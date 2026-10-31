@@ -1,7 +1,12 @@
 import type { StateManager } from '../state/StateManager.js';
 import type { ExecutionAttempt, Task } from '../types/schema.js';
-import { listAttempts } from '../state/attemptStore.js';
+import { currentAttempt, listAttempts } from '../state/attemptStore.js';
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
+import {
+  assertExecutionProfileReady,
+  readExecutionPolicySnapshot,
+  resolveTaskExecutionProfile
+} from '../delivery/executionProfile.js';
 import { ATTEMPT_FINALIZING } from './claimGuards.js';
 import { MoeError, MoeErrorCode } from './errors.js';
 
@@ -37,6 +42,44 @@ export interface BlockedHoldRef {
  */
 export function isClaimGatedByDependsOn(state: StateManager, task: Task): boolean {
   return task.status === 'WORKING' && unmetDependsOn(state, task).length > 0;
+}
+
+/**
+ * EXECUTION-PROFILE ADMISSION (CQ-M01e): why `task` may not be claimed, or
+ * null when it may. One predicate for every claim path: claim_next_task's
+ * explicit-taskId path THROWS the result before any write, while its ranked
+ * pool and wait_for_task's matcher SKIP a non-null row — for the dependsOn
+ * gate's reason, a row that is wait-visible but claim-ineligible is the
+ * measured wake→claim→refuse spin.
+ *
+ * The task-level rule is the CQ-M01c store backstop's: the live profile,
+ * floored by a stored verified-local task snapshot, so a project rollback
+ * cannot lower it. An own-seat resume (the caller is the assignee) continues
+ * the execution its own open attempt recorded, so that attempt's snapshot must
+ * be ready too. Any other worker's leftover attempt is never consulted: a
+ * successor claim records a fresh identity (CQ-M01d).
+ *
+ * It grants nothing: null is not approval, readiness or trust. No environment
+ * flag or caller label is read; the leaf's assertExecutionProfileReady stays
+ * the only readiness authority.
+ *
+ * Error handling: returns the refusal — EXECUTION_PROFILE_NOT_READY, or
+ * INVALID_INPUT naming the malformed snapshot or setting (fail closed). Only a
+ * non-MoeError propagates. Never writes.
+ */
+export function executionAdmissionRefusal(state: StateManager, task: Task, workerId?: string): MoeError | null {
+  try {
+    assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot));
+    if (workerId && task.assignedWorkerId === workerId) {
+      const own = currentAttempt(state, task.id);
+      const recorded = own?.workerId === workerId ? readExecutionPolicySnapshot(own.executionPolicySnapshot) : undefined;
+      if (recorded) assertExecutionProfileReady(recorded.profile);
+    }
+    return null;
+  } catch (err: unknown) {
+    if (err instanceof MoeError) return err;
+    throw err;
+  }
 }
 
 /**

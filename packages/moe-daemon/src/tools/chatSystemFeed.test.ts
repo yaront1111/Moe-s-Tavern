@@ -3,6 +3,7 @@ import { ToolTestHarness } from './toolTestHarness.js';
 import { chatReadTool } from './chatRead.js';
 import { chatResyncTool } from './chatResync.js';
 import { chatWaitTool } from './chatWait.js';
+import { deregisterWorkerTool } from './deregisterWorker.js';
 import type { ChatMessage } from '../types/schema.js';
 
 // The daemon's status lines in #general (task moved, claimed, step completed,
@@ -106,5 +107,117 @@ describe('the #general system feed', () => {
     const contents = (await h.state.getMessages(general)).map((m) => m.content);
     expect(contents).toContain('task-9: QA approved — task complete');
     expect(contents).toContain('🔗 worker-peer set dependencies on task-9: [task-8] (was [none])');
+  });
+});
+
+// Wrapper restarts deregister a seat after almost every CLI session. The
+// "<id> left (<reason>)" line and a "(no tasks held)" banner it leaves in role
+// channels paged every busy seat and woke every chat_wait; they are feed too.
+// A banner that released a task or dropped a resource claim stays actionable.
+describe('routine presence lines', () => {
+  const h = new ToolTestHarness();
+  let workers: string;
+  let governors: string;
+  let events: Array<{ message: ChatMessage; routingTargets: string[] }>;
+  let unsubscribe: () => void;
+
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createWorker({ id: 'worker-peer' });
+    h.createWorker({ id: 'worker-busy', status: 'CODING' });
+    h.createWorker({ id: 'worker-holder', status: 'CODING', currentTaskId: 'task-1' });
+    h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-holder' });
+    await h.state.load();
+    workers = h.state.getChannels().find((channel) => channel.name === 'workers')!.id;
+    governors = h.state.getChannels().find((channel) => channel.name === 'governors')!.id;
+    events = [];
+    unsubscribe = h.state.subscribe((event) => {
+      if (event.type === 'MESSAGE_CREATED') {
+        events.push({ message: event.payload, routingTargets: event.routingTargets ?? [] });
+      }
+    });
+  });
+  afterEach(() => { unsubscribe(); vi.restoreAllMocks(); h.cleanup(); });
+
+  const deregister = (workerId: string, reason: string) =>
+    deregisterWorkerTool(h.state).handler({ workerId, reason }, h.state);
+
+  const routedTo = (content: string, channel?: string) =>
+    events.filter((e) => e.message.content === content && (!channel || e.message.channel === channel));
+
+  async function postSystem(channel: string, content: string, sender = 'system'): Promise<string[]> {
+    return (await h.state.sendMessage({ channel, sender, content })).routingTargets;
+  }
+
+  it('a routine deregistration pages nobody and wakes no parked chat_wait', async () => {
+    await h.state.updateWorker('worker-peer', { chatCursors: { [workers]: 'msg-x', [governors]: 'msg-x' } });
+    let settled = false;
+    const pending = (chatWaitTool(h.state).handler(
+      { workerId: 'worker-busy', channels: [governors], timeoutMs: 2000 }, h.state
+    ) as Promise<{ hasMessage: boolean; messages?: ChatMessage[] }>).then((result) => { settled = true; return result; });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    await deregister('worker-peer', 'wrapper_restart');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const left = 'worker-peer left (wrapper_restart)';
+    const banner = '🔌 worker-peer deregistered (wrapper_restart); (no tasks held)';
+    for (const channel of [workers, governors]) {
+      expect(routedTo(left, channel)).toHaveLength(1);
+      expect(routedTo(banner, channel)).toHaveLength(1);
+    }
+    const presence = [...routedTo(left), ...routedTo(banner)];
+    expect(presence).toHaveLength(4);
+    for (const event of presence) expect(event.routingTargets).toEqual([]);
+    expect(h.state.getUnreadSummary('worker-busy')).toBeNull();
+    expect(settled).toBe(false);
+
+    const human = (await h.state.sendMessage({ channel: governors, sender: 'human', content: 'status?' })).message;
+    const result = await pending;
+    expect(result.messages?.map((m) => m.id)).toEqual([human.id]);
+  });
+
+  it('a deregistration that released a task still routes to busy seats', async () => {
+    await h.state.updateWorker('worker-holder', { chatCursors: { [workers]: 'msg-x' } });
+    await deregister('worker-holder', 'terminal_closed');
+
+    const banner = '🔌 worker-holder deregistered (terminal_closed); released 1 task: task-1→WORKING';
+    for (const channel of [workers, governors]) {
+      const [event] = routedTo(banner, channel);
+      expect(event?.routingTargets).toContain('worker-busy');
+    }
+    const unread = h.state.getUnreadSummary('worker-busy');
+    expect(unread?.channels[workers]).toBe(1);
+    expect(unread?.channels[governors]).toBe(1);
+    // The seat's own "left" line is routine presence: it adds no unread count.
+    expect(routedTo('worker-holder left (terminal_closed)').map((e) => e.routingTargets)).toEqual([[]]);
+  });
+
+  it.each([
+    ['blocked', 'governors', '🚧 worker-peer blocked on task-1: proxy down'],
+    ['stale', 'governors', '⚠️ worker-peer stale on task-1 (T) — last activity 1900s ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.'],
+    ['QA reject', 'workers', '❌ QA rejected task-1: tests fail'],
+    ['file collision', 'workers', '⚠️ file collision on task-1: task-2: `a.ts`'],
+    ['commit', 'governors', '📦 completion commit recorded for task-1: abc1234 on moe/work — 2 path(s), 0 inferred, 0 skipped, 0 unattributed'],
+    ['dropped claims only', 'governors', '🔌 worker-x deregistered (terminal_closed); (no tasks held); dropped 1 resource claim: slot lease (task-1)'],
+  ])('keeps routing the %s banner to busy seats', async (_name, channelName, content) => {
+    const channel = channelName === 'governors' ? governors : workers;
+    expect(await postSystem(channel, content)).toContain('worker-busy');
+    expect(h.state.getUnreadSummary('worker-busy')?.channels[channel]).toBe(1);
+  });
+
+  it.each([
+    ['an agent posting a left line', 'worker-peer', 'worker-x left (bye)'],
+    ['a left line whose reason mentions a seat', 'system', 'worker-x left (restart @worker-busy)'],
+    ['a left line not anchored at the closing paren', 'system', 'worker-x left (bye) again'],
+    ['a banner not anchored at its no-tasks suffix', 'system', '🔌 worker-x deregistered (bye); (no tasks held) again'],
+  ])('does not treat %s as feed: agent reads still show it', async (_name, sender, content) => {
+    const message = (await h.state.sendMessage({ channel: workers, sender, content })).message;
+    const read = await chatReadTool(h.state).handler({ workerId: 'worker-peer', channel: workers }, h.state) as {
+      messages: ChatMessage[];
+    };
+    expect(read.messages.map((m) => m.id)).toEqual([message.id]);
   });
 });

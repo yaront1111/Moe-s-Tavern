@@ -18,10 +18,12 @@ import java.io.File
 import java.net.URI
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
+import javax.swing.SwingUtilities
 import kotlin.concurrent.withLock
 
 @Service(Service.Level.PROJECT)
@@ -30,7 +32,7 @@ class MoeProjectService @JvmOverloads constructor(
     private val invokeLaterForTests: ((() -> Unit) -> Unit)? = null
 ) : Disposable {
     private val log = Logger.getInstance(MoeProjectService::class.java)
-    private val daemonSupervisor = MoeDaemonSupervisor(
+    private val daemonSupervisor: MoeDaemonSupervisor = MoeDaemonSupervisor(
         basePath = project.basePath.orEmpty(),
         projectName = project.name,
         onStatus = ::publishStatus,
@@ -39,6 +41,8 @@ class MoeProjectService @JvmOverloads constructor(
     private val wsLock = ReentrantLock()
     private val messageQueue = ConcurrentLinkedQueue<String>()
     @Volatile private var wsClient: WebSocketClient? = null
+    /** The DaemonInfo the current [wsClient] was opened with. */
+    @Volatile private var clientDaemonInfo: DaemonInfo? = null
     @Volatile private var connected = false
     @Volatile private var state: MoeState? = null
     @Volatile private var connecting = false
@@ -50,7 +54,15 @@ class MoeProjectService @JvmOverloads constructor(
         currentState = { state },
         updateState = { state = it },
         onProjectMismatch = {
+            val info = clientDaemonInfo
             disconnect()
+            if (info != null) {
+                if (daemonSupervisor.deleteDaemonInfoIfUnchanged(info)) {
+                    log.info("Removed daemon.json naming the daemon on port ${info.port}: it serves another project")
+                } else {
+                    log.info("Kept daemon.json: it no longer names that daemon")
+                }
+            }
             wsLock.withLock { isManualDisconnect = false }
             scheduleReconnect()
         },
@@ -144,19 +156,19 @@ class MoeProjectService @JvmOverloads constructor(
 
         val daemonInfo = daemonSupervisor.readDaemonInfo() ?: run {
             connecting = false
+            // A protected refusal needs a human, not a retry; Restart Daemon tries again.
+            daemonSupervisor.selectionRefusal()?.let {
+                publishStatus(false, it)
+                return
+            }
             publishStatus(false, "Daemon not running. Start with: moe-daemon start")
             scheduleReconnect()
             return
         }
-        if (!daemonSupervisor.isProcessAlive(daemonInfo.pid) || !daemonSupervisor.isPortOpen(daemonInfo.port)) {
+        if (!daemonSupervisor.isReachable(daemonInfo)) {
             // Clean up stale daemon.json so next reconnect can spawn a fresh daemon
-            val base = project.basePath
-            if (base != null) {
-                try {
-                    File(base, ".moe/daemon.json").delete()
-                    log.info("Removed stale daemon.json in connect() (PID ${daemonInfo.pid} not reachable)")
-                } catch (_: Exception) {}
-            }
+            val deleted = daemonSupervisor.deleteDaemonInfoIfUnchanged(daemonInfo)
+            log.info("Removed stale daemon.json in connect() (PID ${daemonInfo.pid} not reachable): $deleted")
             connecting = false
             publishStatus(false, "Daemon not running, restarting...")
             scheduleReconnect()
@@ -175,7 +187,7 @@ class MoeProjectService @JvmOverloads constructor(
         }
 
         val daemonInfo = daemonSupervisor.readDaemonInfo()
-        if (daemonInfo != null && daemonSupervisor.isProcessAlive(daemonInfo.pid) && daemonSupervisor.isPortOpen(daemonInfo.port)) {
+        if (daemonInfo != null && daemonSupervisor.isReachable(daemonInfo)) {
             // Daemon is ready, proceed with connection
             connecting = false
             retryFuture = null
@@ -241,8 +253,67 @@ class MoeProjectService @JvmOverloads constructor(
 
     private fun doConnect(daemonInfo: DaemonInfo) {
         if (disposed.get() || connected || connecting) return
+        // Every activation passes here: an unverified daemon gets no client, no registration and no retry.
+        daemonSupervisor.activationRefusal(daemonInfo)?.let {
+            log.warn(it)
+            publishStatus(false, it)
+            return
+        }
         connecting = true
+        val basePath = project.basePath
+        if (basePath.isNullOrBlank()) {
+            openClient(daemonInfo)
+        } else if (SwingUtilities.isEventDispatchThread()) {
+            // The /health probe blocks for up to its timeouts; projectOpened can connect on the EDT.
+            try {
+                scheduler.execute { probeThenOpen(daemonInfo, basePath) }
+            } catch (ex: RejectedExecutionException) {
+                connecting = false
+                log.debug("Daemon identity probe not scheduled: ${ex.message}")
+            }
+        } else {
+            probeThenOpen(daemonInfo, basePath)
+        }
+    }
 
+    /**
+     * daemon.json only proves which project wrote it: a reused PID and another project's daemon on
+     * its port pass connect()'s checks. Only a /health reply naming another project refuses; an
+     * unknown one proceeds as before.
+     */
+    private fun probeThenOpen(daemonInfo: DaemonInfo, basePath: String) {
+        val identity = DaemonIdentityProbe.probe(daemonInfo.port, basePath)
+        if (disposed.get() || isManualDisconnect) {
+            // Disposed or disconnected while probing: open nothing.
+            connecting = false
+            return
+        }
+        if (identity is DaemonIdentity.Foreign) {
+            handleForeignDaemon(daemonInfo, identity, basePath)
+        } else {
+            openClient(daemonInfo)
+        }
+    }
+
+    /** Like connect()'s dead-PID branch: drop the stale daemon.json, and the reconnect spawns ours. */
+    private fun handleForeignDaemon(daemonInfo: DaemonInfo, foreign: DaemonIdentity.Foreign, basePath: String) {
+        log.warn("Daemon on port ${daemonInfo.port} (PID ${daemonInfo.pid}) serves ${foreign.projectPath}, not $basePath")
+        if (daemonSupervisor.deleteDaemonInfoIfUnchanged(daemonInfo)) {
+            log.info("Removed stale daemon.json naming that daemon")
+        } else {
+            log.info("Kept daemon.json: it no longer names that daemon")
+        }
+        // scheduleReconnect returns early while connecting.
+        connecting = false
+        publishStatus(
+            false,
+            "Daemon on port ${daemonInfo.port} serves another project (${foreign.projectPath}); " +
+                "this project's daemon will start on the next free port."
+        )
+        scheduleReconnect()
+    }
+
+    private fun openClient(daemonInfo: DaemonInfo) {
         // Synchronize the client swap to prevent races with callbacks
         val newClient: WebSocketClient
         wsLock.withLock {
@@ -331,6 +402,7 @@ class MoeProjectService @JvmOverloads constructor(
                 }
             }
             wsClient = newClient
+            clientDaemonInfo = daemonInfo
         }
 
         try {
@@ -431,7 +503,7 @@ class MoeProjectService @JvmOverloads constructor(
      *   `0..MAX_SAFE_PLAN_REVISION` (nothing is sent).
      * @see MoeCommandSender.approveTask
      */
-    fun approveTask(taskId: String, expectedPlanRevision: Long? = null): Boolean =
+    fun approveTask(taskId: String, expectedPlanRevision: Long): Boolean =
         commandSender.approveTask(taskId, expectedPlanRevision)
 
     fun releaseTask(taskId: String, reason: String? = null) = commandSender.releaseTask(taskId, reason)
@@ -644,13 +716,14 @@ class MoeProjectService @JvmOverloads constructor(
         val base = project.basePath
         if (base != null) {
             val info = daemonSupervisor.readDaemonInfo()
+            // A refusal keeps daemon.json and starts nothing: the user must identify and stop that process first.
+            // On Windows a null info still stops the supervisor this IDE spawned (mid-startup or in crash backoff).
+            daemonSupervisor.stopDaemonForRestart(info)?.let {
+                log.warn(it)
+                publishStatus(false, it)
+                return
+            }
             if (info != null) {
-                // Kill existing daemon if alive
-                if (daemonSupervisor.isProcessAlive(info.pid)) {
-                    try {
-                        ProcessHandle.of(info.pid.toLong()).ifPresent { it.destroy() }
-                    } catch (_: Exception) {}
-                }
                 try {
                     File(base, ".moe/daemon.json").delete()
                 } catch (_: Exception) {}

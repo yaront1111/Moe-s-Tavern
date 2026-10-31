@@ -39,7 +39,8 @@ Nothing here works around a limit within an account. Moe only chooses which acco
   - The mod adds `acceptsAccountSwitch` to `submit_plan` and `chat_wait`.
   - When the seat holds no task and its account must switch, the daemon answers with `accountSwitch`. The architect gets it right after its plan is recorded. The governor gets it at once, or, while parked in `chat_wait`, as soon as a usage report makes the switch due.
   - The model ends its turn. The mod refuses any further claim or wait, runs `/exit` 10 s after the turn ends, and the wrapper's loop leases again.
-  - The mod also ends a session that claude stopped at the limit (100%).
+  - Hard limits have two independent triggers: the existing main-loop `classic.StopFailure` with `error: 'rate_limit'`, and a usage check at every main-loop `turn.complete`, even if an earlier mod swallows `StopFailure`. Any `$.session.usage().rateLimits` window at **100% or more** marks the session for the same delayed `/exit`; it is not restricted to the 5-hour window or to an error completion.
+  - Both triggers require a leased seat (`MOE_WORKER_ID` and `MOE_ACCOUNT_ID`) and ignore subagent ends. A failed environment/usage read leaves the completed turn and switch state unchanged; an already-pending daemon switch needs no usage read. Repeated or racing triggers still schedule only one toast and exit, after the unchanged 10-second delay.
 
   With `MOE_DISABLE_ACCOUNT_SWITCH_MOD=1`, `--no-loop` or a one-shot launch, a seat moves at its next launch.
 - **Daemon restart.** Leases live in daemon memory. A running seat's lease is learned back from its wrapper's next usage report, which names only the account the running claude was launched under.
@@ -64,7 +65,7 @@ Nothing here works around a limit within an account. Moe only chooses which acco
 
 ## Limitations
 
-- A running step or plan is never interrupted. An interactive seat moves only between tasks, and only with the `moe-account-switch` mod loaded: a TUI whose loop relaunches it. Without the mod, it keeps its account until it exits. Inside an interactive session, a refusal is detected only as claude's `rate_limit` stop at 100% usage (V13).
+- Normal daemon switching at 90% waits for a safe step/task boundary; it does not interrupt work. A hard-limit-ended main turn can instead rotate an interactive seat mid-task: the mod checks any reported window at >=100% independently on `turn.complete`, as well as on a delivered `rate_limit` `classic.StopFailure` (V13). Only leased main-loop seats qualify, and usage-read errors fail open. This requires the `moe-account-switch` mod in a TUI whose loop relaunches it; without the mod it keeps its account until it exits. Work already stopped by the hard limit is not guaranteed to have reached a safe task boundary.
 - Usage comes from CLI output that is only partly documented (V1–V3 below). If the format changes, rotation falls back to "no data" and keeps using the current account.
 - Parallel seats on one account all count against it. Seats that started below the switch point can carry it past 100% before they reach a step boundary. Lower the switch point if many seats run at once.
 - An account is known to be spent only after the CLI reports it, so the first launch on it can be refused once. That case relaunches at once.
@@ -98,7 +99,7 @@ Sources are the Claude Code docs (code.claude.com/docs) and `claude auth login -
 | V10 | A worker told `ACCOUNT-SWITCH` in `complete_step` ends its session instead of starting the next step | Model behaviour; `start_step` refuses either way | Step 5 | |
 | V11 | `$.command.run({ command: 'exit' })` from a mod's timer ends an interactive claude session with exit code 0 | The mod API runs a command as if typed; `/exit` from a mod is not seen | Step 7 | |
 | V12 | An interactive architect or governor told `ACCOUNT-SWITCH` ends its turn instead of claiming or waiting again | Model behaviour; the mod refuses the call and ends the turn either way | Step 7 | |
-| V13 | At a hard limit, an interactive session raises `StopFailure` with `error: 'rate_limit'`, and `$.session.usage()` shows a window at 100% | Documented event; the values at a real limit are not seen | Step 8 | |
+| V13 | At a hard limit, either a delivered main-loop `classic.StopFailure` (`rate_limit`) or the independent main-loop `turn.complete` usage check finds any window at >=100% and schedules one delayed exit, even if an earlier mod swallowed `StopFailure` | Event/usage contracts are documented and version-typed (including API-error completion and percentages above 100). The 2026-10-24 skipped-hook incident is user-reported, not a live observation by this implementation agent | Automated swallowed-hook regression in `hooks/register.test.ts`; a person checks end-to-end exit/relaunch in Step 8 | Automated mock-clock coverage only; real-account end-to-end fallback not verified |
 | V14 | A mod's `tool.call` rewrite (`acceptsAccountSwitch: true`) reaches the MCP server as a tool argument | Read in Claude Code 2.1.309: an MCP tool's input schema is a passthrough object, so an extra key is neither refused nor dropped, and a daemon without the parameter ignores it. `claude plugin test` covers the hook, not a live MCP call | Step 7 | |
 
 The design degrades safely when V1–V4 turn out wrong. Without usable samples, the current account simply keeps being used, which is the behaviour before rotation. A refusal that the wrapper misses still parks the account through its `rejected` sample, so the next launch moves on.

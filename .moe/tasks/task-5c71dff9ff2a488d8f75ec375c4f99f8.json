@@ -1,0 +1,322 @@
+{
+  "id": "task-5c71dff9ff2a488d8f75ec375c4f99f8",
+  "epicId": "epic-be924fb8",
+  "title": "bug: wrapper hot-reload exec's the on-disk script without a syntax check, so a half-edited moe-agent.sh kills every seat that reloads",
+  "description": "scripts/moe-agent.sh:6043-6065 (the \"wrapper source changed on disk; restarting to load it\" block) checks only the sha256 of $MOE_WRAPPER_PATH. When it changes, the wrapper deregisters the seat (reason wrapper_restart) and runs `exec \"$MOE_WRAPPER_PATH\" \"${MOE_WRAPPER_ARGV[@]}\"`. No `bash -n` runs first. The fallback line \"wrapper relaunch failed; continuing on current bytes\" is reached only if exec itself fails, never when the new script fails to parse. The ps1 supervisor has the equivalent hot-reload path.\n\nSeats launched with the project path run the shared checkout's own copy (observed 2026-10-25: 70+ processes on /mnt/d/projexts/moes/scripts/moe-agent.sh). So whenever a task edits the wrapper in place (c532d223 was doing so at 10:52Z, +42/-9 dirty), every wrapper that reaches its loop top re-execs the in-progress bytes. If those bytes are mid-edit and unparseable, the seat dies after it has already deregistered.\n\nExpected: before re-exec, validate the new bytes (`bash -n` for sh; [System.Management.Automation.Language.Parser]::ParseFile with zero errors for ps1). On failure, log a loud MOE_WRAPPER_RELOAD_REFUSED-style line, stay on the current bytes without deregistering, and retry on a later iteration only when the hash changes again. Keep both launchers in parity (parity-check lists the new code), and add a postflight arm with an unparseable wrapper copy.",
+  "definitionOfDone": [
+    "When the on-disk wrapper changes to bytes that fail `bash -n` (sh) or ParseFile (ps1), the running wrapper does not deregister or exec, logs a refusal line naming the reason, and keeps serving on its current bytes; a later change to parseable bytes reloads normally.",
+    "Both postflight harnesses gain an arm with an unparseable wrapper copy that proves the seat survives and stays registered, plus the existing [hot reload] arm stays green.",
+    "`bash scripts/tests/parity-check.sh` (and the ps1 twin) pass with any new code/banner registered in both checkers.",
+    "Fresh `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh` and the ps1 twin exit 0, with output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST, bash harness (scripts/tests/postflight.sh: LF, runs under `set -euo pipefail`). Load test-driven-development. EDIT WITH CLAUDE'S Edit/Write TOOLS ONLY (contested path; see risks).\n\nAdd a new arm right after the existing `[hot reload] ok:` echo (~line 1949) and before `# --- Quality gate (settings.qualityGate)`. Header comment: twin of the refused-reload arm in postflight.ps1; seats launched from the shared checkout reload every edit of the real file, and a half-applied edit used to make each of them deregister and exec bytes bash could not parse.\n\nReuse the existing arm's helpers by re-pointing their globals at a FRESH copy. reload_seq, reload_fail and reload_wait resolve RELOAD_PROJECT, reload_pid and the out file at call time.\n- RELOAD_DIR=\"$TMP_DIR/reload-refused\", plus RELOAD_PROJECT and RELOAD_WRAPPER under it.\n- Same fixture as the existing arm: cp -R \"$ROOT_DIR/scripts\", chmod +x, project.json with autoCommit false, an empty chan-general.jsonl, and daemon.json (moe-call.sh refuses to deregister without it).\n- Same launch line, with --worker-id worker-reload-refused, writing to the SAME $TMP_DIR/wrapper-reload.out. The first arm has finished with that file, and reload_fail prints it.\n- Same LIVE_PIDS bookkeeping.\n\nSequence:\n(1) `reload_wait 0 '^c'`, then record k = the number of claims so far.\n(2) The refused edit is an APPEND: `printf 'if true; then :\\n' >> \"$RELOAD_WRAPPER\"`. Measured at planning: `bash -n` then fails with '<path>: line N: syntax error: unexpected end of file', rc 2. Use appends, never a whole-file rewrite: a short append is effectively atomic, but a rewrite can be hashed half-written and log a second refusal.\n(3) `reload_wait 0 \"^c{$((k + 3)),}\\$\"`. Three claims after the edit guarantee that at least two loop tops saw the refused bytes. EDITS=0 makes any wrapper_restart fail fast, and kill -0 catches a dead seat.\n(4) The parseable edit: `printf 'fi\\n' >> \"$RELOAD_WRAPPER\"`. The tail `if true; then :` + `fi` parses, and it would only run after the main loop ends.\n(5) `reload_wait 1 '^c+rc'`.\n(6) Kill the wrapper and restore LIVE_PIDS. Then assert on the final state; each failure goes through reload_fail with a message naming the broken promise:\n  - the sequence matches ^c+rc+$ ('a refused edit must not deregister; the next parseable edit reloads once');\n  - `grep -c MOE_WRAPPER_RELOAD_REFUSED` (with `|| true`) is exactly 1 ('one refusal line per refused hash, got N');\n  - ONE `grep -Eq` (no pipe: under pipefail a `| grep -q` can read SIGPIPE as failure) for 'MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: .*moe-agent\\.sh'. bash prefixes its own message with the script path, so this proves the reason is bash -n's and stays locale-proof;\n  - 'restarting to load it' appears exactly once.\nThen echo '[hot reload refused] ok: refused once, stayed registered, reloaded on the next parseable edit'.\n\nRED proof, in a scratch copy of scripts/ (never the live tree). Build an arm-only harness by anchors, per mem pattern-postflight-red-proof-via-temp-tree: [0, `FROZEN_SUITE=\"$TMP_DIR/frozen-candidate.cjs\"`) + [`# --- Hot reload: the wrapper re-execs itself`, `# --- Quality gate (settings.qualityGate)`) + `echo PASS`. Run it against the CURRENT wrapper. Expected: the existing arm passes, and the new arm fails with reload_wait's 'a restart with no edit behind it'. The old wrapper deregisters and execs. Because bash parses incrementally, the exec'd copy with a broken tail keeps running, so the forbidden deregister is the observable. Put both lines in the step note. Keep the generator; steps 2 and 7 reuse it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Added the [hot reload refused] arm to scripts/tests/postflight.sh, right after the [hot reload] ok echo (Claude Edit tool only). It reuses reload_seq/reload_fail/reload_wait, re-pointed at $TMP_DIR/reload-refused. Edits are appends: 'if true; then :' (refused), then 'fi' (reloads). Assertions: the sequence matches ^c+rc+$; exactly 1 MOE_WRAPPER_RELOAD_REFUSED; the refusal text plus .*moe-agent\\.sh (bash -n's path-prefixed reason); exactly 1 'restarting to load it'. bash -n is clean on the harness.\nRED proof, in scratch /tmp/w5c71/old (live scripts/ copy, unchanged wrapper). Arm-only harness from the generator /mnt/d/moe-scratch/5c71-work/mk-arm-sh.js (anchors: [0,FROZEN_SUITE=) + [# --- Hot reload: the wrapper re-execs itself, # --- Quality gate (settings.qualityGate)) + echo PASS). Result, exit=1:\n  [hot reload] ok: 2 restarts, each re-registered, none without an edit\n  HOT RELOAD FAILED: a restart with no edit behind it (RPC sequence 'cr')\nSo the old wrapper deregistered (wrapper_restart) on the unparseable bytes. Foreign dirty paths in the shared tree were left alone.",
+      "startedAt": "2026-10-25T22:33:14.897Z",
+      "completedAt": "2026-10-25T22:34:54.245Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Bash twin fix (scripts/moe-agent.sh, LF). Develop it and prove it in the step-1 scratch tree FIRST: the arm subset must go GREEN against the fixed scratch copy. Only then port it to the live file.\n\n1. Next to `MOE_WRAPPER_LAUNCH_HASH=\"\"` (~line 6011), add `MOE_WRAPPER_REFUSED_HASH=\"\"`, the hash of bytes already refused.\n2. Loop-top restart check (~6043):\n  - Add `&& [ \"$MOE_WRAPPER_CURRENT_HASH\" != \"$MOE_WRAPPER_REFUSED_HASH\" ]` to the change test.\n  - Then, BEFORE the restart announcement, stop_heartbeat_sidecar, the deregister, the SECURE_TEMP_DIR removal and the exec: `MOE_WRAPPER_PARSE_RC=0; MOE_WRAPPER_PARSE_ERR=\"$(bash -n \"$MOE_WRAPPER_PATH\" 2>&1)\" || MOE_WRAPPER_PARSE_RC=$?`. This is the error handling that matters here: the `||` keeps set -e from killing the seat on the very failure this guards. Both idioms were verified at planning.\n  - Non-zero rc:\n    - set MOE_WRAPPER_REFUSED_HASH=\"$MOE_WRAPPER_CURRENT_HASH\";\n    - cut the error to its first line with `${MOE_WRAPPER_PARSE_ERR%%$'\\n'*}`, falling back to `bash -n exited <rc>` when it is empty;\n    - print to stderr, exactly: `[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: <reason>`;\n    - fall through, so this iteration serves as usual: no continue, no sidecar stop, no deregister, no temp-dir removal.\n  - Zero rc: today's restart body, byte-for-byte, in the else branch.\n3. Add a short why-comment: a seat launched from the shared checkout reloads every edit of this file, and a half-applied edit used to cost it its registration and then its process; refuse such bytes once per hash and keep serving the bytes already parsed. Do NOT repeat the code token or the refusal prose in any comment: the parity needles must stay unique to the emitting line.\n4. Use `bash -n` on the real path. Do not validate and exec a temp copy: that would move BASH_SOURCE/SCRIPT_DIR, which moe-call.sh, the mods and the *.mjs helpers resolve against.\n\nLIVE-FILE DISCIPLINE. Every seat launched from this checkout hot-reloads each write, and until this lands they have no guard. Make exactly two Claude Edit calls, each one self-contained:\n- (a) the init line;\n- (b) the whole `if [ -n \"$MOE_WRAPPER_CURRENT_HASH\" ] ... fi` block.\nRun `bash -n scripts/moe-agent.sh` right after each one. Then `diff` the scratch copy against the live file: it must differ only by peer hunks, if there are any. Rerun the step-1 subset GREEN with the live bytes, and record its output as this step's test evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh fix in scripts/moe-agent.sh, developed and proven in scratch /tmp/w5c71/new first, then ported to the live file with exactly two Claude Edit calls:\n(a) `MOE_WRAPPER_REFUSED_HASH=\"\"` next to the launch hash;\n(b) the whole restart-check block. The change test gains `!= $MOE_WRAPPER_REFUSED_HASH`. Then `MOE_WRAPPER_PARSE_ERR=\"$(bash -n \"$MOE_WRAPPER_PATH\" 2>&1)\" || MOE_WRAPPER_PARSE_RC=$?`. A non-zero rc memoizes the hash, keeps only the first error line (falling back to 'bash -n exited <rc>'), and prints the [WARN] MOE_WRAPPER_RELOAD_REFUSED line to stderr. It then falls through, with no sidecar stop, deregister, temp removal or exec. Rc 0 runs today's body unchanged, re-indented into the else branch.\n`bash -n` was clean after each Edit, and the live file is byte-identical (cmp) to the scratch copy. 0 CR bytes.\nGREEN on the scratch fix, and again on a fresh copy of the LIVE bytes (/tmp/w5c71/live), exit 0:\n  [hot reload] ok: 2 restarts, each re-registered, none without an edit\n  [hot reload refused] ok: refused once, stayed registered, reloaded on the next parseable edit\n  PASS arm-only\nKept-temp evidence: RPC sequence 'ccccrc'. The out file holds exactly one '[WARN] MOE_WRAPPER_RELOAD_REFUSED: ... until it changes again: /tmp/.../reload-refused/scripts/moe-agent.sh: line 8463: syntax error: unexpected end of file' and then one 'restarting to load it'.",
+      "startedAt": "2026-10-25T22:34:56.561Z",
+      "completedAt": "2026-10-25T22:37:13.568Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "TESTS FIRST, PowerShell harness twin (scripts/tests/postflight.ps1: UTF-8 BOM + LF; afterwards `head -c3` must be ef bb bf and the file must hold zero CR bytes). Edit with Claude's Edit/Write tools only.\n\nAdd a new arm right after `Write-Host '[hot reload] ok: ...'` (~line 1788) and before `# --- Quality gate`.\n\nRe-point the existing helpers at a fresh copy. Get-ReloadRows, Get-ReloadSequence, Get-ReloadWrapperPids and Wait-ReloadSequence resolve $reloadRpcLog, $reloadWrapper, $reloadProc and $wrapperTimeoutSec at call time.\n- $reloadWrapper = <tempRoot>\\reload-refused\\scripts\\moe-agent.ps1, plus $reloadProject, $reloadRpcLog, and $reloadOut = wrapper-reload-refused.out.\n- Same fixture as the existing arm: the wrapper plus EVERY sibling *.mjs, project.json, chan-general.jsonl.\n- Same Start-Process line, with -WorkerId worker-reload-refused, FAKE_CLAIM_MODE idle and MOE_DISABLE_HEARTBEAT 1.\n- Same finally cleanup: env removal, `taskkill /T /F`, Stop-Process on leftovers.\n\nEdits are APPENDS through a small retrying helper, Add-ReloadWrapperText: `[IO.File]::AppendAllText($reloadWrapper, $Text)`, 20 tries x 100 ms like Set-ReloadWrapperText. The seat's own hash read can briefly refuse a concurrent write. A whole-file rewrite can be hashed half-written and log a second refusal. Appended text lands after the wrapper's final `exit 0`, so it never runs.\n\nSequence:\n(1) `Wait-ReloadSequence '^c'`, then record k = claims so far.\n(2) Append \"if (`$true) {`n\". Measured at planning on PS 5.1.26100 and pwsh 7.6.8: ParseFile then reports \"line 7462: Missing closing '}' in statement block or type definition.\"\n(3) `Wait-ReloadSequence ('^c{' + ($k + 3) + ',}$|[rx]')`. Then throw if the sequence contains r or x ('a refused edit must not deregister').\n(4) Record @(Get-ReloadWrapperPids).Count; it must be 1.\n(5) Append \"}`n\".\n(6) `Wait-ReloadSequence '^c+rc'`.\n\nAfter cleanup, collect problems the way the existing arm does:\n- the sequence -notmatch '^c+rc+$';\n- the count of MOE_WRAPPER_RELOAD_REFUSED in stdout+stderr is not 1;\n- no match for 'does not parse; staying on the current bytes until it changes again: line \\d+: '. That is the wrapper's own 'line N:' plus the parser's message; never pin the localized text;\n- the process count after the refused edit is not 1;\n- 'restarting to load it' does not appear exactly once.\nOn any problem: Write-Host the log, then throw 'HOT RELOAD REFUSED FAILED: ...'. Otherwise: Write-Host '[hot reload refused] ok: refused once, one process, reloaded on the next parseable edit'.\n\nRED proof in a scratch copy. Use the arm-only generator from mem pattern-postflight-red-proof-via-temp-tree (task-84150869 update): [0, `$frozenSuite =`) + [`$trueCmd =`, `$wrapperCode = Invoke-WrapperProcess`) + [`# --- Hot reload keeps ONE wrapper process.`, `# --- Quality gate (settings.qualityGate)`) + env-restoring closers + the file's own `} catch {` tail. Run it against the CURRENT wrapper on powershell.exe AND pwsh.exe. Expected: the existing arm passes and the new arm fails with 'wrapper exited: True'. The old wrapper deregisters, then the supervisor's `&` hits the parse error ('wrapper relaunch failed; the seat is stopped'). Put the lines in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Added the [hot reload refused] arm to scripts/tests/postflight.ps1 after the [hot reload] ok line, with the Claude Edit tool. BOM ef bb bf is kept, 0 CR bytes, and ParseFile gives 0 errors on PS 5.1.26100 and pwsh 7.6.8.\n- It re-points $reloadWrapper, $reloadProject, $reloadRpcLog and $reloadOut (wrapper-reload-refused.out) at <tempRoot>\\reload-refused. The fixture is the wrapper plus every sibling *.mjs, project.json and chan-general.jsonl.\n- New helper Add-ReloadWrapperText: AppendAllText with UTF8 no-BOM, 20 tries x 100 ms.\n- Sequence: wait for '^c', then k = number of claims. Append \"if ($true) {\", wait for ^c{k+3,}$ or [rx], and throw on r/x. Count the processes, append \"}\", wait for '^c+rc'.\n- Problems checked after the finally cleanup: seq must be ^c+rc+$; exactly 1 MOE_WRAPPER_RELOAD_REFUSED; 'does not parse; ... again: line \\d+: ' must match on the newline-stripped log (a console host can wrap long lines); the process count after the refused edit must be 1; exactly 1 'restarting to load it'.\nRED proof: scratch D:\\moe-scratch\\5c71-work\\old has the scripts with the HEAD moe-agent.ps1 (cmp-identical to live). The arm-only harness comes from D:\\moe-scratch\\5c71-work\\mk-arm-ps1.js (anchors [0,$frozenSuite =) + [$trueCmd =,$wrapperCode = Invoke-WrapperProcess) + [# --- Hot reload keeps ONE wrapper process., # --- Quality gate (settings.qualityGate)) + env closers + `} catch {` tail).\n- powershell.exe exit=1: '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity', then 'HOT RELOAD REFUSED FAILED: a refused edit must not deregister; RPC sequence 'cr''.\n- pwsh.exe exit=1: the same two lines.\nThe plan expected 'wrapper exited: True'. Instead the r was observed before the process exit, so the explicit deregister assertion fired first. It is the same defect.",
+      "startedAt": "2026-10-25T22:37:16.105Z",
+      "completedAt": "2026-10-25T22:39:29.541Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "PowerShell twin fix (scripts/moe-agent.ps1: UTF-8 BOM + LF; afterwards ef bb bf and zero CR bytes). Develop it in the step-3 scratch tree FIRST, until the subset is GREEN on both engines.\n\n1. Next to `$script:MoeWrapperLaunchHash = $null` (~line 5455), add `$script:MoeWrapperRefusedHash = $null`.\n2. Loop-top restart check (~5493):\n  - Add `-and $moeCurrentHash -ne $script:MoeWrapperRefusedHash` to the change test.\n  - Then, before the announcement: `$moeParseReason = ''; try { $moeParseErrors = $null; $null = [System.Management.Automation.Language.Parser]::ParseFile($script:MoeWrapperPath, [ref]$null, [ref]$moeParseErrors); if ($moeParseErrors.Count -gt 0) { $moeParseReason = \"line $($moeParseErrors[0].Extent.StartLineNumber): $($moeParseErrors[0].Message)\" } } catch { $moeParseReason = \"ParseFile failed: $($_.Exception.Message)\" }`. Error handling: the catch always yields a NON-empty reason, so an IO error is a refusal and never a reload; nothing here can escape to $ErrorActionPreference='Stop'. ParseFile is the engine's own reader, BOM/ANSI decoding included, so it judges exactly what the supervisor's `&` would parse.\n  - Non-empty reason: `$script:MoeWrapperRefusedHash = $moeCurrentHash`, then `Write-Host \"[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: $moeParseReason\" -ForegroundColor Yellow`. Fall through to serve the iteration: no Stop-HeartbeatSidecar, no Invoke-MoeDeregister, no MoeWrapperRelaunchRequested, no break.\n  - Empty reason: today's body unchanged, in the else branch. Its continue and break still target the do loop.\n3. Supervisor catch comment (~line 89): a parse failure can now reach it only when the bytes changed again after the restart check, or the file rejects the bound parameters, or it is gone. Say so without naming the code token.\nUse the same why-comment rules as step 2.\n\nLIVE-FILE DISCIPLINE: one self-contained Edit each for the init line, the restart-check block and the comment. After EACH Edit, run ParseFile on the live file under BOTH powershell.exe and pwsh.exe (0 errors), plus the BOM/CR test. Then rerun the step-3 subset GREEN on both engines.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 fix in scripts/moe-agent.ps1. Developed in scratch D:\\moe-scratch\\5c71-work\\new until GREEN on both engines, then ported with three self-contained Claude Edit calls:\n(1) `$script:MoeWrapperRefusedHash = $null`.\n(2) The restart check: the change test gains `-ne $script:MoeWrapperRefusedHash`. It then calls Parser::ParseFile($script:MoeWrapperPath). The reason is 'line N: <msg>' from ParseErrors[0]; the catch gives 'ParseFile failed: ...', so it is never empty. A non-empty reason memoizes the hash and writes the [WARN] MOE_WRAPPER_RELOAD_REFUSED Write-Host (Yellow), then falls through. An empty reason runs today's body unchanged in the else branch; its continue and break still target the do loop.\n(3) The supervisor catch comment now says a parse error reaches it only when the file changed again after the check.\nAfter EACH Edit: ParseFile on the live file gives 0 errors on PS 5.1.26100.9711 and pwsh 7.6.8, with bom=efbbbf and cr=0. The live file is cmp-identical to the scratch copy.\nGREEN on a fresh copy of the live bytes (arm-only harness), exit 0 on powershell.exe and on pwsh.exe:\n  [hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity\n  [hot reload refused] ok: refused once, one process, reloaded on the next parseable edit\n  PASS arm-only\nKept-temp evidence (PS 5.1): exactly one line '[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: line 7485: Missing closing '}' in statement block or type definition.', then one 'restarting to load it'. The output was not wrapped.",
+      "startedAt": "2026-10-25T22:39:30.571Z",
+      "completedAt": "2026-10-25T22:42:17.163Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Register the new vocabulary in both parity checkers (Claude Edit tool; parity-check.ps1 has NO BOM and stays ASCII, LF).\n- parity-check.sh, Hot reload section (~line 201): add `MOE_WRAPPER_RELOAD_REFUSED` and `'does not parse; staying on the current bytes until it changes again'` to the `for lit in ...; do require_both \"hot reload\" \"$lit\"; done` list.\n- parity-check.ps1: add the same two needles to the `'hot reload' = @(...)` entry (~line 110).\n- Extend the comment above each by one clause: the refusal of changed bytes that do not parse.\nThen run `bash scripts/tests/parity-check.sh`, and parity-check.ps1 on powershell.exe and pwsh.exe: all must PASS. Also the negative test, in a scratch copy only: delete the sh refusal echo and parity-check.sh must FAIL naming the needle; restore it, delete the ps1 Write-Host, and parity-check.ps1 must FAIL. This proves each needle exists only on its emitting line.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Both parity checkers now list the new needles, added with the Claude Edit tool. MOE_WRAPPER_RELOAD_REFUSED and 'does not parse; staying on the current bytes until it changes again' go into the sh 'hot reload' `for lit` list and into the ps1 'hot reload' = @(...) entry. Each comment gains the clause \"the refusal of changed bytes that do not parse\".\nFile hygiene: parity-check.ps1 still has no BOM and 0 CR. Its one non-ASCII line predates this change (HEAD has it too); the added lines are ASCII.\nEach needle appears only on its emitting line (sh 6059 echo, ps1 5521 Write-Host).\nLive tree: PASS parity-check.sh (rc 0), PASS parity-check.ps1 on powershell.exe (rc 0) and on pwsh.exe (rc 0).\nNegative test, scratch D:\\moe-scratch\\5c71-work\\neg:\n- Deleting the sh refusal echo makes parity-check.sh exit 1 with \"PARITY FAIL: hot reload 'MOE_WRAPPER_RELOAD_REFUSED' missing from: moe-agent.sh\" plus the same for the prose needle.\n- With that restored (PASS), deleting the ps1 Write-Host makes parity-check.ps1 exit 1 on both engines: \"[hot reload] 'MOE_WRAPPER_RELOAD_REFUSED' is missing from moe-agent.ps1\" plus the prose needle.",
+      "startedAt": "2026-10-25T22:42:18.258Z",
+      "completedAt": "2026-10-25T22:43:22.053Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "VERIFICATION GATE. Run it once, fresh, after steps 1-5, from SNAPSHOTS of scripts/: peers edit the live tree, and a directory holding scripts/ is a complete harness root. It takes about 35-45 min. Run it detached, with a runner script in scratch that writes gate.log, gate.done (the exit code) and gate.start (like /mnt/d/moe-scratch/c532-run/gate.sh). Poll in calls under 9 minutes.\n\nThis exact chain, run from the repo root, is the complete_task verification command:\nG=/mnt/d/moe-scratch/5c71-gate; L=$(mktemp -d); rm -rf \"$G\" && mkdir -p \"$G\" && cp -R scripts \"$G/\" && cp -R scripts \"$L/\" && (cd \"$L\" && env -u CLAUDE_CONFIG_DIR -u MOE_ACCOUNT_ID -u MOE_ACCOUNT_SAMPLE_FILE -u MOE_PROJECT_PATH -u MOE_WORKER_ID MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh) && cd \"$G\" && for E in powershell.exe pwsh.exe; do WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 $E -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\5c71-gate\\scripts\\tests\\postflight.ps1' && $E -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\5c71-gate\\scripts\\tests\\parity-check.ps1' || exit 1; done\n\nThe sh harness runs from a native-fs mktemp: about 10 min, against about 45 min from /mnt/d. The ps1 harness needs a D:\\ cwd, and WSLENV must forward ONLY the timeout (mem gotcha-qa-ps1-postflight-from-wsl). On a native Windows Git Bash seat, use G=/d/moe-scratch/5c71-gate and drop WSLENV; the chain is otherwise the same.\n\nExpect in gate.log:\n- sh: '[hot reload] ok: 2 restarts, each re-registered, none without an edit', '[hot reload refused] ok: ...', 'PASS postflight.sh', 'PASS parity-check.sh';\n- each PowerShell engine: '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity', '[hot reload refused] ok: ...', 'PASS postflight.ps1', 'PASS parity-check.ps1'.\nWrite the sha256 of the six gated files next to the log, so QA can match them to the landing.\n\nThe DoD names MOE_POSTFLIGHT_TIMEOUT_SEC=180; keep it. If a test this diff does not touch fails, classify it before blaming the change: rerun that single mode (MOE_FROZEN_TEST_ONLY; mem gotcha-postflight-loop-mode-supervisor-deadline), or for ps1 rerun the parent revision's scripts. Then rerun the WHOLE chain. Never report a pass you did not run.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "The gate ran once, fresh, after steps 1-5, through the runner /mnt/d/moe-scratch/5c71-run/gate.sh: the plan's step-6 chain verbatim, plus a sha256 of the six gated files.\n- Start 2026-10-25T22:48:24Z, end 23:20:37Z; gate.done = 0. The previous session died just after it ended, and this resumed session re-verified everything from disk.\n- `sha256sum -c gate.sha256` against the live scripts/: all six OK, so no gated byte changed after the gate.\n\ngate.log:\n- sh: 'PASS frozen candidate scenarios: 73', '[hot reload] ok: 2 restarts, each re-registered, none without an edit', '[hot reload refused] ok: refused once, stayed registered, reloaded on the next parseable edit', 'commit-scope scenarios run: 37', 'PASS postflight.sh', 'PASS parity-check.sh'.\n- PS 5.1 and pwsh 7 each: 'PASS frozen candidate scenarios: 73', '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity', '[hot reload refused] ok: refused once, one process, reloaded on the next parseable edit', both symlink skip lines (no NT symlink rights on this host), 'commit-scope scenarios run: 36', 'PASS postflight.ps1', 'PASS parity-check.ps1'.\n\nGated sha256:\n- moe-agent.sh 3cc5b1c5…\n- moe-agent.ps1 b83a46ba…\n- postflight.sh 49eabcdd…\n- postflight.ps1 968765e2…\n- parity-check.sh 957599a2…\n- parity-check.ps1 37e9d83f…\n\nNo file was modified in this step. The foreign dirty paths in the shared tree were left alone.",
+      "startedAt": "2026-10-25T22:43:22.929Z",
+      "completedAt": "2026-10-25T23:23:41.184Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW with mutation proof (load adversarial-self-review). Post it as a task comment, then complete_task with the step-6 output.\n\nAttack your own diff:\n(1) The refusal path must not touch the seat: no deregister, no sidecar stop, no temp-dir removal, no exec, break or continue, and nothing that set -e or $ErrorActionPreference='Stop' can turn into an exit.\n(2) Once per hash: a second, different bad hash logs again; bad bytes reverted to the launch bytes do nothing; bad then good reloads exactly once. Trace each case through the code.\n(3) Cost is paid only when the hash moved: about 15 ms for bash -n and about 50 ms for ParseFile, measured.\n(4) TOCTOU: bytes that change again between the check and the exec or the supervisor's `&` are not re-checked. The window is about the deregister RPC. State it; add no machinery.\n(5) The existing [hot reload] arm is unchanged and green.\n(6) Encoding: moe-agent.ps1 and postflight.ps1 keep ef bb bf, all six files have zero CR bytes, and the parity needles appear only on the emitting lines.\n\nMutation proof in a scratch copy only, never the live tree (every live seat reloads it). Use the step-1 and step-3 arm subsets on bash, powershell.exe and pwsh.exe, at MOE_POSTFLIGHT_TIMEOUT_SEC=60 for speed:\n- M1: drop the refused-hash memo from the change test. The new arm must fail on the refusal count.\n- M2: validation always refuses (bash -n or ParseFile on a missing path). The new arm must fail with no reload after the parseable edit, and the existing arm must fail too.\n- M3: delete the refusal emitter line. The new arm must fail; step 5's parity proof already covers the checkers.\nFor any survivor, add the missing assertion and rerun. If any gated byte changed after step 6, rerun the step-6 chain and submit THAT output.\ncomplete_step.modifiedFiles must list the six files. No git writes, no .moe edits, and never touch foreign dirty paths.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Adversarial self-review posted as task comment comment-dc236500, covering checklist items (1)-(6), and it needed no fix.\n- The refusal path touches nothing on the seat on either twin, and it is set -e safe and ErrorActionPreference=Stop safe.\n- Once per hash traced in all four cases.\n- Cost: bash -n 35 ms, ParseFile about 50 ms, paid only when the hash moves.\n- TOCTOU and torn-parseable-write residuals are stated.\n- BOMs are intact, there are 0 CR bytes, and the needles are unique to their emitting lines.\nMutation proof, in scratch copies only: M1, M2 and M3 are all KILLED on bash, PS 5.1 and pwsh 7 (details in the comment). There are no survivors, so no assertion was added.\nNo gated byte changed after step 6 (`sha256sum -c` all OK), so the step-6 gate output stands as the verification evidence.\nThe six files are listed for landing. No git writes, no .moe edits, foreign dirty paths untouched.",
+      "startedAt": "2026-10-25T23:23:49.303Z",
+      "completedAt": "2026-10-25T23:24:48.680Z"
+    }
+  ],
+  "planRevision": 15,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 18,
+  "comments": [
+    {
+      "id": "comment-272264ee7dce47108476cd41186976fc",
+      "author": "governor-187cc44e",
+      "content": "Governor notes for the planner/worker:\n(1) Serialized behind c532d223 (dependsOn), which is editing scripts/moe-agent.{sh,ps1} and postflight.{sh,ps1} in the shared tree right now.\n(2) scripts/moe-agent.{sh,ps1}, scripts/tests/postflight.{sh,ps1} and parity-check.{sh,ps1} are contested by stale task-07474ee4 until it's ARCHIVED or DONE. A landing needs this session's Claude Edit/Write TOOL witness (moe-agent.sh:3567), so a Codex/gemini/grok seat must report_blocked rather than edit.\n(3) Ironically, this fix itself hot-reloads the fleet. Keep each Edit to the wrappers self-contained and `bash -n` / ParseFile-clean, so the reload this change triggers can't land on half-applied bytes.",
+      "timestamp": "2026-10-25T10:53:51.365Z"
+    },
+    {
+      "id": "comment-dc23650019ef4258b4f6e11abde3d609",
+      "author": "worker-3729a0d6",
+      "content": "Adversarial self-review (step 7), done on `git diff 16ec9f9 -- <the six files>`.\n\n(1) The refusal path leaves the seat alone.\n- sh: rc != 0 does only three things: record MOE_WRAPPER_REFUSED_HASH, keep the first error line, and echo the [WARN] to stderr. It then falls out of both ifs into the normal iteration. It does not call stop_heartbeat_sidecar, deregister, rm SECURE_TEMP_DIR, exec or continue.\n- sh under `set -e` (line 5): `ERR=\"$(bash -n ...)\" || RC=$?` is the only command that can fail, and `||` guards it. The `%%$'\\n'*` trim is a plain assignment.\n- ps1: ParseFile sits inside try/catch, and the catch always sets a non-empty reason. Under $ErrorActionPreference='Stop' nothing escapes, so an IO error is a refusal, never a reload. The refusal branch does not call Stop-HeartbeatSidecar, Invoke-MoeDeregister, RelaunchRequested, break or continue. The else branch is today's body; its continue and break still target the do loop.\n\n(2) Once per hash, traced through the code:\n- Bad H1: refused, memo = H1, and the next loops skip it silently.\n- A different bad H2: it differs from the memo, so it is parsed, refused and logged again.\n- H1 reverted to the launch bytes: equal to the launch hash, so nothing happens.\n- H1 back again after that: already refused, still unparseable, so it is skipped silently. That is correct.\n- Bad, then good H3: it differs from the memo, parses, and restarts exactly once. The exec'd or rerun pass resets the memo and captures H3 as its launch hash.\nThe arms assert exactly one refusal line and exactly one restart.\n\n(3) Cost: the check runs only when the sha256, already computed each iteration, moves. Re-measured `bash -n` on the 8.5k-line file: 35 ms wall. ParseFile was 47-59 ms at planning on PS 5.1 and pwsh 7.\n\n(4) TOCTOU (accepted residual, no machinery added):\n- Bytes that change again between the check and the exec or the supervisor's `&` are not re-checked. The window is about one deregister RPC.\n- A torn write that happens to parse is not caught. `bash -n` and ParseFile judge syntax, not meaning.\n- A transient failure of the check itself (a fork failure, a sharing violation) refuses those bytes until the hash moves again. That is fail-safe.\n- `bash -n` uses the default shopts; the wrapper sets none.\n\n(5) The existing [hot reload] arm is unchanged and green in the gate on all three engines.\n\n(6) Encoding:\n- moe-agent.ps1 and postflight.ps1: BOM ef bb bf.\n- parity-check.ps1: still no BOM.\n- All six files: 0 CR bytes.\n- The parity needles occur only on sh:6059 and ps1:5521.\n\nMutation proof, in scratch copies only (/tmp/w5c71/mut-sh-*, D:\\moe-scratch\\5c71-work\\mut-ps1-*). Each mutant's wrapper differs from live only by its mutation (diffed), and its harness is cmp-identical to live. TIMEOUT 60.\n- M1 (drop the memo from the change test):\n  - sh: 'one refusal line per refused hash, got 3'.\n  - PS 5.1 and pwsh 7: the same, 'got 3'.\n  - KILLED.\n- M2 (validate a missing path, so it always refuses):\n  - existing arm, sh: 'timed out ... waiting for ^c+rcc'.\n  - existing arm, ps1 on both engines: 'no claim after reload 1'.\n  - new arm, sh: 'timed out waiting for ^c+rc'.\n  - new arm, ps1 on both engines: 'no claim after the parseable edit'.\n  - KILLED.\n- M3 (delete the emitter):\n  - sh: 'got 0'.\n  - ps1 on both engines: 'got 0 | the refusal line must carry ParseFile's reason'.\n  - KILLED.\nThere are no survivors, and no gated byte changed after step 6 (`sha256sum -c` all OK).",
+      "timestamp": "2026-10-25T23:24:41.497Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T10:53:40.118Z",
+  "updatedAt": "2026-10-26T04:43:33.713Z",
+  "dependsOn": [
+    "task-c532d223459b4ef4b5bab2ba0eb4005e"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T10:58:56.406Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 7,
+    "doneAt": "2026-10-26T00:00:36.764Z",
+    "wallClockMs": 46900358
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "architect-2c9d5121",
+    "worker-3729a0d6",
+    "qa-7c627d35"
+  ],
+  "commits": [
+    {
+      "sha": "82f5d26e978402458dcbabf4d4638675099cec42",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-2c9d5121@2026-10-25T21:57:59Z",
+      "paths": [
+        ".moe/tasks/task-3b760109c42544ab892199b3d5534b77.json",
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json"
+      ],
+      "recordedBy": "architect-2c9d5121",
+      "recordedAt": "2026-10-25T21:58:45.966Z",
+      "treeId": "f7bc904f2f473963748b41730030c64431ba0862",
+      "status": "PLANNING",
+      "pushed": true
+    },
+    {
+      "sha": "b9ebc4a0d70938e4c4ad32ffbcda5d2ddb1939b1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-25T22:31:49Z",
+      "paths": [
+        ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-25T23:21:13.032Z",
+      "treeId": "81c5815a16c56a8cbf1f3ed249a29979c00fc296",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "f178123c0c863ba6724fcdda78c2e6c788239887",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-25T23:21:17Z",
+      "paths": [
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+        ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-25T23:26:16.444Z",
+      "treeId": "4496b4ea1ec40df3dc88925c0cf53ccc29cdb953",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "6439001794a2a10e8b272bd89082750795a9f905",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-25T23:26:30Z",
+      "paths": [
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+        ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T00:01:11.908Z",
+      "treeId": "ac7275cce70f8e820060f75739ae71891983bbfd",
+      "status": "DONE",
+      "pushed": true
+    },
+    {
+      "sha": "b24ae05930003b5fc1c6382af0b6c8292cf2bebf",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-2c9d5121@2026-10-25T21:57:59Z",
+      "paths": [
+        ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json",
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+        ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
+      ],
+      "recordedBy": "architect-2c9d5121",
+      "recordedAt": "2026-10-26T04:43:33.713Z",
+      "treeId": "699f580c307ffe964b7f626ca1cdb85fbfcdf373",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+    ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json",
+    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json",
+    ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json",
+    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-2c9d5121@2026-10-25T21:57:59Z",
+    "at": "2026-10-26T04:43:33.713Z"
+  },
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T22:17:59.194Z",
+  "planningNotes": {
+    "approachesConsidered": "(a) CHOSEN: before the restart, check the on-disk path with `bash -n` (sh) and Parser::ParseFile (ps1), and refuse once per hash. These are the DoD's exact checks. ParseFile is the engine's own reader (BOM/ANSI decoding included), so it judges what the supervisor's `&` will parse.\n(b) Validate a temp copy, then exec or run THAT copy. Rejected: BASH_SOURCE, SCRIPT_DIR and $PSCommandPath would point into temp (moe-call.sh, the mods and the *.mjs helpers resolve beside the wrapper), and the next hash check would read a different file.\n(c) Re-check inside the ps1 supervisor, or after exec. Rejected: by then the pass has exited and the seat has deregistered, so there are no current bytes left to stay on.\n(d) Re-parse on every iteration. Rejected: the DoD wants a retry only when the hash changes, and 70+ seats would each log on every poll.\n(e) Post the refusal to #general. Rejected: one console line per seat per bad hash is enough; a chat post would be 70+ messages per bad edit.\n(f) Hash, parse, re-hash, and defer when the hash moved. Rejected: machinery for a sub-second check-to-exec window, when edits arrive seconds to minutes apart. It is documented as a residual instead.\n(g) Split sh and ps1 into two tasks. Rejected: the DoD makes them one deliverable (parity registers both), and the parity edits are one line each. Six files is the daemon's soft-warning band, not a reject.",
+    "codebaseInsights": "sh (scripts/moe-agent.sh):\n- Restart check: ~6043-6068. The launch hash is captured once, at ~6010-6016, before the main while loop.\n- The main loop is the LAST compound command (its `done` is line 8445). Bash parsed it whole before running it, so a refusing seat really does keep its in-memory bytes, and it reads past `done` only when the loop ends.\n- Bash otherwise parses incrementally. A pre-fix wrapper that execs a copy with broken bytes at the END keeps running, so the RED observable is the wrapper_restart deregister, not death.\n- There is no `shopt -s execfail`, so a failed exec exits the shell. The 'wrapper relaunch failed; continuing on current bytes' echo after it is unreachable. Out of scope: leave it.\n\nps1 (scripts/moe-agent.ps1):\n- Restart check: ~5493-5524, inside `try { do {`.\n- The hand-over is at the bottom; `exit 0` is the file's last statement, so appended test text never runs.\n- The supervisor (~66-95) re-runs the file with `&`. Today a ParseException there stops the seat.\n- Neither wrapper re-reads its own file at runtime, except for the hash and the reload.\n\nMeasured at planning:\n- `bash -n` on the 8445-line wrapper: 15 ms. An appended 'if true; then :' gives rc 2 and '<path>: line 8447: syntax error: unexpected end of file'; appending 'fi' makes it clean again.\n- ParseFile: 47-59 ms on PS 5.1.26100 and pwsh 7.6.8, 0 errors on the live file. An appended 'if ($true) {' gives \"line 7462: Missing closing '}' in statement block or type definition.\"; appending '}' makes it clean.\n\nHarness helpers to reuse:\n- postflight.sh: reload_seq, reload_fail, reload_wait (EDITS = allowed restarts; it fails fast on an x, an extra r, or a dead pid).\n- postflight.ps1: Get-ReloadRows, Get-ReloadSequence, Get-ReloadWrapperPids, Wait-ReloadSequence, Set-ReloadWrapperText. All resolve their globals at call time.\n- The parity 'hot reload' needles are at parity-check.sh ~201 and parity-check.ps1 ~110.\n\nEncodings: all six files are LF. moe-agent.ps1 and postflight.ps1 carry a UTF-8 BOM; parity-check.ps1 does not.",
+    "risks": "- CONTESTED PATHS. Stale PLANNING task-07474ee4 ASSERTS all six files (in its filesModified). Under attribution.contested=skip-untouched each one lands only with a TOOL witness.\n  - Edit them only with Claude's Edit/Write, in the headless (--print) session that lands them. No sed, heredoc, python, Set-Content or apply_patch writes. Scratch copies are exempt.\n  - A seat without Edit/Write must not start editing. It should call report_blocked with blockedOnTaskIds [task-07474ee438f34021a23809f9c764d15c] and ask #governors for a Claude seat or for the stale contest to be cleared (precedent: task-c2cb5cf7).\n  - At planning, the parked overlapping rows task-7c2872e7 and task-c2cb5cf7 were made to dependsOn this task, so their plan-declared paths no longer contest it. 07474ee4's ASSERTED paths still do.\n- EVERY WRAPPER EDIT HOT-RELOADS THE FLEET (70+ seats run the shared checkout's copy), and until steps 2 and 4 land those seats have no guard.\n  - Develop each fix in scratch and port it with the self-contained Edit calls the steps name.\n  - Parse-check the live file right after each Edit.\n  - Never mutate the live wrappers for RED or mutation proofs.\n- Residual TOCTOU: bytes that change between the check and the exec, or the supervisor's `&`, are not re-checked. The window is about the deregister RPC. Accepted.\n- A transient failure of the check itself (a fork failure, a sharing violation) counts as a refusal of those bytes. The seat stays on its current bytes until the next change, which is the fail-safe direction, like the existing hash read.\n- bash -n parses under the default shell options. A future `shopt -s extglob` plus extglob syntax would be refused even though it would run. The wrapper has no shopt today.\n- Test flake sources, designed out:\n  - edits are short APPENDS;\n  - refusals are counted after the seat is stopped;\n  - reasons are asserted only on locale-free text: the path bash prefixes, and the ps1 'line N:' the wrapper formats itself;\n  - no `| grep -q` under pipefail.\n- On a loaded box, loop modes can flake at the DoD's TIMEOUT 180. Classify the failure, rerun, and keep 180.\n- The shared checkout carries about 500 foreign dirty paths. Never revert, stash, `git add -A` or commit them; report only the six files.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T22:17:59.330Z",
+  "workStartedAt": "2026-10-25T22:33:14.897Z",
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1"
+  ],
+  "reviewStartedAt": "2026-10-25T23:25:52.346Z",
+  "verification": {
+    "command": "bash /mnt/d/moe-scratch/5c71-run/gate.sh  # plan step-6 chain verbatim: snapshot scripts/ to mktemp + D:\\moe-scratch\\5c71-gate; MOE_POSTFLIGHT_TIMEOUT_SEC=180 postflight.sh (seat account vars unset) && parity-check.sh; then for powershell.exe and pwsh.exe: postflight.ps1 (TIMEOUT 180) && parity-check.ps1",
+    "exitCode": 0,
+    "outputTail": "gate.start=2026-10-25T22:48:24Z gate.end=2026-10-25T23:20:37Z rc=0 (gate.done)\n--- sh (mktemp snapshot)\nPASS frozen candidate scenarios: 73\n[hot reload] ok: 2 restarts, each re-registered, none without an edit\n[hot reload refused] ok: refused once, stayed registered, reloaded on the next parseable edit\ncommit-scope scenarios run: 37\nPASS postflight.sh\nPASS parity-check.sh\n--- powershell.exe (D:\\moe-scratch\\5c71-gate)\nPASS frozen candidate scenarios: 73\n[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity\n[hot reload refused] ok: refused once, one process, reloaded on the next parseable edit\n[scenario AD] link variant skipped: this host cannot create symlinks\n[scenario AE] skipped: this host cannot create symlinks\ncommit-scope scenarios run: 36\nPASS postflight.ps1\nPASS parity-check.ps1\n--- pwsh.exe\nPASS frozen candidate scenarios: 73\n[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity\n[hot reload refused] ok: refused once, one process, reloaded on the next parseable edit\n[scenario AD] link variant skipped: this host cannot create symlinks\n[scenario AE] skipped: this host cannot create symlinks\ncommit-scope scenarios run: 36\nPASS postflight.ps1\nPASS parity-check.ps1\n--- gated sha256 (sha256sum -c vs live scripts/: all 6 OK at completion)\n3cc5b1c5 moe-agent.sh | b83a46ba moe-agent.ps1 | 49eabcdd postflight.sh | 968765e2 postflight.ps1 | 957599a2 parity-check.sh | 37e9d83f parity-check.ps1\n--- re-run fresh at completion: parity-check.sh PASS, parity-check.ps1 PASS on powershell.exe and pwsh.exe, bash -n moe-agent.sh ok",
+    "reportedAt": "2026-10-25T23:25:52.346Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "The wrapper hot reload now parses the changed on-disk wrapper before it restarts. Bytes that fail are refused once per hash. The seat stays registered and keeps serving the bytes it has already parsed.\n\nsh (scripts/moe-agent.sh):\n- The restart check runs `bash -n \"$MOE_WRAPPER_PATH\"`. It is guarded with `|| RC=$?` so set -e cannot end the seat.\n- On failure it records MOE_WRAPPER_REFUSED_HASH and prints one stderr line: `[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: <first bash -n line>`. It then falls through: no sidecar stop, deregister, temp removal or exec.\n- The change test skips a hash already refused. Parseable bytes take the old restart body unchanged.\n\nps1 (scripts/moe-agent.ps1):\n- Same logic through Parser::ParseFile. The reason is `line N: <msg>`; a catch yields `ParseFile failed: ...`, so a failed check refuses rather than reloads.\n- The supervisor catch comment is updated.\n\nTests:\n- postflight.sh and postflight.ps1 each gain a `[hot reload refused]` arm. An unparseable append must give exactly one refusal line with the parser's reason, no deregister (and one process on ps1). The next parseable append must then reload exactly once.\n- The existing `[hot reload]` arm is unchanged and green.\n- Both parity checkers register MOE_WRAPPER_RELOAD_REFUSED plus the refusal prose. The negative proof shows the checks fail when the emitter is deleted.\n\nRED: both pre-fix wrappers deregistered on unparseable bytes (RPC sequence 'cr').\n\nGate: the full chain, rc 0. sh ran 37 scenarios; PS 5.1 and pwsh 7 ran 36 each (no symlink rights on this host). Parity re-ran fresh at completion: PASS on all three engines.\n\nMutants M1 (no memo), M2 (always refuse) and M3 (no emitter) were killed on bash, PS 5.1 and pwsh 7; see comment dc236500.\n\nResiduals:\n- Bytes that change between the check and the exec/`&` are not re-checked.\n- A torn write that happens to parse is not caught.\n- A transie",
+  "completedAt": "2026-10-26T00:00:36.764Z",
+  "reviewCompletedAt": "2026-10-26T00:00:36.764Z",
+  "reviewSummary": "APPROVED. Code is in checkpoint b9ebc4a; completion f178123 has only board JSONs. Both on moe/work-2026-10-24, pushed. Diff: 6 script files, +215/-51 = 164 net LOC, mostly re-indent. Live, HEAD and b9ebc4a match the worker's gated sha256 for all 6 files.\n\nRe-ran the step-6 chain fresh from git archive f178123 scripts/ (all MOE_*/CLAUDE_CONFIG_DIR unset), 23:28-23:59Z, rc 0:\n- sh, TIMEOUT 180: frozen 73, [hot reload] ok, [hot reload refused] ok, commit-scope 37, PASS postflight.sh, PASS parity-check.sh.\n- PS 5.1 and pwsh 7 each: frozen 73, both hot-reload arms ok (1 process), commit-scope 36 (AD/AE skipped: no symlink rights), PASS postflight.ps1, PASS parity-check.ps1.\n\nOwn RED/GREEN, sh arm-only harness: pre-fix wrapper exits 1 'restart with no edit behind it (cr)'; fix exits 0.\n\nDoD:\n(1) sh: bash -n guarded by || under set -e. On failure: memo hash, WARN line with bash's reason, fall through; no sidecar stop, deregister, rm or exec. ps1: ParseFile in try/catch with a never-empty reason, so a failed parse call refuses. Parseable bytes still reload.\n(2) Both harnesses have the refused arm: ^c+rc+$, exactly 1 refusal, reason pinned, 1 restart, 1 process on ps1. Old arm unchanged and green.\n(3) Needles in both checkers, PASS on 3 engines; unique to sh:6059 and ps1:5521.\n(4) Fresh postflight green on all engines.\nEncoding: BOMs kept, 0 CR in all 6. Rails: tests present, no MCP or .moe change.\nResiduals, documented: TOCTOU window; a torn write that parses; a transient check failure refuses (fail-safe); the old unreachable sh echo. Complexity: minimal.",
+  "requiredCheckAtDone": null
+}

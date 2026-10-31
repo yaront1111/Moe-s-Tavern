@@ -22,17 +22,39 @@ export const MAX_CHAT_RESPONSE_CHARS = 40_000;
 /** Approximate serialized overhead of one message's metadata fields. */
 export const CHAT_MESSAGE_OVERHEAD_CHARS = 220;
 
+// `${workerId} left (${reason})`: state/workerLifecycle.ts deregisterWorker posts
+// one into every channel the departing seat has a chat cursor in.
+const PRESENCE_LEFT_LINE = /^\S+ left \([^\n]*\)$/;
+// The deregistration banner when the seat released no task and dropped no
+// resource claim. The text after the reason is daemon-written, so a banner that
+// released tasks ("; released N task...") or dropped claims ("; dropped N ...")
+// never ends in "(no tasks held)" and keeps routing.
+const QUIET_DEREGISTER_BANNER = /^\u{1F50C} \S+ deregistered \([^\n]*\); \(no tasks held\)$/u;
+
 /**
- * A daemon status line in #general that mentions nobody: the board's activity
- * feed (task moved, claimed, step completed, landing reports). The IDE shows
- * it; agents' chat reads skip it (chat_read takes includeSystem to opt back
- * in). Their tools already carry the same facts, and the feed was most of what
- * #general put into their context. A system line with an @mention still shows.
+ * A routine presence line: a seat leaving, or a deregistration that freed
+ * nothing. Wrapper restarts produce them after almost every CLI session, and
+ * they carry no decision for anyone. Total: any other input is simply false.
+ */
+export function isRoutinePresenceLine(content: string): boolean {
+  return typeof content === 'string'
+    && (PRESENCE_LEFT_LINE.test(content) || QUIET_DEREGISTER_BANNER.test(content));
+}
+
+/**
+ * A daemon status line that mentions nobody and pages nobody: in #general, the
+ * board's activity feed (task moved, claimed, step completed, landing reports);
+ * in any channel, a routine presence line (isRoutinePresenceLine). The IDE
+ * shows it; agents' chat reads skip it (chat_read takes includeSystem to opt
+ * back in) and it routes to no seat, so it counts as no unread and wakes no
+ * chat_wait. Their tools already carry the same facts, and the feed was most of
+ * what chat put into their context. A system line with an @mention still shows,
+ * and so does every other line in a role or custom channel.
  */
 export function isSystemFeedMessage(channel: ChatChannel | null | undefined, message: ChatMessage): boolean {
   return message.sender === 'system'
     && (message.mentions ?? []).length === 0
-    && (channel?.type === 'general' || channel?.name === 'general');
+    && (channel?.type === 'general' || channel?.name === 'general' || isRoutinePresenceLine(message.content));
 }
 
 /**

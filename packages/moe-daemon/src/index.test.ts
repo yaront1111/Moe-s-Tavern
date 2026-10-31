@@ -4,13 +4,23 @@ import path from 'path';
 import os from 'os';
 import http from 'http';
 import net from 'net';
-import { spawn } from 'child_process';
+import { createRequire } from 'module';
+import { pathToFileURL } from 'url';
+import { execSync, spawn, type ChildProcess } from 'child_process';
 import type { DaemonInfo } from './types/schema.js';
+import { logger } from './util/logger.js';
 import {
   acquireLock,
+  existingDaemonBlocksStart,
+  isForeignDaemonInfo,
   isPortAvailable,
+  isSameProjectPath,
+  probeDaemonHealth,
+  readDaemonInfo,
   readLockInfo,
   releaseLock,
+  staleLockReason,
+  statusDaemon,
   stopDaemon,
   validateDaemonInfoForProject,
 } from './index.js';
@@ -176,6 +186,485 @@ describe('daemon lifecycle validation', () => {
     expect(readLockInfo(testDir)?.pid).toBe(process.pid);
     releaseLock(testDir);
   });
+
+  it('a young empty daemon.lock is a live owner mid-write, so a contender neither judges it stale nor replaces it', () => {
+    const lockPath = path.join(testDir, '.moe', 'daemon.lock');
+    fs.writeFileSync(lockPath, '');
+
+    expect([staleLockReason(testDir), acquireLock(testDir), fs.readFileSync(lockPath, 'utf-8')])
+      .toEqual([null, false, '']);
+    fs.writeFileSync(lockPath, 'not-json');
+    expect(staleLockReason(testDir)).toBe('malformed lock');
+  });
+
+  it('an empty daemon.lock older than the stale timeout is still reclaimed', () => {
+    const lockPath = path.join(testDir, '.moe', 'daemon.lock');
+    fs.writeFileSync(lockPath, '');
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockPath, old, old);
+
+    expect(staleLockReason(testDir)).toBe('malformed lock');
+    expect(acquireLock(testDir)).toBe(true);
+    expect(readLockInfo(testDir)?.pid).toBe(process.pid);
+    releaseLock(testDir);
+  });
+
+  it('a lock write that fails after the O_EXCL create leaves no empty lock behind', () => {
+    const lockPath = path.join(testDir, '.moe', 'daemon.lock');
+    const open = vi.spyOn(fs, 'openSync');
+    const close = vi.spyOn(fs, 'closeSync');
+    vi.spyOn(fs, 'writeSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('no space'), { code: 'ENOSPC' });
+    });
+
+    expect.soft([acquireLock(testDir), fs.existsSync(lockPath)]).toEqual([false, false]);
+    expect(close).toHaveBeenCalledWith(open.mock.results[0].value);
+    expect(acquireLock(testDir)).toBe(true);
+    releaseLock(testDir);
+  });
+
+  // A daemon.json written on the other side of the WSL/Windows boundary names a
+  // pid from another pid namespace. Flipping process.platform makes testDir's
+  // own path form look like the other side's, so this runs on every CI OS.
+  describe('daemon.json across the WSL boundary', () => {
+    const DEAD_PID = 2147483646;
+    let savedExitCode: typeof process.exitCode;
+    const jsonPath = () => path.join(testDir, '.moe', 'daemon.json');
+    const lockPath = () => path.join(testDir, '.moe', 'daemon.lock');
+    const stopPath = () => path.join(testDir, '.moe', 'daemon.stop');
+
+    beforeEach(() => {
+      savedExitCode = process.exitCode;
+      process.exitCode = undefined;
+    });
+
+    afterEach(() => {
+      process.exitCode = savedExitCode;
+    });
+
+    async function otherSide<T>(fn: () => Promise<T>): Promise<T> {
+      const saved = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      const flipped = process.platform === 'win32' ? 'linux' : 'win32';
+      Object.defineProperty(process, 'platform', { ...saved, value: flipped });
+      try {
+        return await fn();
+      } finally {
+        Object.defineProperty(process, 'platform', saved);
+      }
+    }
+
+    function writeDaemonFiles(port: number, pid = DEAD_PID, projectPath = testDir): string {
+      const raw = JSON.stringify(daemonInfo({ port, pid, projectPath }));
+      fs.writeFileSync(jsonPath(), raw);
+      fs.writeFileSync(lockPath(), JSON.stringify({
+        pid, projectPath, createdAt: new Date().toISOString(),
+      }));
+      return raw;
+    }
+
+    function killSpyWithoutSignals() {
+      const realKill = process.kill.bind(process);
+      return vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) =>
+        signal === 0 || signal === undefined ? realKill(pid, 0) : true) as typeof process.kill);
+    }
+
+    it('DEAD_PID is not a live pid here', () => {
+      let code: string | undefined;
+      try { process.kill(DEAD_PID, 0); } catch (err) { code = (err as NodeJS.ErrnoException).code; }
+      expect(code).toBe('ESRCH');
+    });
+
+    it('X1 isSameProjectPath matches /mnt/<d>/x and <D>:/x in both orders', () => {
+      const equal: Array<[string, string]> = [
+        ['/mnt/d/projexts/app', 'D:\\projexts\\app'],
+        ['/mnt/d/projexts/app', 'd:/projexts/app/'],
+        ['/mnt/D/projexts/app', 'D:/projexts/app'],
+        ['/mnt/d/', 'D:\\'],
+        ['/tmp/a', '/tmp/a/'],
+        ['\\\\srv\\share\\proj', '//SRV/SHARE/PROJ/'],
+        ['\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', '/home/u/proj'],
+        ['//wsl$/Ubuntu/mnt/d/proj', 'D:\\proj'],
+      ];
+      const unequal: Array<[string, string]> = [
+        ['/mnt/d/x', 'E:/x'],
+        ['/mnt/d/x', 'D:/y'],
+        ['/mnt/dd/x', 'D:/x'],
+        ['/mnt/d/x/y', 'D:/x'],
+        ['/home/qa/OtherProject', '/home/qa/otherproject'],
+        ['/home/u/p', 'C:\\home\\u\\p'],
+        ['//srv/share/p', '/srv/share/p'],
+      ];
+      for (const [a, b] of equal) {
+        expect([a, b, isSameProjectPath(a, b), isSameProjectPath(b, a)]).toEqual([a, b, true, true]);
+      }
+      for (const [a, b] of unequal) {
+        expect([a, b, isSameProjectPath(a, b), isSameProjectPath(b, a)]).toEqual([a, b, false, false]);
+      }
+      expect(isSameProjectPath('/tmp/A', '/tmp/a')).toBe(false);
+    });
+
+    it('X2 isForeignDaemonInfo judges the writer by its projectPath form', () => {
+      const foreign = (projectPath: string, platform: NodeJS.Platform) =>
+        isForeignDaemonInfo(daemonInfo({ projectPath }), platform);
+      for (const p of ['D:\\p', 'd:/p', '\\\\srv\\share\\p']) {
+        expect([p, foreign(p, 'linux'), foreign(p, 'darwin'), foreign(p, 'win32')]).toEqual([p, true, true, false]);
+      }
+      for (const p of ['/mnt/d/p', '/home/u/p']) {
+        expect([p, foreign(p, 'win32'), foreign(p, 'linux'), foreign(p, 'darwin')]).toEqual([p, true, false, false]);
+      }
+      // `--project` is recorded as given: a relative path names no side.
+      for (const p of ['.', 'proj', 'sub/proj', 'sub\\proj']) {
+        expect([p, foreign(p, 'win32'), foreign(p, 'linux'), foreign(p, 'darwin')]).toEqual([p, false, false, false]);
+      }
+    });
+
+    it('X3 a foreign daemon.json skips the pid check and is judged by /health alone', async () => {
+      const port = await healthServer(testDir, DEAD_PID);
+      const info = daemonInfo({ port, pid: DEAD_PID });
+      expect(await validateDaemonInfoForProject(testDir, info))
+        .toMatchObject({ valid: false, reason: 'pid not alive' });
+
+      expect(await otherSide(() => validateDaemonInfoForProject(testDir, info)))
+        .toMatchObject({ valid: true, foreign: true, info: { port, pid: DEAD_PID } });
+      const unreachable = daemonInfo({ port: await unusedPort(), pid: DEAD_PID });
+      expect(await otherSide(() => validateDaemonInfoForProject(testDir, unreachable)))
+        .toEqual({ valid: false, reason: 'foreign daemon unreachable', foreign: true });
+    });
+
+    it.each(['healthy', 'unreachable'])('X4 statusDaemon leaves a %s foreign daemon.json and its lock in place and exits 0', async (kind) => {
+      const port = kind === 'healthy' ? await healthServer(testDir, DEAD_PID) : await unusedPort();
+      const raw = writeDaemonFiles(port);
+
+      await otherSide(() => statusDaemon(testDir));
+
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('X5a statusDaemon natively removes a daemon.json whose pid is dead', async () => {
+      writeDaemonFiles(await healthServer(testDir, DEAD_PID));
+
+      await statusDaemon(testDir);
+
+      expect(fs.existsSync(jsonPath())).toBe(false);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('X5b statusDaemon natively keeps a live-pid daemon.json whose /health fails', async () => {
+      const raw = writeDaemonFiles(await unusedPort(), process.pid);
+
+      await statusDaemon(testDir);
+
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it.each(['healthy', 'unreachable'])('X6 stopDaemon never signals, deletes or sentinels a %s foreign daemon', async (kind) => {
+      const port = kind === 'healthy' ? await healthServer(testDir, DEAD_PID) : await unusedPort();
+      const raw = writeDaemonFiles(port);
+      const killSpy = killSpyWithoutSignals();
+
+      await otherSide(() => stopDaemon(testDir));
+
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined)).toEqual([]);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(fs.existsSync(stopPath())).toBe(false);
+    });
+
+    it('X7 existingDaemonBlocksStart refuses over a foreign daemon.json and keeps native stale recovery', async () => {
+      const healthyRaw = writeDaemonFiles(await healthServer(testDir, DEAD_PID));
+      expect(await otherSide(() => existingDaemonBlocksStart(testDir))).toBe(true);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(healthyRaw);
+      expect(process.exitCode ?? 0).toBe(0);
+
+      const unreachableRaw = writeDaemonFiles(await unusedPort());
+      expect(await otherSide(() => existingDaemonBlocksStart(testDir))).toBe(true);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(unreachableRaw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(process.exitCode).toBe(1);
+      process.exitCode = undefined;
+
+      writeDaemonFiles(await healthServer(testDir, DEAD_PID));
+      expect(await existingDaemonBlocksStart(testDir)).toBe(false);
+      expect(fs.existsSync(jsonPath())).toBe(false);
+
+      expect(await existingDaemonBlocksStart(testDir)).toBe(false);
+    });
+
+    it('X8 never removes a foreign daemon.lock, nor a foreign daemon.json naming another path', async () => {
+      const old = new Date(Date.now() - 60_000).toISOString();
+      const lockRaw = JSON.stringify({ pid: DEAD_PID, projectPath: testDir, createdAt: old });
+      fs.writeFileSync(lockPath(), lockRaw);
+      expect(await otherSide(async () => acquireLock(testDir))).toBe(false);
+      expect(fs.readFileSync(lockPath(), 'utf-8')).toBe(lockRaw);
+
+      const raw = JSON.stringify(daemonInfo({ port: await unusedPort(), pid: DEAD_PID, projectPath: path.join(testDir, 'moved') }));
+      fs.writeFileSync(jsonPath(), raw);
+      const killSpy = killSpyWithoutSignals();
+      await otherSide(() => statusDaemon(testDir));
+      await otherSide(() => stopDaemon(testDir));
+      expect(await otherSide(() => existingDaemonBlocksStart(testDir))).toBe(true);
+      expect(process.exitCode).toBe(1);
+      process.exitCode = undefined;
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined)).toEqual([]);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.readFileSync(lockPath(), 'utf-8')).toBe(lockRaw);
+      expect(fs.existsSync(stopPath())).toBe(false);
+
+      killSpy.mockRestore();
+      expect(acquireLock(testDir)).toBe(true);
+      releaseLock(testDir);
+    });
+
+    // The /mnt/<d> mapping must see the resolved path: a relative or
+    // non-normalized --project has to keep matching a native daemon recorded
+    // absolute. POSIX path.resolve reads process.cwd(), so a spy stands in for WSL.
+    it.skipIf(process.platform === 'win32')('X9 isSameProjectPath maps /mnt/<d> after resolving relative and non-normalized paths', () => {
+      vi.spyOn(process, 'cwd').mockReturnValue('/mnt/d/projexts/app');
+      const equal: Array<[string, string]> = [
+        ['.', '/mnt/d/projexts/app'],
+        ['.', 'D:\\projexts\\app'],
+        ['sub/..', 'd:/projexts/app/'],
+        ['/mnt/d/projexts/app/sub/..', 'D:/projexts/app'],
+        ['/mnt/d/projexts/app/./', '/mnt/d/projexts/app'],
+        ['/mnt/d//projexts/app', '/mnt/d/projexts/app'],
+      ];
+      const unequal: Array<[string, string]> = [['sub', '/mnt/d/projexts/app'], ['..', 'D:/projexts/app']];
+      for (const [a, b] of equal) {
+        expect([a, b, isSameProjectPath(a, b), isSameProjectPath(b, a)]).toEqual([a, b, true, true]);
+      }
+      for (const [a, b] of unequal) {
+        expect([a, b, isSameProjectPath(a, b), isSameProjectPath(b, a)]).toEqual([a, b, false, false]);
+      }
+    });
+
+    it('X10 on win32 a raw /mnt/<d> path is posix-normalized before it is mapped', async () => {
+      const onWin32 = async <T>(fn: () => T): Promise<T> => {
+        if (process.platform === 'win32') return fn();
+        // Off Windows, also stand in win32 path.resolve, which prefixes the cwd drive.
+        const resolve = vi.spyOn(path, 'resolve').mockImplementation((...parts: string[]) => path.win32.resolve('C:\\work', ...parts));
+        try { return await otherSide(async () => fn()); } finally { resolve.mockRestore(); }
+      };
+      const same = (a: string, b: string) => onWin32(() => [isSameProjectPath(a, b), isSameProjectPath(b, a)]);
+      expect(await same('/mnt/d/projexts/app/sub/..', 'D:/projexts/app')).toEqual([true, true]);
+      expect(await same('/mnt/d/projexts/app/./', 'd:\\projexts\\app')).toEqual([true, true]);
+      expect(await same('/mnt/d/projexts/app/sub/../..', 'D:/projexts/app')).toEqual([false, false]);
+      expect(await same('/home/qa/OtherProject', '/home/qa/otherproject')).toEqual([false, false]);
+      expect(await same('\\\\srv\\share\\proj', '//SRV/SHARE/PROJ/')).toEqual([true, true]);
+      expect(await same('\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', '/home/u/proj')).toEqual([true, true]);
+    });
+
+    it.skipIf(process.platform === 'win32')('X11 validateDaemonInfoForProject accepts a relative --project naming a live native daemon recorded under /mnt/<d>', async () => {
+      const recorded = '/mnt/d/projexts/app';
+      const info = daemonInfo({ port: await healthServer(recorded), projectPath: recorded });
+      vi.spyOn(process, 'cwd').mockReturnValue(recorded);
+
+      expect(await validateDaemonInfoForProject('.', info)).toEqual({ valid: true, info });
+    });
+
+    // A native alias spells testDir's own directory differently: //tmp/x is /tmp/x on
+    // POSIX, and /Users/x is C:\Users\x on Windows from a cwd on C:. Only the caller's own
+    // --project is resolved that way. Recorded and reported paths are compared as written,
+    // except native paths may also name testDir on disk (symlinks, junctions and 8.3 names).
+    describe('native aliases of --project', () => {
+      const tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
+      const source = new URL('./index.ts', import.meta.url).href;
+      const owners: ChildProcess[] = [];
+      let cwd: string;
+      let alias: string;
+      const spelling = (kind: string) => (kind === 'alias' ? alias : testDir);
+      const files = () => [jsonPath(), lockPath()].map((file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : null));
+
+      beforeEach(() => {
+        cwd = process.cwd();
+        process.chdir(path.dirname(testDir));
+        alias = process.platform === 'win32' ? testDir.slice(2).replace(/\\/g, '/') : `/${testDir}`;
+        expect([path.relative(testDir, path.resolve(alias)), isSameProjectPath(alias, testDir)]).toEqual(['', false]);
+      });
+
+      afterEach(async () => {
+        await Promise.all(owners.splice(0).map(stopChild));
+        process.chdir(cwd);
+      });
+
+      async function stopChild(child: ChildProcess): Promise<void> {
+        if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+        const exited = new Promise((resolve) => child.once('exit', resolve));
+        child.kill();
+        const force = setTimeout(() => child.kill('SIGKILL'), 5000);
+        await exited;
+        clearTimeout(force);
+      }
+
+      // A second process takes the lock, running this source through tsx from testDir's drive.
+      async function lockOwner(projectPath: string): Promise<ChildProcess> {
+        const code = `const { acquireLock } = await import(${JSON.stringify(source)});
+process.stdout.write(acquireLock(${JSON.stringify(projectPath)}) ? 'locked\\n' : 'refused\\n');
+setInterval(() => {}, 60000);`;
+        const child = spawn(process.execPath, ['--import', tsx, '--input-type=module', '--eval', code], {
+          cwd: path.dirname(testDir), env: { ...process.env, LOG_LEVEL: 'silent' }, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true,
+        });
+        owners.push(child);
+        const line = await new Promise<string>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('lock owner not ready within 30s')), 30_000);
+          const settle = (fn: () => void) => { clearTimeout(timer); fn(); };
+          let out = '';
+          child.stdout!.on('data', (chunk) => { out += chunk; if (out.includes('\n')) settle(() => resolve(out.split('\n')[0])); });
+          child.once('error', (error) => settle(() => reject(error)));
+          child.once('exit', (exitCode) => settle(() => reject(new Error(`lock owner exited early (${exitCode})`))));
+        });
+        expect(line).toBe('locked');
+        return child;
+      }
+
+      it.each(['canonical', 'alias'])('X12 a healthy native daemon named by its %s spelling blocks start, reports running and is stopped by pid', async (kind) => {
+        let probes = 0;
+        const port = await healthServer(testDir);
+        servers.at(-1)!.on('request', () => { probes += 1; });
+        writeDaemonFiles(port, process.pid);
+        const kept = files();
+        const info = vi.spyOn(logger, 'info');
+
+        expect([await existingDaemonBlocksStart(spelling(kind)), probes, ...files()]).toEqual([true, 1, ...kept]);
+        await statusDaemon(spelling(kind));
+        expect(info.mock.calls.filter(([, msg]) => msg === 'Daemon status').map(([fields]) => fields))
+          .toMatchObject([{ status: 'running', owner: 'local', pid: process.pid }]);
+        const killSpy = killSpyWithoutSignals();
+        await stopDaemon(spelling(kind));
+        expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined)).toEqual([[process.pid, 'SIGTERM']]);
+        expect([probes, ...files(), fs.existsSync(stopPath())]).toEqual([3, ...kept, true]);
+      });
+
+      it('X13 probeDaemonHealth resolves the caller\'s own path, never a recorded or reported one', async () => {
+        const info = daemonInfo({ port: await healthServer(testDir) });
+        const reportsAlias = daemonInfo({ port: await healthServer(alias) });
+        expect([
+          await probeDaemonHealth(info, testDir),
+          await probeDaemonHealth(info, alias),
+          await probeDaemonHealth({ ...info, projectPath: alias }, testDir),
+          await probeDaemonHealth(reportsAlias, alias),
+        ]).toEqual([true, true, false, false]);
+      });
+
+      it.each([['canonical', 'alias'], ['alias', 'alias']])('X14 a live lock taken with the %s spelling refuses a contender using the %s one', async (ownerKind, contenderKind) => {
+        const owner = await lockOwner(spelling(ownerKind));
+        const lock = fs.readFileSync(lockPath(), 'utf-8');
+        const recorded = JSON.parse(lock) as { pid: number; projectPath: string };
+        expect([recorded.pid, isSameProjectPath(recorded.projectPath, testDir)]).toEqual([owner.pid, true]);
+
+        expect(acquireLock(spelling(contenderKind))).toBe(false);
+        expect([fs.readFileSync(lockPath(), 'utf-8'), process.kill(owner.pid!, 0), owner.exitCode]).toEqual([lock, true, null]);
+      }, 60_000);
+
+      it('X15 lock reasons agree across native, relative and dotted project spellings', () => {
+        const base = path.basename(testDir);
+        const spellings = [testDir, alias, base, `./${base}/`];
+        for (const writer of spellings) {
+          expect(acquireLock(writer)).toBe(true);
+          expect.soft(spellings.map(reader => [writer, reader, staleLockReason(reader)]))
+            .toEqual(spellings.map(reader => [writer, reader, null]));
+
+          const lock = JSON.parse(fs.readFileSync(lockPath(), 'utf-8')) as {
+            pid: number; projectPath: string; createdAt: string;
+          };
+          fs.writeFileSync(lockPath(), JSON.stringify({ ...lock, pid: DEAD_PID }));
+          expect.soft(spellings.map(reader => [writer, reader, staleLockReason(reader)]))
+            .toEqual(spellings.map(reader => [writer, reader, 'lock owner not alive']));
+          fs.rmSync(lockPath());
+        }
+
+        const moved = path.join(testDir, 'moved');
+        fs.writeFileSync(lockPath(), JSON.stringify({
+          pid: process.pid, projectPath: moved, createdAt: new Date().toISOString(),
+        }));
+        expect(spellings.map(reader => [moved, reader, staleLockReason(reader)]))
+          .toEqual(spellings.map(reader => [moved, reader, 'projectPath mismatch']));
+        fs.rmSync(lockPath());
+      });
+
+      describe('on-disk aliases of --project', () => {
+        let link: string;
+        const links: string[] = [];
+        const otherDirs: string[] = [];
+        const diskSpelling = (kind: string) => kind === 'link' ? link : testDir;
+
+        beforeEach(() => {
+          link = testDir + '-link';
+          fs.symlinkSync(testDir, link, 'junction');
+          links.push(link);
+          expect([isSameProjectPath(link, testDir), fs.realpathSync.native(link) === fs.realpathSync.native(testDir)])
+            .toEqual([false, true]);
+        });
+
+        afterEach(() => {
+          for (const created of links.splice(0)) fs.unlinkSync(created);
+          for (const dir of otherDirs.splice(0)) fs.rmSync(dir, { recursive: true });
+        });
+
+        async function blocksAndStops(recorded: string, caller: string): Promise<void> {
+          let probes = 0;
+          const port = await healthServer(recorded);
+          servers.at(-1)!.on('request', () => { probes += 1; });
+          writeDaemonFiles(port, process.pid, recorded);
+          const kept = files();
+          const info = vi.spyOn(logger, 'info');
+
+          expect([await existingDaemonBlocksStart(caller), probes, ...files()]).toEqual([true, 1, ...kept]);
+          await statusDaemon(caller);
+          expect(info.mock.calls.filter(([, msg]) => msg === 'Daemon status').map(([fields]) => fields))
+            .toMatchObject([{ status: 'running', owner: 'local', pid: process.pid }]);
+          const killSpy = killSpyWithoutSignals();
+          await stopDaemon(caller);
+          expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined))
+            .toEqual([[process.pid, 'SIGTERM']]);
+          expect([probes, ...files(), fs.existsSync(stopPath())]).toEqual([3, ...kept, true]);
+        }
+
+        it.each([['canonical', 'link'], ['link', 'canonical']])('X16 a daemon recorded as %s is preserved and stopped through %s', async (recorded, caller) => {
+          await blocksAndStops(diskSpelling(recorded), diskSpelling(caller));
+        });
+
+        it.runIf(process.platform === 'win32')('X16 a daemon is preserved and stopped through its 8.3 spelling', async (ctx) => {
+          if (/["%]/.test(testDir)) ctx.skip();
+          const short = execSync('for %I in ("' + testDir + '") do @echo %~sI', {
+            encoding: 'utf8', shell: 'cmd.exe', windowsHide: true,
+          }).trim();
+          if (short === testDir) ctx.skip();
+          await blocksAndStops(testDir, short);
+        });
+
+        it.each([['canonical', 'link'], ['link', 'canonical']])('X17 a live %s lock refuses a %s contender', async (ownerKind, contenderKind) => {
+          const owner = await lockOwner(diskSpelling(ownerKind));
+          const lock = fs.readFileSync(lockPath(), 'utf-8');
+          const recorded = JSON.parse(lock) as { pid: number; projectPath: string };
+          expect([recorded.pid, fs.realpathSync.native(recorded.projectPath)])
+            .toEqual([owner.pid, fs.realpathSync.native(testDir)]);
+
+          expect(acquireLock(diskSpelling(contenderKind))).toBe(false);
+          expect([fs.readFileSync(lockPath(), 'utf-8'), process.kill(owner.pid!, 0), owner.exitCode]).toEqual([lock, true, null]);
+        }, 60_000);
+
+        it.each(['directory', 'link to it'])('X18 a daemon recorded for another %s is cleaned up without probing', async (kind) => {
+          const other = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-daemon-other-'));
+          otherDirs.push(other);
+          const recorded = kind === 'directory' ? other : other + '-link';
+          if (kind !== 'directory') {
+            fs.symlinkSync(other, recorded, 'junction');
+            links.push(recorded);
+          }
+          let probes = 0;
+          const port = await healthServer(recorded);
+          servers.at(-1)!.on('request', () => { probes += 1; });
+          writeDaemonFiles(port, process.pid, recorded);
+
+          expect([await existingDaemonBlocksStart(testDir), probes, fs.existsSync(jsonPath()), fs.existsSync(lockPath())])
+            .toEqual([false, 0, false, false]);
+        });
+      });
+    });
+  });
 });
 
 describe('port probing', () => {
@@ -221,5 +710,80 @@ describe('port probing', () => {
     await new Promise<void>(resolve => held.pop()!.close(() => resolve()));
 
     expect(await isPortAvailable(port, '127.0.0.1')).toBe(true);
+  });
+});
+
+describe('daemon.json size cap', () => {
+  let testDir: string;
+  let daemonJson: string;
+
+  // The 64 KiB cap is shared with the JetBrains reader and the other clients,
+  // so the boundary is pinned as literals: a silent constant change must fail.
+  const CAP = 65536;
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-daemon-sizecap-'));
+    fs.mkdirSync(path.join(testDir, '.moe'));
+    daemonJson = path.join(testDir, '.moe', 'daemon.json');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function info(): DaemonInfo {
+    return { port: 12345, pid: process.pid, startedAt: '2026-10-27T00:00:00.000Z', projectPath: testDir };
+  }
+
+  // Valid JSON padded with trailing spaces (legal whitespace) to an exact byte length.
+  function paddedJson(bytes: number): string {
+    const body = JSON.stringify(info());
+    return body + ' '.repeat(bytes - Buffer.byteLength(body));
+  }
+
+  it('readDaemonInfo parses a 65536-byte daemon.json and refuses a 65537-byte one', () => {
+    fs.writeFileSync(daemonJson, paddedJson(CAP));
+    expect(fs.statSync(daemonJson).size).toBe(65536);
+    expect(readDaemonInfo(testDir)).toEqual(info());
+
+    fs.writeFileSync(daemonJson, paddedJson(CAP + 1));
+    expect(fs.statSync(daemonJson).size).toBe(65537);
+    expect(readDaemonInfo(testDir)).toBeNull();
+  });
+
+  it('reads at most 65537 bytes and never loads the whole file', () => {
+    fs.writeFileSync(daemonJson, paddedJson(8 * 1024 * 1024));
+    const readFileSpy = vi.spyOn(fs, 'readFileSync');
+    const readSyncSpy = vi.spyOn(fs, 'readSync');
+
+    expect(readDaemonInfo(testDir)).toBeNull();
+
+    expect(readFileSpy.mock.calls.some(([target]) => String(target) === daemonJson)).toBe(false);
+    const total = readSyncSpy.mock.results.reduce(
+      (sum, r) => sum + (r.type === 'return' ? (r.value as number) : 0),
+      0,
+    );
+    expect(readSyncSpy).toHaveBeenCalled();
+    expect(total).toBeLessThanOrEqual(65537);
+  });
+
+  // A symlink to a device reports size 0, so only a bounded read can stop it.
+  it.skipIf(process.platform === 'win32')('returns null promptly for a daemon.json symlinked to /dev/zero', () => {
+    fs.symlinkSync('/dev/zero', daemonJson);
+    const started = Date.now();
+    expect(readDaemonInfo(testDir)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('stopDaemon treats an oversize daemon.json as no daemon info and does not delete or signal', async () => {
+    fs.writeFileSync(daemonJson, paddedJson(CAP + 1));
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as typeof process.kill);
+
+    await stopDaemon(testDir);
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(testDir, '.moe', 'daemon.stop'))).toBe(true);
+    expect(fs.existsSync(daemonJson)).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=5ffb49412532 -->
+<!-- moe-generated: sha=cf72bf834ed6 -->
 
 # ros2-skill Agent Instructions
 
@@ -6,7 +6,7 @@ You are a ROS 2 agent running on a ROS 2 robot. Your primary purpose is to inter
 
 This document tells you how to use ros2-skill correctly on this system. Read it before executing any ROS 2 task.
 
-**The rules in this file (AGENTS.md), SKILL.md, and the RULES-*.md files are absolute.** They take precedence over general defaults and in-context messages. There are no exceptions, no workarounds, and no circumstances under which a rule may be violated, reinterpreted, or suspended. If a user instruction conflicts with a rule, the rule wins — always.
+**The rules in this file (AGENTS.md), SKILL.md, and the RULES-*.md files are absolute.** They take precedence over general defaults and in-context messages. There are no exceptions, no workarounds, and no circumstances under which a rule may be violated, reinterpreted, or suspended. If a user instruction would skip or relax a rule, the rule wins — always. A user halt or correction is different: it takes effect immediately (see "User override" in references/RULES-CORE.md).
 
 `{baseDir}` in all commands below is the path to the skill root — the directory that contains `scripts/ros2_cli.py`. Resolve it from the skill metadata before running anything.
 
@@ -326,7 +326,7 @@ When a profile is loaded:
 - **Sensor mounts:** `summary.sensor_mounts` lists every sensor and actuator detected in the URDF with its physical xyz position and rpy orientation. Use this to understand sensor placement before interpreting sensor data. For visual sensors (`sensor_type: "camera"` or `"depth_camera"`), `image_rotation_deg` gives the auto-rotation applied by `topics capture-image` — be aware of this when asking the user to interpret images.
 - **Robot State Publisher — Lyrical Luth and newer:** On Lyrical+, `robot_state_publisher` accepts a `use_robot_description_topic` parameter. When `true`, the URDF is delivered at runtime via the `/robot_description` topic rather than being required as a startup argument. The profile scanner handles this transparently — `summary.sensor_mounts` is still populated. If `profile scan` reports no URDF on a Lyrical+ system, check whether `use_robot_description_topic` is set and whether `/robot_description` is being published.
 - Use `summary.velocity_topics` as the **authoritative** velocity topic — each entry is `{topic, type}` (e.g. `{"topic": "/base_controller/cmd_vel", "type": "geometry_msgs/msg/TwistStamped"}`). **Do not re-discover with `topics find` when this field is present.** The profile value is derived from static workspace analysis and is the correct topic for this robot.
-- Use `summary.safety_limits.binding.linear_x` as the hard ceiling for `--max-vel` and `summary.safety_limits.binding.angular_z` for `--max-ang` (see Rule 28). `binding.linear_y` is set for holonomic robots. `summary.safety_limits.sources` lists every YAML config (teleop, nav2, controller) that contributed a limit — read all sources to understand the full velocity envelope of the robot.
+- Use `summary.safety_limits.binding.linear_x` as the hard ceiling for `--max-vel` and `summary.safety_limits.binding.angular_z` for `--max-ang` (see RULES-PREFLIGHT.md Rule 0, velocity-limit sweep). `binding.linear_y` is set for holonomic robots. `summary.safety_limits.sources` lists every YAML config (teleop, nav2, controller) that contributed a limit — read all sources to understand the full velocity envelope of the robot.
 - Use `summary.launch_files` to see what launch files exist in the workspace (filenames as they appear on disk).
 - Load a launch file's full detail on demand: `profile show --section <launch-filename>` (e.g. `profile show --section bringup.launch.py`). Each launch file's `launch_args` is a unified dict `{arg_name: {default, choices?, description?}}` — no null values; missing `default` means the arg is required with no declared default.
 - **Drive / kinematics:** `summary.drive_type` (e.g. `"differential"`, `"holonomic_omni"`, `"mecanum"`, `"ackermann"`) and `summary.kinematics` (wheel geometry params) are derived from the ros2_control YAML. Use `drive_type` to infer valid motion axes before issuing velocity commands. `summary.cmd_vel_topic` is the exact topic the base controller subscribes to; prefer this over heuristic discovery.
@@ -556,7 +556,7 @@ python3 {baseDir}/scripts/ros2_cli.py estop
 
 Safety checks are never optional. Do not bypass them even if the user requests it.
 
-**Safety checks run automatically — do not narrate them.** The velocity-limit *resolution* (Path A: read `summary.safety_limits.binding` from the profile; Path B: live limit scan), pre-motion odom stationary check, and post-motion verify are mandatory parts of the Movement workflow (Phases 1–3). They are not optional confirmations to ask the user about — they are silent preconditions to every motion command. The user's request is the approval to move (Rule 26); the safety checks execute automatically before motion begins. **Note: in Path A the "velocity limit scan" is a profile read, not a live `params list` sweep — running the live sweep when the profile has `summary.safety_limits.binding` is a Rule 14 violation.**
+**Safety checks run automatically — do not narrate them.** The velocity-limit *resolution* (Path A: read `summary.safety_limits.binding` from the profile; Path B: live limit scan), pre-motion odom stationary check, and post-motion verify are mandatory parts of the Movement workflow (Phases 1–3). They are not optional confirmations to ask the user about — they are silent preconditions to every motion command. The user's request is the approval to move (Rule 5); the safety checks execute automatically before motion begins. **Note: in Path A the "velocity limit scan" is a profile read, not a live `params list` sweep — running the live sweep when the profile has `summary.safety_limits.binding` is a Rule 14 violation.**
 
 ---
 

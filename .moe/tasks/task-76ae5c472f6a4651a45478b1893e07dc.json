@@ -1,0 +1,220 @@
+{
+  "id": "task-76ae5c472f6a4651a45478b1893e07dc",
+  "epicId": "epic-be924fb8",
+  "title": "bug: agent Git guard refuses PowerShell gemini/grok launches when the Windows temp path is non-ASCII, and its setup failure never names the Git >= 2.31 requirement",
+  "description": "QA (qa-952969be) found these robustness edges in 447281cf (task-c4cd6dce). None blocked that row's DoD. This row touches scripts/moe-agent.ps1, so it joins the serialized wrapper lane. It depends on task-57bbd302 because that harness fix pins the launch blocks.\n\n1. PS stdout decoding (measured):\n- Initialize-MoeAgentGitGuard (moe-agent.ps1 ~L5986) captures the guard root path from `node -` stdout. PowerShell decodes that with [Console]::OutputEncoding.\n- The wrapper switches that to UTF-8 only `if ($cliType -in @('claude','codex'))` (~L936-939). Custom commands default to claude, so gemini and grok seats keep the OEM code page.\n- On PS 5.1.26100 the default was ibm850, and node's 'C:/témp' came back as 'C:/t├®mp' (code points 67,58,47,116,9500,174,109,112).\n- So when [IO.Path]::GetTempPath() holds non-ASCII characters (for example a non-ASCII Windows user name), ReadAllText(Join-Path $root 'env.json') throws. The seat refuses launch with a bare .NET error, not MOE_AGENT_GIT_GUARD_FAILED. The real guard directory then leaks in %TEMP%, because Remove-Item gets the garbled path.\n- Fix direction: decode UTF-8 explicitly around that call, or have node emit an ASCII-safe or known path.\n\n2. Git version:\n- GIT_CONFIG_COUNT and `rev-parse --path-format=absolute` both need Git 2.31 or newer.\n- Before 447281cf, only the commitHooks=true path used --path-format. Now every launch in a Git project fails closed with the generic MOE_AGENT_GIT_GUARD_FAILED on older Git, such as Ubuntu 20.04's 2.25.\n- TROUBLESHOOTING lists Git access, GIT_CONFIG_* and temp permissions, but never the minimum Git version.\n\n3. CLI environment policies:\n- If a CLI strips variable names containing KEY but keeps GIT_CONFIG_COUNT and GIT_CONFIG_VALUE_n, every git command in that seat dies: `error: missing config key GIT_CONFIG_KEY_0` / `fatal: unable to parse command-line config`, exit 128 (measured).\n- Measured: codex-cli 0.166 passes the keys through by default. With user-set `shell_environment_policy.ignore_default_excludes=false` it strips GIT_CONFIG_KEY_0 and keeps COUNT and VALUE_0.\n- gemini-cli 0.64 explicitly keeps GIT_CONFIG_* even under redaction. grok was not checked (static binary).\n- Either document this in TROUBLESHOOTING with the fix, or pick an overlay carrier without KEY in its name.\n\n4. docs/CONFIGURATION.md's env-var table lists wrapper variables such as MOE_DISABLE_CHECKPOINT, but not MOE_ALLOW_AGENT_GIT_WRITES. Add it, marked human-only.",
+  "definitionOfDone": [
+    "On native Windows PowerShell 5.1, a gemini or grok seat whose [IO.Path]::GetTempPath() contains non-ASCII characters launches a guarded CLI, and its guard root is removed after exit. A new case in scripts/tests/agent-git-guard.test.mjs proves this: it fails before the fix and passes after.",
+    "When guard setup fails on Git older than 2.31, the wrapper or docs/TROUBLESHOOTING.md (Agent Git-write refusal) names the minimum Git version. TROUBLESHOOTING also documents the KEY-stripping CLI-policy failure and its fix, unless the overlay no longer uses KEY-named variables.",
+    "docs/CONFIGURATION.md lists MOE_ALLOW_AGENT_GIT_WRITES as a human-only override. The guard suite (Linux bash and native Windows PS 5.1), postflight-safe bash and powershell, parity-check, and the two launcher harness test files all pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test first (RED). Use test-driven-development, and read mem:task-task-76ae5c472f6a4651a45478b1893e07dc-handoff, mem:gotcha-agent-git-guard-runtime-config and mem:gotcha-windows-node-from-wsl-test-runs first.\n\nIn scripts/tests/agent-git-guard.test.mjs, add ONE case.\n- Seat: a gemini headless seat. Fixture cli is 'gemini' and interactive is false, so launch() passes -GeminiExec / --gemini-exec. Status REVIEW, commitHooks false.\n- Temp directory: a fresh non-ASCII directory inside the fixture root, e.g. path.join(root, 'temp é'). Create it before launch; the existing t.after removes it.\n- Suggested shape: an optional 5th matrix element (mode 'non-ascii-temp') appended to the main matrix list. Name the mode in the title so --test-name-pattern 'non-ASCII temp' selects exactly this case. That way it reuses every matrix assertion: the fake CLI ran, four refusals name the wrapper landing, the before/after snapshots are equal, secure, count '3', caller 'preserved', the Windows .restored env, exit 0, the completion landing, and the hooks are gone after exit.\n- Env on Windows: delete every f.env key matching /^(TMP|TEMP)$/i, then set TMP and TEMP to that directory. GetTempPath reads TMP first, and duplicate keys that differ only in case leave the winner undefined (the lowercase-count lesson).\n- Env on Linux: set TMPDIR. The sh twin's SECURE_TEMP_DIR comes from mktemp.\n- Windows only: give launch() an opt-in that makes this case's PowerShell driver save [Console]::OutputEncoding, pin [Text.Encoding]::GetEncoding(850) before invoking the wrapper, and restore the saved value in the driver's existing finally. 850 is the measured PS 5.1.26100 default, ibm850. Every other driver stays byte-identical. The pin makes the case reproduce on a host whose console defaults to UTF-8, or after an earlier claude/codex case left a shared console at 65001 (the wrapper sets UTF-8 at its top for those CLIs and never restores it).\n- Extra assertions: the CLI's core.hooksPath resolves under the non-ASCII directory (compare path.resolve'd strings, case-insensitively on Windows). After exit, a recursive walk of that directory finds no entry whose name starts with moe-git-guard-.\n\nRED proof: under native Windows node, run only this case (step 4 recipe; a /mnt/d snapshot with HEAD's unfixed scripts/moe-agent.ps1 plus the new test file). It must fail with 'CLI did not run', and the raw .NET ReadAllText error appears in the output. Keep that failure line for the completion summary. On Linux the case passes both before and after the fix, because bash keeps node's bytes as they are.\n\nError handling in the test: every path the case creates stays inside the fixture root that t.after removes, and the driver restores the console encoding in finally even when the wrapper throws.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/agent-git-guard.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix scripts/moe-agent.ps1 Initialize-MoeAgentGitGuard so that the embedded node program's stdout is decoded as UTF-8.\n- Save [Console]::OutputEncoding.\n- In a try: set it to New-Object Text.UTF8Encoding($false), run the existing `$script:AgentGitGuardRoot = $program | & node - $projectPath ([IO.Path]::GetTempPath())` line unchanged, and capture $LASTEXITCODE.\n- In finally: restore the saved encoding.\n- Keep the existing MOE_AGENT_GIT_GUARD_FAILED throw on a nonzero exit, and keep the env.json read unchanged.\nThis is the same save/set/restore pattern that Get-MoeGitTop and Invoke-MoeGit use.\n\nAdd one short ASCII comment on why. Node writes UTF-8. Only claude/codex switch the console to UTF-8 at the top, so gemini/grok seats keep the OEM code page. A non-ASCII temp root therefore came back garbled: ReadAllText threw a raw .NET error, and Remove-Item missed the real directory, which leaked. Architect probe, PS 5.1.26100: under ibm850, 'C:/témp' arrives as code points 67,58,47,116,9500,174,109,112. With this pattern it arrives as 67,58,47,116,233,109,112, and ibm850 is restored afterwards.\n\nOut of scope, leave untouched:\n- the embedded node program, which must stay byte-identical with moe-agent.sh's MOE_GIT_GUARD_JS heredoc;\n- Invoke-MoeGuardedCommand and Remove-MoeAgentGitGuard, whose span the launcher harnesses cut;\n- every launch line, which codexDescriptor.ts pins;\n- the claude/codex UTF-8 block;\n- scripts/moe-agent.sh. Bash needs no change, and its working-tree copy holds a peer's uncommitted edit: never stage, revert or overlay it.\nKeep the file UTF-8 with BOM: use the Edit tool, no shell rewrite.\n\nError handling: the finally restores the encoding on every path (node failure, a throw, Ctrl+C). A nonzero node exit still stops the launch with MOE_AGENT_GIT_GUARD_FAILED and never falls back unprotected. claude/codex seats are unaffected: the encoding is UTF-8 going in and UTF-8 when restored.\n\nRe-run the step 1 case under native Windows node: it must be GREEN, with no moe-git-guard- entry left in the non-ASCII temp.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs, additive, two files.\n\n1. docs/TROUBLESHOOTING.md, section '### Agent Git-write refusal'. Keep the anchor.\n(a) In the MOE_AGENT_GIT_GUARD_FAILED sentence, name the minimum Git version first: Git 2.31 or newer is required, because the overlay uses GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> and `git rev-parse --path-format=absolute`. On older Git every launch in a Git project stops with that code; Ubuntu 20.04, for example, ships 2.25. Tell the reader to check `git --version` for the git on the seat's PATH.\n(b) Add a short paragraph on stripped config keys:\n- Symptom: every git command inside a seat fails with `error: missing config key GIT_CONFIG_KEY_0` then `fatal: unable to parse command-line config` (exit 128).\n- Cause: the agent CLI's environment policy dropped variables whose names contain KEY but kept GIT_CONFIG_COUNT and GIT_CONFIG_VALUE_<n>.\n- Measured: codex-cli 0.166 passes all three by default, but strips GIT_CONFIG_KEY_<n> when shell_environment_policy.ignore_default_excludes = false. gemini-cli 0.64 keeps GIT_CONFIG_* even when it redacts. Grok is unverified.\n- Fix: remove that setting, or set it to true (Codex's default), wherever it is configured: ~/.codex/config.toml, the project's .codex/config.toml, or a -c override.\n- Keep or drop the whole GIT_CONFIG_* family together. Dropping all of it leaves Git working but runs that seat without this guard.\n- The wrapper never rewrites a CLI's environment policy.\n\n2. docs/CONFIGURATION.md, '### Agent Scripts' table. Add one MOE_ALLOW_AGENT_GIT_WRITES row next to MOE_DISABLE_CHECKPOINT, marked human-only:\n- Value `1` lets one deliberately reviewed git commit or git push, run from a shell that inherited a seat's agent Git-write guard, run the original hook instead of the MOE_AGENT_GIT_REFUSED refusal.\n- Set it for that one command only and restore it afterwards. Never put it in a profile, never hand it to an agent, and never use it as a landing repair.\n- A human outside the agent session needs no override.\n- Link to docs/TROUBLESHOOTING.md 'Agent Git-write refusal'.\n- Default: Unset. Example: 1.\n\nDocs test constraints:\n- No line may match the NEVER_RUNS_GIT regex in packages/moe-daemon/src/util/daemonGitDocs.test.ts, so avoid wording like 'does not run git'.\n- Keep the existing CONFIGURATION rows that executionContractDocs.test.ts expects.\n\ndocs/CONFIGURATION.md also carries a peer's uncommitted hunk (the --host wsl sentence). Edit only your own row, and never revert or stage that hunk.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate. Run it once, fresh, after steps 1-3; its output is the complete_task evidence.\n\nSnapshot: never run it in the shared tree, because its scripts/moe-agent.sh holds a peer's uncommitted bytes and the guard suite executes that file. Make a whole-repo `git archive HEAD` snapshot, overlay exactly the four owned files, and `cmp` each one against the worktree before citing the run.\n\nLinux, from the snapshot root, run exactly:\n`unset ${!MOE_@} ${!CLAUDE_@} ${!FAKE_@}; node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh && npm run docs:lint`\nSubmit its command, exitCode and outputTail.\n\nNative Windows is also required, and no PowerShell skip counts as a pass.\n- Make a second snapshot on /mnt/d, outside the repo, with the same overlay (a UNC cwd breaks node --test). Delete it afterwards.\n- Check that WSLENV forwards no MOE_*, CLAUDE_* or FAKE_* variable.\n- Run `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs`. It must show 0 failed and 0 skipped. agent-git-guard.test.mjs is not in CI, so this run is the only PS 5.1 proof.\n- Then, alone and not in parallel with that run, run `\"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell`. It must show failureClass NONE and lastScenario Z. It took about 26 min under load, against a 30-min cap.\n\nIn complete_task's summary, put both Windows results, their wall-clock times and the step 1 RED line. Report platform availability honestly, and never substitute Linux pwsh for Windows PS 5.1.\n\nError handling: if any run is red, fix it and re-run the whole gate; never cite a partial run. A failure outside the guard, such as another wrapper temp consumer mangling a non-ASCII TEMP, gets reported on the task with its output; do not widen the task to fix it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/agent-git-guard.test.mjs",
+        "scripts/moe-agent.ps1",
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review of this task's diff: one pass, scoped to this diff only.\n- Is [Console]::OutputEncoding restored on every exit path, including a node failure, a throw, Ctrl+C and the in-process hot reload?\n- Can a seat now launch unguarded when node fails?\n- Did any byte change in the embedded program, the launcher-harness cut span, a launch line, the BOM or moe-agent.sh? Use git diff on the owned paths, and `grep -c` each of the three codexDescriptor PowerShell literals in moe-agent.ps1: each must still count 1.\n- Does the new case fail without the fix? Show the step 1 RED output.\n- Do the other drivers stay byte-identical?\n- Can the TMP/TEMP keys collide by case?\n- Can the console pin leak into later cases?\n- Do the docs claims match the measurements: Git 2.31, codex 0.166, gemini 0.64, grok unverified?\n- Does any docs line match the NEVER_RUNS_GIT regex?\n- Is the task-owned net growth well under 400 LOC?\n- Are peers' hunks in docs/CONFIGURATION.md and scripts/moe-agent.sh untouched?\nFix any finding and re-run the step 4 gate before complete_task. Hand off to QA; never approve your own work.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/agent-git-guard.test.mjs",
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-57bbd302b69241f1986accbe2d170fa3",
+    "task-3ad573a754574dfd92083b2e813c0bff"
+  ],
+  "priority": "LOW",
+  "order": 300.6,
+  "comments": [
+    {
+      "id": "comment-86f79f168a3b428eb10170fd360707cf",
+      "author": "governor-693b7073",
+      "content": "Governor, 18:27Z: lane slot. This row edits scripts/moe-agent.ps1, which is in the serialized wrapper lane: 30+ open rows edit it in one shared checkout. Under the 13:45Z interleave ruling (pinned #general msg-6c3c0ede), a LOW wrapper row goes at the ps1 lane tail. So I added dependsOn 3ad573a7 (PS brackets), the current tail, which already orders after every other open ps1 row. Planning can proceed now. It starts once the lane drains, or earlier if worktree mode (WT-19) makes the lane edges droppable first.\n\nDocs overlap (TROUBLESHOOTING.md, CONFIGURATION.md with 724e31fa, 9d277494 and others) is handled the usual way by the contested-hold machinery.\n\nUndo: set_task_dependencies { taskId: 76ae5c47, removeDependsOn: [task-3ad573a754574dfd92083b2e813c0bff] }.",
+      "timestamp": "2026-10-30T18:26:09.429Z"
+    },
+    {
+      "id": "comment-4326866d0e9240f395b05c99512a945e",
+      "author": "architect-6fc3dd5c",
+      "content": "Architect plan delta, from QA's acceptance list (chan-845e71c6, msg-0cbc8ccad4d6; architect reply msg-5d0b4818f693). Apply it together with the approved plan. Nothing else changes.\n\n1. Step 1, grok twin. Add a second 'non-ascii-temp' matrix element for grok: headless, -GrokExec / --grok-exec, REVIEW, commitHooks false. It uses the same env, the same assertions and the same RED proof as the gemini case. grok has the same exposure: moe-agent.ps1:934 switches only claude/codex to UTF-8. The guard suite goes from 24 to 26. `--test-name-pattern 'non-ASCII temp'` selects both.\n\n2. Step 1, temp dir name. Use a space-free non-ASCII name, e.g. path.join(root, 'témp'), not 'temp é'.\n- Measured 2026-10-30 on PS 5.1.26100.9711: legacy native-argv quoting delivers a spaced path ending in a backslash, as GetTempPath() returns, to node as `C:\\x y\"`.\n- The guard's fs.mkdtempSync(path.join(temp, 'moe-git-guard-')) then fails closed with MOE_AGENT_GIT_GUARD_FAILED, whatever the encoding fix does.\n- Do NOT fix that here. A spaced TEMP failing every PS 5.1 seat (any CLI) at moe-agent.ps1:5986 is a separate, pre-existing bug for its own task. Candidate fix: pass the temp root without the trailing backslash, e.g. GetTempPath() + '.'.\n\n3. Step 1, seat decoding unchanged. In this case's driver finally, record [Console]::OutputEncoding.CodePage BEFORE undoing the 850 pin. Assert it is 850 after exit for both gemini and grok: that proves the guard's UTF-8 switch never reaches the seat. Every other driver stays byte-identical.\n\n4. Step 4, the evidence QA will compare:\n- guard 26/26 with 0 skipped, on Linux bash and on native Windows PS 5.1;\n- the prompt-cache and usage launcher harnesses at Linux 38/0 (+2 PS-only skips) and Windows node.exe 126/0/0;\n- postflight-safe bash and powershell, both exit 0;\n- parity-check PASS.\nQA re-runs the new cases red on the completion's parent, so the RED proof must show 'CLI did not run' for both seats. DoD 2 stays docs-only (step 3). If any codexDescriptor literal has to be re-pinned, stop and report: that is outside this plan, and the daemon providers suite would become required evidence.",
+      "timestamp": "2026-10-30T18:51:56.053Z"
+    },
+    {
+      "id": "comment-9c3db7a50e1741ca9e074c688a3a9663",
+      "author": "architect-6fc3dd5c",
+      "content": "Architect plan delta 2, from QA's review baseline (chan-845e71c6 msg-2514b792; architect reply msg-5bae5856). Apply it with the approved plan and delta 1 (comment-4326866d). Files and DoD are unchanged, and nothing else changes.\n\n1. Step 1, Windows only, both non-ascii-temp cases (gemini and grok).\n- Give this case's `<cli>.ps1` stub one extra first line, before the existing `& node … cli @args` line, that records the seat's console code page. For example: `[Console]::OutputEncoding.CodePage | Set-Content -LiteralPath '<f.result>.codepage' -Encoding ASCII`.\n- Assert that the file reads 850 for both seats. This is in addition to delta 1's driver-finally 850.\n- Why: Invoke-MoeGuardedCommand runs the .ps1 stub in-process (`& $Command @args`, ps1:5999). Gemini headless (ps1:7307) and grok headless (ps1:7442) both go through it. So the 850 shows that the guard restores the encoding before the CLI call, not merely by wrapper exit.\n- Every other case's stub and driver stays byte-identical.\n- Step 5 gains one check: the restore sits inside Initialize-MoeAgentGitGuard, before any CLI call.\n\n2. Step 4 evidence counts are relative to the completion's parent, not to today's numbers.\n- Guard suite: the parent's count + 2, with 0 skipped on Linux and on Windows.\n- Prompt-cache and usage launcher harnesses: the parent's counts, with 0 failed.\n- Windows: 0 skipped. Linux: skips only the PS-only cases.\n- If the parent's counts differ from 24, 38 (+2 PS-only skips) and 126, give them beside the new counts in the completion summary.\n- QA will re-run both new cases on the parent under native Windows node and expects 'CLI did not run' for gemini and grok.\n\n3. Review boundary. When the temp path contains a space, every PS 5.1 seat fails at ps1 ~L5986, with or without this fix. That bug is task-408a0ac1524b4ab4a6418dd741b53d8d (MEDIUM), not this row. Keep delta 1's space-free 'témp' name.",
+      "timestamp": "2026-10-30T19:06:48.306Z"
+    },
+    {
+      "id": "comment-7ef35407e2cc48abb33a8eec7d412466",
+      "author": "architect-b58e1112",
+      "content": "Planner heads-up from architect-b58e1112. task-44b817f9 (pwsh 7 PSModulePath guard fix) lands before this row in the wrapper lane, and it changes the shape your step 1 builds on. Re-read the files at start_step.\n- scripts/tests/agent-git-guard.test.mjs:\n  - The CLI matrix gains an optional 5th tuple element that is an OPTIONS OBJECT (`opts = {}`). Today one win32-only row passes `{ engine: 'pwsh.exe' }` and is titled 'PS7 …'. Put your planned 'non-ascii-temp' mode in that object (`{ mode: … }`), not in a positional 5th element.\n  - launch() now reads `f.engine` (default powershell.exe). The fixture is built with `Object.assign(fixture(...), opts)`.\n  - `clean` also strips PSModulePath.\n  - The 'CLI did not run' message takes codes from stdout+stderr.\n  - A new test asserts that both wrappers embed the same guard program. It automates the manual twin cut in your self-review.\n- The embedded program gains two lines in its win32 ACL block: an env without PSModulePath for the powershell.exe child. Your Initialize-MoeAgentGitGuard encoding change is outside the here-string, so it does not conflict. The program must still stay byte-identical across the twins.\nDetails: mem:task-task-44b817f973374dffb578308278050497-handoff.",
+      "timestamp": "2026-10-31T06:29:54.476Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T18:19:53.148Z",
+  "updatedAt": "2026-10-31T06:29:54.476Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T18:25:23.864Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T18:26:46.141Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-6fc3dd5c",
+    "qa-952969be",
+    "architect-bd1eb82d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T18:42:51.506Z",
+  "executionContract": {
+    "intendedBehavior": "On native Windows PowerShell, every seat reads the agent Git guard's temp root from node as UTF-8. That includes gemini/grok seats, which keep the OEM console code page. A non-ASCII [IO.Path]::GetTempPath() therefore still yields a guarded CLI launch, and the guard root is removed after the CLI exits. TROUBLESHOOTING names the Git 2.31 minimum, plus the KEY-stripping CLI-policy failure and its fix. CONFIGURATION lists MOE_ALLOW_AGENT_GIT_WRITES as a human-only override.",
+    "acceptanceCriteria": [
+      "The new agent-git-guard.test.mjs case runs a gemini headless seat with a non-ASCII TMP/TEMP, and on Windows pins the console to CP 850. It fails on native Windows PS 5.1 against the unfixed moe-agent.ps1, passes with the fix, and passes on Linux bash.",
+      "After that seat exits, no moe-git-guard-* entry remains under the non-ASCII temp directory, and the CLI's core.hooksPath lay under it.",
+      "The TROUBLESHOOTING section 'Agent Git-write refusal' names Git 2.31 as the minimum. It documents `missing config key GIT_CONFIG_KEY_0` / `unable to parse command-line config` (exit 128) and the Codex shell_environment_policy.ignore_default_excludes fix.",
+      "The CONFIGURATION Agent Scripts table has a MOE_ALLOW_AGENT_GIT_WRITES row marked human-only.",
+      "The Linux gate command exits 0. Under native Windows node, the guard suite and both launcher harness files pass with 0 skipped, and postflight-safe powershell reports failureClass NONE, lastScenario Z."
+    ],
+    "invariants": [
+      "The embedded guard node program stays byte-identical between moe-agent.ps1 and moe-agent.sh.",
+      "[Console]::OutputEncoding is restored after the guard setup call on every path, and claude/codex behavior is unchanged.",
+      "A nonzero guard setup still stops the launch with MOE_AGENT_GIT_GUARD_FAILED, with no unprotected fallback.",
+      "No launch line, Invoke-MoeGuardedCommand or Remove-MoeAgentGitGuard text changes.",
+      "moe-agent.ps1 stays UTF-8 with BOM."
+    ],
+    "compatibility": [
+      "No change to wrapper CLI arguments, refusal codes and messages, env var names, or the guard's on-disk layout.",
+      "The docs edits are additive, and the #agent-git-write-refusal anchor is unchanged."
+    ],
+    "approvedScope": [
+      "Initialize-MoeAgentGitGuard body around the node call (not the embedded program)",
+      "agent-git-guard.test.mjs: one non-ASCII-temp case plus an opt-in console code page pin in launch()'s Windows driver",
+      "TROUBLESHOOTING ### Agent Git-write refusal",
+      "CONFIGURATION ### Agent Scripts table row"
+    ],
+    "reuse": [
+      "The save/set/restore [Console]::OutputEncoding pattern from Get-MoeGitTop and Invoke-MoeGit in moe-agent.ps1.",
+      "The existing guard fixture and matrix assertions in agent-git-guard.test.mjs."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1 Initialize-MoeAgentGitGuard assigns `$script:AgentGitGuardRoot = $program | & node - $projectPath ([IO.Path]::GetTempPath())` and then calls [IO.File]::ReadAllText(Join-Path root 'env.json').",
+      "scripts/moe-agent.ps1 top level: `if ($cliType -in @('claude', 'codex'))` sets $global:OutputEncoding and [Console]::OutputEncoding to UTF-8. $cliType comes from the -Command basename: codex, gemini or grok, else claude.",
+      "scripts/moe-agent.sh prepare_agent_git_guard captures node stdout with $(...) and passes $SECURE_TEMP_DIR, which comes from mktemp -d and so honors TMPDIR.",
+      "scripts/tests/agent-git-guard.test.mjs launch() writes a per-launch PowerShell driver on Windows; fixture() roots its files under os.tmpdir().",
+      "Architect probe, 2026-10-30, PS 5.1.26100.9711: the default [Console]::OutputEncoding is ibm850. Node stdout 'C:/témp' decodes to 67,58,47,116,9500,174,109,112, and to 67,58,47,116,233,109,112 with UTF-8 set inside try/finally."
+    ],
+    "checkRefs": [
+      "unset ${!MOE_@} ${!CLAUDE_@} ${!FAKE_@}; node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh && npm run docs:lint",
+      "\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs",
+      "\"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: decode as UTF-8 on the PowerShell side, around the one node call. It touches one runtime file, follows the Get-MoeGitTop pattern, and needs no twin change.\nRejected:\n- Node emits an ASCII-escaped/JSON path: the embedded program is byte-identical in both launchers, so sh would need a JSON reader too.\n- Move the overlay to GIT_CONFIG_PARAMETERS (no KEY in the name): that is an internal Git format with key-quoting traps (gitdir paths containing '=' or quotes), and both twins would need retesting on both OSes. The DoD accepts the docs route.\n- Have the wrapper rewrite codex shell_environment_policy: mem:gotcha-agent-git-guard-runtime-config forbids it.\n- Have the wrapper probe `git --version` to print the 2.31 floor: that needs a twin change plus a fake-old-git fixture, and the DoD accepts TROUBLESHOOTING naming the version.\n- Switch every CLI to UTF-8 at the wrapper top: a wider behavior change for gemini/grok console output.\n- Rely on the host console's default code page in the test: the case would prove nothing on a UTF-8-default host, or after a claude/codex case left a shared console at 65001.",
+    "codebaseInsights": "- PS 5.1 decodes captured native stdout with [Console]::OutputEncoding. Pipeline input to node uses $global:OutputEncoding, which is ASCII by default; that is fine, because the embedded program is pure ASCII (verified).\n- Only claude/codex switch to UTF-8, near the ps1 top (`if ($cliType -in @('claude', 'codex'))`).\n- Initialize-MoeAgentGitGuard runs once per loop iteration. Remove-MoeAgentGitGuard runs after the CLI and again in the teardown finally.\n- The bash twin captures node's bytes via $(...) under $SECURE_TEMP_DIR (mktemp -d), so bash is byte-exact.\n- The launcher harnesses cut ps1 from 'function Invoke-MoeGuardedCommand {' to 'function Remove-MoeAgentGitGuard', and usage-launcher also pins the text before the main-loop Remove-MoeAgentGitGuard call. The fix sits above both.\n- daemonGitDocs.test.ts scans docs for /never (?:runs|executes|touches) git|runs no git|does not run git/i.\n- postflight-safe spawns its PowerShell children with windowsHide, so each gets its own console. agent-git-guard.test.mjs spawnSync does not.\n- agent-git-guard.test.mjs is not in ci.yml.\n- Probe (PS 5.1.26100.9711 from WSL): the initial encoding is ibm850. 'C:/témp' decodes to 67,58,47,116,9500,174,109,112 under ibm850, and to 67,58,47,116,233,109,112 with UTF-8 set in try/finally, after which ibm850 is restored.",
+    "risks": "- Restore the console pin in the driver's finally, or a shared console keeps CP 850 for later cases.\n- f.env may already hold TMP/TEMP in a different case on Windows: delete case-insensitively before setting.\n- Another wrapper temp consumer could mangle a non-ASCII TEMP. None found: the other GetTempPath users are .NET-side, and usage receipts are claude/codex only. If one shows up, report it; don't widen the task.\n- docs/CONFIGURATION.md holds a peer's uncommitted hunk (the --host wsl sentence). The landing may hold it as contested: follow the MOE_CONTESTED_HELD remedy and never hand-land. Codex, Gemini and Grok seats get no TOOL witness (mem:codex-seats-contested-delivery).\n- The Windows runs are long: about 15 min for the guard suite, and about 26 min for postflight-safe powershell against a 30-min cap. Run postflight-safe alone.\n- The serialized ps1 lane means this row starts after 3ad573a7. Re-read Initialize-MoeAgentGitGuard at start_step, since line numbers drift.\n- moe-agent.ps1 must keep its BOM; parity-check enforces it.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/tests/agent-git-guard.test.mjs",
+      "docs/TROUBLESHOOTING.md",
+      "docs/CONFIGURATION.md",
+      "scripts/moe-agent.sh",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/tests/usage-launcher.test.mjs",
+      "packages/moe-daemon/src/util/daemonGitDocs.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T18:42:51.526Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "8fcffcbe535cfba209d87ad55c476b6eab56209a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-6fc3dd5c@2026-10-30T18:26:47Z",
+      "paths": [
+        ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json"
+      ],
+      "recordedBy": "architect-6fc3dd5c",
+      "recordedAt": "2026-10-30T18:43:56.945Z",
+      "treeId": "fe5998ae91524065304a6266769a985b8ed24283",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-6fc3dd5c@2026-10-30T18:26:47Z",
+    "at": "2026-10-30T18:43:56.945Z"
+  }
+}

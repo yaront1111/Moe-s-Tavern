@@ -1,0 +1,245 @@
+{
+  "id": "task-6f3f7fe97a91434c9143e52e57c6f302",
+  "epicId": "epic-be924fb8",
+  "title": "bug: approving an already-approved rail proposal appends its rail again, and rejecting an approved one leaves its rail live",
+  "description": "Observed on 2026-10-30.\n- 12:56:23Z: the human approved four proposals in the IDE (prop-96635005, prop-da2a6c91, prop-4fe44aac, prop-10384054).\n- 13:00:41Z: a governor script sent APPROVE_PROPOSAL over /ws for three of them and REJECT_PROPOSAL for prop-4fe44aac.\n- Result: each re-approved ADD_RAIL was appended a second time, so epic CQ-R carried the CQ-R11e2 rail twice, CQ-RF the RF04 rail three times and the WT epic the WT-S rail twice.\n- prop-4fe44aac flipped to REJECTED while its rail stayed in epicRails.\n- Cleanup took four REMOVE_RAIL proposals (prop-0d2ff5ad, d4edfe4d, 252a4d2d, fab7280e).\n\nCause: packages/moe-daemon/src/state/StateManager.ts.\n- approveProposal (~L1369) calls applyRailChange and then sets APPROVED, whatever the current status is.\n- rejectProposal (~L1466) sets REJECTED on an APPROVED proposal without reverting it.\n- Any two clients can trigger this: two IDE windows, a double-click, or a script.\n\nFix:\n- approveProposal and rejectProposal act only on a PENDING proposal.\n- A repeat of the same decision on an already-resolved proposal is an idempotent no-op that returns the stored proposal.\n- The opposite decision on a resolved proposal is refused with a fixed error, sent back over /ws as an ERROR message.\n- Rails, the proposal file and the activity log stay unchanged in both cases.\n\nOut of scope: the IDE UI and the cleanup already done.",
+  "definitionOfDone": [
+    "A second approveProposal on an APPROVED ADD_RAIL proposal leaves epicRails, global rails and task rails unchanged (no duplicate), returns the stored proposal and appends no PROPOSAL_APPROVED event. Shown by a daemon test.",
+    "rejectProposal on an APPROVED proposal, and approveProposal on a REJECTED one, are refused with a fixed error. The record, the rails and the activity log are unchanged, and the /ws handler replies with ERROR. Shown by tests.",
+    "A PENDING proposal is still approved and rejected exactly as before, shown by the existing proposal tests, and `cd packages/moe-daemon && npm test` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test first, then implement terminal-decision guards (DoD 1–3). Load test-driven-development. Extend the existing proposal describe/fixtures in StateManager.test.ts with compact table-driven cases: (a) PENDING ADD_RAIL approval for GLOBAL, EPIC and TASK adds the exact rail once and one PROPOSAL_APPROVED entry; a second approval returns the stored object and does nothing; (b) first rejection of a PENDING proposal preserves rails and produces one PROPOSAL_REJECTED entry; repeated rejection returns that stored object unchanged; (c) both conflicting directions, APPROVED→reject and REJECTED→approve, across the three scopes refuse with the exact MoeError below and preserve everything; (d) repeated approval of MODIFY_RAIL and REMOVE_RAIL also no-ops, even though the original rail no longer exists; (e) both methods retain the existing 'Proposal not found: <id>' failure for unknown IDs. Before the retry/refusal capture the resolved record, relevant project/epic/task/proposal file bytes, all three in-memory rail lists and activity.log bytes after `await stateManager.flushActivityLog()`. Afterward flush again and assert byte-for-byte/state equality, no new emitted events, no writeEntity calls, and no appendActivity calls. Subscribe only for the replay/refusal and unsubscribe in finally. Ensure the first PENDING resolution really applied/rejected (not a vacuous all-no-op test), and compare resolvedAt/resolvedBy as part of the stored record. Example assertions:\n```ts\nconst approved = await stateManager.approveProposal(proposal.id);\nawait stateManager.flushActivityLog();\nconst recordBytes = fs.readFileSync(path.join(moePath, 'proposals', `${proposal.id}.json`), 'utf8');\nexpect(await stateManager.approveProposal(proposal.id)).toBe(approved);\nexpect(fs.readFileSync(path.join(moePath, 'proposals', `${proposal.id}.json`), 'utf8')).toBe(recordBytes);\nawait expect(stateManager.rejectProposal(proposal.id)).rejects.toMatchObject({ code: -32003, codeName: 'NOT_ALLOWED', message: '[NOT_ALLOWED] resolve proposal not allowed: proposal already resolved' });\n```\nAdd notAllowed to the existing ../util/errors.js import. Immediately after each missing-proposal check, before applyRailChange/writeEntity or timestamp creation, use:\n```ts\n// approveProposal\nif (proposal.status === 'APPROVED') return proposal;\nif (proposal.status !== 'PENDING') throw notAllowed('resolve proposal', 'proposal already resolved');\n// rejectProposal\nif (proposal.status === 'REJECTED') return proposal;\nif (proposal.status !== 'PENDING') throw notAllowed('resolve proposal', 'proposal already resolved');\n```\nPreserve all PENDING logic and its error handling, awaited writes and event order; retain existing failed-rail-application and missing-original tests. Preserve the StateManager line budget by changing each existing missing-proposal block to the equivalent `if (!proposal) throw new Error(\\`Proposal not found: ${proposalId}\\`);`, offsetting the added guard lines; do not change stateModules.test.ts or restructure unrelated methods. Do not deduplicate rails by text: two different PENDING proposals remain independent.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "note": "Added symmetric early guards and 21 compact regressions covering all scopes, replay identity/bytes/no writes/activity/events, both conflicts, MODIFY/REMOVE retries, unknown IDs and independent pending proposals. RED (native Windows PS7): 18 expected failures/3 passes before implementation; GREEN StateManager + stateModules: 146 passed (2 files). StateManager remains 1498 split lines. WSL node_modules is Windows-only and fails rolldown startup; native PS7 uses the existing matching Windows dependencies, with MOE_* scrubbed. Preserved pre-existing shared .moe/ and scripts/mods/ dirt; no scope expansion.",
+      "startedAt": "2026-10-30T13:27:57.452Z",
+      "completedAt": "2026-10-30T13:30:04.409Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Prove the existing /ws boundary enforces the resolution contract (DoD 2, plus concurrent replay regression). Add a nested rail-proposal resolution describe under Plugin endpoint (/ws), reusing connectAndCollect, the real StateManager fixture, and random loopback port. Seed a typed RailProposal via state.createProposal; consume STATE_SNAPSHOT before sending command frames. Table-test an already APPROVED row receiving REJECT_PROPOSAL and an already REJECTED row receiving APPROVE_PROPOSAL. Do not stub the resolution methods or synthesize an ERROR response. Example frame/assertion:\n```ts\nclient.ws.send(JSON.stringify({ type: 'REJECT_PROPOSAL', payload: { proposalId: proposal.id } }));\nexpect(JSON.parse(await client.nextMessage())).toMatchObject({ type: 'ERROR', operation: 'REJECT_PROPOSAL', code: -32003, codeName: 'NOT_ALLOWED', message: '[NOT_ALLOWED] resolve proposal not allowed: proposal already resolved' });\n```\nSnapshot rail/proposal files, in-memory state and flushed activity.log before each refusal and assert unchanged afterward. Test repeated same decisions return PROPOSAL_UPDATED with the original resolved record but append no new activity or state events; this direct acknowledgment is allowed and is not a new resolution broadcast. Add a two-client concurrent APPROVE_PROPOSAL test against one PENDING EPIC ADD_RAIL: both receive the same resolved record, rail occurs once, and exactly one PROPOSAL_APPROVED activity exists. Add a competing approve/reject test: exactly one successful PROPOSAL_UPDATED and one fixed ERROR, one terminal audit event, and rails correspond to whichever decision won; do not assume scheduling order. Use the current fixture without enabling extra broadcast wiring, register waiters/buffer from connect time, and clean up sockets, subscriptions and activity writes in finally/teardown. Production WebSocketServer.ts already has the required mutex and error handling and must not be changed for this task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "note": "Added 6 real /ws regressions: both terminal conflicts produce fixed ERROR, both replays return unchanged PROPOSAL_UPDATED with byte/state/activity/event equality, concurrent approvals resolve once, competing decisions yield one ack/one error without assuming winner. Real mutex dispatch and buffered clients, no handler stubs or extra broadcast wiring; sockets/subscriptions/log writes cleaned up. GREEN: complete WebSocketServer file 112 passed. Mutation RED in independent Linux scratch snapshot with guards removed: all 6 new WS tests failed; shared production source untouched. Also corrected indentation of step-1 table callback. No scope expansion.",
+      "startedAt": "2026-10-30T13:30:04.435Z",
+      "completedAt": "2026-10-30T13:32:03.532Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Document the resolution behavior locally under Communication Protocols → Plugin ↔ Daemon (/ws), beside the existing APPROVE_PROPOSAL / REJECT_PROPOSAL command list. State that only PENDING proposals transition; repeating the same decision returns the unchanged PROPOSAL_UPDATED acknowledgment without new persistence/activity/state events; the opposite decision produces ERROR with code -32003, codeName NOT_ALLOWED and the exact stable message '[NOT_ALLOWED] resolve proposal not allowed: proposal already resolved', leaving rails and record untouched. Do not conflate rail proposals with chat decisions or claim crash-atomic transactions. No schema-shape, UI, or MCP contract edits are needed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Documented PENDING-only rail proposal transitions beside /ws commands: unchanged direct replay acknowledgment with no persistence/activity/state events; conflicts return stable -32003 NOT_ALLOWED ERROR while rails/record remain untouched. Explicitly distinct from chat decisions. No schemas, UI, MCP contracts or crash-atomicity claims changed. Documentation matches exercised wire assertions.",
+      "startedAt": "2026-10-30T13:32:03.553Z",
+      "completedAt": "2026-10-30T13:32:03.588Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Single final verification gate (DoD 1–3): run exactly `cd packages/moe-daemon && npm test` from the repository root, expecting exit 0 for the complete daemon suite, including StateManager, WebSocketServer, proposeRail and stateModules structural coverage. Use bash/WSL/Git Bash or PowerShell 7 for the chained command. Load regression-check and verification-before-completion; preserve fresh command/exitCode/outputTail for complete_task.verification. Do not replace this required gate with focused tests, loosen the file-length check, claim success from a stale log, or edit peer-owned failures. Diagnose any failure and distinguish task regressions from unrelated checkout problems.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "docs/ARCHITECTURE.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Fresh required command `cd packages/moe-daemon && npm test` exit 0: 208 test files, 5953 passed/16 platform-skipped (5969), 37.12s. Ran from Linux verification-copy repository root /tmp/moe-6f3-gate.yQk1yM, preserving shared-root implementation; copied all current daemon src (including peer edits), current manifests/config/wrappers and task docs, using same-lock native Linux dependencies. Compared snapshot inputs with current tree before/after run (identical). No test filtering or timeout/config loosening. Earlier native Windows gate: 5920 passed/1 unrelated heartbeat PS fixture failure; filed task-2c3e6170c6b7406f8136625781d327c6, not edited. Root WSL with Windows deps needed native binding/esbuild overrides and hit 9p CLI timeouts; clean Linux copy removed environment-only failures. No additional source edits.",
+      "startedAt": "2026-10-30T13:32:11.414Z",
+      "completedAt": "2026-10-30T13:38:25.642Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review, once, scoped to this task's diff. Load adversarial-self-review. Verify terminal checks precede every apply/write/timestamp/event and return the actual stored record. Mentally remove each guard and confirm a distinct test fails; check both duplicate approvals and duplicate rejections, both conflict directions, all rail scopes, and MODIFY/REMOVE retries. Verify no broad catch turns refusal into success, no text dedup masks distinct proposals, and no cleanup/migration or pending-path redesign slipped in. Confirm concurrency tests exercise the real serialized WS dispatch, await both decisions and flushed activity, and cannot pass using a stale snapshot or a broadcast mistaken for an acknowledgment. Preserve the existing missing-ID and PENDING failure behavior, strict StateManager line budget, portable temp paths and line endings. If fixes are needed, refresh the same gate before complete_task. Report actual modified paths and fresh verification through Moe; the wrapper alone handles git writes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "docs/ARCHITECTURE.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Completed once-only adversarial diff review: guards precede all effects and return actual stored record; each removed guard breaks distinct replay/conflict tests; all scopes and MODIFY/REMOVE covered. Existing serialized WS dispatch exercised with both clients awaited and activity flushed; no broadcast wiring can masquerade as ack. Missing IDs, PENDING failures and independent identical-text proposals preserved. No broad catch, extra mutex, cleanup/migration or crash-atomicity claim. Inputs/upstream validation and pending partial-write behavior unchanged by design. No review fixes needed; fresh full gate remains 208 files/5953 passed/16 skipped, exit 0, bytes still identical to verified snapshot. Diff-check clean; StateManager 1498 split lines; four scoped paths net +208 lines. Handoff and reusable knowledge saved in Serena. Out-of-scope native-Windows fixture tracked as task-2c3e6170c6b7406f8136625781d327c6.",
+      "startedAt": "2026-10-30T13:38:25.665Z",
+      "completedAt": "2026-10-30T13:39:26.340Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 296.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:04:16.333Z",
+  "updatedAt": "2026-10-30T13:44:28.940Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:22:52.346Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T13:43:57.432Z",
+    "wallClockMs": 1265086
+  },
+  "contextFetchedBy": [
+    "architect-76a2c8bb",
+    "worker-262588d0",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:27:13.386Z",
+  "planningNotes": {
+    "approachesConsidered": "# Idempotent rail proposal decisions\nGoal: only PENDING rail proposals may transition; replaying the same terminal decision returns stored state without side effects, while conflicting decisions fail deterministically. Architecture: put symmetric early guards in the existing StateManager approveProposal/rejectProposal methods, before all rail application and persistence. Reuse the existing WebSocket mutex and error serialization rather than introducing another lock, endpoint, or transaction layer. Tech stack: TypeScript/Node.js, Vitest, ws.",
+    "codebaseInsights": "Verified both production callers are the APPROVE_PROPOSAL/REJECT_PROPOSAL handlers in server/WebSocketServer.ts; each uses withMutex → state.runExclusive. Their catch already serializes MoeError as ERROR with message, operation, code and codeName. StateManager methods currently have no status guard. Existing StateManager.test.ts contains createTestProposal and real filesystem fixtures; WebSocketServer.test.ts has a buffered connectAndCollect helper and competing-client examples. flushActivityLog must be awaited before comparing asynchronous audit-log bytes. StateManager.ts currently has 1497 newline characters, and stateModules.test.ts requires split('\\n').length < 1500: compress only the two existing three-line missing-proposal checks to equivalent one-line throws to offset the four new guard lines; do not weaken/exempt the structural test.",
+    "risks": "Four paths, one bounded bug fix (about 45–60 min); no new files. Use compact table-driven tests and existing fixtures to stay below the ordinary 400 net-LOC review cap. Runtime protocol handler remains unchanged. Both same-decision no-op and opposite-decision error must avoid all entity writes, events and activity appends, not merely duplicate strings. Keep original PENDING error handling, including rail-apply failures; crash recovery across a successful rail write and a failed proposal write is not added by this resolved-state fix. No historical cleanup, text deduplication, UI change, or data-shape migration. All target paths were clean at exploration; preserve unrelated shared dirt and recheck ownership. Paths use Node fs/path and temporary fixtures, with no Windows/macOS/Linux behavior change. Prior knowledge: mem:gotcha-daemon-global-mutex-dispatch.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/state/StateManager.test.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+      "docs/ARCHITECTURE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:27:13.409Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T13:27:57.452Z",
+  "reviewStartedAt": "2026-10-30T13:39:51.419Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Verification root: /tmp/moe-6f3-gate.yQk1yM (Linux filesystem copy of current repository sources; all daemon src, manifests/config/wrappers and task docs compared byte-identical to shared root before/after run). Native Linux dependencies match package-lock. No filters or timeout changes.\nTest Files  208 passed (208)\nTests       5953 passed | 16 skipped (5969)\nStart at    15:37:34\nDuration    37.12s (tests 92%, transform 4%, import 4%)\nGATE_EXIT_CODE=0",
+    "reportedAt": "2026-10-30T13:39:51.419Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/state/StateManager.test.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+    "docs/ARCHITECTURE.md",
+    ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+    ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+    ".moe/tasks/task-2c3e6170c6b7406f8136625781d327c6.json",
+    ".moe/tasks/task-6f3f7fe97a91434c9143e52e57c6f302.json",
+    ".moe/tasks/task-7db14e2df19949a8bfdb150e0f29ffcb.json",
+    ".moe/tasks/task-9d27749421b045c18a6c6eb99694236d.json",
+    ".moe/tasks/task-b5a176355a7c443d98952466b409f941.json",
+    ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+    ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json",
+    ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+    ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
+    ".moe/tasks/task-f31d415d5185424ca5f7e375a8b15134.json"
+  ],
+  "completionSummary": "Implemented symmetric PENDING-only StateManager proposal resolution: same decision returns stored object without effects; opposite decision throws stable -32003 NOT_ALLOWED, serialized by existing /ws handler as ERROR. Added 21 StateManager and 6 real WS regressions, including all rail scopes, unchanged file/state/log bytes and metadata, no persistence/activity/events, MODIFY/REMOVE retries, missing IDs, independent same-text proposals and two-client races. Documented contract; production WS unchanged. Four planned paths, +216/-8 (net 208); StateManager remains 1498 split lines. RED: 18 expected StateManager failures before guards; all 6 WS cases fail with guards removed in scratch. Fresh full gate: 208 files, 5953 passed/16 platform-skipped, exit 0 in byte-identical current-source Linux verification copy /tmp/moe-6f3-gate.yQk1yM, avoiding shared /mnt/d CLI timeouts; no test/config weakening. Native Windows unrelated heartbeat fixture defect filed as task-2c3e6170c6b7406f8136625781d327c6. Scoped adversarial review clean; handoff/knowledge recorded in Serena. Wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "c7551fdd744027a708511259691b60eae1e69a1d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-262588d0@2026-10-30T13:27:22Z",
+      "paths": [
+        ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+        ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+        ".moe/tasks/task-2c3e6170c6b7406f8136625781d327c6.json",
+        ".moe/tasks/task-6f3f7fe97a91434c9143e52e57c6f302.json",
+        ".moe/tasks/task-7db14e2df19949a8bfdb150e0f29ffcb.json",
+        ".moe/tasks/task-9d27749421b045c18a6c6eb99694236d.json",
+        ".moe/tasks/task-b5a176355a7c443d98952466b409f941.json",
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+        ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json",
+        ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+        "docs/ARCHITECTURE.md",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "recordedBy": "worker-262588d0",
+      "recordedAt": "2026-10-30T13:40:08.605Z",
+      "treeId": "ab1fc060975402b173f1e0898ee0845edc29f9c0",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "0a7fba0c4886295379bc59794a35b5d1319bcda4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T13:40:18Z",
+      "paths": [
+        ".moe/tasks/task-6f3f7fe97a91434c9143e52e57c6f302.json",
+        ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
+        ".moe/tasks/task-f31d415d5185424ca5f7e375a8b15134.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T13:44:28.940Z",
+      "treeId": "25fb389c88545a9c2e567fe3c9025c28741a09f8",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T13:40:18Z",
+    "at": "2026-10-30T13:44:28.940Z"
+  },
+  "completedAt": "2026-10-30T13:43:57.432Z",
+  "reviewCompletedAt": "2026-10-30T13:43:57.432Z",
+  "reviewSummary": "Approved. Reviewed completion commit c7551fdd (on moe/work-2026-10-24, pushed) via git show. Size: 4 non-board paths, net +208, under the 400 cap. Runtime change is 7+/7- in StateManager.ts. approveProposal returns the stored proposal when APPROVED, rejectProposal when REJECTED. Any other non-PENDING status throws notAllowed('resolve proposal','proposal already resolved') (-32003 NOT_ALLOWED). Guards precede applyRailChange, writeEntity, timestamp, appendActivity and emit; PENDING and missing-ID paths unchanged. WebSocketServer.ts untouched: its existing catch emits ERROR with operation/code/codeName, under withMutex. ARCHITECTURE.md documents the contract.\n\nRe-ran `cd packages/moe-daemon && npm test` on a git-archive snapshot of c7551fdd (Linux fs, matching-lock native node_modules, MOE_* env scrubbed): 208 files, 5953 passed, 16 skipped, exit 0, same as the worker's evidence. My first run had 4 getContext.test.ts failures only because my QA session's MOE_* vars trim get_context; with them unset the file passes 47/47. Environment artifact, not a task defect.\n\nDoD1: GLOBAL/EPIC/TASK replay returns the same stored object (toBe); project/epic/task/proposal files, activity.log and memory are unchanged, with no events, writeEntity or appendActivity calls. MODIFY/REMOVE replays are also no-ops. DoD2: both conflict directions fail with the exact code/codeName/message and leave state unchanged. Six real /ws tests assert the ERROR frame, unchanged PROPOSAL_UPDATED replays, and two-client same-decision and competing-decision races. DoD3: the full-suite exit 0 covers existing PENDING tests.\n\nMutation probe: removing the guards in a scratch copy failed 24 tests (18 StateManager, all 6 WS). No tests deleted or weakened, no forbidden patterns, rails met. Not verified: native Windows full suite (CI daemon vitest is ubuntu-only); the worker's separate Windows heartbeat fixture failure is filed as task-2c3e6170c6b7406f8136625781d327c6. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

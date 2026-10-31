@@ -6,11 +6,13 @@ import { assertContextFetched, assertWorkerHoldsTask } from '../util/enforcement
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { activeAmendment, effectiveStepDescription } from '../util/planAmendments.js';
 import { accountSwitchFor, accountSwitchReply } from '../state/accountStore.js';
+import { recordStepCompletion } from '../state/attemptStore.js';
+import { assertExecutionAuthorized } from '../util/executionAuthorization.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.complete_step',
-    description: 'Mark a step as COMPLETED. Report EVERY path you created or modified in modifiedFiles — the agent wrapper commits the task from a completed step\'s modifiedFiles (falling back to the step\'s planned affectedFiles), so an omitted list degrades attribution to planned/measured paths and returns a warning.',
+    description: 'Mark a step as COMPLETED. Report EVERY path you created or modified in modifiedFiles — the agent wrapper commits the task from a completed step\'s modifiedFiles (falling back to the step\'s planned affectedFiles), so an omitted list degrades attribution to planned/measured paths and returns a warning. Under verified-local, completion needs workerId, attemptId, generation and the sessionId that read moe.get_context, with the current plan revision approved, and records step evidence on the attempt; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -18,7 +20,10 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         stepId: { type: 'string' },
         modifiedFiles: { type: 'array', items: { type: 'string' }, description: 'Every project-relative path this step created or modified (ASSERTED attribution tier for the auto-commit). Omit nothing.' },
         note: { type: 'string' },
-        workerId: { type: 'string' }
+        workerId: { type: 'string' },
+        attemptId: { type: 'string', maxLength: 128, description: 'The attemptId moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
+        generation: { type: 'integer', minimum: 1, description: 'The generation moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
+        sessionId: { type: 'string', description: 'The sessionId this session passed to moe.get_context. Optional under legacy/observe; required under verified-local.' }
       },
       required: ['taskId', 'stepId'],
       additionalProperties: false
@@ -30,6 +35,9 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         modifiedFiles?: string[];
         note?: string;
         workerId?: string;
+        attemptId?: unknown;
+        generation?: unknown;
+        sessionId?: unknown;
       };
 
       const task = state.getTask(params.taskId);
@@ -41,6 +49,8 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
 
       assertWorkerHoldsTask(task, params.workerId, 'moe.complete_step');
       assertContextFetched(task, params.workerId, 'moe.complete_step');
+      const { attemptId, generation, sessionId } = params;
+      const strict = assertExecutionAuthorized(state, task, params.workerId, { attemptId, generation, sessionId }, 'moe.complete_step');
 
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
         throw invalidState('Task', 'no implementation plan', 'has implementation plan');
@@ -75,6 +85,17 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       // refuse it up front instead, like every other capped text field.
       if (typeof params.note === 'string' && params.note.length > MAX_STEP_NOTE_CHARS) {
         throw invalidInput('note', `too long (${params.note.length} chars). Maximum ${MAX_STEP_NOTE_CHARS} characters allowed.`);
+      }
+
+      // Strict evidence goes on the attempt BEFORE the task write, on purpose:
+      // evidence without the task write is repaired by the worker's retry, while
+      // the reverse order would strand a COMPLETED step with no evidence, which
+      // complete_task then refuses. Fail-safe ordering, not a transaction.
+      if (strict) {
+        await recordStepCompletion(state, {
+          attemptId: strict.attempt.id, workerId: params.workerId as string,
+          stepId: params.stepId, planRevision: strict.planRevision,
+        });
       }
 
       const steps = task.implementationPlan.map((step) =>

@@ -12,7 +12,6 @@ import com.moe.model.MetricsAggregate
 import com.moe.model.MoeState
 import com.moe.model.PinEntry
 import com.moe.util.MoeJson
-import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
 class MoeMessageDispatcher(
@@ -32,6 +31,10 @@ class MoeMessageDispatcher(
     /** Safe asString that handles both Kotlin null and Gson JsonNull. */
     private fun JsonElement?.safeAsString(): String? =
         if (this == null || this.isJsonNull) null else this.asString
+
+    /** Strict: a JSON string only. Never coerces a number and never throws on an object or array. */
+    private fun JsonElement?.stringOrNull(): String? =
+        if (this != null && this.isJsonPrimitive && this.asJsonPrimitive.isString) this.asString else null
 
     fun addListener(listener: MoeStateListener) {
         if (isDisposed()) {
@@ -79,12 +82,9 @@ class MoeMessageDispatcher(
                 val basePath = project.basePath
                 if (basePath != null && newState.project.rootPath.isNotEmpty()) {
                     try {
-                        val daemonPath = File(newState.project.rootPath).canonicalPath
-                        val expectedPath = File(basePath).canonicalPath
-                        if (daemonPath != expectedPath) {
-                            log.warn("STATE_SNAPSHOT project mismatch: expected $expectedPath, got $daemonPath. Disconnecting.")
-                            val daemonJson = File(basePath, ".moe/daemon.json")
-                            try { daemonJson.delete() } catch (_: Exception) {}
+                        val rootPath = newState.project.rootPath
+                        if (!MoeDaemonSupervisor.isSameProject(rootPath, basePath)) {
+                            log.warn("STATE_SNAPSHOT project mismatch: expected $basePath, got $rootPath. Disconnecting.")
                             onProjectMismatch()
                             return
                         }
@@ -181,6 +181,15 @@ class MoeMessageDispatcher(
                 val errorMessage = json.get("message").safeAsString() ?: "Unknown error"
                 val operation = json.get("operation").safeAsString() ?: "unknown"
                 publishError(operation, errorMessage)
+                val context = json.get("context")?.takeIf { it.isJsonObject }?.asJsonObject
+                publishDaemonError(
+                    DaemonError(
+                        operation = json.get("operation").stringOrNull(),
+                        codeName = json.get("codeName").stringOrNull(),
+                        taskId = context?.get("taskId").stringOrNull(),
+                        message = errorMessage
+                    )
+                )
             }
             "ACTIVITY_LOG" -> {
                 val payload = json.get("payload")
@@ -484,6 +493,12 @@ class MoeMessageDispatcher(
     fun publishError(operation: String, message: String) {
         invokeLater {
             listeners.forEach { it.onError(operation, message) }
+        }
+    }
+
+    private fun publishDaemonError(error: DaemonError) {
+        invokeLater {
+            listeners.forEach { it.onDaemonError(error) }
         }
     }
 

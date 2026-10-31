@@ -1,5 +1,6 @@
 import type { StateManager } from '../state/StateManager.js';
 import type { Team } from '../types/schema.js';
+import { roleFromWorkerId } from './workerRole.js';
 
 /**
  * Team membership survives the worker record it is stored on.
@@ -101,11 +102,63 @@ export interface NoTeamMembershipRefusal {
 }
 
 /**
- * The truthful refusal for a claimer skipped only by the solo epic+status rule.
- * Names the rule that refused and the one call that clears it; deliberately
- * carries none of the concurrent-claim wording.
+ * The same refusal for an architect, worker or qa seat: an `END_SESSION`
+ * handoff instead of a `join_team` nextAction. It has no `taskId` — no task is
+ * involved — and the moe-account-switch mod, its one consumer, does not read one.
  */
-export function noTeamMembershipRefusal(workerId: string): NoTeamMembershipRefusal {
+export interface NoTeamMembershipHandoff {
+  hasNext: false;
+  code: typeof NO_TEAM_MEMBERSHIP;
+  sessionHandoff: {
+    action: 'END_SESSION';
+    workerId: string;
+    reason: string;
+  };
+}
+
+/**
+ * The truthful refusal for a claimer skipped only by the solo epic+status rule.
+ * Names the rule that refused and a remedy the caller can execute; deliberately
+ * carries none of the concurrent-claim wording.
+ *
+ * The remedy follows the caller's tools/list, and the id prefix is the whole
+ * story. Only a caller with no team, live or tombstoned (`resolveEffectiveTeam`
+ * returned null), is refused, so McpAdapter's tools/list role
+ * (`resolveWorkerRole`) falls back to `roleFromWorkerId`. TOOL_AUDIENCE lists
+ * `moe.join_team` and `moe.list_teams` to no architect, worker or qa seat, so
+ * `toolsForRole` hides both from them, while a governor sees every non-wrapper
+ * tool and a role-less caller (IDE, scripts/moe-call.sh) sees every tool.
+ *
+ * - architect-, worker-, qa- id: an `END_SESSION` handoff and no nextAction. The
+ *   moe-account-switch mod ends an interactive TUI on any top-level END_SESSION
+ *   addressed to its MOE_WORKER_ID (scripts/mods/moe-account-switch/hooks/
+ *   register.ts `endSessionInstruction`). Both wrappers key only on
+ *   `code === NO_TEAM_MEMBERSHIP` (moe-agent.sh `claim_refused_no_team`,
+ *   moe-agent.ps1) and re-run the team join before their next claim.
+ * - anything else: the `join_team` nextAction, which that caller can see.
+ *
+ * Pure and total: it never throws, so a claim or wait cannot fail because its
+ * refusal was built. An empty or unprefixed id takes the `join_team` branch.
+ */
+export function noTeamMembershipRefusal(workerId: string): NoTeamMembershipRefusal | NoTeamMembershipHandoff {
+  const role = roleFromWorkerId(workerId);
+  if (role !== null && role !== 'governor') {
+    return {
+      hasNext: false,
+      code: NO_TEAM_MEMBERSHIP,
+      sessionHandoff: {
+        action: 'END_SESSION',
+        workerId,
+        reason:
+          `Worker ${workerId} belongs to no team, and every claimable candidate sits in an ` +
+          'epic+status a live worker already holds. A team may work one epic+status in parallel; ' +
+          'a solo worker may not — so the queue is not empty and nothing raced you, your team ' +
+          'membership is missing. This session cannot fix that: joining a team is the launcher\'s ' +
+          'job. Save any handoff, then end this session; before its next claim the wrapper ' +
+          'retries the team join and reports why it fails (for example a full team).'
+      }
+    };
+  }
   return {
     hasNext: false,
     code: NO_TEAM_MEMBERSHIP,

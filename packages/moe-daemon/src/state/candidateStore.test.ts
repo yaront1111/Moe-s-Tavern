@@ -143,7 +143,7 @@ describe('candidateStore', () => {
   // immutability
   // ---------------------------------------------------------------------------
 
-  const changedValue: Record<keyof Omit<RecordCandidateParams, 'id'>, string> = {
+  const changedValue: Record<keyof Omit<RecordCandidateParams, 'id' | 'protectedEntries'>, string> = {
     attemptId: 'attempt-2a',
     taskId: 'task-2',
     baseRevision: SHA.otherBase,
@@ -254,8 +254,10 @@ describe('candidateStore', () => {
     expect(Object.keys(store).sort()).toEqual([
       'REVISION_RE',
       'SHA_RE',
+      'assertAttemptOfTask',
       'caseVariantId',
       'getCandidate',
+      'hasControlChar',
       'listCandidatesForAttempt',
       'listCandidatesForTask',
       'recordCandidate',
@@ -324,6 +326,65 @@ describe('candidateStore', () => {
       expect(fs.existsSync(path.join(h.testDir, 'escaped.json'))).toBe(false);
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // protectedEntries — runner-reported ls-tree entries, strict and immutable
+  // ---------------------------------------------------------------------------
+
+  const OID = { a: 'e5'.repeat(20), b: 'f6'.repeat(20) };
+  const entries = [{ path: 'tests/a.test.ts', oid: OID.a }, { path: 'vitest.config.ts', oid: OID.b }];
+
+  it('persists a valid protectedEntries list and hands out copies of it', async () => {
+    const { candidate } = await recordCandidate(h.state, { ...base, id: 'cand-a', protectedEntries: entries });
+    expect(readCandidate('cand-a').protectedEntries).toEqual(entries);
+    (candidate.protectedEntries![0] as { oid: string }).oid = OID.b;
+    (getCandidate(h.state, 'cand-a')!.protectedEntries![0] as { oid: string }).oid = OID.b;
+    expect(getCandidate(h.state, 'cand-a')!.protectedEntries).toEqual(entries);
+    await recordCandidate(h.state, { ...base, id: 'cand-e', protectedEntries: [] });
+    expect(readCandidate('cand-e').protectedEntries).toEqual([]);
+  });
+
+  const badEntries: Array<[string, unknown, string]> = [
+    ['a non-array', { path: 'a', oid: OID.a }, 'Invalid protectedEntries:'],
+    ['2001 entries', Array.from({ length: 2001 }, (_, i) => ({ path: `t/${String(i).padStart(4, '0')}`, oid: OID.a })), 'Invalid protectedEntries:'],
+    ['a null entry', [entries[0], null], 'Invalid protectedEntries[1]:'],
+    ['an extra key', [{ ...entries[0], mode: '100644' }], 'Invalid protectedEntries[0]:'],
+    ['a missing oid', [{ path: 'a', sha: OID.a }], 'Invalid protectedEntries[0]:'],
+    ['a ./ path', [{ path: './a', oid: OID.a }], 'Invalid protectedEntries[0].path:'],
+    ['a backslash path', [{ path: 'tests\\a', oid: OID.a }], 'Invalid protectedEntries[0].path:'],
+    ['a traversal path', [{ path: '../a', oid: OID.a }], 'Invalid protectedEntries[0].path:'],
+    ['a control character in a path', [{ path: 'tests/a\nb', oid: OID.a }], 'Invalid protectedEntries[0].path:'],
+    ['an uppercase oid', [entries[0], { path: 'z', oid: OID.b.toUpperCase() }], 'Invalid protectedEntries[1].oid:'],
+    ['an abbreviated oid', [{ path: 'a', oid: OID.a.slice(0, 12) }], 'Invalid protectedEntries[0].oid:'],
+    ['unsorted entries', [entries[1], entries[0]], 'Invalid protectedEntries[1].path:'],
+    ['a duplicate path', [entries[0], entries[0]], 'Invalid protectedEntries[1].path:'],
+  ];
+
+  for (const [label, protectedEntries, messagePart] of badEntries) {
+    it(`refuses protectedEntries with ${label} without writing`, async () => {
+      const params = { ...base, id: 'cand-a', protectedEntries } as unknown as RecordCandidateParams;
+      const error = await refusal(recordCandidate(h.state, params));
+      expect(error.codeName).toBe('INVALID_INPUT');
+      expect(error.message).toContain(messagePart);
+      expect(candidateFiles()).toEqual([]);
+    });
+  }
+
+  it('treats protectedEntries as frozen: a differing list is refused, an identical one replays', async () => {
+    await recordCandidate(h.state, { ...base, id: 'cand-a', protectedEntries: entries });
+    const bytesBefore = readBytes('cand-a');
+    for (const changed of [undefined, [], [entries[0]], [{ ...entries[0], oid: OID.b }, entries[1]]]) {
+      const error = await refusal(recordCandidate(h.state, { ...base, id: 'cand-a', protectedEntries: changed }));
+      expect(error.codeName).toBe('CANDIDATE_IMMUTABLE');
+      expect(error.context).toEqual({ candidateId: 'cand-a', differingFields: ['protectedEntries'] });
+    }
+    const replay = await recordCandidate(h.state, { ...base, id: 'cand-a', protectedEntries: entries.map((e) => ({ ...e })) });
+    expect(replay.duplicate).toBe(true);
+    expect(readBytes('cand-a').equals(bytesBefore)).toBe(true);
+    await recordCandidate(h.state, { ...base, id: 'cand-b' });
+    const added = await refusal(recordCandidate(h.state, { ...base, id: 'cand-b', protectedEntries: [] }));
+    expect(added.codeName).toBe('CANDIDATE_IMMUTABLE');
+  });
 
   // ---------------------------------------------------------------------------
   // durability and reload

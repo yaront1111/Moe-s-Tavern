@@ -112,7 +112,7 @@ export function setTaskDependenciesTool(_state: StateManager): ToolDefinition {
         };
       }
 
-      const updated = await state.updateTask(task.id, { dependsOn }, 'TASK_DEPENDENCIES_SET');
+      const updated = await state.updateTask(task.id, { dependsOn }, 'TASK_DEPENDENCIES_SET', params.workerId || undefined);
       if (params.workerId) {
         await state.touchWorker(params.workerId);
       }

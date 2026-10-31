@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=c5e04cdb2823
+# moe-generated: sha=40a3666e5b06
 name: ros2-skill
 description: "Controls and monitors ROS 2 robots directly via rclpy CLI. Use for ANY ROS 2 robot task: topics (subscribe, publish, capture images, find by type), services (list, call), actions (list, send goals), parameters (get, set, presets), nodes, lifecycle management, controllers (ros2_control), Nav2 navigation (go, cancel, status, waypoints, initial-pose), diagnostics, battery, system health checks, TF frames, bags, logs, and more. When in doubt, use this skill — it covers the full ROS 2 operation surface. Never tell the user you cannot do something ROS 2-related without checking this skill first."
 version: "1.0.8"
@@ -116,7 +116,7 @@ python3 {baseDir}/scripts/ros2_cli.py profile show
 #   NO robot name given (bare "create a profile" / "scan workspace")  → omit both flags
 #     python3 {baseDir}/scripts/ros2_cli.py profile scan
 #
-# Use summary.safety_limits as the --max-vel / --max-ang ceiling (Rule 28).
+# Use summary.safety_limits as the --max-vel / --max-ang ceiling (RULES-PREFLIGHT.md Rule 0, velocity-limit sweep).
 ```
 
 Stop and tell the user if Step 1 reports critical failures. Re-run Step 3 before every timed command in simulation.
@@ -262,7 +262,7 @@ python3 {baseDir}/scripts/ros2_cli.py topics subscribe <topic> --max-messages 1 
 python3 {baseDir}/scripts/ros2_cli.py topics echo-once <topic> [--timeout 5]
 ```
 
-**`--max-vel N` / `--max-ang N`** (Twist / TwistStamped only): clamp linear x/y/z to ±N m/s and angular.z to ±N rad/s inside the CLI before the message is sent. Pass `summary.safety_limits.binding.linear_x` / `.angular_z` from the profile (Path A) or the Rule 28 limit-scan result (Path B). Clamped axes are reported in `velocity_clamped` in the JSON output. Other message types pass through unchanged.
+**`--max-vel N` / `--max-ang N`** (Twist / TwistStamped only): clamp linear x/y/z to ±N m/s and angular.z to ±N rad/s inside the CLI before the message is sent. Pass `summary.safety_limits.binding.linear_x` / `.angular_z` from the profile (Path A) or the RULES-PREFLIGHT.md Rule 0 velocity-limit sweep (Path B). Clamped axes are reported in `velocity_clamped` in the JSON output. Other message types pass through unchanged.
 
 ### Services and Actions
 
@@ -567,7 +567,7 @@ python3 {baseDir}/scripts/ros2_cli.py profile annotate "Camera faces a mirror �
 
 **If detection is wrong:** run `profile scan --robot-type <type>` to override. The evidence field always shows what matched so you can see why a type was chosen.
 
-Use `summary.safety_limits.binding.linear_x` as the `--max-vel` ceiling and `summary.safety_limits.binding.angular_z` as the `--max-ang` ceiling (Rule 28). `binding.linear_y` is set for holonomic robots. `sources` lists every config file that contributed a limit — useful when multiple teleop configs are present. Use `summary.launch_files` to see what launch files exist in the workspace; load any one's full detail with `--section <filename>`. Launch arg defaults and choices are always populated — a missing `default` key means the argument is required with no declared default.
+Use `summary.safety_limits.binding.linear_x` as the `--max-vel` ceiling and `summary.safety_limits.binding.angular_z` as the `--max-ang` ceiling (RULES-PREFLIGHT.md Rule 0, velocity-limit sweep). `binding.linear_y` is set for holonomic robots. `sources` lists every config file that contributed a limit — useful when multiple teleop configs are present. Use `summary.launch_files` to see what launch files exist in the workspace; load any one's full detail with `--section <filename>`. Launch arg defaults and choices are always populated — a missing `default` key means the argument is required with no declared default.
 
 ---
 
@@ -663,12 +663,12 @@ This skill uses **progressive disclosure**. SKILL.md covers the most common oper
 | File | When to load |
 |---|---|
 | [`references/RULES.md`](references/RULES.md) | **Index only** — maps each rule number to its domain file. Load first to navigate the rule set. |
-| [`references/RULES-CORE.md`](references/RULES-CORE.md) | **Always load** — general agent conduct (Rules 0.5, 1, 2, 4–6, 10–13). Hard constraints that apply to every command. Includes mandatory compliance preamble and Quick Decision Card. |
-| [`references/RULES-PREFLIGHT.md`](references/RULES-PREFLIGHT.md) | **Load at session start and before any action** — full pre-flight introspection protocol (Rule 0), session-start steps 0–6 (Rule 0.1), lifecycle/QoS/publisher checks (Rules 14, 15, 19). |
+| [`references/RULES-CORE.md`](references/RULES-CORE.md) | **Always load** — general agent conduct (Rules 0.5, 1, 2, 4–6, 10–13, and Rule 14 Path A antipatterns). Hard constraints that apply to every command. Includes mandatory compliance preamble and Quick Decision Card. |
+| [`references/RULES-PREFLIGHT.md`](references/RULES-PREFLIGHT.md) | **Load at session start and before any action** — full pre-flight introspection protocol (Rule 0), session-start steps 0–6 (Rule 0.1), lifecycle/QoS/publisher checks (Rule 14 lifecycle — distinct from RULES-CORE Rule 14 — and Rules 15, 19). |
 | [`references/RULES-MOTION.md`](references/RULES-MOTION.md) | **Always load at session start** (any mobile-base or arm robot may receive a motion command) — movement algorithm (Rule 3), pre-motion check + Nav2 preemption (Rule 9), REP-103/105 (Rule 17), estop (Rule 18), decel zone (Rule 20), timeout recovery (Rule 21), command limits (Rules 22–23), sequencing (Rule 24), proximity scan (Rule 25). Step 1 of Rule 3 is the authoritative source on the profile fast-path for motion. |
 | [`references/RULES-DIAGNOSTICS.md`](references/RULES-DIAGNOSTICS.md) | **Load when something fails** — failure diagnosis + log-level elevation (Rule 7), post-action verification table (Rule 8), multi-step sequencing (Rule 16), Error Recovery Protocols. |
 | [`references/RULES-REFERENCE.md`](references/RULES-REFERENCE.md) | **Load for command lookup** — full intent→command table (Step 1), sensor search by type (Steps 2–3), message structure (Step 4), velocity limits (Step 5), Launch workflow, Discord image delivery (Rule 26), Setup. |
-| [`references/COMMANDS.md`](references/COMMANDS.md) | Load when you need the exact flag name, argument format, or JSON output structure for a specific command. 4535 lines — use `--help` on the specific subcommand first; only load this file if `--help` is insufficient or unavailable. |
-| [`references/EXAMPLES.md`](references/EXAMPLES.md) | Load for step-by-step walkthroughs of common tasks (move N meters, capture camera image, send Nav2 goal, etc.). 699 lines. |
+| [`references/COMMANDS.md`](references/COMMANDS.md) | Load when you need the exact flag name, argument format, or JSON output structure for a specific command. Very large — use `--help` on the specific subcommand first; only load this file if `--help` is insufficient or unavailable. |
+| [`references/EXAMPLES.md`](references/EXAMPLES.md) | Load for step-by-step walkthroughs of common tasks (move N meters, capture camera image, send Nav2 goal, etc.). |
 | [`references/CLI.md`](references/CLI.md) | Load for direct `ros2` CLI equivalents and debugging. Not needed during normal agent operation. 90 lines. |
 | [`AGENTS.md`](AGENTS.md) | Load for the full agent operating protocol — condensed rules, session start detail, reporting style, subcommand inference, motion workflows, and multi-robot handling. Load alongside the RULES-*.md files at session start. |

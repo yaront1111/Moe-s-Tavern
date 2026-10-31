@@ -2,16 +2,22 @@
 // Claude account rotation, wrapper side. moe-agent.{sh,ps1} lease an account
 // from the daemon (moe.lease_account) before every claude launch; this helper
 // turns the reply into one tab-separated line, checks an account's sign-in
-// after a launch fails fast, and turns an interactive seat's statusline input
-// into a usage sample. A Claude config directory is only ever handed to
-// claude as CLAUDE_CONFIG_DIR: nothing here opens, lists or logs a file inside
-// one. From `claude auth status --json` it reads the exit code and authMethod;
-// nothing else in that output is printed, stored or sent.
+// after a launch fails fast, pre-accepts an interactive seat's folder trust,
+// and turns an interactive seat's statusline input into a usage sample.
+// A Claude config directory is handed to claude as CLAUDE_CONFIG_DIR, and this
+// helper opens exactly one file inside one: `trust` sets
+// projects[<key>].hasTrustDialogAccepted in that account's .claude.json for an
+// interactive seat, under claude's own lock (human sign-off 2026-10-26,
+// task-7a0b1881). Nothing read from that file, no path from it and no env
+// value is ever printed; .credentials.json and every other file in the folder
+// are never opened. From `claude auth status --json` it reads the exit code
+// and authMethod; nothing else in that output is printed, stored or sent.
 //
 //   gate                                         go | off | skip<TAB><note>
 //   pick              (stdin: the lease reply)   leased<TAB><id><TAB><peak|?><TAB><configDir>
 //                                                | wait<TAB><sec><TAB><retryAt> | off<TAB><note> | unavailable<TAB><why>
 //   signin-state <configDir> <claude command...> subscription | signed_out | other | unknown
+//   trust <configDir> <projectDir> [<launchDir>] trusted | granted | refused<TAB><sec><TAB><reason>
 //   statusline        claude's statusLine command: prints a line, writes MOE_ACCOUNT_SAMPLE_FILE
 //   statusline-settings <file>                   writes the --settings JSON that installs it
 import fs from 'node:fs';
@@ -33,11 +39,33 @@ const PROBE_TIMEOUT_MS = 60_000;
 const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
 const OFF_RE = /^(0|false|off|no)$/i;
 const UNREADABLE = 'unavailable\tunreadable reply from the daemon';
-const USAGE = 'usage: node moe-account-lease.mjs gate | pick | signin-state <configDir> <claude command...> | statusline | statusline-settings <file>';
+const USAGE = 'usage: node moe-account-lease.mjs gate | pick | signin-state <configDir> <claude command...> '
+  + '| trust <configDir> <projectDir> [<launchDir>] | statusline | statusline-settings <file>';
+const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
+const TRUST_LOCK_WAIT_MS = 2000;
+const TRUST_POLL_MS = 50;
+const GIT_TIMEOUT_MS = 10_000;
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const TRUST_REASON = {
+  missing: 'no .claude.json in the account folder',
+  notFile: "the account's .claude.json is not a regular file",
+  tooBig: "the account's .claude.json is over 16 MiB",
+  notObject: "the account's .claude.json is not a JSON object",
+  locked: "the account's .claude.json is locked by another claude",
+  rewrite: "the account's .claude.json could not be rewritten",
+  readBack: 'the trust entry did not read back',
+  outside: 'the launch directory is outside the project',
+};
 
 const isOff = (value) => OFF_RE.test(String(value ?? '').trim());
 const isSet = (value) => typeof value === 'string' && value.trim() !== '' && !isOff(value);
 const oneLine = (value, max = 300) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+
+/** MOE_ACCOUNT_RETRY_SEC as a whole number of seconds >= 1, else 300. */
+function retryCapSec(env) {
+  const cap = Number.parseInt(env.MOE_ACCOUNT_RETRY_SEC ?? '', 10);
+  return cap >= 1 ? cap : DEFAULT_RETRY_CAP_SEC;
+}
 
 /** `go`, `off` (MOE_ACCOUNT_ROTATION is 0/false/off/no), or `skip<TAB><note>` when a cloud provider is selected. */
 export function gateLine(env = process.env) {
@@ -75,8 +103,7 @@ export function pickLine(text, env = process.env, platform = process.platform) {
   if (reply.rotation !== true) return UNREADABLE;
   if (reply.accountId === null) {
     if (typeof reply.retryInSec !== 'number' || !Number.isFinite(reply.retryInSec)) return UNREADABLE;
-    const cap = Number.parseInt(env.MOE_ACCOUNT_RETRY_SEC ?? '', 10);
-    const sec = Math.max(1, Math.min(Math.ceil(reply.retryInSec), cap >= 1 ? cap : DEFAULT_RETRY_CAP_SEC));
+    const sec = Math.max(1, Math.min(Math.ceil(reply.retryInSec), retryCapSec(env)));
     return `wait\t${sec}\t${oneLine(reply.retryAt, 64) || '?'}`;
   }
   if (typeof reply.accountId !== 'string' || !ACCOUNT_ID_RE.test(reply.accountId)) return UNREADABLE;
@@ -253,6 +280,169 @@ export function writeSample(file, sample) {
   fs.renameSync(tmp, file);
 }
 
+// --- trust: claude stops an interactive launch at "Do you trust the files in
+// this folder?" unless projects[<git top-level of the cwd, else the cwd>] (or
+// a projects[dir] on the walk from the cwd up to it) in $CLAUDE_CONFIG_DIR/
+// .claude.json has hasTrustDialogAccepted: true; -p never asks. Accepting the
+// dialog writes that key, '/'-separated on Windows. claude saves the file under
+// a mkdir lock at `<file>.lock` (proper-lockfile), re-reading under it, as
+// JSON.stringify(config, null, 2) without a trailing newline: so does this.
+
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+function attempt(fn, dir) {
+  try {
+    return fn(dir);
+  } catch {
+    return null;
+  }
+}
+
+// cwd: Windows looks a bare command up in the current directory first, and that
+// is the project being trusted; node's own folder is not.
+function gitTopLevel(dir) {
+  const result = spawnSync('git', ['-C', path.resolve(dir), 'rev-parse', '--show-toplevel'], {
+    cwd: path.dirname(process.execPath), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: GIT_TIMEOUT_MS, windowsHide: true,
+  });
+  return result.status === 0 && typeof result.stdout === 'string' ? result.stdout.trim() || null : null;
+}
+
+/** The key forms claude may look a directory up under: Windows gets '/' separators and an uppercase drive too. */
+function keyForms(dir, platform) {
+  if (platform !== 'win32') return [path.posix.resolve(dir)];
+  const key = path.win32.resolve(dir).replace(/\\/g, '/');
+  const trimmed = /^[A-Za-z]:\/$/.test(key) ? key : key.replace(/\/+$/, '');
+  return [trimmed, trimmed.replace(/^[a-z](?=:)/, (drive) => drive.toUpperCase())];
+}
+
+/** Every key to trust for a launch directory: the directory, its real path and its git top-level, deduped. */
+export function trustKeys(dir, { platform = process.platform, realpath = fs.realpathSync, gitTop = gitTopLevel } = {}) {
+  const keys = new Set();
+  for (const candidate of [dir, attempt(realpath, dir), attempt(gitTop, dir)]) {
+    if (typeof candidate === 'string' && candidate) keyForms(candidate, platform).forEach((key) => keys.add(key));
+  }
+  return [...keys];
+}
+
+/** True when `launchDir` is `projectDir` or below it (Windows compares case-insensitively). */
+export function launchInside(projectDir, launchDir, platform = process.platform) {
+  const paths = platform === 'win32' ? path.win32 : path.posix;
+  const rel = paths.relative(paths.resolve(projectDir), paths.resolve(launchDir));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${paths.sep}`) && !paths.isAbsolute(rel));
+}
+
+/** { config, mode } or { reason }: a regular file of at most 16 MiB holding a JSON object whose projects is an object if set. */
+function readConfig(file) {
+  let stat;
+  try {
+    stat = fs.lstatSync(file);
+  } catch {
+    return { reason: TRUST_REASON.missing };
+  }
+  if (!stat.isFile()) return { reason: TRUST_REASON.notFile };
+  if (stat.size > MAX_CONFIG_BYTES) return { reason: TRUST_REASON.tooBig };
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return { reason: TRUST_REASON.notObject };
+  }
+  if (!isPlainObject(config) || (config.projects !== undefined && !isPlainObject(config.projects))) return { reason: TRUST_REASON.notObject };
+  return { config, mode: stat.mode & 0o777 };
+}
+
+function isTrusted(config, keys) {
+  const projects = config.projects ?? {};
+  return keys.every((key) => Object.hasOwn(projects, key) && isPlainObject(projects[key]) && projects[key].hasTrustDialogAccepted === true);
+}
+
+/** 'held' (this call created the lock), 'busy' (another holder for the whole wait) or 'error'. */
+function takeLock(lockDir, waitMs) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      fs.mkdirSync(lockDir);
+      return 'held';
+    } catch (error) {
+      if (error?.code !== 'EEXIST') return 'error';
+      const left = deadline - Date.now();
+      if (left <= 0) return 'busy';
+      sleepMs(Math.min(TRUST_POLL_MS, left));
+    }
+  }
+}
+
+/** Temp file + rename in the same folder, with the original mode; Windows may refuse a rename for a moment. */
+function replaceFile(file, text, mode) {
+  const tmp = `${file}.moe-${process.pid}.tmp`;
+  try {
+    fs.rmSync(tmp, { force: true });
+    fs.writeFileSync(tmp, text, { flag: 'wx', mode });
+    fs.chmodSync(tmp, mode);
+    for (let tries = 1; ; tries += 1) {
+      try {
+        fs.renameSync(tmp, file);
+        return true;
+      } catch (error) {
+        if (tries >= 5 || !RENAME_RETRY_CODES.has(error?.code)) throw error;
+        sleepMs(TRUST_POLL_MS);
+      }
+    }
+  } catch {
+    attempt((name) => fs.rmSync(name, { force: true }), tmp);
+    return false;
+  }
+}
+
+/** Under claude's lock: re-read, set the missing keys, rewrite, read back. 'trusted', 'granted' or a refusal reason. */
+function grantLocked(file, keys, waitMs) {
+  const lockDir = `${file}.lock`;
+  const lock = takeLock(lockDir, waitMs);
+  if (lock !== 'held') return lock === 'busy' ? TRUST_REASON.locked : TRUST_REASON.rewrite;
+  try {
+    const current = readConfig(file);
+    if (current.reason) return current.reason;
+    const { config } = current;
+    if (isTrusted(config, keys)) return 'trusted';
+    config.projects ??= {};
+    for (const key of keys) {
+      const entry = Object.hasOwn(config.projects, key) && isPlainObject(config.projects[key]) ? config.projects[key] : {};
+      if (entry.hasTrustDialogAccepted !== true) config.projects[key] = { ...entry, hasTrustDialogAccepted: true };
+    }
+    if (!replaceFile(file, JSON.stringify(config, null, 2), current.mode)) return TRUST_REASON.rewrite;
+    const after = readConfig(file);
+    return !after.reason && isTrusted(after.config, keys) ? 'granted' : TRUST_REASON.readBack;
+  } finally {
+    // Only ever this call's own lock; a lock left by a killed holder goes stale for claude after 10 s.
+    attempt((dir) => fs.rmdirSync(dir), lockDir);
+  }
+}
+
+/**
+ * `trusted`, `granted`, or `refused<TAB><sec><TAB><reason>` (one fixed reason;
+ * sec = MOE_ACCOUNT_RETRY_SEC, else 300). A launch directory outside the
+ * project is never granted. Options: env, platform, realpath, gitTop, lockWaitMs.
+ */
+export function trustLine(configDir, projectDir, launchDir = projectDir, options = {}) {
+  const { env = process.env, lockWaitMs = TRUST_LOCK_WAIT_MS, ...keyOptions } = options;
+  const refused = (reason) => `refused\t${retryCapSec(env)}\t${reason}`;
+  try {
+    const keys = trustKeys(launchDir, keyOptions);
+    const file = path.join(configDir, '.claude.json');
+    const first = readConfig(file);
+    const trusted = !first.reason && isTrusted(first.config, keys);
+    if (!launchInside(projectDir, launchDir, keyOptions.platform)) return trusted ? 'trusted' : refused(TRUST_REASON.outside);
+    // A file that does not parse may be one claude is writing: grantLocked reads it again under the lock.
+    if (first.reason && first.reason !== TRUST_REASON.notObject) return refused(first.reason);
+    if (trusted) return 'trusted';
+    const result = grantLocked(file, keys, lockWaitMs);
+    return result === 'trusted' || result === 'granted' ? result : refused(result);
+  } catch {
+    return refused(TRUST_REASON.rewrite);
+  }
+}
+
 function readStdin() {
   try {
     return fs.readFileSync(0, 'utf8');
@@ -296,6 +486,15 @@ export function main(argv, env = process.env) {
         return 2;
       }
       console.log(probeSignIn(configDir, words, env));
+      return 0;
+    }
+    case 'trust': {
+      const [configDir, projectDir, launchDir] = args;
+      if (!configDir || !projectDir) {
+        console.error(USAGE);
+        return 2;
+      }
+      console.log(trustLine(configDir, projectDir, launchDir || projectDir, { env }));
       return 0;
     }
     case 'statusline':

@@ -8,6 +8,7 @@ import { resolveWorkerRole } from '../util/workerRole.js';
 import { logger } from '../util/logger.js';
 import { VERSION } from '../util/version.js';
 import { MoeError } from '../util/errors.js';
+import type { RunnerIdentity } from './runnerChannel.js';
 
 // Rate limiter configuration (configurable via environment variables)
 const RATE_LIMIT_ENABLED = process.env.MOE_RATE_LIMIT_ENABLED !== 'false';
@@ -122,6 +123,8 @@ export interface JsonRpcResponse {
 export interface McpHandleOptions {
   shouldContinue?: () => boolean;
   onWaiterRegistered?: (toolName: string, workerId: string) => void;
+  /** The authenticated /runner identity; forwarded unchanged, never read from arguments. */
+  runner?: RunnerIdentity;
 }
 
 export class McpAdapter {
@@ -301,6 +304,7 @@ export class McpAdapter {
           const invoke = () => tool.handler(params.arguments, this.state, {
             shouldContinue: options.shouldContinue,
             onWaiterRegistered: workerId => options.onWaiterRegistered?.(tool.name, workerId),
+            ...(options.runner ? { runner: options.runner } : {}),
           });
           const result = tool.blocking ? await invoke() : await this.state.runExclusive(invoke);
           return {

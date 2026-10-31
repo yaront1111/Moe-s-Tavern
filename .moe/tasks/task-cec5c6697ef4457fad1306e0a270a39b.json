@@ -96,7 +96,7 @@
       "completedAt": "2026-07-31T13:25:12.401Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -109,7 +109,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:29.140Z",
-  "updatedAt": "2026-07-31T15:47:31.703Z",
+  "updatedAt": "2026-10-24T15:19:01.470Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:17:47.737Z",
     "plannedStepCount": 6,
@@ -167,5 +167,6 @@
   ],
   "completedAt": "2026-07-31T15:47:31.703Z",
   "reviewCompletedAt": "2026-07-31T15:47:31.703Z",
-  "reviewSummary": "Re-ran DoD command `npx vitest run src/tools/reportBlocked.test.ts` myself: exit 0, 8/8. Also `src/util/workerLiveness.test.ts` 15/15, `npx tsc --noEmit` exit 0, full `npm test` 53 files / 819 tests green (shared tree also carries another task's in-flight amendPlanStep/completeStep work — nothing red). DoD 1-3 verified in code + tests: reportBlocked.ts:63-91 resolves the ping via findFreshestLiveWorkerByRole(state.workers.values(), state.teams.values(), 'architect', excludeWorkerIds=[assignedWorkerId, params.workerId]) and prefixes exactly one #general copy (postSystemMessage's forwarded copy stays unprefixed, so no double-page) plus #architects; falls back to '@governors ' with the mention moved onto the #governors copy. workerLiveness.ts:59-89 is pure over iterables (no StateManager import), role via worker.teamId not team.memberIds, liveness via the one canonical isWorkerAlive, ties broken to lowest id — verified deterministic under both iteration orders. Tests are mutation-resistant (exact ids/objects asserted, not truthiness) and cover freshest-of-three, stale+DEAD fallback, no-architect-team, self-ping exclusion, all-chat-posts-reject still returns success + BLOCKED + lastError, and unchanged reason validation / nextAction contract. Spot-checked the ping is real, not decorative: postToGeneral/postToRoleChannel go through sendMessage with sender 'system' (StateManager.ts:1784/1804) and mentionRouter.ts:33 regex `(?<![\\w@])@(\\w[\\w-]*)` captures a hyphenated bare worker id, with 'governors' resolving to the governor role group. docs/MCP_SERVER.md report_blocked section documents routing, channel matrix, notified:{target,via} and states liveness/status/release routing are untouched. Rails clean: no new settings key, no new MCP tool, no forbidden patterns, chat stays inside per-post try/catch so nothing long or throwing runs under the state mutex."
+  "reviewSummary": "Re-ran DoD command `npx vitest run src/tools/reportBlocked.test.ts` myself: exit 0, 8/8. Also `src/util/workerLiveness.test.ts` 15/15, `npx tsc --noEmit` exit 0, full `npm test` 53 files / 819 tests green (shared tree also carries another task's in-flight amendPlanStep/completeStep work — nothing red). DoD 1-3 verified in code + tests: reportBlocked.ts:63-91 resolves the ping via findFreshestLiveWorkerByRole(state.workers.values(), state.teams.values(), 'architect', excludeWorkerIds=[assignedWorkerId, params.workerId]) and prefixes exactly one #general copy (postSystemMessage's forwarded copy stays unprefixed, so no double-page) plus #architects; falls back to '@governors ' with the mention moved onto the #governors copy. workerLiveness.ts:59-89 is pure over iterables (no StateManager import), role via worker.teamId not team.memberIds, liveness via the one canonical isWorkerAlive, ties broken to lowest id — verified deterministic under both iteration orders. Tests are mutation-resistant (exact ids/objects asserted, not truthiness) and cover freshest-of-three, stale+DEAD fallback, no-architect-team, self-ping exclusion, all-chat-posts-reject still returns success + BLOCKED + lastError, and unchanged reason validation / nextAction contract. Spot-checked the ping is real, not decorative: postToGeneral/postToRoleChannel go through sendMessage with sender 'system' (StateManager.ts:1784/1804) and mentionRouter.ts:33 regex `(?<![\\w@])@(\\w[\\w-]*)` captures a hyphenated bare worker id, with 'governors' resolving to the governor role group. docs/MCP_SERVER.md report_blocked section documents routing, channel matrix, notified:{target,via} and states liveness/status/release routing are untouched. Rails clean: no new settings key, no new MCP tool, no forbidden patterns, chat stays inside per-post try/catch so nothing long or throwing runs under the state mutex.",
+  "planRevision": 0
 }

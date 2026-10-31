@@ -1,0 +1,130 @@
+{
+  "id": "task-4359d60bbc9b4d1b83353edfbdaa518a",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M06b] Six-workstream composition fixtures",
+  "description": "Objective: Prove that the six CQ workstreams compose: no stale-revision, check, recipe or isolation bypass at the seams between contract (F), context (C), delivery (V), isolation (R), client (I) and rollout (M). This is a SPIDR slice of [CQ-M06] (task-ced857485a1c4d75b57cc25dcc9b4d82), which keeps the docs sweep, the full regression and the whole-epic review. It depends on CQ-M05, which waits on every workstream's final task (F12, C11, V12, R13, I06), so all producers have landed when it runs.\n\nDeliverable: packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts. It is tests only, using real tools and stores and temp Git repos, with one describe per seam:\n- Stale revision (F×C×V): a requirement edit after approval advances planRevision. Plan reuse then never resumes the row, the recipe instance reads stale, and strict entry or completion is refused PLAN_REVISION_NOT_APPROVED. A review, candidate or check run bound to the old revision is refused, or does not satisfy delivery.\n- Check (V×C×M): under a strict deliveryPolicy, each of these is refused at delivery, identically under legacy and observe: a missing, failing or inconclusive required check; a caller-labelled runner observation; a candidate that edits a protected check config or the recipe definitions.\n- Recipe (C×F×M): an ineligible or mismatched instantiation falls back to ordinary planning with no approval stamp, and 'moe-recipe' impersonation is refused.\n- Isolation (R×M×V×I): verified-local is refused on every path (settings activation through the CQ-M05 control, claim, completion, delivery) with no host fallback. Nothing records isolation, readiness or verifiedLocal from a legacy or observe runner, check or client.\nEvery refusal asserts the exact codeName and that nothing was written. Legacy control rows keep their compatibility outcomes.\n\nNot in scope:\n- New production behavior. A defect fix over about 30 lines, or any contract change, goes to its owning task through moe.report_blocked.\n- IDE rendering (I06), real VM provisioning (R13) and docs.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "workstreamComposition.e2e.test.ts covers the stale-revision, check, recipe and isolation seams named in the description, each through real tools with exact codeName assertions.",
+    "Every refusal case also proves nothing was written: task, attempt, candidate, check, review and receipt bytes are unchanged.",
+    "No gate is mocked, no test-only certification is used, and verified-local is never made ready.",
+    "Legacy-profile control rows keep their existing compatibility outcomes in the same scenarios.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "INVENTORY, no code. Read the LANDED entry points of every producer the seams cross, and their Serena handoffs. Take each row's completion sha from get_context epicSiblings or the board, and run `git show --stat <sha>` first.\n- F: __e2e__/executionContract.e2e.test.ts (F12): boot, claim, serve, the strictInMemory and cutover helpers, and the RUNNER identity.\n- C: context/planReuse*.ts (C07); C08's recipe entry (planned as context/recipes/recipe.ts instantiateRecipe, readRecipeInstance and RECIPE_ACTOR 'moe-recipe' in tools/submitPlan.ts); C09's docs-literal-replace kind; and C11's __e2e__/plannerBoundaries.e2e.test.ts recipe fixture.\n- V:\n  - delivery/requiredChecks.ts (V01 snapshot) and delivery/policy.ts evaluateDeliveryEvidence, with tokens such as `protected-check-changed:<path>`;\n  - state/candidateStore.ts and state/checkRunStore.ts;\n  - the V03/V03b runner-observation tools and the V04 passing-run predicate;\n  - V06 review binding (qa_approve candidateId, attemptId, generation, sessionId);\n  - V09/V12b dependency projections;\n  - V12a's delivery bypass fixtures, and the way they present an authenticated runner (the ToolCallContext runner, or a temp MOE_RUNNER_KEY_DIR key).\n- R and I: server/runnerChannel.ts trust limits, and server/clientCapabilities.ts decodeClientHello.\n- M: CQ-M05 state/profileRollout.ts and the complete_task strict-attempt readiness.\n\nIn the step note, list the exact function, tool and refusal codeName each case below will use. If a producer the seams need never landed, do not invent it: report_blocked naming its task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts: the shared fixture plus seams A and C.\n\nFixture:\n- ToolTestHarness and a real temp Git repo. Copy git() and commit() from delivery/requiredChecks.delivery.test.ts: GIT_* masked, GIT_CONFIG_NOSYSTEM and GIT_CONFIG_GLOBAL set, fixed identities, no Git mocks.\n- MOE_* seat env stubbed to ''.\n- bytes(): a path-to-bytes map of every file under .moe/{tasks,attempts,candidates,checks,reviews,receipts}, over whichever directories exist, used for the no-write proofs.\n- refused(call, codeName): asserts the codeName and that bytes() is unchanged.\n- Profiles are set only through h.state.updateSettings. A strict cutover is the in-memory hand edit F12 uses; nothing ever makes verified-local ready (no readiness spy, no test-only certification).\n- Every expectation is exact: toEqual or toBe, never truthiness.\n\nSeam A, stale revision (F×C×V), with deliveryPolicy 'local-branch' and approvalMode CONTROL. Submit a plan whose executionContract.requiredChecks protects a committed config, approve revision 1, claim, serve, and record candidate C1 at revision 1 with a passing authenticated check run. Then edit the definitionOfDone, which advances planRevision to 2.\n- A1: under the strict cutover, start_step and complete_task with the current identity are refused PLAN_REVISION_NOT_APPROVED (no write).\n- A2: qa_approve naming C1 is refused (V06's landed code: the stale revision or candidate mismatch). evaluateDeliveryEvidence no longer counts C1's check run toward revision 2: assert its exact missingEvidence token.\n- A3: after request_replan (PLANNING, with approved revision 1 != planRevision 2), plan reuse never resumes the row: an architect claim returns it (planner path) and planReuse is not reuse/refresh. A recipe-born plan's readRecipeInstance(task) reads null once the revision advances.\n- Legacy control: the same edit under legacy with no strict cutover keeps the compatibility path. Steps start without identity, and only delivery evidence is re-judged.\n\nSeam C, recipe (C×F×M), approvalMode CONTROL, table over ['legacy','observe']:\n- C1: an ineligible C09 instantiation, and C2 a mismatched one (hash mismatch, old text missing or ambiguous), each return {instantiated:false, fallback:'ordinary-planning', reason:<exact>}. The row stays byte-identical: no plan, no recipeInstance, no approval stamp.\n- C3: an eligible instantiation lands AWAITING_APPROVAL with no approvedPlanRevision.\n- C4: moe.submit_plan with workerId 'moe-recipe' and no internal channel is refused NOT_ALLOWED with no write.\n- C5: after a definitionOfDone edit, approving the recipe plan with the stale expectedPlanRevision (state.approveTask) is refused PLAN_REVISION_MISMATCH with no write.\nOutcomes must be identical across the two profiles, ids and timestamps aside.\n\nError handling: if a seam exposes a real defect, make the smallest fix (at most ~30 lines) in the owning module, after moe.declare_files on it, and keep the case as its regression. A larger fix or a contract change gets report_blocked naming the owning task. Never weaken or skip a case. Run `npx vitest run src/__e2e__/workstreamComposition.e2e.test.ts`.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add seams B and D to __e2e__/workstreamComposition.e2e.test.ts (created in step 2; extend it in place, ~150 more lines).\n\nSeam B, check (V×C×M), deliveryPolicy 'local-branch', table over ['legacy','observe']. A REVIEW row with candidate C on the approved revision. Each case is refused at qa_approve with the landed delivery refusal codeName and its exact missingEvidence or token, and bytes() is unchanged (no review written):\n- B1: no check run.\n- B2: a check run with each non-passing outcome: code-failure, infra-failure, timeout, skipped, inconclusive.\n- B3: a moe.record_check_run call that self-labels source 'runner-observed' without the runner channel. It is not authenticated and never counts.\n- B4: a candidate whose tree changes a protected config, giving `protected-check-changed:<path>`.\n- B5: a recipe task whose candidate edits .moe/recipes.json, giving `protected-check-changed:.moe/recipes.json`. Build it in the temp repo only; never touch the real .moe.\n- Control: a passing authenticated run on the unchanged candidate approves, identically under both profiles.\n\nSeam D, isolation (R×M×V×I):\n- D1: one row is strict through a stored verified-local task snapshot, seeded raw as the only way in. In sequence, each of these is refused EXECUTION_PROFILE_NOT_READY and bytes() is unchanged:\n  - updateSettings({executionProfile:'verified-local'}), with CQ-M05's refused record written;\n  - an explicit claim;\n  - complete_task for an attempt opened with a verified-local snapshot, after a rollback to legacy;\n  - qa_approve.\n  The stored profile is never silently changed: no host fallback.\n- D2: after the B-control run (legacy or observe, authenticated runner), walk every JSON record under .moe (tasks, attempts, candidates, checks, reviews, receipts). No key matching /verified|isolat|ready|trust|certif/i holds a truthy value, except keys that already existed on the fixture rows: compare key sets before and after. decodeClientHello({protocolVersion:1, capabilities:{verifiedLocal:true, runnerStatus:true, modelReceipts:true}}) negotiates all three false.\n\nThe same fix-forward rule as step 2 applies. Run the file again with `npx vitest run src/__e2e__/workstreamComposition.e2e.test.ts`.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE. Run the gate fresh: `cd packages/moe-daemon && npm test`. It must exit 0; its command, exit code and output tail are the complete_task evidence.\n\nRun it in an isolated Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate):\n- `git archive HEAD` of the WHOLE repo;\n- overlay ONLY the e2e file, plus any declared fix-forward file;\n- npm ci under env -i with a Linux-only PATH and NO_COLOR=1, so no MOE_* variable is set;\n- cmp the overlaid files before citing the run.\nAlso run `npx tsc --noEmit`, and a scratch tsconfig that type-checks the e2e file. Compare pass and skip counts with the HEAD baseline. A newly failing test is a regression to fix or report, never an assertion to weaken.\n\nProve the seams bite. On a scratch copy of production code, apply each mutant, confirm the named case turns red, then restore and cmp the bytes:\n- drop the 'moe-recipe' identity check in submit_plan (C4);\n- make evaluateDeliveryEvidence ignore the check outcome (B2);\n- accept a self-labelled runner-observed run (B3);\n- skip the approval-revision CAS in approveTask (C5);\n- revert CQ-M05's attempt-level readiness in complete_task (D1);\n- skip the protected-path drift check (B4/B5).\nRecord each mutant and its red case in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "One adversarial self-review of this task's diff (load adversarial-self-review). Check:\n- Each scenario truly crosses its workstreams, rather than re-testing one producer.\n- No gate is mocked, no readiness spy is used, and no test-only certification exists.\n- The strict cutover is only ever the in-memory hand edit, and is restored per test.\n- The no-write proofs cover every evidence directory that exists.\n- The legacy control rows keep their compatibility outcomes.\n- Temp Git repos are isolated from the real repo: GIT_* masked, cwd set, cleanup on failure.\n- Flaky timing: SPEED is never used; reuse jobs are awaited with settlePlanReuseAssessments.\n- No real .moe edits, no Git writes, and no peer bytes touched.\n- Error handling: a refused call leaves every store unchanged, and a failing fixture setup throws a named error instead of passing vacuously.\nList any fix-forward edits with their owning tasks in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c53999b2dd2c4ad08bacb73c50371cfa"
+  ],
+  "priority": "HIGH",
+  "order": 230.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:51:08.708Z",
+  "updatedAt": "2026-10-29T22:57:13.058Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:55:25.253Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:57:12.971Z",
+  "executionContract": {
+    "intendedBehavior": "A single daemon e2e file proves the landed CQ workstreams compose at their seams:\n- stale revision (F×C×V);\n- check (V×C×M);\n- recipe (C×F×M);\n- isolation (R×M×V×I).\nIt drives real tools and stores with temp Git repos, asserts exact refusal codes with no-write proofs, keeps legacy control outcomes, and never makes verified-local ready.",
+    "acceptanceCriteria": [
+      "Seam cases A1-A3, B1-B5, C1-C5 and D1-D2 pass, each with an exact codeName/token and a no-write proof for every refusal.",
+      "Each production mutant in step 4 turns its named case red in a scratch copy.",
+      "Fresh `cd packages/moe-daemon && npm test` exits 0."
+    ],
+    "invariants": [
+      "Tests only. Any production fix is at most ~30 lines in its owning module, declared and regression-tested; anything larger is report_blocked.",
+      "No mocked gate, readiness spy or test-only certification, and verified-local is never made ready.",
+      "No real .moe edits or Git writes."
+    ],
+    "sourceAssumptions": [
+      "Landed: delivery/requiredChecks.ts (V01), delivery/policy.ts evaluateDeliveryEvidence and the protected-check-changed tokens, state/candidateStore.ts, state/checkRunStore.ts (CHECK_OUTCOMES), context/planReuse*.ts (C07), server/clientCapabilities.ts, __e2e__/executionContract.e2e.test.ts helpers.",
+      "Assumed, landing before M05 is DONE: the C08 recipe entry and RECIPE_ACTOR, the C09 kind, the V03/V03b runner observations, V04's passing-run predicate, V06's review binding, V12a's bypass fixtures, and CQ-M05's profileRollout and attempt-level readiness. Adapt to the landed names."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test",
+      "cd packages/moe-daemon && npx vitest run src/__e2e__/workstreamComposition.e2e.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Re-running each workstream's final suite as the composition proof. Not enough: each final proves only its own workstream. These cases target the cross seams, including:\n   - revision advance invalidating approval, check evidence and the recipe instance together;\n   - the protected recipes.json under delivery;\n   - observe parity at delivery;\n   - strict-attempt readiness after a rollback.\n2. Two files (A+C and B+D). Rejected: the description names one file, and the fixtures are shared. One file at about 350 lines of plan-mandated tests (CQ-M precedent).\n3. Simulating certification to exercise a strict happy path. Rejected by rail and DoD3: verified-local is never made ready. The strict cases use only F12's in-memory cutover, and every completion or delivery stays refused.\n4. Patching producer defects in this slice. Bounded at about 30 lines with a regression; anything more is report_blocked on the owner (C11/V12 precedent).",
+    "codebaseInsights": "Fixture sources:\n- Git helpers: delivery/requiredChecks.delivery.test.ts (lines ~26-80).\n- Strict flow: __e2e__/executionContract.e2e.test.ts.\n- Seeding raw strict rows and attempts: delivery/executionPolicyLifecycle.test.ts seed().\n- Strict attempt plus receipt: tools/completionAuthorization.test.ts.\n- Delivery tokens: delivery/policy.ts:79-101.\n- Check outcomes: state/checkRunStore.ts:51.\n- The approval CAS lives in state.approveTask(taskId, expectedPlanRevision) (F04/I01).\n\nASSUMED (adapt to the landed names):\n- C08: instantiateRecipe, readRecipeInstance, RECIPE_ACTOR.\n- C09: docs-literal-replace and its reason codes.\n- V03/V03b: record_check_dispatch, record_check_observation and isAuthenticatedCheckRun through the runner ToolCallContext.\n- V06: qa_approve's attemptId, generation, sessionId and candidateId refusals.\n- CQ-M05: profileRollout.ts updateProjectSettings and its record, plus complete_task's attempt-level NOT_READY.",
+    "risks": "- Many producers land after this plan: read every landed name first (step 1), never stub one, and report_blocked any that is missing.\n- Brittle exact tokens: read them from the landed code.\n- Temp Git repo hygiene (GIT_* masked).\n- The full suite runs only in a Linux snapshot.\n- Size is about 350 test lines, plan-mandated.\n- Avoid flaky waits: settle plan-reuse jobs explicitly and never use SPEED timers.",
+    "keyFiles": [
+      "packages/moe-daemon/src/__e2e__/executionContract.e2e.test.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/state/checkRunStore.ts",
+      "packages/moe-daemon/src/state/candidateStore.ts",
+      "packages/moe-daemon/src/context/planReuseJob.ts",
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:57:13.057Z",
+  "approvedPlanRevision": 1
+}

@@ -14,7 +14,8 @@ import com.moe.model.MAX_SAFE_PLAN_REVISION
  *  - a [Decision.Send] always quotes the revision captured at render time, never
  *    a fresher one observed later, because the reviewer only ever read that one;
  *  - [Phase.FINISHED] is reachable only from [Phase.PENDING] observing the task
- *    move to `WORKING`. A transport that accepted the bytes is NOT an approval.
+ *    move to `WORKING` at that same captured revision. A transport that accepted
+ *    the bytes is NOT an approval, and neither is a newer plan already working.
  *
  * Error handling: no method throws for bad input. An unusable snapshot produces
  * a [Decision.Blocked] carrying a message key. These methods run inside Swing
@@ -98,10 +99,18 @@ class PlanReviewApprovalState(private val taskId: String) {
      */
     fun onStateUpdate(snapshot: TaskSnapshot): Boolean = synchronized(lock) {
         if (phase != Phase.READY && phase != Phase.PENDING) return false
-        // The one authoritative completion: the daemon moved the task on.
+        // The one authoritative completion: the daemon moved the task on, and the
+        // plan it moved is the SAME revision the reviewer read. A WORKING task at
+        // any other revision proves nothing about this approval, so it latches.
         if (phase == Phase.PENDING && snapshot.present && snapshot.status == STATUS_WORKING) {
-            phase = Phase.FINISHED
-            notice = null
+            val revision = snapshot.revision.effectiveOrNull()
+            val reason = when {
+                revision == null -> REVISION_UNUSABLE_KEY
+                revision != capturedRevision -> PLAN_CHANGED_KEY
+                else -> null
+            }
+            phase = if (reason == null) Phase.FINISHED else Phase.INVALIDATED
+            notice = reason
             return true
         }
         val reason = unusableReason(snapshot) ?: staleReason(snapshot) ?: return false
@@ -148,16 +157,37 @@ class PlanReviewApprovalState(private val taskId: String) {
     fun onSendFailed(): Boolean = releasePending(SEND_FAILED_KEY)
 
     /**
-     * A daemon ERROR frame arrived. Any error while an approval is in flight is
-     * read as "this approval did not happen": re-arming a reviewer whose approval
-     * did land is a visible annoyance, while reporting a success that never
-     * happened is a silent lie.
+     * The daemon connection dropped. A pending approval's fate is unknown, so it is
+     * NOT confirmed: back to [Phase.READY] for the SAME captured revision, which is
+     * never replaced, and nothing is retried automatically. A later `WORKING`
+     * snapshot then latches as status-changed and is never [Phase.FINISHED],
+     * matching the VS Code plan review (PlanReviewPanel.handleConnectionChange).
      *
-     * [operation] and [message] are the daemon's own and the dialog shows them
-     * unchanged; they are not inspected here.
+     * @return true only when a pending approval was released.
      */
-    @Suppress("UNUSED_PARAMETER")
-    fun onDaemonError(operation: String, message: String): Boolean = releasePending(DAEMON_ERROR_KEY)
+    fun onConnectionLost(): Boolean = releasePending(CONNECTION_LOST_KEY)
+
+    /**
+     * A daemon ERROR frame arrived. Only an [APPROVE_OPERATION] error for THIS
+     * task, while an approval is in flight, says anything about it; every other
+     * error leaves the machine alone, so a later `WORKING` at the captured
+     * revision still confirms it. Parity reference: VS Code
+     * PlanReviewPanel.handleClientError.
+     *
+     * A correlated [PLAN_REVISION_MISMATCH] latches as plan changed: the daemon
+     * holds a newer plan than the one read. Any other correlated error is read as
+     * "this approval did not happen" and re-arms the same captured revision.
+     * Matching is exact: no trimming and no case folding.
+     *
+     * @return true when the dialog must repaint.
+     */
+    fun onDaemonError(operation: String?, errorTaskId: String?, codeName: String?): Boolean = synchronized(lock) {
+        if (operation != APPROVE_OPERATION || errorTaskId != taskId || phase != Phase.PENDING) return false
+        if (codeName != PLAN_REVISION_MISMATCH) return releasePending(DAEMON_ERROR_KEY)
+        phase = Phase.INVALIDATED
+        notice = PLAN_CHANGED_KEY
+        true
+    }
 
     /** Terminal. Every later callback is a no-op, so nothing can send after teardown. */
     fun onDisposed() = synchronized(lock) {
@@ -194,6 +224,10 @@ class PlanReviewApprovalState(private val taskId: String) {
         const val STATUS_AWAITING_APPROVAL = "AWAITING_APPROVAL"
         const val STATUS_WORKING = "WORKING"
 
+        /** The daemon's ERROR-frame correlation values, matched exactly. */
+        const val APPROVE_OPERATION = "APPROVE_TASK"
+        const val PLAN_REVISION_MISMATCH = "PLAN_REVISION_MISMATCH"
+
         /** A task whose payload carried no stamp at all is approvable at 0. */
         const val LEGACY_EFFECTIVE_REVISION = 0L
 
@@ -208,6 +242,7 @@ class PlanReviewApprovalState(private val taskId: String) {
         const val SEND_FAILED_KEY = "moe.message.planReview.sendFailed"
         const val DAEMON_ERROR_KEY = "moe.message.planReview.daemonError"
         const val CLOSED_KEY = "moe.message.planReview.closed"
+        const val CONNECTION_LOST_KEY = "moe.message.planReview.connectionLost"
 
         /**
          * Maps [com.moe.model.Task.planRevision] onto a token. The parser already
@@ -243,7 +278,8 @@ class PlanReviewApprovalState(private val taskId: String) {
             NOT_RENDERED_KEY,
             SEND_FAILED_KEY,
             DAEMON_ERROR_KEY,
-            CLOSED_KEY
+            CLOSED_KEY,
+            CONNECTION_LOST_KEY
         )
     }
 }

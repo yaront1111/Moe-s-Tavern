@@ -1,0 +1,208 @@
+{
+  "id": "task-a28c66bbd21448c7b25daec49a3fa217",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-18b] bug: QA's empty-ledger self-landing fallback and moe-epic-breakdown's same-file rule ignore worktree mode",
+  "description": "QA (qa-952969be, comment-67363154 on WT-19 task-b1ca54f2) found two worktree-mode gaps in the WT-S round-2 review. They are docs that the §7.6 sweep misses: WT-17 and WT-18 own that sweep, but neither owns these files. WT-19's rev-2 planner filed this row rather than folding the files into WT-18, which is already at the 5-file cap.\n\n1. What breaks.\n- QA fallback: docs/roles/qa.md:15, docs/roles/qa.reference.md:42 and docs/skills/moe-qa-loop/SKILL.md:26 tell QA to land a REVIEW row itself from the shared working tree when the ledger stays empty.\n  - In worktree mode that tree is the control checkout on moe/control.\n  - A QA commit there moves moe/control off main, which raises MOE_CONTROL_CHECKOUT_DIVERGED (design §6) and contradicts §3.6/§3.7, under which control seats land nothing.\n  - A nothing-to-commit landing (§2.9) can reach this path.\n- Same-file rule: docs/skills/moe-epic-breakdown/SKILL.md:78 says that two tasks touching the same file is \"a sequencing decision\". In worktree mode that rule keeps creating the file-only dependsOn edges that epic goal 5 retires.\n\n2. Why it matters. Other projects get role docs and skills from the daemon's vendored copies (generated initFiles.ts and skillFiles.ts). So this fix must ship in the same daemon build as WT-19's default flip, and WT-19 depends on this row.\n\n3. Fix direction.\n- Scope the QA fallback to shared mode. In worktree mode, meaning the control checkout's HEAD is exactly refs/heads/moe/control (§7.2):\n  - QA never commits in the control checkout;\n  - an empty ledger means the landing did not happen, so it is a qa_reject citing landing.lastCommitOutcome or the unlanded route (§2.5), never a self-land.\n- Scope the same-file sequencing rule to shared mode. In worktree mode, add dependsOn only when B produces something A names (design §8's rule), never for a shared existing file alone.\n- Regenerate packages/moe-daemon/src/generated/initFiles.ts and skillFiles.ts in a history-bearing clone (mem:convention-role-doc-edits-regenerate-initfiles).\n- Keep qa.md within the 40-line lint cap.\n\n4. Evidence.\n- comment-67363154 (QA) and comment-fc1f9afb (governor) on task-b1ca54f2.\n- docs/plans/2026-10-30-per-task-worktrees.md §2.9, §3.6/§3.7, §6, §7.2 and §8.\n\nFiles (6): docs/roles/qa.md, docs/roles/qa.reference.md, docs/skills/moe-qa-loop/SKILL.md, docs/skills/moe-epic-breakdown/SKILL.md, packages/moe-daemon/src/generated/initFiles.ts, packages/moe-daemon/src/generated/skillFiles.ts.\n\ndependsOn WT-18 (task-1b2e6fe3), because both rows regenerate initFiles.ts. That edge also covers WT-13's moe/control contract transitively.",
+  "definitionOfDone": [
+    "docs/roles/qa.md, docs/roles/qa.reference.md and docs/skills/moe-qa-loop/SKILL.md limit the empty-ledger self-landing fallback to shared mode. They state that in worktree mode (the control checkout's HEAD is exactly refs/heads/moe/control) QA never commits in the control checkout, and that an empty ledger is a qa_reject citing the landing evidence.",
+    "docs/skills/moe-epic-breakdown/SKILL.md keeps the same-file sequencing rule for shared mode only. For worktree mode it states design §8's rule: add dependsOn only when B produces something A names, never for a shared existing file alone.",
+    "packages/moe-daemon/src/generated/initFiles.ts and skillFiles.ts are regenerated from the edited docs in a history-bearing clone, and a fresh regeneration cmp-matches the committed files.",
+    "npm run lint passes, with qa.md within the 40-line cap, and `cd packages/moe-daemon && npm test` passes, including src/util/targetedContextGuidance.test.ts and src/util/qaCommitPolicy.test.ts."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "QA docs: limit the empty-ledger self-landing fallback to shared mode (DoD 1), and pin the rule in its existing guard test.\n\nBefore editing:\n- `git status --porcelain --` on the eight plan files must print nothing, unless the dirt is this task's own earlier session (task.commits checkpoints, rescueRefsHint). A peer's dirt on any of them: moe.report_blocked naming the paths. Never mix edits.\n- Grep the LANDED code for every name you cite and use its spelling. The code wins over docs/plans/2026-10-30-per-task-worktrees.md; list each mismatch in the completion summary for WT-19. Names: `moe/control` and `MOE_CONTROL_CHECKOUT_DIVERGED` (scripts/moe-agent.sh and .ps1); `landingRetry` (packages/moe-daemon/src/tools/getContext.ts; cite it only if get_context returns it); `refs/moe/rescue/`.\n\nThe rule (design §2.9, §3.6, §6, §7.2):\n- Worktree mode is on when `git rev-parse --symbolic-full-name HEAD` in QA's checkout prints exactly `refs/heads/moe/control`; anything else is shared mode. Use rev-parse, not symbolic-ref: moe-qa-loop's allowed-tools pre-approve `git rev-parse` only.\n- In worktree mode, QA's checkout is the control checkout, which only follows the target. Workers' bytes live in their task worktrees, and control seats land nothing.\n- Never commit in the control checkout. A commit there moves moe/control off the target, and every later follow stops with MOE_CONTROL_CHECKOUT_DIVERGED until a human fixes it.\n- The bounded wait and the isolated-clone check still apply. Key on 'no `completion` entry in task.commits', not 'empty': worktree checkpoints are recorded on the task branch.\n- If no completion arrives, the landing did not reach the target, e.g. a nothing-to-commit landing (lastCommitOutcome.outcome 'nothing') or a failed one. That is a moe.qa_reject citing task.lastCommitOutcome (outcome and code; null = nothing recorded), task.landingRetry when present, and any rescue entry (rescueRefsHint). Never a self-land.\n\nRequired exact phrases in ALL three docs (the test and checkRefs[0] grep them): `refs/heads/moe/control`, `shared mode only` (e.g. 'Self-landing is shared mode only.'), `commit in the control checkout` (e.g. 'Never commit in the control checkout').\n\nEdits:\n(a) docs/roles/qa.md. Line 15: 'only when current rails permit it' becomes 'only in shared mode and only when current rails permit it'. Add ONE bullet right after line 15 with the worktree rule (36 lines; cap 40). Line 14's 'Self-landing below applies only when' may gain 'in shared mode'. qa.md is in the stable system prefix: no `task-<32 hex>` id and no '<inbox>'-style tags (targetedContextGuidance.test.ts).\n(b) docs/roles/qa.reference.md:\n- :31: 'then the self-landing fallback' names both modes;\n- :40 **Fallback scope.**: add 'shared mode only';\n- :42 **The rule.**: add the shared-mode condition to 'do you fall back';\n- a new paragraph '**Worktree mode: no self-landing.**' after :46 and before **Why — measured 2026-09-06.**, stating the full rule.\n(c) docs/skills/moe-qa-loop/SKILL.md:\n- :24: add shared mode to 'available only when';\n- :26 (step 3): add 'you are in shared mode' to the self-land condition, plus the worktree rule in 1-2 sentences;\n- :50 (Approve when): 'or, when the bounded wait expired with none, the commit you landed yourself' becomes 'or, in shared mode only, …';\n- :61 (Reject when): add a bullet for the worktree-mode case with no completion.\n\nKeep every existing sentinel byte-for-byte: 'bounded wait, not a blocker', 'up to ~2 minutes', 'land it yourself', 'record_commit', 'isolated-clone delivery', 'fresh remote fetch', 'Never self-land clone-delivered bytes', 'rails permit', 'that is the complete QA read', '2026-09-06', 'one completion in three'. Write no phrase matching /never (?:runs|executes|touches) git|runs no git|does not run git/i: util/daemonGitDocs.test.ts scans every doc and the generated files.\n\n(d) packages/moe-daemon/src/util/qaCommitPolicy.test.ts:\n- Add `const WORKTREE_SENTINELS = ['refs/heads/moe/control', 'shared mode only', 'commit in the control checkout'];`.\n- Add one it('limits self-landing to shared mode in every QA document') over the same subject list as the 'records isolated-clone delivery' test: generatedSubjects(), ROLE_DOCS[QA_REFERENCE_KEY], and when hasDocs the disk qa.md, SKILL.md and qa.reference.md. Expect toContain for each sentinel, with a label naming the doc and phrase.\n- Make the header comment say self-landing is shared mode only.\n- It fails on HEAD's docs (none carries refs/heads/moe/control) and on a stale generated copy.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/roles/qa.md",
+        "docs/roles/qa.reference.md",
+        "docs/skills/moe-qa-loop/SKILL.md",
+        "packages/moe-daemon/src/util/qaCommitPolicy.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Same-file rule: keep it for shared mode only (DoD 2).\n\n(a) docs/skills/moe-epic-breakdown/SKILL.md:78.\n- Keep the existing bullet as the shared-checkout rule, including its words 'sequencing decision', and mark it, e.g. '**In shared-checkout mode, file-disjoint tasks are the only ones parallel-claimable.**'.\n- Right after it, add a worktree-mode bullet. Worktree mode is on when the control checkout's HEAD is exactly `refs/heads/moe/control` (`git rev-parse --symbolic-full-name HEAD`).\n  - Each WORKING task then works in its own worktree on its own branch and lands as one merge onto the target. Non-overlapping hunks in one file merge on their own.\n  - A true conflict lands nothing: the bytes are parked on a rescue ref and the task goes back to a worker. It is never overwritten or auto-resolved.\n  - So give task A a `dependsOn` on task B only when B produces something A names (a symbol, tool, setting, or file B creates), never for a shared existing file alone (design §8's rule).\n  - The claim-time `fileCollision` warning still fires there and is no reason to chain.\n- Required exact phrases: `shared-checkout mode`, `refs/heads/moe/control`, `B produces something A names`, `never for a shared existing file alone`.\n- Leave the 'Producers before consumers' bullet and the 'By file' anti-seam unchanged. Do not tell architects to drop existing edges; that sweep is WT-19's.\n\n(b) docs/roles/architect.reference.md:47 states the same rule in brief.\n- 'Only file-disjoint tasks are parallel-claimable.' becomes one sentence: that holds in shared-checkout mode, while in worktree mode a shared existing file alone is no reason for `dependsOn` (point to `moe-epic-breakdown`).\n- Required phrases: `shared-checkout mode`, `shared existing file`.\n- Leave 'memory-name inventory' and 'once per session' untouched (targetedContextGuidance.test.ts).\n- This file is not one of the six the row lists. It is in scope because it carries the same rule and is vendored into the same initFiles.ts, so it costs no extra regeneration, and no open row edits it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/skills/moe-epic-breakdown/SKILL.md",
+        "docs/roles/architect.reference.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Regenerate the vendored copies (DoD 3). Read first: `mem:convention-role-doc-edits-regenerate-initfiles`, `mem:gotcha-daemon-linux-snapshot-gate`.\n- Precondition: `git diff --quiet HEAD -- packages/moe-daemon/src/generated/initFiles.ts packages/moe-daemon/src/generated/skillFiles.ts` exits 0. Otherwise a peer's regeneration is in flight and copying back would erase it: report_blocked naming the dirt.\n- `S=$(mktemp -d) && git clone -q --shared /mnt/d/projexts/moes \"$S/repo\"`, then copy the five edited docs into the clone at the same paths.\n- In \"$S/repo/packages/moe-daemon\", with `E=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin NO_COLOR=1\"`, run `$E npm ci --no-audit --no-fund --loglevel=error && $E npm run generate-init-files && $E npm run generate-skill-files`.\n  - The init generator reads git history for its shipped-body sha list, so it runs in a clone, never a `git archive`.\n  - env -i keeps MOE_* and the Windows PATH out.\n- Copy back ONLY src/generated/initFiles.ts and src/generated/skillFiles.ts. NEVER run npm ci, build, clean or test in the shared checkout: its node_modules are Windows-native, and `clean` deletes the dist a live daemon may use.\n- Check `git diff -- packages/moe-daemon/src/generated/`:\n  - initFiles.ts may change only the qa.md, qa.reference.md and architect.reference.md entries (body, marker sha, shipped-sha list);\n  - skillFiles.ts only the moe-qa-loop and moe-epic-breakdown SKILL.md entries (body, marker).\n  - Both copies were fresh at HEAD b44951dd, so any other hunk means a doc changed since then. Name it in the completion summary; never hand-edit it out, and never hand-edit a generated file.\n- Error handling: if the clone, npm ci or a generator fails, stop and report_blocked with the error output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification (DoD 3, 4): run ONCE, fresh, from the repo root, as ONE command: `<checkRefs[0]> && <checkRefs[1]>`, both exactly as in the executionContract. Give the Bash call a 600000 ms timeout.\n- checkRefs[0] runs the role-doc lint (qa.md ≤40 lines) and greps the required phrases.\n- checkRefs[1] copies the eight plan files into a fresh `git clone --shared` of HEAD and runs parity-check there (rail 2; this task leaves the wrappers alone). Then, under env -i with node v24.21.0, it runs npm ci, npm run build (prebuild regenerates both generated files from the copied docs), a cmp of both against yours, and the full daemon `npm test`, which includes the targetedContextGuidance, qaCommitPolicy, daemonGitDocs, initFiles and skillFiles tests.\n- Dry run at HEAD: 53 s, exit 0, 208 files / 6057 tests passed, 19 skipped. '[DELIVERY_EVIDENCE_MISSING] … task-1' lines in the output are test fixtures, not failures.\n- Expected: exit 0. Submit the joined command, its exit code and the output tail to complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff, then complete_task.\n(a) Shared mode unchanged: diff each doc against HEAD. The only edits to existing sentences are the added shared-mode qualifiers, and every earlier sentinel is still present.\n(b) One rule across the three QA docs: no sentence still offers self-landing without the shared-mode condition. Re-read moe-qa-loop's 'Approve when', 'Reject when' and NO-COMPLETION-COMMIT text, and qa.reference.md's 'When the fallback cannot run' and 'Why'.\n(c) Accuracy: every cited name exists with that spelling in the landed code: refs/heads/moe/control, MOE_CONTROL_CHECKOUT_DIVERGED, landingRetry, rescueRefsHint, and the lastCommitOutcome values (committed|nothing|refused|failed). The mode check is `git rev-parse --symbolic-full-name HEAD`.\n(d) qa.md is at most 40 lines, with no task id and no prefix tags; no daemonGitDocs phrase appears anywhere in the diff.\n(e) The worktree same-file bullet contradicts neither 'Producers before consumers' nor the 'By file' anti-seam.\n(f) The generated files changed only in the five docs' entries.\nIf anything changes, re-run the step-4 command fresh before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's standing delegation: WT-19 rev 2 now dependsOn WT-18b, so this row must be planned or WT-19 can never be claimed. dependsOn WT-18 still gates the WORKING claim.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-1b2e6fe3ba1343c8ab02271510131155",
+    "task-31187ec10ae54dd2b03f4c166f083f31"
+  ],
+  "priority": "MEDIUM",
+  "order": 26.5,
+  "comments": [
+    {
+      "id": "comment-677598de70fa41fe8401d6640b94ca2a",
+      "author": "qa-952969be",
+      "content": "@governor-693b7073 Heads-up for this row's shared-mode wording, from QA on task-c4cd6dce.\n\n447281cf (agent Git-write guard, live in hot-reloaded seats) refuses every porcelain `git commit`/`git push` that an agent CLI or a descendant shell runs in the control checkout, in shared mode too. The refusal is MOE_AGENT_GIT_REFUSED. scripts/CLAUDE.md says agents must not use the MOE_ALLOW_AGENT_GIT_WRITES override to repair landing.\n\nSo QA's empty-ledger self-landing fallback no longer works in shared mode either:\n- docs/roles/qa.md:15\n- qa.reference.md:42-44 (the path recipe commits with the task trailer)\n- moe-qa-loop SKILL.md, including `allowed-tools … Bash(git commit:*)`\n\nMeasured in this QA session: `git hook run pre-commit` in the control checkout prints `MOE_AGENT_GIT_REFUSED: the wrapper lands the work` and exits 1.\n\nThis row's DoD keeps shared-mode self-landing. That keeps doc text that the guard now makes impossible. I filed the reconciliation as a separate row that depends on this one, since it edits the same files and initFiles/skillFiles. Nothing to change in this row's DoD. Just don't add new shared-mode wording that promises a QA commit works.",
+      "timestamp": "2026-10-30T18:19:18.150Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T14:42:58.849Z",
+  "updatedAt": "2026-10-30T20:53:44.417Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T14:50:18.201Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:50:21.700Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 8
+  },
+  "contextFetchedBy": [
+    "architect-bc59d28a",
+    "architect-bd1eb82d"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T15:05:28.438Z",
+  "executionContract": {
+    "intendedBehavior": "QA seats in worktree mode (the control checkout's HEAD is exactly refs/heads/moe/control) never commit in the control checkout. There, a REVIEW row with no completion commit after the bounded wait is a qa_reject citing the landing evidence, never a self-land. Shared-mode QA behavior is unchanged. Architects slicing for worktree mode add dependsOn only when B produces something A names, never for a shared existing file alone; the shared-mode same-file sequencing rule stays. The daemon's vendored ROLE_DOCS/SKILL_FILES match the edited docs.",
+    "acceptanceCriteria": [
+      "DoD 1: qa.md, qa.reference.md and moe-qa-loop/SKILL.md each contain 'refs/heads/moe/control', 'shared mode only' and 'commit in the control checkout'. Each states that in worktree mode a row with no completion after the bounded wait is a moe.qa_reject citing task.lastCommitOutcome (plus landingRetry and rescue entries when present), never a self-land.",
+      "DoD 2: moe-epic-breakdown/SKILL.md keeps the 'sequencing decision' rule, marked as shared-checkout mode, and adds the worktree rule with 'B produces something A names' and 'never for a shared existing file alone'. architect.reference.md:47 carries the same scoping in one sentence.",
+      "DoD 3: initFiles.ts and skillFiles.ts equal what `npm run build` generates in a git clone --shared of HEAD with the edited docs copied in (cmp).",
+      "DoD 4: npm run lint passes with qa.md at most 40 lines, and the full daemon npm test passes in the clone, including targetedContextGuidance, qaCommitPolicy (with the new worktree sentinel test) and daemonGitDocs.",
+      "`<checkRefs[0]> && <checkRefs[1]>` exits 0 fresh."
+    ],
+    "invariants": [
+      "Shared-mode QA guidance (bounded wait, isolated-clone check, measured-attribution self-landing recipe) keeps its meaning; edits only add shared-mode qualifiers.",
+      "Every pre-existing sentinel pinned by qaCommitPolicy.test.ts and targetedContextGuidance.test.ts stays present in both the source docs and the generated copies.",
+      "No doc or generated text matches daemonGitDocs' NEVER_RUNS_GIT regex, and qa.md holds no task id and no per-task tags.",
+      "Generated files come only from the daemon generators: no hand edits, and no npm commands in the shared checkout."
+    ],
+    "compatibility": [
+      "No code or contract change. The .moe/roles and .moe/skills copies are synced by the daemon or plugin from the vendored files; never edit them. The WT-17/WT-18 docs (MCP_SERVER, SCHEMA, CONFIGURATION, CLAUDE.md, scripts/CLAUDE.md, ARCHITECTURE, worker docs) are out of scope."
+    ],
+    "approvedScope": [
+      "docs/roles/qa.md lines 14-15, plus one new bullet",
+      "docs/roles/qa.reference.md: review-order item 3, Fallback scope, The rule, and a new Worktree mode paragraph",
+      "docs/skills/moe-qa-loop/SKILL.md: the isolated-clone paragraph, step 3, Approve when, Reject when",
+      "docs/skills/moe-epic-breakdown/SKILL.md:78: the shared-checkout bullet plus a new worktree bullet",
+      "docs/roles/architect.reference.md:47: one sentence",
+      "packages/moe-daemon/src/util/qaCommitPolicy.test.ts: WORKTREE_SENTINELS, one it(), and the header comment",
+      "packages/moe-daemon/src/generated/initFiles.ts and skillFiles.ts: generator output only"
+    ],
+    "reuse": [
+      "qaCommitPolicy.test.ts's subject-list pattern from 'records isolated-clone delivery before considering shared-tree fallback'.",
+      "The daemon's generate-init-files / generate-skill-files scripts and prebuild. Precedent: 47b4e438 shipped a regenerated initFiles.ts with its qa.md change.",
+      "WT-18's (task-1b2e6fe3) clone-gate command shape for the verification.",
+      "Design docs/plans/2026-10-30-per-task-worktrees.md §2.5, §2.9, §3.6, §6, §7.2 and §8 for the substance; the landed code for every spelling."
+    ],
+    "sourceAssumptions": [
+      "docs/roles/qa.md is 35 lines: :14 is the isolated-clone bullet, :15 the bounded-wait/self-land bullet. scripts/lint-role-docs.sh caps architect/worker/qa.md at 40.",
+      "docs/roles/qa.reference.md: :31 review-order item 3, :40 **Fallback scope.**, :42 **The rule.**, :44 the path recipe, :46 **When the fallback cannot run.**, :48 **Why — measured 2026-09-06.**",
+      "docs/skills/moe-qa-loop/SKILL.md: :5 allowed-tools includes Bash(git rev-parse:*) but not git symbolic-ref; :24 isolated-clone paragraph, :26 step 3, :50 Approve-when, :61 Reject-when.",
+      "docs/skills/moe-epic-breakdown/SKILL.md:78 is the 'File-disjoint tasks are the only ones parallel-claimable … sequencing decision (`order`)' bullet; docs/roles/architect.reference.md:47 holds 'Only file-disjoint tasks are parallel-claimable.'",
+      "get_context exposes task.lastCommitOutcome (getContext.ts:643; TaskLastCommitOutcome {outcome: committed|nothing|refused|failed, kind, code}, schema.ts:647/687), plus rescueRefsHint built from task.commits rescue entries (getContext.ts:450). landingRetry is not projected at HEAD; WT-03 adds Task.landingRetry.",
+      "Rescue refs are refs/moe/rescue/<taskId>/<utc-ts> (scripts/moe-agent.sh:4970).",
+      "util/daemonGitDocs.test.ts scans every docs/**/*.md and every non-test daemon .ts, generated files included, for /never (?:runs|executes|touches) git|runs no git|does not run git/i.",
+      "generate-init-files.ts builds each role doc's shipped-body sha list from `git log -- docs/roles/<f>` plus the working copy, then sorts it, so a regeneration after the landing commit is byte-identical.",
+      "At HEAD b44951dd both generated files are fresh, and the clone gate passed end to end (208 files / 6057 tests, 19 skipped) under env -i with node v24.21.0."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && npm run lint && [ -z \"$(grep -L -F 'refs/heads/moe/control' docs/roles/qa.md docs/roles/qa.reference.md docs/skills/moe-qa-loop/SKILL.md docs/skills/moe-epic-breakdown/SKILL.md)\" ] && [ -z \"$(grep -L -F 'shared mode only' docs/roles/qa.md docs/roles/qa.reference.md docs/skills/moe-qa-loop/SKILL.md)\" ] && [ -z \"$(grep -L -F 'commit in the control checkout' docs/roles/qa.md docs/roles/qa.reference.md docs/skills/moe-qa-loop/SKILL.md)\" ] && [ -z \"$(grep -L -F 'shared-checkout mode' docs/skills/moe-epic-breakdown/SKILL.md docs/roles/architect.reference.md)\" ] && grep -q -F 'B produces something A names' docs/skills/moe-epic-breakdown/SKILL.md && grep -q -F 'never for a shared existing file alone' docs/skills/moe-epic-breakdown/SKILL.md && grep -q -F 'sequencing decision' docs/skills/moe-epic-breakdown/SKILL.md && grep -q -F 'shared existing file' docs/roles/architect.reference.md",
+      "cd /mnt/d/projexts/moes && S=$(mktemp -d) && git clone -q --shared . \"$S/repo\" && for f in docs/roles/qa.md docs/roles/qa.reference.md docs/roles/architect.reference.md docs/skills/moe-qa-loop/SKILL.md docs/skills/moe-epic-breakdown/SKILL.md packages/moe-daemon/src/util/qaCommitPolicy.test.ts packages/moe-daemon/src/generated/initFiles.ts packages/moe-daemon/src/generated/skillFiles.ts; do cp \"$f\" \"$S/repo/$f\" || exit 1; done && (cd \"$S/repo\" && bash scripts/tests/parity-check.sh) && cd \"$S/repo/packages/moe-daemon\" && cp src/generated/initFiles.ts \"$S/init.candidate\" && cp src/generated/skillFiles.ts \"$S/skill.candidate\" && E=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin NO_COLOR=1\" && $E npm ci --no-audit --no-fund --loglevel=error && $E npm run build && cmp src/generated/initFiles.ts \"$S/init.candidate\" && cmp src/generated/skillFiles.ts \"$S/skill.candidate\" && $E npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Folding the work into WT-18: rejected, because that row is at the 5-file cap and WT-19's planner filed this row on purpose.\nQA repairing the ledger with record_commit when the completion is already on the target: rejected. receipt_replay owns ledger repair, and a false reject heals in one round, because the re-landing finds nothing to land (§2.9) and L12 records C.\nDetecting the mode from get_context workspace: rejected. QA's own claim records 'shared' even when the setting is on (§7.2), so only the control checkout's HEAD tells.\n`git symbolic-ref` versus `git rev-parse --symbolic-full-name HEAD`: rev-parse, because moe-qa-loop's allowed-tools pre-approve it.\nA new test file versus extending qaCommitPolicy.test.ts: extend it. It already guards this exact rule across the three docs and their generated copies.\nPinning the epic-breakdown rule in a test: no. It is advisory with no safety impact, and checkRefs[0] greps it.\nLeaving architect.reference.md:47 out: rejected. It states the same rule, the same initFiles.ts regeneration covers it, and no open row edits it.",
+    "codebaseInsights": "ROLE_DOCS (initFiles.ts) and SKILL_FILES (skillFiles.ts) are what IDE users actually receive.\nqaCommitPolicy.test.ts and targetedContextGuidance.test.ts assert sentinels in both the source docs and the generated copies, so a stale regeneration fails them.\ndaemonGitDocs.test.ts scans every doc and generated file for 'never runs git'-style phrases.\nThe generator sorts shas, so a post-commit regeneration is identical.\nThis row's dependsOn chain (WT-18, then 054cc7c6 and f084cbe1) already orders every other open initFiles.ts writer. 7ee53957 only mentions initFiles in its description; its plan files are .gitignore, CLAUDE.md and ARCHITECTURE.md.",
+    "risks": "- The shared checkout's node_modules are Windows-native. Running npm there breaks, and `clean` deletes the live daemon's dist.\n- MOE_* env leaks into vitest. Use env -i.\n- Copying the generated files back over a peer's in-flight regeneration erases it. Step 3 checks first.\n- 'empty task.commits' versus 'no completion entry': worktree checkpoints are recorded, so the rule must key on the completion.\n- The landed spellings may drift from the design (landingRetry projection, codes). The code wins; report mismatches for WT-19.\n- qa.md is in the stable prompt prefix: no task ids.\n- If a claim ever reports workspace.mode 'worktree' for this row (it can't, because this project has no qualityGate and WT-19's flip comes after it), the absolute /mnt/d/projexts/moes commands would target the control checkout. report_blocked instead.",
+    "keyFiles": [
+      "docs/roles/qa.md",
+      "docs/roles/qa.reference.md",
+      "docs/skills/moe-qa-loop/SKILL.md",
+      "docs/skills/moe-epic-breakdown/SKILL.md",
+      "docs/roles/architect.reference.md",
+      "packages/moe-daemon/src/util/qaCommitPolicy.test.ts",
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "packages/moe-daemon/src/util/daemonGitDocs.test.ts",
+      "docs/plans/2026-10-30-per-task-worktrees.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T15:05:28.465Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "4cfc41d8c66918f0595a47f990072c64a696c571",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-bc59d28a@2026-10-30T14:50:22Z",
+      "paths": [
+        ".moe/tasks/task-054cc7c6a9b94f4d91ad4bfe15d50d6f.json",
+        ".moe/tasks/task-a28c66bbd21448c7b25daec49a3fa217.json"
+      ],
+      "recordedBy": "architect-bc59d28a",
+      "recordedAt": "2026-10-30T15:06:18.974Z",
+      "treeId": "c9cfee50c6cbea1581cdaa75bf9afadc135ed8f6",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-054cc7c6a9b94f4d91ad4bfe15d50d6f.json",
+    ".moe/tasks/task-a28c66bbd21448c7b25daec49a3fa217.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-bc59d28a@2026-10-30T14:50:22Z",
+    "at": "2026-10-30T15:06:18.974Z"
+  }
+}

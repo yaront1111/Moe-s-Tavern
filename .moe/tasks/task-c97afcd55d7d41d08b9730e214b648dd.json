@@ -112,7 +112,7 @@
       "completedAt": "2026-09-11T09:58:03.170Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -132,7 +132,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:59:33.295Z",
-  "updatedAt": "2026-09-11T10:03:47.179Z",
+  "updatedAt": "2026-10-24T15:19:06.212Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:44:10.177Z",
     "plannedStepCount": 6,
@@ -258,5 +258,6 @@
   },
   "completedAt": "2026-09-11T10:03:05.478Z",
   "reviewCompletedAt": "2026-09-11T10:03:05.478Z",
-  "reviewSummary": "APPROVED. Read the diff in completion commit fbeb076 (5 paths, +828/-5). Re-ran both commands myself: `npx vitest run src/state/attemptStore.test.ts` EXIT=0, 30/30; `npm.cmd test` in packages/moe-daemon EXIT=0, 105 files / 1279 tests, 0 failures (worker saw 1281; delta is another session's dirty enterGovernance.test.ts in this shared tree, not a regression).\n\nDoD all met. Phase union is exactly running|finalizing|reconciling|closed; ExecutionAttempt has the 9 required + 2 optional fields (schema.ts:857-905); additive, schema version still 6. Store persists through state.writeEntity('attempts',...) as one JSON per attempt under .moe/attempts/, no fs import. nextGeneration is max-over-prior+1 (attemptStore.ts:97-111), proven by the 1/2/3 test and the delete-the-middle test demanding 4. ATTEMPT_ALREADY_OPEN carries attemptId, generation and phase, tested over all three open phases with byte-identity assertions on the prior record. Same-id re-open returns the record unchanged, same bytes, one file, generation not advanced; two resourceStore.durability-style writeEntity injection tests cover failed open and failed phase write.\n\nIndependent red proof, not trusting the recorded mutations: isolated worktree at fbeb076 with junctioned node_modules, mutated there only. Count-based generation gave 1 failed / 29 passed, EXIT=1, \"expected 3 to be 4\". map.set before writeEntity in both paths gave 3 failed / 27 passed, EXIT=1 (both injection tests plus the path-separator test). Matches the worker's record. Worktree and junction removed, real node_modules verified intact.\n\nRails held: zero files under src/tools/, no claim/complete/release change, no delegating methods, no migration, persist-before-publish both paths, no forbidden pattern. Header states the caller-holds-mutex requirement; process hints documented as not evidence of liveness.\n\nNon-blocking follow-up: .moe/attempts/ and .moe/resources/ missing from .gitignore. Tidiness only; attribution DENYs .moe/** except BOARD."
+  "reviewSummary": "APPROVED. Read the diff in completion commit fbeb076 (5 paths, +828/-5). Re-ran both commands myself: `npx vitest run src/state/attemptStore.test.ts` EXIT=0, 30/30; `npm.cmd test` in packages/moe-daemon EXIT=0, 105 files / 1279 tests, 0 failures (worker saw 1281; delta is another session's dirty enterGovernance.test.ts in this shared tree, not a regression).\n\nDoD all met. Phase union is exactly running|finalizing|reconciling|closed; ExecutionAttempt has the 9 required + 2 optional fields (schema.ts:857-905); additive, schema version still 6. Store persists through state.writeEntity('attempts',...) as one JSON per attempt under .moe/attempts/, no fs import. nextGeneration is max-over-prior+1 (attemptStore.ts:97-111), proven by the 1/2/3 test and the delete-the-middle test demanding 4. ATTEMPT_ALREADY_OPEN carries attemptId, generation and phase, tested over all three open phases with byte-identity assertions on the prior record. Same-id re-open returns the record unchanged, same bytes, one file, generation not advanced; two resourceStore.durability-style writeEntity injection tests cover failed open and failed phase write.\n\nIndependent red proof, not trusting the recorded mutations: isolated worktree at fbeb076 with junctioned node_modules, mutated there only. Count-based generation gave 1 failed / 29 passed, EXIT=1, \"expected 3 to be 4\". map.set before writeEntity in both paths gave 3 failed / 27 passed, EXIT=1 (both injection tests plus the path-separator test). Matches the worker's record. Worktree and junction removed, real node_modules verified intact.\n\nRails held: zero files under src/tools/, no claim/complete/release change, no delegating methods, no migration, persist-before-publish both paths, no forbidden pattern. Header states the caller-holds-mutex requirement; process hints documented as not evidence of liveness.\n\nNon-blocking follow-up: .moe/attempts/ and .moe/resources/ missing from .gitignore. Tidiness only; attribution DENYs .moe/** except BOARD.",
+  "planRevision": 0
 }

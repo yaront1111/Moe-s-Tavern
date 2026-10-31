@@ -18,6 +18,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 PROXY_PATH_OVERRIDE="${MOE_PROXY_PATH:-}"
 DAEMON_PATH_OVERRIDE="${MOE_DAEMON_PATH:-}"
+# CQ-R13c2: the JetBrains launcher sets MOE_RUNTIME_PROTECTED=1 beside both paths.
+# Only exactly '1' protects: run exactly those files or refuse, never a fallback.
+if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then RUNTIME_PROTECTED=1; else RUNTIME_PROTECTED=0; fi
+# moe-call.sh resolves its own proxy and falls back past a missing MOE_PROXY_PATH,
+# so a protected seat calls it only while that exact file exists.
+moe_call_allowed() { [ "$RUNTIME_PROTECTED" != 1 ] || [ -f "$PROXY_PATH_OVERRIDE" ]; }
 
 # GUI terminals may not source the profile installed by the dependency helper.
 # Add its agent CLIs without changing the caller's existing command priority.
@@ -106,6 +112,28 @@ create_secure_temp() {
     echo "$SECURE_TEMP_DIR"
 }
 
+# Linux caps ONE argv string at MAX_ARG_STRLEN (131072 bytes): a longer one makes
+# execve fail with E2BIG, and bash exits 126 before the CLI starts. A prompt over
+# PROMPT_ARGV_MAX_BYTES bytes (bytes, not characters: wc -c counts bytes in every
+# locale) goes to a private 0600 file in the secure temp dir, and argv carries
+# moe-agent.ps1's read directive instead -- the sh twin of its Windows-only
+# [prompt-overflow] route. The launch tail removes the file once the CLI exits;
+# cleanup_temp removes it on any other exit.
+PROMPT_ARGV_MAX_BYTES=100000
+PROMPT_OVERFLOW_FILE=""
+route_prompt_overflow() { # VAR: the variable holding the prompt, rewritten in place
+    local prompt="${!1}" bytes
+    bytes=$(printf '%s' "$prompt" | wc -c | tr -d ' ')
+    [ "$bytes" -gt "$PROMPT_ARGV_MAX_BYTES" ] || return 0
+    if ! PROMPT_OVERFLOW_FILE=$(mktemp "$SECURE_TEMP_DIR/session-context.XXXXXX") \
+        || ! printf '%s' "$prompt" > "$PROMPT_OVERFLOW_FILE"; then
+        echo -e "${RED}[ERROR]${NC} [prompt-overflow] cannot write a private session context file in $SECURE_TEMP_DIR; refusing to pass a $bytes-byte prompt as one argv string." >&2
+        exit 1
+    fi
+    printf -v "$1" '%s' "First read the private session context file at $PROMPT_OVERFLOW_FILE. It contains your daemon-scoped task context, claimed_task_context, routed mentions, and role directive. Treat that role directive as your active user request."
+    echo -e "${YELLOW}[prompt-overflow]${NC} prompt routed via private session context file: $bytes bytes > $PROMPT_ARGV_MAX_BYTES-byte argv limit."
+}
+
 cleanup_temp() {
     # This is the EXIT trap: it inherits `set -e`, and a failing command here
     # would abort the trap half-way (no rescue, no deregister). Everything
@@ -155,7 +183,7 @@ cleanup_temp() {
     # task stays assigned until daemon restart, deregister, or an explicit
     # release. WORKER_ID/PROJECT are set later in the script but read here at
     # exit time.
-    if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ]; then
+    if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
         # Via bash, not direct exec: bundled copies can lose the exec bit
         # (e.g. a bundler writeFile), which would silently skip deregister.
         bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
@@ -426,6 +454,10 @@ elif [ "$CMD_BASE" = "gemini" ]; then
 elif [ "$CMD_BASE" = "grok" ]; then
     CLI_TYPE="grok"
 fi
+# The seat's worker.type: moe-proxy forwards it on claim_next_task/join_team.
+# Replaces an inherited value (a hot reload keeps env). Bash 3.2 has no ${x^^}.
+case "$CLI_TYPE" in codex) MOE_WORKER_TYPE=CODEX ;; gemini) MOE_WORKER_TYPE=GEMINI ;; grok) MOE_WORKER_TYPE=GROK ;; *) MOE_WORKER_TYPE=CLAUDE ;; esac
+export MOE_WORKER_TYPE
 
 # Codex is interactive (TUI) for every role unless --codex-exec opts the seat
 # into one-shot `codex exec`. 8b632b5 (2026-09-06) had made worker/qa seats
@@ -701,6 +733,23 @@ if [ -z "$WORKER_ID" ]; then
 fi
 export MOE_WORKER_ID="$WORKER_ID"
 
+# Protected runtime gate, before any MCP config, daemon, proxy RPC or CLI. The
+# refusal names the variable, never its value; byte-identical in moe-agent.ps1.
+refuse_unprotected_runtime() { # $1 = the variable name
+    printf '%b[ERROR]%b %s\n' "$RED" "$NC" "MOE_RUNTIME_PROTECTED_PATH_MISSING: $1 must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start." >&2
+    # Nothing has registered yet, so the EXIT trap must deregister nothing.
+    WORKER_ID=""
+    exit 1
+}
+require_protected_runtime_file() { # $1 = the variable name, $2 = its value
+    case "$2" in /*|[A-Za-z]:[\\/]*) [ -f "$2" ] && return 0 ;; esac
+    refuse_unprotected_runtime "$1"
+}
+if [ "$RUNTIME_PROTECTED" = 1 ]; then
+    require_protected_runtime_file MOE_PROXY_PATH "$PROXY_PATH_OVERRIDE"
+    require_protected_runtime_file MOE_DAEMON_PATH "$DAEMON_PATH_OVERRIDE"
+fi
+
 # Ensure MCP config for Claude Code
 ensure_mcp_config() {
     local config_dir="$HOME/.config/claude"
@@ -712,6 +761,8 @@ ensure_mcp_config() {
     if [ -n "$PROXY_PATH_OVERRIDE" ] && [ -f "$PROXY_PATH_OVERRIDE" ]; then
         PROXY_CMD="$NODE_CMD"
         PROXY_ARGS="$PROXY_PATH_OVERRIDE"
+    elif [ "$RUNTIME_PROTECTED" = 1 ]; then
+        refuse_unprotected_runtime MOE_PROXY_PATH
     elif command -v moe-proxy &> /dev/null; then
         PROXY_CMD="moe-proxy"
     else
@@ -868,11 +919,18 @@ print(f"[OK] Updated MCP config: {config_file}")
 EOF
     fi
 
+    write_project_mcp_json "$PROJECT" "$SERENA_PROJECT"
+}
+
+# write_project_mcp_json ROOT SERENA_PROJECT -- ROOT/.mcp.json (the control, or
+# the task worktree). Its moe server's MOE_PROJECT_PATH stays the control.
+write_project_mcp_json() {
+    local root="$1" SERENA_PROJECT="$2"
     # Also write project-level .mcp.json so Claude Code finds MCP tools
     # regardless of working directory or global config issues
-    local project_mcp="$PROJECT/.mcp.json"
+    local project_mcp="$root/.mcp.json"
     if [ -n "$PROXY_CMD" ]; then
-        $PYTHON_CMD - "$project_mcp" "$PROXY_CMD" "$PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$SERENA_PROJECT" << 'MCPEOF'
+        $PYTHON_CMD - "$project_mcp" "$PROXY_CMD" "$PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$SERENA_PROJECT" << 'MCPEOF' || return 1
 import json
 import sys
 
@@ -911,11 +969,13 @@ MCPEOF
 ensure_mcp_config
 
 # For codex: write project-scoped .codex/config.toml instead of global registration
-if [ "$CLI_TYPE" = "codex" ]; then
+# (write_codex_config ROOT SERENA_PROJECT: ROOT is the control or the task worktree)
+write_codex_config() {
+    local root="$1" SERENA_PROJECT="$2"
     echo "Writing project-scoped Codex MCP config..."
-    CODEX_CONFIG_DIR="$PROJECT/.codex"
+    CODEX_CONFIG_DIR="$root/.codex"
     CODEX_CONFIG_FILE="$CODEX_CONFIG_DIR/config.toml"
-    mkdir -p "$CODEX_CONFIG_DIR"
+    mkdir -p "$CODEX_CONFIG_DIR" || return 1
 
     # Determine the proxy command and args for TOML
     TOML_PROXY_CMD=""
@@ -935,7 +995,7 @@ if [ "$CLI_TYPE" = "codex" ]; then
     TOML_SERENA_PROJECT=$(normalize_path "$SERENA_PROJECT")
 
     if [ -n "$TOML_PROXY_CMD" ]; then
-        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" "$TOML_SERENA_PROJECT" "${MOE_CODEX_REASONING_EFFORT:-xhigh}" << 'PYEOF'
+        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" "$TOML_SERENA_PROJECT" "${MOE_CODEX_REASONING_EFFORT:-xhigh}" << 'PYEOF' || return 1
 import sys, os, re, json
 
 config_file = sys.argv[1]
@@ -1077,22 +1137,24 @@ PYEOF
             echo -e "${GREEN}[OK]${NC} Codex MCP config written to: $CODEX_CONFIG_FILE"
         else
             echo -e "${RED}[ERROR]${NC} Failed to write Codex MCP config"
-            exit 1
+            return 1
         fi
     fi
-fi
+}
+if [ "$CLI_TYPE" = "codex" ]; then write_codex_config "$PROJECT" "$SERENA_PROJECT" || exit 1; fi
 
 # For gemini: write project-scoped .gemini/settings.json with MCP config
-if [ "$CLI_TYPE" = "gemini" ]; then
+write_gemini_config() {
+    local root="$1" SERENA_PROJECT="$2"
     echo "Writing project-scoped Gemini MCP config..."
-    GEMINI_CONFIG_DIR="$PROJECT/.gemini"
+    GEMINI_CONFIG_DIR="$root/.gemini"
     GEMINI_CONFIG_FILE="$GEMINI_CONFIG_DIR/settings.json"
-    mkdir -p "$GEMINI_CONFIG_DIR"
+    mkdir -p "$GEMINI_CONFIG_DIR" || return 1
 
     if [ -z "$PROXY_CMD" ]; then
         echo -e "${YELLOW}[WARN]${NC} moe-proxy not found; cannot write Gemini MCP config"
     else
-        $PYTHON_CMD - "$GEMINI_CONFIG_FILE" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$SERENA_PROJECT" << 'GEMINIEOF'
+        $PYTHON_CMD - "$GEMINI_CONFIG_FILE" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$SERENA_PROJECT" << 'GEMINIEOF' || return 1
 import json
 import sys
 
@@ -1145,14 +1207,17 @@ GEMINIEOF
             echo -e "${GREEN}[OK]${NC} Gemini MCP config written to: $GEMINI_CONFIG_FILE"
         else
             echo -e "${RED}[ERROR]${NC} Failed to write Gemini MCP config"
-            exit 1
+            return 1
         fi
     fi
-fi
+}
+if [ "$CLI_TYPE" = "gemini" ]; then write_gemini_config "$PROJECT" "$SERENA_PROJECT" || exit 1; fi
 
 # Print this seat's `mcp_servers.moe=<inline table>` codex override: the
 # [mcp_servers.moe] and [mcp_servers.moe.env] tables of $1 (.codex/config.toml)
-# plus MOE_WORKER_ID=$2 and, when exported, the seat's runner identity
+# plus, when exported, the seat's execution identity (MOE_SESSION_ID and the
+# MOE_ATTEMPT_ID/MOE_ATTEMPT_GENERATION pair, which moe-proxy stamps) and
+# MOE_WORKER_TYPE, then MOE_WORKER_ID=$2 and the seat's runner identity
 # (MOE_RUNNER_PROCESS_STARTED_AT/MOE_RUNNER_HOST): codex hands an MCP server
 # only the env its table names. The override must be a complete server definition:
 # codex 0.163 TUI bootstrap rejects a partial dotted one
@@ -1165,6 +1230,7 @@ codex_moe_server_override() {
 import sys, json, os
 config_file, worker_id = sys.argv[1], sys.argv[2]
 seat_keys = ("MOE_WORKER_ID", "MOE_RUNNER_PROCESS_STARTED_AT", "MOE_RUNNER_HOST")
+identity_keys = ("MOE_SESSION_ID", "MOE_ATTEMPT_ID", "MOE_ATTEMPT_GENERATION", "MOE_WORKER_TYPE")
 server, env, section = [], [], None
 with open(config_file, "r", encoding="utf-8-sig") as f:
     for line in f:
@@ -1175,7 +1241,7 @@ with open(config_file, "r", encoding="utf-8-sig") as f:
         if not s or s.startswith("#") or "=" not in s:
             continue
         key, value = (p.strip() for p in s.split("=", 1))
-        if key in seat_keys:
+        if key in seat_keys or key in identity_keys:
             continue
         if section == "[mcp_servers.moe]":
             server.append(key + "=" + value)
@@ -1183,6 +1249,9 @@ with open(config_file, "r", encoding="utf-8-sig") as f:
             env.append(key + "=" + value)
 if not any(p.startswith("command=") for p in server):
     sys.exit(1)
+for key in identity_keys:
+    if os.environ.get(key):
+        env.append(key + "=" + json.dumps(os.environ[key]))
 env.append("MOE_WORKER_ID=" + json.dumps(worker_id))
 for key in seat_keys[1:]:
     if os.environ.get(key):
@@ -1271,11 +1340,12 @@ grant_grok_folder_trust() {
     echo -e "${GREEN}[OK]${NC} Grok folder trust granted: $project"
 }
 
-if [ "$CLI_TYPE" = "grok" ]; then
+write_grok_config() {
+    local root="$1" SERENA_PROJECT="$2"
     echo "Writing project-scoped Grok MCP config..."
-    GROK_CONFIG_DIR="$PROJECT/.grok"
+    GROK_CONFIG_DIR="$root/.grok"
     GROK_CONFIG_FILE="$GROK_CONFIG_DIR/config.toml"
-    mkdir -p "$GROK_CONFIG_DIR"
+    mkdir -p "$GROK_CONFIG_DIR" || return 1
 
     # Determine the proxy command and args for TOML
     TOML_PROXY_CMD=""
@@ -1294,7 +1364,7 @@ if [ "$CLI_TYPE" = "grok" ]; then
     TOML_SERENA_PROJECT=$(normalize_path "$SERENA_PROJECT")
 
     if [ -n "$TOML_PROXY_CMD" ]; then
-        $PYTHON_CMD - "$GROK_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$TOML_SERENA_PROJECT" << 'PYEOF'
+        $PYTHON_CMD - "$GROK_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$TOML_SERENA_PROJECT" << 'PYEOF' || return 1
 import sys, os, re, json
 
 config_file = sys.argv[1]
@@ -1342,6 +1412,14 @@ moe_block_lines.extend([
     # only; empty (unset, to the proxy) for a worker or a human run.
     'MOE_RUNNER_PROCESS_STARTED_AT = "${MOE_RUNNER_PROCESS_STARTED_AT:-}"',
     'MOE_RUNNER_HOST = "${MOE_RUNNER_HOST:-}"',
+    # The seat's execution identity, which moe-proxy stamps onto
+    # get_context/start_step/complete_step/complete_task (the attempt pair only on
+    # the last three); empty (unset, to the proxy) outside a task.
+    'MOE_SESSION_ID = "${MOE_SESSION_ID:-}"',
+    'MOE_ATTEMPT_ID = "${MOE_ATTEMPT_ID:-}"',
+    'MOE_ATTEMPT_GENERATION = "${MOE_ATTEMPT_GENERATION:-}"',
+    # The seat's CLI (the wrapper exports GROK), forwarded on registration.
+    'MOE_WORKER_TYPE = "${MOE_WORKER_TYPE:-}"',
     # Grok drops any MCP tool whose name contains a dot (it namespaces tools
     # as <server>__<tool> and validates the result), so the daemon's moe.<name>
     # tools all vanish -- "connected, 0 tools", then "failed to connect"
@@ -1416,33 +1494,102 @@ PYEOF
 
         if [ -f "$GROK_CONFIG_FILE" ]; then
             echo -e "${GREEN}[OK]${NC} Grok MCP config written to: $GROK_CONFIG_FILE"
-            grant_grok_folder_trust "$PROJECT"
+            grant_grok_folder_trust "$root"
         else
             echo -e "${RED}[ERROR]${NC} Failed to write Grok MCP config"
-            exit 1
+            return 1
         fi
     fi
-fi
+}
+if [ "$CLI_TYPE" = "grok" ]; then write_grok_config "$PROJECT" "$SERENA_PROJECT" || exit 1; fi
 
 # HTTP /health probe against a daemon endpoint. Used when a PID check cannot
-# answer liveness (a Windows daemon's PID is invisible inside WSL).
+# answer liveness (a Windows daemon's PID is invisible inside WSL), and to ask a
+# live daemon which project it serves: once this project's daemon dies, another
+# project's daemon can take its port (task-e7f4026a). Exit 0 = healthy, exit 1 =
+# unreachable/unhealthy/unparseable. With $3 (the expected project), a 200 or
+# 503 reply naming another ABSOLUTE project exits 3 and prints that path (one
+# line, at most 300 chars). A relative or missing projectPath cannot be judged.
+# Paths compare by moe-proxy's comparableProjectPath (D:\x == D:/x == /mnt/d/x),
+# with ntpath/posixpath, never os.path, so Windows python agrees. Bounded: 3 s in
+# total (the watchdog also covers a trickled reply) and 64 KiB of body.
 probe_daemon_health() {
     local host="$1"
     local port="$2"
-    $PYTHON_CMD -c "
-import json, sys, urllib.request
+    local project="${3:-}"
+    $PYTHON_CMD -c '
+import json, ntpath, os, posixpath, re, sys, threading, urllib.error, urllib.request
+watchdog = threading.Timer(3, os._exit, (1,))
+watchdog.daemon = True
+watchdog.start()
+WINDOWS = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}[^\\/]")
+def absolute(p):
+    return isinstance(p, str) and (bool(WINDOWS.match(p)) or p.startswith("/"))
+def comparable(p):
+    p = p.strip()
+    if WINDOWS.match(p):
+        return ntpath.normpath(p).replace("\\", "/").rstrip("/").lower()
+    p = posixpath.normpath(p)
+    m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
+    return (m.group(1) + ":" + ("/" + m.group(2) if m.group(2) else "")).lower() if m else p
 try:
-    with urllib.request.urlopen('http://%s:%s/health' % (sys.argv[1], sys.argv[2]), timeout=3) as r:
-        d = json.load(r)
-    sys.exit(0 if d.get('status') == 'healthy' else 1)
+    try:
+        r = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
+            "http://%s:%s/health" % (sys.argv[1], sys.argv[2]), timeout=3)
+    except urllib.error.HTTPError as e:
+        if e.code != 503:
+            sys.exit(1)
+        r = e
+    code = r.getcode()
+    body = r.read(65537)
+    if len(body) > 65536:
+        sys.exit(1)
+    d = json.loads(body)
+    served = d.get("projectPath")
+    if (code in (200, 503) and absolute(served) and absolute(sys.argv[3])
+            and comparable(served) != comparable(sys.argv[3])):
+        shown = re.sub(r"[\x00-\x1f\x7f]", "?", served)
+        sys.stdout.write(shown if len(shown) <= 300 else shown[:300] + "...")
+        sys.exit(3)
+    sys.exit(0 if code != 503 and d.get("status") == "healthy" else 1)
 except Exception:
     sys.exit(1)
-" "$host" "$port" 2>/dev/null
+' "$host" "$port" "$project" 2>/dev/null
+}
+
+# The project as probe_daemon_health compares it. Git Bash/Cygwin spell PROJECT
+# /d/..., which no daemon reports; when cygpath fails, pass nothing (unknown)
+# rather than refuse this project's own daemon over a spelling.
+daemon_identity_project() {
+    case "$OSTYPE" in
+        msys*|cygwin*) cygpath -m "$PROJECT" 2>/dev/null || true ;;
+        *) printf '%s' "$PROJECT" ;;
+    esac
+}
+
+# A reachable daemon serves another project, so daemon.json is stale. Deletes,
+# starts and exports nothing. The three sentences are byte-identical in
+# moe-agent.ps1.
+refuse_foreign_daemon() { # $1 = host, $2 = port, $3 = served projectPath
+    printf '%b[ERROR]%b %s\n' "$RED" "$NC" "MOE_DAEMON_FOREIGN_PROJECT: the daemon at $1:$2 serves $3, not this project ($PROJECT)."
+    printf '%s\n' "$DAEMON_INFO is stale: this project's daemon is not running. Start it (the IDE's Restart Daemon, or moe-daemon start --project $PROJECT); it takes the next free port."
+    printf '%s\n' "Refusing to register, claim or bridge to another project's daemon."
+    exit 1
 }
 
 # Default gateway of a NAT-mode WSL distro = the Windows host.
 wsl_gateway_host() {
     ip route show default 2>/dev/null | awk '{print $3; exit}'
+}
+
+# daemon.json is repository content: read at most 64 KiB + 1 byte and treat a
+# larger file like unparseable JSON (python exits non-zero). Same cap as the
+# daemon, proxy, IDE plugins and moe-agent.ps1's Read-MoeDaemonJsonText.
+daemon_json_field() { # $1 = daemon.json path, $2 = key; prints the value
+    $PYTHON_CMD -c 'import json,sys
+d=open(sys.argv[1],"rb").read(65537)
+if len(d)>65536: sys.exit("daemon.json is larger than 64 KiB")
+sys.stdout.write(str(json.loads(d).get(sys.argv[2],"")))' "$1" "$2"
 }
 
 # Start daemon if needed
@@ -1455,8 +1602,8 @@ if [ "$NO_START_DAEMON" = false ]; then
         # Try to read PID/port/projectPath from daemon.json
         # NOTE: Uses sys.argv[1] instead of string interpolation to safely handle
         # paths containing single quotes, double quotes, or spaces.
-        PID_OUTPUT=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid', ''))" "$DAEMON_INFO" 2>&1)
-        PID_EXIT_CODE=$?
+        PID_EXIT_CODE=0
+        PID_OUTPUT=$(daemon_json_field "$DAEMON_INFO" pid 2>&1) || PID_EXIT_CODE=$?
 
         if [ $PID_EXIT_CODE -ne 0 ]; then
             echo -e "${YELLOW}[WARN]${NC} Failed to parse daemon.json: $PID_OUTPUT"
@@ -1466,8 +1613,8 @@ if [ "$NO_START_DAEMON" = false ]; then
             PID="$PID_OUTPUT"
         fi
 
-        DAEMON_PORT=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('port', ''))" "$DAEMON_INFO" 2>/dev/null || echo "")
-        DAEMON_PROJECT=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('projectPath', ''))" "$DAEMON_INFO" 2>/dev/null || echo "")
+        DAEMON_PORT=$(daemon_json_field "$DAEMON_INFO" port 2>/dev/null || echo "")
+        DAEMON_PROJECT=$(daemon_json_field "$DAEMON_INFO" projectPath 2>/dev/null || echo "")
 
         # daemon.json written by a Windows-side daemon while we run under
         # WSL/Linux: its PID is invisible here, so kill -0 would misread a live
@@ -1484,7 +1631,8 @@ if [ "$NO_START_DAEMON" = false ]; then
                 exit 1
             fi
             # Candidate hosts: explicit override, loopback (mirrored networking),
-            # then the WSL default gateway (NAT mode, daemon bound to 0.0.0.0).
+            # then the WSL default gateway (NAT mode: the Windows WSL adapter
+            # address, which a daemon started with --host wsl also listens on).
             DAEMON_HOST_CANDIDATES=""
             [ -n "${MOE_DAEMON_HOST:-}" ] && DAEMON_HOST_CANDIDATES="$MOE_DAEMON_HOST"
             DAEMON_HOST_CANDIDATES="$DAEMON_HOST_CANDIDATES 127.0.0.1"
@@ -1493,7 +1641,12 @@ if [ "$NO_START_DAEMON" = false ]; then
                 [ -n "$GW" ] && DAEMON_HOST_CANDIDATES="$DAEMON_HOST_CANDIDATES $GW"
             fi
             for CANDIDATE in $DAEMON_HOST_CANDIDATES; do
-                if probe_daemon_health "$CANDIDATE" "$DAEMON_PORT"; then
+                PROBE_RC=0
+                SERVED=$(probe_daemon_health "$CANDIDATE" "$DAEMON_PORT" "$(daemon_identity_project)") || PROBE_RC=$?
+                if [ "$PROBE_RC" -eq 3 ]; then
+                    refuse_foreign_daemon "$CANDIDATE" "$DAEMON_PORT" "$SERVED"
+                fi
+                if [ "$PROBE_RC" -eq 0 ]; then
                     export MOE_DAEMON_HOST="$CANDIDATE"
                     echo -e "${GREEN}[OK]${NC} Windows-side daemon reachable at $CANDIDATE:$DAEMON_PORT (cross-boundary)"
                     RUNNING=true
@@ -1503,7 +1656,7 @@ if [ "$NO_START_DAEMON" = false ]; then
             if [ "$RUNNING" = false ]; then
                 echo -e "${RED}[ERROR]${NC} daemon.json points at a Windows-side daemon ($DAEMON_PROJECT, port $DAEMON_PORT) that is not reachable from here (tried:$DAEMON_HOST_CANDIDATES)."
                 echo -e "${YELLOW}Fix options:${NC}"
-                echo "  - Restart the daemon listening beyond loopback: --host 0.0.0.0 (or MOE_BIND_HOST=0.0.0.0)"
+                echo "  - Restart the daemon listening on loopback plus the WSL adapter: --host wsl (or MOE_BIND_HOST=wsl)"
                 echo "  - Allow inbound TCP $DAEMON_PORT from the WSL subnet in Windows Defender Firewall"
                 echo "  - Or set MOE_DAEMON_HOST to the address the daemon is reachable at"
                 echo "Refusing to touch daemon.json or start a second daemon over the same .moe/."
@@ -1521,6 +1674,15 @@ if [ "$NO_START_DAEMON" = false ]; then
                 rm -f "$DAEMON_INFO"
                 PID=""
             else
+                # A live PID proves a process, not which project it serves.
+                if [[ "$DAEMON_PORT" =~ ^[0-9]+$ ]]; then
+                    PROBE_HOST="${MOE_DAEMON_HOST:-127.0.0.1}"
+                    PROBE_RC=0
+                    SERVED=$(probe_daemon_health "$PROBE_HOST" "$DAEMON_PORT" "$(daemon_identity_project)") || PROBE_RC=$?
+                    if [ "$PROBE_RC" -eq 3 ]; then
+                        refuse_foreign_daemon "$PROBE_HOST" "$DAEMON_PORT" "$SERVED"
+                    fi
+                fi
                 RUNNING=true
             fi
         fi
@@ -1535,6 +1697,8 @@ if [ "$NO_START_DAEMON" = false ]; then
         if [ -n "$DAEMON_PATH_OVERRIDE" ] && [ -f "$DAEMON_PATH_OVERRIDE" ]; then
             DAEMON_CMD="$NODE_CMD"
             DAEMON_ARGS=("$DAEMON_PATH_OVERRIDE")
+        elif [ "$RUNTIME_PROTECTED" = 1 ]; then
+            refuse_unprotected_runtime MOE_DAEMON_PATH
         elif command -v moe-daemon &> /dev/null; then
             DAEMON_CMD="moe-daemon"
         else
@@ -1567,7 +1731,7 @@ if [ "$NO_START_DAEMON" = false ]; then
 
             # Check if daemon.json exists and process is running
             if [ -f "$DAEMON_INFO" ]; then
-                NEW_PID=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid', ''))" "$DAEMON_INFO" 2>/dev/null || echo "")
+                NEW_PID=$(daemon_json_field "$DAEMON_INFO" pid 2>/dev/null || echo "")
                 if [ -n "$NEW_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then
                     echo -e "${GREEN}[OK]${NC} Daemon started (waited ${WAITED}s)"
                     break
@@ -2031,6 +2195,10 @@ sys.exit(1)
 " <<< "$raw"
 }
 
+# A wrapper-only read the CLI is never served: a blank MOE_SESSION_ID keeps
+# moe-proxy from stamping this session's sessionId, so it mints no receipt.
+moe_rpc_unserved() { MOE_SESSION_ID= moe_rpc "$@"; }
+
 # claim_refused_no_team CLAIM_JSON
 # 0 when a claim answer is the daemon's NO_TEAM_MEMBERSHIP refusal
 # (claimNextTask.ts noTeamMembershipRefusal): the seat is SOLO and every
@@ -2051,7 +2219,7 @@ seat_is_teamless() {
     [ -n "$TEAM" ] && [ "$ROLE" != "governor" ] && [ "$TEAM_JOINED" != true ]
 }
 
-# retry_team_join
+# retry_team_join [force]
 # The startup join is one shot. A seat it left SOLO (the team was full, or the
 # daemon did not answer) stayed solo until someone relaunched it: raising the
 # team's maxSize or freeing a seat changed nothing, and the seat logged
@@ -2059,13 +2227,20 @@ seat_is_teamless() {
 # claim_next_task skipped every epic+status a live worker held. So a claiming
 # seat re-runs the join (and the create, if that never answered) before each
 # claim until the daemon accepts it; join_team is idempotent for a member.
+# `force` re-joins even a seat the wrapper believes joined, governors included:
+# the daemon may have pruned the seat's record (stale) or left it DEAD (a hot
+# reload deregisters), and chat then refuses it as an unknown sender. A join
+# re-registers it. Only an answer listing this seat as a member counts.
 # Returns 0 once joined. Twin: moe-agent.ps1 Invoke-MoeTeamJoinRetry.
 retry_team_join() {
-    [ "$TEAM_JOINED" = true ] && return 0
-    [ -n "$TEAM" ] && [ "$ROLE" != "governor" ] && [ -n "$PYTHON_CMD" ] || return 1
-    local previous_error="$TEAM_JOIN_LAST_ERROR" failure="" rpc_args rpc_out rpc_err
+    local force="${1:-}"
+    [ "$TEAM_JOINED" = true ] && [ "$force" != force ] && return 0
+    [ -n "$TEAM" ] && { [ "$ROLE" != "governor" ] || [ "$force" = force ]; } && [ -n "$PYTHON_CMD" ] || return 1
+    local was_joined="$TEAM_JOINED" previous_error="$TEAM_JOIN_LAST_ERROR" failure="" rpc_args rpc_out rpc_rc
+    TEAM_JOINED=false
     if [ -z "$TEAM_ID" ]; then
-        rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'name':sys.argv[1]}))" "$TEAM" 2>/dev/null) || return 1
+        # enter_governance requires a role-bound governor team (see the startup create).
+        rpc_args=$($PYTHON_CMD -c "import json,sys; a={'name':sys.argv[1]}; a.update({'role':'governor'} if sys.argv[2]=='governor' else {}); print(json.dumps(a))" "$TEAM" "$ROLE" 2>/dev/null) || return 1
         if rpc_out=$(moe_rpc create_team "$rpc_args" 2>/dev/null); then
             TEAM_ID=$($PYTHON_CMD -c "
 import json, sys
@@ -2081,18 +2256,20 @@ except Exception:
     fi
     if [ -z "$failure" ]; then
         rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'teamId':sys.argv[1],'workerId':sys.argv[2]}))" "$TEAM_ID" "$WORKER_ID" 2>/dev/null) || return 1
-        # moe_rpc prints the tool's answer on stdout and the JSON-RPC error on
-        # stderr; keep only the error.
-        if rpc_err=$(moe_rpc join_team "$rpc_args" 2>&1 >/dev/null); then
-            TEAM_JOINED=true
-            TEAM_JOIN_LAST_ERROR=""
-            TEAM_CONTEXT="You are part of team '$TEAM' (id: $TEAM_ID, role: $ROLE). Team members can work in parallel on the same epic."
-            echo -e "${GREEN}[OK]${NC} Worker $WORKER_ID joined team '$TEAM' on retry; this seat is no longer teamless."
-            return 0
-        fi
+        # moe_rpc prints the tool's answer on stdout and the JSON-RPC error on stderr.
+        rpc_rc=0; rpc_out=$(moe_rpc join_team "$rpc_args" 2>&1) || rpc_rc=$?
         failure=$($PYTHON_CMD -c "
 import json, sys
+rc, team_id, worker_id = sys.argv[1:4]
 raw = sys.stdin.read().strip()
+if rc == '0':
+    try:
+        team = json.loads(raw)['team']
+        ok = team['id'] == team_id and isinstance(team['memberIds'], list) and worker_id in team['memberIds']
+    except Exception:
+        ok = False
+    print('' if ok else 'the moe.join_team answer does not list this seat as a member')
+    sys.exit(0)
 msg = ''
 for line in reversed([l for l in raw.splitlines() if l.strip()]):
     try:
@@ -2102,17 +2279,30 @@ for line in reversed([l for l in raw.splitlines() if l.strip()]):
     msg = (e.get('message') if isinstance(e, dict) else str(e)) or ''
     break
 print(msg or raw[:200] or 'no answer')
-" <<< "$rpc_err" 2>/dev/null || echo "no answer")
+" "$rpc_rc" "$TEAM_ID" "$WORKER_ID" <<< "$rpc_out" 2>/dev/null || echo "unreadable moe.join_team answer")
+        if [ -z "$failure" ]; then
+            TEAM_JOINED=true
+            TEAM_JOIN_LAST_ERROR=""
+            TEAM_CONTEXT="You are part of team '$TEAM' (id: $TEAM_ID, role: $ROLE). Team members can work in parallel on the same epic."
+            # A healthy seat's forced re-join each pre-flight stays quiet.
+            [ "$was_joined" = true ] || echo -e "${GREEN}[OK]${NC} Worker $WORKER_ID joined team '$TEAM' on retry; this seat is no longer teamless."
+            return 0
+        fi
     fi
     TEAM_JOIN_LAST_ERROR="$failure"
+    # A team deleted under the seat: drop its id so the next retry re-creates it by name.
+    case "$failure" in "Team not found: "*) TEAM_ID="" ;; esac
     # Warn when the refusal changes, not on every poll: the per-poll banners
     # already name a teamless seat.
     if [ "$failure" != "$previous_error" ]; then
-        echo -e "${YELLOW}[WARN]${NC} moe.join_team retry refused: $failure - this seat is still TEAMLESS; the wrapper retries before the next claim."
+        if [ "$force" = force ]; then
+            echo -e "${YELLOW}[WARN]${NC} MOE_SEAT_UNREGISTERED worker=$WORKER_ID team=$TEAM - moe.join_team: $failure; this seat's chat stays unread until a pre-flight join succeeds."
+        else
+            echo -e "${YELLOW}[WARN]${NC} moe.join_team retry refused: $failure - this seat is still TEAMLESS; the wrapper retries before the next claim."
+        fi
     fi
     return 1
 }
-
 
 # Candidate evidence is pinned outside the CLI's mutable context projection.
 # Reading the existing store does not claim, repair or write an attempt.
@@ -2136,9 +2326,16 @@ except Exception as e:
 PY
 }
 
+# Exported for the CLI's moe-proxy, which stamps the pair onto
+# start_step/complete_step/complete_task (CQ-F09, F12a). The
+# pair moves together: only an identity verified against the store is kept.
+# The same verified record pins its execution profile and plan revision (CQ-V07)
+# in PINNED_ATTEMPT_PROFILE / PINNED_ATTEMPT_PLAN_REVISION: never exported, so no
+# CLI can set or read them, and reset with the pair. Twin: Set-MoeAttemptIdentity.
 pin_attempt_identity() {
-    MOE_ATTEMPT_ID=""; MOE_ATTEMPT_GENERATION=""
-    local pinned tokens
+    export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""
+    unset PINNED_ATTEMPT_PROFILE PINNED_ATTEMPT_PLAN_REVISION
+    local pinned tokens attempt_id generation record policy
     tokens=$($PYTHON_CMD -c '
 import json,re,sys
 c=json.load(sys.stdin); a=c.get("attemptId"); g=c.get("generation")
@@ -2151,8 +2348,20 @@ print(a+" "+str(g))
         pinned=$(moe_attempt_read "" "") || return 1
         tokens=$($PYTHON_CMD -c 'import json,sys;a=json.load(sys.stdin);print(a["id"]+" "+str(a["generation"]))' <<< "$pinned") || return 1
     fi
-    read -r MOE_ATTEMPT_ID MOE_ATTEMPT_GENERATION <<< "$tokens"
-    moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" >/dev/null
+    read -r attempt_id generation <<< "$tokens"
+    record=$(moe_attempt_read "$attempt_id" "$generation") || return 1
+    MOE_ATTEMPT_ID="$attempt_id"; MOE_ATTEMPT_GENERATION="$generation"
+    # A missing or malformed snapshot pins nothing: that attempt lands as legacy.
+    policy=$($PYTHON_CMD -c '
+import json,re,sys
+s=json.load(sys.stdin).get("executionPolicySnapshot")
+s=s if isinstance(s,dict) else {}
+p=s.get("profile"); r=s.get("planRevision")
+print(p if isinstance(p,str) and re.fullmatch(r"[a-z][a-z-]{0,31}",p) else "-", r if type(r)==int and 0<r<=9007199254740991 else "-")
+' <<< "$record" 2>/dev/null) || policy="- -"
+    read -r PINNED_ATTEMPT_PROFILE PINNED_ATTEMPT_PLAN_REVISION <<< "$policy"
+    [ "$PINNED_ATTEMPT_PROFILE" != - ] || PINNED_ATTEMPT_PROFILE=""
+    [ "$PINNED_ATTEMPT_PLAN_REVISION" != - ] || PINNED_ATTEMPT_PLAN_REVISION=""
 }
 
 moe_evidence_rpc() {
@@ -2493,6 +2702,10 @@ post_flight() {
         if [ -n "${LAND_SUMMARY_OUTCOME:-}" ] && [ "${LAND_SUMMARY_OUTCOME:-}" != "committed" ] && [ -n "${LAND_SUMMARY_CODE:-}" ]; then
             content="$content outcome=$LAND_SUMMARY_OUTCOME code=$LAND_SUMMARY_CODE"
         fi
+        # Own contested paths the landing held back (ps1 twin): visible before QA.
+        if [ -n "${LAND_SUMMARY_HELD:-}" ]; then
+            content="$content held=$LAND_SUMMARY_HELD"
+        fi
         # Bash 3.2 brace-expands Python dicts inside nested quoted arguments.
         # Build the payload separately; keep serialization/RPC best-effort.
         rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
@@ -2678,11 +2891,321 @@ git_top() {
     return 0
 }
 
+# task_branch_landed REF TASKID -- 0 when refs/heads/moe/task/TASKID is fully
+# landed in REF: merging it into REF writes REF's own tree (design §1.7).
+# Ancestry cannot be the test, because a worktree completion lands as a squash
+# commit. Any failure (git < 2.38, an unknown ref, a conflict) is 1, not landed.
+# WT-14 reuses it with REF=refs/heads/<target>. Twin: Test-MoeTaskBranchLanded.
+task_branch_landed() {
+    local merged tree
+    merged=$(git -C "$MOE_TOP" merge-tree --write-tree "$1" "refs/heads/moe/task/$2" 2>/dev/null) || return 1
+    tree=$(git -C "$MOE_TOP" rev-parse --verify --quiet "$1^{tree}" 2>/dev/null) || return 1
+    [ -n "$tree" ] && [ "${merged%%$'\n'*}" = "$tree" ]
+}
+
+# worktree_stop CODE DETAIL -- refuse this worker seat before any CLI launch:
+# print the code, park the task with one moe.report_blocked, stop the sidecar
+# and exit 1 (the EXIT trap deregisters, as for MOE_CLI_ARGV_REJECTED). Call it
+# from the main shell only, never inside $(...), a pipeline or a subshell,
+# where exit would not end the seat. Twin: Stop-MoeWorktreeSeat.
+worktree_stop() {
+    local args
+    printf '%b[ERROR]%b %s: %s\n' "$RED" "$NC" "$1" "$2"
+    if ! args=$($PYTHON_CMD -c 'import json,sys; t,w,r=sys.argv[1:]; print(json.dumps({"taskId":t,"workerId":w,"reason":r}))' "$PREFLIGHT_TASK_ID" "$WORKER_ID" "$1: $2" 2>/dev/null) \
+        || ! moe_rpc report_blocked "$args" > /dev/null 2>&1; then
+        printf '%b[WARN]%b moe.report_blocked failed for %s; the seat stops anyway.\n' "$YELLOW" "$NC" "$PREFLIGHT_TASK_ID"
+    fi
+    stop_heartbeat_sidecar
+    exit 1
+}
+
+# provision_worktree -- worker pre-flight, design §1.1-§1.6. The fresh claim's
+# workspace (WT-01), else get_context's (WT-02), names the mode; none is shared.
+# Shared mode refuses only an unlanded moe/task/<id> branch and touches nothing
+# else (epic rail 4). Worktree mode runs the guards, then reuses, re-adds or
+# creates the locked sparse worktree W = <git top>/.worktrees/<id> on
+# moe/task/<id>, cut from the LOCAL target, or refuses: there is no fallback to
+# the shared checkout. It never deletes a branch, W/.moe, or a W it did not add
+# in this session. Sets MOE_WT_MODE/PATH/BRANCH/TARGET. Twin: Initialize-MoeWorktree.
+provision_worktree() {
+    local tid="$PREFLIGHT_TASK_ID" parsed mode target foreign ver head w branch found raw ref out verb longest sha fref
+    local added=false finish=false
+    local -a rows=()
+    # The claim and context travel on stdin: one env string is capped at 128 KiB.
+    parsed=$(printf '%s\036%s' "${CLAIM_RESULT:-}" "${PREFLIGHT_CONTEXT:-}" | $PYTHON_CMD -c '
+import json, re, sys
+tid = sys.argv[1]
+claim, _, ctx = sys.stdin.buffer.read().decode("utf-8", "replace").partition("\x1e")
+def load(s):
+    try:
+        d = json.loads(s)
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+claim, ctx = load(claim), load(ctx)
+ws = claim.get("workspace") if isinstance(claim.get("workspace"), dict) else ctx.get("workspace")
+ws = ws if isinstance(ws, dict) else {}
+t = ws.get("target").strip() if isinstance(ws.get("target"), str) else ""
+t = "?" if re.search(r"[\x00-\x1f\x7f]", t) else t
+task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+own = {"moe/task/" + tid, "refs/heads/moe/task/" + tid, t, "refs/heads/" + t}
+out = []
+for r in task.get("commits") if isinstance(task.get("commits"), list) else []:
+    if not isinstance(r, dict) or r.get("kind") not in ("checkpoint", "completion"):
+        continue
+    sha, ref = r.get("sha"), r.get("ref") if isinstance(r.get("ref"), str) else ""
+    if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha) and ref not in own:
+        out.append(sha.lower() + ":" + (re.sub(r"[^A-Za-z0-9._/@-]", "_", ref) or "-"))
+sys.stdout.write(("worktree" if ws.get("mode") == "worktree" else "shared") + "\x1f" + t + "\x1f" + " ".join(out))
+' "$tid" 2>/dev/null) || parsed=""
+    IFS=$'\x1f' read -r mode target foreign <<< "$parsed" || true
+    if [ "$mode" != worktree ]; then
+        git_top || return 0
+        if git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/moe/task/$tid" > /dev/null && ! task_branch_landed HEAD "$tid"; then
+            worktree_stop MOE_WORKTREE_MODE_MISMATCH "shared-mode claim, but moe/task/$tid holds worktree bytes HEAD lacks; land or rescue that branch first"
+        fi
+        return 0
+    fi
+    ver=$(git --version 2>/dev/null) || ver=""
+    ver="${ver#git version }"
+    if ! [[ "$ver" =~ ^([0-9]+)\.([0-9]+) ]] || [ "${BASH_REMATCH[1]}" -lt 2 ] || { [ "${BASH_REMATCH[1]}" -eq 2 ] && [ "${BASH_REMATCH[2]}" -lt 38 ]; }; then
+        worktree_stop MOE_WORKTREE_UNSUPPORTED_GIT "git ${ver:-(no version)} is older than 2.38; worktree mode needs git merge-tree --write-tree"
+    fi
+    if ! git_top || [ -n "$MOE_REL" ]; then
+        worktree_stop MOE_WORKTREE_PROJECT_NOT_TOP "$PROJECT is not the top level of a git work tree; worktree mode needs the project at the repository root"
+    fi
+    head=$(git -C "$MOE_TOP" symbolic-ref -q HEAD 2>/dev/null) || head=""
+    if [ "$head" != refs/heads/moe/control ]; then
+        worktree_stop MOE_CONTROL_NOT_FOLLOWING "the control checkout is on ${head:-a detached HEAD}, not refs/heads/moe/control; switch it to moe/control first"
+    fi
+    if [ -z "$target" ] || [ "$(git -C "$MOE_TOP" check-ref-format --branch "$target" 2>/dev/null)" != "$target" ] \
+        || ! git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$target^{commit}" > /dev/null; then
+        worktree_stop MOE_WORKTREE_CREATE_FAILED "the claim's target '$target' is not a local branch"
+    fi
+    read -ra rows <<< "$foreign" || true
+    for sha in "${rows[@]}"; do
+        fref="${sha#*:}"; sha="${sha%%:*}"
+        git -C "$MOE_TOP" merge-base --is-ancestor "$sha" "refs/heads/$target" 2>/dev/null \
+            || worktree_stop MOE_WORKTREE_MODE_MISMATCH "task commit $sha on $fref is not in $target; land or rescue the shared-mode bytes first"
+    done
+    w="$MOE_TOP/.worktrees/$tid"; branch="moe/task/$tid"
+    case "${OSTYPE:-}" in
+        msys*|cygwin*)
+            # A failed git or python step refuses: the budget is never assumed to fit.
+            longest=$(set -o pipefail; git -C "$MOE_TOP" ls-tree -r -z --name-only "refs/heads/$target" 2>/dev/null | $PYTHON_CMD -c 'import sys; print(max([len(n.decode("utf-8", "replace").encode("utf-16-le")) // 2 for n in sys.stdin.buffer.read().split(b"\0") if n] or [0]))' 2>/dev/null) \
+                && [[ "$longest" =~ ^[0-9]+$ ]] || worktree_stop MOE_WORKTREE_CREATE_FAILED "git ls-tree failed on $target; the Windows path budget cannot be checked"
+            if [ $(( ${#w} + 1 + longest )) -gt 240 ] && [ "$(git -C "$MOE_TOP" config --bool core.longpaths 2>/dev/null)" != true ]; then
+                worktree_stop MOE_WORKTREE_PATH_TOO_LONG "$w plus its longest path ($longest characters) is over 240 characters and core.longpaths is off"
+            fi ;;
+    esac
+    # W's registration, matched under probe_daemon_health's path rule (D:/x is /mnt/d/x).
+    found=$(set -o pipefail; git -C "$MOE_TOP" worktree list --porcelain -z 2>/dev/null | $PYTHON_CMD -c '
+import ntpath, posixpath, re, sys
+WINDOWS = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}[^\\/]")
+def comparable(p):
+    p = p.strip()
+    if WINDOWS.match(p):
+        return ntpath.normpath(p).replace("\\", "/").rstrip("/").lower()
+    p = posixpath.normpath(p)
+    m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
+    return (m.group(1) + ":" + ("/" + m.group(2) if m.group(2) else "")).lower() if m else p
+want, recs = comparable(sys.argv[1]), []
+for f in sys.stdin.buffer.read().decode("utf-8", "surrogateescape").split("\0"):
+    if f.startswith("worktree "):
+        recs.append([f[9:], ""])
+    elif f.startswith("branch ") and recs:
+        recs[-1][1] = f[7:]
+hit = [r for r in recs if comparable(r[0]) == want]
+out = "found\x1f" + hit[0][0] + "\x1f" + hit[0][1] if hit else "absent"
+sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
+' "$w") || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree list failed in $MOE_TOP"
+    IFS=$'\x1f' read -r found raw ref <<< "$found" || true
+    if [ "$found" = found ]; then
+        verb=reused
+        [ "$ref" = "refs/heads/$branch" ] || worktree_stop MOE_WORKTREE_CREATE_FAILED "$w is registered on ${ref:-a detached HEAD}, not refs/heads/$branch"
+        if [ "$raw" != "$w" ]; then
+            out=$(git -C "$MOE_TOP" worktree repair "$w" 2>&1) || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree repair failed: ${out##*$'\n'}"
+        fi
+        # No index file: a session died between the add and read-tree. Finish it, but
+        # only a W holding nothing but .git: with no index, a sparse read-tree overwrites
+        # a file already in W with HEAD's bytes and still exits 0.
+        # An empty index proves nothing: an agent's `git rm -r .` empties one on purpose.
+        out=$(git -C "$w" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [ -n "$out" ] \
+            || worktree_stop MOE_WORKTREE_CREATE_FAILED "git rev-parse failed in $w"
+        if [ ! -e "$out" ]; then
+            out=$(ls -A "$w" 2>/dev/null) && [ "$out" = .git ] \
+                || worktree_stop MOE_WORKTREE_CREATE_FAILED "$w has no index file but holds more than .git; a human must inspect it"
+            finish=true
+        fi
+    elif [ -e "$w" ] || [ -L "$w" ]; then
+        worktree_stop MOE_WORKTREE_CREATE_FAILED "$w exists but is not a registered worktree; a human must inspect it"
+    elif git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$branch" > /dev/null; then
+        verb=re-added; added=true
+        out=$(git -C "$MOE_TOP" worktree add --lock --reason "moe $tid" --no-checkout "$w" "$branch" 2>&1) \
+            || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree add failed: ${out##*$'\n'}"
+    else
+        verb=created; added=true
+        out=$(git -C "$MOE_TOP" worktree add --lock --reason "moe $tid" --no-checkout --no-track -b "$branch" "$w" "refs/heads/$target" 2>&1) \
+            || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree add failed: ${out##*$'\n'}"
+    fi
+    if [ "$added" = true ] || [ "$finish" = true ]; then
+        # MSYS would rewrite '/*' into a Windows path under Git Bash.
+        if ! out=$(MSYS2_ARG_CONV_EXCL='*' git -C "$w" sparse-checkout set --no-cone '/*' '!/.moe/' 2>&1) \
+            || ! out=$(git -C "$w" read-tree -mu HEAD 2>&1); then
+            if [ "$added" = true ] && [ "$(git -C "$MOE_TOP" rev-list --count "refs/heads/$target..refs/heads/$branch" 2>/dev/null)" = 0 ]; then
+                git -C "$MOE_TOP" worktree remove --force --force "$w" > /dev/null 2>&1 || true
+            fi
+            worktree_stop MOE_WORKTREE_CREATE_FAILED "git sparse-checkout or read-tree failed in $w: ${out##*$'\n'}"
+        fi
+    fi
+    if [ -e "$w/.moe" ] || [ -L "$w/.moe" ]; then
+        worktree_stop MOE_WORKTREE_MOE_PRESENT "$w/.moe exists; a worktree never holds .moe files, so a human must inspect it"
+    fi
+    MOE_WT_MODE=worktree; MOE_WT_PATH="$w"; MOE_WT_BRANCH="$branch"; MOE_WT_TARGET="$target"
+    printf '[worktree] %s %s on %s\n' "$verb" "$w" "$branch"
+    return 0
+}
+
+# prepare_worktree_launch -- worktree mode, design §5.1/§5.2: the CLI runs in
+# CLI_ROOT=W. Writes into W what the pre-flight writes into the control for
+# this CLI (the grok writer also trusts W), mirrors .moe/agents/*.md into
+# W/.claude/agents and exports the worktree names; MOE_PROJECT_PATH stays the
+# control. A failed write refuses the seat: nothing falls back to the control.
+# Twin: Initialize-MoeWorktreeLaunch.
+prepare_worktree_launch() {
+    local src out mode serena line re
+    CLI_ROOT="$MOE_WT_PATH"
+    export MOE_WORKTREE_PATH="$MOE_WT_PATH" MOE_TASK_BRANCH="$MOE_WT_BRANCH" MOE_LAND_TARGET="$MOE_WT_TARGET"
+    # Design §5.2-§5.4, §1.10: one node program, the same text in both wrappers (no
+    # shell or PowerShell link primitives, so Windows gets junctions). It maps the
+    # Serena root (the control becomes W; an override is kept, outside the control
+    # with MOE_WORKTREE_SERENA_OUTSIDE), links W/.serena/memories and W/.claude/skills
+    # to the control's, each recorded in <common gitdir>/moe/worktree/<taskId>.links
+    # before it is made (MOE_WORKTREE_LINK_FAILED leaves every byte as it is), copies
+    # .serena/project.yml with project_name <name>@<taskId>, and names each tracked
+    # package-lock.json directory of W without node_modules (MOE_WORKTREE_DEPS_MISSING).
+    # Prints those lines, then W, KEEP or OFF (no Serena: its memories link failed);
+    # any other failure exits 1 with the detail as its last line.
+    out=$("$NODE_CMD" - "$PROJECT" "$CLI_ROOT" "$SERENA_PROJECT" "$PREFLIGHT_TASK_ID" <<'MOE_WT_TOOLING_JS'
+const fs = require('fs'), path = require('path'), cp = require('child_process');
+const [ctl, w, sp, tid] = process.argv.slice(-4), win = process.platform === 'win32', out = [];
+const key = p => { try { p = fs.realpathSync.native(p); } catch { p = path.resolve(p); } return win ? p.toLowerCase() : p; };
+const within = (p, top) => { const r = path.relative(key(top), key(p)); return r !== '' && r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r); };
+const lstat = f => { try { return fs.lstatSync(f); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
+const git = (...a) => { const r = cp.spawnSync('git', a, { encoding: 'utf8' }); if (r.status !== 0) throw Error('git ' + a[2] + ' failed: ' + String(r.stderr || r.error).trim()); return r.stdout; };
+const local = d => { if (!lstat(d)) fs.mkdirSync(d); if (!within(d, w)) throw Error(d + ' resolves outside ' + w); };
+try {
+    const mode = key(sp) === key(ctl) ? 'W' : 'KEEP', failed = [];
+    if (mode === 'KEEP' && !within(sp, ctl)) out.push('MOE_WORKTREE_SERENA_OUTSIDE ' + sp + ' is outside ' + ctl + ', so Serena does not see this worktree');
+    const man = path.join(git('-C', ctl, 'rev-parse', '--path-format=absolute', '--git-common-dir').trim(), 'moe', 'worktree', tid + '.links');
+    for (const rel of ['.serena/memories', '.claude/skills']) {
+        try {
+            const src = path.resolve(ctl, rel), dst = path.join(w, rel);
+            if (!fs.statSync(src).isDirectory()) throw Error(src + ' is not a directory');
+            local(path.dirname(dst));
+            const st = lstat(dst);
+            if (st && !(st.isSymbolicLink() && key(dst) === key(src))) throw Error(dst + ' exists and is not a link to ' + src);
+            if (!(lstat(man) ? fs.readFileSync(man, 'utf8').split('\n') : []).includes(rel)) {
+                fs.mkdirSync(path.dirname(man), { recursive: true }); fs.appendFileSync(man, rel + '\n');
+            }
+            if (!st) fs.symlinkSync(src, dst, win ? 'junction' : 'dir');
+            if (key(dst) !== key(src)) throw Error(dst + ' does not resolve to ' + src);
+        } catch (e) { failed.push(rel); out.push('MOE_WORKTREE_LINK_FAILED ' + rel + ': ' + e.message); }
+    }
+    const yml = path.join(ctl, '.serena', 'project.yml'), text = lstat(yml) ? fs.readFileSync(yml, 'utf8') : null;
+    if (text !== null) {
+        const base = path.basename(path.resolve(ctl)), m = /^project_name:[ \t]*([^\r\n]*)/m.exec(text);
+        const qualify = v => {
+            let q = /^"((?:[^"\\]|\\.)*)"(\s*(?:#.*)?)$/.exec(v);
+            if (q) return '"' + (q[1] || JSON.stringify(base).slice(1, -1)) + '@' + tid + '"' + q[2];
+            q = /^'((?:[^']|'')*)'(\s*(?:#.*)?)$/.exec(v);
+            if (q) return "'" + (q[1] || base.replace(/'/g, "''")) + '@' + tid + "'" + q[2];
+            q = /^(.*?)(\s+#.*)?$/.exec(v);
+            const name = q[1].trim();
+            if (/^["'[\]{}&*!|>%@`]/.test(name)) throw Error('project_name in ' + yml + ' is not a plain or quoted scalar');
+            return JSON.stringify((['', '~', 'null'].includes(name) ? base : name) + '@' + tid) + (q[2] || '');
+        };
+        const line = 'project_name: ' + (m ? qualify(m[1]) : JSON.stringify(base + '@' + tid));
+        const body = m ? text.slice(0, m.index) + line + text.slice(m.index + m[0].length) : line + (text.includes('\r\n') ? '\r\n' : '\n') + text;
+        const dst = path.join(w, '.serena', 'project.yml'), tmp = dst + '.' + process.pid + '.tmp';
+        local(path.dirname(dst));
+        const st = lstat(dst);
+        if (st && !st.isFile()) throw Error(dst + ' is not a regular file');
+        try { fs.writeFileSync(tmp, body, { flag: 'wx' }); fs.renameSync(tmp, dst); } catch (e) { fs.rmSync(tmp, { force: true }); throw e; }
+    }
+    const locks = git('-C', w, 'ls-files', '-z', '--cached', '--', 'package-lock.json', ':(glob)**/package-lock.json').split('\0');
+    for (const d of new Set(locks.filter(f => path.posix.basename(f) === 'package-lock.json' && lstat(path.join(w, f))).map(f => path.posix.dirname(f)))) {
+        const nm = lstat(path.join(w, d, 'node_modules'));
+        if (!nm || !nm.isDirectory()) out.push('MOE_WORKTREE_DEPS_MISSING ' + d);
+    }
+    out.push(mode === 'W' && failed.includes('.serena/memories') ? 'OFF' : mode);
+    process.stdout.write(out.join('\n'));
+} catch (e) {
+    process.stdout.write(out.concat(String((e && e.message) || e).replace(/\s+/g, ' ')).join('\n'));
+    process.exit(1);
+}
+MOE_WT_TOOLING_JS
+    ) || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot prepare Serena, the shared links and the dependency check in $CLI_ROOT: ${out##*$'\n'}"
+    mode=${out##*$'\n'}
+    [ "$out" = "$mode" ] || while IFS= read -r line; do printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$line"; done <<< "${out%$'\n'*}"
+    case "$mode" in W) serena="$CLI_ROOT" ;; KEEP) serena="$SERENA_PROJECT" ;; *) serena="" ;; esac
+    if [ -z "$serena" ]; then
+        # No Serena, so no memory names to read through it (a literal replace: a glob over this text is quadratic).
+        re=$'\nmemory_total=[^\n]*\nmemory_this_task=[^\n]*\nmemory_recent=[^\n]*'
+        [[ $DYNAMIC_CONTEXT =~ $re ]] && DYNAMIC_CONTEXT=${DYNAMIC_CONTEXT/"${BASH_REMATCH[0]}"/$'\n'"memory_total=0 (Serena is off for this launch: MOE_WORKTREE_LINK_FAILED .serena/memories)"}
+    fi
+    DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
+
+Before testing a package in this worktree, run npm ci --prefer-offline in that package, plus npm run build where its tests require dist/."
+    # The writers take Serena's root as an argument; an empty SERENA_CMD drops the server (stale entries too).
+    SERENA_CMD="${serena:+$SERENA_CMD}" write_project_mcp_json "$CLI_ROOT" "$serena" \
+        || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot write the MCP config ($CLI_ROOT/.mcp.json)"
+    case "$CLI_TYPE" in
+        codex|gemini|grok)
+            SERENA_CMD="${serena:+$SERENA_CMD}" "write_${CLI_TYPE}_config" "$CLI_ROOT" "$serena" \
+                || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot write the $CLI_TYPE config ($CLI_ROOT/.$CLI_TYPE)" ;;
+    esac
+    if [ "$ENABLE_AGENT_TEAMS" = "true" ] && [ -d "$MOE_DIR/agents" ]; then
+        mkdir -p "$CLI_ROOT/.claude/agents" \
+            || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot create the subagents dir ($CLI_ROOT/.claude/agents)"
+        for src in "$MOE_DIR/agents"/*.md; do
+            [ -f "$src" ] || continue
+            cp -f "$src" "$CLI_ROOT/.claude/agents/" \
+                || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot copy a subagent ($src)"
+        done
+    fi
+}
+
+# moe_snapshot_hash P -- the snapshot blob of TOP-relative P, the blob `git add`
+# would store; prints nothing and returns non-zero when P cannot be hashed. A
+# symlink is hashed by its link text: hash-object follows a link to its
+# target's bytes, so a retarget to identical bytes read as unchanged, an edit
+# to the target as a change to the link, and a dangling link failed the whole
+# --stdin-paths batch. `update-index --add --info-only` into a throwaway index
+# runs git's own add path (readlink; Git for Windows turns backslashes into
+# slashes) and writes no object. Twin: Get-MoeSnapshotBlob.
+moe_snapshot_hash() {
+    local idx row
+    if [ ! -L "$MOE_TOP/$1" ]; then
+        git -C "$MOE_TOP" hash-object -- "$1" 2>/dev/null
+        return
+    fi
+    idx="$(create_secure_temp)/link-$$.idx"
+    rm -f "$idx" 2>/dev/null || true
+    row=$(GIT_INDEX_FILE="$idx" git -C "$MOE_TOP" update-index --add --info-only -- "$1" 2>/dev/null \
+        && GIT_INDEX_FILE="$idx" git -C "$MOE_TOP" ls-files -s -- ":(literal)$1" 2>/dev/null) || row=""
+    rm -f "$idx" 2>/dev/null || true
+    [ -n "$row" ] || return 1
+    row="${row#* }"
+    printf '%s\n' "${row%% *}"
+}
+
 # git_dirty_snapshot OUT -- `status --porcelain=v1 -z --untracked-files=all
 # --no-renames` mapped to `<blob|D>\t<XY>\t<path>` lines (TOP-relative). Blobs
 # come from ONE `hash-object --stdin-paths` (newline-separated: git has no -z
 # for it), so a path carrying a newline/tab/CR is dropped with a WARN -- it
-# can never be committed by this machinery, which is the safe direction.
+# can never be committed by this machinery, which is the safe direction. A
+# symlink is hashed alone, by its link text (moe_snapshot_hash).
 # Returns 1 when `git status` itself fails: a failed status is NOT a clean
 # tree, and masking it as an empty snapshot would mark the landing "nothing"
 # (landed=1) and silently strand the session's real edits as inter-session
@@ -2701,7 +3224,7 @@ git_dirty_snapshot() {
     fi
     : > "$paths_txt"
     local -a present_paths=() present_xy=()
-    local entry xy p n_present=0
+    local entry xy p n_present=0 h
     while IFS= read -r -d '' entry; do
         [ "${#entry}" -ge 4 ] || continue
         xy="${entry:0:2}"
@@ -2713,7 +3236,14 @@ git_dirty_snapshot() {
         esac
         # A nested repository / submodule shows as a directory: skip it.
         if [ -d "$MOE_TOP/$p" ] && [ ! -L "$MOE_TOP/$p" ]; then continue; fi
-        if [ -e "$MOE_TOP/$p" ] || [ -L "$MOE_TOP/$p" ]; then
+        # A symlink never joins the batch, which would follow it; an
+        # unhashable one gets '?', which always counts as changed.
+        if [ -L "$MOE_TOP/$p" ]; then
+            h=$(moe_snapshot_hash "$p") || h=""
+            printf '%s\t%s\t%s\n' "${h:-?}" "$xy" "$p" >> "$out"
+            continue
+        fi
+        if [ -e "$MOE_TOP/$p" ]; then
             present_paths+=("$p")
             present_xy+=("$xy")
             printf '%s\n' "$p" >> "$paths_txt"
@@ -2723,7 +3253,7 @@ git_dirty_snapshot() {
         fi
     done < "$status_z"
     if [ "$n_present" -gt 0 ]; then
-        local hashes="" n_hashes=0 i=0 h
+        local hashes="" n_hashes=0 i=0
         hashes=$(git -C "$MOE_TOP" hash-object --stdin-paths < "$paths_txt" 2>/dev/null) || hashes=""
         if [ -n "$hashes" ]; then
             n_hashes=$(printf '%s\n' "$hashes" | wc -l | tr -d '[:space:]')
@@ -3284,17 +3814,23 @@ if own is None:
 else:
     a, pl = tiers(own)
     out.update(title=own.get('title') or '', status=own.get('status') or '', epicId=own.get('epicId'),
-               reopenCount=own.get('reopenCount') or 0, assignedWorkerId=own.get('assignedWorkerId'),
+               reopenCount=own.get('reopenCount') or 0,
                asserted=a, declared=PS().addall(own.get('declaredFiles')).values(), planned=pl,
                touchedFiles=PS().addall(own.get('touchedFiles')).values(),
                inferredPaths=PS().addall(own.get('inferredPaths')).values(),
                unattributedPaths=PS().addall(own.get('unattributedPaths')).values())
+    # Only a key the record really has: an absent one is an unknown owner.
+    if 'assignedWorkerId' in own:
+        out['assignedWorkerId'] = own['assignedWorkerId']
     always.append('.moe/tasks/' + task_id + '.json')
 always.append('.moe/project.json')
 for f in sorted(glob.glob(os.path.join(project, '.moe', 'epics', '*.json'))):
     always.append('.moe/epics/' + os.path.basename(f))
+# One entry per path: taskId is its first claimant, taskIds every contributing
+# open task in record-file order, editingTaskIds those with an IN_PROGRESS step
+# naming it. No activity data here, so any IN_PROGRESS step counts (fail closed).
 peer = []
-seen = PS()
+by_key = {}
 live = []
 for f in sorted(glob.glob(os.path.join(tasks_dir, '*.json'))):
     t = load(f)
@@ -3306,11 +3842,20 @@ for f in sorted(glob.glob(os.path.join(tasks_dir, '*.json'))):
     # peer, so no other task record is ever a board candidate in fallback mode.
     live.append(t.get('id'))
     a2, p2 = tiers(t)
+    editing = PS()
+    for s in steps(t):
+        if isinstance(s, dict) and s.get('status') == 'IN_PROGRESS':
+            editing.addall(s.get('affectedFiles')).addall(s.get('newFiles')).addall(s.get('modifiedFiles'))
     for p in a2 + p2:
-        if seen.has(p):
+        e = by_key.get(key(p))
+        if e is None:
+            e = by_key[key(p)] = {'path': p, 'taskId': t.get('id'), 'taskIds': [], 'editingTaskIds': []}
+            peer.append(e)
+        if t.get('id') in e['taskIds']:
             continue
-        seen.add(p)
-        peer.append({'path': p, 'taskId': t.get('id')})
+        e['taskIds'].append(t.get('id'))
+        if editing.has(p):
+            e['editingTaskIds'].append(t.get('id'))
 out.update(peerDeclared=peer, livePeerIds=live, activePeerIds=live, peersActive=True,
            alwaysInclude=always, excludePrefixes=[],
            policy={'undeclared': 'never', 'contested': 'skip-untouched'})
@@ -3320,6 +3865,86 @@ PYEOF
         printf '{"taskId":"%s","notFound":true,"fallback":true,"asserted":[],"planned":[],"peerDeclared":[],"livePeerIds":[],"peersActive":true,"alwaysInclude":[],"excludePrefixes":[],"policy":{"undeclared":"never","contested":"skip-untouched"}}' "$task_id" > "$out"
     fi
     return 0
+}
+
+# landing_owner_guard TASKID SCOPE_JSON -- may this session land the task's
+# bytes? 0 = yes; 1 = no, with LAND_GUARD_CODE / LAND_GUARD_DETAIL. Twin:
+# Get-MoeOwnerGuard; the rule is **Owner guard** in scripts/CLAUDE.md. Only the
+# assignee lands while it is protected (assigneeProtected; assigneeAlive is
+# presence, not death) or another seat's attempt is finalizing; only a JSON
+# false clears a foreign owner, anything else is OWNER_UNKNOWN. The finalizing
+# attempt comes from get_commit_scope.finalizingAttempt; .moe/attempts is
+# scanned only when that field is absent (older daemon) or malformed, or the
+# scope is the disk fallback.
+# ponytail: the scope read and the landing CAS are two steps, not one atomic check.
+landing_owner_guard() {
+    local out=""
+    LAND_GUARD_CODE="MOE_COMMIT_REFUSED_OWNER_UNKNOWN"; LAND_GUARD_DETAIL="the ownership check did not run"
+    out=$($PYTHON_CMD - "$1" "$2" "${WORKER_ID:-}" "${MOE_SCOPE_FALLBACK:-0}" "$PROJECT" <<'PYEOF' 2>/dev/null
+import glob, json, os, sys
+tid, scope_f, me, fallback, project = sys.argv[1:6]
+ACTIVE, UNKNOWN = 'MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE', 'MOE_COMMIT_REFUSED_OWNER_UNKNOWN'
+def verdict():
+    try:
+        with open(scope_f, encoding='utf-8') as fh:
+            d = json.load(fh)
+    except Exception:
+        return UNKNOWN, 'its commit scope is unreadable'
+    if not isinstance(d, dict) or d.get('taskId') != tid or 'assignedWorkerId' not in d:
+        return UNKNOWN, 'its commit scope names no owner'
+    owner = d['assignedWorkerId']
+    if owner is not None and not isinstance(owner, str):
+        return UNKNOWN, 'its commit scope has a malformed owner'
+    if me and owner == me:
+        return '', ''
+    if owner is not None:
+        protected = d.get('assigneeProtected')
+        if fallback == '1':
+            return UNKNOWN, 'it is assigned to %s and the daemon is unreachable' % owner
+        if protected is True:
+            return ACTIVE, 'it is assigned to %s, a live seat or one holding an open attempt' % owner
+        if protected is not False:
+            return UNKNOWN, 'it is assigned to %s with no assigneeProtected answer' % owner
+    fa = d.get('finalizingAttempt')
+    if fallback != '1' and 'finalizingAttempt' in d and (fa is None or (isinstance(fa, dict)
+            and isinstance(fa.get('attemptId'), str) and fa['attemptId'].strip()
+            and isinstance(fa.get('workerId'), str) and fa['workerId'].strip()
+            and type(fa.get('generation')) is int and 1 <= fa['generation'] <= 9007199254740991)):
+        if fa is not None and fa['workerId'] != me:
+            return ACTIVE, 'attempt %s of %s is still finalizing' % (fa['attemptId'], fa['workerId'])
+        return '', ''
+    for f in sorted(glob.glob(os.path.join(project, '.moe', 'attempts', '*.json'))):
+        try:
+            with open(f, encoding='utf-8-sig') as fh:
+                a = json.load(fh)
+        except Exception:
+            continue
+        if not isinstance(a, dict) or a.get('phase') != 'finalizing' or a.get('taskId') != tid:
+            continue
+        aid, w, g = a.get('id'), a.get('workerId'), a.get('generation')
+        if isinstance(aid, str) and aid.strip() and isinstance(w, str) and w.strip() and w != me \
+                and type(g) is int and 1 <= g <= 9007199254740991:
+            return ACTIVE, 'attempt %s of %s is still finalizing' % (aid, w)
+    return '', ''
+code, detail = verdict()
+sys.stdout.write(code + '\x1f' + detail.replace('\x1f', ' ').replace('\n', ' ') + '\x1f')
+PYEOF
+    ) || out=""
+    [ -n "$out" ] || return 1
+    { IFS= read -r -d $'\x1f' LAND_GUARD_CODE; IFS= read -r -d $'\x1f' LAND_GUARD_DETAIL; } <<< "$out" 2>/dev/null || true
+    [ -z "$LAND_GUARD_CODE" ]
+}
+
+# landing_refuse_owner KIND -- record landing_owner_guard's refusal (no sha, ref,
+# push or path field) and fill the session-ended summary; no byte, index entry,
+# ref or baseline row is touched. ATTR_DIR must be a fresh empty directory.
+landing_refuse_owner() {
+    LAND_OUTCOME="refused"; LAND_CODE="$LAND_GUARD_CODE"; LAND_TOOL_FILE_EFFECTIVE=""
+    echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $LAND_GUARD_DETAIL; this session is not its owner, so it lands none of the task's bytes (tree and baseline left as they are)."
+    record_commit_rpc "refused" "$1" "" "" "$LAND_CODE" "$LAND_GUARD_DETAIL" "" "" "" || true
+    MOE_LANDING_DONE=true
+    LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$1"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""
+    LAND_SUMMARY_OUTCOME="refused"; LAND_SUMMARY_CODE="$LAND_CODE"
 }
 
 # resolve_attribution MODE TASKID SNAPSHOT B_FILE U_FILE TOOL_FILE SCOPE_JSON OUT_DIR POLICY_OVERRIDE
@@ -3343,13 +3968,17 @@ PYEOF
 # 'solo' with no active peer; inferred=true, never promoted) > UNATTRIBUTED
 # (reported, never staged). LAND_EVIDENCE_FILE names the pre-flight evidence
 # (P rows, see baseline_path) of the session whose bytes land; '' = none.
+# LAND_PREFLIGHT_DIRTY names this session's whole pre-flight dirty snapshot
+# (the skip-untouched idle-peer exception); '' = none, the exception is off.
 LAND_EVIDENCE_FILE=""
+LAND_PREFLIGHT_DIRTY=""
 resolve_attribution() {
     local mode="$1" tid="$2" snap="$3" bfile="$4" ufile="$5" toolfile="$6" scopefile="$7" outdir="$8" override="${9:-}"
     mkdir -p "$outdir" 2>/dev/null || return 1
-    MOE_LAND_UNDECLARED="$CS_ATTR_UNDECLARED" MOE_LAND_CONTESTED="$CS_ATTR_CONTESTED" MOE_LAND_EXCLUDE="$CS_ATTR_EXCLUDE" \
-    MOE_LAND_BOARD_STATE="$CS_COMMIT_BOARD_STATE" MOE_LAND_POLICY_OVERRIDE="$override" \
-    MOE_LAND_BASE="${10:-}" MOE_LAND_INDEX="${11:-}" MOE_LAND_EVIDENCE="${LAND_EVIDENCE_FILE:-}" \
+    MOE_PY_UNDECLARED="$CS_ATTR_UNDECLARED" MOE_PY_CONTESTED="$CS_ATTR_CONTESTED" MOE_PY_EXCLUDE="$CS_ATTR_EXCLUDE" \
+    MOE_PY_BOARD_STATE="$CS_COMMIT_BOARD_STATE" MOE_PY_POLICY_OVERRIDE="$override" \
+    MOE_PY_BASE="${10:-}" MOE_PY_INDEX="${11:-}" MOE_PY_EVIDENCE="${LAND_EVIDENCE_FILE:-}" \
+    MOE_PY_PREFLIGHT_DIRTY="${LAND_PREFLIGHT_DIRTY:-}" \
     MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" \
     $PYTHON_CMD - "$mode" "$tid" "$snap" "$bfile" "$ufile" "$toolfile" "$scopefile" "$outdir" 2>"$outdir/attr.err" <<'PYEOF'
 import json, os, re, subprocess, sys
@@ -3357,13 +3986,13 @@ mode, task_id, snap_f, b_f, u_f, tool_f, scope_f, out_dir = sys.argv[1:9]
 env = os.environ
 top = (env.get('MOE_GIT_TOP') or '').replace('\\', '/').rstrip('/')
 rel = env.get('MOE_GIT_REL') or ''
-undeclared = env.get('MOE_LAND_UNDECLARED') or 'solo'
-contested_policy = env.get('MOE_LAND_CONTESTED') or 'skip-untouched'
-board_state = (env.get('MOE_LAND_BOARD_STATE') or 'true') == 'true'
-override = env.get('MOE_LAND_POLICY_OVERRIDE') or ''
+undeclared = env.get('MOE_PY_UNDECLARED') or 'solo'
+contested_policy = env.get('MOE_PY_CONTESTED') or 'skip-untouched'
+board_state = (env.get('MOE_PY_BOARD_STATE') or 'true') == 'true'
+override = env.get('MOE_PY_POLICY_OVERRIDE') or ''
 if override == 'never':
     undeclared = 'never'
-exclude_extra = [e for e in (env.get('MOE_LAND_EXCLUDE') or '').split('\x1e') if e]
+exclude_extra = [e for e in (env.get('MOE_PY_EXCLUDE') or '').split('\x1e') if e]
 CI = sys.platform in ('win32', 'darwin')
 def key(p):
     return p.lower() if CI else p
@@ -3445,11 +4074,67 @@ ASSERTED = decl_set(scope.get('asserted'))
 DECLARED = decl_set(scope.get('declared')) if isinstance(scope.get('declared'), list) else None
 PLANNED = dict((k, v) for k, v in decl_set(scope.get('planned')).items() if k not in ASSERTED)
 PEER = {}
+# PEER_IDLE[k]: every entry for k reports peerActive as a JSON false. Absent,
+# null or anything else (an older daemon, the disk fallback) is active.
+PEER_IDLE = {}
+# PEER_IDS[k]: every contesting task of k, the first entry's taskId first, then
+# each entry's taskIds (first-seen order). PEER_EDITING[k]: those mid-step on k
+# with a live session (editingTaskIds). A missing or non-list field (an older
+# daemon) gives [taskId] and [], which lands byte-for-byte as before.
+# PEER_ACTIVE_IDS[k]: those with a session (activeTaskIds), set only when an
+# entry for k carries that list.
+PEER_IDS = {}
+PEER_EDITING = {}
+PEER_ACTIVE_IDS = {}
+def id_list(v):
+    return [x for x in v if isinstance(x, str) and x] if isinstance(v, list) else []
 for ent in (scope.get('peerDeclared') or []):
     if isinstance(ent, dict):
         n = norm_decl(ent.get('path'))
         if n:
             PEER.setdefault(key(n), str(ent.get('taskId') or ''))
+            PEER_IDLE[key(n)] = PEER_IDLE.get(key(n), True) and (ent.get('peerActive') is False)
+            ids = PEER_IDS.setdefault(key(n), [PEER[key(n)]])
+            editing = PEER_EDITING.setdefault(key(n), [])
+            for t in id_list(ent.get('taskIds')):
+                if t and t not in ids:
+                    ids.append(t)
+            for t in id_list(ent.get('editingTaskIds')):
+                if t not in editing:
+                    editing.append(t)
+            if isinstance(ent.get('activeTaskIds'), list):
+                active = PEER_ACTIVE_IDS.setdefault(key(n), [])
+                for t in id_list(ent.get('activeTaskIds')):
+                    if t not in active:
+                        active.append(t)
+# peer_order(k): PEER_IDS[k] in cause order -- editing, then active, then the
+# rest, each in PEER_IDS order -- so contested rows, trailers and held= name
+# the cause first (at 8f62fa0f held= named idle task-001d8ab3 while live
+# task-1e7f5a2d held the path). Built from PEER_IDS only: never a new id.
+# Without activeTaskIds (an older daemon, the disk fallback): PEER_IDS order.
+def peer_order(k):
+    ids, editing, active = PEER_IDS[k], PEER_EDITING.get(k, []), PEER_ACTIVE_IDS.get(k)
+    if active is None:
+        return ids
+    return [t for t in ids if t in editing] \
+        + [t for t in ids if t not in editing and t in active] \
+        + [t for t in ids if t not in editing and t not in active]
+# This session's whole pre-flight dirty snapshot (blob, xy, path rows) as a
+# key set; None = none (a recovery landing, a failed copy): no exception.
+PREFLIGHT_DIRTY = None
+pd_f = env.get('MOE_PY_PREFLIGHT_DIRTY') or ''
+if pd_f and os.path.isfile(pd_f):
+    try:
+        with open(pd_f, encoding='utf-8', errors='surrogateescape') as fh:
+            pd_lines = fh.read().split('\n')
+        PREFLIGHT_DIRTY = set()
+        for line in pd_lines:
+            parts = line.rstrip('\r').split('\t')
+            p = norm_top('\t'.join(parts[2:])) if len(parts) >= 3 else None
+            if p:
+                PREFLIGHT_DIRTY.add(key(p))
+    except Exception:
+        PREFLIGHT_DIRTY = None
 peers_active = bool(scope.get('peersActive'))
 if override == 'never' or scope.get('fallback'):
     peers_active = True
@@ -3513,7 +4198,7 @@ def changed(pk, blob):
 # can be days older than the session, these are that session's own snapshot.
 # No evidence (a pre-flight that could not snapshot) fails closed: only TOOL.
 PRE = None
-ev_f = env.get('MOE_LAND_EVIDENCE') or ''
+ev_f = env.get('MOE_PY_EVIDENCE') or ''
 if ev_f and os.path.isfile(ev_f):
     PRE = {}
     for parts in read_rows(ev_f):
@@ -3535,6 +4220,25 @@ with open(os.path.join(out_dir, 'own'), 'w', encoding='utf-8', errors='surrogate
     fh.write(''.join(rec + '\0' for rec in own))
 if mode == 'carry':
     sys.exit(0)
+if mode == 'worktree':
+    # A task worktree holds this task's bytes only (design §3.2): no baseline,
+    # no tiers. Every dirty path lands except DENY = denied() plus
+    # .claude/skills/** (the link the launch makes), .moe/** with no BOARD
+    # exception. Ps1 twin: Test-MoeDenyPathWorktree.
+    def denied_wt(p, xy):
+        pk = key(p)
+        return denied(p, xy) or any(pk == pre + '.claude/skills' or pk.startswith(pre + '.claude/skills/') for pre in roots)
+    held = set(pk for pk in S if denied_wt(S[pk][0], S[pk][2]))
+    recs = {'candidates': [('WORKTREE', S[pk][1], S[pk][0]) for pk in sorted(S) if pk not in held],
+            'skipped': [('MOE_ATTR_EXCLUDED', S[pk][0]) for pk in sorted(held)],
+            'unattributed': [], 'contested': [], 'missing': []}
+    for name, rows in recs.items():
+        with open(os.path.join(out_dir, name), 'w', encoding='utf-8', errors='surrogateescape', newline='') as fh:
+            fh.write(''.join('\t'.join(r) + '\0' for r in rows))
+    with open(os.path.join(out_dir, 'summary'), 'w', newline='') as fh:
+        n = len(recs['candidates'])
+        fh.write('N_CANDIDATES=%d\nN_NON_BOARD=%d\nN_SKIPPED=%d\nN_EXCLUDED=%d\n' % (n, n, len(held), len(held)))
+    sys.exit(0)
 cands, skipped, unattributed, contested, missing = [], [], [], [], []
 n_pre = n_exc = n_inf = n_foreign = 0
 for pk in sorted(S):
@@ -3555,15 +4259,31 @@ for pk in sorted(S):
         continue
     if pk in MINE or own_memory(p, xy):
         if pk in PEER:
-            contested.append((PEER[pk], p))
+            order = peer_order(pk)
+            for t in order:
+                contested.append((t, p))
             if contested_policy == 'skip':
                 skipped.append(('MOE_ATTR_CONTESTED', p))
+                continue
+            # A contesting task mid-step on the path holds it even when this
+            # session's tool wrote it: completion e67ca0e swept such a peer's
+            # unfinished hunks. This only adds holds (ps1 twin).
+            if contested_policy == 'skip-untouched' and PEER_EDITING.get(pk):
+                skipped.append(('MOE_ATTR_CONTESTED_EDITING(%s)' % PEER_EDITING[pk][0], p))
                 continue
             # 'skip-untouched' (default since 2026-09-06): a contested path
             # lands only when THIS session's editing tools wrote it -- an
             # untouched one carries the PEER's unlanded hunks (ps1 twin).
-            if contested_policy == 'skip-untouched' and pk not in TOOL:
-                skipped.append(('MOE_ATTR_CONTESTED_UNTOUCHED(%s)' % PEER[pk], p))
+            # Idle-peer exception: a path clean at this session's pre-flight,
+            # whose every contesting task has had no session since (no active
+            # assignee, open attempt or attempt phase change), holds only this
+            # session's bytes (a Bash or python edit leaves no TOOL witness).
+            # A path already dirty at pre-flight stays held even if this
+            # session rewrote it: it can carry the peer's earlier hunks.
+            idle_clean = PREFLIGHT_DIRTY is not None and pk not in PREFLIGHT_DIRTY \
+                and PEER_IDLE.get(pk) is True
+            if contested_policy == 'skip-untouched' and pk not in TOOL and not idle_clean:
+                skipped.append(('MOE_ATTR_CONTESTED_UNTOUCHED(%s)' % order[0], p))
                 continue
         # Asserted only by history (filesModified, completed steps, prior
         # commits, touchedFiles -- never declare_files): a claim on the PATH,
@@ -3598,7 +4318,7 @@ for pk in sorted(S):
 if mode == 'index':
     with open(snap_f, encoding='utf-8', errors='surrogateescape') as fh:
         cands = [tuple(row.split('\t', 2)) for row in fh.read().split('\0') if row]
-    if any(len(c) != 3 for c in cands) or not env.get('MOE_LAND_INDEX'):
+    if any(len(c) != 3 for c in cands) or not env.get('MOE_PY_INDEX'):
         raise ValueError('MOE_IMPORTEE_INDEX_INPUT_INVALID')
 # IMPORTEE GUARD (ps1 twin: Get-MoeMissingImportees). A landing source file
 # must not import a relative module that is neither in HEAD nor landing in
@@ -3817,7 +4537,7 @@ def relative_imports(source, jsx_source=False):
     return imports
 def head_paths():
     try:
-        target = env.get('MOE_LAND_BASE', '') if mode == 'index' else 'HEAD'
+        target = env.get('MOE_PY_BASE', '') if mode == 'index' else 'HEAD'
         if not target:
             return set()
         r = subprocess.run(['git', '-C', top, 'ls-tree', '-r', '--name-only', '-z', target], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -3874,7 +4594,7 @@ if src_cands:
         for reason, blob, p in src_cands:
             full = (top + '/' + p) if top else p
             if mode == 'index':
-                index_env = dict(env, GIT_INDEX_FILE=env['MOE_LAND_INDEX'])
+                index_env = dict(env, GIT_INDEX_FILE=env['MOE_PY_INDEX'])
                 actual = subprocess.run(['git', '-C', top, 'rev-parse', '--verify', ':0:' + p], env=index_env,
                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
                 if actual.returncode != 0 or actual.stdout.decode('ascii', 'strict').strip() != blob:
@@ -4008,13 +4728,58 @@ attr_print_skips() {
     return 0
 }
 
+# attr_held_list ATTR_DIR -- the own contested paths a landing held back, as
+# `<path>(<peer>)` joined by ',', at most 5 then `,+<N> more`, then one
+# MOE_CONTESTED_HELD remedy: the strict sentence, else one clause per held kind
+# (untouched, then editing), then which sessions leave a TOOL witness, before
+# the closing sentence (ps1 twin: Get-MoeHeldList). Feeds the session-ended
+# line's held= suffix; an unreadable file gives ''.
+attr_held_list() {
+    local rec code p peer crec out="" n=0 strict="" untouched="" editing=""
+    [ -r "$1/skipped" ] || return 0
+    while IFS= read -r -d '' rec; do
+        code="${rec%%"$MOE_TAB"*}"
+        p="${rec#*"$MOE_TAB"}"
+        case "$code" in
+            "MOE_ATTR_CONTESTED_UNTOUCHED("*")") untouched=1; peer="${code#MOE_ATTR_CONTESTED_UNTOUCHED(}"; peer="${peer%)}" ;;
+            "MOE_ATTR_CONTESTED_EDITING("*")") editing=1; peer="${code#MOE_ATTR_CONTESTED_EDITING(}"; peer="${peer%)}" ;;
+            MOE_ATTR_CONTESTED)
+                strict=1
+                peer=""
+                while IFS= read -r -d '' crec; do
+                    [ "${crec#*"$MOE_TAB"}" = "$p" ] && { peer="${crec%%"$MOE_TAB"*}"; break; }
+                done 2>/dev/null < "$1/contested"
+                ;;
+            *) continue ;;
+        esac
+        n=$((n + 1))
+        [ "$n" -le 5 ] && out="${out:+$out,}$p($peer)"
+    done < "$1/skipped"
+    [ "$n" -gt 5 ] && out="$out,+$((n - 5)) more"
+    # Neither a declaration nor an idle peer releases a path dirty at
+    # pre-flight, so name what does. Strict skip wins: no editing tool
+    # releases MOE_ATTR_CONTESTED.
+    if [ -n "$strict" ]; then
+        out="$out MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
+    elif [ "$n" -gt 0 ]; then
+        out="$out MOE_CONTESTED_HELD remedy:"
+        [ -z "$untouched" ] || out="$out verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude or codex exec session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
+        [ -z "$editing" ] || out="$out the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude or codex exec session of this task re-edit the path, or let the peer's own landing carry the bytes."
+        # Twin: recordCommit.ts HELD_REMEDY_WITNESS (task-7cc959e9 brings it to this sentence).
+        out="$out Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
+        out="$out declare_files, unblocking or a shell touch alone does not release a hold."
+    fi
+    printf '%s' "$out"
+}
+
 # ---- temp index --------------------------------------------------------------
 # moe_temp_index_build BASE CAND_FILE STAGED_OUT DROPPED_OUT
 # BASE = commit/tree to start from ('' = unborn -> empty index). Stages every
 # candidate with `:(literal)` into GITDIR/moe/idx-<task>-<pid> (never the
 # shared index), then verifies the staged blob equals the snapshot blob (or no
-# entry for a deletion); a mismatch means the path moved under us and is
-# dropped with MOE_ATTR_CONCURRENT (re-attempted next exit). Sets TI_INDEX,
+# entry for a deletion), else that a fresh snapshot-style hash still does; a
+# path that moved under us is dropped with MOE_ATTR_CONCURRENT (re-attempted
+# next exit). Sets TI_INDEX,
 # TI_N_STAGED, TI_N_INFERRED.
 moe_temp_index_build() {
     local base="$1" cand="$2" staged_out="$3" dropped_out="$4"
@@ -4030,7 +4795,7 @@ moe_temp_index_build() {
     else
         GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" read-tree --empty >/dev/null 2>&1 || return 1
     fi
-    local rec reason rest blob p actual
+    local rec reason rest blob p actual rehash moved
     while IFS= read -r -d '' rec; do
         reason="${rec%%"$MOE_TAB"*}"
         rest="${rec#*"$MOE_TAB"}"
@@ -4042,7 +4807,31 @@ moe_temp_index_build() {
             continue
         fi
         actual=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" ls-files -s -- ":(literal)$p" 2>/dev/null | head -n1 | awk '{print $2}') || actual=""
-        if { [ "$blob" = "D" ] && [ -n "$actual" ]; } || { [ "$blob" != "D" ] && [ "$actual" != "$blob" ]; }; then
+        moved=0
+        if [ "$blob" = "D" ]; then
+            [ -z "$actual" ] || moved=1
+        elif [ "$actual" != "$blob" ]; then
+            # Never compare across conversion paths. `git add` reads the temp
+            # index (seeded from BASE), so git's safer-autocrlf rule keeps a CRLF
+            # blob BASE already holds; the snapshot's `hash-object` loads no index
+            # and normalizes it to LF (core.autocrlf=true/input, text=auto). So
+            # re-run the snapshot's own hash (moe_snapshot_hash, which reads a
+            # symlink's link text, never its target): unchanged since the
+            # snapshot keeps the blob git add staged (recorded as staged, which
+            # the importee guard checks against the index); anything else, a
+            # failed hash included, moved.
+            # ponytail: the re-hash runs after `git add`, so an edit reverted in
+            # that window (ABA) keeps the intermediate staged blob. Hashing the
+            # staged bytes through the same conversion would close it, but needs a
+            # binary pipe the ps1 twin cannot do safely.
+            rehash=$(moe_snapshot_hash "$p") || rehash=""
+            if [ -n "$actual" ] && [ -n "$rehash" ] && [ "$rehash" = "$blob" ]; then
+                blob="$actual"
+            else
+                moved=1
+            fi
+        fi
+        if [ "$moved" = 1 ]; then
             if [ -n "$base" ]; then
                 GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" reset -q "$base" -- ":(literal)$p" >/dev/null 2>&1 || true
             else
@@ -4196,13 +4985,23 @@ ensure_safe_branch() {
 # write_commit_message KIND OUT N_PATHS N_INFERRED
 write_commit_message() {
     local kind="$1" out="$2" n_paths="${3:-0}" n_inferred="${4:-0}"
-    local subject body contested_lines="" rec peer p
+    local subject body contested_lines="" rec srec peer p prev="" ids="" staged=0
+    # A trailer claims a landed contested path, so a held one (still in the
+    # contested list for the ledger) gets none. A path's rows are adjacent, so
+    # its ONE trailer names every contesting task (ps1 twin: New-MoeCommitMessage).
     while IFS= read -r -d '' rec; do
         peer="${rec%%"$MOE_TAB"*}"
         p="${rec#*"$MOE_TAB"}"
-        contested_lines="$contested_lines
-Moe-Contested: $p ($peer)"
+        if [ "$p" = "$prev" ]; then ids="$ids, $peer"; continue; fi
+        [ "$staged" = 1 ] && contested_lines="$contested_lines
+Moe-Contested: $prev ($ids)"
+        prev="$p"; ids="$peer"; staged=0
+        while IFS= read -r -d '' srec; do
+            [ "${srec#*"$MOE_TAB"*"$MOE_TAB"}" = "$p" ] && { staged=1; break; }
+        done 2>/dev/null < "${LAND_STAGED_FILE:-/dev/null}"
     done < "$ATTR_DIR/contested"
+    [ "$staged" = 1 ] && contested_lines="$contested_lines
+Moe-Contested: $prev ($ids)"
     if [ "$kind" = "completion" ]; then
         local ctype="feat" suffix=""
         if [ "${LAND_REOPEN:-0}" -gt 0 ] 2>/dev/null; then
@@ -4429,9 +5228,11 @@ land_commit() {
 }
 
 land_plumbing() {
-    local msgfile="$1" ref="refs/heads/$LAND_BRANCH" attempt old="" tree="" new="" rc err
+    local msgfile="$1" ref="refs/heads/$LAND_BRANCH" attempt old="" tree="" new="" rc err attempts="1 2 3"
     err="$(create_secure_temp)/land-err-$$.txt"
-    for attempt in 1 2 3; do
+    # A task branch gets ONE CAS (design §2.2 L2): a moved tip is contention, never a rebuild.
+    [ "${LAND_ONE_CAS:-}" != true ] || attempts=1
+    for attempt in $attempts; do
         old=$(git -C "$MOE_TOP" rev-parse -q --verify "$ref" 2>/dev/null) || old=""
         if ! moe_temp_index_build "$old" "$ATTR_DIR/candidates" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE"; then
             moe_temp_index_drop
@@ -4502,7 +5303,33 @@ land_plumbing() {
             unset MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF
             (cd "$MOE_TOP" && bash -c "$hook") >/dev/null 2>&1 || true
         fi
-        if [ "$LAND_KIND" = completion ] && [ -n "${QUALITY_GATE:-}" ]; then
+        if [ "$LAND_KIND" = completion ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ]; then
+            # CQ-V07: under the strong profile this journal IS the landing's
+            # intent, mandatory and on disk before the ref can move. No frozen
+            # candidate of this very tree, or a journal that did not reach the
+            # disk, refuses the completion: no update-ref, no rescue ref and no
+            # push, so no ref moves at all; the bytes and baseline stay for the
+            # next session. The expected-old CAS below is unchanged.
+            RECEIPT_BEFORE="${old:-$MOE_ZERO_OID}"; RECEIPT_LANDED="$new"
+            RECEIPT_JOURNAL="$(receipt_journal_path "$LAND_TASK_ID")"
+            local pending="push result unknown: the landing stopped before its push finished" intent="" refusal=""
+            if no_git_remote; then pending=""; fi
+            if [ -z "${FROZEN_CANDIDATE_ID:-}" ] || [ -z "${FROZEN_TREE:-}" ] || [ "$tree" != "$FROZEN_TREE" ] \
+                || [ -z "${PINNED_ATTEMPT_PLAN_REVISION:-}" ] || [ -z "$MOE_ATTEMPT_ID" ]; then
+                refusal="MOE_COMMIT_REFUSED_INTENT_INCOMPLETE"
+                LAND_MESSAGE="no frozen candidate of this tree, or no pinned attempt and plan revision, to journal"
+            elif ! intent=$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$pending" 1) \
+                || ! intent_journal_write "$RECEIPT_JOURNAL" "$intent"; then
+                refusal="MOE_COMMIT_REFUSED_INTENT_UNWRITABLE"
+                LAND_MESSAGE="the intent journal ${RECEIPT_JOURNAL:-<none>} could not be made durable"
+            fi
+            if [ -n "$refusal" ]; then
+                moe_temp_index_drop
+                LAND_OUTCOME="refused"; LAND_CODE="$refusal"; RECEIPT_LANDED=""
+                echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $LAND_MESSAGE; the strong profile moves no ref without it (no update-ref, no rescue ref, no push). The bytes and baseline stay for the next session."
+                return 4
+            fi
+        elif [ "$LAND_KIND" = completion ] && [ -n "${QUALITY_GATE:-}" ]; then
             # The receipt report is journaled BEFORE the ref can move. targetBefore
             # is the CAS base: the candidate's baseRevision, git's zero id if unborn.
             RECEIPT_BEFORE="${old:-$MOE_ZERO_OID}"; RECEIPT_LANDED="$new"
@@ -4532,7 +5359,7 @@ land_plumbing() {
             return 0
         fi
         # FROZEN_* stay: the next attempt compares its rebuilt tree and base to them.
-        echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (attempt $attempt/3); rebuilding on the new tip."
+        [ "${LAND_ONE_CAS:-}" = true ] || echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (attempt $attempt/3); rebuilding on the new tip."
     done
     LAND_OUTCOME="failed"
     LAND_CODE="MOE_COMMIT_FAILED_REF_CONTENTION"
@@ -4566,7 +5393,9 @@ finalize_postflight() {
     MOE_FINALIZE_DONE=true
     local outcome=failed
     case "${LAND_OUTCOME:-nothing}" in
-        committed) outcome=landed ;;
+        # A worktree completion's checkpoint is not a landing (WT-08 lands the
+        # target), even when an interrupt skipped worktree_postflight's tail.
+        committed) [ "${MOE_WT_COMPLETION:-}" = true ] || outcome=landed ;;
         nothing) outcome=nothing-to-commit ;;
         *) [ -z "${LAND_RESCUE_SHA:-}" ] || outcome=rescued ;;
     esac
@@ -4773,7 +5602,7 @@ record_commit_rpc() {
            MOE_RC_SKIPPED="${ATTR_DIR:-}/skipped" MOE_RC_UNATTR="${ATTR_DIR:-}/unattributed" MOE_RC_CONTESTED="${ATTR_DIR:-}/contested" \
            MOE_RC_TOOL="${LAND_TOOL_FILE_EFFECTIVE:-}" MOE_RC_STATUS="${LAND_STATUS:-}" MOE_RC_ROLE="$ROLE" MOE_RC_WORKER="$WORKER_ID" \
            MOE_RC_SID="${MOE_SID:-}" MOE_RC_CLI_EXIT="${LAND_CLI_EXIT:-}" MOE_RC_TREE="${LAND_TREE:-}" MOE_GIT_REL="${MOE_REL:-}" \
-           $PYTHON_CMD - <<'PYEOF' 2>/dev/null
+           MOE_RC_WT="${MOE_WT_MODE:-}" $PYTHON_CMD - <<'PYEOF' 2>/dev/null
 import json, os, sys
 e = os.environ
 rel = e.get('MOE_GIT_REL') or ''
@@ -4839,7 +5668,8 @@ paths = dedupe([root_rel('\t'.join(r[2:])) for r in staged if len(r) >= 3])
 inferred = dedupe([root_rel('\t'.join(r[2:])) for r in staged if len(r) >= 3 and r[0] == 'MEASURED'])
 if paths:
     d['paths'] = paths[:500]
-if inferred:
+# A worktree landing infers nothing, and says so with an explicit [].
+if inferred or e.get('MOE_RC_WT') == 'worktree':
     d['inferredPaths'] = inferred[:500]
 touched = dedupe([root_rel(p) for p in lines(e.get('MOE_RC_TOOL'))])
 if touched:
@@ -4942,16 +5772,19 @@ receipt_journal_path() {
 # JSON line from the landing's globals ('' PUSH_RESULT = null). A non-empty
 # LEDGER adds `ledger`, the committed ledger row this landing owes until
 # moe.record_commit acknowledges it (the sessionId record_commit_rpc sends).
+# Under the strong profile the report is also the landing's intent (CQ-V07):
+# treeSha, baseRevision (= targetBefore), planRevision and profile.
 receipt_report() {
     $PYTHON_CMD -c '
 import json,sys
-t,w,a,g,c,target,before,landed,push,owed,sid,role,status=sys.argv[1:]
+t,w,a,g,c,target,before,landed,push,owed,sid,role,status,prof,rev,tree=sys.argv[1:]
 d=dict(taskId=t,workerId=w,attemptId=a,generation=int(g),candidateId=c,target=target,
     targetBefore=before,targetAfter=landed,landedRevision=landed,pushResult=push or None)
 if owed: d["ledger"]=dict(sessionId=sid,role=role,status=status)
+if prof=="verified-local": d.update(treeSha=tree,baseRevision=before,planRevision=int(rev),profile=prof)
 print(json.dumps(d))
 ' "$LAND_TASK_ID" "$WORKER_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$FROZEN_CANDIDATE_ID" "refs/heads/$LAND_BRANCH" "$1" "$2" "$3" \
-        "${4:-}" "${MOE_SID:-$WORKER_ID@unknown}" "$ROLE" "${LAND_STATUS:-}"
+        "${4:-}" "${MOE_SID:-$WORKER_ID@unknown}" "$ROLE" "${LAND_STATUS:-}" "${PINNED_ATTEMPT_PROFILE:-}" "${PINNED_ATTEMPT_PLAN_REVISION:-}" "${FROZEN_TREE:-}"
 }
 
 # receipt_journal_write PATH REPORT -- atomic (.tmp + rename) and best-effort: an
@@ -4965,6 +5798,36 @@ receipt_journal_write() {
     rm -f "$1.tmp.$$" 2>/dev/null || true
     echo -e "${YELLOW}[WARN]${NC} receipt journal not written ($1); a crash before the receipt would leave this landing without one."
     return 0
+}
+
+# intent_journal_write PATH REPORT -- the strong profile's durable journal
+# (CQ-V07): write a tmp file, flush and fsync it, rename it over PATH, then fsync
+# the directory. Windows cannot open a directory to fsync it and relies on the
+# NTFS rename. A crash before the rename leaves only a *.tmp.* file, which
+# nothing reads. Returns 1 on any failure, with neither the tmp file nor PATH
+# left behind: the caller then moves no ref, so no journal may describe the
+# landing. Twin: Write-MoeIntentJournal.
+intent_journal_write() {
+    [ -n "$1" ] && [ -n "$2" ] || return 1
+    $PYTHON_CMD - "$1" "$2" <<'PY' 2>/dev/null
+import os,sys
+path,report=sys.argv[1:]
+d=os.path.dirname(path); tmp=path+'.tmp.'+str(os.getpid()); replaced=False
+try:
+    os.makedirs(d,exist_ok=True)
+    with open(tmp,'w',encoding='utf-8',newline='') as f:
+        f.write(report); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp,path); replaced=True
+    if os.name!='nt':
+        fd=os.open(d,os.O_RDONLY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+except Exception:
+    for p in [tmp]+([path] if replaced else []):
+        try: os.unlink(p)
+        except OSError: pass
+    sys.exit(1)
+PY
 }
 
 # receipt_send REPORT JOURNAL -- the delivery receipt, the landing's last daemon
@@ -5054,7 +5917,8 @@ receipt_ledger_send() {
     row=$($PYTHON_CMD - "$1" "$2" "$WORKER_ID" <<'PY' 2>/dev/null
 import json,sys
 f,sha,worker=sys.argv[1:]; d=json.load(open(f,encoding='utf-8')); l=d['ledger']; push=d.get('pushResult')
-row=dict(taskId=d['taskId'],outcome='committed',kind='completion',sha=sha,ref=d['target'],role=l['role'],sessionId=l['sessionId'],workerId=worker)
+t=d['target']; p='refs/heads/'; ref=t[len(p):] if t.startswith(p) and len(t)>len(p) else t
+row=dict(taskId=d['taskId'],outcome='committed',kind='completion',sha=sha,ref=ref,role=l['role'],sessionId=l['sessionId'],workerId=worker)
 if l.get('status'): row['status']=l['status']
 if push is None or str(push).startswith('push failed: '): row['pushed']=False
 elif str(push).startswith('pushed '): row['pushed']=True
@@ -5157,6 +6021,11 @@ run_landing() {
         policy_override="never"
         echo -e "${YELLOW}[attribution]${NC} moe.get_commit_scope unavailable -- disk fallback (declared-only, peers assumed active)."
     fi
+    # Before anything reads or writes the task's bytes, baseline or refs.
+    if ! landing_owner_guard "$LAND_TASK_ID" "$LAND_SCOPE_FILE"; then
+        landing_refuse_owner "$LAND_KIND"
+        return 0
+    fi
     # Every baseline write below keeps the header's session: a landing never
     # takes over another session's baseline, it only prunes B and replaces U.
     local bl_flag bl_session
@@ -5167,10 +6036,14 @@ run_landing() {
     # bytes against the P rows ITS pre-flight persisted; every other landing
     # uses the evidence this session's own pre-flight kept in memory, never the
     # file, which a peer's pre-flight may have rewritten meanwhile.
+    # A recovery lands a dead session's bytes, whose window predates `since`:
+    # no pre-flight snapshot, so the idle-peer exception stays off.
     if [ "${LAND_RECOVERED:-false}" = true ]; then
         LAND_EVIDENCE_FILE="$work/BL.tsv"
+        LAND_PREFLIGHT_DIRTY=""
     else
         LAND_EVIDENCE_FILE="${MOE_PREFLIGHT_EVIDENCE:-}"
+        LAND_PREFLIGHT_DIRTY="${MOE_PREFLIGHT_DIRTY:-}"
     fi
     if ! baseline_read "$LAND_TASK_ID" "$work/B.tsv" "$work/U.tsv"; then
         bl_session="${MOE_SID:-}"
@@ -5190,7 +6063,7 @@ run_landing() {
             echo -e "${YELLOW}[WARN]${NC} git status failed; cannot attribute the working tree for task $LAND_TASK_ID -- nothing committed, baseline kept."
             record_commit_rpc "failed" "$LAND_KIND" "" "" "$LAND_CODE" "" "" "" "" || true
             MOE_LANDING_DONE=true
-            LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0
+            LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""
             LAND_SUMMARY_OUTCOME="failed"; LAND_SUMMARY_CODE="$LAND_CODE"
             return 1
         fi
@@ -5207,11 +6080,13 @@ run_landing() {
         echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: attribution failed for task $LAND_TASK_ID ($(tail -n1 "$ATTR_DIR/attr.err" 2>/dev/null)); nothing committed, baseline kept."
         record_commit_rpc "failed" "$LAND_KIND" "" "" "$LAND_CODE" "" "" "" "" || true
         MOE_LANDING_DONE=true
-        LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0
+        LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""
         LAND_SUMMARY_OUTCOME="failed"; LAND_SUMMARY_CODE="$LAND_CODE"
         return 1
     fi
     attr_print_skips "$ATTR_DIR"
+    local held
+    held="$(attr_held_list "$ATTR_DIR")" || held=""
     if [ "${ATTR_N_PREEXISTING:-0}" -gt 0 ]; then
         echo -e "${BLUE}[attribution]${NC} $ATTR_N_PREEXISTING pre-session dirty path(s) untouched"
     fi
@@ -5232,7 +6107,7 @@ run_landing() {
         # landing kind, sha = the rescue sha when one was parked.
         LAND_SUMMARY_SHA="${LAND_RESCUE_SHA:-none}"
         [ -n "$LAND_SUMMARY_SHA" ] || LAND_SUMMARY_SHA="none"
-        LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR="${ATTR_N_UNATTRIBUTED:-0}"
+        LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR="${ATTR_N_UNATTRIBUTED:-0}"; LAND_SUMMARY_HELD="$held"
         LAND_SUMMARY_OUTCOME="failed"; LAND_SUMMARY_CODE="$LAND_CODE"
         return 4
     fi
@@ -5299,7 +6174,10 @@ run_landing() {
             echo -e "${GREEN}[OK]${NC} Committed $LAND_KIND for task $LAND_TASK_ID on $LAND_BRANCH: $LAND_SHA ($LAND_N_PATHS paths, $LAND_N_INFERRED inferred, $n_skipped skipped, ${ATTR_N_UNATTRIBUTED:-0} unattributed)"
             ;;
         refused)
+            # An intent refusal already said why; committing by hand would bypass the intent.
+            case "$LAND_CODE" in MOE_COMMIT_REFUSED_INTENT_INCOMPLETE|MOE_COMMIT_REFUSED_INTENT_UNWRITABLE) ;; *)
             echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- refusing to auto-commit; there is no whole-tree fallback. Commit the task's own paths by hand: git commit -- <path> [<path>...]"
+            ;; esac
             ;;
         nothing)
             echo -e "${BLUE}[info]${NC} $LAND_CODE: task $LAND_TASK_ID -- nothing landed; candidate bytes, if any, remain deferred."
@@ -5370,10 +6248,10 @@ run_landing() {
             [ -z "$report" ] || receipt_send "$report" "$RECEIPT_JOURNAL" || true
         fi
     elif [ "$LAND_OUTCOME" = "nothing" ]; then
-        record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "" || true
+        record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "${LAND_DROPPED_FILE:-}" || true
         baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" "$bl_flag" "$bl_session" "$work/BL.tsv" "$ATTR_DIR/own"
     elif [ "$LAND_OUTCOME" = "refused" ]; then
-        record_commit_rpc "refused" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "" || true
+        record_commit_rpc "refused" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "${LAND_MESSAGE:-}" "" "" "" || true
         baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" "$bl_flag" "$bl_session" "$work/BL.tsv" "$ATTR_DIR/own"
     else
         record_commit_rpc "failed" "$LAND_KIND" "" "$LAND_BRANCH" "${LAND_CODE:-MOE_COMMIT_FAILED}" "${LAND_MESSAGE:-}" "" "" "$LAND_DROPPED_FILE" || true
@@ -5388,11 +6266,222 @@ run_landing() {
     LAND_SUMMARY_PATHS="$LAND_N_PATHS"
     LAND_SUMMARY_INFERRED="$LAND_N_INFERRED"
     LAND_SUMMARY_UNATTR="${ATTR_N_UNATTRIBUTED:-0}"
+    LAND_SUMMARY_HELD="$held"
     LAND_SUMMARY_OUTCOME="$LAND_OUTCOME"
     LAND_SUMMARY_CODE="${LAND_CODE:-}"
     if [ "$rc" -eq 3 ]; then return 3; fi
     if [ "$LAND_OUTCOME" = "failed" ]; then return 1; fi
     return 0
+}
+
+# ---- worktree landing (design §2.2 L0-L2, §2.4, §3) ----------------------------
+# control_worktree_mode -- 0 when this checkout is a worktree-mode control
+# checkout: its HEAD is refs/heads/moe/control (design §7.2). HEAD only, so
+# WT-13 can reuse it. Twin: Test-MoeControlWorktreeMode.
+control_worktree_mode() {
+    local head
+    [ -n "${MOE_TOP:-}" ] || git_top || return 1
+    head=$(git -C "$MOE_TOP" symbolic-ref -q HEAD 2>/dev/null) || return 1
+    [ "$head" = refs/heads/moe/control ]
+}
+
+# push_task_branch W BRANCH -- push refs/heads/BRANCH to the same name on
+# origin: no force, no upstream, no rebase (design §2.4). 0 = pushed. A missing
+# remote is said once; a rejected or unreachable push is CHECKPOINT-UNPUSHED
+# and moves no ref. Twin: Push-MoeTaskBranch.
+push_task_branch() {
+    local out
+    if no_git_remote; then
+        echo -e "${BLUE}[info]${NC} no git remote configured; push skipped, the checkpoint stays local on $2."
+        return 1
+    fi
+    if out=$(git -C "$1" push --porcelain origin "refs/heads/$2:refs/heads/$2" 2>&1); then
+        echo -e "${GREEN}[OK]${NC} Pushed task $LAND_TASK_ID to $2."
+        return 0
+    fi
+    printf '%s\n' "$out" | tail -3
+    announce_checkpoint_unpushed "$LAND_TASK_ID" "$2"
+    return 1
+}
+
+# land_worktree_checkpoint W BRANCH -- commit every dirty path of the task
+# worktree W except DENY to refs/heads/BRANCH as a checkpoint (design §2.2
+# L0-L2): owner guard, W's snapshot through resolve_attribution's worktree
+# mode, then land_plumbing (temp index from the tip T, commit-tree -p T, ONE
+# CAS update-ref, W's index refresh, a rescue ref on lost contention), the
+# push when settings.checkpointPush, and the ledger row with the full ref. No
+# baseline, tier, peel or shared push: the target and the control checkout are
+# never touched. MOE_TOP/MOE_GITDIR are shadowed, so every helper runs on W.
+# Callers set LAND_TASK_ID/TITLE/STATUS/REOPEN/CLI_EXIT/RECOVERED; a recovery
+# with nothing to land records nothing and never marks this session's landing
+# done. Returns 1 on a failed landing. Twin: Invoke-MoeWorktreeCheckpoint.
+land_worktree_checkpoint() {
+    local w="$1" branch="$2" work rc=0
+    local MOE_TOP="$1" MOE_GITDIR LAND_ONE_CAS=true
+    MOE_GITDIR=$(git -C "$w" rev-parse --absolute-git-dir 2>/dev/null) || MOE_GITDIR=""
+    LAND_KIND=checkpoint; LAND_OUTCOME=failed; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""
+    LAND_BRANCH="$branch"; LAND_PUSHED=""; LAND_RECORDED=""; LAND_N_PATHS=0; LAND_N_INFERRED=0
+    LAND_RESCUE_REF=""; LAND_RESCUE_SHA=""; LAND_TOOL_FILE_EFFECTIVE=""; FROZEN_TREE=""; FROZEN_BASE=""; RECEIPT_LANDED=""
+    work="$(create_secure_temp)/wt-landing-$$"
+    rm -rf "$work" 2>/dev/null || true
+    mkdir -p "$work/attr" || return 1
+    ATTR_DIR="$work/attr"; LAND_STAGED_FILE="$work/staged.z"; LAND_DROPPED_FILE="$work/dropped.z"
+    : > "$LAND_STAGED_FILE"; : > "$LAND_DROPPED_FILE"
+    commit_scope postflight "$LAND_TASK_ID" "$work/scope.json"
+    if ! landing_owner_guard "$LAND_TASK_ID" "$work/scope.json"; then
+        landing_refuse_owner checkpoint
+        return 0
+    fi
+    if [ -z "$MOE_GITDIR" ] || ! git_dirty_snapshot "$work/S.tsv"; then
+        LAND_CODE=MOE_COMMIT_FAILED_ATTRIBUTION; rc=1
+        echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: git status failed in $w; nothing committed for task $LAND_TASK_ID, its bytes stay in the worktree."
+    elif ! resolve_attribution worktree "$LAND_TASK_ID" "$work/S.tsv" "" "" "" "$work/scope.json" "$ATTR_DIR" "" \
+        || ! attr_summary_load "$ATTR_DIR"; then
+        LAND_CODE=MOE_COMMIT_FAILED_ATTRIBUTION; rc=1
+        echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: attribution failed for task $LAND_TASK_ID ($(tail -n1 "$ATTR_DIR/attr.err" 2>/dev/null)); its bytes stay in the worktree."
+    elif [ "${LAND_RECOVERED:-false}" = true ] && [ "${ATTR_N_CANDIDATES:-0}" -eq 0 ]; then
+        LAND_OUTCOME=nothing
+        return 0
+    else
+        attr_print_skips "$ATTR_DIR"
+        [ "${ATTR_N_EXCLUDED:-0}" -eq 0 ] || echo -e "${BLUE}[attribution]${NC} $ATTR_N_EXCLUDED excluded path(s) untouched (MOE_ATTR_EXCLUDED: .moe/, tool config, worktrees)"
+        LAND_OUTCOME=nothing
+        if [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ] && ! git -C "$w" rev-parse -q --verify "refs/heads/$branch" >/dev/null 2>&1; then
+            # No tip T to build on: never an orphan commit from an empty tree.
+            LAND_OUTCOME=failed; LAND_CODE=MOE_COMMIT_FAILED_REF_CONTENTION; rc=1
+            echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: refs/heads/$branch does not resolve; nothing committed for task $LAND_TASK_ID, its bytes stay in $w."
+        elif [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ]; then
+            if land_plumbing "$work/msg.txt"; then rc=0; else rc=$?; fi
+        fi
+        [ "$rc" -ne 2 ] || rc=0
+    fi
+    [ "$LAND_OUTCOME" != nothing ] || LAND_CODE=MOE_COMMIT_NOTHING_TO_COMMIT
+    [ "${LAND_RECOVERED:-false}" = true ] || MOE_LANDING_DONE=true
+    if [ "$LAND_OUTCOME" = committed ]; then
+        echo -e "${GREEN}[OK]${NC} Committed checkpoint for task $LAND_TASK_ID on $branch: $LAND_SHA ($LAND_N_PATHS paths)"
+        LAND_PUSHED=false
+        if [ "$CS_CHECKPOINT_PUSH" != true ]; then
+            echo -e "${BLUE}[info]${NC} settings.checkpointPush=false -- checkpoint kept local on $branch."
+        elif push_task_branch "$w" "$branch"; then
+            LAND_PUSHED=true
+        fi
+        record_commit_rpc committed checkpoint "$LAND_SHA" "refs/heads/$branch" "" "" "$LAND_PUSHED" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE" || true
+        LAND_RECORDED=true
+    else
+        [ "$LAND_OUTCOME" != nothing ] || echo -e "${BLUE}[info]${NC} $LAND_CODE: task $LAND_TASK_ID -- nothing to land from $w."
+        record_commit_rpc "$LAND_OUTCOME" checkpoint "" "refs/heads/$branch" "${LAND_CODE:-MOE_COMMIT_FAILED}" "${LAND_MESSAGE:-}" "" "" "$LAND_DROPPED_FILE" || true
+    fi
+    LAND_SUMMARY_SHA="${LAND_SHA:-${LAND_RESCUE_SHA:-none}}"; LAND_SUMMARY_KIND=checkpoint; LAND_SUMMARY_PATHS="$LAND_N_PATHS"
+    LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""; LAND_SUMMARY_OUTCOME="$LAND_OUTCOME"; LAND_SUMMARY_CODE="${LAND_CODE:-}"
+    return "$rc"
+}
+
+# worktree_control_dirt OUT -- the control checkout's dirty paths minus
+# denied_wt (so never .moe/), NUL-terminated, written OUT.tmp then mv.
+worktree_control_dirt() {
+    local d rec
+    d="$(create_secure_temp)/wt-dirt-$$"
+    rm -rf "$d" 2>/dev/null || true
+    mkdir -p "$d" && git_dirty_snapshot "$d/S.tsv" || return 1
+    resolve_attribution worktree "$PREFLIGHT_TASK_ID" "$d/S.tsv" "" "" "" "" "$d/attr" "" || return 1
+    { while IFS= read -r -d '' rec; do printf '%s\0' "${rec##*"$MOE_TAB"}"; done < "$d/attr/candidates"; } > "$1.tmp" 2>/dev/null \
+        && mv -f "$1.tmp" "$1"
+}
+
+# worktree_preflight TASKID TITLE STATUS -- a worktree worker's pre-flight
+# after provision_worktree's W/.moe guard (design §3.3, §3.7): dirt a crashed
+# session left in W becomes a recovery checkpoint on the task branch
+# (MOE_CHECKPOINT_RECOVERED; a failure leaves it in W), then the control
+# checkout's dirt is listed in <common gitdir>/moe/worktree/<id>.control-dirt
+# for the stray-edit check. No baseline, rescue replay or notice.
+worktree_preflight() {
+    local list
+    if [ "$CS_AUTO_COMMIT" = true ] && [ "$CS_CHECKPOINT_COMMITS" = true ] && [ "${MOE_DISABLE_CHECKPOINT:-0}" != 1 ]; then
+        LAND_TASK_ID="$1"; LAND_TITLE="$2"; LAND_STATUS="${3:-UNKNOWN}"; LAND_REOPEN=0; LAND_CLI_EXIT=0; LAND_RECOVERED=true
+        if land_worktree_checkpoint "$MOE_WT_PATH" "$MOE_WT_BRANCH" && [ "$LAND_OUTCOME" = committed ]; then
+            echo -e "${GREEN}[OK]${NC} MOE_CHECKPOINT_RECOVERED task=$1 sha=$LAND_SHA"
+        elif [ "$LAND_OUTCOME" = failed ]; then
+            echo -e "${YELLOW}[WARN]${NC} recovery checkpoint for $1 did not complete (${LAND_CODE:-?}); its bytes stay in $MOE_WT_PATH."
+        fi
+        LAND_OUTCOME=nothing; LAND_SHA=""; LAND_CODE=""; LAND_RECOVERED=false; MOE_LANDING_DONE=""
+    fi
+    list=$(git -C "$MOE_TOP" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && list="$list/moe/worktree/$1.control-dirt" || list=""
+    if [ -n "$list" ] && mkdir -p "${list%/*}" 2>/dev/null && worktree_control_dirt "$list"; then
+        MOE_WT_DIRT_LIST="$list"
+    else
+        echo -e "${YELLOW}[WARN]${NC} could not write the control-checkout dirt list ${list:-<no git dir>}; the stray-edit check is off for this session."
+    fi
+}
+
+# worktree_stray_check -- design §3.7: a control-checkout path dirty now but
+# absent from the pre-flight list prints MOE_WORKTREE_STRAY_EDIT and becomes
+# ONE task comment naming up to 20 paths. Never landed, never reverted. Any
+# failure is one [WARN] and leaves the landing outcome alone.
+worktree_stray_check() {
+    local tid="$PREFLIGHT_TASK_ID" now stray n more="" content args
+    [ -n "${MOE_WT_DIRT_LIST:-}" ] || return 0
+    now="$(create_secure_temp)/wt-dirt-post-$$"
+    if [ ! -r "$MOE_WT_DIRT_LIST" ] || ! worktree_control_dirt "$now" \
+        || ! stray=$($PYTHON_CMD -c 'import sys
+load = lambda f: [p for p in open(f, "rb").read().split(b"\0") if p]
+pre = set(load(sys.argv[1]))
+sys.stdout.buffer.write(b"\n".join(p for p in load(sys.argv[2]) if p not in pre))' "$MOE_WT_DIRT_LIST" "$now" 2>/dev/null); then
+        echo -e "${YELLOW}[WARN]${NC} the stray-edit check for task $tid could not run (control-dirt list or git status unreadable)."
+        return 0
+    fi
+    [ -n "$stray" ] || return 0
+    n=$(printf '%s\n' "$stray" | wc -l | tr -d '[:space:]')
+    [ "$n" -le 20 ] || more="
++$((n - 20)) more"
+    echo -e "${YELLOW}[WARN]${NC} MOE_WORKTREE_STRAY_EDIT count=$n task=$tid: written into the control checkout $MOE_TOP, not $MOE_WT_PATH; never landed or reverted, a human decides: $(printf '%s\n' "$stray" | head -n 5 | tr '\n' ' ')"
+    content="MOE_WORKTREE_STRAY_EDIT: this session wrote $n path(s) into the control checkout instead of its worktree $MOE_WT_PATH. They were neither landed nor reverted; a human decides.
+$(printf '%s\n' "$stray" | head -n 20 | sed 's/^/- /')$more"
+    if ! args=$($PYTHON_CMD -c 'import json,sys; t,w,c=sys.argv[1:]; print(json.dumps({"taskId":t,"workerId":w,"content":c}))' "$tid" "$WORKER_ID" "$content" 2>/dev/null) \
+        || ! moe_rpc add_comment "$args" > /dev/null 2>&1; then
+        echo -e "${YELLOW}[WARN]${NC} moe.add_comment failed for the MOE_WORKTREE_STRAY_EDIT note on $tid."
+    fi
+    return 0
+}
+
+# worktree_postflight -- a worktree worker's exit (design §2.4, §3): its W
+# bytes go to the task branch only, then the stray-edit check. Never
+# run_landing, the peel, the shared push or a baseline. A completion has no
+# target landing here yet (WT-08): its bytes are checkpointed and the outcome
+# stays failed, so the attempt never finalizes as landed.
+worktree_postflight() {
+    local status="${FINAL_STATUS:-UNKNOWN}" completion=false
+    [ -z "${STATUS_LOOKUP_ERROR:-}" ] || status=UNKNOWN
+    case "$status" in REVIEW|DONE) completion=true ;; esac
+    MOE_WT_COMPLETION="$completion"
+    if [ "$CS_AUTO_COMMIT" != true ]; then
+        echo -e "${BLUE}[info]${NC} settings.autoCommit=false -- no git activity for task $PREFLIGHT_TASK_ID; its bytes stay in $MOE_WT_PATH."
+    elif [ "$completion" = true ] || { [ "$CS_CHECKPOINT_COMMITS" = true ] && [ "${MOE_DISABLE_CHECKPOINT:-0}" != 1 ]; }; then
+        LAND_TASK_ID="$PREFLIGHT_TASK_ID"; LAND_TITLE="$PREFLIGHT_TASK_TITLE"; LAND_STATUS="$status"
+        LAND_REOPEN="${FINAL_REOPEN_COUNT:-0}"; LAND_CLI_EXIT="${CLI_EXIT_CODE:-0}"; LAND_RECOVERED=false
+        land_worktree_checkpoint "$MOE_WT_PATH" "$MOE_WT_BRANCH" || true
+    else
+        echo -e "${BLUE}[info]${NC} no landing for task $PREFLIGHT_TASK_ID (checkpointCommits=$CS_CHECKPOINT_COMMITS MOE_DISABLE_CHECKPOINT=${MOE_DISABLE_CHECKPOINT:-0}); its bytes stay in $MOE_WT_PATH."
+    fi
+    if [ "$completion" = true ]; then
+        echo -e "${YELLOW}[WARN]${NC} worktree completion landing to the target is not available in this wrapper; the bytes are on $MOE_WT_BRANCH and nothing reached $MOE_WT_TARGET"
+        LAND_OUTCOME=failed
+    fi
+    worktree_stray_check
+}
+
+# control_seat_postflight -- design §3.6: an architect or QA seat in a
+# worktree-mode control checkout lands nothing (it carries daemon and human
+# bytes only) and records MOE_COMMIT_NOTHING_TO_COMMIT; no ref moves.
+control_seat_postflight() {
+    ATTR_DIR="$(create_secure_temp)/ctl-$$"
+    rm -rf "$ATTR_DIR" 2>/dev/null || true
+    mkdir -p "$ATTR_DIR" 2>/dev/null || true
+    LAND_TASK_ID="$PREFLIGHT_TASK_ID"; LAND_STATUS="${FINAL_STATUS:-UNKNOWN}"; LAND_CLI_EXIT="${CLI_EXIT_CODE:-0}"
+    LAND_TREE=""; LAND_TOOL_FILE_EFFECTIVE=""; LAND_OUTCOME=nothing; LAND_CODE=MOE_COMMIT_NOTHING_TO_COMMIT
+    echo -e "${BLUE}[info]${NC} $LAND_CODE: task $LAND_TASK_ID -- a $ROLE seat in the worktree-mode control checkout lands nothing."
+    record_commit_rpc nothing checkpoint "" "" "$LAND_CODE" "" "" "" "" || true
+    LAND_SUMMARY_SHA=none; LAND_SUMMARY_KIND=checkpoint; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0
+    LAND_SUMMARY_HELD=""; LAND_SUMMARY_OUTCOME=nothing; LAND_SUMMARY_CODE="$LAND_CODE"
 }
 
 # ---- pre-flight --------------------------------------------------------------
@@ -5407,6 +6496,10 @@ preflight_landing() {
     MOE_BASELINE_PATH=""
     [ "$CS_AUTO_COMMIT" = "true" ] || return 0
     git_top || return 0
+    # Worktree mode keeps no baseline (design §3): a worktree worker's
+    # pre-flight is worktree_preflight, and a control seat lands nothing.
+    [ "${MOE_WT_MODE:-}" != worktree ] || return 0
+    if [ "$ROLE" != worker ] && control_worktree_mode; then return 0; fi
     local work parsed scope_status="" scope_title="" scope_notfound="0" rc=0 known_mine bp
     work="$(create_secure_temp)/preflight-$$"
     rm -rf "$work" 2>/dev/null || true
@@ -5509,7 +6602,8 @@ PYEOF
         echo -e "${BLUE}[info]${NC} lingering baseline for $tid -- landing the previous session's work before this one starts."
         LAND_KIND="checkpoint"; LAND_TASK_ID="$tid"; LAND_TITLE="$title"; LAND_STATUS="$status"; LAND_REOPEN=0
         LAND_CLI_EXIT=0; LAND_RECOVERED=true; LAND_GATE_FAILED=false; LAND_POLICY_OVERRIDE=""
-        LAND_SNAPSHOT_FILE=""; LAND_TOOL_FILE=""; LAND_SCOPE_FILE="$work/scope.json"
+        # A fresh scope (LAND_SCOPE_FILE=''): ownership may have moved since the read above.
+        LAND_SNAPSHOT_FILE=""; LAND_TOOL_FILE=""; LAND_SCOPE_FILE=""
         if run_landing; then rc=0; else rc=$?; fi
         if [ "$LAND_OUTCOME" = "committed" ]; then
             echo -e "${GREEN}[OK]${NC} MOE_CHECKPOINT_RECOVERED task=$tid sha=$LAND_SHA"
@@ -5610,6 +6704,12 @@ PYEOF
         MOE_PREFLIGHT_EVIDENCE="$(create_secure_temp)/preflight-evidence-$$.tsv"
         cp -f "$work/P-new.tsv" "$MOE_PREFLIGHT_EVIDENCE" 2>/dev/null || MOE_PREFLIGHT_EVIDENCE=""
     fi
+    # The whole dirty snapshot of THIS pre-flight, even when the P rows above
+    # were inherited: the skip-untouched idle-peer exception (resolve_attribution)
+    # lands a contested path only when it was clean here. A crashed session's
+    # unlanded bytes are dirty in it, so they stay held. '' = no exception.
+    MOE_PREFLIGHT_DIRTY="$(create_secure_temp)/preflight-dirty-$$.tsv"
+    cp -f "$spre" "$MOE_PREFLIGHT_DIRTY" 2>/dev/null || MOE_PREFLIGHT_DIRTY=""
     # A dead merge (B-new.tsv absent) must NOT write a header-only baseline:
     # an empty B reads as "everything changed since baseline" and re-arms the
     # MEASURED sweep the landing's fail-closed guard exists to prevent.
@@ -5662,7 +6762,7 @@ PYEOF
 #   any other outcome the landing reached before its push/record      -> kept
 #   bytes parked on a rescue ref                                      -> rescued
 #   deliberate autoCommit=false, or no git repo at all                -> nothing
-#   anything else (no baseline, nothing parked)                       -> failed
+#   anything else (no baseline, nothing parked, owner guard refused)  -> failed
 MOE_TEARDOWN_DONE=false
 teardown_rescue() {
     [ "$MOE_TEARDOWN_DONE" = true ] && return 0
@@ -5677,7 +6777,9 @@ teardown_rescue() {
         # row is re-sent only when it did not get out; record_commit is
         # idempotent by sha either way. Checked before MOE_LANDING_DONE, which
         # run_landing sets ahead of its push and ledger record.
-        [ "${LAND_RECORDED:-}" = "true" ] || record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "${LAND_PUSHED:-}" "${LAND_STAGED_FILE:-}" "${LAND_DROPPED_FILE:-}" || true
+        local ref="$LAND_BRANCH"
+        [ "${MOE_WT_MODE:-}" != worktree ] || ref="refs/heads/$LAND_BRANCH"
+        [ "${LAND_RECORDED:-}" = "true" ] || record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$ref" "" "" "${LAND_PUSHED:-}" "${LAND_STAGED_FILE:-}" "${LAND_DROPPED_FILE:-}" || true
         MOE_LANDING_DONE=true
         return 0
     fi
@@ -5690,9 +6792,25 @@ teardown_rescue() {
     [ -n "${MOE_TOP:-}" ] || (git_top) || return 0
     LAND_OUTCOME=failed
     [ -n "${MOE_TOP:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    if [ "${MOE_WT_MODE:-}" = worktree ] || { [ "$ROLE" != worker ] && control_worktree_mode; }; then
+        echo -e "${BLUE}[rescue]${NC} worktree mode: bytes stay in ${MOE_WT_PATH:-$MOE_TOP} for the next pre-flight; no rescue ref for task $tid."
+        return 0
+    fi
     [ -f "$(baseline_path "$tid")" ] || return 0
     [ "$(type -t run_landing)" = "function" ] || return 0
+    local work
+    work="$(create_secure_temp)/teardown-$$"
+    rm -rf "$work" 2>/dev/null
+    mkdir -p "$work/attr" 2>/dev/null || return 0
+    # The owner guard first: a session that does not own the task parks
+    # nothing, an interrupted gate's frozen tree included.
+    commit_scope postflight "$tid" "$work/scope.json"
     echo ""
+    if ! landing_owner_guard "$tid" "$work/scope.json"; then
+        ATTR_DIR="$work/attr"; LAND_TASK_ID="$tid"; LAND_STATUS="${LAND_STATUS:-UNKNOWN}"; LAND_CLI_EXIT="${CLI_EXIT_CODE:-}"; LAND_TREE=""
+        landing_refuse_owner rescue
+        return 0
+    fi
     echo -e "${YELLOW}[rescue]${NC} session ending with task $tid unlanded -- taking a rescue snapshot before deregistering."
     if [ -n "${FROZEN_TREE:-}" ]; then
         LAND_CODE=MOE_COMMIT_FAILED_GATE
@@ -5701,21 +6819,16 @@ teardown_rescue() {
         MOE_LANDING_DONE=true
         return 0
     fi
-    local work
-    work="$(create_secure_temp)/teardown-$$"
-    rm -rf "$work" 2>/dev/null
-    mkdir -p "$work" 2>/dev/null || return 0
     ATTR_DIR="$work/attr"
-    mkdir -p "$ATTR_DIR" 2>/dev/null || return 0
     LAND_KIND="rescue"; LAND_TASK_ID="$tid"; LAND_TITLE="${PREFLIGHT_TASK_TITLE:-}"; LAND_STATUS="${LAND_STATUS:-UNKNOWN}"
     LAND_CLI_EXIT="${CLI_EXIT_CODE:-}"; LAND_TREE=""; TI_N_STAGED=0; TI_N_INFERRED=0
-    commit_scope postflight "$tid" "$work/scope.json"
     baseline_read "$tid" "$work/B.tsv" "$work/U.tsv" || true
     git_dirty_snapshot "$work/S.tsv" || return 0
     local tool="${MOE_TOOL_WRITES_FILE:-}"
     if [ -z "$tool" ] || [ ! -f "$tool" ]; then tool="$work/tool.txt"; : > "$tool"; fi
     LAND_TOOL_FILE_EFFECTIVE="$tool"
     LAND_EVIDENCE_FILE="${MOE_PREFLIGHT_EVIDENCE:-}"
+    LAND_PREFLIGHT_DIRTY="${MOE_PREFLIGHT_DIRTY:-}"
     resolve_attribution "rescue" "$tid" "$work/S.tsv" "$work/B.tsv" "$work/U.tsv" "$tool" "$work/scope.json" "$ATTR_DIR" "never" || return 0
     LAND_OUTCOME=failed
     rescue_ref "teardown" "$ATTR_DIR/candidates" || true
@@ -5901,9 +7014,13 @@ launch_outage_postflight() {
 # claude launch the wrapper leases a subscription account from the daemon
 # (moe.lease_account) and runs claude under that account's config directory.
 # The directory, MOE_ACCOUNT_ID and MOE_ACCOUNT_SAMPLE_FILE reach only the CLI's
-# subshell (apply_account_env), with the token variables removed there. Nothing
-# here opens a file inside a config directory. Every failure mode launches
-# unrotated; only "every signed-in account is spent" waits, holding the task.
+# subshell (apply_account_env), with the token variables removed there. The
+# only file opened inside a config directory is an interactive seat's
+# .claude.json, where moe-account-lease.mjs `trust` sets this project's
+# folder-trust key (human sign-off 2026-10-26, task-7a0b1881): -p seats never
+# see Claude's trust dialog, a TUI on a never-trusted account would park at it.
+# Every other failure mode launches unrotated; "every signed-in account is
+# spent" and "the account could not be trusted" wait, holding the task.
 ACCOUNT_HELPER="$SCRIPT_DIR/moe-account-lease.mjs"
 ACCOUNT_SAMPLE_FILE="$SECURE_TEMP_DIR/account-sample.json"
 ACCOUNT_SETTINGS_FILE="$SECURE_TEMP_DIR/account-settings.json"
@@ -5927,11 +7044,25 @@ clear_account_lease() {
     rm -f "$ACCOUNT_SAMPLE_FILE" 2>/dev/null || true
 }
 
+# announce_account_untrusted ACCOUNT_ID REASON: best-effort #general line, the
+# announce_push_failure pattern. Never the config directory: no account folder
+# may reach the daemon.
+announce_account_untrusted() {
+    local rpc_args
+    local msg="@governors $WORKER_ID: MOE_ACCOUNT_UNTRUSTED - account $1 does not trust project $PROJECT and Moe could not grant it ($2). The interactive seat waits instead of parking at Claude's folder-trust dialog. Fix: start claude once in $PROJECT under that account's folder (claude-accounts/$1) and accept the trust dialog."
+    if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+        rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+            "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null || true)
+        moe_rpc chat_send "$rpc_args" > /dev/null 2>&1 || true
+    fi
+    return 0
+}
+
 # Sets ACCOUNT_LEASED_ID and ACCOUNT_LEASED_DIR, or leaves them empty to launch
 # unrotated. moe-account-lease.mjs reads the reply and maps the directory to
 # this machine (a Windows path becomes its /mnt form under WSL).
 get_account_lease() {
-    local gate reply pick kind f1 f2 f3 rest why
+    local gate reply pick kind f1 f2 f3 rest why trust trust_sec trust_why escalated=" "
     if [ ! -f "$ACCOUNT_HELPER" ]; then
         account_say "MOE_ACCOUNT_LEASE_UNAVAILABLE (moe-account-lease.mjs is missing next to this wrapper) - launching without rotation."
         return 0
@@ -5958,7 +7089,31 @@ get_account_lease() {
             ACCOUNT_LEASED_DIR="$f3"
             if [ "$f2" = "?" ]; then f2=unknown; else f2="$f2%"; fi
             account_say "MOE_ACCOUNT_LEASED account=$f1 usage=$f2" "$GREEN"
-            return 0
+            # Only the TUI asks "Do you trust the files in this folder?"; claude
+            # runs after `cd "${CLI_ROOT:-$PROJECT}"`, the launch directory (W is passed as launchDir).
+            [ "$CLAUDE_INTERACTIVE" = true ] || return 0
+            trust=$("$NODE_CMD" "$ACCOUNT_HELPER" trust "$f3" "$PROJECT" ${CLI_ROOT:+"$CLI_ROOT"} 2>/dev/null) || trust=""
+            case "$trust" in
+                trusted) return 0 ;;
+                granted) account_say "MOE_ACCOUNT_TRUST_GRANTED account=$f1 project=$PROJECT" "$GREEN"; return 0 ;;
+                refused$'\t'*$'\t'*) ;;
+                *)
+                    clear_account_lease
+                    account_say "MOE_ACCOUNT_LEASE_UNAVAILABLE (the account helper failed) - launching without rotation."
+                    return 0
+                    ;;
+            esac
+            IFS=$'\t' read -r _ trust_sec trust_why <<< "$trust" || true
+            case "$trust_sec" in ''|*[!0-9]*) trust_sec=300 ;; esac
+            [ "$trust_sec" -ge 1 ] || trust_sec=300
+            clear_account_lease
+            account_say "MOE_ACCOUNT_UNTRUSTED account=$f1 project=$PROJECT ($trust_why) - not launching into Claude's folder-trust dialog; retry in ${trust_sec}s, the held task stays held. (Ctrl+C to stop)"
+            case "$escalated" in
+                *" $f1 "*) ;;
+                *) escalated="$escalated$f1 "; announce_account_untrusted "$f1" "$trust_why" ;;
+            esac
+            sleep "$trust_sec"
+            continue
         fi
         if [ "$kind" = wait ] && [ -n "$f2" ]; then
             case "$f1" in ''|*[!0-9]*) f1=60 ;; esac
@@ -5977,6 +7132,80 @@ get_account_lease() {
         return 0
     done
 }
+
+# Process-scoped Git hooks: the wrapper and its sidecars never inherit this overlay.
+prepare_agent_git_guard() {
+    local entry
+    AGENT_GIT_GUARD_ROOT=$("$NODE_CMD" - "$PROJECT" "$SECURE_TEMP_DIR" <<'MOE_GIT_GUARD_JS'
+const fs = require('fs'), path = require('path'), cp = require('child_process');
+const [project, temp] = process.argv.slice(-2), win = process.platform === 'win32';
+const native = p => win ? p.replaceAll('\\', '/') : p;
+const env = { ...process.env, LC_ALL: 'C' };
+const git = (cwd, args, e = env) => cp.spawnSync('git', ['-C', cwd, ...args], { env: e, encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 });
+const value = r => { if (r.status !== 0) throw Error('git'); return r.stdout.replace(/\n$/, ''); };
+const shell = s => "'" + s.replaceAll("'", "'\\''") + "'";
+let root;
+try {
+    const count = process.env.GIT_CONFIG_COUNT || '', n = Number(count);
+    if (!/^\d*$/.test(count) || !Number.isSafeInteger(n) || n > 2147483646) throw Error('config');
+    const identity = git(project, ['rev-parse', '--absolute-git-dir']);
+    if (identity.status === 128 && /^fatal: not a git repository\b/.test(identity.stderr || '')) {
+        // A broken/redirected repository is not an ordinary non-Git project.
+        if (['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR'].some(k => process.env[k])) throw Error('identity');
+        for (let dir = path.resolve(project);;) {
+            try { fs.lstatSync(path.join(dir, '.git')); throw Error('identity'); }
+            catch (e) { if (e.code !== 'ENOENT') throw e; }
+            const parent = path.dirname(dir); if (parent === dir) break; dir = parent;
+        }
+        process.exit(0); // No Git protection is claimed.
+    }
+    const gitdir = native(value(identity));
+    const top = value(git(project, ['rev-parse', '--is-bare-repository'])) === 'true'
+        ? gitdir : value(git(project, ['rev-parse', '--show-toplevel']));
+    const original = native(value(git(top, ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'])));
+    for (const p of [gitdir, original, temp]) if (!path.isAbsolute(p) || /[\x00-\x1f\x7f]/.test(p)) throw Error('path');
+    root = fs.mkdtempSync(path.join(temp, 'moe-git-guard-'));
+    fs.chmodSync(root, 0o700);
+    if (win) {
+        const acl = "$ErrorActionPreference='Stop'; $p='" + root.replaceAll("'", "''") + "'; $a=Get-Acl -LiteralPath $p; $a.SetAccessRuleProtection($true,$false); " +
+            "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User,'FullControl','ContainerInherit,ObjectInherit','None','Allow')); Set-Acl -LiteralPath $p -AclObject $a";
+        // pwsh 7 lists its own modules first in PSModulePath, and a Windows PowerShell 5.1 child that inherits it cannot load Get-Acl.
+        const psenv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'PSMODULEPATH'));
+        value(cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(acl, 'utf16le').toString('base64')], { env: psenv, encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 }));
+    }
+    const hooks = native(path.join(root, 'hooks')), config = native(path.join(root, 'config'));
+    fs.mkdirSync(hooks, { mode: 0o700 });
+    let names;
+    try { names = fs.readdirSync(original); } catch (e) { if (e.code !== 'ENOENT') throw e; names = []; }
+    for (const name of new Set(['pre-commit', 'pre-push', ...names])) {
+        const target = shell(native(path.join(original, name)));
+        const deny = ['pre-commit', 'pre-push'].includes(name)
+            ? 'if [ "${MOE_ALLOW_AGENT_GIT_WRITES:-}" != 1 ]; then\n  echo "MOE_AGENT_GIT_REFUSED: the wrapper lands the work" >&2\n  exit 1\nfi\n' : '';
+        fs.writeFileSync(path.join(hooks, name), '#!/bin/sh\n' + deny + `if [ -x ${target} ] && [ ! -d ${target} ]; then exec ${target} "$@"; fi\nexit 0\n`, { mode: 0o700 });
+    }
+    // Wildmatch, config-value quoting and shell quoting are independent layers.
+    fs.writeFileSync(config, '[core]\n hooksPath = "' + hooks.replace(/[\\"]/g, '\\$&') + '"\n', { mode: 0o600 });
+    const key = `includeIf.gitdir${win ? '/i' : ''}:${gitdir.replace(/[\\*?[]/g, '\\$&')}.path`;
+    const added = { [`GIT_CONFIG_KEY_${n}`]: key, [`GIT_CONFIG_VALUE_${n}`]: config, GIT_CONFIG_COUNT: String(n + 1) };
+    if (native(value(git(top, ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'], { ...env, ...added }))) !== hooks) throw Error('validation');
+    fs.writeFileSync(path.join(root, "env.json"), JSON.stringify(added), { mode: 0o600 });
+    fs.writeFileSync(path.join(root, "env"), Object.entries(added).map(([k,v]) => k+"="+v+"\0").join(""), { mode: 0o600 });
+    process.stdout.write(root);
+} catch {
+    try { if (root) fs.rmSync(root, { recursive: true, force: true }); } catch {}
+    process.stderr.write('MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI\n'); process.exit(1);
+}
+MOE_GIT_GUARD_JS
+    ) || return 1
+    AGENT_GIT_GUARD_ENV=()
+    [ -n "$AGENT_GIT_GUARD_ROOT" ] || return 0
+    while IFS= read -r -d '' entry; do AGENT_GIT_GUARD_ENV+=("$entry"); done < "$AGENT_GIT_GUARD_ROOT/env"
+    [ ${#AGENT_GIT_GUARD_ENV[@]} -eq 3 ]
+}
+agent_git_exec() (
+    if [ ${#AGENT_GIT_GUARD_ENV[@]} -gt 0 ]; then export "${AGENT_GIT_GUARD_ENV[@]}"; fi
+    exec "$@"
+)
 
 # Runs inside the CLI's subshell, so the account's directory and the removed
 # token variables never reach this wrapper's own environment.
@@ -6051,14 +7280,42 @@ account_after_exit() {
 #
 # The hash is captured ONCE, here, so one on-disk change triggers exactly one
 # restart: the re-exec'd process captures the new hash and cannot thrash.
+# Only load committed bytes: on 2026-10-30 three seats re-exec'd onto
+# task-e7f4026a's uncommitted, unreviewed +79/-8 wrapper edit.
 MOE_WRAPPER_PATH="${BASH_SOURCE[0]:-$0}"
 MOE_WRAPPER_LAUNCH_HASH=""
+MOE_WRAPPER_REFUSED_HASH=""
+MOE_WRAPPER_DEFERRED_HASH=""
+# Twin: Test-MoeWrapperReloadDeferred. Return 0 to defer, 1 to reload.
+wrapper_reload_deferred() {
+    local rc=0 git_cmd=ls-files
+    git -C "$SCRIPT_DIR" ls-files --error-unmatch -- "${MOE_WRAPPER_PATH##*/}" >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        git_cmd=diff
+        git -C "$SCRIPT_DIR" diff --quiet HEAD -- "${MOE_WRAPPER_PATH##*/}" >/dev/null 2>&1 || rc=$?
+        [ "$rc" -ne 0 ] || return 1
+    fi
+    if [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_DEFERRED_HASH" ]; then
+        MOE_WRAPPER_DEFERRED_HASH="$MOE_WRAPPER_CURRENT_HASH"
+        if [ "$rc" -eq 1 ]; then
+            echo "[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits; staying on the current bytes until they are committed"
+        else
+            echo "[WARN] MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed (git $git_cmd exited $rc); staying on the current bytes" >&2
+        fi
+    fi
+    return 0
+}
 if [ -f "$MOE_WRAPPER_PATH" ]; then
     # FAIL-OPEN: a wrapper that dies because it could not hash itself is a fleet
     # outage; a stale wrapper is merely the status quo this guard improves on.
     MOE_WRAPPER_LAUNCH_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
 fi
 
+# Bash reads scripts incrementally from a saved file offset. An in-place save
+# (same inode: editor/apply_patch) could end the loop on NEW bytes at the OLD
+# offset ("e: command not found", task-f31d415d). Parse the loop and tail as one
+# group before running; exit prevents any later file read. No re-indent by design.
+{
 while [ "$LOOP_RUNNING" = true ]; do
     # Receipt metadata belongs to one actual CLI launch, never a prior task.
     unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON
@@ -6090,28 +7347,43 @@ while [ "$LOOP_RUNNING" = true ]; do
     # a restart can never interleave with a half-done completion.
     if [ -n "$MOE_WRAPPER_LAUNCH_HASH" ]; then
         MOE_WRAPPER_CURRENT_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
-        if [ -n "$MOE_WRAPPER_CURRENT_HASH" ] &&            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_LAUNCH_HASH" ]; then
-            echo "wrapper source changed on disk; restarting to load it"
-            # `exec` replaces this process WITHOUT running the EXIT trap, so
-            # do its two must-haves by hand (ps1 parity): stop the sidecar and
-            # deregister -- the re-exec'd wrapper registers afresh and any
-            # held task is released for it (or a peer) to re-claim. The
-            # previous post-flight already ran, so nothing is left to land.
-            stop_heartbeat_sidecar
-            if [ -n "$HEARTBEAT_PID" ]; then
-                echo "[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle." >&2
-                continue
+        if [ -n "$MOE_WRAPPER_CURRENT_HASH" ] &&            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_LAUNCH_HASH" ] &&
+            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_REFUSED_HASH" ] && ! wrapper_reload_deferred; then
+            # A seat launched from the shared checkout reloads every edit of
+            # this file, and a half-applied edit used to cost it its
+            # registration and then its process. So parse the new bytes
+            # first: bytes that fail are refused once per hash, and the seat
+            # keeps serving the bytes it already parsed. The `||` keeps set -e
+            # from ending the seat on the very failure this guards.
+            MOE_WRAPPER_PARSE_RC=0
+            MOE_WRAPPER_PARSE_ERR="$(bash -n "$MOE_WRAPPER_PATH" 2>&1)" || MOE_WRAPPER_PARSE_RC=$?
+            if [ "$MOE_WRAPPER_PARSE_RC" -ne 0 ]; then
+                MOE_WRAPPER_REFUSED_HASH="$MOE_WRAPPER_CURRENT_HASH"
+                MOE_WRAPPER_PARSE_ERR=${MOE_WRAPPER_PARSE_ERR%%$'\n'*}
+                echo "[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: ${MOE_WRAPPER_PARSE_ERR:-bash -n exited $MOE_WRAPPER_PARSE_RC}" >&2
+            else
+                echo "wrapper source changed on disk; restarting to load it"
+                # `exec` replaces this process WITHOUT running the EXIT trap, so
+                # do its two must-haves by hand (ps1 parity): stop the sidecar and
+                # deregister -- the re-exec'd wrapper registers afresh and any
+                # held task is released for it (or a peer) to re-claim. The
+                # previous post-flight already ran, so nothing is left to land.
+                stop_heartbeat_sidecar
+                if [ -n "$HEARTBEAT_PID" ]; then
+                    echo "[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle." >&2
+                    continue
+                fi
+                if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
+                    bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
+                        "{\"workerId\":\"$WORKER_ID\",\"reason\":\"wrapper_restart\"}" \
+                        --project "$PROJECT" >/dev/null 2>&1 || true
+                fi
+                if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
+                    rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
+                fi
+                exec "$MOE_WRAPPER_PATH" "${MOE_WRAPPER_ARGV[@]}"
+                echo "wrapper relaunch failed; continuing on current bytes"
             fi
-            if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ]; then
-                bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
-                    "{\"workerId\":\"$WORKER_ID\",\"reason\":\"wrapper_restart\"}" \
-                    --project "$PROJECT" >/dev/null 2>&1 || true
-            fi
-            if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
-                rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
-            fi
-            exec "$MOE_WRAPPER_PATH" "${MOE_WRAPPER_ARGV[@]}"
-            echo "wrapper relaunch failed; continuing on current bytes"
         fi
     fi
 
@@ -6130,7 +7402,11 @@ while [ "$LOOP_RUNNING" = true ]; do
     MOE_FINALIZE_DONE=false; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
     LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
-    MOE_ATTEMPT_ID=""; MOE_ATTEMPT_GENERATION=""
+    # Exported blank: no CLI inherits a previous task's attempt (sh hot reload keeps env).
+    export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""
+    # Unset, not blanked: a same-named variable inherited from the environment
+    # stays exported through a plain assignment; unset drops it (CQ-V07).
+    unset PINNED_ATTEMPT_PROFILE PINNED_ATTEMPT_PLAN_REVISION
     MOE_RUNNER_ID=$($PYTHON_CMD -c 'import uuid;print("runner-"+uuid.uuid4().hex)')
     PREFLIGHT_TASK_ID=""
     PREFLIGHT_HELD_TASK_ID=""
@@ -6166,27 +7442,40 @@ while [ "$LOOP_RUNNING" = true ]; do
     # as `sessionId`, and an isolated-clone delivery can read it from nowhere else (the
     # wrapper writes no preflight scope.json when settings.autoCommit is false). Twin:
     # moe-agent.ps1 sets $env:MOE_SESSION_ID from $moeSid at the same point.
+    # moe-proxy (CQ-F09/F12a) also stamps it onto the CLI's get_context/start_step/complete_step/complete_task,
+    # and the attempt pair onto the last three.
     export MOE_SESSION_ID="$MOE_SID"
     MOE_TOP=""
+    MOE_WT_MODE=shared; MOE_WT_PATH=""; MOE_WT_BRANCH=""; MOE_WT_TARGET=""; MOE_WT_DIRT_LIST=""; MOE_WT_COMPLETION=""
+    CLI_ROOT=""; unset MOE_WORKTREE_PATH MOE_TASK_BRANCH MOE_LAND_TARGET
     MOE_REL=""
     MOE_GITDIR=""
     MOE_BASELINE_PATH=""
     MOE_PREFLIGHT_EVIDENCE=""
+    MOE_PREFLIGHT_DIRTY=""
     MOE_LANDING_DONE=""
     MOE_PREFLIGHT_NOTICE=""
     MOE_TOOL_WRITES_FILE="$(create_secure_temp)/tool-writes-$$.txt"
     : > "$MOE_TOOL_WRITES_FILE"
     LAND_STATUS=""
-    LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""
+    LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""; LAND_SUMMARY_HELD=""
     POSTFLIGHT_SNAPSHOT=""
     read_commit_settings
 
     if [ "$AUTO_CLAIM" = true ]; then
         echo -e "${BLUE}Pre-flight: joining chat, claiming task, loading context...${NC}"
 
+        # Re-register before any chat call. A pruned or DEAD worker record makes
+        # chat refuse this seat's reply as an unknown sender and keeps no read
+        # cursor, so a mention would relaunch it in vain on every idle pass.
+        # While the join fails the seat reads no chat; its mentions stay unread.
+        SEAT_REGISTERED=false
+        if retry_team_join force; then SEAT_REGISTERED=true; fi
+
         # 0. Resolve #general channel id (chat tools take id, not name)
         GENERAL_CHANNEL_ID=""
-        CHANNELS_RESP=$(moe_rpc chat_channels "{}" 2>/dev/null || echo "")
+        CHANNELS_RESP=""
+        [ "$SEAT_REGISTERED" != true ] || CHANNELS_RESP=$(moe_rpc chat_channels "{}" 2>/dev/null || echo "")
         if [ -n "$CHANNELS_RESP" ]; then
             GENERAL_CHANNEL_ID=$($PYTHON_CMD -c "
 import json, sys
@@ -6234,8 +7523,6 @@ except Exception:
             fi
             CLAIM_RESULT='{"hasNext":false}'
         else
-            # A seat the startup join left teamless re-joins before it claims.
-            [ "$TEAM_JOINED" = true ] || retry_team_join || true
             if [ "$LAUNCH_OUTAGE" = true ] && [ -z "$LAUNCH_OUTAGE_HELD_TASK_ID" ]; then
                 # Launch outage, nothing held: claim_next_task CLAIMS a task for a
                 # worker that holds none, and the next fast exit would strand it.
@@ -6274,7 +7561,7 @@ except Exception:
         # channels. Ask the daemon for its routed backlog (loop guard intact).
         # This SHORT poll fits the proxy's 2s stdin-EOF grace; never use the
         # normal long-poll default here. Governors own their live chat waiter.
-        if [ "$ROLE" != "governor" ]; then
+        if [ "$ROLE" != "governor" ] && [ "$SEAT_REGISTERED" = true ]; then
             PREFLIGHT_ROUTED_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1],'channels':[],'timeoutMs':1000}))" "$WORKER_ID" 2>/dev/null || true)
             PREFLIGHT_ROUTED_UNREAD=$(moe_rpc chat_wait "$PREFLIGHT_ROUTED_ARGS" 2>/dev/null || echo "")
         fi
@@ -6563,7 +7850,7 @@ except Exception:
 
                 # 5. Fetch context for the claimed task
                 if [ -n "$PREFLIGHT_TASK_ID" ]; then
-                    PREFLIGHT_CONTEXT_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null || true)
+                    PREFLIGHT_CONTEXT_ARGS=$($PYTHON_CMD -c "import json,sys; t,s=sys.argv[1:]; print(json.dumps(dict(taskId=t,sessionId=s) if s else dict(taskId=t)))" "$PREFLIGHT_TASK_ID" "${MOE_SESSION_ID:-}" 2>/dev/null || true)
                     PREFLIGHT_CONTEXT=$(moe_rpc get_context "$PREFLIGHT_CONTEXT_ARGS" 2>/dev/null || echo "")
                     PREFLIGHT_PROGRESS_MARK="$(plan_progress_mark "$PREFLIGHT_CONTEXT" "$PREFLIGHT_TASK_ID")"
                     # alreadyAssigned carries no chatChannel -- recover it from
@@ -6773,9 +8060,12 @@ def verified_mention(msg, mid):
     timestamp = rec.get("timestamp") if isinstance(rec.get("timestamp"), str) else None
     rpc = msg.get("content")
     rpc = rpc if isinstance(rpc, str) else ""
+    # The daemon ends a cut copy with U+2026 and sets contentTruncated, so only
+    # the copy without that mark can be a prefix of the stored body.
+    cut = rpc[:-1] if msg.get("contentTruncated") is True and rpc.endswith("…") else rpc
     if body == rpc:
         prov = "VERIFIED"
-    elif rpc and body.startswith(rpc):
+    elif cut and body.startswith(cut):
         # chat_read truncates at maxContentChars. Legitimate, but delivering
         # silently truncated bytes as "the message" is the same defect wearing a
         # different hat -- deliver the FULL stored body and label the RPC copy.
@@ -7168,6 +8458,12 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
         PROMPT_BODY="$PROMPT_BODY INTERACTIVE session: this TUI stays open after you stop, and the wrapper claims the next task only once the CLI exits. End your one-line summary with: 'Exit this CLI session (e.g. /exit; keep the terminal tab open) to start the next task.'"
     fi
 
+    # -------- Worktree provisioning (worker seats; design §1) --------
+    # Before the pre-flight landing, so a refusal leaves no fresh baseline; not
+    # gated on autoCommit. Provisions W or stops the seat (provision_worktree).
+    if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ] && [ "$ROLE" = worker ]; then provision_worktree; fi
+    if [ "${MOE_WT_MODE:-}" = worktree ]; then worktree_preflight "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" "${RESUME_TASK_STATUS:-}"; fi
+
     # -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------
     # Runs once the task id is known and before the CLI starts (fresh claim
     # and resume alike). Gated on settings.autoCommit and on $PROJECT being a
@@ -7182,7 +8478,7 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
         # where a `recovered` landing sets neither flag.
         MOE_LANDING_DONE=""
         LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""
-        LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""
+        LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""; LAND_SUMMARY_HELD=""
         if [ -n "$MOE_PREFLIGHT_NOTICE" ]; then
             DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
 
@@ -7191,6 +8487,7 @@ $MOE_PREFLIGHT_NOTICE
 </system-reminder>"
         fi
     fi
+    if [ "${MOE_WT_MODE:-}" = worktree ]; then prepare_worktree_launch; fi
 
     # Compose final PROMPT = DYNAMIC_CONTEXT (per-iteration) + PROMPT_BODY (role).
     # Order: dynamic context first (sets the per-task scene), role body last (latest user instruction).
@@ -7237,11 +8534,15 @@ $PROMPT_BODY"
     fi
     # Claude account rotation: a fresh lease for every claude launch. The check
     # above stays on the operator's own config directory; nothing reads inside
-    # an account's. A wait for a free account is not launch time, so the
+    # an account's except an interactive seat's folder-trust key (the lease
+    # sets it). A wait for a free or trusted account is not launch time, so the
     # launch timestamp is taken after the lease.
     clear_account_lease
     if [ "$MOE_SKIP_LAUNCH" != true ] && [ "$CLI_TYPE" = claude ]; then
         get_account_lease
+    fi
+    if [ "$MOE_SKIP_LAUNCH" != true ]; then
+        prepare_agent_git_guard || { echo 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI' >&2; exit 1; }
     fi
     CLI_LAUNCHED_AT=$(date +%s)
     start_heartbeat_sidecar "$WORKER_ID"
@@ -7265,7 +8566,7 @@ $PROMPT_BODY"
         # Keep the shared fallback role-neutral so another seat cannot change
         # this seat's prefix. Role instructions and task context are private,
         # separate files; only stable instructions become model_instructions_file.
-        AGENT_INSTRUCTIONS_PATH="$PROJECT/.codex/agent-instructions.md"
+        AGENT_INSTRUCTIONS_PATH="${CLI_ROOT:-$PROJECT}/.codex/agent-instructions.md"
         mkdir -p "$(dirname "$AGENT_INSTRUCTIONS_PATH")"
         printf '%s' 'Moe role instructions are supplied by the launcher. Follow the user message for this session context.' > "$AGENT_INSTRUCTIONS_PATH"
         CODEX_SEAT_INSTRUCTIONS_FILE="$(create_secure_temp)/moe-codex-instructions-${ROLE}-$$.md"
@@ -7278,7 +8579,7 @@ $PROMPT_BODY"
         fi
         printf '%s' "$CODEX_FILE_BODY" > "$CODEX_SEAT_INSTRUCTIONS_FILE"
         echo -e "${GREEN}[OK]${NC} Agent instructions written to: $CODEX_SEAT_INSTRUCTIONS_FILE (shared role doc: $AGENT_INSTRUCTIONS_PATH)"
-        CODEX_MOE_OVERRIDE="$(codex_moe_server_override "$PROJECT/.codex/config.toml" "$WORKER_ID")"
+        CODEX_MOE_OVERRIDE="$(codex_moe_server_override "${CLI_ROOT:-$PROJECT}/.codex/config.toml" "$WORKER_ID")"
 
         # Build role-aware short prompt for Codex CLI argument
         # Codex instruction delivery chain:
@@ -7395,11 +8696,11 @@ $PROMPT_BODY"
             if [ "${CODEX_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != "1" ]; then
                 CODEX_ARGV_PROBED=true
                 PROBE_EXIT=0
-                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
+                PROBE_OUT="$(agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "${CLI_ROOT:-$PROJECT}" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
                 if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|unrecognized subcommand|unexpected value'; then
                     PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -i 'error' | head -n1)"
                     [ -n "$PROBE_LINE" ] || PROBE_LINE="exit $PROBE_EXIT"
-                    CODEX_VERSION="$("$COMMAND_BIN" --version 2>&1 | head -n1)"
+                    CODEX_VERSION="$(agent_git_exec "$COMMAND_BIN" --version 2>&1 | head -n1)"
                     echo -e "${RED}[ERROR]${NC} MOE_CLI_ARGV_REJECTED: the installed codex ($CODEX_VERSION) rejects the wrapper's launch argv -- $PROBE_LINE. Rebuild and reinstall the Moe plugin (or pin the codex version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check."
                     if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
                         ARGV_MSG="@governors $WORKER_ID: MOE_CLI_ARGV_REJECTED - the installed codex ($CODEX_VERSION) rejects the wrapper's launch argv ($PROBE_LINE). Seat exiting and deregistering (the task returns to the queue); rebuild and reinstall the Moe plugin or pin codex before relaunching."
@@ -7414,18 +8715,19 @@ $PROMPT_BODY"
             echo ""
             # The banner is the line the launch-failure hint tells the operator to re-run by
             # hand, so it carries every argv token the real launch does (ps1 twin parity).
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} ${CODEX_EXEC_OVERRIDES[*]} exec --json -C \"$PROJECT\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} ${CODEX_EXEC_OVERRIDES[*]} exec --json -C \"${CLI_ROOT:-$PROJECT}\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
             start_moe_usage_receipt codex headless
             set +e
 
             # Per-seat overrides on argv (PS twin parity): codex does not
             # forward the wrapper's environment to MCP servers, and the shared
             # .codex/config.toml cannot carry per-seat values without sibling
-            # seats clobbering them.
-            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
+            # seats clobbering them. The helper alone gets the TOOL-witness env
+            # the Claude stream parser gets (prompt-cache-witness.mjs).
+            agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
                 -c "$CODEX_MOE_OVERRIDE" \
-                "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
+                "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "${CLI_ROOT:-$PROJECT}" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
 
             CLI_EXIT_CODE=${PIPESTATUS[0]}
 
@@ -7434,14 +8736,14 @@ $PROMPT_BODY"
             # Interactive TUI mode
             echo "Starting Codex (interactive TUI)..."
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} -C \"$PROJECT\" \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} -C \"${CLI_ROOT:-$PROJECT}\" \"<prompt>\""
             start_moe_usage_receipt codex interactive
             set +e
 
-            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
+            agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
                 -c "$CODEX_MOE_OVERRIDE" \
-                "${CODEX_TASK_ARGS[@]}" -C "$PROJECT" "$SHORT_PROMPT"
+                "${CODEX_TASK_ARGS[@]}" -C "${CLI_ROOT:-$PROJECT}" "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?
 
@@ -7464,7 +8766,7 @@ $PROMPT_BODY"
 
         # Write system/role context to .gemini/GEMINI.md (Gemini's native context file)
         # Gemini CLI auto-discovers and loads this file on every prompt
-        GEMINI_INSTRUCTIONS_PATH="$PROJECT/.gemini/GEMINI.md"
+        GEMINI_INSTRUCTIONS_PATH="${CLI_ROOT:-$PROJECT}/.gemini/GEMINI.md"
         mkdir -p "$(dirname "$GEMINI_INSTRUCTIONS_PATH")"
         printf '%s' "$SYSTEM_APPEND" > "$GEMINI_INSTRUCTIONS_PATH"
         echo -e "${GREEN}[OK]${NC} Agent instructions written to: $GEMINI_INSTRUCTIONS_PATH"
@@ -7493,6 +8795,7 @@ $PROMPT_BODY"
             fi
         fi
 
+        route_prompt_overflow SHORT_PROMPT
         if [ "$GEMINI_EXEC" = true ]; then
             # Non-interactive headless mode
             echo -e "Starting Gemini (headless, --dangerously-skip-permissions)..."
@@ -7500,7 +8803,7 @@ $PROMPT_BODY"
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --print \"<prompt>\" --dangerously-skip-permissions"
             set +e
 
-            (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --print "$SHORT_PROMPT" --dangerously-skip-permissions)
+            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --print "$SHORT_PROMPT" --dangerously-skip-permissions)
 
             CLI_EXIT_CODE=$?
 
@@ -7512,7 +8815,7 @@ $PROMPT_BODY"
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt-interactive \"<prompt>\""
             set +e
 
-            (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-interactive "$SHORT_PROMPT")
+            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-interactive "$SHORT_PROMPT")
 
             CLI_EXIT_CODE=$?
 
@@ -7599,10 +8902,10 @@ $PROMPT_BODY"
         elif [ "$GROK_INTERACTIVE" = false ]; then
             # Non-interactive headless mode
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt-file \"$GROK_PROMPT_FILE\" --yolo --cwd \"$PROJECT\" --no-auto-update --output-format plain$GROK_EXTRA_DISPLAY"
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt-file \"$GROK_PROMPT_FILE\" --yolo --cwd \"${CLI_ROOT:-$PROJECT}\" --no-auto-update --output-format plain$GROK_EXTRA_DISPLAY"
             set +e
 
-            (cd "$PROJECT" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-file "$GROK_PROMPT_FILE" --yolo --cwd "$PROJECT" --no-auto-update --output-format plain "${GROK_MODEL_ARGS[@]}" "${GROK_EFFORT_ARGS[@]}")
+            (cd "${CLI_ROOT:-$PROJECT}" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-file "$GROK_PROMPT_FILE" --yolo --cwd "${CLI_ROOT:-$PROJECT}" --no-auto-update --output-format plain "${GROK_MODEL_ARGS[@]}" "${GROK_EFFORT_ARGS[@]}")
 
             CLI_EXIT_CODE=$?
 
@@ -7612,10 +8915,10 @@ $PROMPT_BODY"
             # keep it a short quote-free pointer at the prompt file.
             GROK_POINTER_PROMPT="Session context (routed mentions, pre-flight data) is in $GROK_PROMPT_FILE - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WORKER_ID. Then follow your role doc."
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --cwd \"$PROJECT\"${GROK_MODEL_ARGS:+ ${GROK_MODEL_ARGS[*]}} \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --cwd \"${CLI_ROOT:-$PROJECT}\"${GROK_MODEL_ARGS:+ ${GROK_MODEL_ARGS[*]}} \"<prompt>\""
             set +e
 
-            (cd "$PROJECT" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --cwd "$PROJECT" "${GROK_MODEL_ARGS[@]}" "$GROK_POINTER_PROMPT")
+            (cd "${CLI_ROOT:-$PROJECT}" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --cwd "${CLI_ROOT:-$PROJECT}" "${GROK_MODEL_ARGS[@]}" "$GROK_POINTER_PROMPT")
 
             CLI_EXIT_CODE=$?
 
@@ -7635,6 +8938,7 @@ $PROMPT_BODY"
         # (system prompt contains XML tags, backticks, and JSON that can break arg passing)
         SYSTEM_PROMPT_FILE=$(create_secure_temp)/system-prompt.md
         printf '%s' "$SYSTEM_APPEND" > "$SYSTEM_PROMPT_FILE"
+        if [ "$AUTO_CLAIM" = true ]; then route_prompt_overflow PROMPT; fi
 
         # Token-budget debug: set MOE_DEBUG_PROMPT_SIZE=1 to print final
         # SYSTEM_APPEND size before launching the agent. Used to measure
@@ -7751,7 +9055,7 @@ $PROMPT_BODY"
         # approvals for the project's .mcp.json servers, so they are named
         # explicitly (a -p seat connects them without asking).
         if [ -n "$ACCOUNT_LEASED_ID" ] && [ ${#PRINT_ARGS[@]} -eq 0 ]; then
-            if [ -f "$PROJECT/.mcp.json" ]; then ACCOUNT_ARGS+=(--mcp-config "$PROJECT/.mcp.json"); fi
+            if [ -f "${CLI_ROOT:-$PROJECT}/.mcp.json" ]; then ACCOUNT_ARGS+=(--mcp-config "${CLI_ROOT:-$PROJECT}/.mcp.json"); fi
             if "$NODE_CMD" "$ACCOUNT_HELPER" statusline-settings "$ACCOUNT_SETTINGS_FILE" >/dev/null 2>&1; then
                 ACCOUNT_ARGS+=(--settings "$ACCOUNT_SETTINGS_FILE")
             fi
@@ -7779,8 +9083,9 @@ $PROMPT_BODY"
         #   replace_in_files: exactly the files its applied summary lists (a
         #     dry run or a failed guard lists none).
         # Absolute paths outside the repo are dropped
-        # with a WARN. Codex/gemini/grok have no such stream: their TOOL set is
-        # empty (documented).
+        # with a WARN. Gemini, grok and the codex TUI have no such stream: their
+        # TOOL set is empty (documented). codex exec's --json stream is
+        # harvested on the codex branch by prompt-cache-witness.mjs.
         STREAM_JSON_PARSER=$(cat <<'PYEOF'
 import json, os, re, sys
 tool_json = ''
@@ -8055,10 +9360,10 @@ PYEOF
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 # Pipe through the parser; the subshell's exit (the CLI's) is
                 # PIPESTATUS[0] — the parser's own status is irrelevant.
-                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
-                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "$PROMPT")
+                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "$PROMPT")
                 CLI_EXIT_CODE=$?
             fi
 
@@ -8068,11 +9373,11 @@ PYEOF
 
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 start_moe_usage_receipt "$CLI_TYPE" headless
-                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
                 start_moe_usage_receipt "$CLI_TYPE" interactive
-                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT")
+                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT")
                 CLI_EXIT_CODE=$?
             fi
 
@@ -8080,6 +9385,8 @@ PYEOF
         fi
     fi
 
+    if [ -n "${AGENT_GIT_GUARD_ROOT:-}" ]; then rm -rf -- "$AGENT_GIT_GUARD_ROOT"; AGENT_GIT_GUARD_ROOT=""; fi
+    if [ -n "$PROMPT_OVERFLOW_FILE" ]; then rm -f -- "$PROMPT_OVERFLOW_FILE"; PROMPT_OVERFLOW_FILE=""; fi
     stop_heartbeat_sidecar
 
     # Launch-failure classification (tracker declared above the main loop).
@@ -8181,7 +9488,7 @@ PYEOF
         # Do NOT "fix" this by raising the limit: MAX_TASK_LIST_LIMIT is 500,
         # which only moves the same silent cliff further out.
         POSTFLIGHT_CTX_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null || true)
-        POSTFLIGHT_CTX=$(moe_rpc get_context "$POSTFLIGHT_CTX_ARGS" 2>/dev/null || echo "")
+        POSTFLIGHT_CTX=$(moe_rpc_unserved get_context "$POSTFLIGHT_CTX_ARGS" 2>/dev/null || echo "")
         FINAL_STATUS=""
         FINAL_REOPEN_COUNT="0"
         IS_EPIC_FINAL="true"
@@ -8330,7 +9637,12 @@ except Exception:
         # and parks the bytes on a rescue ref, it never aborts the loop.
         LANDING_MODE="none"
         LANDING_STATUS=""
-        if [ "$CS_AUTO_COMMIT" != "true" ]; then
+        # Worktree mode (design §3) never reaches the shared landing below.
+        if [ "${MOE_WT_MODE:-}" = worktree ]; then
+            worktree_postflight
+        elif { [ "$ROLE" = architect ] || [ "$ROLE" = qa ]; } && control_worktree_mode; then
+            control_seat_postflight
+        elif [ "$CS_AUTO_COMMIT" != "true" ]; then
             echo -e "${BLUE}[info]${NC} settings.autoCommit=false -- no git activity for task $PREFLIGHT_TASK_ID (no completion, checkpoint or rescue); baseline deleted."
             baseline_delete "$PREFLIGHT_TASK_ID"
         elif [ -n "$STATUS_LOOKUP_ERROR" ]; then
@@ -8488,7 +9800,7 @@ except Exception:
         ADOPT_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1]}))" "$WORKER_ID" 2>/dev/null || echo "")
         ADOPT_RESULT=""
         if [ -n "$ADOPT_ARGS" ]; then
-            ADOPT_RESULT=$(moe_rpc get_context "$ADOPT_ARGS" 2>/dev/null || echo "")
+            ADOPT_RESULT=$(moe_rpc_unserved get_context "$ADOPT_ARGS" 2>/dev/null || echo "")
         fi
         ADOPTED_TASK_ID=""
         if [ -n "$ADOPT_RESULT" ]; then
@@ -8555,3 +9867,12 @@ except Exception:
         break
     fi
 done
+
+# A one-shot run that ends teamless says so in its exit code instead of
+# looking like an idle seat; a looping seat keeps re-joining each pre-flight.
+if [ "$LOOP_ENABLED" = false ] && [ "${MOE_SKIP_LAUNCH:-}" = true ] && seat_is_teamless; then
+    echo "MOE_SEAT_UNREGISTERED worker=$WORKER_ID team=$TEAM - this one-shot run ends without a team (moe.join_team: $TEAM_JOIN_LAST_ERROR); exit 1."
+    exit 1
+fi
+exit
+}

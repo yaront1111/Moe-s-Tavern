@@ -135,7 +135,7 @@
       "completedAt": "2026-09-11T11:10:25.116Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -152,7 +152,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:27.252Z",
-  "updatedAt": "2026-09-11T12:16:52.440Z",
+  "updatedAt": "2026-10-24T15:19:08.028Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "architect-8b93cc67",
@@ -530,5 +530,6 @@
   ],
   "completedAt": "2026-09-11T12:16:05.875Z",
   "reviewCompletedAt": "2026-09-11T12:16:05.875Z",
-  "reviewSummary": "APPROVED. All 6 DoD items verified against landed bytes.\n\nQA RE-RAN (packages/moe-daemon):\n- npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts -> exit 0, 57 passed.\n- npm test -> exit 0, 1436 passed | 6 skipped (109 files).\n- npx tsc --noEmit -p tsconfig.json -> exit 0.\n\nDoD:\n1. Candidate at schema.ts:930 (id, attemptId, taskId, baseRevision, treeSha, deliveryTarget, createdAt; no updatedAt). StateManager:373 map + :1049 loadEntities over .moe/candidates; one file per candidate via writeEntity.\n2. Registered index.ts:65 + :154. Handler calls assertAttemptCurrent BEFORE recordCandidate - read the handler; 4 superseded cases (stale id, stale generation, FUTURE generation, closed attempt) assert -32002/ATTEMPT_SUPERSEDED with a writeEntity spy proving nothing written.\n3. CANDIDATE_IMMUTABLE (-32002) per differing field with byte-level file compare; changed tree under a new id yields a second candidate, both persist. Byte-identical re-record returns the stored record, duplicate:true, original createdAt, writeEntity uncalled.\n4. listCandidatesForTask/ForAttempt tested, createdAt-then-id order.\n6. SCHEMA.md ## Candidate + validation rules; MCP_SERVER.md ### moe.record_candidate.\n\nRAILS: no update/patch/delete function EXISTS (grep + export-list test pinning exactly 5 exports). No child_process/spawn/exec (grep + source-grep test). Not blocking. Shas documented runner-REPORTED, shape-checked only.\n\nQA SELF-LAND: completion d408634 carried 8 code paths but skipped both docs as contested (peers task-7265e1fc, task-0d11e05f). Verified zero peer hunks: 46+49 insertions, 0 deletions, every added line inside the Candidate/record_candidate sections; task-7265e1fc all steps PENDING. Landed b2061c8 via temp-index + commit-tree + update-ref CAS (peers' index untouched), recorded via record_commit. Working tree == HEAD for all 9 task paths."
+  "reviewSummary": "APPROVED. All 6 DoD items verified against landed bytes.\n\nQA RE-RAN (packages/moe-daemon):\n- npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts -> exit 0, 57 passed.\n- npm test -> exit 0, 1436 passed | 6 skipped (109 files).\n- npx tsc --noEmit -p tsconfig.json -> exit 0.\n\nDoD:\n1. Candidate at schema.ts:930 (id, attemptId, taskId, baseRevision, treeSha, deliveryTarget, createdAt; no updatedAt). StateManager:373 map + :1049 loadEntities over .moe/candidates; one file per candidate via writeEntity.\n2. Registered index.ts:65 + :154. Handler calls assertAttemptCurrent BEFORE recordCandidate - read the handler; 4 superseded cases (stale id, stale generation, FUTURE generation, closed attempt) assert -32002/ATTEMPT_SUPERSEDED with a writeEntity spy proving nothing written.\n3. CANDIDATE_IMMUTABLE (-32002) per differing field with byte-level file compare; changed tree under a new id yields a second candidate, both persist. Byte-identical re-record returns the stored record, duplicate:true, original createdAt, writeEntity uncalled.\n4. listCandidatesForTask/ForAttempt tested, createdAt-then-id order.\n6. SCHEMA.md ## Candidate + validation rules; MCP_SERVER.md ### moe.record_candidate.\n\nRAILS: no update/patch/delete function EXISTS (grep + export-list test pinning exactly 5 exports). No child_process/spawn/exec (grep + source-grep test). Not blocking. Shas documented runner-REPORTED, shape-checked only.\n\nQA SELF-LAND: completion d408634 carried 8 code paths but skipped both docs as contested (peers task-7265e1fc, task-0d11e05f). Verified zero peer hunks: 46+49 insertions, 0 deletions, every added line inside the Candidate/record_candidate sections; task-7265e1fc all steps PENDING. Landed b2061c8 via temp-index + commit-tree + update-ref CAS (peers' index untouched), recorded via record_commit. Working tree == HEAD for all 9 task paths.",
+  "planRevision": 0
 }

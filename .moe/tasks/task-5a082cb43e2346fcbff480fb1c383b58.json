@@ -1,0 +1,276 @@
+{
+  "id": "task-5a082cb43e2346fcbff480fb1c383b58",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M01f] Effective task delivery policy",
+  "description": "Objective: Make existing shared delivery-policy consumers respect protected strict configuration snapshots without changing historical legacy/observe semantics.\n\nDeliverable: Introduce one effective task-policy selection path shared by evaluateDeliveryEvidence and qa_approve. Fix qaApprove's separate live-project legacy branch so it cannot skip evidence/readiness evaluation for a stored strict task after rollback. Legacy/observe tasks continue the old live deliveryPolicy and required-check rules. Unavailable strict configuration stays fail-closed in QA, dependency readiness and serving projections; no attestation or missing-policy fallback relabels it verified. Preserve immutable historical configuration and current requiredCheckAtDone behavior; actual revision/candidate-bound check definitions and local delivery certification remain later rollout work.\n\nExisting implementation surfaces / proposed focused tests (maximum five files): packages/moe-daemon/src/delivery/policy.ts (evaluateDeliveryEvidence/requiredCheckCommand/resolveDeliveryPolicy); packages/moe-daemon/src/tools/qaApprove.ts; proposed new packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts. The new focused suite exercises real dependencyShortfall and deliveryProjection consumers; no old held-out acceptance file edits.\n\nNOT in scope: Changing legacy delivery acceptance, treating ARCHIVED/deleted legacy dependencies differently, enabling verified-local, certifying existing runner-observed strings, new check/delivery semantics, or altering old held-out delivery assertions. Verification (fresh, exit 0): cd packages/moe-daemon && npm test -- --maxWorkers=4. Run in a synchronized isolated copy with native Linux dependencies and Linux-only PATH; preserve the original Windows node_modules and unchanged package-lock.json. Each slice owns its behavior tests, one final verification/adversarial review, and no production activation. This breakdown defines deliverables, not per-task implementation steps.",
+  "definitionOfDone": [
+    "New focused integration tests show qa_approve cannot bypass stored strict policy when current project deliveryPolicy is legacy or profile selection is rolled back.",
+    "evaluateDeliveryEvidence, real dependencyShortfall and deliveryProjection agree that unavailable/malformed strict policy is not satisfied or verified.",
+    "Absent/legacy/observe matrices retain existing live policy semantics across local-branch, remote-push, merged-pull-request, manual-artifact and legacy modes.",
+    "Existing requiredCheckCommand/requiredCheckAtDone behavior and attestation labeling remain unchanged outside strict configuration; no incomplete policy snapshot substitutes for future check-definition/destination proof.",
+    "Old held-out delivery acceptance tests remain unchanged; snapshot-read failures and rejected QA operations write no approval/completion evidence.",
+    "Fresh `cd packages/moe-daemon && npm test -- --maxWorkers=4` exits 0 in the synchronized native-Linux copy, with actual pass/skip counts and output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Do not enable verified-local or claim approval, runner trust, hardware/isolation certification, or verified completion from a configuration snapshot.",
+    "Do not edit packages/moe-daemon/src/delivery/acceptance.test.ts or weaken existing held-out delivery assertions; add focused tests for new behavior.",
+    "No direct .moe edits or Git writes; wrappers own landing. Keep each implementation plan within five source/test files and normal sizing limits."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Preconditions, then TDD red, part 1. Load test-driven-development first.\n\n**Preconditions**\n- Confirm CQ-M01c (task-0f7df75f…), CQ-M01d (task-80dfde45…) and CQ-M01e (task-29c8274e…) are DONE and landed: get_context epicSiblings landing.merged, or `git log moe/work-2026-10-24 --grep 'Moe-Task: <id>'`.\n- Read what they landed: taskStore's assertProgressionReady and util/claimEligibility's executionAdmissionRefusal. Both decide strictness as `resolveTaskExecutionProfile(settings, task.executionPolicySnapshot)` followed by `assertExecutionProfileReady`. This task reuses exactly that pair. If the landed rule differs, use the landed one and say so in the completion summary.\n- Read-only for this task: delivery/acceptance.test.ts, delivery/executionProfile.ts and its tests, state/deliveryProjection.ts, state/dependencyUnblock.ts, state/taskStore.ts, util/claimEligibility.ts, tools/claimNextTask.ts, and every existing test file. A red existing test means legacy behaviour changed: fix the code, never the test.\n\n**Create packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts (LF).**\n\nHeader comment: this file pins CQ-M01f.\n- One per-task policy selection is shared by qa_approve, the dependency gate and the board projection.\n- Legacy and observe are unchanged.\n- Strict and malformed configuration fail closed.\n\n**Helpers.** Mirror the 'moe.qa_approve — deliveryPolicy gate' and 'delivery policy — evaluateDeliveryEvidence' describes in tools/qaApprove.test.ts. Copy their HARNESS_SETTINGS shape, because setupMoeFolder replaces the whole settings object.\n- Import the module under test as `import * as policy from './policy.js'`, so a missing resolveTaskDeliveryPolicy export fails only its own cases.\n- `seed({settings, task, candidates, checks, siblings})`:\n  1. Write candidate and check records into .moe/<kind>/ before load (the writeFixtureRecord pattern).\n  2. Write the raw task JSON via h.createTask. This hand edit is the only way a verified-local snapshot or setting can exist, because update_settings and the M01c backstop refuse them.\n  3. Call state.load(), then mock postToRoleChannel.\n- Default fixture: a REVIEW task-1 with complete evidence:\n  - reviewStartedAt set;\n  - current candidate cand-1 on tree T;\n  - a runner-observed exit-0 run of GATE = 'node gate.cjs' on cand-1/T;\n  - one pushed completion commit recorded this round;\n  - settings qualityGate GATE, qualityGateScope 'everyTask', autoCommit true.\n- `approve(extra)`: the real qaApproveTool handler with `{taskId:'task-1', workerId:'qa-1', summary, candidateId:'cand-1', ...extra}`.\n- `refusedWithoutWrites(call, codeName)`:\n  - Before the call: snapshot the task file bytes and a structuredClone of the row; spy writeEntity, touchWorker and postSystemMessage; collect h.state.subscribe events.\n  - Require a MoeError with that codeName.\n  - Then require: zero writes, zero worker touches, zero system or role-channel posts, no events, identical file bytes, an equal row that is still REVIEW, an empty listReviewsForTask and no .moe/reviews directory.\n  - Return the error.\n- Snapshots:\n  - STRICT_V2 `{version:2, profile:'verified-local', planRevision:1, deliveryPolicy:'local-branch'}`\n  - STRICT_LEGACY: the same, with deliveryPolicy 'legacy'\n  - STRICT_V1 `{version:1, profile:'verified-local', planRevision:1}`\n  - legacyV2(p), observeV2(p), LEGACY_V1, OBSERVE_V1\n- MALFORMED table:\n  - null, [] and the string 'verified-local'\n  - version 3\n  - profile 'VERIFIED-LOCAL'\n  - STRICT_V2 plus ready:true\n  - v2 verified-local without deliveryPolicy\n  - planRevision '1'\n- NOT_READY: code -32003 and codeName EXECUTION_PROFILE_NOT_READY. Its context is `{executionProfile:'verified-local', missingCapabilities}`, where missingCapabilities is the leaf's five entries verbatim.\n\n**Group Q: qa_approve cannot bypass strict (DoD 1, 4, 5)**\n\nQ1. it.each over strict sources. Each must be refusedWithoutWrites(approve(), 'EXECUTION_PROFILE_NOT_READY') with the exact NOT_READY identity.\n- (a) STRICT_V2 under settings with no deliveryPolicy (rolled back to the default).\n- (b) STRICT_V2 on a task with planRevision 3 (a stale snapshot), under `{executionProfile:'legacy', deliveryPolicy:'legacy'}`.\n- (c) STRICT_V2 under `{executionProfile:'observe', deliveryPolicy:'local-branch'}`. The live policy's evidence is complete, so only strictness can refuse.\n- (d) STRICT_LEGACY under legacy. A captured legacy policy must not be read as legacy-satisfied.\n- (e) STRICT_V1 under legacy. There is no captured policy, and there must be no fallback to the live one.\n- (f) No snapshot, with settings executionProfile 'verified-local'.\n- (g) legacyV2('legacy') under executionProfile 'verified-local'.\n\nControl: the same fixture holding observeV2('local-branch') under (c)'s settings reaches DONE.\n\nQ2. Attestations never relabel.\n- STRICT_V2 with deliveryPolicy 'manual-artifact', under live manual-artifact plus manualArtifact: NOT_READY, and no deliveryEvidence is written.\n- The merged-pull-request twin, with mergedPullRequest: the same.\n- Precedence: STRICT_V2 under live legacy plus manualArtifact is NOT_READY. Its observe-snapshot twin gets the existing INVALID_INPUT ('is accepted only under deliveryPolicy manual-artifact').\n\nQ3. `vi.stubEnv('MOE_EXECUTION_PROFILE_READY', '1')` does not lift a Q1 refusal. Unstub afterwards.\n\nQ4. Malformed input.\n- it.each(MALFORMED) under legacy settings: refusedWithoutWrites INVALID_INPUT, with context.field starting 'executionPolicySnapshot'.\n- Settings executionProfile 'VERIFIED-LOCAL' with a legacyV2 snapshot: INVALID_INPUT with field 'executionProfile'.\n\nQ5. policy.resolveTaskDeliveryPolicy called directly.\n- It returns the LIVE deliveryPolicy, never the captured one, for each of absent, LEGACY_V1, OBSERVE_V1, legacyV2('manual-artifact') and observeV2('remote-push'), under absent, legacy and observe live profiles.\n- It throws the NOT_READY identity for every Q1 source.\n- It throws INVALID_INPUT for every MALFORMED row.\n- Object.freeze'd inputs are accepted and left unchanged.\n\n**Red run.** Run the file in the scratch copy (recipe in step 2). The Q strict rows must fail because the approval succeeds or writes, and Q5 because the export is missing. A typo or harness error is not a valid red.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+      ],
+      "note": "Preconditions:\n- M01c, M01d and M01e are landed (epicSiblings merged:true).\n- taskStore.assertProgressionReady and claimEligibility.executionAdmissionRefusal both use resolveTaskExecutionProfile + assertExecutionProfileReady; reused as-is.\n\nNew executionPolicyIntegration.test.ts (LF) adds groups Q1-Q5.\n\nRed in isolated Linux copy /tmp/moe-m01f-test.*: lockfile JSON-equal, Linux node_modules symlinked, MOE_* unset, Linux PATH. 48 failed / 2 passed. The passes are the Q1 control and the Q2 observe twin.\n- Q1/Q3/Q4/Q2-strict: writeEntity called once, because an approve Review is written before the M01c backstop refuses DONE.\n- Q2 precedence: INVALID_INPUT instead of NOT_READY.\n- Q5: TypeError, resolveTaskDeliveryPolicy is not a function.\n\nPeers' dirty paths are untouched.",
+      "startedAt": "2026-10-24T15:46:06.877Z",
+      "completedAt": "2026-10-24T15:50:36.697Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "TDD red, part 2. Append groups E and L to executionPolicyIntegration.test.ts, reusing step 1's helpers.\n\n**Group E: the consumers agree (DoD 2)**\n\nFixture:\n- DONE task-P (order 1, requiredCheckAtDone GATE). Its current candidate cand-P on tree T has a runner-observed exit-0 GATE run, so its evidence is complete.\n- A waiter task-D: BLOCKED from WORKING, blockedOnTaskIds ['task-P'], blockedAt set, unassigned.\n\nE1. it.each over strict sources: STRICT_V2 under legacy; STRICT_V2 under {observe, local-branch}; STRICT_LEGACY; STRICT_V1; no snapshot under executionProfile 'verified-local'. For each:\n- `evaluateDeliveryEvidence(state, P)` and `dependencyShortfall(state, 'task-P')` each throw the NOT_READY identity.\n- isDependencySatisfied is false, and `unmetDependsOn(state, {dependsOn:['task-P']})` equals ['task-P'].\n- describeUnmetDependency does not throw. Its result starts 'task-P [DONE' and contains 'could not be judged'.\n- runDependencyUnblock under state.runExclusive restores nothing, and task-D stays BLOCKED.\n- `deliveryProjection(state, P)` still returns currentCandidate (id cand-P) and latestCheckRun {command GATE, exitCode 0, source runner-observed}, but has NO requiredCheckSatisfied key.\n\nControl twin: observeV2('legacy') under {observe, local-branch}.\n- evaluate equals `{policy:'local-branch', satisfied:true, missingEvidence:[]}`.\n- dependencyShortfall is satisfied.\n- runDependencyUnblock restores task-D to WORKING.\n- requiredCheckSatisfied === true.\n\nThe control proves that every strict result comes from strictness, not from missing evidence.\n\nE2. The same task in REVIEW: evaluate throws NOT_READY, and the projection omits requiredCheckSatisfied.\n\nE3. Malformed input: null, the extra-key row, v2 without deliveryPolicy, and settings executionProfile 'VERIFIED-LOCAL'.\n- evaluate and dependencyShortfall throw INVALID_INPUT.\n- isDependencySatisfied is false.\n- The projection omits requiredCheckSatisfied but keeps currentCandidate.\n\nE4. Compatibility pin: an ARCHIVED task-P holding STRICT_V2 still satisfies. This is the existing rule and is out of scope.\n\nE5. Read-only: across the E1-E3 strict and malformed calls, writeEntity is never called, and the stored snapshot and the task file bytes are unchanged.\n\n**Group L: legacy and observe keep the live rules (DoD 3, 4)**\n\nL1. Evaluate matrix.\n- it.each over three axes:\n  - live deliveryPolicy: absent, legacy, local-branch, remote-push, merged-pull-request, manual-artifact;\n  - live executionProfile: absent, legacy, observe;\n  - snapshot: absent, LEGACY_V1, OBSERVE_V1, legacyV2('manual-artifact'), observeV2('remote-push').\n- Fixture: a REVIEW task with one UNPUSHED completion commit this round, the gate owed, and no candidate, so no passing run exists.\n- Seed once, then swap h.state.project.settings and the task's snapshot in memory.\n- The result must equal both a pinned table and the snapshot-less result under the same live deliveryPolicy without executionProfile. The pinned table:\n  - absent and legacy: `{policy:'legacy', satisfied:true, missingEvidence:[]}`\n  - local-branch: ['required-check:node gate.cjs']\n  - remote-push: ['pushed-completion-commit', 'required-check:node gate.cjs']\n  - merged-pull-request: ['merged-pull-request', 'required-check:node gate.cjs']\n  - manual-artifact: ['manual-artifact', 'required-check:node gate.cjs']\n\nL2. qa_approve matrix. Settings have no qualityGate and there is no candidate, so only landing evidence counts. Run it over snapshots absent, legacyV2('manual-artifact') and OBSERVE_V1:\n- Live default: DONE with the existing NO-COMPLETION-COMMIT warning and no deliveryPolicy key.\n- local-branch: with no commit, refusedWithoutWrites DELIVERY_EVIDENCE_MISSING with context `{taskId, deliveryPolicy, missingEvidence:['completion-commit']}`. With a commit, it reaches DONE with result.deliveryPolicy 'local-branch'.\n- remote-push: an unpushed commit gives ['pushed-completion-commit']; a pushed one reaches DONE.\n- merged-pull-request and manual-artifact:\n  - with the attestation missing, the refusal names their token;\n  - with it supplied, the task reaches DONE with task.deliveryEvidence `{kind, reference, verifiedDelivery:false, recordedBy:'qa-1', recordedAt}` and the existing 'NOT verified delivery' message suffix.\n- manualArtifact under live local-branch gives the existing INVALID_INPUT.\n\nL3. requiredCheckAtDone (DoD 4). Fixture: observeV2('local-branch') under live legacy, with qualityGate '  node gate.cjs  ' and scope 'everyTask'.\n- Approval stores requiredCheckAtDone 'node gate.cjs'.\n- With autoCommit false it stores null.\n- With the scope unset and a higher-order sibling, it stores null.\n- Each result equals its snapshot-less twin.\n\nL4. Dependency and projection.\n- DONE task-P holding legacyV2('local-branch') under live legacy is satisfied, and the projection has no requiredCheckSatisfied key.\n- Under {observe, local-branch} with no passing run:\n  - missingEvidence is ['required-check:node gate.cjs'] and the projection reads false;\n  - after recordCheckRun records a runner-observed exit-0 GATE run on the current candidate, it is satisfied and reads true.\n\n**Style.** Keep the file compact with it.each tables and shared fixtures, and use exact toEqual values. The source must not contain any substring from the project's global forbiddenPatterns. The check is a raw substring match, so avoid the dunder-proto key and any identifier ending in the dynamic-code call token.\n\n**Scratch runner** (used by every later step). The shared node_modules is a Windows install: never touch it or package-lock.json.\n1. `D=$(mktemp -d /tmp/moe-m01f-test.XXXXXX)`\n2. `git -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar -x -C \"$D\"`\n3. `ln -s \"$(cat /tmp/moe-linux-test-root.latest)/repo/packages/moe-daemon/node_modules\" \"$D/packages/moe-daemon/node_modules\"`\n4. Copy the owned files' working-tree bytes into $D before each run.\n5. Run vitest from $D/packages/moe-daemon with every MOE_* var unset and the Linux-only PATH (exact env in step 5).\n\n**Red check.** The E reds must be the missing selection, meaning strict rows read as legacy-satisfied. The L rows pin today's behaviour, so they already pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+      ],
+      "note": "Appended groups E and L to executionPolicyIntegration.test.ts (LF, now 511 lines).\n- E: E1 runs over all 7 STRICT_SOURCES, a superset of the plan's 5. The E1 control twin, E2 (REVIEW), E3 (4 malformed rows) and E4 (ARCHIVED compatibility) are here too.\n- E5's read-only check is folded into the shared expectConsumersWithhold helper: no writeEntity, the snapshot is unchanged and the file bytes are unchanged.\n- L: L1 is the 6-policy matrix crossed with 3 profiles and 5 snapshots, each compared to its snapshot-less twin. L2 is qa_approve over 3 snapshots, L3 is requiredCheckAtDone (3 cases x snapshot/twin), and L4 is the dependency gate and projection, plus recordCheckRun.\n\nRed, in /tmp/moe-m01f-test.eZESrm (MOE_* unset, Linux PATH): the whole file is 66 failed / 48 passed (114).\n- Q: 48 failed, as in step 1.\n- E: all 18 strict/malformed rows fail with 'expected a MoeError, but the call returned', meaning strict rows are read as satisfied.\n- E1 control, E4 and every L row pass; they pin today's behaviour.\n\nPeers' dirty paths are untouched.",
+      "startedAt": "2026-10-24T15:52:32.169Z",
+      "completedAt": "2026-10-24T15:56:25.060Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add the shared selection to packages/moe-daemon/src/delivery/policy.ts. The file is LF in both the index and the working tree; keep it LF.\n\n**1. Imports.** Add assertExecutionProfileReady and resolveTaskExecutionProfile to the existing './executionProfile.js' import. That module is the leaf, so this creates no cycle; stateModules.test.ts must stay green.\n\n**2. Export `resolveTaskDeliveryPolicy`.** Signature: `(settings: { executionProfile?: unknown; deliveryPolicy?: unknown } | null | undefined, task: Pick<Task, 'executionPolicySnapshot'>): DeliveryPolicy`.\n- Body: `assertExecutionProfileReady(resolveTaskExecutionProfile(settings, task.executionPolicySnapshot)); return resolveDeliveryPolicy(settings);`\n- This is exactly the strictness rule of the M01c backstop and of M01e admission: the live profile, floored by a stored verified-local snapshot, whether or not its revision is stale.\n- A strict task throws the leaf's EXECUTION_PROFILE_NOT_READY BEFORE any policy is read. So neither the live policy, an attestation, nor an absent captured policy can stand in for the revision-bound check and destination proof it owes.\n- Selecting a strict task's captured policy is later rollout work, once verified-local is certified. Do not add that branch now, and never rank policies.\n- Legacy and observe tasks return the LIVE resolveDeliveryPolicy result exactly as before. A captured deliveryPolicy is identity only and is never consulted.\n- Error handling:\n  - a malformed snapshot or executionProfile setting gives the leaf's INVALID_INPUT;\n  - an unrecognised deliveryPolicy gives resolveDeliveryPolicy's verbatim INVALID_INPUT, which qaApprove.test.ts and dependencyUnblock.test.ts assert.\n- Pure: it only reads. It never writes, repairs or caches.\n\n**3. evaluateDeliveryEvidence.** Replace `resolveDeliveryPolicy(state.project?.settings)` with `resolveTaskDeliveryPolicy(state.project?.settings, task)`.\n\nRewrite its doc comment. It throws rather than answers when the task's policy cannot be applied:\n- an unrecognised deliveryPolicy;\n- a malformed snapshot or setting;\n- a strict task while verified-local is not ready.\n\nEvery consumer already reads a throw as not satisfied:\n- isDependencySatisfied withholds;\n- describeUnmetDependency names it unjudgeable;\n- deliveryProjection's readEvidence omits requiredCheckSatisfied;\n- qa_approve refuses before any write.\n\n**4. Module header.** Replace 'The one throw is an unrecognised deliveryPolicy…' with the same throw list. Add one sentence saying that which policy applies is per task (resolveTaskDeliveryPolicy).\n\n**5. Unchanged.** Do not touch requiredCheckCommand, checkShortfall, landingShortfall, the attestation helpers, the tokens or the messages.\n\n**Green in $D:**\n- groups E, L1, L4 and Q5 of the new test file;\n- src/delivery/executionPolicySnapshot.test.ts\n- src/delivery/executionProfile.test.ts\n- src/state/dependencyUnblock.test.ts\n- src/state/deliveryProjection.test.ts\n- src/state/stateModules.test.ts\n\nQ1 rows under a live legacy policy stay red until step 4, because qa_approve's own legacy branch still skips evaluation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "note": "policy.ts (LF kept, +40/-7):\n- Imports assertExecutionProfileReady and resolveTaskExecutionProfile from the leaf.\n- New export resolveTaskDeliveryPolicy(settings, task): assertExecutionProfileReady(resolveTaskExecutionProfile(settings, task.executionPolicySnapshot)), then the live resolveDeliveryPolicy(settings). It has no captured-policy branch and no ranking.\n- evaluateDeliveryEvidence now calls it.\n- The doc comment and module header list the throw cases. requiredCheckCommand, checkShortfall, landingShortfall, the attestations, the tokens and the messages are untouched.\n\nGreen in /tmp/moe-m01f-test.eZESrm: 411 tests, 389 passed / 22 failed.\n- The 22 are the expected qa_approve rows under a live legacy policy (Q1/Q3 a,b,d-g, Q4 x9, Q2 precedence). They stay red until step 4, because qa_approve's own `deliveryPolicy !== 'legacy'` branch skips evaluation.\n- E, L1-L4 and Q5 are all green.\n- executionPolicySnapshot.test.ts, executionProfile.test.ts, dependencyUnblock.test.ts, deliveryProjection.test.ts and stateModules.test.ts are all green.",
+      "startedAt": "2026-10-24T15:56:28.025Z",
+      "completedAt": "2026-10-24T15:57:12.559Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Wire qa_approve in packages/moe-daemon/src/tools/qaApprove.ts. The file is LF; keep it LF.\n\n**1. Import.** Import resolveTaskDeliveryPolicy instead of resolveDeliveryPolicy, which is no longer used here.\n\n**2. Delivery gate block.** Keep its current position: after the candidate binding, before recordReview, updateTask, touchWorker and every chat side effect.\n- `const deliveryPolicy = resolveTaskDeliveryPolicy(state.project?.settings, task);`\n- `const attestations = readDeliveryAttestations(params, deliveryPolicy);`\n- `const evidence = evaluateDeliveryEvidence(state, task, attestations); if (!evidence.satisfied) throw deliveryEvidenceRefusal(task.id, evidence, autoCommitOn);`\n\nRemove the separate `if (deliveryPolicy !== 'legacy')` branch. Evaluation always runs. Under the default policy it returns satisfied at once, so legacy approvals behave exactly as before.\n\nThe selection runs before the attestations are read. So a strict or malformed task is refused before any attestation can be validated or labelled.\n\n**3. Rewrite the gate comment.** It should say:\n- The policy is the TASK's, the same selection evaluateDeliveryEvidence uses, never the bare live setting.\n- A stored verified-local snapshot is refused with EXECUTION_PROFILE_NOT_READY even after a rollback to legacy, and a malformed snapshot or setting with INVALID_INPUT, both before the Review write.\n- This matters because CQ-M01c's store backstop refuses DONE only inside updateTask, which runs after recordReview has already persisted an 'approve' Review.\n\n**4. Unchanged:**\n- attestationLabel(deliveryPolicy, …);\n- the response's deliveryPolicy key;\n- `requiredCheckAtDone: requiredCheckCommand(state, task)`;\n- the soft commit gate and its warnings;\n- the tool description and the input schema. The docs sweep belongs to the CQ-M01 integration task (task-ad95cb27…).\n\nError handling: every refusal is thrown before any write; nothing is caught or downgraded.\n\n**Green in $D:**\n- the whole new test file;\n- src/tools/qaApprove.test.ts\n- src/delivery/acceptance.test.ts\n- src/state/taskExecutionPolicy.test.ts\n- src/tools/executionProfileAdmission.test.ts\n- src/server/WebSocketServer.test.ts",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts"
+      ],
+      "note": "qaApprove.ts (LF kept, +17/-13):\n- Imports resolveTaskDeliveryPolicy instead of resolveDeliveryPolicy.\n- The gate is now: task policy selection, then readDeliveryAttestations, then an unconditional evaluateDeliveryEvidence, then refuse. The `deliveryPolicy !== 'legacy'` branch is removed.\n- Its position is unchanged: after the candidate binding, before recordReview, updateTask, touchWorker and chat. The gate comment is rewritten.\n- Unchanged: attestationLabel, the response's deliveryPolicy key, requiredCheckAtDone, the soft gate and warnings, the description and the schema.\n\nGreen in /tmp/moe-m01f-test.eZESrm (MOE_* unset, Linux PATH): 6 files, 558/558 passed:\n- executionPolicyIntegration.test.ts (all 114)\n- qaApprove.test.ts\n- acceptance.test.ts (unedited)\n- taskExecutionPolicy.test.ts\n- executionProfileAdmission.test.ts\n- WebSocketServer.test.ts",
+      "startedAt": "2026-10-24T15:57:13.549Z",
+      "completedAt": "2026-10-24T15:57:46.099Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "The one verification gate, run in a fresh synchronized native-Linux copy. Never use the Windows node_modules, and keep package-lock.json unchanged.\n\n**1. Build the copy:**\n```\nD=$(mktemp -d /tmp/moe-m01f-gate.XXXXXX)\ngit -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar -x -C \"$D\"\nfor f in packages/moe-daemon/src/delivery/policy.ts packages/moe-daemon/src/tools/qaApprove.ts packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts; do cp \"/mnt/d/projexts/moes/$f\" \"$D/$f\"; done\nNM=\"$(cat /tmp/moe-linux-test-root.latest)/repo/packages/moe-daemon\"\nLPATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nPATH=$LPATH node -e 'const [a,b]=process.argv.slice(1).map(p=>JSON.stringify(require(p)));process.exit(a===b?0:1)' \"$NM/package-lock.json\" \"$D/packages/moe-daemon/package-lock.json\" && ln -s \"$NM/node_modules\" \"$D/packages/moe-daemon/node_modules\"\n```\nIf the lockfiles differ, run `npm ci` in $D/packages/moe-daemon with the same env instead of linking.\n\n**2. Run the suite:**\n```\ncd \"$D/packages/moe-daemon\" && UNSET=$(env | grep -oE '^MOE_[A-Z_]+' | sed 's/^/-u /' | tr '\\n' ' ') && env $UNSET PATH=$LPATH npm test -- --maxWorkers=4\n```\nThen run `npx tsc --noEmit --incremental false` with the same env. Both must exit 0.\n\n**3. Record and check:**\n- Record the files, passed and skipped counts against the last full count that CQ-M01e reported, in its handoff or completion summary.\n- Type-check the new test file once, since tsconfig excludes tests: `npx tsc --noEmit --ignoreConfig --target ES2022 --module ESNext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --resolveJsonModule src/delivery/executionPolicyIntegration.test.ts`.\n- A red test outside the owned files: classify it by re-running this recipe on a pristine HEAD copy before touching anything. Never weaken or skip a test.\n- Keep the npm test command line, its exit code and output tail for complete_task. That evidence must name the actual pass and skip counts.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate, in a fresh isolated native-Linux copy /tmp/moe-m01f-gate.* built from `git archive HEAD` (2bbf4eb) plus the 3 owned files (cmp-equal to the shared tree). The lockfile is JSON-equal and the Linux node_modules is symlinked. Every MOE_* var was unset and PATH was Linux-only.\n\n- `npm test -- --maxWorkers=4`: exit 0, 153 files passed, 3407 passed / 9 skipped (3416).\n  - CQ-M01e reported 152 files and 3284/9; its QA re-run gave 3293/9.\n  - The delta is the new file (+1 file, +114 tests) plus peer landings since then.\n- `npx tsc --noEmit --incremental false`: exit 0.\n- A one-off type check of the new test file (`tsc --ignoreConfig --strict …`): exit 0.\n\nNo reds outside the owned files.",
+      "startedAt": "2026-10-24T15:57:47.050Z",
+      "completedAt": "2026-10-24T15:59:02.258Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Exactly one adversarial self-review of the three-file diff. Load adversarial-self-review. Read `git diff -- packages/moe-daemon/src/delivery/policy.ts packages/moe-daemon/src/tools/qaApprove.ts` and the new test file.\n\n**Mutation probes.** Run each alone in $D, because a guard pinned only by end state can hide behind a sibling. Record each probe's red count.\n1. Put evaluateDeliveryEvidence back on the live resolveDeliveryPolicy. E1-E3 go red; Q stays green through qa_approve's own selection.\n2. Put qa_approve back on the live resolveDeliveryPolicy, with evaluation still unconditional. The Q2 precedence case goes red: INVALID_INPUT instead of NOT_READY.\n3. Restore the `deliveryPolicy !== 'legacy'` branch with the live policy. Q1 rows under a live legacy policy go red: an 'approve' Review is written before the store backstop refuses DONE.\n4. Move the gate after recordReview. refusedWithoutWrites goes red.\n5. Drop assertExecutionProfileReady from the selector. Q1, Q5 and E1 go red.\n6. Base the selector on resolveExecutionProfile(settings) alone, with no snapshot floor. Rows (a)-(e) go red; (f) and (g) still pass.\n7. Make the selector catch decode errors and use the live policy. Q4, E3 and the Q5 malformed rows go red.\n8. Judge strict rows by readCapturedDeliveryPolicy under today's evidence rules. Q1 (c) and E1's STRICT_V2 rows go red.\n\n**Then challenge:**\n- concurrent approvals under the mutex;\n- a stale strict snapshot, with planRevision behind the task's;\n- an explicit claim of a dependent whose prerequisite is a strict DONE task. dependsOnClaimRefusal then throws NOT_READY without naming that prerequisite. This follows the same precedent as an unrecognised deliveryPolicy. Leave dependencyUnblock.ts and claimNextTask.ts alone, and note it for CQ-M01 (task-ad95cb27…);\n- describeUnmetDependency and the stale-block alert still say 'check settings.deliveryPolicy' for a strict prerequisite. Note it; do not edit;\n- per-event cost and log noise when every task is strict under a hand-edited verified-local setting;\n- that no path consults env, caller args or a missing captured policy as readiness;\n- that legacy and observe are unchanged, apart from malformed settings now failing closed;\n- that error handling leaks nothing beyond the existing refusal texts.\n\n**Confirm** with `git diff --ignore-cr-at-eol --stat`:\n- These are byte-unchanged: delivery/acceptance.test.ts, the leaf, deliveryProjection.ts, dependencyUnblock.ts, taskStore.ts and every existing test file.\n- policy.ts and qaApprove.ts stay LF.\n- There are no .moe or Git writes.\n- No source contains a substring from the project's global forbiddenPatterns.\n\nFix findings with tests. If any byte changed after step 5, rerun the step-5 command fresh and use that output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+      ],
+      "note": "Adversarial self-review of the three-file diff. I found nothing to fix, so no bytes changed after the step-5 gate and its output stands.\n\nMutation probes, each run alone in the gate copy against the new file (114 tests); every one goes red:\n1. evaluate on the live policy: 18 red (E1/E2/E3).\n2. qa_approve on the live policy, evaluation unconditional: 1 red (Q2 precedence).\n3. The legacy branch restored: 22 red (Q1 a,b,d-g, Q2 precedence, Q3 x6, Q4 x9).\n4. The gate moved after recordReview: 26 red (refusedWithoutWrites rows).\n5. The readiness assertion dropped: 38 red (Q1, Q3, Q5, E1, E2).\n6. No snapshot floor: 47 red. Rows a-e and the malformed-snapshot rows go red; f and g pass.\n7. The selector catches decode errors: 21 red (E3 x4, Q4 x9, Q5 malformed x8).\n8. Strict rows judged by readCapturedDeliveryPolicy: 38 red.\nThe probe files were restored and cmp-equal to the shared tree afterwards.\n\nChallenges:\n- **Concurrency.** The selector is pure and synchronous, and it runs under the global tool mutex. There is no new check-then-act, and both selector calls inside qa_approve run with no await between them.\n- **Stale strict snapshot.** Covered by row (b).\n- **Readiness sources.** No env var, caller arg or captured policy is consulted for readiness (Q3, Q5).\n- **Error text.** Refusals reuse the leaf's existing NOT_READY and INVALID_INPUT texts.\n- **Behaviour change.** Legacy and observe are unchanged except that a malformed snapshot or settings.executionProfile now fails closed in delivery evaluation. The M01c backstop and M01e admission already refused those, but only after the Review write.\n\nNoted for CQ-M01 (task-ad95cb27…); none of these files were edited:\n- dependsOnClaimRefusal throws NOT_READY without naming the strict prerequisite.\n- describeUnmetDependency and alertStaleBlocks say 'check settings.deliveryPolicy'.\n- The dependencyUnblock.ts and claimNextTask.ts doc comments are stale.\n- The qa_approve description does not mention the new refusals.\n- Under a hand-edited live verified-local, isDependencySatisfied logs one warn per strict DONE prerequisite per check.\n\nConfirmed:\n- acceptance.test.ts, executionProfile.ts and its test, deliveryProjection.ts, dependencyUnblock.ts and taskStore.ts are byte-unchanged (git diff --ignore-cr-at-eol --stat is empty).\n- policy.ts, qaApprove.ts and the test file are LF (0 CR).\n- There are no forbidden substrings and no .moe or Git writes.\n- schema.ts is a peer's pre-existing dirty path and was not touched.",
+      "startedAt": "2026-10-24T15:59:03.303Z",
+      "completedAt": "2026-10-24T16:00:41.038Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-ad95cb270e9e46df8672eb094d0c1e74",
+  "dependsOn": [
+    "task-29c8274ebc4d4faea67009fa5dcd2df1"
+  ],
+  "priority": "HIGH",
+  "order": 218.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T00:01:38.100Z",
+  "updatedAt": "2026-10-24T21:13:44.128Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T13:55:54.173Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-24T16:06:39.290Z",
+    "wallClockMs": 7845117
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "worker-c1d9de02",
+    "qa-b0c1741e"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T14:15:24.104Z",
+  "planningNotes": {
+    "approachesConsidered": "**Chosen: one exported selector, `resolveTaskDeliveryPolicy(settings, task)`, in delivery/policy.ts.**\n- It applies the M01c/M01e strictness pair (resolveTaskExecutionProfile, then assertExecutionProfileReady) before it reads the live resolveDeliveryPolicy.\n- evaluateDeliveryEvidence and qa_approve both call it.\n- A strict or malformed task THROWS. Every existing consumer already treats a throw as not satisfied:\n  - isDependencySatisfied and describeUnmetDependency catch it;\n  - deliveryProjection's readEvidence omits requiredCheckSatisfied;\n  - qa_approve refuses before any write.\n- So deliveryProjection.ts and dependencyUnblock.ts need no edit, and the change is 3 files.\n\n**Rejected:**\n- **(B) Return satisfied:false with a new execution-profile-not-ready token.** deliveryProjection only recognises required-check tokens, so it would report requiredCheckSatisfied:true whenever a check is owed and passed. Fixing that means editing a 4th file. It also needs a result policy for a v1 or live-only strict task, which has none, and that is a missing-policy fallback.\n- **(C) Judge a strict task by its captured deliveryPolicy under today's evidence rules.** An incomplete snapshot would substitute for the future revision-bound check and destination proof. Captured-policy selection waits for verified-local certification.\n- **(D) Patch only qa_approve.** The dependency gate and the board projection would still read a strict prerequisite as legacy-satisfied after a rollback.\n- **(E) Rank captured vs live with max().** The epic notes forbid it.\n- **(F) Keep qa_approve's `deliveryPolicy !== 'legacy'` branch.** It would be harmless once the selector throws, but it keeps the separate legacy path the task asks to remove. Evaluation is now unconditional, and evaluate's own legacy short-circuit is the single rule.",
+    "codebaseInsights": "**Agreement with M01c/M01e.** Landed M01c's taskStore.assertProgressionReady and M01e's util/claimEligibility.executionAdmissionRefusal both use `resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot)` and then `assertExecutionProfileReady`. M01f must use the same pair, so that the store, claims, QA, the dependency gate and the projection agree. A strict task is either:\n- one whose stored snapshot is verified-local (any version, stale revision or not), or\n- one under a live, hand-edited verified-local setting.\n\n**The hole this closes.** M01c's backstop refuses REVIEW->DONE for strict tasks inside updateTask. qa_approve calls recordReview BEFORE updateTask. So without this task, a strict approval under a live legacy policy writes an 'approve' Review and only then fails. That is exactly the 'rejected QA op writes approval evidence' hole.\n\n**Callers of the evaluator.**\n- evaluateDeliveryEvidence's only production callers are qaApprove, dependencyUnblock.dependencyShortfall and deliveryProjection.requiredCheckSatisfiedFor.\n- dependencyShortfall's callers:\n  - isDependencySatisfied (try/catch -> false); it is used by claims, waiters, auto-unblock, alerts and get_context dependsOnUnmet;\n  - describeUnmetDependency (try/catch);\n  - claimNextTask.dependsOnClaimRefusal (lets the throw escape: an explicit claim of a dependent is refused with it).\n- get_context reads only unmetDependsOn. WebSocketServer.servedTask calls deliveryProjection, which catches.\n\n**Files and style.**\n- policy.ts and qaApprove.ts are LF in both the index and the working tree, and clean.\n- deliveryProjection.ts has CRLF-only peer churn; it is not edited.\n- executionProfile.ts is the leaf. policy.ts may import it, never the reverse.\n- Errors: NOT_ALLOWED and DELIVERY_EVIDENCE_MISSING both use -32003, so assert codeName too. invalidInput gives code -32602 with context {field, reason}.\n- The test harness is ToolTestHarness. The writeFixtureRecord, refusalOf and HARNESS_SETTINGS patterns live in tools/qaApprove.test.ts. listReviewsForTask, state.subscribe and `runDependencyUnblock(state, triggerTaskId?)` exist.",
+    "risks": "**Known limitations, accepted and noted for the CQ-M01 integration/docs task (task-ad95cb270e9e46df8672eb094d0c1e74):**\n- **Explicit claim of a dependent.** If its prerequisite is a strict DONE task, the claim is refused EXECUTION_PROFILE_NOT_READY without naming that prerequisite. dependsOnClaimRefusal lets dependencyShortfall's throw escape, the same precedent as an unrecognised deliveryPolicy's INVALID_INPUT.\n- **Misleading wording.** describeUnmetDependency, report_blocked and the stale-block alert say 'check settings.deliveryPolicy' for such a prerequisite.\n- **Stale comments.** The doc comments in dependencyUnblock.ts and claimNextTask.ts name only the unrecognised policy as the throw case.\n- Do not edit those files, the qa_approve tool description or docs/ here.\n\n**Behaviour to expect:**\n- **Hand-edited live verified-local makes every task strict.** All DONE prerequisites withhold their dependents, projections drop requiredCheckSatisfied, and qa_approve refuses everything. This is intended and consistent with the M01c backstop and M01e admission. It is the unsupported configuration that update_settings refuses.\n- **Log noise.** Under that configuration, isDependencySatisfied warns per strict DONE prerequisite per check, and the projection debug-logs per served task. Each strict evaluation builds one MoeError, which is cheap.\n- **Malformed settings.executionProfile now fails closed for legacy tasks too.** Delivery evaluation throws INVALID_INPUT, matching M01c/M01e.\n- **ARCHIVED strict prerequisites still satisfy.** dependencyShortfall short-circuits before evaluation. This is out of scope and pinned by E4.\n\n**Watch while implementing:**\n- **No dead strict-branch code.** Do not add a captured-policy branch after the readiness assertion; it is untestable today and is later rollout work.\n- **Seeding strict rows.** They exist only as raw JSON: update_settings refuses verified-local, and the M01c backstop refuses its progression. Use as-never casts for malformed values.\n- **Forbidden substrings.** The test source must avoid every substring in the project's forbiddenPatterns; the check is a raw match.\n- **Seat env leaks.** Run vitest with every MOE_* var unset; otherwise getContext tests fail falsely (`mem:gotcha-seat-env-leaks-into-daemon-tests`).\n- **Shared dirty checkout.** Never revert, stash or stage peers' paths.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/delivery/executionProfile.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/tools/qaApprove.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T14:15:24.189Z",
+  "workStartedAt": "2026-10-24T15:46:06.877Z",
+  "commits": [
+    {
+      "sha": "f8e69968138f432cee65f47be099989be3b57e57",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-24T15:44:34Z",
+      "paths": [
+        ".moe/tasks/task-5a082cb43e2346fcbff480fb1c383b58.json",
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-24T15:51:15.064Z",
+      "treeId": "8db65fc2ff08e296da2bd655c8edb0a390bdb285",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "475e743c5c7dc3628eb8abb8f0e8f34f8e6949cd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-24T15:51:46Z",
+      "paths": [
+        ".moe/tasks/task-5a082cb43e2346fcbff480fb1c383b58.json",
+        ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json",
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-24T16:01:42.766Z",
+      "treeId": "3301ddec240f10928ec3e444bf42313a2d9f6d48",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "2e68a6a30f0fb2dafe034735c75857352eef8968",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T16:02:08Z",
+      "paths": [
+        ".moe/tasks/task-0ece1a3552944298af911356f149e150.json",
+        ".moe/tasks/task-5a082cb43e2346fcbff480fb1c383b58.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T16:07:14.674Z",
+      "treeId": "48d65555354bf07e13a758a94c781c4871bc8b56",
+      "status": "DONE",
+      "pushed": true
+    },
+    {
+      "sha": "736ad4d567e683d8e559be4857ba301189010159",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-26ba32c3@2026-10-24T13:55:50Z",
+      "paths": [
+        ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+        ".moe/tasks/task-3b760109c42544ab892199b3d5534b77.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "architect-26ba32c3",
+      "recordedAt": "2026-10-24T21:13:44.127Z",
+      "treeId": "5f5daeb0ff9ec510e464f963214c1abc74f8c25c",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/tools/qaApprove.ts",
+    ".moe/tasks/task-5a082cb43e2346fcbff480fb1c383b58.json",
+    ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json",
+    ".moe/tasks/task-0ece1a3552944298af911356f149e150.json",
+    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+    ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+    ".moe/tasks/task-3b760109c42544ab892199b3d5534b77.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+    "packages/moe-daemon/src/delivery/policy.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-26ba32c3@2026-10-24T13:55:50Z",
+    "at": "2026-10-24T21:13:44.127Z"
+  },
+  "reviewStartedAt": "2026-10-24T16:01:13.474Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test -- --maxWorkers=4 (fresh isolated native-Linux copy /tmp/moe-m01f-gate.*: git archive HEAD 2bbf4eb + the 3 owned files, cmp-equal to the shared tree; lockfile JSON-equal, Linux node_modules symlinked; every MOE_* unset; Linux-only PATH)",
+    "exitCode": 0,
+    "outputTail": "npm test exit=0\n Test Files  153 passed (153)\n      Tests  3407 passed | 9 skipped (3416)\n   Duration  49.70s (tests 93%, import 5%, transform 2%)\n\nAlso: npx tsc --noEmit --incremental false -> exit 0; tsc --ignoreConfig --strict on src/delivery/executionPolicyIntegration.test.ts -> exit 0.",
+    "reportedAt": "2026-10-24T16:01:13.474Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-M01f adds one per-task delivery-policy selection, shared by qa_approve, the dependency gate and the board projection.\n\n**delivery/policy.ts**\n- New `resolveTaskDeliveryPolicy(settings, task)`. It applies the M01c/M01e strictness pair: `assertExecutionProfileReady(resolveTaskExecutionProfile(settings, snapshot))`. It then returns the LIVE resolveDeliveryPolicy.\n- A strict task throws EXECUTION_PROFILE_NOT_READY before any policy, attestation or captured policy is read. Strict means a stored verified-local snapshot (any version, stale or not) or a live verified-local setting.\n- A malformed snapshot or setting gives INVALID_INPUT.\n- There is no captured-policy branch and no ranking.\n- evaluateDeliveryEvidence uses it. isDependencySatisfied, describeUnmetDependency and deliveryProjection already treat a throw as not satisfied, so those files are unedited.\n\n**tools/qaApprove.ts**\n- The gate is now: selector, then attestations, then an unconditional evaluate, still before recordReview.\n- The separate `deliveryPolicy !== 'legacy'` branch is removed. Without this change, a strict task under a live legacy policy wrote an 'approve' Review before the M01c updateTask backstop refused DONE.\n\n**Tests**\n- New delivery/executionPolicyIntegration.test.ts, 114 tests:\n  - Q: strict refusals with no writes, attestations, env, malformed input, and the selector;\n  - E: real dependencyShortfall, isDependencySatisfied, unmetDependsOn, describeUnmetDependency, runDependencyUnblock and deliveryProjection agree, read-only, with E4 ARCHIVED compatibility;\n  - L: the legacy/observe matrices across all six policies, qa_approve landing and attestation labels, and requiredCheckAtDone.\n- Red before the change: 66 failed. All 8 plan mutation probes go red (18, 1, 22, 26, 38, 47, 21, 38).\n\n**Gate:** 153 files, 3407 passed / 9 skipped; CQ-M01e reported 152 files and 3284/9. tsc exit 0.\n\n**Untouched:** acceptance.test.ts, executionProfile.ts and its test, deliveryProjection.ts, dependencyUnblock.ts,",
+  "completedAt": "2026-10-24T16:06:39.290Z",
+  "reviewCompletedAt": "2026-10-24T16:06:39.290Z",
+  "reviewSummary": "Reviewed recorded completion 475e743 and checkpoint f8e6996 (on moe/work-2026-10-24), not the dirty tree. Diff: policy.ts +40/-7, qaApprove.ts +17/-13, new test file +511.\n\nGate in a fresh isolated Linux copy (git archive 475e743, lockfile JSON-equal, Linux node_modules, env -i, Linux PATH):\n- npm test --maxWorkers=4: exit 0, 153 files, 3407 passed / 9 skipped. Matches the worker.\n- tsc --noEmit: exit 0.\n\nMy 5 mutation probes on the new file (114 tests) were all killed:\n- legacy skip restored: 22 red\n- readiness assert dropped: 59\n- evaluate on live policy: 18\n- no snapshot floor: 47\n- decode errors swallowed: 21\n\nDoD:\n1. Q1-Q3: 7 strict sources refused NOT_READY with zero writes, events or Review.\n2. E1-E3: all 7 consumers withhold, read-only; controls satisfy.\n3. L1: 6x3x5 matrix equals its snapshot-less twin; L2 qa_approve matrix.\n4. L3 requiredCheckAtDone unchanged; no captured-policy branch.\n5. acceptance.test.ts untouched; no existing test edited.\n6. Gate reproduced.\n\nRails: verified-local refused; no forbidden substrings; LF; no .moe edits.\n\nSize: ~57 prod + 511 plan-mandated tests, reviewed in full (CQ-M01c/d/e precedent).\n\nNon-blocking: the commit carried peer record deba1a56 (wrapper behaviour). Worker follow-ups for CQ-M01 (task-ad95cb27): wording, stale docs, qa_approve description, log noise. The selector runs twice in qa_approve (cheap).",
+  "requiredCheckAtDone": null
+}

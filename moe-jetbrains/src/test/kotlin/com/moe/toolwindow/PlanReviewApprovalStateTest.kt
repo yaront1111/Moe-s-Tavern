@@ -7,6 +7,7 @@ import com.moe.toolwindow.PlanReviewApprovalState.RevisionToken
 import com.moe.toolwindow.PlanReviewApprovalState.TaskSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -302,7 +303,7 @@ class PlanReviewApprovalStateTest {
         val state = rendered(4L)
         state.onApproveClicked(true, snapshot(4L))
 
-        assertTrue(state.onDaemonError("APPROVE_TASK", "plan revision is stale"))
+        assertTrue(state.onDaemonError("APPROVE_TASK", taskId, null))
 
         assertEquals(Phase.READY, state.currentPhase)
         assertEquals(PlanReviewApprovalState.DAEMON_ERROR_KEY, state.noticeKey)
@@ -314,7 +315,7 @@ class PlanReviewApprovalStateTest {
         val state = rendered(4L)
 
         assertFalse(state.onSendFailed())
-        assertFalse(state.onDaemonError("APPROVE_TASK", "unrelated"))
+        assertFalse(state.onDaemonError("APPROVE_TASK", taskId, null))
 
         assertEquals(Phase.READY, state.currentPhase)
         assertNull(state.noticeKey)
@@ -337,6 +338,197 @@ class PlanReviewApprovalStateTest {
         assertNull(pending.noticeKey)
     }
 
+    // ------------------------------------------------- the acknowledgement is bound to the rendered revision
+
+    private fun pendingAt(revision: Long): PlanReviewApprovalState {
+        val state = rendered(revision)
+        assertEquals(Decision.Send(taskId, revision), state.onApproveClicked(true, snapshot(revision)))
+        assertEquals(Phase.PENDING, state.currentPhase)
+        return state
+    }
+
+    private fun working(revision: Long?) =
+        snapshot(revision, status = PlanReviewApprovalState.STATUS_WORKING)
+
+    private fun assertInvalidated(state: PlanReviewApprovalState, key: String, captured: Long) {
+        assertEquals(Phase.INVALIDATED, state.currentPhase)
+        assertEquals(key, state.noticeKey)
+        assertEquals("the rendered token never changes", captured, state.capturedPlanRevision)
+        assertFalse(state.approveEnabled)
+        assertEquals(Decision.Blocked(key), state.onApproveClicked(true, snapshot(captured)))
+    }
+
+    @Test
+    fun `a newer plan already working is not reported as the rendered approval`() {
+        val state = pendingAt(4L)
+
+        assertTrue("the dialog must repaint with the warning", state.onStateUpdate(working(5L)))
+
+        assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
+    }
+
+    @Test
+    fun `an older or reset revision on a working task never finishes the approval`() {
+        listOf(3L, 0L, 5L, MAX_SAFE_PLAN_REVISION).forEach { observed ->
+            val state = pendingAt(4L)
+
+            assertTrue("revision $observed must repaint", state.onStateUpdate(working(observed)))
+
+            assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
+        }
+    }
+
+    @Test
+    fun `a nonzero rendered revision is not satisfied by a legacy missing stamp`() {
+        val state = pendingAt(4L)
+        val legacy = TaskSnapshot(true, PlanReviewApprovalState.STATUS_WORKING, RevisionToken.LegacyMissing)
+
+        assertTrue(state.onStateUpdate(legacy))
+
+        assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
+    }
+
+    @Test
+    fun `an unusable revision on a working task is reported as unusable`() {
+        val unusable = listOf(
+            "null" to working(null),
+            "negative" to working(-1L),
+            "over max" to working(MAX_SAFE_PLAN_REVISION + 1),
+            "explicit malformed" to
+                TaskSnapshot(true, PlanReviewApprovalState.STATUS_WORKING, RevisionToken.Malformed)
+        )
+        unusable.forEach { (label, observed) ->
+            val state = pendingAt(4L)
+
+            assertTrue("$label must repaint", state.onStateUpdate(observed))
+
+            assertInvalidated(state, PlanReviewApprovalState.REVISION_UNUSABLE_KEY, captured = 4L)
+        }
+    }
+
+    @Test
+    fun `a task that vanished while the approval was pending is reported missing`() {
+        val state = pendingAt(4L)
+
+        assertTrue(state.onStateUpdate(snapshot(4L, status = PlanReviewApprovalState.STATUS_WORKING, present = false)))
+
+        assertInvalidated(state, PlanReviewApprovalState.TASK_MISSING_KEY, captured = 4L)
+    }
+
+    @Test
+    fun `the same revision working finishes at every boundary revision`() {
+        listOf(0L, 1L, 4L, MAX_SAFE_PLAN_REVISION).forEach { revision ->
+            val state = pendingAt(revision)
+
+            assertTrue("revision $revision must repaint", state.onStateUpdate(working(revision)))
+
+            assertEquals(Phase.FINISHED, state.currentPhase)
+            assertNull(state.noticeKey)
+            assertEquals(revision, state.capturedPlanRevision)
+            assertFalse(state.approveEnabled)
+        }
+    }
+
+    @Test
+    fun `a legacy missing stamp working finishes a rendered zero`() {
+        val state = pendingAt(0L)
+
+        assertTrue(
+            state.onStateUpdate(
+                TaskSnapshot(true, PlanReviewApprovalState.STATUS_WORKING, RevisionToken.LegacyMissing)
+            )
+        )
+
+        assertEquals(Phase.FINISHED, state.currentPhase)
+        assertNull(state.noticeKey)
+    }
+
+    @Test
+    fun `an invalidated approval ignores a late same revision working update`() {
+        val state = pendingAt(4L)
+        state.onStateUpdate(working(5L))
+
+        assertFalse("late success must not repaint", state.onStateUpdate(working(4L)))
+        assertFalse(state.onStateUpdate(snapshot(4L)))
+
+        assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
+    }
+
+    @Test
+    fun `an invalidated approval ignores late transport and daemon errors`() {
+        val state = pendingAt(4L)
+        state.onStateUpdate(working(5L))
+
+        assertFalse(state.onDaemonError("APPROVE_TASK", taskId, null))
+        assertFalse(state.onSendFailed())
+
+        assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
+    }
+
+    @Test
+    fun `an error before a mismatching working update never re-arms a stale approval`() {
+        val state = pendingAt(4L)
+        assertTrue(state.onDaemonError("APPROVE_TASK", taskId, null))
+        assertEquals(Phase.READY, state.currentPhase)
+
+        assertTrue(state.onStateUpdate(working(5L)))
+
+        assertEquals(Phase.INVALIDATED, state.currentPhase)
+        assertEquals(PlanReviewApprovalState.STATUS_CHANGED_KEY, state.noticeKey)
+        assertEquals(4L, state.capturedPlanRevision)
+        assertFalse(state.approveEnabled)
+        assertTrue(state.onApproveClicked(true, snapshot(4L)) is Decision.Blocked)
+    }
+
+    @Test
+    fun `an error before a same revision working update is not an approval and does not retry`() {
+        val state = pendingAt(4L)
+        state.onDaemonError("APPROVE_TASK", taskId, null)
+
+        state.onStateUpdate(working(4L))
+
+        assertFalse("only a pending approval can finish", state.currentPhase == Phase.FINISHED)
+        assertEquals(Phase.INVALIDATED, state.currentPhase)
+        assertEquals(4L, state.capturedPlanRevision)
+        assertTrue(state.onApproveClicked(true, snapshot(4L)) is Decision.Blocked)
+    }
+
+    @Test
+    fun `a failed send before a mismatching working update leaves the approval blocked`() {
+        val state = pendingAt(4L)
+        assertTrue(state.onSendFailed())
+
+        state.onStateUpdate(working(5L))
+
+        assertFalse(state.approveEnabled)
+        assertEquals(4L, state.capturedPlanRevision)
+        assertTrue(state.onApproveClicked(true, snapshot(5L)) is Decision.Blocked)
+    }
+
+    @Test
+    fun `a duplicate click while pending stays blocked and a mismatch still invalidates`() {
+        val state = pendingAt(4L)
+
+        assertEquals(
+            Decision.Blocked(PlanReviewApprovalState.IN_FLIGHT_KEY),
+            state.onApproveClicked(true, snapshot(4L))
+        )
+        state.onStateUpdate(working(5L))
+
+        assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
+    }
+
+    @Test
+    fun `a disposed machine is not finished or invalidated by a mismatching working update`() {
+        val state = pendingAt(4L)
+        state.onDisposed()
+
+        assertFalse(state.onStateUpdate(working(5L)))
+
+        assertEquals(Phase.DISPOSED, state.currentPhase)
+        assertNull(state.noticeKey)
+    }
+
     // ------------------------------------------------- disposal
 
     @Test
@@ -349,7 +541,7 @@ class PlanReviewApprovalStateTest {
         assertNull(state.noticeKey)
         assertFalse(state.onStateUpdate(snapshot(5L)))
         assertFalse(state.onSendFailed())
-        assertFalse(state.onDaemonError("APPROVE_TASK", "late"))
+        assertFalse(state.onDaemonError("APPROVE_TASK", taskId, null))
         assertFalse(state.onRendered(snapshot(4L)))
         assertEquals(
             Decision.Blocked(PlanReviewApprovalState.CLOSED_KEY),
@@ -481,6 +673,231 @@ class PlanReviewApprovalStateTest {
         )
     }
 
+    // ---- a lost connection (CQ-I06a)
+
+    private fun lostAt(revision: Long): PlanReviewApprovalState {
+        val state = rendered(revision)
+        assertEquals(Decision.Send(taskId, revision), state.onApproveClicked(true, snapshot(revision)))
+        assertTrue(state.onConnectionLost())
+        return state
+    }
+
+    @Test
+    fun `a lost connection while pending re-arms the same rendered revision`() {
+        val state = rendered(4L)
+        assertEquals(Decision.Send(taskId, 4L), state.onApproveClicked(true, snapshot(4L)))
+        assertEquals(PlanReviewApprovalState.Phase.PENDING, state.currentPhase)
+
+        assertTrue(state.onConnectionLost())
+
+        assertEquals(PlanReviewApprovalState.Phase.READY, state.currentPhase)
+        assertEquals(PlanReviewApprovalState.CONNECTION_LOST_KEY, state.noticeKey)
+        assertTrue(state.approveEnabled)
+        assertEquals(4L, state.capturedPlanRevision)
+    }
+
+    @Test
+    fun `a lost connection outside pending changes nothing`() {
+        val finished = rendered(4L).also {
+            it.onApproveClicked(true, snapshot(4L))
+            it.onStateUpdate(snapshot(4L, PlanReviewApprovalState.STATUS_WORKING))
+        }
+        val invalidated = rendered(4L).also { it.onStateUpdate(snapshot(5L)) }
+        val disposed = rendered(4L).also { it.onDisposed() }
+        val machines = listOf(
+            PlanReviewApprovalState.Phase.AWAITING_RENDER to PlanReviewApprovalState(taskId),
+            PlanReviewApprovalState.Phase.READY to rendered(4L),
+            PlanReviewApprovalState.Phase.INVALIDATED to invalidated,
+            PlanReviewApprovalState.Phase.FINISHED to finished,
+            PlanReviewApprovalState.Phase.DISPOSED to disposed
+        )
+        for ((expectedPhase, state) in machines) {
+            assertEquals(expectedPhase, state.currentPhase)
+            val noticeBefore = state.noticeKey
+
+            assertFalse("$expectedPhase must not release", state.onConnectionLost())
+
+            assertEquals(expectedPhase, state.currentPhase)
+            assertEquals("$expectedPhase notice", noticeBefore, state.noticeKey)
+        }
+    }
+
+    @Test
+    fun `a reconnect snapshot at the rendered revision approves the same revision again`() {
+        val state = lostAt(4L)
+
+        assertFalse("a same-revision snapshot asks for no repaint", state.onStateUpdate(snapshot(4L)))
+        assertTrue(state.approveEnabled)
+
+        assertEquals(Decision.Send(taskId, 4L), state.onApproveClicked(true, snapshot(4L)))
+        assertEquals(PlanReviewApprovalState.Phase.PENDING, state.currentPhase)
+    }
+
+    @Test
+    fun `work found after a lost connection is never this reviewer's approval`() {
+        val state = lostAt(4L)
+
+        assertTrue(state.onStateUpdate(snapshot(4L, PlanReviewApprovalState.STATUS_WORKING)))
+
+        assertEquals(PlanReviewApprovalState.Phase.INVALIDATED, state.currentPhase)
+        assertNotEquals(PlanReviewApprovalState.Phase.FINISHED, state.currentPhase)
+        assertEquals(PlanReviewApprovalState.STATUS_CHANGED_KEY, state.noticeKey)
+        assertFalse(state.onStateUpdate(snapshot(4L, PlanReviewApprovalState.STATUS_WORKING)))
+        assertEquals(PlanReviewApprovalState.Phase.INVALIDATED, state.currentPhase)
+    }
+
+    @Test
+    fun `a repeated lost connection is a no-op`() {
+        val state = lostAt(4L)
+
+        assertFalse(state.onConnectionLost())
+
+        assertEquals(PlanReviewApprovalState.Phase.READY, state.currentPhase)
+        assertEquals(PlanReviewApprovalState.CONNECTION_LOST_KEY, state.noticeKey)
+    }
+
+    @Test
+    fun `the dialog releases a pending approval only when the connection drops`() {
+        val body = dialogSource()
+            .substringAfter("override fun onStatus(")
+            .substringBefore("override fun onDaemonError(")
+
+        val release = body.indexOf("approval.onConnectionLost()")
+        assertTrue("onStatus must release through the machine", release >= 0)
+        assertTrue("onStatus must repaint through applyApprovalState()", body.contains("applyApprovalState()"))
+        assertTrue("the repaint must run on the EDT", body.contains("invokeLater"))
+        assertFalse("a lost connection must not close the dialog", body.contains("close("))
+        val guard = Regex("if \\(connected").find(body)
+        assertNotNull("onStatus must guard on connected", guard)
+        assertTrue("connected=true must never release", guard!!.range.first < release)
+    }
+
+    // ---- daemon error correlation (CQ-I06d)
+
+    /** The approval is untouched: still pending, and WORKING at 4 still confirms it. */
+    private fun assertStillPendingThenConfirmed(state: PlanReviewApprovalState) {
+        assertEquals(Phase.PENDING, state.currentPhase)
+        assertNull(state.noticeKey)
+        assertEquals(4L, state.capturedPlanRevision)
+
+        assertTrue(state.onStateUpdate(working(4L)))
+
+        assertEquals(Phase.FINISHED, state.currentPhase)
+        assertNull(state.noticeKey)
+    }
+
+    @Test
+    fun `an error for another operation leaves a pending approval pending`() {
+        val state = pendingAt(4L)
+
+        assertFalse(state.onDaemonError("UPDATE_SETTINGS", taskId, null))
+        assertFalse(state.onDaemonError("UPDATE_TASK", taskId, "PLAN_REVISION_MISMATCH"))
+        assertFalse(state.onDaemonError("approve_task", taskId, null))
+
+        assertStillPendingThenConfirmed(state)
+    }
+
+    @Test
+    fun `an error for another task leaves a pending approval pending`() {
+        val state = pendingAt(4L)
+
+        assertFalse(state.onDaemonError("APPROVE_TASK", "task-other", "PLAN_REVISION_MISMATCH"))
+        assertFalse(state.onDaemonError("APPROVE_TASK", "task-other", null))
+
+        assertStillPendingThenConfirmed(state)
+    }
+
+    @Test
+    fun `an error without context leaves a pending approval pending`() {
+        val state = pendingAt(4L)
+
+        assertFalse(state.onDaemonError(null, null, null))
+        assertFalse(state.onDaemonError("APPROVE_TASK", null, null))
+        assertFalse(state.onDaemonError(null, taskId, "PLAN_REVISION_MISMATCH"))
+
+        assertStillPendingThenConfirmed(state)
+    }
+
+    @Test
+    fun `a correlated PLAN_REVISION_MISMATCH latches as plan changed`() {
+        val state = pendingAt(4L)
+
+        assertTrue(state.onDaemonError("APPROVE_TASK", taskId, "PLAN_REVISION_MISMATCH"))
+
+        assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
+        // Latched for good: a later confirmation at the same revision, another
+        // error or a transport result can neither finish nor re-arm it.
+        assertFalse(state.onStateUpdate(working(4L)))
+        assertFalse(state.onDaemonError("APPROVE_TASK", taskId, null))
+        assertFalse(state.onSendFailed())
+        assertFalse(state.onConnectionLost())
+        assertNotEquals(Phase.FINISHED, state.currentPhase)
+        assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
+    }
+
+    @Test
+    fun `any other correlated code re-arms with the daemon error notice`() {
+        // Exact, case-sensitive and untrimmed: only the daemon's own code latches.
+        val codes = listOf(
+            null,
+            "INVALID_INPUT",
+            "TASK_NOT_FOUND",
+            "plan_revision_mismatch",
+            " PLAN_REVISION_MISMATCH",
+            "PLAN_REVISION_MISMATCH "
+        )
+        for (code in codes) {
+            val state = pendingAt(4L)
+
+            assertTrue("code $code", state.onDaemonError("APPROVE_TASK", taskId, code))
+
+            assertEquals("code $code", Phase.READY, state.currentPhase)
+            assertEquals("code $code", PlanReviewApprovalState.DAEMON_ERROR_KEY, state.noticeKey)
+            assertTrue("code $code", state.approveEnabled)
+            assertEquals("code $code", 4L, state.capturedPlanRevision)
+            assertEquals("code $code", Decision.Send(taskId, 4L), state.onApproveClicked(true, snapshot(4L)))
+        }
+    }
+
+    @Test
+    fun `a correlated error outside pending changes nothing`() {
+        val finished = pendingAt(4L).also { it.onStateUpdate(working(4L)) }
+        val invalidated = rendered(4L).also { it.onStateUpdate(snapshot(5L)) }
+        val disposed = rendered(4L).also { it.onDisposed() }
+        val machines = listOf(
+            Phase.AWAITING_RENDER to PlanReviewApprovalState(taskId),
+            Phase.READY to rendered(4L),
+            Phase.INVALIDATED to invalidated,
+            Phase.FINISHED to finished,
+            Phase.DISPOSED to disposed
+        )
+        for ((expectedPhase, state) in machines) {
+            assertEquals(expectedPhase, state.currentPhase)
+            val noticeBefore = state.noticeKey
+
+            assertFalse("$expectedPhase mismatch", state.onDaemonError("APPROVE_TASK", taskId, "PLAN_REVISION_MISMATCH"))
+            assertFalse("$expectedPhase other", state.onDaemonError("APPROVE_TASK", taskId, null))
+
+            assertEquals(expectedPhase, state.currentPhase)
+            assertEquals("$expectedPhase notice", noticeBefore, state.noticeKey)
+        }
+    }
+
+    @Test
+    fun `the dialog routes only correlated daemon errors into the machine`() {
+        val source = dialogSource()
+        val signature = "override fun onDaemonError(error: DaemonError)"
+        assertTrue("the dialog must override onDaemonError", source.contains(signature))
+        val body = source.substringAfter(signature).substringBefore("override fun dispose()")
+
+        assertTrue(body.contains("approval.onDaemonError(error.operation, error.taskId, error.codeName)"))
+        assertTrue("the daemon text stays bounded", body.contains("error.message.take(MAX_ERROR_CHARS)"))
+        assertTrue("the repaint goes through applyApprovalState()", body.contains("applyApprovalState()"))
+        assertTrue("the repaint must run on the EDT", body.contains("invokeLater"))
+        assertFalse("the uncorrelated route is gone", source.contains("approval.onDaemonError(operation, message)"))
+        assertFalse("the dialog no longer handles uncorrelated errors", source.contains("override fun onError("))
+    }
+
     // ------------------------------------------------- bundle key guard
 
     @Test
@@ -493,7 +910,8 @@ class PlanReviewApprovalStateTest {
 
         val keys = PlanReviewApprovalState.allMessageKeys()
         assertEquals("allMessageKeys must not repeat a key", keys.size, keys.toSet().size)
-        assertEquals(11, keys.size)
+        assertEquals(12, keys.size)
+        assertTrue(keys.contains(PlanReviewApprovalState.CONNECTION_LOST_KEY))
         for (key in keys) {
             val value = bundle.getProperty(key)
             assertNotNull("$key is missing from MoeBundle.properties", value)
@@ -504,6 +922,10 @@ class PlanReviewApprovalStateTest {
         assertEquals(
             "Plan changed - close and reopen to review the current plan.",
             bundle.getProperty(PlanReviewApprovalState.PLAN_CHANGED_KEY)
+        )
+        assertEquals(
+            "The connection to the Moe daemon dropped before the approval was confirmed - approve again once it reconnects.",
+            bundle.getProperty(PlanReviewApprovalState.CONNECTION_LOST_KEY)
         )
         assertTrue(
             "the daemon error notice must carry the message parameter",

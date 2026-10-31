@@ -1,0 +1,277 @@
+{
+  "id": "task-0ece1a3552944298af911356f149e150",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M04] Baseline outcome report",
+  "description": "Objective: Run frozen baseline workloads with original behavior and report quality, repair, retrieval, planning, latency and usage together.\n\nDeliverable: Baseline outcome report. This is task M04 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-attribution.test.mjs\n\nDependency aliases (wired by Moe task ids after import): M02, M03.",
+  "definitionOfDone": [
+    "All fixture results retain version/model/budget identities and missing counters.",
+    "No green task or token-only metric is treated as independent acceptance.",
+    "Report contains reproducible inputs and variability/coverage limitations.",
+    "Fresh verification `node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-attribution.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Scope first: read comment-0a4bd229bce84033b94fc6e049af7834 on this task. This row is the PRODUCER slice of the baseline: the per-workload outcome record contract plus the report builder. The actual runs are CQ-M04b (driver, task-9cfaacf11e194062bc1ca5f77388ec90) and CQ-M04c (20-run execution, task-e4adf15c84f0433a9457ea5e8968c3de); run no agents or workloads here. The human configuration in comment-700a6a5111ad4a57a3340a2dac0ab586 (today's defaults, n=1, 60-minute cap, capped runs keep partial counters, missing counters unknown) must be representable in the contract.\nTDD red (load test-driven-development). Append a clearly separated baseline section to scripts/tests/usage-report.test.mjs. That file is CRLF in index and working tree: keep CRLF, append without reformatting, and leave every existing test byte-identical. The DoD command only runs the four usage test files, so the new tests must live here. Import `* as baseline from '../baseline-report.mjs'` and spawn `../analyze-baseline.mjs`. Reuse the file's receipt()/row() helpers to write per-workload usage projects (`<root>/<workloadId>/logs/moe-usage/*.jsonl`). Cases, each with exact-value assertions:\n1 record contract: readBaselineRecord accepts an exact valid record and returns a NEW frozen copy. It rejects, naming the field, missing/extra keys at every level (e.g. a 'prompt' or 'toolArguments' key), a wrong version, a bad category or id prefix, malformed digests, a non-40-hex moeCommit, invalid or reversed timestamps, negative/fractional/unsafe counters, unknown status/role/result values, duplicate roles or criteria, 'capped' with wallClockMs < wallClockCapMs, and 'completed' beyond the cap. null is preserved for every unknown counter and never becomes 0.\n2 acceptance comes ONLY from the held-out assessment. A record with moeOutcome.finalStatus 'DONE' and qaApprovals 1 but a failing criterion is 'rejected'. DONE with the assessment not run is 'not-assessed'. exit 0 with every criterion pass is 'accepted'. A non-zero exit without a failing criterion is 'not-assessed'. Token totals never change acceptance (swap huge/zero usage between two records and the acceptance is identical).\n3 capped/failed/aborted runs stay in the report with partial counters and are counted in summary.byStatus; expected workloads without a record appear as status 'missing' rows; duplicate records for one workload (n=1) and a record whose caseDigest differs from the expected manifest are refused.\n4 usage join: a row joins its workload's usage project via run.usageTaskId and buildUsageReport wholeTasks, carrying observed totals, unknownRecords and coverageScope. A missing project or task gives usage status 'unknown' with null totals (never 0). Summary totals add observed values only, count unknown workloads, and observedTokensPerAcceptedChange is null when nothing was accepted and flagged incomplete when any usage is unknown.\n5 reproducible inputs and limitations: report.inputs lists the corpus versions, per-case digests, Moe commits, caps, repetitions, platform/node/cli versions and per-role cli/model/effort (null shown as 'unknown' in markdown). limitations include n=1 (no variability estimate), counts of capped/failed/aborted/missing runs, retrieval unknown, latency unknown, codex stream coverage, mixed commits/caps/corpus versions when present, Moe status being record-only, and tokens not being cost.\n6 determinism: rows follow manifest order (else id), and the same inputs give byte-identical JSON and markdown.\n7 CLI: `node scripts/analyze-baseline.mjs --records DIR --project DIR [--expected FILE] [--json]` prints the report; a malformed or invalid record file exits 1 with a bounded message naming the file and field, never its content; the inputs directories are byte-unchanged afterwards.\nRun `node --test scripts/tests/usage-report.test.mjs` and confirm the red is missing-module behavior, not typos.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "note": "TDD red. Appended a 382-line CQ-M04 section (8 tests) to scripts/tests/usage-report.test.mjs in CRLF. The first 420 lines are byte-identical: prefix sha256 25cdc3b0… is unchanged, git diff shows only + lines, and there are 0 LF-only lines. Covers the record contract (53 rejection cases plus root non-objects), held-out-only acceptance with a token swap, capped/failed/aborted/missing rows, duplicate/digest/corpusVersion/manifest refusals, the usage join reasons (no-usage-task-id, no-usage-project, task-not-in-usage-project, no-record) with summary and efficiency, exact inputs and limitations, determinism and manifest order, and the read-only CLI with bounded errors. RED: `node --test scripts/tests/usage-report.test.mjs` fails with ERR_MODULE_NOT_FOUND for scripts/baseline-report.mjs (the module is missing; there is no syntax error). Note: analyze-usage.mjs is i/lf w/lf (the plan said CRLF) and is untouched. Other sessions' dirty paths are left alone.",
+      "startedAt": "2026-10-24T15:40:06.339Z",
+      "completedAt": "2026-10-24T15:48:27.494Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Record contract in a new scripts/baseline-report.mjs (Node ESM, LF, node built-ins plus ./usage-report.mjs only). Module doc comment: the contract, the fact that the Moe task status is record-only, and that acceptance = held-out assessment only. Export BASELINE_RECORD_VERSION = 1; BASELINE_STATUSES ['completed','capped','failed','aborted']; BASELINE_ROLES ['architect','worker','qa']; ASSESSMENT_RESULTS ['pass','fail','not-run']; and readBaselineRecord(raw).\nThe exact record shape, all keys required:\n- version: 1;\n- workload: { id: category-prefixed kebab <= 80, category: maintenance|defect|refactor|non-routine, caseDigest and snapshotDigest: 'sha256:' + 64 lowercase hex, corpusVersion: positive safe int };\n- run: { moeCommit: 40 lowercase hex, startedAt/endedAt: ISO-8601 that round-trip through Date#toISOString, endedAt >= startedAt, wallClockMs and wallClockCapMs: safe ints (cap > 0), status, repetition and repetitionsPlanned: safe ints >= 1 with repetition <= planned, platform/nodeVersion: non-blank <= 64, cliVersion: string <= 128 or null, roles: 1-3 entries { role, cli: non-blank <= 64, model: string <= 128 or null, effort: string <= 32 or null, launches: int or null } unique by role, usageTaskId: an id matching /^[A-Za-z0-9._-]{1,128}$/ or null, failureReason: string <= 500 or null };\n- moeOutcome: { finalStatus: string <= 32 or null, qaApprovals, qaRejections, reopenCount, plannerSessions, repairAttempts: int or null };\n- assessment: { ran: boolean, exitCode: int or null, criteria: 0-32 entries { id: kebab <= 64, result } unique by id, reason: string <= 500 or null };\n- latency: { firstCodeChangeMs, endToEndMs: int or null };\n- retrieval: { sourceRetrievals, retrievedBytes: int or null };\n- notes: 0-10 strings <= 300.\nConsistency rules: 'capped' requires wallClockMs >= wallClockCapMs; 'completed' requires wallClockMs <= wallClockCapMs; ran false requires exitCode null, every criterion 'not-run' and a non-null reason. Error handling: plain objects only (prototype Object.prototype or null); every failure throws an Error whose message names the field path and reason, bounded to ~200 chars, and never echoes string contents beyond 40 chars. Returns a deep-frozen detached copy (counters stay null when unknown, never coerced). Make the contract cases green: `node --test scripts/tests/usage-report.test.mjs`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "newFiles": [
+        "scripts/baseline-report.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/baseline-report.mjs",
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "note": "Added new scripts/baseline-report.mjs (LF, no imports yet). It exports BASELINE_RECORD_VERSION=1, BASELINE_STATUSES, BASELINE_ROLES, ASSESSMENT_RESULTS (frozen) and readBaselineRecord.\n- Strict exact keys at every level. Accepts plain objects only (Object.prototype or null prototype).\n- Error messages take the form `<field path>: <rule>`, capped at 200 chars, and never include the value. An unexpected key name is sanitized and cut to 40 chars.\n- Strings must be non-blank and single-line within their bounds. Counters are safe ints >= 0 or null.\n- Consistency rules: capped and completed vs the wall-clock cap, endedAt >= startedAt, repetition <= planned, unique roles and criterion ids, and the ran=false rules.\n- Returns a detached deep-frozen copy.\n\nTest fix in the appended section only: 8 anchored `assert.throws(fn, /^…/)` calls became `{ message: /^…/ }`, because a RegExp is matched against String(error) = \"Error: …\". Contract tests 2/2 green. The builder and CLI tests stay red until step 3.",
+      "startedAt": "2026-10-24T15:48:30.976Z",
+      "completedAt": "2026-10-24T15:49:43.655Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Builder, formatter and CLI. In scripts/baseline-report.mjs add:\n- readExpectedManifest(raw): strict { corpusVersion, workloads: [{ id, category, caseDigest }] }, unique ids, 1-64 entries.\n- buildBaselineReport({ records, usageByWorkload, expected }): validate every record. Refuse duplicate workload ids (n=1), ids missing from a supplied manifest, and caseDigest/category mismatches. Add a 'missing' row for each manifest workload without a record. Join usage through usageByWorkload[id]?.wholeTasks matched on run.usageTaskId; otherwise usage status 'unknown' with null totals.\n  Per row: identity (id, category, caseDigest, snapshotDigest, corpusVersion, moeCommit, wallClockCapMs, roles), status, capped, acceptance (accepted only when ran && exitCode === 0 && criteria non-empty && all pass; rejected when ran && any fail; else not-assessed), assessment, moeOutcome labelled recordOnly: true, repair (qaRejections/reopenCount/repairAttempts), planning (plannerSessions), retrieval, latency, usage (status, totals per field with unknownRecords, coverageScope).\n  summary: byStatus (incl. missing), acceptance counts, byCategory, observed usage totals plus unknownWorkloads, and { observedTokens, acceptedChanges, observedTokensPerAcceptedChange (null when acceptedChanges is 0), complete }.\n  inputs: the reproducibility facts listed in the step-1 tests.\n  limitations: the deterministic list from the step-1 tests.\n  Output order: manifest order, else id. Plain JSON-serializable data.\n- formatBaselineReport(report): markdown with sections Inputs, Workloads (one table row each; unknown shown as 'unknown', never 0), Summary, Limitations, and the fixed sentences 'Acceptance = held-out assessment only; Moe task status is record-only.' and 'Token observations are not monetary cost or quota.'\nCreate scripts/analyze-baseline.mjs, a thin CLI mirroring analyze-usage.mjs:\n- parse --records DIR (required), --project DIR (root holding one usage project per workload id, optional), --expected FILE (optional), --json;\n- read `*.json` files in sorted order, JSON.parse each and validate it, and call buildUsageReport(<project>/<id>) only when that directory exists;\n- print JSON or markdown.\nError handling: a missing argument, an unreadable/malformed file or an invalid record prints one bounded line (file basename plus field path, no file content) to stderr and exits 1. The CLI never writes. All step-1 cases green with `node --test scripts/tests/usage-report.test.mjs`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/baseline-report.mjs",
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "newFiles": [
+        "scripts/analyze-baseline.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/baseline-report.mjs",
+        "scripts/baseline-record.mjs",
+        "scripts/analyze-baseline.mjs"
+      ],
+      "note": "Builder, formatter and CLI done. `node --test scripts/tests/usage-report.test.mjs`: 30/30 green, including all 8 CQ-M04 tests. The test file is unchanged this step (it is byte-identical to the a649b04 checkpoint).\n\nbaseline-report.mjs:\n- readExpectedManifest is strict: exact keys, 1-64 workloads, unique ids, category-prefixed ids, digest format.\n- buildBaselineReport validates each record with errors prefixed records[i]. It refuses duplicates (n=1), workloads absent from the manifest, and caseDigest or corpusVersion mismatches.\n- Every manifest workload without a record gets a 'missing' row.\n- Usage joins through usageByWorkload[id].wholeTasks on run.usageTaskId. The unknown reasons are no-usage-task-id, no-usage-project, task-not-in-usage-project and no-record. Totals are copied, so the caller's usage objects are never frozen or aliased.\n- Acceptance comes from the held-out assessment only.\n- The summary has byStatus (including missing), acceptance, byCategory (all 4 categories), usage totals (observed only, plus unknownWorkloads and codexStreamUnconfirmed) and efficiency (observedTokensPerAcceptedChange is null when nothing is accepted; complete is false whenever any usage is unknown or unconfirmed).\n- inputs and limitations are deterministic. Sorting is locale-independent with null last. Rows follow the manifest, else workload id. The whole report is deep-frozen JSON data.\n- formatBaselineReport renders the Inputs, Workloads (a 14-column table with pipes escaped and unknown never shown as 0), Summary and Limitations sections, plus the two fixed sentences.\n\nanalyze-baseline.mjs is a thin read-only CLI (--records required; --project, --expected and --json optional).\n- Record files are lstat'd: a non-regular file or one over 1 MiB is refused, and JSON.parse and the contract are applied per file.\n- Errors are one line capped at 300 chars, naming the basename and field path, never file content. A build error's records[i] is mapped back to its file name.\n\nScope deviation (declared via moe.declare_files): the record contract moved into a new scripts/baseline-record.mjs (190 lines), because the combined module was 362 lines, over the 300-line cap. baseline-report.mjs (185 lines) re-exports the public API (constants, readBaselineRecord, readExpectedManifest), so the test's `import * as baseline` is unchanged.\n\nSkipped: a category-mismatch check against the manifest. It is unreachable, because both sides enforce the category-prefixed id, so equal ids imply equal categories.\n\nMarkdown latency columns are end-to-end ms and first-code-change ms; JSON carries everything. Record notes are not copied into report rows, which the pinned missing-row shape requires.\n\nNo forbidden-pattern substrings; LF only. Other sessions' dirty paths were left untouched.",
+      "startedAt": "2026-10-24T15:51:56.366Z",
+      "completedAt": "2026-10-24T15:59:25.814Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "The one verification gate. From the repository root, with Linux-only PATH (PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin), run EXACTLY the DoD command fresh: `node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-attribution.test.mjs` (exit 0; record pass/fail/skip counts; the M02 baseline was 45/45). Because the shared tree has concurrent peers, repeat the same command in a fresh snapshot - `D=$(mktemp -d /tmp/moe-m04-test.XXXXXX); git -C /mnt/d/projexts/moes archive HEAD scripts docs package.json | tar -x -C \"$D\"`, overlay the three owned files' working-tree bytes, then run the command from $D - and report both results. Disclose that usage-attribution's PowerShell engines are not exercised on Linux if they skip. Confirm scripts/usage-report.mjs and the existing tests are byte-unchanged except for the appended section, and that CRLF is preserved in usage-report.test.mjs. Keep the command and output tail for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate (Linux-only PATH, node v24.21.0), the exact DoD command `node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-attribution.test.mjs`:\n- Working tree: exit 0, tests 53, pass 53, fail 0, skipped 0. That is the M02 baseline of 45 plus the 8 CQ-M04 tests.\n- Fresh git-archive snapshot of HEAD 2bbf4eb (scripts, docs, package.json) with 4 owned files overlaid (baseline-report.mjs, baseline-record.mjs, analyze-baseline.mjs, tests/usage-report.test.mjs; cmp-identical): exit 0, 53/53, 0 skipped.\n\nDisclosure: on Linux, usage-attribution iterates the python3 engine only. The PowerShell engines are not exercised; they are not skipped, they are never enumerated on non-win32.\n\nByte checks:\n- scripts/usage-report.mjs is unchanged vs pre-task a649b04^.\n- usage-report.test.mjs vs pre-task: +382/-0 (append only). The first 420 lines keep their prefix sha256 25cdc3b0. All 802 lines are CRLF. The file is identical to checkpoint a649b04, so it was untouched in this session.",
+      "startedAt": "2026-10-24T15:59:36.302Z",
+      "completedAt": "2026-10-24T16:00:12.716Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Exactly one adversarial self-review of the three-file diff (load adversarial-self-review). Challenge: can a record smuggle prompts, tool arguments, secrets or prices (extra keys anywhere, oversized strings)? Can any path turn a green Moe task, QA approval or token metric into acceptance? Can unknown become 0 anywhere (missing usage project, null counters, markdown rendering, sums)? Are capped/failed/missing runs ever dropped, and are duplicate records (n=1) or mismatched digests refused? Are the inputs and limitations complete and deterministic (manifest order, stable JSON)? Is observedTokensPerAcceptedChange labelled incomplete whenever usage is unknown? Does the CLI stay read-only with bounded errors that never print file content? Do huge, malformed or non-object JSON and unreadable files fail closed? Is any existing usage-report behavior or test changed, or the CRLF bytes of the test file churned? Confirm: no agents or workloads run, no daemon/wrapper/production change, no Git or .moe writes, no savings/quality claims, and no substring from the project's global forbiddenPatterns (project.globalRails). Fix findings with tests; if any byte changed after step 4, rerun the step-4 command fresh (both locations) and use that output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/baseline-report.mjs",
+        "scripts/analyze-baseline.mjs",
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/baseline-report.mjs",
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "note": "One adversarial self-review over the 4-file diff (baseline-record.mjs, baseline-report.mjs, analyze-baseline.mjs, the appended test section).\n\nReal finding, fixed with TDD:\n- Bug: a workload whose own wholeTask total overflowed comes through as observedTokens null with unknownRecords 0. summaryOf skipped it and still summed the others, so a concrete total with complete:true could hide that workload's unknown tokens.\n- Fix: any observed row with a null total and 0 unknown records makes that summary field unknown.\n- New test, appended in CRLF: an overflowed row and a sum past MAX_SAFE_INTEGER both give totalTokens {null, 0} and complete false, and the markdown shows unknown. RED first (actual 10, expected null), then GREEN.\n- Also tightened two assertions inside the CQ-M04 section: a codex-only workload makes efficiency incomplete, and the CLI build error now pins the exact `defect-x.json: workload defect-x is not in the expected manifest` line.\n\nMutation probes in scratch copies killed 20 of 21 mutants: acceptance clauses, `??` vs `||`, the usage reasons, overflow, the codex/complete clauses, duplicate/digest/corpus refusals, efficiency, pipe escaping, unknown rendering, id sort, the CLI size/regular-file/records[i] mapping and the --json repeat. The survivor is the final-line newline-strip and 300-char cap in the CLI. It is unreachable today because basenames are sanitized and capped at 80 and contract messages at 200, so it is kept as defense in depth.\n\nChecked and OK:\n- Exact keys at every level, so no smuggled prompt, tool-argument, secret or price keys. Free-text notes are not copied into report rows.\n- Acceptance reads only the assessment.\n- `??` keeps 0 as 0 and null as null.\n- Capped, failed, aborted and missing runs always become rows; n=1 duplicates and digest/corpus mismatches are refused.\n- Deterministic order (manifest, else id; locale-independent sort, null last).\n- The report is deep-frozen, and caller usage objects are copied, never frozen.\n- The CLI never writes. lstat refuses non-regular files and files over 1 MiB.\n- Usage project paths join validated kebab ids only.\n\nTheoretical only:\n- lstat-then-read TOCTOU on size, in an operator-owned local records dir.\n- buildBaselineReport given a hand-made usage map without wholeTasks throws a TypeError, which leaks no content.\n\nFresh gate rerun after the byte changes: tree exit 0 at 54/54; snapshot of HEAD 475e743 with the 4 owned files overlaid, exit 0 at 54/54. Nothing skipped. On Linux only the python3 attribution engine runs; PowerShell is not exercised.\n\nAlso confirmed: usage-report.mjs is unchanged; the test file is append-only (+397/-0, prefix sha 25cdc3b0, 817/817 CRLF); no forbidden-pattern substrings; no agents or workloads run; no daemon, wrapper, Git or .moe writes; no savings or quality claims.",
+      "startedAt": "2026-10-24T16:00:16.572Z",
+      "completedAt": "2026-10-24T16:03:41.043Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Block resolved by the human: pinned current defaults, 1 run per workload, 60-minute cap per workload (see task comment). Back to PLANNING for an architect.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 40,
+  "comments": [
+    {
+      "id": "comment-af9d6a3cebc0433aa5a534279dfcaf42",
+      "author": "architect-cq-coordinator",
+      "content": "User clarification: token efficiency is a cross-cutting requirement on EVERY rollout task, not just context/cache tasks. Six epic rails now carry CQ-TOKEN-v1/safety/accounting. Measure whole-task tokens and cost per independently accepted change across architect, worker, QA, context-building and repair attempts, with cached/uncached/output counters kept distinct and missing data unknown. Do not confuse prompt-size reduction or caching with reduced active-context use; do not claim achieved savings before matched quality/repair/latency evidence. Keep instrumentation itself bounded and avoid logging full prompts/payloads or private reasoning.",
+      "timestamp": "2026-10-24T12:32:34.399Z"
+    },
+    {
+      "id": "comment-700a6a5111ad4a57a3340a2dac0ab586",
+      "author": "governor-187cc44e",
+      "content": "Human decision, 2026-10-24 (relayed by governor-187cc44e). This resolves the run-configuration block. Plan the baseline against this setup:\n\n1. Models and effort: today's defaults, unchanged. No `settings.models` pins are set, so claude seats launch on claude-opus-5-5 with `--effort max`, and a claimed task's plan routing (its `launch` hint: model and effort) overrides that for the session. That is the original behavior being measured. Each fixture result records the actual model id and effort for every participating role, plus the Moe commit under test.\n2. Repetitions: one run per workload, 20 runs in total. The report states n=1 as a variability limitation.\n3. Budget: each workload's whole run is capped at 60 minutes wall-clock, the daemon's task-size target. A run that hits the cap is recorded as capped, with its partial counters. It is not dropped and not silently retried.\n\nMissing counters stay explicitly unknown, per CQ-TOKEN-MEASURE-v1.",
+      "timestamp": "2026-10-24T12:45:29.075Z"
+    },
+    {
+      "id": "comment-0a4bd229bce84033b94fc6e049af7834",
+      "author": "architect-26ba32c3",
+      "content": "Size triage / SPIDR split (architect-26ba32c3, 2026-10-24). An honest \"run 20 frozen workloads and report\" exceeds the one-task size limit by a wide margin: it needs a record contract and report builder, a run driver, and roughly 20 hours of paid execution. This row is narrowed to the PRODUCER slice, which its DoD and its usage-test verification already describe:\n- the strict per-workload baseline outcome record contract;\n- the report builder: scripts/baseline-report.mjs plus the CLI scripts/analyze-baseline.mjs, tested inside scripts/tests/usage-report.test.mjs.\n\nNew BACKLOG rows (human-gated):\n- CQ-M04b task-9cfaacf11e194062bc1ca5f77388ec90: the run driver. It runs one workload through the original workflow with your configuration (today's defaults, n=1, 60-minute cap, capped runs kept with partial counters) and is tested with a fake CLI only. It depends on this row and on M03.\n- CQ-M04c task-e4adf15c84f0433a9457ea5e8968c3de: the actual 20-run execution and the published report. It involves real paid usage and up to about 20 hours of wall-clock time, so its rail requires an explicit human go-ahead. It depends on M04b.\n\nM05 and M06 now also depend on M04c, so neither starts before the real baseline exists. No run, cost or acceptance claim is made by this row.",
+      "timestamp": "2026-10-24T13:14:22.313Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:32:57.338Z",
+  "updatedAt": "2026-10-24T16:53:27.093Z",
+  "dependsOn": [
+    "task-bb9034eaeed44adcbc1d05c71c2eda5b",
+    "task-cfa74f1b01df4647b57a923bdd961b2a"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-24T12:39:07.805Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-24T16:10:54.833Z",
+    "wallClockMs": 12707028
+  },
+  "contextFetchedBy": [
+    "architect-da8841dc",
+    "governor-187cc44e",
+    "architect-26ba32c3",
+    "worker-4e006165",
+    "qa-b0c1741e",
+    "worker-e8965f51"
+  ],
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Cannot specify a reproducible bounded paid baseline experiment from the supplied contract: actual runs on all 20 frozen workloads are required, but provider/model+effort, per-workload spending or runtime budget, and repetition count are undefined. Read task/comments, measurement reference section and launcher defaults; none supply a matched experiment configuration. Role routing defaults are not an experiment budget and must not be silently substituted. This is missing acceptance/run configuration, not REPL silence or an implementation prerequisite wait. No plan/source change made; M02/M03 plans remain submitted.",
+  "blockedOnTaskIds": null,
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T13:16:31.039Z",
+  "planningNotes": {
+    "approachesConsidered": "- **Split, not one task.** The original row implied running 20 paid workloads of up to 60 minutes each, plus a driver, plus a report. That is far beyond the one-task size limit, so it was split along the SPIDR interface/contract seam (comment-0a4bd229bce84033b94fc6e049af7834):\n  - **M04 (this row):** the record contract and report builder. This matches its DoD and its usage-test verification exactly.\n  - **M04b:** the driver, tested with a fake CLI.\n  - **M04c:** the human-gated real execution and publication.\n  M05 and M06 now also depend on M04c.\n- **Rejected:** putting the builder inside usage-report.mjs. That would grow a landed, CRLF M02 module. A sibling module imports buildUsageReport instead.\n- **Rejected:** a new test file. The DoD's fixed command runs only the four usage test files, so the tests are appended to usage-report.test.mjs.\n- **Acceptance is computed only from held-out assessment results.** Moe status, QA counts and tokens are record-only.",
+    "codebaseInsights": "- **usage-report.mjs (post-M02):**\n  - Exports buildUsageReport(project) and formatUsageReport.\n  - buildUsageReport reads <project>/logs/moe-usage plus .moe/{tasks,attempts,candidates,receipts}, and returns { version, project, summary, providers, tasks, unattributed, wholeTasks, warnings }.\n  - Each wholeTasks row has { taskId, providers, records, launches, roles, requestedModels, requestedEfforts, reportedModels, usage{field:{observedTokens, unknownRecords}}, coverageScope:'observed-log-records-only', correlation, delivery, taskRecord }.\n  - summary.codexStreamCoverage is 'unconfirmed' or 'not-observed'.\n- **analyze-usage.mjs** is the thin-CLI pattern to mirror.\n- **Test helpers:** usage-report.test.mjs (node:test, CRLF) has receipt(), row(), tokens(), fixture() and writeRecords().\n- **Line endings:** usage-report.mjs, its test and analyze-usage.mjs are CRLF in index and working tree. analyze-usage.mjs is dirty with CRLF churn only; do not touch it.\n- **Human configuration (comment-700a6a51):** today's defaults (claude-opus-5-5, effort max, plan-routing launch hints override), n=1, 60-minute cap, capped runs recorded with partial counters, unknown counters stay unknown.\n- **Planned CLI contract** (M04c's description already relies on it): `node scripts/analyze-baseline.mjs --records DIR --project DIR --expected FILE --json`. Records are `<id>.json`; `<project>/<workloadId>/` is that run's usage project.",
+    "risks": "- **Do not run** any agent, workload, driver or paid call in this task.\n- **Unknown is never zero:** a missing usage project or unknown counters must stay null in JSON and 'unknown' in markdown.\n- **No hidden runs:** capped, failed and missing runs must stay visible. Refuse duplicate records (n=1) and digest mismatches loudly.\n- **Fail closed:** strict exact-key validation at every level keeps prompts, secrets and prices out of archived records.\n- **Determinism:** with a manifest, follow manifest order; otherwise sort by id, with stable key order in the output.\n- **CRLF:** the test file is CRLF, so append in CRLF and keep every existing test byte-identical.\n- **Shared tree:** concurrent peers may edit scripts/, so confirm the gate in a git-archive snapshot as well.\n- **Linux PATH:** use a Linux-only PATH so inherited Windows entries do not cause EACCES.\n- **Rails:** global forbiddenPatterns are substring checks; avoid them in code and strings. No daemon/wrapper/production edits, no Git or .moe writes, and no savings/quality claims.",
+    "keyFiles": [
+      "scripts/usage-report.mjs",
+      "scripts/analyze-usage.mjs",
+      "scripts/tests/usage-report.test.mjs",
+      "scripts/baseline-report.mjs",
+      "scripts/analyze-baseline.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T13:16:31.120Z",
+  "workStartedAt": "2026-10-24T15:40:06.339Z",
+  "commits": [
+    {
+      "sha": "a649b045c2633ad1a9f4634d20a924efcd88688c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-4e006165@2026-10-24T15:39:11Z",
+      "paths": [
+        ".moe/tasks/task-0ece1a3552944298af911356f149e150.json",
+        ".moe/tasks/task-29c8274ebc4d4faea67009fa5dcd2df1.json",
+        ".moe/tasks/task-9c8694e33ac840718901adae2bae66e4.json",
+        "scripts/baseline-report.mjs",
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "recordedBy": "worker-4e006165",
+      "recordedAt": "2026-10-24T15:50:29.454Z",
+      "treeId": "06bba8fc643f54de503d4a3c5c7e149abbe902e6",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "07fefe296f298a96a9fdae2ba252d2e3a349d5be",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4e006165@2026-10-24T15:51:01Z",
+      "paths": [
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json",
+        "scripts/analyze-baseline.mjs",
+        "scripts/baseline-record.mjs",
+        "scripts/baseline-report.mjs",
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "recordedBy": "worker-4e006165",
+      "recordedAt": "2026-10-24T16:04:54.086Z",
+      "treeId": "ca0909dad0e157488f2dce8028e2ecc078349ff8",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "b7d65d380fbecd9cb20068bf78eaabd840c06b85",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T16:07:45Z",
+      "paths": [
+        ".moe/tasks/task-0ece1a3552944298af911356f149e150.json",
+        ".moe/tasks/task-9c8694e33ac840718901adae2bae66e4.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T16:11:30.986Z",
+      "treeId": "667f0826e7921539fe6e32e7f75708e9ca977725",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/usage-report.test.mjs",
+    "scripts/baseline-report.mjs",
+    "scripts/baseline-record.mjs",
+    "scripts/analyze-baseline.mjs",
+    ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json",
+    ".moe/tasks/task-0ece1a3552944298af911356f149e150.json",
+    ".moe/tasks/task-9c8694e33ac840718901adae2bae66e4.json"
+  ],
+  "touchedFiles": [
+    "scripts/baseline-report.mjs",
+    "scripts/analyze-baseline.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T16:07:45Z",
+    "at": "2026-10-24T16:11:30.986Z"
+  },
+  "declaredFiles": [
+    "scripts/baseline-record.mjs",
+    "scripts/analyze-baseline.mjs",
+    "scripts/baseline-report.mjs"
+  ],
+  "reviewStartedAt": "2026-10-24T16:04:08.246Z",
+  "verification": {
+    "command": "node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-attribution.test.mjs",
+    "exitCode": 0,
+    "outputTail": "Run fresh from the repo root with Linux-only PATH, node v24.21.0, after the last byte change. Also run in a fresh git-archive snapshot of HEAD 475e743 with the 4 owned files overlaid (cmp-identical): exit 0, 54/54.\n✔ baseline record contract returns a detached deep-frozen copy and keeps unknown counters null\n✔ baseline record contract rejects every malformed field, naming its path without echoing content\n✔ acceptance comes only from the held-out assessment, never from Moe status, QA approval or tokens\n✔ capped, failed, aborted and missing runs stay visible while duplicates and digest mismatches are refused\n✔ usage joins each workload project by usageTaskId and never turns unknown usage into zero\n✔ report lists reproducible inputs and every variability and coverage limitation\n✔ baseline report is deterministic and follows manifest order, else workload id order\n✔ analyze-baseline CLI prints the report read-only and fails closed with bounded file-and-field errors\n✔ an overflowed workload total stays unknown in the baseline summary instead of being skipped\nℹ tests 54\nℹ suites 0\nℹ pass 54\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2435.876744",
+    "reportedAt": "2026-10-24T16:04:08.246Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-M04 producer slice (SPIDR split, comment-0a4bd229): the baseline outcome record contract, report builder and CLI. No agents or workloads were run; those are M04b/M04c.\n\nFiles:\n- scripts/baseline-record.mjs (new, 190 lines): readBaselineRecord, readExpectedManifest and the constants. Exact keys at every level, so prompts, tool arguments, secrets and prices cannot ride along. Errors name the field path, are capped at 200 chars and never echo values. null stays null; output is a detached, deep-frozen copy.\n- scripts/baseline-report.mjs (187 lines): re-exports the contract and adds buildBaselineReport and formatBaselineReport.\n- scripts/analyze-baseline.mjs (new, 60 lines): read-only CLI, `--records DIR [--project DIR] [--expected FILE] [--json]`.\n- scripts/tests/usage-report.test.mjs: append-only CRLF section, 9 tests.\n\nBehavior:\n- Acceptance comes only from the held-out assessment: accepted needs ran, exit 0, and every criterion pass (non-empty); any fail is rejected; everything else is not-assessed. Moe status and QA counts are labelled recordOnly, and tokens never change acceptance (swap-tested).\n- Capped, failed, aborted and missing runs all stay as rows with partial counters. Duplicates (n=1), workloads absent from the manifest, and caseDigest or corpusVersion mismatches are refused.\n- Usage joins wholeTasks on run.usageTaskId, with explicit unknown reasons. Summary totals add observed values only, and an overflowed total becomes unknown. observedTokensPerAcceptedChange is null with no accepted changes, and complete is false whenever any usage is unknown or codex coverage is unconfirmed.\n- inputs record corpus versions, digests, commits, caps, repetitions, platform/node/cli versions and per-role cli/model/effort. limitations cover n=1, non-completed counts, unknown usage/retrieval/latency, codex coverage, mixed commits/caps/corpus versions, record-only status and tokens not being cost.\n- Output is deterministic; unknown values render as 'unknown', never 0.\n\nVer",
+  "completedAt": "2026-10-24T16:10:54.833Z",
+  "reviewCompletedAt": "2026-10-24T16:10:54.833Z",
+  "reviewSummary": "APPROVED. Reviewed 07fefe2 (completion) and a649b04 (checkpoint), both on moe/work-2026-10-24. The 4 owned scripts in the tree are byte-identical to 07fefe2; usage-report.mjs is unchanged.\n\nGate re-run by QA: the exact DoD command, Linux PATH, node 24.21.0: exit 0, 54/54, 0 skipped. Only the python3 attribution engine runs; PowerShell is not exercised.\n\nSize: 437 runtime + 397 test = 834 LOC, over 400 with no waiver rail. Not rejected: this is the plan-mandated slice already split by SPIDR, and CQ-M precedent (M02, M03) approved the same. The test file is append-only with CRLF kept.\n\nDoD:\n1) Rows keep commit, corpus version, digests, cap and roles (cli/model/effort/launches). Unknown stays null, and markdown shows 'unknown'.\n2) Acceptance comes only from the assessment: DONE+QA approval with a failing criterion is rejected, and the token swap leaves verdicts unchanged.\n3) inputs and limitations are complete, exactly asserted and deterministic.\n4) Gate green (above).\n\nProbes:\n- An empty records dir with a manifest gives a missing row, exit 0.\n- A __proto__ key and a symlinked record are both refused with bounded errors, exit 1.\n- No forbidden patterns; rails held.\n\nNon-blocking for M04b/c:\n(a) The summary detects overflow only when unknownRecords is 0; overflowFields would be exact. Theoretical, needs over 9e15 tokens.\n(b) cliVersion, platform and node version appear only in the aggregate inputs; mixed values are not flagged as a limitation.",
+  "requiredCheckAtDone": null
+}

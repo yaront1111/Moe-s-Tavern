@@ -1,0 +1,247 @@
+{
+  "id": "task-3ead73b368094850bfec955c316bc239",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "[CQ-F12b] Revision-bound execution contract reference docs",
+  "description": "Objective: bring the reference docs up to the landed CQ-F contract. CQ-F03 through CQ-F11, and CQ-F12a, deliberately deferred these docs to the epic's final task. This row is split out of CQ-F12 (task-72184c6505cc41e8b6066732011ffb70) for size; F12 stays the single final integration and hardening task and depends on this row. Re-verify every statement against the code at HEAD and document what actually landed, not what a plan said.\n\nFiles: docs/MCP_SERVER.md, docs/SCHEMA.md, docs/PLAN_APPROVAL_FRESHNESS.md and docs/CONFIGURATION.md, plus a docs drift test in packages/moe-daemon/src/util/ (pattern: taskTimeBudgetDocs.test.ts).\n\nOwed content. The hand-forward comments on task-72184c65 are the source; read them with moe.get_context { taskId: \"task-72184c6505cc41e8b6066732011ffb70\", commentsLimit: 50, commentsMaxChars: 0 }.\n- F03 executionContract (comment-b41f072c): the SCHEMA.md Task listing, a subsection, validation bounds, and the corrected planRevision materiality bullets.\n- F04/F05 approvedPlanRevision (comment-8e824b16, comment-b83aef8d, comment-eee23c5e): the SCHEMA.md subsection; MCP_SERVER.md plan-approval token rules and durable-authorization wording; SPEED/TURBO fencing, withhold and restart re-arm facts; PLAN_APPROVAL_FRESHNESS.md Boundaries and Limits.\n- F04b (comment-7868673b, comment-dc06d662): the stale lines in PLAN_APPROVAL_FRESHNESS.md (78/81/85/128) and SCHEMA.md (718).\n- F06 servedContext and receipts (comment-412119fd): the get_context sessionId input, servedContext, receiptStatus and packetId; SCHEMA.md ExecutionAttempt.contextReceipt.\n- F07 step entry (comment-e4992d04): the start_step inputs and strict requirements; the CONFIGURATION.md executionProfile row; PLAN_APPROVAL_FRESHNESS.md consumption.\n- F08 completion (comment-0de6f303): the complete_step/complete_task inputs, strict requirements and EXECUTION_EVIDENCE_INELIGIBLE; SCHEMA.md ExecutionAttempt.stepCompletions/StepCompletionEvidence; the snapshot Consumers correction.\n- F09/F12a proxy (comment-3228d389): the identity env vars in CONFIGURATION.md, and the stamping and refusal notes in the MCP_SERVER.md get_context/start_step/complete_step/complete_task entries.\n\nScope boundaries:\n- Docs plus their drift test only; no production code.\n- CQ-F12's own completion-readiness hardening is documented by F12 itself.\n- docs/MCP_SERVER.md is also in REVIEW-stage task-7a0b188151a74356a4965b3cc589eddf's plan, hence the dependency.\n- Preserve peer bytes in shared docs.\n\nApproved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npx vitest run src/util/executionContractDocs.test.ts",
+  "definitionOfDone": [
+    "docs/MCP_SERVER.md documents the landed contracts: get_context sessionId, servedContext, receiptStatus and packetId; start_step, complete_step and complete_task identity inputs, strict requirements and refusal codeNames; SPEED/TURBO approval stamping, withhold and re-arm; and proxy identity stamping with its two refusal codes.",
+    "docs/SCHEMA.md documents Task.approvedPlanRevision, Task.executionContract, ExecutionAttempt.contextReceipt and ExecutionAttempt.stepCompletions with their validation rules, and corrects the stale planRevision, approval and snapshot-consumer statements.",
+    "docs/PLAN_APPROVAL_FRESHNESS.md and docs/CONFIGURATION.md no longer call revision-less or token-free human approval legal, or SPEED/TURBO unfenced, and document strict step entry/completion plus the execution-identity env vars.",
+    "A docs drift test pins the removed stale statements and the documented codeNames and fields; fresh verification `cd packages/moe-daemon && npx vitest run src/util/executionContractDocs.test.ts` exits 0 with its tests executed (not skipped), and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Docs drift test first (RED).\n\nFirst read the hand-forward comments in full: moe.get_context { taskId: \"task-72184c6505cc41e8b6066732011ffb70\", commentsLimit: 50, commentsMaxChars: 0 }. The prefix for the F04b one is comment-78686731; this row's description misprints it.\n\nCreate packages/moe-daemon/src/util/executionContractDocs.test.ts on the pattern of src/util/taskTimeBudgetDocs.test.ts:\n- compute repoRoot from import.meta.url and read the four docs off disk;\n- no skipIf: every gate snapshot carries docs/, and the verification run must show these tests executed;\n- add a small section(doc, heading) helper that returns the text from the `### <heading>` line to the next `##`/`###` heading. It throws, naming the heading, when the heading is missing, so a renamed heading fails loudly instead of passing vacuously;\n- keep the file to about 90 lines or fewer, using fixed strings.\n\nAssertions:\n(a) Stale statements are gone. Grep each at HEAD first to confirm the exact substring.\n- PLAN_APPROVAL_FRESHNESS.md: 'is still a legal approval', 'approval without the field still works', 'token-free by design', 'still send `{taskId}` only'.\n- SCHEMA.md: 'remains a legal legacy approval'.\n- MCP_SERVER.md: 'Unchanged and still token-free: **SPEED/TURBO auto-approval**', 'do not enforce it yet', 'A number means a revision-checked human approval'.\n(b) The documented contract is present, scoped to its section.\n- section(MCP, 'moe.get_context') contains 'sessionId', 'servedContext', 'packetId', and every receiptStatus value: recorded, record-failed, identity-unreadable, no-session, no-running-attempt, not-attempt-owner. The source of truth is the ReceiptStatus union in src/tools/getContext.ts.\n- section(MCP, 'moe.start_step'), section(MCP, 'moe.complete_step') and section(MCP, 'moe.complete_task') each contain 'attemptId', 'generation', 'sessionId', 'STEP_ENTRY_IDENTITY_REQUIRED', 'ATTEMPT_SUPERSEDED', 'ATTEMPT_NOT_RUNNING', 'PLAN_REVISION_NOT_APPROVED' and 'CONTEXT_RECEIPT_STALE'. complete_task's section also contains 'EXECUTION_EVIDENCE_INELIGIBLE'.\n- MCP_SERVER.md contains 'EXECUTION_IDENTITY_SUBSTITUTED', 'EXECUTION_IDENTITY_INVALID' and 'PLAN_AUTO_APPROVED'.\n- SCHEMA.md contains 'approvedPlanRevision', 'executionContract', 'contextReceipt', 'ServedContextReceipt', 'stepCompletions' and 'StepCompletionEvidence', plus every name in EXECUTION_CONTRACT_FIELDS imported from '../state/validators.js'. That import is the real drift anchor: a field added in code but not in the docs fails the test.\n- CONFIGURATION.md contains 'MOE_SESSION_ID', 'MOE_ATTEMPT_ID' and 'MOE_ATTEMPT_GENERATION'.\n\nRun it against the HEAD docs in the isolated Linux snapshot (Serena gotcha-linux-vitest-reuse-native-node-modules; every MOE_* unset; never npm in the shared checkout) and record the RED, listing which assertions fail. Error handling: a missing doc file or heading throws an Error that names the path or heading.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/util/executionContractDocs.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/executionContractDocs.test.ts"
+      ],
+      "note": "RED in isolated Linux snapshot (git archive HEAD + owned files, native node_modules, env -i): 11 failed / 1 passed (section() throws test). Failing: 3 stale-statement tests (FRESHNESS, SCHEMA, MCP), get_context/start_step/complete_step/complete_task section checks, evidence refusal, proxy refusals, SCHEMA fields, CONFIGURATION env vars. Finding: EXECUTION_CONTRACT_FIELDS at HEAD has NINE fields (requiredChecks added by peer CQ-V01a, ProtectedCheckDefinition); plan says eight - will document requiredChecks briefly in step 4. Ran via /tmp/f12b-run.sh. 549 dirty peer paths left untouched.",
+      "startedAt": "2026-10-26T10:19:45.486Z",
+      "completedAt": "2026-10-26T10:21:19.246Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/MCP_SERVER.md: the execution-tool sections.\n\nDocument what landed: re-read src/tools/getContext.ts, startStep.ts, completeStep.ts, completeTask.ts, src/util/executionAuthorization.ts, src/state/attemptStore.ts and packages/moe-proxy/src/utils.ts (CQ-F12a's landed table) first. Use tight bullets with no repetition across the four sections, and preserve all peer text.\n\n`### moe.get_context` (CQ-F06):\n- New optional `sessionId` input: the receiving session's incarnation exactly as the runner names it, i.e. the wrapper's MOE_SESSION_ID `<workerId>@<preflight-iso>`.\n  - At most 255 chars, with no NUL, CR or LF.\n  - There is no env fallback.\n  - A malformed value, null included, is refused INVALID_INPUT in every view, before contextFetchedBy is stamped.\n- Default and view:\"full\" reads end with `servedContext` {taskId, planRevision, approvedPlanRevision, attemptId, generation, receiptStatus, receiptId, packetId}; a field is null when absent.\n- receiptStatus precedence: identity-unreadable, then no-session, then no-running-attempt, then not-attempt-owner, then recorded or record-failed. Only a presented sessionId on a running attempt whose worker is both the caller and the task's assignee records a receipt.\n- packetId is 'sha256:' + the hex sha256 of the response without servedContext. A recorded read serves exactly the bytes it hashed.\n- A failed receipt write is logged, and the context is still served as record-failed with null ids; get_context never throws for it.\n- view:\"status\" never records a receipt.\n- A receipt records what was served to whom. It is never approval.\n\n`### moe.start_step` (CQ-F07):\n- Optional inputs: attemptId (string, at most 128 chars), generation (integer, at least 1) and sessionId (get_context's rules).\n- Every profile:\n  - malformed input is refused INVALID_INPUT;\n  - a presented attempt that is superseded, closed or from the future is refused ATTEMPT_SUPERSEDED.\n- Strict when the task's resolved profile or the open attempt's recorded snapshot is verified-local; a malformed one fails closed with INVALID_INPUT. Strict requires, in this order:\n  1. workerId, attemptId, generation and sessionId (STEP_ENTRY_IDENTITY_REQUIRED, -32602, with context.missing);\n  2. the caller's own running attempt (ATTEMPT_NOT_RUNNING);\n  3. Task.approvedPlanRevision === planRevision (PLAN_REVISION_NOT_APPROVED). A receipt never grants approval;\n  4. a receipt naming this task, attempt, generation, worker, session and the approved current revision (CONTEXT_RECEIPT_STALE, with context.stale). packetId, view and servedAt are not compared.\n- The ownership and context-fetched checks run before the guard, and every refusal happens before any write.\n- Legacy and observe keep worker-ID-only freshness.\n- Passing grants entry only, never readiness.\n\n`### moe.complete_step` / `### moe.complete_task` (CQ-F08): the same optional inputs and the same guard.\n- A strict complete_step appends {stepId, planRevision, completedAt} to the attempt's stepCompletions BEFORE the task write. The daemon is the only writer.\n- A strict complete_task also needs evidence for every plan step, from the CURRENT attempt, at the approved planRevision. Otherwise it is refused STATE_CONFLICT EXECUTION_EVIDENCE_INELIGIBLE {taskId, attemptId, generation, planRevision, steps}.\n  - Evidence from a superseded attempt or an earlier revision stays recorded but does not count; re-execute it via moe.request_replan.\n  - Malformed stored evidence fails closed with INVALID_INPUT.\n- Legacy rows record no evidence.\n- A strict complete_task still meets the readiness backstop (EXECUTION_PROFILE_NOT_READY). Leave the wording about readiness ORDER to CQ-F12, which is changing it.\n\nProxy (CQ-F09 + CQ-F12a). One short shared paragraph, placed once (e.g. under get_context) and referenced from the other three sections:\n- Over moe-proxy, the session env supplies sessionId (MOE_SESSION_ID) for get_context, start_step, complete_step and complete_task.\n- It supplies attemptId + generation (MOE_ATTEMPT_ID + MOE_ATTEMPT_GENERATION, both or neither; generation sent as a JSON number) for the three step and task tools.\n- A caller value that differs is refused EXECUTION_IDENTITY_SUBSTITUTED (-32003). A malformed or half env identity is refused EXECUTION_IDENTITY_INVALID (-32602), with no coercion and nothing forwarded.\n- JSON-RPC batch elements are fenced the same way.\n- With no identity env, the proxy forwards unchanged.\nState the tool list only after checking CQ-F12a's landed table.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "MCP_SERVER.md execution tools documented: get_context sessionId/servedContext/Served context bullets (getContext.ts:140-190, attemptStore.ts:388), shared proxy paragraph (proxy utils.ts:252-345, table = get_context[session], start_step/complete_step/complete_task[attempt,session]), start_step Strict step entry (executionAuthorization.ts decision order), complete_step/complete_task strict + EXECUTION_EVIDENCE_INELIGIBLE (completeStep.ts:94, completeTask.ts:176-179). Readiness ORDER wording left to F12. Drift test: 4 pass / 8 fail (remaining are step 3-5 targets).",
+      "startedAt": "2026-10-26T10:21:21.303Z",
+      "completedAt": "2026-10-26T10:22:37.648Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/MCP_SERVER.md: the approval sections (CQ-F05 plus leftovers).\n\nIn `### Plan approval — expectedPlanRevision compare-and-swap`, and in `### moe.submit_plan` wherever it describes SPEED/TURBO auto-approval. Verify against src/tools/submitPlan.ts (armSpeedModeApproval, rearmSpeedModeApprovals) and state/taskStore.ts (updateTask, checkedApprovalRevision).\n\nToken rules: replace the bullet 'Unchanged and still token-free: **SPEED/TURBO auto-approval** and the **`moe.set_task_status` relaxed-mode** approval…'. Only the relaxed set_task_status approval stays token-free, and it records no stamp. SPEED/TURBO now stamp (see below).\n\nDurable authorization:\n- Replace 'A number means a revision-checked human approval; …' with: a number is the revision an approval was bound to. That is either a token-checked human approval (PLAN_APPROVED) or a SPEED/TURBO automatic approval of the revision its plan submission committed (PLAN_AUTO_APPROVED). Keep the sentences about absent, null and no-backfill.\n- Replace 'This records approval provenance only. Execution, claim and completion do not enforce it yet (CQ-F06–F08)…' with:\n  - under an effective verified-local profile, step entry and completion require approvedPlanRevision === planRevision (link the moe.start_step, moe.complete_step and moe.complete_task sections);\n  - claims never consult it;\n  - the legacy/observe delivery policy is unchanged.\n\nSPEED/TURBO facts (comment-b83aef8d, plus the worker clarification in comment-eee23c5e):\n- TURBO stamps approvedPlanRevision = the submitted revision, in the same write as WORKING and planApprovedAt (inside the PLAN_SUBMITTED runExclusive).\n- A SPEED timer approves only the revision it was armed for. After a plan, DoD or contract change, it WITHHOLDS:\n  - no task write and no TASK activity;\n  - one #general system message, which logs the usual non-task MESSAGE_CREATED activity, names both revisions and says 'Approve the current revision from the board, or reject the plan and resubmit it.';\n  - the row stays AWAITING_APPROVAL with no live timer, and no timer is armed for the newer revision.\n- Only PLAN_REVISION_MISMATCH withholds. Any other failure records the existing 'SPEED mode auto-approval failed' activity.\n- The restart re-arm:\n  - binds executionPolicySnapshot.planRevision (captured in the PLAN_SUBMITTED write);\n  - for a legacy row with no snapshot, binds its current revision;\n  - when the snapshot or revision is unreadable, records the failure activity and leaves that row unarmed;\n  - never throws at daemon start;\n  - at every restart, re-arms a withheld row (still bound to the older revision), which withholds again and posts one more notice.\n\nKeep the CQ-F04/F04b text that is still true. Preserve all peer text.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Plan-approval CAS section: three stale bullets replaced and a SPEED/TURBO auto-approval block added. Traced to submitPlan.ts:84-124 (withhold, PLAN_REVISION_MISMATCH only, message text), :155-176 (restart re-arm: snapshot planRevision else decodeStoredPlanRevision, unreadable -> recordSpeedApprovalFailure + continue), :594 (TURBO PLAN_AUTO_APPROVED stamp), taskStore.ts:548 (stamp accepted on PLAN_APPROVED||PLAN_AUTO_APPROVED). submit_plan section had no SPEED/TURBO text to change. Drift test: 6 pass / 6 fail (SCHEMA, CONFIGURATION, FRESHNESS targets remain).",
+      "startedAt": "2026-10-26T10:22:39.538Z",
+      "completedAt": "2026-10-26T10:23:07.420Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "docs/SCHEMA.md.\n\nFirst re-read src/types/schema.ts (Task, ExecutionAttempt, ServedContextReceipt, StepCompletionEvidence, TaskExecutionContract), state/validators.ts (EXECUTION_CONTRACT_FIELDS and its bounds), the revision and approval code in state/taskStore.ts, and the readers in state/attemptStore.ts.\n\n1. `## Task` interface listing: add `approvedPlanRevision?: number;` next to planRevision (daemon-owned; see the new subsection), and `executionContract?: TaskExecutionContract;` after executionPolicySnapshot.\n\n2. `### planRevision` (comment-b41f072c, item 3).\n   - Correct the materiality bullets. Only these are material: ordered step ids, the original and the effective active instructions, approved affectedFiles/newFiles, the DoD and the execution contract.\n   - Excluded: status, timestamps, reported modifiedFiles, progress notes, amendment audit metadata and inactive amendment history.\n   - A reopen that clears execution evidence neither increments nor resets it. Every submission bumps it exactly once, and caller stamps are ignored.\n   - Fix the stale 'omitting the token remains a legal legacy approval' sentence (about line 718). An omitted token is now refused INVALID_INPUT on both /ws routes (CQ-F04b). An explicit 0 still approves a stamp-less row, and unstamped approvals stay as history.\n\n3. New `### approvedPlanRevision` subsection (comment-8e824b16; comment-b83aef8d, item 3):\n   - It is daemon-owned, and set only inside the approval write itself: approveTask's PLAN_APPROVED with the checked token, or a SPEED/TURBO PLAN_AUTO_APPROVED with the submitted revision. It lands in the same image as WORKING/planApprovedAt, and only when it equals the revision that write commits.\n   - Absent means an unchecked or legacy approval. Null is never written, and a stored null or non-integer reads as absent.\n   - Nothing backfills it from status or planApprovedAt.\n   - A material plan, DoD or contract edit keeps the old number as history. Only a safe integer equal to planRevision is current.\n   - It is stripped from every caller update (by the /ws UPDATE_TASK denylist and by the store), and CREATE_TASK never copies it. A token-free relaxed set_task_status approval records none.\n   - Its consumers, start_step, complete_step and complete_task under verified-local, treat only that equality as authorization.\n\n4. New `### executionContract` subsection after `### executionPolicySnapshot` (comment-b41f072c, items 2 and 4):\n   - Eight optional fields, in canonical order: intendedBehavior (a string of at most 2000 chars), then acceptanceCriteria, invariants, compatibility, approvedScope, reuse, sourceAssumptions and checkRefs (string lists of at most 50 entries, each at most 1000 chars).\n   - What each field means: the outcome; the behavioural criteria (the DoD stays human-owned); the invariants; legacy, wire and caller compatibility; symbol, interface and producer/consumer scope (file scope stays in the steps); reuse decisions; source path and symbol facts; commands exactly as run.\n   - Validation:\n     - strict, refusing INVALID_INPUT with context.field;\n     - unknown keys are refused;\n     - strings are preserved, never truncated;\n     - the stored object is a fresh canonical copy;\n     - empty lists are omitted;\n     - undefined, null or empty clears the field;\n     - absent legacy rows are unchanged, with no migration.\n   - Every updateTask writer validates it. submit_plan replaces it, and an omitted contract clears it. Every role's get_context projects it when set.\n   - A material change increments planRevision once, in the same write. An equal but reordered contract does not bump it. By itself it grants no approval, readiness or evidence.\n   - Add the bounds to `## Validation Rules` → `### Task`.\n\n5. `### executionPolicySnapshot`, the Consumers bullet: add that moe.start_step, moe.complete_step and moe.complete_task (util/executionAuthorization.ts) judge strictness from the resolved profile or the open attempt's snapshot, and fail closed with INVALID_INPUT on a malformed setting or snapshot. Step progress is therefore no longer among the writes that never read it.\n\n6. `## ExecutionAttempt`: add `contextReceipt?: ServedContextReceipt;` and `stepCompletions?: StepCompletionEvidence[];` to the interface, with a short paragraph on each:\n   - ServedContextReceipt {id 'ctxreceipt-<32hex>', packetId 'sha256:<64hex>', taskId, attemptId, generation, workerId, sessionId, planRevision, approvedPlanRevision? (absent, never null), view 'default'|'full', servedAt}.\n     - One latest-wins slot, written only by get_context, for a running attempt, by its own worker (who is also the assignee).\n     - The binding fields come from the stored attempt.\n     - The decoder is strict: exact key set.\n   - StepCompletionEvidence {stepId, planRevision, completedAt}.\n     - Daemon-owned and append-only, written only by a strict complete_step on the caller's running attempt.\n     - Historical, never approval; the decoder is strict.\n   - Phase changes keep both fields.\n\nPreserve peer text: the Claude Accounts, Candidate and CheckRun sections belong to other tasks.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "SCHEMA.md: Task listing (approvedPlanRevision, executionContract), planRevision materiality bullets rewritten from taskStore.ts:124-195 (approvalPlanSurface, derivePlanRevision) and schema.ts:769-790, scope-note stale sentence fixed, new approvedPlanRevision and executionContract subsections, snapshot Consumers extended, ExecutionAttempt contextReceipt/stepCompletions (attemptStore.ts:405-475), Validation Rules bounds (validators.ts:122-128,188-218). DEVIATION from the plan: the contract has NINE fields at HEAD (requiredChecks from peer CQ-V01a); documented as a ninth table row with bounds (max 20; paths max 50) and left the measured snapshot/check-run docs to the CQ-V rows. Also touched MCP_SERVER.md again: added the strict codeName list to the complete_step/complete_task bullets so the section-scoped drift assertions hold. Drift test: 10 pass / 2 fail (FRESHNESS stale, CONFIGURATION env).",
+      "startedAt": "2026-10-26T10:23:09.323Z",
+      "completedAt": "2026-10-26T10:24:19.414Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "docs/PLAN_APPROVAL_FRESHNESS.md and docs/CONFIGURATION.md.\n\nPLAN_APPROVAL_FRESHNESS.md (sources: comment-78686731 and comment-dc06d662 for F04b; comment-8e824b16 item 2 for F04; comment-b83aef8d item 2 for F05; comment-e4992d04 item 3 for F07; plus F08).\n\nBoundaries:\n- About line 78 ('An omitted expectedPlanRevision is still a legal approval'): omission is now refused INVALID_INPUT on both /ws routes. An explicit 0 still approves a stamp-less row, and unstamped approvals stay as history.\n- About line 81: every JetBrains and VS Code approval entry point now sends the rendered revision (CQ-F04c/F04d). Name the surfaces as they landed; verify in moe-jetbrains BoardApproval/PlanReviewDialog and in moe-vscode's approveTask senders.\n- About line 85: SPEED/TURBO stamp the revision their submission committed. A SPEED timer approves only that revision; otherwise it withholds.\n- About line 87: a queued SPEED callback can approve only the revision it was armed for, and the approval write re-checks it.\n- Keep the bullets on the relaxed set_task_status (token-free, no stamp) and on 'no moe.approve_task'.\n- Add: a human approval cancels a pending SPEED timer only after its own write lands. The verified-local omission guard sits behind EXECUTION_PROFILE_NOT_READY.\n\nAlso:\n- Add the consumption rule: under verified-local, step entry and completion consume approvedPlanRevision. An amend_plan_step, or a DoD or contract edit, on a WORKING strict task blocks further step entry and completion until the plan is re-approved.\n- Evidence map, about line 128: 'approval without the field still works' becomes 'omission is refused INVALID_INPUT'. Add rows for automaticApprovalRevision.test.ts, startStepAuthorization.test.ts and completionAuthorization.test.ts.\n- Check 'What changed, and why' and 'Reproduce it by hand' for the same stale claims.\n\nCONFIGURATION.md:\n- `### Proxy Configuration` table, three new rows:\n  - MOE_SESSION_ID: the session incarnation `<workerId>@<preflight-iso>`, minted by the launchers once per CLI launch. It is record_commit's session, and moe-proxy stamps it as sessionId onto get_context, start_step, complete_step and complete_task.\n  - MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION: both or neither. The id matches [A-Za-z0-9_-]{1,128}; the generation is a positive, plain-decimal safe integer, sent as a number. The launcher's verified attempt pin sets them and leaves them blank when it cannot verify. They are stamped onto start_step, complete_step and complete_task. A differing caller value is refused EXECUTION_IDENTITY_SUBSTITUTED; a malformed or half pair, EXECUTION_IDENTITY_INVALID.\n- Add matching rows to `### Agent Scripts` as the launchers set them: MOE_SESSION_ID on every launch, and the attempt pair after a verified claim.\n- The executionProfile row in the settings table: moe.start_step, moe.complete_step and moe.complete_task now judge the profile. Add them to what a malformed or hand-edited value refuses with INVALID_INPUT: a malformed setting, task or attempt snapshot, stored receipt, stored planRevision, or stored step evidence.\n- `### SPEED Mode` and `### TURBO Mode`: one line each. The auto-approval is bound to the submitted revision: TURBO stamps it, and SPEED withholds after a later material change.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/PLAN_APPROVAL_FRESHNESS.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "docs/PLAN_APPROVAL_FRESHNESS.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "FRESHNESS: Boundaries rewritten (omission refused; JetBrains PlanReviewDialog/ApproveTaskAction/BoardApproval and VS Code PlanReviewPanel/TaskDetailPanel/BoardViewProvider verified by grep; SPEED/TURBO stamp + withhold; timer cancelled only after write), What-changed table row, Reproduce step, new Consumption section, evidence map + 3 rows (test files exist under src/tools). CONFIGURATION: proxy + agent-script env rows (scripts/moe-agent.sh:2155-2174, 6270-6274; proxy utils.ts:266-345), executionProfile row, SPEED/TURBO lines. Dropped one unverifiable claim (start_step is not a progression). Drift test 12/12 green in snapshot.",
+      "startedAt": "2026-10-26T10:24:21.393Z",
+      "completedAt": "2026-10-26T10:25:17.135Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification and self-review.\n\nUse a FRESH isolated Linux snapshot of HEAD plus the 5 owned files: cmp them byte-equal to the worktree, and run under env -i with a Linux-only PATH and every MOE_* unset.\n- `cd packages/moe-daemon && npx vitest run src/util/executionContractDocs.test.ts` must exit 0, and the output must show the tests ran: a passed count above 0, with 0 skipped. This is complete_task's verification.\n- Type-check the new test file (Serena gotcha-daemon-tests-not-type-checked; TS 7 needs --types node).\n- Keep the existing docs guards that read these files green: `npx vitest run src/util/taskTimeBudgetDocs.test.ts src/util/daemonGitDocs.test.ts src/util/qaCommitPolicy.test.ts`.\n\nSelf-review (load the adversarial-self-review skill and read it as an attacker of the docs):\n- Trace every new sentence to a code line. For the non-obvious ones, note file:line in the step note: receiptStatus precedence, evidence eligibility, the SPEED withhold and re-arm, the proxy table.\n- Nothing may document unlanded behaviour or imply verified-local is enabled. It stays unconditionally unavailable.\n- `git diff` must show only CQ-F hunks: peer text untouched, LF endings kept, and none of the project's forbidden markup tokens introduced.\n- Error handling: when a claim cannot be verified in code, drop or soften it instead of guessing.\n\nThen call complete_task with that verification, plus a summary mapping each hand-forward comment to the sections it changed. Record the Serena task-<id>-handoff memory.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/executionContractDocs.test.ts",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "docs/PLAN_APPROVAL_FRESHNESS.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Fresh snapshot (git archive HEAD + 5 owned files cmp-identical, native node_modules, env -i): drift test 12 passed, 0 skipped; docs guards taskTimeBudgetDocs/daemonGitDocs/qaCommitPolicy + new test = 41 passed; tsc --ignoreConfig --types node clean. Self-review: git diff of docs shows only CQ-F hunks (removed lines are exactly the stale statements), 0 CR, no forbidden tokens. Traced claims: receiptStatus precedence getContext.ts:154-190; sessionId rule attemptStore.ts:388; guard order executionAuthorization.ts:41-100; evidence completeTask.ts:176-179 / executionAuthorization.ts:104-118; SPEED withhold/re-arm submitPlan.ts:99-176; proxy table utils.ts:252-345. Residual risk: requiredChecks (CQ-V) documented minimally; readiness ordering left for F12.",
+      "startedAt": "2026-10-26T10:25:19.419Z",
+      "completedAt": "2026-10-26T10:25:56.875Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b5f743bc50544d838422ce365616240e",
+    "task-7a0b188151a74356a4965b3cc589eddf"
+  ],
+  "priority": "CRITICAL",
+  "order": 234.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T09:42:51.863Z",
+  "updatedAt": "2026-10-26T10:30:48.306Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T09:47:26.926Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-26T10:29:49.139Z",
+    "wallClockMs": 2542213
+  },
+  "contextFetchedBy": [
+    "architect-2c9d5121",
+    "worker-7d158765",
+    "qa-7c627d35"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T09:50:41.899Z",
+  "planningNotes": {
+    "approachesConsidered": "Docs in the epic-final row: rejected for size (submit_plan's hard limit of 10 files). The final row is CQ-F12, task-72184c65. This row takes the reference sweep; F12 documents only its own readiness-order hardening, in one line of MCP_SERVER.md, after this row lands. Drift test: fixed stale substrings plus section-scoped presence checks, anchored on the exported EXECUTION_CONTRACT_FIELDS. Regex-scraping code for codeNames was rejected as brittle. The test satisfies the epic's 'every task owns tests' rail with the repo's existing docs-guard pattern (taskTimeBudgetDocs.test.ts, qaCommitPolicy.test.ts).",
+    "codebaseInsights": "Verified at HEAD 66ef204:\n- docs/MCP_SERVER.md has no servedContext, receiptStatus, strict codeNames or EXECUTION_IDENTITY_*. Its plan-approval CAS section (about lines 2924-2975) was already updated by F04/F04b, but still has the stale 'Unchanged and still token-free: SPEED/TURBO', 'A number means a revision-checked human approval' and 'do not enforce it yet (CQ-F06–F08)'.\n- docs/SCHEMA.md lacks approvedPlanRevision, executionContract, contextReceipt and stepCompletions; the stale omission sentence is in `### planRevision`, about line 718.\n- PLAN_APPROVAL_FRESHNESS.md Boundaries: lines 78/81/85/87 and evidence row 128.\n- CONFIGURATION.md: `### Proxy Configuration` (about line 26) and `### Agent Scripts` (about line 37) tables have no MOE_SESSION_ID or attempt pair; the executionProfile row is about line 180; SPEED/TURBO are about lines 409-422.\n- All four docs are LF.\n- Sources: EXECUTION_CONTRACT_FIELDS in state/validators.ts:188; the ReceiptStatus union in tools/getContext.ts:140.",
+    "risks": "- Accuracy is the whole task: QA will trace claims to code, so verify each one; drop or soften what can't be verified.\n- F12a must be landed (dependsOn gates the claim) before the proxy tool list is stated.\n- Do not document CQ-F12's readiness ordering, which is still to change.\n- Peer sections in SCHEMA.md (Claude Accounts: task-fc9835fe may edit it later) and MCP_SERVER.md belong to others: edit only CQ-F hunks.\n- section() must throw on a missing heading; a silent empty match would pass vacuously.\n- Run vitest only in the Linux snapshot; the shared checkout's node_modules is a Windows install.",
+    "keyFiles": [
+      "docs/MCP_SERVER.md",
+      "docs/SCHEMA.md",
+      "docs/PLAN_APPROVAL_FRESHNESS.md",
+      "docs/CONFIGURATION.md",
+      "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts",
+      "packages/moe-daemon/src/util/executionAuthorization.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-proxy/src/utils.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T09:50:42.024Z",
+  "workStartedAt": "2026-10-26T10:19:45.486Z",
+  "reviewStartedAt": "2026-10-26T10:26:10.162Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx vitest run src/util/executionContractDocs.test.ts   # Linux snapshot /tmp/moe-f12b.W3HXHv: git archive HEAD + 5 owned files (cmp-identical to worktree), native node_modules, env -i",
+    "exitCode": 0,
+    "outputTail": "RUN v5.0.3 /tmp/moe-f12b.W3HXHv/packages/moe-daemon\n ✓ src/util/executionContractDocs.test.ts (12 tests) 7ms\n Test Files  1 passed (1)\n      Tests  12 passed (12)",
+    "reportedAt": "2026-10-26T10:26:10.162Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/executionContractDocs.test.ts",
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md",
+    "docs/PLAN_APPROVAL_FRESHNESS.md",
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-3ead73b368094850bfec955c316bc239.json",
+    ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+    ".moe/tasks/task-b5f743bc50544d838422ce365616240e.json"
+  ],
+  "completionSummary": "CQ-F12b delivered: docs only plus drift test (executionContractDocs.test.ts, 12 tests, none skipped; first RED 11 failed). MCP_SERVER.md: get_context sessionId/servedContext/receiptStatus/packetId (comment-412119fd), shared proxy identity paragraph and the two refusal codes (3228d389), start_step strict entry (e4992d04), complete_step/complete_task strict completion and EXECUTION_EVIDENCE_INELIGIBLE (0de6f303), approval CAS token rules, durable-authorization wording, SPEED/TURBO stamp, withhold, restart re-arm (b83aef8d, eee23c5e, 8e824b16). SCHEMA.md: Task listing, corrected planRevision materiality and stale omission sentence (b41f072c, dc06d662), new approvedPlanRevision and executionContract subsections, snapshot Consumers fix, ExecutionAttempt contextReceipt/stepCompletions, validation bounds. PLAN_APPROVAL_FRESHNESS.md: Boundaries, consumption section, evidence map (78686731, dc06d662). CONFIGURATION.md: MOE_SESSION_ID and attempt-pair env rows, executionProfile row, SPEED/TURBO lines. Deviation: contract has 9 fields at HEAD (requiredChecks from CQ-V01a), documented minimally. Readiness ordering left to CQ-F12. verified-local stays unavailable.",
+  "commits": [
+    {
+      "sha": "5a585819a7a217cb4f96d072cb1c1de18a5bcad0",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T10:18:02Z",
+      "paths": [
+        ".moe/tasks/task-3ead73b368094850bfec955c316bc239.json",
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-b5f743bc50544d838422ce365616240e.json",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/PLAN_APPROVAL_FRESHNESS.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/util/executionContractDocs.test.ts"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T10:26:57.368Z",
+      "treeId": "977327f8149449b0f3a332d6db73efa173229e0e",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "8b724ab6143d00e29f3b19ca6a8e34e9b16a2339",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T10:26:58Z",
+      "paths": [
+        ".moe/tasks/task-3ead73b368094850bfec955c316bc239.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T10:30:48.306Z",
+      "treeId": "36ea3a00b4537232769ea91bbef08aa8b939e3c6",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/executionContractDocs.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T10:26:58Z",
+    "at": "2026-10-26T10:30:48.306Z"
+  },
+  "completedAt": "2026-10-26T10:29:49.139Z",
+  "reviewCompletedAt": "2026-10-26T10:29:49.139Z",
+  "reviewSummary": "APPROVED. Commit 5a58581 (completion, on moe/work-2026-10-24 = HEAD) checked via git show; docs + new test net +228 LOC (<400). Re-ran verification myself from a fresh `git archive HEAD` Linux snapshot (native node_modules, env -i): `cd packages/moe-daemon && npx vitest run src/util/executionContractDocs.test.ts` = 12 passed, 0 skipped; with taskTimeBudgetDocs/daemonGitDocs/qaCommitPolicy = 41 passed. Traced doc claims to source: receiptStatus precedence/packetId/record-failed (getContext.ts:140-190), sessionId rule (attemptStore.ts:385), strict entry order + codeNames (executionAuthorization.ts:41-118), complete_step evidence-before-write (completeStep.ts:51-102), complete_task ordering + EXECUTION_EVIDENCE_INELIGIBLE (completeTask.ts:176-179), proxy tool table and both refusal codes (proxy utils.ts:252-345), SPEED withhold/restart re-arm/TURBO stamp (submitPlan.ts:84-176, 585-597), timer cancel only after approval write (taskStore.ts:745-757), launcher env rows (moe-agent.sh). SCHEMA: approvedPlanRevision/executionContract/contextReceipt/stepCompletions, planRevision materiality (taskStore.ts approvalPlanSurface/derivePlanRevision) and bounds (validators.ts) match; the disclosed nine-field deviation (requiredChecks) is correct. FRESHNESS/CONFIGURATION: stale lines gone (grep clean). The drift test anchors on the real EXECUTION_CONTRACT_FIELDS import, scopes assertions per section, section() throws on a missing heading, no skipIf. Scope is docs + test only, 0 CR, no forbidden tokens. Out of scope/unverified: readiness-order wording left to CQ-F12; verified-local still documented unavailable. Non-blocking notes for F12: MCP_SERVER submit_plan executionContract param list omits requiredChecks (CQ-V); the schema.ts approvedPlanRevision comment still says 'omitted-token human approval'. No candidateId was supplied in context.",
+  "requiredCheckAtDone": null
+}

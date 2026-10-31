@@ -121,7 +121,7 @@
       "completedAt": "2026-08-01T08:32:21.783Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -141,7 +141,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T19:27:37.838Z",
-  "updatedAt": "2026-08-01T09:02:22.182Z",
+  "updatedAt": "2026-10-24T15:19:03.141Z",
   "metrics": {
     "firstClaimAt": "2026-07-31T19:31:54.070Z",
     "plannedStepCount": 8,
@@ -221,5 +221,6 @@
   ],
   "completedAt": "2026-08-01T09:02:22.182Z",
   "reviewCompletedAt": "2026-08-01T09:02:22.182Z",
-  "reviewSummary": "APPROVED. Re-ran every gate myself from packages/moe-daemon.\n\nGATES: `npx tsc --noEmit` 0. `npm run build` 0. `npx vitest run` -> 866 passed (866), exit 0, zero failures = baseline exactly. Solo runs prove temp-dir independence: contract 17 passed, remainder 14 (the original 31).\n\nTHE DEFECT IS REAL — confirmed, not accepted: claimNextTask.ts:448 does call computeDiskStateSignature and claimNextTask.test.ts:12 still hoists vi.mock('../util/diskState.js'), so the 17 claim-semantics tests appended there in a22af4c were running against a stub returning undefined and passing. Now in claimNextTask.contract.test.ts with grep-verified 0 `vi.mock` / 0 `diskState`.\n\nPRESERVATION PROVEN BY IDENTITY, NOT BY GREEN: moved body diffed against the deleted hunk is byte-identical bar one trailing blank line; `expect(` multiset HEAD vs (contract+remainder) 113 vs 113, zero lost; it/describe titles 35 vs 35. No MoeErrorCode assertion loosened. Zero `const { state|testDir|moePath` destructures. Zero forbidden rail patterns.\n\nDoD: (1) all 9 blocks in per-tool files, 63 its reconciling 17+12+4+3+6+5+5+4+7; qa_reject TOP-LEVEL at qaReject.test.ts:210 (21 = 9 pre-existing + 12 moved), not nested; tools.test.ts gone (slice 4 owns it) and describe('ARCHIVED status') correctly left in lifecycleLimits.test.ts. (2) harness is ToolTestHarness (class), not the planned __fixtures__/toolsHarness.ts — same intent, no fixture collision by construction. (3)(4) met above.\n\nNON-BLOCKING: verification.outputTail records \"Test Files 56 passed (56)\" but 78 *.test.ts exist and my run reported 78 files / 866 tests. Test count — the DoD metric — matches, and my run covered all 78, so that is a bad capture, not a partial run.\n\nScope clean: claimNextTask.contract.test.ts (new) + claimNextTask.test.ts (-343). chatBudgets.test.ts dirt is a sibling task's comment-only change, correctly untouched."
+  "reviewSummary": "APPROVED. Re-ran every gate myself from packages/moe-daemon.\n\nGATES: `npx tsc --noEmit` 0. `npm run build` 0. `npx vitest run` -> 866 passed (866), exit 0, zero failures = baseline exactly. Solo runs prove temp-dir independence: contract 17 passed, remainder 14 (the original 31).\n\nTHE DEFECT IS REAL — confirmed, not accepted: claimNextTask.ts:448 does call computeDiskStateSignature and claimNextTask.test.ts:12 still hoists vi.mock('../util/diskState.js'), so the 17 claim-semantics tests appended there in a22af4c were running against a stub returning undefined and passing. Now in claimNextTask.contract.test.ts with grep-verified 0 `vi.mock` / 0 `diskState`.\n\nPRESERVATION PROVEN BY IDENTITY, NOT BY GREEN: moved body diffed against the deleted hunk is byte-identical bar one trailing blank line; `expect(` multiset HEAD vs (contract+remainder) 113 vs 113, zero lost; it/describe titles 35 vs 35. No MoeErrorCode assertion loosened. Zero `const { state|testDir|moePath` destructures. Zero forbidden rail patterns.\n\nDoD: (1) all 9 blocks in per-tool files, 63 its reconciling 17+12+4+3+6+5+5+4+7; qa_reject TOP-LEVEL at qaReject.test.ts:210 (21 = 9 pre-existing + 12 moved), not nested; tools.test.ts gone (slice 4 owns it) and describe('ARCHIVED status') correctly left in lifecycleLimits.test.ts. (2) harness is ToolTestHarness (class), not the planned __fixtures__/toolsHarness.ts — same intent, no fixture collision by construction. (3)(4) met above.\n\nNON-BLOCKING: verification.outputTail records \"Test Files 56 passed (56)\" but 78 *.test.ts exist and my run reported 78 files / 866 tests. Test count — the DoD metric — matches, and my run covered all 78, so that is a bad capture, not a partial run.\n\nScope clean: claimNextTask.contract.test.ts (new) + claimNextTask.test.ts (-343). chatBudgets.test.ts dirt is a sibling task's comment-only change, correctly untouched.",
+  "planRevision": 0
 }

@@ -16,6 +16,9 @@ function between(source, start, end) {
 }
 const ps = read('ps1');
 const sh = read('sh');
+// All of step 5: the fetch (moe_rpc is stubbed below) and the post-fetch region that held the
+// context curation until cfd3803, so any curation reintroduced there stays under the
+// comment-retention assertions.
 const shContext = between(sh, '                # 5. Fetch context for the claimed task', '                # 6. Read task channel backlog');
 const psContext = between(ps, '    $dynamicContext = ""', '    # -------- Pre-flight baseline');
 const psBody = between(ps, '    $claimPromptBody = $null', '    $script:CliLaunchedAt = Get-Date');
@@ -61,6 +64,9 @@ $preflightClaimFailed=$${bool(o.claimFailed)}
 $preflightRoutedMentions=@([pscustomobject]@{content='reply-fixture'})
 $preflightContext=$env:MOE_FIXTURE_CONTEXT | ConvertFrom-Json
 $statuses=@('WORKING'); $serenaProject=[IO.Path]::GetTempPath()
+# This fixture tests prompt rendering, not provisioning: psContext calls the real WT-04 helper
+# but excludes its definition, so supply a side-effect-free stand-in with the same signature.
+function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {}
 `;
     script = '\ufeff' + setup + psContext + psBody + '\n[Console]::Write(([char]30).ToString() + $dynamicContext + [char]30 + $claimPromptBody)';
   }

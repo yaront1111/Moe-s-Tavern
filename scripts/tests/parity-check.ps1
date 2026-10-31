@@ -3,6 +3,8 @@ param()
 # scripts/moe-agent.sh). Both must emit the SAME reason codes, chat prefixes,
 # log prefixes, commit-message trailers, settings keys and env names, so an
 # operator grepping either transcript (or git log) finds the same strings.
+# It also requires both postflight harnesses to install the ONE shared fake
+# proxy, scripts/tests/postflight-fake-proxy.js (section 6).
 # Twin: scripts/tests/parity-check.sh. Exit 1 on any asymmetry.
 $ErrorActionPreference = 'Stop'
 
@@ -123,9 +125,13 @@ $required = [ordered]@{
     # identically in both.
     'runner reattach' = @('reattach_attempt', 'processStartedAt', 'attempt-reconciling', 'reattachRequired', '[reattach]', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST')
     'runner reattach prose' = @('Runner identity: processStartedAt=', 'Runner identity unavailable (', 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.', 'is running again after a daemon restart.', 'moe.reattach_attempt refused for attempt', '; not retrying it.', 'moe.reattach_attempt got no answer for attempt', '; retrying later.', 'heartbeat asks for reattachment (', 'but this seat owns no reconciling attempt this wrapper can reattach; nothing to reattach.')
-    # Hot reload: the restart announcement an operator sees and the deregister
-    # reason both postflight hot-reload cases assert, spelled identically in both.
-    'hot reload' = @('wrapper source changed on disk; restarting to load it', 'wrapper_restart')
+    # Execution identity: the env names moe-proxy stamps onto the CLI's
+    # get_context/start_step, exported by both wrappers.
+    'execution identity' = @('MOE_SESSION_ID', 'MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION')
+    # Hot reload: the restart announcement an operator sees, the deregister
+    # reason postflight hot-reload cases assert, parse refusal, and committed-byte
+    # deferral, spelled identically in both.
+    'hot reload' = @('wrapper source changed on disk; restarting to load it', 'wrapper_restart', 'MOE_WRAPPER_RELOAD_REFUSED', 'does not parse; staying on the current bytes until it changes again', 'MOE_WRAPPER_RELOAD_DEFERRED', 'wrapper has uncommitted edits; staying on the current bytes until they are committed', 'cannot confirm the wrapper bytes are committed (')
     # Team join: a refused join (a full team) leaves the seat SOLO, and a solo
     # seat's claims are refused NO_TEAM_MEMBERSHIP; both are named, never hidden.
     'team join prose' = @('moe.join_team refused: ', 'this seat has NO team, so claim_next_task skips every epic a live worker already holds', 'moe.join_team got no answer; team membership is unconfirmed.', 'claim_next_task refused with NO_TEAM_MEMBERSHIP', 'moe.join_team retry refused: ', 'this seat is still TEAMLESS; the wrapper retries before the next claim.', 'on retry; this seat is no longer teamless.', 'MOE_TASKLESS_NO_LAUNCH reason=teamless', 'so claims skip every epic+status a live worker already holds', 'a claiming seat retries the join before every claim.')
@@ -169,6 +175,33 @@ $ps1Head = New-Object byte[] 3
 $ps1Stream = [IO.File]::OpenRead($ps1Path)
 try { [void]$ps1Stream.Read($ps1Head, 0, 3) } finally { $ps1Stream.Dispose() }
 if (($ps1Head -join ',') -ne '239,187,191') { $failures.Add("moe-agent.ps1 lost its UTF-8 BOM (Windows PowerShell 5.1 then reads it as ANSI and cannot parse it)") }
+
+# 6. Postflight fake proxy: both smoke tests run ONE shared fixture,
+#    scripts/tests/postflight-fake-proxy.js (their private embedded copies once
+#    drifted apart). Each harness must copy it to its temp proxy path, and
+#    neither may write a proxy of its own or embed one: a body is recognised by
+#    the fixture's request-parsing line, which only the shared file may carry.
+$proxyJs = Join-Path $root 'scripts\tests\postflight-fake-proxy.js'
+$proxyMarker = "const tool = String(req.params?.name || '').replace(/^moe\./, '');"
+if (-not (Test-Path -LiteralPath $proxyJs)) { $failures.Add('[postflight fake proxy] scripts/tests/postflight-fake-proxy.js is missing') }
+elseif ((Get-Content -Raw -Encoding UTF8 -LiteralPath $proxyJs).IndexOf($proxyMarker, [System.StringComparison]::Ordinal) -lt 0) {
+    $failures.Add('[postflight fake proxy] postflight-fake-proxy.js lost its request-parsing line')
+}
+$harnesses = [ordered]@{
+    'postflight.sh' = @{ Install = '(?m)^[ \t]*cp "\$ROOT_DIR/scripts/tests/postflight-fake-proxy\.js" "\$FAKE_PROXY"[ \t]*\r?$'
+        Write = '(>|tee)\s*"?\$\{?FAKE_PROXY\b'; Target = '$FAKE_PROXY' }
+    'postflight.ps1' = @{ Install = "(?m)^[ \t]*Copy-Item -LiteralPath \(Join-Path \`$root 'scripts\\tests\\postflight-fake-proxy\.js'\) -Destination \`$fakeProxy -ErrorAction Stop[ \t]*\r?$"
+        Write = '(?i)(Set-Content|Add-Content|Out-File)[^#\r\n]*\$fakeProxy\b|WriteAll(Text|Lines|Bytes)\(\s*\$fakeProxy\b'; Target = '$fakeProxy' }
+}
+foreach ($name in $harnesses.Keys) {
+    $path = Join-Path $root "scripts\tests\$name"
+    if (-not (Test-Path -LiteralPath $path)) { $failures.Add("[postflight fake proxy] $name is missing"); continue }
+    $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $path
+    $h = $harnesses[$name]
+    if ($text.IndexOf($proxyMarker, [System.StringComparison]::Ordinal) -ge 0) { $failures.Add("[postflight fake proxy] $name embeds a private fake-proxy body") }
+    if ($text -cnotmatch $h.Install) { $failures.Add("[postflight fake proxy] $name does not install postflight-fake-proxy.js to $($h.Target)") }
+    if ($text -cmatch $h.Write) { $failures.Add("[postflight fake proxy] $name writes its own $($h.Target)") }
+}
 
 if ($failures.Count -gt 0) {
     Write-Host "FAIL parity-check.ps1: $($failures.Count) asymmetry(ies) between moe-agent.ps1 and moe-agent.sh"

@@ -98,15 +98,37 @@ export function findDaemonInfo(options: DaemonClientOptions = {}): DaemonInfo {
   );
 }
 
+// daemon.json is repository content and the PostToolUse hook reads it on every
+// moe.* tool call, so it is capped like the daemon, proxy and JetBrains readers.
+const MAX_DAEMON_JSON_BYTES = 64 * 1024;
+
+/** Reads at most MAX+1 bytes; returns null when the file is over the cap. */
+function readDaemonJsonText(file: string): string | null {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(MAX_DAEMON_JSON_BYTES + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const n = fs.readSync(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+    }
+    return total > MAX_DAEMON_JSON_BYTES ? null : buf.toString('utf8', 0, total);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function readDaemonJson(projectPath: string): DaemonInfo | null {
   const file = path.join(projectPath, '.moe', 'daemon.json');
   if (!fs.existsSync(file)) return null;
-  let raw: string;
+  let raw: string | null;
   try {
-    raw = fs.readFileSync(file, 'utf-8');
+    raw = readDaemonJsonText(file);
   } catch {
     return null;
   }
+  if (raw === null) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);

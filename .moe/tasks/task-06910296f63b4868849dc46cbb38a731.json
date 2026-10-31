@@ -1,0 +1,130 @@
+{
+  "id": "task-06910296f63b4868849dc46cbb38a731",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-12] Wrappers: board history snapshots on refs/moe/board",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §4.\n\nObjective: in worktree mode, board history (.moe/tasks, .moe/epics, .moe/project.json) moves off main onto one plumbing-written ref. Main never changes a .moe path, so the control checkout's fast-forward (WT-13) never collides with files the daemon keeps dirty.\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins: board_snapshot / Invoke-MoeBoardSnapshot.\n- It runs after L12 of every worktree-mode completion landing and after every worktree-mode QA post-flight, gated by settings.commitBoardState (default on).\n- Steps:\n  - a temp index read from the refs/moe/board tree (empty when unborn);\n  - add every file under those paths that parses as JSON (one that does not parse keeps its parent blob and is named in the log line);\n  - write-tree; commit-tree -p <old> with message 'board: <taskId> <status>';\n  - `update-ref refs/moe/board <new> <old>`, 3 attempts, then MOE_BOARD_SNAPSHOT_SKIPPED;\n  - a tree equal to the parent's writes nothing.\n- Best-effort `git push origin refs/moe/board:refs/moe/board` with no force; a failure prints MOE_BOARD_UNPUSHED.\n- The wrapper only READS the daemon's files: it never writes under .moe/ (epic rail 3).\n- Shared mode keeps today's BOARD tier unchanged.\n- Cases in scripts/tests/postflight.sh and postflight.ps1. Depends on WT-11 (task-dd1ee586b90d4fc785434454b1423e76).\n\nNOT in scope: untracking .moe/tasks on main (rejected in §4); daemon changes; docs (WT-17/WT-18).\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh (and on a Windows seat: node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "postflight case (both harnesses): after a worktree completion landing, refs/moe/board's tree contains the control checkout's .moe/tasks/*.json, .moe/epics/*.json and .moe/project.json, and the landed commit C on main changes no .moe path.",
+    "postflight case: a truncated (unparsable) task JSON keeps its previous blob in the new snapshot and is named in the log; an unchanged board writes no new commit.",
+    "postflight case: a CAS race on refs/moe/board exhausting 3 attempts prints MOE_BOARD_SNAPSHOT_SKIPPED and the landing still counts; a failing push prints MOE_BOARD_UNPUSHED.",
+    "postflight case: commitBoardState=false makes no snapshot; the .moe/ directory's mtimes and contents are unchanged by the wrapper (read-only).",
+    "Existing shared-mode BOARD-tier cases pass unchanged; both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes; the verification command exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Implement read-only board tree construction with tests first (DoD 1–2,4). After WT-11 lands, add new self-contained `board_snapshot CONTROL_TOP TASK_ID STATUS` / `Invoke-MoeBoardSnapshot -Top ... -TaskId ... -Status ...`, using the same small inline Node program in both wrappers (node stdin script, values in argv; never splice values into executable source). Existing Node is already required; avoid a new asset/manifest. Worktree-mode control root must be the verified repository root, never W; no nested-project support is added. Use a private temp directory/index OUTSIDE .moe, child-process argv arrays, and Git env with inherited GIT_INDEX_FILE/GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR removed and only the owned GIT_INDEX_FILE set. Read refs/moe/board: genuine absent ref => empty index; existing ref must resolve to a valid commit, other Git errors => skip. Seed temp index from old tree, not main. Allow only regular `.moe/tasks/*.json`, `.moe/epics/*.json`, `.moe/project.json` (flat canonical daemon records); never runtime subdirectories, non-JSON files, symlink/junction escapes or an unexpected non-board parent-tree entry. Read each file to a Buffer once, validate UTF-8/JSON from that captured content, then persist exactly that Buffer to an owned temp copy for Git hashing. Never parse then git-add the mutable source. Invalid/unreadable/changed-during-read files keep their old index entry (new invalid files remain absent), with a bounded escaped log naming each path; do not log content. Refuse/retain unsafe links, checking the input directories too. Confirmed deletions absent from a successfully enumerated directory and still missing at recheck remove only that prior index entry; ENOENT after a file was enumerated is a raced read, so retain it. Directory read failure skips the snapshot rather than deleting an entire subtree. Hash captured temp copies with `git hash-object -w --no-filters -- <args>` in modest argv batches (e.g. 32 paths for Windows command-line bounds), then update the private index with NUL-delimited index-info; board files use 100644. Example invariant:\n```js\nconst bytes = fs.readFileSync(file);\nJSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));\n// Only bytes captured above may be hashed, never a second read of file.\n```\nTwin helper-level tests prove valid full board + byte-exact Unicode/CRLF content, invalid old/new JSON behavior, no external/runtime paths, confirmed deletion vs failed directory/read, and unchanged control index plus recursive .moe content/mtime signatures. Run read-only assertions around the snapshot helper itself, not around fake-daemon RPCs that legitimately mutate fixture state.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Publish only the board ref with bounded CAS and best-effort push (DoD 2–3). In each of at most three attempts, reread the current board tip and rebuild from that parent's tree so invalid-file fallbacks come from the winner, not a stale old snapshot. `write-tree`; if equal to parent's tree (or empty tree when unborn and no board data), create no commit/ref. Otherwise `commit-tree TREE -p OLD` (omit parent when unborn), message exactly `board: <taskId> <status>`, then `update-ref refs/moe/board NEW OLD` with the all-zero old OID for first creation. Git errors are not proof the ref is unborn. On CAS loss, retry from the newly read parent; exhaustion or tree/commit/ref operational failure emits MOE_BOARD_SNAPSHOT_SKIPPED and returns a non-fatal snapshot result. Never invoke hooks, reset an index, checkout a ref, or move main/task/control branches. A successful snapshot (or an existing unchanged board ref) may attempt `git push origin refs/moe/board:refs/moe/board` once, never force/rebase; failure/no remote emits MOE_BOARD_UNPUSHED and keeps local board history. Do not fetch/merge remote board divergence or change task receipt/ledger state. Give subprocess calls finite time/output bounds, dispose only owned temp resources in finally, and make JSON/filesystem/Git exceptions take the same non-fatal error handling path. Tests in both harnesses cover initial parentless commit, subsequent exact parent/message, unchanged board no new commit, one CAS race then success, three CAS losses with competing commits preserved, injected write-tree/commit-tree failure, and rejected/unreachable push with local ref retained. Assert main/task refs and source bytes stay unchanged in every helper-only scenario.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Wire snapshots only into worktree-mode post-flight (DoD 1,4–5). Reuse the landed wrapper's effective mode and canonical control-root resolution. Call the helper once after confirmed completion L12, never before publication or while its result is unknown; snapshot after task-bound QA post-flight as well (QA remains in control and need not own W), including approval and rejection board updates. No taskless notification run, worker checkpoint, failed/unpublished completion, or shared-mode path gains a snapshot. Gate it on existing settings.commitBoardState, default true; false does not invoke the helper or push. Pass actual task id/status read for that post-flight. Snapshot and push failure cannot alter LAND_OUTCOME/the PS result, ledger/finalization, task branch sync, or release cleanup; no board commit is reported as a task completion. Keep existing shared BOARD attribution untouched. Add twin end-to-end postflight cases: worktree completion C changes no .moe path while refs/moe/board contains the control records; QA post-flight refreshes the ref; false setting leaves board ref absent/unchanged; injected snapshot/push failures still leave the completion truthfully landed. Reuse existing fake proxy without changing it; helper-level cases supply their own static board fixtures. Record all actual changed files only, retain existing shared BOARD tests and held-out worktree-landing tests byte-for-byte.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Single final verification gate. From root run exactly `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh`. Require safe failureClass NONE, held-out cases green, parity PASS and exit 0. On native Windows run `node scripts/tests/postflight-safe.mjs powershell` on the identical revision; PS5.1 is required, skips/unavailable engines are not success. Compare sorted grep -oE sets for `MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]+` between wrappers. Preserve safe-output handling; never expose raw postflight fixture logs. Load regression-check/verification-before-completion and retain fresh command, exitCode, safe outputTail and Windows results for complete_task. The held-out scripts are prerequisite outputs not new/edit targets; compare to WT-08T's landed version read-only. No full unrelated daemon/plugin gate or docs sweep in this mid-epic slice.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "5. Final adversarial self-review, once. Load adversarial-self-review. Attack parse→read races, unreadable directories looking deleted, invalid JSON during daemon writes, symlink/junction substitution, untracked runtime files, hostile path/newline characters, CRLF/filter conversion, corrupt parent ref, two simultaneous snapshotters and remote rejection. Assert every hashed blob comes from the exact parsed Buffer; an uncertain read preserves its latest-parent blob; every retry recomputes against the actual latest board ref; .moe content/mtimes and real indexes are untouched; no main write/force push/rollback can occur. Confirm the two embedded programs are equivalent, source/control root is used not W, QA needs no W, false commitBoardState causes no work, and board errors never rewrite task delivery success. Keep <=400 net LOC without dropping the requested tests. Preserve PS BOM/CRLF and atomic Bash save requirements. If fixes arise refresh the same gate, then complete via Moe with accurate modifiedFiles and fresh evidence; wrapper owns Git writes. Docs remain WT-17/18.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-dd1ee586b90d4fc785434454b1423e76",
+    "task-aa85ff13a8894913ae34242dbab6f395"
+  ],
+  "priority": "MEDIUM",
+  "order": 19,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:55:13.075Z",
+  "updatedAt": "2026-10-30T13:54:14.830Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:03:14.897Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:46:49.924Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-76a2c8bb"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:54:14.805Z",
+  "planningNotes": {
+    "approachesConsidered": "# Worktree board-history snapshots\nGoal: record control-checkout board JSON on refs/moe/board without touching main or daemon files. Architecture: new board_snapshot / Invoke-MoeBoardSnapshot twins drive isolated Git plumbing, with JSON read once and snapshotted as exact bytes. Keep this in the two already-bundled wrappers, using an identical small inline Node program invoked with argv (existing Node runtime), rather than a new script requiring two packaging-manifest edits. No new dependencies or files. Tech: Bash, PS5.1, Node fs/child_process, Git temporary index and CAS.",
+    "codebaseInsights": "Verified design §4 specifies CAS board ref, complete board snapshot, invalid JSON retaining old blob, and best-effort push. §1.1 restricts worktree mode to a repository-root project (MOE_REL empty), so paths are root-relative .moe/...; QA stays in control checkout. Existing shared attribution/Build-MoeTempIndexTree helpers git-add live files after hashing and therefore must not be reused to re-read a file after validating it. Use immutable captured buffers/temp copies and hash-object --no-filters to avoid TOCTOU and CRLF normalization. JetBrains build.gradle.kts and VS Code bundle-assets.mjs explicitly enumerate mjs assets, so adding a shared helper would make this seven files; embedded identical Node keeps the requested four-file scope. Current wrapper source lacks prerequisite WT-11 worktree integration; read its landed arm, do not reconstruct it here.",
+    "risks": "Four files, one best-effort history feature, target <=60min and <=400 net LOC via identical compact Node payload and table-driven tests. No source edits during planning. User delegated deletion policy: confirmed deleted JSON disappears from next snapshot; invalid/unreadable JSON retains parent blob. A disappearing file after enumeration is uncertain and retains parent; directory enumeration failure must never look like mass deletion. Snapshot is not a cross-file database transaction. Never stage live .moe, invoke filters/hooks, inherit a caller index, force-push, or turn successful task delivery into failure. Read mem:gotcha-eol-normalization-shared-index and mem:convention-postflight-scratch-harness. Preserve PS BOM/CRLF and use syntax-checked same-filesystem atomic replacement for Bash. Safe postflight gate required.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:54:14.830Z",
+  "approvedPlanRevision": 1
+}

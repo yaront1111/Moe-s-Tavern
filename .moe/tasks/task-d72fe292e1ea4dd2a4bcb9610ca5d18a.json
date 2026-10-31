@@ -1,0 +1,216 @@
+{
+  "id": "task-d72fe292e1ea4dd2a4bcb9610ca5d18a",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: on Windows the daemon's bare `git` execFile with cwd=<project> runs a repository git.exe",
+  "description": "util/diskState.ts defaultGitRunner (claim_next_task/release_task computeDiskStateSignature) and util/cachedPlanPaths.ts runGit/runGitHead call execFile('git', …, { cwd: <project> }); on Windows libuv searches the spawn cwd before PATH, so a git.exe/git.com committed at the project root runs as the daemon user — this bypasses the IDE-side protected runtime selection (CQ-R01 pins only the daemon's own working directory, not explicit spawn cwds).\nVerified 2026-10-25, node v24.16.0 / libuv 1.52.1: whoami.exe copied to <cwd>\\git.exe ran for execFile('git', [], { cwd }) both with NoDefaultCurrentDirectoryInExePath unset and =1 (real git: 2.54.0.windows.1).\nFix: resolve git once to an absolute path from PATH, skipping cwd, blank and relative entries (as accounts/claudeAuth.ts findWindowsCommand does), and execFile that path from every runner; also check diskState's runner, which lacks cachedPlanPaths' readOnlyGitEnv/readOnlyGitArgs config masking.",
+  "definitionOfDone": [
+    "On Windows no daemon git runner executes a git.exe/git.com from the spawn cwd or a blank/relative PATH entry; a Windows-only test plants <cwd>/git.exe and proves the PATH git runs instead.",
+    "diskState defaultGitRunner and cachedPlanPaths runGit/runGitHead share the one resolved absolute git; POSIX behaviour is unchanged.",
+    "Fresh `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the shared git resolver and its cross-platform unit tests.\n\nNew packages/moe-daemon/src/util/gitExecutable.ts:\n- `export function resolveGitExecutable(platform: NodeJS.Platform, pathValue: string, isFile: (file: string) => boolean = <fs.statSync(file).isFile() in try/catch, false on error>): string`.\n  - platform !== 'win32': return 'git' WITHOUT probing (POSIX unchanged, execvp does the PATH lookup).\n  - win32: split pathValue on ';', trim each entry, strip one pair of surrounding double quotes (as accounts/claudeAuth.ts findWindowsCommand does). Use an entry ONLY when fully qualified: drive-absolute (`X:\\` / `X:/`) or UNC (`\\\\host...` / `//host...`), e.g. /^(?:[A-Za-z]:[\\\\/]|[\\\\/]{2}[^\\\\/])/. Skip blank, relative (`.`, `bin`, `.\\tools`), drive-relative (`C:tools`) and root-relative (`\\tools`, `/tools`) entries: libuv resolves those against the spawn cwd, i.e. the project.\n  - Per entry, in PATH order, probe path.win32.join(dir, 'git.com') then 'git.exe' (libuv's order). Do NOT use PATHEXT: libuv only runs .com/.exe today, and Node refuses a .cmd/.bat without a shell (EINVAL).\n  - Error handling: on a miss, throw Object.assign(new Error('git.com or git.exe not found in any fully qualified PATH entry'), { code: 'ENOENT' }). Never fall back to the bare name on win32. The stat probe swallows only its own per-candidate errors.\n- `export function gitExecutable(): string`: module-level `let resolved: string | undefined`; `return (resolved ??= resolveGitExecutable(process.platform, process.env.PATH ?? ''))`. Lazy, never at module load (a missing git must not break the import). A success is cached for the process and shared by every runner; a throw leaves it unset, so a later call retries (git installed after daemon start).\n- Short header comment with the why: on Windows libuv looks for a bare name in the spawn cwd (.com, .exe) before PATH, ignoring NoDefaultCurrentDirectoryInExePath, and resolves relative PATH entries against that cwd, so execFile('git', ..., { cwd: project }) ran a repository-committed git.exe as the daemon user (measured node 24.16 / libuv 1.52.1). Every daemon git spawn must use gitExecutable(). CQ-R01's IDE-side PATH filtering does not cover the spawn cwd.\n\nNew packages/moe-daemon/src/util/gitExecutable.test.ts. These run on every OS (CI runs daemon tests on ubuntu only), with an injected recording isFile and exact assertions:\n(a) 'linux' and 'darwin' return 'git' and never call isFile.\n(b) win32, PATH `;  ;.;bin;.\\tools;C:tools;\\tools;/tools;\"C:\\Program Files\\Git\\cmd\";D:\\later`, isFile always true: returns exactly 'C:\\\\Program Files\\\\Git\\\\cmd\\\\git.com', and the recorded probes equal exactly that one path, so no skipped entry was ever probed.\n(c) PATH `C:\\a;C:\\b`, where only C:\\a\\git.exe and C:\\b\\git.com exist: returns C:\\a\\git.exe, and the probes are exactly [C:\\a\\git.com, C:\\a\\git.exe]. PATH order comes first, then .com before .exe within a folder.\n(d) A UNC `\\\\srv\\tools` entry and a forward-slash `c:/git/cmd` entry are accepted, with the expected path.win32.join outputs.\n(e) win32 with an empty PATH, and with only relative entries plus isFile always true: throws an error whose code is 'ENOENT'. Assert the code, and that nothing is returned.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/util/gitExecutable.ts",
+        "packages/moe-daemon/src/util/gitExecutable.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/gitExecutable.ts",
+        "packages/moe-daemon/src/util/gitExecutable.test.ts"
+      ],
+      "note": "Added gitExecutable.ts (resolveGitExecutable + lazy cached gitExecutable) and gitExecutable.test.ts cases (a)-(e) plus a directory-named-git.exe case; 10 tests pass in a Linux snapshot (/tmp/moe-d72f-gate.*, MOE_* unset). 531 other dirty paths in the shared checkout belong to peers; untouched. start_step hit a transient EPERM on the task json rename once, retry succeeded.",
+      "startedAt": "2026-10-26T08:20:37.951Z",
+      "completedAt": "2026-10-26T08:21:30.355Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Route all three daemon git runners through gitExecutable(), then prove it on mocked and real Windows spawns. (gitExecutable.test.ts already exists from step 1; it is listed in newFiles only because it is not on disk at plan time.)\n\n- util/diskState.ts defaultGitRunner: `execFileAsync(gitExecutable(), args, {same options})`. Error handling: the call stays inside the async runner, so a resolution miss rejects and computeDiskStateSignature still returns undefined (invariant 1). Rewrite its doc comment to say two things:\n  - It spawns the shared absolute git.\n  - It deliberately does NOT adopt cachedPlanPaths' readOnlyGitEnv/readOnlyGitArgs. This answers the task's 'also check diskState's runner'. Masking global/system config (core.excludesFile ignores, Git for Windows' system core.autocrlf) changes which paths `git status` lists. That lets the equality-only signature flap and raise false stale alarms, which invariant 1 forbids, and it would change POSIX behaviour, which the DoD says must stay the same. The absolute path already closes the binary-planting vector.\n  - Keep GIT_STATUS_ARGS and every other option byte-identical.\n- util/cachedPlanPaths.ts runGit and runGitHead: replace 'git' with gitExecutable() INSIDE the existing try blocks; runGitHead keeps its maxBytes check first. Error handling: a miss is then handled exactly like a spawn ENOENT:\n  - runGit rethrows it (it is not the config exit-1 case);\n  - runGitHead rethrows it (the code is not numeric);\n  - openProjectGit names it in the miss.\n  - repositorySource.ts and requiredChecks.ts inherit the fix with no edits.\n- src/util/cachedPlanPaths.test.ts already mocks node:child_process. Add vi.mock('./gitExecutable.js') with a hoisted vi.fn that returns the sentinel 'C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe', and restore that implementation after each test.\n  - New test: runGit, runGitHead and diskState's defaultGitRunner (imported from './diskState.js') each spawn exactly the sentinel (execFileMock.mock.calls[i][0]). diskState's call keeps its own args unchanged and passes no env option.\n  - New test: when gitExecutable throws {code:'ENOENT'}, findCachedPlanPaths returns a miss containing 'git rev-parse --show-toplevel: ENOENT:'. computeDiskStateSignature(root) resolves undefined. runGitHead rejects with that error. execFileMock is never called, so there is no bare-name fallback.\n  - Existing tests stay unchanged and green.\n- src/util/gitExecutable.test.ts has no mocks, so real spawns. Add describe.runIf(process.platform === 'win32') with it.each(['git.exe','git.com']):\n  - mkdtemp a cwd under os.tmpdir() and copy %SystemRoot%\\System32\\whoami.exe to <cwd>\\<name>.\n  - Assert gitExecutable() passes path.win32.isAbsolute and is not under cwd.\n  - Assert defaultGitRunner(['--version'], cwd), runGit(['--version'], cwd, 10_000) and runGitHead(['--version'], cwd, 10_000, 4096) (stdout as utf8) each match /^git version /.\n  - rmSync the cwd in finally/afterEach.\n  - Old code using a bare 'git' runs the planted whoami copy. whoami rejects --version, so the test is red on the old code.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/diskState.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/util/gitExecutable.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/diskState.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.test.ts",
+        "packages/moe-daemon/src/util/gitExecutable.test.ts"
+      ],
+      "note": "diskState.defaultGitRunner, cachedPlanPaths.runGit and runGitHead now spawn gitExecutable() inside their existing try/async scope; diskState args/options byte-identical, no readOnly env adoption (rationale in its doc comment). cachedPlanPaths.test.ts: vi.mock('./gitExecutable.js') sentinel + 2 new tests (sentinel spawn, ENOENT miss/no fallback). gitExecutable.test.ts: Windows-only describe.runIf real-spawn block (git.exe/git.com planted whoami). Linux snapshot: 3 util files 67 passed | 2 skipped (the Windows-only cases).",
+      "startedAt": "2026-10-26T08:21:32.688Z",
+      "completedAt": "2026-10-26T08:22:17.179Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once. The exact command is `cd packages/moe-daemon && npm test`. It must exit 0, and its fresh output tail is the complete_task verification evidence.\n- The shared checkout's node_modules is a Windows install: never npm install or run vitest in /mnt/d.\n- Run the command in an isolated Linux snapshot:\n  - start from a HEAD archive, copy your 5 files over and cmp them;\n  - symlink the native Linux node_modules (memory gotcha-linux-vitest-reuse-native-node-modules);\n  - unset every MOE_* variable (memory gotcha-seat-env-leaks-into-daemon-tests).\n- In the same snapshot:\n  - run `npx tsc --noEmit` for the package;\n  - type-check gitExecutable.test.ts and cachedPlanPaths.test.ts with the --ignoreConfig recipe (memory gotcha-daemon-tests-not-type-checked).\n- Then run src/util/gitExecutable.test.ts and src/util/cachedPlanPaths.test.ts on Windows-native node from a %TEMP% copy (memory pattern-qa-windows-native-vitest-from-wsl), with --reporter=verbose. Confirm both planted cases (git.exe, git.com) RAN and passed, not skipped. That run is DoD 1's evidence, because CI runs daemon tests only on ubuntu.\n- Record the suite counts, both tsc exit codes and the Windows result in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/diskState.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.test.ts"
+      ],
+      "note": "Verification in an isolated Linux snapshot (HEAD archive + my 5 files, cmp-identical, native Linux node_modules symlink, MOE_* unset). `npm test` with a Linux-only PATH: exit 0, 167 files passed, 4219 passed | 16 skipped. (With the inherited Windows PATH one accounts/cli.test.ts case fails with the documented Windows-dir PATH env issue, unrelated to this task.) `npx tsc --noEmit` (package) exit 0; test-file typecheck for gitExecutable.test.ts + cachedPlanPaths.test.ts exit 0 (needed --types node). Windows-native node 24.16 from %TEMP% copy, --reporter=verbose: gitExecutable/cachedPlanPaths/diskState tests 3 files, 69 passed, 0 skipped; both planted cases ('runs the PATH git, not a git.exe/git.com in the cwd') RAN and passed.",
+      "startedAt": "2026-10-26T08:22:18.358Z",
+      "completedAt": "2026-10-26T08:23:53.478Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff. Load adversarial-self-review first.\n\nRun mutation probes in scratch copies only, never the shared tree:\n(1) Linux: restore the bare 'git' in diskState's defaultGitRunner. The sentinel test in cachedPlanPaths.test.ts must fail.\n(2) Linux: drop the fully-qualified check so relative entries are accepted. gitExecutable.test.ts case (b) must fail.\n(3) Linux: make a win32 miss return 'git'. Case (e) and the no-fallback test must fail.\n(4) Windows-native: restore the bare 'git' in runGit. The planted test must fail.\n\nAlso check:\n- resolution never happens at import time;\n- two concurrent first calls are harmless (the resolver is synchronous and idempotent);\n- empty, huge and quoted PATH values;\n- a directory named git.exe on PATH is skipped (isFile);\n- POSIX is untouched (no probes, bare 'git');\n- error handling: every miss still degrades to undefined or a named miss, never a crash;\n- no bare git spawn remains anywhere in src outside tests (grep execFile/spawn for 'git').\n\nIf anything changed, rerun the step-3 command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/diskState.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/gitExecutable.ts",
+        "packages/moe-daemon/src/util/gitExecutable.test.ts",
+        "packages/moe-daemon/src/util/diskState.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.test.ts"
+      ],
+      "note": "Adversarial review, no code change after step 3 (5 files cmp-identical to the verified snapshot, so no rerun needed). Mutation probes in scratch copies, all killed: (1) bare git in diskState -> sentinel + no-fallback tests fail; (2) accept relative PATH entries -> case (b) + relative-only case fail; (3a) win32 miss returns 'git' -> 4 ENOENT cases fail; (3b) runGit falls back to bare git on a resolution miss -> no-fallback test fails (note: that test mocks gitExecutable, so it guards the runners, while 3a guards the resolver); (4) Windows-native bare 'git' in runGit -> both planted git.exe/git.com tests fail. Checks: resolution is lazy, never at import; resolver is sync/idempotent so concurrent first calls are harmless; hostile PATH values fail closed (half-quoted, quoted-with-semicolon, double-quoted -> ENOENT, UNC/\\\\?\\ accepted, 1M relative entries resolved in 187 ms with 2 probes); directory named git.exe skipped via isFile; POSIX returns bare 'git' with no probes. Grep: no bare git spawn left in src outside tests EXCEPT src/benchmarks/baselineRun.ts (POSIX-only dev benchmark driver, header says so; not daemon runtime; left alone). Theoretical residuals: absolute PATH entries inside the project are still honoured; a dead UNC PATH entry could stall statSync on a git miss (miss not cached); POSIX execvp still resolves relative PATH entries against cwd (DoD says POSIX unchanged).",
+      "startedAt": "2026-10-26T08:23:54.642Z",
+      "completedAt": "2026-10-26T08:25:17.428Z"
+    }
+  ],
+  "planRevision": 9,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 238.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T13:33:14.380Z",
+  "updatedAt": "2026-10-26T09:21:52.492Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T08:07:47.720Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-26T08:29:19.672Z",
+    "wallClockMs": 1291952
+  },
+  "contextFetchedBy": [
+    "architect-4c57a52b",
+    "worker-3729a0d6",
+    "qa-7c627d35"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T08:19:46.778Z",
+  "planningNotes": {
+    "approachesConsidered": "1) Reuse accounts/claudeAuth.ts findWindowsCommand: rejected.\n- It keeps relative PATH entries: statSync resolves them against the daemon cwd, and the returned relative path is then resolved by libuv against the spawn cwd.\n- It walks PATHEXT, so a git.cmd/git.bat is picked over a later git.exe, and Node refuses .cmd/.bat without a shell (EINVAL). Today libuv would have skipped it.\n- accounts/ must stay free of daemon imports, so it cannot be moved into util/ to share.\n2) Drop the spawn cwd and pass `git -C <project>`: rejected. libuv then searches the daemon's own cwd, which IS the project when the daemon is started from a terminal or wrapper (the project resolves from cwd). Relative PATH entries still resolve against it.\n3) `where.exe git`: rejected, it searches the current directory first.\n4) NoDefaultCurrentDirectoryInExePath: measured ineffective for libuv.\n5) Route diskState through runGit's readOnlyGitEnv/readOnlyGitArgs: rejected.\n- Masking global/system config (excludesFile, autocrlf) changes the `git status` change list. The equality-only signature would flap and raise false 'stale' alarms, against invariant 1.\n- It would also change POSIX behaviour, which the DoD forbids.\n- The task asked to 'check' this, and the decision is recorded in the defaultGitRunner comment.",
+    "codebaseInsights": "- Bare `git` spawn sites in the daemon:\n  - util/diskState.ts:43 (defaultGitRunner; callers claimNextTask.ts:849 and releaseTask.ts:166);\n  - util/cachedPlanPaths.ts:54 runGit and :76 runGitHead (callers submitPlan.ts via findCachedPlanPaths, context/repositorySource.ts, delivery/requiredChecks.ts).\n  - Every other spawn uses process.execPath or the accounts CLI's resolved claude.\n- CQ-R01 protectedDaemonEnvironment (MoeDaemonSupervisor.kt) strips blank, relative and project PATH entries, but only for IDE-launched daemons. libuv searches the spawn cwd regardless.\n- libuv uses the child env's PATH when `env` is passed (runGit). readOnlyGitEnv copies PATH unchanged, so resolving once from process.env.PATH gives the same answer. On Windows, process.env.PATH is case-insensitive.\n- Test mocking:\n  - cachedPlanPaths.test.ts mocks node:child_process file-wide. promisify of the mock resolves the callback's 2nd argument, so mocks call back with {stdout, stderr}.\n  - Keep real-spawn tests in a file without that mock: gitExecutable.test.ts.\n  - describe.runIf is already used (baselineRun.test.ts:228).\n- Linux node_modules for gates: /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules (present 2026-10-26).",
+    "risks": "- POSIX execvp still resolves empty or relative PATH entries against the child cwd. That is out of scope by the DoD ('POSIX behaviour is unchanged'); a possible follow-up.\n- Absolute PATH entries that point inside the project are still honoured. The IDE launch strips them; a terminal launch uses the user's own PATH.\n- A success is cached per process, so a git moved after its first use needs a daemon restart. A miss is not cached.\n- The Windows-only test needs whoami.exe and git on PATH, which is true on the dev box. CI ubuntu skips it, so the Windows-native run in step 3 is mandatory evidence.\n- Do not call gitExecutable() outside the runners' try/async scope. A sync throw there would escape runGitHead's error classification or crash a caller.\n- Do not change the diskState args or the signature format: stored handoff signatures must still compare equal.\n- The shared checkout is dirty with peers' paths. Touch only these 5 files and report them in modifiedFiles.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/diskState.ts",
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+      "packages/moe-daemon/src/util/cachedPlanPaths.test.ts",
+      "packages/moe-daemon/src/accounts/claudeAuth.ts",
+      "packages/moe-daemon/src/util/diskState.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T08:19:46.897Z",
+  "workStartedAt": "2026-10-26T08:20:37.951Z",
+  "reviewStartedAt": "2026-10-26T08:25:25.613Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test   # run fresh in an isolated Linux snapshot (HEAD archive + the 5 task files, cmp-identical), native Linux node_modules, MOE_* unset, Linux-only PATH",
+    "exitCode": 0,
+    "outputTail": " Test Files  167 passed (167)\n      Tests  4219 passed | 16 skipped (4235)\n   Start at  10:23:04\n   Duration  29.85s (tests 81%, transform 14%, import 5%)\n(also: npx tsc --noEmit exit 0; test-file tsc exit 0; Windows-native vitest on gitExecutable/cachedPlanPaths/diskState tests: 3 files, 69 passed, 0 skipped)",
+    "reportedAt": "2026-10-26T08:25:25.613Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/gitExecutable.ts",
+    "packages/moe-daemon/src/util/gitExecutable.test.ts",
+    "packages/moe-daemon/src/util/diskState.ts",
+    "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+    "packages/moe-daemon/src/util/cachedPlanPaths.test.ts",
+    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+    ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+    ".moe/tasks/task-d72fe292e1ea4dd2a4bcb9610ca5d18a.json"
+  ],
+  "completionSummary": "Windows daemon git spawns now use one resolved absolute git. New util/gitExecutable.ts: resolveGitExecutable(platform, PATH, isFile) + lazy cached gitExecutable(). win32 picks the first git.com/git.exe in a fully qualified (drive-absolute or UNC) PATH entry, skipping blank/relative/drive-relative/root-relative entries and the spawn cwd; a miss throws ENOENT with no bare-name fallback. POSIX returns bare 'git' unprobed (unchanged). diskState.defaultGitRunner and cachedPlanPaths runGit/runGitHead execFile gitExecutable() inside their existing try/async scope (a miss => undefined / a named miss, as a spawn ENOENT). diskState args/options are byte-identical and it deliberately does not adopt readOnlyGitEnv/readOnlyGitArgs (masking would change git status lists and flap the equality-only signature; documented in its comment). Tests: 10 cross-OS resolver cases; Windows-only real-spawn block planting whoami.exe as git.exe/git.com; cachedPlanPaths.test.ts mocks gitExecutable with a sentinel + 2 new tests. Evidence: isolated Linux snapshot (HEAD archive + 5 files, MOE_* unset, Linux-only PATH) `npm test` exit 0, 167 files, 4219 passed|16 skipped; package tsc 0; test-file typecheck 0; Windows-native node 24.16 run of the 3 util test files: 69 passed, 0 skipped, both planted cases RAN and passed. 5 mutation probes (incl. Windows-native bare git in runGit) all killed. Residual: src/benchmarks/baselineRun.ts (POSIX-only dev benchmark driver) still uses bare git; with an inherited Windows PATH one accounts/cli.test.ts case fails (documented env issue).",
+  "commits": [
+    {
+      "sha": "12522b6767f7d1db7257556e3afd889a8fe3839a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T08:19:45Z",
+      "paths": [
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+        ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+        ".moe/tasks/task-d72fe292e1ea4dd2a4bcb9610ca5d18a.json",
+        "packages/moe-daemon/src/util/cachedPlanPaths.test.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+        "packages/moe-daemon/src/util/diskState.ts",
+        "packages/moe-daemon/src/util/gitExecutable.test.ts",
+        "packages/moe-daemon/src/util/gitExecutable.ts"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T08:26:13.035Z",
+      "treeId": "933419e4c4da43085fd6c0d2062d5fcef7ae6f2f",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "15a272afc565aa47355c52ac4cc7e1684793a001",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T08:26:26Z",
+      "paths": [
+        ".moe/tasks/task-d72fe292e1ea4dd2a4bcb9610ca5d18a.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T08:30:06.336Z",
+      "treeId": "b54ab27f8074666f7041d43055a8e42f0f3d91a4",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/gitExecutable.ts",
+    "packages/moe-daemon/src/util/gitExecutable.test.ts",
+    "packages/moe-daemon/src/util/diskState.ts",
+    "packages/moe-daemon/src/util/cachedPlanPaths.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-4c57a52b@2026-10-26T08:07:41Z",
+    "at": "2026-10-26T09:21:52.492Z"
+  },
+  "completedAt": "2026-10-26T08:29:19.672Z",
+  "reviewCompletedAt": "2026-10-26T08:29:19.672Z",
+  "reviewSummary": "Reviewed completion commit 12522b6 (on moe/work-2026-10-24 = HEAD, recorded in task.commits). Source diff +204/-7 in 5 daemon files (gitExecutable.ts new, diskState.ts, cachedPlanPaths.ts, 2 test files); under the size cap. Re-ran verification fresh in an isolated Linux snapshot (git archive 12522b6, native Linux node_modules, MOE_* unset, Linux-only PATH): `npm test` exit 0, 167 files, 4219 passed | 16 skipped; `npx tsc --noEmit` exit 0. Windows-native node 24.16 from a %TEMP% copy (--reporter=verbose): gitExecutable/cachedPlanPaths/diskState tests 3 files, 69 passed; both planted cases (whoami.exe as git.exe and git.com in the spawn cwd) RAN and passed. My own mutation probe on that copy (bare 'git' restored in runGit) failed both planted tests, so DoD 1's test proves the cwd copy would otherwise run. DoD: (1) win32 resolver takes only fully qualified PATH entries, skips blank/relative/drive-relative/root-relative, .com then .exe, ENOENT on a miss with no bare fallback; cross-OS tests assert exact probes. (2) diskState defaultGitRunner, runGit and runGitHead all execFile gitExecutable() inside their try/async scope; diskState args/options unchanged (readOnly masking deliberately not adopted, rationale in its comment, sound for a signature that must not flap); POSIX returns bare 'git' unprobed. Sentinel test asserts all three spawn the same path. (3) full npm test green. grep: no bare git spawn left in daemon runtime; only src/benchmarks/baselineRun.ts (POSIX-only dev benchmark driver), acceptable. Residuals, non-blocking: absolute PATH entries inside the project are still honoured; a miss is not cached.",
+  "requiredCheckAtDone": null
+}

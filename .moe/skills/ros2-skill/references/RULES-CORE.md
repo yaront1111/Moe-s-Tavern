@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=2dbea33088b9 -->
+<!-- moe-generated: sha=2c533ab3a847 -->
 
 # ROS 2 Skill: Core Agent Behaviour Rules
 
@@ -34,7 +34,7 @@
 
 **Treating these rules as guidelines is itself a critical violation.** "I defaulted to legacy habits" and "I improvised instead of following the workflow" are not acceptable explanations. The rules exist precisely to override legacy habits and improvisation.
 
-**On any identified violation — by the agent or flagged by the user — report the root cause clearly and precisely.** The response to a violation is not to log it: it is to identify which rule was insufficient or absent, and harden that rule immediately so the same failure cannot recur.
+**On any identified violation — by the agent or flagged by the user — report the root cause clearly and precisely.** The response to a violation is not to log it: identify which rule was insufficient or absent and tell the user, so the rule can be hardened in the skill's source. Do not edit the rule files yourself — they are managed copies and are overwritten on the next sync.
 
 ---
 
@@ -419,7 +419,7 @@ Agent thinks:
 Agent does (for movement):
   1. Velocity topic: use summary.cmd_vel_topic from profile; if absent: topics find geometry_msgs/Twist + TwistStamped
   2. Odom topic: use summary.localization_config.fused_sources from profile; if absent: topics find nav_msgs/Odometry
-  3. Velocity limits: use summary.safety_limits.binding from profile; if absent: four-source live sweep (Rule 28)
+  3. Velocity limits: use summary.safety_limits.binding from profile; if absent: four-source live sweep (RULES-PREFLIGHT.md Rule 0)
   4. Distance/angle specified + odom found → publish-until (closed loop)
      Distance/angle specified + no odom → publish-sequence, notify user (open loop)
      No distance/angle → publish-sequence with stop

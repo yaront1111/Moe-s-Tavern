@@ -36,10 +36,29 @@
 // failure is a record that landed on disk with nothing following it, which is why
 // the attempt id is caller-suppliable — re-opening with the same id returns the
 // persisted record instead of writing a second one.
+//
+// An attempt may carry a configuration identity (executionPolicySnapshot),
+// captured once at open, never rewritten, and returned only as detached copies.
+// recordContextReceipt writes the latest served get_context receipt onto a
+// running attempt through the same write-then-publish path, and
+// recordStepCompletion appends strict step-completion evidence the same way.
 
 import type { StateManager } from './StateManager.js';
-import type { AttemptPresenceKind, ExecutionAttempt, ExecutionAttemptPhase, Task } from '../types/schema.js';
-import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
+import type {
+  AttemptPresenceKind,
+  ExecutionAttempt,
+  ExecutionAttemptPhase,
+  ExecutionPolicySnapshot,
+  ExecutionWorkspaceMode,
+  ServedContextReceipt,
+  StepCompletionEvidence,
+  Task,
+} from '../types/schema.js';
+// The leaf, and the only policy import allowed here: delivery/policy.ts and
+// state/taskStore.ts both import this store, so either would close a cycle.
+import { readExecutionPolicySnapshot } from '../delivery/executionProfile.js';
+import { validateEnumValue, validateStringValue } from './validators.js';
+import { MoeError, MoeErrorCode, invalidInput, notAllowed } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { logger } from '../util/logger.js';
 
@@ -92,15 +111,39 @@ function decodeStoredGeneration(attempt: ExecutionAttempt): number {
   return stored;
 }
 
+/**
+ * What every exported function hands out: the stored snapshot object never
+ * leaves the store, so no caller can rewrite an attempt's identity through an
+ * alias. A copy of the raw value, deliberately not validated, so one hand-edited
+ * record can never make a read throw. The context receipt and step completions
+ * are copied the same way. A record with none of them is returned as it always was.
+ */
+function detached(attempt: ExecutionAttempt): ExecutionAttempt {
+  const { executionPolicySnapshot: snapshot, contextReceipt: receipt, stepCompletions: steps } = attempt;
+  if (snapshot === undefined && receipt === undefined && steps === undefined) return attempt;
+  return {
+    ...attempt,
+    ...(snapshot !== undefined ? { executionPolicySnapshot: structuredClone(snapshot) } : {}),
+    ...(receipt !== undefined ? { contextReceipt: structuredClone(receipt) } : {}),
+    ...(steps !== undefined ? { stepCompletions: structuredClone(steps) } : {}),
+  };
+}
+
 export function getAttempt(state: StateManager, attemptId: string): ExecutionAttempt | null {
-  return state.attempts.get(attemptId) ?? null;
+  const attempt = state.attempts.get(attemptId);
+  return attempt ? detached(attempt) : null;
+}
+
+/** The stored records in generation order, for this store's own bookkeeping only. */
+function storedAttempts(state: StateManager, taskId?: string): ExecutionAttempt[] {
+  const all = Array.from(state.attempts.values());
+  const scoped = taskId === undefined ? all : all.filter((a) => a.taskId === taskId);
+  return scoped.sort((a, b) => a.generation - b.generation);
 }
 
 /** Attempts in generation order; every attempt when `taskId` is omitted. */
 export function listAttempts(state: StateManager, taskId?: string): ExecutionAttempt[] {
-  const all = Array.from(state.attempts.values());
-  const scoped = taskId === undefined ? all : all.filter((a) => a.taskId === taskId);
-  return scoped.sort((a, b) => a.generation - b.generation);
+  return storedAttempts(state, taskId).map(detached);
 }
 
 /**
@@ -109,14 +152,14 @@ export function listAttempts(state: StateManager, taskId?: string): ExecutionAtt
  * live one and the caller is told about that one.
  */
 export function currentAttempt(state: StateManager, taskId: string): ExecutionAttempt | null {
-  const open = listAttempts(state, taskId).filter((a) => OPEN_PHASES.has(a.phase));
-  return open.length === 0 ? null : open[open.length - 1];
+  const open = storedAttempts(state, taskId).filter((a) => OPEN_PHASES.has(a.phase));
+  return open.length === 0 ? null : detached(open[open.length - 1]);
 }
 
 /** Next generation for a task: max over every prior attempt + 1, never a count. */
 function nextGeneration(state: StateManager, taskId: string): number {
   let max = 0;
-  for (const attempt of listAttempts(state, taskId)) {
+  for (const attempt of storedAttempts(state, taskId)) {
     const generation = decodeStoredGeneration(attempt);
     if (generation > max) max = generation;
   }
@@ -135,6 +178,8 @@ export interface OpenAttemptParams {
   workerId: string;
   runnerId: string;
   workspace: string;
+  /** Internal claim-derived identity; omitted preserves the legacy record shape. */
+  workspaceMode?: ExecutionWorkspaceMode;
   /**
    * Optional. Supply the id a crashed open used to make this call a repair
    * instead of a duplicate; omit it for a fresh attempt.
@@ -143,6 +188,13 @@ export interface OpenAttemptParams {
   /** Advisory reattachment hints — never evidence that a process is alive. */
   processStartedAt?: string;
   host?: string;
+  /**
+   * Internal: the configuration identity the claim path derived from daemon task
+   * and project state (tools/claimNextTask.ts deriveAttemptPolicySnapshot). Never
+   * an MCP argument, and never approval, readiness or runner trust. Omit it and
+   * the record is the legacy shape, with no key at all.
+   */
+  executionPolicySnapshot?: ExecutionPolicySnapshot;
 }
 
 /**
@@ -193,6 +245,10 @@ function assertNoOpenAttempt(state: StateManager, taskId: string): void {
  * Deliberately does NOT require the task to exist. Whether an attempt may
  * outlive its task is policy for the work that wires attempts into
  * claim/complete/release; this store only records what it was told.
+ *
+ * A supplied executionPolicySnapshot is decoded strictly into a fresh copy, so
+ * a malformed one throws INVALID_INPUT before anything is allocated or written
+ * and the caller's object is never stored. A repair never adopts one.
  */
 export async function openAttempt(
   state: StateManager,
@@ -202,11 +258,14 @@ export async function openAttempt(
   const workerId = requireNonBlank('workerId', params.workerId);
   const runnerId = requireNonBlank('runnerId', params.runnerId);
   const workspace = requireNonBlank('workspace', params.workspace);
+  const workspaceMode = params.workspaceMode === undefined ? undefined
+    : validateEnumValue(params.workspaceMode, 'workspaceMode', ['shared', 'worktree'] as const);
   const id = params.id === undefined ? generateId('attempt') : requireNonBlank('id', params.id);
 
   const repaired = repairExisting(state, id, taskId);
-  if (repaired) return repaired;
+  if (repaired) return detached(repaired);
   assertNoOpenAttempt(state, taskId);
+  const snapshot = readExecutionPolicySnapshot(params.executionPolicySnapshot);
 
   // Allocate and persist. writeEntity validates the id against path traversal,
   // creates .moe/attempts itself, and writes atomically.
@@ -218,15 +277,17 @@ export async function openAttempt(
     runnerId,
     generation: nextGeneration(state, taskId),
     workspace,
+    ...(workspaceMode !== undefined ? { workspaceMode } : {}),
     phase: 'running',
     startedAt: now,
     lastPhaseAt: now,
     ...(params.processStartedAt !== undefined ? { processStartedAt: params.processStartedAt } : {}),
     ...(params.host !== undefined ? { host: params.host } : {}),
+    ...(snapshot !== undefined ? { executionPolicySnapshot: snapshot } : {}),
   };
   await state.writeEntity('attempts', attempt.id, attempt);
   state.attempts.set(attempt.id, attempt);
-  return attempt;
+  return detached(attempt);
 }
 
 /**
@@ -257,7 +318,7 @@ export async function setAttemptPhase(
   // Re-asserting the phase an attempt already holds is a no-op, not a write:
   // lastPhaseAt records when the phase CHANGED, so a repeated call (a retried
   // close from an exit trap) must not churn it.
-  if (existing.phase === phase) return existing;
+  if (existing.phase === phase) return detached(existing);
   if (existing.phase === 'closed') {
     throw conflict(
       `Attempt ${id} is closed; its phase cannot change to ${phase}`,
@@ -269,7 +330,7 @@ export async function setAttemptPhase(
   const updated: ExecutionAttempt = { ...existing, phase, lastPhaseAt: new Date().toISOString() };
   await state.writeEntity('attempts', updated.id, updated);
   state.attempts.set(updated.id, updated);
-  return updated;
+  return detached(updated);
 }
 
 /**
@@ -323,7 +384,141 @@ export async function recordAttemptPresence(
   };
   await state.writeEntity('attempts', updated.id, updated);
   state.attempts.set(updated.id, updated);
-  return updated;
+  return detached(updated);
+}
+
+/** record_commit's sessionId bound. No trim, no truncation, no coercion. */
+const SESSION_ID_RULE = { maxLength: 255 };
+
+/** A caller-presented ServedContextReceipt.sessionId. Absent stays absent; null is refused, never "no session". */
+export function readContextSessionId(value: unknown): string | undefined {
+  return value === undefined ? undefined : validateStringValue(value, 'sessionId', SESSION_ID_RULE);
+}
+
+const isText = (v: unknown) => typeof v === 'string' && v.trim() !== '';
+const isRevision = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+
+/** Every receipt field's check, in canonical key order; approvedPlanRevision is the one optional key. */
+const RECEIPT_FIELDS: Record<keyof ServedContextReceipt, (v: unknown) => boolean> = {
+  id: isText,
+  packetId: (v) => typeof v === 'string' && /^sha256:[0-9a-f]{64}$/.test(v),
+  taskId: isText,
+  attemptId: isText,
+  generation: (v) => isRevision(v) && v >= 1,
+  workerId: isText,
+  sessionId: (v) => validateStringValue(v, 'contextReceipt.sessionId', SESSION_ID_RULE) === v,
+  planRevision: isRevision,
+  approvedPlanRevision: isRevision,
+  view: (v) => v === 'default' || v === 'full',
+  servedAt: isText,
+};
+
+/**
+ * The ONE definition of a valid served-context receipt, used on every write
+ * and by every later reader. Strict: the enumerable own key set must match
+ * exactly, and anything malformed throws INVALID_INPUT, never coerced. Returns
+ * a fresh primitive-only copy in canonical key order.
+ */
+export function readContextReceipt(value: unknown): ServedContextReceipt | undefined {
+  if (value === undefined) return undefined;
+  const proto = value !== null && typeof value === 'object' ? Object.getPrototypeOf(value) : undefined;
+  if (proto !== Object.prototype && proto !== null) throw invalidInput('contextReceipt', 'must be a plain object');
+  const r = value as Record<string, unknown>;
+  const own = Object.keys(r);
+  const keys = Object.keys(RECEIPT_FIELDS).filter((k) => k !== 'approvedPlanRevision' || own.includes(k));
+  if (own.length !== keys.length || !own.every((k) => keys.includes(k))) {
+    throw invalidInput('contextReceipt', `must have exactly the keys ${keys.join(', ')}`);
+  }
+  for (const k of keys) {
+    if (!RECEIPT_FIELDS[k as keyof ServedContextReceipt](r[k])) throw invalidInput(`contextReceipt.${k}`, 'is malformed');
+  }
+  return Object.fromEntries(keys.map((k) => [k, r[k]])) as unknown as ServedContextReceipt;
+}
+
+/**
+ * Record what get_context is about to serve to a RUNNING attempt's own worker;
+ * the latest receipt replaces any earlier one. taskId, attemptId, generation
+ * and workerId come from the STORED attempt, never the caller. Every refusal
+ * precedes the write. Not setAttemptPhase: every other field, lastPhaseAt
+ * included, is carried over. Write-then-publish. Caller must hold state.mutex.
+ */
+export async function recordContextReceipt(
+  state: StateManager,
+  p: Pick<ServedContextReceipt, 'attemptId' | 'workerId' | 'sessionId' | 'packetId' | 'planRevision' | 'approvedPlanRevision' | 'view'>
+): Promise<ServedContextReceipt> {
+  const id = requireNonBlank('attemptId', p.attemptId);
+  const existing = state.attempts.get(id);
+  if (!existing) throw new MoeError(MoeErrorCode.NOT_FOUND, `Attempt not found: ${id}`, { attemptId: id }, 'ATTEMPT_NOT_FOUND');
+  if (existing.phase !== 'running') {
+    throw conflict(`Attempt ${id} is ${existing.phase}; a context receipt is recorded only on a running attempt`,
+      { attemptId: id, taskId: existing.taskId, phase: existing.phase }, 'ATTEMPT_NOT_RUNNING');
+  }
+  if (p.workerId !== existing.workerId) throw notAllowed('recordContextReceipt', `attempt ${id} belongs to another worker`);
+  const contextReceipt = readContextReceipt({
+    id: generateId('ctxreceipt'), packetId: p.packetId, taskId: existing.taskId, attemptId: existing.id,
+    generation: decodeStoredGeneration(existing), workerId: existing.workerId, sessionId: p.sessionId,
+    planRevision: p.planRevision,
+    ...(p.approvedPlanRevision !== undefined ? { approvedPlanRevision: p.approvedPlanRevision } : {}),
+    view: p.view, servedAt: new Date().toISOString(),
+  }) as ServedContextReceipt;
+  const updated: ExecutionAttempt = { ...existing, contextReceipt };
+  await state.writeEntity('attempts', id, updated);
+  state.attempts.set(id, updated);
+  return { ...contextReceipt };
+}
+
+const STEP_COMPLETION_KEYS = ['stepId', 'planRevision', 'completedAt'] as const;
+
+/**
+ * The ONE definition of valid stored step-completion evidence (CQ-F08). Absent
+ * is []. Strict: an array of plain objects with exactly stepId, planRevision
+ * and completedAt; anything else throws INVALID_INPUT, never coerced, filtered
+ * or dropped. Returns fresh canonical copies.
+ */
+export function readStepCompletions(value: unknown): StepCompletionEvidence[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw invalidInput('stepCompletions', 'must be an array');
+  return value.map((entry: unknown, i) => {
+    const proto = entry !== null && typeof entry === 'object' ? Object.getPrototypeOf(entry) : undefined;
+    const e = entry as Record<string, unknown>;
+    const own = proto === Object.prototype || proto === null ? Object.keys(e) : [];
+    if (own.length !== STEP_COMPLETION_KEYS.length || !STEP_COMPLETION_KEYS.every((k) => own.includes(k))
+      || !isText(e.stepId) || !isRevision(e.planRevision) || !isText(e.completedAt)) {
+      throw invalidInput(`stepCompletions[${i}]`, `must be a plain object with exactly ${STEP_COMPLETION_KEYS.join(', ')}`);
+    }
+    return { stepId: e.stepId as string, planRevision: e.planRevision, completedAt: e.completedAt as string };
+  });
+}
+
+/**
+ * Append one strict step completion to a RUNNING attempt of the caller's own.
+ * The only writer of stepCompletions: no tool argument, UPDATE_TASK payload or
+ * claim path can mint evidence. Every refusal, a malformed stored history
+ * included, precedes the write; every other field, lastPhaseAt included, is
+ * carried over. Write-then-publish. Caller must hold state.mutex.
+ * ponytail: append-only and unbounded; bounded in practice by plan steps times
+ * replans within one attempt.
+ */
+export async function recordStepCompletion(
+  state: StateManager,
+  p: { attemptId: string; workerId: string; stepId: string; planRevision: number }
+): Promise<StepCompletionEvidence[]> {
+  const id = requireNonBlank('attemptId', p.attemptId);
+  const existing = state.attempts.get(id);
+  if (!existing) throw new MoeError(MoeErrorCode.NOT_FOUND, `Attempt not found: ${id}`, { attemptId: id }, 'ATTEMPT_NOT_FOUND');
+  if (existing.phase !== 'running') {
+    throw conflict(`Attempt ${id} is ${existing.phase}; a step completion is recorded only on a running attempt`,
+      { attemptId: id, taskId: existing.taskId, phase: existing.phase }, 'ATTEMPT_NOT_RUNNING');
+  }
+  if (p.workerId !== existing.workerId) throw notAllowed('recordStepCompletion', `attempt ${id} belongs to another worker`);
+  const stepCompletions = readStepCompletions([
+    ...readStepCompletions(existing.stepCompletions),
+    { stepId: p.stepId, planRevision: p.planRevision, completedAt: new Date().toISOString() },
+  ]);
+  const updated: ExecutionAttempt = { ...existing, stepCompletions };
+  await state.writeEntity('attempts', id, updated);
+  state.attempts.set(id, updated);
+  return structuredClone(stepCompletions);
 }
 
 /**
@@ -378,7 +573,7 @@ export async function recordAttemptPresence(
  */
 export async function reconcileRunningAttempts(state: StateManager): Promise<ExecutionAttempt[]> {
   const reconciled: ExecutionAttempt[] = [];
-  for (const attempt of listAttempts(state)) {
+  for (const attempt of storedAttempts(state)) {
     if (attempt.phase === 'finalizing') {
       if (!state.getTask(attempt.taskId)) await closeOrphanedAttempt(state, attempt, null);
       continue;
@@ -475,7 +670,7 @@ export async function closeOpenAttempts(
   taskId: string
 ): Promise<ExecutionAttempt[]> {
   const closed: ExecutionAttempt[] = [];
-  for (const attempt of listAttempts(state, taskId)) {
+  for (const attempt of storedAttempts(state, taskId)) {
     if (!OPEN_PHASES.has(attempt.phase)) continue;
     closed.push(await setAttemptPhase(state, attempt.id, 'closed'));
   }
@@ -521,7 +716,7 @@ export async function closeHandedBackAttempts(
   taskId: string
 ): Promise<ExecutionAttempt[]> {
   const closed: ExecutionAttempt[] = [];
-  for (const attempt of listAttempts(state, taskId)) {
+  for (const attempt of storedAttempts(state, taskId)) {
     if (!HANDED_BACK_PHASES.has(attempt.phase)) continue;
     closed.push(await setAttemptPhase(state, attempt.id, 'closed'));
   }

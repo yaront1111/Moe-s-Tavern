@@ -1,0 +1,247 @@
+{
+  "id": "task-48edc21bf9e2474689c3028d4463bbd2",
+  "epicId": "epic-be924fb8",
+  "title": "bug: deregistration presence lines route to every busy seat, so routine wrapper restarts wake chat_wait waiters and defeat its channel filter",
+  "description": "Measured 2026-10-30 over .moe/messages from 00:00Z to 06:45Z: of 1162 chat messages, 344 (about 30%) were routine presence lines.\n- 250 were \"<id> left (<reason>)\". state/workerLifecycle.ts:287 posts one into every channel the departing seat has a chat cursor in.\n- 94 were \"🔌 <id> deregistered (wrapper_restart); (no tasks held)\" banners. workerLifecycle.ts:305 sends each one to #workers and #governors.\n\nWrapper restarts happen after almost every CLI session, so this runs continuously.\n\nEach of those lines is a mention-less system message. util/mentionRouter.ts routeSystemMessage (about line 255) routes it to every non-IDLE, non-DEAD worker. That has two effects:\n- chatStore.ts sendMessage increments unread for every busy seat, and every chat_wait waiter wakes, because isRelevant matches routingTargets.\n- util/chatBacklog.ts backlogChannelIds (about line 131) unions the caller's channel filter with every unread channel. A governor's chat_wait {channels: [#governors, #general]} therefore drains #workers, #architects and team-channel presence lines too, including old ones after a restart.\n\nObserved effect: a governing seat's chat_wait returns almost every tick with nothing but presence lines, which burns context and tokens and hides the real signals.\n\nWanted: routine presence lines page nobody, like the #general system feed (isSystemFeedMessage) already does. The daemon's actionable banners keep routing exactly as today: ⚠️ stale worker, 🚧 blocked, ❌ QA reject, 📦 commit and alerts, file collision, and any deregistration that released tasks or dropped resource claims.",
+  "definitionOfDone": [
+    "A '<id> left (<reason>)' line, and a deregistration banner that released no tasks and dropped no resource claims, both have empty routingTargets. Neither increments any seat's unread count, and neither wakes a parked chat_wait. Unit tests cover both lines.",
+    "A deregistration banner that released at least one task or dropped a resource claim still routes to busy seats as today, and so do the other system banners (stale-worker ⚠️, 🚧 blocked, ❌ QA reject, file collision). Regression tests pin that routing for at least the deregistration-with-release and the 🚧 cases.",
+    "A chat_wait with channels:['#governors'] whose entry drain previously returned another channel's presence lines (via the unread union in backlogChannelIds) returns only #governors traffic plus messages that actually mention the caller. There is a test for it in chatWait.test.ts or chatBacklog tests."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first.\n\n(A) In packages/moe-daemon/src/tools/chatSystemFeed.test.ts, add a describe 'routine presence lines' that reuses the file's ToolTestHarness fixture: worker-chat, worker-peer, worker-busy (CODING).\n\nCapture routing: `const off = h.state.subscribe(e => { if (e.type === 'MESSAGE_CREATED') events.push(e) })`. Each event's payload is the stored message and `routingTargets` is the routed seats. Call off() in finally.\n\n- DoD 1 (real producer):\n  - After load, give worker-peer chat cursors in #workers and #governors: `h.state.updateWorker('worker-peer', { chatCursors: { [workers]: 'msg-x', [governors]: 'msg-x' } })`. It holds no task.\n  - Park a chat_wait for worker-busy with `channels: [governors]`, like the existing 'pages nobody' test.\n  - Run `deregisterWorkerTool(h.state).handler({ workerId: 'worker-peer', reason: 'wrapper_restart' }, h.state)` (import from './deregisterWorker.js').\n  - Select the system events whose content is 'worker-peer left (wrapper_restart)' or '🔌 worker-peer deregistered (wrapper_restart); (no tasks held)'. Expect exactly 4: a left line and a banner in each of #workers and #governors. Every one must have routingTargets toEqual [].\n  - h.state.getUnreadSummary('worker-busy') must be null.\n  - The parked wait must not have settled after ~30 ms. Then end it with a human post in #governors and assert it returns exactly that message.\n- DoD 2 (real producer with release): a worker-holder (CODING) holding a WORKING task deregisters with reason 'terminal_closed'. Its banner '🔌 worker-holder deregistered (terminal_closed); released 1 task: <id>→WORKING' in #workers and #governors routes as today: routingTargets contains 'worker-busy', and worker-busy's unread counts rise in both channels.\n- DoD 2 (the other banners), table-driven with `h.state.postToRoleChannel('governors', line)` on the producers' exact shapes. Each must route to worker-busy (routingTargets contains it):\n  - '🚧 worker-peer blocked on task-1: proxy down' (reportBlocked.ts ~381, the mention-less governors copy)\n  - '⚠️ worker-peer stale on task-1 (T) — last activity 1900s ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.' (sweeps.ts ~366)\n  - '❌ QA rejected task-1: tests fail' (qaReject.ts ~370)\n  - '⚠️ file collision on task-1: task-2: `a.ts`'\n  - '📦 completion commit recorded for task-1: abc1234 on moe/work — 2 path(s), 0 inferred, 0 skipped, 0 unattributed'\n  - the dropped-claims-only banner '🔌 worker-x deregistered (terminal_closed); (no tasks held); dropped 1 resource claim: slot lease (task-1)'\n- Near misses stay non-feed and routed:\n  - an AGENT (sender worker-peer) posting 'worker-x left (bye)'\n  - a system 'worker-x left (bye)' that also carries '@worker-busy'\n  - a system 'worker-x left (bye) again', which is not anchored at the closing paren\n\n(B) DoD 3, in packages/moe-daemon/src/tools/chatWait.test.ts, using its fixture helpers (WORKER_ID, PEER_ID, post, wait, channels):\n- Make the waiter busy: `await state.updateWorker(WORKER_ID, { status: 'GOVERNING' })`. Before the fix, a mention-less system line is routed only to non-IDLE seats.\n- Post as 'system' in #workers and #architects: 'worker-gone left (wrapper_restart)' and '🔌 worker-gone deregistered (wrapper_restart); (no tasks held)'.\n- Post a human line in #governors, and a #workers line from PEER_ID: '@worker-wait can you check task-1'.\n- `wait({ channels: [channels.governors] })` must return exactly [the #governors line, the mention] by id, in timestamp order, with no presence line.\n- RED today: the presence lines were routed to the busy waiter, so #architects (and #workers) entered the unread union in util/chatBacklog.ts backlogChannelIds, and the scan returned them.\n\nRun `npx vitest run src/tools/chatSystemFeed.test.ts src/tools/chatWait.test.ts` and record the RED output. The DoD 1 and DoD 3 cases fail. The DoD 2 and near-miss cases already pass: they pin today's routing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+        "packages/moe-daemon/src/tools/chatWait.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+        "packages/moe-daemon/src/tools/chatWait.test.ts"
+      ],
+      "note": "RED tests added (chatSystemFeed.test.ts +113, chatWait.test.ts +19). Ran in a Linux-native /tmp snapshot of HEAD with only these two test files overlaid, env -i, node v24.21.0, lockfile equal. Result: 3 failed | 42 passed. Failing (the DoD cases): (1) 'a routine deregistration pages nobody...' expected ['worker-busy','worker-holder'] to equal []; (2) 'a deregistration that released a task still routes...' expected unread 2 to be 1 (the routed left line adds a count today); (3) chatWait '#governors filter drains no other channel's presence lines' got 6 messages instead of 2. The pin-today cases already pass: the six actionable banners (blocked, stale, QA reject, file collision, commit, dropped-claims-only) and the four near misses. Shared checkout has ~865 dirty peer paths, untouched.",
+      "startedAt": "2026-10-30T07:51:15.137Z",
+      "completedAt": "2026-10-30T07:52:37.055Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN in packages/moe-daemon/src/util/chatPayload.ts. That file's isSystemFeedMessage is already the single predicate behind all three effects:\n- chatStore.ts sendMessage sets routingTargets to [], so no unread and no wake;\n- chatWait.ts isRelevant never wakes on it;\n- every agent read (chat_read without includeSystem, chat_resync, and the chat_wait drain via getMessages hideSystemFeed) skips it.\nOnly the predicate changes. Leave the producers (state/workerLifecycle.ts) and every caller untouched.\n\n- Add two anchored module-level patterns, each with a one-line comment naming its producer:\n  - `const PRESENCE_LEFT_LINE = /^\\S+ left \\([^\\n]*\\)$/;`, for `${workerId} left (${reason})` in workerLifecycle.ts ~287, posted to every channel the seat has a cursor in.\n  - `const QUIET_DEREGISTER_BANNER = /^\\u{1F50C} \\S+ deregistered \\([^\\n]*\\); \\(no tasks held\\)$/u;`, for the ~305 banner when released.length === 0 and dropped.length === 0. The suffix after the reason is daemon-written, so a banner that released a task or dropped a resource claim never ends in '; (no tasks held)' and keeps routing.\n- Export `isRoutinePresenceLine(content: string): boolean`.\n- isSystemFeedMessage becomes: sender === 'system' AND no mentions AND (channel is #general, by type or name as today, OR isRoutinePresenceLine(message.content)).\n- Rewrite its doc comment: the feed is mention-less daemon lines in #general, plus routine presence lines in any channel. The IDE still shows them; agents opt back in with chat_read includeSystem.\n\nError handling: the predicate stays total. A non-string or empty content must return false: guard with `typeof content === 'string'` and never throw, because it runs inside sendMessage and chat_wait event handlers. Content-based classification is deliberate:\n- it needs no schema field or migration;\n- it also hides legacy presence lines that are already stored, which the description's \"old ones after a restart\" calls out;\n- the step 1 tests drive the real deregistration producer, so a wording change in workerLifecycle.ts fails them instead of silently paging again.\nRe-run the step 1 command until everything is green, including the existing chatSystemFeed and chatWait cases.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/chatPayload.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/chatPayload.ts"
+      ],
+      "note": "GREEN: util/chatPayload.ts adds PRESENCE_LEFT_LINE and QUIET_DEREGISTER_BANNER (anchored, bounded), exports isRoutinePresenceLine (typeof-guarded, total), and isSystemFeedMessage = system && no mentions && (#general || routine presence). Producers and callers untouched. Snapshot run of chatSystemFeed + chatWait: 2 files, 45 passed (was 3 failed).",
+      "startedAt": "2026-10-30T07:52:38.750Z",
+      "completedAt": "2026-10-30T07:52:58.182Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs: docs/MCP_SERVER.md, in the moe.chat_read, moe.chat_wait and moe.chat_resync sections only. Find them by heading and text; the line numbers drift.\n\n(1) chat_read input `includeSystem?: boolean   // Also return the #general system feed (default false)` becomes '...Also return the system feed (default false)'.\n(2) The chat_read bullet '**Skips the `#general` system feed**...'. Keep everything else, and:\n- define the feed as daemon posts (`sender: \"system\"`) that @mention nobody, in `#general` (task moved, claimed, step completed, landing reports) plus routine presence lines in any channel: `<id> left (<reason>)`, and a `🔌 <id> deregistered (<reason>); (no tasks held)` banner that released no tasks and dropped no resource claims;\n- say that feed lines are routed to nobody: no unread count, no wake;\n- replace 'and so is every line in role and custom channels' with 'and so is every other line in role and custom channels, including a deregistration banner that released tasks or dropped resource claims'.\n(3) The chat_wait bullet 'The `#general` system feed (see `moe.chat_read`) never wakes a waiter...' becomes 'The system feed (see moe.chat_read) never wakes...'.\n(4) The chat_resync bullet 'Skips the `#general` system feed...' becomes 'Skips the system feed...'.\n\nThis file is contested by several open rows. This task dependsOn task-4d67e805, which edits the same file, so that sibling's bytes are landed first.\n- Edit it only with a wrapper-observed editing tool, and touch only these hunks.\n- Immediately before complete_task, run `git diff -- docs/MCP_SERVER.md`. It must show only this task's hunks.\n- If a peer's in-progress hunks are present, never revert or stash them. Post in #workers mentioning that task's assignee, and name the carried hunks in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md: 4 hunks only (chat_read includeSystem comment; chat_read 'Skips the system feed' bullet now defines feed as #general lines plus routine presence lines, routed to nobody, with the release/dropped-claims banner still returned; chat_wait bullet; chat_resync bullet). The file was CLEAN before my edits (task-4d67e805 already landed), and git diff -U0 shows exactly @@ -2458, -2477, -2555, -2682, no foreign hunks. Edited with the Edit tool.",
+      "startedAt": "2026-10-30T07:52:59.318Z",
+      "completedAt": "2026-10-30T07:53:13.145Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate. Run it once, fresh, after steps 1-3. This is the complete_task evidence.\n\nChat routing is shared by every seat, so run the full daemon suite plus the typecheck: `cd packages/moe-daemon && npx tsc --noEmit && npm test`. Exit 0, quoting the Test Files and Tests totals.\n\nFrom WSL the in-tree node_modules are Windows-native, so follow mem:gotcha-daemon-linux-snapshot-gate:\n- `git archive HEAD` of the whole repo.\n- Overlay ONLY this task's four files (an explicit list).\n- `npm ci`, or symlink a native install with an equal lockfile.\n- Run under `env -i HOME=$HOME PATH=<nvm node bin>:/usr/local/bin:/usr/bin:/bin NO_COLOR=1`.\n- `cmp` the overlaid files against the shared tree before citing the run, and say in the evidence that it ran in the snapshot.\nNever run `npm run build` in the shared tree: prebuild deletes the dist/ the live daemon runs from. Type-check both test files with a scratch tsconfig: extends ./tsconfig.json, include only the two test files, `\"types\": [\"node\"]`.\n\nMutants (scratch copies, restored, cmp-verified). Count one as killed only on real test failures, not on a compile failure:\n- M1, PRESENCE_LEFT_LINE never matches: the DoD 1 left-line and DoD 3 cases fail.\n- M2, the banner pattern unanchored at the end (no `$`), so release and dropped banners turn into feed: the DoD 2 release and dropped-claims cases fail.\n- M3, the sender === 'system' check dropped: the agent near miss fails.\n- M4, the mention check dropped: the mentioned near miss fails.\n- M5, presence lines classified feed only in #general (the pre-fix predicate): DoD 1 and DoD 3 fail.\nReport each mutant's result in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/chatPayload.ts",
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+        "packages/moe-daemon/src/tools/chatWait.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/chatPayload.test.ts",
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts"
+      ],
+      "note": "Gate ran in a Linux-native /tmp snapshot of HEAD (git archive, node_modules symlinked to a native install with an equal lockfile, env -i, node v24.21.0, NO_COLOR=1), with ONLY the 5 owned files overlaid and cmp-verified against the shared tree: `npx tsc --noEmit && npm test` exit 0, Test Files 204 passed (204), Tests 5755 passed | 16 skipped (5771). Scratch test typecheck (extends tsconfig, types node, include the 3 test files): only error is chatWait.test.ts(71,7) TS2322 epicId: null, which is in the untouched fixture and present at HEAD; filed task-a61d4f35. Scope growth: added a unit describe to util/chatPayload.test.ts (the existing file for the changed module) for isRoutinePresenceLine totality/anchoring; fixture-free, +30 lines. Mutants (all real test failures, restored and cmp-verified): M1 left regex never matches: 3 failed (DoD1, DoD2 left-line unread, DoD3). M2 banner unanchored at end: 2 failed (dropped-claims-only banner, not-anchored banner near miss); note a released banner has no '(no tasks held)' so `$` is not what protects it. M3 sender check dropped: 16 failed incl. the agent near miss. M4 mention check dropped: 3 failed incl. the new 'left (restart @worker-busy)' near miss (the first near miss 'left (bye) @worker-busy' did not exercise it, replaced). M5 presence only in #general: 3 failed (DoD1, DoD2, DoD3).",
+      "startedAt": "2026-10-30T07:53:14.098Z",
+      "completedAt": "2026-10-30T07:56:34.880Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (load adversarial-self-review). The board marks this task isEpicFinal for its epic only because the epic has no finalTaskId and this row has the highest order. The epic is a rolling bug bucket whose siblings were each QA-gated, so scope the review to this task's diff plus the shared chat surface it changes. Check:\n(a) Only the two routine shapes become feed. Every actionable daemon line still routes as before, including any line carrying an @mention, a 'released N task' or 'dropped N resource claim' suffix, and lines from agents or humans.\n(b) A crafted deregistration reason cannot turn an actionable banner into feed: the matched suffix is daemon-written. And no reason can make a feed line page anyone, because a mention makes the line non-feed, which is today's behaviour.\n(c) Hidden legacy presence lines never strand a reader. getMessages' hideSystemFeed filtering already keeps the cursor and page semantics: see the existing test 'hidden lines never fill a page or strand a reader behind them'.\n(d) The IDE path is untouched: it reads unfiltered and still shows the lines. chat_read with includeSystem:true still returns them.\n(e) The predicate cannot throw on odd content, and the regexes cannot backtrack catastrophically: they are anchored, with single bounded classes.\n(f) Run `git diff` for the four files. No .moe edits, no forbidden patterns. Re-check docs/MCP_SERVER.md for foreign hunks as in step 3.\nFix anything found, re-run the step 4 gate if any byte changed, then complete_task with the step 4 evidence and the step 1 RED output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/chatPayload.ts",
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+        "packages/moe-daemon/src/tools/chatWait.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review of the 5-file diff (no byte changed after the step-4 gate; all 5 cmp equal to the snapshot). (a) Only two shapes become feed; the six actionable banners and four near misses are pinned. workerLifecycle.ts:287 is the sole daemon producer of '<id> left (' (grep). (b) A crafted reason cannot hide an actionable banner: a released/dropped banner ends in daemon-written text (task ids, status enum), never '(no tasks held)'; a newline in the reason fails [^\\n]* so the line routes as before; an @mention in the reason makes mentions non-empty so the line is non-feed-excluded and routes (test 'left (restart @worker-busy)'). Agents cannot post as sender 'system'. (c) hideSystemFeed filters before the limit and after the cursor lookup, existing 'hidden lines never fill a page' test covers it. (d) getMessages without hideSystemFeed is unfiltered, so the IDE and includeSystem:true still return them. (e) The predicate is pure and total (typeof guard); both regexes are ^-anchored with one [^\\n]* so matching is linear; a 10k-char adversarial input test runs well under 500ms. (f) git diff shows only the 5 owned files; docs/MCP_SERVER.md has exactly 4 hunks, none foreign; no .moe edits, no forbidden patterns. Theoretical only: presence lines already stored are now hidden from agent reads in every channel (intended, per the task). Filed task-a61d4f35 for a pre-existing test typecheck error.",
+      "startedAt": "2026-10-30T07:56:36.025Z",
+      "completedAt": "2026-10-30T07:57:12.617Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 270.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:45:17.943Z",
+  "updatedAt": "2026-10-30T08:20:07.650Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:49:15.275Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T08:19:29.956Z",
+    "wallClockMs": 5414681
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555",
+    "worker-e60b90bd",
+    "qa-8e551ac8"
+  ],
+  "dependsOn": [
+    "task-4d67e805f2e940518137d70de325defc",
+    "task-f943b6877b5f48aeb282d819f9da013d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:56:10.640Z",
+  "planningNotes": {
+    "approachesConsidered": "1) Chosen: widen the existing single predicate (util/chatPayload.ts isSystemFeedMessage) with content patterns for the two routine presence shapes. Routing, wake and drain behaviour all follow from it, with no schema change, and already-stored legacy lines are hidden too.\n2) Rejected: a persisted `feed` flag on ChatMessage set by the producer. It touches schema.ts, chatStore.ts, StateManager.ts, workerLifecycle.ts and docs/SCHEMA.md (8+ files), and does not cover legacy lines.\n3) Rejected: filtering out-of-filter channels in the chatBacklog drain to mention-only messages. It changes the drain semantics for actionable broadcasts routed to the caller, and it needs cursor bookkeeping for skipped messages (a stuck unread count, or hidden ambient lines for a later chat_read). With presence lines no longer routed, they never put a channel into the unread union, and the drain's hideSystemFeed skips them in any scanned channel. That is DoD 3's scenario.",
+    "codebaseInsights": "routeSystemMessage (util/mentionRouter.ts) routes a mention-less system line to every non-IDLE, non-DEAD seat. chatStore.ts sendMessage overrides that to [] when isSystemFeedMessage is true. chatWait.ts isRelevant returns false for feed lines before any channel check. collectChatBacklog reads with hideSystemFeed:true, as do chat_read (unless includeSystem) and chat_resync. Unread counts live in memory (state.unreadCounts). The presence producers are state/workerLifecycle.ts deregisterWorker: one 'left' line per cursor channel, and the banner to #workers and #governors. The banner suffix after the reason is daemon-built from released and dropped.",
+    "risks": "Ordering: dependsOn task-4d67e805 because both tasks edit docs/MCP_SERVER.md, and that sibling's worker had the file dirty at plan time. docs/MCP_SERVER.md is also declared by several CQ rows: edit it with a wrapper-observed tool and check `git diff` for foreign hunks before complete_task. Content-based classification couples the regexes to workerLifecycle.ts wording. The real-producer tests (DoD 1/2) are the guard, so keep them driving deregisterWorkerTool rather than posting copied strings. isEpicFinal comes from the highest-order fallback; the governor may want to designate a real finalTaskId for this rolling epic.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/chatPayload.ts",
+      "packages/moe-daemon/src/state/workerLifecycle.ts",
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "packages/moe-daemon/src/util/mentionRouter.ts",
+      "packages/moe-daemon/src/util/chatBacklog.ts",
+      "packages/moe-daemon/src/tools/chatWait.ts",
+      "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+      "packages/moe-daemon/src/tools/chatWait.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:56:10.667Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:51:15.137Z",
+  "reviewStartedAt": "2026-10-30T07:57:23.816Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx tsc --noEmit && npm test",
+    "exitCode": 0,
+    "outputTail": "Ran in a Linux-native /tmp snapshot of HEAD (git archive, native node_modules with equal lockfile, env -i, node v24.21.0, NO_COLOR=1) with only the 5 owned files overlaid and cmp-verified against the shared tree.\n ✓ src/util/chatPayload.test.ts (15 tests)\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n\n Test Files  204 passed (204)\n      Tests  5755 passed | 16 skipped (5771)\n   Duration  26.64s\n(tsc --noEmit exit 0 before npm test; RED run before the fix: 3 failed | 42 passed)",
+    "reportedAt": "2026-10-30T07:57:23.816Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+    "packages/moe-daemon/src/tools/chatWait.test.ts",
+    "packages/moe-daemon/src/util/chatPayload.ts",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/util/chatPayload.test.ts",
+    ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json",
+    ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+    ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json"
+  ],
+  "completionSummary": "Routine presence lines now page nobody. util/chatPayload.ts: isSystemFeedMessage = system && no mentions && (#general || isRoutinePresenceLine(content)); new exported, total isRoutinePresenceLine matches two anchored shapes: '<id> left (<reason>)' and '🔌 <id> deregistered (<reason>); (no tasks held)' (the released-nothing, dropped-nothing banner). That one predicate drives sendMessage (routingTargets []), chat_wait isRelevant and every agent read, so a mention-less presence line adds no unread, wakes no waiter and no longer pulls its channel into the chatBacklog unread union; legacy stored lines are hidden too. Producers untouched; actionable banners (🚧, ⚠️ stale, ❌ QA reject, file collision, 📦, a deregistration that released tasks or dropped claims) route exactly as before. Tests: chatSystemFeed.test.ts +113 (real deregisterWorkerTool path: 4 presence events with routingTargets [], no unread, parked chat_wait not woken then returns the human post; release banner still routes + unread 1 per channel; 6 table-driven actionable banners; 4 near misses incl. agent sender, '(bye) again', banner with trailing text, '@mention' inside the reason); chatWait.test.ts +19 (DoD 3: busy waiter with channels:[#governors] returns exactly the #governors line + the real @mention, no presence lines); chatPayload.test.ts +33 (matcher unit tests, totality, 10k-char input). RED first: 3 failed | 42 passed. docs/MCP_SERVER.md: 4 hunks (chat_read includeSystem + feed bullet, chat_wait, chat_resync); no foreign hunks. Scope growth: chatPayload.test.ts, a fifth file, for the new exported function's unit tests. Gate in a Linux-native snapshot (all 5 files cmp-equal): tsc --noEmit && npm test exit 0, 204 files, 5755 passed | 16 skipped. Mutants, all killed by real failures: M1 left regex dead (3 failed), M2 banner unanchored (2), M3 sender check dropped (16), M4 mention check dropped (3), M5 #general only (3). Note M2: a released banner never contains '(no tasks held)', so `$` guards the dro",
+  "commits": [
+    {
+      "sha": "477d7f523a8a72222f417ffd1c244c16d75042f8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T07:50:40Z",
+      "paths": [
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json",
+        ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+        "packages/moe-daemon/src/tools/chatWait.test.ts",
+        "packages/moe-daemon/src/util/chatPayload.test.ts",
+        "packages/moe-daemon/src/util/chatPayload.ts"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T07:57:55.818Z",
+      "treeId": "b577c84746990a51089266d6d526ea2f4035043e",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-66e8d7d1e9ef4ba281cdb2f505d47e7d"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "aae91b68741ab48d4b57eedec549ee671432165e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8e551ac8@2026-10-30T08:12:22Z",
+      "paths": [
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json"
+      ],
+      "recordedBy": "qa-8e551ac8",
+      "recordedAt": "2026-10-30T08:20:07.650Z",
+      "treeId": "5ce57bd589453b7765d024e9259a3abe9a7fef65",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/tools/chatWait.test.ts",
+          "taskId": "task-a61d4f3522ab47b7b7df34534cd291b1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/chatPayload.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-8e551ac8@2026-10-30T08:12:22Z",
+    "at": "2026-10-30T08:20:07.650Z"
+  },
+  "completedAt": "2026-10-30T08:19:29.956Z",
+  "reviewCompletedAt": "2026-10-30T08:19:29.956Z",
+  "reviewSummary": "Verified completion 477d7f523a8a72222f417ffd1c244c16d75042f8 (tree b577c84746990a51089266d6d526ea2f4035043e) on moe/work-2026-10-24. Fresh fetch: origin/moe/work-2026-10-24 contains it. Reviewed git show of that commit. Non-board +197/-10, net 187 (runtime chatPayload.ts +28/-6, docs +4/-4, tests +165). Under the 400 cap. docs/MCP_SERVER.md is the four planned chat_read, chat_wait, and chat_resync hunks; the Moe-Contested trailer names the shared file and the diff has no foreign hunks.\n\nDoD 1: a system mention-less \"<id> left (<reason>)\" line and a quiet deregistration banner ending in \"(no tasks held)\" are system feed, so sendMessage forces routingTargets to []. The real deregisterWorker path test expects four presence events with empty targets, unread null, and a parked chat_wait that stays parked until a human #governors post.\n\nDoD 2: a banner that released a task still routes to the busy seat (unread 1 in #workers and #governors). The table pins the blocked, stale, QA-reject, file-collision, and commit banners, plus a dropped-claims banner that still contains \"(no tasks held)\" but does not end on it, so the anchored regex does not hide it. Agent sender, an @mention inside the reason, and unanchored near-misses stay visible to chat_read.\n\nDoD 3: chatWait.test.ts, busy waiter, channels [#governors], returns only the #governors line and the real @mention. The same predicate filters legacy lines on read. Producers untouched. typeof guard; both regexes are start-anchored with one bounded class. No MCP parameter change and no .moe schema change. Rails met: regression tests, backward compatible, no forbidden patterns.\n\nRe-ran on a Linux git archive of that commit (lock 415a8083, node v24.21.0, env -i, NO_COLOR=1): npx tsc --noEmit exit 0; npm test exit 0; Test Files 205 passed (205); Tests 5767 passed | 16 skipped (5783). Ponytail: lean already, net 0.",
+  "requiredCheckAtDone": null
+}

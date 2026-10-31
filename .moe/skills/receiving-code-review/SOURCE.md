@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=203d69c9deac -->
+<!-- moe-generated: sha=13b25bb240cf -->
 
 # Source
 
@@ -14,3 +14,4 @@ Vendored from [`obra/superpowers`](https://github.com/obra/superpowers).
 - Removed "Strange things are afoot at the Circle K" signal phrase (private convention).
 - Removed the GitHub Thread Replies section (Moe's review channel is `moe.add_comment`, not GitHub PR threads — captured in the integration footer).
 - Appended `## Moe integration` footer wiring the skill to `moe.qa_reject` recovery, `rejectionDetails`, and the `regression-check` follow-up.
+- Replaced the "Forbidden phrases" banned-phrase list with a one-line positive statement of how to respond (technical content only; verify before agreeing).

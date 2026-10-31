@@ -21,6 +21,7 @@ import type { StateManager } from './StateManager.js';
 import type { Team, TeamRole } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
+import { withEvictionTombstones } from '../util/teamMembershipHeal.js';
 import { validateCreateTeamInput, validateTeamUpdates } from './validators.js';
 
 export function getTeam(state: StateManager, teamId: string): Team | null {
@@ -136,6 +137,34 @@ async function clearMembershipTombstone(state: StateManager, workerId: string): 
   }
 }
 
+/**
+ * Free the seats of DEAD members the way deleteWorker does: out of memberIds and
+ * into the formerMemberIds tombstone, so resolveEffectiveTeam still places them
+ * on this team. The records stay (DEAD, lastActivityAt untouched) until the
+ * stale prune; only a pointer at THIS team is cleared, and the explicit
+ * lastActivityAt keeps the repair from counting as presence.
+ */
+async function evictDeadMembers(state: StateManager, team: Team, deadIds: string[]): Promise<void> {
+  await state.updateTeam(team.id, {
+    memberIds: team.memberIds.filter((id) => !deadIds.includes(id)),
+    formerMemberIds: withEvictionTombstones(team, deadIds)
+  });
+
+  for (const workerId of deadIds) {
+    const worker = state.workers.get(workerId);
+    if (worker?.teamId === team.id) {
+      try {
+        await state.updateWorker(workerId, { teamId: null, lastActivityAt: worker.lastActivityAt });
+      } catch (err) {
+        // The team write already freed the seat: a failed pointer repair must not fail the join.
+        logger.warn({ err, workerId, teamId: team.id }, 'Failed to clear teamId on an evicted DEAD member');
+      }
+    }
+    state.appendActivity('TEAM_MEMBER_REMOVED', { teamId: team.id, workerId, reason: 'dead-member-evicted' });
+  }
+  logger.info({ teamId: team.id, evicted: deadIds }, 'Evicted DEAD members from a full team');
+}
+
 export async function addTeamMember(state: StateManager, teamId: string, workerId: string): Promise<Team> {
   const existing = state.teams.get(teamId);
   if (!existing) throw new Error(`Team not found: ${teamId}`);
@@ -145,11 +174,21 @@ export async function addTeamMember(state: StateManager, teamId: string, workerI
     return state.teams.get(teamId)!; // Already a member, idempotent
   }
 
-  // Order matters: refuse a full team BEFORE clearing the tombstone. Clearing
-  // first would strip the worker's only route back to its team as a side
-  // effect of a join that then failed.
+  // A DEAD record holds no seat, but it stays until staleWorkerTimeoutMs prunes
+  // it, so counting it left every seat launched after a tab-close wave without
+  // a team for about 35 minutes. A full team therefore evicts its DEAD members
+  // first, and is refused only when the live ones fill it. A member with no
+  // record is not DEAD: it keeps its seat.
+  //
+  // Order matters: refuse a full team BEFORE any write, and so before clearing
+  // the tombstone. Clearing first would strip the worker's only route back to
+  // its team as a side effect of a join that then failed.
   if (existing.memberIds.length >= existing.maxSize) {
-    throw new Error(`Team ${existing.name} is full (max ${existing.maxSize} members)`);
+    const dead = existing.memberIds.filter((id) => state.workers.get(id)?.status === 'DEAD');
+    if (existing.memberIds.length - dead.length >= existing.maxSize) {
+      throw new Error(`Team ${existing.name} is full (max ${existing.maxSize} members)`);
+    }
+    await evictDeadMembers(state, existing, dead);
   }
 
   await clearMembershipTombstone(state, workerId);

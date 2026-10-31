@@ -1,0 +1,205 @@
+{
+  "id": "task-91ef788685924de0a5c1dd0184486d5b",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the daemon reads .moe/daemon.json with no size cap (readDaemonInfo, doctor probe)",
+  "description": "Objective: bound the daemon's own reads of .moe/daemon.json. Two readers call fs.readFileSync on the whole file:\n- packages/moe-daemon/src/index.ts readDaemonInfo, used by start's lock check, status and stop;\n- src/commands/doctor.ts probeDaemonJson.\nThis is a sibling of task-4f1e37f30ee548298b26e17c0b6ea84e (the JetBrains reader, same cap). daemon.json is repository content: a repository can commit one past .moe/.gitignore. A huge or never-ending file (a symlink to /dev/zero) therefore makes start, status, stop and doctor allocate up to gigabytes before they fail.\n\nDeliverable:\n- Both readers go through one bounded read of at most 65537 bytes. The cap is 64 KiB (65536 bytes), the JetBrains value.\n- A file over the cap is handled exactly like an unparseable one: readDaemonInfo returns null, and doctor reports a fail that names the 64 KiB limit and echoes no file content.\n- Read through a file descriptor, never a whole-file read, and never a size pre-check alone: a symlink to a device reports size 0.\n- No deletion for size alone. Valid files behave as today.\n\nNot in scope:\n- the daemon.json write path and format;\n- benchmarks/baselineRun.ts, which reads its own temp project;\n- the other clients (proxy, Claude Code plugin, VS Code, launchers, JetBrains), which have their own sibling tasks.\n\nVerification: cd packages/moe-daemon && npx tsc --noEmit && npm test. On WSL the shared checkout's node_modules is a Windows install, so run it from a Linux snapshot (Serena mem gotcha-daemon-linux-snapshot-gate).",
+  "definitionOfDone": [
+    "index.ts readDaemonInfo returns the parsed info for a valid daemon.json of exactly 65536 bytes (JSON padded with spaces) and null for one of 65537 bytes, proven by new vitest cases.",
+    "doctor's daemon.json probe reports a fail that names the 64 KiB limit for a 65537-byte file and echoes none of its content, and still passes a valid 65536-byte file, proven by new doctor.test.ts cases.",
+    "Neither reader loads more than 65537 bytes of daemon.json, proven by a test (for example, readFileSync is never called on daemon.json, or a sparse multi-GiB file is refused promptly).",
+    "Fresh cd packages/moe-daemon && npx tsc --noEmit && npm test exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first (load test-driven-development). The cross-package contract is fixed: the cap is 64 KiB (65536 bytes); a reader takes at most 65537 bytes through one file descriptor; a larger file is handled exactly like an unparseable one and is never deleted for its size alone. The tests pin 65536 and 65537 as literals, because the cap is shared with the JetBrains reader (task-4f1e37f3) and the sibling client rows, so a silent change to the constant must fail here. Build each payload as JSON.stringify(...) padded with trailing spaces (legal JSON whitespace) to an exact byte length.\n\npackages/moe-daemon/src/index.test.ts: add describe('daemon.json size cap'), reusing the file's testDir and daemonInfo() fixtures and importing readDaemonInfo and stopDaemon from './index.js' (both already exported):\n(1) readDaemonInfo returns the parsed object (toEqual) for a valid daemon.json of exactly 65536 bytes, and null for the same JSON padded to 65537. Today's code parses the 65537 case, so this is RED.\n(2) Bounded read: vi.spyOn(fs, 'readFileSync') and vi.spyOn(fs, 'readSync'), both passing through. readDaemonInfo on an 8 MiB daemon.json (valid JSON plus spaces) returns null, readFileSync is never called with the daemon.json path, and the readSync return values sum to at most 65537.\n(3) POSIX only, it.skipIf(process.platform === 'win32'): a .moe/daemon.json that is a symlink to /dev/zero returns null promptly. The read is bounded by the cap, not by file metadata, which reports size 0.\n(4) stopDaemon with a 65537-byte daemon.json (valid JSON: pid process.pid, an unused port) acts as if there is no daemon info: it writes the stop sentinel, never calls process.kill (spy), and leaves the oversize file in place. Today's code parses it, finds it stale and deletes it, so this is RED.\n\npackages/moe-daemon/src/commands/doctor.test.ts, inside the existing describe, using scaffoldMoe and startHealthServer:\n(5) A 65537-byte daemon.json whose startedAt is a unique marker string gives a '[FAIL] daemon.json:' line that contains '64 KiB' and does not contain the marker, and runDoctor's exitCode is 1.\n(6) The same JSON padded to exactly 65536 bytes, pointing at a healthy /health server, still gives '[OK] daemon.json:' and exitCode 0.\n\nRun the two files in the Linux runner (step 3 recipe): npx vitest run src/index.test.ts src/commands/doctor.test.ts. On today's code, (1)'s 65537 case, (2), (4) and (5) must fail. Record which.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "note": "RED on today's code in the Linux snapshot: doctor.test.ts 65537-byte case failed; index.test.ts worker was killed with SIGTERM (the unbounded /dev/zero read, or the 8 MiB case) so its cases did not run to a verdict. Dirty checkout has 578 peer paths, untouched.",
+      "startedAt": "2026-10-27T14:11:16.349Z",
+      "completedAt": "2026-10-27T14:12:57.345Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN. Create packages/moe-daemon/src/util/daemonJsonFile.ts:\n- export const MAX_DAEMON_JSON_BYTES = 64 * 1024. Comment: daemon.json is repository content (a repository can commit one); the daemon writes a few hundred bytes; JetBrains (task-4f1e37f3) and the other clients use the same cap.\n- export class DaemonJsonTooLargeError extends Error, with the fixed message 'daemon.json is larger than 64 KiB' and no file content.\n- export function readDaemonJsonText(filePath: string): string. It opens the file with fs.openSync(filePath, 'r') and allocates one Buffer.alloc(MAX_DAEMON_JSON_BYTES + 1). It loops fs.readSync(fd, buf, total, buf.length - total, null) until a read returns 0 or the buffer is full, because a device or pipe can return short reads. fs.closeSync runs in finally, including on the throw. When total > MAX it throws DaemonJsonTooLargeError; otherwise it returns buf.toString('utf8', 0, total). An IO error propagates to the callers' existing catch, so their error handling is unchanged.\n\nWire it in:\n- packages/moe-daemon/src/index.ts readDaemonInfo: replace fs.readFileSync(filePath, 'utf-8') with readDaemonJsonText(filePath) inside the existing try. Any error, too-large included, returns null as today.\n- packages/moe-daemon/src/commands/doctor.ts probeDaemonJson: make the same replacement. In its catch, map DaemonJsonTooLargeError to { symbol: 'fail', message: 'daemon.json is larger than 64 KiB; not read' } before the existing 'unparseable' message.\n\nKeep the existsSync checks, every caller (startDaemon, superviseDaemon, stopDaemon, statusDaemon), validateDaemonInfoForProject, the stale cleanup and the write path unchanged. Re-run step 1's two files: green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/util/daemonJsonFile.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/daemonJsonFile.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "note": "GREEN: index.test.ts + doctor.test.ts 22/22 pass in Linux snapshot.",
+      "startedAt": "2026-10-27T14:12:58.226Z",
+      "completedAt": "2026-10-27T14:13:13.557Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run once: cd packages/moe-daemon && npx tsc --noEmit && npm test.\n\nOn WSL the shared checkout's node_modules is a Windows install, so run it from a Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate, mem:gotcha-full-daemon-suite-scratch-root-needs-claude-md):\n- SNAP=$(mktemp -d /tmp/moe-91ef-gate.XXXXXX).\n- git -C <repo root> archive HEAD | tar -x -C $SNAP. Archive the whole repo: tests read the root .gitignore, CLAUDE.md and docs/.\n- Overlay exactly the five owned paths and cmp each one. Never overlay git diff --name-only, which would bring in peers' half-done edits.\n- Symlink $SNAP/packages/moe-daemon/node_modules to /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules, after checking its package.json and package-lock.json equal the snapshot's modulo CR. If they differ, run npm ci in the snapshot.\n- Run under env -i HOME=$HOME PATH=<nvm node bin>:/usr/local/bin:/usr/bin:/bin.\n\nOn native Windows it may run in place: daemon npm test is plain vitest and never rebuilds dist. There, test (3) is skipped by design.\n\nRequire exit 0 and zero failed tests. complete_task gets { command, exitCode, outputTail }, plus the tested root and base commit. Error handling: on a failure, fix the cause, re-overlay and re-run the same command; never weaken an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate in Linux snapshot /tmp/moe-91ef-gate.* (base 57fe21c5, five owned paths overlaid and cmp'd): tsc --noEmit + npm test EXIT=0, 170 files, 4349 passed, 16 skipped.",
+      "startedAt": "2026-10-27T14:13:14.655Z",
+      "completedAt": "2026-10-27T14:14:01.396Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (load adversarial-self-review) of the five-file diff. Check:\n- the off-by-one at the cap: 65536 is read and 65537 refused;\n- short reads are looped;\n- the descriptor is closed on every path, the throw included;\n- no whole-file read of daemon.json is left in src (grep readFileSync; benchmarks/baselineRun.ts is out of scope because it reads its own temp project);\n- no deletion and no kill for an oversize file;\n- doctor's message carries no file content;\n- concurrent start/stop calls share no state;\n- valid files behave exactly as before.\nResidual, noted only: opening a FIFO blocks, but git cannot commit a FIFO. The proxy, Claude plugin, VS Code and launcher readers have sibling rows. If the review changes bytes, re-run the step 3 gate fresh. Report all five paths in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/daemonJsonFile.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "note": "Self-review: cap boundary pinned by the 65536/65537 test; short reads looped; fd closed in finally incl. the throw; grep finds no remaining readFileSync of daemon.json in src; oversize file is not deleted or signalled (stopDaemon test); doctor message has no content; no shared state. No byte changes after the gate. Residual: opening a FIFO blocks (git cannot commit one).",
+      "startedAt": "2026-10-27T14:14:02.482Z",
+      "completedAt": "2026-10-27T14:14:06.681Z"
+    }
+  ],
+  "planRevision": 9,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human asked the architect seat to promote and plan the daemon.json size-cap follow-ups (2026-10-27).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 236.1,
+  "comments": [
+    {
+      "id": "comment-4caaa3772b56463598a790f37c5e69bc",
+      "author": "architect-2c9d5121",
+      "content": "Architect note for QA: do not run this task's new index.test.ts /dev/zero case against pre-fix daemon code. The old fs.readFileSync of /dev/zero never reaches EOF and grows memory until the process dies, and a synchronous read can't be stopped by the vitest timeout. The worker's step-1 RED run hit exactly that: the vitest worker was killed with SIGTERM, so index.test.ts never reached a RED verdict.\n\nTo check that the new cases discriminate, run only the boundary and 8 MiB cases against the old code with vitest -t. Running the suite against the fixed code is safe.\n\nThe plan's choice of that test was my mistake. The sibling proxy row task-685d8a8e has been amended to drop it, and its exact read-total assertion covers the same lying-metadata mutant.",
+      "timestamp": "2026-10-27T14:17:06.194Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T13:43:06.687Z",
+  "updatedAt": "2026-10-27T15:49:21.172Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-27T14:07:11.469Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-27T15:48:51.338Z",
+    "wallClockMs": 6099869
+  },
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-27T14:09:31.038Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) A size pre-check with fs.statSync alone: rejected. A symlink to a device reports size 0 but never ends, so the cap must bound the read itself; this mirrors the JetBrains readNBytes(MAX + 1). (2) Inline bounded reads in index.ts and doctor.ts: rejected as duplication. One helper module keeps the cap and the message in one place. Its tests live in the existing index.test.ts and doctor.test.ts, keeping the plan at five files. (3) Deleting an oversize file: rejected. Every reader treats it like an unparseable one; startDaemon's atomic write replaces it, and stop keeps it. (4) A sparse multi-GiB test file: rejected for the daemon. Node writes zero-fill on NTFS, which is slow on Windows CI, and readFileSync already throws ERR_FS_FILE_TOO_LARGE above 2 GiB, so it would not discriminate. An 8 MiB file plus fs spies proves the bounded read on every OS, and the /dev/zero symlink covers lying metadata on POSIX.",
+    "codebaseInsights": "- index.ts:405 readDaemonInfo (exported at ~:1096) is called by:\n  - startDaemon :497 and its lock wait :516;\n  - superviseDaemon :776;\n  - stopDaemon :898 (null takes the sentinel-only path; an existing stale file is deleted);\n  - statusDaemon :929.\n- Every caller already treats null as 'no daemon info'.\n- doctor.ts:72 probeDaemonJson. emit prints '[OK]|[WARN]|[FAIL] <label>: <message>'. runDoctor exits 1 on any fail.\n- index.test.ts fixtures: testDir with .moe, daemonInfo() overrides, a healthServer helper, vi.restoreAllMocks in afterEach.\n- doctor.test.ts fixtures: scaffoldMoe, startHealthServer, writeDaemonJson, the line() helper.\n- index.ts imports fs as a default import, so vi.spyOn(fs, ...) intercepts its calls.",
+    "risks": "WSL: the shared checkout's daemon node_modules is a Windows install, so use the Linux snapshot with the symlinked native node_modules, under env -i. The full suite takes ~25 s. Test (3) is POSIX-only (skipIf win32), so a Windows run reports it skipped by design. The 64 KiB cap is a cross-package contract with task-4f1e37f3 and sibling rows 685d8a8e, 938653f9, e57d1d20 and ad0dc2e7; do not change it here. The five files are uncontested, with no other live task declaring them, as of 2026-10-27.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/commands/doctor.ts",
+      "packages/moe-daemon/src/index.test.ts",
+      "packages/moe-daemon/src/commands/doctor.test.ts",
+      "packages/moe-daemon/src/util/atomicWrite.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-27T14:09:31.169Z",
+  "contextFetchedBy": [
+    "worker-3729a0d6",
+    "qa-6fa5d758"
+  ],
+  "workStartedAt": "2026-10-27T14:11:16.349Z",
+  "reviewStartedAt": "2026-10-27T14:14:10.828Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx tsc --noEmit && npm test",
+    "exitCode": 0,
+    "outputTail": "Test Files  170 passed (170)\n Tests  4349 passed | 16 skipped (4365)\n Duration 28.23s\nEXIT=0 (Linux snapshot of base 57fe21c5 + five owned paths, node v24.21.0)",
+    "reportedAt": "2026-10-27T14:14:10.828Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/commands/doctor.test.ts",
+    "packages/moe-daemon/src/util/daemonJsonFile.ts",
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-daemon/src/commands/doctor.ts",
+    ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+    ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+    ".moe/tasks/task-91ef788685924de0a5c1dd0184486d5b.json"
+  ],
+  "completionSummary": "readDaemonInfo (index.ts) and doctor's probeDaemonJson now read daemon.json through new util/daemonJsonFile.ts readDaemonJsonText: one fd, one 65537-byte buffer, looped readSync, closed in finally. A file over 64 KiB (65536 bytes) throws DaemonJsonTooLargeError; readDaemonInfo returns null (so stop writes the sentinel and leaves the file), doctor reports '[FAIL] daemon.json: daemon.json is larger than 64 KiB; not read' with no content. Tests: index.test.ts (65536 ok / 65537 null, 8 MiB file with readFileSync never called and readSync total <= 65537, /dev/zero symlink returns null promptly on POSIX, stopDaemon keeps oversize file and never kills) and doctor.test.ts (65537 fail with no marker echo, 65536 passes). Gate run in a Linux snapshot at base 57fe21c5 with the five owned paths overlaid.",
+  "commits": [
+    {
+      "sha": "c006918b31e3a45a2461affd708d462d20c82e71",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T14:09:52Z",
+      "paths": [
+        ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+        ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+        ".moe/tasks/task-91ef788685924de0a5c1dd0184486d5b.json",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/util/daemonJsonFile.ts"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T14:15:53.089Z",
+      "treeId": "6c1e76a2295e6a22960e7c98d87f02ebb2e6ccdf",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ba1b052da6e0fa2e6dee049055e32772c6006e92",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-6fa5d758@2026-10-27T15:46:50Z",
+      "paths": [
+        ".moe/tasks/task-91ef788685924de0a5c1dd0184486d5b.json"
+      ],
+      "recordedBy": "qa-6fa5d758",
+      "recordedAt": "2026-10-27T15:49:21.172Z",
+      "treeId": "643d99d4ccb46caa4bf1fad5d60d4e49cbdd53da",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-6fa5d758@2026-10-27T15:46:50Z",
+    "at": "2026-10-27T15:49:21.172Z"
+  },
+  "completedAt": "2026-10-27T15:48:51.338Z",
+  "reviewCompletedAt": "2026-10-27T15:48:51.338Z",
+  "reviewSummary": "Reviewed completion commit c006918b (on moe/work-2026-10-24; 5 source/test paths, +154 net non-board LOC, well under the 400 cap). Diff read: new util/daemonJsonFile.ts readDaemonJsonText opens one fd, allocates one 65537-byte buffer, loops readSync until EOF or full, closes in finally (including on throw), and throws DaemonJsonTooLargeError (no file content) above 65536. index.ts readDaemonInfo and doctor.ts probeDaemonJson both use it; oversize gives null / '[FAIL] daemon.json: daemon.json is larger than 64 KiB; not read'. No deletion or kill for size alone. Grep of daemon src finds no remaining whole-file daemon.json reads. Re-ran verification myself in a Linux snapshot of HEAD (5ac3eea, five owned files cmp-identical to c006918b, node v24.21.0, env -i): npx tsc --noEmit OK; npm test EXIT=0, 170 files, 4361 passed, 16 skipped. Discrimination check against the pre-fix index.ts and doctor.ts, using only the boundary and 8 MiB cases via -t (the /dev/zero case deliberately excluded per the architect note): 4 RED (readDaemonInfo 65536/65537, bounded-read, stopDaemon-keeps-oversize, doctor 65537 fail), and the doctor 65536 case passes pre-fix as expected. DoD: (1) 65536 parses, 65537 null, pinned as literals; (2) doctor fails naming 64 KiB, marker not echoed, 65536 still [OK]; (3) readFileSync never called on daemon.json and readSync total <= 65537 on an 8 MiB file, plus a /dev/zero symlink returns null promptly on POSIX; (4) fresh gate exit 0. Not exercised: the JetBrains reader and the other clients (sibling rows); a FIFO daemon.json would block on open (noted residual; git cannot commit one).",
+  "requiredCheckAtDone": null
+}

@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=aff1fb76a93a
+# moe-generated: sha=ab29aaa8f589
 name: system-design
 description: Use when designing for scale, availability, or distribution — load balancing, caching, sharding, replication, CAP trade-offs, microservices, or any high-availability/high-throughput architecture decision.
 domain: software-design
@@ -222,7 +222,7 @@ function getShardByDate(date: Date): string {
   return `orders_${year}_${month.toString().padStart(2, '0')}`;
 }
 
-// Consistent hashing for dynamic shards
+// Consistent hashing for dynamic shards (this.hash = any stable 32-bit hash)
 class ConsistentHash {
   private ring: Map<number, string> = new Map();
 
@@ -235,11 +235,12 @@ class ConsistentHash {
 
   getNode(key: string): string {
     const hash = this.hash(key);
-    // Find next node on ring
-    for (const [nodeHash, node] of [...this.ring.entries()].sort()) {
+    // Next node clockwise; numeric sort (default sort() compares as strings)
+    const sorted = [...this.ring.entries()].sort((a, b) => a[0] - b[0]);
+    for (const [nodeHash, node] of sorted) {
       if (nodeHash >= hash) return node;
     }
-    return this.ring.values().next().value;
+    return sorted[0][1]; // wrap around to the lowest hash
   }
 }
 ```
@@ -465,12 +466,3 @@ class SlidingWindowRateLimiter {
 | Chat App | WebSocket, Presence, Message queue |
 | E-commerce | Cart service, Inventory, Payment |
 | Video Streaming | CDN, Chunking, Adaptive bitrate |
-
----
-
-## Related Skills
-
-- [[architecture-patterns]] - Microservices, event-driven
-- [[database]] - Database optimization
-- [[caching-implementation]] - Cache strategies
-- [[reliability-engineering]] - SRE practices

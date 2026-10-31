@@ -3,7 +3,7 @@ import fs from 'fs';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import { deliveryProjection, type TaskDelivery } from './deliveryProjection.js';
 import { recordCandidate } from './candidateStore.js';
-import { recordCheckRun } from './checkRunStore.js';
+import { CHECK_OUTCOMES, recordCheckRun } from './checkRunStore.js';
 import { recordDeliveryReceipt } from './receiptStore.js';
 import type { Candidate, CheckRun, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
 import { createServer } from 'http';
@@ -203,6 +203,21 @@ describe('deliveryProjection', () => {
     expect(deliveryProjection(h.state, task)).toStrictEqual({ ...expected, latestCheckRun: { command: check.command, exitCode: -1 } });
   });
 
+  it.each(CHECK_OUTCOMES)('O1: serves the recorded %s outcome beside the exit code', outcome => {
+    seed();
+    h.state.checkRuns.set(check.id, { ...check, exitCode: 0, outcome });
+    expect(deliveryProjection(h.state, task)).toStrictEqual({
+      ...expected, latestCheckRun: { command: check.command, exitCode: 0, source: 'runner-observed', outcome },
+    });
+  });
+
+  // Display only: an unrecognised outcome is dropped here, never judged (gating stays in delivery/policy.ts).
+  it.each([undefined, null, 'PASSED', 7])('O2/O3: serves no outcome key for an absent or unrecognised outcome %s', outcome => {
+    seed();
+    h.state.checkRuns.set(check.id, { ...check, outcome } as unknown as CheckRun);
+    expect(deliveryProjection(h.state, task)).toStrictEqual(expected);
+  });
+
   describe('required check verdict', () => {
     const GATE = 'node gate.cjs';
     /** The qa_approve strict block: a gate the wrapper runs on every task, under local-branch. */
@@ -229,7 +244,7 @@ describe('deliveryProjection', () => {
       ['a runner-observed pass of another command', { command: 'node lint.cjs' }, false],
       ['a runner-observed failure of the gate', { exitCode: 1 }, false],
       ['a runner-observed pass of the gate', {}, true],
-      ['a runner-observed pass of the gate, padded as the ps1 wrapper records it', { command: `  ${GATE} ` }, true],
+      ['a runner-observed pass of the gate, padded as a pre-fix or direct record_check_run report carries it', { command: `  ${GATE} ` }, true],
     ])('serves %s with its source and the policy verdict', (_, run, satisfied) => {
       strict();
       expect(latest(run)).toStrictEqual(served(run, satisfied));

@@ -1,0 +1,28 @@
+{
+  "id": "task-f366c96ad2d74206aaacca67efb5772d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a claimed task whose pre-flight get_context payload exceeds 128 KiB can never launch, because the wrapper passes it as one CLI argv string (E2BIG, exit 126)",
+  "description": "Observed 2026-10-31 02:02-02:12Z. Filed by governor-4764040b. It blocks [CQ-R13] f4811a72, the CQ-R epic's integration row.\n\nSymptom:\n- worker-25da16b2 and then worker-c75a6f39 each claimed f4811a72.\n- Each failed 3 times in a row, with \"worker session ended ... (CLI exit=126) ... MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY\" within seconds of launch.\n- Each then went into launch outage and released the row. The next idle coder would have been the third victim.\n- Other rows launched fine on the same seats and bytes. c7ee939a's payload is 69,719 bytes.\n\nMechanism, measured:\n- scripts/moe-agent.sh builds DYNAMIC_CONTEXT, which embeds the full pre-flight get_context JSON in a <claimed_task_context> block (around :7830). It is prepended to the user prompt, which reaches the CLI as ONE argv string. The claude cmdline in /proc shows the whole block.\n- Linux caps a single argv string at 131,072 bytes (MAX_ARG_STRLEN). Above that, execve fails with E2BIG and bash exits 126. Repro: `/bin/true \"$(head -c 140000 /dev/zero | tr '\\0' a)\"` gives rc 126 and \"Argument list too long\"; 130,000 bytes gives rc 0.\n- f4811a72's get_context payload is 140,812 bytes. task.epicSiblings is 82,904 of it (34 CQ-R siblings, about 2.4K each). epicRails is 10,466 bytes and appears twice, in epic.epicRails and allRails.epic.\n- Any epic that grows past about 35 siblings, or any task with a large plan or comments, hits the same wall. Every seat that claims such a row is knocked into launch outage in turn.\n- The ps1 twin has to be checked as well: Windows caps the whole command line at 32,767 chars.\n\nThe fix is the planner's call. Examples:\n- (a) Both wrappers stop inlining a payload past a safe bound: write it to a temp file the agent reads, or tell the agent to call moe.get_context itself.\n- (b) Daemon side, bound the default packet. epicSiblings is the bulk; packetManifest already measures a 100000-char budget but never acts on it.\n(a) is the minimum, because it removes the failure class.",
+  "definitionOfDone": [
+    "Regression in both launcher harnesses (postflight.sh and postflight.ps1): a claimed task whose fake get_context payload exceeds 131072 bytes launches the CLI without exit 126, and the session still gets its context, either inlined under the bound or through a file or fetch instruction. RED on the parent.",
+    "A payload under the bound is passed exactly as today, byte for byte, so prompt-cache behaviour for normal tasks is unchanged.",
+    "After landing, CQ-R13 f4811a72 launches on a worker seat. The completion summary names the payload size that was measured."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 321.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T02:14:49.723Z",
+  "updatedAt": "2026-10-31T02:15:17.926Z"
+}

@@ -108,7 +108,7 @@
       "completedAt": "2026-07-30T22:24:56.719Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,7 +121,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:28.024Z",
-  "updatedAt": "2026-07-30T22:30:26.223Z",
+  "updatedAt": "2026-10-24T15:18:58.605Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:12:09.238Z",
     "plannedStepCount": 6,
@@ -187,5 +187,6 @@
   ],
   "completedAt": "2026-07-30T22:30:26.223Z",
   "reviewCompletedAt": "2026-07-30T22:30:26.223Z",
-  "reviewSummary": "Re-ran in packages/moe-daemon: `npx vitest run src/tools/submitPlan.test.ts` -> 43 passed; `npx tsc --noEmit` -> exit 0; full `npm test` -> 48 files / 736 tests passed (no sibling red in the shared tree). Reviewed the diff, excluding the budget-seeding and appendOnlyFiles hunks that belong to sibling tasks. DoD1: test asserts stored affectedFiles toEqual input, newFiles undefined. DoD2: rejection test asserts MoeError INVALID_INPUT, message contains src/missing.ts + newFiles but not the valid src/a.ts, context.missingPaths toEqual ['src/missing.ts'], task still PLANNING with empty implementationPlan; message teaches both fixes (project-root-relative correction with the packages/moe-daemon/src/x.ts example, declare-in-newFiles) and warns against parking existing files there. DoD3: newFiles round-trips via state.getTask -> sanitizeImplementationPlan (StateManager.ts:1186 allow-list passthrough read directly; updateTask sanitizes at :2368 and writes that same object); cross-step create-in-1/cite-in-2 exemption covered; completeStep.ts:74 and reopen.ts:20 both spread ...step so the field survives step lifecycle and reopen. DoD4: newFiles folded into planText for checkPlanRails and into assessPlanSize (distinctFileCount 2 when a path is in both lists; 11-newFiles cap rejection); the four suites the gate tripped (submitPlan plan-size describe, tools.test.ts, governanceFeatures.test.ts, lifecycle.e2e.test.ts) were repaired by creating files in setup — no existing assertion weakened. Rails: no new settings key, no new MCP tool, probes are async Promise.all (no sync work under the state mutex), fail-open on missing/file/empty root and on non-ENOENT errno, filesystem-root prefix regression covered. Diff clean of eval(/innerHTML/dangerouslySetInnerHTML/__proto__. Nit, not blocking: the '+N more' truncation branch is untested and only reachable when taskSizing.maxDistinctFiles is raised above 10, since the size gate runs first."
+  "reviewSummary": "Re-ran in packages/moe-daemon: `npx vitest run src/tools/submitPlan.test.ts` -> 43 passed; `npx tsc --noEmit` -> exit 0; full `npm test` -> 48 files / 736 tests passed (no sibling red in the shared tree). Reviewed the diff, excluding the budget-seeding and appendOnlyFiles hunks that belong to sibling tasks. DoD1: test asserts stored affectedFiles toEqual input, newFiles undefined. DoD2: rejection test asserts MoeError INVALID_INPUT, message contains src/missing.ts + newFiles but not the valid src/a.ts, context.missingPaths toEqual ['src/missing.ts'], task still PLANNING with empty implementationPlan; message teaches both fixes (project-root-relative correction with the packages/moe-daemon/src/x.ts example, declare-in-newFiles) and warns against parking existing files there. DoD3: newFiles round-trips via state.getTask -> sanitizeImplementationPlan (StateManager.ts:1186 allow-list passthrough read directly; updateTask sanitizes at :2368 and writes that same object); cross-step create-in-1/cite-in-2 exemption covered; completeStep.ts:74 and reopen.ts:20 both spread ...step so the field survives step lifecycle and reopen. DoD4: newFiles folded into planText for checkPlanRails and into assessPlanSize (distinctFileCount 2 when a path is in both lists; 11-newFiles cap rejection); the four suites the gate tripped (submitPlan plan-size describe, tools.test.ts, governanceFeatures.test.ts, lifecycle.e2e.test.ts) were repaired by creating files in setup — no existing assertion weakened. Rails: no new settings key, no new MCP tool, probes are async Promise.all (no sync work under the state mutex), fail-open on missing/file/empty root and on non-ENOENT errno, filesystem-root prefix regression covered. Diff clean of eval(/innerHTML/dangerouslySetInnerHTML/__proto__. Nit, not blocking: the '+N more' truncation branch is untested and only reachable when taskSizing.maxDistinctFiles is raised above 10, since the size gate runs first.",
+  "planRevision": 0
 }

@@ -3,8 +3,9 @@
 // Models the REAL delivery path rather than an idealised one:
 //   * chat_read answers from the seeded .moe/messages/<channel>.jsonl and
 //     TRUNCATES each body at maxContentChars (default 1000), exactly as the
-//     daemon does. Truncation is a legitimate transform that still breaks
-//     byte-identity, so the harness must see it.
+//     daemon does (truncateChatMessage: cut to cap-1, trimEnd, append U+2026,
+//     set contentTruncated/contentOriginalLength). Truncation is a legitimate
+//     transform that still breaks byte-identity, so the harness must see it.
 //   * MOE_PROVENANCE_MODE=substitute replaces every body with the
 //     instruction-shaped "SessionStart:startup hook success" block reported in
 //     all 11+ confirmed instances. The stored record stays correct -- the
@@ -76,7 +77,10 @@ function chatRead() {
   const cap = args.maxContentChars === 0 ? 0 : args.maxContentChars || 1000;
   const out = storedMessages().map((rec) => {
     let content = mode === 'substitute' ? SUBSTITUTE_BODY : rec.content;
-    if (cap > 0 && content.length > cap) content = content.slice(0, cap);
+    const cut = cap > 0 && content.length > cap
+      ? { contentTruncated: true, contentOriginalLength: content.length }
+      : {};
+    if (cut.contentTruncated) content = content.slice(0, cap - 1).trimEnd() + '…';
     return {
       id: rec.id,
       channel: rec.channel,
@@ -84,6 +88,7 @@ function chatRead() {
       // what it said. The delivered sender must still come from the store.
       sender: mode === 'substitute' ? FORGED_SENDER : rec.sender,
       content,
+      ...cut,
       mentions: [workerId],
       // A delivery copy must not make a historical message look current.
       timestamp: mode === 'substitute' ? '2099-01-01T00:00:00.000Z' : rec.timestamp
@@ -113,7 +118,7 @@ switch (tool) {
     ok({ team: { id: 'team-provenance', name: args.name || 'Provenance' } });
     break;
   case 'join_team':
-    ok({ success: true });
+    ok({ team: { id: args.teamId, name: 'Provenance', memberIds: [args.workerId] } });
     break;
   case 'chat_channels':
     ok({ channels: mode === 'cross-channel'

@@ -118,7 +118,7 @@
       "completedAt": "2026-07-30T23:15:23.590Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -131,7 +131,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:28.417Z",
-  "updatedAt": "2026-07-30T23:19:48.168Z",
+  "updatedAt": "2026-10-24T15:18:59.576Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:15:41.013Z",
     "plannedStepCount": 7,
@@ -195,5 +195,6 @@
   ],
   "completedAt": "2026-07-30T23:19:48.168Z",
   "reviewCompletedAt": "2026-07-30T23:19:48.168Z",
-  "reviewSummary": "APPROVED. Re-ran: verification command + diskState.test.ts -> 39 passed; full `npm test` -> 49 files/758 tests, zero regressions; `tsc --noEmit` exit 0. Read whole diff (7 modified + 2 new, 346 insertions); scope matches plan.\n\nDoD1: releaseTask.ts:85-99 computes pre-mutex beside handoff validation, gated on params.handoffNote, try/catch, assigns only non-empty strings so failure leaves the key absent. Both persistence branches carry it (:174 repair, :236 normal). Tested: stored + diskStateCaptured; undefined -> `'diskState' in note === false`; throw -> release still succeeds.\n\nDoD2: claimNextTask.ts:384-391 stashes priorHandoffs[0].diskState inside runExclusive; :437-461 recomputes AFTER the block, returns staleHandoffDiskState:true + appended hint. Test asserts flag, hint appended not replaced, helper called once with state.projectPath.\n\nDoD3: four early returns (no stored value, undefined recompute, throw, equal) all tested, plus newest-handoff-only and two zero-call assertions keeping idle polling subprocess-free.\n\nExtra checks: StateManager has zero priorHandoffs references so nothing drops diskState on write, and the claim fixture writes diskState to disk then state.load()s it, proving the round trip. Real `git status --porcelain=v2 --branch` output here matches the test fixture shape exactly. git resolves to git.exe (not a .cmd shim) so execFile+args array is correct on Windows; windowsHide/timeout 3000/8MB maxBuffer present. Zero forbidden-pattern hits.\n\nRails: no new settings key or tool; tests beside every touched file; git call is outside both inner runExclusive blocks and bounded at 3s — the pre-existing McpAdapter.ts:296 global wrap still applies and was reported honestly. Docs landed in SCHEMA.md + MCP_SERVER.md.\n\nNit (non-blocking): a handoffNote release for a DONE/ARCHIVED or missing task still spawns one git subprocess before the inner mutex rejects it."
+  "reviewSummary": "APPROVED. Re-ran: verification command + diskState.test.ts -> 39 passed; full `npm test` -> 49 files/758 tests, zero regressions; `tsc --noEmit` exit 0. Read whole diff (7 modified + 2 new, 346 insertions); scope matches plan.\n\nDoD1: releaseTask.ts:85-99 computes pre-mutex beside handoff validation, gated on params.handoffNote, try/catch, assigns only non-empty strings so failure leaves the key absent. Both persistence branches carry it (:174 repair, :236 normal). Tested: stored + diskStateCaptured; undefined -> `'diskState' in note === false`; throw -> release still succeeds.\n\nDoD2: claimNextTask.ts:384-391 stashes priorHandoffs[0].diskState inside runExclusive; :437-461 recomputes AFTER the block, returns staleHandoffDiskState:true + appended hint. Test asserts flag, hint appended not replaced, helper called once with state.projectPath.\n\nDoD3: four early returns (no stored value, undefined recompute, throw, equal) all tested, plus newest-handoff-only and two zero-call assertions keeping idle polling subprocess-free.\n\nExtra checks: StateManager has zero priorHandoffs references so nothing drops diskState on write, and the claim fixture writes diskState to disk then state.load()s it, proving the round trip. Real `git status --porcelain=v2 --branch` output here matches the test fixture shape exactly. git resolves to git.exe (not a .cmd shim) so execFile+args array is correct on Windows; windowsHide/timeout 3000/8MB maxBuffer present. Zero forbidden-pattern hits.\n\nRails: no new settings key or tool; tests beside every touched file; git call is outside both inner runExclusive blocks and bounded at 3s — the pre-existing McpAdapter.ts:296 global wrap still applies and was reported honestly. Docs landed in SCHEMA.md + MCP_SERVER.md.\n\nNit (non-blocking): a handoffNote release for a DONE/ARCHIVED or missing task still spawns one git subprocess before the inner mutex rejects it.",
+  "planRevision": 0
 }

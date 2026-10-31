@@ -1,0 +1,194 @@
+{
+  "id": "task-a9824bc1a509462da88294d364c0a9dc",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "bug: submit_plan rail-refusal documentation describes obsolete wire error",
+  "description": "docs/MCP_SERVER.md submit_plan Notes says violations return message RAIL_VIOLATION and error.data as a violation string. Production submitPlan.ts throws CONSTRAINT_VIOLATION with a guidance message; McpAdapter restricts wire data. Reconcile the existing note with actual adapter behavior; discovered during CQ-F03, left untouched as outside its contract-doc scope.",
+  "definitionOfDone": [
+    "submit_plan rail refusal documentation matches its handler and McpAdapter serialization."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Pin the submit_plan rail refusal as it crosses the MCP wire, in packages/moe-daemon/src/tools/submitPlan.test.ts (LF). The file has no vi.mock, so appending is safe (mem gotcha-vi-mock-hoisted-into-append-target).\n\nStructure:\n- Append ONE new top-level describe('rail refusal on the MCP wire') at the very end of the file, after the 'planRevision' block.\n- Put a section-local `import { McpAdapter, type JsonRpcResponse } from '../server/McpAdapter.js';` directly above it. The file already uses mid-file imports: ToolTestHarness at ~1113, amendPlanStepTool at ~1177.\n- Give it its own `const h = new ToolTestHarness()`.\n- beforeEach: h.init(); h.setupMoeFolder({ globalRails: { techStack: [], forbiddenPatterns: ['rm -rf'], requiredPatterns: ['error handling'], formatting: '', testing: '', customRules: [] } }); h.createEpic(); h.createTask({ status: 'PLANNING' }); await h.state.load().\n- afterEach: vi.restoreAllMocks(); h.cleanup().\n\nWrite one it.each with three rows. Send each as `await new McpAdapter(h.state).handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'moe.submit_plan', arguments: { taskId: 'task-1', ...args } } }) as JsonRpcResponse`:\n(a) forbidden in a step: steps [{ description: 'error handling, then rm -rf build' }] → violation 'Forbidden pattern: rm -rf'.\n(b) required missing: steps [{ description: 'Step 1' }] → 'Required pattern missing: error handling'.\n(c) forbidden only in the contract: steps [{ description: 'error handling' }], executionContract: { invariants: ['rm -rf build'] } → 'Forbidden pattern: rm -rf'.\n\nAssert for every row:\n- response.result is undefined and response.id is 1.\n- `expect(response.error).toStrictEqual({ code: -32003, message: expect.stringMatching(...), data: { tool: 'moe.submit_plan', codeName: 'CONSTRAINT_VIOLATION' } })`. The regex is anchored on the literal prefix `[CONSTRAINT_VIOLATION] Rail violation: \"<violation>\". Default action: `. Build it by escaping that literal with a small helper, not by hand-typed backslashes.\n- The message contains 'moe.propose_rail' and 'taskId: \"task-1\"'.\n- toStrictEqual on data proves the wire carries exactly those two keys: no violation, no suggestedAction, no stack.\n- No write: the bytes of h.moePath/tasks/task-1.json read just before the call are identical after it, and h.state.getTask('task-1') is still PLANNING with implementationPlan [].\n\nThis is a characterization test. The handler and adapter are already correct; the docs are what is wrong. So the test is expected to PASS on its first run. Its bite is proven in the final step's mutation pass, never by editing production code here.\nError handling: this task changes no production code.\ntsc does not type-check *.test.ts here (tsconfig excludes them, mem gotcha-daemon-tests-not-type-checked), so keep types simple and let vitest prove the test runs.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "startedAt": "2026-10-25T09:00:53.227Z",
+      "completedAt": "2026-10-25T09:01:43.277Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Docs. Edit them with the Edit tool only, never sed/python/heredoc writes, so this session's touchedFiles witnesses the paths (mem gotcha-contested-path-silently-skipped-from-landing). Both files are LF. Anchor by text, not line numbers.\n\nPRE-CHECK: `git diff --stat -- docs/MCP_SERVER.md docs/TROUBLESHOOTING.md` must print nothing. This task waits on F04 (task-076a0bd3f09e4ce4ae4bbc6bb122d2ed), whose +9-line 'Durable authorization' block in MCP_SERVER.md's Plan approval section must already be committed. If either file is dirty, edit neither: call moe.report_blocked naming the owner, so its bytes land first and no peer hunk rides in this commit.\n\n(1) docs/MCP_SERVER.md, '## MCP Protocol Notes'. Replace the two stale bullets 'Errors are JSON-RPC errors with `code: -32000` and `message` set to the error string.' and 'Rails violations include details in `error.data`.' with what McpAdapter's tools/call catch sends:\n- A tool's MoeError keeps its own code: -32602 INVALID_INPUT, -32001 NOT_FOUND, -32002 INVALID_STATE/STATE_CONFLICT, -32003 NOT_ALLOWED/CONSTRAINT_VIOLATION, -32000 INTERNAL_ERROR.\n- Its message is `[<codeName>] <text>`, where codeName may be a specific name such as TASK_NOT_CLAIMED.\n- error.data is exactly `{ tool, codeName }`.\n- Any other tool exception is -32000 with its message and `data: { tool }`. An unknown tool is -32601.\n- MoeError.context is logged in the daemon and never sent. Clients key on data.codeName and read details from the message.\nThis must agree with the existing claim_next_task sentence 'a wire refusal carries `{ code, message, data: { tool, codeName } }` only'.\n\n(2) docs/MCP_SERVER.md, '### moe.submit_plan' Notes. Replace 'On violation, returns JSON-RPC error with `message: \"RAIL_VIOLATION\"` and `error.data` set to the violation string.' with a **Rail refusal:** bullet stating:\n- The plan text (each step's description plus its normalized affectedFiles and newFiles) is matched by case-insensitive substring: forbiddenPatterns first, then the global requiredPatterns. The execution contract text is scanned for forbidden patterns only.\n- The first failure is refused before any write, and before the plan-size and path-existence gates.\n- The refusal is code -32003 with message `[CONSTRAINT_VIOLATION] Rail violation: \"<violation>\". Default action: …`. <violation> is the JSON-quoted 'Forbidden pattern: <p>' or 'Required pattern missing: <p>', and the message goes on to name the moe.propose_rail escape hatch.\n- error.data is `{ tool: \"moe.submit_plan\", codeName: \"CONSTRAINT_VIOLATION\" }`. The violation and suggestedAction stay in the daemon-side MoeError.context.\n- The plan-size refusal shares -32003/CONSTRAINT_VIOLATION, so a client tells the two apart by the 'Rail violation:' message prefix.\n\n(3) docs/TROUBLESHOOTING.md: the '#### \"RAIL_VIOLATION\"' entry. No inbound anchor links exist (grep-verified). Retitle it '#### \"[CONSTRAINT_VIOLATION] Rail violation: …\" (moe.submit_plan)'. Replace the old 'Check epic and task rails' advice with a **Solution:** stating:\n- Forbidden pattern: reword the step description, path or contract text that contains it (case-insensitive substring).\n- Required pattern missing: add the global phrase to the step text. Contract text does not count.\n- Epic and task rails are guidance and never produce this refusal.\n- A rail that is genuinely wrong for the task goes to moe.propose_rail, as the message spells out. Never loop on resubmits.\n\nKeep each passage as short as the notes around it, and change nothing else. The plan-size note's suggestedAction and the existence gate's context.* wording are out of scope; if they now read as misleading, list them as hand-forward items for CQ-F12 (task-72184c6505cc41e8b6066732011ffb70) in the completion summary. No .moe edits and no regeneration: these docs are not bundled into initFiles/skillFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "MCP_SERVER.md edits were already swept into peer checkpoint 27192ed (qa wrapper); bytes are on the branch.",
+      "startedAt": "2026-10-25T09:01:43.865Z",
+      "completedAt": "2026-10-25T09:01:46.740Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Single verification gate, run fresh after steps 1-2:\n`cd packages/moe-daemon && npx vitest run src/tools/submitPlan.test.ts src/server/McpAdapter.test.ts src/util/rails.test.ts src/state/executionContract.test.ts`\nIt must exit 0. Its command, exitCode and outputTail are the complete_task verification.\n\nThe narrow scope is deliberate:\n- this task changes no production code;\n- these four suites pin the handler, the adapter serialization, the rails matcher and the contract scan that the docs now describe;\n- CQ-F12 owns the epic's full regression.\n\nIn WSL, run from a native-Linux snapshot (mem gotcha-linux-vitest-reuse-native-node-modules, mem gotcha-daemon-tests-ambient-moe-worker-id):\n- git archive HEAD;\n- overlay this task's three files and cmp them against the worktree;\n- symlink a native Linux node_modules;\n- use a Linux-only PATH with MOE_* scrubbed.\nNever npm install over the shared Windows node_modules. Record the snapshot's HEAD sha.\nReport any failure honestly, by name: no skip, no weakening. affectedFiles is empty on purpose.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-10-25T09:01:47.326Z",
+      "completedAt": "2026-10-25T09:01:58.635Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review (load adversarial-self-review).\n\nMutation proof, in a scratch copy of the step-3 snapshot and never the shared checkout (mem pattern-red-proof-by-scratch-tree-mutation-vitest). Each mutant must turn the new 'rail refusal on the MCP wire' test red; name the failing rows each time:\n(a) McpAdapter sends `{ tool, codeName, ...toolError.context }` as error.data. All rows go red.\n(b) assertPlanRails' message says 'RAIL_VIOLATION' instead of 'Rail violation'. All rows go red.\n(c) submitPlan's second assertPlanRails call (the contract scan) is removed. Row (c) goes red.\nThen restore the pristine copy.\n\nDoc checks:\n- `grep -rn RAIL_VIOLATION docs/` prints nothing.\n- The documented code, message prefix and data match what the test asserts. Quote one row's observed message prefix in the summary.\n- `git diff --stat` shows only the three planned files, still LF.\n- No .moe byte was changed by hand.\n- The new describe actually ran: vitest counts its three rows.\n\nAttack questions:\n- Could a reader still believe context or the violation arrives in error.data?\n- Does any remaining sentence in MCP_SERVER.md still claim errors are always -32000?\n- Does the troubleshooting fix still send people to epic/task rails?\n\nBoard note for the completion summary: isEpicFinal reads true for this row only because its order (226.5) sorts after CQ-F12. F12 (task-72184c6505cc41e8b6066732011ffb70) stays the epic's integration and hardening task, so do not widen scope.\nIf the review changes any byte, re-run the step-3 command and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Mutants (a) data spread: 3/3 red; (b) RAIL_VIOLATION text: 3/3 red; (c) contract scan removed: only 'forbidden only in contract' red. Scratch tree restored.",
+      "startedAt": "2026-10-25T09:01:59.196Z",
+      "completedAt": "2026-10-25T09:02:15.183Z"
+    }
+  ],
+  "planRevision": 9,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted on the human's 2026-10-25 instruction \"move more from backlog\". Worker-filed LOW docs bug with no dependencies: the submit_plan rail-refusal notes in docs/MCP_SERVER.md describe an obsolete wire error.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 226.5,
+  "comments": [
+    {
+      "id": "comment-bceb6545d37a44eabe58a45852739e8a",
+      "author": "architect-26ba32c3",
+      "content": "Plan rev 1 (architect-26ba32c3, 2026-10-25): docs plus one characterization test, 4 steps, 3 files, standard tier, medium effort (docs/tests-only).\n\nWhat is actually on the wire, verified in code:\n- Code -32003.\n- Message `[CONSTRAINT_VIOLATION] Rail violation: \"Forbidden pattern: X\" | \"Required pattern missing: X\". Default action: … moe.propose_rail …`.\n- `error.data` is exactly `{ tool: \"moe.submit_plan\", codeName: \"CONSTRAINT_VIOLATION\" }`.\n- MoeError.context (violation, suggestedAction) never leaves the daemon.\n\nStale passages to fix:\n- MCP_SERVER.md 'MCP Protocol Notes' (errors are always -32000; rail details are in error.data);\n- the submit_plan RAIL_VIOLATION note;\n- TROUBLESHOOTING.md '\"RAIL_VIOLATION\"', which also wrongly points at epic/task rails.\n\nSerialization:\n- dependsOn F04 task-076a0bd3. Its uncommitted +9-line block is in docs/MCP_SERVER.md. With the dependency, this row's planned paths no longer contest F04's landing, and this row waits for those bytes to be committed.\n- c2cb5cf7 now dependsOn this row, because it also plans both docs.\n\nisEpicFinal:true here is an order artifact (226.5 sorts after F12's 120). CQ-F12 stays the epic's hardening task, so the gate is a focused 4-suite vitest run.",
+      "timestamp": "2026-10-25T08:40:42.591Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T21:58:45.306Z",
+  "updatedAt": "2026-10-25T09:17:36.626Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-25T08:28:05.094Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-25T09:17:07.681Z",
+    "wallClockMs": 2942587
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "worker-07cd2c56",
+    "qa-b0c1741e"
+  ],
+  "dependsOn": [
+    "task-076a0bd3f09e4ce4ae4bbc6bb122d2ed"
+  ],
+  "tier": "standard",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T08:40:12.535Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected alternatives:\n- Docs-only with no test: nothing pinned the wire shape, which is how the note drifted.\n- A markdown-reading doc guard (pattern-doc-contract-guard-test): YAGNI for three passages. The final grep covers RAIL_VIOLATION.\n- Putting the wire test in McpAdapter.test.ts: that file vi.mocks tools/index.js, so the real submit_plan is not available there.\n- Making McpAdapter forward MoeError.context: out of scope. Context deliberately stays daemon-side, and the adapter comment says so for security.",
+    "codebaseInsights": "Observed facts (HEAD c9c2643):\n- submitPlan.ts assertPlanRails (~152-178) throws MoeError(-32003, 'Rail violation: ${JSON.stringify(v)}. Default action: … moe.propose_rail { … taskId: \"<id>\" … }', context { violation, suggestedAction: moe.propose_rail }, 'CONSTRAINT_VIOLATION'). The MoeError constructor prefixes '[CONSTRAINT_VIOLATION] '.\n- Two call sites: steps text (~387), then the contract text scanned with requiredPatterns: [] (~394). Both run before the plan-size gate (~400) and the existence gate.\n- util/rails.ts checkPlanRails: lowercase substring; forbiddenPatterns first ('Forbidden pattern: X'), then the global requiredPatterns ('Required pattern missing: X'). Epic and task rails are not enforced.\n- McpAdapter.ts tools/call catch (~311-326): a MoeError becomes errorResponse(id, code, message, { tool, codeName }); any other error becomes -32000 with { tool }. Unknown tool -32601; missing tool name -32602.\n- McpAdapter.test.ts:277 pins data toEqual { tool, codeName } for a generic MoeError.\n- moe-proxy index.ts (~375-397) forwards error responses verbatim; only tools/list results are rewritten.\n- The submit_plan outer catch (~746) retries only INVALID_INPUT with missingPaths, so a rail refusal is rethrown unchanged.\n- Stale docs found: MCP_SERVER.md:90-91 and :324, TROUBLESHOOTING.md:210-212. Nothing links to the troubleshooting anchor.",
+    "risks": "File overlap and landing:\n- F04 (task-076a0bd3) holds an uncommitted +9-line block in docs/MCP_SERVER.md. This task depends on F04, and step 2 pre-checks that both docs are clean.\n- c2cb5cf7 (BLOCKED) also plans edits to MCP_SERVER.md and TROUBLESHOOTING.md. It now depends on this task (and on F04 and ab6aac94), so its plan-declared paths no longer contest these landings.\n- Use the Edit tool for the docs. A shell-written contested path has no touchedFiles witness and is silently left out of the commit.\n\nOther:\n- The vitest run must come from a native-Linux snapshot.\n- isEpicFinal:true is an order artifact (226.5 > F12's 120); F12 owns the epic hardening.\n- The memory gotcha-moeerror-context-not-on-wire said MCP errors carry code+message only. data { tool, codeName } is also sent; corrected 2026-10-25.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/util/rails.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/server/McpAdapter.test.ts",
+      "packages/moe-daemon/src/util/errors.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "docs/MCP_SERVER.md",
+      "docs/TROUBLESHOOTING.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T08:40:12.641Z",
+  "workStartedAt": "2026-10-25T09:00:53.227Z",
+  "reviewStartedAt": "2026-10-25T09:02:19.551Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx vitest run src/tools/submitPlan.test.ts src/server/McpAdapter.test.ts src/util/rails.test.ts src/state/executionContract.test.ts (native-Linux snapshot of HEAD d435d6d + task test file, MOE_* scrubbed)",
+    "exitCode": 0,
+    "outputTail": "Test Files  4 passed (4)\n      Tests  206 passed (206)",
+    "reportedAt": "2026-10-25T09:02:19.551Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/submitPlan.test.ts",
+    "docs/MCP_SERVER.md",
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-076a0bd3f09e4ce4ae4bbc6bb122d2ed.json",
+    ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+    ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json"
+  ],
+  "completionSummary": "submit_plan rail-refusal docs now match handler and adapter. MCP_SERVER.md: Protocol Notes (per-MoeError codes, message '[codeName] text', data exactly {tool, codeName}, context never sent) and a submit_plan 'Rail refusal' bullet (-32003, '[CONSTRAINT_VIOLATION] Rail violation: \"Forbidden pattern: rm -rf\". Default action: ', plan-size refusal distinguished by prefix). TROUBLESHOOTING.md entry retitled, no longer points at epic/task rails. Added 3-row characterization test 'rail refusal on the MCP wire' in submitPlan.test.ts (strict error shape, no-write bytes). Mutants killed: adapter data spread 3/3, RAIL_VIOLATION message 3/3, contract scan removed (contract row). grep RAIL_VIOLATION docs/ empty. Note: MCP_SERVER.md edits were swept into peer checkpoint 27192ed before my wrapper landed; bytes are on the branch. Linux snapshot gate 206 passed. No hand-forwards for F12. isEpicFinal is an order artifact; F12 remains the hardening task.",
+  "commits": [
+    {
+      "sha": "4d1ba5918cf40ca22a20366821ab3bc98e3e1e33",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-25T09:00:26Z",
+      "paths": [
+        ".moe/tasks/task-076a0bd3f09e4ce4ae4bbc6bb122d2ed.json",
+        ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+        ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json",
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-25T09:02:46.848Z",
+      "treeId": "a606787222af2a91a395e5a2156df5d5642c7d33",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ad9d82c6120aa94c3016f1ae195da6a03baa2c18",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T09:14:35Z",
+      "paths": [
+        ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T09:17:36.626Z",
+      "treeId": "f71114e4ce3e1ba56b2de5248354d20d98a6589a",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/MCP_SERVER.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T09:14:35Z",
+    "at": "2026-10-25T09:17:36.626Z"
+  },
+  "completedAt": "2026-10-25T09:17:07.681Z",
+  "reviewCompletedAt": "2026-10-25T09:17:07.681Z",
+  "reviewSummary": "APPROVED. DoD (one item: submit_plan rail refusal docs match handler + McpAdapter serialization) met.\n\nCommits: completion 4d1ba59 on moe/work-2026-10-24 (test + TROUBLESHOOTING.md). The MCP_SERVER.md edits were swept into peer checkpoint 27192ed (git show confirmed; bytes on branch; shared-tree status of all 4 files clean). Owned diff ~58 LOC, 3 planned files, no production code changed.\n\nDocs vs code checked: McpAdapter.ts:311-325 sends MoeError code/message with data exactly {tool, codeName} (context only logged); other exceptions -32000 + {tool}; unknown tool -32601. errors.ts codes and '[codeName] text' format match. submitPlan.ts assertPlanRails message 'Rail violation: <JSON>. Default action: ... moe.propose_rail', CONSTRAINT_VIOLATION; rails run before plan-size and existence gates; contract scan forbidden-only; planText includes affectedFiles+newFiles. Plan-size refusal shares -32003, doc says tell apart by 'Rail violation:' prefix. grep RAIL_VIOLATION across repo (md/ts/kt/sh/ps1, excl node_modules): empty. TROUBLESHOOTING no longer points at epic/task rails.\n\nRe-ran gate on native-Linux git-archive snapshot of HEAD 0814323 (task files cmp-identical, MOE_* scrubbed): npx vitest run submitPlan.test.ts McpAdapter.test.ts rails.test.ts executionContract.test.ts -> 4 files, 206 passed. New describe 'rail refusal on the MCP wire' ran 3 rows with strict toStrictEqual on error shape, anchored message prefix, no-write byte compare. My own mutant in scratch copy (adapter spreads toolError.context into data) turned all 3 red; shared tree untouched.\n\nNot verified: CQ-F12 owns epic full regression (isEpicFinal here is an order artifact). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

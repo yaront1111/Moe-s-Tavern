@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as net from 'net';
+import type * as http from 'http';
 import { spawn } from 'child_process';
 import WebSocket from 'ws';
 import type {
@@ -97,12 +98,387 @@ function allowlistedErrorContext(context: unknown): DaemonErrorContext | undefin
     return Object.keys(picked).length > 0 ? picked : undefined;
 }
 
-function pathsMatch(a: string, b: string): boolean {
-    const na = path.resolve(a);
-    const nb = path.resolve(b);
-    return process.platform === 'win32'
-        ? na.toLowerCase() === nb.toLowerCase()
-        : na === nb;
+// Comparison-only twin of moe-proxy/src/utils.ts: absolute POSIX paths keep case on every OS.
+const WINDOWS_FORM = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/;
+const WSL_SHARE = /^\/\/(?:wsl\$|wsl\.localhost)\/[^/]+(\/.*)?$/i;
+const MNT_DRIVE = /^\/mnt\/([A-Za-z])(?:\/(.*))?$/;
+
+export function comparableProjectPath(projectPath: string): string {
+    const raw = projectPath.trim();
+    const abs = WINDOWS_FORM.test(raw) || raw.startsWith('/') ? raw : path.resolve(raw);
+    if (!WINDOWS_FORM.test(abs)) return posixKey(abs);
+    const s = abs.replace(/\\/g, '/');
+    const share = WSL_SHARE.exec(s);
+    if (share) return posixKey(share[1] ?? '/');
+    const unc = s.startsWith('//');
+    return ((unc ? '//' : '') + collapse(s, unc ? 2 : 1)).toLowerCase();
+}
+
+function posixKey(p: string): string {
+    const key = '/' + collapse(p, 0);
+    const mnt = MNT_DRIVE.exec(key);
+    return mnt ? `${mnt[1]}:${mnt[2] ? `/${mnt[2]}` : ''}`.toLowerCase() : key;
+}
+
+function collapse(p: string, keep: number): string {
+    const kept: string[] = [];
+    for (const segment of p.split('/').filter(s => s !== '' && s !== '.')) {
+        if (segment !== '..') kept.push(segment);
+        else if (kept.length > keep) kept.pop();
+    }
+    return kept.join('/');
+}
+
+export function pathsMatch(a: string, b: string): boolean {
+    return comparableProjectPath(a) === comparableProjectPath(b);
+}
+
+export function isAbsoluteAnyOs(value: string): boolean {
+    return /^(?:[a-zA-Z]:[\\/]|\\{2}[^\\/]|\/)/.test(value);
+}
+
+// daemon.json is repository content: the cap matches the daemon, proxy, Claude-plugin and JetBrains readers.
+const MAX_DAEMON_JSON_BYTES = 64 * 1024;
+
+/** Read daemon.json through one descriptor, at most cap + 1 bytes; a larger file throws like an unparseable one. */
+export function readDaemonJsonText(filePath: string): string {
+    return readCappedText(filePath, MAX_DAEMON_JSON_BYTES, 'daemon.json is larger than 64 KiB');
+}
+
+type DaemonIdentity = { kind: 'same' } | { kind: 'foreign'; projectPath: string } | { kind: 'unknown' };
+interface DaemonEndpoint {
+    host: string;
+    port: number;
+    fromConfig: boolean;
+    pid?: number;
+    startedAt?: string;
+}
+
+function classifyIdentity(status: number | undefined, body: string, projectPath: string): DaemonIdentity {
+    try {
+        if (status !== 200 && status !== 503) return { kind: 'unknown' };
+        const parsed: unknown = JSON.parse(body);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'unknown' };
+        const served = (parsed as Record<string, unknown>).projectPath;
+        if (typeof served !== 'string' || !isAbsoluteAnyOs(served)) return { kind: 'unknown' };
+        return pathsMatch(served, projectPath) ? { kind: 'same' } : { kind: 'foreign', projectPath: served };
+    } catch { return { kind: 'unknown' }; }
+}
+
+/** Bounded overall deadline (including trickled headers/body); unknown preserves legacy adoption. */
+export function probeDaemonIdentity(host: string, port: number, projectPath: string,
+    { timeoutMs = 1500 }: { timeoutMs?: number } = {}): Promise<DaemonIdentity> {
+    // Lazy builtins preserve existing single-file vm harness dependency maps.
+    return Promise.all([import('http'), import('url')]).then(([http, { URL }]) => new Promise<DaemonIdentity>(resolve => {
+        let done = false;
+        let req: http.ClientRequest | undefined;
+        const timer = setTimeout(() => finish({ kind: 'unknown' }), timeoutMs);
+        function finish(identity: DaemonIdentity): void {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            req?.destroy();
+            resolve(identity);
+        }
+        try {
+            // Parse exactly the URL WebSocket dials; do not forward userinfo or follow redirects.
+            const url = new URL(`ws://${host}:${port}/ws`);
+            const hostname = url.hostname.replace(/^\[|\]$/g, '');
+            req = http.request({ hostname, port: url.port || 80, path: '/health', method: 'GET', timeout: timeoutMs }, res => {
+                const chunks: Buffer[] = [];
+                let total = 0;
+                res.on('data', (chunk: Buffer) => {
+                    if (done) return;
+                    total += chunk.length;
+                    if (total > MAX_DAEMON_JSON_BYTES) { finish({ kind: 'unknown' }); return; }
+                    chunks.push(chunk);
+                });
+                res.on('end', () => finish(classifyIdentity(res.statusCode, Buffer.concat(chunks).toString('utf8'), projectPath)));
+                res.on('error', () => finish({ kind: 'unknown' }));
+                res.on('aborted', () => finish({ kind: 'unknown' }));
+            });
+            req.on('timeout', () => finish({ kind: 'unknown' }));
+            req.on('error', () => finish({ kind: 'unknown' }));
+            req.end();
+        } catch { finish({ kind: 'unknown' }); }
+    })).catch(() => ({ kind: 'unknown' }));
+}
+
+/** Best-effort compare/delete; rereading must not run the destructive project-path checks. */
+export function removeDaemonJsonIfUnchanged(file: string, expected: Pick<DaemonEndpoint, 'pid' | 'port' | 'startedAt'>): void {
+    try {
+        const current = JSON.parse(readDaemonJsonText(file)) as Record<string, unknown> | null;
+        if (current && current.pid === expected.pid && current.port === expected.port && current.startedAt === expected.startedAt) {
+            fs.unlinkSync(file);
+            log('Removed stale daemon.json naming the foreign daemon');
+        }
+    } catch (error) { log(`Kept daemon.json: ${String(error)}`); }
+}
+
+function readCappedText(filePath: string, cap: number, tooLarge: string): string {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+        const buf = Buffer.alloc(cap + 1);
+        let total = 0;
+        while (total < buf.length) {
+            const n = fs.readSync(fd, buf, total, buf.length - total, null);
+            if (n === 0) { break; }
+            total += n;
+        }
+        if (total > cap) {
+            throw new Error(tooLarge);
+        }
+        return buf.toString('utf8', 0, total);
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+// ---- Protected runtime selection: a mirror of JetBrains RuntimeSelectionPolicy (CQ-R01) ----
+// Nothing here throws to its callers. Errors are compared by `code`, never instanceof (cross-realm safe).
+
+export type RuntimeProfile = 'legacy' | 'protected';
+export type ArtifactSelection = { accepted: string } | { rejected: string };
+
+const MAX_PROJECT_JSON_BYTES = 1024 * 1024;
+const DEVICE_PREFIX = /^\/\/[?.]\/(unc\/)?/i;
+const DRIVE_ROOT = /^[A-Za-z]:\/$/;
+// Projects an explicit verified-local read pinned for this extension-host session.
+const pinnedProjects = new Set<string>();
+
+export const defaultFoldCase = process.platform === 'win32' || process.platform === 'darwin';
+
+const errorCode = (err: unknown): unknown => (err as { code?: unknown } | null | undefined)?.code;
+const errorText = (err: unknown): string => String((err as { message?: unknown } | null | undefined)?.message ?? err);
+
+function realPathOrNull(p: string): string | null {
+    try { return fs.realpathSync.native(p); } catch { return null; }
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
+
+/** `\` becomes `/`, a `//?/` or `//./` device prefix goes (`//?/UNC/x` becomes `//x`), trailing `/` goes except on a root. */
+export function comparablePath(p: string, foldCase: boolean): string {
+    let value = p.replace(/\\/g, '/').replace(DEVICE_PREFIX, (_match, unc: string | undefined) => (unc ? '//' : ''));
+    while (value.length > 1 && value.endsWith('/') && !DRIVE_ROOT.test(value)) { value = value.slice(0, -1); }
+    return foldCase ? value.toUpperCase().toLowerCase() : value;
+}
+
+/** `child` is `parent` or under it on a segment boundary; both already in comparable form. */
+export function isWithin(child: string, parent: string): boolean {
+    return child === parent || child.startsWith(parent.endsWith('/') ? parent : `${parent}/`);
+}
+
+/** The only place protected selection takes the wrapper, daemon and proxy from (bundle-assets.mjs). */
+export function installedRoot(extensionPath: string): string {
+    return path.join(extensionPath, 'bundled');
+}
+
+/** Never throws: an unreadable or untrusted `.moe/project.json` answers 'protected'. */
+export function runtimeProfile(basePath: string): RuntimeProfile {
+    try {
+        if (basePath.trim() === '') { return 'legacy'; }
+        const key = comparablePath(realPathOrNull(basePath) ?? path.resolve(basePath), defaultFoldCase);
+        if (pinnedProjects.has(key)) { return 'protected'; }
+        if (!declaresVerifiedLocal(path.join(basePath, '.moe', 'project.json'))) { return 'legacy'; }
+        pinnedProjects.add(key);
+        return 'protected';
+    } catch (err) {
+        log(`Moe runtime selection fails closed to the protected profile: ${errorText(err)}`);
+        return 'protected';
+    }
+}
+
+/** True for exactly "verified-local", false for absent/legacy/observe; throws for anything else. */
+function declaresVerifiedLocal(file: string): boolean {
+    try { fs.lstatSync(file); } catch (err) { if (errorCode(err) === 'ENOENT') { return false; } throw err; }
+    // Checked before open: opening a FIFO or device would block the extension host.
+    if (!fs.statSync(file).isFile()) { throw new Error('project.json is not a regular file'); }
+    const text = readCappedText(file, MAX_PROJECT_JSON_BYTES, 'project.json is larger than 1 MiB');
+    // Buffer#toString keeps a byte order mark, which the daemon's JSON.parse would reject.
+    if (text.startsWith('\uFEFF')) { throw new Error('project.json starts with a byte order mark'); }
+    const root: unknown = JSON.parse(text);
+    if (!isPlainObject(root)) { throw new Error('project.json is not a JSON object'); }
+    if (!hasOwn(root, 'settings')) { return false; }
+    const settings = root.settings;
+    if (!isPlainObject(settings)) { throw new Error('settings is not a JSON object'); }
+    if (!hasOwn(settings, 'executionProfile')) { return false; }
+    const profile = settings.executionProfile;
+    if (profile === 'legacy' || profile === 'observe') { return false; }
+    if (profile === 'verified-local') { return true; }
+    throw new Error('executionProfile is not legacy, observe or verified-local');
+}
+
+/**
+ * `relative` under `root`, accepted as its real file only inside the real root (exact
+ * comparison) and outside the real project (folded where the file system folds case).
+ * The reason reaches the UI; the absolute path only the log.
+ */
+export function installedArtifact(root: string, relative: string, basePath: string, foldCase = defaultFoldCase): ArtifactSelection {
+    const realRoot = realPathOrNull(root);
+    if (realRoot === null) { return { rejected: 'installed Moe runtime not found' }; }
+    return selectInstalledFile(path.join(root, relative), `installed ${relative}`, basePath, foldCase, realRoot);
+}
+
+/** A bare name is never resolved by spawn; the first selected candidate must pass these checks. */
+export function installedExecutable(p: string | undefined, basePath: string, foldCase = defaultFoldCase): ArtifactSelection {
+    if (!p?.trim()) { return { rejected: 'node executable not found' }; }
+    if (!isFullyQualified(p)) { return { rejected: 'node executable is not an absolute path' }; }
+    return selectInstalledFile(p, 'node executable', basePath, foldCase);
+}
+
+function selectInstalledFile(file: string, label: string, basePath: string, foldCase: boolean, realRoot?: string): ArtifactSelection {
+    const notLocal = 'the project directory is not a plain local Windows path';
+    if (isWindowsAlias(basePath)) { return { rejected: notLocal }; }
+    const project = realPathOrNull(basePath);
+    if (project === null) { return { rejected: 'the project directory cannot be resolved' }; }
+    const rejected = (reason: string, detail: string): ArtifactSelection => {
+        log(`Moe protected runtime selection refused: ${reason} (${detail})`);
+        return { rejected: reason };
+    };
+    if (isWindowsAlias(project)) { return rejected(notLocal, project); }
+    let real: string;
+    try {
+        real = fs.realpathSync.native(file);
+        if (!fs.statSync(real).isFile()) { return rejected(`${label} is not a regular file`, real); }
+    } catch (err) {
+        return rejected(errorCode(err) === 'ENOENT' ? `${label} not found` : `${label} cannot be resolved`, errorText(err));
+    }
+    if (isWindowsAlias(real)) { return rejected(`${label} is not a plain local Windows path`, real); }
+    if (realRoot !== undefined && !isWithin(comparablePath(real, false), comparablePath(realRoot, false))) {
+        return rejected(`${label} resolves outside the installed Moe runtime`, real);
+    }
+    if (isWithin(comparablePath(real, foldCase), comparablePath(project, foldCase))) {
+        return rejected(`${label} resolves inside the project`, real);
+    }
+    return { accepted: real };
+}
+
+/** Windows `\x`, `/x` and `C:x` follow the current drive or directory; only `C:\` and `\\` forms (either slash) qualify. */
+export function isFullyQualified(p: string, windows = process.platform === 'win32'): boolean {
+    return windows ? /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(p) : path.posix.isAbsolute(p);
+}
+
+/** On Windows only plain drive paths compare: Win32 strips segment-ending dots/spaces Node's \\?\ fs keeps; UNC, device and rooted forms can name any folder. */
+export function isWindowsAlias(p: string, windows = process.platform === 'win32'): boolean {
+    return windows && (/[. ](?:[\\/]|$)/.test(p) || !/^[A-Za-z]:\//.test(comparablePath(p, false)));
+}
+
+export function isOutsideProject(p: string, basePath: string, foldCase = defaultFoldCase): boolean {
+    try {
+        if (!isFullyQualified(p) || isWindowsAlias(basePath)) { return false; }
+        const forms = pathForms(p), projects = pathForms(basePath);
+        if ([...forms, ...projects].some(form => isWindowsAlias(form))) { return false; }
+        return !forms.some(form => projects.some(project => isWithin(comparablePath(form, foldCase), comparablePath(project, foldCase))));
+    } catch { return false; }
+}
+
+function pathForms(p: string): string[] {
+    const forms = [path.resolve(p)];
+    try { forms.push(fs.realpathSync.native(p)); } catch (err) {
+        // Missing PATH directories are harmless; permission/invalid-path errors must fail closed.
+        if (errorCode(err) !== 'ENOENT') { throw err; }
+        // A folder created there later is searched where its nearest existing ancestor really is (a link, 8.3 name, subst or mapped drive).
+        if (process.platform === 'win32' && !isWindowsAlias(forms[0])) { forms.push(missingRealPath(forms[0])); }
+    }
+    return forms;
+}
+
+/** The nearest existing ancestor's real path plus the missing tail; throws for a level that exists but does not resolve, or no existing ancestor. */
+function missingRealPath(resolved: string): string {
+    const tail: string[] = [];
+    for (let dir = resolved; ;) {
+        let exists = true;
+        try { fs.lstatSync(dir); } catch (err) {
+            if (errorCode(err) !== 'ENOENT') { throw err; }
+            exists = false;
+        }
+        if (exists) { throw new Error('an existing path does not resolve'); }
+        const parent = path.dirname(dir);
+        if (parent === dir) { throw new Error('no existing ancestor'); }
+        tail.unshift(path.basename(dir));
+        dir = parent;
+        try { return path.join(fs.realpathSync.native(dir), ...tail); } catch (err) {
+            if (errorCode(err) !== 'ENOENT') { throw err; }
+        }
+    }
+}
+
+const unquoted = (entry: string): string => entry.trim().replace(/^"(.*)"$/, '$1');
+function safeStat(file: string): fs.Stats | undefined {
+    try { return fs.statSync(file); } catch { return undefined; }
+}
+function pathNames(env: NodeJS.ProcessEnv, windows: boolean): string[] {
+    return windows ? Object.keys(env).filter(key => key.toUpperCase() === 'PATH').sort() : ['PATH'];
+}
+
+/** Validated spellings only: libuv's Windows PATH search strips an edge quote (`C:\proj'` searches `C:\proj`). */
+export function protectedPathEntries(value: string, basePath: string, delimiter = path.delimiter): string[] {
+    return value.split(delimiter).map(unquoted).filter(entry => !/["']$/.test(entry) && isOutsideProject(entry, basePath));
+}
+
+/** In-process lookup: neither which/where nor a bare node can execute workspace code. */
+export function nodeOnProtectedPath(value: string, basePath: string, windows: boolean): string | undefined {
+    return protectedPathEntries(value, basePath).map(entry => path.join(entry, windows ? 'node.exe' : 'node'))
+        .find(file => safeStat(file)?.isFile());
+}
+
+function latestNvmNode(home: string): string | undefined {
+    try {
+        const root = path.join(home, '.nvm', 'versions', 'node');
+        const latest = fs.readdirSync(root).filter(name => safeStat(path.join(root, name))?.isDirectory()).sort().pop();
+        return latest ? path.join(root, latest, 'bin', 'node') : undefined;
+    } catch { return undefined; }
+}
+
+export function protectedNodeCandidate(env: NodeJS.ProcessEnv, home: string | undefined, windows: boolean, basePath: string): string | undefined {
+    if (env.MOE_NODE_COMMAND?.trim()) { return unquoted(env.MOE_NODE_COMMAND); }
+    if (!windows && home) {
+        const managed = path.join(home, '.local', 'share', 'moe', 'node', 'current', 'bin', 'node');
+        try {
+            if (fs.statSync(managed).isFile()) { fs.accessSync(managed, fs.constants.X_OK); return managed; }
+        } catch { /* An unavailable managed runtime lets the in-process search continue. */ }
+    }
+    const onPath = nodeOnProtectedPath(env[pathNames(env, windows)[0] ?? 'PATH'] ?? '', basePath, windows);
+    if (onPath) { return onPath; }
+    const under = (base: string | undefined, relative: string): string | undefined => base ? path.join(base, relative) : undefined;
+    const candidates = windows ? [
+        under(env.ProgramFiles, 'nodejs/node.exe'), under(env['ProgramFiles(x86)'], 'nodejs/node.exe'),
+        under(env.LOCALAPPDATA, 'Programs/nodejs/node.exe'), under(env.LOCALAPPDATA, 'nvm/current/node.exe'),
+        under(env.APPDATA, 'nvm/node.exe')
+    ] : ['/opt/homebrew/bin/node', '/usr/local/bin/node', under(home, '.nvm/current/bin/node'),
+        home ? latestNvmNode(home) : undefined, '/usr/bin/node'];
+    return candidates.find((file): file is string => file !== undefined && safeStat(file) !== undefined);
+}
+
+export function protectedDaemonCommand(basePath: string, root: string, node: string | undefined):
+    { refused: string } | { ready: { node: string; args: string[]; cwd: string } } {
+    const daemon = installedArtifact(root, 'daemon/index.js', basePath);
+    if ('rejected' in daemon) { return { refused: daemon.rejected }; }
+    const executable = installedExecutable(node, basePath);
+    if ('rejected' in executable) { return { refused: executable.rejected }; }
+    return { ready: { node: executable.accepted, args: [daemon.accepted, 'start', '--project', basePath], cwd: path.dirname(daemon.accepted) } };
+}
+
+export function protectedDaemonEnvironment(env: NodeJS.ProcessEnv, basePath: string, nodePath: string, windows: boolean, home: string | undefined): NodeJS.ProcessEnv {
+    const result = { ...env };
+    for (const key of Object.keys(result)) {
+        if (['NODE_OPTIONS', 'NODE_PATH'].includes(windows ? key.toUpperCase() : key)) { delete result[key]; }
+    }
+    const names = pathNames(result, windows), name = names[0] ?? 'PATH';
+    const entries = [path.dirname(nodePath), ...(result[name] ?? '').split(path.delimiter)];
+    for (const duplicate of names.slice(1)) { delete result[duplicate]; }
+    if (!windows && home) {
+        for (const relative of ['.local/share/moe/node/current/bin', '.local/share/moe/npm/bin']) {
+            const directory = path.join(home, relative);
+            if (safeStat(directory)?.isDirectory()) { entries.push(directory); }
+        }
+    }
+    result[name] = [...new Set(protectedPathEntries(entries.join(path.delimiter), basePath))].join(path.delimiter);
+    return result;
 }
 
 export class MoeDaemonClient implements vscode.Disposable {
@@ -179,6 +555,7 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     private daemonShuttingDown = false;
     private manualDisconnect = false;
+    private disposed = false;
 
     private state: StateSnapshot | undefined;
 
@@ -211,6 +588,9 @@ export class MoeDaemonClient implements vscode.Disposable {
     }
 
     async connect(): Promise<void> {
+        if (this.disposed) {
+            return;
+        }
         this.manualDisconnect = false;
         if (this._connectionState !== 'disconnected') {
             return;
@@ -228,7 +608,15 @@ export class MoeDaemonClient implements vscode.Disposable {
             this.daemonShuttingDown = false;
 
             await this.ensureDaemonRunning();
-            const daemonInfo = await this.getDaemonInfo();
+            if (this.connectCancelled()) {
+                log('Connect cancelled during daemon startup');
+                return;
+            }
+            const daemonInfo = await this.getVerifiedDaemonInfo();
+            if (this.connectCancelled()) {
+                log('Connect cancelled during the daemon identity check');
+                return;
+            }
             if (!daemonInfo) {
                 throw new Error('Daemon not running. Start daemon first.');
             }
@@ -441,25 +829,22 @@ export class MoeDaemonClient implements vscode.Disposable {
      * reviewed; the daemon compares it against the task's current revision and
      * refuses the approval if the plan moved underneath the reviewer.
      *
-     * Omitting it is the legacy, unchecked approval — omission is the daemon's
-     * ONLY unchecked opt-out, so the key must be absent rather than null. That
-     * is also why a malformed token is refused right here instead of degrading
-     * into the token-free frame: that fallback would approve a plan nobody
-     * reviewed, which is precisely the hole this guard closes.
+     * There is no token-free approval any more: CQ-F MODIFY_RAIL prop-5e7763ed
+     * (human-approved 2026-10-25) deleted it. An undefined token is therefore
+     * refused right here exactly like a malformed one — no frame is sent, the
+     * refusal is logged, and onError fires with the taskId so the surface that
+     * asked can tell the user which approval did not go through.
      *
      * The token is whatever the reviewed panel hands in. This method never
      * reads cached state to manufacture one — the newest revision is by
      * definition not the reviewed one.
      */
-    approveTask(taskId: string, expectedPlanRevision?: number): boolean {
-        if (expectedPlanRevision === undefined) {
-            const legacyPayload: ApproveTaskPayload = { taskId };
-            return this.sendMessage('APPROVE_TASK', legacyPayload);
-        }
+    approveTask(taskId: string, expectedPlanRevision: number): boolean {
         // Never coerce. Number.isSafeInteger already rejects fractional, NaN,
         // Infinity and out-of-range values, and a numeric conversion here would
         // be exactly the silent fallback this check exists to prevent. The
-        // typeof guard matters because untyped webview messages reach this.
+        // typeof guard matters because untyped webview messages reach this,
+        // and it is also what refuses an undefined token.
         if (typeof expectedPlanRevision !== 'number'
             || !Number.isSafeInteger(expectedPlanRevision)
             || expectedPlanRevision < 0) {
@@ -467,7 +852,7 @@ export class MoeDaemonClient implements vscode.Disposable {
                 + `non-negative safe integer, got ${String(expectedPlanRevision)} `
                 + `(${typeof expectedPlanRevision})`;
             log(message);
-            this._onError.fire({ operation: 'APPROVE_TASK', message });
+            this._onError.fire({ operation: 'APPROVE_TASK', message, context: { taskId } });
             return false;
         }
         const payload: ApproveTaskPayload = { taskId, expectedPlanRevision };
@@ -588,7 +973,35 @@ export class MoeDaemonClient implements vscode.Disposable {
         this.sendMessage('REJECT_PROPOSAL', { proposalId });
     }
 
-    private async getDaemonInfo(): Promise<{ host: string; port: number } | undefined> {
+    private async getVerifiedDaemonInfo(): Promise<DaemonEndpoint | undefined> {
+        const info = await this.getDaemonInfo();
+        const project = this.getWorkspacePath();
+        if (!info || !project) return undefined;
+        const identity = await probeDaemonIdentity(info.host, info.port, project);
+        // Cancelled while probing: act on nothing found (no notice, removal or respawn).
+        if (this.connectCancelled()) return undefined;
+        if (identity.kind !== 'foreign') return info;
+        const message = `Moe: the daemon on ${info.host}:${info.port} serves ${identity.projectPath}, not this workspace (${project}).`;
+        log(message);
+        if (info.fromConfig) {
+            vscode.window.showErrorMessage(message);
+            throw new Error(message);
+        }
+        vscode.window.showWarningMessage(`${message} Starting this project's daemon on the next free port.`);
+        removeDaemonJsonIfUnchanged(path.join(project, '.moe', 'daemon.json'), info);
+        await this.startDaemon('start', project);
+        if (this.connectCancelled()) return undefined;
+        // A concurrent replacement must survive, including metadata naming another project.
+        const replacement = await this.getDaemonInfo(false);
+        const replacementKind = replacement && (await probeDaemonIdentity(replacement.host, replacement.port, project)).kind;
+        if (this.connectCancelled()) return undefined;
+        if (!replacement || replacementKind === 'foreign') {
+            throw new Error('Moe could not find this workspace\'s daemon after refusing a foreign daemon.');
+        }
+        return replacement;
+    }
+
+    private async getDaemonInfo(removeStale = true): Promise<DaemonEndpoint | undefined> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
             return undefined;
@@ -599,7 +1012,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         const configHost = config.get<string>('daemon.host', '127.0.0.1');
 
         if (configPort > 0) {
-            return { host: configHost, port: configPort };
+            return { host: configHost, port: configPort, fromConfig: true };
         }
 
         // Try to read from .moe/daemon.json
@@ -607,13 +1020,13 @@ export class MoeDaemonClient implements vscode.Disposable {
         const daemonJsonPath = path.join(projectPath, '.moe', 'daemon.json');
 
         try {
-            const content = fs.readFileSync(daemonJsonPath, 'utf-8');
+            const content = readDaemonJsonText(daemonJsonPath);
             const daemonInfo = JSON.parse(content);
             if (daemonInfo.projectPath && !pathsMatch(daemonInfo.projectPath, projectPath)) {
                 log(
                     `Stale daemon.json: expected project ${projectPath}, found ${daemonInfo.projectPath}`
                 );
-                try { fs.unlinkSync(daemonJsonPath); } catch { /* ignore */ }
+                if (removeStale) { try { fs.unlinkSync(daemonJsonPath); } catch { /* ignore */ } }
                 return undefined;
             }
             const port = Number(daemonInfo.port);
@@ -621,7 +1034,7 @@ export class MoeDaemonClient implements vscode.Disposable {
                 log(`Invalid daemon port in daemon.json: ${String(daemonInfo.port)}`);
                 return undefined;
             }
-            return { host: configHost, port };
+            return { host: configHost, port, pid: daemonInfo.pid, startedAt: daemonInfo.startedAt, fromConfig: false };
         } catch {
             return undefined;
         }
@@ -687,7 +1100,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         }
 
         try {
-            const content = fs.readFileSync(daemonInfoPath, 'utf-8');
+            const content = readDaemonJsonText(daemonInfoPath);
             const daemonInfo = JSON.parse(content);
             if (daemonInfo.projectPath && !pathsMatch(daemonInfo.projectPath, projectPath)) {
                 log(
@@ -710,7 +1123,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         }
     }
 
-    private resolveDaemonRuntime(): { node: string; env: NodeJS.ProcessEnv } {
+    resolveDaemonRuntime(): { node: string; env: NodeJS.ProcessEnv } {
         const env = { ...process.env };
         const override = env.MOE_NODE_COMMAND;
         const home = env.HOME || env.USERPROFILE;
@@ -745,6 +1158,12 @@ export class MoeDaemonClient implements vscode.Disposable {
         if (this.startInProgress) {
             return;
         }
+        // Only connect() starts the daemon: a liveness check that settles after a
+        // manual disconnect() or dispose() must not spawn for the cancelled attempt.
+        if (this.connectCancelled()) {
+            return;
+        }
+        if (runtimeProfile(projectPath) === 'protected') { return this.startProtectedDaemon(projectPath); }
         const daemonPath = this.resolveBundledDaemonPath() || this.resolveGlobalConfigDaemonPath();
         if (!daemonPath) {
             log('Daemon not found (bundled or global config). Cannot auto-start.');
@@ -781,7 +1200,43 @@ export class MoeDaemonClient implements vscode.Disposable {
             const message = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
                 ? 'Moe could not start Node.js. Run the Moe installer and restart VS Code, or set MOE_NODE_COMMAND to its executable path.'
                 : `Moe could not start its daemon: ${detail}`;
+            // A spawn that fails after its connect attempt was cancelled is logged, not shown.
+            if (!this.connectCancelled()) {
+                vscode.window.showErrorMessage(message);
+            }
+        } finally {
+            this.startInProgress = false;
+        }
+    }
+
+    private async startProtectedDaemon(projectPath: string): Promise<void> {
+        const home = process.env.HOME || process.env.USERPROFILE, windows = process.platform === 'win32';
+        const selection = protectedDaemonCommand(projectPath, installedRoot(this.extensionPath),
+            protectedNodeCandidate(process.env, home, windows, projectPath));
+        if ('refused' in selection) {
+            const message = `Protected execution profile: ${selection.refused}. Project and PATH copies of the Moe daemon are not used.`;
+            log(message);
             vscode.window.showErrorMessage(message);
+            return;
+        }
+        this.startInProgress = true;
+        try {
+            const { node, args, cwd } = selection.ready;
+            const env = protectedDaemonEnvironment(process.env, projectPath, node, windows, home);
+            await new Promise<void>((resolve, reject) => {
+                const proc = spawn(node, args, { detached: true, stdio: 'ignore', windowsHide: true, cwd, env });
+                proc.once('error', reject);
+                proc.once('spawn', () => { proc.unref(); resolve(); });
+            });
+            log(`Started Moe daemon (start) for ${projectPath}`);
+            await this.waitForDaemonInfo(projectPath, 10000);
+        } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            log(`Failed to start daemon: ${detail}`);
+            const message = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+                ? 'Moe could not start Node.js. Run the Moe installer and restart VS Code, or set MOE_NODE_COMMAND to its executable path.'
+                : `Moe could not start its daemon: ${detail}`;
+            if (!this.connectCancelled()) { vscode.window.showErrorMessage(message); }
         } finally {
             this.startInProgress = false;
         }
@@ -795,7 +1250,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         while (Date.now() - start < timeoutMs) {
             if (fs.existsSync(daemonInfoPath)) {
                 try {
-                    const content = fs.readFileSync(daemonInfoPath, 'utf-8');
+                    const content = readDaemonJsonText(daemonInfoPath);
                     const daemonInfo = JSON.parse(content);
                     const port = Number(daemonInfo.port);
                     if (!Number.isNaN(port)) {
@@ -1098,6 +1553,16 @@ export class MoeDaemonClient implements vscode.Disposable {
         this.sendMessage('GET_STATE');
     }
 
+    /**
+     * connect() awaits startup and the /health identity probe before opening /ws.
+     * Manual disconnect() or dispose() during those awaits cancels the attempt.
+     * A later connect() clears manualDisconnect, so the latest call wins;
+     * a disposed client never reconnects.
+     */
+    private connectCancelled(): boolean {
+        return this.disposed || this.manualDisconnect;
+    }
+
     private setConnectionState(state: ConnectionState): void {
         this._connectionState = state;
         this._onConnectionChanged.fire(state);
@@ -1174,6 +1639,7 @@ export class MoeDaemonClient implements vscode.Disposable {
     }
 
     dispose(): void {
+        this.disposed = true;
         this.disconnect();
         this._onStateChanged.dispose();
         this._onConnectionChanged.dispose();

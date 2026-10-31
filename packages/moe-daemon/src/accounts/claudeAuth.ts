@@ -112,7 +112,9 @@ export function runClaude(command: ClaudeCommand, args: string[], env: NodeJS.Pr
   return {
     status: result.error ? null : result.status,
     stdout: typeof result.stdout === 'string' ? result.stdout : '',
-    notFound: errorCode === 'ENOENT',
+    // POSIX execvp keeps searching past an unsearchable PATH directory (or a claude without the execute bit),
+    // then fails EACCES, not ENOENT. For a PATH lookup that still means no runnable claude; an explicit path stays 'unknown'.
+    notFound: errorCode === 'ENOENT' || (errorCode === 'EACCES' && path.basename(command.file) === command.file),
   };
 }
 

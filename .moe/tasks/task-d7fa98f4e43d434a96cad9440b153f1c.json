@@ -112,7 +112,7 @@
       "completedAt": "2026-09-12T00:08:53.347Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -128,7 +128,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-11T21:22:45.077Z",
-  "updatedAt": "2026-09-12T00:13:23.937Z",
+  "updatedAt": "2026-10-24T15:19:07.762Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T23:53:50.656Z",
     "plannedStepCount": 6,
@@ -249,5 +249,6 @@
   },
   "completedAt": "2026-09-12T00:13:17.558Z",
   "reviewCompletedAt": "2026-09-12T00:13:17.558Z",
-  "reviewSummary": "APPROVED. Gates re-run by QA: named gate (sweeps + workerStore) EXIT=0, 19 passed; full npm test EXIT=0, 115 files/1540 passed/4 skipped (baseline 114/1530); tsc --noEmit EXIT=0. Red proof re-derived: parent 081a6f7 sweeps.ts has 0 \"reconcile\" matches, so all 10 new cases fail on old code. Commit 02cc7bf audited via git show (6 paths, pushed); source paths clean.\n\nDoD: (1) past-window reconciling attempt closed, then task released via nextStatusForRelease(task,'requeue') so a successor can claim ('park' would route to human-gated BACKLOG, yielding none); confirmed-dead arm is the existing deregister -> closeOpenAttempts, verified at attemptStore.ts:321-329 (OPEN_PHASES includes reconciling) - the only authority an epic rail leaves a state-only daemon. (2) reconcileWindowMs in ProjectSettings + StateManagerOptions + constructor default 7200000 + applySettingsTimeouts, <=0 rejected. (3) Single successor comes from the store: repeated pass byte- and mtime-identical, one claim takes generation 2, second claim hasNext:false, openAttempt refused ATTEMPT_ALREADY_OPEN. (4) running (incl. reattached) and finalizing untouched at 10x window age with a 3h-quiet worker; WINDOW-1 survives byte-identical, so the boundary is a real comparison. (5) CONFIGURATION.md row: key, 2h default, reconciling-ONLY, reviewStaleTimeoutMs unchanged.\n\nRails hold: clock is the attempt's lastPhaseAt, never worker lastActivityAt (one pass-through write, nothing reads it); filter is phase, never task status. Integration risk checked: reconcileRunningAttempts goes through setAttemptPhase, so each restart re-stamps lastPhaseAt and grants a fresh window instead of firing instantly.\n\nindex.ts untouched though the plan named it - correct: it passes no timeout options, sweeps arm in StateManager.load(). Accepted residual: release is on a timer alone; the stale runner's next mutation is fenced as superseded, its file writes stay out of reach. Audit in Serena task-d7fa98f4 handoff."
+  "reviewSummary": "APPROVED. Gates re-run by QA: named gate (sweeps + workerStore) EXIT=0, 19 passed; full npm test EXIT=0, 115 files/1540 passed/4 skipped (baseline 114/1530); tsc --noEmit EXIT=0. Red proof re-derived: parent 081a6f7 sweeps.ts has 0 \"reconcile\" matches, so all 10 new cases fail on old code. Commit 02cc7bf audited via git show (6 paths, pushed); source paths clean.\n\nDoD: (1) past-window reconciling attempt closed, then task released via nextStatusForRelease(task,'requeue') so a successor can claim ('park' would route to human-gated BACKLOG, yielding none); confirmed-dead arm is the existing deregister -> closeOpenAttempts, verified at attemptStore.ts:321-329 (OPEN_PHASES includes reconciling) - the only authority an epic rail leaves a state-only daemon. (2) reconcileWindowMs in ProjectSettings + StateManagerOptions + constructor default 7200000 + applySettingsTimeouts, <=0 rejected. (3) Single successor comes from the store: repeated pass byte- and mtime-identical, one claim takes generation 2, second claim hasNext:false, openAttempt refused ATTEMPT_ALREADY_OPEN. (4) running (incl. reattached) and finalizing untouched at 10x window age with a 3h-quiet worker; WINDOW-1 survives byte-identical, so the boundary is a real comparison. (5) CONFIGURATION.md row: key, 2h default, reconciling-ONLY, reviewStaleTimeoutMs unchanged.\n\nRails hold: clock is the attempt's lastPhaseAt, never worker lastActivityAt (one pass-through write, nothing reads it); filter is phase, never task status. Integration risk checked: reconcileRunningAttempts goes through setAttemptPhase, so each restart re-stamps lastPhaseAt and grants a fresh window instead of firing instantly.\n\nindex.ts untouched though the plan named it - correct: it passes no timeout options, sweeps arm in StateManager.load(). Accepted residual: release is on a timer alone; the stale runner's next mutation is fenced as superseded, its file writes stay out of reach. Audit in Serena task-d7fa98f4 handoff.",
+  "planRevision": 0
 }

@@ -1,0 +1,253 @@
+{
+  "id": "task-4ca62c89674c466181fc306175d25d2c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: an empty daemon.lock (acquireLock's O_EXCL create-to-write window) is judged 'malformed lock' and replaced, so two simultaneous starts can both take the lock",
+  "description": "acquireLock (packages/moe-daemon/src/index.ts) creates daemon.lock with O_EXCL and writes its JSON in a second syscall. A contender that reads the still-empty file in between gets staleLockReason 'malformed lock', unlinks it and wins its retry, so on POSIX both processes start a daemon over one .moe/. Scratch-probe repro: an empty lock gives staleLockReason='malformed lock' and the contender's acquireLock=true. This is pre-existing and the window is narrow. task-25ba449a's plan forbids lock-policy changes, so it is filed here. One fix is to treat a young empty lock as live, for example by checking mtime against a short grace period.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Load test-driven-development.\n\nPrerequisites (dependsOn gates the claim): task-25ba449a and task-eea78d1d are DONE.\n- Confirm each landed: `git log moe/work-2026-10-24 --grep 'Moe-Task: <id>'`.\n- Confirm packages/moe-daemon/src/index.ts still has readLockInfo's empty-content branch (`if (!raw) return null;`) and staleLockReason's first check returning 'malformed lock'. If a landed predecessor already changed empty-lock handling, stop and call moe.request_replan naming the commit.\n\nIn packages/moe-daemon/src/index.test.ts:\n- Add `staleLockReason` to the `./index.js` import list, unless task-c83d7847 already added it.\n- In the top-level describe('daemon lifecycle validation'), right after it('acquireLock removes stale PID-reuse-ambiguous locks after timeout'), add three tests. Use plain names, because X15+ belong to the WSL-boundary block (c83d7847, eea78d1d).\n  - T1 'a young empty daemon.lock is a live owner mid-write, so a contender neither judges it stale nor replaces it':\n    - fs.writeFileSync(lockPath, ''). This is what acquireLock's O_EXCL create leaves before its write.\n    - expect([staleLockReason(testDir), acquireLock(testDir), fs.readFileSync(lockPath, 'utf-8')]).toEqual([null, false, '']).\n    - Then overwrite the lock with 'not-json' and expect(staleLockReason(testDir)).toBe('malformed lock'). Only an EMPTY lock gets the grace.\n  - T2 'an empty daemon.lock older than the stale timeout is still reclaimed':\n    - Write '' and backdate it 60s with fs.utimesSync, as the PID-reuse test does.\n    - staleLockReason is 'malformed lock', acquireLock is true, and readLockInfo(testDir)?.pid is process.pid. Then releaseLock.\n  - T3 'a lock write that fails after the O_EXCL create leaves no empty lock behind' (the error handling test):\n    - In one synchronous block right before the call, spy fs.openSync and fs.closeSync (call-through), and vi.spyOn(fs, 'writeSync').mockImplementationOnce(() => { throw Object.assign(new Error('no space'), { code: 'ENOSPC' }); }).\n    - expect([acquireLock(testDir), fs.existsSync(lockPath)]).toEqual([false, false]), and closeSync toHaveBeenCalledWith the fd that openSync returned (open.mock.results[0].value).\n    - Then expect(acquireLock(testDir)).toBe(true) and releaseLock. The suite's afterEach vi.restoreAllMocks() restores the spies.\n- Use exact values and tuples only, never toBeTruthy/toBeFalsy. atomicWrite.test.ts is the precedent for vi.spyOn(fs, ...) reaching index.ts's default `fs` import.\n\nRED: run in a Linux-native snapshot (see step 3) with HEAD's index.ts.\n- T1 and T3 must fail by assertion. T1 gets ['malformed lock', true, <JSON>]; T3 finds the empty lock still there and closeSync uncalled.\n- T2 passes on HEAD. It guards against a fix that never reclaims an empty lock.\n- Record the RED output in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Added the three approved regression tests (+36 lines); staleLockReason was already imported by the landed predecessor. Context confirms both dependencies DONE+landed with completion/verification evidence. readLockInfo still returns null for empty content and staleLockReason still immediately calls that malformed. RED in private whole-repo HEAD 84acce64 archive /tmp/moe-4ca62c-worker.HDT3TK, only the two owned overlays cmp-checked, npm ci Linux Node 24.21.0 with env -i: npx vitest run src/index.test.ts -t 'a young empty daemon.lock|an empty daemon.lock older|a lock write that fails' => exit 1; T1/T3 fail by assertion, T2 passes (2 failed/1 passed/44 skipped). T1 received ['malformed lock',true,JSON]; T3 received [false,true] and zero closeSync calls. Log /tmp/moe-4ca62c-red.log. Existing dirty board, VS Code, launcher and mod-config paths belong to other sessions and were left untouched. No scope growth.",
+      "startedAt": "2026-10-30T15:22:02.348Z",
+      "completedAt": "2026-10-30T15:22:37.499Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX (GREEN) in packages/moe-daemon/src/index.ts. Only the type and three functions change.\n\n- `LockInfo` gains optional `empty?: boolean`.\n- `readLockInfo`:\n  - The empty-content branch (`if (!raw) return null;`) instead returns `{ pid: null, projectPath: null, createdAtMs: stat.mtimeMs, empty: true }`, from the same statSync/readFileSync snapshot.\n  - Never re-stat afterwards: a second read races the owner's write.\n  - A missing, unreadable or unparseable lock still returns null.\n- `staleLockReason`:\n  - Right after the read, add: `if (info?.empty) return Date.now() - info.createdAtMs > LOCK_STALE_TIMEOUT_MS ? 'malformed lock' : null;`.\n  - Add a one-line why comment: acquireLock's O_EXCL create lands one syscall before its JSON write, so a young empty lock is a live owner mid-write.\n  - Reuse LOCK_STALE_TIMEOUT_MS. It is already the window a live-pid lock is trusted for, so there is no new env var or doc.\n  - A future mtime (clock skew) reads as young. That is the safe direction, and it matches the existing timeout check.\n  - Every later check and its reason string stay unchanged.\n- `acquireLock` error handling for the write:\n  - After a successful openSync, wrap only the writeSync.\n  - If it throws: try closeSync(fd), then try unlinkSync(lockPath), each ignoring its own error. Then logger.warn({ error }, 'Failed to write daemon lock; removed it') and return false.\n  - Close before unlink: Windows keeps an open file's name until its last handle closes.\n  - Why: a young empty lock now blocks every start for LOCK_STALE_TIMEOUT_MS, so our own failed write must not leave one behind.\n  - The success path (closeSync, return true) and the EEXIST stale-retry loop stay unchanged. Never unlink after a successful write.\n- removeStaleLock, cleanupStaleDaemonFiles, releaseLock and startDaemon stay unchanged. Their stop, status and start callers now also keep a young empty lock, which is intended.\n\nGREEN means T1–T3 pass, and the existing 'stopDaemon refuses to signal when liveness is not tied to a healthy Moe daemon' test passes unchanged. That test removes a young non-empty 'not-json' lock.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "Implemented only optional LockInfo.empty, readLockInfo's empty snapshot marker, the empty-only stale-timeout grace, and acquireLock's failed-write close-before-unlink cleanup with warning. Existing successful-write/EEXIST paths and every later lock reason/check are unchanged; no new env/settings/docs. GREEN after copying/cmp-checking owned bytes into the Linux snapshot: npx vitest run src/index.test.ts => exit 0, 46 passed/1 pre-existing Windows-only skip (47). Includes T1–T3 and unchanged stopDaemon not-json test. Log /tmp/moe-4ca62c-green.log. Own diff is two files, +52/-6 (46 net).",
+      "startedAt": "2026-10-30T15:22:54.148Z",
+      "completedAt": "2026-10-30T15:23:13.244Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY, once, after step 2.\n\nThe shared checkout's packages/moe-daemon/node_modules is win32, so run in a Linux-native snapshot. Follow mem:gotcha-daemon-linux-snapshot-gate and mem:gotcha-linux-vitest-reuse-native-node-modules:\n- `git archive HEAD` of the WHOLE repo into a private mktemp dir.\n- Overlay ONLY packages/moe-daemon/src/index.ts and packages/moe-daemon/src/index.test.ts, then cmp both against the worktree.\n- Link a Linux node_modules whose package-lock matches HEAD's (modulo CR), or run npm ci there.\n- Run under env -i with NO_COLOR=1, so MOE_* is unset and LOCK_STALE_TIMEOUT_MS is its 15000 default.\n\nRun exactly `cd packages/moe-daemon && npx tsc --noEmit && npm test`.\n- This is the full daemon package suite, about 25s. Its exitCode and outputTail are the complete_task verification.\n- It also runs cross-file rules that a single-file run misses, such as util/daemonGitDocs.test.ts's source-comment scan.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Fresh exact plan gate `cd packages/moe-daemon && npx tsc --noEmit && npm test` ran to completion in /tmp/moe-4ca62c-worker.HDT3TK under env -i, NO_COLOR=1, Node 24.21.0, default lock timeout. Whole-repo archive base 84acce64; only index.ts/index.test.ts overlaid and cmp-verified; native npm ci with matching package-lock. Exit 0: tsc clean; 209 files passed, 6067 tests passed/20 skipped, 34.79s. Log /tmp/moe-4ca62c-gate.log, exit /tmp/moe-4ca62c-gate.exit. HEAD advanced to 3d3913ee only outside packages/moe-daemon (git diff base HEAD -- packages/moe-daemon empty), so package evidence remains current. Supplemental scratch tsconfig explicitly included index.test.ts (normal tsc excludes tests); that typecheck also passed (log /tmp/moe-4ca62c-test-types.log). No shared files modified during verification.",
+      "startedAt": "2026-10-30T15:23:13.265Z",
+      "completedAt": "2026-10-30T15:24:40.877Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review.\n\nCheck:\n- Two starts at the same instant: the O_EXCL create picks one owner. The other reads a young empty lock as live (T1), so at most one daemon starts.\n- An owner that crashed between create and write: its empty lock is reclaimed after LOCK_STALE_TIMEOUT_MS (T2). That bounded delay is accepted.\n- Clock skew: a future mtime never steals a lock. A past skew beyond the timeout falls back to today's behavior.\n- Error handling on write failure: the fd is closed, the lock removed and a warn logged (T3). Nothing is unlinked after a successful write.\n- A non-empty unreadable lock is still reclaimed at once.\n- The diff touches only index.ts and index.test.ts, at most about 60 net lines.\n- No new env var, setting or doc. No comment uses the daemonGitDocs phrases (\"runs no git\" and the like).\n\nOut of scope; do not fix here. If you confirm one with a repro, file it as a separate LOW row:\n- removeStaleLock's check-then-unlink TOCTOU: two contenders racing on a genuinely stale lock can delete each other's fresh lock.\n- The 15s trust window for startups slower than LOCK_STALE_TIMEOUT_MS.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Loaded adversarial-self-review and read own scoped diff as an attacker. O_EXCL still selects the owner; T1 preserves its young empty lock, T2 bounds crash leftovers, T3 closes/removes failed writes. Existing missing/unreadable/garbage/pid-only/JSON and project/foreign/liveness/timeout checks retain order and reasons. Read errors still return null. Future mtime remains live; success never unlinks. Independently ran scratch-only lock-review.mts: exact 15000/15001ms boundary, future-clock contender refusal, close-before-unlink, closed fd (EBADF), independent cleanup-error swallowing and no unlink on success all pass (exit 0, /tmp/moe-4ca62c-review.log). No repro/confirmation of additional out-of-scope bugs, so no follow-up row created; known stale-recovery TOCTOU and long-startup timeout remain accepted out of scope. Final cmp against gated files and git diff --check clean; only two own paths, +52/-6 (46 net), acquireLock 39 lines, no new any/env/settings/docs. Gate already fresh this session: tsc clean, 209 files/6067 passed/20 skipped. No implementation change after gate.",
+      "startedAt": "2026-10-30T15:24:40.899Z",
+      "completedAt": "2026-10-30T15:25:24.882Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's 13:00Z delegation. 25ba449a's worker filed this as a pre-existing adjacent daemon-lock bug, the empty daemon.lock O_EXCL window. It joins the packages/moe-daemon/src/index.ts lane after 25ba449a, in the order f0abb6d6 → eea78d1d → 4ca62c89.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-25ba449ab87d4039a283426f07302cbc",
+    "task-eea78d1d1dc54ae1a01a61e0e211cfa0"
+  ],
+  "priority": "LOW",
+  "order": 307.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T14:29:48.062Z",
+  "updatedAt": "2026-10-30T16:03:16.976Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T14:30:43.240Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:31:40.493Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T16:02:51.193Z",
+    "wallClockMs": 5470700
+  },
+  "contextFetchedBy": [
+    "architect-6fc3dd5c",
+    "worker-55e6716a",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:45:22.984Z",
+  "executionContract": {
+    "intendedBehavior": "A daemon.lock with no content yet is treated as a live owner while its mtime is within LOCK_STALE_TIMEOUT_MS. That is the state between acquireLock's O_EXCL create and its JSON write. staleLockReason returns null for it, so acquireLock's contender refuses and no cleanupStaleDaemonFiles caller deletes it. An empty lock older than that is still 'malformed lock' and is reclaimed. A lock write that fails after the O_EXCL create closes its fd and removes the empty lock it created, then acquireLock returns false.",
+    "acceptanceCriteria": [
+      "A young empty lock: staleLockReason is null, acquireLock is false, and the lock bytes stay ''.",
+      "An empty lock whose mtime is 60s old: staleLockReason is 'malformed lock', acquireLock is true, and the lock then records this pid.",
+      "A young non-empty unparseable lock ('not-json') is still 'malformed lock'. The existing stopDaemon 'not-json' test passes unchanged.",
+      "writeSync throwing after the O_EXCL create: acquireLock is false, no daemon.lock remains, the opened fd is closed, and a following acquireLock succeeds."
+    ],
+    "invariants": [
+      "The O_EXCL create stays the only way to take the lock. A young empty lock is never unlinked by a contender or by stop, status or start cleanup.",
+      "The pid-only and JSON lock paths are unchanged: the foreign, projectPath-mismatch, pid-alive and timeout checks keep their order and reason strings.",
+      "Nothing is unlinked after a successful lock write."
+    ],
+    "compatibility": [
+      "Existing daemon.lock formats (pid-only digits, and JSON {pid, projectPath, createdAt}) parse exactly as before.",
+      "readLockInfo still returns null for a missing, unreadable or unparseable lock. LockInfo gains only an optional field.",
+      "No new env var or setting. MOE_LOCK_STALE_TIMEOUT_MS keeps its meaning and now also bounds the empty-lock grace."
+    ],
+    "approvedScope": [
+      "LockInfo.empty (optional)",
+      "readLockInfo empty-content branch",
+      "staleLockReason empty-lock grace",
+      "acquireLock write-failure error handling"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/index.ts readLockInfo: statSync, then readFileSync(...).trim(); `if (!raw) return null`.",
+      "staleLockReason's first check returns 'malformed lock' when !info || !info.pid.",
+      "acquireLock: openSync(O_CREAT|O_EXCL|O_WRONLY), then writeSync, then closeSync. On EEXIST it calls removeStaleLock and retries, up to 3 attempts.",
+      "LOCK_STALE_TIMEOUT_MS = MOE_LOCK_STALE_TIMEOUT_MS || 15000.",
+      "removeStaleLock is staleLockReason's only runtime caller. It is reached from acquireLock and from cleanupStaleDaemonFiles (existingDaemonBlocksStart, startDaemon's lock wait, stopDaemon, statusDaemon)."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npx tsc --noEmit && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": [
+      "Write to a temp file, then fs.linkSync it into place, so the lock is never empty. Rejected: hard links fail on FAT/exFAT and some network shares, so it would need a fallback path.",
+      "A bounded synchronous re-read spin on an empty lock. Rejected: the bound is arbitrary, and the spin stalls stop and status.",
+      "A new MOE_LOCK_WRITE_GRACE_MS. Rejected: it adds a knob and docs, while LOCK_STALE_TIMEOUT_MS is already the lock's trust window.",
+      "Grace for any young malformed lock. Rejected: it is not the observed window, and it changes the stopDaemon 'not-json' cleanup behavior.",
+      "Math.abs on the age. Rejected: under a future-mtime skew it would steal a fresh lock."
+    ],
+    "codebaseInsights": "daemon.lock is only a startup mutex. startDaemon acquires it before findAvailablePort and state.load, and releases it right after writeDaemonInfo. staleLockReason's only runtime caller is removeStaleLock. readLockInfo is exported for tests only. No launcher script, IDE plugin or doctor reads daemon.lock. On HEAD aeeca045 the empty branch is `if (!raw) return null;`, which staleLockReason turns into 'malformed lock'; acquireLock's EEXIST path then unlinks the owner's file and wins its retry. That is the task's repro.",
+    "risks": "- Lane adjacency: c83d7847 adds X15 and maybe the staleLockReason import to index.test.ts. eea78d1d may edit the projectPath-mismatch line right below the new empty-lock line. Both land first; rebase mentally, and do not duplicate the import.\n- The T3 spy must be installed in the same synchronous block as the acquireLock call. Nothing calls fs.writeSync between openSync and the lock write, so mockImplementationOnce hits exactly that write.\n- On Windows, libuv opens files with FILE_SHARE_DELETE, so an unlink of an open file leaves its name delete-pending until close. That is why close comes before unlink.\n- Run every gate in the Linux snapshot. Never npm install in the shared checkout.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/index.test.ts",
+      "packages/moe-daemon/src/util/atomicWrite.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:45:23.009Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "e2358717bd449c53812cffa0130f7886be0536e9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-6fc3dd5c@2026-10-30T14:31:40Z",
+      "paths": [
+        ".moe/tasks/task-f084cbe16ee446ffb2b0dee283273f7f.json"
+      ],
+      "recordedBy": "architect-6fc3dd5c",
+      "recordedAt": "2026-10-30T15:02:39.163Z",
+      "treeId": "0f04f1a99e1e3a29418c69eea47bb7cb248d4495",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "ffbf20ba15ff594b47070083a58482f4f7751f5f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T15:20:57Z",
+      "paths": [
+        ".moe/tasks/task-4ca62c89674c466181fc306175d25d2c.json",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T15:26:27.764Z",
+      "treeId": "ddff6dbb2a463a1482c8a8617600da3d0a8730de",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "e50f7372a8451daebd09f440a3d4f58462fd95f7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T16:01:08Z",
+      "paths": [
+        ".moe/tasks/task-4ca62c89674c466181fc306175d25d2c.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T16:03:16.976Z",
+      "treeId": "7feaad02aa752ba1a567f1dfa29d0a2eca069428",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/index.ts",
+    ".moe/tasks/task-4ca62c89674c466181fc306175d25d2c.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T16:01:08Z",
+    "at": "2026-10-30T16:03:16.976Z"
+  },
+  "workStartedAt": "2026-10-30T15:22:02.348Z",
+  "reviewStartedAt": "2026-10-30T15:26:10.650Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx tsc --noEmit && npm test",
+    "exitCode": 0,
+    "outputTail": " Test Files  209 passed (209)\n      Tests  6067 passed | 20 skipped (6087)\n   Start at  17:23:17\n   Duration  34.79s (tests 94%, import 4%, transform 3%)\n",
+    "reportedAt": "2026-10-30T15:26:10.650Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Fixed the daemon.lock O_EXCL create-to-write window using optional LockInfo.empty and original stat.mtimeMs: young empty locks stay live through LOCK_STALE_TIMEOUT_MS, old empty locks remain reclaimable. Failed writes close their fd before best-effort unlink and return false; no successful-write unlink. Non-empty malformed/pid-only/JSON lock policy, later reason/check order and APIs unchanged. Only index.ts/index.test.ts, +52/-6 (46 net). Three regression tests; RED confirmed T1/T3 assertion failures, T2 baseline pass. GREEN lifecycle suite:46 passed/1 existing Windows-only skip. Fresh exact gate in whole-repo Linux archive /tmp/moe-4ca62c-worker.HDT3TK with cmp-verified owned overlays/native npm ci/env -i/Node24.21.0: tsc clean;209 files,6067 passed/20 skipped; exit0. Supplemental index.test.ts typecheck and scratch timeout/future-mtime/cleanup-error/fd-order/success-no-unlink checks pass. Scoped adversarial review and diff --check clean. Logs /tmp/moe-4ca62c-{red,green,gate,review,test-types}.log. Handoff+gotcha memory saved. No implementation changes after gate; latest HEAD daemon tree unchanged from snapshot baseline. Known stale-unlink TOCTOU and slow-start timeout out of scope; no new bug reproduced. Shared peer dirty paths untouched. Wrapper owns commit/push.",
+  "completedAt": "2026-10-30T16:02:51.193Z",
+  "reviewCompletedAt": "2026-10-30T16:02:51.193Z",
+  "reviewSummary": "Reviewed completion ffbf20ba (on moe/work-2026-10-24, pushed): index.ts +16/-6, index.test.ts +36/-0 = 46 net (under the 400 cap). Diff matches approved scope: optional LockInfo.empty; readLockInfo empty branch keeps the original stat.mtimeMs; staleLockReason gives an empty-only grace (null while age <= LOCK_STALE_TIMEOUT_MS, else 'malformed lock'); acquireLock wraps writeSync, on failure closeSync then unlinkSync (each best-effort), warn, return false. Success and EEXIST-retry paths untouched, no unlink after a successful write. readLockInfo's only prod consumer is staleLockReason (empty handled first); non-empty 'not-json', pid-only and JSON paths keep order and reasons. No new env/setting/doc.\n\nRE-RAN the exact gate in a fresh Linux snapshot of HEAD d444ea1d (whole-repo archive, native node_modules with a lock md5-matching HEAD, index.ts/index.test.ts cmp-identical to ffbf20ba, env -i NO_COLOR=1, Node 24.21.0): `cd packages/moe-daemon && npx tsc --noEmit && npm test` -> exit 0, 210 files, 6071 passed | 20 skipped (worker's 209/6067 predates a later vitestEnv test from another row).\n\nMutants on index.ts, each killed by exactly the intended test: dropping the empty grace fails the young-empty test; a grace that never expires fails the 60s-old-empty test; removing close/unlink fails the failed-write test. Baseline 46 passed | 1 skipped.\n\nAll four acceptance criteria are covered by exact-value tests, and the existing stopDaemon 'not-json' test passes unchanged. Not run: native Windows (close-before-unlink ordering is by construction only). Out of scope and untouched: removeStaleLock TOCTOU, >15s slow-start trust. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

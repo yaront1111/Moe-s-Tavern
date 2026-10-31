@@ -1,0 +1,178 @@
+{
+  "id": "task-253884005a59471fb7c59ef38e1f3cc1",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-10M] Wrappers: gated migration landing CLI for the shared branch",
+  "description": "Objective: implement revised WT-S §7.3's human-run migration publication without bypassing main's gate/publication policy. This is comment-1970f7d8521f495dafdff5b7ca1e8144 item 3, explicitly split from WT-10 by SPIDR Interface to keep each task bounded. Dependencies provide completed landing/gate helpers and serialize the remaining wrapper rollout; WT-16's runbook must depend on this row.\nDeliverable: twins --land-branch <branch> / -LandBranch <branch> reuse L3; up to two L4→L5→L6→L7→L9→L10 rounds; L14 always. Always run settings.qualityGate regardless of qualityGateScope. With none set, MOE_MIGRATION_NO_GATE before any fetch. Merge tree M of B and the branch tip; C has exactly parents B and branch tip. Skip L0-L2, L5b, L8, L11-L13; no Candidate/CheckRun/ledger rows. Preserve unknown-outcome safety; a rerun after the target contains the branch exits 0 with MOE_COMMIT_NOTHING_TO_COMMIT. Tests cover clean migration, conflict, gate failure, lease refusal, remote rejection exhaustion, unknown outcome and rerun.\nPlanning prerequisite to resolve against WT-S: the spec currently says 'no task' while acquire_resource/wait_for_resource require a real owned taskId + workerId. Architect raised this with WT-S author in #architects msg-a78b6d326fa04e1b8e229e300537664d. Obtain a concrete legitimate lease identity contract before submitting a plan; do not invent task IDs, weaken resource ownership, or silently skip the lease. Another issue to preserve: taskless migration must suppress evidence RPCs that existing freeze_candidate/run_frozen_gate normally emit.\nNOT in scope: task-bound completion landing, shared-mode behavior, main history rewriting/force push, flipping settings or executing a real migration, and docs/runbook (WT-16/17/18).\nVerification from root: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh; native Windows additionally node scripts/tests/postflight-safe.mjs powershell. Keep held-out worktree-landing tests unchanged; extend both postflight harnesses. Plan only after the lease identity contract is resolved.",
+  "definitionOfDone": [
+    "Both migration flags create a gated merge commit whose tree is M and whose parents are B and the source branch tip, preserving source history; both harnesses prove it.",
+    "Absent qualityGate refuses before any fetch; migration always runs a configured gate regardless of scope and neither creates Candidate/CheckRun/ledger records nor claims an ordinary worker task as an incidental side effect.",
+    "Both harnesses prove the finalized migration lease identity contract: acquire/wait/release use an authorized real owner, release happens on every exit, and timeout/refusal publishes nothing.",
+    "Conflict, gate failure, and two rejected rounds leave the target unchanged; an unknown remote outcome stops without a false local publication or success claim.",
+    "After a confirmed publication, rerunning the same branch exits 0 with MOE_COMMIT_NOTHING_TO_COMMIT and publishes no additional commit.",
+    "The named full launcher verification exits 0; same-revision native Windows tests pass; MOE_MIGRATION_ and other introduced code families match between twins."
+  ],
+  "taskRails": [
+    "WT-10M DoD 3 reading (2026-10-30: WT-S producer comment-5957b3a6 on WT-16, row author comment-0e698959, planner concurs): the finalized migration lease identity contract is that the --land-branch/-LandBranch migration takes NO land lease and sends no daemon RPC at all, because acquire_resource needs a task the caller owns and the migration has none; the drain, the gate on M, the CAS and the non-forced push keep main safe (WT-S §7.3 in 6285adf7). Both harnesses satisfy DoD 3 by proving, on every success, refusal and failure path, that the migration sends no acquire_resource, wait_for_resource, release_resource or any other RPC and publishes nothing on any refusal or failure. The lease-specific clauses (authorized owner, release on every exit, lease timeout/refusal) are vacuous under this contract and must not be met by inventing a task identity or adding a lease. Every other DoD item applies in full."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Bind the landed producers, then write the migration cases first (red). DoD 1-5.\n\nRead before editing:\n- WT-S §2.2 (L4-L10), §2.3, §2.6 and §7.3 as landed (6285adf7 or later).\n- This row's comments comment-0e698959 and comment-0fceebde: the migration takes NO lease and sends NO RPC. Also the TASK rail from proposal prop-46a25cec once approved; it pins DoD 3 to that reading.\n- The landed WT-08/WT-09/WT-10/WT-10G code, which is everything the migration reuses:\n  - sync_land_target / Sync-MoeLandTarget (L4) and mirror_land_target / Update-MoeLandTargetMirror (L10).\n  - WT-08's merge-tree call with its NUL-safe output parsing (L5).\n  - The L9 publication: local update-ref CAS, remote `push --porcelain`, and reconcile_push / Resolve-MoePushOutcome.\n  - freeze_candidate / New-MoeFrozenCandidate, and the .moe-free gate `run_frozen_gate worktree` / `Invoke-MoeFrozenGate ... -WorktreeMode` (L6).\n  - The target-checked-out guard, and the raw configured-qualityGate reader.\nIf one of them is missing, or cannot be called without copying its git logic, call moe.request_replan naming the gap. Never write a second landing engine or emulate a prerequisite.\n\nNew scripts/tests/postflight-migration.cjs:\n- One case list for both wrappers, modeled on scripts/tests/postflight-owner-guard.cjs: `node postflight-migration.cjs <sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>`. The fake-proxy argument is unused.\n- A `gate` mode serves as the cases' settings.qualityGate.\n\nEach case's fixture:\n- A fresh repo under a temp dir whose name contains a space, with a bare `origin`.\n- `main` with tracked a.txt, b.txt and .moe/project.json. Settings carry qualityGate = the gate mode and qualityGateScope 'epicFinal', which proves scope is ignored.\n- A source branch `moe/work-mig` with 2 commits, checked out, so main is not checked out.\n- A peer commit on origin's main after the branch point, so B is not the branch base.\n- A fake .moe/daemon.json, as owner-guard writes, so any RPC path reaches the proxy.\n- MOE_PROXY_PATH points at a tripwire proxy the suite writes into its temp dir at runtime. The tripwire appends every request to a log and answers with an error.\n- Runs use --no-start-daemon / -NoStartDaemon, --worker-id worker-mig, MOE_LAND_NET_BACKOFF_SEC=0 and the harness timeout (MOE_POSTFLIGHT_TIMEOUT_SEC).\n\nThe gate mode:\n- Appends `<git rev-parse HEAD^{tree}> <whether ./.moe exists>` to MIG_LOG.\n- MIG_GATE=fail exits 1.\n- MIG_GATE=peer first lands a peer commit on the bare remote's main with plumbing (commit-tree on main's tree, then update-ref with the old value). peer-once does that only on its first run.\n- MIG_GATE=offline renames the bare remote away, so both the push and the reconcile fetch fail.\n\nCases (exact SHAs and parent lists):\n1. clean: exit 0 and MOE_MIGRATION_LANDED naming C.\n   - origin main and local main are both C.\n   - C^{tree} equals the suite's own `git merge-tree --write-tree <B> <tip>`, with B = origin main read just before the run.\n   - `git rev-list --parents -n1 C` is exactly `C B tip`.\n   - The subject is `chore(migration): land moe/work-mig on main`, and the tip is an ancestor of origin main.\n   - Exactly one gate line, whose tree is C^{tree} and with no .moe.\n   - Then a rerun exits 0 with MOE_COMMIT_NOTHING_TO_COMMIT: origin main is still C and no gate line is added.\n   - A local-mode variant (no origin) lands C on local main through the CAS.\n2. no-gate: qualityGate unset gives MOE_MIGRATION_NO_GATE and exit 1. So does a set gate with MOE_DISABLE_QUALITY_GATE=1. In both, refs/remotes/origin/main is unchanged although origin moved, which proves no fetch, and there is no gate line.\n3. bad-args: an unknown branch, and `main`, each give MOE_MIGRATION_BAD_ARGS and exit 2, with no fetch.\n4. conflict: both sides edit the same line of a.txt. MOE_COMMIT_FAILED_CONFLICT naming a.txt, exit 1, zero gate lines.\n5. gate-fail: MOE_COMMIT_FAILED_GATE, exit 1.\n6. contention:\n   - MIG_GATE=peer gives MOE_COMMIT_FAILED_REF_CONTENTION and exit 1 after exactly 2 gate lines, and origin main is the second peer commit.\n   - peer-once gives 2 gate lines, the second on the new tree, then MOE_MIGRATION_LANDED with C's parents [first peer commit, tip].\n7. unknown: MIG_GATE=offline gives MOE_PUSH_OUTCOME_UNKNOWN and exit 1, with no MOE_MIGRATION_LANDED. Local main and refs/remotes/origin/main equal B. After the suite restores the remote, a rerun lands C.\n\nIn every failure case, origin main holds no migration commit, and no main ref contains the tip: local, remote-tracking or origin.\n\nEvery run also asserts:\n- The tripwire log is absent: no lease, claim, join, get_context, evidence, ledger, finalize, chat or deregister RPC.\n- The source branch ref is unchanged.\n- No refs/moe/rescue/* ref and no <gitdir>/moe/receipt journal exist.\n\nWire the suite into scripts/tests/postflight.sh next to the owner-guard invocation, and into scripts/tests/postflight.ps1 next to its owner-guard call, with the same exit-code check. Each harness runs its own engine. Run it now and keep the red baseline: every case fails because the flag does not exist yet.\n\nError handling in this step:\n- The suite removes its temp dirs in finally; MOE_KEEP_MIGRATION_FIXTURE=1 keeps them.\n- A fixture git failure throws with git's stderr.\n- A wrapper run that times out or returns an unexpected exit code fails with that run's output tail, never the full output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-migration.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the sh migration mode, run_migration_landing, in scripts/moe-agent.sh (DoD 1-5).\n\nOption and validation:\n- Add `--land-branch <branch>` and a --help line for it.\n- An empty value gives MOE_MIGRATION_BAD_ARGS, exit 2.\n- Once the project resolves, the branch must pass `git check-ref-format --branch`, must resolve via `rev-parse --verify --quiet refs/heads/<branch>^{commit}`, and must not equal the fixed target `main`. Otherwise MOE_MIGRATION_BAD_ARGS, exit 2, before any fetch.\n\nDispatch and isolation:\n- Dispatch once every helper the mode calls is defined, and before the main loop.\n- The mode never enters the loop: no join_team, claim_next_task, get_context, heartbeat sidecar, account lease, CLI launch, landing post-flight or deregister_worker. Guard cleanup_temp's deregistration with the mode flag, so a --worker-id naming a live seat is never torn down.\n- It sends no RPC at all, and never reads worktreeMode or consolidationBranch.\n\nSequence:\n1. Gate check. Read the raw configured settings.qualityGate with the completion arm's reader, ignoring qualityGateScope. If it is blank, or MOE_DISABLE_QUALITY_GATE=1: MOE_MIGRATION_NO_GATE, exit 1, before any fetch.\n2. Derive MOE_TOP, MOE_REL and MOE_GITDIR as pre-flight does, and apply the target-checked-out guard.\n3. At most 2 rounds:\n   - L4: sync_land_target main gives B. Its fetch and diverged codes stop the mode with exit 1.\n   - L5: the landed merge-tree call on B and the tip.\n     - Exit 1: MOE_COMMIT_FAILED_CONFLICT with the paths.\n     - Any other failure or malformed output: MOE_COMMIT_FAILED.\n     - M equal to B's tree (the branch is already contained): MOE_COMMIT_NOTHING_TO_COMMIT, exit 0, nothing published.\n   - L6: freeze B/M and run the .moe-free gate. Add a new explicit no-evidence argument to freeze_candidate and run_frozen_gate that skips record_candidate_rpc and record_check_run_rpc and nothing else; existing callers pass nothing and behave identically. Failure: MOE_COMMIT_FAILED_GATE, keeping MOE_WORKTREE_GATE_INTEGRITY when the integrity check fired.\n   - L7: C = `commit-tree M -p B -p <tip> -m \"chore(migration): land <branch> on main\"`. commit-tree runs no hooks.\n   - L9, through the landed publication helpers:\n     - Confirmed: L10 mirror in remote mode, print `MOE_MIGRATION_LANDED branch=<b> target=main base=<B> commit=<C>`, exit 0.\n     - `[rejected]`, a lost CAS, or a reconcile proving C can never apply: the round ends, and the next round fetches a fresh B and re-gates.\n     - `[remote rejected]`: MOE_PUSH_FAILED, exit 1.\n     - Unknown: MOE_PUSH_OUTCOME_UNKNOWN naming C, exit 1, no ref moved.\n4. Rounds exhausted: MOE_COMMIT_FAILED_REF_CONTENTION, exit 1.\n\nSkipped steps: L0-L3, L5b, L8 and L11-L14. That means no lease, receipt journal, rescue ref, record_commit, finalize_attempt, announce or control follow. Where a landed helper performs one of those task-bound side effects inline, give it the same opt-out or move the side effect into the completion arm. The completion arm's behaviour must not change; the held-out worktree-landing suite and the existing postflight cases prove it.\n\nSave scripts/moe-agent.sh atomically: a temp file in the same directory, checked with `bash -n`, then a rename. Running seats read the wrapper by offset.\n\nError handling in this step:\n- Check every git exit status explicitly and map it to the codes above. No failure path publishes.\n- A signal before L9 publishes nothing.\n- A signal during or after L9 leaves a state the re-run settles. Never print MOE_MIGRATION_LANDED unless publication is confirmed.\n- cleanup_gate_workspace still runs on every exit.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Mirror step 2 in scripts/moe-agent.ps1 as Invoke-MoeMigrationLanding, with a `-LandBranch <string>` parameter and a help entry. Keep the same validation order, codes, strings and exit codes: 2 for bad args, 1 for refused or failed, 0 for landed or nothing to commit.\n\nCall the landed twins:\n- Sync-MoeLandTarget and Update-MoeLandTargetMirror.\n- The merge-tree helper.\n- The L9 publication and Resolve-MoePushOutcome.\n- New-MoeFrozenCandidate. Never call Send-MoeCandidate in this mode.\n- `Invoke-MoeFrozenGate ... -WorktreeMode` with a new `-NoEvidence` switch that skips Send-MoeCheckRun only.\n\nThe script's exit/finally path skips deregistration in this mode, and the mode sends no RPC.\n\nPowerShell 5.1 rules:\n- Run git through Invoke-MoeGit and PATH, and check every native exit code explicitly.\n- Compare refs and codes ordinally (-ceq or [string]::Equals with Ordinal; mem:gotcha-powershell-path-comparison-culture).\n- Restore any env var you set in try/finally.\n- Keep the file's UTF-8 BOM and LF line endings.\n\nError handling in this step:\n- A PowerShell exception inside the mode is caught and printed with the matching code, or generic MOE_COMMIT_FAILED when none applies. The mode then exits 1 after the finally block has removed the gate workspace.\n- No catch path publishes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Single final verification gate. From the repo root, run exactly:\n`node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|MIGRATION|PUSH)_[A-Z0-9_]+' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|MIGRATION|PUSH)_[A-Z0-9_]+' scripts/moe-agent.ps1 | sort -u)`\n\nRequire all of these:\n- failureClass NONE;\n- the held-out landing cases green and byte-unchanged, checked by a read-only diff against WT-08T's landed version;\n- parity PASS;\n- an empty diff;\n- exit 0.\n\nOn a native Windows seat, also run `node scripts/tests/postflight-safe.mjs powershell` at the same revision. It must run under Windows PowerShell 5.1, not as a skipped or substituted pwsh result. Without a Windows seat, say so in complete_task instead of claiming it.\n\nLoad regression-check and verification-before-completion. Submit the fresh command, its exit code and the safe output tail as the complete_task evidence. Keep raw postflight output out of chat.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review, once, scoped to this diff. Load adversarial-self-review, then read the diff as a racing peer and as a crash.\n\nProbe these situations:\n- a peer push between L4 and L9;\n- a remote that applies C while the client sees an error;\n- SIGINT/SIGTERM before, during and after L9;\n- branch names with slashes, or equal to main;\n- a branch already contained in main;\n- main checked out in some worktree;\n- .moe paths in M;\n- MOE_DISABLE_QUALITY_GATE=1;\n- a --worker-id that names a live seat.\n\nConfirm all of the following:\n- No path prints MOE_MIGRATION_LANDED or exits 0 without a confirmed publication or a true nothing-to-commit.\n- Nothing is published after a refusal.\n- No push uses --force, -f, --force-with-lease or a '+' refspec.\n- C always has tree M and exactly the parents [B, tip].\n- No RPC, lease, journal, rescue ref, Candidate, CheckRun or ledger row exists.\n- The source branch never moves.\n- The completion arm and shared mode are unchanged.\n\nKeep the source+test diff within 400 net non-board LOC by reusing the landed helpers, not by dropping cases. After any fix, re-run step 4's command fresh.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's 13:00Z delegation. This is the WT-10M migration-CLI split from the already-promoted WT-10 by architect-76a2c8bb. The planner still has to settle the task/worker identity for the migration land lease (an open question to worker-0062feec at 13:30Z) before the plan can be runnable.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
+    "task-befdddf7e1f047a0ba4f71dd900c9b8f"
+  ],
+  "priority": "HIGH",
+  "order": 22.5,
+  "comments": [
+    {
+      "id": "comment-0e698959331d42e1935015cab2f5b0cf",
+      "author": "architect-76a2c8bb",
+      "content": "Resolved producer contract found in WT16 comment-5957b3a6a14141139e31013de94939af (WT-S author 13:53Z): migration takes NO resource lease because acquire_resource requires an owned task. Drain + gate + CAS + nonforced push keep main safe. This supersedes child description/earlier assumption that migration would acquire a task lease. Use final approved WT-S §7.3; do not fake task identity or broaden resource API. Gate remains mandatory, two-parent migration merge, no task ledger/journal. Also revised worktree completion ignores qualityGateScope and gates every configured landing; normal completions still lease.",
+      "timestamp": "2026-10-30T14:03:32.906Z"
+    },
+    {
+      "id": "comment-d1f0ee31dbec483f8fb954d004505c6b",
+      "author": "architect-6fc3dd5c",
+      "content": "Lease identity contract for WT-10M, from its planner (architect-6fc3dd5c), 2026-10-30. This answers the planning prerequisite. It governs this row over WT-S 6285adf7 §7.3's \"It takes no lease\", because DoD 3 is human-owned and the design doc's rule is that a comment wins.\n\n1. Flags: sh `--land-branch <branch> --lease-task <taskId>`, ps1 `-LandBranch <branch> -LeaseTask <taskId>`. Both or neither. A missing or empty value, a lease task failing the daemon's entity-id rule ([A-Za-z0-9_-], at most 128 characters), or a branch that is not a valid local branch, does not resolve to a commit or equals the target gives MOE_MIGRATION_BAD_ARGS and exit 2, before any fetch or RPC.\n2. Owner task: the operator's dedicated migration row, which WT-16's runbook creates, keeps unassigned in PLANNING and archives afterwards. The wrapper never creates, claims, assigns or registers it.\n3. Owner worker: the wrapper's `--worker-id`. The mode makes no join_team, claim_next_task, get_context, heartbeat or deregister_worker call, and the exit trap skips deregistration.\n4. Authorization: unchanged daemon rules, with no daemon change.\n   - acquire_resource and wait_for_resource: NOT_FOUND for a missing row; assertWorkerOwns' unassigned arm otherwise, NOT_ALLOWED when another worker holds the row.\n   - release_resource {resourceId, taskId, workerId} frees only this caller's lease or queue entry.\n5. Resource `git-land-main`, using WT-10's resource-id helper on the fixed target `main`. Settings are not read for the target.\n6. Failure: anything but an admitted grant, including a refusal, a malformed reply, no answer or a timeout, gives MOE_COMMIT_FAILED_LAND_LEASE and exit 1. Nothing is fetched or published.\n7. Release: WT-10's release_land_lease / Release-MoeLandLease runs on every exit, including the EXIT trap and the PowerShell finally.\n8. Outcome and evidence:\n   - Exit 0: MOE_MIGRATION_LANDED (prints the branch, target, B and C) or MOE_COMMIT_NOTHING_TO_COMMIT. Nothing-to-commit means the branch tip is an ancestor of the fetched B.\n   - Exit 1: every other refusal or failure.\n   - No Candidate, CheckRun, ledger, journal or rescue row, and no finalize_attempt or announce.\n   - The freeze and gate helpers get an explicit no-evidence opt-out; existing callers are unchanged.\n9. Known daemon behaviour, accepted:\n   - A queued grant passes over a row no live seat holds (grantNextLeases, heldByLiveSeat). A queued migration is therefore admitted at its next wait_for_resource re-entry, through the direct grant.\n   - The 5-min reaper drops a lease whose row leaves PLANNING/WORKING/REVIEW/BLOCKED.\n   - Safety never depends on the lease: CAS plus a non-forced push.",
+      "timestamp": "2026-10-30T14:05:12.785Z"
+    },
+    {
+      "id": "comment-0fceebde423444a8bab56195bd822c4a",
+      "author": "architect-6fc3dd5c",
+      "content": "WITHDRAWN: my comment-d1f0ee31, the --lease-task contract. I posted it without seeing comment-0e698959 (14:03, this row's author) or the WT-S author's WT-16 comment-5957b3a6 (13:53). I concur with them. WT-S §7.3 in 6285adf7 governs:\n\n- The migration takes no land lease. There is no --lease-task flag, no migration row, no join, claim, heartbeat or deregister call, and no RPC of any kind.\n- Fail-closed rules:\n  - MOE_MIGRATION_NO_GATE: settings.qualityGate is blank, or MOE_DISABLE_QUALITY_GATE=1. Raised before any fetch.\n  - MOE_MIGRATION_BAD_ARGS, exit 2: the branch is missing or empty, is not a valid local branch, does not resolve to a commit, or equals the fixed target main.\n  - MOE_MIGRATION_LANDED marks a published C.\n- DoD 3 reading: both harnesses prove that no RPC at all is sent, on success, refusal and failure paths alike. A TASK rail proposal on this row pins that reading for QA.",
+      "timestamp": "2026-10-30T14:07:48.135Z"
+    },
+    {
+      "id": "comment-e54103924d4e4709a2184c995b310963",
+      "author": "governor-693b7073",
+      "content": "Governor, 14:45Z: I approved TASK rail proposal prop-46a25cec under the human's 13:00Z delegation (\"if something is waiting for me i delegeted u\"). QA applies DoD 3 as the rail reads: no land lease, no daemon RPC of any kind on any path, and nothing published on any refusal or failure. This rail does not authorize running the migration against this project's main. That remains a human go.",
+      "timestamp": "2026-10-30T14:11:56.600Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:35:19.557Z",
+  "updatedAt": "2026-10-30T14:11:57.166Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:41:12.579Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:46:37.034Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-6fc3dd5c"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:11:57.139Z",
+  "executionContract": {
+    "intendedBehavior": "A human runs `scripts/moe-agent.sh --land-branch <branch>` or `scripts/moe-agent.ps1 -LandBranch <branch>` from the control checkout. The wrapper lands that branch on main as one gated merge commit C through the existing worktree landing core: L4 sync, L5 merge-tree of the fetched main B and the branch tip, L6 gate on exactly M in the .moe-free gate worktree, L7 commit-tree without hooks, L9 CAS or non-forced push, and L10 mirror, in at most 2 rounds. It takes no lease, sends no daemon RPC, claims nothing, and records no Candidate, CheckRun, ledger, journal or rescue entry. With no configured gate (or with MOE_DISABLE_QUALITY_GATE=1) it refuses with MOE_MIGRATION_NO_GATE before any fetch. A rerun after a publication exits 0 with MOE_COMMIT_NOTHING_TO_COMMIT.",
+    "invariants": [
+      "main moves only through the update-ref CAS or a non-forced push of a C whose tree M passed the gate in the same round; no push ever uses --force, -f, --force-with-lease or a '+' refspec.",
+      "C has tree M and exactly two parents, B first and the branch tip second; the source branch ref never moves.",
+      "Migration mode sends no RPC through the proxy or moe-call.sh: no lease, claim, join, get_context, evidence, ledger, finalize, chat or deregister call.",
+      "A failed, refused or unconfirmed publication never prints MOE_MIGRATION_LANDED, never moves the local target, and exits non-zero.",
+      "Shared mode and the worktree completion arm keep their behaviour; the held-out worktree-landing tests stay byte-unchanged.",
+      "moe-agent.sh and moe-agent.ps1 emit the same MOE_MIGRATION_, MOE_LAND_ and MOE_PUSH_ codes."
+    ],
+    "compatibility": [
+      "Existing callers of freeze_candidate, run_frozen_gate and Invoke-MoeFrozenGate pass no new argument and behave identically; the no-evidence option is opt-in.",
+      "Every existing wrapper option and the default (non-migration) launch path are unchanged."
+    ],
+    "reuse": [
+      "sync_land_target/Sync-MoeLandTarget and mirror_land_target/Update-MoeLandTargetMirror (WT-09).",
+      "WT-08's merge-tree helper and local CAS publication, plus WT-09's push and reconcile_push/Resolve-MoePushOutcome.",
+      "freeze_candidate/New-MoeFrozenCandidate and run_frozen_gate worktree/Invoke-MoeFrozenGate -WorktreeMode (WT-10G/WT-10), with a new opt-in no-evidence switch.",
+      "The raw configured-qualityGate reader and the target-checked-out guard from the worktree completion arm.",
+      "postflight-owner-guard.cjs's shared-suite pattern for the new postflight-migration.cjs."
+    ],
+    "checkRefs": [
+      "node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|MIGRATION|PUSH)_[A-Z0-9_]+' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|MIGRATION|PUSH)_[A-Z0-9_]+' scripts/moe-agent.ps1 | sort -u)",
+      "node scripts/tests/postflight-safe.mjs powershell (native Windows PowerShell 5.1 seat, same revision)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) --lease-task identity: a real operator row plus the wrapper's worker id. This planner posted it briefly and withdrew it after finding the producer's comment-5957b3a6 on WT-16 and the row author's comment-0e698959, which both say no lease. During the drained migration a lease adds nothing beyond the CAS and the non-forced push, and it would have added a flag, a runbook row and daemon edge cases: queued grants pass over unheld rows, and the reaper drops leases on rows outside the active columns. 2) A wrapper-created or claimed task: rejected. DoD 2 forbids incidental claims, and create_task makes a BACKLOG row that the reaper treats as ineligible. 3) A daemon system-owner lease: rejected, because it broadens the resource API. 4) Chosen: WT-S §7.3 in 6285adf7, no lease and no RPC, with DoD 3 pinned by the TASK rail proposal prop-46a25cec. 5) The target is fixed to `main` rather than resolveWorktreeTarget: the migration runs before consolidationBranch is set, and a literal consolidationBranch could even equal the source branch. 6) Nothing-to-commit uses WT-08's L5 rule, M == B^{tree}, which covers 'tip already contained'. 7) One shared suite file, following postflight-owner-guard.cjs, instead of two inline copies, to stay under 400 LOC. A tripwire proxy written at runtime replaces fake-proxy edits and proves 'no RPC at all' mechanically.",
+    "codebaseInsights": "- Evidence RPCs to skip: sh freeze_candidate calls record_candidate_rpc and run_frozen_gate calls record_check_run_rpc; ps1 Invoke-MoeFrozenGate calls Send-MoeCheckRun.\n- cleanup_temp, the sh EXIT trap, calls deregister_worker through moe-call.sh. moe-call.sh honours MOE_PROXY_PATH but first requires .moe/daemon.json, so the suite writes a fake one, as postflight-owner-guard.cjs does.\n- postflight-owner-guard.cjs is the shared-suite template: invoked at about postflight.sh:906 and postflight.ps1:886.\n- The post-flight qualityGate reader is a Python JSON read of $MOE_DIR/project.json. WT-10 separates the raw gate from the scope-filtered one.\n- Bash defines functions top-down, so dispatch must come after the landing helper definitions and before the main loop at about :6507.\n- moe-agent.ps1 and postflight.ps1 carry a UTF-8 BOM.\n- Daemon facts, for the record: acquire_resource/wait_for_resource refuse a missing task (NOT_FOUND) and an assignee mismatch (NOT_ALLOWED); grantNextLeases passes over rows no live seat holds; the reaper drops leases on tasks outside PLANNING/WORKING/REVIEW/BLOCKED.",
+    "risks": "- Main publication is data-loss-critical, hence heavy/max.\n- The landed WT-08/09/10/10G helpers may embed task-bound side effects, such as record_commit in WT-09's fetch-failure path and the journal/rescue in reconcile. Factoring them must keep the completion arm's behaviour byte-identical; if that is not possible within budget, call moe.request_replan.\n- The unknown case relies on WT-09 classifying a transport error as reconcile, then unknown. If WT-09's code differs, assert the DoD property (no success claim, no ref moved, exit 1) with WT-09's code.\n- prop-46a25cec may still be pending at QA time. The governor can hold the row as for a size waiver.\n- PS 5.1: native exit codes, ordinal compares, the BOM.\n- Running seats read moe-agent.sh by offset, so save it atomically.\n- 5 files, at most 400 net LOC.",
+    "keyFiles": [
+      "docs/plans/2026-10-30-per-task-worktrees.md",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-owner-guard.cjs",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight-safe.mjs",
+      "scripts/moe-call.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:11:57.166Z",
+  "approvedPlanRevision": 1
+}

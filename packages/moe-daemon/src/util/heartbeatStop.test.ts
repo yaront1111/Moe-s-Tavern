@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
@@ -40,15 +41,29 @@ foreach ($name in @('Start-HeartbeatSidecar', 'Stop-HeartbeatSidecar')) {
 }
 `;
 
+// Parseable stand-in: the reload bodies parse the wrapper before the handle guard.
+const tempDirs: string[] = [];
+function parseableWrapper(name: string, content: string) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-hb-reload-'));
+  tempDirs.push(dir);
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, content);
+  return file;
+}
+
 describe('heartbeat cleanup cannot strand the wrapper after the CLI exits', () => {
+  afterEach(() => { for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+
   it.skipIf(!hasBash)('does not re-exec and lose a pending Bash sidecar handle', async () => {
     const from = sh.indexOf('\n    if [ -n "$MOE_WRAPPER_LAUNCH_HASH" ]; then');
     const body = sh.slice(from, sh.indexOf('\n    IS_FIRST_ITERATION=', from));
+    const wrapper = parseableWrapper('wrapper.sh', 'true\n');
     const r = await run('bash', ['-c', `
 set -e
-MOE_WRAPPER_LAUNCH_HASH=old; MOE_WRAPPER_PATH=unused; HEARTBEAT_PID=123
+MOE_WRAPPER_LAUNCH_HASH=old; MOE_WRAPPER_PATH='${wrapper.replaceAll("'", "'\\''")}'; HEARTBEAT_PID=123
 MOE_WRAPPER_ARGV=(); WORKER_ID=''; PROJECT=''; SECURE_TEMP_DIR=''
 sha256sum() { echo 'new unused'; }
+wrapper_reload_deferred() { return 1; }
 stop_heartbeat_sidecar() { :; }
 exec() { echo BAD_REEXEC; }
 for once in 1; do
@@ -58,18 +73,21 @@ echo RETAINED_HANDLE
 `]);
     expect(r.code, r.output).toBe(0);
     expect(r.output).not.toContain('BAD_REEXEC');
+    expect(r.output).toContain('MOE_HEARTBEAT_STOP_TIMEOUT');
     expect(r.output).toContain('RETAINED_HANDLE');
   });
 
   it.skipIf(!hasPwsh)('does not reload and lose a pending PowerShell job handle', async () => {
     const from = ps.indexOf('\n    if ($script:MoeWrapperLaunchHash) {');
     const body = ps.slice(from, ps.indexOf('\n    $isFirstIteration', from));
+    const wrapper = parseableWrapper('wrapper.ps1', '$null = 1\n');
     const r = await run('pwsh', ['-NoProfile', '-Command', `
 $ErrorActionPreference = 'Stop'
 $script:MoeWrapperLaunchHash = 'old'
-$script:MoeWrapperPath = '${psPath.replaceAll("'", "''")}'
+$script:MoeWrapperPath = '${wrapper.replaceAll("'", "''")}'
 $script:CurrentHeartbeatJob = [pscustomobject]@{ State = 'Running' }
 function Get-MoeSha256Hex { 'new' }
+function Test-MoeWrapperReloadDeferred { param($Hash) $false }
 function Stop-HeartbeatSidecar {}
 function Invoke-MoeDeregister { throw 'BAD_RELOAD' }
 for ($once=0; $once -lt 1; $once++) {
@@ -79,6 +97,7 @@ Write-Output RETAINED_HANDLE
 `]);
     expect(r.code, r.output).toBe(0);
     expect(r.output).not.toContain('BAD_RELOAD');
+    expect(r.output).toContain('MOE_HEARTBEAT_STOP_TIMEOUT');
     expect(r.output).toContain('RETAINED_HANDLE');
   });
 

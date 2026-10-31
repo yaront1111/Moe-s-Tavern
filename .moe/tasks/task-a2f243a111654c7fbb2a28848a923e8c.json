@@ -1,0 +1,276 @@
+{
+  "id": "task-a2f243a111654c7fbb2a28848a923e8c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: ps1 unchanged-tree 'nothing' landing sends record_commit without skipped/contested, so held contested paths raise no #governors MOE_CONTESTED_HELD alert",
+  "description": "scripts/moe-agent.ps1 has two gaps against sh, whose record_commit_rpc always sends skipped and contested:\n- The `-not $built.Changed` branch (~line 4785, MOE_COMMIT_NOTHING_TO_COMMIT) calls Send-MoeRecordCommit with no `skipped` and no `contested`. A landing whose candidates match the branch tip but which still holds own contested paths therefore gets no daemon MOE_CONTESTED_HELD task line or #governors alert. The session-ended held= line is still posted, because $res.Held is set after attribution.\n- The no-candidate send (~4677) omits `contested`, so a strict MOE_ATTR_CONTESTED hold names its peer '?'.\nFix: send the same `skipped` (+$dropped) and `contested` lists as the committed send (~4910). Add a postflight.ps1/.sh regression for an unchanged-tree `nothing` landing with a held contested path. One way to build it: settings.consolidationBranch pre-holding the own file's bytes, with the checkout on main. Found in task-c2a900aa's step-6 review.",
+  "definitionOfDone": [
+    "ps1 MOE_COMMIT_NOTHING_TO_COMMIT (unchanged tree) and no-candidate record_commit carry skipped and contested like sh's record_commit_rpc",
+    "postflight.ps1 and postflight.sh assert the record_commit row of an unchanged-tree nothing landing names the held path under its MOE_ATTR_CONTESTED* code",
+    "postflight.{sh,ps1} and parity-check pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED TESTS FIRST (DoD 2): add scenario AI to scripts/tests/postflight.sh and its twin to scripts/tests/postflight.ps1. Model both on scenario AG (sh ~4377, ps1 ~3663) and put each right after scenario AH's 'ok' line.\n\nWhat AI proves: a held contested path reaches record_commit on BOTH nothing landings.\n- The task's only own path is a declared path that is dirty BEFORE pre-flight and also peer-declared, so it is held and nothing lands. This is AG's mechanism: declare_files paths are held by CONTESTED whatever the peer state.\n- Use declaredFiles, NOT filesModified. With FAKE_SCOPE_DECLARED_FIELD=1, a filesModified path that is dirty at pre-flight becomes MOE_ATTR_ASSERTED_FOREIGN instead (mem:convention-postflight-scratch-harness).\n\nThree runs:\n- AI1, completion (FAKE_TASK_STATUS / -Status REVIEW), default policy, code 'MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'.\n  - Declared count > 0 and nothing missing, so both wrappers enter the build with zero candidates (sh land_commit; ps1 past the no-candidate branch).\n  - The tree is unchanged, so this is the ps1 `-not $built.Changed` MOE_COMMIT_NOTHING_TO_COMMIT send.\n- AI2, the same with settings {\"attribution\":{\"contested\":\"skip\"}}, code 'MOE_ATTR_CONTESTED'. The strict code carries no peer, so the daemon names it only from `contested`.\n- AI3, checkpoint (status WORKING) with contested=skip. Zero candidates and not a completion, so this is the no-candidate send.\n\nFixture per run:\n- `make_scope_project \"$DIR\" '[]' <status> '[]' <settings>`. In ps1, New-ScopeProject followed by AG's literal-JSON record write, because PS 5.1 ConvertTo-Json unwraps one-element arrays: `{\"id\":\"task-postflight\",\"title\":\"Postflight smoke\",\"status\":\"<status>\",\"filesModified\":[],\"declaredFiles\":[\"held.txt\"]}`.\n- COMMIT the rewritten record (`git commit -qm ai-declared .moe/tasks/task-postflight.json`), else it lands as BOARD and the tree changes.\n- `echo pre > held.txt`.\n- Env: FAKE_SCOPE_DECLARED_FIELD=1 FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED='held.txt:task-peer' FAKE_SCOPE_PEER_ACTIVE=1. In ps1, set them in try and remove them in finally, exactly like AG.\n- Run the default no-op CLI: sh `run_scope_wrapper \"$DIR\" \"$out\"`; ps1 `Invoke-GateWrapper $dir $out -Status <status>`.\n\nAssertions per run, in both harnesses, each with its own failure message:\n(a) the wrapper exits 0;\n(b) nothing was committed: `git rev-list --all --count` still equals the fixture's commit count, and held.txt is still untracked and still 'pre';\n(c) the LAST record_commit.jsonl row has outcome 'nothing', code 'MOE_COMMIT_NOTHING_TO_COMMIT', and kind 'completion' (AI1, AI2) or 'checkpoint' (AI3);\n(d) Array.isArray(row.skipped) && Array.isArray(row.contested). Check this with a node one-liner in both harnesses: the real daemon's readRecordList refuses a non-array with INVALID_INPUT, and a single held path is exactly the one-element case PS 5.1 can mangle;\n(e) row.skipped filtered to codes starting 'MOE_ATTR_CONTESTED' deep-equals [{ path: 'held.txt', code: <run code> }];\n(f) row.contested contains { path: 'held.txt', taskId: 'task-peer' };\n(g) ps1 only, to prove WHICH send ran: AI1 and AI2 console contains 'the attributable paths already match', and AI3 contains 'no attributable changes to commit'. Match these ASCII substrings only; the console line also holds an em dash in the OEM code page.\n\nIf AI1/AI2 do not reach the unchanged-tree line on ps1, switch to the task description's construction. settings.consolidationBranch names a branch made in the fixture holding an owned file's exact bytes, the checkout stays on main/master, and FAKE_CLI_EXTRA_FILE + FILE_CLI write those same bytes during the session. Keep assertion (g).\n\nBump the commit-scope counters and lists:\n- sh: scope_expected_runs 40 to 41 and 39 to 40; add AI to the 'Expected ... scenarios' list.\n- ps1: $scopeExpectedRuns 39 to 40 and 40 to 41; add AI to its throw text.\n\nKeep postflight.ps1 UTF-8 with BOM and LF.\n\nRED proof: run the ps1 AI scenario against HEAD's scripts/moe-agent.ps1, either through a trimmed scratch harness or the full harness in a snapshot.\n- AI1 and AI2 must fail (e) and (f): no skipped or contested on the unchanged-tree row.\n- AI3 must fail (f): no contested on the no-candidate row.\n- The sh twin passes on HEAD by design: sh's record_commit_rpc already sends both lists. It is the parity pin.\nFor a fast sh loop, use the trimmed scratch harness recipe in mem:convention-postflight-scratch-harness, in a snapshot, never the live tree. Record the red output in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Scenario AI added after AH in postflight.sh and postflight.ps1 (AI1 completion skip-untouched, AI2 completion contested=skip, AI3 checkpoint contested=skip; held.txt declared via declaredFiles, dirty before pre-flight, peer-declared). Assertions: exit 0, commit count unchanged, held.txt untracked + 'pre', last record_commit row nothing/MOE_COMMIT_NOTHING_TO_COMMIT/kind, skipped+contested Array.isArray, skipped CONTESTED* entries deepStrictEqual [{path:'held.txt',code}], contested has {held.txt, task-peer}; ps1 also pins the console line (unchanged-tree vs no-candidate). Node checker written to a .cjs (ps1) / inline -e (sh); deepStrictEqual so ps1 hashtable key order doesn't matter. Counters: sh 41/40, ps1 40/41, AI added to both lists. postflight.ps1 keeps BOM+LF, ParseFile 0 errors; bash -n clean.\nRED (snapshot /mnt/d/moe-scratch/ta2f2-red-Spuo = HEAD scripts + the two harnesses, trimmed scratch harnesses, env scrubbed, PS 5.1):\n- ps1 AI1 row: {...,\"code\":\"MOE_COMMIT_NOTHING_TO_COMMIT\",\"outcome\":\"nothing\"} with no skipped/contested -> 'skipped and contested must be JSON arrays'\n- ps1 AI2: same\n- ps1 AI3 (no-candidate): skipped [{code:MOE_ATTR_CONTESTED,path:held.txt}] but no contested -> fails\n- ps1 (g) branch lines matched on HEAD for all three (AI1/AI2 unchanged-tree, AI3 no-candidate).\n- sh AI passes on HEAD by design (parity pin): rows carry skipped [{held.txt, code}] and contested [{held.txt, task-peer}] for all three.\nShared checkout: hundreds of peers' dirty paths left untouched.",
+      "startedAt": "2026-10-30T06:29:22.121Z",
+      "completedAt": "2026-10-30T06:32:30.938Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX (DoD 1): every ps1 landing record carries the held lists. Make one helper the single source of the two lists, so the three sends can never drift apart again.\n\n1) scripts/moe-agent.ps1\n- Add, next to ConvertTo-MoeRecordPaths (~line 4086), a function, e.g. `Get-MoeRecordHeldFields $Attr $Dropped [string]$Rel`. It returns a hashtable with exactly two keys:\n  - `skipped`: @(...) of the non-MOE_ATTR_EXCLUDED $Attr.Skipped entries plus $Dropped, first 100, each @{ path = ConvertTo-MoeRootRelative <Path> $Rel; code = <Code> };\n  - `contested`: @(...) of $Attr.Contested, first 100 like the sh twin's contested[:100], each @{ path = ...; taskId = <TaskId> }.\n- Filter `$null -ne $_` on both inputs, as the existing landedContested line does. `@($null)` is a one-element array in PowerShell, and a $null $Dropped must not become a bogus entry.\n- Comment it as the twin of sh record_commit_rpc's skipped and contested assembly (MOE_ATTR_EXCLUDED skips are static noise that would crowd out the 100 cap).\n- Use it at all three sends, by merging into each record with hashtable `+`. The base literal must not already hold either key, because `+` throws on a duplicate key:\n  a) the no-candidate send (~4711): pass `@()` as Dropped, since the build has not run and `$dropped` is not yet assigned there. This replaces its inline `skipped` and adds the missing `contested`;\n  b) the unchanged-tree `-not $built.Changed` send (~4819): pass `$dropped`. It adds both lists; today it has neither;\n  c) the committed `$recArgs` (~4931): pass `$dropped`, replacing its two inline keys. That is behaviour-identical except contested is now capped at 100, as sh caps it.\n- Live-launcher safety: every seat in this checkout parses moe-agent.ps1 whole at each launch. Make the change in complete, parseable hunks: the helper first, then each call site. Re-parse after each hunk with `[System.Management.Automation.Language.Parser]::ParseFile`; it must return no errors. Keep the UTF-8 BOM and LF endings (parity-check enforces the BOM).\n\n2) scripts/moe-agent.sh, a one-token parity alignment. The `elif [ \"$LAND_OUTCOME\" = \"nothing\" ]` record (~5661) passes \"\" as record_commit_rpc's 9th argument, DROPPED_FILE. Pass \"${LAND_DROPPED_FILE:-}\" instead, so an unchanged-tree nothing row carries its staging-time drops exactly like the ps1 row above.\n- The no-candidate path still sends none, because run_landing resets LAND_DROPPED_FILE to \"\" (~5426) and only land_commit sets it (~4688).\n- Run `bash -n scripts/moe-agent.sh` before saving the final bytes, since live sh seats hot-reload on change.\n\nError handling: the sends stay best-effort, so Send-MoeRecordCommit still swallows RPC failures. Empty lists serialize as [] and are accepted by readRecordList.\n\nRe-run the AI scenario (scratch harness, or the full ps1 harness in a snapshot). It must pass on both wrappers.\n\nContested landing: these four files are also declared by four idle, unassigned WORKING CQ rows (task-16bbf8ff, task-2720c13b, task-7f82e200, task-c4e076cd), and all four were clean at plan time.\n- Make every edit through a wrapper-observed file-editing tool call, never a shell cp or redirect onto the live launcher.\n- If the session-ended line still reports a path held, say so in the complete_task summary. Never hand-land it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "scripts/moe-agent.ps1: new Get-MoeRecordHeldFields($Attr, [array]$Dropped, [string]$Rel), placed after ConvertTo-MoeRecordPaths. It returns @{ skipped; contested }:\n- skipped: non-EXCLUDED Attr.Skipped plus Dropped, nulls filtered, first 100, {path (root-relative), code};\n- contested: Attr.Contested, nulls filtered, first 100, {path, taskId}.\nIt is merged with hashtable `+` at three sends: no-candidate (Dropped @(); replaces its inline skipped and adds contested), unchanged-tree `-not $built.Changed` (Dropped $dropped; adds both) and committed $recArgs (replaces both inline keys; contested is now capped at 100 like sh). No base literal keeps either key: grep for `skipped =`/`contested =` finds only the helper and unrelated settings/attribution internals.\n\nEdits were made in 4 Edit-tool hunks (helper first), and ParseFile returned 0 errors after each. The UTF-8 BOM and LF endings are kept.\n\nscripts/moe-agent.sh: the nothing record_commit_rpc call's 9th arg changes from \"\" to \"${LAND_DROPPED_FILE:-}\". bash -n is OK.\n\nGREEN on snapshot /mnt/d/moe-scratch/ta2f2-green-uVYX (HEAD scripts plus the 4 files), scratch AI harness: sh rc=0, PS 5.1 rc=0, pwsh 7.6.9 rc=0. The PS 5.1 rows now carry skipped [{code,path:held.txt}] and contested [{path:held.txt,taskId:task-peer}] on all three runs, both JSON arrays with one element.",
+      "startedAt": "2026-10-30T06:32:32.913Z",
+      "completedAt": "2026-10-30T06:34:27.718Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE (DoD 3) on a snapshot of HEAD plus exactly this task's four files, never the live tree, where peers' dirty bytes could mix in. This chain is complete_task's verification command. Run it from WSL with MOE_* and CLAUDE* scrubbed (env -u each), from a Windows-drive cwd. A /tmp UNC cwd breaks the ps1 dirty-helper case (mem:gotcha-qa-ps1-postflight-from-wsl).\n\n```\nW=$(mktemp -d /mnt/d/moe-scratch/ta2f2-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$W/$f\"; done && cd \"$W\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/parity-check.ps1\")\" && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/postflight.ps1\")\"\n```\n\n- If pwsh.exe is installed, repeat the last two legs with pwsh.exe. The one-element-array JSON shape differs between 5.1 and 7.\n- On a native Windows seat, run the same legs from Git Bash plus powershell.exe and pwsh.exe inside the snapshot instead. The Git Bash postflight.sh takes about 1h45m.\n- cmp the four owned files against the snapshot before citing the run.\n- Each harness is long. Launch it in the background with a log file and poll; the foreground tool cap is 600 s. Read PS 5.1 `*>` logs through `iconv -f UTF-16LE -t UTF-8`.\n- Required evidence:\n  - 'commit-scope scenarios run: 41' (40 without symlinks) from sh, and the matching count from ps1;\n  - '[scenario AI] ok' in both;\n  - both parity-checks exit 0.\n- If a ps1 run fails outside AI, rerun HEAD's unmodified scripts in a sibling snapshot before blaming the change (launch environment).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification chain (the plan's command, verbatim) was run from WSL with MOE_*/CLAUDE* scrubbed and cwd /mnt/d/moe-scratch, on snapshot /mnt/d/moe-scratch/ta2f2-WiLc = HEAD scripts plus the 4 owned files. cmp shows all 4 files identical to the live tree.\n\nResults:\n- bash -n: OK.\n- PASS parity-check.sh.\n- postflight.sh: frozen 74, owner guard 16, '[scenario AI] ok', 'commit-scope scenarios run: 41', PASS.\n- PASS parity-check.ps1 (PS 5.1).\n- postflight.ps1 under PS 5.1.26100: frozen 74, owner guard 16, '[scenario AI] ok', 'commit-scope scenarios run: 40' (no symlinks on this host, the expected 40), PASS.\n- CHAIN_EXIT=0.\n- pwsh 7.6.9 legs: parity-check.ps1 exit 0; postflight.ps1 '[scenario AI] ok', scope 40, PASS, exit 0.\n\nLog: /mnt/d/moe-scratch/ta2f2-run.log.",
+      "startedAt": "2026-10-30T06:34:29.828Z",
+      "completedAt": "2026-10-30T07:15:20.486Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's diff, the last step. Check and note each item:\n- Every ps1 record_commit send that follows attribution now reads both lists from the one helper, and no inline copy is left: grep `skipped =` and `contested =` in moe-agent.ps1.\n- The failed sends (peel, build, gate, commit, ref contention) are deliberately unchanged and out of this task's DoD. The sh twin's failed records still carry the lists; note this residual gap in the complete_task summary rather than fixing it here.\n- The helper with Attr.Skipped/Contested $null, empty, one element, or more than 100 elements: is the serialized JSON always an array of objects with string fields? Check this under PS 5.1 specifically.\n- `@{} + @{}` with a duplicate key throws inside the landing's try. Confirm no base literal still carries skipped or contested.\n- The sh one-token change: the no-candidate nothing row is byte-identical to before, and only the unchanged-tree row gains drops. Confirm `bash -n` is clean.\n- moe-agent.ps1 still has its BOM and LF endings, and the parity-checks are green.\n- Scenario AI cannot pass vacuously: (c) pins outcome and kind, (d) pins array shape, and (g) pins the branch on ps1.\n- Would a governor now see MOE_CONTESTED_HELD for an unchanged-tree landing on a ps1 seat? Trace recordCommit.ts heldContestedPaths, which reads skipped codes and takes the strict peer from contested.\n- The diff stays well under the 400 net-LOC review cap.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of `git diff -- <4 owned files>` (+147/-18, far under the 400 net-LOC cap). Findings:\n\n- Single source: grep `skipped =` / `contested =` in moe-agent.ps1 finds only the helper, plus unrelated settings (2386/2406) and attribution internals (3618/3620). No inline copy is left at the no-candidate, unchanged-tree or committed sends.\n- Duplicate key: no base literal at the 3 merged sends carries skipped or contested, so hashtable `+` cannot throw.\n- Edge shapes, run directly under PS 5.1 (AST-extracted helper, ConvertTo-Json -Depth 20 -Compress like Invoke-MoeRpc):\n  - $null fields, empty lists, or EXCLUDED-only skips give `\"skipped\":[]` and `\"contested\":[]`;\n  - one element in each list stays a one-element array of {path,code} / {path,taskId} string objects;\n  - 150 entries are capped at 100 in each list;\n  - a $null Dropped is filtered, and one dropped entry is kept;\n  - Rel 'sub/' is stripped from the paths.\n- Exit paths: the helper is pure. There is no StrictMode or global Stop EAP, and $attr always has Skipped/Contested arrays (single construction at ~3762). The new list-building on the nothing paths therefore cannot throw into the landing catch.\n- sh: run_landing resets LAND_DROPPED_FILE to \"\" and only land_commit sets it. The no-candidate and BOARD-deferral nothing rows are byte-identical to before; only an unchanged-tree nothing row gains its staging drops (recs() also tolerates a missing file). bash -n is clean.\n- BOM and LF are kept in moe-agent.ps1 and postflight.ps1; parity-check.sh, PS 5.1 and pwsh are all green.\n- Non-vacuity: AI pins outcome, code and kind (c), array shape (d) and, on ps1, the branch console line (g). RED on HEAD failed AI1-AI3 exactly at (d).\n- Governor visibility: recordCommit.ts heldContestedPaths reads the CONTESTED* skip codes and takes a strict hold's peer from contested. alertGovernors fires on held.length>0 even for outcome nothing. A ps1 unchanged-tree held path now yields MOE_CONTESTED_HELD and the #governors alert, and AI2 names its peer instead of '?'.\n- Residual, out of DoD and filed as task-dfbda1a8230a4fe5b57dbe512fa62a33 (LOW, dependsOn this task): the ps1 failed sends (peel/build/gate/commit/ref-contention/teardown), the Invoke-MoeRescueRef kind=rescue send and the catch/finally post-CAS committed re-sends still omit both lists. sh's record_commit_rpc sends them on every outcome.",
+      "startedAt": "2026-10-30T07:15:22.503Z",
+      "completedAt": "2026-10-30T07:16:12.830Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 257.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T03:10:25.864Z",
+  "updatedAt": "2026-10-30T08:11:49.189Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T05:55:43.308Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:16:42.631Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T08:11:23.358Z",
+    "wallClockMs": 6880727
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555",
+    "worker-0062feec",
+    "qa-8e551ac8"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:25:46.497Z",
+  "executionContract": {
+    "intendedBehavior": "Every ps1 landing record that follows attribution (committed, the unchanged-tree MOE_COMMIT_NOTHING_TO_COMMIT, and the no-candidate nothing/refused) sends `skipped` (non-MOE_ATTR_EXCLUDED skips plus staging drops, at most 100) and `contested` (at most 100), as sh's record_commit_rpc does. A held contested path on an unchanged-tree landing therefore raises the daemon's MOE_CONTESTED_HELD task line and #governors alert, and a strict hold names its real peer instead of '?'. sh's nothing record also carries the unchanged-tree drops, so both wrappers send identical lists.",
+    "acceptanceCriteria": [
+      "postflight.sh and postflight.ps1 scenario AI1 (completion, skip-untouched), AI2 (completion, contested=skip) and AI3 (checkpoint, contested=skip): the last record_commit row is outcome nothing / MOE_COMMIT_NOTHING_TO_COMMIT with the right kind; skipped and contested are JSON arrays; skipped names held.txt under exactly the run's MOE_ATTR_CONTESTED* code; contested names {held.txt, task-peer}; nothing is committed",
+      "ps1 AI1/AI2 print the unchanged-tree line ('the attributable paths already match') and AI3 the no-candidate line",
+      "On HEAD's moe-agent.ps1, AI1-AI3 fail (RED proof recorded)",
+      "Snapshot chain: bash -n, parity-check.sh, postflight.sh (41 or 40 scope scenarios), parity-check.ps1 and postflight.ps1 under PS 5.1 (and pwsh when installed) all exit 0"
+    ],
+    "invariants": [
+      "A landing's outcome, its commit and its baseline writes are identical before and after",
+      "MOE_ATTR_EXCLUDED never appears in skipped",
+      "Both lists are JSON arrays of string-field objects, empty when there is nothing to report",
+      "moe-agent.ps1 keeps its UTF-8 BOM, and every intermediate edit parses"
+    ],
+    "compatibility": [
+      "No record_commit schema change: skipped and contested are existing optional array fields",
+      "Committed records are unchanged apart from contested now being capped at 100, matching sh and the daemon cap",
+      "The failed-outcome sends are untouched",
+      "The console output, the session-ended held= line and the landing outcomes are unchanged"
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.ps1: a new held-lists helper, used by the no-candidate, unchanged-tree and committed record_commit sends",
+      "scripts/moe-agent.sh: the nothing record_commit_rpc call's 9th argument becomes ${LAND_DROPPED_FILE:-}",
+      "scripts/tests/postflight.sh and postflight.ps1: scenario AI plus the commit-scope counter and list bumps"
+    ],
+    "reuse": [
+      "Scenario AG's fixture pattern, env knobs and last-row ledger read",
+      "ConvertTo-MoeRootRelative for root-relative record paths",
+      "The existing record_commit skipped/contested fields and the daemon's MOE_CONTESTED_HELD path"
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1 ~4711 no-candidate Send-MoeRecordCommit has skipped and no contested; ~4819 `-not $built.Changed` send has neither; ~4931 $recArgs has both",
+      "scripts/moe-agent.ps1 ~4738: $dropped = @() is assigned only after the no-candidate branch",
+      "scripts/moe-agent.sh ~5041 record_commit_rpc reads ATTR_DIR/skipped, the DROPPED file and ATTR_DIR/contested; ~5661 the nothing call passes \"\" for DROPPED; ~4688 land_commit sets LAND_DROPPED_FILE; ~5426 run_landing resets it",
+      "packages/moe-daemon/src/tools/recordCommit.ts readRecordList throws on non-array; heldContestedPaths takes the strict peer from contested",
+      "scripts/tests/postflight-fake-proxy.js ~591 appends record_commit args to .moe/record_commit.jsonl; FAKE_SCOPE_DECLARED_FIELD/PEERS_ACTIVE/PEER_DECLARED/PEER_ACTIVE knobs exist (scenario AG uses them)"
+    ],
+    "checkRefs": [
+      "bash -n scripts/moe-agent.sh",
+      "bash scripts/tests/parity-check.sh",
+      "MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh",
+      "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\parity-check.ps1",
+      "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\postflight.ps1"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "CHOSEN: one ps1 helper (Get-MoeRecordHeldFields or similar) that builds `skipped` and `contested` for the committed, unchanged-tree nothing and no-candidate sends. The task asks for 'the same lists as the committed send', and a shared helper makes that structural.\n\nDrops: the description says skipped includes $dropped. sh's nothing record passes no DROPPED_FILE today, so a ps1-only change would make the wrappers diverge on the rare unchanged-tree-with-drops landing. The one-token sh alignment keeps them identical.\n\nREJECTED:\n- Inlining the lists at two more sites: a third and fourth copy is how this gap arose.\n- Fixing the failed-outcome sends too: outside the DoD. Note it as a residual gap.\n\nTest construction: AI1/AI2 reach the unchanged-tree branch without the consolidationBranch trick. A completion whose only own path is a held declared path enters the build with zero candidates (sh: completion && ATTR_N_DECLARED > 0 && not all missing; ps1: past the no-candidate branch because AssertedCount > 0). The consolidationBranch construction stays as the fallback in step 1.",
+    "codebaseInsights": "- sh record_commit_rpc (moe-agent.sh ~5041-5146) always reads $ATTR_DIR/skipped (non-EXCLUDED, plus the drops file) and $ATTR_DIR/contested, whatever the outcome. ps1 builds each send by hand:\n  - the committed $recArgs (~4931) has both lists;\n  - the no-candidate send (~4711) has only skipped;\n  - the unchanged-tree send (~4819) has neither.\n- The daemon (packages/moe-daemon/src/tools/recordCommit.ts):\n  - readRecordList THROWS INVALID_INPUT on a non-array skipped or contested;\n  - heldContestedPaths reads the held paths from the skip codes. MOE_ATTR_CONTESTED_UNTOUCHED(task-x) carries its peer; strict MOE_ATTR_CONTESTED takes its peer from `contested`, else it names '?';\n  - the #governors alert fires when held.length > 0, even for outcome 'nothing'.\n- Fake proxy: record_commit appends args to .moe/record_commit.jsonl. Scenario AG reads the LAST row.\n- moe-agent.ps1 and postflight.ps1 are UTF-8 with BOM and LF. postflight.sh and moe-agent.sh are LF.",
+    "risks": "- PS 5.1 JSON shape: a single held path gives a one-element list. If any layer unwraps it, the real daemon refuses the whole record with INVALID_INPUT. AI assertion (d) pins array-ness, and the run must include PS 5.1.\n- `@($null)` is one element in PowerShell. The helper must filter nulls, and the no-candidate site must pass @() as Dropped.\n- Live launchers: seats hot-reload moe-agent.sh (bash -n first) and parse moe-agent.ps1 whole per launch. Edit in complete parseable hunks, helper before call sites, and never cp over them.\n- Contested landing: the four files are declared by four idle CQ rows. Use a wrapper-observed editing tool.\n- The harnesses are long: postflight.sh takes about 12+ min on WSL Linux and about 1h45m on Git Bash; postflight.ps1 about 10-12 min on PS 5.1. Run them in the background against a /mnt/d snapshot.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight-fake-proxy.js",
+      "packages/moe-daemon/src/tools/recordCommit.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:25:46.515Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:29:22.121Z",
+  "reviewStartedAt": "2026-10-30T07:16:57.135Z",
+  "verification": {
+    "command": "W=$(mktemp -d /mnt/d/moe-scratch/ta2f2-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$W/$f\"; done && cd \"$W\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/parity-check.ps1\")\" && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/postflight.ps1\")\"",
+    "exitCode": 0,
+    "outputTail": "SNAPSHOT=/mnt/d/moe-scratch/ta2f2-WiLc\nPASS parity-check.sh\nPASS frozen candidate scenarios: 74\nPASS owner guard scenarios: 16\n[scenario AI] ok\ncommit-scope scenarios run: 41\nPASS postflight.sh\nPASS parity-check.ps1\npostflight.ps1 host=5.1.26100.9711 child=powershell\nPASS frozen candidate scenarios: 74\nPASS owner guard scenarios: 16\n[scenario AI] a held contested path reaches record_commit on both nothing landings\n[scenario AI] ok\ncommit-scope scenarios run: 40\n[team join] ok\n[team heal] ok\nPASS postflight.ps1\nCHAIN_EXIT=0\n--- pwsh legs (same snapshot) ---\nPASS parity-check.ps1\nPWSH_PARITY_EXIT=0\npostflight.ps1 host=7.6.9 child=pwsh\n[scenario AI] ok\ncommit-scope scenarios run: 40\nPASS postflight.ps1\nPWSH_POSTFLIGHT_EXIT=0",
+    "reportedAt": "2026-10-30T07:16:57.135Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+    ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+    ".moe/tasks/task-7e39a63f6b024acf9f5f06c92bfafd59.json",
+    ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+    ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+    ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json"
+  ],
+  "completionSummary": "ps1 nothing landings now send skipped/contested like sh's record_commit_rpc.\n\n- scripts/moe-agent.ps1: new Get-MoeRecordHeldFields($Attr,$Dropped,$Rel) is the single source of the two lists:\n  - skipped = non-EXCLUDED skips plus staging drops, first 100;\n  - contested = first 100;\n  - nulls filtered, paths root-relative, always JSON arrays.\n- It is merged with hashtable `+` into three sends:\n  - the no-candidate nothing/refused send (Dropped @(); adds the missing contested, so a strict MOE_ATTR_CONTESTED hold names its real peer, not '?');\n  - the unchanged-tree MOE_COMMIT_NOTHING_TO_COMMIT send (it had neither list);\n  - the committed $recArgs (same lists as before, except contested is now capped at 100 like sh).\n- scripts/moe-agent.sh: the nothing record_commit_rpc gets \"${LAND_DROPPED_FILE:-}\", so an unchanged-tree nothing row carries its drops as on ps1. The no-candidate row is byte-identical to before.\n\nTests: scenario AI in postflight.sh and postflight.ps1. AI1 is a completion under skip-untouched (unchanged tree), AI2 a completion under contested=skip, AI3 a checkpoint under contested=skip (no candidate). Each asserts:\n- nothing is committed;\n- held.txt stays untracked;\n- the last row is nothing/MOE_COMMIT_NOTHING_TO_COMMIT with the right kind;\n- skipped and contested are arrays;\n- skipped names held.txt under the run's code;\n- contested names {held.txt, task-peer};\n- ps1 also pins which send ran.\nCounters: sh 41/40, ps1 40/41.\n\nRED on HEAD ps1: AI1/AI2 rows had no lists; AI3 had skipped but no contested. sh passed on HEAD as the parity pin.\n\nChain on a snapshot of HEAD plus the 4 files: green under PS 5.1 and pwsh 7.6.9. Scope counts are sh 41 and ps1 40, because this host has no symlinks. PS 5.1 edge probe: $null, empty, one element and 150 entries all serialize as arrays, capped at 100.\n\nDaemon trace: heldContestedPaths plus alertGovernors fire on outcome nothing, so ps1 unchanged-tree holds now raise MOE_CONTESTED_HELD and the #governors alert.\n\nResidual ",
+  "commits": [
+    {
+      "sha": "705045afc0ba70a72124d2c90aa6895797b7c9ad",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T06:26:05Z",
+      "paths": [
+        ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+        ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+        ".moe/tasks/task-7e39a63f6b024acf9f5f06c92bfafd59.json",
+        ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T07:17:32.872Z",
+      "treeId": "4492944e58f46078c5f5b828354b12bd1211733b",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "e344d65c902ec919ea2c44ebc267a7d2e811a02f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8e551ac8@2026-10-30T07:22:20Z",
+      "paths": [
+        ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+        ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json"
+      ],
+      "recordedBy": "qa-8e551ac8",
+      "recordedAt": "2026-10-30T08:11:49.188Z",
+      "treeId": "fae8427128089877358998eee02c96eb2464490c",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-8e551ac8@2026-10-30T07:22:20Z",
+    "at": "2026-10-30T08:11:49.188Z"
+  },
+  "completedAt": "2026-10-30T08:11:23.358Z",
+  "reviewCompletedAt": "2026-10-30T08:11:23.358Z",
+  "reviewSummary": "Approved completion 705045af (tree 4492944e) on moe/work-2026-10-24 and origin/moe/work-2026-10-24. git show of the four owned files: ps1 Get-MoeRecordHeldFields is the only skipped/contested source and is merged into the no-candidate send (Dropped @()), the unchanged-tree MOE_COMMIT_NOTHING_TO_COMMIT send, and the committed send (contested capped at 100). sh nothing record_commit_rpc now passes ${LAND_DROPPED_FILE:-}; run_landing still clears it, so only an unchanged-tree nothing row gains drops. Scenario AI in postflight.sh and postflight.ps1 pins nothing/MOE_COMMIT_NOTHING_TO_COMMIT, kind, JSON arrays, held.txt under the run's MOE_ATTR_CONTESTED* code, contested {held.txt, task-peer}, and on ps1 the unchanged-tree vs no-candidate console line. Non-board +147/-18, net 129, under the 400 cap. Re-ran on snapshot qa-a2f2-RQIn cmp-equal to 705045af, MOE_*/CLAUDE* scrubbed, cwd /mnt/d: bash -n 0, parity-check.sh 0, postflight.sh 0 (frozen 74, owner guard 16, [scenario AI] ok, commit-scope 41), PS 5.1 parity-check.ps1 0 and postflight.ps1 0 (AI ok, scope 40), pwsh 7.6.9 parity 0 and postflight 0 (AI ok, scope 40). PS 5.1 probe: empty/null/EXCLUDED-only serialize as [], one element stays a JSON array, 150 caps at 100. Residual, out of DoD and already filed as task-dfbda1a8: ps1 failed/rescue/post-CAS sends still omit both lists. Ponytail: lean already, net 0.",
+  "requiredCheckAtDone": null
+}

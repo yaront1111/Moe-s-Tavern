@@ -1,0 +1,169 @@
+{
+  "id": "task-35584de27bb24c38a3cf508aeba5550c",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C00] Preserve complete UTF-8 CLI tool responses",
+  "description": "Objective: fix the real Moe CLI response transport truncation/corruption observed during rollout auditing. Final Node parser in scripts/moe-call.sh writes then forces process.exit before pipe drain; Buffer-chunk concatenation also corrupts split UTF-8. Daemon-free fake-proxy evidence: >1.2MB response cut to65,536 bytes with exit0; regular-file Unicode gained replacement characters. Two independent controls show both fixes required. Deliverable: actual-helper large/Unicode/error regressions, minimal parser fix, permanent cross-platform CI command. NOT in scope: proxy changes, Python prerequisite cleanup, response budgeting, task semantics or arbitrary new CLI features. Verification: node --test scripts/tests/moe-call.test.mjs scripts/tests/prompt-cache-launcher.test.mjs; bash -n scripts/moe-call.sh. Never edit real .moe; temporary test fixture dirs may simulate daemon discovery only. Preserve old exit0/exit1 and short legacy behavior.",
+  "definitionOfDone": [
+    "Actual helper with a drained fake proxy reproduces large pipe truncation and Unicode corruption on old source, not a mocked parser.",
+    "Large structured content, raw/bare results and JSON-RPC errors roundtrip complete data with correct exit codes and no UTF-8 replacement.",
+    "Parser decodes stdin with streaming UTF-8 and permits all output to drain without forced immediate process exit.",
+    "Short legacy responses, malformed response failure and shell-sensitive/Unicode content remain correct.",
+    "Fresh named Node gate plus Bash syntax pass; permanent CI invokes the new harness."
+  ],
+  "taskRails": [
+    "Exactly scripts/moe-call.sh, new scripts/tests/moe-call.test.mjs and CI command; no proxy or unrelated cleanup.",
+    "No real daemon/task-state fixture mutation, no agent Git writes, no manual project .moe edits."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write daemon-free Node tests executing the ACTUAL shell helper with a temporary fully-drained fake proxy and scratch discovery file. Reproduce >1MB ASCII structured content/bare/error pipe truncation and split UTF-8 corruption independently using pipe versus regular-file output. Assert complete data/status0 or1, Unicode/shell-sensitive content and short/malformed legacy controls. Error handling and observed semantic red are mandatory; do not print huge payloads.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "newFiles": [
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "note": "Authored actual-helper daemon-free fake-proxy harness with scratch discovery only. Fresh semantic RED on old source:26 tests,13 failed/13 passed,0 skips. Eight large pipe cases and multi-item tail expose truncation; four regular-file Unicode cases independently expose split UTF-8 replacements. Short/error/first-result/malformed/empty legacy controls pass. Test failures compare bounded lengths/hashes, not giant payload dumps. Raw log:/tmp/cq-c00-red.log. Portable Git Bash/native path patterns reused; no production or real task-state fixture changes.",
+      "startedAt": "2026-10-24T00:12:26.259Z",
+      "completedAt": "2026-10-24T00:14:03.456Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix only the final embedded Node response parser: process.stdin.setEncoding(utf8) before data accumulation, replace immediate process.exit calls after writes with process.exitCode + return/natural termination so stdout/stderr drain. Preserve return codes, first-response semantics, request forwarding and all other CLI behavior. Do not change proxy/Python dependencies or add response size caps. Apply atomic byte-preserving replacement because this shared helper handles concurrent Moe tools. Add a permanent explicit CI Node command for the new harness; preserve existing CI CRLF.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Applied only final embedded Node parser UTF-8 stream decoding and process.exitCode/return natural-drain changes using atomic same-directory replacement; all unrelated helper bytes preserved. Added explicit new harness command to existing cross-platform CI matrix, preserving every CI CRLF. Fresh GREEN:26/26 helper tests pass,0 failures/skips. No proxy/Python/request path refactor or response caps. Raw log:/tmp/cq-c00-green.log.",
+      "startedAt": "2026-10-24T00:14:04.975Z",
+      "completedAt": "2026-10-24T00:14:57.228Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Run fresh node --test scripts/tests/moe-call.test.mjs scripts/tests/prompt-cache-launcher.test.mjs and bash -n scripts/moe-call.sh. Perform one adversarial review covering both independent bugs, error status handling, large payload/partial UTF-8, temp fixture cleanup and no real daemon/state writes. Confirm a real bounded large read-only Moe query now parses, without leaking payloads. Record exact outputs in complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Fresh named gate:39/39 Node tests passed,0 failed/skipped; bash -n exit0. CI CRLF preserved; permanent matrix command verified. Real read-only CQ query now roundtrips257387 bytes/68 tasks as valid JSON with zero replacement characters. Final scoped adversarial review completed; independent disposable decoder/drain mutants killed by4 and1 assertion failures. Exact three-file scope, atomic helper replacement, no real state fixtures or proxy/Python/cap changes. Logs:/tmp/cq-c00-final-gate.log and /tmp/cq-c00-red.log.",
+      "startedAt": "2026-10-24T00:14:58.793Z",
+      "completedAt": "2026-10-24T00:16:18.870Z"
+    }
+  ],
+  "planRevision": 7,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 1,
+  "comments": [
+    {
+      "id": "comment-052fb077e78743b3bf10779369cc8634",
+      "author": "worker-cq-c00",
+      "content": "C00 evidence: actual-helper daemon-free TDD RED on original source: 26 tests, 13 assertion failures and 13 passing controls. Large pipe truncation is separated from UTF-8 corruption by regular-file cases; no import failures or huge payload dumps. Minimal final-parser-only production fix was applied atomically, preserving unrelated bytes; CI explicit harness command added with all CRLF retained. GREEN helper suite 26/26. Disposable formal-harness mutants kill missing stream decoder (4 failures) and forced process exit (1 failure), without altering working production. Final fresh named gate: node --test scripts/tests/moe-call.test.mjs scripts/tests/prompt-cache-launcher.test.mjs => 39 passed, 0 failed/skipped, 3140.51ms; bash -n scripts/moe-call.sh exit0. Real bounded read-only search_tasks CQ- full query returned 257387 bytes, 68 tasks, valid JSON and zero replacement characters. No real daemon/task fixture writes; tests only use scratch discovery files and a fully drained fake proxy. One final adversarial review verified temp cleanup, UTF8/hash integrity, preserved status/first-response/error semantics, atomic shared-helper replacement and exact three-file scope. No proxy/Python changes or response caps. Logs: /tmp/cq-c00-red.log, /tmp/cq-c00-green.log, /tmp/cq-c00-final-gate.log, /tmp/cq-c00-mutant-missing-stream-decoder.log, /tmp/cq-c00-mutant-forced-content-exit.log. No Git writes or finish-signal changes.",
+      "timestamp": "2026-10-24T00:16:18.411Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T00:09:31.637Z",
+  "updatedAt": "2026-10-24T15:18:55.850Z",
+  "tier": "standard",
+  "effort": "xhigh",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T00:09:32.621Z",
+  "metrics": {
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 3,
+    "firstClaimAt": "2026-10-24T00:10:54.875Z",
+    "executedStepCount": 3,
+    "doneAt": "2026-10-24T00:19:41.467Z",
+    "wallClockMs": 526592
+  },
+  "planApprovedAt": "2026-10-24T00:09:32.653Z",
+  "contextFetchedBy": [
+    "worker-cq-c00",
+    "qa-cq-c00"
+  ],
+  "workStartedAt": "2026-10-24T00:12:26.259Z",
+  "reviewStartedAt": "2026-10-24T00:16:19.379Z",
+  "verification": {
+    "command": "node --test scripts/tests/moe-call.test.mjs scripts/tests/prompt-cache-launcher.test.mjs && bash -n scripts/moe-call.sh",
+    "exitCode": 0,
+    "outputTail": "tests39\npass39\nfail0\nskipped0\nduration_ms3140.508735\nBASH_SYNTAX_EXIT=0\nHelper-only GREEN26/26; old-source RED13 failed/13 passed. Disposable no-UTF8 and forced-exit mutants failed4 and1 tests respectively. Live read-only response257387 bytes,68 tasks, valid JSON,0 replacement characters. CI explicit harness command and unchanged CRLF verified. Log:/tmp/cq-c00-final-gate.log.",
+    "reportedAt": "2026-10-24T00:16:19.379Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/moe-call.test.mjs",
+    "scripts/moe-call.sh",
+    ".github/workflows/ci.yml",
+    ".moe/tasks/task-35584de27bb24c38a3cf508aeba5550c.json",
+    ".moe/tasks/task-bb9034eaeed44adcbc1d05c71c2eda5b.json",
+    ".moe/tasks/task-cfa74f1b01df4647b57a923bdd961b2a.json"
+  ],
+  "completionSummary": "Fixed complete UTF-8 CLI tool response transport in exactly three approved files. Final embedded Node parser now decodes streamed UTF-8 and naturally drains output using exitCode/return; unrelated helper/request/proxy/Python behavior unchanged, no response caps. Added26 actual-helper daemon-free regressions and permanent cross-platform CI invocation with existing CRLF preserved. Semantic RED13 failures/13 controls -> GREEN26/26; independent decoder/drain mutants killed. Final named combined gate39/39 passes,0 skips; Bash syntax clean. Live read-only CQ search successfully parsed257387 bytes/68 tasks with zero replacement chars. One scoped adversarial review complete; no agent Git/manual real .moe writes or finish-signal changes.",
+  "commits": [
+    {
+      "sha": "35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cq-c00@2026-10-24T00:10:56Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-35584de27bb24c38a3cf508aeba5550c.json",
+        ".moe/tasks/task-bb9034eaeed44adcbc1d05c71c2eda5b.json",
+        ".moe/tasks/task-cfa74f1b01df4647b57a923bdd961b2a.json",
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "recordedBy": "worker-cq-c00",
+      "recordedAt": "2026-10-24T00:17:15.880Z",
+      "treeId": "3618356881c5fdc61fb3fff1d302a70a3f43da3f",
+      "status": "REVIEW",
+      "pushed": false
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-cq-c00@2026-10-24T00:10:56Z",
+    "at": "2026-10-24T00:17:15.880Z"
+  },
+  "completedAt": "2026-10-24T00:19:41.467Z",
+  "reviewCompletedAt": "2026-10-24T00:19:41.467Z",
+  "reviewSummary": "Independent QA of local completion35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71, reachable on moe/work-2026-10-24. All three tested source/config/test blobs exactly match recorded commit. Verified byte invariant: every helper byte before final parser unchanged; parser diff is solely streaming UTF8 plus exitCode/return natural output drain, without proxy/Python/request/cap changes. CI differs solely by three approved CRLF lines; CRLF-aware committed whitespace gate clean. Fresh named verification node --test scripts/tests/moe-call.test.mjs scripts/tests/prompt-cache-launcher.test.mjs && bash -n scripts/moe-call.sh passed39/39,0 failed/skipped,3098.58ms; syntax exit0. Independently executed committed old helper in disposable actual-helper harness:26 tests,13 assertion failures/13 passing controls. Decoder-only mutant independently fails all4 regular-file Unicode cases; forced-exit mutant fails large ASCII pipe completeness. Current tests verify complete byte counts/hashes, correct0/1 status, raw/bare/structured/error, short legacy, multiple-item ordering and malformed/empty failures. Fake proxy drains stdout and replaces real daemon boundary; scratch discovery files never mutate real project state or mint trusted observations. Independent live read-only CQ summary response parsed128043 bytes/68 rows with0 replacement chars, without printing payload. Source delta160 additions/4 deletions; commit includes expected wrapper-owned board records (372/4 total), not unrelated source. No source/Git/manual .moe writes by QA. Detailed independent control logs:/tmp/cq-c00-qa-{old,no-decoder,forced-exit}.log. Broader final regression remains root integration responsibility.",
+  "requiredCheckAtDone": null
+}

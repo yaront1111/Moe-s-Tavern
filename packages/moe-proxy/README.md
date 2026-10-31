@@ -49,6 +49,51 @@ Send JSON-RPC 2.0 messages via stdin:
 - `MOE_PROJECT_PATH` - Project path (required)
 - `MOE_DAEMON_HOST` - Daemon host (default: 127.0.0.1)
 - `MOE_DAEMON_PORT` - Daemon port (default: read from .moe/daemon.json)
+- `MOE_SESSION_ID` - The session id the proxy stamps onto the identity tools (see Execution identity)
+- `MOE_ATTEMPT_ID` and `MOE_ATTEMPT_GENERATION` - The execution attempt the proxy stamps onto the identity tools; set both or neither
+- `MOE_WORKER_TYPE` - The agent CLI the launcher started, added to the registration tools (see Worker type)
+- `MOE_BLOCKING_TIMEOUT_MS` - The per-request deadline of `moe.wait_for_task`, `moe.chat_wait` and `moe.wait_for_resource` (default: 660000)
+- `MOE_PROXY_ONESHOT_DEADLINE_MS` - Wrapper-only. An absolute bound for one call, in Unix epoch milliseconds, covering connect, queue, send and the EOF drain (see One-shot calls). Blank means unset; any other value that is not plain decimal digits forming a safe integer fails closed (one null-id error, exit 1, no connection)
+
+## One-shot calls
+
+The wrappers' RPC helpers pipe one bare `tools/call` into a fresh proxy and close stdin. In a session that never sent `initialize`, stdin EOF lets a pending blocking call (the three tools above) finish up to its deadline instead of the usual drain. It fails at once if the daemon socket is lost. Initialized MCP sessions, ordinary calls and queued (unsent) messages keep the 2-second drain, and SIGINT/SIGTERM cap any drain at 2 seconds.
+
+When `MOE_PROXY_ONESHOT_DEADLINE_MS` passes, the proxy writes one `Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)` error for each pending request id (one null-id error when none is pending, as before the first connect) and exits 1. No late success follows.
+
+## Execution identity
+
+The runner, never the CLI caller, owns the session's execution identity. `scripts/moe-agent.{sh,ps1}` export the three variables above for the seat, and the proxy stamps their values onto the tools below. A blank value counts as unset.
+
+| Env value | Rule |
+|-----------|------|
+| `MOE_SESSION_ID` | At most 255 characters, no NUL, CR or LF. Sent verbatim as `sessionId`. |
+| `MOE_ATTEMPT_ID` + `MOE_ATTEMPT_GENERATION` | Both or neither. `attemptId` matches `[A-Za-z0-9_-]{1,128}`. `generation` is a positive safe integer in plain decimal digits (no sign, no leading zero), sent as a JSON number. |
+
+| Tool | Stamped fields |
+|------|----------------|
+| `moe.get_context` | `sessionId` |
+| `moe.start_step`, `moe.complete_step`, `moe.complete_task` | `attemptId`, `generation`, `sessionId` |
+| `moe.qa_approve`, `moe.qa_reject` | `attemptId`, `generation`, `sessionId` |
+
+This holds under every spelling (`moe.x`, `moe_x` and bare `x`) and covers no other tool. A field whose env group is absent is not stamped, and a value the caller presents for it reaches the daemon untouched. Under verified-local the daemon requires QA's own identity on `moe.qa_approve` and `moe.qa_reject` (CQ-V06); under legacy and observe a presented attempt still gets the daemon's `ATTEMPT_SUPERSEDED` freshness check, as `moe.complete_task` does.
+
+A presented field must equal the stamped env value exactly (`===`: `"7"` does not match `7`). Anything else is refused before the call is forwarded, and nothing is mutated or echoed:
+
+- `EXECUTION_IDENTITY_SUBSTITUTED` (JSON-RPC `-32003`): a presented `attemptId`, `generation` or `sessionId` differs from the session's value. Omit the field so the proxy supplies it.
+- `EXECUTION_IDENTITY_INVALID` (`-32602`): the env group a tool carries is malformed or partial, or the check hit an unexpected error (it fails closed). A broken attempt group refuses only the tools that carry it, so `moe.get_context` still gets its `sessionId`.
+
+The error carries `error.data = { tool, codeName }`. A JSON-RPC batch is fenced per element, and one refusal drops the whole frame. With no identity env the proxy is the legacy proxy: it adds nothing, the daemon decides, and the line is forwarded byte-for-byte unless another step (alias rename, `workerId`, runner identity or worker type) already rewrote it.
+
+## Worker type
+
+The proxy adds `workerType` from `MOE_WORKER_TYPE` to `moe.claim_next_task` and `moe.join_team`, under every spelling (`moe.x`, `moe_x` and bare `x`). It does so even when the call names its own `workerId`, as the wrapper's pre-flight claim and join always do. No other tool, no `tools/list` and no JSON-RPC batch gets it.
+
+- A blank or unset value adds nothing.
+- A `workerType` key the caller already set is forwarded untouched, whatever its value.
+- The value is sent verbatim: never trimmed, re-cased or checked.
+
+The launcher (`scripts/moe-agent.{sh,ps1}`) owns the value, the CLI it started. The daemon owns validation (exactly `CLAUDE`, `CODEX`, `GEMINI` or `GROK`; anything else registers as `CLAUDE`) and records or refreshes `worker.type`. See `moe.claim_next_task` and `moe.join_team` in [`docs/MCP_SERVER.md`](../../docs/MCP_SERVER.md). It is registration metadata: unlike the execution identity it is never compared or refused, and it authorizes nothing.
 
 ## MCP Tools
 

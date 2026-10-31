@@ -5,6 +5,7 @@ import { AGENT_CLAIMABLE_STATUSES } from '../util/claimableStatuses.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { findFreshestLiveWorkerByRole } from '../util/workerLiveness.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 import { RESOURCE_ID_RE } from '../state/resourceStore.js';
 import { MAX_TASK_DEPENDENCY_IDS } from '../state/taskStore.js';
 import {
@@ -18,8 +19,9 @@ const MAX_REASON_LENGTH = 2000;
 
 /**
  * Task ids embedded in free-text reasons ("BUILD-ORDER BLOCK on task-3f71ba30")
- * are auto-parsed and unioned into blockedOnTaskIds, so legacy-style blocks
- * become structured (and auto-unblockable) with zero agent effort. Only ids
+ * are auto-parsed ONLY when blockedOnTaskIds is omitted, so legacy-style blocks
+ * become structured (and auto-unblockable). An explicit list (even []) wins;
+ * informational reason ids cannot add dependencies. Only ids
  * that exist on the board are kept. Both edges are anchored: without the
  * lookbehind, "subtask-abcdef" would parse as task-abcdef and record a FALSE
  * dependency whenever that id exists — falsely auto-unblocking a still-walled
@@ -34,7 +36,7 @@ const BLOCKABLE_STATUSES = new Set(['PLANNING', 'WORKING', 'REVIEW']);
 export function reportBlockedTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.report_blocked',
-    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. Non-resource blocks reported by the ASSIGNEE (or on an unassigned task) FREE YOUR SEAT: the task parks unassigned and you go IDLE. End the current session so its wrapper can checkpoint this task; claim other work only after a fresh wrapper preflight, never inside the same CLI (a third-party/workerId-less block on an assigned task keeps the hold). Declare the tasks you wait on via blockedOnTaskIds (ids in the reason text are auto-parsed too) — the daemon auto-unblocks the task when they are all DONE/ARCHIVED (under a strict settings.deliveryPolicy a DONE task counts only once its required check is recorded). If EVERY task you name already counts that way the task is NOT blocked (dependenciesSatisfied:true — there is nothing to wait on; continue); an id that would close a dependency cycle is dropped with a warning. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks (seat KEPT — the grant returns it to you) and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason and unions new blockedOnTaskIds (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a byte-identical repeat pages nobody and answers reasonUpdated:false. An assignee repeat also frees a still-assigned non-resource hold (even with an identical reason), preserving block provenance and task-keyed leases; otherwise an identical repeat writes nothing. Only PLANNING/WORKING/REVIEW rows can be parked and only a BLOCKED row updated: a human-gated row (BACKLOG, AWAITING_APPROVAL, DONE, ARCHIVED) is refused with INVALID_STATE before any write or page — record a hold there with moe.add_comment or a task rail, or move the row with moe.set_task_status first.',
+    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. Non-resource blocks reported by the ASSIGNEE (or on an unassigned task) FREE YOUR SEAT: the task parks unassigned and you go IDLE. End the current session so its wrapper can checkpoint this task; claim other work only after a fresh wrapper preflight, never inside the same CLI (a third-party/workerId-less block on an assigned task keeps the hold; a governor parking an unassigned task keeps its own session and status). Always pass blockedOnTaskIds explicitly (including [] for no task dependencies): the list wins and reason ids are not parsed. Only when omitted are reason ids auto-parsed as a legacy fallback — the daemon auto-unblocks the task when they are all DONE/ARCHIVED (under a strict settings.deliveryPolicy a DONE task counts only once its required check is recorded). If EVERY selected dependency already counts that way the task is NOT blocked (dependenciesSatisfied:true — there is nothing to wait on; continue); an id that would close a dependency cycle is dropped with a warning. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks (seat KEPT — the grant returns it to you) and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason and unions new blockedOnTaskIds (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a byte-identical repeat pages nobody and answers reasonUpdated:false. An assignee repeat also frees a still-assigned non-resource hold (even with an identical reason), preserving block provenance and task-keyed leases; otherwise an identical repeat writes nothing. Only PLANNING/WORKING/REVIEW rows can be parked and only a BLOCKED row updated: a human-gated row (BACKLOG, AWAITING_APPROVAL, DONE, ARCHIVED) is refused with INVALID_STATE before any write or page — record a hold there with moe.add_comment or a task rail, or move the row with moe.set_task_status first.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -47,7 +49,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         blockedOnTaskIds: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Task ids this block waits on. The task auto-unblocks when they are all DONE/ARCHIVED. Unknown ids are ignored (reported back); unioned with ids parsed from reason, deduped, capped at 20.'
+          description: 'Task ids this block waits on. An explicit list (including []) suppresses reason parsing; only omission auto-parses reason ids. Unioned with stored ids on repeats, deduped, capped at 20; unknown ids ignored (reported back). Auto-unblocks when all are DONE/ARCHIVED. Responses distinguish supplied and parsed input candidates from recorded dependencies.'
         }
       },
       required: ['taskId', 'reason'],
@@ -156,7 +158,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         task = state.getTask(task.id) ?? task;
       }
 
-      // Structured dependency ids: stored ∪ supplied ∪ auto-parsed-from-reason.
+      // Structured dependency ids: stored ∪ (supplied OR legacy reason-parsed).
       // Only ids that EXIST on the board are kept (a missing id counts as
       // satisfied anyway, so storing it would be dead weight); the task's own
       // id is never a dependency of itself; capped at MAX_TASK_DEPENDENCY_IDS.
@@ -167,7 +169,9 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // members never all reach DONE), and the knot would starve silently.
       const flipped = BLOCKABLE_STATUSES.has(task.status);
       const storedBlockedOnIds = Array.isArray(task.blockedOnTaskIds) ? task.blockedOnTaskIds : [];
-      const parsedFromReason = (params.reason.match(TASK_ID_IN_REASON_RE) ?? []).map((id) => id.toLowerCase());
+      const parsedFromReason = params.blockedOnTaskIds !== undefined
+        ? []
+        : [...new Set((params.reason.match(TASK_ID_IN_REASON_RE) ?? []).map((id) => id.toLowerCase()))];
       const suppliedSet = new Set(suppliedBlockedOnIds);
       const ignoredBlockedOnIds: string[] = [];
       const droppedCycleBlockedOnIds: string[] = [];
@@ -228,7 +232,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       let satisfiedBlockedOnIds: string[] = [];
       let recordedBlockedOnIds = mergedBlockedOnIds;
       if (flipped) {
-        satisfiedBlockedOnIds = mergedBlockedOnIds.filter((id) => !!state.getTask(id) && isDependencySatisfied(state, id));
+        satisfiedBlockedOnIds = mergedBlockedOnIds.filter((id) => !!state.getTask(id) && isDependencySatisfied(state, id, task));
         if (satisfiedBlockedOnIds.length > 0) {
           const satisfied = new Set(satisfiedBlockedOnIds);
           recordedBlockedOnIds = mergedBlockedOnIds.filter((id) => !satisfied.has(id));
@@ -254,6 +258,8 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
           taskStatus: task.status,
           blocked: false,
           dependenciesSatisfied: true,
+          suppliedBlockedOnTaskIds: [...suppliedSet],
+          parsedBlockedOnTaskIds: parsedFromReason,
           satisfiedBlockedOnTaskIds: satisfiedBlockedOnIds,
           alreadyBlocked: false,
           reasonUpdated: false,
@@ -263,7 +269,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
           workerStatus: seat ? state.getWorker(seat)?.status ?? 'IDLE' : 'IDLE',
           notified: { target: null, via: 'not-blocked-dependencies-satisfied' as const },
           message:
-            `Every task you named (${satisfiedBlockedOnIds.join(', ')}) is already DONE/ARCHIVED — there is nothing to wait on, ` +
+            `Every selected prerequisite (${satisfiedBlockedOnIds.join(', ')}) is already DONE/ARCHIVED — there is nothing to wait on, ` +
             `so ${task.id} was NOT blocked (status unchanged: ${task.status}) and nobody was paged. Continue the task.`,
           nextAction: {
             tool: 'moe.get_context',
@@ -271,7 +277,8 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
             reason:
               `The prerequisites already landed: read their verification / reviewSummary / completionSummary from ` +
               `get_context.epicSiblings and continue your current step. If something ELSE blocks you, re-file ` +
-              `moe.report_blocked with a reason that names the real blocker (omit the landed ids — they are auto-parsed).`,
+              `moe.report_blocked with explicit blockedOnTaskIds naming only the real dependencies ` +
+              `(use [] for a non-task blocker; reason ids are parsed only when the list is omitted).`,
             recommendedSkill: recommendSkillFor('worker', 'task_blocked')
           }
         };
@@ -470,7 +477,12 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // successful claim changes board ownership, not the launcher's baseline.
       // Return terminal handoff guidance, never an executable next-task hint.
       // A dangling old assignment must not end a different task's live session.
-      const seatWorker = prevAssignee || params.workerId;
+      // The caller fallback is for a seat whose own task lost its assignment
+      // before it reported. A governor never holds a task, so its third-party
+      // park of an unassigned row must not end the governance session.
+      const callerSeat = params.workerId && resolveWorkerRole(state, params.workerId) !== 'governor'
+        ? params.workerId : undefined;
+      const seatWorker = prevAssignee || callerSeat;
       const currentTaskId = seatWorker ? state.getWorker(seatWorker)?.currentTaskId : undefined;
       const sessionHandoff = freeSeat && seatWorker && !currentTaskId
         ? {
@@ -485,14 +497,14 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // rule, not unfinished, so "once it is DONE" alone would read as already
       // satisfied: name what it lacks. Always empty under the default policy.
       const heldOnEvidence = recordedBlockedOnIds.filter(
-        (id) => state.getTask(id)?.status === 'DONE' && !isDependencySatisfied(state, id)
+        (id) => state.getTask(id)?.status === 'DONE' && !isDependencySatisfied(state, id, task)
       );
       const blockResolution = freeSeat
         ? recordedBlockedOnIds.length > 0
           ? `It auto-unblocks (returning unassigned, claimable by anyone) once ${recordedBlockedOnIds.join(', ')} are DONE/ARCHIVED.` +
             (heldOnEvidence.length > 0
               ? ' Already DONE but still withheld until the delivery evidence settings.deliveryPolicy requires is recorded: ' +
-                `${heldOnEvidence.map((id) => describeUnmetDependency(state, id)).join(', ')}.`
+                `${heldOnEvidence.map((id) => describeUnmetDependency(state, id, task)).join(', ')}.`
               : '')
           : 'No unmet blockedOnTaskIds were recorded. A human/governor must clear the real blocker via moe.set_task_status; unblock_worker cannot reach an unassigned task. Re-file actual task dependencies if applicable.'
         : undefined;
@@ -523,6 +535,9 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         alreadyBlocked,
         reasonUpdated,
         ...(params.resourceId ? { resourceId: params.resourceId, granted: false } : {}),
+        // Input provenance BEFORE filtering; these are not the persisted wait list.
+        suppliedBlockedOnTaskIds: [...suppliedSet],
+        parsedBlockedOnTaskIds: parsedFromReason,
         // What the row now carries: on a fresh flip the satisfied ids were
         // filtered out (see above); on the reason-update arm the full union.
         ...((flipped ? recordedBlockedOnIds : mergedBlockedOnIds).length > 0
@@ -540,8 +555,8 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         // unassigned block keeps its own status), else IDLE when no seat is
         // involved at all. The old literal 'BLOCKED' on the no-assignee arms
         // was the phantom-block report this tool is no longer allowed to make.
-        workerStatus: freeSeat
-          ? (prevAssignee ? state.getWorker(prevAssignee)?.status ?? 'IDLE' : 'IDLE')
+        workerStatus: freeSeat && prevAssignee
+          ? state.getWorker(prevAssignee)?.status ?? 'IDLE'
           : task.assignedWorkerId
             ? state.getWorker(task.assignedWorkerId)?.status ?? (workerMarkedBlocked ? 'BLOCKED' : 'IDLE')
             : params.workerId

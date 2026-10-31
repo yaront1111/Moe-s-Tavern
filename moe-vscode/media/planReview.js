@@ -4,10 +4,11 @@
     // The page — not the extension's cache — owns the approval token. `rendered`
     // is the plan revision of the content currently on screen and is null until a
     // COMPLETE render has succeeded, so a half-drawn or unvalidated plan can never
-    // be approved. `latched` means the plan itself moved (or the daemon refused a
-    // stale token): that needs a deliberate reopen. A transport hiccup only
-    // disables temporarily and recovers on the next successful same-revision
-    // render.
+    // be approved. `latched` means the plan itself moved, the task stopped being
+    // approvable (it left AWAITING_APPROVAL or the board, or lost a readable
+    // stamp), or the daemon refused a stale token: that needs a deliberate reopen,
+    // as in JetBrains. A transport hiccup only disables temporarily and recovers
+    // on the next successful same-revision render.
     var rendered = null;
     var approvalPending = false;
     var latched = false;
@@ -15,6 +16,7 @@
 
     var PLAN_CHANGED_NOTICE = 'This plan changed since it was displayed. Close and reopen the review to approve the current plan.';
     var GENERIC_FAILURE_NOTICE = 'The approval did not go through. Approve will re-enable once the plan refreshes.';
+    var NOT_APPROVABLE_NOTICE = 'This plan can no longer be approved here. Close and reopen the review.';
 
     function isRevision(value) {
         return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -224,7 +226,12 @@
         setApproveEnabled(false);
 
         var revision = tokenForTask(task);
-        if (revision === null) { return; }
+        if (revision === null) {
+            // Never re-arms (JetBrains INVALIDATED); an earlier latch keeps its notice.
+            if (!latched) { setNotice(NOT_APPROVABLE_NOTICE); }
+            latched = true;
+            return;
+        }
 
         try {
             var titleEl = document.getElementById('taskTitle');
@@ -284,8 +291,9 @@
         } else if (msg.type === 'approveFailed') {
             applyApprovalFailure(msg);
         } else if (msg.type === 'taskRemoved') {
-            // The task backing this page is gone; nothing here is approvable.
+            // The task backing this page is gone; nothing here is approvable again.
             approvalPending = false;
+            latched = true;
             setApproveEnabled(false);
             setNotice('This task is no longer on the board. Approve is disabled.');
         }

@@ -1,0 +1,352 @@
+{
+  "id": "task-7a0b188151a74356a4965b3cc589eddf",
+  "epicId": "epic-be924fb8",
+  "title": "bug: account rotation relaunches an interactive claude seat on an account that never accepted folder trust, so the TUI silently blocks at the trust dialog",
+  "description": "Observed 2026-10-25 by governor-187cc44e.\n\nAt 10:58:51Z interactive architect-26ba32c3 rotated from acct-2 to acct-4 (wrapper_restart). The wrapper's pre-flight then claimed task-5c71dff9 and preloaded its context (worker status READING_CONTEXT).\n\nThe claude TUI, pid 1795029 with CLAUDE_CONFIG_DIR=acct-4, never produced a transcript. No acct-*/projects/*/*.jsonl contains its pre-flight prompt, and it made no moe tool call afterwards. The heartbeat sidecar kept lastActivityAt fresh, so for 40+ minutes it looked alive while the board's planning queue grew to about 12 rows.\n\nReading each account's .claude.json, projects['/mnt/d/projexts/moes'].hasTrustDialogAccepted is:\n- true for acct-1, acct-2 and acct-5\n- missing for acct-3, acct-4 and acct-6\n\nThose three only ever ran headless -p seats for moes, and -p skips the trust dialog. An interactive launch on them therefore stops at \"Do you trust the files in this folder?\" until a human answers, invisible to the daemon and the governor.\n\nExpected: an interactive claude seat never parks silently on a first-run dialog after rotation. Possible fixes, for the planner to choose:\n- the accounts add/login flow pre-accepts trust for the projects it serves;\n- the lease steers interactive seats to accounts that already trust the project;\n- the wrapper detects the condition and refuses with a named code and a #general escalation, instead of launching into a dialog.\n\nNote the rotation invariant in scripts/CLAUDE.md: \"The wrapper never opens a file inside a config directory\". A fix that touches .claude.json must either respect that invariant or get human sign-off to amend it. Both launchers must stay at parity.",
+  "definitionOfDone": [
+    "An interactive claude seat that the rotation moves to an account without folder trust for the project either launches without stopping at the trust dialog, or is refused before launch with a named code and a #general escalation that names the account and the project. It never parks silently.",
+    "Headless -p seats are unchanged, and the scripts/CLAUDE.md rotation invariant is either preserved or explicitly amended with human sign-off.",
+    "The sh and ps1 launchers behave identically, and bash scripts/tests/parity-check.sh passes. Regression coverage in scripts/tests/moe-account-lease.test.mjs or [accounts] postflight cases exercises the untrusted-account path. Any daemon change passes cd packages/moe-daemon && npm test.",
+    "docs/MCP_SERVER.md 'Claude Account Rotation' and scripts/CLAUDE.md describe the behavior."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Helper `trust` subcommand, test-first (load test-driven-development). Facts measured by the architect 2026-10-26 (claude 2.1.310 + the live account configs; keys/booleans only were read): claude's trust check reads projects[<git toplevel of the cwd, else the cwd>] in $CLAUDE_CONFIG_DIR/.claude.json, then walks from the cwd up to the repo root; accepting the dialog writes that same key, '/' separators on Windows (live keys: WSL '/mnt/d/projexts/moes', native 'D:/projexts/moes'); claude saves the file under a proper-lockfile mkdir lock at `<file>.lock`, re-reading under it, as JSON.stringify(cfg, null, 2) with no trailing newline.\n\nscripts/moe-account-lease.mjs: add `trust <configDir> <projectDir> [<launchDir>]` (launchDir defaults to projectDir; ps1 passes claude's real launch cwd). It prints exactly one line, exit 0:\n- `trusted` (every key already trusted; nothing written)\n- `granted` (missing keys written and read back)\n- `refused<TAB><sec><TAB><reason>`: sec = MOE_ACCOUNT_RETRY_SEC as an integer >= 1, else 300 (pick's cap rule); reason is one of, verbatim: 'no .claude.json in the account folder' | \"the account's .claude.json is not a regular file\" | \"the account's .claude.json is over 16 MiB\" | \"the account's .claude.json is not a JSON object\" | \"the account's .claude.json is locked by another claude\" | \"the account's .claude.json could not be rewritten\" | 'the trust entry did not read back' | 'the launch directory is outside the project'.\nMissing args: exit 2 with USAGE (add `trust` to it and to the header list).\n\nExport for tests: `trustKeys(dir, { platform, realpath, gitTop })` = deduped keys from dir, realpath(dir) and gitTop(dir) (`git -C <dir> rev-parse --show-toplevel`, 10s timeout, windowsHide, skipped on failure). win32: path.win32.resolve, '\\\\' -> '/', strip a trailing '/' (keep 'X:/'), plus the same key with an uppercased drive letter. posix: path.posix.resolve, strip trailing '/'. Also export the IO function with an injectable lock wait (default 2000 ms).\n\nAlgorithm:\n1. launchDir must be projectDir or inside it (win32: compare the normalized forms case-insensitively). Else print `trusted` when every launchDir key is already trusted, otherwise the 'outside' refusal.\n2. Unlocked fast path: lstat <configDir>/.claude.json (missing / symlink / not a file -> refused); size <= 16 MiB; JSON.parse to a plain object whose `projects` is absent or a plain object. If every key has hasTrustDialogAccepted === true -> `trusted`.\n3. Else take claude's own lock: fs.mkdirSync(<configDir>/.claude.json.lock), retry every 50 ms until the wait ends (Atomics.wait sleep). Never remove a lock this call did not create; release ours in finally.\n4. Re-read under the lock with the same checks. Set each missing key: projects[k] = {...existing object entry or {}, hasTrustDialogAccepted: true} (the minimal entry claude's runner writes). Every other key is untouched.\n5. Write JSON.stringify(next, null, 2) (no trailing newline) to <configDir>/.claude.json.moe-<pid>.tmp with the original mode, then renameSync over the file, retrying EPERM/EBUSY/EACCES 5x50 ms (Windows). Unlink the tmp on failure.\n6. Re-read and verify every key -> `granted`.\n\nError handling: every fs/git failure maps to one fixed reason. Nothing from the file, no path and no env value is ever printed; no exception escapes main. Rewrite the header comment: the helper opens exactly one file inside a config folder, .claude.json, only to set this trust key for an interactive seat (human sign-off 2026-10-26, task-7a0b1881); it never opens .credentials.json or any other file.\n\nTests in scripts/tests/moe-account-lease.test.mjs (node:test, temp dirs only, never a real account folder):\n(a) trustKeys:\n- posix: given + realpath + gitTop, deduped, trailing slash stripped;\n- win32: 'D:\\\\projexts\\\\moes\\\\' -> 'D:/projexts/moes';\n- win32: 'd:\\\\x' also yields 'D:/x'.\n(b) Untrusted config -> `granted`:\n- every key now trusted;\n- every other top-level key and project entry deep-equals the seed;\n- an existing entry keeps its fields;\n- 2-space JSON, no trailing newline;\n- POSIX mode preserved;\n- no .lock dir or *.tmp left.\n(c) Already trusted -> `trusted`; bytes and mtimeMs unchanged.\n(d) Missing file -> refused; nothing is created.\n(e) Malformed JSON / an array / a non-object `projects` -> refused; bytes unchanged.\n(f) A file over 16 MiB -> refused.\n(g) A symlinked .claude.json -> the regular-file refusal, and the link stays. Use the canSymlink guard from mem:decision-posix-only-test-guards.\n(h) A pre-existing .claude.json.lock dir -> the locked refusal within the injected wait; the foreign lock is not removed and the file is unchanged.\n(i) launchDir outside projectDir -> 'outside'; launchDir inside -> granted.\n(j) CLI:\n- exactly one stdout line;\n- with MOE_ACCOUNT_RETRY_SEC=7 the line is `refused\\t7\\t...`;\n- a secret marker seeded in the config never appears on stdout or stderr;\n- missing args -> exit 2.\nRed first: the run must fail on the missing export or subcommand.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-account-lease.mjs",
+        "scripts/tests/moe-account-lease.test.mjs"
+      ],
+      "note": "Reopen 1 was for size only. QA's route: do not re-slice landed bytes. File an epic ADD_RAIL size exception, then complete_task again with the bytes unchanged. Filed as prop-f04ebf50a0bc4f1ea3a72671fa72ab8f (PENDING human review). It names 4758ad1 and its numstat, which I re-measured with git show --numstat 4758ad1: lease.mjs +207/-8, moe-agent.sh +49/-6, moe-agent.ps1 +37/-6, MCP_SERVER.md +6/-1, scripts/CLAUDE.md +1/-1, lease test +505/-2, postflight.sh +38/-8.\n\nThe step-1 deliverables (the helper `trust` subcommand and its unit tests) landed in 4758ad1, with the RED proof in round 1. Both paths are unchanged this round: `git diff 4758ad1 --` on them is empty, and no commit after 4758ad1 touches them. No files modified. TDD does not apply because there is no new code. The shared tree's other dirty paths belong to peers and were left alone.",
+      "startedAt": "2026-10-26T07:35:44.895Z",
+      "completedAt": "2026-10-26T07:35:58.702Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Launcher lease-loop tests, red before the wiring. They run the REAL lease functions of both launchers, using the between() extraction from scripts/tests/prompt-cache-launcher.test.mjs (read-only reference).\n- sh block: from '# printf, not echo -e: a reason from the daemon is printed as is.' to \"# Runs inside the CLI's subshell\" (account_say, clear_account_lease, get_account_lease).\n- ps1 block: from \"# One line from moe-account-lease.mjs ('' when it printed nothing)\" to '# The values never leave this process' (Invoke-MoeAccountHelper, Clear-MoeAccountLease, Get-MoeAccountLease).\n- Engines: /bin/bash everywhere; on win32 also powershell.exe, pwsh.exe and Git Bash (that file's engines list).\n\nStubs:\n- moe_rpc / Invoke-MoeRpc: scripted lease_account replies (acct-1, then acct-2) whose configDir points at temp folders; log every call.\n- sleep / Start-Sleep: record only.\n- chat_send / Send-MoeGeneralChat: record.\n- The REAL helper: ACCOUNT_HELPER / $accountHelper = scripts/moe-account-lease.mjs.\n- Define the variables the block reads: WORKER_ID, PROJECT / $projectPath, GENERAL_CHANNEL_ID / $generalChannelId, NODE_CMD, PYTHON_CMD (skip sh without python 3 like the file already does), colors, and the $script:Account* initial values.\n\nCases, with identical assertions for every engine:\n1. Interactive, untrusted acct-1: TRUST_GRANTED line; file trusted; leased id acct-1; one lease; no chat.\n2. Interactive, already trusted: no TRUST line; bytes unchanged.\n3. Interactive, acct-1 has no .claude.json, acct-2 valid but untrusted:\n- the UNTRUSTED line names acct-1, the project and the reason;\n- exactly one #general message, naming acct-1 and the project, containing no temp config path;\n- one recorded sleep of MOE_ACCOUNT_RETRY_SEC;\n- a second lease gets acct-2, which is granted and leased;\n- nothing is created in acct-1's folder.\n4. Headless (CLAUDE_INTERACTIVE=false / $claudeInteractive=$false), untrusted acct-1: leased; file byte-identical; no trust line.\n5. ps1 only: a launch location outside the project -> the outside refusal; inside -> granted.\n\nConfirm these fail now: no trust behaviour in either launcher yet.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/moe-account-lease.test.mjs"
+      ],
+      "note": "Size-only reopen, bytes unchanged (QA route; rail proposal prop-f04ebf50a0bc4f1ea3a72671fa72ab8f is PENDING). The step-2 lease-loop tests landed in 4758ad1. They are in scripts/tests/moe-account-lease.test.mjs: real sh/ps1 function extraction on bash, powershell.exe, pwsh.exe and Git Bash. Round 1 proved them RED before the wiring. QA's three launcher mutants (drop the interactive guard, drop the per-account dedup, return after a refusal) each fail 1-2 of them. The file is identical to 4758ad1 (empty git diff). No files modified. The round-2 gate re-runs the file fresh in step 6.",
+      "startedAt": "2026-10-26T07:36:03.460Z",
+      "completedAt": "2026-10-26T07:36:09.187Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Bash wiring in scripts/moe-agent.sh get_account_lease, in the `leased` branch after the existing MOE_ACCOUNT_LEASED line. Only when $CLAUDE_INTERACTIVE = true (headless -p seats never run it): trust=$(\"$NODE_CMD\" \"$ACCOUNT_HELPER\" trust \"$f3\" \"$PROJECT\" 2>/dev/null) || trust=\"\". claude runs after `cd \"$PROJECT\"`, so the launch dir is the project.\n\nOn its answer:\n- `trusted`: return 0.\n- `granted`: account_say \"MOE_ACCOUNT_TRUST_GRANTED account=$f1 project=$PROJECT\" \"$GREEN\"; return 0.\n- `refused<TAB>sec<TAB>reason`:\n  - clear_account_lease.\n  - account_say \"MOE_ACCOUNT_UNTRUSTED account=$f1 project=$PROJECT ($reason) - not launching into Claude's folder-trust dialog; retry in ${sec}s, the held task stays held. (Ctrl+C to stop)\".\n  - Post ONE #general escalation per get_account_lease call per account (keep a local list of ids already escalated). Follow the announce_push_failure pattern: moe_rpc chat_send, JSON args built with $PYTHON_CMD, best-effort. Text: \"@governors $WORKER_ID: MOE_ACCOUNT_UNTRUSTED - account $f1 does not trust project $PROJECT and Moe could not grant it ($reason). The interactive seat waits instead of parking at Claude's folder-trust dialog. Fix: start claude once in $PROJECT under that account's folder (claude-accounts/$f1) and accept the trust dialog.\" Never include the config directory path: the [accounts] harness forbids any account directory reaching the daemon.\n  - sleep \"$sec\"; continue (re-lease; the daemon may hand out another account).\n- Anything else (empty output, a helper crash): clear_account_lease plus the existing 'MOE_ACCOUNT_LEASE_UNAVAILABLE (the account helper failed) - launching without rotation.'; return 0. This keeps the existing every-failure-launches-unrotated rule.\n\nAmend the block comment (~line 5950) and the call-site comment (~line 7278): nothing reads inside an account folder except an interactive seat's trust key.\n\nscripts/tests/postflight.sh [accounts]:\n- After the five headless runs, assert $ACCT_HOME/acct-1 and acct-2 are still empty (headless seats never touch a config folder).\n- Before `run_accounts interactive`, seed $ACCT_HOME/acct-1/.claude.json with an untrusted config: an unrelated trusted project, an oauthAccount carrying a secret marker, and other keys. This is REQUIRED: without it the existing interactive run now refuses and waits until its timeout.\n- In the checker's interactive case:\n  - want '[account] MOE_ACCOUNT_TRUST_GRANTED account=acct-1 project=';\n  - the projects entry whose key realpath-equals PROJECT_DIR has hasTrustDialogAccepted true (compare by realpath: under Git Bash, MSYS converts \"$PROJECT\" for node.exe, so the key is the Windows form);\n  - every other seeded key deep-equals the seed;\n  - no .claude.json.lock or *.tmp left in acct-1;\n  - the marker appears nowhere in the wrapper output or the RPC log;\n  - still exactly one launch, on acct-1.\n- Update the block's header comment.\n\nThe sh cases from step 2 must now pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Size-only reopen, bytes unchanged (QA route; prop-f04ebf50a0bc4f1ea3a72671fa72ab8f PENDING). The sh wiring in get_account_lease and the seeded postflight [accounts] interactive case landed in 4758ad1. scripts/moe-agent.sh (+49/-6) and scripts/tests/postflight.sh (+38/-8) are identical to 4758ad1 (empty git diff, and no later commit touches them). No files modified. Postflight re-runs fresh in the step-6 gate.",
+      "startedAt": "2026-10-26T07:36:12.515Z",
+      "completedAt": "2026-10-26T07:36:17.386Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "PowerShell twin in scripts/moe-agent.ps1 Get-MoeAccountLease, in the `leased` branch. The file is UTF-8 WITH a BOM and LF line endings; keep both. Use PowerShell 5.1 syntax only (no ??, no ternary, no &&).\n\nOnly when $claudeInteractive: run Invoke-MoeAccountHelper -HelperArgs @('trust', $f[3], $projectPath, (Get-Location).ProviderPath). A ps1 claude launch runs in the launcher's cwd (root CLAUDE.md), and the JetBrains plugin opens that terminal in project.basePath.\n\nOn its answer:\n- `trusted`: return.\n- `granted`: green Write-Host of the same '[account] MOE_ACCOUNT_TRUST_GRANTED account=... project=<$projectPath>' line.\n- `refused`:\n  - Clear-MoeAccountLease.\n  - The same yellow MOE_ACCOUNT_UNTRUSTED line, byte-identical to sh apart from variable syntax.\n  - The same escalation via Send-MoeGeneralChat, once per call per account.\n  - Start-Sleep -Seconds <sec>; continue.\n- $null or unknown output: Clear-MoeAccountLease plus the existing MOE_ACCOUNT_LEASE_UNAVAILABLE line; return.\n\nAmend the block comment (~line 5398) and the call-site comment (~line 6434) like the sh twin.\n\nparity-check compares the MOE_ACCOUNT_* code sets, so both files must carry MOE_ACCOUNT_TRUST_GRANTED and MOE_ACCOUNT_UNTRUSTED. The ps1 cases from step 2 are verified natively in step 6.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Size-only reopen, bytes unchanged (QA route; prop-f04ebf50a0bc4f1ea3a72671fa72ab8f PENDING). The ps1 twin in Get-MoeAccountLease landed in 4758ad1. scripts/moe-agent.ps1 (+37/-6, BOM kept, LF) is identical to 4758ad1: empty git diff, and no later commit touches it. In round 1, QA verified the 7 ps1 lease-loop cases on powershell.exe and pwsh.exe, PS 5.1 ParseFile with 0 errors, and parity-check.ps1 PASS. No files modified.",
+      "startedAt": "2026-10-26T07:36:27.448Z",
+      "completedAt": "2026-10-26T07:36:35.955Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Docs (DoD 4), LF.\n\nscripts/CLAUDE.md, 'Claude account rotation' bullet:\n- Replace 'The wrapper never opens a file inside a config directory, and takes only the exit code and authMethod from claude auth status --json.' with the narrow exception:\n  - for an interactive seat only, the helper sets projects[<key>].hasTrustDialogAccepted in the leased account's .claude.json;\n  - the key is the one Claude's own trust dialog writes for the launch directory;\n  - it is written under Claude's .claude.json.lock and read back;\n  - nothing else in the file is read out or printed, .credentials.json is never opened, and headless -p seats are unchanged;\n  - cite the human sign-off (2026-10-26, task-7a0b1881).\n- Add the codes:\n  - MOE_ACCOUNT_TRUST_GRANTED;\n  - MOE_ACCOUNT_UNTRUSTED: waits MOE_ACCOUNT_RETRY_SEC, then re-leases; one #general escalation per wait, naming the account and the project;\n  - a helper failure launches unrotated.\n- Add the new tests to its Tests list.\n\ndocs/MCP_SERVER.md 'Claude Account Rotation':\n- Add an 'Interactive seats and folder trust' bullet with the same facts.\n- 'Neither the daemon nor the CLI opens a file inside it' stays true. Add that only the wrapper's helper opens one file there, for this key.\n\nDo NOT edit docs/SCHEMA.md, the registry.ts comments or docs/TROUBLESHOOTING.md: sibling task-fc9835feb5c64caab19b736797408b8e owns them.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Size-only reopen, bytes unchanged (QA route; prop-f04ebf50a0bc4f1ea3a72671fa72ab8f PENDING). The DoD-4 docs landed in 4758ad1:\n- scripts/CLAUDE.md +1/-1: the narrow invariant amendment citing sign-off comment-99598cf0, the new codes, and the tests.\n- docs/MCP_SERVER.md +6/-1: an 'Interactive seats and folder trust' bullet.\nBoth are identical to 4758ad1 (empty git diff). No files modified. docs/SCHEMA.md, the registry.ts comments and TROUBLESHOOTING.md remain with follow-up task-fc9835fe, as QA noted.",
+      "startedAt": "2026-10-26T07:36:36.794Z",
+      "completedAt": "2026-10-26T07:36:42.128Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "The ONE gate, fresh, in a Linux snapshot. The checkout is shared; overlay only this task's 7 files (mem:gotcha-daemon-linux-snapshot-gate).\n1. S=$(mktemp -d /tmp/moe-7a0b-gate.XXXXXX); git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\".\n2. cp each owned path over the archive and cmp it against the worktree.\n3. Run, from $S: env -u MOE_PROJECT_PATH -u MOE_WORKER_ID -u CLAUDE_CONFIG_DIR MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash -c 'node --test scripts/tests/moe-account-lease.test.mjs && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh'\nEvery part must exit 0, and the postflight output must show '[accounts] ok'. That command is the complete_task verification.\n\nNative Windows evidence for the summary: copy $S's scripts/ into a Windows temp dir and run from a /mnt/c cwd with MOE_*/CLAUDE* stripped (mem:gotcha-qa-ps1-postflight-from-wsl).\n(1) \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/moe-account-lease.test.mjs exits 0. It runs the ps1 lease-loop cases under powershell.exe and pwsh.exe, plus the win32 rename and lock paths.\n(2) A PS 5.1 parse of scripts/moe-agent.ps1 with [System.Management.Automation.Language.Parser]::ParseFile(<path>, [ref]$null, [ref]$errs) reports 0 errors.\n(3) powershell.exe -NoProfile -File scripts/tests/parity-check.ps1 exits 0.\n\npostflight.ps1 is not part of this gate: its [accounts] runs are headless (the trust step never runs there), and step 2 drives the real Get-MoeAccountLease natively.\nNever point the helper or any test at ~/.moe/claude-accounts or any real Claude config folder. Remove the temp dirs after checking their prefixes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/moe-account-lease.test.mjs",
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "The gate, run fresh this round, from a pure `git archive HEAD` snapshot.\n- HEAD = 4758ad1 itself. The 7 owned paths in the worktree, in 4758ad1 and in the snapshot are identical (git diff --quiet plus cmp).\n- All 27 MOE_*/CLAUDE* vars unset, MOE_POSTFLIGHT_TIMEOUT_SEC=180, GNU bash 5.2.21, node v24.21.0, run 07:35:21Z to 07:43:56Z.\n- Lease test: 40 tests, 39 pass, 0 fail, 1 skip. parity-check.sh PASS. postflight.sh PASS: frozen 73, [accounts] ok, commit-scope 38. GATE_EXIT=0.\n\nNative Windows, from a copy of the snapshot's scripts/ in C:\\Users\\Yaron\\AppData\\Local\\Temp, with MOE_*/CLAUDE* unset and WSLENV empty:\n- node.exe lease test: 54 tests, 52 pass, 0 fail, 2 skip (no symlinks; needs POSIX permissions). All 7 ps1 lease-loop cases pass on powershell.exe and on pwsh.exe, and all 6 Git Bash cases pass.\n- PS 5.1.26100 ParseFile on moe-agent.ps1: 0 errors.\n- parity-check.ps1 PASS (exit 0).\n- moe-agent.ps1 BOM kept (ef bb bf), 0 CR.\n\nBoth temp dirs were removed after a prefix check. No repo files were modified, and no real account folder was used.",
+      "startedAt": "2026-10-26T07:36:50.468Z",
+      "completedAt": "2026-10-26T07:45:09.657Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of the whole diff (load adversarial-self-review). Check:\n- Lock: no path deletes a lock this call did not create; finally always releases ours; a kill while holding it is recovered by claude's 10s stale rule.\n- Atomicity: tmp and rename in the same folder; the tmp is cleaned on every failure; the file mode is preserved.\n- Content: no line can print .claude.json content, a path from it, or an env value; the escalation never carries the config dir.\n- Scope: only interactive leased claude seats; headless and unrotated launches behave exactly as before; only the trust key changes, and every other key round-trips.\n- Keys: correct for WSL/Linux, native (D:/...), Git Bash (MSYS-converted args), a project nested in a git repo (the toplevel key is what claude's dialog writes), and trailing slashes.\n- Loop: a refusal clears the lease, waits once per iteration, escalates once per account per call, and Ctrl+C still ends it; a helper crash launches unrotated.\n- Parity: identical lines and codes in sh/ps1; ps1 BOM kept; PowerShell 5.1 syntax only.\n- No real account folder was touched while testing.\nFix any finding, then rerun step 6 before moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-account-lease.mjs",
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "I re-read the whole 4758ad1 diff this session as an attacker: the helper, both launchers, the docs, the lease test and postflight. I found no real defect and changed no bytes; the 7 owned paths still equal 4758ad1 (git diff --quiet). The shared tree's other dirty paths belong to peers and were left alone.\n\nChecklist:\n- Lock: takeLock returns 'held' only after this call's own mkdir. Only that path reaches the finally rmdir. EEXIST waits up to 2 s, any other error gives the rewrite refusal. A foreign lock is never removed.\n- Atomicity: the tmp file is `.claude.json.moe-<pid>.tmp` in the same folder, opened 'wx' and chmod'd to the original mode. The rename retries EPERM/EBUSY/EACCES 5x50 ms, and the tmp is removed on every failure. The original is untouched unless the rename succeeds.\n- Privacy: the helper prints one of three shapes with fixed reasons; no file content, path or env value. The escalation names the account id, the project and a relative `claude-accounts/<id>` hint, never the config dir. No forbidden patterns in the added lines.\n- Scope (sh): the guard `[ \"$CLAUDE_INTERACTIVE\" = true ]` matches the TUI branch exactly, since PRINT_ARGS is empty iff CLAUDE_INTERACTIVE=true (moe-agent.sh:7824).\n- Scope (ps1): the guard uses $claudeInteractive. Headless seats return before the helper runs.\n- Launch dir: the sh TUI runs `(cd \"$PROJECT\" && ...)`. The ps1 claude launches (moe-agent.ps1:7210-7226) have no Push-Location, so (Get-Location).ProviderPath is claude's cwd. $projectPath is a PathInfo, but [string[]]$HelperArgs turns it into its Path.\n- Keys: covered for WSL/Linux, native D:/, Git Bash (MSYS-converted argv), a nested repo (git top-level), a trailing slash and a lowercase drive.\n- Loop: a refusal clears the lease, prints UNTRUSTED, escalates once per account per call, sleeps, then re-leases. Ctrl+C behaves as in MOE_ACCOUNT_WAIT. A helper failure launches unrotated. Every new sh command is set -e safe.\n\nTheoretical residuals (no change):\n1. A helper killed between mkdir and rmdir leaves a stale .claude.json.lock. Trust calls then refuse loudly ('locked' plus #general) until a claude run clears it under proper-lockfile's 10 s stale rule.\n2. If the helper held the lock over 10 s (a suspended process or a very slow fs), claude could take it over, and our finally would then rmdir claude's lock. The normal hold is milliseconds.\n3. A kill between the tmp write and the rename leaves tmp debris.\n4. claude's no-lock fallback could drop the key later, and the TUI would ask once.\n5. ps1: a non-FileSystem location, or a PSDrive/UNC project path, gets the loud 'outside' refusal.\n6. sh and ps1 parse the retry seconds differently only above 2^31, which matches the existing MOE_ACCOUNT_WAIT path.\n\nFresh gate run in this session, 07:48:58Z to 07:57:54Z: a pure git archive of HEAD 229e534, owned paths == 4758ad1, 27 MOE_*/CLAUDE* vars unset, TIMEOUT 180.\n- Lease test: 40 tests, 39 pass, 1 skip.\n- parity-check.sh PASS.\n- postflight PASS: frozen 73, [accounts] ok, scope 38. GATE_EXIT=0.\n\nNative Windows, same snapshot, 07:58Z:\n- node.exe: 54 tests, 52 pass, 2 skips. Every lease-loop case passes: the 7 ps1 cases on powershell.exe and on pwsh.exe, and the 6 Git Bash cases.\n- PS 5.1.26100 ParseFile: 0 errors.\n- parity-check.ps1 PASS.\n- BOM kept, 0 CR.\n\nTemp dirs removed after a prefix check.",
+      "startedAt": "2026-10-26T07:48:39.745Z",
+      "completedAt": "2026-10-26T07:58:44.657Z"
+    }
+  ],
+  "planRevision": 30,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Human approved size-exception rail prop-f04ebf50a0bc4f1ea3a72671fa72ab8f at 09:21:45Z. QA's round-2 review on e5f0216 passed on substance with every gate green, and the waiver was the only open item. Next QA: confirm the rail in allRails.epic, then approve on the round-2 evidence (comment-60740ecb), naming the 811 net LOC in the summary.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 230.5,
+  "comments": [
+    {
+      "id": "comment-99598cf0e7f64f2ca2db4a0886087a3e",
+      "author": "architect-2c9d5121",
+      "content": "HUMAN SIGN-OFF for the rotation-invariant amendment (DoD item 2), given 2026-10-26 in the interactive architect session architect-2c9d5121 (AskUserQuestion answer: \"Pre-accept trust (Recommended)\").\n\nWhat was approved, a narrow amendment of \"Moe never opens a file inside a config directory\":\n- For an INTERACTIVE claude seat only, scripts/moe-account-lease.mjs may open that leased account's `.claude.json`.\n- It sets `projects[<key>].hasTrustDialogAccepted: true`, where `<key>` is the key Claude's own trust dialog writes for the launch directory. Claude's own guidance names this as the alternative to the dialog (\"Run Claude Code interactively here once and accept the trust dialog, or set projects[...].hasTrustDialogAccepted: true in <config>\"), and Claude's self-hosted runner writes it.\n- The write happens under Claude's own `.claude.json.lock`, then the file is re-read to verify.\n- If the trust cannot be granted, the wrapper refuses the launch with MOE_ACCOUNT_UNTRUSTED and a #general escalation.\n- Nothing else in the file is read out, printed or changed. `.credentials.json` and every other file stay unopened.\n- Headless -p seats are unchanged.\n\nRejected by the human: (a) detect-and-refuse only (read-only); (b) keeping the invariant through per-account operator attestation plus lease steering.\n\nMeasured while planning: claude 2.1.310's trust check reads `projects[<git root of cwd>]`, then walks from cwd up to the repo root. Key forms: WSL '/mnt/d/projexts/moes', native Windows 'D:/projexts/moes'. On 2026-10-26, acct-1..5 trust the WSL key, acct-6 trusts nothing, and no account trusts the native key.",
+      "timestamp": "2026-10-26T05:45:42.987Z"
+    },
+    {
+      "id": "comment-0798688ebded4c7da439e2017935fe57",
+      "author": "governor-96f92f36",
+      "content": "Governor dependency change (2026-10-26T06:00Z), following \"Serialize overlapping affectedFiles through explicit dependencies\". dependsOn was [] and is now [task-7c2872e7]. Step 3 of this plan edits scripts/tests/postflight.sh, which in-flight 7c2872e7 (postflight fake-proxy twins, worker-3729a0d6, 3/5 steps) also edits. Without the dependency, the next free worker would claim this row and both seats would edit the same harness at once, contesting each other's landings. Nothing else overlaps across the WORKING rows. The trust hazard itself is mitigated for now: all six accounts trust /mnt/d/projexts/moes (verified 05:34Z), so waiting costs little. For the implementer: rebase step 3's postflight.sh edits onto 7c2872e7's landed version of the harness.",
+      "timestamp": "2026-10-26T05:57:06.049Z"
+    },
+    {
+      "id": "comment-60740ecb5ce746478bce677a5eaad86d",
+      "author": "qa-7c627d35",
+      "content": "QA round 2 (qa-7c627d35, 2026-10-26 08:02Z-08:13Z). Verdict: the substance passes again, but there is still no size rail. The row is parked from REVIEW, not rejected.\n\nSize rail\n- prop-f04ebf50a0bc4f1ea3a72671fa72ab8f (ADD_RAIL, EPIC, scoped to this task) is still PENDING (resolvedAt null, re-checked 08:12Z).\n- allRails.epic holds only the three standing rails, and no project or epic rail waives size. QA cannot approve 811 net LOC yet.\n- Rejecting again would burn a reopen with nothing for the worker to change; only a human can resolve the proposal.\n\nBytes\n- HEAD = origin/moe/work-2026-10-24 = e5f0216.\n- Round-2 checkpoint 229e534 and completion e5f0216 each touch only this task's board JSON.\n- `git diff --quiet 4758ad1 HEAD` over the 7 owned paths is clean, and the worktree equals HEAD on them. The snapshot cmp equals 4758ad1 equals the worktree.\n- `git show --numstat 4758ad1` equals the proposal text exactly: lease.mjs +207/-8, moe-agent.sh +49/-6, moe-agent.ps1 +37/-6, MCP_SERVER.md +6/-1, scripts/CLAUDE.md +1/-1, lease test +505/-2, postflight.sh +38/-8. Total +843/-32, net 811.\n\ntask.verification, re-run by QA\n- Run from a pure `git archive e5f0216` in /tmp, with all 29 MOE_*/CLAUDE* vars unset and MOE_POSTFLIGHT_TIMEOUT_SEC=180 (bash 5.2.21, node v24.21.0).\n- lease test: 40 tests, 39 pass, 0 fail, 1 skip (Windows-only).\n- parity-check.sh: PASS.\n- postflight.sh: PASS, run 08:03:04Z to 08:12:16Z: frozen candidates 73, [accounts] ok, commit-scope 38, [team join] ok, [team heal] ok; GATE_EXIT=0.\n\nNative Windows\n- Run from a copy of the snapshot's scripts/ in %TEMP%, with MOE_*/CLAUDE* unset and WSLENV empty.\n- node.exe lease test: 54 tests, 52 pass, 0 fail, 2 skip (symlink, POSIX permissions). All 7 ps1 lease-loop cases pass on powershell.exe and on pwsh.exe, and all 6 Git Bash cases pass.\n- PS 5.1.26100 ParseFile on moe-agent.ps1: 0 errors.\n- parity-check.ps1: PASS.\n- moe-agent.ps1 keeps its BOM (ef bb bf) and has 0 CR.\n\nIndependent probes, run in a separate copy\n- 9 helper mutants, 8 killed (1 to 10 failing tests each):\n  - isTrusted every to some;\n  - no lock release;\n  - stealing a foreign lock;\n  - skipping launchInside;\n  - dropping the file mode;\n  - no locked re-read;\n  - a trailing newline;\n  - the config path in the refusal line.\n- Survivor: dropping the final read-back check. No test forces a read-back failure. This is a defensive path, not a DoD item; optional hardening.\n- 8 concurrent `trust` calls on one config: exactly 1 `granted` and 7 `trusted`. Mode 600 kept, other keys and key order intact, no .lock or .tmp left, no secret in any output.\n- No forbidden patterns in the added lines.\n\nDoD, re-checked against the diff\n1. An interactive leased seat gets MOE_ACCOUNT_TRUST_GRANTED. If trust cannot be set, it gets MOE_ACCOUNT_UNTRUSTED plus one #general @governors line per account per lease loop, naming the account and the project, never the folder. It then waits MOE_ACCOUNT_RETRY_SEC and re-leases. It never launches into the dialog.\n2. The headless guards (`[ \"$CLAUDE_INTERACTIVE\" = true ]` and `$claudeInteractive`) match the TUI branch, since PRINT_ARGS is empty only when CLAUDE_INTERACTIVE=true. The invariant amendment in scripts/CLAUDE.md and docs/MCP_SERVER.md cites sign-off comment-99598cf0.\n3. Parity passes on sh and ps1. Coverage is in the lease test (4 engines) and postflight [accounts]. There is no daemon change.\n4. Both docs are updated.\n\nResume route\n- When a human APPROVES the proposal: set_task_status REVIEW. The next QA confirms the rail in allRails.epic, re-checks that the 7 paths still equal 4758ad1, and approves naming the size (811 net).\n- If it is REJECTED: set_task_status PLANNING, so the architect splits.",
+      "timestamp": "2026-10-26T08:12:47.074Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T11:39:58.071Z",
+  "updatedAt": "2026-10-26T09:40:17.287Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-25T22:18:28.699Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 14,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-26T09:38:45.253Z",
+    "wallClockMs": 40816554
+  },
+  "contextFetchedBy": [
+    "worker-3729a0d6",
+    "qa-7c627d35"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T05:48:35.795Z",
+  "planningNotes": {
+    "approachesConsidered": "Human sign-off: the operator chose 'Pre-accept trust' over detect-and-refuse (read-only) and over keeping the invariant through per-account attestation plus lease steering (task comment-99598cf0e7f64f2ca2db4a0886087a3e).\nAlso rejected:\n- CLAUDE_CODE_SANDBOXED: an undocumented claude internal that also lifts a project-permission gate.\n- Granting trust at `accounts login`: misses existing accounts and the per-platform key forms; only the wrapper knows the real launch dir.\n- Daemon-side lease steering: needs a lease_account contract change, and every account still stays untrusted.\n- Launching unrotated on refusal: the operator's own config may park silently too. A loud wait mirrors MOE_ACCOUNT_WAIT.\n- A refused run in postflight.sh: the fake proxy re-leases acct-1 forever (only refused/signIn reports park an account), so refusal coverage lives in the extracted-function tests (step 2).\n- Size: 7 files exceeds the 5-file soft cap. The DoD names both launchers, the harness and two docs, and a task's DoD cannot be narrowed, so the three remaining doc/comment fixes went to sibling task-fc9835feb5c64caab19b736797408b8e.",
+    "codebaseInsights": "claude internals (2.1.310):\n- GP() trust = CLAUDE_CODE_SANDBOXED, or session trust, or projects[ZVe()] (the git root of the cwd), or a walk from the cwd up to the repo root.\n- The dialog mutator th(cI(cwd)) writes projects[wq(canonical git root)]; wq() turns backslashes into '/' on Windows.\n- Saves go through `ii`: proper-lockfile at `${configFile}.lock`, a fresh re-read, projects merged.\n- Format: 2-space JSON, no trailing newline, mode 0600.\n\nLive facts (2026-10-26):\n- acct-1..5 trust '/mnt/d/projexts/moes'; acct-6 trusts nothing; no account trusts 'D:/projexts/moes'.\n- All accounts have hasCompletedOnboarding, so trust is the only first-run dialog.\n\nWrapper structure:\n- sh get_account_lease (~5984) and ps1 Get-MoeAccountLease (~5449) are twin loops (leased / wait / off / unavailable); the trust step slots into `leased`.\n- Escalation patterns: sh announce_push_failure (moe_rpc chat_send + $PYTHON_CMD JSON); ps1 Send-MoeGeneralChat (~3954).\n- ps1 claude runs in the launcher's cwd, never via Push-Location; JetBrains opens it in project.basePath.\n- The [accounts] harness: postflight.sh has an sh-only interactive run whose fake account folders are empty, so it must be seeded; postflight.ps1 [accounts] runs are all headless.\n- parity-check.sh compares MOE_ACCOUNT_* code sets.\n- File formats: moe-agent.ps1 is UTF-8+BOM with LF; everything else is LF without a BOM.",
+    "risks": "- Corrupting or clobbering an account's .claude.json, which holds oauthAccount and onboarding state. Mitigations: an unlocked read fast path; claude's own lock for writes; tmp + rename; read-back verify; refuse rather than create or repair. Residual: a claude that writes through its no-lock fallback can drop the key later, and the TUI would then show the dialog once.\n- Privacy: the config's email/org must never be printed; a seeded marker asserts it. The escalation must not carry the config dir path (the [accounts] check forbids it).\n- Real accounts: tests and smoke runs must never touch ~/.moe/claude-accounts.\n- Hang: the existing postflight interactive run hangs (a refusal loop) unless acct-1 is seeded.\n- Key forms: Git Bash passes MSYS-converted paths to node.exe; compare keys by realpath in assertions.\n- ps1: a refusal for a launch cwd outside the project is loud by design.\n- Windows rename EPERM/EBUSY needs the retry.\n- Claude internals may change between versions (key, lock path). Grant failures are loud, never silent; the documented key is Claude's own published remedy.",
+    "keyFiles": [
+      "scripts/moe-account-lease.mjs",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/moe-account-lease.test.mjs",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/tests/parity-check.sh",
+      "scripts/CLAUDE.md",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T05:48:35.901Z",
+  "dependsOn": [
+    "task-7c2872e7052646b7a521cb7a8f01c546"
+  ],
+  "workStartedAt": "2026-10-26T06:38:46.945Z",
+  "reviewStartedAt": "2026-10-26T07:59:39.975Z",
+  "verification": {
+    "command": "env -u <each of the 27 MOE_*/CLAUDE* vars in the seat env> MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash -c 'node --test scripts/tests/moe-account-lease.test.mjs && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh'  # run from a pure `git archive HEAD` (229e534) snapshot in /tmp; the 7 owned paths are cmp-identical to the worktree and git-diff-identical to completion 4758ad1",
+    "exitCode": 0,
+    "outputTail": "SNAP=/tmp/moe-7a0b-gate.F5jmfs\nHEAD=229e5342a525b2d0ff5644eb9554ce1a9a263b0c\n7 owned paths: worktree == 4758ad1 == snapshot\nunset: 54 args\n2026-10-26T07:48:58Z\nGNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)\nv24.21.0\n...\nℹ tests 40\nℹ pass 39\nℹ fail 0\nℹ skipped 1\nℹ duration_ms 2180.322669\nPASS parity-check.sh\n...\nPASS frozen candidate scenarios: 73\n[accounts] ok\n...\n[scenario AE] a retargeted symlink lands; a symlink whose target changed, and a dangling one, stay MOE_ATTR_PREEXISTING\n[scenario AE] ok\n[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle\n[scenario AF] ok\ncommit-scope scenarios run: 38\n[team join] a full team is reported and the NO_TEAM_MEMBERSHIP claim refusal is named\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\nPASS postflight.sh\nGATE_EXIT=0\n2026-10-26T07:57:54Z",
+    "reportedAt": "2026-10-26T07:59:39.975Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-account-lease.mjs",
+    "scripts/tests/moe-account-lease.test.mjs",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+    ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+    ".moe/tasks/task-502c00a50db340c9941cae20eeef1021.json",
+    ".moe/tasks/task-a103c2f4c9984b7481dbefca4d52fdf0.json",
+    ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+    ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+    ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+    ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+    ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json",
+    ".moe/tasks/task-df5384bf7fbd4b7ba3dedb43d7373ffa.json",
+    ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json"
+  ],
+  "completionSummary": "Round 2 after the size-only reject (reopen 1). Following QA's route, the landed bytes are unchanged: the 7 owned paths equal completion 4758ad1 (git diff --quiet, no later commit touches them; HEAD 229e534 is a board-only checkpoint). The size exception is filed as prop-f04ebf50a0bc4f1ea3a72671fa72ab8f (ADD_RAIL, EPIC) and is still PENDING human review. It is scoped to this task and names 4758ad1 +843/-32 (net 811) with this numstat: lease.mjs +207/-8, moe-agent.sh +49/-6, moe-agent.ps1 +37/-6, MCP_SERVER.md +6/-1, scripts/CLAUDE.md +1/-1, lease test +505/-2, postflight.sh +38/-8.\n\nBehaviour, as in round 1:\n- `moe-account-lease.mjs trust` sets projects[<key>].hasTrustDialogAccepted in the leased account's .claude.json, under claude's .claude.json.lock, with tmp+rename and a read-back.\n- Both launchers run it for interactive leased claude seats only, printing MOE_ACCOUNT_TRUST_GRANTED.\n- When trust cannot be set, they print MOE_ACCOUNT_UNTRUSTED and post one #general @governors line per account, naming the account and project but never the folder. They then wait MOE_ACCOUNT_RETRY_SEC and re-lease.\n- Headless -p seats are unchanged. The invariant amendment cites sign-off comment-99598cf0.\n\nStep-7 adversarial review: no defect. Theoretical residuals only:\n- A stale lock from a killed helper gives a loud refusal until claude's 10 s stale rule clears it.\n- A kill mid-write leaves tmp debris.\n- claude's no-lock fallback could drop the key later.\n\nFresh gate, run 07:48:58Z-07:57:54Z on a pure git archive of HEAD with 27 MOE_*/CLAUDE* vars unset and TIMEOUT 180:\n- lease test: 40 tests, 39 pass, 1 skip\n- parity-check.sh PASS\n- postflight PASS (frozen 73, [accounts] ok, scope 38)\n- exit 0\n\nNative Windows, same snapshot:\n- node.exe: 54 tests, 52 pass, 2 skips. That covers the 7 ps1 cases on each of powershell.exe and pwsh.exe, plus the 6 Git Bash cases.\n- PS 5.1 ParseFile: 0 errors.\n- parity-check.ps1 PASS.\n- BOM kept, 0 CR.",
+  "commits": [
+    {
+      "sha": "4758ad13111f7394606a6df6fde4ca7bd1c574d3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T06:37:12Z",
+      "paths": [
+        ".moe/tasks/task-491a2d8cff4d45afbdac79539098ebb1.json",
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+        "docs/MCP_SERVER.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-account-lease.mjs",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/moe-account-lease.test.mjs",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T07:18:59.743Z",
+      "treeId": "f3be92d6fde5ed98a8054faeec3761c23d37b07d",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "229e5342a525b2d0ff5644eb9554ce1a9a263b0c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T07:32:19Z",
+      "paths": [
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T07:45:56.220Z",
+      "treeId": "00fb73fdab7f0fb6249724d9f98acc0588e831f7",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "e5f021639d7f75f205af71f28ccebee364d4af22",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T07:46:27Z",
+      "paths": [
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T08:00:25.741Z",
+      "treeId": "3ed22457fa52d0670bf1d22a35bbef3cea837f70",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "a7222fa47acb2d12eb65bb5833c15156f5fa06e4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T08:00:47Z",
+      "paths": [
+        ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+        ".moe/tasks/task-502c00a50db340c9941cae20eeef1021.json",
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+        ".moe/tasks/task-a103c2f4c9984b7481dbefca4d52fdf0.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T08:14:05.623Z",
+      "treeId": "ae2d0ba3b3fc2bdedc1976912bebccf6341ae106",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "651acba28c6f83c9f6a36c119058315ad5e91d69",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T09:24:46Z",
+      "paths": [
+        ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+        ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+        ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json",
+        ".moe/tasks/task-df5384bf7fbd4b7ba3dedb43d7373ffa.json",
+        ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T09:40:17.287Z",
+      "treeId": "0ac88d7ff56d474734069505ab102c48b79bdb78",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/moe-account-lease.test.mjs",
+    "scripts/moe-account-lease.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T09:24:46Z",
+    "at": "2026-10-26T09:40:17.287Z"
+  },
+  "reviewCompletedAt": "2026-10-26T09:38:45.253Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "description": "Oversized: 4758ad1 is +843/-32 = 811 net non-board LOC (278 runtime+docs, 533 tests), over the 400 net-LOC cap, and no project or epic rail waives size. Don't re-slice landed bytes. File moe.propose_rail (ADD_RAIL, EPIC) for a size exception scoped to this task. Name 4758ad1 and its numstat: lease.mjs +207/-8, moe-agent.sh +49/-6, moe-agent.ps1 +37/-6, docs +7/-2, lease test +505/-2, postflight.sh +38/-8. Then complete_task again with the bytes unchanged."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Size only. The substance passes and every gate re-runs green. But completion 4758ad1 is +843/-32 = 811 net changed non-board LOC, over the 400 net-LOC review cap:\n- runtime + docs: 278 net (helper +207/-8, sh +49/-6, ps1 +37/-6, docs +7/-2)\n- tests: 533 net\nNo project or epic rail waives size. No DoD item failed.\n\nRoute, as for task-c2cb5cf7 (prop-a53405bd) and task-08070acb: do NOT re-slice landed bytes. File moe.propose_rail (ADD_RAIL, EPIC) for a size exception scoped to this task, naming 4758ad1 and its per-file numstat. Then call complete_task again with the bytes unchanged. In round 2, QA checks the rail in allRails.epic, the numstat and the tree, then approves. If the proposal is still PENDING then, QA parks the row from REVIEW rather than rejecting again.\n\nVerified by QA from a pure git archive of 4758ad1, with MOE_*/CLAUDE* unset:\n- task.verification: lease test 40 tests, 39 pass, 1 skip; parity-check.sh PASS; postflight.sh PASS (frozen 73, [accounts] ok, scope 38); exit 0.\n- Native Windows node.exe: 54 tests, 52 pass, 2 skips. All 7 ps1 lease-loop cases pass on powershell.exe and pwsh.exe; all 6 Git Bash cases pass. parity-check.ps1 PASS. PS 5.1 ParseFile: 0 errors. BOM kept, 0 CR.\n- trust on a /mnt/c drvfs temp folder: granted, then trusted; other keys kept.\n- Three launcher mutations (drop the interactive guard, drop the per-account dedup, launch after a refusal) each fail 1-2 tests.\n\nDoD 1-4 all have evidence:\n- Only interactive leased claude seats run the trust step.\n- A refusal prints MOE_ACCOUNT_UNTRUSTED and sends one #general @governors line per account, naming the account and the project, never the folder.\n- Headless seats are byte-identical.\n- Sign-off comment-99598cf0 is cited in scripts/CLAUDE.md and docs/MCP_SERVER.md.\n- Parity PASS.\n\nThe stale \"never opens a file inside\" wording in SCHEMA.md and registry.ts is scheduled in follow-up task-fc9835fe.",
+      "rejectedAt": "2026-10-26T07:32:09.261Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "description": "Oversized: 4758ad1 is +843/-32 = 811 net non-board LOC (278 runtime+docs, 533 tests), over the 400 net-LOC cap, and no project or epic rail waives size. Don't re-slice landed bytes. File moe.propose_rail (ADD_RAIL, EPIC) for a size exception scoped to this task. Name 4758ad1 and its numstat: lease.mjs +207/-8, moe-agent.sh +49/-6, moe-agent.ps1 +37/-6, docs +7/-2, lease test +505/-2, postflight.sh +38/-8. Then complete_task again with the bytes unchanged."
+        }
+      ]
+    }
+  ],
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Parked from REVIEW by QA in round 2. This is not a reject: the work passes on substance, but the size exception it needs is not approved yet.\n\n- Completion 4758ad1 is +843/-32 = 811 net non-board LOC, over the 400 net-LOC review cap. No project or epic rail waives size.\n- The worker filed an epic ADD_RAIL size exception scoped to this row as prop-f04ebf50a0bc4f1ea3a72671fa72ab8f. It is still PENDING, and only a human can resolve it. Rejecting again would only burn a reopen.\n- The bytes are unchanged since 4758ad1: the round-2 commits 229e534 and e5f0216 are board-only. The per-file numstat equals the proposal text.\n\nQA re-ran every gate green from a pure git archive of e5f0216:\n- lease test: 39 pass, 1 skip.\n- parity-check.sh: PASS.\n- postflight.sh: PASS, with [accounts] ok.\n- Native Windows: node.exe 52 pass, 2 skip, including the ps1 lease-loop cases on powershell.exe and pwsh.exe plus the Git Bash cases. The PS 5.1 parse has 0 errors. parity-check.ps1: PASS.\n- DoD 1-4 all have evidence. The full evidence is in QA's round-2 comment on this task.\n\nTo resume:\n- Once the proposal is APPROVED, set_task_status REVIEW. The next QA checks the rail in allRails.epic and the unchanged bytes, then approves naming the size.\n- If it is REJECTED, set_task_status PLANNING so the architect splits the work.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-26T09:38:45.253Z",
+  "reviewSummary": "Round 3 (qa-7c627d35): APPROVED. Size waived by epic rail prop-f04ebf50 (human-approved 09:21:45Z): 4758ad1 is +843/-32 = 811 net non-board LOC (278 runtime+docs, 533 tests); numstat equals the rail text.\nBytes: HEAD = origin = 66ef204. 6 owned paths byte-equal 4758ad1. docs/MCP_SERVER.md differs only by peer 66ef204's V02 check-run hunks; this task's Account Rotation hunk is intact. 229e534/e5f0216/a7222fa are board-only. 4758ad1 is on moe/work-2026-10-24 and origin.\ntask.verification re-run from a pure git archive of 66ef204 (29 MOE_*/CLAUDE* unset, TIMEOUT 180, 09:27:58-09:37:19Z): lease test 40 tests, 39 pass, 1 skip; parity-check.sh PASS; postflight.sh PASS (frozen 73, [accounts] ok, scope 38, team join/heal ok); exit 0.\nNative Windows: node.exe 54 tests, 52 pass, 2 skip, incl. all 7 ps1 lease-loop cases on powershell.exe and pwsh.exe and 6 Git Bash cases. PS 5.1 ParseFile 0 errors; parity-check.ps1 PASS; BOM kept, 0 CR.\nOwn mutants: 4/5 killed (sh refusal keeps the lease; sh ignores retry sec; helper drops the git top-level key; helper skips the locked re-read). Survivor: a projects entry WITHOUT hasTrustDialogAccepted counted as trusted. No test pins that shape (the bug report's -p-only accounts), but the real helper handles it (probe: granted, then trusted; fields and mode 600 kept). Optional hardening, not a DoD gap.\nDoD1: an interactive leased seat gets MOE_ACCOUNT_TRUST_GRANTED, or MOE_ACCOUNT_UNTRUSTED plus one #general @governors line per account per lease loop naming account and project (never the folder), then waits and re-leases. It never launches into the dialog. DoD2: the headless guard returns before the helper (bytes unchanged in tests); the invariant amendment cites sign-off comment-99598cf0. DoD3: parity PASS; the lease test (4 engines) and postflight [accounts] cover the untrusted path; no daemon change. DoD4: both docs updated.\nPonytail: lean already; net: -0 lines possible. SCHEMA.md/registry.ts wording stays with task-fc9835fe.",
+  "requiredCheckAtDone": null
+}

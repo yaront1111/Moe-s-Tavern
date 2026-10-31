@@ -124,6 +124,23 @@ describe('moe.record_candidate', () => {
     expect(fs.existsSync(candidateFile('cand-r'))).toBe(true);
   });
 
+  it('declares protectedEntries as a closed {path, oid} list and records it', async () => {
+    const schema = recordCandidateTool(h.state).inputSchema as {
+      properties: Record<string, { items?: Record<string, unknown> }>; required: string[];
+    };
+    expect(schema.properties.protectedEntries.items).toMatchObject({
+      type: 'object', required: ['path', 'oid'], additionalProperties: false,
+    });
+    expect(schema.required).not.toContain('protectedEntries');
+    const protectedEntries = [{ path: 'tests/a.test.ts', oid: 'e5'.repeat(20) }];
+    expect((await call({ protectedEntries })).candidate.protectedEntries).toEqual(protectedEntries);
+    expect(JSON.parse(fs.readFileSync(candidateFile('cand-1'), 'utf8')).protectedEntries).toEqual(protectedEntries);
+    const write = vi.spyOn(h.state, 'writeEntity');
+    await expect(call({ id: 'cand-2', protectedEntries: [{ path: 'a', oid: 'XYZ' }] }))
+      .rejects.toThrow('Invalid protectedEntries[0].oid');
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it('accepts the current attempt id without a generation', async () => {
     const result = await call({ generation: undefined });
     expect(result.candidate.attemptId).toBe('attempt-2');

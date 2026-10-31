@@ -11,8 +11,9 @@ Common issues and solutions for Moe's Tavern.
 3. [MCP/Proxy Issues](#mcpproxy-issues)
 4. [Task Sync Issues](#task-sync-issues)
 5. [Claude Account Rotation Issues](#claude-account-rotation-issues)
-6. [Performance Issues](#performance-issues)
-7. [Diagnostic Commands](#diagnostic-commands)
+6. [Local Runner Issues](#local-runner-issues)
+7. [Performance Issues](#performance-issues)
+8. [Diagnostic Commands](#diagnostic-commands)
 
 ---
 
@@ -150,6 +151,26 @@ cat .moe/daemon.json
 
 ---
 
+### WSL agents cannot reach the Windows daemon
+
+**Solution:** Start the Windows daemon with `--host wsl` (or `MOE_BIND_HOST=wsl`). This binds loopback plus the IPv4 addresses of its WSL adapters, not every interface. In NAT mode agents reach it through the WSL gateway, which is the Windows adapter address; mirrored networking uses loopback. Without a WSL adapter, only loopback is bound.
+
+- Allow the daemon's `node.exe` through Windows Firewall for the WSL adapter/subnet; do not open it to the whole LAN.
+- Restart the daemon after WSL restarts: the adapter address can change, and listeners are resolved only at daemon startup.
+- If automatic host discovery fails, set `MOE_DAEMON_HOST` in the WSL agent environment to the reachable Windows host address (gateway in NAT mode, `127.0.0.1` in mirrored mode). This overrides the client's destination, not the daemon's bind addresses.
+
+---
+
+### WebSocket upgrade refused with HTTP 403
+
+**Symptom:** A client's WebSocket handshake to `/ws`, `/mcp` or `/runner` gets `HTTP/1.1 403 Forbidden`. The daemon log shows a warning: `Refused WebSocket upgrade: Origin not allowed`, with the remote address, the path and a truncated origin.
+
+**Cause:** The client sent an `Origin` (or `Sec-WebSocket-Origin`) header. Browser-hosted clients always send one, and some custom clients do too. The daemon refuses every such upgrade before any message is processed (see `docs/CONFIGURATION.md`, **WebSocket Origin rule**). The bundled clients never send it: the IDE plugins, moe-proxy, the Claude plugin hook and the local runner.
+
+**Solution:** Connect from a non-browser client that sends no `Origin` header. Browser clients are not supported, and there is no setting that allows an origin.
+
+---
+
 ### Plugin shows stale data
 
 **Symptom:** Tasks don't update after changes.
@@ -226,9 +247,13 @@ ls .moe/tasks/
 
 **Solution:** Register the worker first using `moe.claim_next_task`.
 
-#### "RAIL_VIOLATION"
+#### "[CONSTRAINT_VIOLATION] Rail violation: …" (moe.submit_plan)
 
-**Solution:** Ensure plan includes all required rail phrases. Check epic and task rails.
+**Solution:**
+- Forbidden pattern: reword the step description, path or contract text that contains it (case-insensitive substring).
+- Required pattern missing: add the global phrase to the step text. Contract text does not count.
+- Epic and task rails are guidance and never produce this refusal.
+- A rail that is genuinely wrong for the task goes to `moe.propose_rail`, as the message spells out. Never loop on resubmits.
 
 ---
 
@@ -434,6 +459,14 @@ git for-each-ref refs/moe/rescue/task-<id>/
 - **`{ outcome: "refused", code: "MOE_COMMIT_REFUSED_OWNED_PATH_MISSING" }`** — every asserted path is
   absent from disk and from HEAD (renamed, deleted, or edited inside a `.worktrees/` checkout the
   post-flight cannot see). Move the edits into the project root and re-declare.
+- **`MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE` | `MOE_COMMIT_REFUSED_OWNER_UNKNOWN`** (not a
+  `lastCommitOutcome` value) — expected, nothing lost: the exiting session was not the task's assignee
+  (an architect or QA seat whose task moved on), and the owner was live or held an open attempt, another
+  seat's attempt was still finalizing (ACTIVE), or ownership could not be confirmed (UNKNOWN: daemon
+  unreachable, older daemon). It moved nothing; the owner's own landing commits those bytes. See
+  **Owner guard** in `scripts/CLAUDE.md`. `lastCommitOutcome` keeps the owner's own last landing (only a
+  row recorded by an older daemon can still show one of these codes); the refusal shows only in the task
+  channel (`⛔ … landing REFUSED …`) and on the refusing seat's session-ended line.
 - **`{ outcome: "nothing", code: "MOE_COMMIT_NOTHING_TO_COMMIT" }`** — the candidates were already in
   HEAD (a resume relaunch after a successful landing, or the agent committed mid-session). Nothing lost.
 - **`{ outcome: "failed", code: … }`** — `MOE_COMMIT_FAILED_REF_CONTENTION` (three CAS losses to
@@ -560,8 +593,9 @@ Each dirty path is classified once per landing, in this order: **BOARD** (own ta
 |---|---|---|
 | `MOE_ATTR_EXCLUDED` | On the DENY list: `.moe/**` (except board records), `.mcp.json`, `.codex/**`, `.gemini/**`, `.grok/**`, `.claude/agents/**`, `.claude/settings.local.json`, untracked `.serena/**`, `.worktrees/**`, `.moe-worktree*`, `settings.attribution.exclude` | Nothing — these never belong in a task commit. |
 | `MOE_ATTR_PEER_DECLARED(task-<peer>)` | Another nonterminal task declares this path, with no ASSERTED or TOOL scope here | Resolve which task owns the changes. Declaring the path on this task makes it contested while the peer declaration still applies; the declaration alone does not supply a TOOL witness. |
-| `MOE_ATTR_CONTESTED_UNTOUCHED(task-<peer>)` | Asserted by this task **and** declared by another nonterminal task, without a supported TOOL witness from this session (default policy `skip-untouched`) | Keep the path held while the peer declaration applies. Coordinate the task ownership until that declaration no longer applies, or use an explicitly chosen project policy appropriate to the reviewed ownership arrangement. An extra edit does not prove ownership of existing hunks. |
-| `MOE_ATTR_CONTESTED` | In this task's ASSERTED or TOOL scope **and** declared by another nonterminal task, with `settings.attribution.contested: "skip"` | Resolve ownership before choosing an applicable policy. An explicit `"commit"` permits whole-path landing with a `Moe-Contested: <path> (task-<peer>)` trailer; it does not establish ownership of the file's changes. |
+| `MOE_ATTR_CONTESTED_UNTOUCHED(task-<peer>)` | Asserted by this task **and** declared by another nonterminal task, without a supported TOOL witness from this session (default policy `skip-untouched`). It still fires when the path was dirty at this session's pre-flight, when any contesting task had a session since then (`peerActive` is not `false`), on a crash-recovery landing, and without the daemon's `peerActive` field; a path clean at pre-flight whose every contesting task is idle lands instead. The session-ended `#general` line names each held path as `held=<path>(task-<peer>)`, then a `MOE_CONTESTED_HELD remedy:` sentence. `<peer>`, here and in the code, is the first of the path's contesting tasks in cause order: editing, then active (`activeTaskIds`), then the rest | `moe.declare_files` does not release it. Verify the bytes are this task's and coordinate any live peer. The path then lands once a one-shot Claude or `codex exec` session of this task edits it with a supported editing tool, once a later session of this task that found it clean at its pre-flight edits it while every contesting peer stays idle, or once the stale peer task is legitimately completed or archived. A Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave no TOOL witness. An extra edit lands the whole file, so it does not prove ownership of hunks already in it: verify first. Never change the policy as the fix. |
+| `MOE_ATTR_CONTESTED_EDITING(task-<peer>)` | Default policy `skip-untouched`: a contesting peer task was mid-step on the path with an active session (an IN_PROGRESS plan step naming it, `moe.get_commit_scope` `editingTaskIds`; the disk-fallback scope counts any IN_PROGRESS step), so the path is held even though this session edited it. `<peer>` is the first editing task. The file can carry that peer's unfinished hunks | Coordinate that peer and let its step finish, then have a one-shot Claude or `codex exec` session of this task re-edit the path before its next exit; or let the peer's own landing carry the bytes, and name that commit. `moe.declare_files`, unblocking or a shell touch does not release it. Never change the policy as the fix. |
+| `MOE_ATTR_CONTESTED` | In this task's ASSERTED or TOOL scope **and** declared by another nonterminal task, with `settings.attribution.contested: "skip"`. Its `held=` peer is the first contesting task in the same cause order | No editing tool and no `moe.declare_files` releases it; only resolving, completing or archiving the peer task does. Resolve ownership before choosing an applicable policy. An explicit `"commit"` permits whole-path landing with one `Moe-Contested: <path> (task-<a>, task-<b>)` trailer per path, naming every contesting task in cause order; it does not establish ownership of the file's changes. |
 | `MOE_ATTR_IMPORTEE_MISSING(<specifier>)` | A supported literal relative import has no matching path in the resulting commit. This checks path presence, including TypeScript source candidates for emitted module paths; it does not certify compiler or runtime validity | If this task owns the importee, declare it so both paths can pass attribution together; otherwise wait for its owner to land it; the path is re-attempted at the next exit and is reported as `MOE_ATTRIBUTION_UNRESOLVED` meanwhile. |
 | `MOE_ATTR_PREEXISTING` | Dirty before this task's first session and byte-identical now — the hard constraint: a path the task never asserted and never changed is never committed | Nothing for this task. Debris left by a DONE task → "Dirty paths owned only by DONE tasks" below. |
 | `MOE_ATTR_ASSERTED_FOREIGN` | Asserted by this task only through its history (`filesModified`, a completed step's `modifiedFiles`/`affectedFiles`, an earlier commit, an earlier session's tool writes; never `moe.declare_files`), but the bytes were already dirty when the landing session's pre-flight ran and are untouched since, so this task did not produce them. A crash recovery compares against the dead session's own pre-flight. The 2026-09-30 shape: someone's uncommitted edit to a file a task delivered days earlier | Find who made the edit (`git diff -- <path>`, chat, the other live tasks). If those bytes really are this task's, `moe.declare_files { taskId, paths }` and the next exit lands them; otherwise leave the path for its owner. The task's next edit to the path also lands it (whole file, including the existing hunks). |
@@ -575,16 +609,18 @@ parked on a rescue ref before any commit hook or signing attempt. Review conditi
 configuration so both contexts resolve the intended settings; do not disable required signing
 to clear the refusal. Hooked completion on an unborn branch is also held until HEAD exists.
 
-**Current witness limit:** only Claude one-shot `stream-json` editing events feed the wrapper's
-per-session TOOL set today, after an editing call receives its matching successful
-`tool_result`. Failed calls and calls without results supply no witness. Codex, Gemini, Grok
-and interactive Claude can perform real edits without producing that witness. A dirty tree,
-baseline difference, declaration,
-`complete_step.modifiedFiles`, or historical task touch record cannot substitute for it.
-Completed-step reports remain ASSERTED scope; they do not prove this session edited the path.
-The default therefore keeps their contested paths held, even after the peer becomes idle or
-its CLI exits, until its nonterminal task declaration no longer applies or an applicable
-explicit policy permits landing. See [Session touch evidence](CONFIGURATION.md#session-touch-evidence).
+**Current witness limit:** only Claude one-shot `stream-json` editing events and
+`codex exec --json` events (a completed `file_change`, a successful Serena editing call)
+feed the wrapper's per-session TOOL set today, after an editing call receives its matching
+successful result. Failed calls, calls without results and shell writes supply no witness.
+Codex TUI, Gemini, Grok and interactive Claude can perform real edits without producing that
+witness. A dirty tree, baseline difference, declaration, `complete_step.modifiedFiles`, or
+historical task touch record cannot substitute for it. Completed-step reports remain ASSERTED
+scope; they do not prove this session edited the path. Under the default, such a seat's
+contested path lands only from a later session whose pre-flight found it clean while every
+contesting peer stays idle. Otherwise hand the edit to a one-shot Claude or `codex exec`
+session of the task, or let the peer task complete or be archived; never change the policy as
+the fix. See [Session touch evidence](CONFIGURATION.md#session-touch-evidence).
 
 Also printed once per landing: `[attribution] <K> pre-session dirty path(s) untouched` — the count of
 foreign / pre-existing dirt the wrapper deliberately left alone. It is informational, never an error
@@ -732,6 +768,30 @@ no completion commit from anyone is still a merge with no reviewed diff.
 
 ---
 
+### Agent Git-write refusal
+
+`MOE_AGENT_GIT_REFUSED: the wrapper lands the work` means an ordinary commit/push came from an agent CLI (or descendant shell) in the shared control checkout. Report the task's paths with `moe.complete_step`; let the wrapper land them. Do not repair this by bypassing the guard or committing peers' staged files. Scratch commands must use `cd /absolute/scratch && git ...` or `git -C /absolute/scratch ...`.
+
+The temporary, inherited Git configuration matches only that checkout's exact gitdir, not separate scratch repositories or linked worktrees. The wrapper and sidecars do not inherit it; `settings.commitHooks` is unchanged, and existing human hooks/configuration remain untouched. `MOE_AGENT_GIT_GUARD_FAILED` stops CLI launch rather than falling back unprotected: check Git/repository access, inherited `GIT_CONFIG_*` overrides and temporary-directory permissions, then relaunch. Non-Git projects remain supported without Git protection.
+
+This prevents accidents, not hostile agents: `--no-verify`, explicitly replacing `core.hooksPath`, or removing inherited Git configuration defeats it. For a **deliberately reviewed human operation only**, the following one-command override delegates to the original hook (including its failures). It is not an agent recovery procedure:
+
+```bash
+MOE_ALLOW_AGENT_GIT_WRITES=1 git -C /absolute/control commit --only reviewed-file.txt -m 'Reviewed human change'
+```
+
+```powershell
+$previous = $env:MOE_ALLOW_AGENT_GIT_WRITES
+try {
+    $env:MOE_ALLOW_AGENT_GIT_WRITES = '1'
+    git -C 'C:/absolute/control' commit --only reviewed-file.txt -m 'Reviewed human change'
+} finally { [Environment]::SetEnvironmentVariable('MOE_ALLOW_AGENT_GIT_WRITES', $previous) }
+```
+
+A human outside the agent session needs no override. Do not persist it in a profile or weaken Git configuration to make agent writes routine.
+
+---
+
 ### `MOE_COMMIT_INDEX_REFRESH_FAILED`
 
 **Symptom:** `[WARN] MOE_COMMIT_INDEX_REFRESH_FAILED` after an `[OK] Committed …` banner; `git status`
@@ -837,6 +897,33 @@ seat; it then moves at its next launch, as before. A `--no-loop`/`-NoLoop` or on
 the mod. If a seat leaves the toast `Type /exit and Moe relaunches it.` and keeps running, the claude build could not
 run `/exit` from the mod. Exit it by hand.
 
+### An interactive seat will not launch: `MOE_ACCOUNT_UNTRUSTED`
+
+**Symptom:** an interactive claude seat prints `[account] MOE_ACCOUNT_UNTRUSTED account=<id> project=<project> (<reason>) -
+not launching into Claude's folder-trust dialog; retry in <n>s, the held task stays held.` and launches nothing.
+#general gets one `@governors` line per account per lease loop, naming the account and the project, never the folder.
+When Moe did set the trust it prints `MOE_ACCOUNT_TRUST_GRANTED account=<id> project=<project>` instead and launches;
+an account that already trusts the project is quiet.
+
+**Cause:** an interactive claude stops at "Do you trust the files in this folder?" until the launch directory is
+trusted in the leased account's `.claude.json` (`claude -p` never asks). Before an interactive launch the wrapper helper
+`scripts/moe-account-lease.mjs trust` sets `projects[<key>].hasTrustDialogAccepted` there. `MOE_ACCOUNT_UNTRUSTED` means
+it could not, and `<reason>` is one of these:
+- `no .claude.json in the account folder`
+- `the account's .claude.json is not a regular file`
+- `the account's .claude.json is over 16 MiB`
+- `the account's .claude.json is not a JSON object`
+- `the account's .claude.json is locked by another claude`
+- `the account's .claude.json could not be rewritten`
+- `the trust entry did not read back`
+- `the launch directory is outside the project`
+
+The seat does not launch into the dialog. It waits `MOE_ACCOUNT_RETRY_SEC` (default 300) with the task held, then leases
+again. Headless `-p` seats never run this step.
+
+**Fix:** start claude once in the project under that account (its folder is `claude-accounts/<id>` next to the account
+list) and accept the trust dialog. The next lease finds the project trusted and launches.
+
 ### An architect session ends after it finds nothing to plan
 
 **Symptom:** an interactive claude architect shows the toast `Moe: this seat holds no task. This session ends in 10 s
@@ -932,6 +1019,24 @@ first model response. A claude session started by hand reports nothing.
 **Fix:** none while no seat has answered yet. If the columns stay empty after a seat has worked on the account,
 claude's output format may have changed. Rotation then keeps using the current account (the safe fallback); file a
 task with the wrapper's output.
+
+---
+
+## Local Runner Issues
+
+`node scripts/local-runner/cli.mjs certify` ([CERTIFICATION.md](CERTIFICATION.md)) and the check runner fail closed with
+one fixed code. A certify report names the failing check and its code, and every later check is `not-run`. A check run
+reports `infra-failure` with the code as its `failure`.
+
+| Code (where) | Cause | Fix |
+|---|---|---|
+| `CERTIFY_PROVISION_UNAVAILABLE` (`provision`) | A host prerequisite is unmet. On Linux that includes the image cache, `<work-dir>/images`: the strictly confined Multipass snap reads only paths under your home directory with no hidden segment. | Run `node scripts/local-runner/cli.mjs prerequisites --cache-dir <work-dir>/images` and do each unmet item's `action` until it exits 0. On Linux, use a work dir under your home directory with no segment starting with `.`. |
+| `BOOTSTRAP_FAILED` (`readiness`) | cloud-init did not end in a clean `done`/`done`: an error, a `degraded` status (even one with only recoverable warnings), or a guest that stopped. Readiness accepts no degraded boot. | Re-run certify once. If a healthy host repeats it, the pinned user-data boots degraded on the pinned image: attach the report to the CQ-R13 row. Never loosen readiness locally. |
+| `BOOTSTRAP_TIMEOUT` (`readiness`) | cloud-init was still running after 15 minutes. | Free host CPU and memory, then re-run. |
+| `MOUNTS_PRESENT` (`readiness`), `TRANSFER_MOUNTS_PRESENT` (`no-mounts`) | The run's VM had a host-sharing mount (a Multipass mount, 9p, virtiofs, fuse, NFS or SMB). Moe never mounts. | Stop whatever runs `multipass mount` against `moe-vm-*` instances, then re-run. `MOUNTS_UNKNOWN` means the mount table was unreadable: re-run. |
+| `CERTIFY_GUEST_NETWORK_REACHABLE` (`guest-network`) | A guest identity connected to the VM gateway, at the default daemon port 9876 or at certify's own loopback listener. The usual cause is a Moe daemon bound beyond loopback: `--host 0.0.0.0`, `MOE_BIND_HOST`, or WSL agent mode (`--host wsl`). | Stop that daemon, restart it on the default loopback bind (turn off "Run Agents in WSL" for the run), and re-run. If no daemon listens on 9876, a loopback-only listener was reachable from the guest: attach the report to the CQ-R13 row. |
+| `DEPENDENCY_SOURCE_UNSUPPORTED`, `DEPENDENCY_INTEGRITY_INVALID` (a check's dependency phase) | A lockfile entry the guest must install lacks the canonical registry.npmjs.org tarball `resolved` URL or one canonical `sha512-` `integrity`: for example an entry with neither field, a link, or a git or `file:` source. The runner installs admitted registry tarballs only. | Regenerate the lockfile against registry.npmjs.org so every installed entry has both fields, then re-run the check. |
+| `MOE_RUNTIME_PROTECTED_PATH_MISSING` (`moe-agent.{sh,ps1}`, `moe-call.sh`) | `MOE_RUNTIME_PROTECTED=1`, which the JetBrains launcher sets for a protected seat, and the named variable (`MOE_PROXY_PATH` or `MOE_DAEMON_PATH`) is not an absolute path to an existing file. The scripts never fall back to another copy. | Reinstall or update the plugin so its bundled daemon and proxy exist, then relaunch the seat. A legacy seat refuses too when it inherits `MOE_RUNTIME_PROTECTED=1` from the IDE's or the shell's own environment: unset it there. |
 
 ---
 

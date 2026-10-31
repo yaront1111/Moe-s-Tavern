@@ -1,8 +1,13 @@
+import path from 'path';
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { ExecutionAttempt, Task, TaskPriority, WorkerType } from '../types/schema.js';
+import type { ExecutionAttempt, ExecutionPolicySnapshot, ExecutionWorkspaceMode, Task, TaskPriority } from '../types/schema.js';
 import { MoeError, missingRequired, notAllowed, invalidState, notFound, invalidInput } from '../util/errors.js';
+import { WORKER_TYPE_SCHEMA, normalizeWorkerType, refreshWorkerType } from './joinTeam.js';
 import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
+import { planSubmissionSnapshot } from '../state/taskStore.js';
+import { resolveAttemptWorkspace, resolveWorktreeMode } from '../state/validators.js';
+import { validateEntityId } from '../util/sanitize.js';
 import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import {
@@ -10,11 +15,12 @@ import {
   finalizingAttemptsByTask,
   foreignFinalizingAttempt,
   foreignFinalizingRefusal,
+  executionAdmissionRefusal,
   heldTaskRefusal,
   isClaimGatedByDependsOn
 } from '../util/claimEligibility.js';
 import { resolveLaunch } from '../util/routing.js';
-import { dependencyShortfall, unmetDependsOn } from '../state/dependencyUnblock.js';
+import { dependencyShortfall, describeUnmetDependency, unmetDependsOn } from '../state/dependencyUnblock.js';
 import { describeMissingEvidence } from '../delivery/policy.js';
 import {
   assertNoLiveLease,
@@ -25,8 +31,10 @@ import {
 } from '../util/claimGuards.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
-import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
+import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES, type FileCollision } from '../util/affectedFiles.js';
+import { isGroupToken } from '../util/mentionRouter.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
+import { awaitingPlanReuse, planReuseContext } from '../context/planReuseJob.js';
 import {
   healTeamMembership,
   noTeamMembershipRefusal,
@@ -88,6 +96,24 @@ function readProcessIdentity(processStartedAt: unknown, host: unknown): ProcessI
 }
 
 /**
+ * The configuration identity a NEW attempt records, from daemon state alone:
+ * the task's stored snapshot and the live project settings, at the task's
+ * planRevision (absent reads as 0). A stored verified-local task snapshot is a
+ * floor a project rollback cannot lower: taskStore.planSubmissionSnapshot is the
+ * one floor rule tasks and attempts share. A successor records a FRESH identity,
+ * so a predecessor attempt's strict identity that came only from live settings
+ * is history, not a task requirement. Never read from claim arguments, and
+ * never approval or readiness.
+ *
+ * Error handling: a malformed planRevision (null included: no `??` coercion),
+ * task snapshot or setting throws INVALID_INPUT.
+ */
+export function deriveAttemptPolicySnapshot(state: StateManager, task: Task): ExecutionPolicySnapshot {
+  const planRevision = task.planRevision === undefined ? 0 : task.planRevision;
+  return planSubmissionSnapshot(state.project?.settings, task.executionPolicySnapshot, planRevision);
+}
+
+/**
  * Open the attempt for a claim whose assignment write has ALREADY succeeded,
  * or adopt the one still open on a genuine resume. Three arms:
  *  1. Nothing open: open a fresh attempt (generation = max over prior + 1).
@@ -109,6 +135,11 @@ function readProcessIdentity(processStartedAt: unknown, host: unknown): ProcessI
  * assignment write some other way. The caller's handBackUnrecordedClaim then
  * undoes that write, and its seat clear closes only running/reconciling.
  * Any other failure propagates; the caller treats it as fatal to the claim.
+ *
+ * The resume is adopted BEFORE anything is derived, so it keeps its original
+ * snapshot (or none, for a historical attempt), workspaceMode and workspace even
+ * when the task or settings are malformed now. Every other arm opens with
+ * deriveAttemptPolicySnapshot's identity; a derivation failure propagates like any other.
  */
 async function openClaimAttempt(
   state: StateManager,
@@ -117,17 +148,28 @@ async function openClaimAttempt(
   resumingOwnSeat: boolean,
   identity: ProcessIdentity | null
 ): Promise<ExecutionAttempt> {
+  const resumed = currentAttempt(state, taskId);
+  if (resumed && resumingOwnSeat && resumed.workerId === workerId) return resumed;
+  const task = state.getTask(taskId);
+  if (!task) throw notFound('Task', taskId);
+  const workspaceMode: ExecutionWorkspaceMode = task.status === 'WORKING'
+    && resolveWorktreeMode(state.project?.settings) === 'on' ? 'worktree' : 'shared';
+  const workspace = workspaceMode === 'worktree'
+    ? path.join(state.projectPath, '.worktrees', validateEntityId(taskId, 'taskId')) : state.projectPath;
   const params = {
     taskId,
     workerId,
-    // The claim knows the worker and the project. runnerId stays the worker id
-    // (reattach never compares it) and no per-attempt workspace is invented.
+    // runnerId stays the worker id (reattach never compares it); mode/path are
+    // daemon-derived once, so resuming an attempt never switches its checkout.
     runnerId: workerId,
-    workspace: state.projectPath,
+    workspace,
+    workspaceMode,
     // The runner's process identity, recorded exactly as it was sent so that
-    // moe.reattach_attempt can match it after a restart. No identity, no keys:
-    // the record is then byte for byte what it was before identities existed.
+    // moe.reattach_attempt can match it after a restart. Without identity, the
+    // processStartedAt and host keys remain absent.
     ...identity,
+    // Derived from daemon state only; claim arguments never reach openAttempt.
+    executionPolicySnapshot: deriveAttemptPolicySnapshot(state, task),
   };
   try {
     return await openAttempt(state, params);
@@ -208,9 +250,10 @@ function assertNotHeldByReconciliation(state: StateManager, task: Task, workerId
  * the result before any write, like every other claim refusal.
  */
 function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
-  const unmet = unmetDependsOn(state, task).map((id) => ({ id, ...dependencyShortfall(state, id) }));
-  const onEvidence = unmet.find((dep) => dep.missingEvidence.length > 0);
-  const onStatus = unmet.filter((dep) => dep.missingEvidence.length === 0).map((dep) => dep.id);
+  const unmet = unmetDependsOn(state, task).map((id) => ({ id, ...dependencyShortfall(state, id, task) }));
+  const onEvidence = unmet.find((dep) => state.getTask(dep.id)?.status === 'DONE' && dep.missingEvidence.length > 0);
+  const onStatus = unmet.filter((dep) => state.getTask(dep.id)?.status !== 'DONE' || dep.missingEvidence.length === 0)
+    .map((dep) => dep.missingEvidence.length > 0 ? describeUnmetDependency(state, dep.id, task) : dep.id);
   if (onStatus.length > 0 || !onEvidence) {
     return notAllowed(
       'claim',
@@ -223,6 +266,57 @@ function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
     prerequisiteTaskId: onEvidence.id,
     missing: onEvidence.missingEvidence.map((token) => ({ token, reason: describeMissingEvidence(token) })),
   });
+}
+
+/** A collision entry; `liveAssignee` is set only when a live seat holds the peer task. */
+type CollisionEntry = FileCollision & { liveAssignee?: string };
+
+/** One @mention token, as parseRawMentions reads it (util/mentionRouter.ts). */
+const MENTION_TOKEN = /^\w[\w-]*$/;
+
+/**
+ * Mark each collision whose peer task is held by a live seat. Live is the claim
+ * path's own claimability predicate: assigned, and the owner neither missing
+ * nor DEAD. A quiet seat is still live; an unassigned row that is only waiting
+ * on its dependencies is not. Dormant entries come back untouched, with no key.
+ */
+function markLivePeers(state: StateManager, collisions: FileCollision[]): CollisionEntry[] {
+  return collisions.map((c) => {
+    const peer = state.tasks.get(c.task);
+    return peer?.assignedWorkerId && !state.isTaskAssignedToInactiveWorker(peer)
+      ? { ...c, liveAssignee: peer.assignedWorkerId }
+      : c;
+  });
+}
+
+/**
+ * The #workers heads-up. Files sit in code spans, which the mention parser
+ * blanks, so an '@' inside a path never pages anyone; a backtick in a path would
+ * end its span early, so it is swapped for a quote.
+ */
+function describeCollision(c: CollisionEntry): string {
+  const files = c.files.slice(0, 3).map((f) => `\`${f.replace(/`/g, "'")}\``).join(', ');
+  return `${c.task}: ${files}${c.files.length > 3 ? '…' : ''}`;
+}
+
+/**
+ * Live peers are listed first and their assignees plus the claimer are
+ * @mentioned, which is what wakes a seat's chat_wait. Dormant-only collisions
+ * mention nobody. An id that is not one mention token is never written with
+ * '@': spaces would let "@worker x" parse as the group token "worker". Nor is
+ * an id that IS a group token (a seat named "qa"), which would page every seat.
+ */
+function collisionNotice(taskId: string, collisions: CollisionEntry[], claimerId: string | undefined): string {
+  const live = collisions.filter((c) => c.liveAssignee);
+  const dormant = collisions.filter((c) => !c.liveAssignee);
+  const list = (entries: CollisionEntry[]): string => entries.map(describeCollision).join(' | ');
+  if (live.length === 0) return `⚠️ file collision on ${taskId}: ${list(dormant)}`;
+  const page = [...new Set([...live.map((c) => c.liveAssignee as string), ...(claimerId ? [claimerId] : [])])]
+    .filter((id) => MENTION_TOKEN.test(id) && !isGroupToken(id))
+    .map((id) => `@${id} `)
+    .join('');
+  const tail = dormant.length > 0 ? `; dormant: ${list(dormant)}` : '';
+  return `${page}⚠️ file collision on ${taskId}. Live: ${list(live)}${tail}. Coordinate before either of you lands.`;
 }
 
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
@@ -239,6 +333,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         },
         epicId: { type: 'string' },
         workerId: { type: 'string' },
+        workerType: WORKER_TYPE_SCHEMA,
         processStartedAt: {
           type: 'string',
           description: 'Optional; send together with host or not at all. The runner process start time as the runner itself records it (e.g. `<pid>@<start token>`): supplied by the runner, never derived by the daemon. Recorded on the attempt this claim opens and compared by moe.reattach_attempt as an exact string. Non-blank, no control characters, at most 200 chars.'
@@ -275,6 +370,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           preferAdjacentInEpic?: boolean;
           processStartedAt?: unknown;
           host?: unknown;
+          workerType?: unknown;
         };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
@@ -304,6 +400,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // without a record — so this guard preserves it rather than adding one.
         if (params.workerId && state.getWorker(params.workerId)) {
           if (resolveWorkerRole(state, params.workerId) === 'governor') {
+            await refreshWorkerType(state, params.workerId, params.workerType);
             return {
               hasNext: false,
               nextAction: {
@@ -322,6 +419,12 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // and permanently wedges the worker — no tool acts on BACKLOG, and
         // one-task-per-worker blocks every other claim until a release.
         assertAgentClaimableStatuses(statuses);
+
+        // Record the seat's reported CLI type before any answer below (resume,
+        // alreadyAssigned, no work, a later refusal). Only after the input checks
+        // above, and never creating a record: auto-registration stays on a
+        // successful claim.
+        await refreshWorkerType(state, params.workerId, params.workerType);
 
         // One task per worker: a worker already holding an active task
         // (PLANNING/WORKING/REVIEW/BLOCKED — see workerStore's active set) must
@@ -407,6 +510,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           if (landing) {
             throw foreignFinalizingRefusal(landing);
           }
+          // Execution-profile admission (CQ-M01e): a row whose effective profile
+          // is not ready is refused with the concrete reason before the
+          // dependsOn gate, every eviction, the assignment write, any attempt
+          // open or close and worker registration. Not inside a workerId block,
+          // and no exemption for an own-seat resume: the predicate itself reads
+          // the caller's own open attempt (util/claimEligibility.ts).
+          const admission = executionAdmissionRefusal(state, requested, params.workerId);
+          if (admission) throw admission;
           // Re-claiming a task you already own is a resume, not a takeover.
           const ownedBySelf = Boolean(params.workerId) && requested.assignedWorkerId === params.workerId;
           // dependsOn gates WORKING-status claims: an explicit-taskId claim of
@@ -459,6 +570,17 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // here reads to the sh wrapper as a dead daemon ("claim_next_task
             // stopped answering").
             .filter((t) => !foreignFinalizingAttempt(finalizingByTask, t.id, params.workerId))
+            // Execution-profile admission — the SAME predicate as wait_for_task's
+            // matcher, and SKIPPED, never refused, for the finalizing hold's
+            // reason: a thrown refusal here reads to the sh wrapper as a dead
+            // daemon. Only an explicit-taskId claim names why.
+            .filter((t) => !executionAdmissionRefusal(state, t, params.workerId))
+            // Approved-plan reuse (CQ-C07): a PLANNING row whose current approved
+            // plan awaits its source assessment is withheld from planners, and
+            // evaluating it starts that assessment outside the lock
+            // (context/planReuseJob.ts). Mirrored in wait_for_task's matcher. An
+            // explicit taskId claim still gets the row.
+            .filter((t) => !awaitingPlanReuse(state, t))
             .sort((a, b) => {
               // Priority first, the same order wait_for_task ranks by: a
               // higher-priority task outranks a lower one in any epic. Ranking
@@ -603,10 +725,9 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // Auto-register or update worker entity
           const existingWorker = state.getWorker(params.workerId);
           if (!existingWorker) {
-            const workerType: WorkerType = 'CLAUDE';
             await state.createWorker({
               id: params.workerId,
-              type: workerType,
+              type: normalizeWorkerType(params.workerType),
               projectId: state.project!.id,
               epicId: candidate.epicId,
               currentTaskId: candidate.id,
@@ -672,22 +793,24 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       }
 
       // Compute file-collision warnings against every OTHER WORKING task.
-      // Advisory only — never blocks the claim. We post a heads-up to
-      // #workers if there's any overlap so peers can sync diffs.
+      // Advisory only — never blocks the claim: the computation is in-memory
+      // and a failure of it, like of the post, is swallowed (the claim already
+      // wrote its assignment and attempt). We post a heads-up to #workers if
+      // there's any overlap, @mentioning the seats live on a colliding peer and
+      // the claimer so they can coordinate before either lands.
       // Append-only files (CHANGELOG.md by default) are filtered out so the
       // expected shared-file overlap doesn't drown the real ones. `??` — never
       // `||` — because an explicit `[]` deliberately disables suppression.
       const appendOnlyFiles = state.project?.settings?.appendOnlyFiles ?? DEFAULT_APPEND_ONLY_FILES;
-      const fileCollision = computeFileCollisions(task, state.tasks.values(), appendOnlyFiles);
+      let fileCollision: CollisionEntry[] = [];
+      try {
+        fileCollision = markLivePeers(state, computeFileCollisions(task, state.tasks.values(), appendOnlyFiles));
+      } catch (error) {
+        logger.warn({ error, taskId: task.id }, 'claim_next_task: file-collision scan failed; claim continues');
+      }
       if (fileCollision.length > 0) {
         try {
-          const summary = fileCollision
-            .map((c) => `${c.task}: ${c.files.slice(0, 3).join(', ')}${c.files.length > 3 ? '…' : ''}`)
-            .join(' | ');
-          await state.postToRoleChannel(
-            'workers',
-            `⚠️ file collision on ${task.id}: ${summary}`
-          );
+          await state.postToRoleChannel('workers', collisionNotice(task.id, fileCollision, params.workerId));
         } catch { /* never block tool */ }
       }
 
@@ -739,6 +862,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       }
 
       const launch = resolveLaunch(task, state.project?.settings, resolveWorkerRole(state, params.workerId ?? ''));
+      const reuse = planReuseContext(task);
       return {
         hasNext: true,
         task: {
@@ -759,7 +883,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // the attempt is a record of its own. Callers present these two values
         // to fenced tools (assertAttemptCurrent); absent when no worker is named.
         ...(claimedAttempt
-          ? { attemptId: claimedAttempt.id, generation: claimedAttempt.generation }
+          ? {
+              attemptId: claimedAttempt.id,
+              generation: claimedAttempt.generation,
+              workspace: resolveAttemptWorkspace(claimedAttempt, state.project?.settings),
+            }
           : {}),
         // Model/effort the wrapper launches this task's CLI with (settings.routing).
         ...(launch ? { launch } : {}),
@@ -768,6 +896,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
               reopenWarning: `WARNING: This task was rejected by QA (${task.reopenCount} time(s)). Read reopenReason and rejectionDetails carefully. Fix the identified issues before proceeding.`
             }
           : {}),
+        ...(reuse ? { planReuse: reuse } : {}),
         ...(chatHint ? { chatHint } : {}),
         ...(handoffHint ? { handoffHint } : {}),
         ...(fileCollision.length > 0 ? { fileCollision } : {}),

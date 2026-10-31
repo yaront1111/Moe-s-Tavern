@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { MAX_COMMITS_PER_TASK, sanitizeImplementationPlan, sanitizeStepAmendments, trimCommits, validateSettingsUpdate } from './validators.js';
+import { MAX_COMMITS_PER_TASK, MAX_EPIC_RAIL_CHARS, sanitizeImplementationPlan, sanitizeStepAmendments, trimCommits, validateEpicUpdates, validateSettingsUpdate, validateStringArrayValue } from './validators.js';
 import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import type { Project, TaskCommit } from '../types/schema.js';
+import { resolveAttemptWorkspace, resolveWorktreeMode, resolveWorktreeTarget } from './validators.js';
+import { MoeErrorCode } from '../util/errors.js';
 
 function project(settingsOverrides: Record<string, unknown> = {}): Project {
   return {
@@ -24,6 +26,54 @@ function project(settingsOverrides: Record<string, unknown> = {}): Project {
     updatedAt: new Date().toISOString(),
   };
 }
+
+describe('worktree mode', () => {
+  it.each(['off', 'on'] as const)('accepts %s unchanged', (worktreeMode) => {
+    expect(validateSettingsUpdate(project(), { worktreeMode })).toEqual({ ...project().settings, worktreeMode });
+    expect(resolveWorktreeMode({ worktreeMode })).toEqual(worktreeMode);
+  });
+
+  it('leaves an omitted setting absent on unrelated updates', () => {
+    expect(validateSettingsUpdate(project(), { autoCommit: false })).toEqual({ ...project().settings, autoCommit: false });
+  });
+
+  it.each(['yes', 'ON', ' on', '', true, 1, null, {}])('rejects invalid mode %j', (worktreeMode) => {
+    expect(() => validateSettingsUpdate(project(), { worktreeMode } as never))
+      .toThrow(/worktreeMode.*must be one of: off, on/);
+    expect(() => resolveWorktreeMode({ worktreeMode }))
+      .toThrow(expect.objectContaining({ code: MoeErrorCode.INVALID_INPUT, message: expect.stringContaining('worktreeMode') }));
+  });
+
+  it.each([undefined, null, {}])('defaults absent settings %j to off', (settings) => {
+    expect(resolveWorktreeMode(settings)).toEqual('off');
+  });
+
+  it.each([
+    ['main', 'main'], ['moe/work-2026-10-24', 'moe/work-2026-10-24'], ['  release/v2  ', 'release/v2'],
+    ['moe/work-*', 'main'], ['rel?ase', 'main'], ['feat[0-9]', 'main'], ['', 'main'], ['   ', 'main'],
+    [undefined, 'main'], [42, 'main'], [null, 'main'], [[], 'main'], [{}, 'main'],
+  ])('resolves target %j to %s', (consolidationBranch, expected) => {
+    expect(resolveWorktreeTarget({ consolidationBranch })).toEqual(expected);
+  });
+
+  it.each([undefined, null, 42, [], {}])('tolerates malformed or absent settings %j', (settings) => {
+    expect(resolveWorktreeTarget(settings as never)).toEqual('main');
+    expect(resolveAttemptWorkspace({ taskId: 'task-1', workspace: '/work', workspaceMode: 'worktree' }, settings as never))
+      .toEqual({ mode: 'worktree', path: '/work', branch: 'moe/task/task-1', target: 'main' });
+  });
+
+  it('uses pinned worktree identity and the live target', () => {
+    expect(resolveAttemptWorkspace({ taskId: 'task-1', workspace: '/work', workspaceMode: 'worktree' },
+      { consolidationBranch: '  release/v2  ' }))
+      .toEqual({ mode: 'worktree', path: '/work', branch: 'moe/task/task-1', target: 'release/v2' });
+  });
+
+  it.each(['shared', undefined, 'bogus'])('reads mode %j as shared', (workspaceMode) => {
+    const attempt = { taskId: 'task-1', workspace: '/control', ...(workspaceMode === undefined ? {} : { workspaceMode }) };
+    expect(resolveAttemptWorkspace(attempt as never, { consolidationBranch: 'release/v2' }))
+      .toEqual({ mode: 'shared', path: '/control', branch: null, target: null });
+  });
+});
 
 describe('validateSettingsUpdate — wrapper landing settings', () => {
   it('accepts the boolean landing switches and stores them as supplied', () => {
@@ -154,5 +204,67 @@ describe('sanitizeImplementationPlan — bounds equal the tool caps', () => {
     const description = 'a'.repeat(MAX_STEP_DESCRIPTION_CHARS);
     const [amendment] = sanitizeStepAmendments([{ amendmentId: 'amend-1', description, reason: 'r', amendedBy: 'architect-1', amendedAt: '2026-10-01T00:00:00.000Z' }]);
     expect(amendment.description).toBe(description);
+  });
+});
+
+
+describe('validateSettingsUpdate — execution profile foundation', () => {
+  it.each(['legacy', 'observe'] as const)('accepts %s without relaxing an existing strict deliveryPolicy', executionProfile => {
+    const original = project({ deliveryPolicy: 'remote-push', qualityGate: 'npm test' });
+    const next = validateSettingsUpdate(original, { executionProfile } as never);
+    expect(next).toMatchObject({ executionProfile, deliveryPolicy: 'remote-push', qualityGate: 'npm test' });
+    expect(original.settings).not.toHaveProperty('executionProfile');
+  });
+
+  it('keeps an omitted profile absent and preserves observe on unrelated updates', () => {
+    expect(validateSettingsUpdate(project({ deliveryPolicy: 'local-branch' }), {})).not.toHaveProperty('executionProfile');
+    expect(validateSettingsUpdate(project({ executionProfile: 'observe', deliveryPolicy: 'local-branch' }), { agentCommand: 'codex' }))
+      .toMatchObject({ executionProfile: 'observe', deliveryPolicy: 'local-branch', agentCommand: 'codex' });
+  });
+
+  it.each([null, '', 'verified', 'VERIFIED-LOCAL', ' verified-local ', false, 1, [], {}].map(value => [value]))('refuses malformed profile %j', value => {
+    expect(() => validateSettingsUpdate(project(), { executionProfile: value } as never)).toThrow('must be one of: legacy, observe, verified-local');
+  });
+
+  it('refuses verified-local before returning settings for persistence', () => {
+    const original = project({ deliveryPolicy: 'remote-push' });
+    expect(() => validateSettingsUpdate(original, { executionProfile: 'verified-local', agentCommand: 'codex' } as never))
+      .toThrowError(expect.objectContaining({ codeName: 'EXECUTION_PROFILE_NOT_READY', code: -32003 }));
+    expect(original.settings).toMatchObject({ deliveryPolicy: 'remote-push', agentCommand: 'claude' });
+    expect(original.settings).not.toHaveProperty('executionProfile');
+  });
+
+  it('does not silently persist an already stored unavailable profile on an unrelated update', () => {
+    expect(() => validateSettingsUpdate(project({ executionProfile: 'verified-local' }), { agentCommand: 'codex' }))
+      .toThrowError(expect.objectContaining({ codeName: 'EXECUTION_PROFILE_NOT_READY' }));
+  });
+
+  it('permits an explicit project rollback without rewriting existing policy', () => {
+    expect(validateSettingsUpdate(project({ executionProfile: 'verified-local', deliveryPolicy: 'local-branch' }), { executionProfile: 'observe' } as never))
+      .toMatchObject({ executionProfile: 'observe', deliveryPolicy: 'local-branch' });
+  });
+
+  it.each(['ready', 'executionProfileReady', 'capabilities', 'executionPolicySnapshot'])('refuses caller readiness/policy injection through %s', key => {
+    expect(() => validateSettingsUpdate(project(), { executionProfile: 'observe', [key]: true } as never))
+      .toThrow('is not a supported project setting field');
+  });
+});
+
+describe('validateStringArrayValue — truncate option', () => {
+  it('still shortens an over-long entry by default (settings arrays keep their old behavior)', () => {
+    expect(validateStringArrayValue(['a'.repeat(600)], 'appendOnlyFiles', 100, 500)).toEqual(['a'.repeat(500)]);
+    const next = validateSettingsUpdate(project(), { attribution: { exclude: ['b'.repeat(600)] } });
+    expect(next.attribution?.exclude).toEqual(['b'.repeat(500)]);
+  });
+
+  it('refuses instead of shortening when truncate is false, with the entry named', () => {
+    expect(() => validateStringArrayValue(['ok', 'a'.repeat(501)], 'rails', 100, 500, false)).toThrow(/rails\[1\].*500 characters or fewer/);
+    expect(validateStringArrayValue(['a'.repeat(500)], 'rails', 100, 500, false)).toEqual(['a'.repeat(500)]);
+  });
+
+  it('epicRails uses the strict cap while other epic text fields keep truncating', () => {
+    expect(() => validateEpicUpdates({ epicRails: ['x'.repeat(MAX_EPIC_RAIL_CHARS + 1)] })).toThrow(/epicRails\[0\]/);
+    expect(validateEpicUpdates({ title: 't'.repeat(600), epicRails: ['x'.repeat(MAX_EPIC_RAIL_CHARS)] }))
+      .toMatchObject({ title: 't'.repeat(500), epicRails: ['x'.repeat(MAX_EPIC_RAIL_CHARS)] });
   });
 });

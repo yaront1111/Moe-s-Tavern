@@ -186,6 +186,175 @@ describe('governance control-plane features', () => {
       expect(result.fileCollision![0].task).toBe('task-A');
       expect(result.fileCollision![0].files).toEqual(['src/foo.ts']);
     });
+
+    describe('collision notice marks live peers and pages them', () => {
+      type Collision = { task: string; files: string[]; liveAssignee?: string };
+      type Claimed = { hasNext: boolean; fileCollision?: Collision[] };
+      type Heard = { content: string; mentions: string[]; targets: string[] };
+
+      function writePeer(id: string, assignee: string | null, epicId: string, shared: string[]): void {
+        writeTask({
+          id, epicId, status: 'WORKING', assignedWorkerId: assignee,
+          implementationPlan: [{
+            stepId: 'step-1', description: 'edit foo', status: 'IN_PROGRESS',
+            affectedFiles: ['src/foo.ts', ...shared],
+          }],
+        });
+      }
+
+      // task-B is up for grabs; each peer WORKING row also declares src/foo.ts.
+      // The live peer sits in its own epic: a teamless claimer is skipped when a
+      // live OTHER worker already holds its epic + status.
+      async function setup(opts: { live?: string; shared?: string[] } = {}): Promise<void> {
+        const shared = opts.shared ?? [];
+        setupMoe('TURBO');
+        const epic = writeEpic();
+        fs.writeFileSync(
+          path.join(moePath, 'epics', 'epic-2.json'),
+          JSON.stringify({ ...epic, id: 'epic-2', title: 'E2' }, null, 2)
+        );
+        writePeer('task-B', null, 'epic-1', shared);
+        writePeer('task-unassigned', null, 'epic-1', shared);
+        writePeer('task-dead', 'worker-dead', 'epic-1', shared);
+        writePeer('task-gone', 'worker-gone', 'epic-1', shared);
+        if (opts.live) writePeer('task-live', opts.live, 'epic-2', shared);
+        await state.load();
+        await state.createWorker({
+          id: 'worker-dead', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+          currentTaskId: null, status: 'DEAD',
+        });
+        if (opts.live) {
+          // createWorker only accepts [A-Za-z0-9_-] ids, so an id that is not one
+          // mention token can reach a registry only through a hand-edited
+          // workers/*.json. Re-key the record in memory to stand in for that.
+          const safeId = opts.live.replace(/[^\w-]/g, '-');
+          await state.createWorker({
+            id: safeId, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-2',
+            currentTaskId: 'task-live', status: 'CODING',
+          });
+          if (safeId !== opts.live) {
+            const record = state.workers.get(safeId)!;
+            state.workers.delete(safeId);
+            state.workers.set(opts.live, { ...record, id: opts.live });
+          }
+        }
+      }
+
+      async function claimAndHear(): Promise<{ result: Claimed; heard: Heard[] }> {
+        const heard: Heard[] = [];
+        const unsubscribe = state.subscribe((e) => {
+          if (e.type !== 'MESSAGE_CREATED') return;
+          if (!e.payload.content.includes('file collision on task-B')) return;
+          heard.push({
+            content: e.payload.content,
+            mentions: e.payload.mentions,
+            targets: e.routingTargets ?? [],
+          });
+        });
+        try {
+          const result = await claimNextTaskTool(state).handler(
+            { workerId: 'worker-b', statuses: ['WORKING'], taskId: 'task-B' },
+            state
+          ) as Claimed;
+          return { result, heard };
+        } finally {
+          unsubscribe();
+        }
+      }
+
+      it('(a) carries liveAssignee only on a peer held by a registered, non-DEAD worker', async () => {
+        await setup({ live: 'worker-live' });
+        const { result } = await claimAndHear();
+
+        expect(result.hasNext).toBe(true);
+        expect(result.fileCollision).toEqual([
+          { task: 'task-dead', files: ['src/foo.ts'] },
+          { task: 'task-gone', files: ['src/foo.ts'] },
+          { task: 'task-live', files: ['src/foo.ts'], liveAssignee: 'worker-live' },
+          { task: 'task-unassigned', files: ['src/foo.ts'] },
+        ]);
+        for (const entry of result.fileCollision!) {
+          expect('liveAssignee' in entry).toBe(entry.task === 'task-live');
+        }
+      });
+
+      it('(b) pages each live assignee and the claimer, listing live peers first', async () => {
+        await setup({ live: 'worker-live' });
+        const { heard } = await claimAndHear();
+
+        expect(heard).toHaveLength(1);
+        const [notice] = heard;
+        expect(notice.mentions).toEqual(['worker-live', 'worker-b']);
+        expect(notice.targets).toEqual(['worker-live', 'worker-b']);
+        const live = notice.content.indexOf('task-live');
+        expect(live).toBeGreaterThan(-1);
+        for (const dormant of ['task-dead', 'task-gone', 'task-unassigned']) {
+          expect(notice.content.indexOf(dormant)).toBeGreaterThan(live);
+        }
+        expect(notice.content).not.toContain('worker-dead');
+        expect(notice.content).not.toContain('worker-gone');
+      });
+
+      it('(c) a dormant-only collision mentions nobody, even for a path containing @', async () => {
+        await setup({ shared: ['packages/@scope/x.ts'] });
+        const { result, heard } = await claimAndHear();
+
+        expect(result.fileCollision!.some((c) => 'liveAssignee' in c)).toBe(false);
+        expect(heard).toHaveLength(1);
+        const [notice] = heard;
+        expect(notice.mentions).toEqual([]);
+        expect(notice.content.startsWith('⚠️ file collision on task-B: ')).toBe(true);
+        for (const id of ['task-unassigned', 'task-dead', 'task-gone']) {
+          expect(notice.content).toContain(id);
+        }
+        expect(notice.content).toContain('`src/foo.ts`');
+      });
+
+      it('(d) a failure computing collisions is swallowed: the claim still lands', async () => {
+        await setup();
+        // Only the collision scan reads a peer's per-step affectedFiles.
+        (state.tasks.get('task-unassigned')!.implementationPlan[0] as unknown as { affectedFiles: unknown })
+          .affectedFiles = 42;
+        const { result, heard } = await claimAndHear();
+
+        expect(result.hasNext).toBe(true);
+        expect('fileCollision' in result).toBe(false);
+        expect(heard).toHaveLength(0);
+        expect(state.getTask('task-B')!.assignedWorkerId).toBe('worker-b');
+      });
+
+      it('(e) never writes an assignee id that is not one mention token with an @', async () => {
+        await setup({ live: 'worker x' });
+        const { result, heard } = await claimAndHear();
+
+        expect(result.fileCollision!.find((c) => c.task === 'task-live')!.liveAssignee).toBe('worker x');
+        expect(heard).toHaveLength(1);
+        // Unfiltered, "@worker x" at line start parses as the group token
+        // "worker" and pages every worker seat.
+        expect(heard[0].mentions).toEqual(['worker-b']);
+        expect(heard[0].targets).toEqual(['worker-b']);
+      });
+
+      it('(f) a live assignee whose id is a group token is not @mentioned', async () => {
+        await setup({ live: 'qa' });
+        const { result, heard } = await claimAndHear();
+
+        expect(result.fileCollision!.find((c) => c.task === 'task-live')!.liveAssignee).toBe('qa');
+        expect(heard).toHaveLength(1);
+        // "@qa" at line start would address every QA seat.
+        expect(heard[0].mentions).toEqual(['worker-b']);
+        expect(heard[0].targets).toEqual(['worker-b']);
+      });
+
+      it('(g) a backtick in a path cannot end its code span and page a seat', async () => {
+        await setup({ shared: ['src/a`@worker-victim`.ts'] });
+        const { heard } = await claimAndHear();
+
+        expect(heard).toHaveLength(1);
+        expect(heard[0].mentions).toEqual([]);
+        expect(heard[0].content).toContain("`src/a'@worker-victim'.ts`");
+      });
+    });
   });
 
   // ---------------------------------------------------------------------------

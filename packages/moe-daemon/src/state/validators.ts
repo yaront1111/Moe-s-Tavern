@@ -2,7 +2,7 @@
 // State validators + sanitizers
 // =============================================================================
 //
-// Extracted verbatim from StateManager. Two families with DELIBERATELY different
+// Extracted from StateManager. Two mutation families with DELIBERATELY different
 // contracts, and the split is load-bearing:
 //   - validate*  — throw `invalidInput(...)` on bad input. Callers rely on the
 //                  throw happening BEFORE anything reaches disk.
@@ -10,6 +10,7 @@
 //                  sliced, because they run on every write path (updateTask
 //                  calls sanitizeImplementationPlan on every single update) and
 //                  a throw here would break state mutation entirely.
+// resolve* helpers form a third family: read pinned workspace identity/settings.
 //
 // `validateSettingsUpdate`, `validateEpicUpdates` and `sanitizeImplementationPlan`
 // are hardcoded field ALLOWLISTS. A field added to a schema type but not to the
@@ -17,21 +18,27 @@
 // value still looks correct — the hardest failure in this codebase to spot.
 
 import type {
+  AttemptWorkspace,
   Epic,
+  ExecutionAttempt,
   ImplementationStep,
   Project,
   ProjectSettings,
+  ProtectedCheckDefinition,
   StepAmendment,
   StepStatus,
   Task,
   TaskComment,
+  TaskExecutionContract,
   TaskCommit,
   Team,
   TeamRole,
+  WorktreeMode,
 } from '../types/schema.js';
 import { invalidInput } from '../util/errors.js';
+import { assertExecutionProfileReady, EXECUTION_PROFILES, resolveExecutionProfile } from '../delivery/executionProfile.js';
 import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
-import { normalizeAffectedFiles } from '../util/affectedFiles.js';
+import { normalizeAffectedFile, normalizeAffectedFiles } from '../util/affectedFiles.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
 
@@ -116,6 +123,105 @@ export function validateStringValue(
   return normalized;
 }
 
+export const MAX_CONTRACT_BEHAVIOR_CHARS = 2000;
+export const MAX_CONTRACT_LIST_ITEMS = 50;
+export const MAX_CONTRACT_ITEM_CHARS = 1000;
+
+export const MAX_REQUIRED_CHECKS = 20;
+export const MAX_REQUIRED_CHECK_PATHS = 50;
+export const MAX_REQUIRED_CHECK_COMMAND_CHARS = 1000;
+const CHECK_PATH_KINDS = ['configs', 'scripts', 'assertionRoots'] as const;
+const CHECK_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+function validateCheckPaths(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) throw invalidInput(field, 'must be an array of paths');
+  if (value.length > MAX_REQUIRED_CHECK_PATHS) {
+    throw invalidInput(field, `must contain ${MAX_REQUIRED_CHECK_PATHS} paths or fewer`);
+  }
+  return [...new Set(Array.from(value, (entry, index) => {
+    const itemField = `${field}[${index}]`;
+    const normalized = normalizeAffectedFile(entry, itemField);
+    if (entry !== normalized) throw invalidInput(itemField, `must be normalized: ${normalized}`);
+    if (CHECK_CONTROL_CHARACTERS.test(normalized)) throw invalidInput(itemField, 'cannot contain control characters');
+    if (/[*?\[\]]/.test(normalized) || normalized.startsWith(':')) {
+      throw invalidInput(itemField, 'cannot contain glob or pathspec magic');
+    }
+    return normalized;
+  }))];
+}
+
+function validateRequiredChecks(value: unknown, field: string): ProtectedCheckDefinition[] {
+  if (!Array.isArray(value)) throw invalidInput(field, 'must be an array of check definitions');
+  if (value.length > MAX_REQUIRED_CHECKS) {
+    throw invalidInput(field, `must contain ${MAX_REQUIRED_CHECKS} definitions or fewer`);
+  }
+  const ids = new Set<string>();
+  return Array.from(value, (entry, index) => {
+    const itemField = `${field}[${index}]`;
+    const input = requirePlainObject(entry, itemField);
+    const prototype: unknown = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) throw invalidInput(itemField, 'must be a plain object');
+    for (const key of Object.keys(input)) {
+      if (!['id', 'command', ...CHECK_PATH_KINDS].includes(key)) {
+        throw invalidInput(`${itemField}.${key}`, 'is not a supported check definition field');
+      }
+    }
+    const id = input.id;
+    if (typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
+      throw invalidInput(`${itemField}.id`, 'must be 1-64 alphanumeric, dot, underscore or hyphen characters, starting alphanumeric');
+    }
+    if (ids.has(id)) throw invalidInput(`${itemField}.id`, 'must be unique');
+    ids.add(id);
+    const command = validateStringValue(input.command, `${itemField}.command`, { maxLength: MAX_REQUIRED_CHECK_COMMAND_CHARS });
+    if (CHECK_CONTROL_CHARACTERS.test(command)) throw invalidInput(`${itemField}.command`, 'cannot contain control characters');
+    const definition: ProtectedCheckDefinition = { id, command };
+    for (const kind of CHECK_PATH_KINDS) {
+      if (input[kind] === undefined || input[kind] === null) continue;
+      const paths = validateCheckPaths(input[kind], `${itemField}.${kind}`);
+      if (paths.length) definition[kind] = paths;
+    }
+    return definition;
+  });
+}
+
+const CONTRACT_FIELD_KINDS: { [K in keyof Required<TaskExecutionContract>]: 'text' | 'list' | 'checks' } = {
+  intendedBehavior: 'text', acceptanceCriteria: 'list', invariants: 'list',
+  compatibility: 'list', approvedScope: 'list', reuse: 'list',
+  sourceAssumptions: 'list', checkRefs: 'list', requiredChecks: 'checks',
+};
+export const EXECUTION_CONTRACT_FIELDS = Object.keys(CONTRACT_FIELD_KINDS) as (keyof TaskExecutionContract)[];
+
+/** Strict, lossless validation; build a detached canonical contract or clear it. */
+export function validateExecutionContract(value: unknown, fieldName = 'executionContract'): TaskExecutionContract | undefined {
+  if (value === undefined || value === null) return undefined;
+  const input = requirePlainObject(value, fieldName);
+  rejectUnknownFields(input, EXECUTION_CONTRACT_FIELDS, fieldName);
+  const contract: TaskExecutionContract = {};
+  for (const key of EXECUTION_CONTRACT_FIELDS) {
+    const item = input[key];
+    if (item === undefined || item === null) continue;
+    const field = `${fieldName}.${key}`;
+    if (key === 'requiredChecks') {
+      const checks = validateRequiredChecks(item, field);
+      if (checks.length) contract[key] = checks;
+      continue;
+    }
+    if (key === 'intendedBehavior') {
+      contract[key] = validateStringValue(item, field, { maxLength: MAX_CONTRACT_BEHAVIOR_CHARS, allowNewlines: true });
+      continue;
+    }
+    if (!Array.isArray(item)) throw invalidInput(field, 'must be an array of strings');
+    if (item.length > MAX_CONTRACT_LIST_ITEMS) {
+      throw invalidInput(field, `must contain ${MAX_CONTRACT_LIST_ITEMS} items or fewer`);
+    }
+    const items = Array.from(item, (text, index) => validateStringValue(text, `${field}[${index}]`, {
+      maxLength: MAX_CONTRACT_ITEM_CHARS, allowNewlines: true,
+    }));
+    if (items.length) contract[key] = items;
+  }
+  return Object.keys(contract).length ? contract : undefined;
+}
+
 export function validateBooleanValue(value: unknown, fieldName: string): boolean {
   if (typeof value !== 'boolean') {
     throw invalidInput(fieldName, 'must be a boolean');
@@ -140,11 +246,15 @@ export function validateEnumValue<T extends string>(value: unknown, fieldName: s
   return value as T;
 }
 
+/** Longest epic rail, in UTF-16 code units. Longer text is refused, never shortened. */
+export const MAX_EPIC_RAIL_CHARS = 10000;
+
 export function validateStringArrayValue(
   value: unknown,
   fieldName: string,
   maxItems: number,
-  maxItemLength: number
+  maxItemLength: number,
+  truncate = true
 ): string[] {
   if (!Array.isArray(value)) {
     throw invalidInput(fieldName, 'must be an array');
@@ -160,7 +270,7 @@ export function validateStringArrayValue(
       maxLength: maxItemLength,
       allowEmpty: false,
       trim: false,
-      truncate: true,
+      truncate,
     });
   });
 }
@@ -177,12 +287,35 @@ export function validatePatternSetting(value: unknown, fieldName: string): strin
   return pattern;
 }
 
+// Worktree contract: epic-dce3a64f §7.1/§2.7. Mode/path are pinned; target is live.
+const WORKTREE_MODES: readonly WorktreeMode[] = ['off', 'on'];
+
+export function resolveWorktreeMode(settings?: { worktreeMode?: unknown } | null): WorktreeMode {
+  const mode = settings?.worktreeMode;
+  return mode === undefined ? 'off' : validateEnumValue(mode, 'worktreeMode', WORKTREE_MODES);
+}
+
+export function resolveWorktreeTarget(settings?: { consolidationBranch?: unknown } | null): string {
+  const branch = settings?.consolidationBranch;
+  return typeof branch === 'string' && branch.trim() && !/[*?\[]/.test(branch) ? branch.trim() : 'main';
+}
+
+export function resolveAttemptWorkspace(
+  attempt: Pick<ExecutionAttempt, 'taskId' | 'workspace' | 'workspaceMode'>,
+  settings?: { consolidationBranch?: unknown } | null,
+): AttemptWorkspace {
+  return attempt.workspaceMode === 'worktree'
+    ? { mode: 'worktree', path: attempt.workspace, branch: `moe/task/${attempt.taskId}`, target: resolveWorktreeTarget(settings) }
+    : { mode: 'shared', path: attempt.workspace, branch: null, target: null };
+}
+
 export function validateSettingsUpdate(project: Project, settings: Partial<ProjectSettings>): ProjectSettings {
   if (!project) {
     throw new Error('Project not loaded');
   }
   const input = requirePlainObject(settings, 'settings');
   rejectUnknownFields(input, [
+    'executionProfile',
     'approvalMode',
     'speedModeDelayMs',
     'autoCreateBranch',
@@ -206,12 +339,21 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     'qualityGate',
     'qualityGateScope',
     'consolidationBranch',
+    'worktreeMode',
     'appendOnlyFiles',
     'refusalCascadeAutoBacklog',
     'resources',
   ], 'project setting');
 
   const next: ProjectSettings = { ...project.settings };
+
+  // Readiness is daemon-owned, never a caller-provided setting. Check before
+  // updateSettings can persist anything, including unrelated partial updates.
+  const executionProfile = input.executionProfile === undefined
+    ? resolveExecutionProfile(project.settings)
+    : validateEnumValue(input.executionProfile, 'executionProfile', EXECUTION_PROFILES);
+  assertExecutionProfileReady(executionProfile);
+  if (input.executionProfile !== undefined) next.executionProfile = executionProfile;
 
   if (input.approvalMode !== undefined) {
     next.approvalMode = validateEnumValue(input.approvalMode, 'approvalMode', ['CONTROL', 'SPEED', 'TURBO'] as const);
@@ -300,6 +442,9 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
   }
   if (input.qualityGateScope !== undefined) {
     next.qualityGateScope = validateEnumValue(input.qualityGateScope, 'qualityGateScope', ['epicFinal', 'everyTask'] as const);
+  }
+  if (input.worktreeMode !== undefined) {
+    next.worktreeMode = validateEnumValue(input.worktreeMode, 'worktreeMode', WORKTREE_MODES);
   }
   if (input.consolidationBranch !== undefined) {
     // Literal branch name or a `*` glob checked at complete_task. Empty
@@ -397,7 +542,7 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
 
 export function validateEpicUpdates(updates: Partial<Epic>): Partial<Epic> {
   const input = requirePlainObject(updates, 'updates');
-  rejectUnknownFields(input, ['title', 'description', 'architectureNotes', 'epicRails', 'status', 'order'], 'epic update');
+  rejectUnknownFields(input, ['title', 'description', 'architectureNotes', 'epicRails', 'status', 'order', 'finalTaskId'], 'epic update');
 
   const sanitized: Partial<Epic> = {};
   if (input.title !== undefined) {
@@ -426,13 +571,20 @@ export function validateEpicUpdates(updates: Partial<Epic>): Partial<Epic> {
     });
   }
   if (input.epicRails !== undefined) {
-    sanitized.epicRails = validateStringArrayValue(input.epicRails, 'epicRails', 100, 1000);
+    sanitized.epicRails = validateStringArrayValue(input.epicRails, 'epicRails', 100, MAX_EPIC_RAIL_CHARS, false);
   }
   if (input.status !== undefined) {
     sanitized.status = validateEnumValue(input.status, 'status', ['PLANNED', 'ACTIVE', 'COMPLETED', 'ARCHIVED'] as const);
   }
   if (input.order !== undefined) {
     sanitized.order = validateIntegerValue(input.order, 'order', 0, Number.MAX_SAFE_INTEGER);
+  }
+  if (input.finalTaskId !== undefined) {
+    // Shape only. moe.update_epic checks the id names a live task of this epic;
+    // isEpicFinalTask ignores a designation that stops doing so. Blank clears:
+    // an undefined value drops the key when the epic is written.
+    const finalTaskId = validateStringValue(input.finalTaskId, 'finalTaskId', { maxLength: 200, allowEmpty: true, trim: true });
+    sanitized.finalTaskId = finalTaskId === '' ? undefined : finalTaskId;
   }
   return sanitized;
 }
@@ -478,6 +630,9 @@ export function epicUpdatedActivityPayload(epic: Epic, updates: Partial<Epic>): 
   }
   if (Object.prototype.hasOwnProperty.call(updates, 'epicRails')) {
     payload.epicRailsCount = epic.epicRails.length;
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'finalTaskId')) {
+    payload.finalTaskId = epic.finalTaskId ?? null;
   }
 
   return payload;
