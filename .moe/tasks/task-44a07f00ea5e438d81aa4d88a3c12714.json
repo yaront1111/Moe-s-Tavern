@@ -1,0 +1,169 @@
+{
+  "id": "task-44a07f00ea5e438d81aa4d88a3c12714",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: get_commit_scope keeps excluding a dependent's planned paths after this task is DONE, so a QA exit landing sweeps the dependent's mid-step edits",
+  "description": "governor-4764040b measured this at 18:21Z (#governors msg-5fcf216b). governor-693b7073 verified it on HEAD.\n\nWhat happened:\n- WT-08 (task-7a4aab5e) became DONE at 18:15:01Z. fa7fece5 (dependsOn WT-08) was claimed at once, and its step 1 (affectedFiles [scripts/moe-agent.sh]) ran IN_PROGRESS from 18:15:27Z to 18:17:43Z.\n- WT-08's QA session exited at 18:16:21Z. Its landing, wip baa704f5 `[status=DONE role=qa]`, committed and pushed fa7fece5's half-done scripts/moe-agent.sh edit (the bash 3.2 heredoc→function refactor, +44/-19) under WT-08's task id.\n- The QA session's pre-flight (17:41:28Z) had seen the file clean, so the wrapper's \"changed since my pre-flight\" rule took the bytes as its own.\n\nCause: packages/moe-daemon/src/tools/getCommitScope.ts:160-168.\n- `waitsOnThis = findDependencyPath(state, other.id, task.id) !== null` makes a dependent contribute only its ASSERTED paths. The comment reads \"cannot have run yet: dependsOn gates its WORKING claims until this task is DONE\".\n- The code never checks whether THIS task is already DONE/ARCHIVED, or whether the dependent is active.\n- Once this task is terminal, its dependents are claimable and editing. Their planned and IN_PROGRESS step paths then enter neither the peer set nor editingTaskIds, so nothing is held.\n\nImpact:\n- Every serialized-lane handoff (wrapper lane, any dependsOn chain) can put the next row's mid-step bytes into the previous row's QA exit commit.\n- Attribution is wrong: the dependent's completion commit lacks those paths.\n- Worse, unreviewed mid-step wrapper bytes reach HEAD, and seats hot-reload committed moe-agent.* bytes.\n\nFix shape:\n- Apply the waitsOnThis exclusion only while THIS task is non-terminal AND the waiting peer has no active assignee and no open attempt.\n- Otherwise the dependent is an ordinary peer: its planned and IN_PROGRESS paths count, with peerActive/editingTaskIds as for any peer.\n- Keep the original intent: a serialized chain's not-yet-started links must not contest the link before them.\n- Update the tool description string and docs/MCP_SERVER.md's get_commit_scope PEER text to match.\n\nNote: the running daemon gets this fix only after a rebuild and restart. That is human-coordinated, using the staging-build swap; never build in place in the shared checkout.",
+  "definitionOfDone": [
+    "With this task DONE (or ARCHIVED), a dependent's planned and IN_PROGRESS step paths appear in peerDeclared (and in editingTaskIds while it is active), so a later exit landing of this task holds them instead of committing them.",
+    "While this task is non-terminal, a dependent with no active assignee and no open attempt still contributes only its ASSERTED paths: a serialized chain's unstarted links do not contest the link before them, as today.",
+    "getCommitScope.test.ts has regression tests for: a terminal task with an active, editing dependent (held); a non-terminal task with an idle dependent (asserted only); and a non-terminal task with an active dependent (counted).",
+    "The get_commit_scope tool description and docs/MCP_SERVER.md describe the new rule.",
+    "The daemon vitest suite for getCommitScope, plus the full daemon suite, passes in a snapshot (never an in-place build in the shared checkout), and its output is supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Regression tests first (red). Edit only packages/moe-daemon/src/tools/getCommitScope.test.ts.\n(1) The test 'keeps the waits-on-this rule: a dependent contributes no entry for a path only its plan names' (~:745) pins exactly the behavior this task reverses: task-1 WORKING, task-dep dependsOn task-1 with an active assignee worker-live and an IN_PROGRESS step on src/only-plan.ts, expected []. Keep its setup. Retitle it 'counts a dependent of a non-terminal task whose assignee is active, with its editing marks' and expect peerDeclared toEqual [{path:'src/only-plan.ts', taskId:'task-dep', peerActive:true, taskIds:['task-dep'], activeTaskIds:['task-dep'], editingTaskIds:['task-dep']}]. This is DoD 3c, assignee arm; it deliberately has no attempt.\n(2) Add describe('waits-on-this exclusion (task-44a07f00)') just before describe('assigneeProtected'). Give it afterEach(() => vi.useRealTimers()), sinceIso = now minus 5 min, and a local helper dep(id, steps, overrides) that creates a WORKING task with dependsOn ['task-1'] whose plan steps carry the given status and affectedFiles. Assert through checked(), which runs expectActiveInvariants, with whole-entry toEqual, never truthiness.\n T-A (DoD 1 and 3a; the baa704f5 repro). Loop over status of ['DONE','ARCHIVED'], calling h.cleanup(); h.init() per pass, as the 'ORs over every task contributing a path' test does. Board:\n  - task-1: that status, one COMPLETED step with modifiedFiles ['scripts/moe-agent.sh'].\n  - worker-live: CODING, lastActivityAt now.\n  - task-dep-live: assignee worker-live; steps IN_PROGRESS ['scripts/moe-agent.sh'] and PENDING ['scripts/later.sh']; an open attempt, made with openAttempt AFTER h.state.load().\n  - task-dep-idle: unassigned, one PENDING step ['scripts/idle-plan.sh'], no attempt.\n checked({workerId:'worker-1', since}).peerDeclared must equal exactly these three entries, in this order:\n  - {path:'scripts/idle-plan.sh', taskId:'task-dep-idle', peerActive:false, taskIds:['task-dep-idle'], activeTaskIds:[], editingTaskIds:[]}\n  - {path:'scripts/moe-agent.sh', taskId:'task-dep-live', peerActive:true, taskIds, activeTaskIds and editingTaskIds all ['task-dep-live']}\n  - {path:'scripts/later.sh', taskId:'task-dep-live', peerActive:true, taskIds and activeTaskIds ['task-dep-live'], editingTaskIds:[]}\n The idle entry is the one that kills a mutant dropping the terminal check: the running check alone already counts the live dependent.\n T-B (DoD 2 and 3b). Board:\n  - task-1: REVIEW, one COMPLETED step with modifiedFiles ['src/shared.ts'].\n  - Workers: worker-dead (DEAD, lastActivityAt now) and worker-stale (IDLE, lastActivityAt and startedAt 60 min ago).\n  - Five dependents, each with one PENDING step naming 'src/shared.ts' and its own 'src/<x>-plan.ts':\n    - task-dep-unassigned: declaredFiles ['src/dep-asserted.ts'].\n    - task-dep-dead: assignee worker-dead.\n    - task-dep-missing: assignee 'worker-missing', which has no record.\n    - task-dep-stale: assignee worker-stale.\n    - task-dep-planned: unassigned. After load, openAttempt then setAttemptPhase(h.state, id, 'closed') at real now: an architect planned it inside the landing window.\n For args of [{since: sinceIso()}, {}], peerDeclared.map(e => [e.path, e.taskIds]) must equal [['src/dep-asserted.ts', ['task-dep-unassigned']]]. task-dep-planned and the since-less pass both kill a mutant that reuses peerTaskActive, which treats a recent close, or a missing since, as active.\n T-C (DoD 3c, attempt arm). task-1 WORKING. task-dep-open is unassigned, has one PENDING step ['src/open.ts'] and an open attempt (workerId/runnerId 'worker-gone', workspace h.testDir). With since, expect [{path:'src/open.ts', taskId:'task-dep-open', peerActive:true, taskIds:['task-dep-open'], activeTaskIds:['task-dep-open'], editingTaskIds:[]}].\nLeave the serialized-chain tests 'ignores the plan-declared paths of a peer that waits on this task, but keeps its asserted ones' (~:203) and 'still counts the plan-declared paths of a prerequisite and of an unrelated peer' (~:240) byte-for-byte untouched; they are DoD 2's as-today guard. Red check, in a snapshot (see step 4): against the unchanged getCommitScope.ts, exactly (1), T-A and T-C fail and T-B passes, because T-B pins today's behavior.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "Inverted the ~:745 test (now 'counts a dependent of a non-terminal task whose assignee is active, with its editing marks') and added describe('waits-on-this exclusion (task-44a07f00)') with T-A/T-B/T-C, before describe('assigneeProtected'). The ~:203 and ~:240 serialized-chain tests are untouched. Red check in snapshot /tmp/moe-44a0.DQL20Z (HEAD archive + test overlay only, npm ci native, node v24.21.0): getCommitScope.test.ts is 3 failed | 61 passed (64): exactly (1), T-A and T-C fail with real AssertionErrors (expected [] to deeply equal the entries), T-B passes because it pins today's behavior. Shared-checkout dirty paths from other sessions (.moe/tasks/*, scripts/tests/postflight-worktree.cjs, .moe/decisions/) are not mine and untouched.",
+      "startedAt": "2026-10-31T18:40:22.029Z",
+      "completedAt": "2026-10-31T18:41:31.797Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix. Edit only packages/moe-daemon/src/tools/getCommitScope.ts.\n(a) Add this helper next to peerTaskActive: `function dependentMayRun(state: StateManager, other: Task, nowMs: number, sinceMs: number | null): boolean { const assignee = other.assignedWorkerId ? state.getWorker(other.assignedWorkerId) : null; if (assignee && isPeerActive(assignee, nowMs, sinceMs)) return true; return listAttempts(state, other.id).some((attempt) => attempt.phase !== 'closed'); }`. Its JSDoc must say why it is deliberately narrower than peerTaskActive:\n  - It has no fail-closed shortcut when since is missing, and no clause for a recent phase change. An idle link has not started, even one whose planning attempt closed inside the window, or any link when since is missing. Counting it would reopen task-435683c2: a serialized chain's unstarted link contesting the link before it.\n  - A session that can write bytes always holds a non-closed attempt: claimNextTask's openClaimAttempt opens one per claim, and taskStore's closeAttemptsOnHandBack closes it when the seat is cleared. running, reconciling and finalizing all count as open.\n(b) Just before the peer loop, add `const thisTerminal = TERMINAL_STATUSES.has(task.status);`. Use the raw status on purpose; see the risks note.\n(c) Replace `const waitsOnThis = findDependencyPath(state, other.id, task.id) !== null;` with `const waitsOnThis = !thisTerminal && !dependentMayRun(state, other, nowMs, sinceMs) && findDependencyPath(state, other.id, task.id) !== null;`. The explicit terminal check is required: findDependencyPath (state/dependencyUnblock.ts) matches a DONE/ARCHIVED target before its status skip, which is the root cause.\n(d) Rewrite the comment above that line. The exclusion applies only while this task is not DONE/ARCHIVED and the waiting peer has no active assignee and no open attempt. Once this task is terminal, its dependents are claimable and may be mid-step: in baa704f5, WT-08's QA exit landing committed fa7fece5's half-done scripts/moe-agent.sh under WT-08's id. A dependent with a live session is an ordinary peer, whatever the edges say.\n(e) In the tool description's PEER clause, replace 'a peer that waits on this task contributes only its asserted paths, since it cannot have run yet;' with 'while this task is not DONE/ARCHIVED, a peer that waits on it (dependsOn or blockedOnTaskIds, transitively) and has no active assignee and no open attempt contributes only its asserted paths, since it cannot have run yet; once this task is DONE/ARCHIVED, or while that peer has an active assignee or an open attempt, it counts like any other peer;'.\nError handling: add no new throw path. One peer's junk record must never fail another task's scope. dependentMayRun uses the same getWorker and listAttempts calls that peerTaskActive already survives: a non-string or unknown assignedWorkerId resolves to no assignee, and an unrecognised attempt phase counts as open, so it fails closed and the peer is counted. The handler's existing input validation (missing taskId, bad phase, unparsable since, unknown task) is unchanged.\nChange nothing else. These stay as they are: the peerPaths, active and editing lines; peerTaskActive; inProgressStepPaths; TERMINAL_STATUSES; the reply shape (no new field); and both wrappers. A counted dependent then gets peerActive, activeTaskIds and editingTaskIds by the same rule as any peer. Keep this invariant: for every board state, the new peerDeclared is a superset of the old one. Paths and contributors are only added, and peerActive only flips false to true, so the fix only adds holds and never releases one. After this step, every step-1 test passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "Fix in getCommitScope.ts: new helper dependentMayRun (assignee active via isPeerActive, or any non-closed attempt; no since fail-closed shortcut, no recent-phase clause), const thisTerminal before the peer loop, waitsOnThis = !thisTerminal && !dependentMayRun(...) && findDependencyPath(...) !== null, rewritten comment, tool-description PEER clause updated. One deviation from the plan's helper body, to honour the contract line 'malformed assignee data fails closed': a non-string assignedWorkerId returns true (like isAssigneeProtected), because getWorker(42) just returns null and the peer would otherwise be excluded. Missing/DEAD/stale owners stay uncounted (T-B pins that). Added test T-D (numeric assignee + garbage attempt phase are counted, no throw) to the new describe, so the narrow file is 65 tests, not 64. Snapshot run: getCommitScope.test.ts 65 passed (65); tsc --noEmit clean.",
+      "startedAt": "2026-10-31T18:41:33.661Z",
+      "completedAt": "2026-10-31T18:42:24.706Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs. Edit only docs/MCP_SERVER.md, the '### moe.get_commit_scope' Returns block.\nReplace the peerDeclared comment text 'except a peer that waits on this task (dependsOn ∪ blockedOnTaskIds, transitively) contributes its asserted paths only: dependsOn gates it from WORKING until this task is DONE, so its plan is intent, not an edit.' with the new rule, keeping the aligned `//` comment column:\n  - While this task is not DONE/ARCHIVED, a peer that waits on it (dependsOn ∪ blockedOnTaskIds, transitively) and has no active assignee (peerActive's assignee test) and no non-closed attempt contributes its asserted paths only. dependsOn gates it from WORKING until this task is DONE, so its plan is intent, not an edit.\n  - Once this task is DONE/ARCHIVED, its dependents are claimable. A waiting peer with an active assignee or an open attempt may be mid-step. Either one counts like any other peer: planned and IN_PROGRESS paths, peerActive, activeTaskIds and editingTaskIds.\nAlso change '...so a waits-on-this peer still contributes its asserted paths only.' to '...so an excluded waits-on-this peer still contributes its asserted paths only.'\nNo other doc states the rule: a grep for 'waits on this' over docs/ and every CLAUDE.md found only these lines. Do not touch any other section. Four open tasks plan or assert edits elsewhere in this file (WT-17, CQ-V12 and CQ-M06 PENDING; CQ-R13 BLOCKED, asserted). Use the Edit tool only: a TOOL witness is what lets this contested path land.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md get_commit_scope Returns block only (Edit tool): the peerDeclared comment now states the new rule (exclusion while this task is not DONE/ARCHIVED and the waiting peer has no active assignee and no non-closed attempt; otherwise an ordinary peer with planned and IN_PROGRESS paths, peerActive, activeTaskIds, editingTaskIds), and 'a waits-on-this peer' became 'an excluded waits-on-this peer' (also fixed the preceding line's 'so a' to 'so an' for grammar across the line break). git diff on the file shows only these two hunks (+8/-4).",
+      "startedAt": "2026-10-31T18:42:26.851Z",
+      "completedAt": "2026-10-31T18:42:42.309Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once, in a snapshot outside the checkout. Global rail: no npm ci/install/build/test inside the shared checkout's packages. The recipe and its pitfalls are in Serena memory gotcha-daemon-linux-snapshot-gate.\nSnapshot setup:\n  - SNAP=$(mktemp -d /tmp/moe-44a0.XXXXXX); mkdir \"$SNAP/repo\"; git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$SNAP/repo\". Archive the whole repo: initFiles and benchmarks tests read root files.\n  - Overlay ONLY the three owned files: cp each of packages/moe-daemon/src/tools/getCommitScope.ts, packages/moe-daemon/src/tools/getCommitScope.test.ts and docs/MCP_SERVER.md from the checkout into \"$SNAP/repo\". Never overlay `git diff --name-only`; it drags in peers' half-done edits.\n  - cd \"$SNAP/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" npm ci --no-audit --no-fund\nNamed command, which is the complete_task evidence: `cd \"$SNAP/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npx vitest run src/tools/getCommitScope.test.ts && npx vitest run'`. Before citing it, cmp the three files against the checkout.\nExpected:\n  - getCommitScope.test.ts: 64 passed.\n  - Full suite: 218 files passed, about 6434 passed / 20 skipped. HEAD d40c2847 alone gives 6431 / 20; the counts move as peers land.\nAlso run `bash scripts/tests/parity-check.sh` in place. This is the epic rail; no wrapper file changes, so it must pass.\ncomplete_task: verification is {command: the named command with your real $SNAP path, exitCode: 0, outputTail: both vitest summary lines}. Name the parity result in the summary.\nIf an unrelated test file fails, rerun the same command on an HEAD archive with no overlay. If it fails there too, it is a pre-existing peer failure:\n  - add a task comment with both outputs;\n  - use as evidence the narrow file plus the full suite run with only that file passed to --exclude;\n  - never edit unrelated files.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff (git diff -- the three files), with the adversarial-self-review skill. Check each point:\n(a) Monotone. Walk each branch, old against new. Nothing that was in peerDeclared before may drop out, and no peerActive may flip true to false.\n(b) The serialized-chain tests at ~:203 and ~:240 are unchanged and green.\n(c) Error handling on junk records: a non-string assignedWorkerId, an unknown worker or a corrupt attempt must still not throw, and must fail closed (the peer is counted).\n(d) Mutants, in the step-4 snapshot. Each must fail with a real 'Tests N failed' line; a compile error or 'no tests' is a false kill.\n  - M1: drop `!thisTerminal &&`. Expect T-A to fail.\n  - M2: drop `!dependentMayRun(...) &&`. Expect (1) and T-C to fail.\n  - M3: make the attempt arm false. Expect T-C to fail.\n  - M4: make the assignee arm never true. Expect (1) to fail.\n  - M5: swap dependentMayRun for peerTaskActive. Expect T-B and the ~:203 test to fail.\n  - M6: `const thisTerminal = false`. Expect T-A to fail.\n  Back up the file ONCE. Afterwards restore it from the checkout copy and cmp, so no mutant leaks into the gate.\n(e) The tool description, the code comment and the MCP_SERVER.md text all state the same rule as the code.\nFix anything you find, then rerun the step-4 named command fresh for the complete_task evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-88af1437",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 33,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T18:22:24.560Z",
+  "updatedAt": "2026-10-31T18:42:42.309Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T18:22:37.281Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-66fd8127",
+    "worker-88af1437"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T18:39:54.561Z",
+  "executionContract": {
+    "intendedBehavior": "moe.get_commit_scope drops the non-asserted paths of a peer that waits on the scoped task (dependsOn ∪ blockedOnTaskIds, transitively) only while two things hold: the scoped task is not DONE/ARCHIVED, and the peer has no active assignee (isPeerActive) and no non-closed attempt. In every other case the waiting peer is an ordinary PEER contributor: its planned and IN_PROGRESS step paths count, and its peerActive, activeTaskIds and editingTaskIds are computed exactly as for any peer.",
+    "invariants": [
+      "For every board state, the new peerDeclared is a superset of the old one. Paths and contributors are only added, and peerActive only flips false to true, so the change only adds landing holds and never releases one.",
+      "While the scoped task is non-terminal, a dependent that is unassigned or whose owner is DEAD, missing or stale, and that has no open attempt, contributes only its asserted paths. This holds with or without since, including when its planning attempt closed inside the window.",
+      "The reply shape is unchanged: no new field. The tool stays read-only apart from the existing liveness touch.",
+      "Error handling: one peer's junk record never fails another task's scope. No new throw path; malformed assignee or attempt data fails closed, so the peer is counted."
+    ],
+    "compatibility": [
+      "scripts/moe-agent.sh, scripts/moe-agent.ps1 and their disk fallback are unchanged; they already treat PEER entries as holds.",
+      "The existing serialized-chain tests in getCommitScope.test.ts (~:203, ~:240) pass unchanged."
+    ],
+    "approvedScope": [
+      "getCommitScope.ts: new module helper dependentMayRun; the waitsOnThis expression and its comment in the handler's peer loop; the PEER clause of the tool description",
+      "getCommitScope.test.ts: the inverted ~:745 test and a new describe('waits-on-this exclusion (task-44a07f00)')",
+      "docs/MCP_SERVER.md: the get_commit_scope Returns block's peerDeclared comment lines"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/dependencyUnblock.ts findDependencyPath matches a DONE/ARCHIVED target before its status skip.",
+      "packages/moe-daemon/src/tools/getCommitScope.ts peerTaskActive returns true without since and counts an attempt phase change inside the window.",
+      "packages/moe-daemon/src/tools/claimNextTask.ts openClaimAttempt opens an attempt per claim; packages/moe-daemon/src/state/taskStore.ts closeAttemptsOnHandBack closes non-finalizing attempts when the seat is cleared."
+    ],
+    "checkRefs": [
+      "cd \"$SNAP/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npx vitest run src/tools/getCommitScope.test.ts && npx vitest run'",
+      "bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Reuse peerTaskActive as the 'dependent is active' test. Rejected for two reasons. It fails closed when since is missing: every dependent then counts, which brings back the task-435683c2 serialized-chain regression for callers that omit since and fails the existing ~:203 test. And its recent-phase-change clause counts a link whose planning attempt closed during this task's review, which is the normal serialized-lane case.\n(2) Gate on the dependent's own unmet dependencies (isDependencySatisfied or unmetDependsOn) instead of this task's raw terminal status. This is more precise under a strict deliveryPolicy and for transitive chains. But the DoD names DONE/ARCHIVED, and the running check already covers real activity. Counting an idle dependent that is still gated only adds holds; with since its peerActive is false, so the idle-clean exception still lands paths that were clean at pre-flight.\n(3) A presence-free assignee test: any registered non-DEAD owner, as assigneeProtected uses. Rejected to keep the tool's existing 'active assignee' meaning (isPeerActive). Any session that can write bytes holds a non-closed attempt, and the attempt arm catches that whatever the presence.\n(4) A wrapper-side fix. Rejected: dependency knowledge lives in the daemon. Once the peer map is right, the wrapper's existing MOE_ATTR_CONTESTED_EDITING hold does the right thing, with no sh/ps1 parity churn. The wrapper's disk fallback already counts every open task in full (fail closed) and needs no change.",
+    "codebaseInsights": "Root cause. findDependencyPath (state/dependencyUnblock.ts:174) checks `id === targetId` before it skips DONE/ARCHIVED nodes. So it returns a path when the TARGET is DONE, and waitsOnThis stayed true after this task finished.\nWrapper consumption (scripts/moe-agent.sh resolve_attribution, ~:4255-4300). PEER membership only ever adds skips: MOE_ATTR_PEER_DECLARED, CONTESTED_EDITING and CONTESTED_UNTOUCHED. With editingTaskIds naming the dependent, the incident path lands as MOE_ATTR_CONTESTED_EDITING(task-fa7fece5) instead of committing through own_bytes.\nAttempts. Every claim opens one (claimNextTask openClaimAttempt). A hand-back closes the non-finalizing ones (taskStore closeAttemptsOnHandBack). So an idle WORKING row waiting on the gate has no open attempt.\nArchitect prototype, on a scratch archive of d40c2847:\n  - Before the fix, exactly (1), T-A and T-C fail and T-B passes.\n  - After it, getCommitScope.test.ts passes 64/64, and the full daemon suite passes: 218 files, 6434 passed / 20 skipped (HEAD alone: 6431 / 20).\n  - Mutants M1-M6 are all killed by real assertion failures.\nThe prototype is reference only and may be cleaned: /tmp/claude-1000/-mnt-d-projexts-moes/1b65d15e-a468-4704-b5a3-19fabfe7d4b3/scratchpad/gate44/repo/packages/moe-daemon/src/tools/getCommitScope.ts and getCommitScope.test.ts. Never cp it into the checkout: write with the Edit tool (global rail: shell writes leave no TOOL witness).",
+    "risks": "Intended behavior change. A terminal task's later exit landing, usually QA's, now holds paths that a dependent's plan names instead of sweeping them: EDITING while the dependent is mid-step, UNTOUCHED when the path was dirty at pre-flight.\nA dependent of a non-terminal task with a live session now contests too. Examples: an edge added after its claim, a kept-seat block, an architect re-planning a reopened row that still has its old plan. This is fail closed, and rare.\nRaw DONE counts as terminal even under a strict deliveryPolicy, so an idle dependent still gated on evidence is counted. That only adds holds.\nTest pitfalls:\n  - openAttempt must run after h.state.load().\n  - T-A's entry order is task-id order, then each task's asserted-then-planned order.\n  - vitest colours its output; use NO_COLOR=1, and grep -a, because a log can contain NUL bytes.\n  - Restore mutants from the checkout copy and cmp before citing the gate.\nThe running daemon gets the fix only after a human-coordinated staging-build swap and a restart. Never build in place.\nOther tasks touch docs/MCP_SERVER.md: WT-17, CQ-V12 and CQ-M06 have it in PENDING plan steps, and BLOCKED CQ-R13 asserts it. Edit only the get_commit_scope Returns lines, with the Edit tool, or the landing holds the file as CONTESTED_UNTOUCHED.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+      "docs/MCP_SERVER.md",
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "41006cd016321d27271e462ececed8156374e491",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T18:39:54.587Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T18:40:22.029Z"
+}

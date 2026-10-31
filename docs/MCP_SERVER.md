@@ -738,8 +738,12 @@ All seven are required; `additionalProperties` is `false`.
   inferredPaths: string[],
   unattributedPaths: string[],
   peerDeclared: { path: string, taskId: string, peerActive: boolean, taskIds: string[], activeTaskIds: string[], editingTaskIds: string[] }[],   // the same union over every OTHER task with status ∉ {DONE, ARCHIVED} —
-                              // except a peer that waits on this task (dependsOn ∪ blockedOnTaskIds, transitively) contributes its
-                              // asserted paths only: dependsOn gates it from WORKING until this task is DONE, so its plan is intent, not an edit.
+                              // except: while this task is not DONE/ARCHIVED, a peer that waits on it (dependsOn ∪ blockedOnTaskIds, transitively)
+                              // and has no active assignee (peerActive's assignee test) and no non-closed attempt contributes its asserted paths only:
+                              // dependsOn gates it from WORKING until this task is DONE, so its plan is intent, not an edit. Once this task is
+                              // DONE/ARCHIVED its dependents are claimable, and a waiting peer with an active assignee or a non-closed attempt may
+                              // be mid-step: either one counts like any other peer (planned and IN_PROGRESS paths, peerActive, activeTaskIds,
+                              // editingTaskIds), so a landing of this task holds the dependent's paths instead of committing its half-done edit.
                               // taskId is the first contributing task in id order; peerActive is an OR over EVERY contributing task: true when,
                               // since `since − 120 s`, its assignee was active, it has a non-closed attempt, or an attempt changed phase (an
                               // unparsable time counts as active); always true without `since`. Additive: a wrapper treats an absent field as
@@ -748,8 +752,8 @@ All seven are required; `additionalProperties` is `false`.
                               // are active by the peerActive rule, in id order (every contributor without `since`), so peerActive === (activeTaskIds.length > 0):
                               // a wrapper names the live cause of a hold from it, not an idle first claimant. editingTaskIds is the contributing tasks with an
                               // IN_PROGRESS plan step naming the path (affectedFiles ∪ newFiles ∪ modifiedFiles) that are active by the peerActive rule
-                              // (always active without `since`); otherwise []. It is a subset of activeTaskIds. It only marks paths a task already contributes, so a
-                              // waits-on-this peer still contributes its asserted paths only. taskIds, activeTaskIds and editingTaskIds are additive: a wrapper
+                              // (always active without `since`); otherwise []. It is a subset of activeTaskIds. It only marks paths a task already contributes, so an
+                              // excluded waits-on-this peer still contributes its asserted paths only. taskIds, activeTaskIds and editingTaskIds are additive: a wrapper
                               // that predates them reads taskId and peerActive; one that finds them absent (older daemon) treats taskIds as [taskId], and
                               // activeTaskIds and editingTaskIds as [], which is today's landing
   livePeerIds: string[],      // workers ≠ caller, not DEAD, lastActivityAt inside the window (or registered since `since`)
