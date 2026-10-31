@@ -4009,6 +4009,48 @@ landing_refuse_owner() {
     LAND_SUMMARY_OUTCOME="refused"; LAND_SUMMARY_CODE="$LAND_CODE"
 }
 
+# strong_landing_task TASKID -- 0 when a wrapper- or daemon-written record names
+# the task's profile verified-local (CQ-V08b): this session's pinned profile for
+# its own task, the newest readable .moe/attempts record of the task (highest
+# generation; an unreadable record is skipped, never trusted), or the task's
+# receipt journal's own profile. Never an environment variable a CLI can set.
+# Twin: Test-MoeStrongLandingTask.
+strong_landing_task() {
+    [ "$1" = "${PREFLIGHT_TASK_ID:-}" ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] && return 0
+    $PYTHON_CMD - "$PROJECT" "$1" "$(receipt_journal_path "$1")" <<'PY' 2>/dev/null
+import glob,json,os,sys
+project,task,journal=sys.argv[1:]
+def load(p):
+    try:
+        d=json.load(open(p,encoding='utf-8-sig'))
+        return d if isinstance(d,dict) else None
+    except Exception: return None
+def strong(d):
+    s=d.get('executionPolicySnapshot')
+    return isinstance(s,dict) and s.get('profile')=='verified-local'
+records=[a for a in map(load,glob.glob(os.path.join(project,'.moe','attempts','*.json')))
+         if a is not None and a.get('taskId')==task and type(a.get('generation')) is int]
+# A generation tie counts as strong: fail closed.
+newest=max(((a['generation'],strong(a)) for a in records),default=(0,False))
+j=load(journal) if journal else None
+sys.exit(0 if newest[1] or (j is not None and j.get('profile')=='verified-local') else 1)
+PY
+}
+
+# landing_refuse_strong KIND -- under the strong profile only a verified
+# completion moves the target: record the checkpoint's refusal and fill the
+# session-ended summary. No byte, index entry, ref, rescue ref or baseline row
+# is touched, so the bytes stay for that completion. Twin: Send-MoeStrongRefusal.
+landing_refuse_strong() {
+    LAND_OUTCOME="refused"; LAND_CODE="MOE_COMMIT_REFUSED_STRONG_CHECKPOINT"; LAND_TOOL_FILE_EFFECTIVE=""
+    local detail="it runs under the strong profile (verified-local), where only a verified completion moves $(current_branch_name)"
+    echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $detail; its bytes and baseline stay for that completion (no ref, rescue ref or index written)."
+    record_commit_rpc "refused" "$1" "" "" "$LAND_CODE" "$detail" "" "" "" || true
+    MOE_LANDING_DONE=true
+    LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$1"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""
+    LAND_SUMMARY_OUTCOME="refused"; LAND_SUMMARY_CODE="$LAND_CODE"
+}
+
 # resolve_attribution MODE TASKID SNAPSHOT B_FILE U_FILE TOOL_FILE SCOPE_JSON OUT_DIR POLICY_OVERRIDE
 # The exact tiered algorithm (see docs/CONFIGURATION.md "attribution"), in ONE
 # python pass -- bash 3.2 has no associative arrays. Writes NUL-terminated
@@ -5489,17 +5531,25 @@ finalize_postflight() {
         *) [ -z "${LAND_RESCUE_SHA:-}" ] || outcome=rescued ;;
     esac
     # CQ-V08: a strong landing finalizes only once its receipt is recorded. While
-    # the journal stays (or its proof did not transfer) the attempt stays
-    # finalizing, which holds qa_approve and every claim of the task, so nothing
-    # reaches DONE and no dependent is released before the replay settles it.
+    # its journal waits on an unacknowledged receipt (or its proof did not
+    # transfer) the attempt stays finalizing, which holds qa_approve and every
+    # claim of the task, so nothing reaches DONE and no dependent is released
+    # before the replay settles it.
     if [ "$outcome" = landed ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] \
-        && { [ "${LAND_PROOF_UNTRANSFERRED:-}" = true ] || { [ -n "${RECEIPT_JOURNAL:-}" ] && [ -e "$RECEIPT_JOURNAL" ]; }; }; then
+        && { [ "${LAND_PROOF_UNTRANSFERRED:-}" = true ] \
+            || { [ "${RECEIPT_ACKED:-}" != true ] && [ -n "${RECEIPT_JOURNAL:-}" ] && [ -e "$RECEIPT_JOURNAL" ]; }; }; then
         echo -e "${YELLOW}[WARN]${NC} MOE_FINALIZE_DEFERRED_RECEIPT: task ${LAND_TASK_ID:-} -- the delivery receipt of $LAND_SHA is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes."
         MOE_FINALIZE_RC=0
         return 0
     fi
     finalize_attempt_rpc "$outcome" "${LAND_SHA:-}" || return 1
     MOE_FINALIZE_RC=0
+    # CQ-V08b: the strong journal goes only once its attempt is closed; a lost
+    # finalize (above) or an attempt still open keeps it for the next replay.
+    if [ "$outcome" = landed ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] && [ -n "${RECEIPT_JOURNAL:-}" ] \
+        && [ "$(moe_pinned_attempt_phase)" = closed ]; then
+        rm -f "$RECEIPT_JOURNAL"
+    fi
 }
 
 # rescue_ref REASON CAND_FILE -- park the candidate snapshot on
@@ -5940,26 +5990,32 @@ PY
 # call. Bookkeeping only: 1 (a refusal, a lost answer) never rolls back, re-lands
 # or stops the loop, and keeps the journal for the next pre-flight to replay.
 # DELIVERY_RECEIPT_CONFLICT means a receipt already records this candidate's
-# landing: logged, never retried. Twin: Send-MoeReceipt.
+# landing: logged, never retried. RECEIPT_ACKED=true on either answer. A strong
+# journal (its own profile verified-local) outlives an accepted receipt until
+# its attempt is closed (CQ-V08b): finalize_postflight or the next replay drops
+# it. Twin: Send-MoeReceipt.
 receipt_send() {
-    local report="$1" journal="$2" parsed args cand err="$SECURE_TEMP_DIR/receipt-err.txt"
+    local report="$1" journal="$2" parsed args cand strong err="$SECURE_TEMP_DIR/receipt-err.txt"
+    RECEIPT_ACKED=""
     parsed=$($PYTHON_CMD -c '
 import json,sys
 d=json.load(sys.stdin)
 p={k:d[k] for k in ("candidateId","target","targetBefore","targetAfter","landedRevision")}
 if d.get("pushResult") is not None: p["pushResult"]=d["pushResult"]
 p["workerId"]=sys.argv[1]
-print(d["candidateId"]); print(json.dumps(p))
+print(d["candidateId"]); print("1" if d.get("profile")=="verified-local" else "-"); print(json.dumps(p))
 ' "$WORKER_ID" <<< "$report") || return 1
-    cand="${parsed%%$'\n'*}"; args="${parsed#*$'\n'}"
+    cand="${parsed%%$'\n'*}"; parsed="${parsed#*$'\n'}"; strong="${parsed%%$'\n'*}"; args="${parsed#*$'\n'}"
     if moe_evidence_rpc record_delivery_receipt "$args" 2>"$err"; then
         cat "$err" >&2 2>/dev/null || true
-        [ -z "$journal" ] || rm -f "$journal"
+        RECEIPT_ACKED=true
+        [ -z "$journal" ] || [ "$strong" = 1 ] || rm -f "$journal"
         return 0
     fi
     cat "$err" >&2 2>/dev/null || true
     if grep -q '"codeName": *"DELIVERY_RECEIPT_CONFLICT"' "$err" 2>/dev/null; then
         echo -e "${YELLOW}[WARN]${NC} candidate $cand already has a delivery receipt that differs from this report; keeping the recorded one, not retrying."
+        RECEIPT_ACKED=true
         [ -z "$journal" ] || rm -f "$journal"
         return 0
     fi
@@ -6055,7 +6111,9 @@ PY
 # journal, so a receipt refused from there on never re-sends it), re-send the
 # journaled report verbatim, and close the journaled attempt as landed while it
 # is still finalizing under the journal's worker, whichever seat replays
-# (finalize_attempt is fenced by attempt id + generation); git shows neither ->
+# (finalize_attempt is fenced by attempt id + generation); a strong journal is
+# dropped only once that attempt is closed (CQ-V08b; still running, reconciling
+# or unreadable keeps it); git shows neither ->
 # the ref never moved, drop the journal (the baseline recovery owns those
 # bytes). Reads git, never moves a ref, never re-freezes or re-gates. Each step
 # is safe to repeat. Best-effort: a failure logs and keeps that journal. The git
@@ -6063,7 +6121,7 @@ PY
 # Twin: Invoke-MoeReceiptReplay.
 receipt_replay() {
     [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
-    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" f fields tid target after aid gen owner before owed strong tree wt ltree landed args report
+    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" f fields tid target after aid gen owner before owed strong tree wt ltree landed args report phase
     git_top || return 0
     [ -d "$MOE_GITDIR/moe/receipt" ] || return 0
     for f in "$MOE_GITDIR"/moe/receipt/*.json; do
@@ -6116,15 +6174,23 @@ receipt_replay() {
             receipt_journal_write "$f" "$report"
         fi
         [ -n "$wt" ] || receipt_send "$(cat "$f")" "$f" || continue
-        if [ "$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")" = finalizing ]; then
+        phase=$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")
+        if [ "$phase" = finalizing ]; then
             args=$($PYTHON_CMD -c 'import json,sys;t,a,g,w,r,s=sys.argv[1:];print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,runnerId=r,outcome="landed",landedRevision=s)))' \
                 "$tid" "$aid" "$gen" "$owner" "$MOE_RUNNER_ID" "$landed") || continue
             if ! moe_evidence_rpc finalize_attempt "$args" 3; then
                 echo -e "${YELLOW}[WARN]${NC} attempt $aid is still finalizing after its replayed receipt; its finalizing holds stay until it closes."
                 continue
             fi
+            phase=closed
         fi
-        [ -z "$wt" ] || rm -f "$f"
+        # CQ-V08b: a strong journal (kept past its accepted receipt) goes only
+        # once its attempt is closed.
+        if [ -n "$strong" ] && [ -z "$wt" ] && [ "$phase" != closed ] && [ -e "$f" ]; then
+            echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: attempt $aid of task $tid is $phase, not closed; nothing finalized."
+            continue
+        fi
+        [ -z "$wt" ] && [ -z "$strong" ] || rm -f "$f"
     done
     return 0
 }
@@ -6151,7 +6217,7 @@ run_landing() {
     ATTR_DIR="$work/attr"
     mkdir -p "$ATTR_DIR"
     LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""; LAND_RECORDED=""; LAND_PUSH_RESULT=""
-    RECEIPT_BEFORE=""; RECEIPT_LANDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""
+    RECEIPT_BEFORE=""; RECEIPT_LANDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""; RECEIPT_ACKED=""
     LAND_N_PATHS=0; LAND_N_INFERRED=0; LAND_RESCUE_REF=""; LAND_STAGED_FILE=""; LAND_DROPPED_FILE=""
     TI_N_STAGED=0; TI_N_INFERRED=0
     local policy_override="${LAND_POLICY_OVERRIDE:-}"
@@ -6166,6 +6232,12 @@ run_landing() {
     # Before anything reads or writes the task's bytes, baseline or refs.
     if ! landing_owner_guard "$LAND_TASK_ID" "$LAND_SCOPE_FILE"; then
         landing_refuse_owner "$LAND_KIND"
+        return 0
+    fi
+    # CQ-V08b: every checkpoint path (post-flight exit, pre-flight and idle
+    # recoveries) lands through here, so this one gate holds them all.
+    if [ "$LAND_KIND" = checkpoint ] && strong_landing_task "$LAND_TASK_ID"; then
+        landing_refuse_strong "$LAND_KIND"
         return 0
     fi
     # Every baseline write below keeps the header's session: a landing never
@@ -7781,7 +7853,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # Results are baked into SYSTEM_APPEND/PROMPT below so the agent starts
     # already initialized instead of being told to do these via prompt.
     MOE_FINALIZE_DONE=false; MOE_FINALIZE_RC=0; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
-    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""
+    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""; RECEIPT_ACKED=""
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
     # Exported blank: no CLI inherits a previous task's attempt (sh hot reload keeps env).
     export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""

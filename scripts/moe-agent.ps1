@@ -1937,18 +1937,22 @@ function Send-MoeCheckRun([hashtable]$Frozen, [hashtable]$Gate) {
 # (Get-MoeReceiptJournalPath). Bookkeeping only: $false (a refusal, a lost
 # answer) never rolls back, re-lands or stops the loop, and keeps the journal
 # for the next pre-flight to replay. DELIVERY_RECEIPT_CONFLICT means a receipt
-# already records this candidate's landing: logged, never retried. Twin: receipt_send.
+# already records this candidate's landing: logged, never retried. $true on
+# either answer. A strong journal (its own profile verified-local) outlives an
+# accepted receipt until its attempt is closed (CQ-V08b): Complete-MoePostflight
+# or the next replay drops it. Twin: receipt_send.
 function Send-MoeReceipt([string]$Path, $Report) {
     $payload = @{ candidateId=[string]$Report.candidateId; target=[string]$Report.target; targetBefore=[string]$Report.targetBefore
         targetAfter=[string]$Report.targetAfter; landedRevision=[string]$Report.landedRevision; workerId=$WorkerId }
     if ($null -ne $Report.pushResult) { $payload.pushResult = [string]$Report.pushResult }
     $ok = Send-MoeEvidence 'record_delivery_receipt' $payload
+    $keep = $ok -and (Get-MoeProp $Report 'profile') -ceq 'verified-local'
     if (-not $ok -and $script:MoeRpcCodeName -ceq 'DELIVERY_RECEIPT_CONFLICT') {
         Write-Host "[WARN] candidate $($payload.candidateId) already has a delivery receipt that differs from this report; keeping the recorded one, not retrying." -ForegroundColor Yellow
         $ok = $true
     }
     if ($ok) {
-        if ($Path) { Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue }
+        if ($Path -and -not $keep) { Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue }
         return $true
     }
     Write-Host "[WARN] delivery receipt not recorded for candidate $($payload.candidateId); journal kept at $Path for the next pre-flight to replay." -ForegroundColor Yellow
@@ -2151,12 +2155,22 @@ function Invoke-MoeReceiptReplay {
                     $j.PSObject.Properties.Remove('ledger'); Write-MoeReceiptJournal $f.FullName $j
                 }
                 if (-not $wt -and -not (Send-MoeReceipt $f.FullName $j)) { continue }
-                if ((Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId) -ceq 'finalizing') {
+                $phase = Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId
+                if ($phase -ceq 'finalizing') {
                     $closed = Send-MoeEvidence 'finalize_attempt' @{ taskId=[string]$j.taskId; attemptId=[string]$j.attemptId; generation=$j.generation
                         workerId=[string]$j.workerId; runnerId=$script:MoeRunnerId; outcome='landed'; landedRevision=$landedAs } 3
                     if (-not $closed) { Write-Host "[WARN] attempt $($j.attemptId) is still finalizing after its replayed receipt; its finalizing holds stay until it closes." -ForegroundColor Yellow; continue }
+                    $phase = 'closed'
+                }
+                # CQ-V08b: a strong journal (kept past its accepted receipt) goes only
+                # once its attempt is closed. Twin: receipt_replay.
+                $strong = $j.profile -ceq 'verified-local'
+                if ($strong -and -not $wt -and $phase -cne 'closed' -and (Test-Path -LiteralPath $f.FullName)) {
+                    Write-Host "[WARN] receipt journal $($f.FullName) kept: attempt $($j.attemptId) of task $($j.taskId) is $phase, not closed; nothing finalized." -ForegroundColor Yellow
+                    continue
                 }
                 if ($wt) { Remove-Item -LiteralPath $f.FullName -Force }
+                elseif ($strong) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
             } catch {
                 Write-Host "[WARN] receipt journal $($f.FullName) kept: $_" -ForegroundColor Yellow
             }
@@ -3837,6 +3851,46 @@ function Send-MoeOwnerRefusal([string]$TaskId, [string]$Kind, [string]$Status, [
     Send-MoeRecordCommit $rec | Out-Null
 }
 
+# True when a wrapper- or daemon-written record names the task's profile
+# verified-local (CQ-V08b): this session's pinned profile for its own task, the
+# newest readable .moe/attempts record of the task (highest generation; an
+# unreadable record is skipped, never trusted), or the task's receipt journal's
+# own profile. Never an environment variable a CLI can set. Twin: strong_landing_task.
+function Test-MoeStrongLandingTask([string]$TaskId, [string]$GitDir) {
+    if ($TaskId -ceq $preflightTaskId -and $script:PinnedAttemptProfile -ceq 'verified-local') { return $true }
+    $newest = $null; $strong = $false; $files = @()
+    try { $files = @(Get-ChildItem -LiteralPath (Join-Path $projectPath '.moe/attempts') -Filter '*.json' -ErrorAction Stop) } catch { }
+    foreach ($f in $files) {
+        try { $a = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        $g = Get-MoeProp $a 'generation'
+        if ((Get-MoeProp $a 'taskId') -cne $TaskId -or -not ($g -is [int] -or $g -is [long])) { continue }
+        $s = (Get-MoeProp (Get-MoeProp $a 'executionPolicySnapshot') 'profile') -ceq 'verified-local'
+        # A generation tie counts as strong: fail closed.
+        if ($null -eq $newest -or $g -gt $newest -or ($g -eq $newest -and $s)) { $newest = $g; $strong = $s }
+    }
+    if ($strong) { return $true }
+    $journal = Get-MoeReceiptJournalPath $GitDir $TaskId
+    try { return [bool]($journal -and (Get-MoeProp ([IO.File]::ReadAllText($journal) | ConvertFrom-Json -ErrorAction Stop) 'profile') -ceq 'verified-local') } catch { return $false }
+}
+
+# Under the strong profile only a verified completion moves the target: record
+# the checkpoint's refusal. No byte, index entry, ref, rescue ref or baseline
+# row is touched, so the bytes stay for that completion. Twin: landing_refuse_strong.
+function Send-MoeStrongRefusal([string]$TaskId, [string]$Kind, [string]$Status, [string]$Sid, [string]$Top, $CliExit = $null) {
+    $branch = ''
+    $r = Invoke-MoeGit -Top $Top -GitArgs @('symbolic-ref', '--short', '-q', 'HEAD')
+    if ($r.Rc -eq 0) { $branch = ($r.Out -join '').Trim() }
+    if (-not $branch) {
+        $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--abbrev-ref', 'HEAD')
+        if ($r.Rc -eq 0) { $branch = ($r.Out -join '').Trim() }
+    }
+    $detail = "it runs under the strong profile (verified-local), where only a verified completion moves $branch"
+    Write-Host "[WARN] MOE_COMMIT_REFUSED_STRONG_CHECKPOINT: task $TaskId -- $detail; its bytes and baseline stay for that completion (no ref, rescue ref or index written)." -ForegroundColor Yellow
+    $rec = @{ taskId = $TaskId; outcome = 'refused'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; code = 'MOE_COMMIT_REFUSED_STRONG_CHECKPOINT'; message = $detail }
+    if ($null -ne $CliExit) { $rec.cliExitCode = $CliExit }
+    Send-MoeRecordCommit $rec | Out-Null
+}
+
 function Test-MoeDenyPath([string]$TopPath, [string]$XY, [string]$Rel, [hashtable]$Settings) {
     $k = Get-MoePathKey $TopPath
     $r = Get-MoePathKey $Rel
@@ -5286,6 +5340,13 @@ function Invoke-MoeLanding {
             Send-MoeOwnerRefusal $TaskId $Kind $Status $Sid $guard $CliExit
             return $res
         }
+        # CQ-V08b: every checkpoint path (post-flight exit, pre-flight and idle
+        # recoveries) lands through here, so this one gate holds them all. Twin: run_landing.
+        if ($Kind -eq 'checkpoint' -and (Test-MoeStrongLandingTask $TaskId $Git.GitDir)) {
+            $res.Outcome = 'refused'; $res.Code = 'MOE_COMMIT_REFUSED_STRONG_CHECKPOINT'
+            Send-MoeStrongRefusal $TaskId $Kind $Status $Sid $Git.Top $CliExit
+            return $res
+        }
         if (-not $Title -and $scope.Title) { $Title = $scope.Title }
         $baselinePath = Get-MoeBaselinePath $Git.GitDir $TaskId
         $bl = Read-MoeBaseline $baselinePath
@@ -5732,7 +5793,7 @@ function Invoke-MoeLanding {
             if ($ledgerAcked) { $receipt.Remove('ledger') }
             $receipt.pushResult = $script:MoePushResult
             Write-MoeReceiptJournal $journal $receipt
-            if (-not $res.ProofUntransferred) { $null = Send-MoeReceipt $journal $receipt }
+            if (-not $res.ProofUntransferred) { $res.ReceiptAcked = Send-MoeReceipt $journal $receipt }
         }
         return $res
     } catch {
@@ -6579,17 +6640,24 @@ function Complete-MoePostflight {
         elseif ($r.Ref -and $r.Sha) { $outcome='rescued' }
         else { $outcome='failed' }
         # CQ-V08: a strong landing finalizes only once its receipt is recorded. While
-        # the journal stays (or its proof did not transfer) the attempt stays
-        # finalizing, which holds qa_approve and every claim of the task, so nothing
-        # reaches DONE and no dependent is released before the replay settles it. Twin: finalize_postflight.
+        # its journal waits on an unacknowledged receipt (or its proof did not
+        # transfer) the attempt stays finalizing, which holds qa_approve and every
+        # claim of the task, so nothing reaches DONE and no dependent is released
+        # before the replay settles it. Twin: finalize_postflight.
         if ($outcome -eq 'landed' -and $script:PinnedAttemptProfile -ceq 'verified-local' -and
-            ($r.ProofUntransferred -or ($r.ReceiptJournal -and (Test-Path -LiteralPath $r.ReceiptJournal)))) {
+            ($r.ProofUntransferred -or (-not $r.ReceiptAcked -and $r.ReceiptJournal -and (Test-Path -LiteralPath $r.ReceiptJournal)))) {
             Write-Host "[WARN] MOE_FINALIZE_DEFERRED_RECEIPT: task $preflightTaskId -- the delivery receipt of $sha is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes." -ForegroundColor Yellow
             $script:MoeFinalizeRc=$true
             return $true
         }
     }
     $script:MoeFinalizeRc=[bool](Send-MoeFinalize $outcome $sha)
+    # CQ-V08b: the strong journal goes only once its attempt is closed; a lost
+    # finalize or an attempt still open keeps it for the next replay. Twin: finalize_postflight.
+    if ($script:MoeFinalizeRc -and $outcome -eq 'landed' -and $script:PinnedAttemptProfile -ceq 'verified-local' -and $r.ReceiptJournal -and
+        (Get-MoePinnedAttemptPhase) -ceq 'closed') {
+        Remove-Item -LiteralPath $r.ReceiptJournal -Force -ErrorAction SilentlyContinue
+    }
     return $script:MoeFinalizeRc
 }
 

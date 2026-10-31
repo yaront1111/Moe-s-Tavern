@@ -114,6 +114,8 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'receipt-ledger-replay','receipt-rebase-replay','receipt-push-rejected','receipt-foreign-replay',
 'intent-strong','intent-strong-cas','intent-strong-unwritable','intent-strong-nocandidate','intent-legacy-unwritable',
 'reconcile-strong-receipt-lost','reconcile-strong-unreconciled','reconcile-strong-target-moved','reconcile-strong-rewrite','reconcile-strong-rewrite-same-tree','reconcile-strong-no-rebase',
+'reconcile-strong-finalize-lost','strong-checkpoint-held','strong-checkpoint-held-env','strong-checkpoint-held-forged','strong-checkpoint-held-journal',
+'strong-recovery-held','strong-recovery-held-gate',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none','reattach-session',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
 'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running','teardown-protected'];
@@ -198,6 +200,7 @@ if(mode==='hidden-mutation'){get('update-index','--skip-worktree','owned.txt');g
 if(mode==='cleanup-retry')get('worktree','lock','--reason','moe frozen cleanup retry',get('rev-parse','--show-toplevel'));
 if(mode==='dirty-helper'&&!fs.existsSync('helper.txt'))process.exit(19);
 if(mode==='race-fail'&&fs.existsSync('../break-gate.txt'))process.exit(23);
+if(mode==='strong-recovery-held-gate')process.exit(29);
 if(mode.startsWith('interrupt-')){fs.writeFileSync(path.join(dir,'owned.txt'),'late shared\\n');fs.writeFileSync(path.join(dir,'.moe','gate-ready'),'ready');setInterval(()=>{},1000);}
 if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');process.stderr.write('END');process.exit(37);}
 `;
@@ -262,16 +265,20 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
     // execution policy. The hook logs every prepared ref update -- old is the
     // expected-old git was handed, so the CAS -- with the receipt journal as it
     // stood at that instant. A regular file where the journal dir goes makes the
-    // journal unwritable.
-    if(/^(intent|reconcile)-/.test(mode)){const stamp=new Date().toISOString(),hook=path.join(repo,'.git','hooks','reference-transaction');
+    // journal unwritable. CQ-V08b: strong-checkpoint-held-journal pins a legacy
+    // attempt, and only the task's receipt journal says verified-local -- one the
+    // pre-flight replay keeps (it cannot parse it), as it keeps an unsettled one.
+    if(/^(intent|reconcile|strong)-/.test(mode)){const stamp=new Date().toISOString(),hook=path.join(repo,'.git','hooks','reference-transaction');
       write(path.join(nested,'.moe','attempts','attempt-postflight.json'),JSON.stringify({id:'attempt-postflight',generation:7,taskId:'task-postflight',
         workerId:'worker-frozen',runnerId:'worker-frozen',phase:'running',workspace:nested,startedAt:stamp,lastPhaseAt:stamp,
-        executionPolicySnapshot:{version:2,profile:/^(intent|reconcile)-strong/.test(mode)?'verified-local':'legacy',planRevision:3,deliveryPolicy:'local-branch'}}));
+        executionPolicySnapshot:{version:2,profile:/^((intent|reconcile)-)?strong/.test(mode)&&mode!=='strong-checkpoint-held-journal'?'verified-local':'legacy',
+          planRevision:3,deliveryPolicy:'local-branch'}}));
+      if(mode==='strong-checkpoint-held-journal')write(path.join(repo,'.git','moe','receipt','task-postflight.json'),'{"profile":"verified-local"}\n');
       write(hook,['#!/bin/sh','[ "$1" = prepared ] || exit 0','d="$(git rev-parse --git-common-dir)"; j="$d/moe/receipt/task-postflight.json"',
         'while read -r old new ref; do','  if [ -f "$j" ]; then c="$(tr -d \'\\r\\n\' < "$j")"; else c=null; fi',
         '  printf \'{"ref":"%s","old":"%s","new":"%s","journal":%s}\\n\' "$ref" "$old" "$new" "$c" >> "$d/moe-intent-events.jsonl"','done',''].join('\n'));
       fs.chmodSync(hook,0o755);
-      if(mode.endsWith('-unwritable'))write(path.join(repo,'.git','moe','receipt'),'not a directory\n');}
+      if(mode.endsWith('-unwritable')||mode==='strong-recovery-held')write(path.join(repo,'.git','moe','receipt'),'not a directory\n');}
   }
   write(path.join(nested,'helper.txt'),'dirty helper\n');write(path.join(nested,'peer.txt'),'peer bytes\n');
   write(path.join(nested,'.codex','dirty.txt'),'denied bytes\n');
@@ -287,7 +294,7 @@ if(mode==='loop-land-twice'){const n=Number(fs.readFileSync(path.join(dir,'.moe'
  fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned '+(n===2?1:n)+'\\n');}
 else if(mode!=='no-change'&&mode!=='teardown-nothing')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
 const file=path.join(dir,'.moe','attempts','attempt-postflight.json');
-const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed)-/.test(mode)||/^teardown-(running|protected)$/.test(mode);
+const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed|strong-checkpoint)-/.test(mode)||/^teardown-(running|protected)$/.test(mode)||process.env.FROZEN_RUN==='2';
 // reattach-sidecar/-refused: a daemon restart parks the attempt while this
 // session runs, and the session goes on once the wrapper reattached it (or once
 // the wait runs out, as under a restart nobody reattached). reattach-preflight
@@ -323,9 +330,14 @@ if(mode==='closed-attempt'||mode==='freed-closed'||qaClaimed)a.phase='closed';if
 const stamp=new Date().toISOString();
 if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json'),JSON.stringify({id:'attempt-qa',generation:8,taskId:'task-postflight',
  workerId:'qa-frozen',runnerId:'qa-frozen',phase:'running',workspace:dir,startedAt:stamp,lastPhaseAt:stamp}));
+// strong-checkpoint-held-forged: the CLI writes a newer, legacy attempt record of
+// its task; the profile its wrapper pinned at pre-flight still holds the exit.
+if(mode==='strong-checkpoint-held-forged')fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-forged.json'),JSON.stringify({id:'attempt-forged',generation:8,
+ taskId:'task-postflight',workerId:'worker-forged',runnerId:'worker-forged',phase:'closed',workspace:dir,startedAt:stamp,lastPhaseAt:stamp,
+ executionPolicySnapshot:{version:2,profile:'legacy',planRevision:3,deliveryPolicy:'local-branch'}}));
 if(mode.endsWith('-unpinned')||mode==='freed-corrupt-sibling')fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
 if(mode==='teardown-no-baseline')fs.rmSync(${JSON.stringify(baselineFile)},{force:true});
-if(mode==='teardown-protected')fs.copyFileSync(${JSON.stringify(baselineFile)},path.join(dir,'.moe','baseline-at-cli'));
+if(mode==='teardown-protected'||mode.startsWith('strong-checkpoint-'))fs.copyFileSync(${JSON.stringify(baselineFile)},path.join(dir,'.moe','baseline-at-cli'));
 if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|protected)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
  const until=Date.now()+120000,wait=setInterval(()=>{if(fs.existsSync(ready+'.sent')||Date.now()>until)clearInterval(wait);},100);}
 `);
@@ -344,7 +356,8 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|pro
     FAKE_EVIDENCE_MODE:mode,FAKE_CTX_IS_EPIC_FINAL:mode==='deferred'?'false':'true'};
   // CQ-V08 arms reuse the fake daemon's receipt knobs: a refused receipt, or a crash at the held ledger row.
   env.FAKE_EVIDENCE_MODE={'reconcile-strong-receipt-lost':'receipt-refused','reconcile-strong-unreconciled':'receipt-refused',
-    'reconcile-strong-rewrite':'receipt-ledger-replay','reconcile-strong-rewrite-same-tree':'receipt-ledger-replay'}[mode]||mode;
+    'reconcile-strong-rewrite':'receipt-ledger-replay','reconcile-strong-rewrite-same-tree':'receipt-ledger-replay',
+    'reconcile-strong-finalize-lost':'finalize_attempt-null'}[mode]||mode;
   if(mode.startsWith('race-')||mode==='reconcile-strong-target-moved')env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';
   // A peer lands an EMPTY commit before the CAS: new base, identical rebuilt tree.
   if(mode==='receipt-same-tree-race'||mode==='intent-strong-cas'){write(race,"require('child_process').execFileSync('git',['commit','--allow-empty','-qm','peer-empty']);");
@@ -357,7 +370,10 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|pro
     [wrapper,'--project',nested,'--worker-id','worker-frozen','--role','worker','--team','Smoke','--no-start-daemon',
     '--command',cli,'--no-loop','--poll-interval','0'];
 
-  if(/^(checkpoint|manual)-/.test(mode)||/^teardown-(running|protected)$/.test(mode))env.FAKE_TASK_STATUS='WORKING';
+  if(/^(checkpoint|manual|strong-checkpoint)-/.test(mode)||/^teardown-(running|protected)$/.test(mode))env.FAKE_TASK_STATUS='WORKING';
+  // A CLI-visible variable that claims the legacy profile changes nothing: the
+  // wrapper reads the profile only from wrapper- and daemon-written records.
+  if(mode==='strong-checkpoint-held-env'){env.MOE_EXECUTION_PROFILE='legacy';env.PINNED_ATTEMPT_PROFILE='legacy';}
   if(mode==='teardown-protected')env.FAKE_SCOPE_ASSIGNEE='worker-live';
   if(mode.startsWith('freed-'))env.FAKE_TASK_STATUS='BLOCKED';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
@@ -655,6 +671,21 @@ exit "$rc"
         state:['rebase-merge','rebase-apply'].some(d=>fs.existsSync(path.join(repo,'.git',d))),receipt:[r.targetAfter,/^push failed: /.test(String(r.pushResult))],
         finals:finals.map(f=>[f.args.outcome,f.args.landedRevision])},
         {rebased:false,exact:1,tree:c1.treeSha,state:false,receipt:[after,true],finals:[['landed',after]]},log);
+    }else if(mode==='reconcile-strong-finalize-lost'){
+      // CQ-V08b: the receipt is accepted, then every finalize is lost. The strong journal
+      // stays; the replay re-sends that receipt, THEN finalizes that landing once, and never lands again.
+      const phase=()=>JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json'))).phase;
+      assert.deepEqual({finals:finals.map(f=>[f.args.outcome,f.args.landedRevision]),receipts:receipts.map(r=>r.args.targetAfter),
+        journal:fs.existsSync(journal)&&JSON.parse(read(journal)).targetAfter,phase:phase(),exhausted:said('finalize_attempt acknowledgement exhausted'),
+        deferred:said('MOE_FINALIZE_DEFERRED_RECEIPT'),completions:completions(),rows:ledgerRows().length},
+        {finals:Array(3).fill(['landed',after]),receipts:[after],journal:after,phase:'finalizing',exhausted:1,deferred:0,completions:[after],rows:1},log);
+      const n=rpc.length,reflog=reflogOf();env.FAKE_EVIDENCE_MODE=mode;
+      const {log2,rpc2}=replay(args),tail=rpc2.slice(n).filter(r=>['record_commit','record_delivery_receipt','finalize_attempt'].includes(r.tool)),f=tail[1]?.args||{};
+      assert.deepEqual({tail:tail.map(r=>r.tool),resent:tail[0]?.args,final:[f.attemptId,f.generation,f.workerId,f.outcome,f.landedRevision],
+        head:git(repo,'rev-parse','moe/frozen'),reflog:reflogOf(),journal:fs.existsSync(journal),phase:phase(),completions:completions(),rows:ledgerRows().length,
+        evidence:rpc2.filter(r=>r.tool==='record_candidate'||r.tool==='record_check_run').length},
+        {tail:['record_delivery_receipt','finalize_attempt'],resent:receipts[0].args,final:['attempt-postflight',7,'worker-frozen','landed',after],
+        head:after,reflog,journal:false,phase:'closed',completions:[after],rows:1,evidence:candidates.length+checks.length},log2);
     }else{
       // DoD3: run 1 died at its ledger row; the branch then carries the landing's
       // trailers on a copy. A copy of another tree gets nothing; the same tree is that landing.
@@ -670,6 +701,54 @@ exit "$rc"
       assert.deepEqual({warned:run2,tail,head:git(repo,'rev-parse','moe/frozen'),journal:fs.existsSync(journal)?read(journal):null},
         same?{warned:0,tail:[['record_commit',copy],['record_delivery_receipt',after],['finalize_attempt','landed '+copy]],head:copy,journal:null}
           :{warned:1,tail:[],head:copy,journal:j1},log2);
+    }
+    count++;continue;
+  }
+  if(mode.startsWith('strong-')){
+    // CQ-V08b: under the strong profile only a verified completion moves the target.
+    // A checkpoint -- this session's exit, or a later pre-flight's recovery -- is
+    // refused before any effect: no ref, rescue ref, index or baseline write.
+    const code='MOE_COMMIT_REFUSED_STRONG_CHECKPOINT',warned=s=>s.split(code+': task task-postflight --').length-1,
+      moved=()=>rows(path.join(repo,'.git','moe-intent-events.jsonl')).filter(e=>e.ref==='refs/heads/moe/frozen'||e.ref.startsWith('refs/moe/rescue/')),
+      rescues=()=>git(repo,'for-each-ref','--format=%(refname) %(objectname)','refs/moe/rescue/'),
+      commits=r=>r.filter(x=>x.tool==='record_commit').map(x=>[x.args.outcome,x.args.kind,x.args.code]);
+    // The exit is held by: -held the pin and the record; -env the same, its
+    // environment forged; -forged the pin alone, against a newer forged legacy
+    // record; -journal the receipt journal alone, under a legacy pin and record.
+    if(mode.startsWith('strong-checkpoint-')){
+      const line=rows(path.join(nested,'.moe','messages','chan-general.jsonl')).map(m=>String(m.content))
+        .filter(s=>s.includes('worker session ended: task=task-postflight')).pop()||'';
+      assert.deepEqual({warned:warned(log),commits:commits(rpc),line:line.includes(' outcome=refused code='+code),head:after,reflog:reflogOf(),moved:moved(),
+        rescue:rescues(),owned:read(owned),index:fs.readFileSync(index).equals(beforeIndex),
+        baseline:fs.readFileSync(baselineFile).equals(fs.readFileSync(path.join(nested,'.moe','baseline-at-cli'))),
+        evidence:candidates.length+checks.length+seen.length+finals.length},
+        {warned:1,commits:[['refused','checkpoint',code]],line:true,head:before,reflog:before,moved:[],
+        rescue:'',owned:'frozen owned\n',index:true,baseline:true,evidence:0},log);
+    }else{
+      // Run 1 ends a strong completion unlanded: its journal unwritable, or its gate
+      // failed and parked the bytes on a rescue ref. Run 2 (journal writable again)
+      // lands nothing, and the rescue ref stays unmoved.
+      const gate=mode.endsWith('-gate'),refs1=rescues(),moved1=moved().length,reflog=reflogOf(),
+        phase=()=>JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json'))).phase;
+      assert.deepEqual({code:rpc.filter(r=>r.tool==='record_commit').at(-1)?.args.code,finals:finals.map(f=>f.args.outcome),phase:phase(),head:after,
+        rescue:refs1.split('\n').filter(Boolean).length,baseline:fs.existsSync(baselineFile)},
+        {code:gate?'MOE_COMMIT_FAILED_GATE':'MOE_COMMIT_REFUSED_INTENT_UNWRITABLE',finals:[gate?'rescued':'failed'],phase:'closed',head:before,
+        rescue:gate?1:0,baseline:true},log);
+      if(!gate)fs.rmSync(path.join(repo,'.git','moe','receipt'));
+      const n=rpc.length,second=cp.spawnSync(engine,args,{env:{...env,FAKE_TASK_STATUS:'WORKING',FROZEN_RUN:'2'},encoding:'utf8',
+        timeout:Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)*1000,maxBuffer:4*1024*1024});
+      const log2=(second.stdout||'')+(second.stderr||'');write(path.join(root,mode+'.log'),log+log2);
+      assert.equal(second.signal,null,log2);assert.ok(second.status!==null,log2);
+      // The gate failure leaves its baseline lingering, so run 2 refuses twice: the
+      // pre-flight recovery of those bytes, then its own exit. A V07 refusal settles
+      // its baseline instead (landed=1, the bytes carried as the task's own), so run 2
+      // has nothing to recover and refuses only its exit checkpoint of those bytes.
+      const recovering=log2.indexOf(win?'a previous session of task task-postflight ended without landing':'lingering baseline for task-postflight');
+      assert.deepEqual({recovering:recovering>=0&&recovering<log2.indexOf(code),warned:warned(log2),recovered:log2.includes('MOE_CHECKPOINT_RECOVERED'),
+        commits:commits(rows(path.join(nested,'.moe','evidence-rpcs.jsonl')).slice(n)),head:git(repo,'rev-parse','moe/frozen'),reflog:reflogOf(),
+        rescue:rescues(),moved:moved().length,owned:read(owned)},
+        {recovering:gate,warned:gate?2:1,recovered:false,commits:Array(gate?2:1).fill(['refused','checkpoint',code]),head:before,reflog,
+        rescue:refs1,moved:moved1,owned:'frozen owned\n'},log2);
     }
     count++;continue;
   }
