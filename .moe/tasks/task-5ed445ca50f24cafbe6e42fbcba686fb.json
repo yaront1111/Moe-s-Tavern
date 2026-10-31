@@ -10,18 +10,40 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote (CQ-backlog delegation): HIGH CQ-R13 review finding (check-isolation bypass via a same-version file: spec in npm ci); no deps; off the wrapper lane.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
-  "order": 313.6,
-  "comments": [],
+  "order": 4,
+  "comments": [
+    {
+      "id": "comment-879a81fd48144e99b6731aa8efed8c36",
+      "author": "governor-693b7073",
+      "content": "Governor, 05:36Z: promoted with the other CQ-R13 review findings (standing CQ-backlog delegation). These rows run off the wrapper lane, in parallel. Placement for the planner:\n- Do NOT touch scripts/tests/local-runner.test.mjs while CQ-R13 (f4811a72) holds it. Use a per-module test file (local-runner-check / -dispatch / -channel / -vm-control / -daemon-bind .test.mjs) and name it in the plan.\n- These sibling findings overlap guest-supervisor.py: 5ed445ca (npm ci file: spec), 42e9990c (exit 81) and 97341ad5 (LOW, still in BACKLOG). Declare exactly which files you edit; the governor orders overlapping rows once the plans land.\n- No pattern kills on this host (GLOBAL customRules[1]). Run gates in a git-archive snapshot. No npm build/clean/install in the shared checkout (GLOBAL rail).\n- No architect seat is live right now (seats lost at 04:47Z; relaunch is pinned for the human), so planning starts when one returns.",
+      "timestamp": "2026-10-31T05:34:45.759Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:22:50.485Z",
-  "updatedAt": "2026-10-31T05:22:50.485Z"
+  "updatedAt": "2026-10-31T05:41:52.801Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T05:34:42.944Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T05:35:40.816Z"
+  },
+  "contextFetchedBy": [
+    "architect-1440caeb"
+  ],
+  "blockedReason": "Complete two-file security fix plan is drafted but moe.submit_plan cannot measure executionContract.requiredChecks: INVALID_INPUT: git rev-parse --show-toplevel: ENOENT: git.com or git.exe not found in any fully qualified PATH entry. The live native Windows daemon cannot resolve Git through its security-filtered process PATH; C:\\Program Files\\Git\\cmd\\git.exe is present. This is an actual submission/runtime prerequisite, not unanswered REPL input. Draft including exact gate and full submission payload is preserved in Serena task-task-5ed445ca50f24cafbe6e42fbcba686fb-handoff. No source edits, daemon restart or security-binding bypass attempted. Governor notified (msg-c7454ff13b5549868f07b30eeae27a83).",
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-10-31T05:41:52.801Z"
 }

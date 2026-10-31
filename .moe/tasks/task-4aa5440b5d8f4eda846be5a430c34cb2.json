@@ -1,0 +1,42 @@
+{
+  "id": "task-4aa5440b5d8f4eda846be5a430c34cb2",
+  "epicId": "epic-be924fb8",
+  "title": "bug: providerDescriptor.contract.test.ts fails 4/23 since be889d73 (WT-05) moved the codex config writer out of the test's anchored codex branches",
+  "description": "Repro: in a git-archive snapshot of be889d73, run `cd packages/moe-daemon && npm ci && npx vitest run src/providers/providerDescriptor.contract.test.ts`. Result: 4 failed | 19 passed. The anchored site is 122 lines where the test expects >200, and 22 shared, 43 emitter and 17 side-specific literals read \"absent\". The full daemon suite fails only this file (4 failed | 6250 passed | 20 skipped). With scripts/moe-agent.{sh,ps1} taken from be889d73^ the file passes 23/23.\nCause: WT-05 moved the codex config writer into write_codex_config() (moe-agent.sh:973) and Write-MoeCodexConfig (moe-agent.ps1:997). Both now sit outside BRANCH_ANCHORS (providerDescriptor.contract.test.ts:60-68), and the anchored codex site shrank from 372 to 200 lines (sh) and from 374 to 228 lines (ps1). Fix: anchor those writers and re-point codexDescriptor's emitter evidence at the worktree-aware literals. Never weaken an assertion. CI's daemon test:coverage gate is red until this lands. Found by CQ-R13 (task-f4811a72) step-4 verification.",
+  "definitionOfDone": [
+    "`npx vitest run src/providers/providerDescriptor.contract.test.ts` in packages/moe-daemon passes 23/23 at the fix commit, with no assertion removed or loosened (the >200-line site floor and every fact check stay)",
+    "The full daemon `npm test`, run in a snapshot outside the live checkout, passes with 0 failed"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote: HIGH regression from WT-05 (be889d73) — providerDescriptor.contract.test.ts 4/23 red, CI daemon gate red. Daemon test-only fix, off the wrapper lane; dependsOn 7db14e2d (lane head editing the codex branches the test anchors).",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 323.7,
+  "comments": [
+    {
+      "id": "comment-f9d5b957b67b4c4bbe1dc14eb1bba084",
+      "author": "governor-693b7073",
+      "content": "Governor, 05:43Z: promoted HIGH (a regression that keeps CI's daemon test:coverage red).\n\nPlacement: this row edits daemon files only (providerDescriptor.contract.test.ts, plus codexDescriptor if its emitter evidence moves), so it is off the wrapper lane. It does READ scripts/moe-agent.{sh,ps1}. It dependsOn 7db14e2d, the lane head now, because that row is editing the wrappers' codex launch and witness paths. Anchor on its landed shape, not today's.\n\nGuidance:\n- Make the anchors follow the named writer functions (write_codex_config / Write-MoeCodexConfig) rather than line spans that the next lane rows will shift. Keep every assertion, including the >200-line floor, as the DoD says.\n- Gates: run the full daemon npm test in a git-archive or clone snapshot, never in the shared checkout (GLOBAL rail). No pattern kills (GLOBAL customRules[1]).\n- After this lands, any later lane row that moves the codex writer must keep this file green.",
+      "timestamp": "2026-10-31T05:41:26.279Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T05:40:42.351Z",
+  "updatedAt": "2026-10-31T05:41:26.311Z",
+  "dependsOn": [
+    "task-7db14e2df19949a8bfdb150e0f29ffcb"
+  ],
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T05:41:26.311Z",
+    "seq": 1
+  }
+}
