@@ -4,12 +4,20 @@
 // non-elevated CIM query). HypervisorPresent can be true where only the Virtual Machine Platform is on
 // (for example Home editions), and hcs launches still fail there; R06 bounds those retries. Satisfied
 // prerequisites are NOT readiness or isolation certification: real-hardware evidence is CQ-R13.
+// The client is pinned, because libuv looks a bare name up in the current directory first (.com, then .exe) and PATH
+// order is not certified. canonical/multipass v1.17.0 packaging/windows/wix: Package.wxs names the package "Multipass",
+// with INSTALLFOLDER under ProgramFiles6432Folder and BinFolder 'bin' (the WixUI_InstallDir dialog can move it);
+// CLIClientComponents.wxs installs bin\multipass.exe and appends [INSTALLFOLDER]bin LAST to the user or system PATH.
+// A client outside the default folder reports PROVIDER_NOT_FOUND (fail closed).
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { runDoctor } from './doctor.mjs';
 import { MAX_PROBE_BUFFER, MAX_PROBE_TIMEOUT_MS } from './multipass.mjs';
 
+// A drive-absolute environment root (letter, colon, backslash), else the default: never relative, UNC or blank.
+const driveRoot = (value, fallback) => (/^[A-Za-z]:\\/.test(value ?? '') ? value : fallback);
+const EXECUTABLE = path.win32.join(driveRoot(process.env.ProgramFiles, 'C:\\Program Files'), 'Multipass', 'bin', 'multipass.exe');
 const execute = promisify(execFile);
 const HYPERVISOR_QUERY = ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance -ClassName Win32_ComputerSystem).HypervisorPresent'];
 // [id, requiresElevation, operator action, the doctor codes that prove it unmet]
@@ -26,8 +34,7 @@ const HYPER_V = { id: 'hyper-v', requiresElevation: true, action: 'Enable Hyper-
 
 /** true or false only for an exact PowerShell answer; any failure or other output is unknown (null). */
 export async function probeHypervisor({ run = execute } = {}) {
-  const root = /^[A-Za-z]:\\/.test(process.env.SystemRoot ?? '') ? process.env.SystemRoot : 'C:\\Windows';
-  const powershell = path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const powershell = path.win32.join(driveRoot(process.env.SystemRoot, 'C:\\Windows'), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   try {
     const { stdout } = await run(powershell, [...HYPERVISOR_QUERY], {
       encoding: 'utf8', shell: false, windowsHide: true, timeout: MAX_PROBE_TIMEOUT_MS, maxBuffer: MAX_PROBE_BUFFER, killSignal: 'SIGKILL',
@@ -44,7 +51,7 @@ export async function probeHypervisor({ run = execute } = {}) {
 async function prerequisites({
   provider = {}, doctor = runDoctor, hypervisor = probeHypervisor, host = { platform: process.platform, arch: process.arch },
 } = {}) {
-  const report = await doctor({ host, executable: provider.executable, run: provider.run });
+  const report = await doctor({ host, executable: provider.executable ?? EXECUTABLE, run: provider.run });
   const providerReady = report?.providerReady === true;
   const code = typeof report?.code === 'string' ? report.code : null;
   // An unsupported host never gets a PowerShell probe.
@@ -60,4 +67,4 @@ async function prerequisites({
   };
 }
 
-export const windowsPlatform = Object.freeze({ id: 'win32', arch: 'x64', prerequisites });
+export const windowsPlatform = Object.freeze({ id: 'win32', arch: 'x64', executable: EXECUTABLE, prerequisites });

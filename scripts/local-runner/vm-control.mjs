@@ -13,7 +13,7 @@ import { open } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { hostPrerequisites } from './cli.mjs';
+import { hostPrerequisites, platformFor } from './cli.mjs';
 import { canonicalProjectPath, loopbackDaemonHost, MAX_DAEMON_INFO_BYTES } from './guest-session.mjs';
 import { cleanupOwned, createLedger, queryOwnedInstance, reconcileOwned } from './lifecycle.mjs';
 
@@ -156,10 +156,13 @@ export async function runVmControl(argv, { write = text => process.stdout.write(
   }
   let line;
   try {
+    // This host's pinned client unless the caller names one, never a bare `multipass`; a host without one refuses first.
+    const pinned = { ...provider, executable: provider.executable ?? platformFor(process.platform)?.executable };
+    if (pinned.executable === undefined) throw controlError('VM_CONTROL_FAILED');
     const ledger = deps.ledger ?? createLedger(ownedLedgerDir(project));
-    const report = command === 'status' ? await statusReport({ ledger, provider, prerequisites: deps.prerequisites })
-      : command === 'reconcile' ? await reconcileReport({ ledger, provider })
-        : await cleanupReport({ ledger, provider, call: deps.call ?? mcpCaller(project) });
+    const report = command === 'status' ? await statusReport({ ledger, provider: pinned, prerequisites: deps.prerequisites })
+      : command === 'reconcile' ? await reconcileReport({ ledger, provider: pinned })
+        : await cleanupReport({ ledger, provider: pinned, call: deps.call ?? mcpCaller(project) });
     line = JSON.stringify(report);
     if (Buffer.byteLength(line, 'utf8') >= MAX_REPORT_BYTES) line = JSON.stringify({ code: 'VM_CONTROL_REPORT_TOO_LARGE' });
   } catch { line = JSON.stringify({ code: 'VM_CONTROL_FAILED' }); } // only a fixed code: no path, stack, key or stderr

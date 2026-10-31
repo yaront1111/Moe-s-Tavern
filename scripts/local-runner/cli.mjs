@@ -51,7 +51,8 @@ export async function hostPrerequisites({ executable, cacheDir } = {}, { platfor
 
 async function reportFor(parsed, doctor, prerequisites) {
   if (parsed === null) return { code: 'CLI_INPUT_INVALID', providerReady: false, executionReady: false, message: USAGE };
-  if (parsed.command === 'doctor') return doctor(parsed.options);
+  // This host's pinned client unless --executable names one: never a bare `multipass`.
+  if (parsed.command === 'doctor') return doctor({ executable: platformFor(process.platform)?.executable, ...parsed.options });
   try {
     return await prerequisites(parsed.options);
   } catch {

@@ -5,6 +5,7 @@
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { platformFor } from './cli.mjs';
 import { jobFrame, scopeRequest } from './guest-bridge.mjs';
 import { endAgentJobs, MAX_RESPONSE_BYTES, runGuestSession } from './guest-session.mjs';
 import { isOwnedInstanceName, jobLeaseResourceId } from './lifecycle.mjs';
@@ -38,12 +39,13 @@ function parse(input) {
     const { name: key, value } = exactKeys(credential, ['name', 'value']) ? credential : {};
     const copy = Object.freeze({ cli, credential: Object.freeze({ name: key, value }) });
     jobFrame({ cli, role: frozen.role, credential: copy.credential });
-    const kit = isRecord(provider) ? Object.freeze({ ...provider }) : null; // checked and used as this one copy
+    // Checked and used as this one copy, with this host's pinned client unless the caller names one: never a bare `multipass`.
+    const kit = isRecord(provider) ? Object.freeze({ ...provider, executable: provider.executable ?? platformFor(process.platform)?.executable }) : null;
     const sessionId = `${frozen.workerId}@${new Date().toISOString()}#${randomBytes(8).toString('hex')}`;
     if (isOwnedInstanceName(name) && typeof daemonInfoPath === 'string' && path.isAbsolute(daemonInfoPath) && !CONTROL.test(daemonInfoPath)
       && [forward, onOutput, onObservation].every(fn => typeof fn === 'function') && [sleep, kit?.run, kit?.spawn]
         .every(fn => fn === undefined || typeof fn === 'function') && kit
-      && (kit.executable === undefined || usable(kit.executable)) && (signal === undefined || signal instanceof AbortSignal)
+      && usable(kit.executable) && (signal === undefined || signal instanceof AbortSignal)
       && Number.isSafeInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= 60_000 && sessionId.length <= 255) {
       return { name, binding: frozen, job: copy, sessionId, daemonInfoPath, forward, onOutput, onObservation, signal, timeoutMs,
         provider: kit, sweep: sleep ? { sleep } : {}, resourceId: jobLeaseResourceId(name) };

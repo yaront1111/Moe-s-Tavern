@@ -2510,7 +2510,7 @@ test('Windows provisioning keeps its own multipass client and ignores the cache 
   const executables = new Set();
   const run = (executable, args, options) => { executables.add(executable); return h.fake.run(executable, args, options); };
   assert.deepEqual(await provisionWith(h, { provider: { run } }), provisioned());
-  assert.deepEqual([...executables], ['multipass']);
+  assert.deepEqual([...executables], [windowsPlatform.executable]);
 });
 
 test('the CLI selects the Linux platform module and no other host gains one', () => {
@@ -3555,7 +3555,7 @@ test('WC1 writer-containment makes the other job\'s home, installs the pinned to
   assert.deepEqual(await h.certify(), certification());
   const query = lifecycleOptions(QUERY_TIMEOUT_MS);
   assert.deepEqual(h.ops, [['home', inGuest(GUEST_EXECS.home), query], ['toolchain', { arch: 'x64', cacheDir: path.join(h.workDir, 'images') }],
-    ['install', { name: GUEST, toolchain: TOOLCHAIN_STUB, provider: { ...h.deps.provider, executable: undefined }, timeoutMs: 120_000 }],
+    ['install', { name: GUEST, toolchain: TOOLCHAIN_STUB, provider: { ...h.deps.provider, executable: windowsPlatform.executable }, timeoutMs: 120_000 }],
     ['probe', inGuest(GUEST_EXECS.probe), query], ['replace', inGuest(GUEST_EXECS.replace), query]]);
   // The supervisor's own paths the targets name: its manifest, sessions and toolchain, and a check job's PATH.
   const supervisor = readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url), 'utf8');
@@ -3644,7 +3644,7 @@ test('LC1 cancellation aborts its own check VM\'s session at its first stdout by
   assert.deepEqual(await h.certify(), certification());
   const sessions = h.router.calls.filter(({ proc }) => proc.frame?.id === 'certify-cancel');
   assert.deepEqual([sessions.length, sessions[0].args, sessions[0].proc.frame, sessions[0].proc.stdin.destroyed, sessions[0].proc.kills, log],
-    [1, ['multipass', checkArgv(nameAt(2)), PIPES], checkOf('certify-cancel', CB_EOF), true, [], ['stdout', 'eof']]);
+    [1, [windowsPlatform.executable, checkArgv(nameAt(2)), PIPES], checkOf('certify-cancel', CB_EOF), true, [], ['stdout', 'eof']]);
   const [[input, result, main]] = seen;
   assert.deepEqual([seen.length, result.outcome, result.vm, result.instance, main, input.signal.aborted, input.check, input.dependencies, input.budgetMs, validOwner(input.owner)],
     [1, 'infra-failure', 'deleted', nameAt(2), 'owned', true, { id: 'certify-cancel', command: CB_EOF, protected: [] }, [], 5_000, true]);
@@ -5316,7 +5316,7 @@ test('AJ3 a clean job: lease, verified sweep, no mounts, one bridge session with
   assert.deepEqual(result, { sessionId, observation: EXITED, failure: null, terminationVerified: true, lease: 'released', executionReady: false });
   assert.deepEqual([Object.isFrozen(result), h.observations, h.log, h.fake.unexpected], [true, [EXITED], CLEAN_LOG, []]);
   const [proc] = h.procs;
-  assert.deepEqual(h.procs.flatMap(({ calls }) => calls), [['multipass', bridgeArgv(GUEST), PIPES]]);
+  assert.deepEqual(h.procs.flatMap(({ calls }) => calls), [[platformFor(process.platform).executable, bridgeArgv(GUEST), PIPES]]);
   const [job, ...replies] = proc.frames();
   assert.deepEqual(job, { kind: 'job', version: 1, cli: 'claude', role: 'worker', credential: JOB.credential });
   assert.equal(proc.written[0].equals(jobFrame({ cli: 'claude', role: 'worker', credential: JOB.credential })), true);
@@ -5508,15 +5508,16 @@ test('CJ1 invalid input or an aborted signal refuses before any ledger or provid
 test('CJ2 a clean run provisions, materializes, reports the environment, runs the approved check and deletes its own VM', async () => {
   const signal = new AbortController().signal;
   const h = checkHarness();
+  const pinned = { ...h.input.provider, executable: windowsPlatform.executable };
   const result = await runCheckJob({ ...h.input, signal }, h.deps);
   assert.deepEqual([result, Object.isFrozen(result), h.log, h.seen.onReady], [ranWith(PASSED_RUN), true, FULL_LOG, identityOf()]);
   const { ledger, ...provisioned } = h.seen.provision;
-  assert.deepEqual(provisioned, { platform: h.input.platform, owner, cacheDir: '/var/cache/moe', supervisor: SUPERVISOR, credential: CREDENTIAL, provider: h.input.provider });
-  assert.deepEqual([ledger === h.ledger, h.seen.reserve, h.seen.remove], [false, owner, { ledger, name: GUEST, owner, provider: h.input.provider }]);
-  assert.deepEqual(h.seen.materialize, { name: GUEST, snapshot: CHECK_SNAPSHOT, provider: h.input.provider });
+  assert.deepEqual(provisioned, { platform: h.input.platform, owner, cacheDir: '/var/cache/moe', supervisor: SUPERVISOR, credential: CREDENTIAL, provider: pinned });
+  assert.deepEqual([ledger === h.ledger, h.seen.reserve, h.seen.remove], [false, owner, { ledger, name: GUEST, owner, provider: pinned }]);
+  assert.deepEqual(h.seen.materialize, { name: GUEST, snapshot: CHECK_SNAPSHOT, provider: pinned });
   assert.deepEqual([h.seen.toolchain, h.seen.installToolchain, h.seen.dependencies, h.seen.installDependencies],
-    [{ arch: 'x64', cacheDir: '/var/cache/moe' }, { name: GUEST, toolchain: TOOLCHAIN, provider: h.input.provider }, undefined, undefined]);
-  assert.deepEqual(h.seen.session, { name: GUEST, check: CHECK, provider: h.input.provider, budgetMs: 60_000, timeoutMs: 1_000, signal });
+    [{ arch: 'x64', cacheDir: '/var/cache/moe' }, { name: GUEST, toolchain: TOOLCHAIN, provider: pinned }, undefined, undefined]);
+  assert.deepEqual(h.seen.session, { name: GUEST, check: CHECK, provider: pinned, budgetMs: 60_000, timeoutMs: 1_000, signal });
   assert.deepEqual([h.seen.session.signal === signal, h.seen.session.provider === h.seen.materialize.provider], [true, true]);
   // Two concurrent runs of one owner each reserve, check and delete only their own VM.
   const names = [nameAt(1), nameAt(2)];
@@ -5844,7 +5845,7 @@ test('CJ9 only a passed session is verified, after it and before the delete, and
     const h = checkHarness({ verify: async () => { await wait(2); h.log.push('verified'); return state; } });
     assert.deepEqual([await runCheckJob(h.input, h.deps), h.log, h.seen.verify],
       [ranWith(PASSED_RUN, { workspace: state }), [...UNVERIFIED_LOG.slice(0, -2), 'verify', 'verified', 'remove', 'removed'],
-        { name: GUEST, provider: h.input.provider, timeoutMs: 1_000 }], state);
+        { name: GUEST, provider: { ...h.input.provider, executable: windowsPlatform.executable }, timeoutMs: 1_000 }], state);
   }
   for (const verify of [() => { throw transferError('TRANSFER_MOUNTS_PRESENT'); }, () => Promise.reject(new Error('/private/secret')), () => { throw 'x'; },
     ...['INTACT', 'unverified', undefined, { state: 'intact' }].map(value => () => value)]) {
@@ -5899,6 +5900,7 @@ test('CJ12 the toolchain and the merged view\'s lockfiles are fetched for the gu
   const bytes = text => new Uint8Array(Buffer.from(text));
   for (const arch of ['x64', 'arm64']) {
     const h = checkHarness({ provision: reserving(readyGuest({ image: { source: { ...SOURCE, arch }, provider: { imageHash: PROVIDER_HASH } } })) });
+    const pinned = { ...h.input.provider, executable: windowsPlatform.executable };
     let reads = 0;
     const dirs = ['.', 'pkg'];
     Object.defineProperty(dirs, 0, { enumerable: true, get: () => (++reads === 1 ? '.' : 'gone') }); // read exactly once
@@ -5908,7 +5910,7 @@ test('CJ12 the toolchain and the merged view\'s lockfiles are fetched for the gu
       'materialize', 'installToolchain', 'installDependencies', 'onReady', 'session', 'verify', 'remove', 'removed'], environment, 1], arch);
     assert.deepEqual([h.seen.toolchain, h.seen.dependencies, h.seen.installToolchain, h.seen.installDependencies], [{ arch, cacheDir: '/var/cache/moe' },
       { lockfiles: [{ dir: '.', bytes: bytes('ROOT') }, { dir: 'pkg', bytes: bytes('OVERLAY') }], cpu: arch, cacheDir: '/var/cache/moe' },
-      { name: GUEST, toolchain: TOOLCHAIN, provider: h.input.provider }, { name: GUEST, tree: CACHE.tree, provider: h.input.provider }], arch);
+      { name: GUEST, toolchain: TOOLCHAIN, provider: pinned }, { name: GUEST, tree: CACHE.tree, provider: pinned }], arch);
   }
 });
 
