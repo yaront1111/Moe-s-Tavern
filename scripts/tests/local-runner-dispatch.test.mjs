@@ -8,7 +8,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { dispatchFocusedChecks, landedRunCheck, owedChecks, runDispatchCli } from '../local-runner/check-dispatch.mjs';
+import { runCheckJob } from '../local-runner/check-lifecycle.mjs';
 import { checkEnvironment } from '../local-runner/check-evidence.mjs';
+import { MAX_CHECK_TAIL_BYTES } from '../local-runner/check-session.mjs';
 import { GUEST_RESOURCES } from '../local-runner/guest-bootstrap.mjs';
 import { validateImport } from '../local-runner/source-snapshot.mjs';
 
@@ -284,4 +286,207 @@ test('D: the real dispatch adapter binds only approved lockfiles, with no depend
   await assert.rejects(runCheck(input), { code: 'CHECK_JOB_INPUT_INVALID' });
   assert.equal(provisions, 0);
   assert.deepEqual([(await runCheck({ ...input, dependencies: [] })).failure, provisions], ['PROVISION_SENTINEL', 1]);
+});
+
+// task-12e89395 cleanup visibility: the real runCheckJob over injected, logged steps (remove settles as told), then dispatch.
+const OWNER = { taskId: TASK, attemptId: 'attempt-1', generation: 3 };
+const PASS = { outcome: 'passed', exitCode: 0, signal: null, outputTail: 'ok' };
+const [IMG, PROV, SUP, TOOL] = ['1', '2', '3', '4'].map(c => c.repeat(64));
+const JOB_ENV = checkEnvironment({ sourceImageSha256: IMG, providerImageHash: PROV, supervisorSha256: SUP, resources: GUEST_RESOURCES, toolchainSha256: TOOL,
+  dependencyDigest: null });
+const RESOLVES = Symbol('resolves');
+const REMOVALS = [['deleted', 'deleted'], ['gone', 'delete-failed'], [fail('LIFECYCLE_STATE_UNKNOWN'), 'delete-failed']];
+const reportOf = vm => ({ vm, failure: vm === 'delete-failed' ? 'CHECK_VM_DELETE_FAILED' : null });
+function jobSteps(log, { remove = 'deleted', session = PASS, verify = 'intact', materialize = async () => {} } = {}) {
+  return { provision: async ({ ledger, owner }) => { log.push('create'); return { provisioned: true, instance: (await ledger.reserve(owner)).instance,
+    bootstrapReady: true, failures: [], supervisorSha256: SUP, image: { source: { arch: 'x64', sha256: IMG }, provider: { imageHash: PROV } } }; },
+  toolchain: async () => ({ file: '/t', sha256: TOOL, size: 1, version: '24.22.2' }), materialize, installToolchain: async () => {},
+  session: async () => { log.push('session'); return session; }, verify: async () => verify,
+  remove: async () => {
+    log.push('remove');
+    await new Promise(setImmediate);
+    try { if (remove instanceof Error) throw remove; return remove; } finally { log.push('removed'); }
+  } };
+}
+const jobInput = (log, changes = {}) => ({ platform: {}, owner: OWNER, cacheDir: '/c', supervisor: Buffer.from('s'), credential: Buffer.alloc(32, 7),
+  ledger: { read: async () => null, reserve: async () => ({ instance: 'moe-check-1' }), update: async () => null, recordImage: async () => null },
+  snapshot: { version: 1, tree: TREE, overlay: validateImport([]), base: validateImport([]) }, check: { id: 'unit', command: 'npm test', protected: [] },
+  dependencies: [], budgetMs: 1_000, timeoutMs: 20, onReady: async () => { log.push('onReady'); }, onCleanup: report => { log.push(report); }, ...changes });
+const settled = promise => promise.then(value => ({ value }), error => ({ error }));
+
+test('CL1 runCheckJob tells onCleanup its settled delete once, after remove, and still rejects with onReady\'s own error', async () => {
+  const [boom, frozen] = [new Error(SECRET), Object.freeze(new Error(SECRET))];
+  const hooks = [[async () => {}], [async () => { throw boom; }, boom], [() => Promise.reject(null), null], [() => { throw SECRET; }, SECRET],
+    [async () => { throw frozen; }, frozen], [() => new Promise(() => {}), 'timeout']];
+  for (const [hook, thrown = RESOLVES] of hooks) {
+    for (const [remove, vm] of REMOVALS) {
+      const log = [];
+      const end = await settled(runCheckJob(jobInput(log, { onReady: env => { log.push('onReady'); return hook(env); } }), jobSteps(log, { remove })));
+      const reports = log.filter(entry => typeof entry !== 'string');
+      assert.deepEqual([reports, log.slice(-3), Object.isFrozen(reports[0]), log.includes('session')],
+        [[reportOf(vm)], ['remove', 'removed', reports[0]], true, thrown === RESOLVES], `${String(thrown)} ${vm}`);
+      assert.deepEqual(Object.keys(end), [thrown === RESOLVES ? 'value' : 'error']);
+      if (thrown === RESOLVES) assert.deepEqual([end.value.vm, end.value.outcome], [vm, vm === 'deleted' ? 'passed' : 'inconclusive']);
+      else if (thrown === 'timeout') assert.deepEqual([end.error.code, end.error.message], ['CHECK_READY_TIMEOUT', 'Check job failed: CHECK_READY_TIMEOUT.']);
+      else assert.equal(end.error, thrown);
+    }
+  }
+});
+
+test('CL2 a throwing, rejecting or never-settling onCleanup changes nothing; an invalid one, or an abort, refuses before any step', async () => {
+  const [unhandled, boom] = [[], new Error('hook')];
+  const onUnhandled = reason => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    for (const onCleanup of [() => { throw new Error(SECRET); }, async () => { throw new Error(SECRET); }, () => new Promise(() => {}),
+      () => ({ then() { throw new Error(SECRET); } }), () => Object.defineProperty({}, 'then', { get() { throw new Error(SECRET); } })]) {
+      for (const [onReady, thrown = RESOLVES] of [[async () => {}], [async () => { throw boom; }, boom]]) {
+        const log = [];
+        const end = await settled(runCheckJob(jobInput(log, { onCleanup, onReady }), jobSteps(log, { remove: 'gone' })));
+        assert.deepEqual([end.error ?? RESOLVES, end.value?.vm, log.filter(entry => entry === 'removed').length], [thrown, thrown === RESOLVES ? 'delete-failed' : undefined, 1]);
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 5));
+  } finally { process.off('unhandledRejection', onUnhandled); }
+  assert.deepEqual(unhandled, []);
+  for (const changes of [{ onCleanup: null }, { onCleanup: 'x' }, { onCleanup: {} }, { signal: AbortSignal.abort() }]) {
+    const log = [];
+    await assert.rejects(runCheckJob(jobInput(log, changes), jobSteps(log)), { code: changes.signal ? 'CHECK_ABORTED' : 'CHECK_JOB_INPUT_INVALID' });
+    assert.deepEqual(log, []);
+  }
+});
+
+const JOB_SNAP = { version: 1, tree: TREE, overlay: validateImport([]), base: validateImport([]) };
+const DIAG = 'RUNNER_VM_DELETE_FAILED: VM cleanup was not confirmed; no further checks will be launched.';
+const [FAILED, DELETED] = [reportOf('delete-failed'), reportOf('deleted')];
+// The real landedRunCheck over jobSteps, its ledger in a temp state dir outside the project.
+async function landedSeam(t, log, steps) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'moe-cleanup-')), previous = process.env.MOE_RUNNER_STATE_DIR;
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'project'));
+  process.env.MOE_RUNNER_STATE_DIR = path.join(root, 'state');
+  try { return await landedRunCheck(path.join(root, 'project'), jobSteps(log, steps)); } finally {
+    if (previous === undefined) delete process.env.MOE_RUNNER_STATE_DIR; else process.env.MOE_RUNNER_STATE_DIR = previous;
+  }
+}
+// runDispatchCli over the scripted daemon, its calls logged among the VM steps; one JSON line with no secret or escape byte.
+async function dispatchCli(runCheck, log, { ctx = context({ envs: [JOB_ENV] }), tools } = {}) {
+  const [h, lines] = [harness(ctx, { tools }), []];
+  const call = async (tool, args) => { log.push(tool.slice(4)); return h.call(tool, args); };
+  const exit = await runDispatchCli(['--project', '/srv/project', '--task', TASK, '--commit', TREE], { open: async () => ({ call, close() {} }),
+    exportSnapshot: async () => JOB_SNAP, loadRunCheck: async () => runCheck, write: text => lines.push(text) });
+  assert.deepEqual([lines.length, /SENTINEL|\x1b/.test(lines[0])], [1, false]);
+  return { exit, report: JSON.parse(lines[0]), h };
+}
+const RAN = ['get_context', 'create', 'record_check_dispatch', 'session', 'remove', 'removed', 'record_check_observation'];
+const UNREADY = ['get_context', 'create', 'remove', 'removed'];
+const retryInfra = () => ({ success: true, repair: { action: 'retry-infra' } });
+const lost = n => times(n, () => fail('RUNNER_DISCONNECTED'));
+
+test('CD1 a known failed delete stops the whole dispatch: observed once, never passed, with the fixed diagnostic, and in the CLI report', async t => {
+  const infra = { outcome: 'infra-failure', exitCode: null, signal: null, outputTail: 'boom' };
+  const red = { outcome: 'code-failure', exitCode: 1, signal: null, outputTail: 'red\n' };
+  const timedOut = { outcome: 'timeout', exitCode: null, signal: null, outputTail: '' };
+  for (const [label, steps, tools, trace, observed, stop] of [
+    ['infra + retry-infra', { session: infra }, { 'moe.record_check_observation': [retryInfra] }, RAN, ['infra-failure', -1, `boom\n${DIAG}`], {}],
+    ['passed + intact', {}, {}, RAN, ['inconclusive', 0, `ok\n${DIAG}`], {}],
+    ['code-failure', { session: red, remove: fail('LIFECYCLE_STATE_UNKNOWN') }, {}, RAN, ['code-failure', 1, `red\n${DIAG}`], {}],
+    ['timeout', { session: timedOut }, {}, RAN, ['timeout', -1, DIAG], {}],
+    ['observation lost', {}, { 'moe.record_check_observation': lost(3) }, [...RAN, 'record_check_observation', 'record_check_observation'],
+      ['inconclusive', 0, `ok\n${DIAG}`], { causeCode: 'RUNNER_OBSERVATION_UNRECORDED' }],
+    ['observation refused', {}, { 'moe.record_check_observation': [fail('RUNNER_TOOL_ERROR', 'CHECK_DISPATCH_ALREADY_OBSERVED')] }, RAN,
+      ['inconclusive', 0, `ok\n${DIAG}`], { causeCode: 'RUNNER_TOOL_ERROR', codeName: 'CHECK_DISPATCH_ALREADY_OBSERVED' }],
+  ]) {
+    const log = [];
+    const { exit, report, h } = await dispatchCli(await landedSeam(t, log, { remove: 'gone', ...steps }), log, { tools });
+    const [[d], observations] = [h.of('moe.record_check_dispatch'), h.of('moe.record_check_observation')];
+    assert.deepEqual([exit, log, observations.map(o => [o.outcome, o.exitCode, o.outputTail])], [2, trace, times(observations.length, () => observed)], label);
+    assert.equal(new Set(observations.map(o => o.id)).size, 1, label);
+    const recorded = stop.causeCode ? [] : [{ checkId: 'unit', command: 'npm test', dispatchId: d.id, outcome: observed[0], ...FAILED }];
+    assert.deepEqual(report.results, recorded, label);
+    assert.deepEqual(report.stopped, { ...stop, code: 'RUNNER_VM_DELETE_FAILED', dispatchId: d.id, ...FAILED }, label);
+  }
+});
+
+test('CD2 a deleted VM with an unverified workspace is ordinary inconclusive: its own tail, no stop, later checks still run', async t => {
+  const log = [];
+  const { exit, report, h } = await dispatchCli(await landedSeam(t, log, { verify: 'unverified' }), log);
+  const [[d1, d2], observations] = [h.of('moe.record_check_dispatch'), h.of('moe.record_check_observation')];
+  assert.deepEqual([exit, log, observations.map(o => [o.outcome, o.outputTail])], [2, [...RAN, ...RAN.slice(1)], [['inconclusive', 'ok'], ['inconclusive', 'ok']]]);
+  assert.deepEqual(report, { taskId: TASK, candidateId: 'cand-1', results: [{ checkId: 'unit', command: 'npm test', dispatchId: d1.id, outcome: 'inconclusive', ...DELETED },
+    { checkId: 'gate', command: 'npm run gate', dispatchId: d2.id, outcome: 'inconclusive', ...DELETED }] });
+});
+
+test('CD3 a run rejected before its dispatch is accepted reports the failed delete with its cause, and never an observation', async t => {
+  for (const [label, ctx, tools, trace, cause] of [
+    ['unlisted environment', context({ envs: [ENV] }), () => ({}), UNREADY, { causeCode: 'RUNNER_ENVIRONMENT_NOT_APPROVED' }],
+    ['dispatch refused', undefined, () => ({ 'moe.record_check_dispatch': [fail('RUNNER_TOOL_ERROR', 'CHECK_DEFINITION_NOT_APPROVED')] }),
+      ['get_context', 'create', 'record_check_dispatch', 'remove', 'removed'], { causeCode: 'RUNNER_TOOL_ERROR', codeName: 'CHECK_DEFINITION_NOT_APPROVED' }],
+  ]) {
+    for (const [remove, cleanup] of [['gone', FAILED], ['deleted', DELETED]]) {
+      const log = [];
+      const { exit, report } = await dispatchCli(await landedSeam(t, log, { remove }), log, { ctx, tools: tools() });
+      const { causeCode, ...rest } = cause;
+      const stopped = cleanup === FAILED ? { ...cause, code: 'RUNNER_VM_DELETE_FAILED', ...FAILED } : { ...rest, code: causeCode, ...DELETED };
+      assert.deepEqual([exit, log, report.results, report.stopped], [2, trace, [], stopped], `${label} ${remove}`);
+    }
+  }
+});
+
+test('CD4 deleted infra failures still follow the daemon\'s retries with fresh ids and the cap; a failed delete before any dispatch keeps the job\'s code', async t => {
+  const log = [], infra = { outcome: 'infra-failure', exitCode: null, signal: null, outputTail: 'boom' };
+  const { report, h } = await dispatchCli(await landedSeam(t, log, { session: infra }), log, { tools: { 'moe.record_check_observation': times(20, () => retryInfra) } });
+  const dispatches = h.of('moe.record_check_dispatch');
+  assert.deepEqual([log.filter(entry => entry === 'create').length, new Set(dispatches.map(d => d.id)).size, report.stopped],
+    [11, 11, { code: 'RUNNER_RETRY_LIMIT', dispatchId: dispatches[10].id }]);
+  assert.deepEqual(report.results.map(r => [r.outcome, r.vm, r.failure]), times(11, () => ['infra-failure', 'deleted', null]));
+  for (const [remove, stopped] of [['gone', { code: 'RUNNER_VM_DELETE_FAILED', causeCode: 'CHECK_MATERIALIZE_FAILED', ...FAILED }],
+    ['deleted', { code: 'RUNNER_CHECK_FAILED', vm: 'deleted', failure: 'CHECK_MATERIALIZE_FAILED' }]]) {
+    const unready = [];
+    const { exit, report: summary } = await dispatchCli(await landedSeam(t, unready, { remove, materialize: async () => { throw new Error(SECRET); } }), unready);
+    assert.deepEqual([exit, unready, summary.results, summary.stopped], [2, UNREADY, [], stopped], remove);
+  }
+});
+
+test('CD5 a dispatch answered after the readiness timeout resumes nothing, and two simultaneous dispatches keep their own cleanup', async t => {
+  let release;
+  const [log, late] = [[], new Promise(resolve => { release = resolve; })];
+  const short = input => runCheckJob({ ...jobInput(log), ...input, timeoutMs: 30 }, jobSteps(log, { remove: 'gone' }));
+  const { exit, report } = await dispatchCli(short, log, { tools: { 'moe.record_check_dispatch': [() => late] } });
+  release({ success: true });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual([exit, report.results, report.stopped], [2, [], { code: 'RUNNER_VM_DELETE_FAILED', causeCode: 'RUNNER_CHECK_FAILED', ...FAILED }]);
+  assert.deepEqual(log, ['get_context', 'create', 'record_check_dispatch', 'remove', 'removed']);
+  const [failing, clean] = [[], []];
+  const seams = [await landedSeam(t, failing, { remove: 'gone' }), await landedSeam(t, clean)];
+  const [a, b] = await Promise.all([dispatchCli(seams[0], failing), dispatchCli(seams[1], clean)]);
+  assert.deepEqual([a.exit, a.report.stopped.code, failing.filter(e => e === 'create').length], [2, 'RUNNER_VM_DELETE_FAILED', 1]);
+  assert.deepEqual([b.exit, b.report.stopped, clean, b.report.results.map(r => [r.outcome, r.vm])],
+    [0, undefined, [...RAN, ...RAN.slice(1)], [['passed', 'deleted'], ['passed', 'deleted']]]);
+});
+
+test('CD6 hostile or conflicting cleanup metadata fails closed with fixed codes; a huge multibyte tail keeps the diagnostic within the cap', async t => {
+  const [intact, throwing] = [{ ...PASS, workspace: 'intact' }, new Proxy({}, { get: (_, key) => { if (key !== 'then') throw new Error(SECRET); } })];
+  const seam = (cleanup, result) => async ({ onReady, onCleanup }) => {
+    await onReady(JOB_ENV);
+    onCleanup(cleanup);
+    if (result instanceof Error) throw result;
+    return result;
+  };
+  const stop = { code: 'RUNNER_VM_DELETE_FAILED', ...FAILED }, after = { ...stop, causeCode: 'RUNNER_CHECK_FAILED' }, diagnosed = [['inconclusive', `ok\n${DIAG}`]];
+  for (const [label, cleanup, result, observed, stopped] of [['result says failed', DELETED, { ...intact, ...FAILED }, diagnosed, stop],
+    ['report says failed', FAILED, { ...intact, ...DELETED }, diagnosed, stop], ['unreadable report', throwing, intact, diagnosed, stop],
+    ['unreadable result', DELETED, throwing, [], after], ['rejects with a secret', FAILED, Object.assign(new Error(`${SECRET}\x1b[31m`), { code: '\x1b[31mX' }), [], after],
+    ['unreadable outcome', DELETED, Object.defineProperty({ ...DELETED }, 'outcome', { get() { throw new Error(SECRET); } }), [], { code: 'RUNNER_CHECK_FAILED', ...DELETED }],
+    ['unknown values', { vm: 'evil', failure: `${SECRET} x` }, { ...intact, vm: 'gone', failure: 'lower' }, [['passed', 'ok'], ['passed', 'ok']], undefined]]) {
+    const { report, h } = await dispatchCli(seam(cleanup, result), []);
+    const ids = h.of('moe.record_check_dispatch').map(d => d.id);
+    assert.deepEqual([ids.length, h.of('moe.record_check_observation').map(o => [o.outcome, o.outputTail]), report.stopped],
+      [stopped ? 1 : 2, observed, stopped && { ...stopped, dispatchId: ids[0] }], label);
+  }
+  const [log, big] = [[], `${'€'.repeat(8_000)}z`]; // the cut lands inside a '€'
+  const { h } = await dispatchCli(await landedSeam(t, log, { remove: 'gone', session: { ...PASS, outputTail: big } }), log);
+  const [{ outputTail }] = h.of('moe.record_check_observation'), kept = outputTail.slice(0, -DIAG.length - 1), size = Buffer.byteLength(outputTail);
+  assert.deepEqual([outputTail.endsWith(`z\n${DIAG}`), big.endsWith(kept), kept[0], size <= MAX_CHECK_TAIL_BYTES, size > MAX_CHECK_TAIL_BYTES - 3],
+    [true, true, '€', true, true]);
 });

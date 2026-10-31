@@ -20,8 +20,8 @@ import { validateImportPath } from './source-snapshot.mjs';
 import { fetchNodeToolchain } from './toolchain-cache.mjs';
 
 const KEYS = ['platform', 'ledger', 'owner', 'cacheDir', 'supervisor', 'credential', 'snapshot', 'check', 'budgetMs', 'onReady', 'dependencies',
-  'provider', 'signal', 'timeoutMs'];
-const OPTIONAL = ['provider', 'signal', 'timeoutMs'];
+  'provider', 'signal', 'timeoutMs', 'onCleanup'];
+const OPTIONAL = ['provider', 'signal', 'timeoutMs', 'onCleanup'];
 const PROVISION_CODE = /^(?:PROVISION|BOOTSTRAP|LIFECYCLE|LEDGER|PROVIDER|IMAGE|PRIMARY)_[A-Z0-9_]{1,60}$/;
 const TRANSFER_CODE = /^TRANSFER_[A-Z0-9_]{1,60}$/;
 const TOOLCHAIN_CODE = /^TOOLCHAIN_[A-Z0-9_]{1,60}$/;
@@ -57,7 +57,7 @@ function parse(input) {
     const keys = isRecord(input) ? Object.keys(input) : [null];
     if (!keys.every(key => KEYS.includes(key)) || !KEYS.every(key => OPTIONAL.includes(key) || keys.includes(key))) return null;
     const { platform, ledger, owner, cacheDir, supervisor, credential, snapshot, check, budgetMs, onReady, dependencies, provider = {}, signal,
-      timeoutMs = 30_000 } = input;
+      timeoutMs = 30_000, onCleanup } = input;
     const who = isRecord(owner) ? Object.freeze({ taskId: owner.taskId, attemptId: owner.attemptId, generation: owner.generation }) : null;
     const { id, command, protected: list } = isRecord(check) && Object.keys(check).sort().join() === 'command,id,protected' ? check : {};
     const entries = Array.isArray(list) && list.length <= 2000 ? list.map(entry => (isRecord(entry) ? Object.freeze({ ...entry }) : entry)) : null;
@@ -71,9 +71,10 @@ function parse(input) {
     const executable = copy?.executable ?? platform?.executable;
     const kit = copy && Object.freeze(executable === undefined ? copy : { ...copy, executable });
     if (lockfiles && kit && validOwner(who) && [read, reserve, update, recordImage, onReady].every(fn => typeof fn === 'function')
-      && within(budgetMs, MAX_BUDGET_MS) && within(timeoutMs, 60_000) && (signal === undefined || signal instanceof AbortSignal)) {
+      && within(budgetMs, MAX_BUDGET_MS) && within(timeoutMs, 60_000) && (signal === undefined || signal instanceof AbortSignal)
+      && (onCleanup === undefined || typeof onCleanup === 'function')) {
       return { platform, ledger: { read, reserve, update, recordImage }, owner: who, cacheDir, supervisor, credential, snapshot,
-        check: approved, budgetMs, onReady, lockfiles, provider: kit, signal, timeoutMs };
+        check: approved, budgetMs, onReady, lockfiles, provider: kit, signal, timeoutMs, onCleanup };
     }
   } catch { /* refused below */ }
   return null;
@@ -89,7 +90,10 @@ function parse(input) {
  * session's CheckOutcome, but a pass without a verified delete is 'inconclusive'. workspace is verify's 'intact' or
  * 'changed' for a passed session, else, or when verify fails, 'unverified'. vm is 'deleted', 'not-launched',
  * 'delete-failed' or 'none' (nothing reserved). Rejects CHECK_JOB_INPUT_INVALID or CHECK_ABORTED before any call, and
- * after the delete, onReady's own error unchanged or CHECK_READY_TIMEOUT. The second argument injects the steps.
+ * after the delete, onReady's own error unchanged or CHECK_READY_TIMEOUT. input.onCleanup, optional, is told once the delete
+ * has settled, on every path past those two refusals and before the run settles, a rejection included: a frozen {vm, failure},
+ * failure CHECK_VM_DELETE_FAILED for 'delete-failed', else null. It is never awaited, and its throw or rejection is ignored.
+ * The second argument injects the steps.
  */
 export async function runCheckJob(input, { provision = provisionGuest, materialize = materializeSnapshot, session = runCheckSession, verify = verifyWorkspace,
   remove = deleteOwned, toolchain = fetchNodeToolchain, dependencies = buildDependencyCache, installToolchain = copyToolchain,
@@ -107,6 +111,7 @@ export async function runCheckJob(input, { provision = provisionGuest, materiali
   } finally { // 'not-launched': reserved, never launched by this run, so nothing of ours is left to delete.
     if (run.name !== null) vm = await Promise.resolve().then(() => remove({ ledger, name: run.name, owner: o.owner, provider: o.provider }))
       .then(gone => (gone === 'deleted' || gone === 'not-launched' ? gone : 'delete-failed'), () => 'delete-failed');
+    notify(o.onCleanup, vm);
   }
   const deleted = vm === 'deleted';
   const observed = failure === null ? run.observed : { outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '' };
@@ -114,6 +119,12 @@ export async function runCheckJob(input, { provision = provisionGuest, materiali
   return Object.freeze({ ...observed, outcome: observed.outcome === 'passed' && !deleted ? 'inconclusive' : observed.outcome,
     environment: run.environment, workspace: run.workspace, instance: run.name, vm,
     failure: failure ?? (deleted ? null : 'CHECK_VM_DELETE_FAILED'), executionReady: false });
+}
+
+// The settled delete, for a caller that never sees the result: a rejection carries onReady's error unchanged, not the vm.
+function notify(onCleanup, vm) {
+  const report = Object.freeze({ vm, failure: vm === 'delete-failed' ? 'CHECK_VM_DELETE_FAILED' : null });
+  try { Promise.resolve(onCleanup?.(report)).catch(() => {}); } catch { /* an observer cannot replace the run's own settlement */ }
 }
 
 // Each step passes or ends the run with one fixed code (null once the session ran): the session needs every step before it.

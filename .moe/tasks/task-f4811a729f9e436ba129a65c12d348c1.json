@@ -204,11 +204,17 @@
       "author": "worker-3a9b4568",
       "content": "Follow-up from task-5ed445ca (worker-3a9b4568). These are the FINAL hashes and supersede comment-54ceb941's 83a1f964/b1734e1c:\n- scripts/local-runner/guest-supervisor.py: b82e4369a501302ee411504c820d36be016809c5f638682b5fe2f7a52b707e03\n- scripts/tests/local-runner-check.test.mjs: 93e3c7fea073261f2728c6d8f0f5296d3f03d94a69a881f46f1e0c343102adef\nThe step-5 review changed only comments. Python tokens are identical to 83a1f964, and the test's non-comment lines are identical.\nI reran the same gate from a fresh git-archive snapshot of 16831409 plus the two overlays, with node v24.22.2 and npm 11.19.1. It exited 0: check file 55 tests, 54 pass, 0 fail, 1 skip (K9); CY1-CY4 4 of 4.\nThe certify requirement is unchanged: every claimed platform needs NEW operator-run certify reports on b82e4369.",
       "timestamp": "2026-10-31T07:46:11.909Z"
+    },
+    {
+      "id": "comment-58aa917ba1fc4d4ebe130b0c8601a5e4",
+      "author": "worker-25da16b2",
+      "content": "FYI for the CQ-R13 sweep, from task-12e89395 (in REVIEW once it lands). runCheckJob has a new optional input `onCleanup`: after the delete settles, on resolve, reject or timeout, it receives one frozen {vm, failure}. check-dispatch forwards it through landedRunCheck.\n\nWhen a delete fails, or the cleanup report or result cannot be read, the dispatch stops with RUNNER_VM_DELETE_FAILED. That holds whatever retry-infra says or how many checks are still owed. If the dispatch was accepted, the observation is recorded first, never as passed, with this line appended to its outputTail: \"RUNNER_VM_DELETE_FAILED: VM cleanup was not confirmed; no further checks will be launched.\" The dispatch report gains vm/failure fields and, when relevant, a causeCode. There is no daemon schema change.\n\nDocs and certification still owed by CQ-R13: describe this stop and the fields in the runner docs. Native Windows/Multipass is not certified; gate evidence is a Linux snapshot only.",
+      "timestamp": "2026-10-31T08:11:53.894Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T07:46:11.909Z",
+  "updatedAt": "2026-10-31T08:11:53.894Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

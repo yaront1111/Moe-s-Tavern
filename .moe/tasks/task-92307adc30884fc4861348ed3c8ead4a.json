@@ -137,7 +137,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:22:59.885Z",
-  "updatedAt": "2026-10-31T07:57:15.628Z",
+  "updatedAt": "2026-10-31T07:57:48.556Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:44.144Z",
@@ -256,7 +256,8 @@
     "scripts/local-runner/cli.mjs",
     "scripts/local-runner/vm-control.mjs",
     "scripts/local-runner/agent-lifecycle.mjs",
-    ".moe/tasks/task-92307adc30884fc4861348ed3c8ead4a.json"
+    ".moe/tasks/task-92307adc30884fc4861348ed3c8ead4a.json",
+    ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json"
   ],
   "completionSummary": "Pinned one absolute Multipass client per platform, and every local-runner entry point now uses it.\n\nWhat changed:\n- platform-windows.mjs: EXECUTABLE = path.win32.join(<ProgramFiles if drive-absolute, else C:\\Program Files>, 'Multipass','bin','multipass.exe'), per the canonical/multipass v1.17.0 wix files. windowsPlatform.executable is that pin, and its prerequisites hand the doctor `explicit ?? pin`. Linux (/snap/bin/multipass) and macOS (/usr/local/bin/multipass) were already pinned.\n- cli.mjs: the doctor gets this host's pin unless --executable is given.\n- vm-control.mjs: status, reconcile and cleanup get `provider.executable ?? pin`. A host with no pin refuses {\"code\":\"VM_CONTROL_FAILED\"} before any ledger dir or call.\n- agent-lifecycle.mjs: parse pins kit.executable and requires usable(). An unsupported host gives AGENT_INPUT_INVALID.\n- provision, runCheckJob, certify and native-smoke already used `explicit ?? platform.executable`, so they now get the Windows pin too.\n- New file scripts/tests/local-runner-pinned-client.test.mjs, MX0-MX9, added once to ci.yml's local-runner line.\n- local-runner.test.mjs: exactly the 7 held rows (Windows provisioning…, WC1, LC1, AJ3, CJ2, CJ9, CJ12) now expect the pin.\n\nEvidence:\n- The verification command is amend-1's: the CI line minus local-runner-check.test.mjs. In the snapshot it exits 0: 551 tests, 549 pass, 0 fail, 2 skipped.\n- In place it exits 1. Tests 551, pass 544, fail 0, cancelled 5, skipped 2. The only failures are C4-C9 in local-runner-channel, cancelled because their before() needs the live daemon dist to carry the /health `checks, bindHost` report. That dist (2026-10-30 20:44) predates src. No in-place build is allowed, so the snapshot run is the evidence; routed to the governor in comment-7bec9210.\n- local-runner-check.test.mjs alone, in place: exit 0, 54 tests, 53 pass, 0 fail, 1 skipped, file sha256 ae94e1c8…. There were no failing peer (5ed445ca) cases to list.\n- Full eleven-file CI line in the snapshot, with ",
   "commits": [
@@ -287,6 +288,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "78eddb63eea6181f59ccaea76a196f1865b5f753",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-31T07:49:09Z",
+      "paths": [
+        ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
+        ".moe/tasks/task-92307adc30884fc4861348ed3c8ead4a.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-31T07:57:48.556Z",
+      "treeId": "834098127f8f26052904a267cba319fbedf9a0e0",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -301,9 +318,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-88af1437@2026-10-31T06:22:15Z",
-    "at": "2026-10-31T07:08:22.561Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-31T07:49:09Z",
+    "at": "2026-10-31T07:57:48.556Z"
   },
   "completedAt": "2026-10-31T07:57:15.628Z",
   "reviewCompletedAt": "2026-10-31T07:57:15.628Z",
