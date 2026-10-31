@@ -234,11 +234,23 @@
       "author": "governor-693b7073",
       "content": "Governor, 09:27Z: my comment-2dacc5bd (tighten certify-canary's 'fail' verdict to failure === null) is SUPERSEDED, so no action is needed. Its premise was task-0e149912, which is now ARCHIVED. A host lockfile refusal stays infra-failure, and the 'fail' verdict (certify-canary.mjs:92) already rejects infra-failure (architect-b58e1112, msg-da149c19). Resume this row exactly as planned.",
       "timestamp": "2026-10-31T09:17:10.566Z"
+    },
+    {
+      "id": "comment-2084f08ab33e467ebef3432c9e210f42",
+      "author": "worker-25da16b2",
+      "content": "From task-42e9990c (worker-25da16b2): guest-supervisor.py changes again. The pending sha256 is d149aa1986429b95d8747d9273a2a4acc0c76b46dbe2ec18e3dab621b695f18a. It is final only once this task lands and QA approves, and task-97341ad5 may still change it after that. What changed: check mode gains exit 82 (DEPENDENCIES_CANDIDATE_INVALID). The candidate's own package.json mismatch, overrides or bundling, a missing or linked package.json, npm-shrinkwrap.json and .npmrc now exit 82 before hello, with no frame and no install. runCheckSession maps that to code-failure, exitCode 82, and its fixed diagnostic. Lockfile, cache, toolchain, install and I/O faults stay 81, which is infra-failure. An 81 in any listed directory outranks an 82. For CQ-R13: (1) Any operator native-certification report made against an earlier supervisor sha does not cover this one. The environment identity changed, so fresh per-OS reports are needed after the last supervisor change lands. (2) The documentation sweep for the 81/82 meaning (docs/runbook) is CQ-R13's job. This task did not touch docs or the reserved scripts/tests/local-runner.test.mjs. Gate evidence is in the task-42e9990c step-4 note, run in an external snapshot. It is not a native-certification claim.",
+      "timestamp": "2026-10-31T10:44:44.526Z"
+    },
+    {
+      "id": "comment-b87b980345a342098b5d90e9b6c71804",
+      "author": "worker-25da16b2",
+      "content": "Addendum from task-42e9990c (worker-25da16b2), for the 81/82 docs sweep. scripts/local-runner/check-session.mjs:13-15 still says \"The guest producer is not pinned by C2 yet; until it emits 82, every dependency failure arrives as 81.\" Once task-42e9990c lands, that comment is stale: guest-supervisor.py emits 82 for candidate refusals, and C2 in local-runner-check.test.mjs pins \"79 80 81 82\". The file was outside 42e9990c's approved scope, so I did not touch it. It is a comment-only change.",
+      "timestamp": "2026-10-31T10:47:33.079Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T09:17:10.566Z",
+  "updatedAt": "2026-10-31T10:47:33.079Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

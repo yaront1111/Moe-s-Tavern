@@ -12,48 +12,79 @@
     {
       "stepId": "step-1",
       "description": "Test first on the landed 5ed445ca manifest guard and a80f46db host exit-code contract; keep both dependencies. Only three write paths in this plan; check-session.mjs/check-evidence.mjs are the prerequisite's responsibility, and local-runner.test.mjs/CERTIFICATION.md remain CQ-R13-owned. Extend INSTALL/installRun/refusedInstall and KI cases: candidate missing/nonregular package.json, malformed candidate JSON, changed dependency spec/root metadata, overrides/bundle controls, and planted npm-shrinkwrap.json or .npmrc must end with the new supervisor code 82, no stdout frames, no relay, no npm started, no installed bytes. Include valid-first/invalid-second directory and preserve zero installs. Split existing refusedInstall expectations by cause rather than globally changing 81 to 82. Malformed dependency directory list, missing/malformed protected lock/root, toolchain exec/start failures, timeout, offline-cache failure and unknown nonzero npm exit must retain existing infrastructure outcomes, especially exit 81. Protected blob mismatch 79 and reown failures keep their established earlier-phase behavior. Valid install and absent dependency manifest remain unchanged. The new rows must initially fail because the supervisor still collapses all dependency refusals to 81. Retain all previous byte-preservation, no-follow, offline/ignore-scripts/workspaces and cleanup assertions.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Tests first. refusedInstall/refusedPkg take an expected code (default 81); installRun takes a check frame. Split by cause: KI3 (no package.json, shrinkwrap, .npmrc -> 82; list/lockfile faults 81), KI5 (metadata/controls -> 82; the 3 'on both sides' rows have a malformed approved lock root -> 81), KI7 (package.json content/shape/FIFO/dir/symlink -> 82; lockfile rows, shapes and either file resized while read -> 81), KI8 real npm (file:/override refusals -> 82 over full and empty tree; NEW honest manifest over empty tree -> 81 offline cache fault). NEW KI9: precedence (candidate in both dirs 82; candidate+missing lock either order 81; malformed list 81; injected EACCES/EIO package.json read 81, injected ENOENT 82 control; no toolchain still 82 because preflight starts no npm; protected mismatch 79 and reown link 65 still come first). C2 now pins Python DEPENDENCIES_CANDIDATE_INVALID == JS 82. RED on current supervisor with pinned node v24.22.2/npm 11.19.1: 6 fail (KI3, KI5, KI7, KI8, KI9: 81 vs 82; C2: AttributeError), KI1/2/4/6 pass. Pre-existing dirty .moe/tasks paths of other sessions untouched.",
+      "startedAt": "2026-10-31T10:26:29.413Z",
+      "completedAt": "2026-10-31T10:30:09.474Z"
     },
     {
       "stepId": "step-2",
       "description": "Separate positively identified candidate refusals from environmental failures without parsing npm stderr or fabricating a check-job observation. Add the host prerequisite's exact constant DEPENDENCIES_CANDIDATE_INVALID = 82 beside DEPENDENCIES_FAILED = 81. Use a small dedicated exception type for candidate validation, distinct from ValueError/OSError and never carrying candidate data. Keep install_dependencies' boolean success/infra result for existing callers; its candidate-specific checks raise only the dedicated exception. At check_job's dependency call:\n```py\ntry:\n    if os.path.lexists(dependencies_manifest) and not install_dependencies(\n            workspace, dependencies, toolchain, env, spawn, install_timeout):\n        return DEPENDENCIES_FAILED\nexcept CandidateDependencyInvalid:\n    return DEPENDENCIES_CANDIDATE_INVALID\n```\nCandidateDependencyInvalid is NEW; choose this exact local class name and define it before the installer. Reuse 5ed445ca's manifest reader/comparison: distinguish reading/validating the protected lock and dependency-list/cache inputs (infra) from invalid candidate package metadata (candidate). Candidate package absent/not regular, invalid UTF8/JSON/shape/size, mismatch against valid approved root or forbidden overrides/bundling, and existing shrinkwrap/.npmrc guards are candidate causes. Unexpected OSError, access failure, corrupted approved lock, cache metadata, and all unclassified run_install failures stay infra. Error handling: distinguish ENOENT for the candidate manifest from I/O errors; never turn a generic exception or all False returns into code-failure. Preserve all-directories preflight, close fds, existing timeout/signal/GUARD cleanup, no-follow reads, no raw path/content logging and no-manifest behavior. No network or npm-output heuristic. No check command or relay starts on 82, and no hello/output/observation frame is emitted. Update supervisor's exit-code comments to explain 81 versus 82. C2 must now pin both Python and JS constants. Keep patch small and table-driven; no repair-policy production change.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-supervisor.py",
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "guest-supervisor.py (+58/-18 incl. comments): import errno; DEPENDENCIES_CANDIDATE_INVALID = 82 beside 81; new class CandidateDependencyInvalid(Exception) (no payload, not ValueError/OSError). approved_project validates the protected lockfile FIRST (read errors propagate, bad version/packages/root -> False = infra), then reads package.json: ENOENT/ELOOP, ValueError (not regular/oversized/not strict JSON) and RecursionError -> CandidateDependencyInvalid; any other OSError (EACCES/EIO/resized) propagates -> 81; metadata mismatch or UNAPPROVED_CONTROLS -> CandidateDependencyInvalid. read_json: a file that grows while read now raises OSError (as shrink already did) so a race stays infra. install_dependencies: all-dir preflight keeps checking after a candidate refusal; any infra fault in any dir returns False (81 wins); only after the loop a recorded candidate refusal raises; shrinkwrap/.npmrc raise the candidate exception. check_job catches only CandidateDependencyInvalid around the dependency call -> 82 before relay (no hello/frame/job/install). Header + check_job comments document 81 vs 82. GREEN with pinned node v24.22.2/npm 11.19.1 (sha256 48cc0e21 verified): local-runner-check.test.mjs 66 tests, 65 pass, 0 fail, 1 skip (K9 root); CY1-CY4 4/4. ASCII only; no __pycache__. Edit tool ate a trailing space once (argv =[), fixed.",
+      "startedAt": "2026-10-31T10:30:11.332Z",
+      "completedAt": "2026-10-31T10:33:27.003Z"
     },
     {
       "stepId": "step-3",
       "description": "Prove the outcome through the real producer and consumers. In local-runner-check.test.mjs reuse C7's SESSION_HARNESS/PY_LOAD/provider-spawn pattern, with INSTALL fixtures and real supervisor main/check_job. Let actual runCheckSession consume the Python child's clean no-frame exit. Table-drive candidate metadata refusal => exactly {outcome:'code-failure', exitCode:82, signal:null, outputTail:<the fixed host diagnostic>}; missing toolchain/cache error/unknown npm exit => infra-failure, never candidate; timeout retains its existing timeout/infra distinction. Assert zero check-command marker and no npm installation on rejected metadata. Plant CR/LF, ANSI, secrets and long/unicode strings in candidate fields/stderr and assert outputTail is the same host-owned ASCII literal, <=512 UTF8 bytes, with none of those inputs. Track only owned child PIDs, clean them and temp dirs, require Linux/WSL execution rather than a skipped native-Windows row.\n\nIn packages/moe-daemon/src/delivery/repairPolicy.test.ts import runCheckSession from '../../../../scripts/local-runner/check-session.mjs' (test-only, never production import). Use an EventEmitter child plus Writable stdin and PassThrough stdout/stderr, following the scripts test's checkProvider event order: write callback completes, stdout ends, then close 82 or 81. Pass the resulting outcome/nonzero exitCode/outputTail into the existing run()/decide()/cands() helpers; use the runner convention exitCode ?? 1 only for an infra result with no observed code. Assert the candidate result produces action:'repair', not retry-infra, with the bounded nonempty diagnostic preserved; the infrastructure result produces action:'retry-infra', consumes only maxInfraRetries and retains the existing escalation behavior. A zero infra budget must not prevent the candidate repair. Repeating the same unchanged code failure must never start an infra retry; existing code-repair escalation rules still apply. Do not change repairPolicy.ts or mock its decision. Keep existing C1/I1 tests intact. This parent owns integration/hardening for the split; the broader epic-final native certification stays CQ-R13.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-check.test.mjs",
         "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "note": "C9 (local-runner-check.test.mjs): real supervisor main(['check']) with INSTALL fixtures + fake toolchain, spawned as the provider child of the REAL runCheckSession (C7 pattern; owned children SIGKILLed in after() only if still running; temp dirs removed). The harness first writes ~180 KB hostile stderr (token, CR/LF, ANSI, 5000 emoji, 100000 x 0xff). 12 rows: honest -> passed/0/'ok\\n' with 1 install and the check marker; hostile package.json name, .npmrc holding a token+hostile text, npm-shrinkwrap.json, override, no package.json -> exactly {code-failure, 82, null, fixed host literal}, 0 installs, no marker; no toolchain, npm exit 3, install outliving install_timeout, EIO on package.json, .npmrc beside a missing lockfile, .npmrc under a malformed list -> {infra-failure, null, null, ''}. Every tail ASCII <=512 bytes. RED vs HEAD supervisor (scratch archive): C9 fails at 'a hostile name in package.json'. GREEN live: C7+C9 pass. repairPolicy.test.ts: new describe 'decideRepair over real host check sessions' (H1-H3) dynamically imports scripts/local-runner/check-session.mjs + lifecycle.mjs (test only, like requiredChecks.test.ts), fake EventEmitter/Writable/PassThrough child in checkProvider order (write cb, stdout end, close code) with token-bearing stderr; results fed through run()/decide() with exitCode ?? -1 (check-dispatch convention per architect comment). H1 82 -> repair attempt 1/remaining 2, excerpt == fixed text, no 'secret', repairs even with maxInfraRetries 0. H2 81 -> infra-failure/-1 -> retry-infra 1, 2, then escalate infra-retry-budget-exhausted; budget 0 escalates; c2's 82 afterwards is repair 1 of 3. H3 a repeated identical 82 escalates unchanged-failure / unchanged-candidate, never retry-infra. repairPolicy.ts unchanged; C1/I1 untouched. Snapshot /tmp/moe-42e-snap (git archive HEAD f3a70964 + 3 overlays, npm ci there with pinned node v24.22.2): repairPolicy.test.ts 46/46 pass. Scratch mutants in snapshot check-session.mjs: 82->infra kills H1/H2/H3; 81->code-failure kills H2; restored (cmp).",
+      "startedAt": "2026-10-31T10:33:29.185Z",
+      "completedAt": "2026-10-31T10:39:10.420Z"
     },
     {
       "stepId": "step-4",
       "description": "One verification gate, broad because this changes the guest/host outcome contract. Prepare a FULL git archive/clone snapshot outside /mnt/d/projexts/moes with all prerequisites landed, then overlay only these three owned files. Install host-native daemon dependencies there with npm ci --no-audit --no-fund, never in live packages; use the verified pinned Linux Node toolchain for required runner npm rows. From snapshot root run exactly:\n```bash\nnode --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)\n```\nRequire zero failed in all runner suites and full daemon npm test. KI/C7 and new real-supervisor rows must actually execute on Linux/WSL; native Windows can run pure host/daemon tests but is not sufficient evidence. Capture base/dependency SHAs, owned overlay hashes, toolchain versions, log and outputTail for complete_task. Full snapshot includes scripts/docs; do not use scripts-only archives. Shared live dist/runtime files are untouched; no pattern kills, only recorded owned PIDs. Notify CQ-R13/governor of new supervisorSha256 and environment identity, requiring new operator native certification reports and the final documentation sweep. No reused certificate or verified-local activation claim.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate GREEN in an external snapshot, per the shared-checkout rail. /tmp/moe-42e-snap = git archive of f3a70964, whose non-.moe sources match HEAD 5b2ca85e, plus the 3 task files overlaid. Their sha256 match the live tree: guest-supervisor.py d149aa1986429b95d8747d9273a2a4acc0c76b46dbe2ec18e3dab621b695f18a, local-runner-check.test.mjs 48262f6d1c1201643efa8e7da7fce5431daf14444158bc0e104729485752fa5b, repairPolicy.test.ts e4a3430028cb39de829891acdbb4d04e607e3c6941ebeb467467337fd85b20ec. In the daemon package: npm ci exit 0, npm run build exit 0. Toolchain: node v24.22.2 / npm 11.19.1 (official tarball, sha256 48cc0e21...aaf75), python 3.12.3, run under env -i. Command run from the snapshot root: `node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)`, GATE_EXIT 0. Runner: tests 626, pass 623, fail 0, cancelled 0, skipped 3. Daemon vitest: Test Files 215 passed (215), Tests 6341 passed | 20 skipped (6361). Prerequisites 5ed445ca (92d96620) and a80f46db (41fd0683) are ancestors of HEAD. Nothing was modified in this step. I am notifying CQ-R13 (task-f4811a72) separately that the supervisor sha changed. This is not a verified-local or native-certification claim.",
+      "startedAt": "2026-10-31T10:39:36.331Z",
+      "completedAt": "2026-10-31T10:44:36.973Z"
     },
     {
       "stepId": "step-5",
       "description": "Final adversarial self-review, once (load adversarial-self-review), scoped to this three-file diff plus the prerequisite interface seam. Trace each candidate cause to 82 only after the existing protected-blob/ownership checks; verify cache/lock/toolchain/VM uncertainty stays infra. No broad catch upgrades arbitrary environment failures into a code failure. Negative probes in scratch: remove the dedicated candidate catch and confirm real-supervisor/repair integration fails; map generic install failure to 82 and confirm infrastructure rows fail; suppress the all-dir pass and confirm the invalid-second-dir row fails. Check stale/malformed/truncated frame and timeout precedence inherited from host prerequisite, fixed diagnostics without secrets/control characters, no observation claiming the check job ran, and outcome82 cannot ever be passed. Ensure fds and owned child/process-group cleanup occur on errors/concurrency; never signal peer processes. Confirm old no-dependency checks, locks and earlier 79/80 behavior remain compatible, and package/source bytes are unchanged on refusal. If review changes code, rerun the exact gate; report cause matrix, mutation results, new hashes and evidence in complete_task. Wrapper owns Git landing; QA reviews. Do not edit reserved CQ-R13 files or expand production repair policy.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-supervisor.py",
         "scripts/tests/local-runner-check.test.mjs",
         "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "note": "Ran the adversarial self-review once, over the three-file diff and the check-session.mjs seam. No code changes resulted, so the step-4 gate stands; the sha256s are unchanged (d149aa19… / 48262f6d… / e4a34300…).\n\nFindings:\n1. Every 82 comes after holds() (79), reown (65/71) and protect_mounts, and before relay. No frame, no npm, no job. Only reads and lexists run, so no workspace bytes change on a refusal. The root fd is closed in a finally.\n2. CandidateDependencyInvalid is a bare Exception, so neither outer handler (ValueError/RecursionError/OSError → 81) catches it. Only check_job's dedicated except maps it to 82.\n3. 82 needs a positive candidate cause: package.json ENOENT/ELOOP, ValueError (non-regular, oversized, malformed), RecursionError, a metadata mismatch, UNAPPROVED_CONTROLS, or shrinkwrap/.npmrc. These stay 81: lockfile faults, any other errno, growth/shrink while reading (now an OSError), a malformed list, a missing toolchain, npm failure and timeout.\n4. Infra wins across all directories, in either order.\n5. Host seam: timeout, then failed/killed/!written/!ended, then 82 only with no frame. 82 can never pass, and its outputTail is the fixed host ASCII text; stderr is never read.\n\nMutation sweep (scratch, /tmp/moe-42e-mut, `^(KI[1-9]|C[29]) `, scored by exit code): the no-op control passes, and 20/20 mutants are killed. They are: no check_job catch; 81→82; raise at once without the all-dir pass; every OSError → candidate; every OSError → infra; ELOOP dropped; ENOENT dropped; growth → ValueError; bad lock root → candidate; shrinkwrap/.npmrc → infra; constant 83; post-loop raise dropped; package ValueError → infra; RecursionError dropped; lexists check dropped; bad lockfile in loop → candidate; outer except swallowing the candidate; the class subclassing ValueError; controls check dropped; metadata mismatch ignored. In step 3, mutants in check-session.mjs (82→infra, 81→code) were killed by H1-H3. No leftover processes (checked by env marker) and no leftover dirs.\n\nTheoretical, noted only:\n(a) If an operator PROTECTS package.json or .npmrc and the approved base already disagrees with its lockfile, the candidate cannot fix it. Repair then escalates through unchanged-failure or the budget.\n(b) A dir deleted between the lockfile read and the package.json read gives ENOENT → 82. Nothing runs in the guest at that point.\n\nStale comment: check-session.mjs:13-15 still says the guest does not emit 82. That file is out of scope; I routed it to CQ-R13's docs sweep in a comment on task-f4811a72.",
+      "startedAt": "2026-10-31T10:44:45.476Z",
+      "completedAt": "2026-10-31T10:49:04.905Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -85,7 +116,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:22:54.584Z",
-  "updatedAt": "2026-10-31T06:08:45.337Z",
+  "updatedAt": "2026-10-31T10:49:56.805Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:41.542Z",
@@ -98,16 +129,24 @@
   "metrics": {
     "firstClaimAt": "2026-10-31T05:49:45.656Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-21c9ed65"
+    "architect-21c9ed65",
+    "worker-25da16b2"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T05:54:06.760Z",
   "executionContract": {
@@ -159,5 +198,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-31T05:54:06.783Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T10:26:29.413Z",
+  "reviewStartedAt": "2026-10-31T10:49:56.803Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)",
+    "exitCode": 0,
+    "outputTail": "Run from the root of an external FULL snapshot /tmp/moe-42e-snap (git archive f3a70964, whose non-.moe files equal HEAD 5b2ca85e, plus the 3 task files overlaid with sha256 identical to the live tree; npm ci and npm run build in packages/moe-daemon, both exit 0), under env -i with node v24.22.2 / npm 11.19.1 / python 3.12.3.\n\nlocal-runner suites:\nℹ tests 626\nℹ suites 4\nℹ pass 623\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 81393.022797\n\ndaemon npm test (vitest):\n Test Files  215 passed (215)\n      Tests  6341 passed | 20 skipped (6361)\n   Duration  40.46s\n\nGATE_EXIT 0",
+    "reportedAt": "2026-10-31T10:49:56.803Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+  ],
+  "completionSummary": "A candidate-caused dependency refusal now exits 82 (DEPENDENCIES_CANDIDATE_INVALID) instead of 81. The host maps it to code-failure with a fixed ASCII diagnostic, so decideRepair repairs instead of retrying as infra.\n\nSupervisor (sha256 d149aa19…f18a):\n- Gives 82 for the candidate's package.json when it is missing, symlinked, not regular, oversized, not strict JSON, too deep, mismatched with the lockfile root, or carries overrides, bundling or workspaces; also for a planted npm-shrinkwrap.json or .npmrc.\n- Keeps 81 for lockfile faults, any other OSError (EACCES, EIO, a file resized while read), a malformed list, a missing toolchain, and npm failure or timeout.\n- Checks every directory first, and an 81 cause in any directory outranks an 82.\n- Exits 82 before hello: no frame, no npm, no job. Only after the 79/65/71 checks.\n\nTests:\n- local-runner-check: cause-specific KI3/KI5/KI7, KI8 with real npm, new KI9 (precedence and injected errnos), C2 pinning \"79 80 81 82\", and new C9. C9 runs 12 rows through the real supervisor main() and the real runCheckSession. Hostile stderr (an npm token, CR/LF/ANSI, 0xff bytes) never reaches outputTail.\n- repairPolicy.test.ts: new H1-H3 feed real runCheckSession results into the unchanged decideRepair: 82 → repair, 81 → bounded retry-infra then escalate, a repeated 82 → unchanged-failure.\n\nUnchanged: repairPolicy.ts, check-session.mjs and local-runner.test.mjs.\n\nMutation: 20/20 supervisor mutants killed, plus a passing control. Host mutants (82→infra, 81→code) were killed by H1-H3.\n\nNotified CQ-R13 (task-f4811a72): the new supervisor sha needs fresh operator native certification; check-session.mjs:13-15 has a stale comment; the 81/82 docs sweep is theirs. No native-certification or verified-local claim is made."
 }

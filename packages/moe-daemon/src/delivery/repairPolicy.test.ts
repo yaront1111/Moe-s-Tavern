@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_REPAIR_POLICY, decideRepair, resolveRepairPolicy, type RepairDecision, type RepairInput } from './repairPolicy.js';
 import type { CheckOutcome } from '../types/schema.js';
@@ -207,5 +209,77 @@ describe('decideRepair diagnostics and determinism', () => {
     const [one, two] = [run('dup', 'c1', { ...at, outputTail: 'one' }), run('dup', 'c1', { ...at, outputTail: 'two' })];
     expect(decide(cands(1), [two, one])).toStrictEqual(decide(cands(1), [one, two]));
     expect(decide(cands(1), [one, two])).toMatchObject({ action: 'repair', attempt: 1, diagnostics: { logRefs: ['dup'] } });
+  });
+});
+
+// task-42e9990c: the real host check session (scripts/local-runner/check-session.mjs, imported by this test only) settles
+// a fake provider's clean, frameless supervisor exit, and its actual result is the run decideRepair reads, as
+// check-dispatch records it (no exitCode becomes -1). A candidate dependency refusal (82) repairs with the fixed host
+// text; the environment's 81 retries infrastructure in its own budget. The guest's stderr is never read.
+interface Settled { outcome: CheckOutcome; exitCode: number | null; signal: string | null; outputTail: string }
+type FakeChild = EventEmitter & { stdin: Writable; stdout: PassThrough; stderr: PassThrough; kill(signal?: string): boolean };
+const runner = (name: string) => import(new URL(`../../../../scripts/local-runner/${name}`, import.meta.url).href);
+
+// The scripts test's checkProvider order: the check frame's write completes, stdout ends, then the child closes with code.
+function exitingProvider(code: number) {
+  const child = new EventEmitter() as FakeChild;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new Writable({
+    write(_chunk, _encoding, done) {
+      done();
+      child.stderr.end('npm ERR! //registry.npmjs.org/:_authToken=npm_secret0123\n');
+      child.stdout.once('close', () => child.emit('close', code, null)).end();
+    },
+  });
+  child.kill = (signal) => { setImmediate(() => child.emit('close', null, signal ?? 'SIGKILL')); return true; };
+  return { spawn: () => child };
+}
+
+async function settle(code: number): Promise<Settled> {
+  const [{ runCheckSession }, { ownedInstanceName }] = await Promise.all([runner('check-session.mjs'), runner('lifecycle.mjs')]);
+  const name = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
+  return runCheckSession({ name, check: { id: 'unit-1', command: 'npm test', protected: [] }, provider: exitingProvider(code), budgetMs: 5_000, timeoutMs: 1_000 });
+}
+const observed = (id: string, candidateId: string, s: Settled) =>
+  run(id, candidateId, { outcome: s.outcome, exitCode: s.exitCode ?? -1, outputTail: s.outputTail });
+
+describe('decideRepair over real host check sessions', () => {
+  it('H1 a candidate dependency refusal (82) repairs with the fixed host text, even with no infrastructure budget', async () => {
+    const { DEPENDENCIES_CANDIDATE_INVALID } = await runner('check-session.mjs');
+    const refused = await settle(DEPENDENCIES_CANDIDATE_INVALID);
+    expect(refused).toMatchObject({ outcome: 'code-failure', exitCode: 82, signal: null });
+    expect(refused.outputTail).toMatch(/^MOE_DEPENDENCY_CANDIDATE_INVALID: [\x20-\x7e]+$/);
+    expect(Buffer.byteLength(refused.outputTail)).toBeLessThanOrEqual(512);
+    expect(refused.outputTail).not.toContain('secret');
+    const r1 = observed('r1', 'c1', refused);
+    expect(decide(cands(1), [r1])).toStrictEqual({ action: 'repair', attempt: 1, remaining: 2, diagnostics: diag(r1, ['r1']) });
+    expect(diagOf(decide(cands(1), [r1]))?.excerpt).toBe(refused.outputTail);
+    expect(decide(cands(1), [r1], { policy: { maxCodeRepairs: 3, maxInfraRetries: 0 } })).toMatchObject({ action: 'repair', attempt: 1, remaining: 2 });
+  });
+
+  it('H2 an environment dependency failure (81) retries infrastructure in its own budget, then escalates, and spends no code repair', async () => {
+    const { DEPENDENCIES_FAILED, DEPENDENCIES_CANDIDATE_INVALID } = await runner('check-session.mjs');
+    const failed = await settle(DEPENDENCIES_FAILED);
+    expect(failed).toStrictEqual({ outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '' });
+    const [r1, r2, r3] = ['r1', 'r2', 'r3'].map((id) => observed(id, 'c1', failed));
+    expect(r1.exitCode).toBe(-1);
+    const on1 = (runs: Run[], policy = POLICY) => decide(cands(1), runs, { policy });
+    expect(on1([r1])).toStrictEqual({ action: 'retry-infra', attempt: 1, remaining: 1, diagnostics: diag(r1, ['r1']) });
+    expect(on1([r1, r2])).toStrictEqual({ action: 'retry-infra', attempt: 2, remaining: 0, diagnostics: diag(r2, ['r2', 'r1']) });
+    expect(on1([r1, r2, r3])).toStrictEqual({ action: 'escalate', reason: 'infra-retry-budget-exhausted', diagnostics: diag(r3, ['r3', 'r2', 'r1']) });
+    expect(on1([r1], { maxCodeRepairs: 3, maxInfraRetries: 0 })).toMatchObject({ action: 'escalate', reason: 'infra-retry-budget-exhausted' });
+    // c1's infrastructure runs left the code budget whole: c2's candidate refusal is repair 1 of 3.
+    const r4 = observed('r4', 'c2', await settle(DEPENDENCIES_CANDIDATE_INVALID));
+    expect(decide(cands(2), [r1, r2, r3, r4])).toStrictEqual({ action: 'repair', attempt: 1, remaining: 2, diagnostics: diag(r4, ['r4', 'r3', 'r2', 'r1']) });
+  });
+
+  it('H3 the same candidate refusal again never retries infrastructure: an unchanged failure or tree escalates as code', async () => {
+    const { DEPENDENCIES_CANDIDATE_INVALID } = await runner('check-session.mjs');
+    const [first, again] = [await settle(DEPENDENCIES_CANDIDATE_INVALID), await settle(DEPENDENCIES_CANDIDATE_INVALID)];
+    expect(again).toStrictEqual(first);
+    const runs = [observed('r1', 'c1', first), observed('r2', 'c2', again)];
+    expect(decide(cands(2), runs)).toStrictEqual({ action: 'escalate', reason: 'unchanged-failure', diagnostics: diag(runs[1], ['r2', 'r1']) });
+    expect(decide([{ id: 'c1', treeSha: 'same' }, { id: 'c2', treeSha: 'same' }], runs)).toMatchObject({ action: 'escalate', reason: 'unchanged-candidate' });
   });
 });

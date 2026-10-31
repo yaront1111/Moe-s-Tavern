@@ -24,9 +24,13 @@
 # blob once the job is reaped; CQ-R11c classifies the run as inconclusive. CQ-R11e5: when this run's 'dependencies' mode
 # wrote its manifest, `npm ci` from that offline tree runs for each listed lockfile directory as the check job would, after
 # the re-own and the protected mounts. 81 (before hello, no frame, no job; CQ-R11c reports infra-failure) is a malformed
-# directory list, a missing, linked, non-regular, malformed or oversized lockfile or package.json, a package.json whose
-# install metadata differs from its lockfile's root entry or that sets overrides, bundled dependencies or workspaces,
-# an npm-shrinkwrap.json or .npmrc beside them, or an install that failed, could not start or outlived INSTALL_TIMEOUT.
+# directory list, a missing, linked, non-regular, malformed or oversized lockfile (an approved, protected path), a
+# lockfile or package.json that could not be read or changed while it was read, or an install that failed, could not
+# start or outlived INSTALL_TIMEOUT. 82 (task-42e9990c; before hello, no frame, no job, no install; the host reports
+# code-failure with its own fixed text) is a refusal the candidate's own files cause: a missing, linked, non-regular,
+# malformed or oversized package.json, one whose install metadata differs from its lockfile's root entry or that sets
+# overrides, bundled dependencies or workspaces, or an npm-shrinkwrap.json or .npmrc beside them. Every listed
+# directory is checked first, and an 81 cause in any of them outranks an 82.
 # Mode 'verify' (CQ-R11f): reads no stdin and writes one {kind: 'verified', changed} frame, the count of manifest paths no
 # longer holding their materialized bytes and exec bit; 65 a missing or malformed manifest or workspace root, 74 a gone
 # host, each with no frame.
@@ -41,6 +45,7 @@
 # manifest, 74 I/O failure, 77 not root, 64 any other argv. Stream refusals leave no new tree, manifest or staging.
 import base64
 import contextlib
+import errno
 import hashlib
 import json
 import lzma
@@ -949,6 +954,7 @@ PROTECTED_MISMATCH = 79
 PROTECTED_CHANGED = 80
 # CQ-R11e5: the offline install of this run's 'dependencies' tree, one `npm ci` per lockfile directory it lists.
 DEPENDENCIES_FAILED = 81
+DEPENDENCIES_CANDIDATE_INVALID = 82  # check-session.mjs's code-failure: the candidate's own files refused the install
 INSTALL_TIMEOUT = 900  # seconds per directory
 MAX_DEPENDENCY_DIRS = 16  # dependency-cache.mjs MAX_LOCKFILES
 MAX_DEPENDENCY_LIST_BYTES = 65536
@@ -1192,8 +1198,9 @@ def no_constant(name):
 def read_json(root, path, limit):
     # The JSON value of the regular file of at most limit bytes at path under the root fd, opened by blob_oid's walk, so
     # no symlink is followed. One leading BOM is dropped, as npm drops it. Anything else that is not strict UTF-8 JSON
-    # raises ValueError, as do a repeated key, NaN or Infinity, and a file that is not regular, too big or grows while
-    # it is read; one that shrinks raises OSError, and nesting past the recursion limit RecursionError.
+    # raises ValueError, as do a repeated key, NaN or Infinity, and a file that is not regular or too big; nesting past
+    # the recursion limit raises RecursionError. A file that grows or shrinks while it is read raises OSError, as any
+    # other I/O failure does: its bytes say nothing about the file.
     fds = []
     try:
         *parents, name = path.split('/')
@@ -1205,7 +1212,7 @@ def read_json(root, path, limit):
             raise ValueError('not a bounded regular file')
         data = b''.join(chunks(fds[-1], info.st_size))
         if os.read(fds[-1], 1):
-            raise ValueError('the file grew while it was read')
+            raise OSError('the file grew while it was read')
     finally:
         for fd in fds:
             os.close(fd)
@@ -1228,17 +1235,37 @@ def install_metadata(value):
     return json.dumps([value.get('name'), value.get('version'), maps], sort_keys=True)
 
 
+class CandidateDependencyInvalid(Exception):
+    # The candidate's own files refuse the install (82). It carries no candidate text, and is neither a ValueError nor
+    # an OSError, so no infrastructure handler (81) catches it.
+    pass
+
+
 def approved_project(root, at):
     # The lockfile's root entry is the authority: packages[''] of a lockfileVersion 2 or 3 lockfile (an exact int, never
-    # true or 2.0), whose install metadata package.json must equal, with no unapproved control besides.
+    # true or 2.0), whose install metadata package.json must equal, with no unapproved control besides. The lockfile is
+    # approved and protected, so its faults are the environment's: False, or the read's own error. package.json is the
+    # candidate's: missing, linked, not regular, oversized, not strict JSON or not matching raises
+    # CandidateDependencyInvalid. Any other OSError (EACCES, EIO, a file resized while read) proves nothing, and
+    # propagates.
     lock = read_json(root, at + 'package-lock.json', MAX_LOCKFILE_BYTES)
-    package = read_json(root, at + 'package.json', MAX_PACKAGE_JSON_BYTES)
     if not (type(lock) is dict and type(lock.get('lockfileVersion')) is int and lock['lockfileVersion'] in (2, 3)
             and type(lock.get('packages')) is dict):
         return False
     locked = install_metadata(lock['packages'].get(''))
-    return (locked is not None and install_metadata(package) == locked
-            and not any(key in package for key in UNAPPROVED_CONTROLS))
+    if locked is None:
+        return False
+    try:
+        package = read_json(root, at + 'package.json', MAX_PACKAGE_JSON_BYTES)
+    except OSError as error:
+        if error.errno not in (errno.ENOENT, errno.ELOOP):  # ELOOP: O_NOFOLLOW met a symlink
+            raise
+        raise CandidateDependencyInvalid() from None
+    except (ValueError, RecursionError):
+        raise CandidateDependencyInvalid() from None
+    if install_metadata(package) != locked or any(key in package for key in UNAPPROVED_CONTROLS):
+        raise CandidateDependencyInvalid()
+    return True
 
 
 # Every listed directory is checked before any install runs: approved_project reads its lockfile and package.json by
@@ -1250,17 +1277,27 @@ def approved_project(root, at):
 # the lockfile does not name for that dependency, so package.json must ask for exactly what the lockfile root records.
 # Each cwd is a path GUARD's root chdir follows, which is safe: reown refused every link in the workspace (so lexists
 # follows none either), and since then only the pinned npm, running no scripts, has run as the check identity.
+# False is the environment's failure (81). A candidate refusal in one directory raises CandidateDependencyInvalid (82)
+# only once every directory is checked, so a fault of the environment in any directory still returns False.
 def install_dependencies(workspace, tree, toolchain, env, spawn, timeout):
     try:
         dirs = dependency_dirs(tree)
         root = os.open(workspace, WALK)
+        refused = False
         try:
             for at in ('' if name == '.' else name + '/' for name in dirs):
-                if not approved_project(root, at) or any(
-                        os.path.lexists(os.path.join(workspace, at + file)) for file in ('npm-shrinkwrap.json', '.npmrc')):
-                    return False
+                try:
+                    if not approved_project(root, at):
+                        return False
+                    if any(os.path.lexists(os.path.join(workspace, at + file))
+                           for file in ('npm-shrinkwrap.json', '.npmrc')):
+                        raise CandidateDependencyInvalid()
+                except CandidateDependencyInvalid:
+                    refused = True
         finally:
             os.close(root)
+        if refused:
+            raise CandidateDependencyInvalid()
         argv = [toolchain + '/bin/node', toolchain + '/lib/node_modules/npm/bin/npm-cli.js', 'ci', *OFFLINE_INSTALL_ARGS,
                 '--cache', tree]
         return all(run_install(argv, env, {**spawn, 'cwd': workspace if name == '.' else os.path.join(workspace, name)}, timeout)
@@ -1275,8 +1312,8 @@ def install_dependencies(workspace, tree, toolchain, env, spawn, timeout):
 # from Python only (tests). A refusal writes no frame and starts no job: 74 host EOF, 65 a malformed or disallowed
 # frame, 71 no account, 66 no workspace, 79 a protected path that does not hold its approved blob, 65 a workspace entry
 # reown refuses, 71 a failed re-own, no session home or a failed protect_mounts, 81 a failed dependency install phase
-# (CQ-R11e5; toolchain, dependencies, dependencies_manifest and install_timeout are injectable from Python only too).
-# After the observation, 80 is a protected path the job changed.
+# (CQ-R11e5; toolchain, dependencies, dependencies_manifest and install_timeout are injectable from Python only too),
+# 82 a dependency phase the candidate's own files refuse. After the observation, 80 is a protected path the job changed.
 def check_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=None, netns=True, toolchain=TOOLCHAIN,
               dependencies=DEPENDENCIES, dependencies_manifest=DEPENDENCIES_MANIFEST, install_timeout=INSTALL_TIMEOUT):
     try:
@@ -1314,9 +1351,12 @@ def check_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=No
            'MOE_CHECK_ID': frame['id']}
     spawn = {'user': uid, 'group': gid, 'extra_groups': groups, 'umask': 0o077, 'cwd': workspace, 'rlimits': CHECK_RLIMITS,
              'netns': netns}
-    if os.path.lexists(dependencies_manifest) and not install_dependencies(workspace, dependencies, toolchain, env, spawn,
-                                                                            install_timeout):
-        return DEPENDENCIES_FAILED  # before relay(): no hello, no frame, no check job
+    try:
+        if os.path.lexists(dependencies_manifest) and not install_dependencies(workspace, dependencies, toolchain, env,
+                                                                                spawn, install_timeout):
+            return DEPENDENCIES_FAILED  # before relay(): no hello, no frame, no check job
+    except CandidateDependencyInvalid:
+        return DEPENDENCIES_CANDIDATE_INVALID  # as early, and no install started either
     code = relay(['/bin/sh', '-c', frame['command']], out_fd, in_fd, job={'env': env, 'spawn': spawn})
     # relay's 0 means its observation frame is written; a failed relay is already a failure and is never re-checked.
     return PROTECTED_CHANGED if code == 0 and paths and not unchanged(workspace, frame['protected']) else code

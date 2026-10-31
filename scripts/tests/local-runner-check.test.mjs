@@ -882,15 +882,18 @@ m.relay = logged
 ${more}`;
 const dirList = dirs => JSON.stringify({ version: 1, dirs });
 const lockDirs = count => Array.from({ length: count }, (_, i) => `d${String(i).padStart(2, '0')}`);
-function installRun(t, list, dirs, { more = '', timeout = 2, toolchain = 'tc', manifest = true } = {}) {
+function installRun(t, list, dirs, { more = '', timeout = 2, toolchain = 'tc', manifest = true, check = CHECK } = {}) {
   const seams = `, identity=(os.getuid(), os.getgid(), None), netns=False, toolchain=${toolchain}, dependencies=deps,
     dependencies_manifest=os.path.join(base, 'deps.manifest'), install_timeout=${timeout}`;
-  const run = checkRun(checkFrame(CHECK), { setup: INSTALL(list, dirs, more, manifest), seams });
+  const run = checkRun(checkFrame(check), { setup: INSTALL(list, dirs, more, manifest), seams });
   t.after(() => rmSync(run.dir, { recursive: true, force: true }));
   const log = join(run.dir, 'install.log');
   return Object.assign(run, { installs: existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map(line => line.split('|')) : [] });
 }
-const refusedInstall = (run, label) => assert.deepEqual([run.status, run.stdout.length, run.relays, run.stray], [DEPENDENCIES_FAILED, 0, [], []], `${label} ${run.stderr}`);
+// task-42e9990c: a refusal the candidate's own files cause exits 82 (DEPENDENCIES_CANDIDATE_INVALID), any other 81; both
+// before hello, with no frame, relay or stray stderr.
+const CANDIDATE = DEPENDENCIES_CANDIDATE_INVALID;
+const refusedInstall = (run, label, code = DEPENDENCIES_FAILED) => assert.deepEqual([run.status, run.stdout.length, run.relays, run.stray], [code, 0, [], []], `${label} ${run.stderr}`);
 const INSTALLS_RUN = NO_GUEST || (process.platform !== 'linux' && 'the fake toolchain reads /proc');
 const busy = t => {
   const tasks = userTasks();
@@ -942,7 +945,7 @@ test('KI2 an install that fails, cannot start or outlives install_timeout exits 
 const NO_REOWN = 'm.reown = lambda *args, **kwargs: None\n';
 const OUTSIDE = `plant(os.path.join(base, 'out'), ${pyFiles(PROJECT_FILES)})\n`;
 
-test('KI3 a malformed dependency list, a missing, non-regular or symlinked lockfile, no package.json, or a shrinkwrap or .npmrc exits 81 before any install or frame',
+test('KI3 a malformed dependency list or a missing, non-regular or symlinked lockfile exits 81, and no package.json, a shrinkwrap or .npmrc 82, before any install or frame',
   { skip: NO_GUEST, timeout: 60_000 }, t => {
     const planted = ['.', ...lockDirs(17)];
     const lists = [null, 'nope', '[]', JSON.stringify({ version: 1, dirs: ['.'], extra: 1 }), '{"version":1.0,"dirs":["."]}',
@@ -955,16 +958,17 @@ test('KI3 a malformed dependency list, a missing, non-regular or symlinked lockf
       assert.deepEqual(run.installs, [], list?.slice(0, 80));
     }
     const PKG = `plant(os.path.join(workspace, 'pkg'), ${pyFiles({ 'package.json': PROJECT })})\n`;
-    for (const [label, dirs, locks, more] of [['a missing lockfile', ['.', 'pkg'], ['.'], PKG],
+    for (const [label, dirs, locks, more, code] of [['a missing lockfile', ['.', 'pkg'], ['.'], PKG],
       ['a lockfile that is a directory', ['pkg'], [], `os.makedirs(os.path.join(workspace, 'pkg', 'package-lock.json'))\n${PKG}`],
       ['a symlinked lockfile', ['pkg'], [], `${NO_REOWN}${OUTSIDE}os.makedirs(os.path.join(workspace, 'pkg'))
 os.symlink(os.path.join(base, 'out', 'package-lock.json'), os.path.join(workspace, 'pkg', 'package-lock.json'))\n${PKG}`],
       ['a directory reached through a symlink', ['pkg'], [], `${NO_REOWN}${OUTSIDE}os.symlink(os.path.join(base, 'out'), os.path.join(workspace, 'pkg'))\n`],
       // npm ci would install from these over the approved lockfile, or walk up from a directory with no package.json.
-      ['no package.json', ['.', 'pkg'], ['.', 'pkg'], "os.unlink(os.path.join(workspace, 'pkg', 'package.json'))\n"],
-      ...['npm-shrinkwrap.json', '.npmrc'].map(file => [`a planted ${file}`, ['.', 'pkg'], ['.', 'pkg'], `open(os.path.join(workspace, 'pkg', '${file}'), 'w').close()\n`])]) {
+      // The protected lockfile is approved; these are the candidate's own files, so the refusal is the candidate's.
+      ['no package.json', ['.', 'pkg'], ['.', 'pkg'], "os.unlink(os.path.join(workspace, 'pkg', 'package.json'))\n", CANDIDATE],
+      ...['npm-shrinkwrap.json', '.npmrc'].map(file => [`a planted ${file}`, ['.', 'pkg'], ['.', 'pkg'], `open(os.path.join(workspace, 'pkg', '${file}'), 'w').close()\n`, CANDIDATE])]) {
       const run = installRun(t, dirList(dirs), locks, { more });
-      refusedInstall(run, label);
+      refusedInstall(run, label, code);
       assert.deepEqual(run.installs, [], label);
     }
     const linked = installRun(t, dirList(['pkg']), [], { more: "os.symlink(os.path.join(base, 'file'), os.path.join(workspace, 'pkg'))\n" });
@@ -989,43 +993,44 @@ const DEPENDENCY_MAPS = ['dependencies', 'devDependencies', 'optionalDependencie
 const omit = (value, ...keys) => Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)));
 const pkgRun = (t, files, more = '') => installRun(t, dirList(['.', 'pkg']), ['.', 'pkg'],
   { more: `${more}plant(os.path.join(workspace, 'pkg'), ${pyFiles(files)})\n` });
-function refusedPkg(t, label, files, more) {
+function refusedPkg(t, label, files, more, code) {
   const run = pkgRun(t, files, more);
-  refusedInstall(run, label);
+  refusedInstall(run, label, code);
   assert.deepEqual(run.installs, [], label);
   for (const [name, value] of Object.entries(files)) {
     if (typeof value !== 'string') assert.deepEqual(readFileSync(join(run.dir, 'ws', 'pkg', name)), bytesOf(value), label);
   }
 }
 
-test('KI5 install metadata that differs from the lockfile root, or overrides, bundled dependencies or workspaces, exit 81 before any install or frame',
+test('KI5 install metadata that differs from the lockfile root, or overrides, bundled dependencies or workspaces, exit 82 before any install or frame; a malformed lockfile root 81',
   { skip: NO_GUEST, timeout: 120_000 }, t => {
     const peer = optional => ({ ...PROJECT, peerDependencies: { dep: '1.0.0' }, peerDependenciesMeta: { dep: optional } });
-    for (const [label, manifest, root = PROJECT] of [
+    // A row whose malformed value is on both sides fails on the approved lockfile root first, which is never the candidate's.
+    for (const [label, manifest, root = PROJECT, code = CANDIDATE] of [
       ...DEPENDENCY_MAPS.flatMap(key => [STUB_TGZ, 'file:../stub'].map(spec => [`${spec} in ${key}`, { ...PROJECT, [key]: { ...PROJECT[key], dep: spec } }])),
       ['a changed range', { ...PROJECT, dependencies: { dep: '^1.0.0' } }],
       ['an npm alias', { ...PROJECT, dependencies: { dep: 'npm:dep@1.0.0' } }],
       ['an added dependency', { ...PROJECT, dependencies: { ...PROJECT.dependencies, extra: '1.0.0' } }],
       ['a removed dependency', omit(PROJECT, 'dependencies')],
       ['a dependency the lockfile root lacks', PROJECT, omit(PROJECT, 'dependencies')],
-      ['a non-string spec on both sides', { ...PROJECT, dependencies: { dep: 1 } }, { ...PROJECT, dependencies: { dep: 1 } }],
+      ['a non-string spec on both sides', { ...PROJECT, dependencies: { dep: 1 } }, { ...PROJECT, dependencies: { dep: 1 } }, DEPENDENCIES_FAILED],
       ...[null, [], 'x'].map(value => [`a ${JSON.stringify(value)} map for an absent one`, { ...PROJECT, devDependencies: value }]),
       ['another name', { ...PROJECT, name: 'other' }],
       ['no name', omit(PROJECT, 'name')],
       ['a null name for an absent one', { ...PROJECT, name: null }, omit(PROJECT, 'name')],
       ['another version', { ...PROJECT, version: '1.0.1' }],
       ['no version', omit(PROJECT, 'version')],
-      ['a numeric version on both sides', { ...PROJECT, version: 1 }, { ...PROJECT, version: 1 }],
+      ['a numeric version on both sides', { ...PROJECT, version: 1 }, { ...PROJECT, version: 1 }, DEPENDENCIES_FAILED],
       ['peerDependenciesMeta the lockfile root lacks', peer({ optional: true }), omit(peer(), 'peerDependenciesMeta')],
       ['optional 1 for true', peer({ optional: 1 }), peer({ optional: true })],
       ['optional "true" for true', peer({ optional: 'true' }), peer({ optional: true })],
-      ['a peerDependenciesMeta entry that is no object, on both sides', peer(true), peer(true)],
+      ['a peerDependenciesMeta entry that is no object, on both sides', peer(true), peer(true), DEPENDENCIES_FAILED],
       ...[{ dep: STUB_TGZ }, { other: { dep: STUB_TGZ } }, { dep: '$dep' }, {}, null, 'x'].map(overrides => [`overrides ${JSON.stringify(overrides)}`, { ...PROJECT, overrides }]),
       ...['bundleDependencies', 'bundledDependencies'].flatMap(key => [['dep'], true, []].map(value => [`${key} ${JSON.stringify(value)}`, { ...PROJECT, [key]: value }])),
       ['workspaces', { ...PROJECT, workspaces: ['stub'] }],
       ['an array', [PROJECT]],
     ]) {
-      refusedPkg(t, label, { 'package.json': manifest, 'package-lock.json': lockOf(root) });
+      refusedPkg(t, label, { 'package.json': manifest, 'package-lock.json': lockOf(root) }, '', code);
     }
   });
 
@@ -1072,6 +1077,9 @@ function strictRows(name, good, bound) {
   const at = middle => Buffer.concat([Buffer.from(marked.slice(0, -2)), Buffer.from(middle), Buffer.from(marked.slice(-1))]);
   const [key] = Object.keys(good);
   const target = `os.path.join(workspace, 'pkg', '${name}')`;
+  // package.json is the candidate's own file and the lockfile the approved one. A file that changes while it is read
+  // says nothing about its bytes: nothing of the candidate's runs before the install, so that stays infrastructure.
+  const own = name === 'package.json' ? CANDIDATE : DEPENDENCIES_FAILED;
   return [
     ['malformed JSON', Buffer.from(text.slice(0, -1))],
     ['trailing data', Buffer.from(`${text} x`)],
@@ -1083,16 +1091,16 @@ function strictRows(name, good, bound) {
     ['two BOMs', Buffer.concat([BOM, BOM, Buffer.from(text)])],
     ['nesting past the recursion limit', `${pyBytes(Buffer.from(marked.slice(0, -2)))} + b'[' * 100000 + b']' * 100000 + b'}'`],
     ['one byte over its bound', `${pyBytes(good)}.ljust(${bound + 1})`],
-  ].map(([label, bytes]) => [label, { [name]: bytes }]).concat([
-    ['a FIFO', `${NO_REOWN}os.unlink(${target})\nos.mkfifo(${target})\n`],
-    ['a directory', `os.unlink(${target})\nos.makedirs(${target})\n`],
-    ['a symlink to a matching copy', `${NO_REOWN}${OUTSIDE}os.unlink(${target})\nos.symlink(os.path.join(base, 'out', '${name}'), ${target})\n`],
-    ['a file that grows while it is read', RESIZE_PKG(name, "open(target, 'a').write(' ')")],
-    ['a file that shrinks while it is read', RESIZE_PKG(name, 'os.truncate(target, 1)')],
-  ].map(([label, more]) => [label, {}, more])).map(([label, ...row]) => [`${name}: ${label}`, ...row]);
+  ].map(([label, bytes]) => [label, { [name]: bytes }, '', own]).concat([
+    ['a FIFO', `${NO_REOWN}os.unlink(${target})\nos.mkfifo(${target})\n`, own],
+    ['a directory', `os.unlink(${target})\nos.makedirs(${target})\n`, own],
+    ['a symlink to a matching copy', `${NO_REOWN}${OUTSIDE}os.unlink(${target})\nos.symlink(os.path.join(base, 'out', '${name}'), ${target})\n`, own],
+    ['a file that grows while it is read', RESIZE_PKG(name, "open(target, 'a').write(' ')"), DEPENDENCIES_FAILED],
+    ['a file that shrinks while it is read', RESIZE_PKG(name, 'os.truncate(target, 1)'), DEPENDENCIES_FAILED],
+  ].map(([label, more, code]) => [label, {}, more, code])).map(([label, ...row]) => [`${name}: ${label}`, ...row]);
 }
 
-test('KI7 a lockfile or package.json that is malformed, oversized, not regular or resized while read, or a lockfile with no v2/v3 root entry, exits 81 before any install or frame',
+test('KI7 a package.json that is malformed, oversized or not regular exits 82, and a lockfile that is, one with no v2/v3 root entry, or either file resized while read 81, before any install or frame',
   { skip: NO_GUEST, timeout: 120_000 }, t => {
     const shapes = [
       ...[1, 4, true, '3', null].map(version => [`lockfileVersion ${JSON.stringify(version)}`, lockOf(PROJECT, version)]),
@@ -1104,9 +1112,50 @@ test('KI7 a lockfile or package.json that is malformed, oversized, not regular o
       ...[[PROJECT], null, 'x'].map(root => [`a root entry ${JSON.stringify(root).slice(0, 20)}`, { lockfileVersion: 3, packages: { '': root } }]),
       ['an array', [lockOf(PROJECT)]],
     ].map(([label, lock]) => [`package-lock.json: ${label}`, { 'package-lock.json': lock }]);
-    for (const [label, files, more] of [...strictRows('package.json', PROJECT, 1048576), ...strictRows('package-lock.json', lockOf(PROJECT), 16777216), ...shapes,
-      ...[null, 'x', 1].map(manifest => [`package.json: ${JSON.stringify(manifest)}`, { 'package.json': bytesOf(manifest) }])]) {
-      refusedPkg(t, label, files, more);
+    for (const [label, files, more, code] of [...strictRows('package.json', PROJECT, 1048576), ...strictRows('package-lock.json', lockOf(PROJECT), 16777216), ...shapes,
+      ...[null, 'x', 1].map(manifest => [`package.json: ${JSON.stringify(manifest)}`, { 'package.json': bytesOf(manifest) }, '', CANDIDATE])]) {
+      refusedPkg(t, label, files, more, code);
+    }
+  });
+
+// task-42e9990c: which cause wins. Every listed directory is checked before any install, and a fault that is not the
+// candidate's, in any of them, outranks a candidate refusal in another: only a run whose every fault is the candidate's
+// own files exits 82. A package.json read error other than a missing file (EACCES or EIO, injected once the preflight
+// starts, after reown) proves nothing about the candidate. The earlier phases keep their codes: 79, then reown's 65.
+const NPMRC = dir => `open(os.path.join(workspace, '${dir}', '.npmrc'), 'w').close()\n`;
+const READ_ERROR = name => `import errno
+real_open, real_dirs = os.open, m.dependency_dirs
+def failing(path, flags, *args, dir_fd=None, **kwargs):
+    if path == 'package.json' and dir_fd is not None:
+        raise OSError(errno.${name}, 'injected')
+    return real_open(path, flags, *args, dir_fd=dir_fd, **kwargs)
+def arming(tree):
+    os.open = failing
+    return real_dirs(tree)
+m.dependency_dirs = arming
+`;
+
+test('KI9 a fault that is not the candidate\'s in any directory, or a package.json read error, exits 81 over a candidate refusal, and 79 and 65 still come first',
+  { skip: NO_GUEST, timeout: 60_000 }, t => {
+    const noLock = "os.unlink(os.path.join(workspace, 'pkg', 'package-lock.json'))\n";
+    for (const [label, list, more, code, options = {}] of [
+      ['a candidate refusal in both directories', dirList(['.', 'pkg']), `${NPMRC('.')}${NPMRC('pkg')}`, CANDIDATE],
+      ['a candidate refusal first, a missing lockfile second', dirList(['.', 'pkg']), `${NPMRC('.')}${noLock}`, DEPENDENCIES_FAILED],
+      ['a missing lockfile first, a candidate refusal second', dirList(['pkg', '.']), `${NPMRC('.')}${noLock}`, DEPENDENCIES_FAILED],
+      ['a candidate refusal under a malformed dependency list', 'nope', NPMRC('.'), DEPENDENCIES_FAILED],
+      ...['EACCES', 'EIO'].map(name => [`package.json read ${name}`, dirList(['.']), READ_ERROR(name), DEPENDENCIES_FAILED]),
+      ['package.json read ENOENT, through the same injection', dirList(['.']), READ_ERROR('ENOENT'), CANDIDATE],
+      // The preflight starts no install, so a toolchain that cannot run never hides a candidate refusal.
+      ['a candidate refusal with no toolchain', dirList(['.']), NPMRC('.'), CANDIDATE, { toolchain: "os.path.join(base, 'absent')" }],
+    ]) {
+      const run = installRun(t, list, ['.', 'pkg'], { more, ...options });
+      refusedInstall(run, label, code);
+      assert.deepEqual(run.installs, [], label);
+    }
+    const mismatch = installRun(t, dirList(['.']), ['.'], { more: NPMRC('.'), check: { ...CHECK, protected: [{ path: 'package.json', oid: 'a'.repeat(40) }] } });
+    const linked = installRun(t, dirList(['.']), ['.'], { more: `${NPMRC('.')}os.symlink(os.path.join(base, 'file'), os.path.join(workspace, 'link'))\n` });
+    for (const [run, code] of [[mismatch, PROTECTED_MISMATCH], [linked, 65]]) {
+      assert.deepEqual([run.status, run.stdout.length, run.relays, run.installs], [code, 0, [], []], String(run.stderr));
     }
   });
 
@@ -1166,13 +1215,14 @@ test('C2 checkFrame accepts exactly the check frames the supervisor read_check a
         print('accepted')
     except ValueError:
         print('refused')
-print(m.PROTECTED_MISMATCH, m.PROTECTED_CHANGED, m.DEPENDENCIES_FAILED)
+print(m.PROTECTED_MISMATCH, m.PROTECTED_CHANGED, m.DEPENDENCIES_FAILED, m.DEPENDENCIES_CANDIDATE_INVALID)
 `;
   const run = spawnSync('python3', ['-I', '-B', '-c', code, SUPERVISOR, String(rows.length)], { input, maxBuffer: 64 << 20, timeout: 30_000, killSignal: 'SIGKILL' });
   assert.equal(run.status, 0, String(run.stderr));
   const lines = String(run.stdout).trim().split('\n');
   assert.deepEqual(lines.slice(0, -1), accepted.map(ok => (ok ? 'accepted' : 'refused')));
-  assert.deepEqual([lines.at(-1), DEPENDENCIES_FAILED], [`${PROTECTED_MISMATCH} ${PROTECTED_CHANGED} ${DEPENDENCIES_FAILED}`, 81]);
+  assert.deepEqual([lines.at(-1), DEPENDENCIES_FAILED, DEPENDENCIES_CANDIDATE_INVALID],
+    [`${PROTECTED_MISMATCH} ${PROTECTED_CHANGED} ${DEPENDENCIES_FAILED} ${DEPENDENCIES_CANDIDATE_INVALID}`, 81, 82]);
 });
 
 // A spawn-compatible fake provider of real Node streams. Like the supervisor it exits 74 on host EOF unless it is hung,
@@ -1410,6 +1460,59 @@ test('C7 through the real supervisor check mode, real exit codes give passed, co
       assert.deepEqual(result, expected, command);
       assert.deepEqual(calls.map(([executable, argv]) => [executable, argv]), [['multipass', checkArgv(NAME)]]);
       assert.deepEqual(existsSync(join(dir, 'sessions')) ? readdirSync(join(dir, 'sessions')).length : 0, homes, command);
+    }
+  });
+
+// task-42e9990c: the dependency phase through C7's real supervisor main() and the real runCheckSession. INSTALL plants an
+// honest project in '.' and the fake toolchain, and each row breaks one thing. The harness writes hostile bytes to the
+// supervisor's stderr first, and the candidate rows carry them in their own files too: a candidate refusal is still the
+// host's fixed literal. The check command leaves a marker only if it runs.
+const [ESC, CR] = [String.fromCharCode(27), String.fromCharCode(13)];
+const HOSTILE = `npm_secretToken0123456789${CR}\n${ESC}[31mred${ESC}[0m ${String.fromCodePoint(0x1f600).repeat(5000)}`;
+const DEPENDENCY_SESSION = more => `${INSTALL(dirList(['.']), ['.'], more, true)}m.protect_mounts = lambda workspace, paths: None
+sys.stderr.buffer.write(bytes.fromhex('${Buffer.from(HOSTILE).toString('hex')}') + bytes.fromhex('ff') * 100000)
+sys.stderr.buffer.flush()
+sys.exit(m.main(['check'], geteuid=lambda: 0, workspace=workspace, sessions=sessions, identity=(os.getuid(), os.getgid(), None), netns=False,
+                toolchain=tc, dependencies=deps, dependencies_manifest=os.path.join(base, 'deps.manifest'), install_timeout=2))
+`;
+
+test('C9 through the real supervisor, a candidate dependency refusal is code-failure 82 with the fixed host text and an environment fault infra-failure, and neither runs the check',
+  { skip: INSTALLS_RUN, timeout: 120_000 }, async t => {
+    if (busy(t)) return;
+    const children = [];
+    t.after(() => { for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+    const plant = files => `plant(workspace, ${pyFiles(files)})\n`;
+    const list = text => `with open(os.path.join(deps, 'moe-dependencies.json'), 'w') as f:\n    f.write(${JSON.stringify(text)})\n`;
+    const infra = ended('infra-failure');
+    for (const [label, more, expected, installs] of [
+      ['the honest project', '', ended('passed', 0, null, 'ok\n'), 1],
+      ['a hostile name in package.json', plant({ 'package.json': { ...PROJECT, name: HOSTILE } }), refusedCandidate, 0],
+      ['an .npmrc holding a token', plant({ '.npmrc': Buffer.from(`//registry.npmjs.org/:_authToken=${HOSTILE}\n`) }), refusedCandidate, 0],
+      ['an npm-shrinkwrap.json', plant({ 'npm-shrinkwrap.json': lockOf(PROJECT) }), refusedCandidate, 0],
+      ['an override', plant({ 'package.json': { ...PROJECT, overrides: { dep: STUB_TGZ } } }), refusedCandidate, 0],
+      ['no package.json', "os.unlink(os.path.join(workspace, 'package.json'))\n", refusedCandidate, 0],
+      ['no toolchain', "tc = os.path.join(base, 'absent')\n", infra, 0],
+      ['an install that exits 3', "open(os.path.join(workspace, 'status'), 'w').write('3\\n')\n", infra, 1],
+      ['an install that outlives install_timeout', "open(os.path.join(workspace, 'hang'), 'w').close()\n", infra, 1],
+      ['a package.json read that fails with EIO', READ_ERROR('EIO'), infra, 0],
+      ['an .npmrc beside a missing lockfile', `${NPMRC('.')}os.unlink(os.path.join(workspace, 'package-lock.json'))\n`, infra, 0],
+      ['an .npmrc under a malformed dependency list', `${NPMRC('.')}${list('nope')}`, infra, 0],
+    ]) {
+      const dir = mkdtempSync(join(tmpdir(), 'moe-42e9-'));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      const calls = [];
+      const spawn = (executable, argv, options) => {
+        calls.push([executable, argv, options]);
+        const child = spawnChild('python3', ['-I', '-B', '-c', `${PY_LOAD}${CHECK_DIRS}${DEPENDENCY_SESSION(more)}`, SUPERVISOR, dir, 'ws'], { stdio: 'pipe' });
+        children.push(child);
+        return child;
+      };
+      const result = await runCheckSession({ name: NAME, check: { id: 'unit-1', command: 'touch ran; echo ok', protected: [] }, provider: { spawn }, budgetMs: 20_000, timeoutMs: 5_000 });
+      assert.deepEqual(result, expected, label);
+      assert.ok(Buffer.byteLength(result.outputTail) <= 512 && /^[\x20-\x7e\n]*$/.test(result.outputTail), label);
+      const log = join(dir, 'install.log');
+      assert.deepEqual([calls.map(([executable, argv]) => [executable, argv]), existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0,
+        existsSync(join(dir, 'ws', 'ran'))], [[['multipass', checkArgv(NAME)]], installs, label === 'the honest project'], label);
     }
   });
 
@@ -2149,7 +2252,7 @@ test('DC5 the host npm installs the fixture offline from the read-only tree, wit
 // task-5ed445ca with the real npm: the supervisor's own run_install and GUARD run the host's node and npm (the pinned
 // toolchain in the gate) as the test user, netns False, over a tree buildDependencyCache built from an unchanged registry
 // lock in which a depends on b, nested under it. A same-version candidate tarball named by a file: spec for a, or by an
-// override for b, exits 81 with nothing installed, whether or not the tree holds the locked tarballs. Unguarded, npm
+// override for b, exits 82 with nothing installed, whether or not the tree holds the locked tarballs. Unguarded, npm
 // 11.19.1 installs the file: spec's tarball. Under the override it kept the locked bytes (it refuses an override of a
 // direct dependency and resolves the spec from a's folder), but overrides are refused outright all the same. The honest
 // manifest installs the cached registry bytes, and no planted file changes.
@@ -2180,14 +2283,19 @@ test('KI8 with the real npm, a file: spec or override naming a same-version cand
     const honest = run(project, full);
     assert.deepEqual([honest.status, honest.stray, honest.relays.length, honest.kept, honest.installed, honest.manifests, honest.ran],
       [42, [], 1, true, [['package.json'], ['package.json']], [manifestA, manifestOf(b)], false], String(honest.stderr));
+    const empty = { 'moe-dependencies.json': full['moe-dependencies.json'] };
     for (const [label, manifest] of [['a file: spec', { ...project, dependencies: { [a]: `file:stub/${a}-1.0.0.tgz` } }],
       ['an override', { ...project, overrides: { [b]: `file:../../stub/${b}-1.0.0.tgz` } }]]) {
-      for (const [cacheLabel, cache] of [['the tree', full], ['an empty tree', { 'moe-dependencies.json': full['moe-dependencies.json'] }]]) {
+      for (const [cacheLabel, cache] of [['the tree', full], ['an empty tree', empty]]) {
         const refused = run(manifest, cache);
-        refusedInstall(refused, `${label} over ${cacheLabel}`);
+        refusedInstall(refused, `${label} over ${cacheLabel}`, CANDIDATE);
         assert.deepEqual([refused.kept, refused.installed, refused.ran], [true, null, false], `${label} over ${cacheLabel}`);
       }
     }
+    // task-42e9990c: the honest manifest over a tree missing its tarballs fails npm itself, offline: an infrastructure 81.
+    const uncached = run(project, empty);
+    refusedInstall(uncached, 'the honest manifest over an empty tree');
+    assert.deepEqual([uncached.kept, uncached.ran], [true, false]);
   });
 
 // task-adbab50d's oracle: every dependency spec, and every bundled entry's name@version, admission accepts resolves to the
