@@ -206,6 +206,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Parse the Bash launcher with the stock macOS bash
+        # macOS /bin/bash is 3.2, and JetBrains launches Mac seats through it. Linux and Windows run bash 5,
+        # which parses constructs 3.2 rejects (a quoted heredoc inside $( ) is the known one).
+        if: runner.os == 'macOS'
+        run: |
+          /bin/bash --version
+          /bin/bash -n scripts/moe-agent.sh
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:

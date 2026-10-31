@@ -636,10 +636,6 @@ function between(source, start, end) {
 const LEASE_ENGINES = process.platform === 'win32'
   ? [['ps1', 'powershell.exe'], ['ps1', 'pwsh.exe'], ['sh', 'C:/Program Files/Git/bin/bash.exe']]
   : [['sh', '/bin/bash']];
-// macOS's /bin/bash is 3.2. Its $( ) scanner reads a here-document body as shell, so the JavaScript quotes in this
-// cut's MOE_GIT_GUARD_JS leave it unparseable ("unexpected EOF while looking for matching `''"). moe-agent.sh claims
-// bash 3.2, so this is a known launcher bug: remove the skip below once it is fixed.
-const bashVersion = (engine) => spawnSync(engine, ['-c', 'echo "$BASH_VERSION"'], { encoding: 'utf8' }).stdout?.trim() ?? '';
 const shQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const fwd = (file) => file.replaceAll('\\', '/');
@@ -742,10 +738,7 @@ const untrustedLine = (id, project, reason) => `[account] MOE_ACCOUNT_UNTRUSTED 
   + "not launching into Claude's folder-trust dialog; retry in 3s, the held task stays held. (Ctrl+C to stop)";
 
 for (const [ext, engine] of LEASE_ENGINES) {
-  const version = ext === 'sh' ? bashVersion(engine) : '';
-  const skip = ext === 'sh' && ((!PYTHON && 'no python 3')
-    || (parseInt(version, 10) < 4 && `${engine} is bash ${version}: moe-agent.sh's quoted heredocs inside $( ) do not parse `
-      + 'before bash 4 (known launcher bug; remove this skip once it is fixed)'));
+  const skip = ext === 'sh' && !PYTHON && 'no python 3';
 
   test(`${engine}: an interactive seat on an untrusted account is granted trust, then launches`, { skip }, (t) => {
     const run = runLeaseLoop(t, ext, engine, { accounts: ['acct-1'], configs: { 'acct-1': untrustedFor } });
