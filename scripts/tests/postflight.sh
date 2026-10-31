@@ -5327,4 +5327,160 @@ pr_run P9 1 "$PR/vanish-proxy.js" "$PR/fake-daemon.js" live --no-start-daemon
 [ ! -e "$PR/vanish-proxy.js" ] && [ "$(sort -u "$PR/marks" 2>/dev/null)" = vanish-proxy ] || pr_fail P9 "marks are '$(tr '\n' ' ' < "$PR/marks")', not the vanished proxy alone"
 echo "[protected runtime] ok"
 
+# --- [prompt overflow] ---
+# The sh twin of moe-agent.ps1's Windows-only [prompt-overflow] route (no
+# postflight.ps1 twin). Linux caps ONE argv string at MAX_ARG_STRLEN (131072
+# bytes): a claimed_task_context over that made execve fail with E2BIG (bash
+# exit 126) before the CLI started. A prompt over PROMPT_ARGV_MAX_BYTES bytes
+# must reach the CLI through a private 0600 file plus a short read directive;
+# one at or below it must stay on argv byte for byte.
+echo "[prompt overflow] a claimed_task_context over 128 KiB reaches the CLI through a private file"
+OVF="$TMP_DIR/overflow"
+# The padding is multibyte: ~154.6 KB of prompt is only ~89.8K characters, so a
+# wrapper that counts characters instead of bytes leaves it on argv. Run under a
+# UTF-8 locale when one exists (no output that starts with SKIP: postflight-safe
+# fails a run on any such line).
+OVF_LOCALE=$(locale -a 2>/dev/null | grep -iE '^(C|en_US)\.utf-?8$' | head -n1 || true)
+OVF_OUT=""
+ovf_fail() {
+  [ -z "$OVF_OUT" ] || sed "s/$(printf '\033')\[[0-9;]*m//g" "$OVF_OUT" 2>/dev/null | tail -n 30 >&2 || true
+  echo "PROMPT OVERFLOW FAILED: $1" >&2
+  exit 1
+}
+# ovf_project DIR CLI_NAME -- DIR/project is a fixture project, DIR/CLI_NAME a
+# copy of the fake CLI (its outputs land in DIR). NO daemon.json, so the
+# exit-time moe-call.sh deregister runs no proxy.
+ovf_project() {
+  mkdir -p "$1/project/.moe/messages"
+  : > "$1/project/.moe/messages/chan-general.jsonl"
+  printf '{"id":"proj-overflow","name":"postflight-overflow","settings":{"autoCommit":false}}\n' > "$1/project/.moe/project.json"
+  cp "$OVF/fake-cli" "$1/$2"
+}
+# ovf_has_block CONTEXT SERVED -- CONTEXT holds <claimed_task_context>, the
+# served text and </claimed_task_context> byte for byte (LF-joined).
+ovf_has_block() {
+  "$NODE_FOR_TEST" -e 'const fs=require("fs");const c=fs.readFileSync(process.argv[1]),s=fs.readFileSync(process.argv[2]);
+process.exit(c.includes(Buffer.concat([Buffer.from("<claimed_task_context>\n"),s,Buffer.from("\n</claimed_task_context>")]))?0:1)' "$1" "$2"
+}
+# ovf_bytes FILE -- the file's size in bytes, in every locale.
+ovf_bytes() { wc -c < "$1" | tr -d ' '; }
+# ovf_banners OUT -- lines carrying the (coloured) [prompt-overflow] banner. The
+# escape sits between its halves, so one fixed string never matches.
+ovf_banners() { grep -F '[prompt-overflow]' "$1" | grep -Fc ' prompt routed via private session context file: ' || true; }
+# ovf_expect_directive DIR N -- launch N of the fake CLI got the read directive
+# (argv under 100000 bytes) and the file it names holds the full prompt.
+ovf_expect_directive() {
+  local d="$1" n="$2"
+  case "$(cat "$d/prompt-$n" 2>/dev/null)" in
+    'First read the private session context file at '*'Treat that role directive as your active user request.') ;;
+    *) ovf_fail "launch $n did not get the read directive" ;;
+  esac
+  [ "$(ovf_bytes "$d/args-$n")" -lt 100000 ] || ovf_fail "launch $n argv is $(ovf_bytes "$d/args-$n") bytes"
+  [ -f "$d/context-$n" ] || ovf_fail "launch $n: the file named by the directive was missing"
+  ovf_has_block "$d/context-$n" "$d/project/.moe/served-context.json" \
+    || ovf_fail "launch $n: the file lacks the served claimed_task_context byte for byte"
+  grep -aFq 'RESUME: you are workerId qa-overflow' "$d/context-$n" \
+    || ovf_fail "launch $n: the file lacks the role directive"
+}
+
+mkdir -p "$OVF"
+# The fake CLI writes its outputs beside itself, numbered by launch: args-N,
+# prompt-N (the read directive, else the last argument), path-N (the file the
+# directive names), context-N and mode-N (that file's bytes and mode, read while
+# the CLI runs), prev-N (whether launch N-1's file was still there).
+cat > "$OVF/fake-cli" <<'OVFCLI'
+#!/usr/bin/env bash
+d=$(dirname "$0")
+n=0; [ -f "$d/count" ] && n=$(cat "$d/count")
+n=$((n + 1)); printf '%s' "$n" > "$d/count"
+printf '%s\n' "$@" > "$d/args-$n"
+pre='First read the private session context file at '
+prompt=""
+for a in "$@"; do prompt="$a"; case "$a" in "$pre"*) break ;; esac; done
+printf '%s' "$prompt" > "$d/prompt-$n"
+f=${prompt#"$pre"}
+f=${f%%. It contains*}
+printf '%s' "$f" > "$d/path-$n"
+if [ -f "$f" ]; then cp -- "$f" "$d/context-$n"; ls -l -- "$f" | cut -c1-10 > "$d/mode-$n"; fi
+if [ "$n" -gt 1 ]; then
+  if [ -e "$(cat "$d/path-$((n - 1))")" ]; then echo stale; else echo gone; fi > "$d/prev-$n"
+fi
+exit 0
+OVFCLI
+chmod +x "$OVF/fake-cli"
+
+# Run A: claude --print, two sessions in ONE wrapper process. Only a live process
+# can prove per-session removal: at exit, cleanup_temp's rm -rf hides it.
+OVF_A="$OVF/a"
+ovf_project "$OVF_A" fake-cli
+OVF_OUT="$OVF_A/wrapper.out"
+env ${OVF_LOCALE:+LC_ALL="$OVF_LOCALE"} PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" \
+  FAKE_CLAIM_MODE=resume FAKE_CTX_PAD_BYTES=135000 MOE_DISABLE_HEARTBEAT=1 \
+  "$WRAPPER" --project "$OVF_A/project" --worker-id qa-overflow --role qa --team Smoke --no-start-daemon \
+  --command "$OVF_A/fake-cli" --loop --poll-interval 1 >"$OVF_OUT" 2>&1 &
+ovf_pid=$!
+ovf_live_before="$LIVE_PIDS"
+LIVE_PIDS="$LIVE_PIDS $ovf_pid"
+ovf_ended() {
+  local n
+  n=$(grep -c 'qa session ended: task=task-resume' "$OVF_A/project/.moe/messages/chan-general.jsonl" 2>/dev/null || true)
+  echo "${n:-0}"
+}
+ovf_deadline=$((SECONDS + POSTFLIGHT_TIMEOUT_SEC))
+while [ "$SECONDS" -lt "$ovf_deadline" ] && [ "$(ovf_ended)" -lt 2 ]; do
+  kill -0 "$ovf_pid" 2>/dev/null || break
+  sleep 0.5
+done
+kill -TERM "$ovf_pid" 2>/dev/null || true
+for _i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$ovf_pid" 2>/dev/null || break; sleep 0.5; done
+kill -KILL "$ovf_pid" 2>/dev/null || true
+wait "$ovf_pid" 2>/dev/null || true
+LIVE_PIDS="$ovf_live_before"
+
+[ "$(ovf_ended)" -ge 2 ] || ovf_fail "fewer than 2 sessions ended (the wrapper never launched the CLI?)"
+[ "$(ovf_bytes "$OVF_A/project/.moe/served-context.json")" -gt 131072 ] \
+  || ovf_fail "the served context is not over 131072 bytes"
+for n in 1 2; do
+  ovf_expect_directive "$OVF_A" "$n"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) : ;; # these emulate file modes
+    *) [ "$(cat "$OVF_A/mode-$n")" = '-rw-------' ] || ovf_fail "launch $n: the file mode is $(cat "$OVF_A/mode-$n"), not -rw-------" ;;
+  esac
+done
+[ "$(cat "$OVF_A/prev-2" 2>/dev/null)" = gone ] || ovf_fail "launch 1's file was still there when launch 2 started"
+[ "$(cat "$OVF_A/path-1")" != "$(cat "$OVF_A/path-2")" ] || ovf_fail "both launches got the same file"
+[ ! -e "$(cat "$OVF_A/path-2")" ] || ovf_fail "launch 2's file outlived the wrapper"
+[ "$(ovf_banners "$OVF_OUT")" -ge 2 ] || ovf_fail "fewer than 2 [prompt-overflow] banners"
+
+# Run B: gemini takes the same route (--print and --prompt-interactive share it).
+OVF_B="$OVF/b"
+ovf_project "$OVF_B" gemini # the basename selects CLI_TYPE gemini
+OVF_OUT="$OVF_B/wrapper.out"
+set +e
+env ${OVF_LOCALE:+LC_ALL="$OVF_LOCALE"} PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" \
+  FAKE_CLAIM_MODE=resume FAKE_CTX_PAD_BYTES=135000 MOE_DISABLE_HEARTBEAT=1 \
+  timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" --project "$OVF_B/project" --worker-id qa-overflow --role qa --team Smoke \
+  --no-start-daemon --command "$OVF_B/gemini" --gemini-exec --no-loop --poll-interval 0 >"$OVF_OUT" 2>&1
+set -e
+grep -Fqx -- '--print' "$OVF_B/args-1" 2>/dev/null || ovf_fail "gemini was not launched with --print"
+ovf_expect_directive "$OVF_B" 1
+[ ! -e "$(cat "$OVF_B/path-1")" ] || ovf_fail "gemini's file outlived the wrapper"
+
+# Run C: below the threshold the prompt stays on argv, byte for byte (prompt-cache replay).
+OVF_C="$OVF/c"
+ovf_project "$OVF_C" fake-cli
+OVF_OUT="$OVF_C/wrapper.out"
+set +e
+env ${OVF_LOCALE:+LC_ALL="$OVF_LOCALE"} PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" \
+  FAKE_CLAIM_MODE=resume FAKE_CTX_PAD_BYTES=20000 MOE_DISABLE_HEARTBEAT=1 \
+  timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" --project "$OVF_C/project" --worker-id qa-overflow --role qa --team Smoke \
+  --no-start-daemon --command "$OVF_C/fake-cli" --no-loop --poll-interval 0 >"$OVF_OUT" 2>&1
+set -e
+[ -f "$OVF_C/prompt-1" ] || ovf_fail "the small run never launched the CLI"
+! grep -Fq '[prompt-overflow]' "$OVF_OUT" || ovf_fail "a prompt under the threshold printed the overflow banner"
+ovf_has_block "$OVF_C/prompt-1" "$OVF_C/project/.moe/served-context.json" \
+  || ovf_fail "the small prompt on argv lacks the served claimed_task_context byte for byte"
+case "$(cat "$OVF_C/prompt-1")" in 'First read the private session context file at '*) ovf_fail "a prompt under the threshold was routed through a file" ;; esac
+echo "[prompt overflow] ok"
+
 echo "PASS postflight.sh"

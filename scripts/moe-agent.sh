@@ -112,6 +112,28 @@ create_secure_temp() {
     echo "$SECURE_TEMP_DIR"
 }
 
+# Linux caps ONE argv string at MAX_ARG_STRLEN (131072 bytes): a longer one makes
+# execve fail with E2BIG, and bash exits 126 before the CLI starts. A prompt over
+# PROMPT_ARGV_MAX_BYTES bytes (bytes, not characters: wc -c counts bytes in every
+# locale) goes to a private 0600 file in the secure temp dir, and argv carries
+# moe-agent.ps1's read directive instead -- the sh twin of its Windows-only
+# [prompt-overflow] route. The launch tail removes the file once the CLI exits;
+# cleanup_temp removes it on any other exit.
+PROMPT_ARGV_MAX_BYTES=100000
+PROMPT_OVERFLOW_FILE=""
+route_prompt_overflow() { # VAR: the variable holding the prompt, rewritten in place
+    local prompt="${!1}" bytes
+    bytes=$(printf '%s' "$prompt" | wc -c | tr -d ' ')
+    [ "$bytes" -gt "$PROMPT_ARGV_MAX_BYTES" ] || return 0
+    if ! PROMPT_OVERFLOW_FILE=$(mktemp "$SECURE_TEMP_DIR/session-context.XXXXXX") \
+        || ! printf '%s' "$prompt" > "$PROMPT_OVERFLOW_FILE"; then
+        echo -e "${RED}[ERROR]${NC} [prompt-overflow] cannot write a private session context file in $SECURE_TEMP_DIR; refusing to pass a $bytes-byte prompt as one argv string." >&2
+        exit 1
+    fi
+    printf -v "$1" '%s' "First read the private session context file at $PROMPT_OVERFLOW_FILE. It contains your daemon-scoped task context, claimed_task_context, routed mentions, and role directive. Treat that role directive as your active user request."
+    echo -e "${YELLOW}[prompt-overflow]${NC} prompt routed via private session context file: $bytes bytes > $PROMPT_ARGV_MAX_BYTES-byte argv limit."
+}
+
 cleanup_temp() {
     # This is the EXIT trap: it inherits `set -e`, and a failing command here
     # would abort the trap half-way (no rescue, no deregister). Everything
@@ -8319,6 +8341,7 @@ $PROMPT_BODY"
             fi
         fi
 
+        route_prompt_overflow SHORT_PROMPT
         if [ "$GEMINI_EXEC" = true ]; then
             # Non-interactive headless mode
             echo -e "Starting Gemini (headless, --dangerously-skip-permissions)..."
@@ -8461,6 +8484,7 @@ $PROMPT_BODY"
         # (system prompt contains XML tags, backticks, and JSON that can break arg passing)
         SYSTEM_PROMPT_FILE=$(create_secure_temp)/system-prompt.md
         printf '%s' "$SYSTEM_APPEND" > "$SYSTEM_PROMPT_FILE"
+        if [ "$AUTO_CLAIM" = true ]; then route_prompt_overflow PROMPT; fi
 
         # Token-budget debug: set MOE_DEBUG_PROMPT_SIZE=1 to print final
         # SYSTEM_APPEND size before launching the agent. Used to measure
@@ -8907,6 +8931,7 @@ PYEOF
     fi
 
     if [ -n "${AGENT_GIT_GUARD_ROOT:-}" ]; then rm -rf -- "$AGENT_GIT_GUARD_ROOT"; AGENT_GIT_GUARD_ROOT=""; fi
+    if [ -n "$PROMPT_OVERFLOW_FILE" ]; then rm -f -- "$PROMPT_OVERFLOW_FILE"; PROMPT_OVERFLOW_FILE=""; fi
     stop_heartbeat_sidecar
 
     # Launch-failure classification (tracker declared above the main loop).

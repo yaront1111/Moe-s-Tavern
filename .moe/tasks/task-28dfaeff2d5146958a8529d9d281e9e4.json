@@ -13,35 +13,54 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (RED). Files: scripts/tests/postflight-fake-proxy.js and scripts/tests/postflight.sh. Anchor every edit on text, never on line numbers. The dependency c7ee939a has landed (completion eeca8aa0), and these anchors were re-checked on that tip.\n\n(a) Fake-proxy knob FAKE_CTX_PAD_BYTES. In `case 'get_context':`, immediately before that handler's `ok(ctxPayload);`, add the code below. Document it with a comment at the handler, as FAKE_CTX_WORKSPACE / FAKE_CTX_COMMITS are:\n  const padBytes = Number(process.env.FAKE_CTX_PAD_BYTES || 0);\n  if (padBytes > 0) {\n    const unit = '日本語日本語 \"q\" \\\\ ';\n    ctxPayload.task.description = unit.repeat(Math.ceil(padBytes / Buffer.byteLength(unit)));\n    fs.writeFileSync(path.join(moe, 'served-context.json'), JSON.stringify(ctxPayload));\n  }\nThe unit is six CJK characters, a space, q in double quotes, a space, one backslash and a space: 25 UTF-8 bytes but 13 characters. JSON escaping adds 3 bytes per unit. So FAKE_CTX_PAD_BYTES=135000 serves about 151 KB (more than 131072 bytes) that is only about 86K characters.\nserved-context.json is byte-identical to the text ok() serves: it is the same JSON.stringify of the same object.\nUnset or 0 changes nothing. postflight.ps1 shares this file, and none of its arms sets the knob.\nAdd 'served-context.json (FAKE_CTX_PAD_BYTES)' to the header comment's list of .moe side effects.\n\n(b) postflight.sh: add ONE self-contained section, `# --- [prompt overflow] ...`, immediately before the final `echo \"PASS postflight.sh\"` line (after `echo \"[protected runtime] ok\"`).\n- Its comment says it is the sh twin of moe-agent.ps1's Windows-only route, with no postflight.ps1 twin.\n- It edits no earlier arm.\n- It starts with `echo \"[prompt overflow] a claimed_task_context over 128 KiB reaches the CLI through a private file\"` and ends with `echo \"[prompt overflow] ok\"`.\n\nFixture: OVF=\"$TMP_DIR/overflow\" and OVF_PROJECT=\"$OVF/project\".\n- .moe/messages/chan-general.jsonl, empty.\n- .moe/project.json: {\"id\":\"proj-overflow\",\"name\":\"postflight-overflow\",\"settings\":{\"autoCommit\":false}}.\n- NO daemon.json, so the exit-time moe-call.sh deregister runs no proxy.\n\nFake CLI \"$OVF/fake-cli\", written from a QUOTED heredoc. It writes its outputs beside itself (d=$(dirname \"$0\")):\n- n = count + 1, saved back to $d/count.\n- printf '%s\\n' \"$@\" > $d/args-$n.\n- prompt = the argument starting with 'First read the private session context file at ', else the last argument. printf '%s' \"$prompt\" > $d/prompt-$n.\n- f = prompt minus that prefix, cut at '. It contains' (f=${f%%. It contains*}). Save it to $d/path-$n.\n- If [ -f \"$f\" ]: cp -- \"$f\" $d/context-$n, and ls -l -- \"$f\" | cut -c1-10 > $d/mode-$n.\n- For n > 1: write gone or stale to $d/prev-$n, depending on whether $(cat $d/path-$((n-1))) still exists.\n- exit 0.\n\nLocale: OVF_LOCALE=$(locale -a 2>/dev/null | grep -iE '^(C|en_US)\\.utf-?8$' | head -n1 || true).\n- Prefix every wrapper run below with env ${OVF_LOCALE:+LC_ALL=\"$OVF_LOCALE\"}.\n- Under it, the ~154.6 KB overflow prompt is only ~89.8K characters, so counting characters would leave it on argv and hit E2BIG.\n- If no UTF-8 locale exists, print nothing that starts with SKIP: postflight-safe.mjs fails a run on any ^SKIP line.\n\nRun A: claude --print, two sessions in ONE wrapper process. Only a live process can prove per-session removal; at exit, cleanup_temp's rm -rf hides it.\nLaunch in the background:\n  env ${OVF_LOCALE:+...} PATH=\"$TMP_DIR:$PATH\" HOME=\"$HOME_DIR\" MOE_PROXY_PATH=\"$FAKE_PROXY\" FAKE_CLAIM_MODE=resume FAKE_CTX_PAD_BYTES=135000 MOE_DISABLE_HEARTBEAT=1 \"$WRAPPER\" --project \"$OVF_PROJECT\" --worker-id qa-overflow --role qa --team Smoke --no-start-daemon --command \"$OVF/fake-cli\" --loop --poll-interval 1 >\"$OVF/wrapper.out\" 2>&1 &\nKeep --poll-interval 1: a value of 0 disables the loop.\nTrack the pid in LIVE_PIDS, as scenario AH run 3 does.\nEvery 0.5 s, check whether the arm's chan-general.jsonl holds 2 'qa session ended: task=task-resume' lines. Stop waiting when it does, when the pid dies, or when SECONDS passes a deadline of POSTFLIGHT_TIMEOUT_SEC.\nThen kill -TERM, wait up to 5 s, kill -KILL, wait, and restore LIVE_PIDS.\n\nAsserts for A. Each failure goes through one helper that prints the ANSI-stripped wrapper.out tail and 'PROMPT OVERFLOW FAILED: <why>', then exits 1.\n- 2 sessions ended.\n- served-context.json is more than 131072 bytes.\n- For n in 1 2:\n  - prompt-n starts with 'First read the private session context file at ' and ends with 'Treat that role directive as your active user request.'\n  - args-n is under 100000 bytes.\n  - context-n contains '<claimed_task_context>' + LF + served-context.json + LF + '</claimed_task_context>', compared as bytes (node Buffer.includes).\n  - context-n also contains 'RESUME: you are workerId qa-overflow', so the role directive reached the file too.\n  - mode-n is '-rw-------'. Skip this check only when uname -s is MINGW*/MSYS*/CYGWIN*, which emulate modes.\n- prev-2 is gone.\n- path-1 differs from path-2.\n- path-2 no longer exists once the wrapper has exited.\n- At least 2 wrapper.out lines contain both '[prompt-overflow]' and ' prompt routed via private session context file: '. The banner is coloured (${YELLOW}[prompt-overflow]${NC}), so grep the two halves separately: one fixed string across the escape never matches.\n\nRun B: gemini, same route.\n- mkdir \"$OVF/gemini\" and cp the fake CLI to \"$OVF/gemini/gemini\". The basename gemini selects CLI_TYPE gemini.\n- Same env, OVF_PROJECT and pad: timeout ${POSTFLIGHT_TIMEOUT_SEC}s \"$WRAPPER\" ... --command \"$OVF/gemini/gemini\" --gemini-exec --no-loop.\n- Assert: args-1 holds a --print line; prompt-1 is the directive; context-1 holds the served block byte for byte; args-1 is under 100000 bytes; path-1 is gone after the run.\n\nRun C: below the threshold (prompt-cache invariance, governor 02:16Z point 1).\n- Its own project, \"$OVF/small/project\", with the same fixture shape, and a copy of the fake CLI.\n- FAKE_CTX_PAD_BYTES=20000, --no-loop, under timeout.\n- Assert: no '[prompt-overflow]' in its output; prompt-1 (the ~25.8 KB claude argv prompt) contains that project's served block byte for byte; prompt-1 does not start with the directive.\n\nRED check. Use a fast driver in a git-archive snapshot outside the checkout, never in the shared scripts/tests/.\n- The driver is postflight.sh from line 1 through the line cp \"$ROOT_DIR/scripts/tests/postflight-fake-proxy.js\" \"$FAKE_PROXY\", then the new section, then the PASS line.\n- Run it under env -i HOME=\"$HOME\" PATH=\"<node dir>:/usr/local/bin:/usr/bin:/bin\".\n- Against today's wrapper, expect wrapper.out to say 'Argument list too long', launch 1 never to reach the CLI, and the arm to fail after about POSTFLIGHT_TIMEOUT_SEC.\nArchitect pre-validation (2026-10-31): the arm is RED on HEAD. Three mutants each fail it: one without the per-session rm, one that counts characters, one without the gemini call site.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js",
         "scripts/tests/postflight.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Added the FAKE_CTX_PAD_BYTES knob (writes .moe/served-context.json atomically) and a self-contained [prompt overflow] arm (runs A claude --print loop x2 sessions, B gemini, C below-threshold) before the PASS line. RED check in a git-archive snapshot (/mnt/d/moe-scratch/28dfaeff-red.*), driver = harness prefix + the arm, env -i: the unfixed wrapper prints 'Argument list too long' (exit 126), the CLI is never reached, and the arm fails with 'fewer than 2 sessions ended'. Shared checkout dirty paths seen (.moe/tasks/*.json, .moe/decisions/) belong to other sessions; not touched.",
+      "startedAt": "2026-10-31T02:59:56.807Z",
+      "completedAt": "2026-10-31T03:04:27.056Z"
     },
     {
       "stepId": "step-2",
       "description": "IMPLEMENT (GREEN). scripts/moe-agent.sh only. Anchor on text.\n\nLive seats run this file, so never edit it in place, and never point Edit or Write at it directly (scripts/CLAUDE.md Hot reload; governor 02:08Z):\n  T=$(mktemp -d /mnt/d/moe-scratch/28dfaeff.XXXXXX)\n  cp -p scripts/moe-agent.sh \"$T/moe-agent.sh\"\n  edit only that copy\n  bash -n \"$T/moe-agent.sh\"\n  mv -f \"$T/moe-agent.sh\" scripts/moe-agent.sh\n  rmdir \"$T\"\n/mnt/d is one mount, so the mv is a single rename. It keeps the exec bit, running seats keep the old inode, and nothing stray appears under scripts/.\n\n(1) Helper. Put it directly after the create_secure_temp() function and before cleanup_temp(). Open it with a 5-6 line comment saying:\n- Linux caps ONE argv string at MAX_ARG_STRLEN (131072 bytes). A longer one fails execve with E2BIG, and bash exits 126 before the CLI starts.\n- A prompt over PROMPT_ARGV_MAX_BYTES bytes (bytes, not characters) goes to a private 0600 file in the secure temp dir, and argv carries moe-agent.ps1's read directive instead. This is the sh twin of moe-agent.ps1's Windows-only [prompt-overflow] route.\n- The launch tail removes the file once the CLI exits; cleanup_temp removes it on any other exit.\nThis comment is DoD 1's documentation (rail prop-34cca36f).\n  PROMPT_ARGV_MAX_BYTES=100000\n  PROMPT_OVERFLOW_FILE=\"\"\n  route_prompt_overflow() { # VAR: the variable holding the prompt, rewritten in place\n      local prompt=\"${!1}\" bytes\n      bytes=$(printf '%s' \"$prompt\" | wc -c | tr -d ' ')\n      [ \"$bytes\" -gt \"$PROMPT_ARGV_MAX_BYTES\" ] || return 0\n      if ! PROMPT_OVERFLOW_FILE=$(mktemp \"$SECURE_TEMP_DIR/session-context.XXXXXX\") \\\n          || ! printf '%s' \"$prompt\" > \"$PROMPT_OVERFLOW_FILE\"; then\n          echo -e \"${RED}[ERROR]${NC} [prompt-overflow] cannot write a private session context file in $SECURE_TEMP_DIR; refusing to pass a $bytes-byte prompt as one argv string.\" >&2\n          exit 1\n      fi\n      printf -v \"$1\" '%s' \"First read the private session context file at $PROMPT_OVERFLOW_FILE. It contains your daemon-scoped task context, claimed_task_context, routed mentions, and role directive. Treat that role directive as your active user request.\"\n      echo -e \"${YELLOW}[prompt-overflow]${NC} prompt routed via private session context file: $bytes bytes > $PROMPT_ARGV_MAX_BYTES-byte argv limit.\"\n  }\nWhy each piece:\n- wc -c counts bytes in every locale. It is the MOE_DEBUG_PROMPT_SIZE idiom.\n- mktemp creates the file 0600 with a fresh name every session.\n- ${!1} and printf -v run on bash 3.2 (macOS /bin/bash); namerefs need bash 4.3.\n- The directive is moe-agent.ps1's text, word for word.\n- At or below the threshold the function returns before touching the variable, so the prompt reaches argv byte for byte.\n- error handling: a failed mktemp or file write prints the [ERROR] line and exits 1, so the EXIT trap runs teardown rescue and deregister. That matches a failed SYSTEM_PROMPT_FILE write under set -e. The oversize argv is never passed.\n\n(2) claude call site. Directly after the line\n        printf '%s' \"$SYSTEM_APPEND\" > \"$SYSTEM_PROMPT_FILE\"\nadd\n        if [ \"$AUTO_CLAIM\" = true ]; then route_prompt_overflow PROMPT; fi\nOnly the AUTO_CLAIM branch passes \"$PROMPT\", to both the --print and the TUI launch. Keep both launch lines byte-identical.\nscripts/tests/usage-launcher.test.mjs cuts the block from the last `        LAUNCH_SKIPPED=false` to `\\n    fi\\n\\n    if [ -n \"${AGENT_GIT_GUARD_ROOT:-}\" ]`. It runs that block with PROMPT=pointer and no helper, so add nothing inside it.\n\n(3) gemini call site. Put\n        route_prompt_overflow SHORT_PROMPT\non the line immediately before\n        if [ \"$GEMINI_EXEC\" = true ]; then\nThis covers --print and --prompt-interactive. In the legacy branches SHORT_PROMPT is a fixed string, so the helper returns at once.\n\n(4) Removal at session end. Directly AFTER the line\n    if [ -n \"${AGENT_GIT_GUARD_ROOT:-}\" ]; then rm -rf -- \"$AGENT_GIT_GUARD_ROOT\"; AGENT_GIT_GUARD_ROOT=\"\"; fi\nadd\n    if [ -n \"$PROMPT_OVERFLOW_FILE\" ]; then rm -f -- \"$PROMPT_OVERFLOW_FILE\"; PROMPT_OVERFLOW_FILE=\"\"; fi\nNever put it between the dispatch's closing fi and that line: that is usage-launcher's end anchor.\nEvery CLI type passes this point. Ctrl+C, TERM and set -e exits are covered by cleanup_temp's rm -rf of SECURE_TEMP_DIR, and the hot-reload exec path deletes the dir too.\n\nLeave untouched:\n- codex. When DYNAMIC_CONTEXT exists it already goes to CODEX_SESSION_CONTEXT_FILE, and SHORT_PROMPT is CONTEXT_POINTER + PROMPT_BODY. Its launch lines are pinned by packages/moe-daemon/src/providers/codexDescriptor.ts.\n- grok, which uses --prompt-file or a short GROK_POINTER_PROMPT.\n- The PROMPT/DYNAMIC_CONTEXT composition.\n- moe-agent.ps1.\n\nGREEN, on the snapshot:\n- The Step 1 driver passes.\n- node --test scripts/tests/usage-launcher.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/taskless-handoff.test.mjs scripts/tests/importee-guard-bash.test.mjs passes. These tests slice moe-agent.sh by text anchors. Architect pre-validation: 131 pass, 2 skipped.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "scripts/moe-agent.sh: +25 lines. PROMPT_ARGV_MAX_BYTES=100000, PROMPT_OVERFLOW_FILE and route_prompt_overflow() after create_secure_temp(); claude call site after the SYSTEM_PROMPT_FILE write (AUTO_CLAIM only); gemini call site before `if [ \"$GEMINI_EXEC\" = true ]`; one rm line after the AGENT_GIT_GUARD_ROOT cleanup line. Saved safely: edited a copy under /mnt/d/moe-scratch, bash -n, one mv -f (running seats keep the old inode). GREEN on a snapshot: the Step 1 driver exits 0 in 9 s ('[prompt overflow] ok'); the 4 node launcher suites give 124 tests, 122 pass, 0 fail, 2 skipped (the architect's '131 pass' count came from a different environment; same 124 with the full PATH); parity-check passes.",
+      "startedAt": "2026-10-31T03:04:27.957Z",
+      "completedAt": "2026-10-31T03:06:25.481Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY ONCE. This run is the completion evidence. No files change in this step.\n\nSnapshot outside the checkout:\n  S=$(mktemp -d)\n  git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\"\nThen copy this task's three files over it. Run scratch git only via git -C, or after cd \"$S\" || exit 1.\n\nFrom \"$S\", run under:\n  env -i HOME=\"$HOME\" PATH=\"<dir of node>:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=180\nIf you launch it in the background, exec through a shim that resets every SIG_IGN to SIG_DFL (python signal + os.execvp). An inherited ignored SIGINT fails scenario W (Serena gotcha-qa-session-env-and-signals-leak-into-harness).\n\nCommand:\n  bash -n scripts/moe-agent.sh && bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh && node --test scripts/tests/usage-launcher.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/taskless-handoff.test.mjs scripts/tests/importee-guard-bash.test.mjs\n\nExpect:\n- '[prompt overflow] ok'\n- 'PASS postflight.sh'\n- 'PASS parity-check.sh'\n- node 'fail 0'\nIt takes about 12 min. The architect's full postflight.sh run with the arm and the fix took 715 s and exited 0.\n\nSubmit this fresh output as complete_task's verification: command, exitCode, outputTail.\n\nNever run the harness from the shared scripts/ (governor 02:08Z), and never run npm build, clean or install in the checkout (GLOBAL rail).\n\nNo daemon suite is needed:\n- heartbeatStop.test.ts slices from HEARTBEAT_PID=\"\" to post_flight().\n- providerDescriptor pins only the codex lines.\n- No edit here touches either.\nSay so in the summary.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Full chain ran in a full git-archive snapshot (/mnt/d/moe-scratch/28dfaeff-v.*, the 3 task files cmp-identical to the checkout) under env -i + python sigreset shim (SigIgn 0x4 = SIGQUIT only), MOE_POSTFLIGHT_TIMEOUT_SEC=180: '[prompt overflow] ok', 'PASS postflight.sh', 'PASS parity-check.sh', node 124 tests / 122 pass / 0 fail / 2 skipped, GATE_EXIT=0. No daemon suite run: heartbeatStop.test.ts slices HEARTBEAT_PID=\"\"..post_flight() and providerDescriptor pins only the codex lines; no edit touches either.",
+      "startedAt": "2026-10-31T03:06:26.323Z",
+      "completedAt": "2026-10-31T03:21:02.711Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW of this task's own diff (the three files), then complete_task. If the review changes any byte, re-run Step 3's command and submit that output.\n\nChecks:\n(a) No argv path can still carry more than 100000 bytes.\n- claude --print and TUI go through PROMPT.\n- gemini --print and --prompt-interactive go through SHORT_PROMPT.\n- codex is safe: argv holds the pointer plus PROMPT_BODY, a fixed role directive of a few KB, and the context sits in its file.\n- grok is safe: --prompt-file, or a short pointer.\n(b) At or below 100000 bytes the argv prompt is byte-identical. Run C shows it, and so do the untouched resume, tier and interactive arms.\n(c) A 0-byte prompt returns at once. A multi-MB prompt is fine, because printf is a builtin and wc reads a pipe.\n(d) Concurrency: SECURE_TEMP_DIR is per process with mode 0700, and mktemp gives each session a unique 0600 name. No two seats or loop iterations share a file.\n(e) Every exit removes the file:\n- a normal exit through the tail rm;\n- INT, TERM and set -e through cleanup_temp;\n- a hot-reload exec through its rm of the dir;\n- a write failure exits 1 and never passes the argv.\n(f) Bash 3.2 compatibility: no namerefs, no ${x^^}. No new MOE_* code. parity-check passes.\n\nThe completion summary must carry:\n- DoD 2: codex shown safe as in (a); gemini covered and tested by run B; grok noted.\n- The ps1 confirmation (governor 02:16Z point 2). Its $isWin route sends any claude prompt over 6000 chars, or containing a double quote, through moe-claude-context-<guid>.md, for both --print and the TUI. So a 140 KB claimed_task_context never reaches argv on Windows.\n- The payload size reproduced against: a served context of ~151 KB and a routed prompt of ~154.6 KB (~89.8K characters). Compare CQ-R13's measured 144,781 bytes; the governor's second measurement was 140,812.\n- The safe-save method used.\n- Rail prop-34cca36f.\n- Residuals, stated but not fixed:\n  - A Git Bash seat on Windows is still capped by CreateProcess's 32,767-character command line.\n  - A non-Windows pwsh seat still has no route.\n  - agy may need its shell tool to read a file outside its workspace. That is still better than exit 126.\n  - The daemon-side epicSiblings/epicRails trim is a BACKLOG follow-up (governor 02:16Z point 3).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review of the 3-file diff, no byte changed (Step 3 evidence stands). (a) Every argv path: claude --print/TUI via PROMPT and gemini via SHORT_PROMPT are routed; codex SHORT_PROMPT = pointer + fixed PROMPT_BODY whenever DYNAMIC_CONTEXT exists; grok uses --prompt-file or a short pointer. (b) At or below 100000 bytes the helper returns before touching the variable; run C shows argv byte for byte. (c) 0-byte prompt returns at once; multi-MB fine (printf builtin, wc reads a pipe). (d) mktemp gives a unique 0600 name inside the per-process 0700 SECURE_TEMP_DIR. (e) Removal: tail rm on a normal pass (no bash continue/break sits between the claude call site and the tail; the grep hits were inside the Python parser heredoc), cleanup_temp rm -rf on INT/TERM/set -e, hot-reload exec removes the dir, a write failure exits 1 without passing argv. (f) bash 3.2: ${!1} and printf -v only, no namerefs; no new MOE_* code. Mutants (no tail rm, character count, no gemini call site) each fail the arm. Theoretical only: a TUI seat may have to approve the Read of a file outside the project (claude --print runs --permission-mode bypassPermissions, so it does not).",
+      "startedAt": "2026-10-31T03:21:03.632Z",
+      "completedAt": "2026-10-31T03:21:30.176Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -73,7 +92,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T02:07:32.248Z",
-  "updatedAt": "2026-10-31T02:50:12.604Z",
+  "updatedAt": "2026-10-31T03:21:55.601Z",
   "dependsOn": [
     "task-c7ee939a460641eab87eb799a38e6ff9"
   ],
@@ -85,16 +104,23 @@
   "metrics": {
     "firstClaimAt": "2026-10-31T02:08:13.843Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-915213a1"
+    "architect-915213a1",
+    "worker-632cd3f0"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T02:49:55.897Z",
   "executionContract": {
@@ -164,5 +190,45 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-31T02:49:55.918Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "c0ec7612d69f090798e37d47461a3a03e24fc337",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-915213a1@2026-10-31T02:08:15Z",
+      "paths": [
+        ".moe/tasks/task-28dfaeff2d5146958a8529d9d281e9e4.json",
+        ".moe/tasks/task-b60cb68c4ae74ffda43e617c7466911e.json"
+      ],
+      "recordedBy": "architect-915213a1",
+      "recordedAt": "2026-10-31T02:51:23.336Z",
+      "treeId": "bc2a23e2def6f5de7be86294cb326026a43548ac",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-915213a1@2026-10-31T02:08:15Z",
+    "at": "2026-10-31T02:51:23.336Z"
+  },
+  "workStartedAt": "2026-10-31T02:59:56.807Z",
+  "reviewStartedAt": "2026-10-31T03:21:55.599Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /mnt/d/moe-scratch/v-28dfaeff.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/tests/postflight.sh scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh && node --test scripts/tests/usage-launcher.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/taskless-handoff.test.mjs scripts/tests/importee-guard-bash.test.mjs'",
+    "exitCode": 0,
+    "outputTail": "[prompt overflow] a claimed_task_context over 128 KiB reaches the CLI through a private file\n[prompt overflow] ok\nPASS postflight.sh\nPASS parity-check.sh\nℹ tests 124\nℹ suites 0\nℹ pass 122\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0\nGATE_EXIT=0\n(Run in a full git-archive snapshot of HEAD with the three task files copied over and cmp-identical to the checkout, under env -i + a SIG_IGN-resetting python shim, MOE_POSTFLIGHT_TIMEOUT_SEC=180, ~16 min.)",
+    "reportedAt": "2026-10-31T03:21:55.599Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "moe-agent.sh no longer passes a claude/gemini user prompt over PROMPT_ARGV_MAX_BYTES (100000 bytes, counted with wc -c, so locale-proof) as one argv string. Above it, route_prompt_overflow() writes the prompt byte for byte to a 0600 mktemp file in the 0700 SECURE_TEMP_DIR, passes moe-agent.ps1's read directive, and prints '[prompt-overflow] prompt routed via private session context file: N bytes > 100000-byte argv limit.' A failed write exits 1 with an [ERROR] line and never passes the argv. At or below the threshold the prompt reaches argv unchanged (the helper returns before touching the variable). The file is removed right after the CLI exits (one rm line after the AGENT_GIT_GUARD_ROOT cleanup) and by cleanup_temp on any other exit. 3 files: scripts/moe-agent.sh (+25), postflight-fake-proxy.js (FAKE_CTX_PAD_BYTES knob), postflight.sh ([prompt overflow] arm).\\n\\nTests: RED on HEAD ('Argument list too long', arm fails). GREEN: run A (claude --print, one --loop process, 2 sessions: directive on argv under 100000 bytes, file holds the served claimed_task_context block + the RESUME role directive byte for byte, mode -rw------- (MSYS exempt), launch 1's file gone when launch 2 starts, banner per launch); run B gemini; run C pad 20000 stays on argv with no banner. Runs under a UTF-8 locale, so a character count fails it. Mutants (no tail rm, character count, no gemini call site) each fail the arm. Full chain (bash -n, postflight.sh, parity-check.sh, 4 node suites: 124 tests, 122 pass, 0 fail, 2 skipped) exit 0 in a full git-archive snapshot. No daemon suite: heartbeatStop.test.ts slices HEARTBEAT_PID=\\\"\\\"..post_flight() and codexDescriptor pins only the codex lines; nothing here touches either.\\n\\nDoD 2: codex is safe (SHORT_PROMPT = pointer + fixed PROMPT_BODY whenever DYNAMIC_CONTEXT exists; context goes to its file); grok is safe (--prompt-file or short pointer); gemini is covered and tested by run B. ps1: its $isWin route sends any claude prompt over 6000 chars or h"
 }

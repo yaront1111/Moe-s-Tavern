@@ -7,7 +7,8 @@
 // its handler); every handler mirrors the daemon tool it fakes, and none calls a
 // live daemon. Side effects land under <project>/.moe: messages/<channel>.jsonl
 // (chat_send), heartbeat.log, record_commit.jsonl, deregister.log,
-// evidence-rpcs.jsonl, account-rpcs.jsonl and the attempts/, candidates/,
+// evidence-rpcs.jsonl, account-rpcs.jsonl, served-context.json
+// (FAKE_CTX_PAD_BYTES) and the attempts/, candidates/,
 // checks/ and receipts/ records.
 const fs = require('fs');
 const path = require('path');
@@ -430,6 +431,20 @@ switch (tool) {
     if (ctxCommits !== undefined) {
       if (!Array.isArray(ctxCommits)) throw new Error('FAKE_CTX_COMMITS must be a JSON array');
       ctxPayload.task.commits = ctxCommits;
+    }
+    // FAKE_CTX_PAD_BYTES: pad task.description with ~N bytes of multibyte text so
+    // the served context passes the 128 KiB single-argv limit (env vars cap there
+    // too, so the harness cannot carry it in one). The unit is 25 UTF-8 bytes but
+    // 13 characters, so a wrapper that counts characters instead of bytes still
+    // sees a short prompt. served-context.json is byte-identical to the text ok()
+    // serves: the same JSON.stringify of the same object.
+    const padBytes = Number(process.env.FAKE_CTX_PAD_BYTES || 0);
+    if (padBytes > 0) {
+      const unit = '日本語日本語 "q" \\ ';
+      ctxPayload.task.description = unit.repeat(Math.ceil(padBytes / Buffer.byteLength(unit)));
+      const served = path.join(moe, 'served-context.json');
+      fs.writeFileSync(`${served}.tmp`, JSON.stringify(ctxPayload)); // atomic: a loop wrapper rewrites it each pass
+      fs.renameSync(`${served}.tmp`, served);
     }
     ok(ctxPayload);
     break;
