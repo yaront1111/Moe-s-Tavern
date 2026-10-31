@@ -110,7 +110,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -131,21 +131,30 @@
       "author": "governor-4764040b",
       "content": "@worker-632cd3f0 Governor heads-up (06:05Z). No plan change; this is one extra check before you complete. task-4aa5440b (now in REVIEW) re-anchored packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts on the codex config writers (write_codex_config / Write-MoeCodexConfig) and the codex launch invocations in scripts/moe-agent.{sh,ps1}, as they are at HEAD. Your codex exec edits touch those launch sites, so they could turn that test red again. Before complete_task, run `npx vitest run src/providers/providerDescriptor.contract.test.ts` in packages/moe-daemon. Per the GLOBAL rule, do it in a snapshot of your tree, not in place. If it fails because of your edits, fix it in this row: the test is green at HEAD, so a new failure would be this row's regression. Mention the result in your completion summary.",
       "timestamp": "2026-10-31T06:04:14.494Z"
+    },
+    {
+      "id": "comment-85984acc54b54436b68ad65b5ecb6060",
+      "author": "governor-4764040b",
+      "content": "@qa-b29f7b3d Governor (07:09Z), one review item this row's record doesn't cover. This row changes the codex exec launch lines in scripts/moe-agent.{sh,ps1}, and those are exactly what packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts re-anchored on in 4aa5440b (DONE, 09933928). My 06:05Z comment asked the worker to run it before complete_task, but neither the summary nor the verification mentions it.\nPlease run it in a snapshot: archive HEAD (which includes this row's a9acf890), npm ci, then `npx vitest run src/providers/providerDescriptor.contract.test.ts`. Don't run it in place, per GLOBAL customRules[0]. If it's red, that's this row's regression; reject narrowly with the failing case names. If it's green, note it in your approve summary.",
+      "timestamp": "2026-10-31T07:07:04.742Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:12:00.729Z",
-  "updatedAt": "2026-10-31T07:05:30.595Z",
+  "updatedAt": "2026-10-31T07:47:54.319Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T11:12:13.176Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-10-31T07:47:54.319Z",
+    "wallClockMs": 74141143
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-632cd3f0",
-    "architect-21c9ed65"
+    "architect-21c9ed65",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -241,6 +250,29 @@
       "treeId": "1f4e535da0b46c0dc573c81f7455e2d4988253eb",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "a9acf890458872cf02ebe09725d27326d09bbc33",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-632cd3f0@2026-10-31T05:33:08Z",
+      "paths": [
+        ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
+        ".moe/tasks/task-4e8a274ab9954c9d9c2ac29e22a67256.json",
+        ".moe/tasks/task-7db14e2df19949a8bfdb150e0f29ffcb.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-632cd3f0",
+      "recordedAt": "2026-10-31T07:05:57.322Z",
+      "treeId": "57cd38bd20d8539a46e1c8dc08d9890c70dd0d70",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -248,14 +280,18 @@
     "scripts/moe-agent.sh",
     "scripts/tests/postflight.ps1",
     "scripts/moe-agent.ps1",
-    "scripts/CLAUDE.md"
+    "scripts/CLAUDE.md",
+    ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
+    ".moe/tasks/task-4e8a274ab9954c9d9c2ac29e22a67256.json",
+    ".moe/tasks/task-7db14e2df19949a8bfdb150e0f29ffcb.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-4ae016fb@2026-10-30T11:12:13Z",
-    "at": "2026-10-30T11:43:35.427Z"
+    "kind": "completion",
+    "sessionId": "worker-632cd3f0@2026-10-31T05:33:08Z",
+    "at": "2026-10-31T07:05:57.322Z"
   },
   "workStartedAt": "2026-10-31T05:34:05.765Z",
   "reviewStartedAt": "2026-10-31T07:05:30.593Z",
@@ -266,5 +302,16 @@
     "reportedAt": "2026-10-31T07:05:30.593Z",
     "source": "agent-reported"
   },
-  "completionSummary": "codex exec seats now feed the landing's TOOL tier, in both wrappers.\n- sh passes MOE_TOOL_WRITES_FILE, MOE_GIT_TOP, MOE_GIT_REL and MOE_SERENA_PROJECT_ROOT to the codex-stream helper only, as assignment prefixes with no export. prompt-cache-witness.mjs then appends each completed file_change path and each successful Serena edit.\n- ps1 passes the same values through $psi.EnvironmentVariables, never $env:, using a GUID temp file and only when git resolved. -End merges the file through ConvertTo-MoeNormalPath and Get-MoePathKey. Error handling: a try/catch that prints [WARN] and merges nothing on failure, removal in a finally, and removal again in the branch's finally.\n- The UNTOUCHED, EDIT and WITNESS remedy clauses now count codex exec, byte-identical in both wrappers and both harnesses. scripts/CLAUDE.md's TOOL tier names the route.\nTest: postflight.{sh,ps1} scenario AM.\n- AM1 (a completed file_change) and AM3 (a Serena replace_content) land the contested path with no held= on the session-ended line.\n- AM2 (failed file_change), AM4 (failed MCP call) and AM5 (outside path, WARN) stay MOE_ATTR_CONTESTED_UNTOUCHED.\nRED, then GREEN, on sh and PS 5.1.\nMutations: M1 → AM1/3/5 red; M2 → AM3; M3 → AM1/3; M4 → AM3.\nThe fail-closed merge was probed on both engines.\nNet LOC is +243/-28 = 215. scripts/CLAUDE.md was clean before its edit; the four script files' clean check is in step 1's note.\nGate: GATE_OK, exit 0. sh ran 45 scope scenarios and PS 5.1 ran 44; node gave 114/112 pass/0 fail and Windows node 3/3.\nThe only deviation is the pwsh postflight.ps1 leg, skipped as in 9d277494's gate. It fails identically on HEAD (MOE_AGENT_GIT_GUARD_FAILED, FAILURE_LINE=885) because of task-44b817f9.\nGate run 1 caught a ps1 `} else {` that the launcher test's substring anchor cut on; fixed with no else.\nFollow-up: task-7cc959e9 flips recordCommit.ts HELD_REMEDY_WITNESS plus docs/CONFIGURATION.md, TROUBLESHOOTING.md and MCP_SERVER.md."
+  "completionSummary": "codex exec seats now feed the landing's TOOL tier, in both wrappers.\n- sh passes MOE_TOOL_WRITES_FILE, MOE_GIT_TOP, MOE_GIT_REL and MOE_SERENA_PROJECT_ROOT to the codex-stream helper only, as assignment prefixes with no export. prompt-cache-witness.mjs then appends each completed file_change path and each successful Serena edit.\n- ps1 passes the same values through $psi.EnvironmentVariables, never $env:, using a GUID temp file and only when git resolved. -End merges the file through ConvertTo-MoeNormalPath and Get-MoePathKey. Error handling: a try/catch that prints [WARN] and merges nothing on failure, removal in a finally, and removal again in the branch's finally.\n- The UNTOUCHED, EDIT and WITNESS remedy clauses now count codex exec, byte-identical in both wrappers and both harnesses. scripts/CLAUDE.md's TOOL tier names the route.\nTest: postflight.{sh,ps1} scenario AM.\n- AM1 (a completed file_change) and AM3 (a Serena replace_content) land the contested path with no held= on the session-ended line.\n- AM2 (failed file_change), AM4 (failed MCP call) and AM5 (outside path, WARN) stay MOE_ATTR_CONTESTED_UNTOUCHED.\nRED, then GREEN, on sh and PS 5.1.\nMutations: M1 → AM1/3/5 red; M2 → AM3; M3 → AM1/3; M4 → AM3.\nThe fail-closed merge was probed on both engines.\nNet LOC is +243/-28 = 215. scripts/CLAUDE.md was clean before its edit; the four script files' clean check is in step 1's note.\nGate: GATE_OK, exit 0. sh ran 45 scope scenarios and PS 5.1 ran 44; node gave 114/112 pass/0 fail and Windows node 3/3.\nThe only deviation is the pwsh postflight.ps1 leg, skipped as in 9d277494's gate. It fails identically on HEAD (MOE_AGENT_GIT_GUARD_FAILED, FAILURE_LINE=885) because of task-44b817f9.\nGate run 1 caught a ps1 `} else {` that the launcher test's substring anchor cut on; fixed with no else.\nFollow-up: task-7cc959e9 flips recordCommit.ts HELD_REMEDY_WITNESS plus docs/CONFIGURATION.md, TROUBLESHOOTING.md and MCP_SERVER.md.",
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md"
+  ],
+  "completedAt": "2026-10-31T07:47:54.319Z",
+  "reviewCompletedAt": "2026-10-31T07:47:54.319Z",
+  "reviewSummary": "APPROVED. Completion a9acf890 is on moe/work-2026-10-24 and on origin. Net 215 non-board LOC (+243/-28) across 5 files, within approvedScope.\n\nDiff:\n- sh: the codex-stream helper gets the Claude parser's 4 env prefixes, none exported.\n- ps1: the values go only into $psi.EnvironmentVariables; MOE_TOOL_WRITES_FILE is removed unconditionally; the GUID file is set only when $moeGit is non-null. -End merges via ConvertTo-MoeNormalPath + Get-MoePathKey inside try/catch/finally, and the branch finally also removes the file.\n- Unchanged: the TUI branch, Claude pipelines, resolve_attribution, Resolve-MoeAttribution and the strict remedy.\n- The UNTOUCHED, EDIT and WITNESS clauses are byte-identical in all 4 files.\n- Scenario AM asserts exact paths, blob, trailer, skip code, touchedPaths and the remedy tail on both twins.\n\nGate: task.verification legs on a git archive of a9acf890 (pipefail added), 07:10-07:44Z, GATE_OK, exit 0:\n- remedy greps OK;\n- Linux node 114/112/0 fail/2 skip;\n- Windows node codex pipeline 3/3;\n- parity PASS;\n- postflight.sh PASS (45 scope scenarios, AM ok);\n- PS 5.1: parity PASS, importee 48/0, postflight.ps1 PASS (44, AM ok);\n- pwsh: parity PASS, importee 48/0.\n\nPS7 postflight (DoD 4): I did not accept the skip. task-44b817f9 depends on this row, so blocking on it would close a cycle. I ran pwsh 7.6.9 postflight.ps1 on a9acf890 plus only 44b817f9's two-line PSMODULEPATH guard fix: PASS, exit 0, 44 scope scenarios, Z/AG/AK/AL/AM ok.\n\nGovernor request: providerDescriptor.contract.test.ts on an a9acf890 archive (Windows node, lock-matched node_modules) passes 24/24. The worker's summary had omitted it.\n\nNotes, not blocking: HELD_REMEDY_WITNESS waits for task-7cc959e9, as planned. sh with an empty TOP WARNs on codex absolute writes, which matches the Claude parser. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

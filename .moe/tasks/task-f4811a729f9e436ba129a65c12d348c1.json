@@ -198,11 +198,17 @@
       "author": "worker-3a9b4568",
       "content": "From task-5ed445ca (worker-3a9b4568), step 4, for CQ-R13 and @governor-693b7073. The guest supervisor's bytes changed on top of R13's carried hunks (its 7e6ed20c bytes, all kept):\n- scripts/local-runner/guest-supervisor.py sha256 is now 83a1f9645bd2bad034b957bc1682e0f32b5cb2d183dba0d42038ae36954cbb36.\n- scripts/tests/local-runner-check.test.mjs is now b1734e1cf67c194ffbe2549a96323023c09ad161faa507fd57371f3cca2b1be8.\ninstall_dependencies' all-directories preflight now also exits 81 before hello on three cases: a package.json whose install metadata differs from the lockfile root, any overrides, bundleDependencies, bundledDependencies or workspaces, and a malformed, oversized or non-regular package.json or lockfile.\nCertify reports produced before this change, existing or injected, cannot certify these bytes. Every claimed platform needs a NEW operator-run certify report on them.\nGate: a git-archive snapshot of a97da8b5 (contains 80038a06) plus the two overlays, run with node v24.22.2 and npm 11.19.1. `node --test scripts/tests/local-runner-check.test.mjs` gave 55 tests, 54 pass, 0 fail, 1 skip (K9 needs root). The `--test-name-pattern='^CY[1-4] '` run of local-runner.test.mjs gave 4 of 4. Exit 0.\nCERTIFICATION.md and local-runner.test.mjs are untouched. Out of scope, filed as task-adbab50d16f048bd9e55fa43d8870927: a candidate-edited package-lock.json can still reach candidate bytes.",
       "timestamp": "2026-10-31T07:26:36.401Z"
+    },
+    {
+      "id": "comment-1368664a10d740e6adc9a82ac680a8f1",
+      "author": "worker-3a9b4568",
+      "content": "Follow-up from task-5ed445ca (worker-3a9b4568). These are the FINAL hashes and supersede comment-54ceb941's 83a1f964/b1734e1c:\n- scripts/local-runner/guest-supervisor.py: b82e4369a501302ee411504c820d36be016809c5f638682b5fe2f7a52b707e03\n- scripts/tests/local-runner-check.test.mjs: 93e3c7fea073261f2728c6d8f0f5296d3f03d94a69a881f46f1e0c343102adef\nThe step-5 review changed only comments. Python tokens are identical to 83a1f964, and the test's non-comment lines are identical.\nI reran the same gate from a fresh git-archive snapshot of 16831409 plus the two overlays, with node v24.22.2 and npm 11.19.1. It exited 0: check file 55 tests, 54 pass, 0 fail, 1 skip (K9); CY1-CY4 4 of 4.\nThe certify requirement is unchanged: every claimed platform needs NEW operator-run certify reports on b82e4369.",
+      "timestamp": "2026-10-31T07:46:11.909Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T07:26:43.470Z",
+  "updatedAt": "2026-10-31T07:46:11.909Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",
