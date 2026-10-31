@@ -61,7 +61,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,7 +81,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T02:14:56.385Z",
-  "updatedAt": "2026-10-31T02:38:50.065Z",
+  "updatedAt": "2026-10-31T02:41:12.148Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T02:16:52.214Z",
@@ -91,11 +91,14 @@
     "firstClaimAt": "2026-10-31T02:23:05.351Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T02:41:12.148Z",
+    "wallClockMs": 1086797
   },
   "contextFetchedBy": [
     "architect-4ff0711c",
-    "worker-632cd3f0"
+    "worker-632cd3f0",
+    "qa-12f7cf2d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -176,7 +179,44 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.ts",
+    ".moe/tasks/task-b60cb68c4ae74ffda43e617c7466911e.json",
+    ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json"
+  ],
+  "completionSummary": "report_blocked no longer hands a governor an END_SESSION when it parks an unassigned task: the caller fallback for seatWorker now skips callers whose resolveWorkerRole is 'governor' (team role or id prefix). Dropped-assignment worker/qa/architect callers and the assignee still get END_SESSION. Also the unassigned-park workerStatus now reports the caller's real stored status instead of a phantom 'IDLE'; description gained one clause. Tests: 2 governor rows (RED on parent, 2 failed/59 passed) + 3 dropped-assignment rows; 5 mutants killed. Snapshot gate: tsc clean, full suite 215 files, 6254 passed, 20 skipped. The fix reaches the live daemon only at its next restart (a human decision). Follow-up (docs/MCP_SERVER.md held by 4 open rows): lines 1203 and 1255 should add 'a governor's park of an unassigned row carries no sessionHandoff and keeps its own status'.",
+  "commits": [
+    {
+      "sha": "22d4b29be1a0cf2b59a6f02cc8176e5b695370c4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-632cd3f0@2026-10-31T02:36:18Z",
+      "paths": [
+        ".moe/tasks/task-b60cb68c4ae74ffda43e617c7466911e.json",
+        ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ],
+      "recordedBy": "worker-632cd3f0",
+      "recordedAt": "2026-10-31T02:39:20.362Z",
+      "treeId": "5b5ec0e8a960e12db97f2ed98acbd3a686e014f7",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/reportBlocked.test.ts",
     "packages/moe-daemon/src/tools/reportBlocked.ts"
   ],
-  "completionSummary": "report_blocked no longer hands a governor an END_SESSION when it parks an unassigned task: the caller fallback for seatWorker now skips callers whose resolveWorkerRole is 'governor' (team role or id prefix). Dropped-assignment worker/qa/architect callers and the assignee still get END_SESSION. Also the unassigned-park workerStatus now reports the caller's real stored status instead of a phantom 'IDLE'; description gained one clause. Tests: 2 governor rows (RED on parent, 2 failed/59 passed) + 3 dropped-assignment rows; 5 mutants killed. Snapshot gate: tsc clean, full suite 215 files, 6254 passed, 20 skipped. The fix reaches the live daemon only at its next restart (a human decision). Follow-up (docs/MCP_SERVER.md held by 4 open rows): lines 1203 and 1255 should add 'a governor's park of an unassigned row carries no sessionHandoff and keeps its own status'."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-632cd3f0@2026-10-31T02:36:18Z",
+    "at": "2026-10-31T02:39:20.362Z"
+  },
+  "completedAt": "2026-10-31T02:41:12.148Z",
+  "reviewCompletedAt": "2026-10-31T02:41:12.148Z",
+  "reviewSummary": "Reviewed completion 22d4b29b (on moe/work-2026-10-24, pushed, in task.commits): 2 files, +45/-4 (~41 net LOC), test file additions only, no existing test edited.\n\nRe-ran task.verification in a fresh git-archive snapshot (/tmp/tmp.2l67oh9H3x; nothing built or tested in the shared checkout): exit 0, tsc clean, reportBlocked.test.ts 61/61, full daemon suite 215 files / 6254 passed / 20 skipped.\n\nRED on parent: overlaid parent reportBlocked.ts (22d4b29b^) with the new tests in the snapshot. Exactly the 2 governor rows fail (governor-1 by id prefix, ops-seat by team role only: 'expected END_SESSION handoff to be undefined'); 59 pass. Restored the fix and cmp'd to HEAD.\n\nDoD 1 holds: governor caller on an unassigned row gets no sessionHandoff, workerStatus equals its stored status, task BLOCKED and unassigned, worker record unchanged. DoD 2 holds: worker/WORKING, qa/REVIEW and architect/PLANNING dropped-assignment callers still get END_SESSION addressed to themselves; the assignee's own report is covered by the existing unedited test (prevAssignee wins first).\n\nCode read: the only handoff change is the callerSeat guard (resolveWorkerRole !== 'governor'; never throws, unknown id keeps today's fallback). The currentTaskId guard, freeSeat/seatFreed and all write paths are untouched. workerStatus now falls through to the caller's real stored status instead of a phantom 'IDLE' (same value domain, additive). One description clause added; 'End the current session' text intact.\n\nNon-blocking:\n- The fix reaches the live daemon only at its next restart (a human decision).\n- docs/MCP_SERVER.md ~1203 and ~1255 need 'a governor's park of an unassigned row carries no sessionHandoff and keeps its own status'; deferred because four open rows declare that file.\n- Out of scope: an idle architect or QA third-party park of an unassigned row still gets END_SESSION.",
+  "requiredCheckAtDone": null
 }
