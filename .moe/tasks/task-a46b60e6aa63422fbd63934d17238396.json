@@ -1,0 +1,156 @@
+{
+  "id": "task-a46b60e6aa63422fbd63934d17238396",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: under a root runner, local-runner bridge/check tests resolve namespace-local job pids and signal across the GUARD PID namespace",
+  "description": "Source: QA finding by qa-4398294e on task-a4a729dd (comment-666e86e0 on CQ-R13 task-f4811a72). a4a7 is approved, and this is not a supervisor defect.\n\nSince b0734674 (a4a7), a root GUARD unshares a PID namespace for the job. Several existing tests carry pids out of the job and resolve them against the guest procfs, or kill them from the host side. Under a root runner those pids are namespace-local numbers. The pid sources are:\n- os.getpid() / os.getppid() inside the job;\n- $PPID inside the job;\n- a job that signals the harness by the harness's outer pid. The namespace now correctly blocks that signal.\n\nRepro on a non-root Linux host with unprivileged user namespaces (WSL2 works):\n`unshare -r env -i HOME=$HOME PATH=<node24 bin>:/usr/local/bin:/usr/bin:/bin node --test --test-reporter=tap scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs`\n- 65f78435 (pre-a4a7): 131 tests, 129 pass, 0 fail. S8 and LA5 skip.\n- b0734674 (a4a7): 11 fail:\n  - S6, S10, I1, H5, KI2: the host checks the liveness of pids the job reported.\n  - J4, K3, KI1: getppid() is 1 inside the namespace, so /proc/$PPID is the wrong process. J4's PROBE crashes with exit 1.\n  - S12, S16: the job signals the harness's outer pid, and the signal never arrives.\n  - S11: by design, root containment now kills its lingering grandchild.\n- G1-G6, G8 and G9 (local-runner-guard.test.mjs) pass under fake root. G7 skips.\n\nCI runs these files as the non-root runner user, so CI and the a4a7 gate are unaffected. The failures appear wherever the suite runs as root, for example a manual root run of local-runner-check.test.mjs on a real guest to exercise K9.\n\nFix (QA's suggestion):\n- Carry global pids out of the job: readlink('/proc/self'), and field 4 (ppid) of /proc/<pid>/stat. procfs reports pids in its own mount's namespace, and the job has no mount namespace.\n- Give S11 an explicit root expectation (grandchild killed) next to the existing non-root one.\n- Send the S12/S16 signals from the harness side, outside the job, and keep the observed outcome they assert.\n\nOrdering:\n- Depends on task-97341ad5, which is WORKING and edits local-runner-bridge.test.mjs plus the finished-job descendant/relay behavior that S11/S12/S16 exercise. Re-derive the failing set on the post-97341ad5 bytes before editing, because 97341ad5 may already rewrite some of these rows.\n- Not a gate on CQ-R13 (task-f4811a72). R13's native evidence is `cli.mjs certify` reports keyed to the guest-supervisor.py sha256, and certify never runs these test files. A test-only change invalidates no report.\n\nLinux-only behavior. The root rows already skip on hosts without root or unprivileged user namespaces.\n\nVerification command (fresh, both must exit 0): the unshare -r command above, then the same `env -i … node --test --test-reporter=tap scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs` without unshare.",
+  "definitionOfDone": [
+    "Fresh `unshare -r env -i HOME=$HOME PATH=<node24 bin>:/usr/local/bin:/usr/bin:/bin node --test --test-reporter=tap scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs` exits 0 with `# fail 0`, and no row skips except S8 and LA5 (or a skip 97341ad5 added, named in the step note).",
+    "The same command without `unshare -r`, as the plain non-root user, exits 0 with `# fail 0`, so the CI path does not regress.",
+    "Every pid a job reports to the host in S6, S10, I1, H5, KI2, J4, K3 and KI1 (or their post-97341ad5 successors) is read from procfs (readlink('/proc/self') or field 4 of /proc/<pid>/stat), not from os.getpid(), os.getppid() or $PPID inside the job.",
+    "S11 asserts the root outcome (lingering grandchild killed) when the job runs as root, and keeps its non-root outcome otherwise. Both branches are exercised by the two runs above.",
+    "S12 and S16 deliver their signal from the harness, outside the job, and still assert the same observed outcome. No assertion is removed or weakened, and the test count of each file is unchanged.",
+    "`git diff --name-only` for this task lists only scripts/tests/local-runner-bridge.test.mjs and scripts/tests/local-runner-check.test.mjs, so the guest-supervisor.py sha256 is unchanged."
+  ],
+  "taskRails": [
+    "Test-only. Do not change scripts/local-runner/guest-supervisor.py or any file that `cli.mjs certify` hashes. If a fix appears to need one, call moe.report_blocked and name CQ-R13 (task-f4811a72), so its native certification is re-sequenced.",
+    "Never weaken a test to pass under root. Change where pids come from and where signals are sent from, and keep the property each row asserts.",
+    "Do not touch the reserved scripts/tests/local-runner.test.mjs (CQ-R13's) or ci.yml.",
+    "On WSL, run every test under env -i with the nvm Node 24 bin on PATH, so Windows Node is never used."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Bridge test: re-derive the failing set on the post-97341ad5 bytes, then convert every job pid the host uses to procfs's global pid, and move S12/S16's signals to the harness.\n(a) Preconditions. task-97341ad5 has landed, and 5ee846b6 before it: `git log moe/work-2026-10-24 --grep 'Moe-Task: task-97341ad5'` finds it. Both test files are clean in the shared checkout: `git status --short scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs` prints nothing. If either file holds a peer's uncommitted bytes, coordinate in chat before editing, because this task's landing would carry them.\n(b) Baseline. Build a fresh full snapshot outside the repo: `export MOE_VERIFY_SNAPSHOT=$(mktemp -d)/snap && mkdir -p \"$MOE_VERIFY_SNAPSHOT\" && git archive HEAD | tar -x -C \"$MOE_VERIFY_SNAPSHOT\"`. Run step 3's command there unchanged. Record in the step note:\n- the HEAD sha;\n- both TAP summaries, with every # SKIP name;\n- the rows that fail under unshare -r;\n- `grep -cE '^\\s*test\\(' <file>` for each file.\nThese are the baselines for DoD 1's allowed skips and DoD 5's counts.\n(c) Audit both files for job-side pid sources: `grep -nE 'os\\.getpid|os\\.getppid|os\\.getsid|os\\.fork|\\$\\$|\\$PPID|\\$!|sys\\.argv\\[1\\]\\), signal'`.\n- Convert every value that reaches the host: one the host passes to alive(), running(), procState() or sessionMembers(), reads under /proc, or kills in a finally or after().\n- Leave unchanged a job signalling itself (S2, S14) and STALLED's pthread_kill.\n- List every converted site in the step note, including the rows 97341ad5 added (its S11 rewrite, and its quiet-output host-EOF and malformed-data cases).\n(d) Port the prototype hunks from Serena memory `task-task-a46b60e6aa63422fbd63934d17238396-prototype` by hand with the Edit tool. Never use git apply, sed or a heredoc into the tree; that is a rail.\n- Add GLOBAL_PIDS after `const WRITE`. On Linux: gpid() returns readlink('/proc/self'); gsid() returns field [3] after comm in /proc/self/stat; gfork() is a fork whose child sends its gpid() to the parent through a pipe. Elsewhere: os.getpid, os.getsid(0) and os.fork.\n- Use it in S6, AGENT_CHILD (I1-I7, H5 and the sessions after() hook), GROUP_JOB (S9, S10), S11, S15's `started`, S17's job and every audited 97341ad5 row.\n- J4's PROBE sets `me = int(os.readlink('/proc/self'))` and walks up through its existing parent().\n(e) S11.\n- If 97341ad5 made 'dead before the observation' unconditional, as its plan says, keep that single assertion and only make its pids global. The step note then states that DoD 4 holds: the one assertion is both the root and the non-root outcome, and both runs exercise it.\n- If S11 still asserts survival for non-root, add the prototype's `process.getuid() === 0` branch: right at the observation, with no sleep, running(grandchild) is false.\n(f) S12 and S16. Add SIGNAL_ON_START before S12.\n- The job only writes one start byte.\n- A harness thread reads relay()'s frames from out_fd's pipe. After hello and that byte, plus `settle` seconds, it calls `os.kill(os.getpid(), sig)`. At EOF it sends nothing. The caller closes w, then joins the thread.\n- S12's last call keeps [75, true, true, true, true].\n- S16 keeps both rows and both assertions: open output (settle 0, job sleeps 1 s) and quiet output (settle 0.3, job sleeps 1.3 s). The 1.3 s keeps the undrained-wakeup spin window at 1 s.\n- Keep 97341ad5's titles and comments; change only the mechanism.\n(g) Limits. Add or remove no test() row, remove or loosen no assertion, add no skip. Wrap new comments at 120 columns. `grep -cP '[^\\x00-\\x7f]'` stays unchanged.\n(h) Focused check. Copy this file into the snapshot, then run step 3's two commands with `--test-name-pattern='^(S6|S9|S1[0-7]|I[1-7]|H5|J4) '`, plus the names of any converted 97341ad5 rows.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Check test: the same procfs pid source.\n(a) K3's PROBE. Replace `job = os.getppid()` with `job = int(open('/proc/self/stat').read().rsplit(')', 1)[1].split()[1])`, procfs's ppid field, which is global. Extend the comment above it as in the prototype.\n(b) FAKE_NODE.\n- Add `read -r pid rest < /proc/self/stat` right after the shebang.\n- `$pid` replaces both `$$`: the logged pid that KI2 probes, and the `/proc/$pid/status` behind KI1's NoNewPrivs column.\n- Why `read`: a builtin's redirect is opened by the shell itself, so /proc/self is the install process. `$(readlink /proc/self)` would name a subshell.\n- Add the prototype's comment line.\n(c) Convert any other job-reported pid that the step-1 audit found in this file. None is expected.\n(d) Focused check. Copy this file into the snapshot, then run step 3's two commands with `--test-name-pattern='^(K3|KI[12]) '`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY once, on the final bytes.\n- Refresh $MOE_VERIFY_SNAPSHOT from `git archive HEAD`, because HEAD may have moved. Copy only the two edited test files over it.\n- Run exactly:\n`cd \"$MOE_VERIFY_SNAPSHOT\" && T='scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs' && E=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" && { unshare -r $E node --test --test-reporter=tap $T > ../a46b-root.tap 2>&1; R=$?; $E node --test --test-reporter=tap $T > ../a46b-user.tap 2>&1; U=$?; grep -HE '^# (tests|pass|fail|skipped)|# SKIP|^not ok' ../a46b-root.tap ../a46b-user.tap; echo \"ROOT_EXIT=$R USER_EXIT=$U\"; [ \"$R$U\" = 00 ]; }`\n- Its exit code and output tail are the complete_task evidence: both summary blocks, every # SKIP line, and ROOT_EXIT/USER_EXIT.\n- Expected under unshare -r: `# fail 0`, with only S8 and LA5 skipped, plus any skip that step 1's baseline note names.\n- Expected in the plain run: `# fail 0`. LA5 and K9 skip there.\n- In both modes, `# tests` equals step 1's baseline.\n- Also record `git diff --name-only`, and `sha256sum scripts/local-runner/guest-supervisor.py` beside `git show HEAD:scripts/local-runner/guest-supervisor.py | sha256sum`.\n- Run tests only in the snapshot. Never run an npm install or build in the checkout.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review of this task's diff. Load adversarial-self-review.\n- Scope: `git diff --name-only` lists only the two test files, plus this task's board JSON. guest-supervisor.py's sha256 equals HEAD's. scripts/tests/local-runner.test.mjs and ci.yml are untouched.\n- Strength: every removed assert line has a replacement that is as strong or stronger. `^\\s*test\\(` counts and TAP totals match step 1.\n- Non-vacuity, on scratch copies only:\n  - The 'kill instead of killpg' supervisor mutant from the prototype memory must fail S6, S9 x3, I1, I3 and H5 under unshare -r. With the old tests, S9 x3 and I3 passed vacuously.\n  - The 'no drain' mutant must fail both S16 rows, in both modes, on the CPU column.\n  - If 97341ad5's rows were converted, a mutant of their completion kill must fail them under unshare -r.\n  - Tag each run with a unique env var. Then kill only the pids recorded from /proc/<pid>/environ. Never pkill, killall or pattern-kill; that is a rail.\n- Error handling in the new helpers:\n  - If gfork's child dies before it writes, int(b'') raises. That is a loud failure, never a vacuous pass.\n  - At EOF, SIGNAL_ON_START sends nothing and the thread ends, so a failed relay() start never hangs the join.\n  - S12's out pipe exists both before and after call()'s fd snapshot.\n  - macOS takes the os.getpid, os.fork and os.getsid fallback, and Windows still skips.\n- If anything changes, re-run step 3's command on refreshed snapshot bytes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-97341ad5be744d19ac869972299a2714"
+  ],
+  "priority": "MEDIUM",
+  "order": 314.6,
+  "comments": [
+    {
+      "id": "comment-67be68b1cf3c4096ab2a17c05567c49e",
+      "author": "architect-b58e1112",
+      "content": "@architect-66fd8127 Relaying governor-693b7073's request (chan-15c8e232, msg-1658262e) for this row's plan.\n\nPR #232 (branch fix/ci-pr230, the CI fix for #230) rewrites cwd assertions in scripts/tests/local-runner-bridge.test.mjs, because macOS getcwd() returns /private/var/...:\n- J4: [realpathSync(join(dir, 'kept', 'ws')), 0o077, ['NoNewPrivs:\\t1']]\n- LA3: assert.equal(observed.cwd, realpathSync(join(dir, 'ws')))\n- AE1: realpathSync(join(base, 'ws'))\n- The node:fs import on line 4 gains realpathSync.\n\nBuild on these lines when this row edits J4; don't revert them to the plain join(). Today HEAD's J4 (line 1447) still uses the plain join(), because #232 forks from d60d2958, before a4a7. If #232 isn't on the branch when you plan, write J4's expected cwd in the same realpathSync form. On Linux it's the same path, and the two changes then merge cleanly.\n\nUnchanged and already on this row: tests only (DoD 6, guest-supervisor.py untouched) and ordered after 97341ad5 (dependsOn). This row stays off R13's blockedOnTaskIds.",
+      "timestamp": "2026-10-31T12:09:31.064Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T12:03:24.222Z",
+  "updatedAt": "2026-10-31T12:36:54.883Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T12:03:49.710Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-66fd8127"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T12:36:54.855Z",
+  "executionContract": {
+    "intendedBehavior": "Under a root runner (unshare -r or real root), every bridge and check test that checks, walks or signals a job process works the same. It uses procfs's global pids, or it signals from the harness side. Both files then pass with unchanged assertions as root and as non-root. Root runs no longer pass vacuously on namespace-local pids, and no longer SIGKILL host pids 2 and 3 in cleanup.",
+    "acceptanceCriteria": [
+      "The unshare -r run of both files exits 0 with # fail 0. Only S8 and LA5 skip, plus any skip that step 1's baseline names.",
+      "The plain non-root run exits 0 with # fail 0.",
+      "Every job pid the host checks, walks or kills comes from readlink('/proc/self') or a /proc/<pid>/stat field on Linux. The listed rows (S6, S10, I1, H5, KI2, J4, K3, KI1) and their post-97341ad5 successors are covered.",
+      "S11 asserts the root outcome (grandchild dead at the observation) under root and its non-root outcome otherwise. If 97341ad5 made those identical, one unconditional assertion serves both.",
+      "S12 and S16 send their signals from a harness thread, never from the job. Their assertions and every test count are unchanged.",
+      "The diff touches only the two test files, and the guest-supervisor.py sha256 is unchanged."
+    ],
+    "invariants": [
+      "Test-only. No change to scripts/local-runner/**, scripts/tests/local-runner.test.mjs or ci.yml.",
+      "No assertion is removed or loosened, no row is added or removed, and no skip is added.",
+      "A job signalling itself (S2, S14) keeps its namespace-local self pid, which is correct.",
+      "Tracked files are written only with the Edit tool. Tests run in a snapshot with Node 24 under env -i. Processes are killed only by recorded pid."
+    ],
+    "compatibility": [
+      "The non-root CI path keeps its behavior: on Linux the global pid equals os.getpid() when there is no PID namespace.",
+      "Off Linux (macOS) GLOBAL_PIDS falls back to os.getpid, os.getsid(0) and os.fork. Windows rows still skip as NO_GUEST."
+    ],
+    "approvedScope": [
+      "Bridge: GLOBAL_PIDS (gpid, gsid, gfork) and SIGNAL_ON_START, plus the rows S6, S9-S12, S15-S17, AGENT_CHILD (I1-I7, H5), J4 PROBE and any 97341ad5 row that reports a job pid.",
+      "Check: K3 PROBE and FAKE_NODE (KI1, KI2)."
+    ],
+    "reuse": [
+      "readlink('/proc/self') and /proc/self/stat fields, as the G harness in scripts/tests/local-runner-guard.test.mjs already uses them.",
+      "STALLED's frame-reading thread (S15), via m.take_frames.",
+      "J4 PROBE's existing parent() stat parser."
+    ],
+    "sourceAssumptions": [
+      "guest-supervisor.py GUARD: os.unshare(os.CLONE_NEWPID) runs only when os.geteuid() == 0, so the job tree is job -> init -> GUARD -> supervisor and the job has no mount namespace.",
+      "relay() installs its TERM/HUP/INT handlers and set_wakeup_fd before run_bridge writes hello, so a signal sent after the job's first output frame lands in relay()'s wait.",
+      "An init's exit empties its namespace before GUARD's waitpid(init) returns, so under root the S11 grandchild is gone when relay() returns."
+    ],
+    "checkRefs": [
+      "cd \"$MOE_VERIFY_SNAPSHOT\" && T='scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs' && E=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" && { unshare -r $E node --test --test-reporter=tap $T > ../a46b-root.tap 2>&1; R=$?; $E node --test --test-reporter=tap $T > ../a46b-user.tap 2>&1; U=$?; grep -HE '^# (tests|pass|fail|skipped)|# SKIP|^not ok' ../a46b-root.tap ../a46b-user.tap; echo \"ROOT_EXIT=$R USER_EXIT=$U\"; [ \"$R$U\" = 00 ]; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected options:\n- Skip the affected rows under root: that weakens the tests.\n- Scan NSpid in /proc/<pid>/status to translate pids: more code, and racy.\n- Read /proc/<pid>/task/*/children for fork children: it needs CONFIG_PROC_CHILDREN. gfork's pipe handoff does not depend on kernel config.\n- Send S12/S16's signal from a time-delayed sibling process: timing-based. The chosen harness thread is triggered by the job's first frame, which is deterministic because relay() arms its handlers and wakeup fd before hello.\n- Check for /proc at runtime in Python: rejected for a JS platform split, so Linux fails loudly without procfs.\n- Fix only the 11 failing rows: those were only the rows that fail. S9 x3, I2-I7, S15 and S17 pass vacuously under unshare -r, because alive() gets EPERM on host pids 2 and 3. Under real root they would fail, and their finally/after() would SIGKILL host pids 2 and 3. Converting the shared constants (AGENT_CHILD, GROUP_JOB) covers them at no extra cost.",
+    "codebaseInsights": "Prototype validated on f46d3723. It is in Serena memory task-task-a46b60e6aa63422fbd63934d17238396-prototype, with the diff and the mutant recipes.\n- Before the fix, unshare -r: 131 tests, 118 pass, 11 fail.\n- After the fix: 129 pass, 0 fail as root (S8 and LA5 skip) and as the plain user (LA5 and K9 skip). 3 extra parallel root+user pairs were all green.\n- Diff: +83/-26, two files. Supervisor sha 8a631957... unchanged.\n- Mutant 'kill instead of killpg': it survives the old S9 x3 and I3 under unshare -r, and all 7 rows kill it after the fix.\n- Mutant 'no drain': both new S16 rows fail it on the CPU column, in both modes.\n- procfs reports pid, ppid and session in its own mount's namespace, which is the guest's, so it gives global numbers. os.getpid() is 2 and os.getppid() is 1 inside root GUARD's namespace, and a job's kill() of an outer pid gets ESRCH.\n- A fork() return value is namespace-local too, so the child must report its own pid (gfork).\n- dash's `read` builtin opens its redirect in the shell process itself.\n- Run the tests from a bare full git archive; npm ci is not needed. A run of both files takes about 27 s.",
+    "risks": "- The bytes are moving: 97341ad5 (WORKING, unassigned) rewrites S11, adds quiet-output and host-EOF rows that may report namespace pids, and rewords S15-S17. Step 1 re-derives the failing set and audits before any edit, and the prototype is a reference, not a patch.\n- S16's quiet row still relies on a 0.3 s settle, the same as today.\n- I1/I3 use alive(), which counts zombies. Under root the job is reaped during init's exit, before the supervisor exits; 7 of 7 runs were green.\n- macOS was not run here. Its fallback is byte-equivalent to today's pid code; only the S12/S16 thread is new there, and STALLED already passes on macOS with the same pattern.\n- A real root runner is improved but not certified; CQ-R13 owns native runs.\n- Cleanup during mutant sweeps is by env marker and recorded pid only.",
+    "keyFiles": [
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/tests/local-runner-check.test.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-guard.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "efbb41015f87033d7cd5fb8866df08e859a5bdc6",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T12:36:54.883Z",
+  "approvedPlanRevision": 1
+}

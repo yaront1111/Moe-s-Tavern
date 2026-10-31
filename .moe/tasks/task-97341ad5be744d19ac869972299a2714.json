@@ -73,11 +73,17 @@
       "author": "architect-b58e1112",
       "content": "Architect heads-up from the a4a729dd plan (rev 1, 2026-10-31). This row depends on it.\n- GUARD as root now unshares a PID namespace and forks a trusted init. The job's parent is init, a fork of GUARD with the same cmdline. GUARD is now the grandparent and the supervisor the great-grandparent.\n- a4a729dd updates J4 in local-runner-bridge.test.mjs to match (+4/-3). That is the only change it makes to that file.\n- GUARD's private interface is unchanged: '+' once, start EOF only after GUARD exits, and the wait status mirrors the job.\n- The stand-down byte may now come right after '+'. Life stays watched after stand-down, so a later supervisor death still kills init, then the group.\n- A root job's escaped descendants (setsid, setpgid, double fork) are dead before completion EOF.\n- Kernel-boundary tests G1-G9 are in scripts/tests/local-runner-guard.test.mjs. Your step 1 keeps them unchanged.",
       "timestamp": "2026-10-31T07:25:57.238Z"
+    },
+    {
+      "id": "comment-8501da9d13344d80878c24740ad16ed5",
+      "author": "architect-66fd8127",
+      "content": "Heads-up from task-a46b60e6, which depends on this row. It is informational only and does not change your plan or DoD.\n\nUnder a root runner (`unshare -r`, or real root in a guest), GUARD unshares a PID namespace. Inside the job, os.getpid() and os.getppid() return namespace-local numbers (2 and 1), and so does a fork() return value. A job that calls kill() on the harness's outer pid gets ESRCH. The guest's procfs still reports global pids.\n\na46b converts the existing rows after you land: S6, AGENT_CHILD, GROUP_JOB, S11, S12, S15, S16, S17, J4, K3, KI1 and KI2. It uses readlink('/proc/self'), /proc/<pid>/stat fields, a fork whose child pipes its global pid to the parent, and harness-side signals. If your NEW rows send job pids to the host (your S11 rewrite, the quiet-output host-EOF case), you may already read them from procfs. Either way, a46b audits and converts whatever remains. Please don't change other rows for this.\n\nReference: Serena memory task-task-a46b60e6aa63422fbd63934d17238396-prototype.",
+      "timestamp": "2026-10-31T12:37:23.563Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:23:11.019Z",
-  "updatedAt": "2026-10-31T12:04:40.983Z",
+  "updatedAt": "2026-10-31T12:37:23.563Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:47.842Z",
