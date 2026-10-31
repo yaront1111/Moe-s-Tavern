@@ -1,0 +1,32 @@
+{
+  "id": "task-fa7fece51d0045edb7871beef40e0d93",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: moe-agent.sh does not parse under macOS /bin/bash 3.2, so no seat can launch on stock macOS",
+  "description": "moe-agent.sh starts with #!/bin/bash, which is bash 3.2 on every Mac. JetBrains on macOS launches agents through this script (TerminalAgentLauncher.kt, ScriptKind.BASH).\n\n**Evidence.** On PR #232's macos-latest CI runner, the moe-account-lease cases that run the launcher under /bin/bash failed with a bash parse error. #232 (fix/ci-pr230) now skips them when bash < 4, with the reason \"known launcher bug; remove this skip once it is fixed\" (scripts/tests/moe-account-lease.test.mjs around lines 641 and 748).\n\n**Diagnosis from that run.** bash 3.2 mis-parses a quoted heredoc inside $( ). The culprits are the two JS heredocs:\n- MOE_WT_TOOLING_JS at moe-agent.sh:3089 (WT-06, 397fac23)\n- MOE_GIT_GUARD_JS at moe-agent.sh:7188 (447281cf)\nThe other heredoc-in-$( ) sites hold python bodies (2427, 2555, 3883, 5946, 6558, 6683, 6995, 9138). They predate those two and are believed to parse on 3.2, but confirm that under a real bash 3.2 before relying on it.\n\n**Fix direction.** Assign each body outside the $( ), for example a top-level `read -r -d '' VAR <<'JS' ... JS || true`, then run it with node -e \"$VAR\". Alternatively, ship the JS as a sidecar .cjs next to the script.\n\nThis row dependsOn the #232 merge gate (task-d4810c9c), because the bash<4 skip it removes only exists once #232 is on the work branch.",
+  "definitionOfDone": [
+    "/bin/bash -n scripts/moe-agent.sh exits 0 under bash 3.2, run on macos-latest CI or a local bash-3.2 build. The command and its output are in the completion summary.",
+    "ci.yml runs /bin/bash -n scripts/moe-agent.sh on macos-latest, so a bash 3.2 parse regression fails CI.",
+    "The bash<4 skip in scripts/tests/moe-account-lease.test.mjs is removed, and the lease cases pass on macos-latest CI.",
+    "There is no behavior change on bash 5: node scripts/tests/postflight-safe.mjs bash reports failureClass NONE, and parity-check PASSes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-d4810c9c0b0244598e275cc5cbe40ed7"
+  ],
+  "priority": "HIGH",
+  "order": 32,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T14:35:40.181Z",
+  "updatedAt": "2026-10-31T14:35:40.181Z"
+}

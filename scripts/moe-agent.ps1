@@ -2016,7 +2016,8 @@ function Invoke-MoeReceiptReplay {
                 if ($null -eq $j -or $f.Name -cne "$($j.taskId).json" -or -not (Get-MoeReceiptJournalPath $git.GitDir ([string]$j.taskId)) -or
                     [string]$j.candidateId -cnotmatch $id -or [string]$j.attemptId -cnotmatch $id -or -not (Test-MoeGeneration $j.generation) -or
                     -not $j.workerId -or -not $j.target -or [string]$j.targetBefore -notmatch $rev -or
-                    [string]$j.targetAfter -notmatch $rev -or [string]$j.landedRevision -notmatch $rev -or -not (Test-MoeOwedLedger $j.ledger)) {
+                    [string]$j.targetAfter -notmatch $rev -or [string]$j.landedRevision -notmatch $rev -or -not (Test-MoeOwedLedger $j.ledger) -or
+                    ($j.profile -ceq 'verified-local' -and -not ($j.treeSha -is [string] -and $j.treeSha -match $rev))) {
                     Write-Host "[WARN] receipt journal $($f.FullName) kept: malformed journal" -ForegroundColor Yellow
                     continue
                 }
@@ -2026,6 +2027,19 @@ function Invoke-MoeReceiptReplay {
                     Write-Host "[receipt] $($j.target) does not contain $($j.targetAfter): that landing never moved the ref; dropping $($f.FullName)." -ForegroundColor Cyan
                     Remove-Item -LiteralPath $f.FullName -Force
                     continue
+                }
+                # CQ-V08: a strong journal's proof binds to its verified tree. A copy on
+                # another tree is not that landing: keep the journal, send nothing. Twin: receipt_replay.
+                if ($j.profile -ceq 'verified-local') {
+                    $lt = Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', "$landedAs^{tree}")
+                    if ($lt.Rc -ne 0) {
+                        Write-Host "[WARN] receipt journal $($f.FullName) kept: git rev-parse $landedAs^{tree} failed" -ForegroundColor Yellow; continue
+                    }
+                    $ltree = ($lt.Out -join '').Trim(); $tree = ([string]$j.treeSha).ToLowerInvariant()
+                    if ($ltree -cne $tree) {
+                        Write-Host "[WARN] MOE_DELIVERY_PROOF_NOT_TRANSFERRED: task $($j.taskId) -- $($j.target) carries the landing as $landedAs, whose tree $ltree is not the verified tree $tree; receipt journal $($f.FullName) kept, nothing recorded or finalized." -ForegroundColor Yellow
+                        continue
+                    }
                 }
                 Write-Host "[receipt] replaying the delivery receipt of task $($j.taskId) from $($f.FullName)" -ForegroundColor Cyan
                 if ($null -ne $j.ledger) {
@@ -4816,7 +4830,13 @@ function Push-MoeBranch([string]$Top, [string]$Branch, [string]$Kind, [string]$T
     # replayed commit stops tracking. MOE_PUSH_REBASE=1 restores the one retry
     # for a seat that owns a private checkout (sh twin parity).
     $pushOk = $false
-    if ($env:MOE_PUSH_REBASE -eq '1') {
+    # CQ-V08: a pull --rebase rewrites the verified commit onto another tree.
+    $rebase = ($env:MOE_PUSH_REBASE -eq '1')
+    if ($rebase -and $script:PinnedAttemptProfile -ceq 'verified-local') {
+        $rebase = $false
+        Write-Host "[info] strong delivery is exact: MOE_PUSH_REBASE=1 is ignored, a rejected push is never rebased, so $Branch keeps the verified commit." -ForegroundColor Cyan
+    }
+    if ($rebase) {
         Write-Host "[WARN] git push failed; MOE_PUSH_REBASE=1: trying git pull --rebase then re-push..." -ForegroundColor Yellow
         if ($hasUpstream) {
             $pr = Invoke-MoeGit -Top $Top -GitArgs @('pull', '--rebase') -MergeStderr
@@ -5329,6 +5349,22 @@ function Invoke-MoeLanding {
         $casOk = $false
         $journal = ''
         $receipt = $null
+        $stale = if ($Kind -eq 'completion' -and $script:PinnedAttemptProfile -ceq 'verified-local') { Get-MoeReceiptJournalPath $Git.GitDir $TaskId } else { '' }
+        if ($stale -and (Test-Path -LiteralPath $stale)) {
+            # CQ-V08: a journal still on disk is an earlier landing of this task whose
+            # effect the pre-flight replay could not settle. Landing again would
+            # double-land and overwrite that intent: refuse, leave it untouched. Twin: land_plumbing.
+            $refusal = 'MOE_COMMIT_REFUSED_UNRECONCILED_INTENT'; $why = "the receipt journal $stale of an earlier landing is unreconciled"
+            Write-Host "[WARN] ${refusal}: task $TaskId -- $why; no ref moves until a pre-flight replay settles it (no update-ref, no rescue ref, no push). The bytes and baseline stay for the next session." -ForegroundColor Yellow
+            $res.Outcome = 'refused'; $res.Code = $refusal
+            if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU $landedFlag $blSession $blP (Get-MoeCarryRows $attr.Own @()) | Out-Null }
+            Send-MoeRecordCommit (@{
+                taskId = $TaskId; outcome = 'refused'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId
+                sessionId = $Sid; cliExitCode = $CliExit; code = $refusal; message = $why; ref = $branch
+                unattributedPaths = $unattrRecPaths
+            } + (Get-MoeRecordHeldFields $attr @() $Git.Rel)) | Out-Null
+            return $res
+        }
         for ($attempt = 1; $attempt -le 3; $attempt++) {
             $old = ''
             $o = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', "refs/heads/$branch")
@@ -5492,7 +5528,7 @@ function Invoke-MoeLanding {
                 # in the push or the ledger record below must not leave the result
                 # reading 'pending'/'nothing' and report a landed commit as unlanded.
                 $casOk = $true
-                $res.Outcome = 'committed'; $res.Sha = $new; $res.Ref = "refs/heads/$branch"
+                $res.Outcome = 'committed'; $res.Sha = $new; $res.Ref = "refs/heads/$branch"; $res.ReceiptJournal = $journal
                 break
             }
             # The ref never moved, so this attempt's report describes nothing.
@@ -5547,7 +5583,18 @@ function Invoke-MoeLanding {
 
         # 7.6 Record (rebase-safe sha via the session trailer).
         $lg = Invoke-MoeGit -Top $Git.Top -GitArgs @('log', '-n1', '--format=%H', '--fixed-strings', "--grep=Moe-Session: $Sid", $branch)
-        if ($lg.Rc -eq 0 -and $lg.Out.Count -gt 0 -and ($lg.Out -join '').Trim()) { $sha = ($lg.Out -join '').Trim(); $res.Sha = $sha }
+        $found = if ($lg.Rc -eq 0 -and $lg.Out.Count -gt 0) { ($lg.Out -join '').Trim() } else { '' }
+        # CQ-V08: under the strong profile the proof binds to the verified tree, so
+        # a trailer-matched commit stands for this landing only on that tree. Twin: the sh Record block.
+        if ($found -and $receipt -and $script:PinnedAttemptProfile -ceq 'verified-local') {
+            $ft = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', "$found^{tree}")
+            if ($ft.Rc -ne 0 -or ($ft.Out -join '').Trim() -cne [string]$script:MoeFrozen.Tree) {
+                $res.ProofUntransferred = $true
+                Write-Host "[WARN] MOE_DELIVERY_PROOF_NOT_TRANSFERRED: task $TaskId -- $branch carries this landing's trailers on $found, whose tree is not the verified candidate's; the proof stays with candidate $($script:MoeFrozen.CandidateId), no receipt is sent and the journal stays." -ForegroundColor Yellow
+                $found = ''
+            }
+        }
+        if ($found) { $sha = $found; $res.Sha = $sha }
         $treeId = ''
         $tr = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', "$sha^{tree}")
         if ($tr.Rc -eq 0 -and $tr.Out.Count -gt 0) { $treeId = ($tr.Out -join '').Trim() }
@@ -5569,7 +5616,7 @@ function Invoke-MoeLanding {
             if ($ledgerAcked) { $receipt.Remove('ledger') }
             $receipt.pushResult = $script:MoePushResult
             Write-MoeReceiptJournal $journal $receipt
-            $null = Send-MoeReceipt $journal $receipt
+            if (-not $res.ProofUntransferred) { $null = Send-MoeReceipt $journal $receipt }
         }
         return $res
     } catch {
@@ -6173,6 +6220,15 @@ function Complete-MoePostflight {
         elseif ($r.Outcome -eq 'nothing') { $outcome='nothing-to-commit' }
         elseif ($r.Ref -and $r.Sha) { $outcome='rescued' }
         else { $outcome='failed' }
+        # CQ-V08: a strong landing finalizes only once its receipt is recorded. While
+        # the journal stays (or its proof did not transfer) the attempt stays
+        # finalizing, which holds qa_approve and every claim of the task, so nothing
+        # reaches DONE and no dependent is released before the replay settles it. Twin: finalize_postflight.
+        if ($outcome -eq 'landed' -and $script:PinnedAttemptProfile -ceq 'verified-local' -and
+            ($r.ProofUntransferred -or ($r.ReceiptJournal -and (Test-Path -LiteralPath $r.ReceiptJournal)))) {
+            Write-Host "[WARN] MOE_FINALIZE_DEFERRED_RECEIPT: task $preflightTaskId -- the delivery receipt of $sha is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes." -ForegroundColor Yellow
+            return $true
+        }
     }
     return (Send-MoeFinalize $outcome $sha)
 }

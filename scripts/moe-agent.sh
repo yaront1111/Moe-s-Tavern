@@ -5232,6 +5232,18 @@ land_plumbing() {
     err="$(create_secure_temp)/land-err-$$.txt"
     # A task branch gets ONE CAS (design §2.2 L2): a moved tip is contention, never a rebuild.
     [ "${LAND_ONE_CAS:-}" != true ] || attempts=1
+    if [ "$LAND_KIND" = completion ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ]; then
+        # CQ-V08: a journal still on disk is an earlier landing of this task whose
+        # effect the pre-flight replay could not settle. Landing again would
+        # double-land and overwrite that intent: refuse, leave it untouched.
+        local stale; stale="$(receipt_journal_path "$LAND_TASK_ID")"
+        if [ -n "$stale" ] && [ -e "$stale" ]; then
+            LAND_OUTCOME="refused"; LAND_CODE="MOE_COMMIT_REFUSED_UNRECONCILED_INTENT"
+            LAND_MESSAGE="the receipt journal $stale of an earlier landing is unreconciled"
+            echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $LAND_MESSAGE; no ref moves until a pre-flight replay settles it (no update-ref, no rescue ref, no push). The bytes and baseline stay for the next session."
+            return 4
+        fi
+    fi
     for attempt in $attempts; do
         old=$(git -C "$MOE_TOP" rev-parse -q --verify "$ref" 2>/dev/null) || old=""
         if ! moe_temp_index_build "$old" "$ATTR_DIR/candidates" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE"; then
@@ -5399,6 +5411,15 @@ finalize_postflight() {
         nothing) outcome=nothing-to-commit ;;
         *) [ -z "${LAND_RESCUE_SHA:-}" ] || outcome=rescued ;;
     esac
+    # CQ-V08: a strong landing finalizes only once its receipt is recorded. While
+    # the journal stays (or its proof did not transfer) the attempt stays
+    # finalizing, which holds qa_approve and every claim of the task, so nothing
+    # reaches DONE and no dependent is released before the replay settles it.
+    if [ "$outcome" = landed ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] \
+        && { [ "${LAND_PROOF_UNTRANSFERRED:-}" = true ] || { [ -n "${RECEIPT_JOURNAL:-}" ] && [ -e "$RECEIPT_JOURNAL" ]; }; }; then
+        echo -e "${YELLOW}[WARN]${NC} MOE_FINALIZE_DEFERRED_RECEIPT: task ${LAND_TASK_ID:-} -- the delivery receipt of $LAND_SHA is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes."
+        return 0
+    fi
     finalize_attempt_rpc "$outcome" "${LAND_SHA:-}"
 }
 
@@ -5522,12 +5543,18 @@ push_branch() {
         echo -e "${BLUE}[info]${NC} no git remote configured; push skipped, the commit stays local on $branch."
         return 1
     fi
+    # CQ-V08: a pull --rebase rewrites the verified commit onto another tree.
+    local rebase="${MOE_PUSH_REBASE:-0}"
+    if [ "$rebase" = 1 ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ]; then
+        rebase=0
+        echo -e "${BLUE}[info]${NC} strong delivery is exact: MOE_PUSH_REBASE=1 is ignored, a rejected push is never rebased, so $branch keeps the verified commit."
+    fi
     if git -C "$MOE_TOP" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' > /dev/null 2>&1; then
         if PUSH_OUT=$(git -C "$MOE_TOP" push 2>&1); then
             ok=true
         else
             printf '%s\n' "$PUSH_OUT" | tail -5
-            if [ "${MOE_PUSH_REBASE:-0}" = 1 ]; then
+            if [ "$rebase" = 1 ]; then
                 echo -e "${YELLOW}[WARN]${NC} git push failed; MOE_PUSH_REBASE=1: trying git pull --rebase then re-push..."
                 if REBASE_OUT=$(git -C "$MOE_TOP" pull --rebase 2>&1); then
                     printf '%s\n' "$REBASE_OUT" | tail -5
@@ -5551,7 +5578,7 @@ push_branch() {
             ok=true
         else
             printf '%s\n' "$PUSH_OUT" | tail -5
-            if [ "${MOE_PUSH_REBASE:-0}" = 1 ]; then
+            if [ "$rebase" = 1 ]; then
                 echo -e "${YELLOW}[WARN]${NC} git push failed; MOE_PUSH_REBASE=1: trying git pull --rebase then re-push..."
                 if REBASE_OUT=$(git -C "$MOE_TOP" pull --rebase origin "$branch" 2>&1); then
                     printf '%s\n' "$REBASE_OUT" | tail -5
@@ -5877,8 +5904,10 @@ ok=(os.path.basename(f)==str(d.get('taskId'))+'.json' and re.fullmatch(r'[A-Za-z
     and all(isinstance(d.get(k),str) and rev.fullmatch(d[k]) for k in ('targetBefore','targetAfter','landedRevision'))
     and (l is None or (isinstance(l,dict) and all(isinstance(l.get(k),str) and l[k].strip() and len(l[k])<=n
         for k,n in (('sessionId',255),('role',64))) and (l.get('status') is None or isinstance(l['status'],str)))))
-if not ok: sys.exit(1)
-print('\x1f'.join([d['taskId'],d['target'],d['targetAfter'],d['attemptId'],str(g),d['workerId'],d['targetBefore'],'' if l is None else '1']))
+strong=d.get('profile')=='verified-local'
+if not ok or (strong and not (isinstance(d.get('treeSha'),str) and rev.fullmatch(d['treeSha']))): sys.exit(1)
+print('\x1f'.join([d['taskId'],d['target'],d['targetAfter'],d['attemptId'],str(g),d['workerId'],d['targetBefore'],'' if l is None else '1',
+    '1' if strong else '',d['treeSha'].lower() if strong else '']))
 PY
 }
 
@@ -5946,7 +5975,7 @@ PY
 # Twin: Invoke-MoeReceiptReplay.
 receipt_replay() {
     [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
-    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" f fields tid target after aid gen owner before owed landed args report
+    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" f fields tid target after aid gen owner before owed strong tree ltree landed args report
     git_top || return 0
     [ -d "$MOE_GITDIR/moe/receipt" ] || return 0
     for f in "$MOE_GITDIR"/moe/receipt/*.json; do
@@ -5955,7 +5984,7 @@ receipt_replay() {
             echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: malformed journal"
             continue
         fi
-        IFS=$'\x1f' read -r tid target after aid gen owner before owed <<< "$fields" || true
+        IFS=$'\x1f' read -r tid target after aid gen owner before owed strong tree <<< "$fields" || true
         if live_marker_foreign_live "$tid"; then continue; fi
         if ! landed=$(receipt_landed_as "$target" "$after" "$before"); then
             echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: $landed"
@@ -5965,6 +5994,18 @@ receipt_replay() {
             echo -e "${BLUE}[receipt]${NC} $target does not contain $after: that landing never moved the ref; dropping $f."
             rm -f "$f"
             continue
+        fi
+        # CQ-V08: a strong journal's proof binds to its verified tree. A copy on
+        # another tree is not that landing: keep the journal, send nothing.
+        if [ -n "$strong" ]; then
+            if ! ltree=$(git -C "$MOE_TOP" rev-parse "$landed^{tree}" 2>/dev/null); then
+                echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: git rev-parse $landed^{tree} failed"
+                continue
+            fi
+            if [ "$ltree" != "$tree" ]; then
+                echo -e "${YELLOW}[WARN]${NC} MOE_DELIVERY_PROOF_NOT_TRANSFERRED: task $tid -- $target carries the landing as $landed, whose tree $ltree is not the verified tree $tree; receipt journal $f kept, nothing recorded or finalized."
+                continue
+            fi
         fi
         [ "$landed" = "$after" ] || echo -e "${BLUE}[receipt]${NC} a pull --rebase rewrote $after; $target carries it as $landed."
         echo -e "${BLUE}[receipt]${NC} replaying the delivery receipt of task $tid from $f"
@@ -6009,7 +6050,7 @@ run_landing() {
     ATTR_DIR="$work/attr"
     mkdir -p "$ATTR_DIR"
     LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""; LAND_RECORDED=""; LAND_PUSH_RESULT=""
-    RECEIPT_BEFORE=""; RECEIPT_LANDED=""; RECEIPT_JOURNAL=""
+    RECEIPT_BEFORE=""; RECEIPT_LANDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""
     LAND_N_PATHS=0; LAND_N_INFERRED=0; LAND_RESCUE_REF=""; LAND_STAGED_FILE=""; LAND_DROPPED_FILE=""
     TI_N_STAGED=0; TI_N_INFERRED=0
     local policy_override="${LAND_POLICY_OVERRIDE:-}"
@@ -6175,7 +6216,7 @@ run_landing() {
             ;;
         refused)
             # An intent refusal already said why; committing by hand would bypass the intent.
-            case "$LAND_CODE" in MOE_COMMIT_REFUSED_INTENT_INCOMPLETE|MOE_COMMIT_REFUSED_INTENT_UNWRITABLE) ;; *)
+            case "$LAND_CODE" in MOE_COMMIT_REFUSED_INTENT_INCOMPLETE|MOE_COMMIT_REFUSED_INTENT_UNWRITABLE|MOE_COMMIT_REFUSED_UNRECONCILED_INTENT) ;; *)
             echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- refusing to auto-commit; there is no whole-tree fallback. Commit the task's own paths by hand: git commit -- <path> [<path>...]"
             ;; esac
             ;;
@@ -6232,6 +6273,14 @@ run_landing() {
     if [ "$LAND_OUTCOME" = "committed" ]; then
         local found
         found=$(git -C "$MOE_TOP" log -n1 --format=%H --fixed-strings --grep="Moe-Session: $MOE_SID" "$LAND_BRANCH" 2>/dev/null) || found=""
+        # CQ-V08: under the strong profile the proof binds to the verified tree, so
+        # a trailer-matched commit stands for this landing only on that tree.
+        if [ -n "$found" ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] && [ -n "${RECEIPT_LANDED:-}" ] \
+            && [ "$(git -C "$MOE_TOP" rev-parse "$found^{tree}" 2>/dev/null)" != "${FROZEN_TREE:-}" ]; then
+            LAND_PROOF_UNTRANSFERRED=true
+            echo -e "${YELLOW}[WARN]${NC} MOE_DELIVERY_PROOF_NOT_TRANSFERRED: task $LAND_TASK_ID -- $LAND_BRANCH carries this landing's trailers on $found, whose tree is not the verified candidate's; the proof stays with candidate ${FROZEN_CANDIDATE_ID:-}, no receipt is sent and the journal stays."
+            found=""
+        fi
         if [ -n "$found" ]; then
             LAND_SHA="$found"
             LAND_TREE=$(git -C "$MOE_TOP" rev-parse "$found^{tree}" 2>/dev/null) || LAND_TREE=""
@@ -6245,7 +6294,7 @@ run_landing() {
             # Only an acknowledged row leaves the journal; a lost one is replayed.
             report=$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$LAND_PUSH_RESULT" "$owed") || report=""
             receipt_journal_write "$RECEIPT_JOURNAL" "$report"
-            [ -z "$report" ] || receipt_send "$report" "$RECEIPT_JOURNAL" || true
+            [ -z "$report" ] || [ "${LAND_PROOF_UNTRANSFERRED:-}" = true ] || receipt_send "$report" "$RECEIPT_JOURNAL" || true
         fi
     elif [ "$LAND_OUTCOME" = "nothing" ]; then
         record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "${LAND_DROPPED_FILE:-}" || true
@@ -7400,7 +7449,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # Results are baked into SYSTEM_APPEND/PROMPT below so the agent starts
     # already initialized instead of being told to do these via prompt.
     MOE_FINALIZE_DONE=false; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
-    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""
+    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
     # Exported blank: no CLI inherits a previous task's attempt (sh hot reload keeps env).
     export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""

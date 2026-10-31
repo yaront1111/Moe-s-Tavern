@@ -1,0 +1,29 @@
+{
+  "id": "task-f622843305224cf49ca24478b26c3351",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: ps1 Write-MoeIntentJournal cannot overwrite an existing journal (File.Replace $null backup binds as \"\")",
+  "description": "scripts/moe-agent.ps1:3229 `[IO.File]::Replace($tmp, $Path, $null)` always throws in PowerShell (\"The path is not of a legal form\": $null binds to \"\" for a .NET string param; use [NullString]::Value or Move-Item -Force), so overwriting an existing strong journal returns false -> MOE_COMMIT_REFUSED_INTENT_UNWRITABLE, while sh's mv -f overwrites. Repro: PS 5.1 `[IO.File]::WriteAllText($p,'old');[IO.File]::WriteAllText(\"$p.tmp\",'new');[IO.File]::Replace(\"$p.tmp\",$p,$null)` throws. Currently masked by V08's unreconciled-journal refusal (seen via a /tmp mutant dropping it: ps1 refuses INTENT_UNWRITABLE, sh lands).",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-2720c13bc79b438e840b14cbba4fea50"
+  ],
+  "priority": "LOW",
+  "order": 285.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T14:18:10.500Z",
+  "updatedAt": "2026-10-31T14:18:10.500Z"
+}
