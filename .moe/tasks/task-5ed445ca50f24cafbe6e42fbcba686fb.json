@@ -80,7 +80,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -114,11 +114,17 @@
       "author": "governor-693b7073",
       "content": "Governor, 06:24Z, for the worker and for QA. Read this before step 1.\n\nCQ-R13 parked at 06:19Z, waiting on this row. Its checkpoint 80038a06 landed 18 paths but HELD two of this row's files as MOE_ATTR_CONTESTED_UNTOUCHED. The working tree still carries R13's reviewed step-3 hunks there, uncommitted:\n- scripts/local-runner/guest-supervisor.py: OFFLINE_INSTALL_ARGS gains '--workspaces=false', and install_dependencies also requires a regular package.json and refuses a planted npm-shrinkwrap.json or .npmrc. Its comment hands the same-version file: spec to this row.\n- scripts/tests/local-runner-check.test.mjs: the matching installRun fixture, three new KI3 cases, and DC4's 7-flag list.\nAt 06:23Z the sha256 values were 7e6ed20c… (guest-supervisor.py) and 61265ef7… (test).\n\nWorker: build on these bytes and never revert them. R13's step 4 verified them at 349 pass. Edit both files with your Edit tool, so your completion carries them (expect Moe-Contested trailers naming f4811a72 and 42e9990c). This also fixes HEAD: 80038a06 committed dependency-cache.mjs's 7-flag OFFLINE_INSTALL_ARGS, while the committed DC4 still asserts 6 flags.\n\nQA: in this row's diff, the hunks above are carried CQ-R13 work, not scope creep. Review this row's own change on top of them.",
       "timestamp": "2026-10-31T06:21:31.959Z"
+    },
+    {
+      "id": "comment-d3489853430c43fe8aca9776507b05a3",
+      "author": "qa-b29f7b3d",
+      "content": "QA qa-b29f7b3d, 2026-10-31: evidence for the APPROVE of task-5ed445ca.\n\nDelivery: completion commit 92d96620 (tree a482c052) is on moe/work-2026-10-24 and is an ancestor of the remote head 5ad0dcb3. It carries guest-supervisor.py (sha256 b82e4369…) and local-runner-check.test.mjs (93e3c7fe…) plus 2 .moe task records. Both hashes equal the working tree and the worker's handoff. scripts/ is unchanged between 92d96620 and HEAD 78eddb63. local-runner.test.mjs and CERTIFICATION.md are untouched.\n\nSize: the two files are +296/-19 (277 net), CQ-R13's carried hunks included. This row's own supervisor delta over R13's 7e6ed20c is +83/-9. R13's hunks are preserved: --workspaces=false, the shrinkwrap/.npmrc refusal, and the regular package.json check (now read_json's S_ISREG).\n\nGate re-run: from a fresh full `git archive 92d96620` in /tmp, under env -i PATH=<pinned toolchain>/bin:/usr/local/bin:/usr/bin:/bin. The toolchain tarball's sha256 (48cc0e21…) and size (32039312) match toolchain.json, and I extracted it fresh: node v24.22.2, npm 11.19.1, python 3.12.3.\n`node --test scripts/tests/local-runner-check.test.mjs && node --test --test-name-pattern='^CY[1-4] ' scripts/tests/local-runner.test.mjs` exits 0:\n- check file: 55 tests, 54 pass, 0 fail, 1 skip (K9, needs root, pre-existing)\n- CY1-CY4: 4/4\n- KI1-KI8 and DC5 all executed.\n\nRED: KI1-KI8 against R13's pre-fix supervisor (7e6ed20c) fail KI5, KI7 and KI8. In KI8, 'a file: spec over the tree' reaches relay with 42, not 81. KI1-KI4 and KI6 pass.\n\nMy own 12 mutants, scored by exit code on ^KI[1-8], were all killed:\n- the controls clause (KI5, KI8)\n- peerDependenciesMeta or optionalDependencies dropped from the compare (KI5)\n- Python dict equality instead of json.dumps (KI5)\n- preflight of the first directory only (KI3, KI5, KI7)\n- the name/version type check, a null/[] map coerced to {}, the spec type check (KI5)\n- the BOM strip (KI6)\n- the lockfileVersion range, the size cap (KI7)\n- the .npmrc check (KI3)\n\nOver-refusal and DoD 2:\n- The real certify canary files (canarySnapshot('pass')) give approved_project True.\n- A lock root written by real npm 11.19.1 (`npm install --package-lock-only --offline`, empty maps, a prerelease version) gives True.\n\nAdversarial real-npm probes of fields the preflight does not compare, using a scratch copy of KI8's fixture outside the repo:\n- acceptDependencies with file: specs for a or b\n- raw-JSON \"__proto__\" wrapping overrides, bundleDependencies, workspaces, optionalDependencies or devDependencies\n\nEvery row gave 42 with only the cached registry bytes (no stub.txt) and ran no script. No route found.\n\nAccepted fail-closed restrictions (the human approved the fail-closed policy):\n- a dependency in both dependencies and optionalDependencies\n- an empty-string name or version\n- workspaces, overrides or bundle keys, even when empty\n- a package.json over 1 MiB\n- JSON numbers compared by type\n\nThe residual editable-lockfile routes are task-adbab50d. CQ-R13 needs new operator-run certify reports on supervisor b82e4369 (comment-1368664a).\n\nNot run here: the macOS lane, where KI5/KI7 use the same checkRun refusal harness as the pre-existing KI3 and KI6/KI8 skip off Linux, and the Windows lane, where every new row skips. CI's 3-OS matrix covers both.\n\nPonytail, non-blocking: read_json repeats blob_oid's no-follow fd walk. A shared helper would save about 8 lines but widen scope into existing helpers. net: -8 lines possible.",
+      "timestamp": "2026-10-31T08:18:27.064Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:22:50.485Z",
-  "updatedAt": "2026-10-31T07:49:44.921Z",
+  "updatedAt": "2026-10-31T08:18:36.567Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:42.944Z",
@@ -128,13 +134,16 @@
     "firstClaimAt": "2026-10-31T05:35:40.816Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-31T08:18:36.567Z",
+    "wallClockMs": 9775751
   },
   "contextFetchedBy": [
     "architect-1440caeb",
     "architect-21c9ed65",
     "worker-3a9b4568",
-    "architect-66fd8127"
+    "architect-66fd8127",
+    "qa-b29f7b3d"
   ],
   "blockedReason": null,
   "blockedResourceId": null,
@@ -286,5 +295,9 @@
   "touchedFiles": [
     "scripts/tests/local-runner-check.test.mjs",
     "scripts/local-runner/guest-supervisor.py"
-  ]
+  ],
+  "completedAt": "2026-10-31T08:18:36.567Z",
+  "reviewCompletedAt": "2026-10-31T08:18:36.567Z",
+  "reviewSummary": "APPROVED. Full evidence in comment-d3489853.\nDelivery: completion 92d96620 is on moe/work-2026-10-24 and is an ancestor of the remote head 5ad0dcb3. It holds exactly the two approved files (supervisor b82e4369, test 93e3c7fe) plus .moe records. Size is +296/-19 (277 net) including CQ-R13's preserved hunks; this row's own supervisor delta is +83/-9.\nGate re-run from a fresh full git-archive of 92d96620, with the toolchain sha256/size verified against toolchain.json (node 24.22.2, npm 11.19.1, py 3.12.3): exit 0. The check file gave 55 tests, 54 pass, 0 fail, 1 skip (K9, root). CY1-CY4 4/4. KI1-KI8 and DC5 executed.\nDoD 1: KI5 (41 refusal rows: file: tarball/dir in every map, alias, range, added/removed dep, name/version/meta, overrides, both bundle spellings, workspaces) and KI8 (real npm, file: spec and override over a full and an empty cache) refuse with 81, nothing installed, all-dir preflight. RED: on R13's pre-fix bytes, KI5, KI7 and KI8 fail (the file: spec reaches relay with 42). My 12 independent mutants were all killed.\nDoD 2: KI1, DC5 and CY1-CY4 are green. The real canarySnapshot('pass') project and an npm-written lock root both pass approved_project. Probes of unchecked fields (acceptDependencies file: specs, raw __proto__ wrapping overrides/bundle/workspaces/maps) install only cached bytes.\nContract: no wire/schema/certification/local-runner.test.mjs change. The fail-closed restrictions are human-approved; the residual lockfile routes are task-adbab50d. CQ-R13 needs new certify reports on b82e4369. macOS and Windows lanes were not run locally (CI matrix).\nPonytail: read_json repeats blob_oid's walk; net -8 lines possible, non-blocking.",
+  "requiredCheckAtDone": null
 }
