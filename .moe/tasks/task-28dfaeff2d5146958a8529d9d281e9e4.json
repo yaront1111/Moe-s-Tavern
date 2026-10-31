@@ -60,7 +60,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,7 +92,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T02:07:32.248Z",
-  "updatedAt": "2026-10-31T03:21:55.601Z",
+  "updatedAt": "2026-10-31T03:42:07.455Z",
   "dependsOn": [
     "task-c7ee939a460641eab87eb799a38e6ff9"
   ],
@@ -105,11 +105,14 @@
     "firstClaimAt": "2026-10-31T02:08:13.843Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T03:42:07.455Z",
+    "wallClockMs": 5633612
   },
   "contextFetchedBy": [
     "architect-915213a1",
-    "worker-632cd3f0"
+    "worker-632cd3f0",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -207,19 +210,40 @@
       "treeId": "bc2a23e2def6f5de7be86294cb326026a43548ac",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "ba9d44b6bb186ac68a2f18ada4f4bf015264a1b5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-632cd3f0@2026-10-31T02:59:37Z",
+      "paths": [
+        ".moe/tasks/task-28dfaeff2d5146958a8529d9d281e9e4.json",
+        ".moe/tasks/task-c7ee939a460641eab87eb799a38e6ff9.json",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-632cd3f0",
+      "recordedAt": "2026-10-31T03:22:13.635Z",
+      "treeId": "7e9fac9aea1defb2af87e6ff61bc70f267b7c223",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/tests/postflight-fake-proxy.js",
     "scripts/tests/postflight.sh",
-    "scripts/moe-agent.sh"
+    "scripts/moe-agent.sh",
+    ".moe/tasks/task-28dfaeff2d5146958a8529d9d281e9e4.json",
+    ".moe/tasks/task-c7ee939a460641eab87eb799a38e6ff9.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-915213a1@2026-10-31T02:08:15Z",
-    "at": "2026-10-31T02:51:23.336Z"
+    "kind": "completion",
+    "sessionId": "worker-632cd3f0@2026-10-31T02:59:37Z",
+    "at": "2026-10-31T03:22:13.635Z"
   },
   "workStartedAt": "2026-10-31T02:59:56.807Z",
   "reviewStartedAt": "2026-10-31T03:21:55.599Z",
@@ -230,5 +254,13 @@
     "reportedAt": "2026-10-31T03:21:55.599Z",
     "source": "agent-reported"
   },
-  "completionSummary": "moe-agent.sh no longer passes a claude/gemini user prompt over PROMPT_ARGV_MAX_BYTES (100000 bytes, counted with wc -c, so locale-proof) as one argv string. Above it, route_prompt_overflow() writes the prompt byte for byte to a 0600 mktemp file in the 0700 SECURE_TEMP_DIR, passes moe-agent.ps1's read directive, and prints '[prompt-overflow] prompt routed via private session context file: N bytes > 100000-byte argv limit.' A failed write exits 1 with an [ERROR] line and never passes the argv. At or below the threshold the prompt reaches argv unchanged (the helper returns before touching the variable). The file is removed right after the CLI exits (one rm line after the AGENT_GIT_GUARD_ROOT cleanup) and by cleanup_temp on any other exit. 3 files: scripts/moe-agent.sh (+25), postflight-fake-proxy.js (FAKE_CTX_PAD_BYTES knob), postflight.sh ([prompt overflow] arm).\\n\\nTests: RED on HEAD ('Argument list too long', arm fails). GREEN: run A (claude --print, one --loop process, 2 sessions: directive on argv under 100000 bytes, file holds the served claimed_task_context block + the RESUME role directive byte for byte, mode -rw------- (MSYS exempt), launch 1's file gone when launch 2 starts, banner per launch); run B gemini; run C pad 20000 stays on argv with no banner. Runs under a UTF-8 locale, so a character count fails it. Mutants (no tail rm, character count, no gemini call site) each fail the arm. Full chain (bash -n, postflight.sh, parity-check.sh, 4 node suites: 124 tests, 122 pass, 0 fail, 2 skipped) exit 0 in a full git-archive snapshot. No daemon suite: heartbeatStop.test.ts slices HEARTBEAT_PID=\\\"\\\"..post_flight() and codexDescriptor pins only the codex lines; nothing here touches either.\\n\\nDoD 2: codex is safe (SHORT_PROMPT = pointer + fixed PROMPT_BODY whenever DYNAMIC_CONTEXT exists; context goes to its file); grok is safe (--prompt-file or short pointer); gemini is covered and tested by run B. ps1: its $isWin route sends any claude prompt over 6000 chars or h"
+  "completionSummary": "moe-agent.sh no longer passes a claude/gemini user prompt over PROMPT_ARGV_MAX_BYTES (100000 bytes, counted with wc -c, so locale-proof) as one argv string. Above it, route_prompt_overflow() writes the prompt byte for byte to a 0600 mktemp file in the 0700 SECURE_TEMP_DIR, passes moe-agent.ps1's read directive, and prints '[prompt-overflow] prompt routed via private session context file: N bytes > 100000-byte argv limit.' A failed write exits 1 with an [ERROR] line and never passes the argv. At or below the threshold the prompt reaches argv unchanged (the helper returns before touching the variable). The file is removed right after the CLI exits (one rm line after the AGENT_GIT_GUARD_ROOT cleanup) and by cleanup_temp on any other exit. 3 files: scripts/moe-agent.sh (+25), postflight-fake-proxy.js (FAKE_CTX_PAD_BYTES knob), postflight.sh ([prompt overflow] arm).\\n\\nTests: RED on HEAD ('Argument list too long', arm fails). GREEN: run A (claude --print, one --loop process, 2 sessions: directive on argv under 100000 bytes, file holds the served claimed_task_context block + the RESUME role directive byte for byte, mode -rw------- (MSYS exempt), launch 1's file gone when launch 2 starts, banner per launch); run B gemini; run C pad 20000 stays on argv with no banner. Runs under a UTF-8 locale, so a character count fails it. Mutants (no tail rm, character count, no gemini call site) each fail the arm. Full chain (bash -n, postflight.sh, parity-check.sh, 4 node suites: 124 tests, 122 pass, 0 fail, 2 skipped) exit 0 in a full git-archive snapshot. No daemon suite: heartbeatStop.test.ts slices HEARTBEAT_PID=\\\"\\\"..post_flight() and codexDescriptor pins only the codex lines; nothing here touches either.\\n\\nDoD 2: codex is safe (SHORT_PROMPT = pointer + fixed PROMPT_BODY whenever DYNAMIC_CONTEXT exists; context goes to its file); grok is safe (--prompt-file or short pointer); gemini is covered and tested by run B. ps1: its $isWin route sends any claude prompt over 6000 chars or h",
+  "touchedFiles": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight.sh"
+  ],
+  "completedAt": "2026-10-31T03:42:07.455Z",
+  "reviewCompletedAt": "2026-10-31T03:42:07.455Z",
+  "reviewSummary": "APPROVED. Reviewed completion ba9d44b6 (task.commits kind=completion, on moe/work-2026-10-24, pushed; HEAD==ba9d44b6). 3 non-board files, ~+198 net LOC (moe-agent.sh +25, fake-proxy knob, postflight.sh arm), under the cap.\n\nRe-ran task.verification in a fresh full git-archive snapshot outside the checkout (3 files cmp-identical), env -i + SIG_IGN-reset shim, MOE_POSTFLIGHT_TIMEOUT_SEC=180: bash -n OK; postflight.sh '[prompt overflow] ok' + PASS (all pre-existing arms green); PASS parity-check.sh; 4 node suites 124 tests/122 pass/0 fail/2 skipped; GATE_EXIT=0.\nIndependent RED: ran the new arm against ba9d44b6^ wrapper: 'Argument list too long', exit 126, arm fails.\n\nDoD 1: route_prompt_overflow counts bytes (wc -c; arm uses multibyte padding under UTF-8 locale), threshold 100000 documented by comment+banner; over it -> 0600 mktemp file in 0700 SECURE_TEMP_DIR, ps1's directive on argv, [prompt-overflow] banner; write failure -> [ERROR]+exit 1; at/below threshold argv unchanged (run C). Per-session rm sits after the AGENT_GIT_GUARD_ROOT line (usage-launcher cut block untouched, suite green); cleanup_temp covers other exits. Run A (one --loop process, 2 launches) proves directive-only argv, file byte-for-byte, mode -rw-------, launch 1 file gone at launch 2, banner per launch.\nDoD 2: traced every launch path: claude print+TUI routed; gemini routed (run B); codex safe (large PROMPT implies DYNAMIC_CONTEXT, so CODEX_USES_FILE_CONTEXT replaces SHORT_PROMPT with pointer+fixed body); grok safe (--prompt-file/short pointer).\nDoD 3: arm before final PASS; pre-existing arms unchanged; bash -n and parity pass.\nInvariants hold: claude/codex/grok launch lines, PROMPT composition and ps1 untouched; no new MOE_* code; bash 3.2-safe. No daemon suite needed. Residuals (worker-stated, not defects): Git Bash/Windows 32,767-char cap, non-Windows pwsh, daemon epicSiblings trim follow-up.",
+  "requiredCheckAtDone": null
 }
