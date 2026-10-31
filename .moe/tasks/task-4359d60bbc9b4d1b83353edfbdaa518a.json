@@ -71,7 +71,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -95,17 +95,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:51:08.708Z",
-  "updatedAt": "2026-10-31T17:24:07.917Z",
+  "updatedAt": "2026-10-31T17:31:28.698Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:55:25.253Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T17:31:28.698Z",
+    "wallClockMs": 153363445
   },
   "contextFetchedBy": [
     "architect-32ff5555",
     "architect-8419009e",
-    "worker-3a9b4568"
+    "worker-3a9b4568",
+    "qa-b29f7b3d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -241,7 +244,42 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts",
+    ".moe/tasks/task-4359d60bbc9b4d1b83353edfbdaa518a.json",
+    ".moe/tasks/task-a28c66bbd21448c7b25daec49a3fa217.json"
+  ],
+  "completionSummary": "CQ-M06b: seam D plus the whole-file gate. Seams A-C came from CQ-M06b1 (task-c34f9700, e3659d58). Tests only, one file: src/__e2e__/workstreamComposition.e2e.test.ts (+187/-18). B's toReview moved to module scope as toReview(profile, ...); no A-C assertion changed.\n\nSeam D (9 tests), on real tools and stores. No spy and no certification. Strict state comes only from a raw seed plus load, or from strictInMemory.\n- D1a, legacy and observe: activation is refused with exact {code, codeName, context} NOT_READY. project.json is unchanged, with one new refused-activate record naming vm, client and check.\n- D1b: an explicit claim of a stored-strict row is refused, and no worker is registered. The implicit claim returns the legacy row, never the higher-priority strict one. S's bytes are unchanged.\n- D1c: after an audited rollback (retainedStrictAttempts 1), complete_task on the strict attempt is refused. The task stays WORKING and the attempt stays verified-local. The legacy control goes to REVIEW.\n- D1d: an approval that passes V06's binding is refused NOT_READY. After the rollback (0/0) the same approval reaches DONE.\n- D2a: after the B control, under legacy and observe, no truthy isolation, readiness, verifiedLocal or certification key and no verified-local profile appears in any record. It has a non-vacuity guard and no allowlist.\n- D2b: the hello negotiates all three capabilities false.\n\nEvery refusal is checked with refused(): exact codeName, and bytes unchanged over tasks, attempts, candidates, checks, reviews and receipts. Deviation: McpAdapter puts only {tool, codeName} on the wire, so the MCP refusals assert the exact {code, codeName, message}.\n\nGate: Linux archive of HEAD 0733a436, npm ci, env -i, node 24.21.0.\n- npm test: EXIT 0, 218 files, 6430 passed | 20 skipped. The HEAD baseline is 6421 | 20, so +9 with no regressions.\n- Scratch tsc: 0.\n\nMutants, each a real failure:\n- completeTask reverted to task-level: D1c.\n- Admission throw dropped: D1b.\n- verifiedLocal ",
+  "commits": [
+    {
+      "sha": "5923b5c329ccf3a2cf4f8351620d2121bcdf14c8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3a9b4568@2026-10-31T17:04:55Z",
+      "paths": [
+        ".moe/tasks/task-4359d60bbc9b4d1b83353edfbdaa518a.json",
+        ".moe/tasks/task-a28c66bbd21448c7b25daec49a3fa217.json",
+        "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
+      ],
+      "recordedBy": "worker-3a9b4568",
+      "recordedAt": "2026-10-31T17:24:37.444Z",
+      "treeId": "de0a17d83af8bda57a98f0fe3763525209bd54a1",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
   ],
-  "completionSummary": "CQ-M06b: seam D plus the whole-file gate. Seams A-C came from CQ-M06b1 (task-c34f9700, e3659d58). Tests only, one file: src/__e2e__/workstreamComposition.e2e.test.ts (+187/-18). B's toReview moved to module scope as toReview(profile, ...); no A-C assertion changed.\n\nSeam D (9 tests), on real tools and stores. No spy and no certification. Strict state comes only from a raw seed plus load, or from strictInMemory.\n- D1a, legacy and observe: activation is refused with exact {code, codeName, context} NOT_READY. project.json is unchanged, with one new refused-activate record naming vm, client and check.\n- D1b: an explicit claim of a stored-strict row is refused, and no worker is registered. The implicit claim returns the legacy row, never the higher-priority strict one. S's bytes are unchanged.\n- D1c: after an audited rollback (retainedStrictAttempts 1), complete_task on the strict attempt is refused. The task stays WORKING and the attempt stays verified-local. The legacy control goes to REVIEW.\n- D1d: an approval that passes V06's binding is refused NOT_READY. After the rollback (0/0) the same approval reaches DONE.\n- D2a: after the B control, under legacy and observe, no truthy isolation, readiness, verifiedLocal or certification key and no verified-local profile appears in any record. It has a non-vacuity guard and no allowlist.\n- D2b: the hello negotiates all three capabilities false.\n\nEvery refusal is checked with refused(): exact codeName, and bytes unchanged over tasks, attempts, candidates, checks, reviews and receipts. Deviation: McpAdapter puts only {tool, codeName} on the wire, so the MCP refusals assert the exact {code, codeName, message}.\n\nGate: Linux archive of HEAD 0733a436, npm ci, env -i, node 24.21.0.\n- npm test: EXIT 0, 218 files, 6430 passed | 20 skipped. The HEAD baseline is 6421 | 20, so +9 with no regressions.\n- Scratch tsc: 0.\n\nMutants, each a real failure:\n- completeTask reverted to task-level: D1c.\n- Admission throw dropped: D1b.\n- verifiedLocal "
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3a9b4568@2026-10-31T17:04:55Z",
+    "at": "2026-10-31T17:24:37.444Z"
+  },
+  "completedAt": "2026-10-31T17:31:28.698Z",
+  "reviewCompletedAt": "2026-10-31T17:31:28.698Z",
+  "reviewSummary": "Approved CQ-M06b: seam D plus the whole-file gate. Seams A-C came from CQ-M06b1 (task-c34f9700).\n\nCommit 5923b5c3 is on moe/work-2026-10-24. Source is one test file, workstreamComposition.e2e.test.ts (+187/-18, net 169), with no production bytes. The other two paths are board records. Read in full: only B's toReview moved to module scope with a `profile` parameter, and no A-C assertion changed.\n\nGate, in my own Linux snapshot (git archive 5923b5c3, cmp OK, npm ci, env -i, node 24.21.0):\n- `cd packages/moe-daemon && npm test`: EXIT 0, 218 files, 6430 passed | 20 skipped. This matches the worker's evidence.\n- The file alone: 49/49. Scratch tsc: 0. No spies, no mocks and no forbidden patterns.\n\nMutants (restored; diff -rq identical; kills counted only on real failures):\n- completeTask task-level readiness: D1c red.\n- Claim admission throw dropped: D1b red.\n- verifiedLocal true: D2b and D1a x2 red.\n- My extra mutant, resolveTaskDeliveryPolicy readiness dropped: D1d red.\n- All 11 of M06b1's A-C mutants are still red.\n\nDoD:\n1. D1a-d and D2a-b run on real tools and stores, with exact codeNames. D1a asserts the full {code, codeName, context}. The MCP refusals assert the exact wire form {code, codeName, message}, because the context is not carried on /mcp (documented deviation).\n2. Each refusal goes through refused(): bytes over tasks, attempts, candidates, checks, reviews and receipts are unchanged. On top of that: project.json is unchanged, getWorker is null, the task stays WORKING with the attempt still STRICT_V2, and there is no reviews dir.\n3. No mocked gate and no certification. Verified-local is never ready: strict state comes only from a raw seed or the in-memory flip, in a fresh harness for each test.\n4. Legacy controls: the row is claimable, the attempt reaches REVIEW, and approval reaches DONE after rollback.\n5. Fresh npm test exits 0.\n\nNotes (not blocking): the file is 538 lines, and TRUST_KEY misses snake_case keys (all keys are camelCase today).",
+  "requiredCheckAtDone": null
 }
