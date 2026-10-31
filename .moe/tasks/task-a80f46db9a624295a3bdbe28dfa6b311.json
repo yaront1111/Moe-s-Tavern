@@ -74,7 +74,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -100,16 +100,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:52:00.964Z",
-  "updatedAt": "2026-10-31T10:15:43.002Z",
+  "updatedAt": "2026-10-31T10:23:34.969Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T05:54:22.770Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T10:23:34.968Z",
+    "wallClockMs": 16152198
   },
   "contextFetchedBy": [
     "architect-21c9ed65",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-4398294e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -181,7 +184,50 @@
   "filesModified": [
     "scripts/local-runner/check-session.mjs",
     "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/check-evidence.mjs",
+    ".moe/tasks/task-a80f46db9a624295a3bdbe28dfa6b311.json"
+  ],
+  "completionSummary": "Host recognition of supervisor exit 82 (DEPENDENCIES_CANDIDATE_INVALID), no guest/daemon change. Modified: scripts/local-runner/check-session.mjs (+16/-1), check-evidence.mjs (+7/-2), scripts/tests/local-runner-check.test.mjs (+111/-2). 133 added lines.\n\nBehaviour:\n- Clean stdout EOF + supervisor exit 82 with NO frame (hello never seen, whole session) resolves frozen {code-failure, exitCode 82, signal null, outputTail = fixed 173-byte ASCII host literal}. Guest stdout/stderr never reach it (stderr stays drained unread; ring bypassed for this result).\n- outcomeOf puts the 82 branch after timedOut/failed/killed/!written/!ended and the 79 branch, before the generic unopened rejection. 81, unknown codes, 82 after hello/observation, any frame before hello, partial/bad frames, write/stream/child errors, abort, kill, close-before-EOF stay infra-failure; budget expiry stays timeout. 82 can never reach passed.\n- CHECK_BOUNDARIES.dependencies.failure = {candidate:'code-failure', infrastructure:'infra-failure'}; other leaves and prefix unchanged. Every environment hash changes: native certify reports/evidence must be rerun (CQ-R13), not reused.\n\nTests: C8 (two tests: exact result over 8 hostile stderr rows incl. forged literal/ANSI/CR-LF/160 KB emoji/0xff, unknown-code controls, 4 concurrent sessions, late events; and a 22-row precedence matrix of 82), E10 (exact object, old-descriptor identity differs with and without null dependencyDigest, collapsed variants differ, old-identity evidence stale), LITERAL updated. Red first: missing export fails import; against HEAD's check-evidence.mjs E1 and E10 fail. 22/22 scratch mutants killed incl. 82-before-error-gates, dropped exitCode, old descriptor. C3-C7, C2 (79/80/81 only), local-runner.test.mjs and guest-supervisor.py untouched.\n\nGate: exact command in an external snapshot of HEAD deb7c8a1 + only these 3 files (sha256 7b6919ab/0ed0f851/1317a043, identical to the live files), pinned node v24.22.2/npm 11.19.1 (tarball sha256 48cc0e",
+  "commits": [
+    {
+      "sha": "41fd0683b5234b2ff37d60d6441bb190b468d3a7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T10:05:01Z",
+      "paths": [
+        ".moe/tasks/task-a80f46db9a624295a3bdbe28dfa6b311.json",
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/local-runner/check-session.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T10:16:03.676Z",
+      "treeId": "473a41ed1e97fb939a8b717b4c45801d5d545af6",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner-check.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/check-session.mjs",
     "scripts/local-runner/check-evidence.mjs"
   ],
-  "completionSummary": "Host recognition of supervisor exit 82 (DEPENDENCIES_CANDIDATE_INVALID), no guest/daemon change. Modified: scripts/local-runner/check-session.mjs (+16/-1), check-evidence.mjs (+7/-2), scripts/tests/local-runner-check.test.mjs (+111/-2). 133 added lines.\n\nBehaviour:\n- Clean stdout EOF + supervisor exit 82 with NO frame (hello never seen, whole session) resolves frozen {code-failure, exitCode 82, signal null, outputTail = fixed 173-byte ASCII host literal}. Guest stdout/stderr never reach it (stderr stays drained unread; ring bypassed for this result).\n- outcomeOf puts the 82 branch after timedOut/failed/killed/!written/!ended and the 79 branch, before the generic unopened rejection. 81, unknown codes, 82 after hello/observation, any frame before hello, partial/bad frames, write/stream/child errors, abort, kill, close-before-EOF stay infra-failure; budget expiry stays timeout. 82 can never reach passed.\n- CHECK_BOUNDARIES.dependencies.failure = {candidate:'code-failure', infrastructure:'infra-failure'}; other leaves and prefix unchanged. Every environment hash changes: native certify reports/evidence must be rerun (CQ-R13), not reused.\n\nTests: C8 (two tests: exact result over 8 hostile stderr rows incl. forged literal/ANSI/CR-LF/160 KB emoji/0xff, unknown-code controls, 4 concurrent sessions, late events; and a 22-row precedence matrix of 82), E10 (exact object, old-descriptor identity differs with and without null dependencyDigest, collapsed variants differ, old-identity evidence stale), LITERAL updated. Red first: missing export fails import; against HEAD's check-evidence.mjs E1 and E10 fail. 22/22 scratch mutants killed incl. 82-before-error-gates, dropped exitCode, old descriptor. C3-C7, C2 (79/80/81 only), local-runner.test.mjs and guest-supervisor.py untouched.\n\nGate: exact command in an external snapshot of HEAD deb7c8a1 + only these 3 files (sha256 7b6919ab/0ed0f851/1317a043, identical to the live files), pinned node v24.22.2/npm 11.19.1 (tarball sha256 48cc0e"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-31T10:05:01Z",
+    "at": "2026-10-31T10:16:03.676Z"
+  },
+  "completedAt": "2026-10-31T10:23:34.968Z",
+  "reviewCompletedAt": "2026-10-31T10:23:34.968Z",
+  "reviewSummary": "Reviewed commit 41fd0683 on moe/work-2026-10-24: check-session.mjs +15/-1, check-evidence.mjs +7/-2, local-runner-check.test.mjs +111/-2 (133 added lines). Only the 3 owned files changed; guest-supervisor.py and local-runner.test.mjs untouched; no non-ASCII; no tests weakened.\n\nRe-ran the exact gate in a fresh git-archive snapshot outside the repo (daemon npm ci/build only inside it, pinned node v24.22.2/npm 11.19.1, tarball sha256 checked, env -i): `node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)` exit 0. Runner 624 tests, 621 pass, 0 fail, 3 skipped. Daemon 215 files, 6338 passed, 20 skipped.\n\nDoD: (1) clean EOF + exit 82, no frame, gives frozen code-failure, exitCode 82, signal null and a fixed 173-byte ASCII host literal; stderr is never read (C8, 8 hostile stderr rows). (2) The 82 branch sits after the timedOut/failed/killed/written/ended gates and the 79 branch; 81 and unknown codes stay infra; the 22-row C8 matrix covers hello/observation, frames before hello, bad/partial frames, write/stream errors, abort, kill, close-before-EOF and budget timeout; 82 never reaches passed. (3) CHECK_BOUNDARIES.dependencies.failure is {candidate, infrastructure}; E10 proves the old descriptor gives a different identity and stale evidence. (4) Gate green; no guest or daemon repair change.\n\nMy mutation sweep (23 scratch mutants vs C1-C8/E rows): 22 killed. The survivor, provider stderr fed into the ordinary tail ring, is outside this task: the clean-82 result bypasses the ring and no earlier C row pins it. Noted for CQ-R13.\n\nHand-off: parent 42e9990c must emit 82 pre-hello and add the Python constant plus a C2 parity row. Every environment hash changed, so native certify reports from before this commit must be rerun, not reused.",
+  "requiredCheckAtDone": null
 }
