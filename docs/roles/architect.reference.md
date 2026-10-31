@@ -44,7 +44,7 @@ The full sizing table (daemon-enforced; thresholds tunable via `project.json` `s
 | DoD items | 3–7, mechanically checkable | >7 (`create_task` warning) | — |
 | Net changed LOC | ≤200 | — | >400 (QA rejects as oversized) |
 
-One self-contained deliverable per task — a function, a test file, a review; one noun per title (one model / one service / one endpoint). Epics land as 10–30 small tasks, not 2–3 big ones (past `taskSizing.maxTasksPerEpic`, default 40, `create_task` warns: re-slice into sub-epics). Only file-disjoint tasks are parallel-claimable. When a cap trips, split with SPIDR (Spike / Path / Interface / Data / Rules) — `moe-epic-breakdown` has the procedure.
+One self-contained deliverable per task — a function, a test file, a review; one noun per title (one model / one service / one endpoint). Epics land as 10–30 small tasks, not 2–3 big ones (past `taskSizing.maxTasksPerEpic`, default 40, `create_task` warns: re-slice into sub-epics). Only file-disjoint tasks are parallel-claimable in shared-checkout mode; in worktree mode (the control checkout's HEAD is `refs/heads/moe/control`) a shared existing file alone is no reason for `dependsOn` (`moe-epic-breakdown` has the rule). When a cap trips, split with SPIDR (Spike / Path / Interface / Data / Rules) — `moe-epic-breakdown` has the procedure.
 
 ## Dependencies and evidence at breakdown time
 

@@ -3,9 +3,12 @@
 // docs/roles/qa.md and docs/skills/moe-qa-loop/SKILL.md used to contradict each
 // other ('Do NOT wait' vs 'wait for it before reviewing'), so QA behaviour was
 // whichever text the agent read last. Both now state one rule: a bounded wait,
-// then self-land the row's own paths. These assertions fail if either document
-// drifts back, AND if the vendored copies in src/generated/ go stale — an IDE
-// user only ever sees the generated copy.
+// then self-land the row's own paths — and that self-landing is shared mode
+// only. In worktree mode (the control checkout's HEAD is refs/heads/moe/control)
+// a missing completion is a reject, because a QA commit there would move
+// moe/control off the target. These assertions fail if either document drifts
+// back, AND if the vendored copies in src/generated/ go stale — an IDE user
+// only ever sees the generated copy.
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
@@ -15,6 +18,7 @@ import { SKILL_FILES } from '../generated/skillFiles.js';
 
 const FORBIDDEN = ['Do NOT wait', 'wait for it before reviewing'];
 const SENTINELS = ['bounded wait, not a blocker', 'up to ~2 minutes', 'land it yourself', 'record_commit'];
+const WORKTREE_SENTINELS = ['refs/heads/moe/control', 'shared mode only', 'commit in the control checkout'];
 
 const QA_ROLE_KEY = 'qa.md';
 const QA_REFERENCE_KEY = 'qa.reference.md';
@@ -105,6 +109,21 @@ describe('QA empty-task.commits policy — the two documents agree', () => {
       expect(text, label).toContain('record_commit');
       expect(text, label).toContain('Never self-land clone-delivered bytes');
       expect(text, label).toContain('rails permit');
+    }
+  });
+
+  // Worktree mode: the control checkout only follows the target, so a QA
+  // commit there diverges moe/control. Every QA document, source and vendored,
+  // must scope self-landing to shared mode and name the control-checkout rule.
+  it('limits self-landing to shared mode in every QA document', () => {
+    for (const [label, text] of [
+      ...generatedSubjects(),
+      [QA_REFERENCE_KEY, lf(ROLE_DOCS[QA_REFERENCE_KEY])],
+      ...(hasDocs ? [...diskSubjects(), ['docs/roles/qa.reference.md', readDoc('roles', 'qa.reference.md')]] : []),
+    ]) {
+      for (const phrase of WORKTREE_SENTINELS) {
+        expect(text, `${label} is missing the worktree-mode phrase "${phrase}"`).toContain(phrase);
+      }
     }
   });
 
