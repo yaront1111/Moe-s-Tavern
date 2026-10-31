@@ -103,7 +103,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -126,16 +126,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:03:38.184Z",
-  "updatedAt": "2026-10-31T01:36:20.993Z",
+  "updatedAt": "2026-10-31T02:02:22.135Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:10:34.210Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-31T02:02:22.135Z",
+    "wallClockMs": 71507925
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-12f7cf2d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -223,7 +226,44 @@
     "scripts/tests/postflight.sh",
     "scripts/moe-agent.sh",
     "scripts/tests/postflight.ps1",
-    "scripts/moe-agent.ps1"
+    "scripts/moe-agent.ps1",
+    ".moe/tasks/task-6f5cf10f78184c38a46e6973cadda817.json",
+    ".moe/tasks/task-9d27749421b045c18a6c6eb99694236d.json",
+    ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json"
   ],
-  "completionSummary": "CQ-R13c2. With MOE_RUNTIME_PROTECTED exactly '1', moe-agent.sh and moe-agent.ps1 use only MOE_PROXY_PATH and MOE_DAEMON_PATH. Each must be an absolute path to a regular file; otherwise the wrapper prints one line, `[ERROR] MOE_RUNTIME_PROTECTED_PATH_MISSING: <VAR> must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start.`, and exits 1. It refuses before any MCP config, daemon, proxy RPC or CLI.\n- Each wrapper has an early gate. Use-site refusals replace every PATH, own-root and global fallback.\n- sh fix found during GREEN: the moe-call.sh deregister (EXIT trap and hot reload) resolves its own proxy and fell back to the own-root or global proxy. It now runs only when the exact file exists (moe_call_allowed), and a refusal clears WORKER_ID.\n- Any other marker value keeps the legacy behaviour; changed existing lines are gated by the marker.\nTests: [protected runtime] rows P1-P9 in postflight.sh and twins in postflight.ps1. Refused rows run with a live daemon.json. P9 covers a proxy that vanishes after the gate. Decoys on PATH and a fake global install.\n- RED: the HEAD wrapper failed P1-P5 on sh and on PS 5.1. The gate-only wrapper failed P1-P5 and P9 through moe-call.sh.\nVerify, from a snapshot:\n- DoD command EXIT=0.\n- postflight.ps1 on PS 5.1 EXIT=0.\n- parity-check.ps1 on pwsh 7 rc=0.\n- Full postflight.ps1 on pwsh 7.6.9 fails at [frozen candidate] dirty-helper (MOE_AGENT_GIT_GUARD_FAILED). The HEAD snapshot fails identically, so it is pre-existing (task-44b817f9). The protected rows pass under pwsh in the trimmed harness.\n- grep -c in each wrapper: PATH_MISSING=1, MOE_RUNTIME_PROTECTED=3.\n- Size: sh 29/2, ps1 23/0, postflight.sh 97/0, postflight.ps1 102/0, 253 lines in total against the 400 cap.\nSelf-review: all mutants (a)-(h), plus moe_call_allowed and WORKER_ID removal and the vanish-after-gate injections, were killed on sh and PS 5.1; details are in the step-6 note.\nFollow-up: task-c78916ea (LOW). The window between moe_call_all"
+  "completionSummary": "CQ-R13c2. With MOE_RUNTIME_PROTECTED exactly '1', moe-agent.sh and moe-agent.ps1 use only MOE_PROXY_PATH and MOE_DAEMON_PATH. Each must be an absolute path to a regular file; otherwise the wrapper prints one line, `[ERROR] MOE_RUNTIME_PROTECTED_PATH_MISSING: <VAR> must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start.`, and exits 1. It refuses before any MCP config, daemon, proxy RPC or CLI.\n- Each wrapper has an early gate. Use-site refusals replace every PATH, own-root and global fallback.\n- sh fix found during GREEN: the moe-call.sh deregister (EXIT trap and hot reload) resolves its own proxy and fell back to the own-root or global proxy. It now runs only when the exact file exists (moe_call_allowed), and a refusal clears WORKER_ID.\n- Any other marker value keeps the legacy behaviour; changed existing lines are gated by the marker.\nTests: [protected runtime] rows P1-P9 in postflight.sh and twins in postflight.ps1. Refused rows run with a live daemon.json. P9 covers a proxy that vanishes after the gate. Decoys on PATH and a fake global install.\n- RED: the HEAD wrapper failed P1-P5 on sh and on PS 5.1. The gate-only wrapper failed P1-P5 and P9 through moe-call.sh.\nVerify, from a snapshot:\n- DoD command EXIT=0.\n- postflight.ps1 on PS 5.1 EXIT=0.\n- parity-check.ps1 on pwsh 7 rc=0.\n- Full postflight.ps1 on pwsh 7.6.9 fails at [frozen candidate] dirty-helper (MOE_AGENT_GIT_GUARD_FAILED). The HEAD snapshot fails identically, so it is pre-existing (task-44b817f9). The protected rows pass under pwsh in the trimmed harness.\n- grep -c in each wrapper: PATH_MISSING=1, MOE_RUNTIME_PROTECTED=3.\n- Size: sh 29/2, ps1 23/0, postflight.sh 97/0, postflight.ps1 102/0, 253 lines in total against the 400 cap.\nSelf-review: all mutants (a)-(h), plus moe_call_allowed and WORKER_ID removal and the vanish-after-gate injections, were killed on sh and PS 5.1; details are in the step-6 note.\nFollow-up: task-c78916ea (LOW). The window between moe_call_all",
+  "commits": [
+    {
+      "sha": "ee650fea4a66670258d03bad1923b8c955202553",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T00:25:37Z",
+      "paths": [
+        ".moe/tasks/task-6f5cf10f78184c38a46e6973cadda817.json",
+        ".moe/tasks/task-9d27749421b045c18a6c6eb99694236d.json",
+        ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T01:36:59.250Z",
+      "treeId": "96952903fa91cb2fbbcbabc1c1e0af829f3d692a",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-31T00:25:37Z",
+    "at": "2026-10-31T01:36:59.250Z"
+  },
+  "completedAt": "2026-10-31T02:02:22.135Z",
+  "reviewCompletedAt": "2026-10-31T02:02:22.135Z",
+  "reviewSummary": "Approved. Commit ee650fea is on moe/work-2026-10-24 and pushed. Code is 253 lines (+251/-2) across 4 files, under the 400 cap.\n\nFresh runs, from a git-archive snapshot of ee650fea under env -i with MOE_POSTFLIGHT_TIMEOUT_SEC=180:\n- DoD command `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`: EXIT=0, `[protected runtime] ok`, both PASS, 0 FAIL.\n- Full postflight.ps1 on PS 5.1: exit=0, `[protected runtime] ok`.\n- parity-check.ps1 on pwsh: PASS.\n- pwsh 7 full postflight.ps1 not re-run (worker: pre-existing failure, task-44b817f9).\n\nDoD:\n1. P1-P5 in both twins: exit 1, one refusal line naming the variable, no value printed, nothing run, no MCP config. P6 runs exactly MOE_DAEMON_PATH and MOE_PROXY_PATH, no decoy. P9 covers a proxy that vanishes after the gate.\n2. P7 (unset) keeps the legacy fallback; P8 ('01') stays legacy. The diff is additions only, plus two sh moe-call ifs that always pass in legacy mode.\n3. Parity passes. PATH_MISSING=1 and PROTECTED=3 in each wrapper; refusal sentence byte-identical.\n4. Evidence reproduces.\n\nStatic: both gates run before any MCP config, daemon or RPC. sh use-site exits are top-level; every RPC and the TOML writers use PROXY_ARGS. ps1 use-site exits come before the outer try and before Invoke-MoeRpc exists. BOM kept, LF only.\n\nMy sh mutants: e (P8), b (P3) and i (no moe_call_allowed, P9) are killed. Removing the use-site refusals survives the shipped rows, as expected for a race guard. A vanish injected after the gate is refused with them in place and runs a decoy without them, so they are load-bearing.\n\nNon-blocking:\n- P9 kills mutant i only in a scripts-only snapshot.\n- Under MOE_FALLBACK_CLI=1 the agent can call moe-call.sh directly. Noted on follow-up task-c78916ea.\n- The ps1 use-site wildcard Test-Path refuses `[`-paths, which fails closed.\n\nponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
