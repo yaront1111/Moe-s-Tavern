@@ -16,73 +16,121 @@
     {
       "stepId": "step-1",
       "description": "1. Resolve the seat's Serena root before WT-05 writes configs (tests first). Goal: task-local LSP plus shared tooling without changing shared mode. Architecture: extend the claim-pinned WT-04/WT-05 pre-launch tooling phase, not the early shared-mode writer; keep MOE_PROJECT_PATH and proxy executable rooted at control. Tech: Bash/Python/Node stdlib and Windows PowerShell 5.1-compatible primitives. Read the landed WT-05 phase and docs/plans/2026-10-30-per-task-worktrees.md §5.2-5.4 and §1.10; WT-05 helper names were not yet present at planning, so use its landed entry point rather than inventing a second launch path. Existing verified seams: sh ensure_mcp_config, SERENA_PROJECT/SERENA_CMD and MEMORIES_DIR; ps1 $serenaProject/$serenaPath, $mcpConfigObj and $memoriesDir. Preserve config-over-env-over-default precedence from control/.moe-agent.json. Resolve/normalize paths before comparison; equal-to-control (including explicit equivalent spelling) maps to W; a distinct explicit root is retained, with MOE_WORKTREE_SERENA_OUTSIDE when outside control. A root inside control but not equal remains an explicit override, not silently rewritten. Invalid override keeps existing warning/fallback semantics, but the fallback then maps to W. Pseudocode: `effective = samePath(resolved, control) ? W : resolved; if (explicit && outsideControl(effective) && !samePath(effective,W)) warn(...)`. Use ordinal comparison after the existing platform normalization; use path-component boundaries, not string-prefix containment, and literal paths in PS. Reset effective values per iteration. Add parameterized cases to both harnesses using WT-05 fake launches: all four CLI configs contain the expected --project; explicit control equivalence; env outside root; config beats env; missing override; shared mode unchanged; two launches do not retain the prior W/disabled state. Assert the Moe server still names control and control config bytes are unchanged. This task edits only the four named files; no landing, installation, runtime .moe writes, docs sweep, or prerequisite reimplementation.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Serena root mapping, twins. One node program with the same text in both wrappers (sh heredoc MOE_WT_TOOLING_JS in prepare_worktree_launch; ps1 here-string in Initialize-MoeWorktreeLaunch; a diff of the two extracted copies is empty). The mapping: control → W (realpath and case-folded compare on win32, so a trailing separator still maps); an override is kept, and one outside the control prints MOE_WORKTREE_SERENA_OUTSIDE. The writers get the mapped root via their existing ROOT/SERENA_PROJECT arguments. The ps1 claude temp --mcp-config is rewritten per worktree launch and restored at the loop top through $script:MoeMcpConfigDirty. Shared mode is unchanged: the shared-landed case asserts Serena stays at the project and the session context has no dependency line. That case now uses the claude shim, because the default cliShim forwards no argv, so its context assertion passed without checking anything before. Scope note: tests live in scripts/tests/postflight-worktree.cjs, the suite shared by postflight.sh:910 and postflight.ps1:891 (as in WT-05), so postflight.sh/.ps1 needed no edits. Cases: tooling, serena-outside, and a Serena-root check in launch-claude/codex/gemini/grok. Left for WT-07: the MOE_SERENA_PROJECT_ROOT witness env in the launch lines still names the control's Serena root.",
+      "startedAt": "2026-10-31T09:17:12.621Z",
+      "completedAt": "2026-10-31T09:39:36.514Z"
     },
     {
       "stepId": "step-2",
       "description": "2. Provision the two shared links and their manifest with non-destructive error handling. Add one small twin helper called in the worktree tooling phase before configs and memory preload. Fixed pairs only: `.serena/memories` -> control/.serena/memories and `.claude/skills` -> control/.claude/skills. Use the control checkout's resolved common Git directory for `moe/worktree/<taskId>.links`, never W/.git (a file) or .moe. Create only W-local parents; reject parents that resolve outside W. Use native symlinks on Linux/macOS/WSL and directory junctions on native Windows, including Git Bash with native Node: the existing Node executable can use `fs.symlinkSync(target, dest, process.platform === 'win32' ? 'junction' : 'dir')`; PS can use `New-Item -ItemType Junction`. Pass paths as arguments, not interpolated shell commands; preserve spaces/Unicode. Source must be a directory; a missing source, existing real destination, wrong/dangling link, reparse-parent collision or IO failure warns MOE_WORKTREE_LINK_FAILED with the relative path and continues without enabling that shared tool; never delete/replace existing bytes or redirect Serena to control. A matching existing link is reused. Persist each allowed W-relative path once, forward slashes and LF, UTF-8 without BOM; retain earlier entries. Before creating a link, persist its manifest reservation (after validating the destination) so a crash can never leave an unrecorded link; an unused reservation after failed creation is harmless and must not be treated as a removable real directory. Manifest-write failure prevents creating/enabling that link. A memories failure clears the launch-local Serena executable/entry, including stale JSON/TOML entries for every CLI, and suppresses memory preload; a skills failure does not disable Moe or a healthy Serena. Do not alter global/control configs. Tests first in both harnesses: exact realpath target and native link type, manifest set equals the two paths, rerun does not duplicate, control sentinel unchanged, missing source, occupied destination, wrong link, forced creation failure and manifest-write failure. Assert fake CLI still launches with Moe and no Serena after a memories failure, while an independent skills failure leaves Serena enabled. Test helpers must unlink their own junctions/symlinks before scratch-directory cleanup; production removal remains WT-14.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Shared links and manifest, in the twin node program.\n- Fixed pairs only: .serena/memories and .claude/skills. Native Node fs.symlinkSync makes a 'dir' link, or a 'junction' on win32 (Git Bash with Windows node also gets junctions).\n- The manifest is at <control common gitdir>/moe/worktree/<taskId>.links (rev-parse --path-format=absolute --git-common-dir). Each path is appended once (LF, no BOM) after the destination is validated and before the link is made.\n- Refused, each with MOE_WORKTREE_LINK_FAILED <rel>: a non-directory source, a parent resolving outside W, an existing destination that is not a link to the control's, and a manifest read/append failure. Existing bytes are never touched, and a matching link is reused.\n- A memories failure prints OFF: the wrappers clear Serena for the launch (sh: an empty SERENA_CMD into the writers; ps1: a local $serenaPath=$null), which drops stale JSON/TOML entries, and replace the memory_* preload lines with \"memory_total=0 (Serena is off for this launch: …)\". A skills failure leaves Serena on.\n- Tests: tooling covers the exact link targets, the manifest equalling the two paths, no duplicates on a rerun, an unchanged control sentinel, and unlinking in a finally. link-fail covers a missing source plus an occupied destination, a stale TOML entry dropped and Moe still launched. The new link-partial covers a wrong link alone keeping Serena and the memory names, then a manifest that cannot be written (made a directory) leaving no memories link and Serena off.\n- Mutation check: changing the OFF rule to `failed.length` made link-partial fail (\"a skills failure turned Serena off\"); reverted, and the JS is byte-identical across the twins again.\n- Windows (powershell.exe 5.1, Windows node): tooling, link-fail and link-partial all ok.",
+      "startedAt": "2026-10-31T09:41:55.123Z",
+      "completedAt": "2026-10-31T09:42:04.396Z"
     },
     {
       "stepId": "step-3",
       "description": "3. Copy and task-qualify Serena project metadata, without modifying control. During the same worktree preparation, copy control/.serena/project.yml into W/.serena/project.yml when the source exists, replacing only the top-level project_name scalar with `<name>@<taskId>` and preserving other settings. Read from control on each preparation, never suffix the prior W copy twice. Preserve scalar escaping for ordinary single-quoted, double-quoted and plain names, comments and CRLF/LF; append the suffix inside existing quotes, or emit a quoted scalar for a plain value. If the name is absent/empty, use control's directory name before the suffix and write one top-level project_name. Missing source means no copy (do not invent a project.yml or remove an existing W file). Reject a destination/parent link that would write outside W; an unreadable source, unsupported non-scalar name, or copy/write failure follows WT-05's config-error route: MOE_WORKTREE_CREATE_FAILED, report_blocked, no CLI and no partial replacement. Use a temp sibling plus atomic replacement, with cleanup on failure. Add compact table-driven cases in each harness for quoted/plain name and line endings, two tasks get distinct names, repeat stays single-suffixed, all non-name settings preserved and control bytes unchanged, missing source, and failed copy/no launch. Example assertion: `assert.equal(projectName(W), 'fixture@task-postflight')`; name parsing in the fixture must inspect the value rather than merely grep for the task id.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "project.yml copy, in the twin node program. The control's .serena/project.yml is read on every preparation, so a rerun or another task never stacks suffixes. Only the top-level project_name is replaced. The suffix goes inside existing double or single quotes (escapes kept). A plain value becomes a JSON-quoted scalar, and its trailing comment is kept. An empty, ~ or null value uses the control's directory name. With no project_name, one is prepended using the file's EOL. Everything else, including CRLF, is preserved. A flow, block or anchor value ([{&*!|>%@`, quotes) throws. A missing source means no copy. The destination parent must resolve inside W, and the destination must be a regular file if present. Writes go to a wx temp sibling plus rename, with the temp removed on failure. Any error exits 1, which the wrappers route to MOE_WORKTREE_CREATE_FAILED (report_blocked, no CLI).\n\nTests:\n- tooling: CRLF single-quoted with a comment, two runs, control unchanged.\n- link-fail: missing source, so no copy.\n- new project-yml case: runs each wrapper's own embedded program, extracted from the wrapper under test, directly. Its table covers double-quoted with an escape and a comment, single-quoted '' in CRLF, plain with spaces and a comment, ~, empty '', and absent with CRLF. It also checks task-a, task-b, task-b giving x@task-a, x@task-b, x@task-b. Then project_name: [x] through the real wrapper is refused with MOE_WORKTREE_CREATE_FAILED, no CLI, and the control unchanged.\n\nMutation check: dropping `[` from the non-scalar guard failed project-yml. Reverted, and the JS is byte-identical across the twins. Windows ps1: project-yml ok.",
+      "startedAt": "2026-10-31T09:42:06.159Z",
+      "completedAt": "2026-10-31T09:44:48.326Z"
     },
     {
       "stepId": "step-4",
       "description": "4. Report per-worktree dependency readiness without installing or linking anything. Before launch in worktree mode only, enumerate tracked lockfiles from W using `git -C W ls-files -z --cached -- package-lock.json ':(glob)**/package-lock.json'`, parse NUL records, deduplicate directories and check the basename exactly. Root package prints `.`; nested packages print W-relative forward-slash directories. Do not recursively scan the filesystem, follow a dependency link, or count untracked lockfiles. For each directory lacking a real node_modules directory emit `MOE_WORKTREE_DEPS_MISSING <dir>`; the wrapper never creates/links node_modules or runs npm/build. Add exactly one prompt line per worktree launch: `Before testing a package in this worktree, run npm ci --prefer-offline in that package, plus npm run build where its tests require dist/.` Put it in the common WT-05 prompt/context construction so claude/codex/gemini/grok all receive it, including interactive launches. A git enumeration failure reports MOE_WORKTREE_CREATE_FAILED and uses WT-05's no-launch/report_blocked route rather than pretending the check succeeded. Test in both harnesses: root and space-containing nested tracked packages missing dependencies, an installed package, an untracked lockfile and a control-only node_modules sentinel; assert the exact warning set, exactly one prompt line, zero newly created node_modules links/directories, unchanged control dependency bytes and no npm invocation. Retain the existing shared-mode fixture expectations, with no new dependency prompt or warnings there.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Dependency readiness, in the twin node program.\n\nWhat it does:\n- It enumerates `git -C W ls-files -z --cached -- package-lock.json ':(glob)**/package-lock.json'` and splits on NUL. It keeps an exact basename match whose file is present in W (sparse-safe), then dedups dirs: the root prints `.` and nested dirs are posix and W-relative.\n- It prints MOE_WORKTREE_DEPS_MISSING <dir> when <dir>/node_modules is not a real directory (lstat, so a link does not count).\n- No scan, no npm, no link or mkdir of node_modules.\n- A git failure throws, exits 1 and goes to MOE_WORKTREE_CREATE_FAILED (report_blocked, no CLI).\n- The prompt line is appended once to DYNAMIC_CONTEXT (sh) or $dynamicContext (ps1, via [ref]) inside prepare_worktree_launch / Initialize-MoeWorktreeLaunch. Those are called after every preload and notice. The composed prompt reaches all four CLIs, interactive included: sh 8167-8178 and the codex context file at 8252; ps1 7273/7287/7380.\n\nTests (tooling, two runs):\n- Fixture: tracked root, tracked \"pkg one\" and an installed inst (W/inst/node_modules pre-made); an untracked loose/package-lock.json; a control-only \"pkg one/node_modules\" sentinel.\n- Asserts the exact warning set ['.','pkg one'] and the line exactly once in the recorded prompt.\n- W ends with only ['inst/node_modules'] under it. This is also the no-npm evidence: npm ci would have made root and \"pkg one\" node_modules.\n- The control sentinel bytes are unchanged.\n- shared-landed asserts shared mode has no dependency line and no MOE_WORKTREE_ lines. It now uses the claude shim so the prompt is really recorded (memory_total= present).\n\nWindows ps1: tooling ok.",
+      "startedAt": "2026-10-31T09:44:49.960Z",
+      "completedAt": "2026-10-31T09:45:28.525Z"
     },
     {
       "stepId": "step-5",
       "description": "5. Run the single focused verification gate and retain fresh evidence. Add a small assertion in the twin postflight cases comparing sorted unique `/MOE_(?:WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]+/g` token sets from both wrappers; do not edit parity-check.sh (its permanent family expansion belongs to WT-19). Run from repository root exactly `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh`. On the required native Windows seat also run `node scripts/tests/postflight-safe.mjs powershell` against the same revision; pwsh alone is not a substitute for Windows PowerShell 5.1. Require exit 0, safe-harness failureClass NONE and parity PASS, no skipped platform evidence represented as passing. Use the safe runner, not raw harness output; harness fixtures can contain adversarial prompt text. Capture command, exitCode and outputTail for complete_task and record Windows evidence. Keep this mid-epic gate scoped to launcher harnesses: no daemon/IDE full regression, dependency installation work or docs sweep. If a final review requires edits, rerun this same gate on the final bytes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Gate on the final bytes (no edits after the runs started):\n- `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh` gave `{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}`, then `PASS parity-check.sh`, with exit 0.\n- Windows evidence: `WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell` (native Windows node driving Windows PowerShell 5.1, not pwsh) gave `{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}` with exit 0.\n- Code-family equality is the `codes` case in the shared postflight-worktree.cjs (sorted unique /MOE_(?:WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]+/g of both sibling wrappers). It runs inside both harnesses and is ok on sh and ps1.\n- parity-check.sh is not edited.\n- Earlier direct suite runs: sh 23/23 cases; ps1 on Windows 22/22 (path-long runs on win32 only) after the shared-landed shim fix.\n- No daemon/IDE regression, installs or docs, per the plan.",
+      "startedAt": "2026-10-31T09:45:30.476Z",
+      "completedAt": "2026-10-31T10:10:17.377Z"
     },
     {
       "stepId": "step-6",
       "description": "6. Final adversarial self-review, then hand off to QA. Load adversarial-self-review and inspect only this task's diff once: can repeated/concurrent task launches overwrite the manifest or double-suffix a name; can a failed append leave an unrecorded junction; can a stale Serena config route edits to control; can missing/hostile paths, Unicode, trailing separators, symlinked parents or PowerShell wildcard expansion write outside W; does an optional link failure preserve bytes and launch with Moe; do tests clean junctions without deleting shared targets; are node_modules and .moe untouched? Check all six DoD items against concrete twin test assertions, including Windows evidence and code-family equality. Preserve peer dirt and keep the task-wide non-board diff within the 400-net-line cap by reusing WT-05 fixtures and existing writers rather than duplicating launch branches. Fix defects within these four files and repeat the named gate if bytes changed. No Git staging/commit commands: wrappers own delivery. Complete through moe.complete_task with fresh verification evidence; record any non-obvious implementation findings for QA. Full-epic docs and adversarial coverage remain WT-18/WT-19.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Adversarial self-review (skill loaded) of this task's diff only: net 323 lines (<400). No file mode changes; ps1 keeps its BOM and LF; the twin JS is byte-identical and ASCII-only. No byte changes came out of the review, so the gate evidence from step 5 stands.\n\nChecked:\n- Rerun or concurrent launches: the manifest is append-only and never truncated. project_name is always derived from the control's file, so no double suffix (project-yml covers task-a, task-b, task-b).\n- Failed append: it throws before symlinkSync, so no unrecorded link (link-partial: a manifest dir leaves no memories link).\n- Stale Serena: OFF drops it from every writer, stale TOML/JSON included (link-fail). The ps1 temp config is restored at the loop top. The control configs still root Serena at the control (launch-*).\n- Paths:\n  - All paths go as argv, with no interpolation.\n  - Parents must realpath inside W.\n  - A trailing separator maps to W (serena-outside). PS 5.1's trailing-backslash argv split is handled with `\\.`.\n  - ps1 writes use -LiteralPath.\n  - Spaces are covered (\"pkg one\", \"worktree XXXX\" roots). Non-ASCII paths are untested (display-only OEM decoding risk on ps1 WARN lines).\n- An optional link failure keeps bytes and launches with Moe (link-fail, link-partial).\n- Test cleanup unlinks junctions before deleting anything and asserts the shared targets survive.\n- node_modules and .moe are untouched (tooling: only the pre-made inst/node_modules exists; W/.moe absent).\n- DoD 1-6 map to serena-outside/launch-*; tooling; tooling, link-fail and link-partial; tooling; codes; and the step-5 gate.\n\nTheoretical notes for QA and WT-07/14, recorded in the Serena handoff:\n- A repo that tracks .serena/project.yml would show W's copy as modified.\n- project.local.yml is not copied.\n- A repo that tracks .claude/skills warns LINK_FAILED every launch.\n- A W made by a WSL seat and resumed natively on Windows ends with Serena off.\n- The MOE_SERENA_PROJECT_ROOT witness still names the control (WT-07).\n\nPeer dirt left untouched: .moe/tasks/*, .moe/decisions/, scripts/tests/local-runner-check.test.mjs.",
+      "startedAt": "2026-10-31T10:10:19.103Z",
+      "completedAt": "2026-10-31T10:10:56.584Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-3a9b4568",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -113,7 +161,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:50:38.545Z",
-  "updatedAt": "2026-10-31T09:02:34.333Z",
+  "updatedAt": "2026-10-31T10:11:07.755Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:02.150Z",
@@ -122,7 +170,8 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:18:53.738Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-eb7de546",
@@ -133,7 +182,14 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:24:00.659Z",
   "planningNotes": {
@@ -154,5 +210,46 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T13:24:00.685Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "3d42fda0d1ab0b61d2e516b95c05f8e3aee3be05",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-3a9b4568@2026-10-31T09:02:30Z",
+      "paths": [
+        ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+        ".moe/tasks/task-44b817f973374dffb578308278050497.json",
+        ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json"
+      ],
+      "recordedBy": "worker-3a9b4568",
+      "recordedAt": "2026-10-31T09:02:43.722Z",
+      "treeId": "ef9d48638f7d742c6355ceecaa2bc3cdf33cf1f5",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-3a9b4568@2026-10-31T09:02:30Z",
+    "at": "2026-10-31T09:02:43.722Z"
+  },
+  "workStartedAt": "2026-10-31T09:17:12.621Z",
+  "reviewStartedAt": "2026-10-31T10:11:07.753Z",
+  "verification": {
+    "command": "node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS parity-check.sh\n\nWindows companion (same bytes): WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}",
+    "reportedAt": "2026-10-31T10:11:07.753Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "WT-06: worktree tooling in both wrappers, using one byte-identical node program: sh prepare_worktree_launch (heredoc MOE_WT_TOOLING_JS) and ps1 Initialize-MoeWorktreeLaunch([ref]$Context).\n\nWhat it does:\n- Serena root: the control maps to W. An override is kept, and one outside the control warns MOE_WORKTREE_SERENA_OUTSIDE.\n- Links: W/.serena/memories and W/.claude/skills point to the control's (a symlink, or a junction on win32). Each is recorded in <git-common-dir>/moe/worktree/<taskId>.links before it is made.\n- MOE_WORKTREE_LINK_FAILED leaves existing bytes alone and the seat still launches with Moe. A memories failure turns Serena off: it is dropped from every config, stale entries included, and the memory preload is replaced.\n- project.yml: the control's .serena/project.yml is copied to W with project_name set to <name>@<taskId> (quote styles and CRLF kept). A non-scalar name refuses the seat with MOE_WORKTREE_CREATE_FAILED.\n- Dependencies: MOE_WORKTREE_DEPS_MISSING <dir> for each tracked package-lock.json dir without node_modules, plus one prompt line. Nothing is installed or linked.\n- ps1 claude: the temp --mcp-config is rewritten per worktree launch and restored at the loop top.\n\nTests are in scripts/tests/postflight-worktree.cjs, the suite shared by postflight.sh and postflight.ps1; this is a scope addition, as in WT-05. New cases: tooling, link-fail, link-partial, project-yml, serena-outside, codes. launch-* now check Serena roots. The shared-landed shim was fixed: it forwarded no argv, so its context check passed without testing anything.\n\nResults: the bash gate and the Windows PowerShell 5.1 gate both passed (failureClass NONE). Net diff is 323 lines.\n\nQA notes:\n- The MOE_SERENA_PROJECT_ROOT witness env still names the control (WT-07).\n- A repo that tracks .serena/project.yml or .claude/skills would see W-side effects; details in the Serena handoff task-task-042dc0ddb9b64c60a98a567b71723351-handoff."
 }

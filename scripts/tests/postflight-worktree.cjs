@@ -23,11 +23,13 @@ if(process.argv[2]==='cli'){
   // A version probe is not a launch.
   if(process.argv.includes('--version')){console.log('0.0.0-fake');process.exit(0);}
   fs.appendFileSync(path.join(process.env.MOE_PROJECT_PATH,'.moe','wt-cli.log'),process.cwd()+'\n');
-  // WT_CLI_RECORD: one JSON line per launch (cwd, argv, the four worktree env values, --mcp-config text).
-  const argv=process.argv.slice(3),at=argv.indexOf('--mcp-config');
+  // WT_CLI_RECORD: one JSON line per launch (cwd, argv, the four worktree env values, --mcp-config text,
+  // and the prompt: the last argv, or the private session context file it points at).
+  const argv=process.argv.slice(3),at=argv.indexOf('--mcp-config'),last=argv[argv.length-1]||'',
+    ctx=/private session context file at (.+?)\. It contains/.exec(last);
   if(process.env.WT_CLI_RECORD)fs.appendFileSync(process.env.WT_CLI_RECORD,JSON.stringify({cwd:process.cwd(),argv,
     env:Object.fromEntries(['MOE_PROJECT_PATH','MOE_WORKTREE_PATH','MOE_TASK_BRANCH','MOE_LAND_TARGET'].map(k=>[k,process.env[k]??null])),
-    mcpConfig:at>=0&&argv[at+1]?readOr(argv[at+1]):null})+'\n');
+    mcpConfig:at>=0&&argv[at+1]?readOr(argv[at+1]):null,context:ctx?readOr(ctx[1]):last})+'\n');
   process.exit(0);
 }
 
@@ -296,12 +298,15 @@ async function refusal(name,code,knobs,setup=()=>{},opts){
 }
 // Shared mode with the task branch fully landed in HEAD: the CLI launches as before.
 async function sharedLanded(){
-  const p=repo('shared-landed');git(p.top,'branch','moe/task/'+TASK,'HEAD');
-  const before=control(p.top),r=await launch(p,'shared-landed',{FAKE_CLAIM_WORKSPACE:null});
+  const p=repo('shared-landed'),record=path.join(root,'shared-landed.jsonl');git(p.top,'branch','moe/task/'+TASK,'HEAD');
+  const before=control(p.top),r=await launch(p,'shared-landed',{FAKE_CLAIM_WORKSPACE:null,WT_CLI_RECORD:record,MOE_SERENA_PATH:process.execPath},{type:'claude'});
   assert.ok(r.cliRan,'the CLI did not run'+tail(r.log));
   assert.equal(r.blocked.length,0,'report_blocked was called'+tail(r.log));
   assert.ok(!r.log.includes('MOE_WORKTREE_'),'a MOE_WORKTREE_ line in a shared-mode run'+tail(r.log));
   assert.ok(!present(p.W),'shared mode made a worktree');
+  const rec=rows(record).pop();
+  assert.ok(rec&&rec.context.includes('memory_total=')&&!rec.context.includes(DEPS_LINE),'shared mode got the worktree dependency line, or no session context'+tail(r.log));
+  assert.ok(same(serenaOf(win?rec.mcpConfig.replace(/^﻿/,''):cfgText(path.join(p.dir,'.mcp.json'))),p.dir),'shared mode no longer roots Serena at the project');
   controlSame(p,before);
   assert.equal(r.code,0,`exit code ${r.code}`+tail(r.log));
 }
@@ -312,7 +317,16 @@ const same=(a,b)=>typeof a==='string'&&typeof b==='string'&&norm(a)===norm(b);
 const execFlag=t=>win?'-'+t[0].toUpperCase()+t.slice(1)+'Exec':'--'+t+'-exec';
 const cfgText=f=>{assert.ok(present(f),`${f} is missing`);return read(f).replace(/^\uFEFF/,'');};
 const jsonMoe=s=>JSON.parse(s).mcpServers.moe.env.MOE_PROJECT_PATH;
-const tomlMoe=f=>{const m=/^MOE_PROJECT_PATH = (".*")\r?$/m.exec(cfgText(f));assert.ok(m,`${f} has no MOE_PROJECT_PATH line`);return JSON.parse(m[1]);};
+const tomlMoe=s=>{const m=/^MOE_PROJECT_PATH = (".*")\r?$/m.exec(s);assert.ok(m,'no MOE_PROJECT_PATH line in\n'+s);return JSON.parse(m[1]);};
+// WT-06: Serena's --project in a JSON config or a TOML [mcp_servers.serena] table; null with no Serena server.
+function serenaOf(text,toml=false){
+  const m=toml?/^\[mcp_servers\.serena\]\r?\n(?:(?!\[).*\r?\n)*?args = (\[.*\])\r?$/m.exec(text):null;
+  const a=toml?m&&JSON.parse(m[1]):(JSON.parse(text).mcpServers.serena||{}).args;
+  return a?a[a.indexOf('--project')+1]:null;
+}
+const DEPS_LINE='Before testing a package in this worktree, run npm ci --prefer-offline in that package, plus npm run build where its tests require dist/.';
+const SERENA_OFF='memory_total=0 (Serena is off for this launch: MOE_WORKTREE_LINK_FAILED .serena/memories)';
+const LINKS=['.serena/memories','.claude/skills'];
 // [banner, config path under its root]; the sh Gemini writer prints its banner twice.
 const BANNERS={codex:['Codex MCP config written to:','.codex/config.toml'],gemini:['Gemini MCP config written to:','.gemini/settings.json'],
   grok:['Grok MCP config written to:','.grok/config.toml']};
@@ -320,8 +334,10 @@ const BANNERS={codex:['Codex MCP config written to:','.codex/config.toml'],gemin
 function wtCase(name,type){
   const p=repo(name),dir=path.join(root,name+'-case'),record=path.join(dir,'record.jsonl'),grokHome=path.join(dir,'grok-home');
   fs.mkdirSync(dir,{recursive:true});write(path.join(p.dir,'.moe','agents','x.md'),'agent x\r\nbytes\n');
-  return {p,record,grokHome,run:()=>launch(p,name,{MOE_DISABLE_ARGV_PROBE:'1',WT_CLI_RECORD:record,GROK_HOME:grokHome},
-    {type,args:type==='claude'?[]:[execFlag(type)]})};
+  // The shared tooling W links to (WT-06): the control's Serena memories and Claude skills.
+  write(path.join(p.dir,'.serena','memories','m.md'),'memory\n');write(path.join(p.dir,'.claude','skills','s','SKILL.md'),'skill\n');
+  return {p,record,grokHome,run:(k={})=>launch(p,name,{MOE_DISABLE_ARGV_PROBE:'1',WT_CLI_RECORD:record,GROK_HOME:grokHome,
+    MOE_SERENA_PATH:process.execPath,...k},{type,args:type==='claude'?[]:[execFlag(type)]})};
 }
 async function launchAs(type){
   const c=wtCase('launch-'+type,type),{p}=c,r=await c.run();
@@ -334,12 +350,17 @@ async function launchAs(type){
   assert.ok(same(rec.env.MOE_PROJECT_PATH,p.dir),`MOE_PROJECT_PATH ${rec.env.MOE_PROJECT_PATH} is not the control`);
   assert.ok(same(rec.env.MOE_WORKTREE_PATH,p.W),`MOE_WORKTREE_PATH ${rec.env.MOE_WORKTREE_PATH} is not W`);
   assert.deepEqual([rec.env.MOE_TASK_BRANCH,rec.env.MOE_LAND_TARGET],['moe/task/'+TASK,'main'],'MOE_TASK_BRANCH / MOE_LAND_TARGET');
-  const inW=f=>path.join(p.W,...f.split('/')),named=[];
-  if(!win)named.push(['W/.mcp.json',jsonMoe(cfgText(inW('.mcp.json')))]);
-  if(win&&type==='claude'){assert.ok(rec.mcpConfig,'no --mcp-config text recorded');named.push(['the temp --mcp-config',jsonMoe(rec.mcpConfig.replace(/^\uFEFF/,''))]);}
-  if(type==='codex'||type==='grok')named.push([BANNERS[type][1],tomlMoe(inW(BANNERS[type][1]))]);
-  if(type==='gemini')named.push(['W/.gemini/settings.json',jsonMoe(cfgText(inW('.gemini/settings.json')))]);
-  for(const [what,v] of named)assert.ok(same(v,p.dir),`${what} names ${v} as MOE_PROJECT_PATH, not the control`);
+  const inW=f=>path.join(p.W,...f.split('/')),named=[],ctl=[];
+  if(!win){named.push(['W/.mcp.json',cfgText(inW('.mcp.json'))]);ctl.push('.mcp.json');}
+  if(win&&type==='claude'){assert.ok(rec.mcpConfig,'no --mcp-config text recorded');named.push(['the temp --mcp-config',rec.mcpConfig.replace(/^\uFEFF/,'')]);}
+  if(BANNERS[type]){named.push(['W/'+BANNERS[type][1],cfgText(inW(BANNERS[type][1]))]);ctl.push(BANNERS[type][1]);}
+  // The moe server names the control; Serena is rooted at W in W's configs and still at the control in the control's.
+  for(const [what,t] of named){
+    const toml=what.endsWith('.toml'),v=toml?tomlMoe(t):jsonMoe(t);
+    assert.ok(same(v,p.dir),`${what} names ${v} as MOE_PROJECT_PATH, not the control`);
+    assert.ok(same(serenaOf(t,toml),p.W),`${what} roots Serena at ${serenaOf(t,toml)}, not W`);
+  }
+  for(const f of ctl)assert.ok(same(serenaOf(cfgText(path.join(p.dir,f)),f.endsWith('.toml')),p.dir),`the control's ${f} no longer roots Serena at the control`);
   for(const f of {codex:['.codex/agent-instructions.md'],gemini:['.gemini/GEMINI.md']}[type]||[])assert.ok(present(inW(f)),`W/${f} is missing`);
   // Each writer wrote the control once (the pre-flight) and W once: never the control twice.
   for(const [b,rel] of (win?[]:[['Wrote project MCP config:','.mcp.json']]).concat(BANNERS[type]?[BANNERS[type]]:[])){
@@ -362,17 +383,142 @@ async function launchAs(type){
 // failure is the codex writer's, whose config.toml is a directory.
 async function configFail(){
   const c=wtCase('config-fail','codex'),{p}=c;
-  git(p.top,'worktree','add','--lock','--reason','moe '+TASK,'--no-checkout','--no-track','-b','moe/task/'+TASK,p.W,'main');
-  git(p.W,'sparse-checkout','set','--no-cone','/*','!/.moe/');git(p.W,'read-tree','-mu','HEAD');
-  fs.mkdirSync(path.join(p.W,'.codex','config.toml'),{recursive:true});
+  preProvision(p);fs.mkdirSync(path.join(p.W,'.codex','config.toml'),{recursive:true});
   refused(await c.run(),'MOE_WORKTREE_CREATE_FAILED');
   assert.ok(!present(c.record),'a CLI launch was recorded');
+}
+// A fully provisioned W made ahead of the launch, which then reuses it.
+function preProvision(p){
+  git(p.top,'worktree','add','--lock','--reason','moe '+TASK,'--no-checkout','--no-track','-b','moe/task/'+TASK,p.W,'main');
+  git(p.W,'sparse-checkout','set','--no-cone','/*','!/.moe/');git(p.W,'read-tree','-mu','HEAD');
+}
+
+// WT-06 (design §5.2-§5.4, §1.10): Serena root, the shared links and their manifest,
+// the task-named project.yml and the dependency notice.
+const manifest=p=>path.join(git(p.top,'rev-parse','--path-format=absolute','--git-common-dir').trim(),'moe','worktree',p.task+'.links');
+const warned=(log,code)=>[...log.matchAll(new RegExp(`^\\[WARN\\] ${code} (.+?)\\r?$`,'gm'))].map(m=>m[1]).sort();
+const claudeCfg=(p,rec)=>win?rec.mcpConfig.replace(/^﻿/,''):cfgText(path.join(p.W,'.mcp.json'));
+// Every node_modules under W (W's .git file and links are not followed).
+const nodeModules=(top,rel='')=>fs.readdirSync(path.join(top,rel),{withFileTypes:true}).flatMap(d=>{const r=rel?rel+'/'+d.name:d.name;
+  return d.name==='node_modules'?[r]:d.isDirectory()&&!d.isSymbolicLink()?nodeModules(top,r):[];});
+// Removes a link the wrapper made, never its target: unlink, else rmdir (a Windows junction).
+function unlinkOnly(f){
+  if(!present(f))return;
+  assert.ok(fs.lstatSync(f).isSymbolicLink(),`${f} is not a link`);
+  try{fs.unlinkSync(f);}catch{fs.rmdirSync(f);}
+}
+async function tooling(){
+  const c=wtCase('tooling','claude'),{p}=c,yml="# keep\r\nproject_name: 'fix''ture' # name\r\nlanguages: [x]\r\n";
+  for(const [f,b] of [['.serena/project.yml',yml],['pkg one/node_modules/sentinel','control deps\n'],['loose/package-lock.json','{}\n']])write(path.join(p.dir,f),b);
+  commitOn(p,'refs/heads/main',{'package-lock.json':'{}\n','pkg one/package-lock.json':'{}\n','inst/package-lock.json':'{}\n'});
+  preProvision(p);fs.mkdirSync(path.join(p.W,'inst','node_modules'));
+  try{
+    for(const run of [1,2]){
+      // A missing override falls back to the control, so Serena is rooted at W.
+      const r=await c.run({MOE_SERENA_PROJECT:path.join(root,'no such dir')}),rec=rows(c.record).pop();
+      assert.ok(r.code===0&&rec,`run ${run}: exit code ${r.code}, CLI launched: ${!!rec}`+tail(r.log));
+      assert.ok(same(serenaOf(claudeCfg(p,rec)),p.W),`run ${run}: Serena is not rooted at W`);
+      for(const l of LINKS){
+        const f=path.join(p.W,l);
+        assert.ok(present(f)&&fs.lstatSync(f).isSymbolicLink()&&norm(f)===norm(path.join(p.dir,l)),`run ${run}: W/${l} is not a link to the control's`);
+      }
+      assert.equal(readOr(manifest(p)),LINKS.join('\n')+'\n',`run ${run}: the link manifest`);
+      assert.equal(readOr(path.join(p.W,'.serena','project.yml')),yml.replace("'fix''ture'","'fix''ture@task-postflight'"),`run ${run}: W/.serena/project.yml`);
+      assert.deepEqual(warned(r.log,'MOE_WORKTREE_DEPS_MISSING'),['.','pkg one'],`run ${run}: MOE_WORKTREE_DEPS_MISSING lines`+tail(r.log));
+      assert.equal(rec.context.split(DEPS_LINE).length,2,`run ${run}: the dependency line is not in the prompt exactly once`);
+      assert.match(rec.context,/^memory_recent=m\r?$/m,`run ${run}: the memory preload is gone`);
+      assert.deepEqual(warned(r.log,'MOE_WORKTREE_LINK_FAILED'),[],`run ${run}: a link failed`+tail(r.log));
+    }
+    assert.deepEqual(nodeModules(p.W),['inst/node_modules'],'node_modules made in W');
+    assert.equal(readOr(path.join(p.dir,'pkg one','node_modules','sentinel')),'control deps\n',"the control's node_modules changed");
+    assert.equal(readOr(path.join(p.dir,'.serena','project.yml')),yml,"the control's project.yml changed");
+  }finally{for(const l of LINKS)unlinkOnly(path.join(p.W,l));}
+  assert.deepEqual([readOr(path.join(p.dir,'.serena','memories','m.md')),readOr(path.join(p.dir,'.claude','skills','s','SKILL.md'))],
+    ['memory\n','skill\n'],'unlinking touched a shared target');
+}
+// An occupied W/.serena/memories and a missing control .claude/skills: both warn, bytes stay,
+// the seat launches with Moe and no Serena (a stale TOML entry included), and no inbox memory names.
+async function linkFail(){
+  const c=wtCase('link-fail','codex'),{p}=c;
+  fs.rmSync(path.join(p.dir,'.claude','skills'),{recursive:true});preProvision(p);write(path.join(p.W,'.serena','memories','keep.md'),'keep\n');
+  write(path.join(p.W,'.codex','config.toml'),`[mcp_servers.serena]\ncommand = "stale"\nargs = ["--project", "stale"]\n`);
+  const r=await c.run(),rec=rows(c.record).pop();
+  assert.ok(r.code===0&&rec,`exit code ${r.code}, CLI launched: ${!!rec}`+tail(r.log));
+  assert.deepEqual(warned(r.log,'MOE_WORKTREE_LINK_FAILED').map(s=>s.split(':')[0]),['.claude/skills','.serena/memories'],'MOE_WORKTREE_LINK_FAILED lines'+tail(r.log));
+  assert.ok(!fs.lstatSync(path.join(p.W,'.serena','memories')).isSymbolicLink(),'the occupied W/.serena/memories became a link');
+  assert.equal(readOr(path.join(p.W,'.serena','memories','keep.md')),'keep\n','W/.serena/memories/keep.md changed');
+  assert.ok(!present(path.join(p.W,'.claude','skills'))&&!present(path.join(p.W,'.serena','project.yml')),'a skills link or a project.yml was made');
+  assert.equal(readOr(manifest(p)),null,'a link manifest for links never made');
+  const toml=cfgText(path.join(p.W,'.codex','config.toml'));
+  assert.deepEqual([serenaOf(toml,true),same(tomlMoe(toml),p.dir)],[null,true],'W/.codex/config.toml: a Serena server, or moe not naming the control');
+  if(!win)assert.equal(serenaOf(cfgText(path.join(p.W,'.mcp.json'))),null,'W/.mcp.json has a Serena server');
+  assert.ok(!/^memory_recent=/m.test(rec.context)&&rec.context.includes(SERENA_OFF),'the memory names survived in the prompt');
+}
+// A wrong skills link fails alone (Serena and the memory names stay); then a manifest that
+// cannot be written (a directory) leaves the memories link unmade and Serena off.
+async function linkPartial(){
+  const c=wtCase('link-partial','claude'),{p}=c,wrong=path.join(root,'wrong skills'),W=l=>path.join(p.W,l);
+  fs.mkdirSync(wrong,{recursive:true});preProvision(p);fs.mkdirSync(path.dirname(W('.claude/skills')),{recursive:true});
+  fs.symlinkSync(wrong,W('.claude/skills'),win?'junction':'dir');
+  try{
+    let r=await c.run(),rec=rows(c.record).pop();
+    assert.ok(r.code===0&&rec,`exit code ${r.code}, CLI launched: ${!!rec}`+tail(r.log));
+    assert.deepEqual(warned(r.log,'MOE_WORKTREE_LINK_FAILED').map(s=>s.split(':')[0]),['.claude/skills'],'MOE_WORKTREE_LINK_FAILED lines'+tail(r.log));
+    assert.ok(norm(W('.claude/skills'))===norm(wrong)&&norm(W('.serena/memories'))===norm(path.join(p.dir,'.serena','memories')),'a link was replaced or not made');
+    assert.equal(readOr(manifest(p)),'.serena/memories\n','the link manifest');
+    assert.ok(same(serenaOf(claudeCfg(p,rec)),p.W)&&/^memory_recent=m\r?$/m.test(rec.context),'a skills failure turned Serena off');
+    unlinkOnly(W('.serena/memories'));fs.rmSync(manifest(p));fs.mkdirSync(manifest(p));
+    r=await c.run();rec=rows(c.record).pop();
+    assert.ok(r.code===0&&!present(W('.serena/memories')),`exit code ${r.code}, or a memories link with no manifest entry`+tail(r.log));
+    assert.ok(serenaOf(claudeCfg(p,rec))===null&&rec.context.includes(SERENA_OFF),'Serena stayed on with no memories link');
+  }finally{for(const l of LINKS)unlinkOnly(W(l));}
+  assert.ok(present(wrong)&&present(path.join(p.dir,'.serena','memories','m.md')),'unlinking touched a link target');
+}
+// project_name variants through this wrapper's own node program (read from the control each
+// time, so a rerun or another task never stacks suffixes); a non-scalar name refuses the seat.
+async function projectYml(){
+  const c=wtCase('project-yml','claude'),{p}=c,base=path.basename(p.dir),yml=path.join(p.dir,'.serena','project.yml'),
+    js=(win?/\$js = @'\r?\n([\s\S]*?)^'@/m:/<<'MOE_WT_TOOLING_JS'\r?\n([\s\S]*?)^MOE_WT_TOOLING_JS$/m).exec(read(wrapper))[1];
+  const copy=(text,tid=TASK)=>{
+    write(yml,text);const r=cp.spawnSync(process.execPath,['-',p.dir,p.W,p.dir,tid],{input:js,encoding:'utf8'});
+    assert.equal(r.status,0,`the node program failed on ${JSON.stringify(text)}: ${r.stdout}${r.stderr}`);
+    return read(path.join(p.W,'.serena','project.yml'));
+  };
+  preProvision(p);
+  for(const [text,want] of [['project_name: "fix\\"ture" # c\n','project_name: "fix\\"ture@T" # c\n'],
+    ["a: 1\r\nproject_name: 'it''s'\r\nb: 2\r\n","a: 1\r\nproject_name: 'it''s@T'\r\nb: 2\r\n"],
+    ['project_name: fix ture  # c\n','project_name: "fix ture@T"  # c\n'],['project_name: ~\n',`project_name: ${JSON.stringify(base+'@T')}\n`],
+    ["project_name: ''\n",`project_name: '${base.replace(/'/g,"''")}@T'\n`],['b: [x]\r\n',`project_name: ${JSON.stringify(base+'@T')}\r\nb: [x]\r\n`]])
+    assert.equal(copy(text),want.replace('@T','@'+TASK),`W/.serena/project.yml from ${JSON.stringify(text)}`);
+  assert.deepEqual(['task-a','task-b','task-b'].map(t=>/^project_name: "(.*)"$/m.exec(copy('project_name: x\n',t))[1]),
+    ['x@task-a','x@task-b','x@task-b'],'project_name across two tasks and a rerun');
+  write(yml,'project_name: [x]\n');
+  refused(await c.run(),'MOE_WORKTREE_CREATE_FAILED');
+  assert.ok(!present(c.record)&&read(yml)==='project_name: [x]\n','a CLI launch was recorded, or the control project.yml changed');
+}
+// .moe-agent.json beats MOE_SERENA_PROJECT, and its spelling of the control maps to W; an
+// override outside the control is kept, with MOE_WORKTREE_SERENA_OUTSIDE.
+async function serenaOutside(){
+  const c=wtCase('serena-outside','claude'),{p}=c,out=path.join(root,'outside serena'),cfg=path.join(p.dir,'.moe-agent.json');
+  fs.mkdirSync(out,{recursive:true});write(cfg,JSON.stringify({serenaProject:p.dir+path.sep}));
+  let r=await c.run({MOE_SERENA_PROJECT:out});
+  assert.ok(same(serenaOf(claudeCfg(p,rows(c.record).pop())),p.W),'the control spelled with a trailing separator is not mapped to W'+tail(r.log));
+  assert.deepEqual(warned(r.log,'MOE_WORKTREE_SERENA_OUTSIDE'),[],'MOE_WORKTREE_SERENA_OUTSIDE for the control');
+  fs.rmSync(cfg);
+  r=await c.run({MOE_SERENA_PROJECT:out});
+  assert.ok(same(serenaOf(claudeCfg(p,rows(c.record).pop())),out),'the outside override was not kept'+tail(r.log));
+  assert.equal(warned(r.log,'MOE_WORKTREE_SERENA_OUTSIDE').length,1,'no single MOE_WORKTREE_SERENA_OUTSIDE line'+tail(r.log));
+}
+// DoD: both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes.
+function codes(){
+  const set=f=>[...new Set(read(path.join(path.dirname(wrapper),f)).match(/MOE_(?:WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]+/g))].sort();
+  assert.deepEqual(set('moe-agent.sh'),set('moe-agent.ps1'),'the wrappers carry different worktree code families');
 }
 
 const cases={lifecycle,resume,'half-made':halfMade,
   ...Object.fromEntries(refusals.map(c=>[c[0],()=>refusal(...c)])),'shared-landed':sharedLanded};
 for(const t of ['claude','codex','gemini','grok'])cases['launch-'+t]=()=>launchAs(t);
-cases['config-fail']=configFail;
+Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link-partial':linkPartial,'project-yml':projectYml,'serena-outside':serenaOutside,codes});
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{
   let ok=0,failed=0;
@@ -391,6 +537,10 @@ const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(','
   process.exitCode=failed?1:0;
 })().catch(e=>{console.log('[worktree] harness FAILED: '+(e&&e.stack));process.exitCode=1;})
   .finally(()=>{
-    if(process.env.MOE_KEEP_WORKTREE_FIXTURE)console.log('[worktree] fixture kept: '+root);
-    else for(const d of [root,wrapperTmp])fs.rmSync(d,{recursive:true,force:true,maxRetries:10,retryDelay:200});
+    if(process.env.MOE_KEEP_WORKTREE_FIXTURE){console.log('[worktree] fixture kept: '+root);return;}
+    // The wrapper's links go first, so the recursive delete never walks a junction.
+    for(const d of present(root)?fs.readdirSync(root):[])for(const l of LINKS){
+      const f=path.join(root,d,'.worktrees',TASK,l);try{if(fs.lstatSync(f).isSymbolicLink())unlinkOnly(f);}catch{}
+    }
+    for(const d of [root,wrapperTmp])fs.rmSync(d,{recursive:true,force:true,maxRetries:10,retryDelay:200});
   });

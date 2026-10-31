@@ -3058,14 +3058,96 @@ sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
 # control. A failed write refuses the seat: nothing falls back to the control.
 # Twin: Initialize-MoeWorktreeLaunch.
 prepare_worktree_launch() {
-    local src
+    local src out mode serena line re
     CLI_ROOT="$MOE_WT_PATH"
     export MOE_WORKTREE_PATH="$MOE_WT_PATH" MOE_TASK_BRANCH="$MOE_WT_BRANCH" MOE_LAND_TARGET="$MOE_WT_TARGET"
-    write_project_mcp_json "$CLI_ROOT" "$SERENA_PROJECT" \
+    # Design §5.2-§5.4, §1.10: one node program, the same text in both wrappers (no
+    # shell or PowerShell link primitives, so Windows gets junctions). It maps the
+    # Serena root (the control becomes W; an override is kept, outside the control
+    # with MOE_WORKTREE_SERENA_OUTSIDE), links W/.serena/memories and W/.claude/skills
+    # to the control's, each recorded in <common gitdir>/moe/worktree/<taskId>.links
+    # before it is made (MOE_WORKTREE_LINK_FAILED leaves every byte as it is), copies
+    # .serena/project.yml with project_name <name>@<taskId>, and names each tracked
+    # package-lock.json directory of W without node_modules (MOE_WORKTREE_DEPS_MISSING).
+    # Prints those lines, then W, KEEP or OFF (no Serena: its memories link failed);
+    # any other failure exits 1 with the detail as its last line.
+    out=$("$NODE_CMD" - "$PROJECT" "$CLI_ROOT" "$SERENA_PROJECT" "$PREFLIGHT_TASK_ID" <<'MOE_WT_TOOLING_JS'
+const fs = require('fs'), path = require('path'), cp = require('child_process');
+const [ctl, w, sp, tid] = process.argv.slice(-4), win = process.platform === 'win32', out = [];
+const key = p => { try { p = fs.realpathSync.native(p); } catch { p = path.resolve(p); } return win ? p.toLowerCase() : p; };
+const within = (p, top) => { const r = path.relative(key(top), key(p)); return r !== '' && r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r); };
+const lstat = f => { try { return fs.lstatSync(f); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
+const git = (...a) => { const r = cp.spawnSync('git', a, { encoding: 'utf8' }); if (r.status !== 0) throw Error('git ' + a[2] + ' failed: ' + String(r.stderr || r.error).trim()); return r.stdout; };
+const local = d => { if (!lstat(d)) fs.mkdirSync(d); if (!within(d, w)) throw Error(d + ' resolves outside ' + w); };
+try {
+    const mode = key(sp) === key(ctl) ? 'W' : 'KEEP', failed = [];
+    if (mode === 'KEEP' && !within(sp, ctl)) out.push('MOE_WORKTREE_SERENA_OUTSIDE ' + sp + ' is outside ' + ctl + ', so Serena does not see this worktree');
+    const man = path.join(git('-C', ctl, 'rev-parse', '--path-format=absolute', '--git-common-dir').trim(), 'moe', 'worktree', tid + '.links');
+    for (const rel of ['.serena/memories', '.claude/skills']) {
+        try {
+            const src = path.resolve(ctl, rel), dst = path.join(w, rel);
+            if (!fs.statSync(src).isDirectory()) throw Error(src + ' is not a directory');
+            local(path.dirname(dst));
+            const st = lstat(dst);
+            if (st && !(st.isSymbolicLink() && key(dst) === key(src))) throw Error(dst + ' exists and is not a link to ' + src);
+            if (!(lstat(man) ? fs.readFileSync(man, 'utf8').split('\n') : []).includes(rel)) {
+                fs.mkdirSync(path.dirname(man), { recursive: true }); fs.appendFileSync(man, rel + '\n');
+            }
+            if (!st) fs.symlinkSync(src, dst, win ? 'junction' : 'dir');
+            if (key(dst) !== key(src)) throw Error(dst + ' does not resolve to ' + src);
+        } catch (e) { failed.push(rel); out.push('MOE_WORKTREE_LINK_FAILED ' + rel + ': ' + e.message); }
+    }
+    const yml = path.join(ctl, '.serena', 'project.yml'), text = lstat(yml) ? fs.readFileSync(yml, 'utf8') : null;
+    if (text !== null) {
+        const base = path.basename(path.resolve(ctl)), m = /^project_name:[ \t]*([^\r\n]*)/m.exec(text);
+        const qualify = v => {
+            let q = /^"((?:[^"\\]|\\.)*)"(\s*(?:#.*)?)$/.exec(v);
+            if (q) return '"' + (q[1] || JSON.stringify(base).slice(1, -1)) + '@' + tid + '"' + q[2];
+            q = /^'((?:[^']|'')*)'(\s*(?:#.*)?)$/.exec(v);
+            if (q) return "'" + (q[1] || base.replace(/'/g, "''")) + '@' + tid + "'" + q[2];
+            q = /^(.*?)(\s+#.*)?$/.exec(v);
+            const name = q[1].trim();
+            if (/^["'[\]{}&*!|>%@`]/.test(name)) throw Error('project_name in ' + yml + ' is not a plain or quoted scalar');
+            return JSON.stringify((['', '~', 'null'].includes(name) ? base : name) + '@' + tid) + (q[2] || '');
+        };
+        const line = 'project_name: ' + (m ? qualify(m[1]) : JSON.stringify(base + '@' + tid));
+        const body = m ? text.slice(0, m.index) + line + text.slice(m.index + m[0].length) : line + (text.includes('\r\n') ? '\r\n' : '\n') + text;
+        const dst = path.join(w, '.serena', 'project.yml'), tmp = dst + '.' + process.pid + '.tmp';
+        local(path.dirname(dst));
+        const st = lstat(dst);
+        if (st && !st.isFile()) throw Error(dst + ' is not a regular file');
+        try { fs.writeFileSync(tmp, body, { flag: 'wx' }); fs.renameSync(tmp, dst); } catch (e) { fs.rmSync(tmp, { force: true }); throw e; }
+    }
+    const locks = git('-C', w, 'ls-files', '-z', '--cached', '--', 'package-lock.json', ':(glob)**/package-lock.json').split('\0');
+    for (const d of new Set(locks.filter(f => path.posix.basename(f) === 'package-lock.json' && lstat(path.join(w, f))).map(f => path.posix.dirname(f)))) {
+        const nm = lstat(path.join(w, d, 'node_modules'));
+        if (!nm || !nm.isDirectory()) out.push('MOE_WORKTREE_DEPS_MISSING ' + d);
+    }
+    out.push(mode === 'W' && failed.includes('.serena/memories') ? 'OFF' : mode);
+    process.stdout.write(out.join('\n'));
+} catch (e) {
+    process.stdout.write(out.concat(String((e && e.message) || e).replace(/\s+/g, ' ')).join('\n'));
+    process.exit(1);
+}
+MOE_WT_TOOLING_JS
+    ) || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot prepare Serena, the shared links and the dependency check in $CLI_ROOT: ${out##*$'\n'}"
+    mode=${out##*$'\n'}
+    [ "$out" = "$mode" ] || while IFS= read -r line; do printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$line"; done <<< "${out%$'\n'*}"
+    case "$mode" in W) serena="$CLI_ROOT" ;; KEEP) serena="$SERENA_PROJECT" ;; *) serena="" ;; esac
+    if [ -z "$serena" ]; then
+        # No Serena, so no memory names to read through it (a literal replace: a glob over this text is quadratic).
+        re=$'\nmemory_total=[^\n]*\nmemory_this_task=[^\n]*\nmemory_recent=[^\n]*'
+        [[ $DYNAMIC_CONTEXT =~ $re ]] && DYNAMIC_CONTEXT=${DYNAMIC_CONTEXT/"${BASH_REMATCH[0]}"/$'\n'"memory_total=0 (Serena is off for this launch: MOE_WORKTREE_LINK_FAILED .serena/memories)"}
+    fi
+    DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
+
+Before testing a package in this worktree, run npm ci --prefer-offline in that package, plus npm run build where its tests require dist/."
+    # The writers take Serena's root as an argument; an empty SERENA_CMD drops the server (stale entries too).
+    SERENA_CMD="${serena:+$SERENA_CMD}" write_project_mcp_json "$CLI_ROOT" "$serena" \
         || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot write the MCP config ($CLI_ROOT/.mcp.json)"
     case "$CLI_TYPE" in
         codex|gemini|grok)
-            "write_${CLI_TYPE}_config" "$CLI_ROOT" "$SERENA_PROJECT" \
+            SERENA_CMD="${serena:+$SERENA_CMD}" "write_${CLI_TYPE}_config" "$CLI_ROOT" "$serena" \
                 || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot write the $CLI_TYPE config ($CLI_ROOT/.$CLI_TYPE)" ;;
     esac
     if [ "$ENABLE_AGENT_TEAMS" = "true" ] && [ -d "$MOE_DIR/agents" ]; then
