@@ -1,7 +1,7 @@
 // =============================================================================
 // `moe-daemon doctor` — local health check that doesn't require the daemon
 // to be running. Walks a checklist of common breakage points and prints a
-// pass/warn/fail line per probe. Exits 1 if any probe hard-fails.
+// pass/warn/fail/info line per probe. Exits 1 if any probe hard-fails.
 // =============================================================================
 
 import fs from 'fs';
@@ -10,9 +10,11 @@ import net from 'net';
 import path from 'path';
 import { DaemonJsonTooLargeError, readDaemonJsonText } from '../util/daemonJsonFile.js';
 import { canonicalProjectPath, isSameProjectPath } from '../util/projectPath.js';
+import { probeWorktreeReadiness, type WorktreeProbeOptions } from './doctorWorktree.js';
 
-interface ProbeResult {
-  symbol: 'pass' | 'warn' | 'fail';
+export interface ProbeResult {
+  /** 'info' reports an observed condition that never affects the exit code. */
+  symbol: 'pass' | 'warn' | 'fail' | 'info';
   message: string;
 }
 
@@ -294,7 +296,7 @@ async function probeMessagesSize(moePath: string): Promise<ProbeResult> {
 }
 
 function emit(label: string, result: ProbeResult, log: (msg: string) => void): void {
-  const icon = result.symbol === 'pass' ? '[OK]' : result.symbol === 'warn' ? '[WARN]' : '[FAIL]';
+  const icon = { pass: '[OK]', warn: '[WARN]', fail: '[FAIL]', info: '[INFO]' }[result.symbol];
   log(`${icon} ${label}: ${result.message}`);
 }
 
@@ -305,9 +307,9 @@ export interface DoctorResult {
 
 /**
  * Run all probes and return aggregated output. Exit code is 1 if any probe
- * hard-fails; warnings do NOT cause a non-zero exit.
+ * hard-fails; warnings and info lines do NOT cause a non-zero exit.
  */
-export async function runDoctor(projectPath: string): Promise<DoctorResult> {
+export async function runDoctor(projectPath: string, options: WorktreeProbeOptions = {}): Promise<DoctorResult> {
   const moePath = path.join(projectPath, '.moe');
   const output: string[] = [];
   const log = (msg: string) => output.push(msg);
@@ -348,6 +350,9 @@ export async function runDoctor(projectPath: string): Promise<DoctorResult> {
 
   // 8. disk usage
   probes.push(['messages disk usage', await probeMessagesSize(moePath)]);
+
+  // 9. worktree-mode readiness: hard checks when worktreeMode is on, info when off
+  probes.push(...await probeWorktreeReadiness(projectPath, moePath, options));
 
   for (const [label, result] of probes) {
     emit(label, result, log);

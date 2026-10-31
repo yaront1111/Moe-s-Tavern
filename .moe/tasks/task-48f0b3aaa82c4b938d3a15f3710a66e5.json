@@ -15,20 +15,36 @@
     {
       "stepId": "step-1",
       "description": "1. Add named worktree readiness probes and tests first (DoD1–2 plus latest gate requirement). Extend ProbeResult with info and emit [INFO]; existing pass/warn/fail meanings stay unchanged. Read .moe/project.json once without starting StateManager; absent file/settings uses WT01 resolver default; malformed JSON, unreadable file or invalid mode gets a named settings failure, never silently enables/off-defaults. Resolve target via landed WT01 resolveWorktreeTarget (literal trimmed consolidationBranch else main), do not duplicate its policy. Reuse runGit with argv, canonical cwd, timeout <=2s/call and <=128KiB output; For error handling, report bounded single-line error categories without dumping config/stdout. New labels: worktree git version, project root, control branch, target, quality gate. Check parsed git --version >=2.38 (Windows/Apple suffix allowed; malformed unknown fails), realpath project == rev-parse --show-toplevel, symbolic-ref -q HEAD exactly refs/heads/moe/control, and target is a valid fully-qualified local branch ref resolving to a commit. Require nonblank settings.qualityGate when on; do not execute it. Run worktree list --porcelain -z once, parse NUL fields/blank-record delimiters (never split a filename on whitespace/newlines), and fail target probe if any branch field equals refs/heads/<target>, including current checkout; detached roots are not target checkouts. Missing ref, timeout/truncated/malformed listing and spawn errors are named failures on, information off. All new worktree probe results are [INFO] with observed condition when mode off; they never change old probe severity/exit logic. Tests through runDoctor with stubbed read-only runner cover each failure individually on/off, all passing on exits0, absent settings preserves current health fixtures, absent/blank gate fails on, invalid mode/config not silently defaulted, version boundaries/suffixes, custom/glob/default target, and no shell/network/mutating command invocation.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/commands/doctor.ts",
         "packages/moe-daemon/src/commands/doctor.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/commands/doctorWorktree.ts"
+      ],
+      "note": "Step 1 done. Scope note: the worktree probes live in a NEW module packages/moe-daemon/src/commands/doctorWorktree.ts (doctor.ts was already 358 lines, over the 300-line file cap); doctor.ts only exports ProbeResult (+ 'info' symbol, [INFO] icon) and appends probeWorktreeReadiness() as probe 9 via runDoctor(projectPath, options={git?, now?}); index.ts call unchanged. No other open row plans these files.\nProbes (labels): worktree mode / git version (>=2.38, suffixes OK, unknown output fails) / project root (realpath vs rev-parse --show-toplevel, pathKey) / control branch (symbolic-ref -q HEAD == refs/heads/moe/control) / target (resolveWorktreeTarget(settings) + cachedPlanRef literal-name rule, rev-parse --verify --quiet refs/heads/<t>^{commit}, NUL-parsed `worktree list --porcelain -z` branch fields) / quality gate (nonblank, never executed). resolveWorktreeMode gets the WHOLE parsed settings object (architect-899a90d6 note). Unreadable/malformed project.json or invalid mode = [FAIL] worktree mode, never silent off; JSON content never echoed. runGit reused (masked GIT_*, 2s, 128KiB), plus a /*-suffix root guard.\nTests RED first (35 failing on HEAD for the missing feature), then GREEN: snapshot /tmp/wt16.fqfUXx (HEAD archive + native npm ci, env -i, node 24.21.0): `npx vitest run src/commands/doctor.test.ts` 45 passed; `tsc --noEmit -p tsconfig.json` clean; scratch tsconfig incl. test file clean. Read-only run against this project prints all worktree lines [INFO], exit 0. Shared checkout untouched by builds. Pre-existing dirty paths from other sessions left alone.",
+      "startedAt": "2026-10-31T06:13:42.093Z",
+      "completedAt": "2026-10-31T06:16:52.684Z"
     },
     {
       "stepId": "step-2",
       "description": "2. Add conservative stale terminal-worktree warning (DoD3). Reuse the successful listing from step1; inspect only registered immediate canonical .worktrees/<full task-id> paths within this project, not arbitrary human names, outside roots, symlink escapes, prefix lookalikes or unregistered directories. Read corresponding regular .moe/tasks/<id>.json without writes; match record id, terminal status DONE/ARCHIVED and finite updatedAt older than strictly 24h. Using updatedAt is a conservative age bound because no archivedAt exists; document that fact in the probe message/comment. Count/name stale entries with [WARN] when on and [INFO] when off; exactly24h, future time, recent terminal, live tasks are not stale. Unreadable/invalid/missing task data or missing timestamp gives bounded 'age unknown' informational/soft warning, never a hard failure or deletion permission. Table-driven tests cover DONE and ARCHIVED, old-but-live, boundary times, missing/malformed JSON/id mismatch, nested/foreign paths and UNC/drive normalization. Add one real throwaway Git fixture for listing/target detection (path with spaces, task worktree and separate target checkout), preserving existing HTTP/socket cleanup. Snapshot source JSON bytes/mtimes, refs and index before/after doctor to prove read-only; clean only owned fixture after all processes exit.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/commands/doctor.ts",
         "packages/moe-daemon/src/commands/doctor.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctorWorktree.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "note": "Step 2 done (the governor's 06:10Z ruling: steps 1-2 only, then BLOCKED on WT-10M).\n- New probe 'worktree stale task worktrees' reuses step 1's listing.\n- It considers only registered worktrees whose realpath'd dirname equals <root>/.worktrees (isSameProjectPath, so D:/ vs /mnt/d and //wsl$ shares match) and whose basename is task-*.\n- It reads .moe/tasks/<id>.json (regular file, id match). A task counts as stale when it is DONE or ARCHIVED and updatedAt is strictly more than 24h old. updatedAt is a conservative bound because tasks have no archivedAt; a code comment says so.\n- Severity: [WARN] when on, [INFO] when off. Unknown age (missing or malformed record, id mismatch, bad timestamp) is [INFO]. It never fails and never deletes.\n- I compacted the step 1 code at the same time. Both functions are realpathSync.native now, so Windows 8.3 TEMP paths match git's toplevel.\nTests:\n- 12-row age table: DONE/ARCHIVED 25h, 24h+1ms, exactly 24h, 1h, future, WORKING 72h, plus the unknown cases.\n- Ignore table: nested, foreign, lookalike, human name, control root. A symlink escape row (skipped on win32). A cross-spelling row. The off-mode stale row is folded into the off table.\n- Real Git fixture, under a path with spaces: a task worktree plus a separate target checkout. It gives a target FAIL and a stale WARN with exit 1. The snapshot of project.json/task bytes+mtimes, .git/index, HEAD, refs and the worktree list is unchanged after doctor. After the worktree is removed, the target is OK and the exit code is 0.\nEvidence, from snapshot /tmp/wt16.fqfUXx (HEAD archive, native npm ci, env -i, node 24.21.0):\n- doctor.test.ts: 64 passed. Every new test failed before the implementation existed.\n- Full daemon suite: 215 files, 6310 passed / 20 skipped.\n- tsc: clean for the src build and for a scratch tsconfig that includes the test.\n- 15 targeted mutants, all killed.\nSize: +443 net so far (doctorWorktree.ts 192, test +246, doctor.ts +5). I filed TASK-rail waiver proposal prop-8953acab (at most 560 net across the 4 files) so QA need not size-reject.\nStep 3 (runbook) is NOT started, per the governor.",
+      "startedAt": "2026-10-31T06:16:55.795Z",
+      "completedAt": "2026-10-31T06:24:45.614Z"
     },
     {
       "stepId": "step-3",
@@ -60,7 +76,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -71,8 +87,6 @@
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
     "task-6cf120a38b344e72b7bab8b9faf806f1",
-    "task-253884005a59471fb7c59ef38e1f3cc1",
-    "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
     "task-f33bf7aff4d245d3b8bb1d8c8a6ceedf"
   ],
   "priority": "MEDIUM",
@@ -125,11 +139,17 @@
       "author": "governor-693b7073",
       "content": "Governor, 18:48Z. IMPORTANT for step 4's gate. Do NOT run `(cd packages/moe-daemon && npm run build && npx vitest run …)` from the repo root of the shared checkout (D:\\projexts\\moes or /mnt/d/projexts/moes).\n- `prebuild` deletes the live daemon's dist first.\n- From WSL the build then fails, because the node_modules are Windows-native (tsx exits 1; tsc can't resolve @typescript/typescript-linux-x64). dist is left deleted.\n- It happened once today; the governor restored dist at 18:45Z. The fix is task-f9789178.\n\nRun the gate in an isolated git archive or clone snapshot outside the repo, with native deps and MOE_* unset (mem:gotcha-daemon-linux-snapshot-gate). This comment overrides the plan text on that point.",
       "timestamp": "2026-10-30T18:47:16.427Z"
+    },
+    {
+      "id": "comment-8b272c3b5a2441829dc465d6f32da865",
+      "author": "governor-693b7073",
+      "content": "Governor ruling, 06:10Z. The human asked to unblock idle coders, so this row gets an early partial run. I removed its dependsOn on WT-10M (task-253884005a59471fb7c59ef38e1f3cc1) and WT-10 (task-5c2e6cdf2494412ca0c2bc40e26d9da3). Steps 1 and 2 touch only packages/moe-daemon/src/commands/doctor.ts and doctor.test.ts, and no other open row plans those files.\n\n1. Do steps 1 and 2 as planned, including the comments above: worker-0062feec's spike correction (a missing qualityGate is a hard fail when worktreeMode is on) and architect-899a90d6's note (pass the whole parsed settings object to resolveWorktreeMode). Run doctor.test.ts in a snapshot. Never run `npm run build` or `npm ci` in the shared checkout (18:48Z comment; GLOBAL rule 0).\n2. Do NOT start step 3. Its runbook must come from WT-10M's landed migration CLI, and WT-10M has not landed. After complete_step on step 2, call moe.report_blocked { taskId: \"task-48f0b3aaa82c4b938d3a15f3710a66e5\", blockedOnTaskIds: [\"task-253884005a59471fb7c59ef38e1f3cc1\"], reason: \"steps 1-2 done; step 3 runbook needs WT-10M's landed migration CLI\" }, then end the session. The wrapper checkpoints your bytes, and the row auto-unblocks when WT-10M is DONE. WT-10M depends on WT-10, so that one id covers both.\n3. Whoever resumes the row starts at step 3. Steps 1 and 2 stay COMPLETED.",
+      "timestamp": "2026-10-31T06:08:39.067Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-10-30T20:31:19.650Z",
+  "updatedAt": "2026-10-31T06:25:08.153Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",
@@ -138,16 +158,21 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T14:02:59.763Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-76a2c8bb"
+    "architect-76a2c8bb",
+    "worker-c0a1ac70"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:06:08.916Z",
   "planningNotes": {
@@ -167,5 +192,16 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T14:06:08.953Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T06:13:42.093Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/commands/doctorWorktree.ts"
+  ],
+  "blockedReason": "steps 1-2 done; step 3 runbook needs WT-10M's landed migration CLI (task-253884005a59471fb7c59ef38e1f3cc1, which covers WT-10). Per governor ruling 06:10Z. Steps 1-2 stay COMPLETED; resume at step 3. Size-waiver proposal prop-8953acab pending (+443 net so far).",
+  "blockedOnTaskIds": [
+    "task-253884005a59471fb7c59ef38e1f3cc1"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-31T06:25:08.153Z"
 }
