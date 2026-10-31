@@ -105,7 +105,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -137,7 +137,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:07:46.761Z",
-  "updatedAt": "2026-10-30T23:40:03.352Z",
+  "updatedAt": "2026-10-31T00:25:22.888Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T10:45:01.200Z",
@@ -147,11 +147,14 @@
     "firstClaimAt": "2026-10-30T10:45:17.012Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-31T00:25:22.888Z",
+    "wallClockMs": 49205876
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-4b0c6c8e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -230,6 +233,27 @@
       "treeId": "e7ba4e9e54390c3fca5b59e6860fe9e7ec267892",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "cea06e2a5692d778e3f57eaa0b1460e7a0064738",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-30T22:38:58Z",
+      "paths": [
+        ".moe/tasks/task-9d27749421b045c18a6c6eb99694236d.json",
+        ".moe/tasks/task-c7ee939a460641eab87eb799a38e6ff9.json",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-30T23:40:44.464Z",
+      "treeId": "4e889edb1c6dbeb1980e45b54181304bf703bd45",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -237,14 +261,16 @@
     "scripts/tests/postflight.ps1",
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
-    "docs/TROUBLESHOOTING.md"
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-9d27749421b045c18a6c6eb99694236d.json",
+    ".moe/tasks/task-c7ee939a460641eab87eb799a38e6ff9.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-e4b7eee0@2026-10-30T10:45:17Z",
-    "at": "2026-10-30T11:14:29.611Z"
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-30T22:38:58Z",
+    "at": "2026-10-30T23:40:44.464Z"
   },
   "workStartedAt": "2026-10-30T22:40:09.366Z",
   "reviewStartedAt": "2026-10-30T23:39:55.592Z",
@@ -255,5 +281,16 @@
     "reportedAt": "2026-10-30T23:39:55.592Z",
     "source": "agent-reported"
   },
-  "completionSummary": "The MOE_CONTESTED_HELD remedy now names who can release a hold. held= and contested rows name the causing peer first.\n\nChanges (5 files):\n- moe-agent.sh/.ps1: the UNTOUCHED and EDIT clauses drop \"Serena editor\". Release routes are now a one-shot Claude session of this task, a later clean-at-pre-flight session while every peer stays idle, or completing/archiving the stale peer. A new WITNESS sentence, byte-equal to recordCommit.ts HELD_REMEDY_WITNESS, says Codex/Gemini/Grok/interactive edits leave no witness.\n- peer_order/$peerOrder put contested rows, the trailer, UNTOUCHED(<peer>) and the strict held= peer in cause order: editing, then active, then idle.\n  - Decision: reordering applies only when an entry carries an activeTaskIds list. An older daemon or disk-fallback scope stays byte-identical to HEAD (contract invariant). Fates are unchanged.\n- postflight.sh/.ps1: new scenario AL (4 rows: idle first claimant, active second peer, and an editing/active/idle mix) plus the updated AG/AK strings.\n- TROUBLESHOOTING.md is updated to match.\n\nNet non-board LOC: 168 (+204/-36). Each file was clean before its first edit.\n\nRED against HEAD's wrappers, identical on sh and PS 5.1:\n- AG1-3, AK1 and AK7 fail on the remedy text.\n- AL1 fails on trailer order and UNTOUCHED(task-a).\n- AL2 and AL4 fail on row order.\n- AL3 (legacy) fails only on the remedy text.\nGREEN: the gate exits 0.\n\nGate deviations, both rail-driven:\n- The daemon vitest leg runs in a /tmp snapshot after npm ci. The shared node_modules is the Windows install, so the rolldown binding fails from WSL.\n- pwsh 7 postflight.ps1 is skipped. It fails identically on HEAD with MOE_AGENT_GIT_GUARD_FAILED (task-44b817f973374dffb578308278050497). pwsh parity-check and importee-guard do run.\n\nSelf-review: 13 junk activeTaskIds/taskIds probes give identical results on sh, PS 5.1 and pwsh, with no throw and no invented row.\n\nCodex `--json` witness harvest is split out (DoD 4) as task-7cc959e9b42043ba8009cdd9813103e0. The daemon h"
+  "completionSummary": "The MOE_CONTESTED_HELD remedy now names who can release a hold. held= and contested rows name the causing peer first.\n\nChanges (5 files):\n- moe-agent.sh/.ps1: the UNTOUCHED and EDIT clauses drop \"Serena editor\". Release routes are now a one-shot Claude session of this task, a later clean-at-pre-flight session while every peer stays idle, or completing/archiving the stale peer. A new WITNESS sentence, byte-equal to recordCommit.ts HELD_REMEDY_WITNESS, says Codex/Gemini/Grok/interactive edits leave no witness.\n- peer_order/$peerOrder put contested rows, the trailer, UNTOUCHED(<peer>) and the strict held= peer in cause order: editing, then active, then idle.\n  - Decision: reordering applies only when an entry carries an activeTaskIds list. An older daemon or disk-fallback scope stays byte-identical to HEAD (contract invariant). Fates are unchanged.\n- postflight.sh/.ps1: new scenario AL (4 rows: idle first claimant, active second peer, and an editing/active/idle mix) plus the updated AG/AK strings.\n- TROUBLESHOOTING.md is updated to match.\n\nNet non-board LOC: 168 (+204/-36). Each file was clean before its first edit.\n\nRED against HEAD's wrappers, identical on sh and PS 5.1:\n- AG1-3, AK1 and AK7 fail on the remedy text.\n- AL1 fails on trailer order and UNTOUCHED(task-a).\n- AL2 and AL4 fail on row order.\n- AL3 (legacy) fails only on the remedy text.\nGREEN: the gate exits 0.\n\nGate deviations, both rail-driven:\n- The daemon vitest leg runs in a /tmp snapshot after npm ci. The shared node_modules is the Windows install, so the rolldown binding fails from WSL.\n- pwsh 7 postflight.ps1 is skipped. It fails identically on HEAD with MOE_AGENT_GIT_GUARD_FAILED (task-44b817f973374dffb578308278050497). pwsh parity-check and importee-guard do run.\n\nSelf-review: 13 junk activeTaskIds/taskIds probes give identical results on sh, PS 5.1 and pwsh, with no throw and no invented row.\n\nCodex `--json` witness harvest is split out (DoD 4) as task-7cc959e9b42043ba8009cdd9813103e0. The daemon h",
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completedAt": "2026-10-31T00:25:22.888Z",
+  "reviewCompletedAt": "2026-10-31T00:25:22.888Z",
+  "reviewSummary": "Reviewed completion cea06e2a (pushed, on moe/work-2026-10-24 + origin): +204/-36, net 168 non-board LOC over 5 files, under the cap.\n\nGate re-run on a git-archive snapshot pinned to cea06e2a (not the shared tree), MOE_/CLAUDE_ env scrubbed, 23:53Z-00:24Z: GATE_EXIT=0.\n- daemon recordCommit.test.ts (/tmp snapshot, npm ci) 73/73\n- bash -n ok; parity-check.sh PASS; node --test importee-guard-bash + usage-attribution 44/44\n- postflight.sh PASS, 44 scope scenarios (AG/AK/AL ok)\n- PS 5.1: parity PASS, importee-guard 48/0, postflight.ps1 PASS (43)\n- pwsh 7: parity PASS, importee-guard 48/0; postflight.ps1 skipped. I ran it separately: rc=1, MOE_AGENT_GIT_GUARD_FAILED at failure line 883 = pre-existing task-44b817f9 (BACKLOG).\n- A first attempt failed scenario W only because my nohup launch ignored SIGINT (known gotcha). It passed relaunched with signals reset.\n\nDoD 1: git grep finds no \"Serena editor\" remedy in either wrapper, recordCommit.ts, MCP_SERVER.md or TROUBLESHOOTING.md. UNTOUCHED (3 routes) and WITNESS are byte-identical across both wrappers and both harnesses (counted 1/1/2/2), and WITNESS equals the eval'd HELD_REMEDY_WITNESS. BOM kept, 0 CR.\nDoD 2: peer_order/$peerOrder (editing, then active, then the rest, built from PEER_IDS only) drives contested rows, trailers, UNTOUCHED(order[0]) and the strict held=. AL1 has an idle first claimant and an active second peer giving held.txt(task-b); AL4 gives c,b,a; deepStrictEqual on the ledger.\nDoD 3: fates unchanged (skip, EDITING, idle_clean and TOOL conditions untouched). The presence gate keeps legacy scopes byte-identical (AL3, importee-guard).\nDoD 4: split out as task-7cc959e9 (exists, depends on this row).\nPonytail: lean, nothing to cut.",
+  "requiredCheckAtDone": null
 }
