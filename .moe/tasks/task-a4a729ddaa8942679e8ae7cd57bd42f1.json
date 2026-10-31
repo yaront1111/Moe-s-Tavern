@@ -1,0 +1,32 @@
+{
+  "id": "task-a4a729ddaa8942679e8ae7cd57bd42f1",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "Contain Linux guest job descendants across setsid and process-group escape",
+  "description": "Prerequisite of97341ad5: the root Linux GUARD must own kernel-enforced lifetime of the job and every descendant, including setsid/setpgid/double-fork escape, before its completion EOF/status is observable. Deliver within guest-supervisor.py and a new scripts/tests/local-runner-guard.test.mjs; retain the private GUARD interface: '+' only once the job starts, start-pipe EOF after job/descendant teardown, and outer guard waitpid status mirrors the actual job exit/signal. A private PID namespace with a trusted namespace-init shim is the preferred bounded mechanism: outer root guard creates namespace before any watcher thread/forked job; inner init waits the job, transmits its trusted raw wait status over a private close-on-exec pipe, and exits so the kernel kills remaining namespace descendants. Outer guard reaps init before reflecting the job status; do not turn a signal into a successful exit. Existing life-pipe EOF/group kill must still terminate init from its ancestor namespace, killing escaped descendants even after supervisor SIGKILL. Missing kernel capability/API or malformed/incomplete status must fail closed, never launch uncontained or fabricate success. Production main is root-only Linux; preserve explicitly non-certifying non-root POSIX import fixtures without granting a CLI/env bypass. Architect must validate exact integration and sizing; no cgroup/UID/name-wide process sweep. Root Linux unprivileged-userns probe already confirmed nested PID-init exit kills a setsid descendant and preserves separately conveyed job exit7 on this host; URL https://www.man7.org/linux/man-pages/man7/pid_namespaces.7.html. Do NOT change pump/host EOF or public framing here: parent owns them and the normal-completion group fallback. Test real kernel namespace behavior in a dedicated child-owned user namespace where supported, plus failure injection, exit0/nonzero/signals, open/closed output, supervisor death, descriptor cleanup and sibling sentinel survival. Full gate from external full snapshot: node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test). R13 owns native certification against the new supervisor hash; no verified-local claim.",
+  "definitionOfDone": [
+    "Root Linux GUARD cannot start a job without its owned kernel descendant boundary; unavailable setup fails closed with no successful observation.",
+    "Normal completion and supervisor death kill setsid/setpgid/double-fork descendants before completion EOF; real job code/signal remains intact, with owned-process tests.",
+    "Private '+', completion EOF and waitpid-status contract remains usable by relay/run_install; existing guards and full external runner+daemon regression pass.",
+    "No host-wide/name/UID kill, process scan-to-kill race, credential leak, CLI/env bypass or native certification claim."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-97341ad5be744d19ac869972299a2714",
+  "dependsOn": [
+    "task-42e9990c286a43fcab7edd716290a515"
+  ],
+  "priority": "MEDIUM",
+  "order": 7.8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T06:17:56.507Z",
+  "updatedAt": "2026-10-31T06:17:56.507Z"
+}

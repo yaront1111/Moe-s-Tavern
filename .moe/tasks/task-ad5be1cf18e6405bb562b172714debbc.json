@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -91,16 +91,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T06:02:37.951Z",
-  "updatedAt": "2026-10-31T06:15:58.563Z",
+  "updatedAt": "2026-10-31T06:17:54.579Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T06:04:19.662Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T06:17:54.579Z",
+    "wallClockMs": 814917
   },
   "contextFetchedBy": [
     "architect-21c9ed65",
-    "worker-88af1437"
+    "worker-88af1437",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -213,5 +216,9 @@
     "kind": "completion",
     "sessionId": "worker-88af1437@2026-10-31T06:12:55Z",
     "at": "2026-10-31T06:15:58.562Z"
-  }
+  },
+  "completedAt": "2026-10-31T06:17:54.579Z",
+  "reviewCompletedAt": "2026-10-31T06:17:54.579Z",
+  "reviewSummary": "Reviewed completion commit 1e9d82e3 (on moe/work-2026-10-24). Source diff is small: checkRunStore.ts +3/-4, its test +47, SCHEMA.md 3 lines, recordCheckRun.test.ts one literal. I re-ran the gate: git archive of 1e9d82e3 into /tmp, npm ci only there, then `cd $MOE_VERIFY_SNAPSHOT/packages/moe-daemon && npm test` (Linux node v24.21.0). Result: exit 0, 215 files, 6263 passed, 20 skipped, matching the worker's evidence. No live-checkout installs, builds or tests.\n\nDoD1: private MAX_COMMAND_CHARS=500 removed. requireCommand uses MAX_REQUIRED_CHECK_COMMAND_CHARS imported from ./validators.js (=1000, defined once). Blank/type checks and write order untouched.\n\nDoD2: tests accept 500/501/1000 units, padded 1000, and 500 emoji (1000 UTF-16 units). They reject 1001 ASCII, 500 emoji plus 1, and padded 1001, with the 'got 1001' message. A 1000-unit command survives identical replay (duplicate:true), conflicting replay (CHECK_RUN_IMMUTABLE, no write, unchanged snapshot) and a fresh StateManager reload, verbatim. Over-limit refusal spies on writeEntity (never called) and leaves files and maps unchanged. The tests would fail at a 500 or 1001 cap.\n\nDoD3: all three SCHEMA.md command-cap statements (CheckRun, CheckDispatch, record_check_run prose) say 1000 UTF-16 code units; no 500-char command claim remains. This follows the architect's comment, which overrode the description's 'leave CheckDispatch at 500'.\n\nScope note: tools/recordCheckRun.test.ts is outside the approved files; the worker changed one literal (501 to 1001) because that stale pin asserted a refusal this change makes valid. Accepted as minimal and disclosed. The tool description in recordCheckRun.ts still says 500 (parent 4e8a274a's). Not verified here: CheckDispatch runtime and the tool-layer maxLength, which belong to the dependent slices.",
+  "requiredCheckAtDone": null
 }

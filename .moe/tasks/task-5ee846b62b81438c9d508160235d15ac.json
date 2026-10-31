@@ -1,0 +1,32 @@
+{
+  "id": "task-5ee846b62b81438c9d508160235d15ac",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "Preserve a valid guest observation when bridge requests remain pending",
+  "description": "Host-session prerequisite of97341ad5. Own scripts/local-runner/guest-session.mjs and scripts/tests/local-runner-bridge.test.mjs. Today child close exit0 becomes SESSION_PROTOCOL_VIOLATION solely because session.pending.length>0, even after valid hello/observation/clean EOF; stop already aborts forwards and closes stdin. Make authenticated supervisor terminal observation+clean EOF+exit0 finalize once while cancelling/abandoning unresolved agent requests; never replay a request, dispatch queued work after terminal completion, or write late replies to closed stdin. Preserve real provider/protocol/timeout/abort failures and every malformed/duplicate/trailing-frame guard; cancellation cannot erase a prior failure or claim an upstream side effect was undone. Test pending active and queued forwards at successful finish, late resolve/reject/abort races, no extra forward/reply/onObservation, and negative no-observation/nonzero/partial/trailing-frame cases. Use existing stop/controller/timer ownership, no second session queue. Do not modify GUARD/pump or certification. Full external snapshot gate: node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test). Depend on containment and provider-resolution task for explicit source serialization; parent follows this test file.",
+  "definitionOfDone": [
+    "Valid hello/one observation/clean EOF/exit0 succeeds once despite unresolved agent requests; pending work is cancelled without late forwarding/writes.",
+    "Malformed framing, missing observation, nonzero exit, real timeout/abort and pre-existing failures remain failures in race-focused tests.",
+    "No leaked timers/listeners or repeated side effects; full runner+daemon regression passes in an external snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-97341ad5be744d19ac869972299a2714",
+  "dependsOn": [
+    "task-a4a729ddaa8942679e8ae7cd57bd42f1",
+    "task-92307adc30884fc4861348ed3c8ead4a"
+  ],
+  "priority": "MEDIUM",
+  "order": 7.9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T06:17:56.550Z",
+  "updatedAt": "2026-10-31T06:17:56.550Z"
+}
