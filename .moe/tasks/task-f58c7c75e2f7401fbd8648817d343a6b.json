@@ -62,7 +62,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -75,7 +75,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T14:35:31.686Z",
-  "updatedAt": "2026-10-31T18:44:41.048Z",
+  "updatedAt": "2026-10-31T19:11:07.580Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T14:49:02.375Z",
@@ -85,11 +85,14 @@
     "firstClaimAt": "2026-10-31T14:49:30.087Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T19:11:07.580Z",
+    "wallClockMs": 15697493
   },
   "contextFetchedBy": [
     "architect-66fd8127",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-4398294e"
   ],
   "dependsOn": [
     "task-7a4aab5e0bfa48e0978eb76506edfd57"
@@ -197,17 +200,33 @@
       "treeId": "ac0c96048e18a8ada6a5107beb703509bc69b1d2",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "a912e2404a106272a71626a17c16a412403a7c81",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T18:43:58Z",
+      "paths": [
+        ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T18:44:59.695Z",
+      "treeId": "672ccb9de5ba2c03a6dae13f63d2516103b58d3b",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "scripts/tests/postflight-worktree.cjs"
+    "scripts/tests/postflight-worktree.cjs",
+    ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-25da16b2@2026-10-31T18:15:10Z",
-    "at": "2026-10-31T18:43:20.662Z"
+    "kind": "completion",
+    "sessionId": "worker-25da16b2@2026-10-31T18:43:58Z",
+    "at": "2026-10-31T18:44:59.695Z"
   },
   "workStartedAt": "2026-10-31T18:15:30.373Z",
   "touchedFiles": [
@@ -221,5 +240,9 @@
     "reportedAt": "2026-10-31T18:44:41.046Z",
     "source": "agent-reported"
   },
-  "completionSummary": "wt-control-seats (postflight-worktree.cjs, wtControlSeats only) now gives each architect/QA control seat a declared (ASSERTED) path, src/<role>.txt, in the fixture task record, and serves it via FAKE_SCOPE_DECLARED_FIELD=1. The shared landing would commit that path even with no baseline. After the seat exits the case asserts `git log --all -- src/<role>.txt` is empty, on top of the unchanged assertions (one nothing/checkpoint/MOE_COMMIT_NOTHING_TO_COMMIT row, refs and HEAD unchanged, write kept, no baseline).\n\nGates (first run, no flake; snapshot of HEAD baa704f5 + hardened suite, MOE_*/CLAUDE* cleared):\n- bash: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}; parity-check PASS; rc=0.\n- PS 5.1: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}; rc=0.\n\nMutation table (each mutant is one changed line in a scratch snapshot, count==1, bash -n ok, BOM kept):\n1 bash | hardened | real | ok\n2 bash | hardened | mutant (elif false) | FAILED at 'architect: exit code 0, or no MOE_COMMIT_NOTHING_TO_COMMIT line'; log 'Committed checkpoint ... on moe/control (2 paths)'\n3 ps1 5.1 | hardened | real | ok\n4 ps1 5.1 | hardened | mutant ($false) | FAILED at the same assertion; shared route committed 2 paths on moe/control\n5 ps1 5.1 | HEAD suite | mutant | ok (QA's survivor reproduced)\n\nscripts/moe-agent.sh, moe-agent.ps1 and postflight-fake-proxy.js are unchanged; no defect found. Snapshots deleted. The step-3 gate output was captured earlier in this same attempt; the outputTail below is condensed from my step-3 note, not re-run in this session."
+  "completionSummary": "wt-control-seats (postflight-worktree.cjs, wtControlSeats only) now gives each architect/QA control seat a declared (ASSERTED) path, src/<role>.txt, in the fixture task record, and serves it via FAKE_SCOPE_DECLARED_FIELD=1. The shared landing would commit that path even with no baseline. After the seat exits the case asserts `git log --all -- src/<role>.txt` is empty, on top of the unchanged assertions (one nothing/checkpoint/MOE_COMMIT_NOTHING_TO_COMMIT row, refs and HEAD unchanged, write kept, no baseline).\n\nGates (first run, no flake; snapshot of HEAD baa704f5 + hardened suite, MOE_*/CLAUDE* cleared):\n- bash: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}; parity-check PASS; rc=0.\n- PS 5.1: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}; rc=0.\n\nMutation table (each mutant is one changed line in a scratch snapshot, count==1, bash -n ok, BOM kept):\n1 bash | hardened | real | ok\n2 bash | hardened | mutant (elif false) | FAILED at 'architect: exit code 0, or no MOE_COMMIT_NOTHING_TO_COMMIT line'; log 'Committed checkpoint ... on moe/control (2 paths)'\n3 ps1 5.1 | hardened | real | ok\n4 ps1 5.1 | hardened | mutant ($false) | FAILED at the same assertion; shared route committed 2 paths on moe/control\n5 ps1 5.1 | HEAD suite | mutant | ok (QA's survivor reproduced)\n\nscripts/moe-agent.sh, moe-agent.ps1 and postflight-fake-proxy.js are unchanged; no defect found. Snapshots deleted. The step-3 gate output was captured earlier in this same attempt; the outputTail below is condensed from my step-3 note, not re-run in this session.",
+  "completedAt": "2026-10-31T19:11:07.580Z",
+  "reviewCompletedAt": "2026-10-31T19:11:07.580Z",
+  "reviewSummary": "APPROVED. Reviewed completion a912e240 (board only) + checkpoint 76f80f90 (suite change), on moe/work-2026-10-24, pushed. Diff: postflight-worktree.cjs wtControlSeats() only, +7/-3; moe-agent.sh/.ps1/fake-proxy unchanged (DoD 4).\n\nDoD 1: each role's task record declares src/<role>.txt, written before before=refs(); FAKE_SCOPE_DECLARED_FIELD=1; new assert `git log --all -- rel` empty; old assertions kept. Fake proxy declaredSets/knob read and confirmed.\n\nDoD 2 (my scratch snapshots of a912e240, one-line mutants, count==1, bash -n ok, BOM kept):\n- bash real ok; bash mutant (elif false) FAILED at 'exit code 0, or no MOE_COMMIT_NOTHING_TO_COMMIT line', log 'Committed checkpoint ... on moe/control (2 paths)'\n- PS5.1 real ok; PS5.1 mutant ($false) FAILED, same assertion\n- PS5.1 pre-change suite (76f80f90^) on mutant: ok = QA's survivor reproduced.\n\nDoD 3 (snapshot of a912e240, MOE_*/CLAUDE* cleared, first run, no flake):\n- verification cmd (postflight-safe.mjs bash && parity-check.sh): {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}, PASS parity, rc=0\n- Windows node.exe postflight-safe powershell (PS5.1, timeout 180 via WSLENV): {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}, rc=0\n\nTIMING/CONTENTION (proxy, not CPU): gates concurrent from 18:46:13Z; bash+parity ~11 min, PS ~24 min. Live seats 12 (2 workers CODING). jetbrains-gradle/gradle leases: no holders or queue at start or end. tasklist.exe node/powershell/pwsh/bash/java start 6/3/0/0/2, end 6/3/0/0/2 (flat); other seats' harnesses on host, untouched.\n\nPonytail: nothing to cut. Own scratch dirs deleted; no process kills.",
+  "requiredCheckAtDone": null
 }
