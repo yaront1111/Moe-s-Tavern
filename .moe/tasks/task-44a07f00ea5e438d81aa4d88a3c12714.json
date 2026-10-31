@@ -58,27 +58,38 @@
     {
       "stepId": "step-4",
       "description": "Verification, once, in a snapshot outside the checkout. Global rail: no npm ci/install/build/test inside the shared checkout's packages. The recipe and its pitfalls are in Serena memory gotcha-daemon-linux-snapshot-gate.\nSnapshot setup:\n  - SNAP=$(mktemp -d /tmp/moe-44a0.XXXXXX); mkdir \"$SNAP/repo\"; git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$SNAP/repo\". Archive the whole repo: initFiles and benchmarks tests read root files.\n  - Overlay ONLY the three owned files: cp each of packages/moe-daemon/src/tools/getCommitScope.ts, packages/moe-daemon/src/tools/getCommitScope.test.ts and docs/MCP_SERVER.md from the checkout into \"$SNAP/repo\". Never overlay `git diff --name-only`; it drags in peers' half-done edits.\n  - cd \"$SNAP/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" npm ci --no-audit --no-fund\nNamed command, which is the complete_task evidence: `cd \"$SNAP/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npx vitest run src/tools/getCommitScope.test.ts && npx vitest run'`. Before citing it, cmp the three files against the checkout.\nExpected:\n  - getCommitScope.test.ts: 64 passed.\n  - Full suite: 218 files passed, about 6434 passed / 20 skipped. HEAD d40c2847 alone gives 6431 / 20; the counts move as peers land.\nAlso run `bash scripts/tests/parity-check.sh` in place. This is the epic rail; no wrapper file changes, so it must pass.\ncomplete_task: verification is {command: the named command with your real $SNAP path, exitCode: 0, outputTail: both vitest summary lines}. Name the parity result in the summary.\nIf an unrelated test file fails, rerun the same command on an HEAD archive with no overlay. If it fails there too, it is a pre-existing peer failure:\n  - add a task comment with both outputs;\n  - use as evidence the narrow file plus the full suite run with only that file passed to --exclude;\n  - never edit unrelated files.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getCommitScope.ts",
         "packages/moe-daemon/src/tools/getCommitScope.test.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "note": "Verification only, no file edits this step. Fresh snapshot /tmp/moe-44a0.HP24gk (git archive of HEAD a265cc8b, native npm ci, node v24.21.0, env -i, NO_COLOR=1); the three owned files are committed in HEAD (checkpoint c51b780b) and cmp-equal to the checkout. Named command exit 0: getCommitScope.test.ts 65 passed (65); full suite 218 files passed, 6435 passed | 20 skipped (6455). Counts differ from the plan's 64 / ~6434 by the extra T-D test (+1). bash scripts/tests/parity-check.sh in place: PASS.",
+      "startedAt": "2026-10-31T18:44:23.319Z",
+      "completedAt": "2026-10-31T18:45:22.419Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff (git diff -- the three files), with the adversarial-self-review skill. Check each point:\n(a) Monotone. Walk each branch, old against new. Nothing that was in peerDeclared before may drop out, and no peerActive may flip true to false.\n(b) The serialized-chain tests at ~:203 and ~:240 are unchanged and green.\n(c) Error handling on junk records: a non-string assignedWorkerId, an unknown worker or a corrupt attempt must still not throw, and must fail closed (the peer is counted).\n(d) Mutants, in the step-4 snapshot. Each must fail with a real 'Tests N failed' line; a compile error or 'no tests' is a false kill.\n  - M1: drop `!thisTerminal &&`. Expect T-A to fail.\n  - M2: drop `!dependentMayRun(...) &&`. Expect (1) and T-C to fail.\n  - M3: make the attempt arm false. Expect T-C to fail.\n  - M4: make the assignee arm never true. Expect (1) to fail.\n  - M5: swap dependentMayRun for peerTaskActive. Expect T-B and the ~:203 test to fail.\n  - M6: `const thisTerminal = false`. Expect T-A to fail.\n  Back up the file ONCE. Afterwards restore it from the checkout copy and cmp, so no mutant leaks into the gate.\n(e) The tool description, the code comment and the MCP_SERVER.md text all state the same rule as the code.\nFix anything you find, then rerun the step-4 named command fresh for the complete_task evidence.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getCommitScope.ts",
         "packages/moe-daemon/src/tools/getCommitScope.test.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review, no edits needed (the three files are unchanged since checkpoint c51b780b). (a) Monotone: new waitsOnThis = old && two extra conjuncts, so it is only ever true where the old one was; when false, peerPaths widens from asserted to collectPeerPaths (superset). peerTaskActive/active/editing are untouched, so peerActive only flips false to true. (b) The ~:203 and ~:240 serialized-chain tests are untouched and green. (c) Junk records: non-string assignedWorkerId and an unknown attempt phase fail closed (counted, no throw), pinned by T-D; an unknown/DEAD/stale owner and a missing since are deliberately NOT counted (T-B), which differs from the plan's 5(c) wording 'unknown worker is counted' (contradicts DoD 2). (d) Mutants in snapshot /tmp/moe-44a0.HP24gk, file backed up once and restored from the checkout copy with cmp: M1 drop !thisTerminal (T-A fails), M2 drop !dependentMayRun (inverted test, T-C, T-D fail), M3 attempt arm false (T-C, T-D), M4 assignee arm never true (inverted test), M5 peerTaskActive swap (~:203 test, T-B, T-D), M6 thisTerminal=false (T-A), M7 drop non-string assignee arm (T-D), M8 unknown phase not open (T-D), M9 DONE-only terminal (T-A on ARCHIVED). Every one is a real 'Tests N failed' line. (e) Tool description, code comment and MCP_SERVER.md state the same rule. Fresh named command after restore: exit 0, 65 passed narrow; 218 files / 6435 passed | 20 skipped full; parity-check.sh PASS.",
+      "startedAt": "2026-10-31T18:45:24.396Z",
+      "completedAt": "2026-10-31T18:47:31.837Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-88af1437",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -90,12 +101,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T18:22:24.560Z",
-  "updatedAt": "2026-10-31T18:42:42.309Z",
+  "updatedAt": "2026-10-31T18:47:48.386Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T18:22:37.281Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-66fd8127",
@@ -108,7 +119,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T18:39:54.561Z",
@@ -165,5 +178,70 @@
   },
   "planApprovedAt": "2026-10-31T18:39:54.587Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-10-31T18:40:22.029Z"
+  "workStartedAt": "2026-10-31T18:40:22.029Z",
+  "commits": [
+    {
+      "sha": "c51b780b1c222a43f30ee4b30eaba56186a8a55b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-88af1437@2026-10-31T18:40:02Z",
+      "paths": [
+        ".moe/tasks/task-01020adf7b0f4dc3bdd72734eb07be3c.json",
+        ".moe/tasks/task-44a07f00ea5e438d81aa4d88a3c12714.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.ts"
+      ],
+      "recordedBy": "worker-88af1437",
+      "recordedAt": "2026-10-31T18:43:12.950Z",
+      "treeId": "208ccd7b9478c77ecdc128e77ecc41ea59c94656",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-b621ddc99fe44d50ab700b2aa51c84fc"
+        },
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-cda65eb0efb244efa8a506969bac47f9"
+        },
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-ced857485a1c4d75b57cc25dcc9b4d82"
+        },
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-88af1437@2026-10-31T18:40:02Z",
+    "at": "2026-10-31T18:43:12.950Z"
+  },
+  "reviewStartedAt": "2026-10-31T18:47:48.385Z",
+  "verification": {
+    "command": "cd \"/tmp/moe-44a0.HP24gk/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npx vitest run src/tools/getCommitScope.test.ts && npx vitest run'",
+    "exitCode": 0,
+    "outputTail": " Test Files  1 passed (1)\n      Tests  65 passed (65)\n Test Files  218 passed (218)\n      Tests  6435 passed | 20 skipped (6455)\n\nSnapshot = git archive of HEAD a265cc8b (owned files cmp-equal to the checkout), native npm ci, node v24.21.0. bash scripts/tests/parity-check.sh (in place): PASS.",
+    "reportedAt": "2026-10-31T18:47:48.385Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "get_commit_scope no longer keeps excluding a dependent's planned paths after the scoped task is terminal or while the dependent is live. waitsOnThis is now !thisTerminal && !dependentMayRun(...) && findDependencyPath(...) !== null. dependentMayRun is true when the dependent's assignee is active (isPeerActive) or it has any non-closed attempt. It is deliberately narrower than peerTaskActive: no fail-closed shortcut without `since`, and no recent-phase-change clause, so a serialized chain's idle links still contribute asserted paths only (the ~:203 and ~:240 tests are unchanged and green). The new peerDeclared is a superset of the old one, so the fix only adds landing holds. The reply shape is unchanged. Tool description PEER clause, code comment and docs/MCP_SERVER.md (get_commit_scope Returns block) state the new rule. Tests: the ~:745 test inverted, plus describe('waits-on-this exclusion (task-44a07f00)') with T-A (DONE/ARCHIVED, live and idle dependents), T-B (non-terminal, unassigned/dead/missing/stale/just-closed-planning dependents stay asserted-only, with and without since), T-C (open attempt counted) and an extra T-D (fail-closed on junk data). Deviations from the plan: (1) dependentMayRun has an extra arm: a non-string assignedWorkerId counts the peer, to honour the contract line that malformed assignee data fails closed; (2) T-D is an extra test, so the narrow file is 65 tests, not 64 (full run 6435 passed vs the plan's about 6434); (3) plan step 5(c) said an unknown worker is counted, but that contradicts T-B and DoD 2, so only a non-string assignee and an unknown attempt phase fail closed. Adversarial mutants M1-M9 are all killed by real assertion failures. parity-check.sh passed. The running daemon gets the fix only after a human-coordinated staging-build swap and restart."
 }
