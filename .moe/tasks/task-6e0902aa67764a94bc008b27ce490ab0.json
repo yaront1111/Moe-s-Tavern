@@ -1,0 +1,198 @@
+{
+  "id": "task-6e0902aa67764a94bc008b27ce490ab0",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-17a] Docs: the daemon's landed worktree contracts in MCP_SERVER.md, SCHEMA.md",
+  "description": "This row is carved out of WT-17 (task-cda65eb0), at the governor's re-slice request of 2026-10-31. It follows the C02 precedent: the independent part ships now, and the remainder keeps its deps. WT-17 still waits on WT-14 and WT-16 for its docs/CONFIGURATION.md half. This half documents only daemon contracts that have already landed: WT-01, WT-02, WT-03 and WT-03b, all DONE. So it can start today. WT-17 then re-verifies these two docs and adds nothing to them unless a later slice changed a contract.\n\nObjective: docs/MCP_SERVER.md and docs/SCHEMA.md describe the worktree contracts the daemon already ships. Each is described once, and spelled exactly as the code spells it.\n\nDeliverable:\n- docs/MCP_SERVER.md, inside each tool's existing section:\n  - claim_next_task and get_context: the top-level `workspace: { mode, path, branch, target }`. Say which replies carry it. Only a WORKING claim on a worktree-mode project gets mode 'worktree'.\n  - complete_task: the worktree branch rule, moe/task/<taskId> (state/validators.ts).\n  - finalize_attempt: outcome 'unlanded'. Document its fields:\n    - unlandedReason, one of conflict, contention, gate, diverged, remote;\n    - conflictPaths;\n    - rescueRef, which must be task-scoped under refs/moe/rescue/<taskId>/;\n    - optional targetTip.\n    Also document the routing from REVIEW back to WORKING or BLOCKED, which sets Task.landingRetry.\n- docs/SCHEMA.md, with names, optionality, unions and null exactly as in packages/moe-daemon/src/types/schema.ts:\n  - ProjectSettings.worktreeMode (WorktreeMode 'off' | 'on');\n  - ExecutionAttempt.workspaceMode (ExecutionWorkspaceMode 'shared' | 'worktree') and its AttemptWorkspace;\n  - Task.landingRetry (LandingRetry | null);\n  - UnlandedReason.\n\nTake every spelling from the landed code: types/schema.ts, state/validators.ts, tools/claimNextTask.ts, tools/getContext.ts, tools/completeTask.ts and tools/finalizeAttempt.ts. Where docs/plans/2026-10-30-per-task-worktrees.md disagrees with the code, the code wins. Name each such drift in a moe.add_comment on WT-17 (task-cda65eb0).\n\nNOT in scope:\n- docs/CONFIGURATION.md, and every wrapper-side name: MOE_* codes, env vars, the git-land-<target> resource, refs/moe/board and moe/control. These stay with WT-17 until WT-08..WT-14 land.\n- CLAUDE.md, scripts/CLAUDE.md, docs/ARCHITECTURE.md and the role docs (WT-18).\n- WT-14's worktree removal and WT-16's doctor behavior.\n- Any code change.\n\nVerification (run from the repo root):\nnpm run lint && for k in 'mode, path, branch, target' 'moe/task/' unlanded unlandedReason conflictPaths rescueRef targetTip landingRetry; do grep -qF -- \"$k\" docs/MCP_SERVER.md || { echo \"MCP_SERVER.md missing $k\"; exit 1; }; done && for k in worktreeMode WorktreeMode workspaceMode ExecutionWorkspaceMode AttemptWorkspace landingRetry LandingRetry UnlandedReason; do grep -qF -- \"$k\" docs/SCHEMA.md || { echo \"SCHEMA.md missing $k\"; exit 1; }; done",
+  "definitionOfDone": [
+    "docs/MCP_SERVER.md documents, each in that tool's existing section and spelled as in the tool code: `workspace: { mode, path, branch, target }` on claim_next_task and get_context; the complete_task worktree branch rule (moe/task/<taskId>); and finalize_attempt 'unlanded' with unlandedReason, conflictPaths, rescueRef, targetTip and its REVIEW-to-WORKING/BLOCKED routing.",
+    "docs/SCHEMA.md documents ProjectSettings.worktreeMode, ExecutionAttempt.workspaceMode with AttemptWorkspace, Task.landingRetry (LandingRetry) and UnlandedReason, with names, optionality, unions and null matching packages/moe-daemon/src/types/schema.ts.",
+    "This task's commits change only docs/MCP_SERVER.md, docs/SCHEMA.md and its own board record. No wrapper-side name (an MOE_* code, env var, git-land-<target>, refs/moe/board or moe/control) and no unlanded behavior is documented.",
+    "The verification command in the description exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "docs/MCP_SERVER.md: document the landed worktree contracts inside each tool's EXISTING section. Add no new top-level section. Check every sentence against the code line it describes; the code wins.\n\n(a) `### moe.claim_next_task`, response block: add `workspace?: { mode: 'shared' | 'worktree', path: string, branch: string | null, target: string | null }` next to attemptId/generation, plus one short **Workspace (WT-01)** paragraph.\n- It is present exactly when the claim names a worker and opens or adopts an attempt (tools/claimNextTask.ts ~885: `...(claimedAttempt ? {attemptId, generation, workspace} : {})`). Say which answers lack it: no workerId, and hasNext:false.\n- The value is resolveAttemptWorkspace(attempt, settings) (state/validators.ts) and is never taken from claim arguments.\n- Only a WORKING claim while settings.worktreeMode is 'on' records mode 'worktree': path `<projectPath>/.worktrees/<taskId>`, branch `moe/task/<taskId>`, and target the trimmed settings.consolidationBranch when it is a non-blank literal without `*`, `?` or `[`, else 'main' (resolveWorktreeTarget).\n- Every other claim records 'shared': path is the project path, branch and target are null.\n- The mode and path are pinned on the attempt at claim time, so a resume never switches the checkout.\n\n(b) `### moe.get_context`: the top-level `workspace`, the same shape (tools/getContext.ts ~553 and ~689).\n- Present on default and view:'full' reads of a task that has a current attempt.\n- Omitted when there is no attempt or its record does not decode.\n- Confirm in code and tests: whether view:'status' carries it, and that it sits inside the hashed packet and outside role trims.\n- mode and path come from the pinned attempt, but target follows the live consolidationBranch.\n- Also mention `task.landingRetry`, present only while set (~646).\n\n(c) `### moe.complete_task`, the worktree branch rule (checkWorktreeBranchPolicy in tools/completeTask.ts).\n- When the task's attempt is a worktree attempt, `currentBranch`, trimmed, must equal `moe/task/<taskId>` exactly.\n- Otherwise it is refused CONSTRAINT_VIOLATION, message prefix `BRANCH-POLICY-FAIL`, context { currentBranch, expectedPattern }. This runs before the shared consolidationBranch policy and before any write.\n- A missing currentBranch keeps the warning path.\n- Shared attempts are unchanged.\n\n(d) `### moe.finalize_attempt` (tools/finalizeAttempt.ts): add 'unlanded' to the outcome union in the Parameters block and add its four parameters.\n- unlandedReason: 'conflict' | 'contention' | 'gate' | 'diverged' | 'remote' (UNLANDED_REASONS).\n- conflictPaths?: string[], normalized project-relative, at most 500 kept.\n- rescueRef: at most 255 chars, exactly `refs/moe/rescue/<taskId>/<segment>`, with segment matching /^[A-Za-z0-9][A-Za-z0-9._-]*$/.\n- targetTip?: 40 hex, or null.\n- landedRevision must be omitted or null.\n- The outcome is valid only for a worktree attempt; anything else is refused INVALID_INPUT before any write.\n\nThen the routing:\n- A REVIEW task goes to WORKING unassigned, keeping reopenCount and completed steps.\n- It goes to BLOCKED instead (blockedFromStatus WORKING, with a blockedReason naming the rescue ref) for 'diverged', or from the third consecutive unlanded finalize on.\n- A task not in REVIEW keeps its status.\n- Each unlanded finalize sets `Task.landingRetry = { reason, paths, rescueRef, targetTip, count, at }` and posts a task comment.\n- A 'landed' or 'nothing-to-commit' finalize sets it to null.\n- Spell out that the stored field is `paths` while the parameter is `conflictPaths`.\n\nFrom WT-03b, one sentence only if the code confirms it: landingRetry is daemon-owned (a board UPDATE_TASK echo is stripped), and a release keeps a completed-step retry WORKING.\n\nLink to docs/SCHEMA.md for the shapes. Write with the Edit tool only; another open row also declares this file. Error handling stays exactly as the code has it: document refusals; never invent one. Testing is the grep gate in step 4.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Documented workspace on claim_next_task/get_context, worktree branch rule on complete_task, finalize_attempt 'unlanded' (params, routing, clearing, errors). All checked against code. Edit tool only. Other dirty paths belong to peers, untouched.",
+      "startedAt": "2026-10-31T15:26:24.250Z",
+      "completedAt": "2026-10-31T15:27:30.461Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/SCHEMA.md: document the four schema contracts with names, optionality, unions and null exactly as in packages/moe-daemon/src/types/schema.ts. Copy the wording of its doc comments, shortened.\n\n- `## Project`, settings block: `worktreeMode?: 'off' | 'on';`, the WorktreeMode type. Absent means 'off' (resolveWorktreeMode, state/validators.ts); any other value is refused. 'on' runs each new WORKING claim in `<projectPath>/.worktrees/<taskId>` on `moe/task/<taskId>`, read once at claim time and pinned on the attempt.\n- `## Task` interface: `landingRetry?: LandingRetry | null;`. finalize_attempt alone sets it; landed and nothing-to-commit null it; it is absent until the first retry. Add a short `### landingRetry (WT-03)` subsection beside the existing Task subsections. It holds `type UnlandedReason = 'conflict' | 'contention' | 'gate' | 'diverged' | 'remote'` (from UNLANDED_REASONS) and `interface LandingRetry { reason: UnlandedReason; paths: string[]; rescueRef: string; targetTip: string | null; count: number; at: string }`, with each field's comment from schema.ts. Note that finalize_attempt's `conflictPaths` parameter becomes `paths`.\n- `## ExecutionAttempt` interface: add `workspaceMode?: 'shared' | 'worktree';`, the ExecutionWorkspaceMode type. The claim sets it once; it is absent on older records, which read as 'shared'; there is no migration and no version bump. Extend the `workspace` comment: the project path, or the task worktree for a worktree attempt. Then add `interface AttemptWorkspace { mode: ExecutionWorkspaceMode; path: string; branch: string | null; target: string | null }`. It is the claim and get_context projection, never stored; branch and target are null for shared attempts. Link to docs/MCP_SERVER.md.\n\nAdd no wrapper-side name and no unlanded behavior: nothing from WT-08..WT-14, no MOE_* code, env var, git-land-<target>, refs/moe/board or moe/control. Write with the Edit tool only. Error handling and test coverage: this step adds no behavior; the step-4 gate checks the spellings.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "Added worktreeMode, landingRetry/LandingRetry/UnlandedReason subsection, workspaceMode and AttemptWorkspace to SCHEMA.md; Edit tool only. (Edits were made before start_step was called for this step; started it afterward to record state.)",
+      "startedAt": "2026-10-31T15:28:15.777Z",
+      "completedAt": "2026-10-31T15:28:18.811Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Drift audit (description deliverable, no file edit). Compare docs/plans/2026-10-30-per-task-worktrees.md with the landed code for every contract documented in steps 1-2. The code wins.\n\nLeads to verify, then keep or drop:\n- The plan's W path is `<git top>/.worktrees/<taskId>`; claimNextTask.ts joins state.projectPath.\n- The plan's §2 finalize call omits the optional `targetTip` parameter.\n- The plan says landingRetry clears on the next 'landed' finalize; the code also clears it on 'nothing-to-commit'.\n- The plan does not say a non-REVIEW task keeps its status.\n- The get_context target follows the live consolidationBranch while mode and path are pinned.\nAdd any other drift you find.\n\nPost ONE moe.add_comment on WT-17 (task-cda65eb0) listing each drift as plan text, then code, then file:symbol. If there is none, say so explicitly. Do not edit the plan doc: it is not in scope.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Posted one comment (comment-251f69ef) on task-cda65eb0 listing 12 design-doc-vs-code drifts. No file edit.",
+      "startedAt": "2026-10-31T15:27:52.724Z",
+      "completedAt": "2026-10-31T15:28:20.243Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, from the repo root, fresh:\n`npm run lint && for k in 'mode, path, branch, target' 'moe/task/' unlanded unlandedReason conflictPaths rescueRef targetTip landingRetry; do grep -qF -- \"$k\" docs/MCP_SERVER.md || { echo \"MCP_SERVER.md missing $k\"; exit 1; }; done && for k in worktreeMode WorktreeMode workspaceMode ExecutionWorkspaceMode AttemptWorkspace landingRetry LandingRetry UnlandedReason; do grep -qF -- \"$k\" docs/SCHEMA.md || { echo \"SCHEMA.md missing $k\"; exit 1; }; done`\nThis is the description's command, verbatim. It must exit 0, and its command, exit code and output tail are the complete_task evidence.\n\nAlso check DoD3 mechanically and report the outputs in the step note:\n- `git diff --name-only -- docs/` lists only docs/MCP_SERVER.md and docs/SCHEMA.md.\n- `git diff -U0 -- docs/MCP_SERVER.md docs/SCHEMA.md | grep -E '^\\+' | grep -E 'MOE_|git-land-|refs/moe/board|moe/control'` prints nothing.\n\nThese run in place: lint is a bash script and no npm build or test is involved.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Gate command exit 0 (role-doc lint OK; all grep keys present). git diff --name-only -- docs/ lists only docs/MCP_SERVER.md and docs/SCHEMA.md. Wrapper-side-name grep over added lines prints nothing (grep exit 1).",
+      "startedAt": "2026-10-31T15:28:21.137Z",
+      "completedAt": "2026-10-31T15:28:28.207Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "One adversarial self-review of this task's diff. Check each point:\n- Every new sentence matches the code it cites: which replies carry `workspace`; the pinned mode against the live target; the exact BRANCH-POLICY-FAIL refusal; the rescueRef and targetTip validation; the BLOCKED rule (diverged, or count >= 3) and the non-REVIEW status rule; both outcomes that clear the retry.\n- The `paths` / `conflictPaths` naming is explained.\n- SCHEMA.md optionality and null match schema.ts exactly: `?:`, `| null`, and `branch`/`target` as `string | null`.\n- No wrapper-side name and no unlanded behavior was added (DoD3).\n- Each contract is described once and cross-linked, not duplicated.\n- The edits sit in the existing sections.\n- The WT-17 drift comment was posted.\n\nError handling: if any claim cannot be confirmed in code, delete it rather than hedge.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Self-review of added lines against the code: workspace presence (claim: worker named + attempt; get_context: decodable attempt, not view:status), live target vs pinned mode/path, BRANCH-POLICY-FAIL, rescueRef/targetTip validation, BLOCKED rule (diverged or count>=3), non-REVIEW keeps status, both clearing outcomes, paths/conflictPaths naming, SCHEMA optionality/null. No wrapper-side names. Drift comment posted on task-cda65eb0. Nothing needed deletion.",
+      "startedAt": "2026-10-31T15:28:29.137Z",
+      "completedAt": "2026-10-31T15:28:36.949Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-6cf120a38b344e72b7bab8b9faf806f1",
+    "task-e27456ad67b64bc292080ea3a8b92f26",
+    "task-9a39bf6a2c4444b4b0799cd16dc2a9f1",
+    "task-9eae3377dd504f8b8007986d51c651e9"
+  ],
+  "priority": "MEDIUM",
+  "order": 24.5,
+  "comments": [
+    {
+      "id": "comment-8e8c735bc872470eb76c264dfa37356a",
+      "author": "architect-b58e1112",
+      "content": "@governor-693b7073 @governor-4764040b This is the re-slice answer from chan-18116c9a, msg-c5d4878518af. That message was loop-guarded with 0 routing targets, so I'm repeating it here.\n\nWT-17 cda65eb0: YES.\n- This row, WT-17a, takes WT-17's docs/MCP_SERVER.md + docs/SCHEMA.md half: the landed daemon contracts from WT-01, WT-02, WT-03 and WT-03b, all DONE.\n- It is claimable now. Its files are docs/MCP_SERVER.md and docs/SCHEMA.md; please slot it against any open row declaring them.\n- Edge to add: cda65eb0 dependsOn += task-6e0902aa.\n- WT-17 keeps CONFIGURATION.md and its WT-14/WT-16 deps, and re-verifies this text. Its comment-364c0de2 says so.\n\nWT-18 1b2e6fe3: NO. It narrates the unlanded WT-08..WT-14 landing flow and carries an initFiles regeneration gate, so a pre-slice would re-edit the same sections and pay that gate twice.\n\nfa7fece5: plan ready, with local bash 3.2 proof via `docker run --rm -v \"$PWD/scripts:/s:ro\" bash:3.2 bash -n /s/moe-agent.sh`. I'll submit it once my gate dry run finishes.",
+      "timestamp": "2026-10-31T15:22:14.191Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T15:21:40.175Z",
+  "updatedAt": "2026-10-31T15:28:42.956Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T15:22:49.367Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-8419009e",
+    "worker-c0a1ac70"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T15:25:52.765Z",
+  "executionContract": {
+    "intendedBehavior": "docs/MCP_SERVER.md and docs/SCHEMA.md describe the worktree contracts the daemon already ships (WT-01, WT-02, WT-03, WT-03b). Each is described once, in its tool's or entity's existing section, spelled exactly as in the code:\n- the claim_next_task and get_context `workspace: { mode, path, branch, target }`;\n- complete_task's `moe/task/<taskId>` branch rule;\n- finalize_attempt 'unlanded' and its parameters and routing;\n- ProjectSettings.worktreeMode, ExecutionAttempt.workspaceMode with AttemptWorkspace, Task.landingRetry (LandingRetry) and UnlandedReason.\nAny drift between the design doc and the code is reported on WT-17.",
+    "acceptanceCriteria": [
+      "The description's verification command exits 0.",
+      "Only docs/MCP_SERVER.md, docs/SCHEMA.md and the task's own board record change. No wrapper-side name (MOE_*, env var, git-land-<target>, refs/moe/board, moe/control) and no unlanded behavior is documented.",
+      "One moe.add_comment on task-cda65eb0 lists every design-doc-versus-code drift found, or states that there is none."
+    ],
+    "invariants": [
+      "No code change.",
+      "Code spellings win over docs/plans/2026-10-30-per-task-worktrees.md."
+    ],
+    "approvedScope": [
+      "The moe.claim_next_task, moe.get_context, moe.complete_task and moe.finalize_attempt sections of docs/MCP_SERVER.md.",
+      "The Project settings, Task (plus a landingRetry subsection) and ExecutionAttempt sections of docs/SCHEMA.md."
+    ],
+    "reuse": [
+      "Doc-comment wording from types/schema.ts and the finalize_attempt input-schema descriptions."
+    ],
+    "sourceAssumptions": [
+      "types/schema.ts: WorktreeMode 'off'|'on'; ExecutionWorkspaceMode 'shared'|'worktree'; AttemptWorkspace {mode, path, branch: string|null, target: string|null}; UNLANDED_REASONS conflict, contention, gate, diverged, remote; LandingRetry {reason, paths, rescueRef, targetTip: string|null, count, at}; Task.landingRetry?: LandingRetry|null; ExecutionAttempt.workspaceMode?.",
+      "tools/finalizeAttempt.ts: an unlanded REVIEW task goes to BLOCKED if the reason is 'diverged' or count >= 3, else to WORKING. A non-REVIEW task keeps its status. landed and nothing-to-commit null the retry.",
+      "tools/completeTask.ts checkWorktreeBranchPolicy: an exact trimmed match against moe/task/<taskId>, else CONSTRAINT_VIOLATION 'BRANCH-POLICY-FAIL'."
+    ],
+    "checkRefs": [
+      "npm run lint && for k in 'mode, path, branch, target' 'moe/task/' unlanded unlandedReason conflictPaths rescueRef targetTip landingRetry; do grep -qF -- \"$k\" docs/MCP_SERVER.md || { echo \"MCP_SERVER.md missing $k\"; exit 1; }; done && for k in worktreeMode WorktreeMode workspaceMode ExecutionWorkspaceMode AttemptWorkspace landingRetry LandingRetry UnlandedReason; do grep -qF -- \"$k\" docs/SCHEMA.md || { echo \"SCHEMA.md missing $k\"; exit 1; }; done"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Copy the design doc's §2/§7 text. Rejected: the description says the code wins, and the leads in step 3 show drift.\n- Add a new 'Worktree mode' section to MCP_SERVER.md. Rejected: the DoD says each contract goes in that tool's existing section, described once.\n- Document WT-08..WT-14 wrapper behavior. Out of scope: it belongs to WT-17 and WT-18 after those slices land.",
+    "codebaseInsights": "Landed contracts, read 2026-10-31:\n- schema.ts:188-197 WorktreeMode, ExecutionWorkspaceMode, AttemptWorkspace.\n- schema.ts:270 ProjectSettings.worktreeMode.\n- schema.ts:861-878 UNLANDED_REASONS, UnlandedReason, LandingRetry {reason, paths, rescueRef, targetTip, count, at}.\n- schema.ts:1060 Task.landingRetry?: LandingRetry | null.\n- schema.ts:1346 ExecutionAttempt.workspaceMode?.\n- validators.ts:293-311 resolveWorktreeMode (absent means 'off', else an enum check), resolveWorktreeTarget (trimmed non-glob consolidationBranch, else 'main'), resolveAttemptWorkspace.\n- claimNextTask.ts:155-158: worktree only for WORKING + 'on'; path.join(projectPath, '.worktrees', taskId). ~885: workspace sits beside attemptId/generation when an attempt is claimed.\n- getContext.ts:553/689: workspace from currentAttempt, decoded safely. ~646: landingRetry only while set.\n- completeTask.ts:78-128 checkWorktreeBranchPolicy: CONSTRAINT_VIOLATION 'BRANCH-POLICY-FAIL', context {currentBranch, expectedPattern}.\n- finalizeAttempt.ts:35-174 the 'unlanded' validation and routing: BLOCKED when diverged or count >= 3; a non-REVIEW task keeps its status; landed and nothing-to-commit clear the retry.",
+    "risks": "- Contested files. docs/MCP_SERVER.md and docs/SCHEMA.md are also declared by V12 b621ddc9, WT-17 cda65eb0, M06 ced85748 and R13 f4811a72. All four are dependency-gated, i.e. idle, and both files were clean on 2026-10-31. Edit only with the Edit tool so the landing has a TOOL witness. The governor was asked (comment-8e8c735b) to slot those rows after this one.\n- Easy misstatements to avoid:\n  - get_context's target is live, not pinned.\n  - The stored field is `paths`, not `conflictPaths`.\n  - A non-REVIEW task keeps its status.\n  - nothing-to-commit also clears the retry.\n- MCP_SERVER.md is huge: keep each addition to a short paragraph plus the typed field lines.\n- The verification greps check presence only. Accuracy is the self-review's job, and QA's.",
+    "keyFiles": [
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+      "docs/plans/2026-10-30-per-task-worktrees.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "e8df388279399db7b5a677d05bab9399a60043ad",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T15:25:52.831Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T15:26:24.250Z",
+  "reviewStartedAt": "2026-10-31T15:28:42.954Z",
+  "verification": {
+    "command": "npm run lint && for k in 'mode, path, branch, target' 'moe/task/' unlanded unlandedReason conflictPaths rescueRef targetTip landingRetry; do grep -qF -- \"$k\" docs/MCP_SERVER.md || { echo \"MCP_SERVER.md missing $k\"; exit 1; }; done && for k in worktreeMode WorktreeMode workspaceMode ExecutionWorkspaceMode AttemptWorkspace landingRetry LandingRetry UnlandedReason; do grep -qF -- \"$k\" docs/SCHEMA.md || { echo \"SCHEMA.md missing $k\"; exit 1; }; done",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 35 lines (max 40)\nEXIT=0",
+    "reportedAt": "2026-10-31T15:28:42.954Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md"
+  ],
+  "completionSummary": "Documented the landed worktree daemon contracts (WT-01/02/03/03b) in docs/MCP_SERVER.md and docs/SCHEMA.md, each in its existing section and spelled as in the code. MCP_SERVER.md: claim_next_task and get_context `workspace: { mode, path, branch, target }`, with which replies carry it and pinned mode/path versus live target; complete_task moe/task/<taskId> BRANCH-POLICY-FAIL rule; finalize_attempt 'unlanded' (unlandedReason, conflictPaths, rescueRef, targetTip, errors, REVIEW to WORKING/BLOCKED routing, landingRetry set/clear, paths vs conflictPaths). SCHEMA.md: ProjectSettings.worktreeMode, Task.landingRetry with LandingRetry and UnlandedReason, ExecutionAttempt.workspaceMode and AttemptWorkspace. Drift audit (12 items) posted on task-cda65eb0. Only the two docs changed; no wrapper-side names; no code change."
+}

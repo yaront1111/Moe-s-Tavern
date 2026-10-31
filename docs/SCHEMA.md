@@ -182,6 +182,12 @@ interface ProjectSettings {
   // as the wrapper's peel target instead of moe/work-<date>.
   consolidationBranch?: string;
 
+  // WorktreeMode = 'off' | 'on'. 'on' runs each new WORKING claim in
+  // <projectPath>/.worktrees/<taskId> on moe/task/<taskId>. Read once at
+  // claim time and pinned on the attempt's workspaceMode. Absent means 'off'
+  // (resolveWorktreeMode, state/validators.ts); any other value is refused.
+  worktreeMode?: WorktreeMode;
+
   // Plan-size thresholds enforced by moe.submit_plan: warn past the warn
   // values, hard-reject past the max values. Distinct files = union of
   // affectedFiles across all steps. maxTasksPerEpic is checked at
@@ -464,6 +470,7 @@ interface Task {
   codexModel?: string;                            // Planner's codex model (provider 'codex'); qa_reject resets to the codex default
   priorAttempt?: PriorAttempt;                  // Snapshot from moe.request_replan
   priorHandoffs?: HandoffNote[];                // Newest-first; capped at 20
+  landingRetry?: LandingRetry | null;           // finalize_attempt alone sets it (outcome 'unlanded'); landed/nothing-to-commit null it. Absent until first retry. See `landingRetry` below
 
   // Plan-size warnings from the latest submit_plan (warn-zone only; cleared
   // when a compliant plan lands) — lets boards/governors see size pressure.
@@ -791,6 +798,23 @@ Every string list holds at most 50 entries, each at most 1000 chars.
 - **Validation** (`validateExecutionContract`, run by every `updateTask` writer): strict, refusing `INVALID_INPUT` with `context.field`; unknown keys are refused; strings are preserved and never truncated; the stored object is a fresh canonical copy; empty lists are omitted. `undefined`, `null` or an empty contract clears it.
 - **Writers.** `moe.submit_plan` replaces it, and an omitted contract clears it. `moe.get_context` projects it for every role when set.
 - **Revision.** A material change increments `planRevision` once, in the same write. Object key order is not material; list order is.
+
+### `landingRetry` (WT-03)
+
+`Task.landingRetry` records the last worktree landing that published nothing. It is optional and absent until the first retry, so older rows load unchanged with no migration and no `schemaVersion` bump. Only `moe.finalize_attempt` writes it: outcome `'unlanded'` sets it, and `'landed'` or `'nothing-to-commit'` set it to `null`. Board `UPDATE_TASK` echoes cannot restore, clear or forge it. How each field is fed, and the routing that goes with it, is under `moe.finalize_attempt` in [`docs/MCP_SERVER.md`](MCP_SERVER.md).
+
+```typescript
+type UnlandedReason = 'conflict' | 'contention' | 'gate' | 'diverged' | 'remote';  // UNLANDED_REASONS
+
+interface LandingRetry {
+  reason: UnlandedReason;     // Why the worktree landing published nothing
+  paths: string[];            // Normalized project-relative conflict paths, when reported (finalize_attempt's `conflictPaths` parameter)
+  rescueRef: string;          // Task-scoped rescue ref holding the unpublished bytes
+  targetTip: string | null;   // The attempted 40-hex target tip, or null when not reported
+  count: number;              // Consecutive unlanded finalizes since landed/nothing-to-commit, starting at 1
+  at: string;                 // ISO timestamp of this unlanded finalize
+}
+```
 
 ### `planSourceBasis`, `planningEntry`, `planReuse` (CQ-C07a)
 
@@ -1244,7 +1268,8 @@ interface ExecutionAttempt {
   workerId: string;           // The seat that opened it; not necessarily the row's current assignee
   runnerId: string;           // The runner session; a claim-opened attempt records the worker id
   generation: number;         // Fencing token: per task, starts at 1, (max over every prior attempt) + 1, never reused
-  workspace: string;          // The checkout it runs against; a claim records the project path
+  workspace: string;          // The checkout it runs against: the project path, or the task worktree for a worktree attempt
+  workspaceMode?: ExecutionWorkspaceMode; // ExecutionWorkspaceMode = 'shared' | 'worktree'. Set once by the claim; absent on older records, which read as 'shared' (no migration, no version bump)
   phase: 'running' | 'finalizing' | 'reconciling' | 'closed';
   startedAt: string;          // ISO 8601
   lastPhaseAt: string;        // ISO 8601, when `phase` last changed; the reconcile window counts from it
@@ -1255,6 +1280,15 @@ interface ExecutionAttempt {
   executionPolicySnapshot?: ExecutionPolicySnapshot; // Captured at claim; absent on attempts opened before it existed
   contextReceipt?: ServedContextReceipt;             // Latest served get_context read; daemon-written, never approval
   stepCompletions?: StepCompletionEvidence[];        // Strict step evidence; daemon-written, append-only, never approval
+}
+
+// The claim and get_context projection of an attempt's workspace (`workspace` in the
+// moe.claim_next_task and moe.get_context replies, docs/MCP_SERVER.md). Never stored.
+interface AttemptWorkspace {
+  mode: ExecutionWorkspaceMode;
+  path: string;
+  branch: string | null;         // moe/task/<taskId> for a worktree attempt, null for shared
+  target: string | null;         // The live delivery target for a worktree attempt, null for shared
 }
 
 interface ServedContextReceipt {
