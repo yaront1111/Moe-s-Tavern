@@ -70,6 +70,11 @@ object TerminalAgentLauncher {
         }
     }
 
+    internal sealed interface AgentCommandChoice {
+        data class Run(val command: String) : AgentCommandChoice
+        data class Refused(val message: String) : AgentCommandChoice
+    }
+
     /**
      * Contract with scripts/moe-agent.{sh,ps1} (CQ-R13c2): exactly "1", set only by [selectProtectedAgentRuntime]
      * under the PROTECTED profile, so the wrappers refuse to fall back from MOE_DAEMON_PATH/MOE_PROXY_PATH.
@@ -153,6 +158,26 @@ object TerminalAgentLauncher {
                 return entries.firstOrNull { it != CUSTOM && it.command == command } ?: CUSTOM
             }
         }
+    }
+
+    // The protected profile runs these agent CLIs by exact name only; the wrappers accept the same set (task-aa85ff13).
+    private val PROTECTED_AGENT_COMMANDS = AgentProvider.entries.filter { it != AgentProvider.CUSTOM }.map { it.command }
+    private const val MAX_SHOWN_AGENT_COMMAND = 200
+
+    /**
+     * Under PROTECTED, repository content (.moe/project.json settings.agentCommand) and custom commands never choose
+     * the binary a seat runs: only an exact known CLI name passes. LEGACY keeps explicit, then the setting, then claude.
+     */
+    internal fun agentCommandFor(profile: RuntimeProfile, explicit: String?, projectSetting: String?): AgentCommandChoice {
+        if (profile == RuntimeProfile.LEGACY) return AgentCommandChoice.Run(explicit ?: projectSetting ?: "claude")
+        val candidate = (explicit ?: projectSetting)?.trim() ?: "claude"
+        if (candidate in PROTECTED_AGENT_COMMANDS) return AgentCommandChoice.Run(candidate)
+        val shown = candidate.take(MAX_SHOWN_AGENT_COMMAND).map { if (Character.isISOControl(it)) '?' else it }.joinToString("")
+        val source = if (explicit != null) "custom command" else "from .moe/project.json settings.agentCommand"
+        return AgentCommandChoice.Refused(
+            "Protected execution profile: the agent command '$shown' ($source) is not one of " +
+                "${PROTECTED_AGENT_COMMANDS.joinToString(", ")}, so no agent was started. Pick an agent from the Agents menu."
+        )
     }
 
     private const val LAST_PROVIDER_KEY = "moe.lastUsedProvider"
@@ -264,8 +289,16 @@ object TerminalAgentLauncher {
             return null
         }
 
-        val resolvedCommand = agentCommand ?: MoeProjectService.getInstance(project)
-            .getState()?.project?.settings?.agentCommand ?: "claude"
+        // `selected` is non-null exactly under PROTECTED, so project.json is not read a second time.
+        val profile = if (selected != null) RuntimeProfile.PROTECTED else RuntimeProfile.LEGACY
+        val projectSetting = MoeProjectService.getInstance(project).getState()?.project?.settings?.agentCommand
+        val resolvedCommand = when (val choice = agentCommandFor(profile, agentCommand, projectSetting)) {
+            is AgentCommandChoice.Run -> choice.command
+            is AgentCommandChoice.Refused -> {
+                Messages.showErrorDialog(project, choice.message, "Moe")
+                return null
+            }
+        }
 
         return AgentContext(basePath, script, manager, envOverrides, resolvedCommand, wslAgents)
     }
