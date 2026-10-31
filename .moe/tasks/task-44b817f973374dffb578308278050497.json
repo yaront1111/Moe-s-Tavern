@@ -7,9 +7,50 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED), in scripts/tests/agent-git-guard.test.mjs. Load test-driven-development. First read mem:task-task-44b817f973374dffb578308278050497-handoff (it holds the architect's measured prototype diff), mem:gotcha-pwsh7-agent-git-guard-psmodulepath and mem:gotcha-agent-git-guard-runtime-config.\n\nPreconditions:\n- dependsOn task-7db14e2d is DONE. It rewrote both wrappers' codex exec pipeline, a different region. Re-read this file and both wrappers now, and anchor every edit on its text, never on a line number.\n- `git status --short -- scripts/moe-agent.ps1 scripts/moe-agent.sh scripts/tests/agent-git-guard.test.mjs` is empty. A dirty hunk there is a peer's: comment on this row and stop. Never edit over it, stage it or revert it.\n\nEdits (the architect's prototype measured exactly these):\n(a) `clean`: add `PSMODULEPATH$` to the stripped-name regex, giving `/^(MOE_|FAKE_|GIT_|CLAUDE|CODEX|GUARD_|PSMODULEPATH$)/i`.\n- Why: the fake CLI's own `secure` check spawns powershell.exe for Get-Acl, and under any pwsh ancestor that check fails too (measured: exit 1, CouldNotAutoloadMatchingModule).\n- It cannot mask the bug, because pwsh re-adds its own paths at startup.\n(b) After `const win = ...`, add `const pwsh = win && spawnSync('pwsh.exe', ['-NoProfile', '-Command', 'exit 0'], { timeout: 60000 }).status === 0;`.\n(c) launch(): make the first line `const shell = win ? f.engine || 'powershell.exe' : 'bash';`. Use `shell` in both the concurrent execFile call and the final run call.\n(d) CLI matrix:\n- Destructure an optional 5th tuple element `opts = {}`.\n- Append, on win32 only, `['custom', false, false, 'REVIEW', { engine: 'pwsh.exe' }]`.\n- Title prefix: `opts.engine ? 'PS7' : win ? 'PS5.1' : 'bash'`.\n- Test options: `{ skip: opts.engine && !pwsh && 'pwsh.exe not found' }`.\n- Fixture: `Object.assign(fixture(t, cli, hooks, status), opts)`.\n- The body and every assertion stay as they are, and they apply to the PS7 row.\n- Why an object: task-76ae5c47 and task-408a0ac1, later in the lane, add their planned `mode` key to it instead of a 6th position.\n(e) In that body's first assertion message ('CLI did not run'), take codes from both streams: `(r.stdout + r.stderr).match(/MOE_[A-Z_]+/g)` instead of `r.stdout?.match(...)`. The ps1 throw goes to stderr, so HEAD prints codes=null. A RED run now names MOE_AGENT_GIT_GUARD_FAILED.\n(f) In the `if (process.argv[2] !== 'cli') {` block, add the test 'both wrappers embed one guard program, and it keeps PSModulePath from its powershell.exe child'.\n- Cut moe-agent.sh between `<<'MOE_GIT_GUARD_JS'\\n` and `\\nMOE_GIT_GUARD_JS\\n`.\n- Cut moe-agent.ps1 between `$program = @'\\n` and `\\n'@\\n`.\n- Assert that each opening anchor occurs exactly once, and that the two programs are equal.\n- Assert that the program matches /'PSMODULEPATH'/. That is the quoted code literal, so the comment alone cannot satisfy it.\n- This is the only check of the sh twin: Linux never takes the win32 branch, and parity-check.sh does not compare the programs.\n\nRED proof. Record both lines in the step note.\n- Snapshot: `git archive HEAD scripts docs` into `mktemp -d /mnt/d/moe-scratch/g44b8-red-XXXX`, plus only this file.\n- Linux: `node --test --test-name-pattern='embed one guard program' scripts/tests/agent-git-guard.test.mjs` gives 1 fail.\n- Windows, with cwd in that /mnt/d snapshot (a UNC cwd breaks node --test): `\"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap --test-name-pattern='^PS7 ' scripts/tests/agent-git-guard.test.mjs` gives `not ok 1 - PS7 custom headless plumbing completion ...` with MOE_AGENT_GIT_GUARD_FAILED among its codes.\n- Then delete the snapshot.\nThe architect saw both RED on HEAD 09120533. Expected counts after steps 2-3: Linux 25 tests, Windows 26.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/agent-git-guard.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN, scripts/moe-agent.ps1: function Initialize-MoeAgentGitGuard, the `$program = @'...'@` here-string, inside the `if (win) {` block. Any editor works (Edit, apply_patch), as long as the file keeps its UTF-8 BOM (first bytes ef bb bf) and LF-only endings; parity-check.sh enforces the BOM. Never rewrite it through a shell pipeline.\nReplace the one line\n`        value(cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(acl, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 }));`\nwith these three (8-space indent):\n`        // pwsh 7 lists its own modules first in PSModulePath, and a Windows PowerShell 5.1 child that inherits it cannot load Get-Acl.`\n`        const psenv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'PSMODULEPATH'));`\n`        value(cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(acl, 'utf16le').toString('base64')], { env: psenv, encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 }));`\nWhy this shape (each point is measured or sourced in the handoff memory):\n- Without the variable, 5.1 builds its own default module path. pwsh repairs PSModulePath only for a powershell.exe it starts directly, never for a grandchild started through node.\n- libuv's Windows env injection does not list PSModulePath, so the drop holds (mem:gotcha-windows-libuv-spawn-env-injection).\n- Compare keys case-insensitively, because a spread process.env is no longer case-insensitive (the lowercase-count lesson).\n- Start from process.env, not the program's `env` const, so the child keeps exactly its old environment minus that one variable.\nError handling is unchanged. A non-zero exit, timeout or spawn error of the ACL child still throws in value(); the catch removes the root, and the wrapper stops with MOE_AGENT_GIT_GUARD_FAILED (fail closed).\nLeave untouched:\n- the `& node -` line;\n- Invoke-MoeGuardedCommand and Remove-MoeAgentGitGuard, whose span the launcher harnesses cut;\n- every launch line, which codexDescriptor.ts pins;\n- the rest of the program.\nCheck: the step-1 PS7 row passes on native Windows from a fresh /mnt/d snapshot with this file overlaid. The twin test stays red until step 3.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "GREEN, scripts/moe-agent.sh: function prepare_agent_git_guard, the `<<'MOE_GIT_GUARD_JS'` heredoc. Make the same three-line replacement as step 2, byte-identical. The delimiter is quoted, so bash expands nothing in the JS.\nLive seats execute this file, and bash parses launch code above the main loop incrementally, so never rewrite it in place (scripts/CLAUDE.md, Hot reload):\n1. `T=$(mktemp -d /mnt/d/moe-scratch/g44b8-sh-XXXX) && cp -p scripts/moe-agent.sh \"$T/moe-agent.sh\"`. This is the same D: volume, so the mv below is a rename.\n2. Edit \"$T/moe-agent.sh\" with any editor.\n3. Run `bash -n \"$T/moe-agent.sh\"`. Then `grep -c $'\\r' \"$T/moe-agent.sh\"` must print 0.\n4. `mv -f \"$T/moe-agent.sh\" scripts/moe-agent.sh && rmdir \"$T\"`.\n5. `git diff --stat -- scripts/moe-agent.sh` shows +3/-1 and no mode change.\nThen the step-1 twin test passes: `node --test --test-name-pattern='embed one guard program' scripts/tests/agent-git-guard.test.mjs`. That name-filtered run only reads the two wrappers, so it may run in place.\nError handling: nothing new. prepare_agent_git_guard's caller already turns a failed program into MOE_AGENT_GIT_GUARD_FAILED and exit 1.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, after steps 1-3. Fresh output of this exact command is the complete_task evidence. Run it from the repo root on this WSL seat, in the background, and wait for VERIFY_EXIT. It takes about 25-30 min: the guard suite about 1 min on Linux and 2.5 min on Windows, acceptance 20 s, pwsh postflight about 20 min.\n\nset -o pipefail; unset ${!MOE_@} ${!CLAUDE_@} ${!FAKE_@}; mkdir -p /mnt/d/moe-scratch; V=$(mktemp -d /mnt/d/moe-scratch/g44b8-gate-XXXX) && git archive HEAD | tar -x -C \"$V\" && cp scripts/moe-agent.sh \"$V/scripts/moe-agent.sh\" && cp scripts/moe-agent.ps1 \"$V/scripts/moe-agent.ps1\" && cp scripts/tests/agent-git-guard.test.mjs \"$V/scripts/tests/agent-git-guard.test.mjs\" && cd \"$V\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && echo '== linux guard' && node --test scripts/tests/agent-git-guard.test.mjs 2>&1 | tail -9 && echo '== windows guard' && \"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap scripts/tests/agent-git-guard.test.mjs > win-guard.tap 2>&1; w=$?; [ -f win-guard.tap ] && grep -E '^(not )?ok [0-9]+ - (PS7|both)|^# (tests|pass|fail|skipped) ' win-guard.tap; [ \"$w\" = 0 ] && grep -qx '# fail 0' win-guard.tap && grep -qx '# skipped 0' win-guard.tap && grep -q '^ok [0-9]* - PS7 custom headless plumbing completion' win-guard.tap && echo '== windows acceptance (pwsh 7)' && (cd /mnt/c/Windows/System32 && ./cmd.exe /c robocopy \"D:\\projexts\\moes\\packages\\moe-daemon\\node_modules\" \"$(wslpath -w \"$V\")\\packages\\moe-daemon\\node_modules\" /E /XD .vite /NFL /NDL /NJH /NJS /NP /R:0 /W:0 > /dev/null; [ $? -lt 8 ]) && (cd packages/moe-daemon && \"/mnt/c/Program Files/nodejs/node.exe\" node_modules/vitest/vitest.mjs run src/delivery/acceptance.test.ts > ../../acc.log 2>&1; a=$?; sed 's/\\x1b\\[[0-9;]*m//g' ../../acc.log | grep -E 'lands once|Test Files|Tests '; exit $a) && echo '== windows postflight.ps1 under pwsh 7' && WSLENV=\"${WSLENV:+$WSLENV:}MOE_POSTFLIGHT_TIMEOUT_SEC\" MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs pwsh > pf7.json; cat pf7.json 2>/dev/null; grep -q '\"failureClass\":\"NONE\"' pf7.json; rc=$?; cd /mnt/d/projexts/moes; rm -rf \"$V\"; echo \"VERIFY_EXIT=$rc\"; [ \"$rc\" -eq 0 ]\n\nWhat it proves:\n- bash -n and parity.\n- The Linux guard suite: 25 pass.\n- The native Windows guard suite: 26 pass, '# skipped 0', and the PS7 row and the twin test printed as ok.\n- The description's own repro: delivery/acceptance.test.ts 'lands once, crashes before the receipt...' passes natively under pwsh 7. The daemon's Windows node_modules are robocopied read-only into the snapshot; the shared tree is never written.\n- postflight.ps1 under pwsh 7, via postflight-safe: failureClass NONE. The governor asked that the completion summary say so, because it gives every later lane row its pwsh 7 leg back.\nRules:\n- Everything runs in one whole-repo `git archive HEAD` snapshot on /mnt/d. A UNC cwd breaks node --test, and the shared tree's wrappers may hold peer bytes.\n- Never npm build, test or install in the shared checkout.\n- If something hangs, kill only PIDs you started, by recorded PID. Never pattern-kill.\n- On a failed leg, rerun that leg on a pure-HEAD snapshot before blaming this change. Architect baselines:\n  - HEAD 09120533: guard suite 24/24 on Linux (55 s) and on Windows PS 5.1 (135 s); acceptance fails only 'lands once...', with MOE_AGENT_GIT_GUARD_FAILED.\n  - With the fix: guard suite 25/25 on Linux and 26/26 with 0 skipped on Windows (152 s); acceptance 6/6 (15 s); postflight.ps1 under pwsh 7 PASS through scenario Z (1176 s).\n- failureClass TIMEOUT means a loaded box (postflight-safe caps at 30 min). Rerun later. Never raise caps or edit harness files.\n- QA reruns this exact command with `git archive <completion sha>` and without the three cp's.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's own diff, the last step (load adversarial-self-review). Check and note each item:\n- Scope:\n  - `git diff HEAD --stat` covers only the three files.\n  - Each wrapper is +3/-1.\n  - The test is about +15/-7.\n  - Net growth is far under 400 LOC.\n- Bytes:\n  - The twin test passes.\n  - moe-agent.ps1 starts with ef bb bf.\n  - Neither wrapper contains a CR.\n  - The sh file mode is unchanged.\n- Fail-closed: the precedence, invalid-count, hook-directory, invalid-gitdir, broken-gitdir and hook-control rows passed in the gate on both OSes.\n- Edge cases:\n  - PSModulePath absent: the filter is a no-op.\n  - PSModulePath present in several letter cases: every copy is dropped.\n  - Non-Windows: the branch is never taken.\n  - Two seats at once: psenv is per process, and the concurrent row passed.\n  - A null stdout in the new assertion message: `(r.stdout + r.stderr)` stays a string.\n- The PS7 row really ran ('# skipped 0'), and it was RED before the fix (step-1 note).\n- Other powershell.exe spawns (the description's last ask):\n  - `grep -n \"spawnSync('powershell.exe'\" scripts/moe-agent.ps1 scripts/moe-agent.sh` shows only the guard's spawn, once per twin.\n  - Cite the architect's measurements under pwsh 7.6.9 -> node -> powershell.exe (handoff memory) and state that no change is needed:\n    - postflight.{sh,ps1}'s leak probe (Get-CimInstance plus ConvertTo-Json) exits 0;\n    - scripts/local-runner/platform-windows.mjs probeHypervisor (Get-CimInstance) exits 0;\n    - this test's own Get-Acl check exited 1, which step 1(a) fixes;\n    - the JetBrains TerminalAgentLauncher, VS Code AgentLauncher and installer/moe-installer.iss lines start the wrapper itself, and its only module-dependent child was this ACL step.\n- The completion summary states:\n  - the RED and GREEN lines;\n  - 'postflight.ps1 now passes under pwsh 7' (failureClass NONE), as the governor asked;\n  - that the CI-style chain pwsh -> node -> powershell.exe 5.1 wrapper failed the same way (measured) and is fixed by the same change.\nFix any finding, then re-run the step 4 gate before complete_task. Hand off to QA; never approve your own work.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/agent-git-guard.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -18,14 +59,92 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
-  "order": 319.7,
-  "comments": [],
+  "order": 1,
+  "comments": [
+    {
+      "id": "comment-5e3adb519ae54d378b70692975a3f198",
+      "author": "governor-693b7073",
+      "content": "Governor, 05:40Z, for the planner. The human promoted this row (05:34Z).\n\nLane slot: 7db14e2d (WORKING now) → THIS ROW → WT-06 (042dc0dd) → V07 → …. moe-agent.ps1 is serialized in that chain. Declare exactly what you edit, and anchor on names, not line numbers: 7db14e2d is editing both wrappers now.\n\nWhy it's early in the lane: QA's 9d277494 approval (00:25Z) had to skip the pwsh 7 `postflight.ps1` leg (rc=1, MOE_AGENT_GIT_GUARD_FAILED at its failure line 883 = this bug). Every lane row after this one gets its pwsh 7 leg back once this lands. Say in the completion summary that postflight.ps1 now passes under pwsh 7.\n\nScope: the guard program's powershell.exe Set-Acl/Get-Acl child in moe-agent.ps1 (drop PSModulePath from that child's env), plus a check of the other powershell.exe spawns and the sh twin, as the description asks.\n\nGates: run them in a snapshot. No npm build/clean/install in the shared checkout (GLOBAL rail). No pattern kills on this host (GLOBAL customRules[1]).",
+      "timestamp": "2026-10-31T05:37:10.495Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T20:58:12.787Z",
-  "updatedAt": "2026-10-30T22:03:03.049Z",
+  "updatedAt": "2026-10-31T06:28:52.205Z",
   "planningEntry": {
     "from": "BACKLOG",
-    "at": "2026-10-30T22:03:00.896Z",
-    "seq": 1
-  }
+    "at": "2026-10-31T05:34:39.847Z",
+    "seq": 2
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T05:35:45.861Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-b58e1112"
+  ],
+  "dependsOn": [
+    "task-7db14e2df19949a8bfdb150e0f29ffcb"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T06:28:52.184Z",
+  "executionContract": {
+    "intendedBehavior": "On Windows, the agent Git guard's ACL step runs without an inherited PSModulePath. That step is the powershell.exe Get-Acl/Set-Acl child spawned by the embedded node program in moe-agent.ps1 (Initialize-MoeAgentGitGuard) and in moe-agent.sh (prepare_agent_git_guard). A wrapper started under PowerShell 7, or anywhere below a pwsh ancestor (for example a pwsh CI step running node, which runs the 5.1 wrapper), therefore sets up the guard and launches its CLI instead of failing closed with MOE_AGENT_GIT_GUARD_FAILED. PS 5.1 seats and Linux/macOS behave exactly as before.",
+    "acceptanceCriteria": [
+      "agent-git-guard.test.mjs gains a win32-only row 'PS7 custom headless plumbing completion ...' that runs moe-agent.ps1 under pwsh.exe with every PS5.1-row assertion. It is RED against HEAD's wrappers, passes with the fix, and is not skipped on the gate host.",
+      "A twin test asserts that both wrappers embed the same program and that it carries the 'PSMODULEPATH' filter. It is RED on HEAD.",
+      "Every existing guard row passes on Linux (bash) and on native Windows (PS 5.1), and parity-check.sh passes.",
+      "The description's repro, delivery/acceptance.test.ts 'lands once, crashes before the receipt...', passes natively under pwsh 7. postflight.ps1 under pwsh 7 reports failureClass NONE (the governor's request)."
+    ],
+    "invariants": [
+      "The embedded guard program stays byte-identical between moe-agent.sh's MOE_GIT_GUARD_JS heredoc and moe-agent.ps1's $program here-string, and a test enforces it.",
+      "A failing ACL child (non-zero exit, timeout or spawn error) still fails closed: MOE_AGENT_GIT_GUARD_FAILED, the temp root removed, no CLI launch.",
+      "Only PSModulePath (in any letter case) leaves that one child's environment. Every other variable is inherited as before, and the git spawns' env is unchanged.",
+      "moe-agent.ps1 keeps its UTF-8 BOM and LF endings. moe-agent.sh is replaced by a validated rename (bash -n), never rewritten in place. No byte changes in any launch line, the `& node -` line, Invoke-MoeGuardedCommand or Remove-MoeAgentGitGuard."
+    ],
+    "compatibility": [
+      "No MCP tool, wire or .moe state change. Seats the JetBrains plugin launches under PS 5.1 behave exactly as before.",
+      "The later guard rows task-76ae5c47 and task-408a0ac1 can add a `mode` key to the new matrix options object."
+    ],
+    "approvedScope": [
+      "The ACL spawn in the embedded guard program, in both twins.",
+      "agent-git-guard.test.mjs: the clean filter, the pwsh probe, the launch() engine, the matrix options object plus the PS7 row, the assertion-message codes, and the twin test."
+    ],
+    "reuse": [
+      "The pwsh availability probe of scripts/tests/taskless-binding-notice.test.mjs (spawnSync pwsh -Command 'exit 0').",
+      "The PS7 row reuses the existing matrix body and its assertions; no new helper is added.",
+      "The root cause is the same one documented at Get-MoeSha256Hex in moe-agent.ps1 (5.1 under node under pwsh). There .NET replaced the cmdlet; here the child's env is fixed instead, as the task proposes."
+    ],
+    "sourceAssumptions": [
+      "In scripts/moe-agent.ps1, Initialize-MoeAgentGitGuard's `$program = @'...'@` holds, inside `if (win) {`, exactly one line `value(cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', ...], { encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 }));`.",
+      "In scripts/moe-agent.sh, prepare_agent_git_guard's `<<'MOE_GIT_GUARD_JS'` heredoc holds the same 56-line program, byte-identical at 09120533.",
+      "scripts/tests/agent-git-guard.test.mjs has `clean`, launch() hard-codes powershell.exe on win32, the CLI matrix loop, and agent()'s `secure` Get-Acl check."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: drop PSModulePath (any letter case) from the guard program's powershell.exe ACL child only, as the description proposes. Measured natively: HEAD's program exits 1 under pwsh 7.6.9, the patched one exits 0, and both exit 0 under PS 5.1. Rejected: (1) replacing Get-Acl/Set-Acl with [IO.Directory]::GetAccessControl/SetAccessControl. It is module-free and also measured working, but it rewrites the reviewed ACL code, and the env fix also covers any future cmdlet in that child. (2) Stripping PSModulePath before launching pwsh: pwsh re-adds its own paths at startup (mem:gotcha-pwsh7-agent-git-guard-psmodulepath). (3) Rebuilding a 5.1 value the way pwsh does for a direct child: more code, and 5.1 builds the same default itself when the variable is absent. (4) A full PS7 matrix of 11 rows: it doubles Windows runtime, and guard setup is the only engine-dependent code, so one full-assertion row suffices. (5) Changing the other powershell.exe callers: measured unaffected (see codebaseInsights).",
+    "codebaseInsights": "Architect measurements, 2026-10-31, native Windows driven from WSL (pwsh 7.6.9 Store install, PS 5.1, Windows node 24.16, Git 2.54):\n- The CI-style chain pwsh -> node -> powershell.exe 5.1 'wrapper' -> node guard -> powershell.exe fails on HEAD as well. Even Get-Acl in the 5.1 wrapper itself fails with CouldNotAutoloadMatchingModule. CI's Windows legs (a pwsh step running node) are therefore hit by the same bug, and the same fix covers them.\n- Under pwsh -> node -> powershell.exe:\n  - postflight.{sh,ps1}'s leak probe (Get-CimInstance plus ConvertTo-Json) exits 0;\n  - local-runner probeHypervisor (Get-CimInstance) exits 0;\n  - agent-git-guard.test.mjs's own Get-Acl check exits 1;\n  - [IO.Directory]::GetAccessControl exits 0.\n- The guard dirs the patched program created report AreAccessRulesProtected=True.\n- In the launchers, the only powershell.exe spawn is this ACL step: one in each twin, byte-identical (56-line program).\n- node:test TAP prints '# skipped 0', not '# skip'.\n- A prototype of exactly this plan gave:\n  - Linux 25/25 (57 s);\n  - Windows 26/26 with 0 skipped (152 s);\n  - acceptance.test.ts natively: RED on HEAD ('lands once...' fails with MOE_AGENT_GIT_GUARD_FAILED), 6/6 GREEN with the fix (15 s);\n  - postflight.ps1 under pwsh 7 with the fix: PASS through scenario Z (1176 s).",
+    "risks": "- moe-agent.sh is live in the shared checkout. Replace it by copy, bash -n and mv -f on the same D: volume, never by an in-place rewrite.\n- moe-agent.ps1 must keep its UTF-8 BOM and LF endings.\n- task-7db14e2d (dependsOn) is editing both wrappers right now. Anchor on text, and start only when the three files are clean.\n- task-76ae5c47 and then task-408a0ac1 later edit Initialize-MoeAgentGitGuard and this test file. The matrix options object is meant for their 'mode' key.\n- A skipped PS7 row proves nothing, so the gate requires '# skipped 0' and the PS7 ok line.\n- The pwsh postflight leg takes about 20 min, under postflight-safe's 30-min cap. On a busy box it can TIMEOUT: rerun then; never raise the cap.\n- The live daemon currently lacks Git on PATH (governor, 05:44Z), so this plan declares no requiredChecks.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/agent-git-guard.test.mjs",
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "scripts/tests/postflight-safe.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T06:28:52.205Z",
+  "approvedPlanRevision": 1
 }

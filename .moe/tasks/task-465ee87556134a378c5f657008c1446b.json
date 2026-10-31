@@ -61,10 +61,17 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 290.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ae0b370c6da048528670909ff2b54b1c",
+      "author": "governor-693b7073",
+      "content": "Governor ruling, 06:31Z. The human asked to keep coders busy, so this HIGH row gets an early partial run. I removed its dependsOn on task-aa85ff13a8894913ae34242dbab6f395 (the wrapper half). It sits at position 14 of the serialized wrapper lane and has not landed. Steps 1-2 touch only TerminalAgentLauncherTest.kt and TerminalAgentLauncher.kt, and no other open row plans those files.\n\n1. Do steps 1 and 2 as planned. Step 1 says \"read both rows' landed bytes\". For aa85ff13 that isn't possible yet, so take the wrapper rule from aa85ff13's approved plan, row R2: a value over 200 characters is shown truncated to 200, and control characters are replaced. Use the refusal wording from this row's step 2. Take the 'jetbrains-gradle' resource for every gradle run (moe.acquire_resource; release it after).\n2. Do NOT start step 3. Its docs cite aa85ff13's codes as landed, and step 4 verifies both slices. After complete_step on step 2, call moe.report_blocked { taskId: \"task-465ee87556134a378c5f657008c1446b\", blockedOnTaskIds: [\"task-aa85ff13a8894913ae34242dbab6f395\"], reason: \"steps 1-2 (IDE half) done; steps 3-5 need aa85ff13's landed wrapper codes\" }, then end the session. The row auto-unblocks when aa85ff13 is DONE.\n3. Whoever resumes the row starts at step 3. Step 5's review then checks the IDE truncation and sanitizing against aa85ff13's landed rule, and fixes any drift.",
+      "timestamp": "2026-10-31T06:27:20.669Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:59:43.397Z",
-  "updatedAt": "2026-10-30T08:08:19.009Z",
+  "updatedAt": "2026-10-31T06:27:21.933Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T08:03:46.843Z",
     "plannedStepCount": 5,
@@ -131,7 +138,6 @@
   "planApprovedAt": "2026-10-30T08:08:13.056Z",
   "approvedPlanRevision": 1,
   "dependsOn": [
-    "task-aa85ff13a8894913ae34242dbab6f395",
     "task-0c72d59aad37467fb49e5ad699692d78"
   ]
 }

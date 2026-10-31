@@ -14,6 +14,7 @@ import { validateEntityId } from '../util/sanitize.js';
 import { caseVariantId, getCandidate, hasControlChar, listCandidatesForTask, renderGot } from './candidateStore.js';
 import { recordCheckRun, validateCheckRunParams, type RecordCheckRunParams, type RecordCheckRunResult } from './checkRunStore.js';
 import { loadEntities } from './persistence.js';
+import { MAX_REQUIRED_CHECK_COMMAND_CHARS } from './validators.js';
 
 /** The protected-check id rule of validateRequiredChecks (state/validators.ts). */
 const CHECK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -75,7 +76,7 @@ function validateDispatch(raw: unknown, runnerId: string) {
   if (f.planRevision === undefined || f.planRevision === null) throw missingRequired('planRevision');
   if (!Number.isSafeInteger(f.planRevision)) throw invalidInput('planRevision', `must be a safe integer (got ${renderGot(f.planRevision)})`);
   const planRevision = f.planRevision as number;
-  const command = requireText('command', f.command, 500);
+  const command = requireText('command', f.command, MAX_REQUIRED_CHECK_COMMAND_CHARS);
   if (f.checkId !== undefined && (typeof f.checkId !== 'string' || !CHECK_ID_RE.test(f.checkId))) {
     throw invalidInput('checkId', 'must be 1-64 alphanumeric, dot, underscore or hyphen characters, starting alphanumeric');
   }

@@ -17,6 +17,7 @@ const SHA = { base: 'a1'.repeat(20), k1: 'c3'.repeat(20), k2: 'd4'.repeat(20), o
 const [RUNNER, OTHER] = [{ runnerId: 'runner-0123456789abcdef' }, { runnerId: 'runner-fedcba9876543210' }];
 const ENV = ' ubuntu-24.04/node-24 '; // verbatim: the spaces are part of the identity
 const CMD = 'cd packages/moe-daemon && npm test';
+const FOUR = '\u{1F600}'; // one character, two UTF-16 units
 const [T1, T2] = ['2099-01-01T01:00:00.000Z', '2099-01-01T02:00:00.000Z']; // after every fixture candidate: currency follows createdAt
 type Row = [string, Record<string, unknown>, unknown, string, string?];
 
@@ -90,7 +91,9 @@ describe('checkObservationStore', () => {
     ['a missing taskId', { taskId: undefined }, RUNNER, 'MISSING_REQUIRED', 'taskId'],
     ['a non-integer revision', { planRevision: 1.5 }, RUNNER, 'INVALID_INPUT', 'planRevision'],
     ['a blank command', { command: ' ' }, RUNNER, 'INVALID_INPUT', 'command'],
-    ['a 501-character command', { command: 'x'.repeat(501) }, RUNNER, 'INVALID_INPUT', 'command'],
+    ['a 1001-unit command', { command: 'x'.repeat(1001) }, RUNNER, 'INVALID_INPUT', 'command'],
+    ['500 supplementary characters plus one unit', { command: `${FOUR.repeat(500)}x` }, RUNNER, 'INVALID_INPUT', 'command'],
+    ['a 1001-unit command padded with whitespace', { command: ` ${'x'.repeat(999)} ` }, RUNNER, 'INVALID_INPUT', 'command'],
     ['a bad checkId', { checkId: '.tests' }, RUNNER, 'INVALID_INPUT', 'checkId'],
     ['a 256-character environment', { environment: 'e'.repeat(256) }, RUNNER, 'INVALID_INPUT', 'environment'],
     ['a control character in the environment', { environment: 'a\tb' }, RUNNER, 'INVALID_INPUT', 'environment'],
@@ -99,6 +102,47 @@ describe('checkObservationStore', () => {
     const before = snapshot();
     expect((await refused(dispatch(override, runner))).slice(0, 2)).toEqual([codeName, field]);
     expect([snapshot(), getCheckDispatch(h.state, 'dispatch-1')]).toStrictEqual([before, null]);
+  });
+
+  it('names the 1000-unit limit when it refuses an over-long command, and writes nothing', async () => {
+    const before = snapshot();
+    const [, field, context] = await refused(dispatch({ command: 'x'.repeat(1001) }));
+    expect([field, (context as { reason: string }).reason]).toEqual(['command', 'must be non-blank and at most 1000 characters']);
+    expect(snapshot()).toStrictEqual(before);
+  });
+
+  it.each<[string, string, number]>([
+    ['500 units', 'x'.repeat(500), 500],
+    ['501 units', 'x'.repeat(501), 501],
+    ['1000 units', 'x'.repeat(1000), 1000],
+    ['1000 units with outer whitespace', ` \t${'x'.repeat(996)}\n `, 1000],
+    ['500 supplementary characters (1000 UTF-16 units)', FOUR.repeat(500), 1000],
+  ])('records a %s command verbatim and authenticates its observed run', async (_name, command, units) => {
+    expect(command.length).toBe(units);
+    clockAt(T1);
+    const { dispatch: recorded } = await dispatch({ command });
+    const { checkRun } = await observe();
+    expect([recorded.command, checkRun]).toStrictEqual([command, { ...observedRun(T1), command }]);
+    expect([(readJson('dispatches/dispatch-1.json') as { command: string }).command, (readJson('check-obs-1.json') as { command: string }).command])
+      .toEqual([command, command]);
+    expect([getCheckRun(h.state, 'check-obs-1')?.command, isAuthenticatedCheckRun(h.state, checkRun)]).toEqual([command, true]);
+  });
+
+  it('keeps a 1000-unit command exact through replay, a changed-command retry and a fresh StateManager', async () => {
+    const command = `  ${FOUR.repeat(498)}x `;
+    expect(command.length).toBe(1000);
+    clockAt(T1);
+    const genuine = (await dispatch({ command }), (await observe()).checkRun);
+    const before = snapshot();
+    clockAt(T2);
+    expect([await dispatch({ command }), await observe(), snapshot()]).toStrictEqual([
+      { dispatch: { ...getCheckDispatch(h.state, 'dispatch-1')! }, duplicate: true }, { checkRun: genuine, duplicate: true }, before]);
+    expect(await refused(dispatch({ command: command.trimEnd() }))).toEqual(['CHECK_DISPATCH_IMMUTABLE', undefined,
+      { dispatchId: 'dispatch-1', differingFields: ['command'] }]);
+    expect(snapshot()).toStrictEqual(before);
+    const state = await restart();
+    expect([getCheckDispatch(state, 'dispatch-1')?.command, getCheckRun(state, genuine.id)?.command, isAuthenticatedCheckRun(state, genuine)])
+      .toEqual([command, command, true]);
   });
 
   it.each([[2, 1, 1], [0, 0, 0], [2, 2, 1], [1, 1, undefined]])('dispatch refuses revision %s at task revision %s approved %s', async (rev, task, approved) => {

@@ -876,7 +876,7 @@ All seven are required; `additionalProperties` is `false`.
                            // when omitted the daemon generates "check-<32 hex>"
   candidateId: string,     // [A-Za-z0-9_-]{1,128}: the Candidate whose bytes were checked; it must already exist
   treeSha: string,         // /^[0-9a-f]{7,40}$/i: the tree the check ran against, as reported; must equal the candidate's treeSha exactly
-  command: string,         // the command that was run, verbatim (never trimmed, never run by the daemon); non-blank, ≤500 chars
+  command: string,         // the command that was run, verbatim (never trimmed, never run by the daemon); non-blank, ≤1000 UTF-16 code units
   exitCode: number,        // any safe integer: zero, positive or negative. A failing run is recorded like a passing one
   outputTail?: string,     // the end of the output, stored as its final 16384 UTF-8 BYTES; absent is stored as ""
   runnerId: string,        // [A-Za-z0-9_-]{1,128}: the runner the report names. Reported, not authenticated; need not be a registered worker
@@ -945,7 +945,7 @@ Sending the identical report again, for example after a runner crash, returns th
 - **No ownership, status or attempt gate.** The runner reports after `complete_task`, when QA may already hold the `REVIEW` task and the attempt may be closed. An optional `attemptId` is checked only for referential integrity (an attempt of the candidate's task, a reviewer's or a closed one included). The tool is not `blocking`, so dispatch serializes it under the state mutex: two concurrent identical reports make one write and one `duplicate: true`.
 
 **Errors.** Checked in this order, and every refusal writes nothing. Each is listed as JSON-RPC code, then `MoeError.codeName` (sent as `error.data.codeName`):
-- `-32602 INVALID_INPUT` / `MISSING_REQUIRED`: a malformed or absent field, such as a missing or differently spelled `source`, an unknown `outcome` or one incoherent with `exitCode`, a `null` identity, a string or fractional `exitCode`, an invalid `id`/`candidateId`/`runnerId`, a `treeSha` that is not 7-40 hex, a blank or over-500-character `command`, a non-string `outputTail`, or non-object arguments. Nothing is coerced.
+- `-32602 INVALID_INPUT` / `MISSING_REQUIRED`: a malformed or absent field, such as a missing or differently spelled `source`, an unknown `outcome` or one incoherent with `exitCode`, a `null` identity, a string or fractional `exitCode`, an invalid `id`/`candidateId`/`runnerId`, a `treeSha` that is not 7-40 hex, a blank or over-1000-UTF-16-code-unit `command`, a non-string `outputTail`, or non-object arguments. Nothing is coerced.
 - `-32001 CANDIDATE_NOT_FOUND`: `candidateId` names no candidate
 - `-32002 CHECK_RUN_TREE_MISMATCH`: `treeSha` is not exactly the candidate's tree. The message names both trees.
 - `-32002 CHECK_RUN_IMMUTABLE`: the `id` already holds a different run. The message names the differing fields; record the change under a new id.
@@ -973,7 +973,7 @@ Sending the identical report again, for example after a runner crash, returns th
   taskId: string,          // the task whose check is dispatched
   candidateId: string,     // the task's CURRENT candidate (its latest recorded one). Its treeSha is pinned from the candidate, never passed
   planRevision: number,    // integer >= 1: must equal both the task's planRevision and its approvedPlanRevision
-  command: string,         // the command the runner will run, verbatim; non-blank, ≤500 chars (the CheckRun command rule)
+  command: string,         // the command the runner will run, verbatim; non-blank, ≤1000 UTF-16 code units (the CheckRun command rule)
   checkId?: string,        // optional protected check id, [A-Za-z0-9][A-Za-z0-9._-]{0,63}
   environment: string,     // opaque environment identity (e.g. an image digest): non-blank, ≤255 chars, no control chars, verbatim
   workerId?: string        // caller (auto-injected by proxy); not evidence, never stored

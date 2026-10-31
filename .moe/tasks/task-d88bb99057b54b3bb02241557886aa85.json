@@ -13,39 +13,63 @@
     {
       "stepId": "step-1",
       "description": "Use test-driven-development with the existing dispatch/observe/refused/snapshot/restart helpers. Accept 500,501,1000 UTF-16-unit commands through real recordCheckDispatch -> recordCheckObservation -> stored CheckRun and assert exact command, candidate/tree/revision/channel-runner binding and isAuthenticatedCheckRun=true. Include leading/trailing whitespace in the 1000-unit accepted command and 500 supplementary-plane emoji; reject 1001 ASCII units and 500 emoji plus one ASCII unit before writeEntity/files/maps. Replace the obsolete501-refusal row with1001 and assert field=command and the1000-limit error. Import MAX_REQUIRED_CHECK_COMMAND_CHARS from ./validators.js and pass it to requireText for command only; preserve all other validation and error handling. Test1000-unit identical dispatch/observation replay without writes, changed-command immutable refusal, and exact command/authentication after fresh StateManager reload. Keep current wrong-runner, stale-revision/current-candidate, marker-missing/tampering and write-failure tests unchanged; do not alter production binding or persistence order.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/checkObservationStore.ts",
         "packages/moe-daemon/src/state/checkObservationStore.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkObservationStore.ts",
+        "packages/moe-daemon/src/state/checkObservationStore.test.ts"
+      ],
+      "note": "RED first: 6 new rows failed at the 500 cap in an external snapshot (/tmp/d88-snap-*, git archive HEAD, npm ci there only). Then validateDispatch passes the imported MAX_REQUIRED_CHECK_COMMAND_CHARS (1000) to requireText for command only. checkObservationStore.test.ts: 51/51 pass, tsc --noEmit clean. Added rows: 500/501/1000/1000+whitespace/500 emoji accept through dispatch->observe->stored CheckRun (verbatim in files, isAuthenticatedCheckRun true); 1001 ASCII, 500 emoji+1, padded 1001 refuse with no writes; the limit-message test; 1000-unit replay/changed-command/fresh-StateManager test. Dirty foreign paths (.moe/tasks, scripts/*, docs/TROUBLESHOOTING.md) untouched.",
+      "startedAt": "2026-10-31T06:26:33.859Z",
+      "completedAt": "2026-10-31T06:27:18.196Z"
     },
     {
       "stepId": "step-2",
       "description": "Update docs/MCP_SERVER.md record_check_run command parameter, its over-limit refusal prose and record_check_dispatch command parameter from500 to1000 UTF-16 code units, preserving nonblank/verbatim and authentication caveats. No unrelated255/500/10000 limits change. SCHEMA was assigned entirely to prerequisitead5 by the task comment; parent4e8a owns the public tool schemas and cross-language integration, not this document.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md: record_check_run command param (line 879), its INVALID_INPUT refusal prose (948) and record_check_dispatch command param (976) now say 1000 UTF-16 code units. Left untouched: paths ≤500, manualArtifact/mergedPullRequest 500, note ≤500, environment 255, 10000 verification command. No SCHEMA edit (ad5 owns it).",
+      "startedAt": "2026-10-31T06:27:20.349Z",
+      "completedAt": "2026-10-31T06:27:30.517Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY: full daemon regression for this shared authenticated-recording contract. Create a full git archive snapshot outside the live checkout, overlay ONLY the final three owned files and export its absolute path as MOE_VERIFY_SNAPSHOT; install host-native daemon dependencies there with npm ci and no lockfile changes. WSL uses Linux-only Node/npm/Git PATH, not Windows node_modules. Run exactly cd \"$MOE_VERIFY_SNAPSHOT/packages/moe-daemon\" && npm test. Record source SHA, overlay, exitCode and fresh outputTail as completion evidence. Never run live checkout daemon npm tests/installs/builds, edit .moe or pattern-kill processes. Preserve foreign dirty bytes; gate failure requires correction/reporting rather than suppressing tests.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate run in external snapshot (git archive of HEAD 8f059bec at a mktemp dir under /tmp; npm ci there only; overlay = exactly the 3 owned files, cmp-verified identical to the working tree; Linux node v24.21.0): `cd \"$MOE_VERIFY_SNAPSHOT/packages/moe-daemon\" && npm test` -> exit 0, 215 test files passed, 6327 passed, 20 skipped. No live-checkout install/build/test.",
+      "startedAt": "2026-10-31T06:27:31.464Z",
+      "completedAt": "2026-10-31T06:28:19.019Z"
     },
     {
       "stepId": "step-4",
       "description": "Final adversarial self-review on this slice: ensure bound is imported rather than redefined; UTF-16 and whitespace behavior agree with CheckRun and approvals; every invalid dispatch writes nothing; replay still precedes currency checks; runner identity cannot come from args; marker creation/write-failure semantics and case-collision protection remain. Probe changed command/same id and long forged diagnostic runs against authentication. No trusted-evidence or verified-local enablement. If corrections alter final bytes, rerun the same gate on the refreshed snapshot.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/checkObservationStore.ts",
         "packages/moe-daemon/src/state/checkObservationStore.test.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkObservationStore.ts",
+        "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review of the diff (production +2/-1: one import, one constant swap). Bound is imported from ./validators.js (single definition, no new import edge: checkRunStore already imports it). Length is measured on the untrimmed string like checkRunStore.requireCommand, so 1000-with-outer-whitespace is accepted by both and padded 1001 refused by both (rows prove it). The check sits in validateDispatch, before the replay lookup, case-collision and currency checks, so an over-limit command writes nothing (snapshot/getCheckDispatch asserted) and replay still precedes currency (existing superseded-candidate test unchanged and green). Runner identity still comes from the channel; changed command on the same id is CHECK_DISPATCH_IMMUTABLE at 1000 units. isAuthenticatedCheckRun, marker order, write-failure and case-collision code untouched; their tests pass unchanged. Approved-check matching uses the trimmed command, so any approved command <=1000 dispatches verbatim; a whitespace-padded one over 1000 total fails closed, acceptable. No trusted-evidence or verified-local change. Final bytes equal the gated snapshot overlay, so no rerun was needed.",
+      "startedAt": "2026-10-31T06:28:21.512Z",
+      "completedAt": "2026-10-31T06:28:34.596Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -68,20 +92,27 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T06:02:37.974Z",
-  "updatedAt": "2026-10-31T06:21:37.564Z",
+  "updatedAt": "2026-10-31T06:28:46.177Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T06:07:22.469Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-21c9ed65"
+    "architect-21c9ed65",
+    "worker-c0a1ac70"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T06:08:08.236Z",
   "executionContract": {
@@ -133,5 +164,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-31T06:08:08.257Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T06:26:33.859Z",
+  "reviewStartedAt": "2026-10-31T06:28:46.175Z",
+  "verification": {
+    "command": "cd \"$MOE_VERIFY_SNAPSHOT/packages/moe-daemon\" && npm test  (MOE_VERIFY_SNAPSHOT = git archive of HEAD 8f059bec in /tmp + overlay of checkObservationStore.ts, checkObservationStore.test.ts, docs/MCP_SERVER.md; npm ci only in snapshot; Linux node v24.21.0)",
+    "exitCode": 0,
+    "outputTail": "Test Files  215 passed (215)\n      Tests  6327 passed | 20 skipped (6347)\n   Start at  08:27:40\n   Duration  37.82s (tests 93%, transform 4%, import 4%)\n\nexit=0",
+    "reportedAt": "2026-10-31T06:28:46.175Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/checkObservationStore.ts",
+    "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "validateDispatch now bounds the dispatch command with the imported MAX_REQUIRED_CHECK_COMMAND_CHARS (1000 UTF-16 units) instead of a literal 500; nothing else in the store changed (production +2/-1). Tests: 500/501/1000, 1000 with outer whitespace and 500 emoji (1000 units) go dispatch -> authenticated observation -> stored CheckRun verbatim; 1001 ASCII, 500 emoji+1 and padded 1001 refuse before any file/map write; a 1000-unit command survives identical replay, a changed-command CHECK_DISPATCH_IMMUTABLE refusal and a fresh StateManager. docs/MCP_SERVER.md record_check_run command param, its INVALID_INPUT prose and record_check_dispatch command param say 1000 UTF-16 code units. Out of scope and still 500: the tool descriptions/schemas in tools/recordCheckRun.ts and the dispatch tool (parent 4e8a274a). Gate ran in an external git-archive snapshot of HEAD 8f059bec with an overlay of exactly the 3 owned files."
 }
