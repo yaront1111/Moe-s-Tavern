@@ -2213,12 +2213,17 @@ const URL_ROUTE_ID = createHash('sha256').update(PINS.x64.url).digest('hex');
 
 test('a Windows guest whose full image id is not exactly the pin is refused before readiness, keeps its record and is never deleted', async t => {
   const adopted = count => (count === 1 ? { error: failWith({ killed: true, code: 'ETIMEDOUT' }), create: true } : {});
+  // A full 64-hex id that shares the pin's 12-character prefix and differs after it: only the exact compare refuses it.
+  const prefixTwin = PINS.x64.sha256.slice(0, 12) + '0'.repeat(52);
+  assert.match(prefixTwin, /^[0-9a-f]{64}$/);
+  assert.notEqual(prefixTwin, PINS.x64.sha256);
   for (const [label, info, code, launch] of [
     ['the https URL route id', guestDetail({ image_hash: URL_ROUTE_ID }), 'IMAGE_PROVIDER_HASH_MISMATCH'],
     ['another image id', guestDetail(), 'IMAGE_PROVIDER_HASH_MISMATCH'],
     ['an adopted timed-out launch', guestDetail({ image_hash: URL_ROUTE_ID }), 'IMAGE_PROVIDER_HASH_MISMATCH', adopted],
     // The text view truncates the id to 12 characters; only the full JSON id counts.
     ['a 12-character pin prefix', guestDetail({ image_hash: PINS.x64.sha256.slice(0, 12) }), 'PROVIDER_INFO_INVALID'],
+    ['a full id sharing only the 12-character pin prefix', guestDetail({ image_hash: prefixTwin }), 'IMAGE_PROVIDER_HASH_MISMATCH'],
     ['no image_hash', guestDetail({ image_hash: undefined }), 'PROVIDER_INFO_INVALID'],
     ['a numeric image_hash', guestDetail({ image_hash: 4 }), 'PROVIDER_INFO_INVALID'],
     ['an info transport failure', { error: failWith({ killed: true, code: 'ETIMEDOUT', stderr: 'secret-diagnostic' }) }, 'PROVIDER_TIMEOUT'],

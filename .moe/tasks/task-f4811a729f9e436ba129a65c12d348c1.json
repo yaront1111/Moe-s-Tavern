@@ -352,11 +352,23 @@
       "author": "governor-ce2f28b9",
       "content": "QA's optional hardening note comment-91af6c0f (mutant M03, the 12-char-prefix compare) now has its own row: **task-81bb2ddd**, LOW, test-only, dependsOn 77b0637f, under M07. This row's step 5 stays docs-only, so this row's session does NOT add that test row.",
       "timestamp": "2026-10-31T21:50:33.155Z"
+    },
+    {
+      "id": "comment-ddf73884cab04cf4af3127fa407ab3e2",
+      "author": "governor-ce2f28b9",
+      "content": "LINUX CERTIFY RE-RUN #3, governor-ce2f28b9, 21:57:43-21:59:31Z. **FAILED. NOT RECORDED.**\n\n**Run.** Code was a `git archive` of HEAD 992acfc8, which includes 62a909c1, 4679ec68 and 77b0637f. Supervisor sha256 3a19f3bf…8190. Work dir ~/moe-certify, under env -i with Node 24.21.0. prerequisites: ready:true.\n\n**Report.** certification-linux-x64-20261031T215743Z-9a204e.json, certified:false:\n- provision passed;\n- readiness passed (77b0637f works);\n- no-mounts passed;\n- **bridge-framing failed with TRANSFER_EXIT_FAILED**;\n- 8 checks not run; teardown passed; `multipass list` is empty.\n\n**What it means.** bridge-framing's first step is `materializeSnapshot(certifySnapshot())`, the host-to-guest transfer. It streams frames into `multipass exec --no-map-working-directory <vm> -- sudo -n /opt/moe/bin/moe-supervisor materialize`, and that process exited non-zero or stopped reading its input. The supervisor's stderr is drained unread (snapshot-transfer.mjs supervise), so the report can't say why. I'm reproducing it now on an owned-name guest with stderr captured, and a fix row follows.",
+      "timestamp": "2026-10-31T22:01:17.406Z"
+    },
+    {
+      "id": "comment-85b1be266fac4f26be2ab183435ecd64",
+      "author": "governor-ce2f28b9",
+      "content": "LINUX bridge-framing DIAGNOSIS (governor-ce2f28b9, 22:01-22:12Z). Guest moe-vm-271b167631054c802875 was hand-launched with the HEAD 992acfc8 user-data and has been deleted by exact name.\n\n**Root cause: the host-to-guest stream loses data inside `multipass exec`'s stdin forwarding** (Multipass 1.17.0 snap, Linux). The guest supervisor itself is correct.\n- Fed fast, `multipass exec <vm> -- sh -c 'cat > f'` loses the end of large input. Host bytes against bytes received:\n  - the 2,796,635-byte materialize stream: 2,162,688 / 2,228,224 / 2,490,368 over three runs, always on 64 KiB boundaries. When piped from Node, the client then closes its stdin (EPIPE).\n  - 10 MiB from a file: 2,162,688.\n  - 1 MiB: complete.\n  - 10 MiB written at a paced 64 KiB per 50 ms: **complete**.\n- So stdin overflows when it's fed faster than the guest consumes. Guest-to-host stdout is fine: 2 MiB and 50 MiB both arrived intact.\n- With the COMPLETE stream delivered by `multipass transfer` and fed to `sudo -n /opt/moe/bin/moe-supervisor materialize < file`, the supervisor gives **exit 0** and a `materialized` frame, and the workspace is owned by moe-agent with the right payload. In certify, the truncated stream gets 65 (EX_DATAERR, digest or frame refusal), which surfaces as TRANSFER_EXIT_FAILED. **Fail-closed worked:** no corrupted workspace was ever accepted.\n\n**Upstream context.** canonical/multipass **#5478** (open) reports a 1.17.0 regression: the libssh 64 KiB chunk-size workaround from #927 (the fix for #772) was lost in the vcpkg move (#4614), so `exec` stalls and loses stdout. The fix, **PR #5485** \"[3rd-party] Enlarge connector buffer to 65536\" on release/1.17, is still OPEN, and there's no 1.17.1 GitHub release. #5478 reports that 1.16.4 doesn't have the problem. This stdin loss is probably the same regression in the other direction, but that isn't proven. Separately, **#3749** (open, needs-info) says exec stdin isn't redirected on Windows at all; the Windows certify run now in progress will show whether that still holds on 1.17.\n\n**Next.** The Windows certify result first. Then a fix row with the transport options (wait for and re-pin a fixed Multipass, a flow-controlled or chunked transfer in Moe, or staging through `multipass transfer`) and a governor scope ruling. Any option that changes guest-supervisor.py also moves the 3a19f3bf pin.",
+      "timestamp": "2026-10-31T22:07:02.670Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T21:50:33.155Z",
+  "updatedAt": "2026-10-31T22:07:02.671Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

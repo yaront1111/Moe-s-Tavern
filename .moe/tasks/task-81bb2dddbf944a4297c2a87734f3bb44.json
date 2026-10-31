@@ -1,0 +1,152 @@
+{
+  "id": "task-81bb2dddbf944a4297c2a87734f3bb44",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "test: the win32 image identity proof has no row that kills a 12-char-prefix compare (QA mutant M03 survives)",
+  "description": "From QA's review of 4679ec68 (qa-1f1f912c, approved 21:49Z; note comment-91af6c0f on R13). Filed as its own row because R13's remaining step only edits docs/CERTIFICATION.md.\n\nprovisionGuest's win32 identity proof (scripts/local-runner/provision.mjs, about line 114) compares the full 64-hex `image_hash` from `multipass info --format json` with the R02 pin, using `!==` after readGuestInfo's 64-hex parse. The code is correct. But QA mutant M03, which compares only the first 12 characters, survives the whole suite: no row gives a full-length id that shares the pin's 12-char prefix and differs after it. So the governor ruling comment-cfa4d81f on 4679ec68 (\"require the full 64-hex pin\") is pinned at the parser but not at the comparison.\n\nFix: add one row to the table \"a Windows guest whose full image id is not exactly the pin…\" in scripts/tests/local-runner.test.mjs.\n- Info override: `guestDetail({ image_hash: PINS.x64.sha256.slice(0, 12) + '0'.repeat(52) })`. Assert that it differs from the pin.\n- Expect IMAGE_PROVIDER_HASH_MISMATCH, with the same record and command assertions as the table's other rows: record 'owned', no image, no readiness exec, no delete.\n\nThis row dependsOn 77b0637f because both edit local-runner.test.mjs.",
+  "definitionOfDone": [
+    "One new row is in the win32 identity-proof table. Its image_hash is a 64-hex id that shares the pin's first 12 characters and differs after them, and it expects IMAGE_PROVIDER_HASH_MISMATCH with the table's record and command assertions.",
+    "Mutant M03 is killed. With provision.mjs temporarily changed to compare only the first 12 characters, the new row fails. The evidence names the temporary edit and the failing row, and provision.mjs is restored byte-identical before completion.",
+    "Test-only change: scripts/local-runner/provision.mjs and scripts/local-runner/guest-supervisor.py are byte-unchanged (guest-supervisor.py sha256 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190). The local-runner suite passes in a git-archive snapshot under env -i with the pinned Node, not in place."
+  ],
+  "taskRails": [
+    "Test-only: edit only scripts/tests/local-runner.test.mjs. Production code stays byte-unchanged; the mutant edit is temporary and reverted.",
+    "No seat runs Multipass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the row that kills M03 (test-only; mem:gotcha-local-runner-tests). Edit scripts/tests/local-runner.test.mjs with the main session's Edit tool only. That is the global rail: a shell write leaves no TOOL witness, and R13 (task-f4811a72) also declares this file, so an unwitnessed edit can be HELD at landing. The target is the test 'a Windows guest whose full image id is not exactly the pin is refused before readiness, keeps its record and is never deleted' (line 2214 at HEAD 992acfc8).\n(a) Between the `const adopted = count => ...` line and `for (const [label, info, code, launch] of [`, insert these 4 lines (2-space indent):\n  // A full 64-hex id that shares the pin's 12-character prefix and differs after it: only the exact compare refuses it.\n  const prefixTwin = PINS.x64.sha256.slice(0, 12) + '0'.repeat(52);\n  assert.match(prefixTwin, /^[0-9a-f]{64}$/);\n  assert.notEqual(prefixTwin, PINS.x64.sha256);\n(b) Directly after the row `['a 12-character pin prefix', guestDetail({ image_hash: PINS.x64.sha256.slice(0, 12) }), 'PROVIDER_INFO_INVALID'],`, insert this row (4-space indent):\n    ['a full id sharing only the 12-character pin prefix', guestDetail({ image_hash: prefixTwin }), 'IMAGE_PROVIDER_HASH_MISMATCH'],\nWhy this works:\n- The pin is lowercase hex (04e8f2461a16...6c94; PINS = (await loadCertifiedProvider()).images).\n- So the twin passes readGuestInfo's 64-hex parse (guest-readiness.mjs validDetail, which would refuse with PROVIDER_INFO_INVALID), and only provisionGuest's full `!==` compare (provision.mjs:114) refuses it.\n- The two asserts keep the row's premise self-checking.\n- fakeVm answers an explicit info option verbatim.\n- The loop body already applies the table's assertions to the new row: phase 'owned', launchTries 1, image undefined, commands after the 4 prerequisite calls exactly ['launch','info'] (so no readiness exec and no delete), one ledger file, guest still present. It also applies the sanitized-error `quiet` check.\nDo not edit the loop, any other row or any other test. Expected diff: +5/-0 in this one file. The test count stays 356, because this is a table row, not a new test(). Error handling: no production code changes; the row exercises the existing fail-closed IMAGE_PROVIDER_HASH_MISMATCH path. Architect prototype at efa77f4f: the table passes with the row. With M03 applied, the full file fails exactly this test (354 pass, 1 fail, 1 skip).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Added prefixTwin const + 2 asserts + one table row; diff +5/-0.",
+      "startedAt": "2026-10-31T22:06:05.801Z",
+      "completedAt": "2026-10-31T22:06:16.362Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Gate, run fresh (DoD 2 and 3; mem:gotcha-gate-hermetic-snapshot-from-wsl, mem:gotcha-local-runner-tests). This step makes no edits. Never apply the mutant, run npm or run Multipass in the shared checkout. Kill only PIDs you started. Give every Bash call timeout 600000, because the gate takes about 90 s.\n(a) Scope: `git diff --numstat HEAD -- scripts/tests/local-runner.test.mjs` prints `5 0 scripts/tests/local-runner.test.mjs` (tab-separated). Peers' dirty paths elsewhere (for example scripts/moe-agent.*, scripts/tests/postflight.*) are not yours: note them and never revert them.\n(b) M03 probe. Run it as ONE Bash call; the architect dry-ran these exact lines at 992acfc8:\ncd /mnt/d/projexts/moes\nB=$(git rev-parse HEAD:scripts/local-runner/provision.mjs); echo \"HEAD blob $B, shared $(git hash-object scripts/local-runner/provision.mjs)\"\nM=$(mktemp -d -t moe-81bb-m03.XXXXXX) && git archive HEAD | tar -x -C \"$M\" && cp --parents scripts/tests/local-runner.test.mjs \"$M\"\nrun() { (cd \"$M\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test --test-name-pattern='^a Windows guest' scripts/tests/local-runner.test.mjs 2>&1 | grep -E '^ℹ (tests|pass|fail)|Missing expected'); }\necho '== unmutated'; run\necho \"== matches: $(grep -c 'providerImageHash !== source.imageSha256)' \"$M/scripts/local-runner/provision.mjs\")\"\nsed -i 's/providerImageHash !== source\\.imageSha256)/providerImageHash.slice(0, 12) !== source.imageSha256.slice(0, 12))/' \"$M/scripts/local-runner/provision.mjs\"\ndiff <(git show HEAD:scripts/local-runner/provision.mjs) \"$M/scripts/local-runner/provision.mjs\"\necho '== M03 + new row'; run\ngit show HEAD:scripts/tests/local-runner.test.mjs > \"$M/scripts/tests/local-runner.test.mjs\"; echo '== M03 + HEAD table (baseline)'; run\ncase \"$M\" in */moe-81bb-m03.?*) rm -rf \"$M\" ;; esac\necho \"shared after: $(git hash-object scripts/local-runner/provision.mjs)\"\nExpected output:\n- The two hashes are equal, before and after. The shared provision.mjs is never touched. The mutant exists only in the deleted /tmp copy, which is DoD 2's temporary edit that ends byte-identical.\n- Unmutated: 2 pass, 0 fail.\n- matches: 1.\n- The diff shows only line 114.\n- M03 + new row: fail 1, with `Missing expected rejection (quiet): a full id sharing only the 12-character pin prefix`.\n- Baseline: M03 passes HEAD's table (pass 2). That is the gap this row closes.\nIf the M03 run does not fail on exactly that label, stop: the row is wrong. Put the from-to edit, the failing label and both hashes in the step note.\n(c) THE GATE. This is the one verification command; its fresh output is the complete_task evidence (command, exitCode, outputTail):\ncd /mnt/d/projexts/moes && S= && git diff --quiet HEAD -- scripts/local-runner/provision.mjs scripts/local-runner/guest-supervisor.py && S=$(mktemp -d -t moe-81bb-gate.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents scripts/tests/local-runner.test.mjs \"$S\" && (cd \"$S\" && echo '3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190  scripts/local-runner/guest-supervisor.py' | sha256sum -c - && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs > \"$S.log\" 2>&1); rc=$?; tail -n 12 \"$S.log\"; case \"$S\" in */moe-81bb-gate.?*) rm -rf \"$S\" ;; esac; (exit $rc)\nExpected output: `scripts/local-runner/guest-supervisor.py: OK`, then tests 356, pass 355, fail 0, skipped 1 (the opt-in macOS native smoke), and exit 0. The full log stays at the printed /tmp/moe-81bb-gate.*.log. If `git diff --quiet` fails, provision.mjs or guest-supervisor.py differs from HEAD. If you did not touch them, a peer did: report it and do not revert.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "M03 probe on /tmp copy: line 114 changed to compare .slice(0,12); new row fails with 'Missing expected rejection (quiet): a full id sharing only the 12-character pin prefix'; HEAD table passes under M03. provision.mjs blob 920da2c0 before and after. Gate: 356/355/0/1 skipped.",
+      "startedAt": "2026-10-31T22:06:17.194Z",
+      "completedAt": "2026-10-31T22:07:54.735Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this task's own +5/-0 diff. Load the adversarial-self-review skill. Make no edits unless the review finds a defect; then fix it with the Edit tool and re-run step 2 (b) and (c). Check:\n(1) Premise. prefixTwin is 64 lowercase hex, shares exactly the pin's first 12 characters and differs after them. Otherwise the asserts fail loudly, for example after a pin bump whose tail is 52 zeros.\n(2) The comparison refuses it, not the parser: the expected code is IMAGE_PROVIDER_HASH_MISMATCH, never PROVIDER_INFO_INVALID, and M03 dies on the new label.\n(3) Rows are independent. Each one builds its own provisionHarness(t, ...), so row order cannot mask a failure.\n(4) No existing row, the loop body or any other test changed, and the diff has no forbidden-pattern token.\n(5) Cross-platform. provisionWith pins platform onWindows(), and the row adds no path or OS dependency, so Windows, macOS and Linux CI run it unchanged.\n(6) Concurrency: none. The rows await one after another inside one test.\n(7) provision.mjs and guest-supervisor.py are byte-unchanged, no Multipass ran, and no /tmp/moe-81bb-* snapshot directory is left (logs are fine).\nThen call complete_task with step 2 (c)'s command, exit code and output tail, and quote step 2 (b)'s M03 lines as the DoD 2 evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Self-review found no defects; diff is +5/-0, no leftover snapshot dirs.",
+      "startedAt": "2026-10-31T22:07:55.483Z",
+      "completedAt": "2026-10-31T22:08:01.545Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-77b0637fbe0043da988ea8206e5aaadb"
+  ],
+  "priority": "LOW",
+  "order": 254.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T21:50:23.670Z",
+  "updatedAt": "2026-10-31T22:08:07.719Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T21:50:26.479Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-54e5eb09",
+    "worker-f21b922a"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T22:05:39.292Z",
+  "executionContract": {
+    "intendedBehavior": "The win32 identity-proof table in scripts/tests/local-runner.test.mjs gains one row. A full 64-hex image_hash that shares the R02 x64 pin's first 12 characters and differs after them is refused with IMAGE_PROVIDER_HASH_MISMATCH before readiness. Its record stays 'owned' with no image, the commands after the prerequisite calls are exactly ['launch','info'], and nothing is deleted. A provisionGuest that compares only the first 12 characters (QA mutant M03) now fails this row.",
+    "acceptanceCriteria": [
+      "The new row expects IMAGE_PROVIDER_HASH_MISMATCH, and the table's existing loop assertions apply to it unchanged.",
+      "Under M03, applied only to a /tmp snapshot copy of provision.mjs, the focused run fails exactly the table test with 'Missing expected rejection (quiet): a full id sharing only the 12-character pin prefix'. HEAD's table passes under the same mutant.",
+      "The gate command exits 0: guest-supervisor.py OK, tests 356, pass 355, fail 0, skipped 1."
+    ],
+    "invariants": [
+      "scripts/local-runner/provision.mjs and scripts/local-runner/guest-supervisor.py are byte-unchanged (guest-supervisor.py sha256 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190).",
+      "Only scripts/tests/local-runner.test.mjs changes, +5/-0. No existing row or test is edited.",
+      "The mutant never touches the shared checkout. No seat runs Multipass."
+    ],
+    "reuse": [
+      "The existing table loop, provisionHarness, provisionWith and guestDetail. No new helper."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/provision.mjs:114 provisionGuest: `(await readGuestInfo(name, provider)).providerImageHash !== source.imageSha256`. That text is unique, and the HEAD blob is 920da2c0.",
+      "scripts/local-runner/guest-readiness.mjs validDetail accepts image_hash /^[0-9a-fA-F]{64}$/, and parseInfo lowercases it.",
+      "scripts/tests/local-runner.test.mjs:2214: the table loop asserts the record, commands, ledger and presence for every row. PINS = (await loadCertifiedProvider()).images, and the x64 pin is 04e8f2461a16...6c94."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && S= && git diff --quiet HEAD -- scripts/local-runner/provision.mjs scripts/local-runner/guest-supervisor.py && S=$(mktemp -d -t moe-81bb-gate.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents scripts/tests/local-runner.test.mjs \"$S\" && (cd \"$S\" && echo '3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190  scripts/local-runner/guest-supervisor.py' | sha256sum -c - && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs > \"$S.log\" 2>&1); rc=$?; tail -n 12 \"$S.log\"; case \"$S\" in */moe-81bb-gate.?*) rm -rf \"$S\" ;; esac; (exit $rc)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Two options for the twin. (1) Inline the expression in the row, as the description wrote it. (2) A named const with two guard asserts. Chose (2): the 'differs from the pin' assert the description asks for then sits next to the row. Rejected: mutating provision.mjs in the shared tree with Edit and then reverting it. That leaves a TOOL witness on a production path and races peers. A /tmp git-archive copy is the recipe in mem:gotcha-local-runner-tests.",
+    "codebaseInsights": "readGuestInfo (guest-readiness.mjs parseInfo/validDetail) accepts any 64-hex id and lowercases it. provisionGuest compares the full id once, at provision.mjs:114, after provisionOwned. fakeVm answers an explicit info option verbatim. Under M03 the twin's guest goes on to readiness and provisions, so assert.rejects fails with 'Missing expected rejection (quiet): <label>'. QA's full-suite sweep, which the architect reproduced, shows this table test as the only one M03 fails once the row exists.",
+    "risks": "The gate takes about 90 s; use Bash timeout 600000. A peer's dirty bytes in provision.mjs or guest-supervisor.py would fail the gate's git diff --quiet: report it, never revert. R13 (task-f4811a72, BLOCKED) also declares the test file. Edit it with the Edit tool so the TOOL witness lands it, not a CONTESTED hold.",
+    "keyFiles": [
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/provision.mjs",
+      "scripts/local-runner/guest-readiness.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "992acfc8e554dd7b3508a937d129a56896ecf09e",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T22:05:39.314Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T22:06:05.801Z",
+  "reviewStartedAt": "2026-10-31T22:08:07.717Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S= && git diff --quiet HEAD -- scripts/local-runner/provision.mjs scripts/local-runner/guest-supervisor.py && S=$(mktemp -d -t moe-81bb-gate.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents scripts/tests/local-runner.test.mjs \"$S\" && (cd \"$S\" && echo '3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190  scripts/local-runner/guest-supervisor.py' | sha256sum -c - && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs > \"$S.log\" 2>&1); rc=$?; tail -n 12 \"$S.log\"; case \"$S\" in */moe-81bb-gate.?*) rm -rf \"$S\" ;; esac; (exit $rc)",
+    "exitCode": 0,
+    "outputTail": "scripts/local-runner/guest-supervisor.py: OK\n✔ RX6 runCheckJob pins every provider call to the platform's own Multipass client, unless the caller names one\nℹ tests 356\nℹ suites 0\nℹ pass 355\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 84286.1734",
+    "reportedAt": "2026-10-31T22:08:07.717Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "completionSummary": "Added one row to the win32 identity-proof table in scripts/tests/local-runner.test.mjs (+5/-0): a full 64-hex image_hash sharing the pin's 12-char prefix, expecting IMAGE_PROVIDER_HASH_MISMATCH. M03 evidence (temporary edit on a /tmp git-archive copy only): provision.mjs:114 changed to `providerImageHash.slice(0, 12) !== source.imageSha256.slice(0, 12)`; the new row fails with 'Missing expected rejection (quiet): a full id sharing only the 12-character pin prefix' (pass 1, fail 1), while HEAD's table passes under the same mutant (pass 2). Shared provision.mjs blob 920da2c0 before and after; guest-supervisor.py sha 3a19f3bf OK. Gate in a git-archive snapshot under env -i, Node v24.21.0: 356 tests, 355 pass, 0 fail, 1 skipped. No Multipass run."
+}
