@@ -73,7 +73,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,7 +89,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T17:35:11.968Z",
-  "updatedAt": "2026-10-31T18:38:41.648Z",
+  "updatedAt": "2026-10-31T18:41:17.173Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T18:16:34.535Z",
@@ -99,11 +99,14 @@
     "firstClaimAt": "2026-10-31T18:16:37.407Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T18:41:17.173Z",
+    "wallClockMs": 1479766
   },
   "contextFetchedBy": [
     "architect-8419009e",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-4398294e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -198,7 +201,54 @@
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
     "moe-vscode/src/util/ManagedVm.ts",
     "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
-    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+    ".moe/tasks/task-01020adf7b0f4dc3bdd72734eb07be3c.json",
+    ".moe/tasks/task-47d21b835b5e4f28bb08b17f83d22256.json",
+    ".moe/tasks/task-5c8c22d77fbf46008229d092ad84e1c4.json",
+    ".moe/tasks/task-d4c4a758ad304ec3a6d294d9307b06f1.json"
   ],
-  "completionSummary": "Both Managed VM clients now render fixed, identical text for all 17 previously missing vm-control codes. These are VERSION_MISMATCH, PROVIDER_*, MANIFEST_INVALID, DOCTOR_INPUT_INVALID, LIFECYCLE_*, LEDGER_* and IMAGE_IDENTITY_CHANGED.\n\nThe text is in MoeBundle.properties, ManagedVmPresentation.KNOWN_CODES and ManagedVm.ts CODE_TEXT. CODE_TEXT is now an exported ReadonlyMap.\n\nThe tests are:\n- a VS Code closed-world guard that derives 30 reachable codes from the doctor, multipass and lifecycle MESSAGES tables plus 6 cited literals, and requires the JetBrains bundle keys and the CODE_TEXT keys to equal that set with identical text;\n- V5, covering VERSION_MISMATCH, LIFECYCLE_NOT_OWNER and LEDGER_WRITE_FAILED;\n- JetBrains P6, which checks KNOWN_CODES equals the bundle keys and renders the same three codes.\n\nThe VS Code run and the Gradle run each exited 0. Unknown tokens still fall back to the unknown-code text. scripts/local-runner and client-verdicts.json are untouched."
+  "completionSummary": "Both Managed VM clients now render fixed, identical text for all 17 previously missing vm-control codes. These are VERSION_MISMATCH, PROVIDER_*, MANIFEST_INVALID, DOCTOR_INPUT_INVALID, LIFECYCLE_*, LEDGER_* and IMAGE_IDENTITY_CHANGED.\n\nThe text is in MoeBundle.properties, ManagedVmPresentation.KNOWN_CODES and ManagedVm.ts CODE_TEXT. CODE_TEXT is now an exported ReadonlyMap.\n\nThe tests are:\n- a VS Code closed-world guard that derives 30 reachable codes from the doctor, multipass and lifecycle MESSAGES tables plus 6 cited literals, and requires the JetBrains bundle keys and the CODE_TEXT keys to equal that set with identical text;\n- V5, covering VERSION_MISMATCH, LIFECYCLE_NOT_OWNER and LEDGER_WRITE_FAILED;\n- JetBrains P6, which checks KNOWN_CODES equals the bundle keys and renders the same three codes.\n\nThe VS Code run and the Gradle run each exited 0. Unknown tokens still fall back to the unknown-code text. scripts/local-runner and client-verdicts.json are untouched.",
+  "commits": [
+    {
+      "sha": "7baced9b1a3ce3f06d85f2f3176c8ce2a914cb00",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T18:35:40Z",
+      "paths": [
+        ".moe/tasks/task-01020adf7b0f4dc3bdd72734eb07be3c.json",
+        ".moe/tasks/task-47d21b835b5e4f28bb08b17f83d22256.json",
+        ".moe/tasks/task-5c8c22d77fbf46008229d092ad84e1c4.json",
+        ".moe/tasks/task-d4c4a758ad304ec3a6d294d9307b06f1.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
+        "moe-vscode/src/util/ManagedVm.ts",
+        "moe-vscode/tests/managed-vm.test.cjs"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T18:39:00.555Z",
+      "treeId": "2f40cec314095fff4b5e6034591781a7e837df98",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/src/util/ManagedVm.ts",
+    "moe-vscode/tests/managed-vm.test.cjs",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-31T18:35:40Z",
+    "at": "2026-10-31T18:39:00.555Z"
+  },
+  "completedAt": "2026-10-31T18:41:17.173Z",
+  "reviewCompletedAt": "2026-10-31T18:41:17.173Z",
+  "reviewSummary": "Approved. Reviewed completion commit 7baced9b (on moe/work-2026-10-24, pushed) via git show: the 5 owned files are +97/-4 net; the rest is board JSON. scripts/local-runner and client-verdicts.json untouched.\n\nRe-ran the step-3 gate myself on a fresh git archive of 7baced9b, with no overlay:\n- VS Code under env -i with Linux node 24.21: npm ci, lint, compile, test gave VSCODE_EXIT=0. 352 tests, 348 pass, 0 fail, 4 skipped.\n- Gradle test --rerun via gradlew.bat in /mnt/d/moe-scratch (Windows equivalent of ./gradlew test, under the jetbrains-gradle lease) gave BUILD SUCCESSFUL, GRADLE_EXIT=0. 28 suites. ManagedVmPresentationTest 8/0/0 (7 plus P6), ClientVerdictCorpusTest 3/0/0, none failing. Lease released, my snapshots deleted.\n\nIndependent checks:\n- 24 producer codes derived from the doctor, multipass and lifecycle MESSAGES tables, plus 6 cited literals, gives 30. The bundle has 30 code keys, KNOWN_CODES has 30 and CODE_TEXT has 30 uppercase keys. Text is byte-identical bundle to TS for all 30; KNOWN_CODES equals the bundle keys.\n- The new lines have no non-ASCII, apostrophe, angle bracket, brace, ampersand or backtick. The 13 existing texts and 4 reasons are unchanged; the diff only adds lines apart from the export line and the KNOWN_CODES trailing comma.\n- Mutants in my scratch copy: adding a code to the producer MESSAGES makes the closed-world guard fail; dropping VERSION_MISMATCH from CODE_TEXT makes the guard and V5 fail. The guard is not vacuous.\n- Texts checked against producers: LEDGER_* says the VM may already be gone, true because ledger.update runs after purgeOwned. SURFACED plus PROVIDER_INPUT_INVALID are covered.\n\nDoD: 1 yes (30 identical texts). 2 yes (V5 and P6 assert VERSION_MISMATCH, LIFECYCLE_NOT_OWNER and LEDGER_WRITE_FAILED render their text). 3 yes (both gates exit 0). Unknown-token rows (NEW_CODE and others) pass unchanged. Not run: the JetBrains runtime UI; the unit tests render via MessageFormat.",
+  "requiredCheckAtDone": null
 }
