@@ -17,7 +17,8 @@ import {
   foreignFinalizingRefusal,
   executionAdmissionRefusal,
   heldTaskRefusal,
-  isClaimGatedByDependsOn
+  isClaimGatedByDependsOn,
+  parseExecutionRoute
 } from '../util/claimEligibility.js';
 import { resolveLaunch } from '../util/routing.js';
 import { dependencyShortfall, describeUnmetDependency, unmetDependsOn } from '../state/dependencyUnblock.js';
@@ -342,6 +343,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           type: 'string',
           description: 'Optional; send together with processStartedAt or not at all. The host the runner process runs on: supplied by the runner, never derived by the daemon. Recorded on the attempt this claim opens and compared by moe.reattach_attempt as an exact string. Non-blank, no control characters, at most 255 chars.'
         },
+        executionRoute: {
+          type: 'string',
+          enum: ['vm'],
+          description: 'Set only by a wrapper that runs the claimed WORKING/REVIEW session in a Moe VM (CQ-M07m/n). A verified-local WORKING or REVIEW task is refused (explicit taskId) or skipped (ranked pool) without it. It can only refuse: it never grants readiness or skips another check.'
+        },
         replaceExisting: { type: 'boolean', description: 'Replace existing worker assignment if another worker is active' },
         taskId: { type: 'string', description: 'Claim this specific task (must be in one of the requested statuses). Skips priority/order ranking.' },
         preferAdjacentInEpic: {
@@ -371,6 +377,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           processStartedAt?: unknown;
           host?: unknown;
           workerType?: unknown;
+          executionRoute?: unknown;
         };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
@@ -379,6 +386,9 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // Refused here, before any other check or write, so a claim with a
         // malformed identity assigns nobody (see readProcessIdentity).
         const identity = readProcessIdentity(params.processStartedAt, params.host);
+        // Same rule for the VM-route marker: INVALID_INPUT before any write. It is
+        // read only by executionAdmissionRefusal and can only add a refusal.
+        const executionRoute = parseExecutionRoute(params.executionRoute);
 
         if (!state.project) {
           throw invalidState('StateManager', 'unloaded', 'loaded');
@@ -516,7 +526,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // open or close and worker registration. Not inside a workerId block,
           // and no exemption for an own-seat resume: the predicate itself reads
           // the caller's own open attempt (util/claimEligibility.ts).
-          const admission = executionAdmissionRefusal(state, requested, params.workerId);
+          const admission = executionAdmissionRefusal(state, requested, params.workerId, executionRoute);
           if (admission) throw admission;
           // Re-claiming a task you already own is a resume, not a takeover.
           const ownedBySelf = Boolean(params.workerId) && requested.assignedWorkerId === params.workerId;
@@ -574,7 +584,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // matcher, and SKIPPED, never refused, for the finalizing hold's
             // reason: a thrown refusal here reads to the sh wrapper as a dead
             // daemon. Only an explicit-taskId claim names why.
-            .filter((t) => !executionAdmissionRefusal(state, t, params.workerId))
+            .filter((t) => !executionAdmissionRefusal(state, t, params.workerId, executionRoute))
             // Approved-plan reuse (CQ-C07): a PLANNING row whose current approved
             // plan awaits its source assessment is withheld from planners, and
             // evaluating it starts that assessment outside the lock

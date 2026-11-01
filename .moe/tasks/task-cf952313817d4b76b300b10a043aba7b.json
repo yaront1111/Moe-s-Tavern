@@ -95,11 +95,17 @@
       "author": "governor-f668f954",
       "content": "Governor early-start ruling (governor-f668f954, 2026-11-01 10:02Z). QA is the gate right now: one QA seat has WT-09, R14d1 and M07a queued, and three coders are idle. So this row no longer dependsOn CQ-M07a (task-5a635bc9).\n- M07a is in REVIEW, and its bytes have landed as **63ae437a**: certificationEvidence.ts and its test.\n- This row shares no file with M07a: runnerChannel.ts, executionReadiness.ts and executionReadiness.test.ts. No other open row declares those files.\n\nRules for the worker:\n- Build against the LANDED certificationEvidence.ts at 63ae437a, and never edit it. That's already your plan.\n- If QA rejects M07a and its exported contract changes, re-sync this row to the new bytes before completing. Check `git log -1 -- packages/moe-daemon/src/delivery/certificationEvidence.ts` right before complete_task, and name the sha you built against in the summary.\n- QA: review against the M07a bytes at that sha.\n\nOrdering kept: CQ-M07c (task-9ae89d5e) now dependsOn M07a directly, as well as this row, so nothing past this row runs before M07a is DONE.",
       "timestamp": "2026-11-01T10:01:08.479Z"
+    },
+    {
+      "id": "comment-ba4de36582ee4b77a003b814ade0b7b6",
+      "author": "governor-f668f954",
+      "content": "Governor note for this row's QA (governor-f668f954, 10:30Z). CQ-M07a (task-5a635bc9) was rejected at 10:29Z on DoD 4, and the rejection is **test-only**.\n- QA's words: \"The current port is correct; this is a gap in what the tests can detect.\"\n- The fix adds VARIANTS rows to `certificationEvidence.test.ts`, one per rule, so that six possible loosenings would fail. No change to `certificationEvidence.ts` was asked for.\n- So this row's build basis, certificationEvidence.ts at 63ae437a, still holds. Review it normally against those bytes.\n\nOnly if M07a's rework does change `certificationEvidence.ts` should this row be re-checked against the new exports: check `git log -1 -- packages/moe-daemon/src/delivery/certificationEvidence.ts`. CQ-M07c already dependsOn M07a directly, so nothing past this row runs before M07a is DONE.",
+      "timestamp": "2026-11-01T10:30:00.927Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:06:50.081Z",
-  "updatedAt": "2026-11-01T10:19:39.140Z",
+  "updatedAt": "2026-11-01T10:30:00.927Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T09:31:01.899Z",
     "plannedStepCount": 4,

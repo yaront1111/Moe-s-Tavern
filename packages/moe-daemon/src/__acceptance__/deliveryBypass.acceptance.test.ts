@@ -40,7 +40,8 @@ const GATE = 'npm run gate';
 const ENV = `moe-local-vm-v1:${'a'.repeat(64)}`;
 const OWED = [`required-check:${GATE}`];
 const SUMMARY = 'verified DoD; re-ran the gate';
-const RUNNER = { processStartedAt: '4242@2026-10-30T00:00:00.0000000Z', host: 'box-1' };
+// executionRoute: a strict WORKING/REVIEW claim needs the VM-route marker (CQ-M07q); these seats stand in for one.
+const RUNNER = { processStartedAt: '4242@2026-10-30T00:00:00.0000000Z', host: 'box-1', executionRoute: 'vm' };
 const STRICT_SNAPSHOT = { version: 2, profile: 'verified-local', planRevision: 1, deliveryPolicy: 'local-branch' } as const;
 const sha = (c: string) => c.repeat(40);
 

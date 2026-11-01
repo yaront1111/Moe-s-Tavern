@@ -194,7 +194,7 @@ describe('strict consumer readiness (CQ-V09)', () => {
     h.state.reviews.clear();
     const before = fs.readFileSync(path.join(h.moePath, 'tasks', 'task-consumer.json'), 'utf8');
     const update = vi.spyOn(h.state, 'updateTask');
-    await expect(claimNextTaskTool(h.state).handler({ taskId: consumer().id, statuses: ['WORKING'], workerId: 'worker-new' }, h.state))
+    await expect(claimNextTaskTool(h.state).handler({ taskId: consumer().id, statuses: ['WORKING'], workerId: 'worker-new', executionRoute: 'vm' }, h.state))
       .rejects.toMatchObject({ codeName: 'DEPENDENCY_EVIDENCE_MISSING', context: { missingEvidence: ['approved-review'] } });
     expect(update).not.toHaveBeenCalled(); expect(h.state.workers.size).toBe(0); expect(h.state.attempts.size).toBe(0);
     expect(fs.readFileSync(path.join(h.moePath, 'tasks', 'task-consumer.json'), 'utf8')).toBe(before);
@@ -204,7 +204,7 @@ describe('strict consumer readiness (CQ-V09)', () => {
     else patch({ status });
     const token = status === 'missing' ? 'prerequisite-missing' : 'delivery-receipt';
     const update = vi.spyOn(h.state, 'updateTask');
-    await expect(claimNextTaskTool(h.state).handler({ taskId: consumer().id, statuses: ['WORKING'] }, h.state))
+    await expect(claimNextTaskTool(h.state).handler({ taskId: consumer().id, statuses: ['WORKING'], executionRoute: 'vm' }, h.state))
       .rejects.toMatchObject({ codeName: 'NOT_ALLOWED', context: { reason: expect.stringContaining(`task-1 [${status}, missing ${token}]`) } });
     expect(update).not.toHaveBeenCalled();
   });

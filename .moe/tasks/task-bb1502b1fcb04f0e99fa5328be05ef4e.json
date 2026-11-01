@@ -14,9 +14,78 @@
     "Put new test rows in a new test file: packages/moe-daemon/src/tools/claimNextTask.test.ts, state/validators.ts and types/schema.ts are declared by WT-19 (task-b1ca54f2), which is still open.",
     "The marker may only refuse; never let it grant readiness or skip any other claim check."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the route requirement to the ONE admission predicate in packages/moe-daemon/src/util/claimEligibility.ts. Read `mem:decision-cq-m07-verified-local-activation` first, plus the predicate's doc comment (lines ~47-68).\n\n1. **Exports.**\n   - `type ExecutionRoute = 'vm'`.\n   - `parseExecutionRoute(value: unknown): ExecutionRoute | undefined`: undefined stays undefined, the exact string 'vm' returns 'vm', and anything else throws invalidInput('executionRoute', \"must be 'vm' when present\"). That covers 'host', 'VM', '', null, numbers and objects.\n2. **`executionAdmissionRefusal(state, task, workerId?, executionRoute?: ExecutionRoute)`.** Keep every existing check and its order; the route check comes LAST, so it can only add a refusal.\n   - Resolve `profile = resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot)` once, and assertExecutionProfileReady(profile), exactly as today.\n   - In the own-seat resume block, assert the recorded attempt profile as today. Mark the task strict when the task-level profile, or that recorded profile, is 'verified-local'.\n   - After both readiness checks pass: if strict, task.status is 'WORKING' or 'REVIEW', and executionRoute !== 'vm', return\n     `new MoeError(MoeErrorCode.NOT_ALLOWED, 'Task <id> runs under verified-local: only a VM-route seat may claim it in <status> (claim_next_task executionRoute \"vm\").', { taskId, status, executionProfile: 'verified-local', requiredRoute: 'vm' }, 'EXECUTION_ROUTE_REQUIRED')`.\n   - PLANNING rows, legacy and observe rows, and a marked strict claim are unchanged. Readiness still refuses first, so the marker never satisfies or skips it.\n3. **Doc comment.** The only caller field read is executionRoute, and it can only refuse. It is a guard against accidental host runs (an older wrapper, a hand-run CLI), not authentication. CQ-M07m/n's wrapper VM route sends it.\n\nError handling: the function still returns MoeErrors and never throws them; only parseExecutionRoute throws, and it does so before any work.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claimEligibility.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/claimEligibility.ts"
+      ],
+      "note": "Added ExecutionRoute, EXECUTION_ROUTE_REQUIRED, parseExecutionRoute and the route param to executionAdmissionRefusal. The route check runs last, after both readiness checks, so it can only add a refusal. 27 other dirty paths belong to other sessions and were left alone.",
+      "startedAt": "2026-11-01T10:23:06.083Z",
+      "completedAt": "2026-11-01T10:23:31.378Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Thread the marker through both claim paths, so the ranked pool, the explicit claim and the waiter all read the same predicate with the same route. A drift between them recreates the wake→claim→refuse spin.\n\n1. **packages/moe-daemon/src/tools/claimNextTask.ts.**\n   - inputSchema gains `executionRoute: { type: 'string', enum: ['vm'], description: 'Set only by a wrapper that runs the claimed WORKING/REVIEW session in a Moe VM (CQ-M07m/n). A verified-local WORKING or REVIEW task is refused (explicit taskId) or skipped (ranked pool) without it. It can only refuse: it never grants readiness or skips another check.' }`.\n   - At the top of the handler, before any read-modify-write, call `const executionRoute = parseExecutionRoute(params.executionRoute)`. An invalid value gives INVALID_INPUT and nothing is written.\n   - Pass it to both executionAdmissionRefusal calls (~:519 explicit, ~:577 ranked pool). The explicit path throws, as today; the pool skips, as today.\n2. **packages/moe-daemon/src/tools/waitForTask.ts.**\n   - inputSchema gains the same `executionRoute`. Parse it at the top of the handler the same way.\n   - Store it on the waiter record next to workerId.\n   - Pass it to every executionAdmissionRefusal call: the own-held match at ~:152 and the candidate filter at ~:200. A VM-route waiter then matches strict rows, and any other waiter skips them.\n\nChange nothing else in either file. Every existing claim and wait behaves exactly as before when executionRoute is absent and the row is not strict WORKING/REVIEW.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "note": "claim_next_task and wait_for_task now take executionRoute, parsed once at handler top before any write. All four executionAdmissionRefusal callers pass the parsed route. Two deviations from the plan text. (1) I did not add a route field to the ActiveWaiter record. No code reads that record for matching, and the TASK_UPDATED re-match closes over the same parsed const, so a stored copy would be dead data. (2) wait_for_task's nextAction hints (claim hint on both wake paths, wait re-entry on timeout) carry executionRoute only when it was sent, so a seat following the hint claims with the same route and does not hit the wake->claim->skip spin. When the route is absent the hint args are unchanged.",
+      "startedAt": "2026-11-01T10:23:33.801Z",
+      "completedAt": "2026-11-01T10:24:23.664Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Write a NEW test file, packages/moe-daemon/src/tools/executionRoute.test.ts. The task rail forbids editing claimNextTask.test.ts, state/validators.ts and types/schema.ts, which WT-19 declares.\n\n**Setup.**\n- Use ToolTestHarness and the raw-JSON seeding of tools/executionProfileAdmission.test.ts:\n  - strict snapshot STRICT = { version: 2, profile: 'verified-local', planRevision: 1, deliveryPolicy: 'local-branch' };\n  - legacy and observe snapshots;\n  - project settings executionProfile 'verified-local', deliveryPolicy 'local-branch'.\n- Readiness: follow `mem:convention-verified-local-test-fixture`, but make the vi.mock of '../delivery/executionProfile.js' toggleable through vi.hoisted. While the toggle is on, assertExecutionProfileReady is a no-op (readiness mocked ready); while it is off, it is the real function. Default on, reset in afterEach.\n- Pin the real assertion once: vi.importActual's assertExecutionProfileReady('verified-local') throws EXECUTION_PROFILE_NOT_READY.\n- Call the tools through their handlers, as the admission test does. Assert exact values.\n\n**Rows.**\n1. **DoD 1, readiness mocked ready.**\n   - A strict WORKING task and a strict REVIEW task are each claimed by explicit taskId with executionRoute 'vm': success, the row is assigned to the caller, and an attempt is opened.\n   - Without the marker, each explicit claim throws codeName EXECUTION_ROUTE_REQUIRED. Its context is { taskId, status, executionProfile: 'verified-local', requiredRoute: 'vm' }, and nothing is written: the assignee stays unchanged and no attempt is opened.\n   - The ranked pool (no taskId) without the marker returns hasNext false, or the legacy row when one is seeded. With the marker it returns the strict row.\n   - An own-seat resume of a held strict WORKING row without the marker is refused EXECUTION_ROUTE_REQUIRED.\n   - wait_for_task with statuses ['WORKING']: a waiter without the marker never matches a strict row, and a waiter with it does. Mirror executionProfileAdmission.test.ts's waiter rows, and clear activeWaiters timers in afterEach.\n2. **DoD 2, unchanged behavior.**\n   - A strict PLANNING claim (architect) succeeds with or without the marker.\n   - Legacy and observe WORKING and REVIEW claims succeed with or without the marker, explicit and ranked.\n   - Results match the same claim without the field: same task, same status.\n3. **DoD 3.** With the toggle off, so the real assertion runs, a strict WORKING claim WITH executionRoute 'vm' is refused EXECUTION_PROFILE_NOT_READY, not EXECUTION_ROUTE_REQUIRED, and nothing is written.\n4. **DoD 4.** executionRoute 'host', 'VM', '', null, 1 and {} are each refused INVALID_INPUT, on claim_next_task and on wait_for_task, before any write.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/executionRoute.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/executionRoute.test.ts"
+      ],
+      "note": "New executionRoute.test.ts: 47 tests, all passing in the /tmp snapshot. They cover strict WORKING and REVIEW claims with and without the marker (explicit, ranked, own-seat resume, hand-edited settings), waiter rows (immediate, TASK_UPDATED re-match, timeout hint, own-held match), PLANNING/legacy/observe unchanged, the real not-ready assertion with the marker, and six invalid values. A mutation check that disabled the route refusal in the snapshot made 17 tests fail, and I restored the file afterwards. The readiness mock is a vi.hoisted toggle.",
+      "startedAt": "2026-11-01T10:24:26.018Z",
+      "completedAt": "2026-11-01T10:27:00.759Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh, after steps 1-3: the FULL daemon suite, because these are shared claim tools. Run it in a git-archive snapshot; never npm ci, npm test or a build in the shared checkout (global rail).\n\nRun exactly this. Its command, exit code and output tail are the complete_task verification evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-bb1502b1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/claimEligibility.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/waitForTask.ts packages/moe-daemon/src/tools/executionRoute.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'`\n\nExpect exit 0 and 0 failures; every existing claim, wait and admission test passes unchanged. Cite the file and test counts, passed and skipped, in complete_task.\n\nIf an existing test fails, compare it against the same command without the overlay before changing anything. Never edit claimNextTask.test.ts (WT-19).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+        "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts"
+      ],
+      "note": "The plan's premise that every existing test passes unchanged was wrong. The first full-suite run in the /tmp snapshot failed 32 tests in 3 files: deliveryBypass.acceptance, dependencyProjection.acceptance and dependencyReadiness.strict. Every failure was EXECUTION_ROUTE_REQUIRED, because those files claim strict WORKING/REVIEW rows with readiness mocked ready and send no marker, which the new contract refuses. I added `executionRoute: 'vm'` to their strict claim calls: the RUNNER and IDENTITY arg constants (used only by claims) and two direct handler calls. None of these files is claimNextTask.test.ts, validators.ts or schema.ts (the WT-19 files). Their assertions are unchanged, and a repeat run showed 3 files and 80 tests passing. The overlay in the gate command is the plan's command plus those 3 paths. Second full run exited 0: tsc clean, 221 test files passed, 6659 tests passed, 20 skipped, 0 failed (6679 total). It ran on a HEAD snapshot plus this task's 7 overlaid files.",
+      "startedAt": "2026-11-01T10:27:11.719Z",
+      "completedAt": "2026-11-01T10:29:40.565Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read `git diff HEAD -- packages/moe-daemon/src/util/claimEligibility.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/waitForTask.ts` and the new test file as an attacker would.\n\n- **Refuse only.** No path lets executionRoute skip readiness, the finalizing hold, dependsOn, plan-reuse or team gates. The route check runs after readiness and can only return a refusal.\n- **One predicate.** The explicit claim, the ranked pool, the own-held waiter match and the waiter filter all pass the same parsed route. `grep -n \"executionAdmissionRefusal(\" packages/moe-daemon/src/tools/*.ts` must show the route argument at every call.\n- **No write before refusal.** Parsing happens before any read-modify-write, and the explicit refusal is thrown before the dependsOn gate and the assignment write.\n- **Scope.** PLANNING, legacy and observe rows are unchanged. The waiter record carries the route, so a later TASK_UPDATED re-match uses it.\n- **Not authentication.** The doc comment says so; it is a guard against accidental host runs.\n\nFix anything found, re-run step 4's gate, and submit its fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review done, no fixes needed, so no gate re-run. (1) Refuse only: the route check is the last statement of the predicate, after both readiness asserts. It only returns a refusal, and no other gate reads the route. (2) One predicate: grep shows the parsed route at all 4 executionAdmissionRefusal calls (claimNextTask 529 and 587, waitForTask 155 and 203). (3) No write before refusal: parsing sits at the top of both handlers, before the project load, any write and touchWorker. The explicit refusal is thrown before the dependsOn gate and the assignment write, and the tests assert unchanged board bytes, events and writeEntity calls. (4) Inputs: null, '', 'VM', 1, {} and 'host' are all INVALID_INPUT. McpAdapter does not validate args against inputSchema (it only advertises it), so the handler's parse is the sole gate and was tested. (5) No shared state: the predicate is synchronous and pure, and the explicit claim runs inside runExclusive. The waiter closure holds the parsed route, so every TASK_UPDATED re-match uses it. A repeat wait by the same worker still cancels the old waiter. (6) Not authentication: the doc comment says so. In production verified-local never reaches the route check, because readiness refuses it first. Two plan deviations are recorded in the step 2 and step 4 notes.",
+      "startedAt": "2026-11-01T10:29:41.663Z",
+      "completedAt": "2026-11-01T10:29:56.895Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -29,5 +98,115 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:30.039Z",
-  "updatedAt": "2026-11-01T08:07:30.039Z"
+  "updatedAt": "2026-11-01T10:30:23.748Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T10:18:30.441Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "worker-009c883d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T10:22:16.573Z",
+  "executionContract": {
+    "intendedBehavior": "A verified-local task in WORKING or REVIEW is claimable only with claim_next_task (or wait_for_task) executionRoute 'vm'. Without it, an explicit claim is refused EXECUTION_ROUTE_REQUIRED, and the ranked pool and the waiters skip the row. PLANNING, legacy and observe claims are unchanged. Readiness is still checked first, and the marker never grants anything.",
+    "acceptanceCriteria": [
+      "With readiness mocked ready, strict WORKING and REVIEW claims with 'vm' succeed. Without it, explicit claims are refused EXECUTION_ROUTE_REQUIRED and the pool skips the row.",
+      "PLANNING strict claims, and all legacy and observe claims, are unchanged with or without the marker.",
+      "With real readiness, a marked strict claim is refused EXECUTION_PROFILE_NOT_READY.",
+      "Any executionRoute other than 'vm' is INVALID_INPUT."
+    ],
+    "invariants": [
+      "executionRoute can only add a refusal: it never satisfies readiness or skips another check.",
+      "The explicit claim, the ranked pool and both waiter paths read the same predicate with the same parsed route.",
+      "A refused or invalid claim writes nothing."
+    ],
+    "compatibility": [
+      "Callers that omit executionRoute see unchanged behavior for every non-strict row and for PLANNING.",
+      "claimNextTask.test.ts, state/validators.ts and types/schema.ts are untouched (WT-19)."
+    ],
+    "approvedScope": [
+      "claimEligibility.ts: ExecutionRoute, parseExecutionRoute, and the executionAdmissionRefusal route parameter.",
+      "claimNextTask.ts and waitForTask.ts: the inputSchema field, parsing, and passing it to the predicate."
+    ],
+    "reuse": [
+      "executionAdmissionRefusal (CQ-M01e) as the single admission predicate.",
+      "The executionProfileAdmission.test.ts seeding, and the readiness mock in mem:convention-verified-local-test-fixture."
+    ],
+    "sourceAssumptions": [
+      "util/claimEligibility.ts:70 executionAdmissionRefusal(state, task, workerId?) resolves the task profile and the own-attempt recorded profile.",
+      "Callers: claimNextTask.ts:519 (throws) and :577 (skips); waitForTask.ts:152 and :200 (skip).",
+      "claim_next_task's inputSchema sits at claimNextTask.ts:~326-350; wait_for_task's at waitForTask.ts:~252-266 (additionalProperties false)."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-bb1502b1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/claimEligibility.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/waitForTask.ts packages/moe-daemon/src/tools/executionRoute.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- **A separate route predicate.** Rejected: claimNextTask and waitForTask must read ONE predicate, or they recreate the wake→claim→refuse spin (claimEligibility.ts doc). The check goes inside executionAdmissionRefusal, after readiness.\n- **Leaving wait_for_task without the marker.** Rejected: a VM-route waiter would never be woken for strict rows. The arg is symmetric and refusal-only.\n- **Readiness first.** It keeps DoD 3 (with the marker but not ready, the claim is refused NOT_READY), and it means the marker can never mask a readiness refusal.",
+    "codebaseInsights": "- executionAdmissionRefusal (util/claimEligibility.ts:70) is the single admission predicate. Its callers:\n  - claimNextTask.ts:519 (the explicit claim throws);\n  - claimNextTask.ts:577 (the ranked pool skips);\n  - waitForTask.ts:152 (own held match) and :200 (the candidate filter).\n- The ranked pool must skip, never throw: the sh wrapper reads a throw as a dead daemon (claimNextTask.ts:568-576).\n- claim_next_task's inputSchema already carries runner identity fields (host, processStartedAt) that moe-proxy stamps; the proxy passes unknown args through.",
+    "risks": "- **Strict rows held by older seats.** A strict row already held by a host seat before this lands cannot be resumed without the marker. That is intended (fail closed), and verified-local can't be activated yet anyway.\n- **Waiter type.** The waiter record type must gain the field. Check every place that builds or copies a waiter (activeWaiters), so a re-match never drops the route.\n- **WT-19.** Its open row declares claimNextTask.test.ts, validators.ts and schema.ts. Touching them would HOLD this landing.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/waitForTask.ts",
+      "packages/moe-daemon/src/tools/executionProfileAdmission.test.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3c30b30a501d466e1b110fae01b2e815b51171dd",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T10:22:16.597Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T10:23:06.083Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/util/claimEligibility.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "packages/moe-daemon/src/tools/executionRoute.test.ts",
+    "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+    "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+    "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts"
+  ],
+  "reviewStartedAt": "2026-11-01T10:30:23.746Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-bb1502b1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/claimEligibility.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/waitForTask.ts packages/moe-daemon/src/tools/executionRoute.test.ts packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'",
+    "exitCode": 0,
+    "outputTail": " Test Files  221 passed (221)\n      Tests  6659 passed | 20 skipped (6679)\n   Start at  12:28:52\n   Duration  38.61s (tests 93%, transform 4%, import 3%)\n\n(npm ci and tsc --noEmit ran first in the same && chain; chain exit code 0. Snapshot = HEAD git archive plus the 7 overlaid files. The plan's command overlays 4 files; this adds the 3 existing test files that now send executionRoute 'vm'.)",
+    "reportedAt": "2026-11-01T10:30:23.746Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/claimEligibility.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "packages/moe-daemon/src/tools/executionRoute.test.ts",
+    "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+    "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+    "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts"
+  ],
+  "completionSummary": "claim_next_task and wait_for_task now take an optional executionRoute: 'vm'. Any other value (host, VM, '', null, 1, {}) is INVALID_INPUT, raised before any write. The ONE predicate, executionAdmissionRefusal(state, task, workerId?, executionRoute?) in util/claimEligibility.ts, refuses a verified-local WORKING or REVIEW row without the marker, after both readiness asserts, so the marker can only refuse. The task-level profile or the own seat's recorded attempt profile makes a row strict. The explicit claim throws EXECUTION_ROUTE_REQUIRED (NOT_ALLOWED; context {taskId,status,executionProfile,requiredRoute:'vm'}) before any write. The ranked pool and both waiter paths skip the row. PLANNING, legacy and observe claims are unchanged, and a marked claim under real readiness is still EXECUTION_PROFILE_NOT_READY. All 4 callers pass the parsed route. New tools/executionRoute.test.ts has 47 tests; a mutation check that disabled the refusal made 17 fail. Deviations: (1) no route field on the ActiveWaiter record, since the subscribe closure holds it; (2) wait_for_task hints carry the route when sent, to avoid a wake-claim-skip spin; (3) 3 existing tests (deliveryBypass.acceptance, dependencyProjection.acceptance, dependencyReadiness.strict) claimed strict rows without the marker and failed 32 tests on the first full run, so I added executionRoute 'vm' to their claim args with assertions unchanged. None of the WT-19 files was touched. Full daemon suite in a /tmp snapshot plus 7 overlaid files: tsc clean, 221 files passed, 6659 tests passed, 20 skipped, 0 failed (6679 total)."
 }

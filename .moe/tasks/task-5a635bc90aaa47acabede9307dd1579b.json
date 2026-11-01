@@ -18,75 +18,47 @@
     {
       "stepId": "step-1",
       "description": "Phase 2-4, slice 1: the schema port, the pins and the drift test (DoD 4).\nCreate packages/moe-daemon/src/delivery/certificationEvidence.ts as a LEAF: its runtime imports are only node:crypto, node:fs, node:os, node:path and pathKey from ../util/affectedFiles.js. Nothing imports it in this task, and executionProfile.ts / assertExecutionProfileReady stay untouched (task rail). Exports:\n- CERTIFY_CHECK_IDS: frozen, the ids of certify.mjs CERTIFY_CHECKS (L73) in order. Today there are 13: provision, readiness, no-mounts, bridge-framing, bridge-eof, guest-network, writer-containment, check-containment, controller-replacement, cancellation, recovery, canary-check, teardown.\n- CERTIFICATION_PINS: deep-frozen { versions, hosts: [{platform, arch, versionSuffix}], images: {x64, arm64}, supervisorSha256 }. It is a hand-kept compiled copy of scripts/local-runner/certified-provider.json (versions; hosts without driver; images[arch].sha256) and of sha256(guest-supervisor.py).\n  - Copy every value from HEAD, never from this plan or the working tree, where a peer's uncommitted supervisor bytes may sit: `git -C /mnt/d/projexts/moes show HEAD:scripts/local-runner/guest-supervisor.py | sha256sum`. Today that is 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190; CQ-M07f will move it.\n  - A comment at the constant says: whoever changes certified-provider.json, guest-supervisor.py, CERTIFY_CHECKS or validateCertificationReport updates this file in the same diff and runs this test file (mem:decision-certification-evidence-pins).\n- hostIdentity(platform = process.platform, arch = process.arch): the CERTIFICATION_PINS.hosts entry for that pair, else null. Only 'x64' and 'arm64' map, and a pair the manifest does not list (linux/arm64, win32/arm64) is null.\n- checkCertificationReport(value: unknown): a never-throwing TypeScript port of certify.mjs validateCertificationReport (L184) and validChecks (L175).\n  - It uses the same constants (L25-29): CODE /^[A-Z][A-Z0-9_]{0,63}$/, SHA256, VERSION /^[0-9A-Za-z.+-]{1,64}$/, platforms win32/linux/darwin, results passed/failed/not-run, and arches x64/arm64.\n  - It uses the same isIso (Date.parse succeeds and toISOString round-trips) and the same plain-record, exact-own-keys rule (Reflect.ownKeys).\n  - It returns a frozen {ok: true, report}, where report is a deep-frozen copy built from exactly the schema keys. Otherwise it returns {ok: false, code}: CERTIFICATION_REPORT_CHECKS when the checks list fails (length, a row's keys, id order, result, the not-run rule or the code rule), else CERTIFICATION_REPORT_SCHEMA.\n  - Export the report and check-row types.\nTests: create certificationEvidence.test.ts with describe('drift'). Load the runner sources as repairPolicy.test.ts L221 does: import(new URL('../../../../scripts/local-runner/certify.mjs', import.meta.url).href) for certify.mjs, and readFileSync(new URL(...)) for the JSON and the .py.\n- CERTIFY_CHECK_IDS toEqual CERTIFY_CHECKS.map(c => c.id).\n- Pins against the files:\n  - versions toEqual the manifest's;\n  - hosts toEqual the manifest hosts mapped to {platform, arch, versionSuffix};\n  - images toEqual {x64, arm64} of images[arch].sha256, with the same key set;\n  - supervisorSha256 equals createHash('sha256') of the guest-supervisor.py bytes.\n- A differential table. Each variant must get the same verdict from checkCertificationReport(v).ok and from certify's validateCertificationReport (accepted means it did not throw), and both verdicts must occur.\n  - Accepted:\n    - the valid native certified report, and the same report with provider.version null;\n    - injected + certified false, and that injected report with arch null, and with one null hash;\n    - native + certified false with one failed check, not-run after it and a passed teardown, and the same report with that failed row's code exactly 64 chars.\n  - Refused:\n    - the valid report with arch null, or with one null hash (certified stays true);\n    - a provider.version with a space, or of 65 chars;\n    - a failed-row code of 65 chars, in lowercase, or with a leading digit;\n    - a code on a passed row, or a failed row without a code;\n    - not-run on teardown, or not-run with no earlier failure;\n    - one row short, or two ids swapped;\n    - a missing key, or an extra key at the top level, in provider, in image or in a check row;\n    - another kind, version 2, another provider.name, executionReady true, or a non-ISO startedAt;\n    - injected + certified true, or native + certified true with a failed check.\n  - Also assert that the accepted copy is deep-frozen, that the swapped ids give code CHECKS, and that the top-level extra key gives SCHEMA.\n- hostIdentity rows:\n  - win32/x64 gives '+win', and linux/x64 gives '';\n  - darwin/x64 and darwin/arm64 give '+mac';\n  - linux/arm64, win32/arm64, linux/ia32 and freebsd/x64 give null.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/certificationEvidence.ts",
         "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/delivery/certificationEvidence.ts",
-        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
-      ],
-      "note": "Step 1 done. certificationEvidence.ts is a leaf (no runtime imports yet besides what step 2 adds). It exports CERTIFY_CHECK_IDS (13 ids), CERTIFICATION_PINS (deep-frozen; values copied from HEAD; the supervisor sha 3a19f3bf… matches both HEAD and the working tree), hostIdentity, and checkCertificationReport. checkCertificationReport is a never-throwing port that returns {ok:true, report:<deep-frozen copy>} or {ok:false, code: CERTIFICATION_REPORT_SCHEMA|CHECKS}; a checks-list failure gives CHECKS, everything else SCHEMA. Tests are describe('drift') and describe('hostIdentity'): the ids and the pins against certify.mjs, certified-provider.json and guest-supervisor.py; a 40-row differential table against validateCertificationReport, with both verdicts asserted; frozen-copy, code and hostile-input (Proxy trap) rows; and 8 hostIdentity rows. Snapshot /tmp/moe-5a635bc9-dev-SBVU9b (git archive HEAD + npm ci, dev only): tsc --noEmit passes, and vitest gives 51/51 passed. Mutation probe (/tmp/moe-5a635bc9-mut/mutate.mjs, 25 mutants): all killed. The first run left 4 survivors (code first-letter case, platform, transport, an extra check row); I added the 4 table rows that kill them. Shared checkout dirty paths are peers'/pre-existing (24), untouched.",
-      "startedAt": "2026-11-01T09:30:51.141Z",
-      "completedAt": "2026-11-01T09:34:57.184Z"
+      ]
     },
     {
       "stepId": "step-2",
       "description": "Phase 4, slice 2: the fail-closed host store reader (DoD 1-3). Add to certificationEvidence.ts:\n- CERTIFICATION_REFUSALS: frozen and exported, every code prefixed CERTIFICATION_:\n  - input, host and store: INPUT_INVALID, HOST_UNSUPPORTED, STORE_UNAVAILABLE, STORE_MISSING, STORE_UNSAFE, STORE_IN_PROJECT, STORE_UNREADABLE;\n  - reading a file: REPORT_NONE, REPORT_UNSAFE, REPORT_UNREADABLE, REPORT_OVERSIZE, REPORT_MALFORMED;\n  - judging a report: REPORT_SCHEMA, REPORT_CHECKS, REPORT_INJECTED, REPORT_UNCERTIFIED, REPORT_PLATFORM, REPORT_ARCH, REPORT_IMAGE, REPORT_SUPERVISOR, REPORT_PROVIDER_VERSION.\n- MAX_REPORT_BYTES = 65_536.\n- The type CertificationEvidence = frozen {ok: true, report, sha256} | {ok: false, refusals}.\n- certificationStoreDir(): path.join(os.userInfo().homedir, '.moe', 'certification'), or null when os.userInfo() throws.\n  - Never os.homedir(), which honors HOME and USERPROFILE. os.userInfo() reads the passwd entry on POSIX and the token's registry profile on Windows.\n  - No env var, setting or argument may change it (task rail).\n- readHostCertificationEvidence(projectRoot): the only production entry. It is exactly readCertificationStore({storeDir: certificationStoreDir(), projectRoot}), and a null dir gives STORE_UNAVAILABLE. It takes no store and no host.\n- readCertificationStore({storeDir, projectRoot}): the test seam the task description names. Its doc comment says production code calls readHostCertificationEvidence only.\nError handling: it is async and never rejects. A top-level try/catch maps anything unexpected to STORE_UNREADABLE, and every file handle is closed in a finally. In order:\n1. storeDir and projectRoot must be absolute strings without control characters, and projectRoot must realpath; else INPUT_INVALID. A null hostIdentity() gives HOST_UNSUPPORTED.\n2. lstat(storeDir):\n   - ENOENT gives STORE_MISSING, and any other error gives STORE_UNREADABLE.\n   - A symlink (a Windows junction lstats as one) or a non-directory gives STORE_UNSAFE.\n   - On POSIX (process.getuid is a function), a uid other than process.getuid() or (mode & 0o077) !== 0 also gives STORE_UNSAFE. That is the M07e writer's rule (comment-e9e780c9).\n3. realpath(storeDir) must be inside neither realpath(projectRoot) nor realpath(projectRoot/.moe), else STORE_IN_PROJECT.\n   - Check .moe whenever it resolves, since it may be a symlink out of the project; ENOENT skips it.\n   - Inside means what commitMaterializer.ts L156-157 tests: rel = path.relative(pathKey(root), pathKey(target)), and inside is rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel)).\n4. readdir(storeDir, {withFileTypes: true}). Keep only the writer's names, matching /^certification-(win32|linux|darwin)-(x64|arm64)-\\d{8}T\\d{6}Z-[0-9a-f]{6}\\.json$/, sorted, and ignore every other name. If none match, REPORT_NONE.\n5. Each kept entry, with the discipline of runner-client.mjs readSmall (L32):\n   - A symlink or non-file Dirent gives REPORT_UNSAFE.\n   - open with O_RDONLY | (O_NOFOLLOW ?? 0) | (O_NONBLOCK ?? 0). ELOOP or EMLINK gives REPORT_UNSAFE, and any other error REPORT_UNREADABLE. A handle.stat() that is not a file gives REPORT_UNSAFE.\n   - Read MAX_REPORT_BYTES + 1 bytes from offset 0. More than the cap gives REPORT_OVERSIZE.\n   - JSON.parse of the utf8 text must succeed, and Buffer.from(JSON.stringify(value) + '\\n') must equal the bytes exactly; else REPORT_MALFORMED. That is the writer's form, and it refuses a BOM, invalid UTF-8, any other whitespace and a duplicate key.\n   - Then checkCertificationReport's code.\n   - Then the first failure wins:\n     - transport not 'native': INJECTED;\n     - certified false: UNCERTIFIED;\n     - platform not the host's: PLATFORM;\n     - arch not the host's: ARCH;\n     - image.sourceSha256 not CERTIFICATION_PINS.images[host.arch]: IMAGE;\n     - supervisorSha256 not the pin: SUPERVISOR;\n     - provider.version not equal to some pinned version + host.versionSuffix (doctor.mjs L72's rule): PROVIDER_VERSION.\n6. If any file passes, return frozen {ok: true, report, sha256}: the newest by Date.parse(finishedAt), a tie going to the greater name, with the sha256 of its exact bytes. Otherwise return frozen {ok: false, refusals}, each code once in first-seen name order.\nTests: in describe.skipIf(!hostIdentity()). Each test uses fresh mkdtemp dirs, removed in afterEach together with vi.unstubAllEnvs().\n- A valid() builder uses this host's platform and arch, the pinned version + suffix, CERTIFICATION_PINS.images[arch] and supervisorSha256, and all 13 ids passed.\n- Files are written as JSON.stringify(r) + '\\n' under writer-style names, in a 0700 store.\n- DoD 1:\n  - One valid report gives toStrictEqual {ok: true, report: parsed, sha256: the file bytes' sha256}, with result and report deep-frozen.\n  - With two valid reports, the newer finishedAt wins.\n  - A valid report beside a refused one is still returned.\n  - An empty store gives [REPORT_NONE], and an absent store [STORE_MISSING].\n- DoD 2, one file each, toStrictEqual {ok: false, refusals: [code]}:\n  - injected (certified false): INJECTED;\n  - certified false (one failed check, then not-run, teardown passed): UNCERTIFIED;\n  - another platform: PLATFORM; another arch: ARCH;\n  - another image sha: IMAGE; another supervisor sha: SUPERVISOR;\n  - 1.16.0 + suffix, and 1.17.0 + a wrong suffix: PROVIDER_VERSION;\n  - an extra key, and a missing key: SCHEMA;\n  - two check rows swapped: CHECKS;\n  - truncated JSON, a pretty-printed valid report, and a duplicate key: MALFORMED;\n  - 65_537 bytes: OVERSIZE.\n- DoD 3:\n  - The store as a symlink (type 'junction', which Windows allows unprivileged) to a dir holding a valid report gives STORE_UNSAFE.\n  - A report-named file symlink to a valid report outside the store gives REPORT_UNSAFE. Call ctx.skip() only when symlinkSync throws EPERM on win32.\n  - A report-named directory gives REPORT_UNSAFE.\n  - A store under the project root gives STORE_IN_PROJECT, and so does one under a project/.moe that is a junction to an outside dir.\n  - POSIX only: a 0755 store gives STORE_UNSAFE. The uid branch stays review-only, since an unprivileged test cannot create a foreign-owned dir.\n  - Stub HOME and USERPROFILE (vi.stubEnv) to a temp home holding .moe/certification/<valid report>.\n    - First assert that os.homedir() now equals that home, which proves the stub reaches the OS lookup in this vitest pool.\n    - Then assert that certificationStoreDir() equals path.join(os.userInfo().homedir, '.moe', 'certification') and is not under the temp home.\n    - Then assert that readHostCertificationEvidence(project), a read-only look at the real store, never returns the planted report's sha256.\nBudget: module ≤170 lines and tests ≤230 lines (table-driven), so the diff stays under 400 changed lines.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/certificationEvidence.ts",
         "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/delivery/certificationEvidence.ts",
-        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
-      ],
-      "note": "Step 2 done. Added CERTIFICATION_REFUSALS (21 frozen codes), MAX_REPORT_BYTES, CertificationEvidence, certificationStoreDir (os.userInfo().homedir only, null when it throws), readHostCertificationEvidence(projectRoot) and readCertificationStore({storeDir, projectRoot}), as planned: input/host checks, lstat + owner/0o077 rule, realpath containment against root and .moe (a non-ENOENT .moe error fails closed), writer-name filter + sort, readSmall discipline (Dirent, O_NOFOLLOW|O_NONBLOCK, fstat, cap+1), canonical bytes, the schema port, then the first-failure-wins host match, and newest finishedAt with the greater name on a tie. Never rejects; handles are closed in finally. Tests (describe.skipIf(!hostIdentity())), as planned plus extras: DoD1 rows (exact-bytes sha, deep-frozen, newest, tie, valid beside refused, NONE incl. foreign-only names, MISSING), a 16-row DoD2 table, and DoD3 rows (junction store, report dir, 0755 store, file-symlink report with the win32 EPERM skip, store in project / in symlinked .moe / reached via a symlinked ancestor / equal to the root, HOME+USERPROFILE stub asserting os.homedir moved but the store did not). Extras: INPUT_INVALID (null, {}, relative incl. '.', control char, missing root), HOST_UNSUPPORTED via a platform stub, a darwin-stub row proving the suffix is required, STORE_UNAVAILABLE via a userInfo spy, and .moe ELOOP → STORE_UNREADABLE. Snapshot run: tsc --noEmit clean; vitest 63/63 passed. Size: module 185 + tests 214 = 399 lines (the module is over its 170 estimate and the tests are under their 230; the total stays under 400). Mutation sweep (64 mutants): 56 killed. The 8 survivors are all equivalent or review-only. The uid branch is review-only as planned. On this host these are redundant: lstat isSymbolicLink (a symlink is already !isDirectory), O_NOFOLLOW, the Dirent check and fstat (layered, each alone redundant on Linux), rel==='' (it already passes the other clauses), Set dedupe, and the sort (libuv scandir already returns sorted names). executionProfile.ts is untouched, and nothing imports the module.",
-      "startedAt": "2026-11-01T09:35:00.298Z",
-      "completedAt": "2026-11-01T09:54:42.705Z"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "Phase 5: the one verification gate (DoD 5). Run it once, fresh, after steps 1-2, from the repo root. Never run npm ci, npm test or a build in the shared checkout, and never run Multipass (global and task rails). Run exactly:\ncd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-5a635bc9-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/delivery/certificationEvidence.ts packages/moe-daemon/src/delivery/certificationEvidence.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/delivery/certificationEvidence.test.ts'\nWhat it does:\n- It overlays this task's two files on a whole-repo archive of HEAD, so the drift test reads HEAD's certify.mjs, certified-provider.json and guest-supervisor.py.\n- It typechecks the module. vitest does not typecheck, and tsconfig excludes the tests.\n- It runs the one test file under env -i with the pinned Node.\nExpect exit 0 and 0 failures. On this linux/x64 host nothing skips except the win32-only EPERM guard. The fresh output tail is the complete_task verification evidence, and QA re-runs the same command. If the drift test fails because HEAD's supervisor moved, update the pin from HEAD and re-run; never edit a runner file.\nAlso run the Windows probe for the description's USERPROFILE check once, and paste its output into the step note. It is evidence, not the gate:\ncd /mnt/c && cmd.exe /c \"set USERPROFILE=C:\\\\moe-fake-profile&& set HOME=C:\\\\moe-fake-home&& node -p require('os').userInfo().homedir+'#'+require('os').homedir()\"\nExpect the real profile before '#' and C:\\moe-fake-profile after it. The architect observed C:\\Users\\<user>#C:\\moe-fake-profile on Node 24.16 on 2026-11-01.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/delivery/certificationEvidence.ts",
-        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
-      ],
-      "note": "Step 3 gate ran fresh at HEAD 79693e95 (HEAD moved since claim, but HEAD's guest-supervisor.py sha256 is still 3a19f3bf…ecef8190, so the pin is unchanged). I ran the plan's exact command from the repo root in snapshot /tmp/moe-5a635bc9-SfwEG3 (git archive HEAD + the two files overlaid, npm ci under env -i with Node v24.21.0, then tsc --noEmit, then vitest). EXIT=0. Tail: \"✓ src/delivery/certificationEvidence.test.ts (63 tests) 394ms / Test Files 1 passed (1) / Tests 63 passed (63)\", with no skips; the win32 EPERM guard is not hit on linux/x64. Full log: /tmp/moe-5a635bc9-gate.log. Windows probe (evidence only), `cmd.exe /c \"set USERPROFILE=C:\\moe-fake-profile&& set HOME=C:\\moe-fake-home&& node -p require('os').userInfo().homedir+'#'+require('os').homedir()\"`, printed `C:\\Users\\Yaron#C:\\moe-fake-profile` on Windows node v24.16.0. So userInfo ignores USERPROFILE and homedir follows it, as expected. Not done: a Windows-node run of the vitest file itself, which the plan does not require; daemon CI runs on Linux. No npm command ran in the shared checkout, and Multipass never ran.",
-      "startedAt": "2026-11-01T09:54:46.009Z",
-      "completedAt": "2026-11-01T09:55:47.633Z"
+      "status": "PENDING",
+      "affectedFiles": []
     },
     {
       "stepId": "step-4",
       "description": "Phase 7: the adversarial self-review, once, on this task's diff only (skill adversarial-self-review).\n- Can anything other than a native, certified report that matches platform, arch, image pin, supervisor pin and a pinned version + suffix come back ok:true? Would a mutant that drops any one check survive its DoD 2 row?\n- Can any input make readCertificationStore or readHostCertificationEvidence reject or throw? Try null, {}, relative paths, control characters, a store deleted mid-read, and EACCES. Is every handle closed on every path?\n- Does anything follow a symlink?\n  - the store (lstat);\n  - a report (Dirent, O_NOFOLLOW and fstat);\n  - the project's .moe (realpath on both sides);\n  - on Windows, with no O_NOFOLLOW, and through junctions.\n- Does the store path come from os.userInfo() only? Never from os.homedir(), HOME, USERPROFILE, a setting, or an argument on the production entry.\n- Are the pins HEAD's values, not the working tree's?\n- Would the drift test fail if:\n  - CERTIFY_CHECKS gained, lost or reordered an id;\n  - certified-provider.json or guest-supervisor.py changed;\n  - the port dropped or loosened any validateCertificationReport rule?\n- Is executionProfile.ts (assertExecutionProfileReady) untouched? Does nothing import the new module yet? Does no refusal carry a path, an errno or report bytes?\n- Does the diff list only the two new files, at about 400 changed lines or fewer?\nRe-run step 3's command if anything changed.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/certificationEvidence.ts",
         "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/delivery/certificationEvidence.ts",
-        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
-      ],
-      "note": "Adversarial self-review of the two new files (the only diff). One change: I renamed a test helper `as` (a contextual keyword) to `onOs`. I then re-ran step 3's exact command at HEAD 79693e95: EXIT=0, 63/63 passed (/tmp/moe-5a635bc9-gate2.log).\n\nChecklist:\n(1) ok:true only for schema-valid + native + certified + host platform/arch + image pin + supervisor pin + pinned version+suffix. Each branch has its own DoD2 row, and every drop-one mutant is killed, including the suffix: on linux that needs a darwin platform-stub row, because the linux suffix is ''.\n(2) Never rejects or throws: there is a top-level catch, and input/host are validated first (null, {}, relative incl. '.', control chars and a missing root are tested). Deletion mid-read is handled: readdir ENOENT gives STORE_UNREADABLE, and a file gone after readdir gives REPORT_UNREADABLE. EACCES gives UNREADABLE. The handle is closed in finally on every path.\n(3) Symlinks: the store is checked with lstat (a junction lstats as a symlink); a report with Dirent, O_NOFOLLOW and fstat; .moe and every ancestor through realpath on both sides (tested: a symlinked .moe, an ancestor symlink into the project, and a .moe ELOOP that fails closed).\n(4) The store path comes only from os.userInfo().homedir. The production entry takes only projectRoot. The HOME/USERPROFILE test proves os.homedir() moved while the store did not; the Windows probe printed C:\\Users\\Yaron#C:\\moe-fake-profile.\n(5) The pins equal HEAD's (the drift test passes on a HEAD archive).\n(6) The drift and differential tests kill id-order, pin and rule mutants (25/25 port mutants).\n(7) executionProfile.ts is untouched; nothing imports the module; refusals are fixed codes only.\n(8) Exactly two new files, 399 lines.\n\nTheoretical, noted for QA and M07b:\n(a) On Windows, with no O_NOFOLLOW and no ACL check, a same-user swap of a report for a symlink between readdir and open would be followed. Same-user processes are outside the threat model (decision 4).\n(b) The reader does not itself refuse a symlinked <home>/.moe that resolves outside the project; the M07e writer refuses it. The reader refuses only when the resolved path lands in the project or its .moe.\n(c) There is no cap on the number of store entries. Each read is capped at 64 KiB and sequential, so M07b should cache or evaluate off the hot path.\n(d) A report caught mid-write by M07e reads as MALFORMED for that pass (fail-closed, transient).\n(e) A project rooted at or above the OS home always gives STORE_IN_PROJECT, by design.",
-      "startedAt": "2026-11-01T09:55:49.460Z",
-      "completedAt": "2026-11-01T09:57:34.917Z"
+      ]
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD 4 is not met. The acceptance criterion says the drift tests fail when the port diverges from \"any validateCertificationReport rule\". For six of those rules, the port in certificationEvidence.ts can be loosened and all 63 tests stay green. I applied each loosening (mutant) alone to a git-archive snapshot:\n(1) L81 drop isIso(finishedAt);\n(2) L78 ARCHES.includes → true;\n(3) L80 drop SHA256.test;\n(4) L60 drop RESULTS.includes;\n(5) L79 drop the typeof provider.version guard;\n(6) L52 Reflect.ownKeys → Object.keys.\nFor each one, certify.mjs REFUSES a matching row (checked in node), so one VARIANTS row per rule catches it. The step-4 claim that the differential table catches any dropped or loosened rule (\"25/25 port mutants\") holds only for your own sweep. The current port is correct; this is a gap in what the tests can detect. It matters downstream: with (1), an unparseable finishedAt could win the newest-report pick, and with (3), a providerImageHash that is not a sha256 would reach CQ-M07b.\n\nEverything else checked out, so there is nothing to redo:\n- Gate: the exact verification command re-ran at HEAD 90189373, whose two files equal 63ae437a. EXIT=0, 63/63.\n- Delivery: completion 63ae437a is on moe/work-2026-10-24 and is 399 lines under packages/.\n- DoD 1, 2, 3 and 5 hold.\n- The pins equal HEAD's.\n- Nothing imports the module, and executionProfile.ts is untouched.\n- The helpers match certify.mjs.\n- The Windows probe printed C:\\Users\\Yaron#C:\\moe-fake-profile.\n- Ten other reader and port mutants were killed.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -101,28 +73,30 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:06:33.518Z",
-  "updatedAt": "2026-11-01T09:59:42.551Z",
+  "updatedAt": "2026-11-01T10:30:13.534Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T09:10:01.886Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-b520bc90",
-    "worker-cef53f62"
+    "qa-1e84238e"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
+  "tier": "heavy",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [
-    "step-1",
-    "step-2",
-    "step-3",
-    "step-4"
+  "stepsCompleted": [],
+  "failedDodItems": [
+    {
+      "item": "A drift test fails when the TypeScript schema port or the pins diverge from scripts/local-runner/certify.mjs, certified-provider.json or guest-supervisor.py.",
+      "rejectedAt": "2026-11-01T10:29:24.165Z",
+      "rejectedBy": "qa-1e84238e"
+    }
   ],
-  "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T09:29:04.450Z",
   "executionContract": {
     "intendedBehavior": "readHostCertificationEvidence(projectRoot) reads only <os.userInfo().homedir>/.moe/certification and never relocates it. It always resolves, never rejects, to a frozen result. On success that is the newest report (by finishedAt), with the sha256 of its exact bytes, that passes the TypeScript port of certify.mjs validateCertificationReport and matches all of the following: native; certified; this host's platform and arch; the shipped image pin for that arch; the shipped guest-supervisor.py sha256; and a pinned Multipass version with this host's suffix. Otherwise it is a list of fixed refusal codes. These are refused: a symlinked or loosely permissioned store; a symlinked or non-regular report; a store inside the project root or its .moe/; an oversize or non-canonical file. The pins are a hand-kept compiled constant, drift-tested against certified-provider.json, guest-supervisor.py and certify.mjs. Nothing here grants readiness: assertExecutionProfileReady is untouched and nothing imports the module yet.",
@@ -233,6 +207,21 @@
       "treeId": "5c3c606d34a1575dd722c801927bc3557de21f9b",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "8ce2cda4cc6db91a34cdf28aa2650ba4915638c1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1e84238e@2026-11-01T10:24:04Z",
+      "paths": [
+        ".moe/tasks/task-b8734a784d6b42d98bd5f2493e2e228e.json"
+      ],
+      "recordedBy": "qa-1e84238e",
+      "recordedAt": "2026-11-01T10:30:13.534Z",
+      "treeId": "d73afebb2346ee31723575e6033f4ac3abd65a70",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -242,8 +231,62 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-cef53f62@2026-11-01T09:29:24Z",
-    "at": "2026-11-01T09:59:42.551Z"
-  }
+    "kind": "checkpoint",
+    "sessionId": "qa-1e84238e@2026-11-01T10:24:04Z",
+    "at": "2026-11-01T10:30:13.534Z"
+  },
+  "reviewCompletedAt": "2026-11-01T10:29:24.165Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "A drift test fails when the TypeScript schema port or the pins diverge from scripts/local-runner/certify.mjs, certified-provider.json or guest-supervisor.py."
+    ],
+    "issues": [
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+        "line": 43,
+        "description": "VARIANTS needs rows that both validators refuse, for three rules: (a) finishedAt ISO, port L81: valid({finishedAt:'2026-11-01T09:20:00Z'}), with no millis; (b) the arch enum, port L78: {...injected, arch:'ia32'}; (c) the hash format, port L80: {...injected, supervisorSha256:'E'.repeat(64)}. The real certify.mjs refuses each one today, so each row kills its surviving mutant."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+        "line": 43,
+        "description": "VARIANTS also needs refused rows for: (d) the result enum, port L60: injected with one row's result set to 'skipped'; (e) the provider.version type, port L79: provider(1170), a number; (f) exact own keys, port L52: {...valid(), [Symbol('x')]:1}, or a non-enumerable extra key. Check each one by loosening that clause alone in a scratch snapshot; the file must go red."
+      },
+      {
+        "type": "other",
+        "file": "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+        "description": "Keep the total at 400 net lines or fewer under packages/ (399 today). Fold the new rows into existing VARIANTS lines, 2-3 per line as the table already does. Correct the step-4 claim and the handoff's \"25/25 port mutants\". Re-run the exact checkRefs command in a fresh git-archive snapshot and record its tail."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 4 is not met. The acceptance criterion says the drift tests fail when the port diverges from \"any validateCertificationReport rule\". For six of those rules, the port in certificationEvidence.ts can be loosened and all 63 tests stay green. I applied each loosening (mutant) alone to a git-archive snapshot:\n(1) L81 drop isIso(finishedAt);\n(2) L78 ARCHES.includes → true;\n(3) L80 drop SHA256.test;\n(4) L60 drop RESULTS.includes;\n(5) L79 drop the typeof provider.version guard;\n(6) L52 Reflect.ownKeys → Object.keys.\nFor each one, certify.mjs REFUSES a matching row (checked in node), so one VARIANTS row per rule catches it. The step-4 claim that the differential table catches any dropped or loosened rule (\"25/25 port mutants\") holds only for your own sweep. The current port is correct; this is a gap in what the tests can detect. It matters downstream: with (1), an unparseable finishedAt could win the newest-report pick, and with (3), a providerImageHash that is not a sha256 would reach CQ-M07b.\n\nEverything else checked out, so there is nothing to redo:\n- Gate: the exact verification command re-ran at HEAD 90189373, whose two files equal 63ae437a. EXIT=0, 63/63.\n- Delivery: completion 63ae437a is on moe/work-2026-10-24 and is 399 lines under packages/.\n- DoD 1, 2, 3 and 5 hold.\n- The pins equal HEAD's.\n- Nothing imports the module, and executionProfile.ts is untouched.\n- The helpers match certify.mjs.\n- The Windows probe printed C:\\Users\\Yaron#C:\\moe-fake-profile.\n- Ten other reader and port mutants were killed.",
+      "rejectedAt": "2026-11-01T10:29:24.165Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "A drift test fails when the TypeScript schema port or the pins diverge from scripts/local-runner/certify.mjs, certified-provider.json or guest-supervisor.py."
+      ],
+      "issues": [
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+          "line": 43,
+          "description": "VARIANTS needs rows that both validators refuse, for three rules: (a) finishedAt ISO, port L81: valid({finishedAt:'2026-11-01T09:20:00Z'}), with no millis; (b) the arch enum, port L78: {...injected, arch:'ia32'}; (c) the hash format, port L80: {...injected, supervisorSha256:'E'.repeat(64)}. The real certify.mjs refuses each one today, so each row kills its surviving mutant."
+        },
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+          "line": 43,
+          "description": "VARIANTS also needs refused rows for: (d) the result enum, port L60: injected with one row's result set to 'skipped'; (e) the provider.version type, port L79: provider(1170), a number; (f) exact own keys, port L52: {...valid(), [Symbol('x')]:1}, or a non-enumerable extra key. Check each one by loosening that clause alone in a scratch snapshot; the file must go red."
+        },
+        {
+          "type": "other",
+          "file": "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+          "description": "Keep the total at 400 net lines or fewer under packages/ (399 today). Fold the new rows into existing VARIANTS lines, 2-3 per line as the table already does. Correct the step-4 claim and the handoff's \"25/25 port mutants\". Re-run the exact checkRefs command in a fresh git-archive snapshot and record its tail."
+        }
+      ]
+    }
+  ]
 }
