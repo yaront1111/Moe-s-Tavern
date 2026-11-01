@@ -930,6 +930,9 @@ const STREAM_KEYS = path.join(tmpdir(), 'moe-stream', 'keys');
 const STREAM = Object.freeze({ ssh: STREAM_SSH, keyDir: STREAM_KEYS });
 const streamCall = (mode, name = GUEST) => [STREAM_SSH,
   sshStreamArgv({ ...transportFiles(name, STREAM_KEYS), name, address: '10.0.0.2', mode }), { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
+// CQ-R14d3: the same spawn through a harness's own provider route (certifyHarness carries transportStub's ssh and keyDir).
+const streamFor = (provider, mode, name = GUEST) => [provider.ssh,
+  sshStreamArgv({ ...transportFiles(name, provider.keyDir), name, address: '10.0.0.2', mode }), { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
 const IDENTITIES = ['moe-agent', 'moe-check'];
 const PINS = (await loadCertifiedProvider()).images;
 const SOURCE = { arch: 'x64', url: PINS.x64.url, sha256: PINS.x64.sha256 };
@@ -3078,13 +3081,18 @@ const GUEST_EXECS = { home: ['sudo', '-n', 'install', '-d', '-m', '0700', '-o', 
   probe: ['sudo', '-n', '-u', 'moe-agent', 'python3', '-I', '-c', WRITER_LITERAL], replace: ['sudo', '-n', 'cp', '/usr/bin/true', '/opt/moe/bin/moe-supervisor'] };
 const guestExecOf = args => (args[0] === 'exec' && args[2] === GUEST ? Object.keys(GUEST_EXECS).find(kind => JSON.stringify(args.slice(4)) === JSON.stringify(GUEST_EXECS[kind])) : undefined);
 const REPLACED_HASH = `${'0'.repeat(64)}  /opt/moe/bin/moe-supervisor\n`;
+// CQ-R14d3: a rig run's VM was never launched, so its session's info read answers as certify's guest under the run's own name.
+const infoAs = (run, name) => (executable, args, options) => (args[0] === 'info' && args[1] === name
+  ? run(executable, ['info', GUEST, ...args.slice(2)], options).then(({ stdout, stderr }) => ({ stdout: stdout.replaceAll(GUEST, name), stderr }))
+  : run(executable, args, options));
 function containmentRig(runs = []) {
   const calls = [];
   const runCheckJob = async (input, given) => {
     const at = calls.push({ input, given }) - 1;
     const { session = at === 1, reject, ...result } = { workspace: ['intact', 'unverified', 'changed'][at], ...runs[at] };
     if (reject) throw Object.assign(new Error('/private/path'), { code: reject });
-    const observed = session ? await given.session({ name: nameAt(7 + at), check: input.check, provider: input.provider, budgetMs: input.budgetMs, timeoutMs: 1_000 }) : {};
+    const provider = { ...input.provider, run: infoAs(input.provider.run, nameAt(7 + at)) };
+    const observed = session ? await given.session({ name: nameAt(7 + at), check: input.check, provider, budgetMs: input.budgetMs, timeoutMs: 1_000 }) : {};
     return Object.freeze({ outcome: 'passed', exitCode: 0, signal: null, outputTail: '', ...observed, environment: null, instance: nameAt(7 + at), vm: 'deleted',
       failure: null, executionReady: false, ...result });
   };
@@ -3441,9 +3449,9 @@ test('CB2 bridge-framing materializes the generated snapshot, then streams the 2
   const { guest, router, context } = bridgeContext();
   const result = await framingCheck.run(context);
   assert.deepEqual([result, Object.isFrozen(result)], [{ result: 'passed', code: null }, true]);
-  assert.deepEqual(router.calls.map(({ args }) => args), [streamCall('materialize'), ['multipass', checkArgv(GUEST), PIPES]]);
+  assert.deepEqual(router.calls.map(({ args }) => args), [streamCall('materialize'), streamCall('check')]);
   assert.equal(router.calls[0].proc.frames()[0].digest, workspaceEntries(certifySnapshot()).digest);
-  assert.deepEqual([router.calls[1].proc.frame, router.calls[1].proc.written.length, guest.ids()], [checkOf('certify-framing', CB_FRAMING), 1, ['info', 'mountinfo', 'info', 'info', 'mountinfo']]);
+  assert.deepEqual([router.calls[1].proc.frame, router.calls[1].proc.written.length, guest.ids()], [checkOf('certify-framing', CB_FRAMING), 1, ['info', 'mountinfo', 'info', 'info', 'mountinfo', 'info']]);
 });
 
 test('CB3 bridge-framing fails with one fixed code per rule: digest, session outcome, then exact bytes', async () => {
@@ -3478,7 +3486,7 @@ test('CB4 bridge-eof passes when closing stdin after exactly "ready\\n" ends the
       onEof: proc => { log.push('eof'); proc.exit(74); } });
     assert.deepEqual(await eofCheck.run(context), { result: 'passed', code: null });
     assert.deepEqual([router.calls.map(({ args }) => args), router.calls[0].proc.frame, log, router.calls[0].proc.kills],
-      [[['multipass', checkArgv(GUEST), PIPES]], checkOf('certify-eof', CB_EOF), ['ready', 'eof'], []]);
+      [[streamCall('check')], checkOf('certify-eof', CB_EOF), ['ready', 'eof'], []]);
   }
 });
 
@@ -3594,7 +3602,7 @@ test('GN1 the connect probe is one fixed literal; the gateway, check-identity an
   const command = `python3 -I -c '${PROBE_LITERAL}' 10.20.30.1 ${port} 9876`;
   assert.deepEqual([order, listening, h.probes, networkCall(h).args[1], networkCall(h).proc.frame],
     [['gateway', 'check', 'agent'], [true], [['gateway', ROUTE_ARGV, lifecycleOptions(QUERY_TIMEOUT_MS)], ['agent', agentArgv(port), lifecycleOptions(QUERY_TIMEOUT_MS)]],
-      checkArgv(GUEST), checkOf('certify-network', command)]);
+      streamFor(h.deps.provider, 'check')[1], checkOf('certify-network', command)]);
   assert.deepEqual([command.length <= 1000, Number.isInteger(port) && port > 0 && port !== 9876, await refusesConnect(port)], [true, true, true]);
 });
 
@@ -3789,7 +3797,7 @@ test('CC4 the integrity run changes the protected file once, through one fixed r
   assert.deepEqual([await h.certify(), log, h.changes], [certification(), ['stdout', 'change'],
     [[['exec', '--no-map-working-directory', nameAt(8), '--', ...CHANGE_ARGV], lifecycleOptions(QUERY_TIMEOUT_MS)]]]);
   const session = h.router.calls.find(({ proc }) => proc.frame?.id === 'certify-integrity');
-  assert.deepEqual([session.args[1], session.proc.frame], [checkArgv(nameAt(8)), { kind: 'check', version: 1, id: 'certify-integrity', command: CC_COMMANDS[1], protected: [CC_ENTRY] }]);
+  assert.deepEqual([session.args[1], session.proc.frame], [streamFor(h.deps.provider, 'check', nameAt(8))[1], { kind: 'check', version: 1, id: 'certify-integrity', command: CC_COMMANDS[1], protected: [CC_ENTRY] }]);
   // No stdout, a failed change or a result that never ran its session: CHANGE_FAILED, and the edit run never starts.
   for (const options of [{ bridge: { scripts: { 'certify-integrity': proc => proc.exit(74) } } }, { change: probeExit(1, '') },
     { containment: [, { session: false, outcome: 'inconclusive' }] }]) {
@@ -3933,7 +3941,7 @@ test('LC1 cancellation aborts its own check VM\'s session at its first stdout by
   assert.deepEqual(await h.certify(), certification());
   const sessions = h.router.calls.filter(({ proc }) => proc.frame?.id === 'certify-cancel');
   assert.deepEqual([sessions.length, sessions[0].args, sessions[0].proc.frame, sessions[0].proc.stdin.destroyed, sessions[0].proc.kills, log],
-    [1, [windowsPlatform.executable, checkArgv(nameAt(2)), PIPES], checkOf('certify-cancel', CB_EOF), true, [], ['stdout', 'eof']]);
+    [1, streamFor(h.deps.provider, 'check', nameAt(2)), checkOf('certify-cancel', CB_EOF), true, [], ['stdout', 'eof']]);
   const [[input, result, main]] = seen;
   assert.deepEqual([seen.length, result.outcome, result.vm, result.instance, main, input.signal.aborted, input.check, input.dependencies, input.budgetMs, validOwner(input.owner)],
     [1, 'infra-failure', 'deleted', nameAt(2), 'owned', true, { id: 'certify-cancel', command: CB_EOF, protected: [] }, [], 5_000, true]);
@@ -3942,7 +3950,7 @@ test('LC1 cancellation aborts its own check VM\'s session at its first stdout by
 
 test('LC2 cancellation fails with one fixed code unless its session started, did not pass, and its VM and record were deleted', async t => {
   const started = outcome => async input => {
-    input.provider.spawn('multipass', checkArgv(input.name), PIPES).stdout.write('x');
+    input.provider.spawn(...streamFor(input.provider, 'check', input.name)).stdout.write('x');
     await new Promise(setImmediate);
     return { outcome, exitCode: outcome === 'passed' ? 0 : null, signal: null, outputTail: '' };
   };
@@ -5699,7 +5707,7 @@ test('AJ6 a reconnect is a new job under a fresh session id, after a verified sw
 import { checkEnvironment, evidenceStatus } from '../local-runner/check-evidence.mjs';
 import { runCheckJob } from '../local-runner/check-lifecycle.mjs';
 import { MAX_BUDGET_MS } from '../local-runner/check-session.mjs';
-import { checkArgv, checkFrame } from '../local-runner/guest-bridge.mjs';
+import { checkFrame } from '../local-runner/guest-bridge.mjs';
 import { deleteOwned, validOwner } from '../local-runner/lifecycle.mjs';
 import { transferError } from '../local-runner/snapshot-transfer.mjs';
 
@@ -5913,9 +5921,9 @@ test('CJ6 outcomes pass through after the delete, the approved protected list re
       return procs.push(proc) && proc;
     };
     const { session, ...deps } = h.deps;
-    const result = await runCheckJob({ ...h.input, check, provider: { spawn } }, deps);
+    const result = await runCheckJob({ ...h.input, check, provider: { run: fakeGuest().run, ...STREAM, spawn } }, deps);
     assert.deepEqual([result.outcome, result.exitCode, result.vm, result.failure], [outcome, exitCode, 'deleted', null], String(code));
-    assert.deepEqual(procs.map(proc => [proc.argv, Buffer.concat(proc.written).equals(checkFrame(CHECK))]), [[checkArgv(GUEST), true]]);
+    assert.deepEqual(procs.map(proc => [proc.argv, Buffer.concat(proc.written).equals(checkFrame(CHECK))]), [[streamCall('check')[1], true]]);
   }
 });
 

@@ -1,10 +1,11 @@
 // Bridge certify checks (CQ-R13e1): they close two points CQ-R08 left uncertified. Host EOF on stdin must reach the guest
-// supervisor through `multipass exec` with no pty, so it kills the job; and frame bytes must arrive exact in both directions.
-// They run in the certify VM with the real supervisor, after 'no-mounts' and before 'teardown'. Certification is not
-// activation: executionReady stays false and verified-local stays unavailable. Every argv is checkArgv(name),
-// snapshotArgv(name, 'materialize') or a fixed `multipass exec` literal plus validated numbers, and every frame a fixed
-// literal; guest bytes are only compared, so none reaches a command, an argv, a code or the report. CQ-R13e adds
-// 'guest-network': no guest identity may reach the host's daemon ports at the VM gateway.
+// supervisor over the OpenSSH stream (-T, no pty) to its forced command, so it kills the job; and frame bytes must arrive
+// exact in both directions. They run in the certify VM with the real supervisor, after 'no-mounts' and before 'teardown'.
+// Certification is not activation: executionReady stays false and verified-local stays unavailable. Every stream argv is
+// guest-stream.mjs openGuestStream's sshStreamArgv (check and materialize), and every probe argv a fixed `multipass exec`
+// literal plus validated numbers; every frame is a fixed literal. Guest bytes are only compared, so none reaches a command,
+// an argv, a code or the report. CQ-R13e adds 'guest-network': no guest identity may reach the host's daemon ports at the
+// VM gateway.
 import { spawn as spawnProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import net from 'node:net';
@@ -63,7 +64,8 @@ export async function watchedSession(context, id, command, { signal, limit = 0, 
     return child;
   };
   const { outcome, exitCode } = await runCheckSession({ name: context.name, check: { id, command, protected: [] },
-    provider: { executable: typeof executable === 'string' ? executable : 'multipass', spawn: watched },
+    // The whole provider: run drives openGuestStream's info read, and ssh and keyDir pick the route's client and keys.
+    provider: { ...context.provider, executable: typeof executable === 'string' ? executable : 'multipass', spawn: watched },
     budgetMs: context.bounds?.sessionMs, timeoutMs: context.bounds?.exitMs, signal });
   return Object.freeze({ outcome, exitCode, exit: seen.killed ? null : seen.exit, stdout: Buffer.concat(seen.kept), overflow: seen.overflow, broken: seen.broken });
 }

@@ -1,4 +1,5 @@
-// Host side of one CQ-R11 check: one `multipass exec ... moe-supervisor check` session runs one approved check in its
+// Host side of one CQ-R11 check: one session of the supervisor's check mode, over the pinned OpenSSH stream to the owned
+// guest's forced-command supervisor (CQ-R14d3, openGuestStream; never `multipass exec`), runs one approved check in its
 // fresh check VM, and its end is classified into the daemon's CheckOutcome values. name, check, provider and signal are
 // trusted host-controller inputs; every guest byte is untrusted. The check frame is the first and only stdin write, and
 // stdin then stays open: the supervisor reads host EOF as a gone host and kills the job (74). A check job has no Moe
@@ -6,10 +7,14 @@
 // This is local session logic, not VM or isolation certification (CQ-R13): executionReady stays false and verified-local
 // stays unavailable.
 import { spawn as spawnProcess } from 'node:child_process';
-import { checkArgv, checkFrame, createFrameDecoder, parseGuestFrame } from './guest-bridge.mjs';
+import { checkFrame, createFrameDecoder, parseGuestFrame } from './guest-bridge.mjs';
+import { openGuestStream } from './guest-stream.mjs';
+import { isOwnedInstanceName } from './lifecycle.mjs';
 
-// guest-supervisor.py's codes, which C2 pins: 79 before hello (the candidate lacks an approved protected blob), 80
-// after the observation (the job changed one) and 81 before hello, with no frame (the CQ-R11e5 dependency install failed).
+// guest-supervisor.py's codes, which C2 pins. Each can only be the supervisor's own exit relayed by ssh, which uses 255
+// for its own failures, so no supervisor code is ever derived from 255 (ruling condition 5). 79 before hello (the
+// candidate lacks an approved protected blob), 80 after the observation (the job changed one) and 81 before hello, with
+// no frame (the CQ-R11e5 dependency install failed).
 // 82 is a SUPERVISOR refusal, never a job's exit: before hello, with no frame, it says the candidate's own package metadata
 // was refused (a code failure, not an infrastructure one).
 export const PROTECTED_MISMATCH = 79;
@@ -39,26 +44,30 @@ const result = (outcome, observation = null, outputTail = '') =>
  * one observation, a clean stdout EOF and exit 0, 'passed' for job exit code 0, else 'code-failure'. exitCode and signal
  * are the observation's for those three, else null. One more 'code-failure' needs no observation: a clean stdout EOF and
  * supervisor exit 82 (DEPENDENCIES_CANDIDATE_INVALID) with no frame at all and a whole session, which resolves exitCode 82,
- * signal null and the fixed CANDIDATE_REFUSAL as outputTail, never any guest byte. provider: {executable = 'multipass', spawn = child_process.spawn};
- * timeoutMs (1-60000) bounds the stdin write and the wait for the provider to exit once stdin is closed. Invalid input
- * rejects with CHECK_SESSION_INPUT_INVALID before any spawn; nothing after that rejects.
+ * signal null and the fixed CANDIDATE_REFUSAL as outputTail, never any guest byte. ssh's own exit 255, before or after
+ * hello, is 'infra-failure' with exitCode null. provider: {executable = 'multipass', run = execFile} for openGuestStream's
+ * info read, plus its optional ssh, keyDir and spawn = child_process.spawn; it is copied at entry. A transport refusal
+ * (bad client or key path, no address) spawns nothing and is 'infra-failure'. timeoutMs (1-60000) bounds the stdin write
+ * and the wait for the provider to exit once stdin is closed. Invalid input rejects with CHECK_SESSION_INPUT_INVALID
+ * before any spawn; nothing after that rejects.
  */
 export async function runCheckSession(input) {
   let options;
   try {
     const { name, check, provider = {}, budgetMs, timeoutMs = 30_000, signal } = input;
     const { executable = 'multipass', spawn = spawnProcess } = isRecord(provider) ? provider : { spawn: null };
-    if (typeof executable === 'string' && executable.trim() !== '' && !CONTROL.test(executable) && typeof spawn === 'function'
-      && within(budgetMs, MAX_BUDGET_MS) && within(timeoutMs, MAX_TIMEOUT_MS) && (signal === undefined || signal instanceof AbortSignal)) {
-      options = { executable, spawn, argv: checkArgv(name), frame: checkFrame(check), budgetMs, timeoutMs, signal };
+    if (isOwnedInstanceName(name) && typeof executable === 'string' && executable.trim() !== '' && !CONTROL.test(executable)
+      && typeof spawn === 'function' && within(budgetMs, MAX_BUDGET_MS) && within(timeoutMs, MAX_TIMEOUT_MS)
+      && (signal === undefined || signal instanceof AbortSignal)) {
+      // executable and run still drive the info read; a later caller edit cannot change the route.
+      options = { name, provider: Object.freeze({ ...provider, executable, spawn }), frame: checkFrame(check), budgetMs, timeoutMs, signal };
     }
   } catch { options = undefined; }
   if (!options) throw Object.assign(new Error('Check session input was invalid.'), { code: 'CHECK_SESSION_INPUT_INVALID' });
   if (options.signal?.aborted) return result('infra-failure');
   let child;
-  try {
-    child = options.spawn(options.executable, options.argv, { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  } catch { child = null; }
+  // The only spawn: a transport refusal or a spawn throw spawns nothing and is 'infra-failure'.
+  try { child = await openGuestStream({ name: options.name, mode: 'check', provider: options.provider }); } catch { child = null; }
   if (typeof child?.kill !== 'function' || ![child, child.stdin, child.stdout, child.stderr].every(item => typeof item?.on === 'function')) {
     return result('infra-failure');
   }
@@ -72,7 +81,10 @@ function watch(s) {
   s.budget = setTimeout(() => { s.timedOut = true; stop(s); }, options.budgetMs);
   s.onAbort = () => stop(s, true);
   options.signal?.addEventListener('abort', s.onAbort, { once: true });
+  // An abort that landed while openGuestStream read the address takes the one teardown path: no check frame is written.
+  if (options.signal?.aborted) s.onAbort();
   child.on('error', () => stop(s, true));
+  // Any exit status, ssh's own 255 included, reaches outcomeOf: 255 is never a supervisor code, so it is 'infra-failure'.
   child.on('close', code => settle(s, code));
   child.stdin.on('error', () => stop(s, true));
   child.stdout.on('error', () => stop(s, true));
@@ -82,6 +94,7 @@ function watch(s) {
     stop(s);
   });
   child.stderr.on('error', () => {}).resume(); // drained unread: stderr is never protocol data
+  if (s.closing) return; // a session already torn down never receives the check frame
   s.deadline = setTimeout(() => stop(s, true), options.timeoutMs);
   try {
     child.stdin.write(options.frame, error => { clearTimeout(s.deadline); s.written = !error; if (error) stop(s, true); });
