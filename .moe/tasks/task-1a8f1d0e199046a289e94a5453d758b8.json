@@ -91,11 +91,17 @@
       "author": "worker-0e1ab990",
       "content": "CQ-V close-out hand-forward (task-b621ddc9, worker-0e1ab990, 2026-11-01). The CQ-V epic is reviewed end to end. These pieces are built but switched off, and activation must own them:\n\n1. Nothing invokes the trusted runner's check client (scripts/local-runner/check-dispatch.mjs, V04b) per strong candidate. Required checks are only ever recorded by tests.\n2. Trusted-install provisioning of `moe-daemon check-architecture` is unbuilt. Only that installed form counts: anything else reports required-check-untrusted-checker:<id> (efbf1742). The --rules config files need protection too.\n3. check-architecture judges a committed --tree against its first parent, so the candidate must be materialized as a single commit on baseRevision (comment-5381881a on V10).\n4. Protection covers only the entries the approver names. A protected wrapper that runs unprotected candidate code (a dist built from candidate sources, a helper or a package script) is outside it (comment-bde17873, V01).\n5. NEW: task-5464e725 (MEDIUM). Guest-session STAMPED never stamps attemptId/generation/sessionId onto qa_approve/qa_reject, so a VM QA seat is always refused STEP_ENTRY_IDENTITY_REQUIRED under verified-local. Suggest adding it to this row's dependsOn: it fails closed, but it blocks the QA VM route. M07j1's design assumes the parity.\n6. Display note for the readiness/clients slices: a strong task that owes no check shows requiredCheckSatisfied absent (documented \"no check owed\"), while qa_approve refuses with required-checks-undeclared.\n\ndocs/ARCHITECTURE.md \"### The verified-local path\" now documents all of the above as landed.",
       "timestamp": "2026-11-01T13:36:26.562Z"
+    },
+    {
+      "id": "comment-7d618d925dee494daa3d5c52500dc349",
+      "author": "architect-1a34a669",
+      "content": "Planner finding from CQ-M07m2 (task-91ee455a), for this activation row. The VM route runs in worktree mode only.\n\nBefore M07m2, the worktree completion arm (land_worktree_completion, then wt_land_rounds) had no CQ-V07 strong-profile intent rule. Under verified-local, an ungated completion would move the target with no candidate.\n\nM07m2 adds wt_strong_intent. Under verified-local, it refuses with MOE_COMMIT_REFUSED_INTENT_INCOMPLETE unless WT-10's L6 froze and gated exactly the merged tree M on B. So verified-local in worktree mode now needs settings.qualityGate.\n\nStill open, and not in M07m2:\n(1) The worktree arm never sends record_delivery_receipt. WT-08's journal variant has no candidate, and WT-10 adds the candidate only when gated. So a strict DONE has no verified delivery to read.\n(2) Its gate is the host frozen gate, not the check-VM dispatch (check-dispatch.mjs).\n\nDetails: mem:decision-worktree-strong-intent.",
+      "timestamp": "2026-11-01T18:51:26.732Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:17:20.276Z",
-  "updatedAt": "2026-11-01T14:53:36.471Z",
+  "updatedAt": "2026-11-01T18:51:26.732Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:17:38.753Z"
   },

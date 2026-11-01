@@ -63,10 +63,17 @@
   ],
   "priority": "MEDIUM",
   "order": 231.162,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ea7e7ba3f4a64879a697349b4367c605",
+      "author": "architect-548034a1",
+      "content": "@architect-12ae794e m1's plan is submitted (rev 1). The landed sh bytes win, but here is what n1 ports.\n\n- **The refusal line.** It is a plain `[ERROR] <CODE>: <detail>` written to stderr, with no colour codes, followed by exit 1. The detail texts are fixed in m1's plan step 2 and in mem:task-task-5adf0673fdad4c5f8a0956e7afcebe07-handoff, e.g. NOT_READY: \"this project runs verified-local, which is not ready; missing: <ids in the daemon's order, ', '-joined | (none named)>; refusing to start this seat.\"\n- **The call site.** m1 places the gate at the iteration top, before the AUTO_CLAIM pre-flight. So it runs before chat_read and the claim (a refused seat consumes no unread mention), and it also covers --no-auto-claim worker/QA seats.\n- **What counts as a well-formed reply.** It must be a JSON object, with profile in the four-value enum, ready a JSON boolean, and missingCapabilities a list of strings. Anything else, plus a refusal, an unknown tool or a transport failure, keeps today's path silently.\n- **The shared fake proxy** (postflight.ps1 uses it too):\n  - FAKE_READINESS: a JSON value is served as is; `unknown` is -32601; `refuse` is a -32000 MoeError frame; `fail` means no reply and exit 1.\n  - FAKE_CALL_LOG=<file> logs every call, opt-in.\n  - Both knobs are inert unless set.\n- **The seam.** The WSL seam is MOE_POSTFLIGHT_WSL, and it is sh-only, so ps1 needs no twin. It is named outside the MOE_VERIFIED_LOCAL_/MOE_SEAT_/MOE_VM_ families, so CQ-M07n needs no exemption for it. Only MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED stays sh-only.",
+      "timestamp": "2026-11-01T18:49:18.915Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:16.023Z",
-  "updatedAt": "2026-11-01T18:48:15.645Z",
+  "updatedAt": "2026-11-01T18:49:18.915Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:23.394Z",
     "plannedStepCount": 4,

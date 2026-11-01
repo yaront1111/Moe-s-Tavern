@@ -9,9 +9,45 @@
     "node --test scripts/tests/local-runner-bridge.test.mjs passes, and any doc naming the guest-stamped tools matches the code"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Red test first, then the fix (DoD 1-2).\n\nTEST, in scripts/tests/local-runner-bridge.test.mjs H3 (~line 775). Add 'moe.qa_approve': execution and 'moe.qa_reject': execution to the `stamps` map. The QA binding's loop already forwards every TOOLS.qa tool, so H3 must fail on today's code: the forwarded args lack attemptId, generation and sessionId. Run `node --test scripts/tests/local-runner-bridge.test.mjs` once to SEE it fail before the fix.\n\nAdd QA-binding refusal rows to H3's denied part. Use a second session, `openSession(proc2, { binding: QA })`, because the existing denied session uses the worker BINDING, where moe.qa_approve is BRIDGE_TOOL_DENIED.\n- moe.qa_approve with { attemptId: QA.attemptId } and with { generation: QA.generation }: BRIDGE_IDENTITY_MISMATCH. guest-bridge.mjs FORBIDDEN_IDENTITY_KEYS covers both, even with equal values.\n- moe.qa_reject with { attemptId: 'attempt-9' }: BRIDGE_IDENTITY_MISMATCH.\n- moe.qa_approve and moe.qa_reject with { sessionId: SESSION_ID }: BRIDGE_ARGUMENT_DENIED. sessionId is not in TOOLS.qa's allowed keys.\nAssert that run.forwarded is [] and that each reply is refused(id, code).\n\nFIX, in scripts/local-runner/guest-session.mjs:32. STAMPED gains 'moe.qa_approve': EXECUTION and 'moe.qa_reject': EXECUTION. reply() already takes the values only from the frozen binding (attemptId, generation) and the session's validated sessionId (`identity`), and stamps them after scopeRequest. A guest can therefore never supply them: scopeRequest refuses those keys first.\nRefresh the comment above STAMPED: host identity is stamped after scoping onto exactly the tools whose daemon schema takes it, the same six tools moe-proxy's EXECUTION_IDENTITY_TOOLS stamps (packages/moe-proxy/src/utils.ts). qa_approve and qa_reject need it under verified-local (delivery/reviewBinding.ts).\nKeep FORBIDDEN_IDENTITY_KEYS, TOOLS and scopeRequest in guest-bridge.mjs unchanged.\n\nError handling is unchanged: a refused scope is still one fixed-code reply that never reaches forward, and a daemon refusal of the stamped call is still BRIDGE_UPSTREAM_FAILED. Do not add a guest-side schema field to guest-mcp-tools.json either: the guest never presents identity.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Docs that name the stamped tools (DoD 3). Keep each edit to the lines named here. Both docs are also declared by open docs/integration rows, so write them with the Edit tool and touch nothing else.\n(a) docs/MCP_SERVER.md, the paragraph 'Execution identity over moe-proxy (CQ-F09, CQ-F12a, CQ-V06a)' (~line 326). Add one sentence: on a VM seat the host guest session (scripts/local-runner/guest-session.mjs) stamps the same fields onto the same six tools, from its frozen binding and its session id, after scoping; a guest that presents attemptId or generation is refused BRIDGE_IDENTITY_MISMATCH, and one that presents sessionId is refused BRIDGE_ARGUMENT_DENIED.\n(b) docs/CONFIGURATION.md, rows `MOE_SESSION_ID` (~line 44) and `MOE_ATTEMPT_ID` / `MOE_ATTEMPT_GENERATION` (~line 45). Their tool lists predate CQ-V06a. Add `moe.qa_approve` and `moe.qa_reject` so both rows match packages/moe-proxy/src/utils.ts EXECUTION_IDENTITY_TOOLS and docs/MCP_SERVER.md.\nThen grep docs/, packages/moe-proxy/README.md and scripts/CLAUDE.md for any other list of stamped tools, and fix only a list that is wrong.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/CONFIGURATION.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. One verification gate, run once at the end, from the repo root, in place (node test files only; nothing is built). The exact command:\n`node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs`\nIt must exit 0 with zero failures. local-runner-agents.test.mjs cross-checks the guest tool tables and schemas, which this fix must leave untouched.\nThe fresh command, exitCode and outputTail are the complete_task evidence. Also record in the step note the red run of H3 from step 1: the failing assertion, before the fix.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Adversarial self-review, once (load adversarial-self-review), scoped to this diff. Check each of these:\n- no path lets a guest value for attemptId, generation or sessionId reach forward: the refusal precedes the stamp, and the stamp overwrites;\n- the binding is frozen at session start, so a caller's later edit cannot change the stamped identity;\n- a worker-role session still cannot call the qa tools (BRIDGE_TOOL_DENIED);\n- under legacy the daemon ignores or fences a presented identity exactly as it does for moe-proxy, so no legacy behavior changes;\n- CQ-M07j1's seatForward relays the stamped args verbatim;\n- the docs match the code.\nRe-run step 3's exact command after any fix. Report every modified path in complete_step.modifiedFiles. Never commit by hand: the wrappers land the work.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-session.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,10 +60,89 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T13:35:53.219Z",
-  "updatedAt": "2026-11-01T18:35:31.320Z",
+  "updatedAt": "2026-11-01T18:53:54.889Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:30:34.773Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T18:51:30.594Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-1a34a669"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T18:53:54.859Z",
+  "executionContract": {
+    "intendedBehavior": "A VM QA seat's moe.qa_approve and moe.qa_reject leave the host guest session carrying attemptId and generation from the frozen host binding and sessionId from the session, exactly as moe-proxy stamps them for a host seat. A guest still cannot present any of the three.",
+    "acceptanceCriteria": [
+      "H3: with the QA binding, the forwarded moe.qa_approve and moe.qa_reject args equal {taskId, workerId, attemptId, generation, sessionId} from the binding and session. The test fails on the pre-fix code.",
+      "H3: under the QA binding, a guest attemptId or generation on either qa tool is BRIDGE_IDENTITY_MISMATCH and a guest sessionId is BRIDGE_ARGUMENT_DENIED, with nothing forwarded.",
+      "Docs that list the stamped tools name all six, including qa_approve and qa_reject, and MCP_SERVER.md names the guest session.",
+      "`node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs` exits 0."
+    ],
+    "invariants": [
+      "The identity comes only from the frozen host binding and the session id, never from guest args.",
+      "guest-bridge.mjs FORBIDDEN_IDENTITY_KEYS, TOOLS and scopeRequest are unchanged.",
+      "A worker-role session still cannot call the qa tools."
+    ],
+    "compatibility": [
+      "Legacy and observe daemons fence an optional presented identity, as they do for moe-proxy's stamps, so nothing changes for a legacy task.",
+      "CQ-M07j1's seatForward relays the stamped args verbatim."
+    ],
+    "approvedScope": [
+      "guest-session.mjs STAMPED and its comment",
+      "local-runner-bridge.test.mjs H3 stamps map plus the QA refusal rows",
+      "docs/MCP_SERVER.md: one sentence in the execution-identity paragraph",
+      "docs/CONFIGURATION.md: the tool lists of the MOE_SESSION_ID and MOE_ATTEMPT_ID rows"
+    ],
+    "reuse": [
+      "The existing EXECUTION list and reply()'s stamping loop",
+      "moe-proxy's EXECUTION_IDENTITY_TOOLS as the reference set"
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/guest-session.mjs:32 STAMPED lists get_context, start_step, complete_step and complete_task only.",
+      "scripts/local-runner/guest-session.mjs reply() applies `STAMPED[scoped.tool]` after scopeRequest.",
+      "packages/moe-proxy/src/utils.ts EXECUTION_IDENTITY_TOOLS includes qa_approve and qa_reject (CQ-V06a).",
+      "packages/moe-daemon/src/delivery/reviewBinding.ts assertReviewBinding requires the identity under verified-local."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Letting the guest present the identity: rejected. It is caller-minted evidence, and guest-bridge.mjs FORBIDDEN_IDENTITY_KEYS exists to refuse exactly that.\n2. Stamping inside guest-bridge.mjs scopeRequest: rejected. scopeRequest holds no sessionId, and guest-session.mjs reply() is already the single place where host identity is stamped after scoping.\n3. A daemon-side exemption for VM QA: rejected. It would weaken CQ-V06's review binding.",
+    "codebaseInsights": "- guest-session.mjs reply() stamps `{attemptId: binding.attemptId, generation: binding.generation, sessionId}` onto STAMPED[tool], after scopeRequest.\n- moe-proxy's EXECUTION_IDENTITY_TOOLS (packages/moe-proxy/src/utils.ts ~line 332) stamps get_context (session) and start_step/complete_step/complete_task/qa_approve/qa_reject (attempt+session).\n- TOOLS.qa allows only summary/candidateId on qa_approve, and reason/failedDodItems/issues/candidateId on qa_reject.\n- FORBIDDEN_IDENTITY_KEYS = role, attemptId, generation, processStartedAt, host. sessionId is refused as BRIDGE_ARGUMENT_DENIED because no qa entry allows it.\n- H3 iterates the tools of [BINDING, QA] with `stamps[tool]`; its denied list runs on the worker binding.\n- No open plan declares guest-session.mjs, guest-bridge.mjs or local-runner-bridge.test.mjs (checked 2026-11-01).\n- CI runs the bridge test in the local-runner node --test line.",
+    "risks": "- docs/MCP_SERVER.md is declared by open rows WT-17 and CQ-M06, and docs/CONFIGURATION.md by WT-17, WT-19, CQ-M06, CQ-RF07 and task-76ae5c47. Edit them with Edit only, so they land under skip-untouched. A peer mid-step on the same doc can hold the path (MOE_ATTR_CONTESTED_EDITING) until it finishes.\n- local-runner-agents.test.mjs reads the daemon's dist read-only; never build in place.",
+    "keyFiles": [
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-daemon/src/delivery/reviewBinding.ts",
+      "docs/MCP_SERVER.md",
+      "docs/CONFIGURATION.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3761931b07ac7a51fc282bae73c220d17ceb0387",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T18:53:54.889Z",
+  "approvedPlanRevision": 1
 }
