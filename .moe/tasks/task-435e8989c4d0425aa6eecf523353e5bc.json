@@ -60,7 +60,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,7 +80,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T13:36:09.052Z",
-  "updatedAt": "2026-11-01T19:45:50.174Z",
+  "updatedAt": "2026-11-01T20:21:02.855Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:30:39.580Z",
@@ -90,11 +90,14 @@
     "firstClaimAt": "2026-11-01T18:52:44.788Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T20:21:02.855Z",
+    "wallClockMs": 5298067
   },
   "contextFetchedBy": [
     "architect-12ae794e",
-    "worker-24f14750"
+    "worker-24f14750",
+    "qa-174e8876"
   ],
   "tier": "standard",
   "effort": "high",
@@ -236,5 +239,9 @@
     "kind": "completion",
     "sessionId": "worker-24f14750@2026-11-01T19:42:51Z",
     "at": "2026-11-01T19:45:50.174Z"
-  }
+  },
+  "completedAt": "2026-11-01T20:21:02.855Z",
+  "reviewCompletedAt": "2026-11-01T20:21:02.855Z",
+  "reviewSummary": "Reviewed completion 975ae6c8 (on moe/work-2026-10-24, pushed) via git show of the owned paths, not the dirty tree: contextPacket.ts, getContextPacket.test.ts and docs/MCP_SERVER.md are +82/-6 non-board, under the 400 cap. getContext.ts is untouched, as the invariant requires. Re-ran the gate on a fresh git-archive of exact HEAD 0ac74a40 with no overlay, because the shared MCP_SERVER.md carries peers' dirty bytes. npm ci, then env -i with node v24.21.0: tsc --noEmit exit 0; npm test exit 0, 227 files, 6863 passed, 20 skipped, 0 failed, which matches the worker's evidence. A scratch tsconfig type-checked the test file, which the main tsc excludes: exit 0. DoD 1: unservable plus non-empty own-array requiredChecks lists task.requiredCheckSnapshot as missing, mandatory, 'unbound-snapshot', with complete false. DoD 2: no requiredChecks (empty, absent, non-array, inherited) lists nothing. A bound snapshot is served whole and listed served and mandatory, in both views for every caller role. The tests are additive only, none weakened. DoD 3: builder and get_context rows cover declared, absent, stale-digest and bound, and the MCP_SERVER.md sentences match. Mutants in the snapshot, restored byte-identical: branch disabled kills 3 rows; empty-array also firing kills 1 (builder); any-declared-value firing kills 1. Taste notes, non-blocking: Object.hasOwn(CONDITIONAL_SECTIONS, path) is evaluated twice per loop turn.",
+  "requiredCheckAtDone": null
 }

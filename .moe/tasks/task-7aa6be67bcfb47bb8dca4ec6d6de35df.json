@@ -121,7 +121,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T13:36:02.164Z",
-  "updatedAt": "2026-11-01T20:20:07.303Z",
+  "updatedAt": "2026-11-01T20:20:58.678Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:30:37.377Z",
@@ -208,7 +208,8 @@
     "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
     ".moe/tasks/task-3954cc09f74045a0ac8fa4b795dcb0a9.json",
     ".moe/tasks/task-7aa6be67bcfb47bb8dca4ec6d6de35df.json",
-    ".moe/tasks/task-9ae89d5e362c4bf3afb692de17ae8c5b.json"
+    ".moe/tasks/task-9ae89d5e362c4bf3afb692de17ae8c5b.json",
+    ".moe/tasks/task-cd2977e10648489fa3d63b0a376ca6fa.json"
   ],
   "completionSummary": "Text only: no status, code, codeName, context or recorded-id change. Dependency messages now state the verified-local rule; legacy/observe text is byte-identical, and the exact-text rows in dependencyUnblock.test.ts and reportBlocked.test.ts pass unedited.\n\nChanges:\n- reportBlocked.ts: heldOnEvidence now also covers ARCHIVED and missing ids that the consumer-aware predicate withholds (still DONE-only for legacy). The strict blockResolution reads 'once <ids> have retained verified delivery ... Still withheld: <describeUnmetDependency>', which names e.g. 'task-1 [ARCHIVED, missing delivery-receipt]' and 'task-gone [missing, missing prerequisite-missing]'. The dependenciesSatisfied message and both descriptions are updated.\n- claimNextTask.ts and claimGuards.ts: the strict claim refusal names the rule, and dependencyEvidenceRefusal gains an optional verifiedLocal that swaps only its 'lacks the ...' phrase. The description is updated.\n- setTaskDependencies.ts: the strict satisfied and unmet messages are computed from the updated task. The description is updated.\n- repairActivation.ts: the decideCheckRepair comment now matches the code. Diagnostics decisions are matched to their run. none/replan can come back for a late run, which is benign: replan = plan-revision-unapproved, the one-run-per-dispatch marker, and activateRepair skipping duplicates. The code is unchanged.\n- The strict decision is isVerifiedLocal; a throw counts as strict, matching the fail-closed predicate.\n\nTests (dependencyReadiness.strict.test.ts): C1, C2, R1-R3, S1 and D1, exact strings. 8 rows failed before the fix.\n\nSCOPE +1 line: __acceptance__/deliveryBypass.acceptance.test.ts:242 built its expected message for a STRICT consumer without verifiedLocal and pinned the old wording, so it now passes verifiedLocal:true. That was the only full-suite failure. No open task declares that file.\n\nGate: exit 0; 225/225 files, 6787 passed, 20 skipped.\n\nResidual for the docs owner (CQ-M07 final docs sweep): docs/",
   "commits": [
@@ -235,6 +236,22 @@
       "treeId": "2b8e81d39d11db84357433e99e39571f433b9ee0",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "bd6de0c15a0646e6db00359448cd22806ea1220a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1b5727b1@2026-11-01T20:16:59Z",
+      "paths": [
+        ".moe/tasks/task-7aa6be67bcfb47bb8dca4ec6d6de35df.json",
+        ".moe/tasks/task-cd2977e10648489fa3d63b0a376ca6fa.json"
+      ],
+      "recordedBy": "qa-1b5727b1",
+      "recordedAt": "2026-11-01T20:20:58.678Z",
+      "treeId": "ee78451d2ae480023ee48fc6f07cea65a4bb7ccd",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -249,9 +266,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-152f84fc@2026-11-01T19:01:22Z",
-    "at": "2026-11-01T19:11:33.461Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-1b5727b1@2026-11-01T20:16:59Z",
+    "at": "2026-11-01T20:20:58.678Z"
   },
   "completedAt": "2026-11-01T20:20:07.302Z",
   "reviewCompletedAt": "2026-11-01T20:20:07.302Z",
