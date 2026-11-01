@@ -130,7 +130,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','sha256-repo','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
 'loop-land-twice',
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
-'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
+'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation','index-mutation','head-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
 'receipt-ledger-replay','receipt-rebase-replay','receipt-push-rejected','receipt-foreign-replay',
 'intent-strong','intent-strong-cas','intent-strong-unwritable','intent-strong-nocandidate','intent-legacy-unwritable',
@@ -218,6 +218,8 @@ fs.writeFileSync('scratch.txt','generated only\\n');
 if(mode==='tracked-mutation')fs.writeFileSync('owned.txt','gate changed tracked\\n');
 if(mode==='hidden-mutation'){get('update-index','--skip-worktree','owned.txt');get('update-index','--assume-unchanged','gate.cjs');
  fs.writeFileSync('owned.txt','hidden gate change\\n');fs.appendFileSync('gate.cjs','\\n// hidden gate change\\n');}
+if(mode==='index-mutation'){fs.writeFileSync('staged.txt','gate staged\\n');get('add','staged.txt');}
+if(mode==='head-mutation')get('-c','user.name=t','-c','user.email=t@t.test','commit','--allow-empty','-qm','gate moved HEAD');
 if(mode==='cleanup-retry')get('worktree','lock','--reason','moe frozen cleanup retry',get('rev-parse','--show-toplevel'));
 if(mode==='dirty-helper'&&!fs.existsSync('helper.txt'))process.exit(19);
 if(mode==='race-fail'&&fs.existsSync('../break-gate.txt'))process.exit(23);
@@ -502,7 +504,7 @@ exit "$rc"
     checks=rpc.filter(r=>r.tool==='record_check_run'),finals=rpc.filter(r=>r.tool==='finalize_attempt'),
     seen=rows(path.join(nested,'.moe','gate-observations.jsonl'));
   const failed=['dirty-helper','race-fail','tracked-mutation','exit-tail','missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt','workspace-failure','interrupt-int','interrupt-term',
-    'gate-qa-claimed','hidden-mutation'].includes(mode)||mode.startsWith('record_');
+    'gate-qa-claimed','hidden-mutation','index-mutation','head-mutation'].includes(mode)||mode.startsWith('record_');
   const after=noGit?'':git(repo,'rev-parse','HEAD');
   const lastCommit=rpc.filter(r=>r.tool==='record_commit').at(-1);
   const pushBlocked=rows(path.join(nested,'.moe','messages','chan-general.jsonl')).some(m=>String(m.content).includes('PUSH-BLOCKED'))||
@@ -925,7 +927,7 @@ exit "$rc"
         assert.equal(git(repo,'rev-parse',after+'~1'),c.baseRevision,log);}
     }
   }
-  if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','record_candidate-refuse'].includes(mode))
+  if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','index-mutation','head-mutation','record_candidate-refuse'].includes(mode))
     assert.equal(pushBlocked,true,'a real gate or evidence persistence failure stays PUSH-BLOCKED\n'+log);
   if(mode==='dirty-helper'){
     assert.equal(after,before,'dirty helper must not authorize a branch commit\n'+log);
@@ -975,6 +977,14 @@ exit "$rc"
     assert.ok(ci>=0&&ci<rpc.indexOf(check));assert.equal(check.args.treeSha,rpc[ci].args.treeSha);
     assert.equal(check.args.source,'runner-observed');assert.equal(check.args.command,'node gate.cjs');
     assert.ok(Buffer.byteLength(check.args.outputTail)<=16384);
+    // The run carries its honest outcome: 'passed' only for exit 0 with the checkout
+    // intact, 'inconclusive' for exit 0 after a tracked tree/index/HEAD mutation,
+    // 'code-failure' for a nonzero exit, 'infra-failure' for an interrupted gate.
+    // The wrapper can only know the mutation if it checked integrity BEFORE recording.
+    const wantOutcome=mode.startsWith('interrupt-')?'infra-failure':
+      ['tracked-mutation','hidden-mutation','index-mutation','head-mutation'].includes(mode)?'inconclusive':
+      check.args.exitCode!==0?'code-failure':'passed';
+    assert.equal(check.args.outcome,wantOutcome,'CheckRun outcome for '+mode+' (exit '+check.args.exitCode+')\n'+log);
   }
   for(const o of seen){
     assert.notEqual(path.resolve(o.cwd),path.resolve(nested));assert.equal(path.basename(o.cwd),'nested project é');
@@ -1005,7 +1015,10 @@ exit "$rc"
     assert.equal(git(repo,'rev-list','--parents','-n','1','HEAD'),after,'unborn landing is a parentless root commit');
     assert.equal(checks.length,1,log);assert.equal(checks[0].args.exitCode,0);
   }
-  if(mode==='hidden-mutation'){assert.equal(checks.length,1,log);assert.equal(checks[0].args.exitCode,0,'integrity refusal keeps the actual exit code');}
+  if(['tracked-mutation','hidden-mutation','index-mutation','head-mutation'].includes(mode)){
+    assert.equal(checks.length,1,log);assert.equal(checks[0].args.exitCode,0,'integrity refusal keeps the actual exit code');
+    assert.equal(checks[0].args.outcome,'inconclusive','an exit-0 gate that mutated its checkout is never a passing run\n'+log);}
+  if(mode==='pass')assert.deepEqual(checks.map(r=>[r.args.exitCode,r.args.outcome]),[[0,'passed']],log);
   if(mode==='receipt-cached-check'){
     assert.ok(fs.existsSync(path.join(repo,'.git','moe-cas-refused')),'git refused the first CAS\n'+log);
     assert.equal(candidates.length,1,log);assert.equal(checks.length,1,log);

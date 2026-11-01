@@ -1931,6 +1931,7 @@ function Send-MoeCheckRun([hashtable]$Frozen, [hashtable]$Gate) {
     $payload = @{ id=$Gate.CheckId; candidateId=$Frozen.CandidateId; treeSha=$Frozen.Tree
         command=$Gate.Command; exitCode=$Gate.ExitCode; outputTail=(Read-MoeGateTail $Gate.Log)
         runnerId=$script:MoeRunnerId; source='runner-observed'; workerId=$WorkerId }
+    if ($Gate.Outcome) { $payload.outcome = [string]$Gate.Outcome }
     return (Send-MoeEvidence 'record_check_run' $payload)
 }
 # The delivery receipt: the landing's last daemon call, from a journaled report
@@ -5274,7 +5275,7 @@ function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Comman
     $null = Remove-MoeGateWorkspace # an earlier leftover never blocks this candidate's gate
     $root=Join-Path ([IO.Path]::GetTempPath()) ('moe-gate-'+[guid]::NewGuid().ToString('N'))
     $script:MoeGate=@{ Root=$root; Top=$Git.Top; Workspace=(Join-Path $root 'tree'); Log=(Join-Path $root 'output.log')
-        Command=$Command; CheckId=('check-'+[guid]::NewGuid().ToString('N')); Started=$false; Finished=$false; Recorded=$false; ExitCode=0; Process=$null }
+        Command=$Command; CheckId=('check-'+[guid]::NewGuid().ToString('N')); Started=$false; Finished=$false; Recorded=$false; ExitCode=0; Outcome=$null; Process=$null }
     $gate=$script:MoeGate
     try {
         New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
@@ -5295,10 +5296,19 @@ function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Comman
         while (-not $gate.Process.Wait(100)) { } # No idle-output timeout.
         $gate.ExitCode=$gate.Process.ExitCode; $gate.Finished=$true
         Stop-MoeGateChild
+        # Classify BEFORE recording: the run must never read as a pass when the gate
+        # mutated its checkout. 'passed' needs exit 0 AND an intact tree, index and
+        # HEAD; a failing or throwing integrity probe is 'inconclusive', never
+        # 'passed'. The probe runs once, and only after a zero exit.
+        if ($gate.ExitCode -ne 0) { $gate.Outcome='code-failure' }
+        else {
+            $gate.Outcome='inconclusive'
+            try { if (Test-MoeGateIntegrity $Frozen) { $gate.Outcome='passed' } } catch { }
+        }
         $gate.Recorded=$true
         if (-not (Send-MoeCheckRun $Frozen $gate)) { throw 'qualityGate check persistence failed' }
         if ($gate.ExitCode -ne 0) { throw "qualityGate failed (exit $($gate.ExitCode))" }
-        if (-not (Test-MoeGateIntegrity $Frozen)) { throw 'qualityGate tracked tree/index/HEAD mutation' }
+        if ($gate.Outcome -cne 'passed') { throw 'qualityGate tracked tree/index/HEAD mutation' }
         Write-Host '[OK] qualityGate passed.' -ForegroundColor Green
         # Landing is decided by the exit code and integrity above; a failed removal
         # of the disposable checkout is reported and retried, never a gate failure.
@@ -5829,11 +5839,16 @@ function Invoke-MoeLanding {
         return $res
     } finally {
         try {
-            $interrupted=$script:MoeGate -and $script:MoeGate.Started -and -not $script:MoeGate.Finished
+            # Started and not yet recorded, as the sh twin's finish_gate_observation: the
+            # post-exit integrity probe now runs before the record, so an interrupt in it
+            # still leaves its (infra-failure) run behind.
+            $interrupted=$script:MoeGate -and $script:MoeGate.Started -and -not $script:MoeGate.Recorded
             Stop-MoeGateChild
             if ($interrupted) {
                 $res.Outcome='failed'; $res.Code='MOE_COMMIT_FAILED_GATE'; $res.StopLoop=$true
                 $script:MoeGate.Recorded=$true
+                # An interrupted gate was never verified: no pass, whatever its exit code.
+                $script:MoeGate.Outcome='infra-failure'
                 Send-MoeCheckRun $script:MoeFrozen $script:MoeGate | Out-Null
             }
             if ($casOk -and -not $recorded) {

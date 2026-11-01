@@ -2475,15 +2475,17 @@ print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,id=c,bas
 
 record_check_run_rpc() {
     local args
-    args=$($PYTHON_CMD - "$FROZEN_CANDIDATE_ID" "$FROZEN_TREE" "$QUALITY_GATE" "$GATE_RC" "$MOE_RUNNER_ID" "$GATE_CHECK_ID" "$GATE_LOG" "$WORKER_ID" <<'PY'
+    args=$($PYTHON_CMD - "$FROZEN_CANDIDATE_ID" "$FROZEN_TREE" "$QUALITY_GATE" "$GATE_RC" "$MOE_RUNNER_ID" "$GATE_CHECK_ID" "$GATE_LOG" "$WORKER_ID" "${GATE_OUTCOME:-}" <<'PY'
 import json,sys
-c,t,command,rc,runner,cid,log,worker=sys.argv[1:]
+c,t,command,rc,runner,cid,log,worker,outcome=sys.argv[1:]
 with open(log,'rb') as f:
     f.seek(0,2); f.seek(max(0,f.tell()-16384)); b=f.read(16384)
 while b and b[0]&0xc0==0x80: b=b[1:]
 tail=b.decode('utf-8','replace').encode('utf-8')[-16384:].decode('utf-8','ignore')
-print(json.dumps(dict(id=cid,candidateId=c,treeSha=t,command=command,exitCode=int(rc),
-    runnerId=runner,source='runner-observed',outputTail=tail,workerId=worker)))
+run=dict(id=cid,candidateId=c,treeSha=t,command=command,exitCode=int(rc),
+    runnerId=runner,source='runner-observed',outputTail=tail,workerId=worker)
+if outcome: run['outcome']=outcome
+print(json.dumps(run))
 PY
     ) || return 1
     moe_evidence_rpc record_check_run "$args"
@@ -5289,7 +5291,7 @@ run_frozen_gate() {
     GATE_ROOT=$(mktemp -d -t moe-gate.XXXXXXXX) || return 1
     GATE_WORKSPACE="$GATE_ROOT/tree"; GATE_LOG="$GATE_ROOT/output.log"
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
-    GATE_RC=0; GATE_OUT=""; GATE_PID=""
+    GATE_RC=0; GATE_OUTCOME=""; GATE_OUT=""; GATE_PID=""
     if ! git -C "$MOE_TOP" -c core.hooksPath=/dev/null -c core.sparseCheckout=false \
         -c core.sparseCheckoutCone=false worktree add --detach "$GATE_WORKSPACE" "$FROZEN_COMMIT" >"$GATE_LOG" 2>&1; then
         echo "[WARN] qualityGate workspace materialization failed." >&2; return 1
@@ -5308,12 +5310,19 @@ run_frozen_gate() {
     if wait "$GATE_PID"; then GATE_RC=0; else GATE_RC=$?; fi
     GATE_FINISHED=true
     stop_gate_child
+    # Classify BEFORE recording: the run must never read as a pass when the gate
+    # mutated its checkout. 'passed' needs exit 0 AND an intact tree, index and
+    # HEAD; a failing integrity probe is 'inconclusive', never 'passed'. The
+    # probe runs once, and only after a zero exit.
+    if [ "$GATE_RC" -ne 0 ]; then GATE_OUTCOME=code-failure
+    elif gate_integrity; then GATE_OUTCOME=passed
+    else GATE_OUTCOME=inconclusive; fi
     GATE_RECORDED=true
     record_check_run_rpc || return 1
     if [ "$GATE_RC" -ne 0 ]; then
         echo "[WARN] qualityGate failed (exit $GATE_RC); refusing branch commit." >&2; return 1
     fi
-    gate_integrity || { echo "[WARN] qualityGate tracked tree/index/HEAD mutation; refusing branch commit." >&2; return 1; }
+    [ "$GATE_OUTCOME" = passed ] || { echo "[WARN] qualityGate tracked tree/index/HEAD mutation; refusing branch commit." >&2; return 1; }
     echo -e "$GREEN[OK]$NC qualityGate passed."
     # Landing is decided by the exit code and integrity above; a failed removal
     # of the disposable checkout is reported and retried, never a gate failure.
@@ -5518,6 +5527,8 @@ finish_gate_observation() {
     stop_gate_child
     if [ "${GATE_STARTED:-false}" = true ] && [ "${GATE_RECORDED:-false}" != true ]; then
         GATE_RECORDED=true
+        # An interrupted gate was never verified: no pass, whatever its exit code.
+        GATE_OUTCOME=infra-failure
         record_check_run_rpc || return 1
     fi
 }

@@ -117,6 +117,13 @@ function checkReply() {
   assert.ok(typeof args.command === 'string' && args.command.trim() && args.command.length <= 500);
   assert.ok(typeof args.outputTail === 'string' && Buffer.byteLength(args.outputTail,'utf8') <= 16384);
   assert.ok(!args.outputTail.includes('\ufffd'));
+  // The daemon's CQ-V02 rule (state/checkRunStore.ts): a declared outcome is one of
+  // six values, 'passed' needs exit 0 and 'code-failure' a nonzero exit.
+  if (args.outcome !== undefined) {
+    assert.ok(['passed','code-failure','infra-failure','timeout','skipped','inconclusive'].includes(args.outcome),'unknown outcome '+args.outcome);
+    if (args.outcome === 'passed') assert.equal(args.exitCode,0,'passed requires exitCode 0');
+    if (args.outcome === 'code-failure') assert.notEqual(args.exitCode,0,'code-failure requires a nonzero exitCode');
+  }
   const {workerId,...checkRun} = args;
   payload = {success:true,checkRun:{...checkRun,createdAt:new Date().toISOString()},duplicate:false};
   ensureDir(path.join(moe,'checks'));
