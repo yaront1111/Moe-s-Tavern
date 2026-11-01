@@ -95,7 +95,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -137,18 +137,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:04.449Z",
-  "updatedAt": "2026-11-01T19:00:38.927Z",
+  "updatedAt": "2026-11-01T19:07:45.272Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T09:56:54.252Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-01T19:07:45.272Z",
+    "wallClockMs": 33051020
   },
   "contextFetchedBy": [
     "architect-b520bc90",
     "worker-009c883d",
     "worker-24f14750",
-    "qa-1b5727b1"
+    "qa-1b5727b1",
+    "qa-174e8876"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -325,5 +328,9 @@
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "QA parked CQ-M07c: substance GREEN, size-only hold. Net 548 changed lines under packages/ (+568/-20; runtime 205, tests 343) is over the 400 QA cap. No epic rail covers it yet. The worker pre-filed the EPIC size waiver prop-10edb6bb7d9c4747b59d7c83214d2dbf, still PENDING, and its text equals the per-file numstat of completion 3761931b plus checkpoint e7668eae. Evidence: the recorded gate was re-run fresh at HEAD 3761931b (224 files, 6774 passed, 20 skipped, EXIT 0; tsc clean). Every DoD item maps to tests. 12 of 12 independent QA mutants were killed. The leaf rail holds, and no caller of the readiness assertion was edited. Full evidence is in the QA comment on this row. Resume: on APPROVED, a governor runs set_task_status REVIEW, and QA checks the rail against the numstat and approves. On REJECTED, set_task_status PLANNING to split it. No worker action is needed.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-01T19:07:45.272Z",
+  "reviewCompletedAt": "2026-11-01T19:07:45.272Z",
+  "reviewSummary": "QA round 2 (qa-174e8876): APPROVED.\n\nSIZE: net 548 (+568/-20; runtime 205, tests 343), over the 400 default. The CQ-M07c epic rail waives it and matches exactly. Numstat (1feb9c0b..3761931b): readinessHolder.ts +186 (in e7668eae), executionProfile.ts +18/-15, profileRollout.ts +8/-5, index.ts +13, readinessHolder.test.ts +343. The M07g0 paths in that range were excluded.\n\nDELIVERY: 3761931b and e7668eae are on moe/work-2026-10-24. The 5 files and their dependencies (executionReadiness, certificationEvidence, clientCapabilities, runnerChannel) are unchanged since. The overlay is clean against HEAD.\n\nGATE: the recorded command, fresh at HEAD dccdec14 (snapshot /tmp/moe-9ae89d5e-qa2-p6yJVV). npm ci ok, tsc clean. 225/225 files, 6782 passed, 20 skipped, EXIT 0. Refusal pins pass unchanged: executionProfile 41, profileRollout 36, rolloutControls 3, workstreamComposition 49. readinessHolder 56.\n\nDoD:\n1. Real tools: READY plus the client gate lets the update, submit_plan and claim succeed; READY without the gate gives exactly [client]. The default refuses all three NOT_READY, with no writes.\n2. The context list equals the held list.\n3. Env, policy values, labels, caller args and a planted report all stay refused.\n4. 6 gap rows.\n5. Scheduler with injected deps; a throw holds DEFAULT.\n6. Gate above.\n\nRAILS:\n- executionProfile.ts is a leaf even transitively: built-ins, util/errors and affectedFiles only; no store, policy.ts or cycle.\n- No caller of the assertion was edited.\n- The never-evaluated message is byte-identical.\n\nMUTANTS: round 1 killed 12/12. My 5 extra are all killed: stop no-op, unref removed, always-pass, client gap dropped, inputs cached. Restored and cmp-checked.\n\nADVISORY:\n- startDaemon wiring is checked statically only; it fails closed.\n- The qa_approve proof row asserts only a MoeError.\n- rolloutDecision.test awaits CQ-M06a.\n- No isolation is claimed; the client gate refuses activation until CQ-M07d.",
+  "requiredCheckAtDone": null
 }

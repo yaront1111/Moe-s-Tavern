@@ -95,7 +95,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:02.990Z",
-  "updatedAt": "2026-11-01T19:05:53.724Z",
+  "updatedAt": "2026-11-01T19:06:18.786Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T11:01:53.876Z",
     "plannedStepCount": 4,
@@ -201,7 +201,46 @@
     "moe-jetbrains/src/main/kotlin/com/moe/util/VerifiedLocalLaunch.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/util/VerifiedLocalLaunchTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    ".moe/tasks/task-8dbc76d7678b416bbfdbbbe9f58a33f8.json",
+    ".moe/tasks/task-d56fb46eb0a941808a7ba7e0588f2fd5.json"
+  ],
+  "completionSummary": "CQ-M07o in moe-jetbrains, 5 files. (1) RuntimeSelectionPolicy: DeclaredProfile {LEGACY_LIKE, VERIFIED_LOCAL, UNTRUSTED} and declaredProfile(basePath), a pure strict read that never pins, persists or asks; profile() is unchanged. (2) New VerifiedLocalLaunch: VM_AGENT_COMMANDS claude/codex (guest AGENT_JOBS), isVmSeat (worker/qa and not LEGACY_LIKE), preferBash(vm,wsl)=!vm&&wsl, agentRefusal, and decide. decide launches only when the profile is verified-local, ready is true and nothing is missing; every other answer and each ReadinessFailure is Refused. Shown ids and profile keep only [A-Za-z0-9._-], max 64 chars and 32 ids. (3) TerminalAgentLauncher: resolveContext/agentCommandFor gain vmSeat (default false); a VM seat whose protected selection is null is refused. openSeat seam: a refusal never touches the manager. launchRole(decision) opens the widget before building the command, so a refusal builds nothing. startAgent: thenAccept -> invokeLater(.., project.disposed). startAgents: one VM context and one readiness future; a decision on the pooled thread (25 s bounded); one refusal dialog skips worker and QA; a VM seat only ever gets the VM context. buildCommand and the builders are unedited; buildCommandForTest added. Tests: 16-row pinned legacy table (DoD1); the VM-seat .ps1 selection with WSL on plus the bashWrap relation (DoD2); fake-manager openSeat rows plus the decide/failure/sanitize rows (DoD3); vmSeat CLI refusal (DoD4). DoD5 is M07o1's MoeProjectConnectionTest 'every open sends the client hello as the first frame, before GET_STATE' (HELLO has verifiedLocal:true), green in this run. Gate: EXIT 0, 544/0 fail. A 4-mutant run gave 5 failures, then was reverted. SIZE 458 net (runtime 188, tests 270) > 400: EPIC waiver prop-e747f6a18b6a4577affa1245490492f7 PENDING with the exact numstat. Not exercised: a live ready daemon (CQ-M07d not landed); the real Start Agent flow is first run in the CQ-M07 real-board run. These tests use the pure decision and a fake termina",
+  "commits": [
+    {
+      "sha": "e02eca26fca76fe10b1a0602b58a3652638a4658",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-24f14750@2026-11-01T18:50:03Z",
+      "paths": [
+        ".moe/tasks/task-8dbc76d7678b416bbfdbbbe9f58a33f8.json",
+        ".moe/tasks/task-d56fb46eb0a941808a7ba7e0588f2fd5.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/VerifiedLocalLaunch.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/VerifiedLocalLaunchTest.kt"
+      ],
+      "recordedBy": "worker-24f14750",
+      "recordedAt": "2026-11-01T19:06:18.786Z",
+      "treeId": "28c9a9e535252ca54a3e23cbaa020164c130c76c",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/VerifiedLocalLaunch.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/VerifiedLocalLaunchTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
   ],
-  "completionSummary": "CQ-M07o in moe-jetbrains, 5 files. (1) RuntimeSelectionPolicy: DeclaredProfile {LEGACY_LIKE, VERIFIED_LOCAL, UNTRUSTED} and declaredProfile(basePath), a pure strict read that never pins, persists or asks; profile() is unchanged. (2) New VerifiedLocalLaunch: VM_AGENT_COMMANDS claude/codex (guest AGENT_JOBS), isVmSeat (worker/qa and not LEGACY_LIKE), preferBash(vm,wsl)=!vm&&wsl, agentRefusal, and decide. decide launches only when the profile is verified-local, ready is true and nothing is missing; every other answer and each ReadinessFailure is Refused. Shown ids and profile keep only [A-Za-z0-9._-], max 64 chars and 32 ids. (3) TerminalAgentLauncher: resolveContext/agentCommandFor gain vmSeat (default false); a VM seat whose protected selection is null is refused. openSeat seam: a refusal never touches the manager. launchRole(decision) opens the widget before building the command, so a refusal builds nothing. startAgent: thenAccept -> invokeLater(.., project.disposed). startAgents: one VM context and one readiness future; a decision on the pooled thread (25 s bounded); one refusal dialog skips worker and QA; a VM seat only ever gets the VM context. buildCommand and the builders are unedited; buildCommandForTest added. Tests: 16-row pinned legacy table (DoD1); the VM-seat .ps1 selection with WSL on plus the bashWrap relation (DoD2); fake-manager openSeat rows plus the decide/failure/sanitize rows (DoD3); vmSeat CLI refusal (DoD4). DoD5 is M07o1's MoeProjectConnectionTest 'every open sends the client hello as the first frame, before GET_STATE' (HELLO has verifiedLocal:true), green in this run. Gate: EXIT 0, 544/0 fail. A 4-mutant run gave 5 failures, then was reverted. SIZE 458 net (runtime 188, tests 270) > 400: EPIC waiver prop-e747f6a18b6a4577affa1245490492f7 PENDING with the exact numstat. Not exercised: a live ready daemon (CQ-M07d not landed); the real Start Agent flow is first run in the CQ-M07 real-board run. These tests use the pure decision and a fake termina"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-24f14750@2026-11-01T18:50:03Z",
+    "at": "2026-11-01T19:06:18.786Z"
+  }
 }
