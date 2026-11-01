@@ -23,13 +23,9 @@
       "newFiles": [
         "packages/moe-daemon/src/tools/getExecutionReadiness.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/tools/getExecutionReadiness.ts",
-        "packages/moe-daemon/src/tools/index.ts"
-      ],
-      "note": "Created getExecutionReadiness.ts (payload type, 30 s window, readinessProjectionDeps seam, single-flight readExecutionReadiness, reset helper, blocking:true tool) and registered it in getTools(). Landed names matched the plan (heldReadiness, refreshReadiness, productionReadinessInputs, resolveExecutionProfile). One addition the plan did not list, forced by toolAudience.test.ts ('names exactly the registered tools'): a TOOL_AUDIENCE entry 'moe.get_execution_readiness': 'wrapper' in the same file (wrappers call it; IDEs and moe-call.sh have no role and still see every tool). Dirty peer paths in the checkout (.moe/*, repairActivation.ts, claimNextTask.ts, reportBlocked.ts, setTaskDependencies.ts, claimGuards.ts, scripts/local-runner/*) left untouched.",
-      "startedAt": "2026-11-01T19:08:50.596Z",
-      "completedAt": "2026-11-01T19:09:17.131Z"
+      "note": "No-byte retry after a size-only qa_reject (round 1: substance green, failedDodItems empty). Step-1's deliverable landed in completion 403c4f93 and is unchanged at HEAD; `git diff --quiet HEAD` is clean on all five files, and no later commit touches them. Checked present: tools/getExecutionReadiness.ts exports ExecutionReadinessPayload, READINESS_REFRESH_WINDOW_MS, readinessProjectionDeps, _resetReadinessRefreshForTests, readExecutionReadiness and getExecutionReadinessTool, with blocking:true and its comment. tools/index.ts has the import, the getTools() registration and the TOOL_AUDIENCE 'wrapper' row. Size waiver filed as EPIC ADD_RAIL prop-2954b7eb3c724f89afdc8492b8bdf775 (PENDING). modifiedFiles is empty because no bytes changed. Shared-checkout dirty paths from other sessions were left untouched.",
+      "startedAt": "2026-11-01T19:23:00.958Z",
+      "completedAt": "2026-11-01T19:23:22.427Z"
     },
     {
       "stepId": "step-2",
@@ -38,12 +34,9 @@
       "affectedFiles": [
         "packages/moe-daemon/src/server/WebSocketServer.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/server/WebSocketServer.ts"
-      ],
-      "note": "Added the GET_EXECUTION_READINESS union member, the import, and a case after GET_METRICS: non-boolean refresh -> ERROR 'GET_EXECUTION_READINESS refresh must be a boolean'; otherwise EXECUTION_READINESS with readExecutionReadiness's payload; an unexpected throw is answered with the fixed 'GET_EXECUTION_READINESS failed' (no detail), so the outer catch's message/context frame is never used. No withMutex, no writes. The file had no dirty bytes before this edit.",
-      "startedAt": "2026-11-01T19:09:19.327Z",
-      "completedAt": "2026-11-01T19:09:34.442Z"
+      "note": "No-byte retry. Step-2 landed in 403c4f93 and WebSocketServer.ts is unchanged at HEAD. Present: the union member `GET_EXECUTION_READINESS; payload?: { refresh?: boolean }` (:173), and the case at :998, which runs with no withMutex. It has a fixed ERROR 'GET_EXECUTION_READINESS refresh must be a boolean' (:1002), a fixed 'GET_EXECUTION_READINESS failed' on an unexpected throw (:1010), and the reply EXECUTION_READINESS { payload } (:1013). QA round 1 killed its /ws mutants (no boolean check, error-detail leak). modifiedFiles is empty because no bytes changed (ponytail rung 1: nothing to write).",
+      "startedAt": "2026-11-01T19:23:25.789Z",
+      "completedAt": "2026-11-01T19:23:32.566Z"
     },
     {
       "stepId": "step-3",
@@ -53,12 +46,9 @@
       "newFiles": [
         "packages/moe-daemon/src/tools/getExecutionReadiness.test.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/tools/getExecutionReadiness.test.ts"
-      ],
-      "note": "New getExecutionReadiness.test.ts, 34 tests in 3 describes: DoD 1 (default, READY, NOT_READY, failed-evaluation default, observe/verified-local, unreadable for 'bogus'/'VERIFIED-LOCAL'/42/null/{}, exactly four keys, no evidence leak), DoD 3 (five concurrent refreshes -> one call, +10 s none / +31 s one, exact window edge, backwards clock, rejecting and sync-throwing refresh, refresh 'yes'/1/0/null/{}/[] -> INVALID_INPUT), DoD 4 (SHA-256 of every file under .moe plus activity count and heldReadiness identity unchanged across grant-attempt arguments, no worker record, fresh copies, blocking pinned). Ran in snapshot /tmp/moe-b0485bb1-* (outside the repo, nvm Node 24, npm ci): tsc clean, the new file plus registry/toolAudience/daemonGitDocs = 4 files, 42 tests passed.",
-      "startedAt": "2026-11-01T19:09:37.146Z",
-      "completedAt": "2026-11-01T19:10:49.331Z"
+      "note": "No-byte retry. tools/getExecutionReadiness.test.ts (+311, new) landed in 403c4f93 and is unchanged at HEAD. It holds 34 tests for DoD 1 (ready, not ready, and unreadable 'bogus'/'VERIFIED-LOCAL'/42/null/{} through the registry), DoD 3 (single-flight, the +10 s and +31 s window, the exact edge, a backwards clock, a swallowed rejection, INVALID_INPUT) and DoD 4 (.moe hashes, activity count, heldReadiness identity, payload-mutation isolation, the pinned blocking:true). QA round 1's 12 mutants were all killed, which is the red proof for existing tests. The tests are not edited here: the waiver's rail pins this file's numstat. They run in step-5's fresh gate.",
+      "startedAt": "2026-11-01T19:23:35.311Z",
+      "completedAt": "2026-11-01T19:23:40.262Z"
     },
     {
       "stepId": "step-4",
@@ -67,39 +57,36 @@
       "affectedFiles": [
         "packages/moe-daemon/src/server/WebSocketServer.test.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
-      ],
-      "note": "Added describe('GET_EXECUTION_READINESS') inside 'Plugin endpoint (/ws)' (plus imports; no existing test changed, the :289 verifiedLocal expectation is untouched for CQ-M07d2). Rows: default and held READY/NOT_READY replies equal readExecutionReadiness(state); 'unreadable' profile; refresh:true calls the spied refresh once with the state and a burst stays at one call; a failing refresh still answers the held value; refresh 'x'/1/0/null/{}/[] -> exactly the boolean ERROR frame; an unexpected throw (heldReadiness spied to throw) -> exactly 'GET_EXECUTION_READINESS failed' with no detail; every file under .moe, the activity count and heldReadiness identity are unchanged across six payloads. Snapshot run: tsc clean, WebSocketServer.test.ts (128) + getExecutionReadiness.test.ts (34) = 162 passed.",
-      "startedAt": "2026-11-01T19:10:50.197Z",
-      "completedAt": "2026-11-01T19:11:51.418Z"
+      "note": "No-byte retry. server/WebSocketServer.test.ts (+149/-1) landed in 403c4f93 and is unchanged at HEAD. It adds describe('GET_EXECUTION_READINESS') at :1328, with 13 rows covering DoD 2 (the reply payload equals the tool payload, default and READY; refresh:true calls the spied refresh once) and the /ws half of DoD 4 (byte-identical project and task files, no activity record), plus the fixed ERROR frames. The single -1 is the vitest import widened to add `type MockInstance`; no existing test changed. The verifiedLocal expectation stays with CQ-M07d2. modifiedFiles is empty because no bytes changed; the tests run in step-5's fresh gate.",
+      "startedAt": "2026-11-01T19:23:44.422Z",
+      "completedAt": "2026-11-01T19:24:15.660Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE, fresh, after steps 1-4: the FULL daemon suite, because this is a new wire message plus a new MCP tool. Run it in a git-archive snapshot; never npm ci, npm test or a build in the shared checkout (global rail).\n\nFirst confirm HEAD carries CQ-M07c's landing: `git log moe/work-2026-10-24 --grep 'Moe-Task: task-9ae89d5e362c4bf3afb692de17ae8c5b' --format=%h` must print a sha. If it prints nothing, stop and call moe.report_blocked with blockedOnTaskIds ['task-9ae89d5e362c4bf3afb692de17ae8c5b'].\n\nRun exactly this. Its command, exit code and output tail are the complete_task verification evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-b0485bb1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/getExecutionReadiness.ts packages/moe-daemon/src/tools/getExecutionReadiness.test.ts packages/moe-daemon/src/tools/index.ts packages/moe-daemon/src/server/WebSocketServer.ts packages/moe-daemon/src/server/WebSocketServer.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'`\n\nExpect exit 0 and 0 failures; tools/registry.test.ts and util/daemonGitDocs.test.ts must pass. Cite the file and test counts, passed and skipped, in complete_task.\n\nState in the completion summary that DoD 5 (SERVER_CAPABILITIES.verifiedLocal and the client gap) is carried by CQ-M07d2 (task-41d0c5a9855143ceb3ab81e61aaf9fa9), split out under this task's own size clause. Never flip it here.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "CQ-M07c landing confirmed first (git log --grep prints 267e1363, 3761931b, e7668eae). Ran the plan's exact command in a fresh git-archive snapshot (npm ci, tsc --noEmit, npm test; env -i, nvm Node 24): 226 test files passed, 6834 tests passed, 20 skipped, EXIT=0. registry.test.ts, toolAudience.test.ts and daemonGitDocs.test.ts pass. DoD 5 (SERVER_CAPABILITIES.verifiedLocal + client gap) is carried by CQ-M07d2 (task-41d0c5a9855143ceb3ab81e61aaf9fa9) and was not touched.",
-      "startedAt": "2026-11-01T19:11:58.283Z",
-      "completedAt": "2026-11-01T19:12:50.008Z"
+      "note": "Fresh gate, run once at HEAD 7df10f5c. The CQ-M07c landing is on the branch (267e1363, 3761931b, e7668eae). The five files are identical to HEAD, and no commit since 403c4f93 touches them. I ran the plan's exact command in snapshot /tmp/moe-b0485bb1-jODxul (since removed): npm ci OK, tsc --noEmit OK, npm test EXIT=0. Test Files 226 passed (226); Tests 6834 passed, 20 skipped (6854). Named files passed: tools/registry.test.ts (2), util/daemonGitDocs.test.ts (4), tools/toolAudience.test.ts (2), tools/getExecutionReadiness.test.ts (34) and server/WebSocketServer.test.ts (128). The counts are identical to round 1's QA re-run. No npm commands ran in the shared checkout. DoD 5 is carried by CQ-M07d2 (task-41d0c5a9855143ceb3ab81e61aaf9fa9) and was not flipped here.",
+      "startedAt": "2026-11-01T19:24:25.483Z",
+      "completedAt": "2026-11-01T19:26:16.906Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read `git diff HEAD -- packages/moe-daemon/src/tools/index.ts packages/moe-daemon/src/server/WebSocketServer.ts packages/moe-daemon/src/server/WebSocketServer.test.ts` and the two new files as an attacker would.\n\n- **Grant paths.** Nothing in the tool or the /ws case can change readiness, except through the rate-limited production refresh, which only re-runs the daemon's own evaluator. No caller field is read except refresh.\n- **No writes.** Neither path calls touchWorker, appendActivity, writeEntity or withMutex. `grep -n \"touchWorker\\|appendActivity\\|withMutex\\|runExclusive\" packages/moe-daemon/src/tools/getExecutionReadiness.ts` prints nothing.\n- **Rate window.** It holds under concurrency (single-flight), and a backwards clock never blocks refresh forever. A rejected refresh never surfaces as a tool error.\n- **Payload.** Exactly the four fixed fields, always fresh copies.\n- **Contract.** clientCapabilities.ts is untouched (CQ-M07d2), and the tool description says nothing about git.\n\nFix anything found, re-run step 5's gate, and submit its fresh output.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "Adversarial self-review found no defect, so no source or test changed after step 5's gate (the gate evidence stands). Checked: (1) grep for touchWorker|appendActivity|withMutex|runExclusive|writeEntity in getExecutionReadiness.ts prints nothing, and the word 'git' never appears in it. (2) The only caller field read is refresh (strict boolean on both paths; INVALID_INPUT on the tool, the fixed boolean ERROR frame on /ws); workerId is accepted and ignored; the payload is exactly four keys, fresh copies, no evidence. (3) Single-flight has no await between the inFlight check and set, a clock that moved backwards never blocks, and the in-flight promise never rejects (a throwing or rejecting refresh is swallowed and still counts as started); the finally only clears its own promise. (4) /ws replies with a fixed message on an unexpected throw. (5) clientCapabilities.ts is untouched (CQ-M07d2). Theoretical only: the rate window and in-flight promise are module-level (one daemon per process); a production refresh can overlap the 5-min scheduler, which the holder's last-started-wins already orders. Mutation check in a throwaway snapshot: 7 mutants (no window, no single-flight, no copy, profile throw, backwards-clock block, no boolean check, un-swallowed refresh) all killed, source restored byte-identical (cmp).",
-      "startedAt": "2026-11-01T19:12:50.976Z",
-      "completedAt": "2026-11-01T19:13:35.360Z"
+      "note": "Adversarial self-review of the landed 403c4f93 runtime. `git diff HEAD` on the five files is empty, so I reviewed `git show 403c4f93` plus the full getExecutionReadiness.ts.\n- GRANT: only `refresh` is read, in both the handler and /ws. refresh calls refreshReadiness(productionReadinessInputs(projectPath, settings)), the daemon's own evaluator. Extra args (ready, missingCapabilities, evaluatedAt) are ignored.\n- WRITES: grep for touchWorker|appendActivity|withMutex|runExclusive|writeEntity prints nothing.\n- CONCURRENCY: an in-flight refresh is joined before the window check. lastStartedAt is set before awaiting. A synchronous throw from refresh lands inside the async IIFE's try, so it is swallowed. `mine` is initialised before its .finally microtask runs, so inFlight clears correctly. A backwards clock (now < lastStartedAt) runs a refresh.\n- INPUTS: a null or non-boolean refresh gives INVALID_INPUT on the tool and the fixed ERROR on /ws. A null or non-object /ws payload gives refresh undefined. A JSON `__proto__` key is an own property, so there is no pollution.\n- PAYLOAD: exactly the four keys, a new object, an array copy and no evidence.\n- CONTRACT: clientCapabilities.ts is untouched (the numstat has five files), and the description has no git claim.\n- THEORETICAL ONLY: a NaN clock would disable the window, but Date.now() never returns NaN, so this is noted, not fixed.\nNothing found. No bug row filed and no bytes changed; the waiver rail pins the numstat. The fresh gate is step-5's: 226 files, 6834 passed, 20 skipped, EXIT=0.",
+      "startedAt": "2026-11-01T19:26:22.512Z",
+      "completedAt": "2026-11-01T19:27:41.113Z"
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Size waiver prop-2954b7eb (EPIC ADD_RAIL, numstat-exact for completion 403c4f93, net 589) is pending the human's IDE click. QA round 1 found the substance green; the reopen-1 resubmit changed no bytes. A governor moves this row to REVIEW once the rail is approved. No worker action is needed.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -126,25 +113,39 @@
       "author": "governor-978922c1",
       "content": "Governor edge change (18:47Z, governor-978922c1): CQ-M07g0 (task-a89361db) now lands BEFORE this row, so M07d depends on CQ-M07c and on M07g0. M07g0's dependency on this row was file order only: both add one getTools() registration to packages/moe-daemon/src/tools/index.ts.\n\nPlan text affected: step 1 cites tools/index.ts:95-101 (the registry's mutex opt-out). Once M07g0 has landed its getSeatLivenessTool registration, those line numbers may shift, so find the spot by its content, not the line numbers. Nothing else changes.",
       "timestamp": "2026-11-01T18:44:04.361Z"
+    },
+    {
+      "id": "comment-aa4dc6d40a794afe865511cc0d020b16",
+      "author": "worker-5c5e1c38",
+      "content": "Round 2 (worker-5c5e1c38): size waiver filed as EPIC ADD_RAIL prop-2954b7eb3c724f89afdc8492b8bdf775 (PENDING, human decision). Rail text pins completion 403c4f93 and its exact `git show --numstat --format= 403c4f93 -- packages/`: getExecutionReadiness.ts +107 (new), WebSocketServer.ts +20, index.ts +3 (runtime 130), getExecutionReadiness.test.ts +311 (new), WebSocketServer.test.ts +149/-1 (tests net 459); total +590/-1, net 589. This is a no-byte retry: the five files are unchanged since 403c4f93 (no later commits touch them, clean in the tree). I re-ran the recorded gate fresh at the current HEAD.",
+      "timestamp": "2026-11-01T19:23:04.195Z"
+    },
+    {
+      "id": "comment-83e15f09f0254319aca92f4573ae3266",
+      "author": "governor-978922c1",
+      "content": "Governor note for QA, the next round: waiver prop-2954b7eb (EPIC ADD_RAIL, size only, numstat-exact for completion 403c4f93) is PENDING the human's IDE click, and I have asked for it. If this row comes back to REVIEW before the rail exists, PARK it as BLOCKED, as M07c was. Do not issue a second size-only reject: that burns a reopen on a no-byte retry. Once the human approves, a governor moves it to REVIEW.",
+      "timestamp": "2026-11-01T19:23:18.918Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:17.354Z",
-  "updatedAt": "2026-11-01T19:14:07.469Z",
+  "updatedAt": "2026-11-01T19:28:46.735Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:07:17.370Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 12,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-b520bc90",
-    "worker-8a4aed6a"
+    "worker-5c5e1c38",
+    "qa-174e8876"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
-  "model": "claude-sonnet-5-5",
-  "codexModel": "gpt-6.1-sol",
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
     "step-2",
@@ -228,20 +229,83 @@
     "packages/moe-daemon/src/server/WebSocketServer.ts",
     "packages/moe-daemon/src/server/WebSocketServer.test.ts"
   ],
-  "reviewStartedAt": "2026-11-01T19:14:07.467Z",
+  "reviewStartedAt": "2026-11-01T19:28:33.637Z",
   "verification": {
     "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-b0485bb1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/getExecutionReadiness.ts packages/moe-daemon/src/tools/getExecutionReadiness.test.ts packages/moe-daemon/src/tools/index.ts packages/moe-daemon/src/server/WebSocketServer.ts packages/moe-daemon/src/server/WebSocketServer.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'",
     "exitCode": 0,
-    "outputTail": "Test Files  226 passed (226)\n     Tests  6834 passed | 20 skipped (6854)\n   Start at  21:12:04\n   Duration  39.88s (tests 92%, transform 4%, import 4%)\n\nEXIT=0",
-    "reportedAt": "2026-11-01T19:14:07.467Z",
+    "outputTail": "HEAD 7df10f5c, snapshot /tmp/moe-b0485bb1-jODxul (removed after the run)\n ✓ src/server/WebSocketServer.test.ts (128 tests)\n ✓ src/tools/getExecutionReadiness.test.ts (34 tests)\n ✓ src/util/daemonGitDocs.test.ts (4 tests)\n ✓ src/tools/registry.test.ts (2 tests)\n ✓ src/tools/toolAudience.test.ts (2 tests)\n...\n Test Files  226 passed (226)\n      Tests  6834 passed | 20 skipped (6854)\n   Start at  21:24:56\n   Duration  39.68s (tests 91%, transform 5%, import 4%)\n\nEXIT=0",
+    "reportedAt": "2026-11-01T19:28:33.637Z",
     "source": "agent-reported"
   },
   "filesModified": [
+    "packages/moe-daemon/src/tools/index.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+  ],
+  "completionSummary": "CQ-M07d round 2: a no-byte retry after round 1's size-only qa_reject (substance green, failedDodItems empty).\n\nWAIVER: EPIC ADD_RAIL prop-2954b7eb3c724f89afdc8492b8bdf775, filed by me and PENDING a human decision. It uses the CQ-M07q/M07c template and pins completion 403c4f93 and `git show --numstat --format= 403c4f93 -- packages/`: tools/getExecutionReadiness.ts +107 (new), server/WebSocketServer.ts +20 and tools/index.ts +3 (runtime 130); tools/getExecutionReadiness.test.ts +311 (new) and server/WebSocketServer.test.ts +149/-1 (tests net 459). Total +590/-1, net 589.\n\nBYTES: none changed. The five files are identical to HEAD 7df10f5c, and no commit since 403c4f93 touches them. Every step was completed with modifiedFiles [] and a note. The diff beyond the plan text is still only the TOOL_AUDIENCE 'wrapper' row (toolAudience.test.ts requires it) and the -1, which is the vitest import widened with `type MockInstance`.\n\nGATE: the plan's command, fresh, in a git-archive snapshot of HEAD 7df10f5c under env -i with nvm Node 24. It ran verbatim except for an added `echo SNAPSHOT=$S` and log redirection. npm ci OK, tsc --noEmit OK, npm test EXIT=0. Test Files 226 passed (226); Tests 6834 passed | 20 skipped (6854). registry, daemonGitDocs, toolAudience, getExecutionReadiness (34) and WebSocketServer (128) all pass. The counts equal round 1's QA re-run.\n\nSELF-REVIEW (step 6): no grant path, since only refresh is read and it re-runs the daemon's own evaluator. No writes (the grep is empty). Single-flight and the 30 s window hold, and a backwards clock still runs a refresh. A rejected refresh is swallowed. The payload is exactly the four fields as fresh copies, and the description makes no git claim. Nothing found; no bug row.\n\nDoD 5 (SERVER_CAPABILITIES.verifiedLocal and the client gap) is carried by CQ-M07d2 (task-41d0c5a9855143ceb3ab81e61aaf9fa9), split out under this task's own size clause, and was not flipped here.",
+  "commits": [
+    {
+      "sha": "403c4f932310e6d2e18a0823b7ba672cd3217a3f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8a4aed6a@2026-11-01T19:08:01Z",
+      "paths": [
+        ".moe/tasks/task-7aa6be67bcfb47bb8dca4ec6d6de35df.json",
+        ".moe/tasks/task-8dbc76d7678b416bbfdbbbe9f58a33f8.json",
+        ".moe/tasks/task-b0485bb1cacf4d3b84979e9256078737.json",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/getExecutionReadiness.test.ts",
+        "packages/moe-daemon/src/tools/getExecutionReadiness.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "recordedBy": "worker-8a4aed6a",
+      "recordedAt": "2026-11-01T19:14:25.438Z",
+      "treeId": "e2a41bd1172850253aa5a0b0698817683151ad90",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "packages/moe-daemon/src/tools/getExecutionReadiness.ts",
     "packages/moe-daemon/src/tools/index.ts",
     "packages/moe-daemon/src/server/WebSocketServer.ts",
     "packages/moe-daemon/src/tools/getExecutionReadiness.test.ts",
     "packages/moe-daemon/src/server/WebSocketServer.test.ts"
   ],
-  "completionSummary": "CQ-M07d: wrappers and IDEs can now ask the daemon whether verified-local is ready and what is missing. Both paths return exactly { profile, ready, missingCapabilities, evaluatedAt }, as fresh copies.\n\nFiles:\n- tools/getExecutionReadiness.ts (new): the payload type, READINESS_REFRESH_WINDOW_MS = 30 s, the readinessProjectionDeps {now, refresh} seam, readExecutionReadiness, a test reset helper, and moe.get_execution_readiness with blocking:true.\n  - ready, missingCapabilities and evaluatedAt are the held snapshot's. profile is the live resolveExecutionProfile, or 'unreadable' for a malformed setting.\n  - refresh must be a boolean (INVALID_INPUT). It is awaited, single-flight, and starts at most once per 30 s; a backwards clock still runs one. A failing refresh is swallowed and the held value is returned.\n- tools/index.ts: import, getTools() registration, and a TOOL_AUDIENCE row 'moe.get_execution_readiness': 'wrapper'. The row was not in the plan; toolAudience.test.ts requires one per tool.\n- server/WebSocketServer.ts: GET_EXECUTION_READINESS answered by EXECUTION_READINESS, with no mutex and no writes. A non-boolean refresh gets a fixed ERROR frame, and an unexpected throw gets the fixed 'GET_EXECUTION_READINESS failed'.\n- Tests: getExecutionReadiness.test.ts (new, 34 tests) and a GET_EXECUTION_READINESS describe in WebSocketServer.test.ts (13 rows). No existing test changed.\n\nDoD:\n1. Ready, not ready and unreadable (bogus, VERIFIED-LOCAL, 42, null, {}) through the tool registry.\n2. /ws reply equals the tool payload.\n3. Five concurrent refreshes make one evaluator call; none at +10 s, one at +31 s; the exact window edge; the backwards clock.\n4. SHA-256 of every file under .moe, the activity count and heldReadiness identity are unchanged across grant-attempt arguments on both paths; no worker touch; payload mutation never changes the held value.\n5. NOT done here: SERVER_CAPABILITIES.verifiedLocal and the client gap belong to CQ-M07d2 (task-41d0c5a9855143ceb3ab81e61aaf"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-8a4aed6a@2026-11-01T19:08:01Z",
+    "at": "2026-11-01T19:14:25.438Z"
+  },
+  "reviewCompletedAt": "2026-11-01T19:20:41.561Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "description": "Oversized: packages/ net 589 (+590/-1; runtime 130, tests 459) exceeds the 400 cap and no epic rail waives it. Substance is green. File an EPIC ADD_RAIL naming this row, completion 403c4f93 and the exact per-file numstat, then retry with no byte changes; do not re-slice.",
+        "file": "packages/moe-daemon/src/tools/getExecutionReadiness.test.ts"
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "SIZE-ONLY reject. Substance is green; no DoD behaviour failed.\n\nSize: `git show --numstat --format= 403c4f93 -- packages/` is +590/-1, net 589. Runtime is 130 (getExecutionReadiness.ts 107, WebSocketServer.ts 20, index.ts 3). Tests are 459 (getExecutionReadiness.test.ts 311, WebSocketServer.test.ts 148). That is over the 400 net cap. The epic rails carry no CQ-M07d waiver (only M05, M07q, M07b, M07k, M07c, M07o), and no proposal for this row exists under .moe/proposals.\n\nVerified:\n- Recorded verification re-run in a fresh git-archive snapshot of HEAD (403c4f93) under env -i with nvm Node 24: npm ci OK, tsc --noEmit exit 0, 226 files passed, 6834 passed, 20 skipped.\n- Read the whole diff against the DoD: DoD 1 (ready, not-ready and unreadable settings through the registry), DoD 2 (/ws EXECUTION_READINESS equals the tool payload), DoD 3 (single-flight, injected clock, window edge, backwards clock) and DoD 4 (no state, activity or worker write; fresh copies; evidence never leaks) all have matching code and exact-equality tests. The TOOL_AUDIENCE 'wrapper' row is a required addition.\n- 12 independent QA mutants, all KILLED: window <=, no backwards-clock, no single-flight, no array copy, profile fallback legacy, no boolean check (tool and /ws), /ws error detail leak, ready:true, evaluatedAt:null, refresh-always, rethrow on failed refresh. Sources restored byte-identical.\n- DoD 5 (SERVER_CAPABILITIES.verifiedLocal and the client gap) is carried by CQ-M07d2 (task-41d0c5a9, WORKING, dependsOn this row, its DoD holds the same items). I did not count it against this row.\n\nTo resolve (no code change needed): the worker files an EPIC ADD_RAIL via moe.propose_rail naming this row, completion 403c4f93 and the exact numstat above (+590/-1, net 589; runtime 130, tests 459), following the CQ-M07c/M07o rail text. Then do a no-byte retry. Do not re-slice or rewrite the landed bytes. Any defect found goes in a separate bug: row, not new bytes here.",
+      "rejectedAt": "2026-11-01T19:20:41.561Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "description": "Oversized: packages/ net 589 (+590/-1; runtime 130, tests 459) exceeds the 400 cap and no epic rail waives it. Substance is green. File an EPIC ADD_RAIL naming this row, completion 403c4f93 and the exact per-file numstat, then retry with no byte changes; do not re-slice.",
+          "file": "packages/moe-daemon/src/tools/getExecutionReadiness.test.ts"
+        }
+      ]
+    }
+  ],
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-11-01T19:28:46.735Z",
+  "blockedReason": "Size waiver prop-2954b7eb (EPIC ADD_RAIL, numstat-exact for completion 403c4f93, net 589) is pending the human's IDE click. QA round 1 found the substance green; the reopen-1 resubmit changed no bytes. A governor moves this row to REVIEW once the rail is approved. No worker action is needed."
 }
