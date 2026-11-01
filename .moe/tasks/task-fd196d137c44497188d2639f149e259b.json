@@ -1,0 +1,41 @@
+{
+  "id": "task-fd196d137c44497188d2639f149e259b",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: the guest bridge moves every host↔guest stream over `multipass exec` stdio, which Multipass 1.17.0 breaks (Linux stdin truncates, Windows stdin is dead and stdout stalls), so no certify gets past bridge-framing",
+  "description": "Found by governor-ce2f28b9 on 2026-10-31 in R13's certify runs on HEAD 992acfc8. Both hosts now pass provision, readiness and no-mounts, then fail bridge-framing:\n- Linux: TRANSFER_EXIT_FAILED (report ~/moe-certify/certification-linux-x64-20261031T215743Z-9a204e.json);\n- Windows: TRANSFER_TIMEOUT (C:\\moe-certify\\certification-win32-x64-20261031T220650Z-8aa57e.json).\nFull measurements are in R13 comments 85b1be26 and da75f6a9.\n\n**The guest is fine.** Fed the COMPLETE 2,796,635-byte materialize stream from a file (`sudo -n /opt/moe/bin/moe-supervisor materialize < file`), the guest supervisor exits 0, emits a `materialized` frame, and the workspace is owned by moe-agent with the right payload. Under certify it gets a truncated stream and refuses it with 65 (EX_DATAERR). Fail-closed worked.\n\n**The provider transport is what breaks, on Multipass 1.17.0, measured:**\n- **Linux (snap, qemu).** `exec` stdin loses its tail when fed faster than the guest consumes. A 2.8 MB stream arrived as 2,162,688, 2,228,224 or 2,490,368 bytes; 10 MiB arrived as 2,162,688; a Node pipe gets EPIPE. 1 MiB arrives complete, and so does 10 MiB written at 64 KiB per 50 ms. stdout is fine: 50 MiB arrived intact.\n- **Windows (1.17.0+win, hcs).** `exec` with piped stdin delivers **0 bytes** at 1 KiB, 64 KiB, 1 MiB and 2.8 MB, and hangs until killed (upstream #3749, open since 2024). A 2 MiB **stdout** hung and lost its tail: 2,064,384 bytes arrived (#5478).\n- **Both.** `multipass transfer` (SFTP) is byte-exact: 2,796,635 bytes, matching sha.\n- **Upstream.** #5478 is the 1.17.0 libssh chunk-size regression; its fix, PR #5485, is OPEN and there's no 1.17.1 release. The evidence was posted on #5478 and #3749 on the human's yes.\n\n**Every bridge stream uses exec stdio.** No SSH or other transport exists in scripts/local-runner. The users are:\n- snapshot-transfer.mjs: materialize, export, verify, and the dependencies, agents and toolchain installs;\n- guest-bridge.mjs: `bridge` sessions, where a job frame goes on stdin, output comes on stdout, and closing stdin is the cancel/EOF signal (exit 74);\n- guest-session.mjs, guest-readiness.mjs and certify-containment.mjs: exec queries.\nOn Windows, with stdin dead, even small job frames and the EOF/cancel semantics fail. So this is architecture-level, not a one-line fix.\n\n**Directions to weigh (the planner decides; the governor rules on the design).**\n- An OpenSSH transport, using `ssh`/`ssh.exe` with a Moe-provisioned per-VM key and a pinned guest host key, for every stream, on both platforms. It avoids both upstream bugs.\n- Bulk data via `multipass transfer` into a root-staged path, plus a supervisor mode that reads the staged file, plus a separate control channel.\n- Paced Linux stdin, only as a stopgap.\n- Re-pinning a Multipass release with #5485, which fixes neither #3749 nor the Windows stdout stall.\nWeigh security (key custody, host-key pinning, what job identities can reach), the guest-supervisor.py pin (any change moves R13's 3a19f3bf pin and re-runs R13 step 4), and the three measured failure modes.",
+  "definitionOfDone": [
+    "Before submit_plan, a DESIGN row comment chooses the host↔guest transport for every stream listed in the description, including bridge job sessions and their EOF/cancel semantics. It is justified against the three measured 1.17.0 failure modes: Linux stdin truncation, Windows stdin with no delivery, and Windows stdout stall. A governor ruling comment approves the design.",
+    "If the approved design exceeds the size caps, the planner splits it with moe-epic-breakdown into slice rows. Each slice is a prerequisite of this row, and this row stays the integration row. Every new row ends up under M07 (task-1a8f1d0e).",
+    "Unit tests with fakes reproduce each of the three measured failure modes, and prove the new transport either is unaffected or fails closed with a fixed code. Integrity stays end-to-end and guest-verified: a truncated or altered stream is never accepted.",
+    "No silent fallback to host execution, and the R02 image pin and the guest readiness strictness are unchanged. If guest-supervisor.py changes, the completion names the new sha256, and R13 gets a comment that the commit-under-test pin moved.",
+    "The local-runner suite passes in a git-archive snapshot under env -i with the pinned Node. The real-host proof is the governor's R13 certify re-run on Linux and Windows, which gets past bridge-framing; no seat runs Multipass."
+  ],
+  "taskRails": [
+    "Design first: post the design as a row comment and wait for the governor's ruling comment before moe.submit_plan. TURBO approves a submitted plan at once, so the ruling must come first.",
+    "No seat runs Multipass. Real-host checks belong to the governor.",
+    "Never weaken the guest supervisor's integrity checks, the R02 image pin or guest readiness, and never fall back to running anything on the host."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-b520bc90",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 254.45,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T00:20:13.476Z",
+  "updatedAt": "2026-11-01T07:33:39.300Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T00:20:28.365Z"
+  },
+  "contextFetchedBy": [
+    "architect-125fd305",
+    "architect-b520bc90"
+  ]
+}

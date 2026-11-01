@@ -11,7 +11,8 @@
   ],
   "taskRails": [
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
-    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
+    "DoD readings for QA (governor darwin ruling 2026-10-31 under the human's delegation; no macOS host exists): DoD 1 - a support claim exists only for a platform/arch with a passing native `cli.mjs certify` report recorded in docs/CERTIFICATION.md; win32 x64 and linux x64 must each be certified by such a report, while darwin x64 and arm64 ship as 'unsupported: no report' with no support claim, which is not a DoD 1 failure. DoD 3 - darwin, and any arch without a recorded report, keeps refusing certification-dependent use (verified-local unavailable) with no silent fallback; QA checks that refusal instead of a darwin report."
   ],
   "implementationPlan": [
     {
@@ -370,11 +371,35 @@
       "author": "governor-ce2f28b9",
       "content": "WINDOWS CERTIFY + TRANSPORT DIAGNOSIS (governor-ce2f28b9, 22:06-22:35Z). **FAILED. NOT RECORDED.**\n\n**Report.** certification-win32-x64-20261031T220650Z-8aa57e.json on HEAD 992acfc8 (Multipass 1.17.0+win, hcs; C:\\moe-certify; source D:\\moe-scratch\\certify-src):\n- provision passed: the `release:<pin>` route works, and providerImageHash = pin, so 4679ec68 is proven on real hcs;\n- readiness passed; no-mounts passed;\n- **bridge-framing failed with TRANSFER_TIMEOUT**;\n- teardown passed; no instances left.\n\n**Measured on throwaway VM moe-diag-w90ccee, since deleted by exact name.**\n- Windows `multipass.exe exec` with piped stdin (Node spawn, as certify does) delivers **0 bytes at 1 KiB, 64 KiB, 1 MiB and 2.8 MB alike**; the command hangs until killed. This is upstream **#3749**, still open (needs-info), so exec stdin is unusable on Windows.\n- A 2 MiB **stdout** over Windows `exec` **hung, and lost its tail**: 2,064,384 of 2,097,152 bytes arrived before the kill. That fits **#5478**, the 1.17.0 libssh regression; its fix, PR #5485, is still OPEN.\n- `multipass transfer` (SFTP) of the 2,796,635-byte frame stream works: rc 0, byte-exact, sha 27abec6c.\n\n**Both hosts together.** The guest supervisor and frame protocol are correct (exit 0 on the intact stream). The provider transport is what breaks:\n- Linux exec stdin truncates when fed fast;\n- Windows exec stdin is dead;\n- Windows exec stdout is unreliable at MB sizes;\n- `transfer` works on both.\n\nThe CQ-R bridge sends job frames and transfers over exec stdio, so this is an architecture-level gap on Multipass 1.17.0, not a one-line fix.\n\n**Next (governor, next session).**\n1. File the transport row or rows with this evidence. Directions to weigh: host-to-guest bulk data via `multipass transfer` into a root-staged path, then a supervisor mode that reads the staged file (this changes guest-supervisor.py, so the 3a19f3bf pin moves and step 4 re-runs); a control channel that doesn't use exec stdin on Windows; paced stdin on Linux only as a stopgap; or re-pin a Multipass release that has #5485 once it ships.\n2. Make the scope call: whether win32, like darwin, ships \"unsupported: provider transport (#3749/#5478)\" until that lands.\n3. Ask the human before any upstream post (adding the stdin-direction evidence to #5478/#3749).",
       "timestamp": "2026-10-31T22:28:01.803Z"
+    },
+    {
+      "id": "comment-80041aa05c8c477bbe94b07918a4fad8",
+      "author": "governor-ce2f28b9",
+      "content": "Upstream transport evidence posted on the human's explicit \"yes post them\":\n- **#5478**, https://github.com/canonical/multipass/issues/5478#issuecomment-6551061416: Linux exec stdin truncates when fed fast, paced input arrives complete; Windows 2 MiB stdout stalls and loses its tail. Flagged as possibly the same root cause that PR #5485 fixes.\n- **#3749**, https://github.com/canonical/multipass/issues/3749#issuecomment-6551061646: on 1.17.0+win, piped stdin through exec delivers 0 bytes at every size from 1 KiB to 2.8 MB; `multipass transfer` works.\n\nThis doesn't change the next step: file the transport row(s) and make the win32 scope call (comment-da75f6a9).",
+      "timestamp": "2026-11-01T00:17:37.063Z"
+    },
+    {
+      "id": "comment-fb61f7a7e42a425691f6209487ab44c3",
+      "author": "governor-ce2f28b9",
+      "content": "Two updates, governor-ce2f28b9, 00:20Z on 11-01:\n1. **TASK rail prop-29ce59fa is APPROVED by the human** (23:46:43Z) and is live in this row's rails. It carries the darwin \"unsupported: no report\" reading for DoD 1 and DoD 3. Cite it as APPROVED at completion, as step 5 amend-1 says.\n2. **The transport fix row is task-fd196d137c44497188d2639f149e259b** (HIGH, design-first, under M07). It moves every host↔guest stream off `multipass exec` stdio. Until it lands, no certify gets past bridge-framing on either host. If it changes guest-supervisor.py, the 3a19f3bf commit-under-test pin moves, and step 4 re-runs before certify.",
+      "timestamp": "2026-11-01T00:20:26.502Z"
+    },
+    {
+      "id": "comment-532a16667fdf41ebb92b060dfb179efe",
+      "author": "governor-693b7073",
+      "content": "Governor-693b7073, 00:21Z, at the human's \"make sure we r moving\". I filed the bulk-transport fix as task-a6a78f21 (HIGH, PLANNING, CQ-R order 254.46). It moves the materialize, dependencies, agents, toolchain and export streams off exec stdio onto `multipass transfer` staging, and the evidence is this row's comments ddf73884, 85b1be26 and da75f6a9. This row's dependsOn is at its 20-id cap, so the order is: a6a78f21 lands, then the supervisor pin moves, then step 4 certify re-runs. a6a78f21 is wired under M07 (task-1a8f1d0e). The bridge and check control channel on Windows (#3749), and the win32 scope call, stay with governor-ce2f28b9.",
+      "timestamp": "2026-11-01T00:21:29.106Z"
+    },
+    {
+      "id": "comment-0194f45e62f24d209ae40b9de9b1ea6c",
+      "author": "governor-693b7073",
+      "content": "Correction to comment-532a1666: task-a6a78f21 was a duplicate and is deleted. The transport fix row is governor-ce2f28b9's **task-fd196d13**, which architect-125fd305 is planning and which is wired under M07.",
+      "timestamp": "2026-11-01T00:22:08.804Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T22:28:01.803Z",
+  "updatedAt": "2026-11-01T00:22:08.804Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",
