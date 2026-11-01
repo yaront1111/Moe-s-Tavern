@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -87,7 +87,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T18:18:42.785Z",
-  "updatedAt": "2026-11-01T07:43:40.453Z",
+  "updatedAt": "2026-11-01T07:46:51.515Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T18:22:23.277Z",
@@ -97,11 +97,14 @@
     "firstClaimAt": "2026-10-31T18:35:46.470Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T07:46:51.515Z",
+    "wallClockMs": 47465045
   },
   "contextFetchedBy": [
     "architect-8419009e",
-    "worker-009c883d"
+    "worker-009c883d",
+    "qa-1e84238e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -173,7 +176,54 @@
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/platform-linux.mjs",
+    "docs/CERTIFICATION.md",
+    ".moe/tasks/task-47d21b835b5e4f28bb08b17f83d22256.json"
+  ],
+  "completionSummary": "probeSnap now accepts a Notes column of exactly '-' or exactly 'held' (snapd refresh hold); any other note, alone or combined with held, still fails closed with the unchanged SNAP_ACTION. The multipass-snap test covers held (ready, all items satisfied), disabled,held / devmode,held / held,jailmode and all prior rejected notes, with full items including action text pinned. docs/CERTIFICATION.md step 1 says a snap refresh --hold multipass pin is allowed and keeps 1.17.0. Three files changed: platform-linux.mjs, local-runner.test.mjs, CERTIFICATION.md.",
+  "commits": [
+    {
+      "sha": "4f309514b1a118356285afa47c0f590086d965b9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-009c883d@2026-11-01T07:41:07Z",
+      "paths": [
+        ".moe/tasks/task-47d21b835b5e4f28bb08b17f83d22256.json",
+        "docs/CERTIFICATION.md",
+        "scripts/local-runner/platform-linux.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-009c883d",
+      "recordedAt": "2026-11-01T07:44:00.473Z",
+      "treeId": "3091c8dd7557b39e8874da3d607eafc6f8eaf825",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/CERTIFICATION.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/platform-linux.mjs",
     "docs/CERTIFICATION.md"
   ],
-  "completionSummary": "probeSnap now accepts a Notes column of exactly '-' or exactly 'held' (snapd refresh hold); any other note, alone or combined with held, still fails closed with the unchanged SNAP_ACTION. The multipass-snap test covers held (ready, all items satisfied), disabled,held / devmode,held / held,jailmode and all prior rejected notes, with full items including action text pinned. docs/CERTIFICATION.md step 1 says a snap refresh --hold multipass pin is allowed and keeps 1.17.0. Three files changed: platform-linux.mjs, local-runner.test.mjs, CERTIFICATION.md."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-009c883d@2026-11-01T07:41:07Z",
+    "at": "2026-11-01T07:44:00.473Z"
+  },
+  "completedAt": "2026-11-01T07:46:51.515Z",
+  "reviewCompletedAt": "2026-11-01T07:46:51.515Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 4f309514 (on moe/work-2026-10-24, in task.commits). Its stat matches filesModified (platform-linux.mjs, local-runner.test.mjs, CERTIFICATION.md, task json); the three files in the working tree equal the commit. Diff is tiny (~+19/-5), no size issue.\n\nRe-ran task.verification verbatim: git archive HEAD snapshot in /tmp, cmp-overlay of the 3 files, env -i node 24.21 -> EXIT=0, tests 356, pass 355, fail 0, skipped 1 (opt-in macOS smoke, same as R13 baseline). Never ran in the shared checkout; snapshot deleted.\n\nDoD: (1) probeSnap is `(notes === '-' || notes === 'held')`, exact equality, no comma split; version/publisher/row-count/shape checks untouched. (2) multipass-snap test adds held-ready (ready true, LINUX_READY), rejects `disabled,held`/`devmode,held`/`held,jailmode`, keeps all prior rejected notes and U rows, and now asserts full prerequisites so SNAP_ACTION text is pinned. (3) CERTIFICATION.md step 1 allows `sudo snap refresh --hold multipass`, keeps 1.17.0, names the `held` note and the failing notes; matches code. (4) gate output supplied.\n\nMutation probes on a snapshot copy: killed - drop held, includes('held'), split(',').some, startsWith('held'), drop version check, held-only (the broader Linux suite kills it; the focused multipass-snap pattern alone does not). One non-blocking survivor: split(',').every(n => '-'|'held') passes; it differs only for `held,held`/`-,held`, which snapd never emits and no row asserts. Note, not a reject. Complexity pass: nothing to cut. No rail violated; certify inherits via platform.prerequisites.",
+  "requiredCheckAtDone": null
 }
