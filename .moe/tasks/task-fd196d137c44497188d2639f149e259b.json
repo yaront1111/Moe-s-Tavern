@@ -102,7 +102,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -176,19 +176,22 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T00:20:13.476Z",
-  "updatedAt": "2026-11-01T11:59:41.079Z",
+  "updatedAt": "2026-11-01T12:08:58.544Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T00:20:28.365Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-01T12:08:58.544Z",
+    "wallClockMs": 42510179
   },
   "contextFetchedBy": [
     "architect-125fd305",
     "architect-b520bc90",
     "governor-f668f954",
     "worker-009c883d",
-    "worker-0e1ab990"
+    "worker-0e1ab990",
+    "qa-c5835a34"
   ],
   "commits": [
     {
@@ -385,5 +388,9 @@
     "scripts/tests/local-runner-check.test.mjs",
     "docs/ARCHITECTURE.md",
     "docs/CERTIFICATION.md"
-  ]
+  ],
+  "completedAt": "2026-11-01T12:08:58.544Z",
+  "reviewCompletedAt": "2026-11-01T12:08:58.544Z",
+  "reviewSummary": "QA approve (qa-c5835a34) of completion 375db7be, which is on moe/work-2026-10-24.\n\nGate re-run at the exact commit: a `git archive 375db7be` snapshot, daemon npm ci+build there, and the 12 ci.yml local-runner files under env -i with Node 24.21.0. Result: 693 tests, 690 pass, 0 fail, 3 pre-existing opt-in skips (LA5, K9, macOS smoke), EXIT=0, 82.8 s. B-XWIRE, the new C1, GS3 and SS4-6 are green. Daemon requiredChecks.test.ts, which imports guest-bridge checkFrame: 129/129.\n\nMutants: B-XWIRE killed 4/4 (cached address, HostKeyAlias=address, 255 remapped, 255 ignored). GS3 killed both R14a survivors (owned-name [0-9a-z], drive regex backslash-only).\n\nSize: +70/-35 in code and docs; the rest is board json. The contested trailers cover only this row's hunks, and diff --check is clean.\n\nDoD:\n1. DESIGN comment-350cb4d0 and the governor's APPROVED ruling comment-d954b3df both precede the plan.\n2. R14a-d3 are DONE prerequisites, and M07 dependsOn this row.\n3. SS4/5/6 fake the three 1.17.0 failure modes, and each fails closed with a fixed code.\n4. No fallback. guest-supervisor.py and certified-provider.json are unchanged since fdb5330a, and the sha is still 3a19f3bf. Readiness gained only the readHostKey row and the address field. The R13 handoff is comment-239c6bbb.\n5. The suite is green. The real-host certify proof is deferred to the governor's R13 re-run and was NOT verified by QA.\n\nContract: the 'exec' grep lists only the 4 stdin-less 64 KiB invoker queries, and the docs match the code.\n\nAccepted deviation: the builder names survive only in supervisor.py:1649's comment (pinned), the T2 absence guard and a comment; no definition or caller remains. The stale threat-model doc is routed to R13 (comment-6063dace).",
+  "requiredCheckAtDone": null
 }
