@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_REPAIR_POLICY, decideRepair, resolveRepairPolicy, type RepairDecision, type RepairInput } from './repairPolicy.js';
@@ -220,8 +222,21 @@ interface Settled { outcome: CheckOutcome; exitCode: number | null; signal: stri
 type FakeChild = EventEmitter & { stdin: Writable; stdout: PassThrough; stderr: PassThrough; kill(signal?: string): boolean };
 const runner = (name: string) => import(new URL(`../../../../scripts/local-runner/${name}`, import.meta.url).href);
 
+// CQ-R14d3 (6ac51c42): the session opens its check stream over the SSH route (guest-stream.mjs openGuestStream), which reads
+// the guest address through provider.run before it spawns ssh. This is the shape of scripts/tests/local-runner-check.test.mjs
+// CHECK_ROUTE: a fake run answers only that one info read, and ssh and keyDir are strings that are never created or executed
+// (spawn is faked). The provider records its run args and spawn commands so settle can prove no real binary ran.
+const INFO = { state: 'Running', image_hash: 'a'.repeat(64), image_release: '24.04 LTS', cpu_count: '2', memory: {}, disks: { sda1: {} }, mounts: {},
+  ipv4: ['10.0.0.2'] };
+const SSH = join(tmpdir(), 'moe-stream', 'ssh');
+const KEYS = join(tmpdir(), 'moe-stream', 'keys');
+
 // The scripts test's checkProvider order: the check frame's write completes, stdout ends, then the child closes with code.
-function exitingProvider(code: number) {
+// The child emits only from its stdin write callback, never synchronously after spawn, because the spawn now follows an
+// async info read and a late listener would miss an eager emit.
+function exitingProvider(code: number, name: string) {
+  const runCalls: string[][] = [];
+  const spawnCommands: string[] = [];
   const child = new EventEmitter() as FakeChild;
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
@@ -233,13 +248,24 @@ function exitingProvider(code: number) {
     },
   });
   child.kill = (signal) => { setImmediate(() => child.emit('close', null, signal ?? 'SIGKILL')); return true; };
-  return { spawn: () => child };
+  const run = async (_executable: string, args: string[]) => {
+    runCalls.push(args);
+    if (JSON.stringify(args) !== JSON.stringify(['info', name, '--format', 'json'])) throw new Error('unexpected provider call');
+    return { stdout: JSON.stringify({ errors: [], info: { [name]: INFO } }), stderr: '' };
+  };
+  const spawn = (command: string) => { spawnCommands.push(command); return child; };
+  return { provider: { run, spawn, ssh: SSH, keyDir: KEYS }, runCalls, spawnCommands };
 }
 
 async function settle(code: number): Promise<Settled> {
   const [{ runCheckSession }, { ownedInstanceName }] = await Promise.all([runner('check-session.mjs'), runner('lifecycle.mjs')]);
   const name = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
-  return runCheckSession({ name, check: { id: 'unit-1', command: 'npm test', protected: [] }, provider: exitingProvider(code), budgetMs: 5_000, timeoutMs: 1_000 });
+  const { provider, runCalls, spawnCommands } = exitingProvider(code, name);
+  const settled = await runCheckSession({ name, check: { id: 'unit-1', command: 'npm test', protected: [] }, provider, budgetMs: 5_000, timeoutMs: 1_000 });
+  // Only the fake info read and one fake-ssh spawn happened: the SSH route ran and no real multipass or ssh did.
+  expect(runCalls).toStrictEqual([['info', name, '--format', 'json']]);
+  expect(spawnCommands).toStrictEqual([SSH]);
+  return settled;
 }
 const observed = (id: string, candidateId: string, s: Settled) =>
   run(id, candidateId, { outcome: s.outcome, exitCode: s.exitCode ?? -1, outputTail: s.outputTail });
