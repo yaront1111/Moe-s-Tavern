@@ -36,7 +36,10 @@ const UNLAUNCHED = new Set(['reserved', 'collision']);
 const LAUNCHED = new Set(['launching', 'owned', 'absent', 'failed']);
 const ACTIVE_ATTEMPT = new Set(['running', 'finalizing', 'reconciling']);
 const SURFACED = new Set(['PROVIDER_NOT_FOUND', 'PROVIDER_ACCESS_DENIED', 'PROVIDER_TIMEOUT', 'PROVIDER_OUTPUT_LIMIT']);
-const RECORD_KEYS = ['schemaVersion', 'provider', 'instance', 'taskId', 'attemptId', 'generation', 'phase', 'launchTries', 'createdAt', 'updatedAt'];
+const BASE_KEYS = ['schemaVersion', 'provider', 'instance', 'phase', 'launchTries', 'createdAt', 'updatedAt'];
+const ATTEMPT_KEYS = ['taskId', 'attemptId', 'generation'];
+const SEAT_OWNER_KEYS = ['workerId', 'runner', 'host'];
+const SEAT_KEYS = [...SEAT_OWNER_KEYS, 'platform'];
 const REFUSED = new Map([['launching', 'LIFECYCLE_STATE_UNKNOWN'], ['failed', 'LIFECYCLE_RETRY_EXHAUSTED'],
   ['collision', 'LIFECYCLE_NAME_COLLISION'], ['deleted', 'LIFECYCLE_PHASE_INVALID']]);
 const MESSAGES = {
@@ -132,6 +135,20 @@ export function validOwner(owner) {
     && Number.isSafeInteger(owner.generation) && owner.generation > 0;
 }
 
+const text = (value, max) => typeof value === 'string' && value.trim() !== '' && value.length <= max && !CONTROL.test(value);
+// The wrappers' runner identity (moe-agent.sh moe_runner_identity, moe-agent.ps1 Get-MoeProcStartToken and
+// Get-MoeLiveMarkerHost) under claim_next_task's limits; the token may hold spaces (the `ps lstart` fallback).
+const validSeatFields = x => text(x.workerId, 128) && text(x.runner, 200) && /^[1-9][0-9]{0,9}@./.test(x.runner) && text(x.host, 255);
+
+/** A seat VM outlives any one attempt (CQ-M07g): its owner is exactly { workerId, runner: '<pid>@<start token>', host }. */
+export function validSeatOwner(owner) {
+  return isRecord(owner) && Object.keys(owner).length === SEAT_OWNER_KEYS.length && SEAT_OWNER_KEYS.every(key => Object.hasOwn(owner, key))
+    && validSeatFields(owner);
+}
+
+export const isSeatRecord = record => isRecord(record) && Object.hasOwn(record, 'workerId');
+const sameOwner = (record, owner) => (isSeatRecord(record) ? SEAT_OWNER_KEYS : ATTEMPT_KEYS).every(key => owner?.[key] === record[key]);
+
 const isSha256 = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const IMAGE_KEYS = ['sourceSha256', 'providerImageHash'];
 const validImage = image => isRecord(image) && Object.keys(image).length === IMAGE_KEYS.length
@@ -140,10 +157,13 @@ const validImage = image => isRecord(image) && Object.keys(image).length === IMA
 /** `image` (CQ-R07) is the one optional key: absent on every R06 record, exact when present. */
 function validRecord(record, name) {
   const imaged = isRecord(record) && Object.hasOwn(record, 'image');
-  return isRecord(record) && Object.keys(record).length === RECORD_KEYS.length + (imaged ? 1 : 0) && RECORD_KEYS.every(key => Object.hasOwn(record, key))
+  const seat = isSeatRecord(record); // exactly one owner shape: a seat record owns workerId
+  const keys = [...BASE_KEYS, ...(seat ? SEAT_KEYS : ATTEMPT_KEYS)];
+  return isRecord(record) && Object.keys(record).length === keys.length + (imaged ? 1 : 0) && keys.every(key => Object.hasOwn(record, key))
     && (!imaged || validImage(record.image))
     && record.schemaVersion === 1 && record.provider === 'multipass' && record.instance === name && isOwnedInstanceName(name)
-    && validOwner(record) && PHASES.has(record.phase) && Number.isInteger(record.launchTries)
+    && (seat ? validSeatFields(record) && typeof record.platform === 'string' && /^[a-z0-9]{1,16}$/.test(record.platform) : validOwner(record))
+    && PHASES.has(record.phase) && Number.isInteger(record.launchTries)
     && record.launchTries >= 0 && record.launchTries <= MAX_LAUNCH_TRIES
     && (record.launchTries === 0) === UNLAUNCHED.has(record.phase) && isIso(record.createdAt) && isIso(record.updatedAt);
 }
@@ -217,12 +237,15 @@ async function listRecords(stateDir) {
   return { records, invalid };
 }
 
+/** An attempt owner is checked first, unchanged. A seat's platform is the reserver's: WSL and Windows share a host name. */
 async function reserveRecord(stateDir, random, owner) {
-  if (!validOwner(owner)) throw lifecycleError('LEDGER_INPUT_INVALID');
+  const seat = !validOwner(owner);
+  if (seat && !validSeatOwner(owner)) throw lifecycleError('LEDGER_INPUT_INVALID');
   const now = new Date().toISOString();
   const record = {
     schemaVersion: 1, provider: 'multipass', instance: ownedInstanceName({ random }),
-    taskId: owner.taskId, attemptId: owner.attemptId, generation: owner.generation,
+    ...(seat ? { workerId: owner.workerId, runner: owner.runner, host: owner.host, platform: process.platform }
+      : { taskId: owner.taskId, attemptId: owner.attemptId, generation: owner.generation }),
     phase: 'reserved', launchTries: 0, createdAt: now, updatedAt: now,
   };
   try {
@@ -267,6 +290,18 @@ async function updateRecord(stateDir, expected, changes) {
   return swapRecord(stateDir, expected, current => ({ ...current, ...changes }));
 }
 
+/** Unlinks a never-launched seat record (CQ-M07g) whose re-read is still 'reserved' and matches expected's phase,
+ * launchTries and owner. The same compare-then-act window as swapRecord: it is a check, not a lock. */
+async function retireRecord(stateDir, expected) {
+  const current = await readRecord(stateDir, expected?.instance);
+  if (!isSeatRecord(current) || current.phase !== 'reserved' || current.phase !== expected.phase
+    || current.launchTries !== expected.launchTries || !sameOwner(current, expected)) throw lifecycleError('LEDGER_CONFLICT');
+  try {
+    await unlink(path.join(stateDir, `${current.instance}.json`));
+  } catch { throw lifecycleError('LEDGER_WRITE_FAILED'); }
+  await syncDir(stateDir);
+}
+
 /** Set-once image identity on an owned record: the same identity is a no-op, a different one is refused. */
 async function recordImage(stateDir, expected, image) {
   if (!isOwnedInstanceName(expected?.instance) || !validImage(image)) throw lifecycleError('LEDGER_INPUT_INVALID');
@@ -292,6 +327,7 @@ export function createLedger(stateDir, { random } = {}) {
     reserve: owner => reserveRecord(stateDir, random, owner),
     update: (expected, changes) => updateRecord(stateDir, expected, changes),
     recordImage: (expected, image) => recordImage(stateDir, expected, image),
+    retire: expected => retireRecord(stateDir, expected),
   };
 }
 
@@ -303,9 +339,7 @@ export async function provisionOwned({ ledger, name, owner, launch, provider = {
     throw lifecycleError('LIFECYCLE_INPUT_INVALID');
   }
   let record = await ledger.read(name);
-  if (owner?.taskId !== record.taskId || owner?.attemptId !== record.attemptId || owner?.generation !== record.generation) {
-    throw lifecycleError('LIFECYCLE_NOT_OWNER');
-  }
+  if (!sameOwner(record, owner)) throw lifecycleError('LIFECYCLE_NOT_OWNER');
   if (record.phase === 'owned') return ownedResult(record);
   if (REFUSED.has(record.phase)) throw lifecycleError(REFUSED.get(record.phase));
   if (record.phase === 'reserved' && (await queryOwnedInstance(name, provider)).present) {
@@ -331,21 +365,34 @@ export async function provisionOwned({ ledger, name, owner, launch, provider = {
   }
 }
 
-/** Restart recovery: queries each launched record's own name only. Idempotent. */
+/** Phase-syncs one launched record by querying its own name; returns the change, or null when there is none. */
+async function syncLaunched(record, ledger, provider) {
+  const { present } = await queryOwnedInstance(record.instance, provider);
+  const to = present ? 'owned' : record.phase === 'failed' ? 'failed' : 'absent';
+  if (to === record.phase) return null;
+  await ledger.update(record, { phase: to });
+  return { instance: record.instance, from: record.phase, to };
+}
+
+/** Restart recovery: queries each launched attempt record's own name only (seat records: reconcileSeats). Idempotent. */
 export async function reconcileOwned({ ledger, provider = {} } = {}) {
   const { records, invalid } = await ledger.list();
   const reconciled = [];
   const unknown = [];
-  for (const record of records.filter(entry => LAUNCHED.has(entry.phase))) {
+  for (const record of records.filter(entry => LAUNCHED.has(entry.phase) && !isSeatRecord(entry))) {
     try {
-      const { present } = await queryOwnedInstance(record.instance, provider);
-      const to = present ? 'owned' : record.phase === 'failed' ? 'failed' : 'absent';
-      if (to === record.phase) continue;
-      await ledger.update(record, { phase: to });
-      reconciled.push({ instance: record.instance, from: record.phase, to });
+      const change = await syncLaunched(record, ledger, provider);
+      if (change) reconciled.push(change);
     } catch { unknown.push(record.instance); }
   }
   return { reconciled, unknown, invalid };
+}
+
+async function leaseReason(record, leaseHeld) {
+  let lease;
+  try { lease = await leaseHeld(jobLeaseResourceId(record.instance)); } catch { lease = undefined; }
+  if (lease === true) return 'job-lease-held';
+  return lease === false ? null : 'lease-unknown';
 }
 
 async function holdReason(record, attemptPhase, leaseHeld) {
@@ -353,10 +400,31 @@ async function holdReason(record, attemptPhase, leaseHeld) {
   try { attempt = await attemptPhase(record.attemptId); } catch { attempt = undefined; }
   if (ACTIVE_ATTEMPT.has(attempt)) return 'attempt-active';
   if (attempt !== 'closed') return 'attempt-unknown';
-  let lease;
-  try { lease = await leaseHeld(jobLeaseResourceId(record.instance)); } catch { lease = undefined; }
-  if (lease === true) return 'job-lease-held';
-  return lease === false ? null : 'lease-unknown';
+  return leaseReason(record, leaseHeld);
+}
+
+const SEAT_HOLDS = new Map([['registered', 'seat-registered'], ['attempt-open', 'seat-attempt-open']]);
+
+/** A seat VM may go only once seatState(workerId) proves the seat 'gone', runnerAlive(record) proves its runner dead
+ * (exactly false) and its job lease is free, in that order. A throw, a missing function or any other answer holds it. */
+async function seatHoldReason(record, seatState, runnerAlive, leaseHeld) {
+  let seat;
+  try { seat = await seatState(record.workerId); } catch { seat = undefined; }
+  if (seat !== 'gone') return SEAT_HOLDS.get(seat) ?? 'seat-unknown';
+  let alive;
+  try { alive = await runnerAlive(record); } catch { alive = undefined; }
+  if (alive !== false) return alive === true ? 'runner-alive' : 'runner-unknown';
+  return leaseReason(record, leaseHeld);
+}
+
+function transportOf(record, provider) {
+  try { return transportFiles(record.instance, provider?.keyDir ?? defaultKeyDir()); } catch { throw lifecycleError('LIFECYCLE_INPUT_INVALID'); }
+}
+
+async function unlinkTransport(files) {
+  for (const file of [files.identityFile, files.knownHostsFile]) {
+    await unlink(file).catch(error => { if (error?.code !== 'ENOENT') throw lifecycleError('LIFECYCLE_STATE_UNKNOWN'); });
+  }
 }
 
 // CQ-R14c: the VM's two transport files (client key, pinned known_hosts) go with it. They are named before any provider
@@ -364,18 +432,44 @@ async function holdReason(record, attemptPhase, leaseHeld) {
 // absent and before the record is marked deleted: an unlink failure keeps the record, and a later cleanup re-queries,
 // finds the VM absent, skips the delete and unlinks again.
 async function purgeOwned(record, ledger, provider) {
-  let files;
-  try { files = transportFiles(record.instance, provider?.keyDir ?? defaultKeyDir()); } catch { throw lifecycleError('LIFECYCLE_INPUT_INVALID'); }
+  const files = transportOf(record, provider);
   if ((await queryOwnedInstance(record.instance, provider)).present) {
     let failure;
     await deleteOwnedInstance(record.instance, provider).catch(error => { failure = error; });
     const after = await queryOwnedInstance(record.instance, provider).catch(() => undefined);
     if (after?.present !== false) throw failure ?? lifecycleError('LIFECYCLE_STATE_UNKNOWN');
   }
-  for (const file of [files.identityFile, files.knownHostsFile]) {
-    await unlink(file).catch(error => { if (error?.code !== 'ENOENT') throw lifecycleError('LIFECYCLE_STATE_UNKNOWN'); });
-  }
+  await unlinkTransport(files);
   await ledger.update(record, { phase: 'deleted' });
+}
+
+/** Seat-record restart recovery (CQ-M07g). A held record gets no provider call: a live seat may be mid-provisionOwned. A
+ * launched one is phase-synced; a reserved one was never launched by us (its transport files are written once owned): present
+ * is foreign ('collision'), absent unlinks stray transport files and retires the record. Any throw is unknown. */
+export async function reconcileSeats({ ledger, provider = {}, seatState, runnerAlive, leaseHeld } = {}) {
+  const { records } = await ledger.list();
+  const report = { reconciled: [], unknown: [], held: [], retired: [] };
+  for (const record of records.filter(entry => isSeatRecord(entry) && (entry.phase === 'reserved' || LAUNCHED.has(entry.phase)))) {
+    const reason = await seatHoldReason(record, seatState, runnerAlive, leaseHeld);
+    if (reason) { report.held.push({ instance: record.instance, reason }); continue; }
+    try {
+      if (record.phase !== 'reserved') {
+        const change = await syncLaunched(record, ledger, provider);
+        if (change) report.reconciled.push(change);
+        continue;
+      }
+      const files = transportOf(record, provider);
+      if ((await queryOwnedInstance(record.instance, provider)).present) {
+        await ledger.update(record, { phase: 'collision' });
+        report.reconciled.push({ instance: record.instance, from: 'reserved', to: 'collision' });
+        continue;
+      }
+      await unlinkTransport(files);
+      await ledger.retire(record);
+      report.retired.push(record.instance);
+    } catch { report.unknown.push(record.instance); }
+  }
+  return report;
 }
 
 /**
@@ -386,9 +480,7 @@ async function purgeOwned(record, ledger, provider) {
 export async function deleteOwned({ ledger, name, owner, provider = {} } = {}) {
   if (typeof ledger?.read !== 'function') throw lifecycleError('LIFECYCLE_INPUT_INVALID');
   const record = await ledger.read(name);
-  if (owner?.taskId !== record.taskId || owner?.attemptId !== record.attemptId || owner?.generation !== record.generation) {
-    throw lifecycleError('LIFECYCLE_NOT_OWNER');
-  }
+  if (!sameOwner(record, owner)) throw lifecycleError('LIFECYCLE_NOT_OWNER');
   if (record.phase === 'deleted') return 'deleted';
   if (!LAUNCHED.has(record.phase)) return 'not-launched';
   await purgeOwned(record, ledger, provider);
@@ -399,12 +491,14 @@ export async function deleteOwned({ ledger, name, owner, provider = {} } = {}) {
  * attemptPhase(attemptId) and leaseHeld(resourceId) read the daemon's existing attempt phase and resource
  * lease; activation wires them. Only launched ledger records whose attempt is closed and whose job lease
  * is free are deleted, by exact name; anything unknown is preserved. Per-record failures never abort.
+ * A seat record needs seatHoldReason's proof instead (seatState, runnerAlive): a caller passing neither keeps it.
  */
-export async function cleanupOwned({ ledger, provider = {}, attemptPhase, leaseHeld } = {}) {
+export async function cleanupOwned({ ledger, provider = {}, attemptPhase, leaseHeld, seatState, runnerAlive } = {}) {
   const { records, invalid } = await ledger.list();
   const report = { deleted: [], preserved: [], errors: [], invalid };
   for (const record of records.filter(entry => LAUNCHED.has(entry.phase))) {
-    const reason = await holdReason(record, attemptPhase, leaseHeld);
+    const reason = isSeatRecord(record) ? await seatHoldReason(record, seatState, runnerAlive, leaseHeld)
+      : await holdReason(record, attemptPhase, leaseHeld);
     if (reason) {
       report.preserved.push({ instance: record.instance, reason });
       continue;

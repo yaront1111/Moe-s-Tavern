@@ -15,62 +15,107 @@
     {
       "stepId": "step-1",
       "description": "Seat owner kind in the ledger record layer (lifecycle.mjs), with its rows. Read mem:gotcha-local-runner-tests first (no forbidden-pattern literals even in tests; QA counts numstat additions + deletions).\n(a) Export validSeatOwner(owner): exactly the own keys workerId, runner, host (Object.keys length 3). workerId: trimmed non-empty, at most 128 chars. runner: at most 200 chars, shaped `<pid>@<start token>` (/^[1-9][0-9]{0,9}@./; the token may contain spaces, because moe-agent.sh falls back to `ps lstart`). host: trimmed non-empty, at most 255 chars. None may match CONTROL. This is the wrappers' runner identity (moe-agent.sh moe_runner_identity, moe-agent.ps1 Get-MoeProcStartToken + Get-MoeLiveMarkerHost) under the daemon's claim_next_task limits (processStartedAt 200, host 255). Keep the field checks in a private validSeatFields(x) so validRecord reuses them.\n(b) Export isSeatRecord(record) = isRecord(record) && Object.hasOwn(record, 'workerId').\n(c) Replace RECORD_KEYS with BASE_KEYS plus either ATTEMPT_KEYS (taskId, attemptId, generation) or SEAT_KEYS (workerId, runner, host, platform). validRecord accepts exactly one shape: seat iff the record owns workerId; exact key count, +1 for the optional CQ-R07 image on either shape; seat records pass validSeatFields and platform matches /^[a-z0-9]{1,16}$/; attempt records keep validOwner. A record carrying both key sets fails the count (LEDGER_RECORD_INVALID, counted in list().invalid).\n(d) reserveRecord: an owner passing validOwner is checked FIRST and unchanged (existing callers may pass a wider attempt binding that also carries workerId) and gets today's literal byte-for-byte, same key order. Otherwise validSeatOwner gives { schemaVersion, provider, instance, workerId, runner, host, platform: process.platform, phase: 'reserved', launchTries: 0, createdAt, updatedAt }. Otherwise LEDGER_INPUT_INVALID before mkdir or any write. platform is stamped by the reserving process, never supplied by the caller: CQ-M07i spawns it from the seat's own wrapper, so it is the runner's OS. The step-4 probe needs it because WSL and Windows share a host name but not a pid table.\n(e) A private sameOwner(record, owner) replaces the inline comparisons in provisionOwned and deleteOwned. Seat records compare workerId/runner/host; attempt records compare taskId/attemptId/generation exactly as today. A non-object owner, or the other kind, is LIFECYCLE_NOT_OWNER before any provider call.\nTests in scripts/tests/local-runner-vm-control.test.mjs (it already imports createLedger; local-runner.test.mjs is declared by four peers and is NOT edited):\n- VC-SL1. reserve(seat owner): Object.keys are exactly the seat list in order, platform === process.platform, and read() round-trips. provisionOwned with that owner and a fake launch that creates the VM gives owned. deleteOwned with it, and a provider.keyDir holding <name>.key and <name>.known_hosts, gives 'deleted', removes both files and leaves the record 'deleted'. An attempt owner, a seat owner with another runner, and undefined each give LIFECYCLE_NOT_OWNER with zero provider calls. An attempt owner's record has exactly today's ten keys in today's order.\n- VC-SL2 (table). Each of these is LEDGER_INPUT_INVALID with no file in the ledger dir: a missing key; an extra key; a blank, 129-char or control-char workerId; runner 'x', '0@t' or '12@'; a 201-char runner; a control char in the token; a blank or 256-char host. Hand-written records mixing both key sets, or with platform 'Win 32', are named by list().invalid, and read() throws LEDGER_RECORD_INVALID.\nerror handling: every refusal is a fixed lifecycle code, never text.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/lifecycle.mjs",
         "scripts/tests/local-runner-vm-control.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "lifecycle.mjs: validSeatOwner/isSeatRecord exports, private validSeatFields + sameOwner; validRecord accepts exactly one owner shape (BASE_KEYS + ATTEMPT_KEYS or SEAT_KEYS incl. platform /^[a-z0-9]{1,16}$/); reserveRecord checks validOwner first and keeps the attempt JSON byte-identical, seat records get platform: process.platform; provisionOwned/deleteOwned use sameOwner. Rows VC-SL1/VC-SL2 (RED seen: LEDGER_INPUT_INVALID on seat reserve). Snapshot run of local-runner.test.mjs + local-runner-vm-control.test.mjs: 401 tests, 400 pass, 0 fail, 1 pre-existing skip. Other dirty paths in the shared tree belong to peers; untouched.",
+      "startedAt": "2026-11-01T18:49:07.798Z",
+      "completedAt": "2026-11-01T18:53:33.635Z"
     },
     {
       "stepId": "step-2",
       "description": "statusReport (vm-control.mjs) lists seat VMs additively (DoD 2).\nRecords where isSeatRecord is true go to a new top-level `seatInstances` array as { instance, phase, state, launchTries, ownerKind: 'seat', workerId }, with state queried exactly as today.\nEvery other record stays in `instances` with exactly today's keys { instance, phase, state, launchTries, taskId }. A seat row there would carry no taskId, and both IDE parsers would then refuse the WHOLE report: JetBrains ManagedVmPresentation.parse reads member('taskId') matching TASK_ID, and VS Code ManagedVm.ts parse does the same. Both parsers read only named keys, so they ignore the new root key.\nThe LEDGER_UNREADABLE fallback gains seatInstances: [].\nTests:\n- The VC-S1 expectation gains `seatInstances: []`.\n- New VC-S2. A ledger holds one attempt record and one seat record. `instances` holds only the attempt row, whose Object.keys are exactly the five IDE-read keys. `seatInstances` holds the seat row with ownerKind 'seat' and its workerId. The unreadable fallback carries seatInstances: [].",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/vm-control.mjs",
         "scripts/tests/local-runner-vm-control.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "statusReport routes isSeatRecord records to a new root seatInstances { instance, phase, state, launchTries, ownerKind:'seat', workerId }; instances rows keep exactly { instance, phase, state, launchTries, taskId }; LEDGER_UNREADABLE fallback gains seatInstances: []. VC-S1 expectation updated, VC-S2 added (RED seen on both). vm-control test file: 15/15 pass in snapshot.",
+      "startedAt": "2026-11-01T18:53:34.421Z",
+      "completedAt": "2026-11-01T18:54:57.658Z"
     },
     {
       "stepId": "step-3",
       "description": "Seat proof, retire, seat reconcile and cleanup routing (lifecycle.mjs).\n(a) Extract leaseReason(record, leaseHeld) from holdReason, returning job-lease-held, lease-unknown or null. holdReason's attempt behavior is unchanged.\n(b) seatHoldReason(record, seatState, runnerAlive, leaseHeld) checks in order:\n  1. seatState(workerId) must resolve 'gone'. Otherwise a Map lookup turns 'registered' into 'seat-registered' and 'attempt-open' into 'seat-attempt-open'. Anything else is 'seat-unknown': a throw, a missing function, or an unexpected string, including prototype names such as 'constructor' or 'toString'.\n  2. runnerAlive(record) must resolve exactly false. true is 'runner-alive'; anything else is 'runner-unknown'.\n  3. Then leaseReason.\n  Every injected call sits in try/catch: a throw holds the record and never aborts the run. All reasons match the IDE REASON pattern [a-z][a-z-]{0,31}.\n(c) Extract unlinkTransport(files) from purgeOwned: unlink both files, tolerate ENOENT, map any other error to LIFECYCLE_STATE_UNKNOWN. purgeOwned still names the files before any provider call.\n(d) retireRecord + createLedger().retire(expected): unlink, then syncDir, only a seat record whose re-read phase is 'reserved' and whose phase, launchTries and owner (sameOwner) still match expected. Anything else is LEDGER_CONFLICT; an unlink failure is LEDGER_WRITE_FAILED. Document that it has the same compare-then-act window as swapRecord.\n(e) Export reconcileSeats({ ledger, provider, seatState, runnerAlive, leaseHeld }), returning { reconciled, unknown, held, retired }. For each seat record in 'reserved' or a LAUNCHED phase, run seatHoldReason first. A non-null reason means held.push({ instance, reason }) and the record is not touched, with no provider call: a live seat may be mid-provisionOwned. Once the seat is proven gone:\n  - A LAUNCHED record is phase-synced exactly as reconcileOwned does.\n  - A reserved record was never launched by us (provision.mjs:158-160 writes transport files only once the record is owned). Name its transport files, then query its own name. Present: update it to 'collision' (foreign, as provisionOwned rules) and push to reconciled. Absent: unlinkTransport, then ledger.retire, and push to retired.\n  - Any throw: push to unknown.\n  collision and deleted seat records are skipped.\n(f) reconcileOwned skips seat records (one filter). Its return stays exactly { reconciled, unknown, invalid }: local-runner.test.mjs deep-equals it six times.\n(g) cleanupOwned takes optional seatState and runnerAlive. It routes isSeatRecord records to seatHoldReason and attempt records to holdReason; the report shape is unchanged. The existing callers that pass neither (certify-lifecycle.mjs, native-smoke.mjs, local-runner.test.mjs) preserve any seat record as 'seat-unknown': fail closed.\nTest VC-SL3:\n- With no seat deps, cleanupOwned preserves a seat record as 'seat-unknown' with zero provider calls, while an attempt record in the same ledger is purged as before.\n- reconcileOwned makes provider calls only for attempt names and returns exactly the three keys.\n- ledger.retire refuses LEDGER_CONFLICT for an attempt record, an 'owned' seat record and a stale expected, and the files stay.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/lifecycle.mjs",
         "scripts/tests/local-runner-vm-control.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "lifecycle.mjs: leaseReason extracted from holdReason (attempt behavior unchanged); seatHoldReason (seat gone -> runner exactly false -> lease; reasons seat-registered/seat-attempt-open/seat-unknown/runner-alive/runner-unknown via a Map, every injected call in try/catch); transportOf + unlinkTransport extracted from purgeOwned (files still named before any provider call); ledger.retire(expected) = CAS unlink of a reserved seat record (LEDGER_CONFLICT / LEDGER_WRITE_FAILED); syncLaunched shared by reconcileOwned (now skips seat records, return shape unchanged) and the new export reconcileSeats -> { reconciled, unknown, held, retired }; cleanupOwned routes seat records to seatHoldReason, so R06 callers passing no seat deps preserve them as seat-unknown. VC-SL3 RED observed (today's cleanup purged the seat VM), now green. Both gate files in snapshot: 403 tests, 402 pass, 0 fail, 1 pre-existing skip.",
+      "startedAt": "2026-11-01T18:54:58.484Z",
+      "completedAt": "2026-11-01T18:59:18.931Z"
     },
     {
       "stepId": "step-4",
       "description": "vm-control.mjs seat-proof wiring, with rows for DoD 3 and 4.\n(a) Export localRunnerHost({ platform, env, hostname }), mirroring the wrappers: on win32, COMPUTERNAME lowercased (moe-agent.ps1 Get-MoeLiveMarkerHost); elsewhere, os.hostname() lowercased with whitespace removed (moe-agent.sh live_marker_host).\n(b) Export runnerProbe(record, { kill = process.kill, host = localRunnerHost(), platform = process.platform }), returning true, false or undefined. It returns undefined unless record.host === host (non-empty), record.platform === platform and the runner parses as /^([1-9][0-9]{0,9})@/. Then it calls kill(pid, 0): signal 0 only, an existence check that delivers nothing. Success or EPERM is true, ESRCH is false, anything else is undefined. A reused pid reads alive, so the VM is preserved, never deleted; document that residual.\n(c) seatStateOf(call) calls call('moe.get_seat_liveness', { workerId }). This is CQ-M07g0's read-only tool, replying { workerId, registered, status, openAttempts }. Map the reply:\n  - 'registered': registered is true and status !== 'DEAD';\n  - 'attempt-open': openAttempts > 0;\n  - 'gone': otherwise;\n  - 'unknown': the reply is not an object, names another workerId, has a non-boolean registered, or has an openAttempts that is not a non-negative safe integer.\n  A thrown call propagates to seatHoldReason's catch (seat-unknown).\n(d) Extract cleanupReport's leaseHeld closure, unchanged, into leaseHeldOf(call): a fresh list_resources per decision, and an unreadable list counts as held. cleanupReport builds its owners map from attempt records only, and passes seatState: seatStateOf(call) and runnerAlive (default runnerProbe) to cleanupOwned.\n(e) reconcileReport({ ledger, provider, call, runnerAlive = runnerProbe }) lists once and hands the same listing to reconcileOwned and reconcileSeats. It reports { reconciled: attempt then seat, unknown: attempt then seat, invalid, held, retired }. Each record lands in exactly one list, because the IDE parsers refuse a report that names an instance twice. Only seat records reach the daemon, so an attempt-only ledger never touches it.\n(f) runVmControl passes call (deps.call ?? mcpCaller(project); it is lazy and reads daemon.json only when called) and deps.runnerAlive to reconcile as well as cleanup. Update the header comment.\nTests:\n- fakeDaemon gains `seats`, answering moe.get_seat_liveness; an Error entry rejects.\n- The VC-R1 and VC-O1 expectations gain held: [] and retired: []. VC-O1's exact CLI line ends ,\"invalid\":0,\"held\":[],\"retired\":[]}.\n- VC-C3 (DoD 3). Seat records, all Running:\n  - registered IDLE: seat-registered;\n  - registered DEAD, 0 open, runner false, lease free: deleted, with its key files unlinked;\n  - unregistered, 1 open: seat-attempt-open;\n  - a malformed reply: seat-unknown;\n  - gone, runner true: runner-alive;\n  - gone, runner undefined: runner-unknown;\n  - gone, runner false, lease held: job-lease-held;\n  - unregistered, 0 open, runner false, free: deleted.\n  Provider calls are only info/delete/info for the two deleted names, and list_resources runs only for records that reached the lease check. A second run with the daemon down preserves every remaining record as seat-unknown.\n- VC-R2 (DoD 4):\n  - a registered seat's 'launching' record: held and untouched, with no provider call;\n  - gone, 'launching', absent: launching→absent;\n  - gone, 'reserved', absent, with stray key files: retired, and both the record and the key files are gone;\n  - gone, 'reserved', present: reserved→collision;\n  - gone, 'owned', provider FAIL: unknown;\n  - an attempt 'owned' record, absent: owned→absent, with no daemon call for it.\n  A second run is idempotent.\n- VC-P1. runnerProbe with a fake kill: a host or platform mismatch, a blank host or a malformed runner gives undefined and never calls kill. A plain return gives true, EPERM true, ESRCH false, any other code undefined. kill is always called with (pid, 0). One real call with `${process.pid}@x`, host localRunnerHost() and platform process.platform gives true; never signal another process. localRunnerHost maps win32 COMPUTERNAME 'DESK-1' to 'desk-1', and a linux hostname ' My Host ' to 'myhost'.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/vm-control.mjs",
         "scripts/tests/local-runner-vm-control.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "vm-control.mjs: exports localRunnerHost (win32 COMPUTERNAME lowercased; else hostname lowercased, whitespace removed) and runnerProbe (undefined unless pid parses and record host/platform match this host; kill(pid, 0) only; ok/EPERM true, ESRCH false, else undefined); private seatStateOf(call) maps moe.get_seat_liveness to registered/attempt-open/gone/unknown; leaseHeldOf(call) extracted unchanged; reconcileReport lists once and merges reconcileOwned + reconcileSeats into { reconciled, unknown, invalid, held, retired }; cleanupReport owners map from attempt records only and passes seatState + runnerAlive (default runnerProbe); runVmControl passes call + deps.runnerAlive to reconcile too; header comment updated. Rows VC-C3, VC-R2, VC-P1 added; VC-R1/VC-O1 expectations gain held/retired; fakeDaemon gains seats. RED was a link-time missing export, so I ran a 26-mutant sweep over the new guards: 25 killed at first, and the survivor (retire without the seat-record check) exposed a VC-SL3 row using a deleted attempt record. That row now uses a reserved attempt record, and the mutant is killed (26/26). Trimmed comment rewrites to fit the cap; lifecycle comments only (behavior unchanged). Both gate files in snapshot: 406 tests, 405 pass, 0 fail, 1 pre-existing skip. numstat 395 (+338/-57).",
+      "startedAt": "2026-11-01T18:59:19.818Z",
+      "completedAt": "2026-11-01T19:11:04.427Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification gate, run once (DoD 5), in a git-archive snapshot outside the checkout, never in the shared tree (mem:gotcha-local-runner-tests recipe):\nS=$(mktemp -d /tmp/m07g-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && for f in scripts/local-runner/lifecycle.mjs scripts/local-runner/vm-control.mjs scripts/tests/local-runner-vm-control.test.mjs; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-vm-control.test.mjs\nBoth files must report 0 fail. The unedited local-runner.test.mjs staying green is the proof that attempt records behave exactly as before.\nThen measure: git diff --numstat HEAD -- scripts/local-runner/lifecycle.mjs scripts/local-runner/vm-control.mjs scripts/tests/local-runner-vm-control.test.mjs. QA counts additions + deletions against 400. If the count is over, first merge rows that share setup (the CQ-I03a note in that memory). If it is still over, file an EPIC ADD_RAIL size exception via moe.propose_rail, quoting the exact numstat, before complete_task, so QA parks the row instead of rejecting it.\nThe fresh output of the gate command is the complete_task verification evidence.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/lifecycle.mjs",
         "scripts/local-runner/vm-control.mjs",
         "scripts/tests/local-runner-vm-control.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "Exact plan gate in a fresh git-archive snapshot of HEAD 154a1c71 with the 3 task files overlaid: EXIT=0, tests 406, pass 405, fail 0, skipped 1 (pre-existing), ~102 s. The unedited local-runner.test.mjs is green. No peer commit touched the three files since c9f241d7. numstat: lifecycle.mjs +123/-29, vm-control.mjs +64/-20, local-runner-vm-control.test.mjs +151/-8 = 395 (+338/-57), under the 400 cap, so no size-exception rail was filed.",
+      "startedAt": "2026-11-01T19:11:05.351Z",
+      "completedAt": "2026-11-01T19:13:28.663Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this task's diff only (load adversarial-self-review), as the final step. Check:\n1. Can any path purge a seat VM without all three proofs, in order: seat gone, runner proven false, lease false? List every purgeOwned caller.\n2. Can a seat row reach `instances`, or can one instance appear in two lists of one report?\n3. Is the attempt record literal still byte-identical, key order included, and is local-runner.test.mjs untouched?\n4. Does every injected call (seatState, runnerAlive, leaseHeld, call) sit in try/catch, so one bad record never aborts the run?\n5. Do prototype-name answers through the reason Map read seat-unknown?\n6. Is kill only ever called with signal 0 and a parsed positive pid, and does no test signal a foreign process?\n7. Does any host, path, stderr or token text reach a report? Only fixed codes, instance names and workerId may.\n8. Two concurrent reconcile/cleanup runs: CAS refusals must become unknown or errors, never a double delete or a retired live record.\n9. Is a workerId over 128 chars refused at reserve, so it never reaches the daemon?\nIf any byte changes, re-run step 5's exact command and submit that fresh output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/lifecycle.mjs",
         "scripts/local-runner/vm-control.mjs",
         "scripts/tests/local-runner-vm-control.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "Adversarial self-review, no byte changes, so the step-5 gate output stands.\n1. purgeOwned callers: cleanupOwned (a seat record only after seatHoldReason, which checks seat gone, then runner exactly false, then lease false) and deleteOwned (the seat owner's own delete, by sameOwner, the same as an attempt owner today). reconcileSeats never deletes a VM: it phase-syncs, marks collision, or retires a reserved record whose VM is verified absent.\n2. instances is attempt-only and seatInstances seat-only. In reconcile, attempt rows come from reconcileOwned (filtered) and seat rows from reconcileSeats. Each seat record pushes to exactly one list, because every push comes after the last await that can throw.\n3. The attempt literal keeps its key order and JSON bytes, pinned by VC-SL1. local-runner.test.mjs is untouched and green.\n4. seatState, runnerAlive, leaseHeld and attemptPhase all sit in try/catch. A throw from `call` lands in that catch. A missing `call` (direct reconcileReport) reads seat-unknown or lease held.\n5. SEAT_HOLDS is a Map, so constructor and toString read seat-unknown (tested).\n6. kill is called only as kill(Number(pid), 0), with the pid from /^[1-9][0-9]{0,9}@/, so never 0 or negative. A pid over int32 throws ERR_INVALID_ARG_TYPE and reads runner-unknown. The only real call targets process.pid.\n7. Reports carry only fixed codes, instance names and workerId (validated: at most 128 chars, no control chars).\n8. Two concurrent reconciles: the second retire re-reads a missing record and gets LEDGER_RECORD_INVALID, which lands in unknown. collision versus retire is refused by CAS. Concurrent cleanups behave as the attempt path does today (the second update is a LEDGER_CONFLICT error).\n9. A workerId over 128 chars is refused at reserve and invalid in validRecord (VC-SL2).\nI also ran local-runner-pinned-client, daemon-bind, dispatch and bundle in a snapshot: 56/56 pass.\nResiduals, noted not fixed: a reused pid reads alive, so the VM is kept. A same-workerId relaunch keeps the old VM seat-registered (CQ-M07i). The JetBrains and VS Code reason maps show the new seat reasons as unknown codes, and the cleanup button is gated on `instances` rows (IDE follow-up).",
+      "startedAt": "2026-11-01T19:13:29.707Z",
+      "completedAt": "2026-11-01T19:15:40.471Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,15 +124,21 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-fd196d137c44497188d2639f149e259b",
-    "task-a89361db41f24ef2aee19667aefc2135"
+    "task-fd196d137c44497188d2639f149e259b"
   ],
   "priority": "MEDIUM",
   "order": 231.12,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-753b644880d0433f9b8a4183b0119414",
+      "author": "governor-978922c1",
+      "content": "Governor edge change (18:50Z, governor-978922c1): early start. I dropped the dependsOn on CQ-M07g0 (task-a89361db). It is in REVIEW, and its bytes landed as completion c9f241d7 at 18:46Z. This row's only other dependency, fd196d13, is DONE, so it is claimable now.\n\nBuild on those landed bytes: `moe.get_seat_liveness { workerId }` replies exactly `{ workerId, registered, status, openAttempts }`, and it is registered in getTools() with TOOL_AUDIENCE 'wrapper'. Step 4 already injects `call`, so the unit tests don't need a live daemon. No open row plans lifecycle.mjs, vm-control.mjs or local-runner-vm-control.test.mjs.\n\nIf a QA reject on M07g0 changes the tool name or reply shape, re-sync step 4 to the new bytes before you complete.",
+      "timestamp": "2026-11-01T18:47:24.026Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:59.472Z",
-  "updatedAt": "2026-11-01T11:48:22.963Z",
+  "updatedAt": "2026-11-01T19:17:56.711Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T08:16:03.094Z",
@@ -96,15 +147,24 @@
   "metrics": {
     "firstClaimAt": "2026-11-01T11:25:26.163Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
-    "architect-b520bc90"
+    "architect-b520bc90",
+    "worker-83c3fcad"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T11:48:22.934Z",
   "executionContract": {
@@ -154,5 +214,20 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-01T11:48:22.963Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T18:49:07.799Z",
+  "reviewStartedAt": "2026-11-01T19:17:56.709Z",
+  "verification": {
+    "command": "S=$(mktemp -d /tmp/m07g-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && for f in scripts/local-runner/lifecycle.mjs scripts/local-runner/vm-control.mjs scripts/tests/local-runner-vm-control.test.mjs; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-vm-control.test.mjs",
+    "exitCode": 0,
+    "outputTail": "HEAD 403c4f93 snapshot + 3 overlaid files.\n✔ VC-SL1 a seat owner round-trips reserve, launch and delete...\n✔ VC-SL2 malformed seat owners are refused before any write...\n✔ VC-S2 status lists a seat VM only in seatInstances...\n✔ VC-SL3 R06 callers hold a seat record as seat-unknown...\n✔ VC-C3 cleanup deletes a seat VM only once its seat is gone...\n✔ VC-R2 reconcile settles a crashed seat's record only once...\n✔ VC-P1 the runner probe sends signal 0 only...\n✔ SS9 all seven transfer modes spawn only the ssh client with exactly streamCall, never the Multipass executable or exec (25.775018ms)\nℹ tests 406\nℹ suites 0\nℹ pass 405\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 96231.580225\nEXIT=0",
+    "reportedAt": "2026-11-01T19:17:56.709Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/lifecycle.mjs",
+    "scripts/tests/local-runner-vm-control.test.mjs",
+    "scripts/local-runner/vm-control.mjs"
+  ],
+  "completionSummary": "CQ-M07g: the owned-VM ledger gets seat owners, and cleanup and reconcile delete or retire a seat record only on full proof. 3 files; numstat 395 (+338/-57), under 400, so no size rail.\n\n**lifecycle.mjs**\n- validSeatOwner is exactly {workerId ≤128, runner `<pid>@<token>` ≤200, host ≤255}, with no control chars.\n- validRecord accepts exactly one owner shape. A seat record carries workerId, runner, host and platform; platform is stamped from process.platform at reserve.\n- validOwner is checked first, so attempt record bytes and key order are unchanged.\n- sameOwner gates provisionOwned and deleteOwned.\n- ledger.retire is a CAS unlink of a reserved seat record.\n- seatHoldReason checks, in order: seat gone, runner exactly false, lease free. A throw or any other answer holds the record. Reasons: seat-registered, seat-attempt-open, seat-unknown, runner-alive, runner-unknown.\n- reconcileSeats: a held record gets no provider call. A launched record is phase-synced. A reserved record that is present becomes collision; one that is absent has its key files unlinked and is retired.\n- reconcileOwned skips seat records; its shape is unchanged.\n- cleanupOwned routes seat records to the proof, so callers that pass no seat deps keep them as seat-unknown.\n- Key files are unlinked via purgeOwned.\n\n**vm-control.mjs**\n- seatInstances is a new root key; `instances` keeps its 5 keys.\n- runnerProbe calls kill(pid, 0) only, for a record of this host and platform; EPERM reads true, ESRCH false.\n- localRunnerHost mirrors both wrappers' host spelling.\n- seatStateOf maps moe.get_seat_liveness (M07g0).\n- The reconcile report adds `held` and `retired`.\n\n**Tests:** VC-SL1-3, VC-S2, VC-C3 (DoD 3), VC-R2 (DoD 4), VC-P1.\n- Gate: 406 tests, 405 pass, 0 fail, 1 pre-existing skip. local-runner.test.mjs is unedited and green.\n- pinned-client, daemon-bind, dispatch and bundle: 56/56.\n- 26-mutant sweep: all killed.\n\n**Follow-ups:**\n- The IDE reason maps show the new seat codes as unknown codes.\n- The cleanup"
 }

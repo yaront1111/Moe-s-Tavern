@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { createLedger, lifecycleError } from '../local-runner/lifecycle.mjs';
+import { cleanupOwned, createLedger, deleteOwned, lifecycleError, provisionOwned, reconcileOwned } from '../local-runner/lifecycle.mjs';
 import {
-  canonicalProjectPath, cleanupReport, mcpCaller, ownedLedgerDir, readDaemonInfo, reconcileReport, runVmControl, statusReport,
+  canonicalProjectPath, cleanupReport, localRunnerHost, mcpCaller, ownedLedgerDir, readDaemonInfo, reconcileReport, runnerProbe, runVmControl, statusReport,
 } from '../local-runner/vm-control.mjs';
 
 const CLI = fileURLToPath(new URL('../local-runner/vm-control.mjs', import.meta.url));
@@ -43,11 +43,12 @@ function fakeProvider(states) {
   };
   return { calls, provider: { run } };
 }
-function fakeDaemon({ open = {}, unreadable = [], resources = [], down = false }) {
+function fakeDaemon({ open = {}, unreadable = [], resources = [], down = false, seats = {} }) {
   const calls = [];
   const call = async (tool, args) => {
     calls.push(tool);
     if (down) throw Object.assign(new Error('down'), { code: 'DAEMON_UNREACHABLE' });
+    if (tool === 'moe.get_seat_liveness') return seats[args.workerId] instanceof Error ? Promise.reject(seats[args.workerId]) : seats[args.workerId];
     if (tool === 'moe.list_resources') return resources instanceof Error ? Promise.reject(resources) : { success: true, resources };
     if (!Object.hasOwn(open, args.taskId)) throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' });
     const receiptStatus = unreadable.includes(args.taskId) ? 'identity-unreadable' : 'no-session';
@@ -90,13 +91,13 @@ test('VC-S1 status lists exactly the ledger records, queries only their names an
   assert.deepEqual(await statusReport({ ledger, provider, prerequisites }), {
     schema: 'moe-vm-status-v1', provider: { ready: true, code: 'PROVIDER_READY', platform: 'linux' }, executionReady: false, verified: false,
     instances: [[a, 'Running', 'task-a'], [b, 'Unknown', 'task-b'], [c, 'Absent', 'task-c']].map(([instance, state, taskId]) => ({ instance, phase: 'owned', state, launchTries: 1, taskId })),
-    invalid: 1,
+    seatInstances: [], invalid: 1,
   });
   assert.deepEqual(calls, [a, b, c].map(name => `info ${name} --format json`));
   assert.deepEqual((await statusReport({ ledger, provider, prerequisites: async () => { throw new Error('/x'); } })).provider, { ready: false, code: 'PREREQUISITES_UNAVAILABLE' });
   assert.deepEqual((await statusReport({ ledger, provider, prerequisites: async () => ({ ready: 'yes', code: '/x/KEY', platform: '../x' }) })).provider, { ready: false });
   assert.deepEqual(await statusReport({ ledger: UNREADABLE, provider, prerequisites }),
-    { schema: 'moe-vm-status-v1', code: 'LEDGER_UNREADABLE', instances: [], executionReady: false, verified: false });
+    { schema: 'moe-vm-status-v1', code: 'LEDGER_UNREADABLE', instances: [], seatInstances: [], executionReady: false, verified: false });
 });
 
 test('VC-R1 reconcile is R06 reconcileOwned over the ledger only, with its schema and an invalid count', async t => {
@@ -104,7 +105,7 @@ test('VC-R1 reconcile is R06 reconcileOwned over the ledger only, with its schem
   writeFileSync(path.join(dir, 'junk.json'), 'not json');
   const { calls, provider } = fakeProvider({ [b]: 'Running', [FOREIGN]: 'Running' });
   assert.deepEqual(await reconcileReport({ ledger, provider }),
-    { schema: 'moe-vm-reconcile-v1', reconciled: [{ instance: a, from: 'owned', to: 'absent' }], unknown: [], invalid: 1 });
+    { schema: 'moe-vm-reconcile-v1', reconciled: [{ instance: a, from: 'owned', to: 'absent' }], unknown: [], invalid: 1, held: [], retired: [] });
   assert.deepEqual(calls, [`info ${a} --format json`, `info ${b} --format json`]);
   assert.deepEqual(await reconcileReport({ ledger: UNREADABLE, provider }), { schema: 'moe-vm-reconcile-v1', code: 'LEDGER_UNREADABLE' });
 });
@@ -171,7 +172,7 @@ test('VC-O1 every report is one bounded line of fixed codes; internal throws nev
   const huge = { ledger: { list: async () => ({ records: many, invalid: [] }) }, provider: fakeProvider({}).provider, prerequisites: async () => ({ ready: false }) };
   assert.deepEqual(await captured(['status', '--project', project], huge), { code: 0, stdout: '{"code":"VM_CONTROL_REPORT_TOO_LARGE"}\n', stderr: '' });
   const run = spawnSync(process.execPath, [CLI, 'reconcile', '--project', project], { encoding: 'utf8', env: { ...process.env, MOE_RUNNER_STATE_DIR: state } });
-  assert.deepEqual([run.status, run.stdout, run.stderr], [0, '{"schema":"moe-vm-reconcile-v1","reconciled":[],"unknown":[],"invalid":0}\n', '']);
+  assert.deepEqual([run.status, run.stdout, run.stderr], [0, '{"schema":"moe-vm-reconcile-v1","reconciled":[],"unknown":[],"invalid":0,"held":[],"retired":[]}\n', '']);
 });
 
 function fakeSocket(reply) {
@@ -288,4 +289,146 @@ test('VC-M2 readDaemonInfo accepts this project\'s daemon.json in another spelli
     info(projectPath);
     await rejectsWith(readDaemonInfo('.'), 'DAEMON_UNREACHABLE');
   }
+});
+
+// CQ-M07g: seat-owned ledger records. A seat owner is the wrappers' runner identity; the ledger stamps the platform.
+const SEAT = { workerId: 'worker-1', runner: '4242@12345', host: 'desk' };
+const ATTEMPT_KEYS = ['schemaVersion', 'provider', 'instance', 'taskId', 'attemptId', 'generation', 'phase', 'launchTries', 'createdAt', 'updatedAt'];
+const counted = dir => { let n = 0; return createLedger(dir, { random: size => Buffer.alloc(size, ++n) }); };
+
+test('VC-SL1 a seat owner round-trips reserve, launch and delete; any other owner is refused before a provider call', async t => {
+  const [dir, keyDir] = [scratch(t), scratch(t)];
+  const ledger = counted(dir);
+  const seat = await ledger.reserve(SEAT);
+  const name = seat.instance;
+  assert.deepEqual([Object.keys(seat), seat.platform], [[...ATTEMPT_KEYS.slice(0, 3), 'workerId', 'runner', 'host', 'platform', ...ATTEMPT_KEYS.slice(6)], process.platform]);
+  assert.deepEqual(await ledger.read(name), seat);
+  assert.deepEqual(Object.keys(await ledger.reserve(owner('a'))), ATTEMPT_KEYS); // an attempt record is unchanged
+  const states = {};
+  const { calls, provider } = fakeProvider(states);
+  const own = { ledger, name, provider: { ...provider, keyDir }, launch: async () => { states[name] = 'Running'; } };
+  for (const other of [owner('a'), { ...SEAT, runner: '4243@12345' }, undefined]) for (const act of [provisionOwned, deleteOwned]) await rejectsWith(act({ ...own, owner: other }), 'LIFECYCLE_NOT_OWNER');
+  assert.deepEqual(calls, []);
+  assert.deepEqual(await provisionOwned({ ...own, owner: SEAT }), { instance: name, phase: 'owned', launchTries: 1, executionReady: false });
+  for (const ext of ['key', 'known_hosts']) writeFileSync(path.join(keyDir, `${name}.${ext}`), 'x');
+  assert.equal(await deleteOwned({ ...own, owner: SEAT }), 'deleted');
+  assert.deepEqual([readdirSync(keyDir), (await ledger.read(name)).phase, states], [[], 'deleted', {}]);
+});
+
+test('VC-SL2 malformed seat owners are refused before any write; mixed-shape or bad-platform records are invalid', async t => {
+  const dir = scratch(t);
+  const ledger = counted(dir);
+  const rows = [{ workerId: 'w', runner: '1@t' }, { ...SEAT, extra: 1 }, ...['', ' ', 'w'.repeat(129), 'w\x01'].map(workerId => ({ ...SEAT, workerId })),
+    ...['x', '0@t', '12@', `1@${'t'.repeat(199)}`, '1@t\x07'].map(runner => ({ ...SEAT, runner })), ...['', ' ', 'h'.repeat(256)].map(host => ({ ...SEAT, host }))];
+  for (const row of rows) await rejectsWith(ledger.reserve(row), 'LEDGER_INPUT_INVALID');
+  assert.deepEqual(readdirSync(dir), []);
+  // The limits themselves pass, and a `ps lstart` token carries spaces.
+  const edge = await ledger.reserve({ workerId: 'w'.repeat(128), runner: '1@Sat Nov 1 10:00:00 2026'.padEnd(200, 't'), host: 'h'.repeat(255) });
+  const [mixed, spaced] = ['a', 'b'].map(c => `moe-vm-${c.repeat(20)}`);
+  writeFileSync(path.join(dir, `${mixed}.json`), JSON.stringify({ ...edge, instance: mixed, taskId: 'task-a', attemptId: 'attempt-a', generation: 1 }));
+  writeFileSync(path.join(dir, `${spaced}.json`), JSON.stringify({ ...edge, instance: spaced, platform: 'Win 32' }));
+  const { records, invalid } = await ledger.list();
+  assert.deepEqual([records.map(record => record.instance), invalid], [[edge.instance], [`${mixed}.json`, `${spaced}.json`]]);
+  for (const name of [mixed, spaced]) await rejectsWith(ledger.read(name), 'LEDGER_RECORD_INVALID');
+});
+
+test('VC-S2 status lists a seat VM only in seatInstances; instances rows keep exactly the five keys the IDE parsers read', async t => {
+  const ledger = counted(scratch(t));
+  const [{ instance: a }, { instance: s }] = [await ledger.reserve(owner('a')), await ledger.reserve(SEAT)];
+  const { provider } = fakeProvider({ [s]: 'Running' });
+  assert.deepEqual(await statusReport({ ledger, provider, prerequisites: async () => ({ ready: false }) }), {
+    schema: 'moe-vm-status-v1', provider: { ready: false }, executionReady: false, verified: false, invalid: 0,
+    instances: [{ instance: a, phase: 'reserved', state: 'Absent', launchTries: 0, taskId: 'task-a' }],
+    seatInstances: [{ instance: s, phase: 'reserved', state: 'Running', launchTries: 0, ownerKind: 'seat', workerId: 'worker-1' }],
+  });
+});
+
+test('VC-SL3 R06 callers hold a seat record as seat-unknown and reconcile skips it; retire unlinks only its own reserved seat record', async t => {
+  const { dir, ledger, names: [a, s] } = await ledgerWith(t, [owner('a'), SEAT]);
+  const { calls, provider } = fakeProvider({ [a]: 'Running', [s]: 'Running' });
+  const p = { ...provider, keyDir: scratch(t) };
+  assert.deepEqual(await reconcileOwned({ ledger, provider: p }), { reconciled: [], unknown: [], invalid: [] });
+  const held = { preserved: [{ instance: s, reason: 'seat-unknown' }], errors: [], invalid: [] };
+  const r06 = { ledger, provider: p, attemptPhase: () => 'closed', leaseHeld: () => false }; // today's callers pass no seat proof
+  assert.deepEqual(await cleanupOwned(r06), { deleted: [a], ...held });
+  // A throw, or an answer that is not 'gone' (prototype names included), holds it even with the runner dead.
+  for (const seatState of [() => { throw new Error('x'); }, () => 'constructor', () => 'toString', () => 'GONE']) assert.deepEqual(await cleanupOwned({ ...r06, seatState, runnerAlive: () => false }), { deleted: [], ...held });
+  assert.deepEqual(calls, ['info', 'info', 'delete', 'info'].map(cmd => (cmd === 'info' ? `info ${a} --format json` : `delete --purge ${a}`)));
+  const [reserved, attempt] = [await ledger.reserve(SEAT), await createLedger(dir, { random: size => Buffer.alloc(size, 9) }).reserve(owner('b'))];
+  for (const expected of [attempt, await ledger.read(s), { ...reserved, launchTries: 1 }, { ...reserved, runner: '1@x' }]) await rejectsWith(ledger.retire(expected), 'LEDGER_CONFLICT');
+  assert.equal(readdirSync(dir).length, 4);
+  await ledger.retire(reserved);
+  assert.deepEqual(readdirSync(dir).sort(), [a, s, attempt.instance].map(name => `${name}.json`));
+});
+
+const seatOf = workerId => ({ ...SEAT, workerId });
+const liveness = (workerId, registered, status, openAttempts) => ({ workerId, registered, status, openAttempts });
+const gone = id => liveness(id, false, null, 0);
+const [SL, LR] = ['moe.get_seat_liveness', 'moe.list_resources'];
+
+test('VC-C3 cleanup deletes a seat VM only once its seat is gone, its runner is dead and its job lease is free', async t => {
+  const ids = ['reg', 'dead', 'open', 'bad', 'alive', 'unk', 'lease', 'gone'];
+  const { ledger, names } = await ledgerWith(t, ids.map(seatOf));
+  const name = Object.fromEntries(ids.map((id, i) => [id, names[i]]));
+  const keyDir = scratch(t);
+  for (const id of ['reg', 'dead', 'gone']) for (const ext of ['key', 'known_hosts']) writeFileSync(path.join(keyDir, `${name[id]}.${ext}`), 'x');
+  const { calls, provider } = fakeProvider(Object.fromEntries(names.map(n => [n, 'Running'])));
+  const seats = { reg: liveness('reg', true, 'IDLE', 0), dead: liveness('dead', true, 'DEAD', 0), open: liveness('open', false, null, 1),
+    bad: { ...gone('bad'), workerId: 'other' }, alive: gone('alive'), unk: gone('unk'), lease: gone('lease'), gone: gone('gone') };
+  const runnerAlive = ({ workerId }) => (workerId === 'alive' ? true : workerId === 'unk' ? undefined : false); // a fake process probe
+  const run = daemon => cleanupReport({ ledger, provider: { ...provider, keyDir }, call: daemon.call, runnerAlive });
+  const held = rows => rows.map(([id, reason]) => ({ instance: name[id], reason }));
+  const daemon = fakeDaemon({ seats, resources: [{ id: name.lease, holders: [{ taskId: 'task-q' }], queue: [] }] });
+  assert.deepEqual(await run(daemon), { schema: 'moe-vm-cleanup-v1', deleted: [name.dead, name.gone], errors: [], invalid: 0,
+    preserved: held([['reg', 'seat-registered'], ['open', 'seat-attempt-open'], ['bad', 'seat-unknown'], ['alive', 'runner-alive'],
+      ['unk', 'runner-unknown'], ['lease', 'job-lease-held']]) });
+  assert.deepEqual(calls.splice(0), [name.dead, name.gone].flatMap(n => [`info ${n} --format json`, `delete --purge ${n}`, `info ${n} --format json`]));
+  assert.deepEqual(daemon.calls, [SL, SL, LR, SL, SL, SL, SL, SL, LR, SL, LR]); // a lease read only once seat and runner are proven gone
+  assert.deepEqual(readdirSync(keyDir).sort(), [`${name.reg}.key`, `${name.reg}.known_hosts`]);
+  // A down daemon, a refusal or any malformed reply holds every remaining seat VM.
+  const left = ['reg', 'open', 'bad', 'alive', 'unk', 'lease'];
+  for (const reply of [() => null, () => 'gone', id => ({ ...gone(id), registered: 'no' }), id => ({ ...gone(id), openAttempts: -1 }),
+    id => ({ ...gone(id), openAttempts: 0.5 }), () => new Error('refused')]) {
+    const report = await run(fakeDaemon({ seats: Object.fromEntries(left.map(id => [id, reply(id)])) }));
+    assert.deepEqual(report.preserved, held(left.map(id => [id, 'seat-unknown'])));
+  }
+  assert.deepEqual((await run(fakeDaemon({ down: true }))).preserved, held(left.map(id => [id, 'seat-unknown'])));
+  assert.deepEqual(calls, []);
+});
+
+test('VC-R2 reconcile settles a crashed seat\'s record only once the seat is proven gone; attempt records never reach the daemon', async t => {
+  const [dir, keyDir] = [scratch(t), scratch(t)];
+  const ledger = counted(dir);
+  const up = async (o, owned) => {
+    const record = await ledger.update(await ledger.reserve(o), { phase: 'launching', launchTries: 1 });
+    return (owned ? await ledger.update(record, { phase: 'owned' }) : record).instance;
+  };
+  const [reg, l] = [await up(seatOf('reg')), await up(seatOf('l'))];
+  const [res, col] = [(await ledger.reserve(seatOf('res'))).instance, (await ledger.reserve(seatOf('col'))).instance];
+  const [fail, a] = [await up(seatOf('fail'), true), await up(owner('a'), true)];
+  for (const ext of ['key', 'known_hosts']) writeFileSync(path.join(keyDir, `${res}.${ext}`), 'x'); // stray key files
+  const { calls, provider } = fakeProvider({ [reg]: 'Running', [col]: 'Running', [fail]: 'FAIL' });
+  const daemon = fakeDaemon({ seats: { reg: liveness('reg', true, 'IDLE', 0), ...Object.fromEntries(['l', 'res', 'col', 'fail'].map(id => [id, gone(id)])) } });
+  const run = () => reconcileReport({ ledger, provider: { ...provider, keyDir }, call: daemon.call, runnerAlive: () => false });
+  const steady = { schema: 'moe-vm-reconcile-v1', unknown: [fail], invalid: 0, held: [{ instance: reg, reason: 'seat-registered' }] };
+  assert.deepEqual(await run(), { ...steady, retired: [res], reconciled: [{ instance: a, from: 'owned', to: 'absent' },
+    { instance: l, from: 'launching', to: 'absent' }, { instance: col, from: 'reserved', to: 'collision' }] });
+  assert.deepEqual(calls, [a, l, res, col, fail].map(n => `info ${n} --format json`)); // never the held seat's name
+  assert.deepEqual(daemon.calls, [SL, SL, LR, SL, LR, SL, LR, SL, LR]);
+  assert.deepEqual([readdirSync(keyDir), readdirSync(dir).includes(`${res}.json`), (await ledger.read(reg)).phase], [[], false, 'launching']);
+  assert.deepEqual(await run(), { ...steady, reconciled: [], retired: [] }); // idempotent
+});
+
+test('VC-P1 the runner probe sends signal 0 only, to a pid parsed from a record of this host and platform', () => {
+  const kills = [];
+  const kill = code => (pid, signal) => { kills.push([pid, signal]); if (code) throw Object.assign(new Error('x'), { code }); };
+  const [mine, here] = [{ runner: '4242@t', host: 'desk', platform: 'linux' }, { host: 'desk', platform: 'linux' }];
+  const refused = [{ ...mine, host: 'other' }, { ...mine, platform: 'win32' }, { ...mine, runner: '0@t' }, { ...mine, runner: 'x@1' }, { ...mine, runner: 42 }, null];
+  assert.deepEqual([...refused.map(record => runnerProbe(record, { ...here, kill: kill() })), runnerProbe({ ...mine, host: '' }, { ...here, host: '', kill: kill() }), kills],
+    [...refused.map(() => undefined), undefined, []]); // a blank host too, and kill is never called
+  assert.deepEqual([undefined, 'EPERM', 'ESRCH', 'EINVAL'].map(code => runnerProbe(mine, { ...here, kill: kill(code) })), [true, true, false, undefined]);
+  assert.deepEqual(kills, Array(4).fill([4242, 0]));
+  assert.equal(runnerProbe({ runner: `${process.pid}@x`, host: localRunnerHost(), platform: process.platform }), true); // this process only
+  assert.deepEqual([localRunnerHost({ platform: 'win32', env: { COMPUTERNAME: 'DESK-1' } }), localRunnerHost({ platform: 'linux', hostname: () => ' My Host ' })],
+    ['desk-1', 'myhost']);
 });

@@ -7,6 +7,8 @@
 // this ledger. executionReady and verified are always false: no isolation claim, never verified-local.
 // cleanup deletes only what the daemon (loopback /mcp; Node 22+ WebSocket, else unreachable) proves closed and
 // lease-free. Residual: a lease granted between list_resources and the delete is unseen; R10 pins its release.
+// A seat VM (CQ-M07g) is reconciled or deleted only once the daemon proves its seat gone (moe.get_seat_liveness), its
+// runner is dead on this host (signal 0) and its lease is free; status lists it apart, in seatInstances.
 import { createHash } from 'node:crypto';
 import { constants, mkdirSync, realpathSync } from 'node:fs';
 import { open } from 'node:fs/promises';
@@ -15,7 +17,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { hostPrerequisites, platformFor } from './cli.mjs';
 import { canonicalProjectPath, loopbackDaemonHost, MAX_DAEMON_INFO_BYTES } from './guest-session.mjs';
-import { cleanupOwned, createLedger, queryOwnedInstance, reconcileOwned } from './lifecycle.mjs';
+import { cleanupOwned, createLedger, isSeatRecord, queryOwnedInstance, reconcileOwned, reconcileSeats } from './lifecycle.mjs';
 
 const CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const CONTROL = /[\x00-\x1f\x7f]/;
@@ -62,22 +64,71 @@ async function ledgerReport(schema, run, unreadable = {}) {
 /** Ledger records only, each queried by its own name ('Unknown' on any failure); there is no provider list call. */
 export const statusReport = ({ ledger, provider = {}, prerequisites = hostPrerequisites }) => ledgerReport('moe-vm-status-v1', async () => {
   const { records, invalid } = await ledger.list();
-  const instances = [];
-  for (const { instance, phase, launchTries, taskId } of records) {
+  const [instances, seatInstances] = [[], []];
+  for (const record of records) {
+    const { instance, phase, launchTries } = record;
     const state = await queryOwnedInstance(instance, provider).then(found => (found.present ? found.state : 'Absent'), () => 'Unknown');
-    instances.push({ instance, phase, state, launchTries, taskId });
+    // A seat VM (CQ-M07g) goes apart: the IDE parsers need a taskId on every `instances` row and ignore unknown root keys.
+    if (isSeatRecord(record)) seatInstances.push({ instance, phase, state, launchTries, ownerKind: 'seat', workerId: record.workerId });
+    else instances.push({ instance, phase, state, launchTries, taskId: record.taskId });
   }
-  return { provider: await providerReadiness(prerequisites), executionReady: false, verified: false, instances, invalid };
-}, { instances: [], executionReady: false, verified: false });
+  return { provider: await providerReadiness(prerequisites), executionReady: false, verified: false, instances, seatInstances, invalid };
+}, { instances: [], seatInstances: [], executionReady: false, verified: false });
 
-export const reconcileReport = ({ ledger, provider = {} }) => ledgerReport('moe-vm-reconcile-v1', () => reconcileOwned({ ledger, provider }));
+/** This host's name as the wrappers spell it: win32 COMPUTERNAME lowercased (moe-agent.ps1 Get-MoeLiveMarkerHost),
+ * elsewhere the hostname lowercased without whitespace (moe-agent.sh live_marker_host). */
+export function localRunnerHost({ platform = process.platform, env = process.env, hostname = os.hostname } = {}) {
+  return platform === 'win32' ? String(env.COMPUTERNAME ?? '').toLowerCase() : String(hostname()).toLowerCase().replace(/\s/g, '');
+}
+
+/** Whether a seat record's runner is alive: true, false, or undefined when unprovable (another host or platform, a
+ * malformed runner, any other error). Signal 0 is an existence check that delivers nothing. Residual: a reused pid
+ * reads alive, so its VM is preserved, never deleted. */
+export function runnerProbe(record, { kill = process.kill, host = localRunnerHost(), platform = process.platform } = {}) {
+  const pid = /^([1-9][0-9]{0,9})@/.exec(typeof record?.runner === 'string' ? record.runner : '')?.[1];
+  if (!pid || typeof host !== 'string' || host === '' || record.host !== host || record.platform !== platform) return undefined;
+  try {
+    kill(Number(pid), 0);
+    return true;
+  } catch (error) { return error?.code === 'EPERM' ? true : error?.code === 'ESRCH' ? false : undefined; }
+}
+
+/** The seat's daemon liveness (CQ-M07g0 moe.get_seat_liveness): 'registered' (a non-DEAD worker record),
+ * 'attempt-open', 'gone', or 'unknown' for a malformed reply. A failed call throws, which holds the record. */
+const seatStateOf = call => async workerId => {
+  const reply = await call('moe.get_seat_liveness', { workerId });
+  if (!isRecord(reply) || reply.workerId !== workerId || typeof reply.registered !== 'boolean'
+    || !Number.isSafeInteger(reply.openAttempts) || reply.openAttempts < 0) return 'unknown';
+  if (reply.registered && reply.status !== 'DEAD') return 'registered';
+  return reply.openAttempts > 0 ? 'attempt-open' : 'gone';
+};
+
+// A fresh read per decision, just before that record's delete: a cached list goes stale across slow deletes.
+const leaseHeldOf = call => async resourceId => {
+  try {
+    const list = (await call('moe.list_resources', {}))?.resources;
+    if (!list.every(entry => isRecord(entry) && typeof entry.id === 'string' && Array.isArray(entry.holders))) return true;
+    return list.find(entry => entry.id === resourceId)?.holders.length > 0;
+  } catch { return true; }
+};
+
+/** One listing for both: attempt records through reconcileOwned (never the daemon), seat records through
+ * reconcileSeats. Each record lands in exactly one list, as the IDE parsers refuse an instance named twice. */
+export const reconcileReport = ({ ledger, provider = {}, call, runnerAlive = runnerProbe }) => ledgerReport('moe-vm-reconcile-v1', async () => {
+  const listed = await ledger.list();
+  const once = { ...ledger, list: async () => listed };
+  const owned = await reconcileOwned({ ledger: once, provider });
+  const seats = await reconcileSeats({ ledger: once, provider, seatState: seatStateOf(call), runnerAlive, leaseHeld: leaseHeldOf(call) });
+  return { reconciled: [...owned.reconciled, ...seats.reconciled], unknown: [...owned.unknown, ...seats.unknown], invalid: owned.invalid,
+    held: seats.held, retired: seats.retired };
+});
 
 /** At most one attempt per task is open (attemptStore currentAttempt) and attempts are append-only, so an owner
  * attempt that is not the task's served open attempt is closed. A refusal, malformed reply or transport failure
  * is unknown. A resource the daemon does not list has no lease; an unreadable list counts as held. */
-export const cleanupReport = ({ ledger, provider = {}, call }) => ledgerReport('moe-vm-cleanup-v1', async () => {
+export const cleanupReport = ({ ledger, provider = {}, call, runnerAlive = runnerProbe }) => ledgerReport('moe-vm-cleanup-v1', async () => {
   const listed = await ledger.list();
-  const owners = new Map(listed.records.map(record => [record.attemptId, record.taskId]));
+  const owners = new Map(listed.records.filter(record => !isSeatRecord(record)).map(record => [record.attemptId, record.taskId]));
   const attemptPhase = async attemptId => {
     const taskId = owners.get(attemptId);
     const served = taskId ? (await call('moe.get_context', { taskId }))?.servedContext : undefined;
@@ -85,15 +136,8 @@ export const cleanupReport = ({ ledger, provider = {}, call }) => ledgerReport('
       || (served.attemptId !== null && typeof served.attemptId !== 'string')) return 'unknown';
     return served.attemptId === attemptId ? 'running' : 'closed';
   };
-  // A fresh read per decision, just before that record's delete: a cached list goes stale across slow deletes.
-  const leaseHeld = async resourceId => {
-    try {
-      const list = (await call('moe.list_resources', {}))?.resources;
-      if (!list.every(entry => isRecord(entry) && typeof entry.id === 'string' && Array.isArray(entry.holders))) return true;
-      return list.find(entry => entry.id === resourceId)?.holders.length > 0;
-    } catch { return true; }
-  };
-  return cleanupOwned({ ledger: { ...ledger, list: async () => listed }, provider, attemptPhase, leaseHeld });
+  return cleanupOwned({ ledger: { ...ledger, list: async () => listed }, provider, attemptPhase, leaseHeld: leaseHeldOf(call),
+    seatState: seatStateOf(call), runnerAlive });
 });
 
 /** This project's own loopback daemon as {port, host}: a bounded, regular daemon.json supplies the port and can only
@@ -160,9 +204,9 @@ export async function runVmControl(argv, { write = text => process.stdout.write(
     const pinned = { ...provider, executable: provider.executable ?? platformFor(process.platform)?.executable };
     if (pinned.executable === undefined) throw controlError('VM_CONTROL_FAILED');
     const ledger = deps.ledger ?? createLedger(ownedLedgerDir(project));
+    const proof = { ledger, provider: pinned, call: deps.call ?? mcpCaller(project), runnerAlive: deps.runnerAlive }; // the caller is lazy
     const report = command === 'status' ? await statusReport({ ledger, provider: pinned, prerequisites: deps.prerequisites })
-      : command === 'reconcile' ? await reconcileReport({ ledger, provider: pinned })
-        : await cleanupReport({ ledger, provider: pinned, call: deps.call ?? mcpCaller(project) });
+      : command === 'reconcile' ? await reconcileReport(proof) : await cleanupReport(proof);
     line = JSON.stringify(report);
     if (Buffer.byteLength(line, 'utf8') >= MAX_REPORT_BYTES) line = JSON.stringify({ code: 'VM_CONTROL_REPORT_TOO_LARGE' });
   } catch { line = JSON.stringify({ code: 'VM_CONTROL_FAILED' }); } // only a fixed code: no path, stack, key or stderr
