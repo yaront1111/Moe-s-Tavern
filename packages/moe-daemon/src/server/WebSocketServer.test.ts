@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { createServer, Server } from 'http';
 import WebSocket from 'ws';
 import fs from 'fs';
@@ -11,6 +11,12 @@ import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
 import * as speedMode from '../tools/submitPlan.js';
 import { decodeClientHello } from './clientCapabilities.js';
+import {
+  readExecutionReadiness, readinessProjectionDeps, _resetReadinessRefreshForTests,
+} from '../tools/getExecutionReadiness.js';
+import * as readinessHolder from '../delivery/readinessHolder.js';
+import { clearReadiness, refreshReadiness } from '../delivery/readinessHolder.js';
+import { READINESS_CAPABILITIES, type ReadinessInputs } from '../delivery/executionReadiness.js';
 import type { LandingRetry, RailProposal, TaskExecutionContract } from '../types/schema.js';
 
 describe('MoeWebSocketServer Integration', () => {
@@ -1317,6 +1323,148 @@ describe('MoeWebSocketServer Integration', () => {
 
       await closePromise;
       await socketClosed;
+    });
+
+    describe('GET_EXECUTION_READINESS', () => {
+      type Client = ReturnType<typeof connectAndCollect>;
+      type Frame = { type: string; payload?: Record<string, unknown>; message?: string };
+      const ISO = '2026-11-01T12:00:00.000Z';
+      const READY = { ready: true, missingCapabilities: [], evaluatedAt: ISO, evidence: null };
+      const NOT_READY = { ready: false, missingCapabilities: ['revision-bound-local-delivery'], evaluatedAt: ISO, evidence: null };
+      const DEFAULT_PAYLOAD = { profile: 'legacy', ready: false, missingCapabilities: [...READINESS_CAPABILITIES], evaluatedAt: null };
+      const READY_PAYLOAD = { profile: 'legacy', ready: true, missingCapabilities: [], evaluatedAt: ISO };
+      const hold = (snapshot: unknown) => refreshReadiness({ projectRoot: 'never-read' } as unknown as ReadinessInputs, async () => snapshot);
+      let clients: Client[];
+      let refresh: MockInstance<typeof readinessProjectionDeps.refresh>;
+
+      beforeEach(() => {
+        clients = [];
+        clearReadiness();
+        _resetReadinessRefreshForTests();
+        // Replaces the production refresh: a call only counts, it never evaluates for real.
+        refresh = vi.spyOn(readinessProjectionDeps, 'refresh').mockImplementation(async () => undefined);
+      });
+      afterEach(async () => {
+        for (const client of clients) client.ws.close();
+        await state.flushActivityLog();
+        clearReadiness();
+        _resetReadinessRefreshForTests();
+        vi.restoreAllMocks();
+        state.clearEmitter();
+      });
+
+      async function connect(): Promise<Client> {
+        const client = connectAndCollect();
+        clients.push(client);
+        await client.ready;
+        expect(JSON.parse(await client.nextMessage()).type).toBe('STATE_SNAPSHOT');
+        return client;
+      }
+      /** Send one frame and read until the EXECUTION_READINESS or ERROR reply, skipping other broadcasts. */
+      async function ask(client: Client, frame: unknown): Promise<Frame> {
+        client.ws.send(JSON.stringify(frame));
+        for (let i = 0; i < 20; i++) {
+          const parsed = JSON.parse(await client.nextMessage()) as Frame;
+          if (parsed.type === 'EXECUTION_READINESS' || parsed.type === 'ERROR') return parsed;
+        }
+        throw new Error('no EXECUTION_READINESS or ERROR reply');
+      }
+      /** path -> bytes of every file under .moe (activity log included; flush first). */
+      function bytes(dir = moePath, out: Record<string, string> = {}): Record<string, string> {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) bytes(full, out);
+          else out[path.relative(moePath, full)] = fs.readFileSync(full, 'utf8');
+        }
+        return out;
+      }
+
+      it('is answered by EXECUTION_READINESS with the default held value, equal to the tool payload', async () => {
+        const client = await connect();
+        const reply = await ask(client, { type: 'GET_EXECUTION_READINESS' });
+        expect(reply).toEqual({ type: 'EXECUTION_READINESS', payload: DEFAULT_PAYLOAD });
+        expect(reply.payload).toEqual(await readExecutionReadiness(state));
+        expect(await ask(client, { type: 'GET_EXECUTION_READINESS', payload: {} })).toEqual(reply);
+        expect(refresh).not.toHaveBeenCalled();
+      });
+
+      it('carries a held READY snapshot and a held NOT_READY list', async () => {
+        const client = await connect();
+        await hold(READY);
+        expect(await ask(client, { type: 'GET_EXECUTION_READINESS' }))
+          .toEqual({ type: 'EXECUTION_READINESS', payload: READY_PAYLOAD });
+        await hold(NOT_READY);
+        const reply = await ask(client, { type: 'GET_EXECUTION_READINESS', payload: { refresh: false } });
+        expect(reply).toEqual({
+          type: 'EXECUTION_READINESS',
+          payload: { profile: 'legacy', ready: false, missingCapabilities: ['revision-bound-local-delivery'], evaluatedAt: ISO },
+        });
+        expect(reply.payload).toEqual(await readExecutionReadiness(state));
+        expect(refresh).not.toHaveBeenCalled();
+      });
+
+      it('reports "unreadable" for a malformed executionProfile setting, never an error frame', async () => {
+        const projectFile = path.join(moePath, 'project.json');
+        const project = JSON.parse(fs.readFileSync(projectFile, 'utf8'));
+        project.settings.executionProfile = 'bogus';
+        fs.writeFileSync(projectFile, JSON.stringify(project));
+        await state.load();
+        const client = await connect();
+        expect(await ask(client, { type: 'GET_EXECUTION_READINESS' }))
+          .toEqual({ type: 'EXECUTION_READINESS', payload: { ...DEFAULT_PAYLOAD, profile: 'unreadable' } });
+      });
+
+      it('refresh: true runs the evaluator once, awaited, and replies with the refreshed held value', async () => {
+        const client = await connect();
+        refresh.mockImplementation(async () => { await hold(READY); });
+        const reply = await ask(client, { type: 'GET_EXECUTION_READINESS', payload: { refresh: true } });
+        expect(refresh).toHaveBeenCalledTimes(1);
+        expect(refresh).toHaveBeenCalledWith(state);
+        expect(reply).toEqual({ type: 'EXECUTION_READINESS', payload: READY_PAYLOAD });
+        // A burst inside the 30 s window never evaluates again.
+        await ask(client, { type: 'GET_EXECUTION_READINESS', payload: { refresh: true } });
+        await ask(client, { type: 'GET_EXECUTION_READINESS', payload: { refresh: true } });
+        expect(refresh).toHaveBeenCalledTimes(1);
+      });
+
+      it('a failing refresh still answers with the held value', async () => {
+        const client = await connect();
+        refresh.mockImplementation(async () => { throw new Error('boom /secret/path'); });
+        expect(await ask(client, { type: 'GET_EXECUTION_READINESS', payload: { refresh: true } }))
+          .toEqual({ type: 'EXECUTION_READINESS', payload: DEFAULT_PAYLOAD });
+      });
+
+      it.each([['x'], [1], [0], [null], [{}], [[]]])('refresh %j is answered by exactly the boolean ERROR frame', async (bad) => {
+        const client = await connect();
+        const reply = await ask(client, { type: 'GET_EXECUTION_READINESS', payload: { refresh: bad } });
+        expect(reply).toEqual({ type: 'ERROR', message: 'GET_EXECUTION_READINESS refresh must be a boolean' });
+        expect(refresh).not.toHaveBeenCalled();
+      });
+
+      it('an unexpected throw is answered with a fixed message that carries no detail', async () => {
+        const client = await connect();
+        vi.spyOn(readinessHolder, 'heldReadiness').mockImplementation(() => { throw new Error('boom /secret/path\n    at stack'); });
+        const reply = await ask(client, { type: 'GET_EXECUTION_READINESS' });
+        expect(reply).toEqual({ type: 'ERROR', message: 'GET_EXECUTION_READINESS failed' });
+      });
+
+      it('writes nothing: no file, no activity record, no held-value change, whatever the payload', async () => {
+        const client = await connect();
+        await hold(NOT_READY);
+        await state.flushActivityLog();
+        const files = bytes();
+        const activity = state.getActivityLog(500).length;
+        const held = readinessHolder.heldReadiness();
+        const payloads: unknown[] = [
+          undefined, {}, { refresh: true }, { refresh: false }, { refresh: 'x' },
+          { ready: true, missingCapabilities: [], evaluatedAt: 'x', profile: 'verified-local' },
+        ];
+        for (const payload of payloads) await ask(client, { type: 'GET_EXECUTION_READINESS', payload });
+        await state.flushActivityLog();
+        expect(bytes()).toEqual(files);
+        expect(state.getActivityLog(500)).toHaveLength(activity);
+        expect(readinessHolder.heldReadiness()).toBe(held);
+      });
     });
   });
 
