@@ -1,0 +1,104 @@
+{
+  "id": "task-1a8f1d0e199046a289e94a5453d758b8",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07] Turn on verified-local: starting a worker or QA agent runs it in a Moe VM",
+  "description": "Added by the human on 2026-10-31 as the rollout's last task: the activation step that every CQ row scoped out.\n\nWhy it is needed. The pieces are built but nothing switches them on:\n- CQ-R built the VM agent path: scripts/local-runner/agent-lifecycle.mjs (host side of one agent job), guest-session/guest-bridge, the guest-supervisor bridge mode and the R10d4 headless launch spec. Nothing calls agent-lifecycle.mjs except its tests and certify.\n- The JetBrains Agents menu and scripts/moe-agent.{sh,ps1} always run the agent CLI on the host. The only VM UI is the Managed VM panel (status/reconcile/cleanup).\n- assertExecutionProfileReady (packages/moe-daemon/src/delivery/executionProfile.ts:108) refuses verified-local unconditionally.\n- CQ-M06a records non-promotion. Without this row, the rollout ends with everything built and certified but still switched off.\n\nObjective. A project sets executionProfile verified-local, and readiness is proven from evidence. From then on, starting a worker or QA agent runs its CLI inside an owned Moe VM through agent-lifecycle.mjs:\n- source goes in by the snapshot transfer;\n- changes come back only through export and host admission;\n- the host wrapper stays the only Git writer and lander;\n- required checks run in their own check VMs (CQ-V, CQ-R11).\nArchitect and governor seats stay on the host unless the approved design says otherwise. JetBrains first; VS Code parity before the docs call it supported.\n\nSize. This is larger than one task. Split it with moe-epic-breakdown into the daemon readiness gate, the JetBrains launch route, the wrapper route and VS Code parity, and keep this row as the final integration task.\n\nOpen decisions go to the human before submit_plan:\n- one VM per job or per seat;\n- a concurrency cap, since each VM is 2 CPUs, 4 GB RAM and 20 GB disk;\n- what WSL agent mode does under verified-local;\n- how the daemon trusts a certification report.",
+  "definitionOfDone": [
+    "With executionProfile absent, legacy or observe, launching agents behaves exactly as today; regression tests cover the JetBrains launcher and both wrappers.",
+    "With verified-local and readiness met, JetBrains Start Agent for a worker or QA seat runs the CLI inside an owned VM via agent-lifecycle.mjs, and the host never runs that seat's agent CLI. Tested.",
+    "With verified-local and readiness not met, Start Agent refuses with a dialog naming each missing capability. No terminal, no VM and no host fallback. Tested.",
+    "assertExecutionProfileReady derives readiness from evidence: a passing certify report for this host's platform that matches the current provider version, image pin and supervisor pin, plus the other listed capabilities. Tests prove that no env var, setting, persisted label, caller argument, or report file inside the project or .moe/ satisfies it.",
+    "An agent job's changes reach the branch only through export and host admission, then the wrapper's landing. The job's VM is deleted on every exit path, through the owned ledger. Tested.",
+    "VS Code reaches parity with the JetBrains launch route and refusal.",
+    "Docs are updated: the executionProfile row in CONFIGURATION.md, 'Nothing here is active yet' in ARCHITECTURE.md Local Runner Isolation, and 'Certification is not activation' in CERTIFICATION.md.",
+    "One end-to-end task runs on a real VM on Windows and on Linux, run by the human or the governor (not a seat), with the outcome recorded as a task comment.",
+    "Daemon npm test, ./gradlew test and node --test scripts/tests/local-runner.test.mjs pass, run in a git-archive snapshot and not in place in the shared checkout."
+  ],
+  "taskRails": [
+    "Never let an env var, setting, persisted label, caller argument or project-supplied file grant verified-local.",
+    "Never fall back to running the agent CLI on the host when the VM path fails; refuse instead.",
+    "Legacy, the default, stays byte-for-byte unchanged in behavior.",
+    "No seat runs Multipass. Real-VM runs belong to the human or the governor.",
+    "Do not loosen guest readiness, the certified-provider.json pins or guest-supervisor.py's guarantees.",
+    "The open design decisions (VM per job or per seat, the concurrency cap, WSL agent mode, report trust) go to the human before submit_plan."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-30d804be",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ced857485a1c4d75b57cc25dcc9b4d82",
+    "task-f4811a729f9e436ba129a65c12d348c1",
+    "task-f3f364a6c6864054901ec27f342a87f6",
+    "task-b1ca54f2716442be889a14623eb59983",
+    "task-4679ec688bb14233b3b5454e32a9b52d",
+    "task-47d21b835b5e4f28bb08b17f83d22256",
+    "task-77b0637fbe0043da988ea8206e5aaadb",
+    "task-81bb2dddbf944a4297c2a87734f3bb44",
+    "task-fd196d137c44497188d2639f149e259b"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.5,
+  "comments": [
+    {
+      "id": "comment-8bf3a7e488d14fada6b1c5363b3e6933",
+      "author": "governor-693b7073",
+      "content": "@architect-b742aab1 Scope extension from the human (2026-10-31, \"make sure that our board in the end will have complete system\"). This row is now the board's final whole-system acceptance, not only the activation.\n\nDependencies. dependsOn now covers every open row on the board, transitively:\n- M06 (ced85748), which covers I06, V12 and M06a;\n- R13 (f4811a72);\n- CQ-RF07 (f3f364a6);\n- WT-19 (b1ca54f2), which covers the worktree epic and the Stability bugs;\n- the three certify fixes that R13's 20-id cap could not hold: 4679ec68, 47d21b83, 77b0637f.\nAny new row filed from here on should be wired under one of these, or under this row directly.\n\nOn the create_task warning: it flagged this row as a second hardening row next to M06. Keep both. M06 is integration before activation and records non-promotion. This row comes after activation and is the last acceptance.\n\nExtra DoD items for this row, on top of its description:\n1. After activation and with worktreeMode on (WT-19), the full regression passes, run in a git-archive snapshot, never in place:\n   - daemon, proxy and claude-plugin npm test;\n   - JetBrains ./gradlew test and buildPlugin;\n   - VS Code npm test and npm run compile;\n   - bash scripts/tests/postflight.sh (plus the .ps1 sibling), scripts/tests/parity-check.sh, and npm run lint.\n2. A short end-to-end on the real board in both legacy and verified-local, run by the human or the governor: architect plan → worker → QA → landed DONE. The outcome is recorded as a comment here.\n3. The plugin built from that tree is installed, and the CQ-M06a record is updated with the promotion decision and the per-platform status. macOS stays \"not certified\" until the human has a Mac.\n\nAsk the human the open decisions (VM per job or per seat, the concurrency cap, WSL agent mode, report trust) before submit_plan. Split the slices with moe-epic-breakdown and keep this row last.",
+      "timestamp": "2026-10-31T21:18:59.946Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T21:17:20.276Z",
+  "updatedAt": "2026-11-01T07:33:52.389Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T21:17:38.753Z"
+  },
+  "contextFetchedBy": [
+    "architect-b742aab1",
+    "architect-30d804be"
+  ],
+  "commits": [
+    {
+      "sha": "abb8af3a30e86ad5ef49889e49d481a0bb459fc0",
+      "ref": "refs/moe/rescue/task-1a8f1d0e199046a289e94a5453d758b8/20261101T003018Z",
+      "kind": "rescue",
+      "role": "architect",
+      "sessionId": "architect-b742aab1@2026-10-31T21:17:41Z",
+      "paths": [
+        ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+        ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+        ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+        ".moe/tasks/task-81bb2dddbf944a4297c2a87734f3bb44.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+      ],
+      "recordedBy": "architect-b742aab1",
+      "recordedAt": "2026-11-01T00:30:13.383Z",
+      "status": "UNKNOWN",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-1a8f1d0e199046a289e94a5453d758b8 ref=refs/moe/rescue/task-1a8f1d0e199046a289e94a5453d758b8/20261101T003018Z sha=abb8af3a30e86ad5ef49889e49d481a0bb459fc0 reason=teardown"
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+    ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+    ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+    ".moe/tasks/task-81bb2dddbf944a4297c2a87734f3bb44.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "rescue",
+    "code": "teardown",
+    "sessionId": "architect-b742aab1@2026-10-31T21:17:41Z",
+    "at": "2026-11-01T00:30:13.383Z"
+  }
+}
