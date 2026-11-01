@@ -176,7 +176,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T00:20:13.476Z",
-  "updatedAt": "2026-11-01T11:59:16.790Z",
+  "updatedAt": "2026-11-01T11:59:41.079Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T00:20:28.365Z",
     "plannedStepCount": 5,
@@ -222,6 +222,58 @@
       "treeId": "3bbcb1c6bef1e250fc4b670e04324b5a5ea9f5a0",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "375db7beecfffad0afb74e29d63d32c2c640d504",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0e1ab990@2026-11-01T11:47:13Z",
+      "paths": [
+        ".moe/tasks/task-08062ce85dc94dcd80c62053e30f561f.json",
+        ".moe/tasks/task-5bebd9d3a57049b2878a5068ac1f905e.json",
+        ".moe/tasks/task-9076afab319b4056989e370039efba3d.json",
+        ".moe/tasks/task-a89361db41f24ef2aee19667aefc2135.json",
+        ".moe/tasks/task-eb783f598086440f8e758445f8717ef8.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json",
+        "docs/ARCHITECTURE.md",
+        "docs/CERTIFICATION.md",
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-0e1ab990",
+      "recordedAt": "2026-11-01T11:59:41.079Z",
+      "treeId": "57928ef46f554c6d992dcac69f0824264ba4f712",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-1b2e6fe3ba1343c8ab02271510131155"
+        },
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-b621ddc99fe44d50ab700b2aa51c84fc"
+        },
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-f3f364a6c6864054901ec27f342a87f6"
+        },
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "docs/CERTIFICATION.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "scripts/tests/local-runner-check.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -229,14 +281,21 @@
     "scripts/tests/local-runner-bridge.test.mjs",
     "scripts/tests/local-runner-check.test.mjs",
     "docs/ARCHITECTURE.md",
-    "docs/CERTIFICATION.md"
+    "docs/CERTIFICATION.md",
+    ".moe/tasks/task-08062ce85dc94dcd80c62053e30f561f.json",
+    ".moe/tasks/task-5bebd9d3a57049b2878a5068ac1f905e.json",
+    ".moe/tasks/task-9076afab319b4056989e370039efba3d.json",
+    ".moe/tasks/task-a89361db41f24ef2aee19667aefc2135.json",
+    ".moe/tasks/task-eb783f598086440f8e758445f8717ef8.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-b520bc90@2026-11-01T07:33:30Z",
-    "at": "2026-11-01T09:30:26.306Z"
+    "kind": "completion",
+    "sessionId": "worker-0e1ab990@2026-11-01T11:47:13Z",
+    "at": "2026-11-01T11:59:41.079Z"
   },
   "dependsOn": [
     "task-4c295c56a0db475998ae9d947a1d1de6",
@@ -319,5 +378,12 @@
     "reportedAt": "2026-11-01T11:59:16.786Z",
     "source": "agent-reported"
   },
-  "completionSummary": "R14 integration for task-fd196d13. Every host-guest supervisor stream already runs over the guest SSH route, through R14a-R14d3. This row removes the dead exec builders, adds the cross-wired-IP row, and documents the route. 5 files, +73/-35.\n\n**Code and tests**\n- scripts/local-runner/guest-bridge.mjs: bridgeArgv and checkArgv are removed, with their comment and their now-unused GUEST_LAYOUT and isOwnedInstanceName imports.\n- scripts/tests/local-runner-bridge.test.mjs:\n  - B15 and its import are removed.\n  - New row B-XWIRE runs two sessions on one VM while its ipv4 moves from 10.97.0.41 to 10.97.0.42. It checks:\n    - one fresh info read per session;\n    - an exact sshStreamArgv per address, with HostKeyAlias=<name> and that VM's own .known_hosts and .key;\n    - a 255 with 'REMOTE HOST IDENTIFICATION HAS CHANGED' gives SESSION_PROVIDER_FAILED, the error's own keys are only ['code'], and the message carries no address or stderr text.\n    Scratch mutants (cached address, HostKeyAlias=address, 255 ignored) were all KILLED.\n  - GS3 adds a 'C:/' drive row and a lowercase owned-name row. These close R14a QA's two survivors, which were both KILLED.\n- scripts/tests/local-runner-check.test.mjs: C1 is now checkFrame only, with every checkFrame assertion unchanged.\n\n**Docs**\n- docs/ARCHITECTURE.md gets a 'Host-guest transport' bullet: the pinned clients, -F none, ed25519, the HostKeyAlias pin, the fresh ipv4[0] read and the zone1 10.97.0.0/24 cross-wire note, keys under ~/.moe/guest-ssh (0600, purged with the VM), the restrict/command line, readHostKey, exec limited to stdin-less queries capped at 64 KiB, the 1.17.0 reasons, and no fallback.\n- docs/CERTIFICATION.md: the bridge-framing row now says SSH route, and step 1 adds the OpenSSH prerequisite.\n\n**Acceptance and DoD**\n- The 'exec' grep finds only the 4 stdin-less queries.\n- `git diff fdb5330a..HEAD` is empty for guest-supervisor.py and certified-provider.json.\n- guest-readiness.mjs shows only the readHostKey row and `addr"
+  "completionSummary": "R14 integration for task-fd196d13. Every host-guest supervisor stream already runs over the guest SSH route, through R14a-R14d3. This row removes the dead exec builders, adds the cross-wired-IP row, and documents the route. 5 files, +73/-35.\n\n**Code and tests**\n- scripts/local-runner/guest-bridge.mjs: bridgeArgv and checkArgv are removed, with their comment and their now-unused GUEST_LAYOUT and isOwnedInstanceName imports.\n- scripts/tests/local-runner-bridge.test.mjs:\n  - B15 and its import are removed.\n  - New row B-XWIRE runs two sessions on one VM while its ipv4 moves from 10.97.0.41 to 10.97.0.42. It checks:\n    - one fresh info read per session;\n    - an exact sshStreamArgv per address, with HostKeyAlias=<name> and that VM's own .known_hosts and .key;\n    - a 255 with 'REMOTE HOST IDENTIFICATION HAS CHANGED' gives SESSION_PROVIDER_FAILED, the error's own keys are only ['code'], and the message carries no address or stderr text.\n    Scratch mutants (cached address, HostKeyAlias=address, 255 ignored) were all KILLED.\n  - GS3 adds a 'C:/' drive row and a lowercase owned-name row. These close R14a QA's two survivors, which were both KILLED.\n- scripts/tests/local-runner-check.test.mjs: C1 is now checkFrame only, with every checkFrame assertion unchanged.\n\n**Docs**\n- docs/ARCHITECTURE.md gets a 'Host-guest transport' bullet: the pinned clients, -F none, ed25519, the HostKeyAlias pin, the fresh ipv4[0] read and the zone1 10.97.0.0/24 cross-wire note, keys under ~/.moe/guest-ssh (0600, purged with the VM), the restrict/command line, readHostKey, exec limited to stdin-less queries capped at 64 KiB, the 1.17.0 reasons, and no fallback.\n- docs/CERTIFICATION.md: the bridge-framing row now says SSH route, and step 1 adds the OpenSSH prerequisite.\n\n**Acceptance and DoD**\n- The 'exec' grep finds only the 4 stdin-less queries.\n- `git diff fdb5330a..HEAD` is empty for guest-supervisor.py and certified-provider.json.\n- guest-readiness.mjs shows only the readHostKey row and `addr",
+  "touchedFiles": [
+    "scripts/local-runner/guest-bridge.mjs",
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/tests/local-runner-check.test.mjs",
+    "docs/ARCHITECTURE.md",
+    "docs/CERTIFICATION.md"
+  ]
 }

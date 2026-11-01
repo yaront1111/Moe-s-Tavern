@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,10 +80,17 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 231.05,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-dd291ae098cc478d935b00e91619c0c5",
+      "author": "qa-c5835a34",
+      "content": "QA round 2 (qa-c5835a34, 2026-11-01 11:59Z): PARKING via report_blocked, not rejecting. Substance is green and no DoD item failed. The size waiver is still PENDING.\n\nSIZE. `git show --numstat --format= 799936d9 -- packages/`:\n- runtime net 72: util/claimEligibility.ts +56/-9, tools/claimNextTask.ts +13/-3, tools/waitForTask.ts +26/-11;\n- tests net 430: tools/executionRoute.test.ts +428, __acceptance__/deliveryBypass +2/-1, __acceptance__/dependencyProjection +2/-1, state/dependencyReadiness.strict +2/-2.\nThat is +529/-27, net 502, and it matches the text of prop-09077323d7384a6986bd7933f10ad623 file for file. The proposal is PENDING (resolvedAt null), and allRails.epic has no CQ-M07q rail, so approval over 400 is not possible yet.\n\nBYTES. 41680ea5 (round-2 completion) is board JSON only. `git diff 799936d9 HEAD` over the 7 paths is empty, and the working tree is clean for them. Both commits are on moe/work-2026-10-24.\n\nGATES (env -i, Node v24.21.0, npm ci, tsc --noEmit, npm test):\n1. task.verification re-run as recorded, on a git archive of HEAD 67453739 with a no-op overlay. EXIT 1: tsc clean; 222 files; 3 failed, 6698 passed, 20 skipped.\n   - All 3 failures are delivery/repairPolicy.test.ts H1-H3, \"decideRepair over real host check sessions\".\n   - They are NOT caused by this row. A/B in the same snapshot: with HEAD's scripts/local-runner/check-session.mjs that test file gives 3 fail / 43 pass; with 41680ea5's check-session.mjs it gives 46/46 pass. repairPolicy.ts imports only types/schema and util/errors.\n   - Cause: 6ac51c42 (CQ-R14d3, DONE) moved runCheckSession onto openGuestStream, whose address read uses provider.run (default: a real `multipass info`). The scripts test got the CHECK_ROUTE fake. The daemon test's exitingProvider still supplies only spawn, so the read fails and the session settles infra-failure with exitCode null. A fix row is being filed and reported in #governors.\n2. Exact-commit gate, git archive of 41680ea5 (this round's completion). EXIT 0: tsc clean; 221/221 files; 6679 passed, 20 skipped, 0 failed; executionRoute.test.ts 47/47. These are the worker's exact counts.\n3. Extra QA mutant: the route check moved ahead of readiness in executionAdmissionRefusal is KILLED (12+ failures in executionProfileAdmission.test.ts E1-E3/R1). Restored and sha256-verified. Round 1's 13/13 kills stand, since the bytes are unchanged.\n\nDoD 1-5 are all met at 41680ea5. DoD 5 is backed by the worker's 56fb4b45 run and my exact-commit run. The 3 failures at HEAD are the peer regression above.\n\nRESUME:\n- APPROVED: add the epic rail, then set_task_status REVIEW. QA checks the rail text against the numstat above, re-runs the gate (on a 41680ea5 archive, or at HEAD once the repairPolicy fix lands) and approves, naming the size.\n- REJECTED: set_task_status PLANNING, so an architect splits the review scope over the landed bytes (the U2 matrix is the cheapest cut). Never rewrite them.",
+      "timestamp": "2026-11-01T11:58:40.706Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:30.039Z",
-  "updatedAt": "2026-11-01T11:21:04.978Z",
+  "updatedAt": "2026-11-01T11:59:46.527Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:18:30.441Z",
     "plannedStepCount": 5,
@@ -94,7 +101,8 @@
   },
   "contextFetchedBy": [
     "qa-1e84238e",
-    "worker-0e1ab990"
+    "worker-0e1ab990",
+    "qa-c5835a34"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -294,5 +302,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "QA PARK, round 2: the size waiver is pending. Substance is green and no DoD item failed; the only open item is the 400 net-LOC cap. Completion 799936d9 measures +529/-27, net 502, under packages/ (runtime 72, tests 430). That is exactly the per-file numstat in epic ADD_RAIL prop-09077323d7384a6986bd7933f10ad623, which is still PENDING (filed 11:15Z, resolvedAt null); allRails.epic has no matching rail. A second size-only reject would burn a reopen on a no-byte retry, so the row parks for the human decision.\nEvidence: exact-commit gate on a git archive of 41680ea5 (env -i, Node 24.21.0, npm ci, tsc --noEmit, npm test): exit 0, 221 files, 6679 passed, 20 skipped, 0 failed. The recorded command at HEAD 67453739 exits 1 only on delivery/repairPolicy.test.ts H1-H3. That is a peer regression from 6ac51c42, filed as a HIGH bug row in the CQ-R epic. A/B: that file passes 46/46 with the 41680ea5 check-session.mjs. An extra mutant (route check before readiness) is killed. Full evidence is in the latest comment on this row.\nResume: APPROVED -> add the epic rail, set_task_status REVIEW; QA checks the rail text against the numstat and approves. REJECTED -> set_task_status PLANNING for an architect to split the review scope over the landed bytes, with no rewrite.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-11-01T11:59:46.527Z"
 }
