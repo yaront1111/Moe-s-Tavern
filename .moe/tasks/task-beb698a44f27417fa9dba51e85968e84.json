@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,16 +108,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:50:58.592Z",
-  "updatedAt": "2026-11-01T19:43:05.166Z",
+  "updatedAt": "2026-11-01T19:46:04.772Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:53:46.332Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T19:46:04.772Z",
+    "wallClockMs": 247938440
   },
   "contextFetchedBy": [
     "architect-32ff5555",
-    "worker-9be3bcf5"
+    "worker-9be3bcf5",
+    "qa-1b5727b1"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -189,21 +192,43 @@
       "treeId": "07f34b77174f312f493347fb2cec1252a512a2f3",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "4468588dccdd658d1bdfef9e409af885b8700100",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-9be3bcf5@2026-11-01T19:34:17Z",
+      "paths": [
+        ".moe/tasks/task-5464e7259cfd479793d93f9651fb3eba.json",
+        ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
+        ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json",
+        "docs/baselines/cq-m06/README.md"
+      ],
+      "recordedBy": "worker-9be3bcf5",
+      "recordedAt": "2026-11-01T19:43:24.664Z",
+      "treeId": "c6f4b3c34af2b2c13938039e702dc1f5ff73769b",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts",
-    "docs/baselines/cq-m06/README.md"
+    "docs/baselines/cq-m06/README.md",
+    ".moe/tasks/task-5464e7259cfd479793d93f9651fb3eba.json",
+    ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
+    ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json"
   ],
   "touchedFiles": [
-    "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts"
+    "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts",
+    "docs/baselines/cq-m06/README.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-9be3bcf5@2026-11-01T19:29:38Z",
-    "at": "2026-11-01T19:33:47.053Z"
+    "kind": "completion",
+    "sessionId": "worker-9be3bcf5@2026-11-01T19:34:17Z",
+    "at": "2026-11-01T19:43:24.664Z"
   },
   "reviewStartedAt": "2026-11-01T19:43:05.164Z",
   "verification": {
@@ -213,5 +238,9 @@
     "reportedAt": "2026-11-01T19:43:05.164Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-M06a: records non-promotion from existing evidence only (no agent run, no pilot, no profile change, no .moe edit, no Git write).\n\nDelivered:\n- docs/baselines/cq-m06/README.md: 'Decision: non-promotion'. Gates table: readiness unmet (EXECUTION_PROFILE_NOT_READY); vm and check unsupported with the live activationGaps() reasons (vm-provisioning-uncertified, check-runner-uncertified); client residuals unmet (the client gap left activationGaps when CQ-M07d2 landed, d67c23d1; open client items are I06's unowned residuals); matched pilot and retrieval baseline unmet. Targets: 50% planner and 30% retrieval, baseline mean planner sessions 1 (20 of 20), sourceRetrievals unknown 20 of 20, pilot and outcome unmeasured. Baseline only: accepted 20, rejected 0, not assessed 0; 38926322 observed tokens (incomplete), 1946316.1 per accepted change; median end-to-end 669869 ms; firstCodeChangeMs unknown 20 of 20. 'Claimed savings: none.', 'Tokens are not monetary cost.', 'Skipped real-VM tests do not certify support.' Platform rows from R13 (linux x64 and win32 x64 certified, darwin unsupported: no report) and I06 (I06 was in REVIEW at writing; the README says so).\n- packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts (landed in checkpoint b0ca24d8): G1-G6 plus helper tests, 25 tests.\n\nGate: npm test in a snapshot of HEAD d67c23d1 with only the two owned files overlaid and cmp-equal: exit 0, 227 files, 6859 passed, 20 skipped. Scratch tsconfig typecheck of the test: exit 0.\n\nDoD mutants (scratch README copy, restored and cmp OK each time, only the named case red, 24 of 25 pass): digit drift -> G2; 'Decision: promotion' -> G1; deleted skipped-tests statement -> G4; added '40%' line -> G5. Extras: vm reason changed -> G3; platform status 'supported (tests skipped)' -> G6.\n\nHonesty note: an earlier run at HEAD b0ca24d8 failed 13 tests in readinessHolder.test.ts and WebSocketServer.test.ts, none in my files: peer CQ-M07d2 had landed its source in wip 746d88c4 while its test upda"
+  "completionSummary": "CQ-M06a: records non-promotion from existing evidence only (no agent run, no pilot, no profile change, no .moe edit, no Git write).\n\nDelivered:\n- docs/baselines/cq-m06/README.md: 'Decision: non-promotion'. Gates table: readiness unmet (EXECUTION_PROFILE_NOT_READY); vm and check unsupported with the live activationGaps() reasons (vm-provisioning-uncertified, check-runner-uncertified); client residuals unmet (the client gap left activationGaps when CQ-M07d2 landed, d67c23d1; open client items are I06's unowned residuals); matched pilot and retrieval baseline unmet. Targets: 50% planner and 30% retrieval, baseline mean planner sessions 1 (20 of 20), sourceRetrievals unknown 20 of 20, pilot and outcome unmeasured. Baseline only: accepted 20, rejected 0, not assessed 0; 38926322 observed tokens (incomplete), 1946316.1 per accepted change; median end-to-end 669869 ms; firstCodeChangeMs unknown 20 of 20. 'Claimed savings: none.', 'Tokens are not monetary cost.', 'Skipped real-VM tests do not certify support.' Platform rows from R13 (linux x64 and win32 x64 certified, darwin unsupported: no report) and I06 (I06 was in REVIEW at writing; the README says so).\n- packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts (landed in checkpoint b0ca24d8): G1-G6 plus helper tests, 25 tests.\n\nGate: npm test in a snapshot of HEAD d67c23d1 with only the two owned files overlaid and cmp-equal: exit 0, 227 files, 6859 passed, 20 skipped. Scratch tsconfig typecheck of the test: exit 0.\n\nDoD mutants (scratch README copy, restored and cmp OK each time, only the named case red, 24 of 25 pass): digit drift -> G2; 'Decision: promotion' -> G1; deleted skipped-tests statement -> G4; added '40%' line -> G5. Extras: vm reason changed -> G3; platform status 'supported (tests skipped)' -> G6.\n\nHonesty note: an earlier run at HEAD b0ca24d8 failed 13 tests in readinessHolder.test.ts and WebSocketServer.test.ts, none in my files: peer CQ-M07d2 had landed its source in wip 746d88c4 while its test upda",
+  "completedAt": "2026-11-01T19:46:04.772Z",
+  "reviewCompletedAt": "2026-11-01T19:46:04.772Z",
+  "reviewSummary": "APPROVED CQ-M06a (mid-epic slice, legacy policy). Reviewed recorded commits: completion 4468588d (README +92) and checkpoint b0ca24d8 (rolloutDecision.test.ts +241), both on moe/work-2026-10-24; owned files equal HEAD; ~333 net LOC; nothing under scripts/ or docs/baselines/cq-m04 changed.\n\nRE-RAN `cd packages/moe-daemon && npm test` in a fresh Linux-native snapshot (git archive of HEAD 4468588d, native npm ci, env -i, node v24.21.0, NO_COLOR=1; README+test cmp-equal): exit 0, 227 files, 6859 passed | 20 skipped, rolloutDecision.test.ts 25/25.\n\nDoD mutants re-proven by me (scratch README copy, cmp-restored, only the named case red, 24/25 pass): digit drift -> G2; 'Decision: promotion' -> G1; deleted skipped-VM statement -> G4; added '40%' line -> G5.\n\nDoD items: non-promotion plus every unmet gate (readiness; vm/check unsupported with live activationGaps reasons, checked in profileRollout.ts:58-63; client residuals; matched pilot; retrieval baseline). Baseline figures re-derived by my own node script from report.json and match (20 workloads, accepted 20/0/0, planner 1 in 20/20, sourceRetrievals and firstCodeChangeMs null 20/20, median e2e 669869 ms, 38926322 tokens incomplete, 1946316.1 per accepted change). Pilot/outcome cells all unmeasured; savings/cost/skipped-VM statements present; % only on the two target lines. Platform rows match docs/CERTIFICATION.md.\n\nNon-blocking: README says HEAD b0ca24d8 though the gate ran at d67c23d1. CQ-I06 is still in REVIEW (README says so); CQ-M06 final should re-sync the IDE rows if its evidence changes. G1/G3 couple to live readiness/activationGaps, so the M07 certification landing must edit this README in the same change.",
+  "requiredCheckAtDone": null
 }
