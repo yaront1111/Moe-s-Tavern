@@ -24,17 +24,39 @@
 // evidence, and a guest's calls must never carry it. The bridge's TOOLS allowlist and STAMPED identity already scope every guest
 // request, and runAgentJob's acquire/release_resource go through the same forward, so the job lease stays task-keyed. It needs
 // Node 22+'s global WebSocket (no headers, no Origin); without one every call refuses. Every refusal is SEAT_FORWARD_FAILED.
+// runSeatJob (CQ-M07j) runs ONE worker or QA job on the seat's VM: endAgentJobs' verified sweep, resetWorkspace (CQ-M07f), an
+// exportSourceSnapshot of `commit` whose overlay is replaced by an empty one (a shared checkout's dirty bytes are peers'),
+// materializeSnapshot, runAgentJob over seatForward, importCandidate, then admitCandidate for a worker; a QA candidate must be empty.
+// A failure is one fixed code (a stage's own fixed code passes through) and no later stage runs; stopSeat runs only on unverified
+// VM state (sweep, reset, or job termination), else the VM is kept. It never writes the checkout: admission writes git objects only,
+// and CQ-M07m/n land the returned tree on `commit` through the wrapper's candidate path (CQ-V07/V08). The agent CLI never runs here.
+// The export still reads the checkout's dirty files before dropping them: one it refuses (a symlink, past the size cap) fails the job.
+//   agent-seat.mjs seat-job <seat-stop's flags> --role worker|qa --task <taskId> --attempt <attemptId> --generation <n>
+//     --checkout <abs> --commit <full id> --cli claude|codex
+// A worker passes its checkout's HEAD at job start; QA passes the task's last landed completion commit, so it reviews what landed.
+// The credential comes ONLY on stdin, read to EOF (the wrapper closes it): one JSON {"name","value"} of at most 16 KiB; never a flag or env. The job CLI's stdout and
+// stderr are relayed as bytes, then ONE line {"seatJob":1,...result} ends stdout, after a '\n' when the relayed bytes lack one.
+// Exit 0 ok, 1 failure, 2 usage (SEAT_JOB_INPUT_INVALID). Two guest sessions on one instance never interleave (runAgentJob's
+// AGENT_BUSY, and the per-VM job lease refuses another task's job); the sweep, reset and materialize before it are serialized only
+// by the wrapper running one seat-job per seat at a time, as for seat-start.
 import { randomBytes } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { admitCandidate } from './admission.mjs';
+import { runAgentJob } from './agent-lifecycle.mjs';
 import { platformFor } from './cli.mjs';
 import { IMAGE_ARCHES } from './guest-bootstrap.mjs';
+import { jobFrame, scopeRequest } from './guest-bridge.mjs';
+import { endAgentJobs } from './guest-session.mjs';
 import { createLedger, deleteOwned, isOwnedInstanceName, isSeatRecord, validSeatOwner } from './lifecycle.mjs';
 import { provisionGuest } from './provision.mjs';
 import { admitSeatVm, countSeatVms, hostAgentVmCap, seatAdmissionFor } from './seat-capacity.mjs';
-import { installAgents, installToolchain } from './snapshot-transfer.mjs';
+import { importCandidate } from './snapshot-import.mjs';
+import { installAgents, installToolchain, materializeSnapshot, resetWorkspace } from './snapshot-transfer.mjs';
+import { exportGit, exportSourceSnapshot } from './source-export.mjs';
+import { validateImport } from './source-snapshot.mjs';
 import { fetchNodeToolchain } from './toolchain-cache.mjs';
 import { ownedLedgerDir, readDaemonInfo, runnerProbe } from './vm-control.mjs';
 
@@ -194,20 +216,138 @@ export function seatForward(projectPath, { WebSocketImpl = globalThis.WebSocket,
   };
 }
 
+const JOB_KEYS = ['project', 'owner', 'instance', 'binding', 'checkout', 'commit', 'cli', 'credential', 'onOutput'];
+const FULL_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const JOB_STEPS = Object.freeze({ sweep: endAgentJobs, reset: resetWorkspace, exportSnapshot: exportSourceSnapshot, materialize: materializeSnapshot,
+  job: runAgentJob, importCandidate, admit: admitCandidate, stop: stopSeat });
+const absolute = value => typeof value === 'string' && path.isAbsolute(value) && !CONTROL.test(value);
+const safeCode = (error, fallback) => { try { return codeOf(error, fallback); } catch { return fallback; } };
+
+/** Every field is checked, and the binding and credential copied once, before any step runs; null refuses. */
+function parseJob(input) {
+  try {
+    const keys = isRecord(input) ? Object.keys(input) : [];
+    if (!JOB_KEYS.every(key => keys.includes(key)) || !keys.every(key => [...JOB_KEYS, 'signal', 'timeoutMs'].includes(key))) return null;
+    const { project, owner, instance, binding, checkout, commit, cli, credential, onOutput, signal, timeoutMs } = input;
+    const frozen = Object.freeze({ ...binding });
+    scopeRequest({ kind: 'request', id: 1, tool: 'moe.get_context', args: {} }, frozen); // validates the binding only
+    const { name, value } = isRecord(credential) && Object.keys(credential).sort().join() === 'name,value' ? credential : {};
+    const job = Object.freeze({ cli, credential: Object.freeze({ name, value }) }); // the one copy, for the job step alone
+    jobFrame({ cli, role: frozen.role, credential: job.credential }); // a known cli and a credential name that cli takes
+    if (absolute(project) && absolute(checkout) && validSeatOwner(owner) && isOwnedInstanceName(instance) && typeof commit === 'string'
+      && FULL_ID.test(commit) && typeof onOutput === 'function' && (signal === undefined || signal instanceof AbortSignal)
+      && (timeoutMs === undefined || (Number.isSafeInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= 60_000))) {
+      return { project, owner: ownerOf(owner), instance, binding: frozen, checkout, commit, job, onOutput, signal, timeoutMs };
+    }
+  } catch { /* refused below */ }
+  return null;
+}
+
+// run.stage is the fixed code of the stage in progress; run.unverified marks VM state no sweep or reset has proven.
+async function seatJob(o, run, steps) {
+  const s = run.s = kit({ ...JOB_STEPS, ...steps });
+  const [name, provider] = [o.instance, s.provider];
+  run.stage = 'SEAT_JOB_SWEEP_UNVERIFIED';
+  run.unverified = true;
+  if ((await s.sweep(name, provider))?.verified !== true) throw seatError(run.stage);
+  run.stage = 'SEAT_JOB_RESET_FAILED';
+  await s.reset({ name, provider });
+  run.unverified = false;
+  run.stage = 'SEAT_JOB_EXPORT_FAILED';
+  const git = await exportGit(o.checkout); // resolved once, for the export and the admission
+  // The commit's tree alone: a shared checkout's dirty bytes are peers' or pre-existing, never this VM job's.
+  const snapshot = Object.freeze({ ...(await s.exportSnapshot({ repoDir: o.checkout, commit: o.commit, git })), overlay: validateImport([]) });
+  run.stage = 'SEAT_JOB_MATERIALIZE_FAILED';
+  await s.materialize({ name, snapshot, provider });
+  run.stage = 'SEAT_JOB_SESSION_FAILED';
+  const job = await s.job({ name, binding: o.binding, job: o.job, daemonInfoPath: path.join(o.project, '.moe', 'daemon.json'),
+    forward: s.forward ?? seatForward(o.project), onOutput: o.onOutput, onObservation: () => {}, signal: o.signal, provider, timeoutMs: o.timeoutMs });
+  if (job?.failure !== null || job.terminationVerified !== true) { // the job's exit code is data, never a failure
+    run.unverified = job?.terminationVerified !== true;
+    throw seatError(job?.failure);
+  }
+  run.stage = 'SEAT_JOB_IMPORT_FAILED';
+  const { candidate } = await s.importCandidate({ name, provider });
+  if (!Array.isArray(candidate?.entries)) throw seatError(run.stage);
+  const qa = o.binding.role === 'qa';
+  if (qa && candidate.entries.length > 0) throw seatError('SEAT_JOB_QA_CANDIDATE_REFUSED'); // nothing is admitted or applied
+  run.stage = 'SEAT_JOB_ADMISSION_FAILED';
+  // Git objects only, through admitCandidate's private index: never the checkout's worktree or index.
+  const { tree, digest } = qa ? { tree: snapshot.tree, digest: candidate.digest }
+    : await s.admit({ repoDir: o.checkout, git, baseTree: snapshot.tree, candidate });
+  const { code: exitCode = null, signal = null } = job.observation ?? {};
+  return Object.freeze({ ok: true, role: o.binding.role, commit: o.commit, baseTree: snapshot.tree, tree, digest,
+    paths: Object.freeze(candidate.entries.map(entry => Object.freeze({ kind: entry.kind, path: entry.path }))),
+    exitCode, signal, lease: job.lease, executionReady: false });
+}
+
+/** One worker or QA job on this seat's VM. input is exactly { project, owner, instance, binding, checkout, commit, cli, credential,
+ * onOutput } plus an optional signal and timeoutMs. Never writes the checkout; resolves the frozen result (header). */
+export async function runSeatJob(input, steps = {}) {
+  const o = parseJob(input);
+  if (!o) return failed('SEAT_JOB_INPUT_INVALID', 'kept');
+  const run = { stage: 'SEAT_JOB_FAILED', unverified: false, s: null };
+  try {
+    return await seatJob(o, run, steps);
+  } catch (error) { // the stop first, then the code: a hostile error cannot skip it
+    const vm = !run.unverified ? 'kept' : await Promise.resolve()
+      .then(() => run.s.stop({ project: o.project, owner: o.owner, instance: o.instance }, { provider: run.s.provider }))
+      .then(result => (result?.ok === true ? 'stopped' : 'stop-failed'), () => 'stop-failed');
+    return failed(safeCode(error, run.stage), vm);
+  }
+}
+
 const FLAGS = Object.freeze({ 'seat-start': ['--project', '--worker', '--runner', '--host'],
-  'seat-stop': ['--project', '--worker', '--runner', '--host', '--instance'] });
+  'seat-stop': ['--project', '--worker', '--runner', '--host', '--instance'],
+  'seat-job': ['--project', '--worker', '--runner', '--host', '--instance', '--role', '--task', '--attempt', '--generation', '--checkout', '--commit', '--cli'] });
+const MAX_CREDENTIAL_BYTES = 16_384;
 
 /** Exactly `<command>` and its flags in FLAGS order, each with one value; nothing is read or run before this passes. */
 function inputFor(argv) {
   const flags = Array.isArray(argv) && Object.hasOwn(FLAGS, argv[0]) ? FLAGS[argv[0]] : null;
   if (!flags || argv.length !== 1 + 2 * flags.length || flags.some((flag, at) => argv[1 + 2 * at] !== flag)) return null;
-  const [project, workerId, runner, host, instance] = flags.map((_, at) => argv[2 + 2 * at]);
-  const input = { project, owner: { workerId, runner, host }, ...(argv[0] === 'seat-stop' ? { instance } : {}) };
+  const [project, workerId, runner, host, instance, role, taskId, attemptId, generation, checkout, commit, cli] = flags.map((_, at) => argv[2 + 2 * at]);
+  const owner = { workerId, runner, host };
+  if (argv[0] === 'seat-job') { // runSeatJob checks every other field before any step
+    const binding = { role, workerId, taskId, attemptId, generation: Number(generation) };
+    return /^[1-9][0-9]{0,15}$/.test(generation) ? { project, owner, instance, binding, checkout, commit, cli } : null;
+  }
+  const input = { project, owner, ...(argv[0] === 'seat-stop' ? { instance } : {}) };
   return parse(input, Object.keys(input)) ? input : null;
 }
 
-/** The CLI core: write and the steps are injected only by tests. Returns the exit code (header). */
-export async function runAgentSeat(argv, { write = text => process.stdout.write(text), ...steps } = {}) {
+/** stdin to EOF as JSON, at most MAX_CREDENTIAL_BYTES; null when larger. runSeatJob checks the {name, value} shape. */
+async function readCredential(stdin) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of stdin) {
+    size += Buffer.byteLength(chunk);
+    if (size > MAX_CREDENTIAL_BYTES) return null;
+    chunks.push(Buffer.from(chunk));
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+/** seat-job: the job CLI's bytes relayed as they come, then ONE marked outcome line last on stdout (header). */
+async function seatJobCli(argv, { write, writeError, stdin }, steps) {
+  const fields = inputFor(argv);
+  let newline = true; // whether relayed stdout so far ends in '\n' (or nothing was relayed)
+  const onOutput = (stream, chunk) => {
+    if (stream !== 'stdout') return writeError(chunk);
+    if (chunk.length > 0) newline = chunk[chunk.length - 1] === 0x0a;
+    return write(chunk);
+  };
+  const credential = fields ? await readCredential(stdin).catch(() => null) : null;
+  const result = credential ? await runSeatJob({ ...fields, credential, onOutput }, steps).catch(() => failed('SEAT_JOB_FAILED', 'kept'))
+    : failed('SEAT_JOB_INPUT_INVALID', 'kept');
+  write(`${newline ? '' : '\n'}${JSON.stringify({ seatJob: 1, ...result })}\n`);
+  return result.ok === true ? 0 : result.code === 'SEAT_JOB_INPUT_INVALID' ? 2 : 1;
+}
+
+/** The CLI core: write, writeError, stdin and the steps are injected only by tests. Returns the exit code (header). */
+export async function runAgentSeat(argv, { write = text => process.stdout.write(text), writeError = text => process.stderr.write(text),
+  stdin = process.stdin, ...steps } = {}) {
+  if (Array.isArray(argv) && argv[0] === 'seat-job') return seatJobCli(argv, { write, writeError, stdin }, steps);
   const input = inputFor(argv);
   if (!input) {
     write('{"code":"SEAT_INPUT_INVALID"}\n');

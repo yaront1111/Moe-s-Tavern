@@ -7,12 +7,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { runAgentSeat, seatForward, startSeat, stopSeat } from '../local-runner/agent-seat.mjs';
+import { admitCandidate } from '../local-runner/admission.mjs';
+import { runAgentSeat, runSeatJob, seatForward, startSeat, stopSeat } from '../local-runner/agent-seat.mjs';
 import { platformFor } from '../local-runner/cli.mjs';
 import { createLedger, deleteOwned } from '../local-runner/lifecycle.mjs';
 import { admitSeatVm } from '../local-runner/seat-capacity.mjs';
+import { exportSourceSnapshot } from '../local-runner/source-export.mjs';
+import { validateImport } from '../local-runner/source-snapshot.mjs';
 import { ownedLedgerDir } from '../local-runner/vm-control.mjs';
 
 const SEAT = Object.freeze({ workerId: 'worker-a1', runner: '4242@tok a', host: 'host-a' });
@@ -334,4 +338,177 @@ test('SF4 a daemon.json for another project or a non-loopback bind refuses befor
     await rejectsFixed(seatForward(w.project, { WebSocketImpl: FakeSocket })('moe.x', ARGS));
     assert.equal(made.length, 0, JSON.stringify([health, patch]));
   }
+});
+
+// CQ-M07j runSeatJob: a real temp git checkout with the REAL exportSourceSnapshot and admitCandidate. Every VM-side stage is a fake;
+// each has its own provider-level R-series rows (endAgentJobs, resetWorkspace, materializeSnapshot, runAgentJob, importCandidate).
+const CANARY = 'canary-Q7v-credential';
+const CRED = Object.freeze({ name: 'ANTHROPIC_API_KEY', value: CANARY });
+const VM = 'moe-vm-0123456789abcdef0123';
+const BINDING = Object.freeze({ role: 'worker', workerId: SEAT.workerId, taskId: 'task-sj1', attemptId: 'attempt-sj1', generation: 3 });
+const ORDER = ['sweep', 'reset', 'export', 'materialize', 'job', 'import', 'admit'];
+const CHANGE = Object.freeze({ kind: 'file', path: 'a.txt', executable: false, data: Buffer.from('a2\n') });
+const OBS = Object.freeze({ kind: 'observation', type: 'exit', code: 0, signal: null });
+const sjGit = (cwd, ...args) => spawnSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd, windowsHide: true }).stdout;
+const holds = (value, seen = new Set()) => (typeof value === 'string' ? value.includes(CANARY) : value instanceof Uint8Array
+  ? Buffer.from(value).includes(CANARY) : value !== null && typeof value === 'object' && !seen.has(value) && seen.add(value)
+    && Reflect.ownKeys(value).some(key => holds(value[key], seen)));
+
+/** A checkout with committed a.txt and a peer's uncommitted b.txt; w.state() is its status, index and file bytes. */
+function sjWorld(t) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'moe-seat-job-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const checkout = path.join(dir, 'repo');
+  mkdirSync(checkout);
+  writeFileSync(path.join(checkout, 'a.txt'), 'a1\n');
+  for (const args of [['init', '-q'], ['add', 'a.txt'], ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', '-m', 'a']]) sjGit(checkout, ...args);
+  writeFileSync(path.join(checkout, 'b.txt'), 'peer dirt\n');
+  const rev = name => sjGit(checkout, 'rev-parse', name).toString().trim();
+  const w = { checkout, commit: rev('HEAD'), project: path.join(dir, 'project'), calls: [], out: [] };
+  w.baseTree = rev(`${w.commit}^{tree}`);
+  w.state = () => [sjGit(checkout, '--no-optional-locks', 'status', '--porcelain=v1', '-z'), ...['.git/index', 'a.txt', 'b.txt'].map(f => readFileSync(path.join(checkout, f)))];
+  w.input = (extra = {}) => ({ project: w.project, owner: SEAT, instance: VM, binding: { ...BINDING }, checkout, commit: w.commit, cli: 'claude',
+    credential: { ...CRED }, onOutput: (stream, chunk) => w.out.push([stream, chunk]), ...extra });
+  w.labels = () => w.calls.map(([label]) => label).filter(label => label !== 'forward');
+  w.args = label => w.calls.find(([name]) => name === label)?.[1];
+  return w;
+}
+
+/** runSeatJob's steps over `w`, each recording its arguments; `fail` throws at that stage (with `code`, or `hostile` itself). */
+function sjSteps(w, { fail, code, hostile, verified = true, job = {}, entries = [CHANGE], imported, relay = 'relayed', stop = { ok: true, vm: 'deleted' } } = {}) {
+  const step = (label, value) => async (...args) => {
+    w.calls.push([label, args]);
+    if (fail === label) throw hostile ?? (code ? Object.assign(opaque(), { code }) : opaque());
+    return typeof value === 'function' ? value(...args) : value;
+  };
+  return {
+    sweep: step('sweep', { verified }), reset: step('reset', 'reset'), exportSnapshot: step('export', exportSourceSnapshot),
+    materialize: step('materialize', { executionReady: false }), admit: step('admit', admitCandidate), stop: step('stop', stop),
+    job: step('job', async args => {
+      await args.forward('moe.heartbeat', {}, {});
+      args.onOutput('stdout', Buffer.from(relay));
+      args.onOutput('stderr', Buffer.from('warn'));
+      return { sessionId: 's', observation: OBS, failure: null, terminationVerified: true, lease: 'released', executionReady: false, ...job };
+    }),
+    importCandidate: step('import', imported ?? (() => ({ instance: VM, candidate: validateImport(entries), executionReady: false }))),
+    forward: async (...args) => { w.calls.push(['forward', args]); return { content: [] }; },
+  };
+}
+const pinned = () => ({ executable: platformFor(process.platform).executable });
+
+test('SJ1 a worker job admits exactly the guest change on the commit\'s tree, and nothing reaches the checkout', async t => {
+  const w = sjWorld(t);
+  const [before, input, steps] = [w.state(), w.input(), sjSteps(w)];
+  const result = await runSeatJob(input, steps);
+  assert.deepEqual([w.labels(), w.state(), Object.isFrozen(result)], [ORDER, before, true]);
+  assert.deepEqual(result, { ok: true, role: 'worker', commit: w.commit, baseTree: w.baseTree, tree: result.tree, digest: validateImport([CHANGE]).digest,
+    paths: [{ kind: 'file', path: 'a.txt' }], exitCode: 0, signal: null, lease: 'released', executionReady: false });
+  assert.deepEqual([sjGit(w.checkout, 'diff-tree', '-r', '--name-only', w.baseTree, result.tree).toString(),
+    sjGit(w.checkout, 'cat-file', 'blob', `${result.tree}:a.txt`)], ['a.txt\n', CHANGE.data]);
+  const [{ snapshot, ...materialize }] = w.args('materialize');
+  assert.deepEqual([snapshot.overlay.entries, snapshot.base.entries.map(e => e.path), snapshot.tree, materialize], [[], ['a.txt'], w.baseTree, { name: VM, provider: pinned() }]);
+  const [{ git }] = w.args('export');
+  assert.deepEqual([w.args('sweep'), w.args('reset'), w.args('import'), w.args('export'), path.isAbsolute(git)],
+    [[VM, pinned()], [{ name: VM, provider: pinned() }], [{ name: VM, provider: pinned() }], [{ repoDir: w.checkout, commit: w.commit, git }], true]);
+  const [{ candidate, ...admit }] = w.args('admit');
+  assert.deepEqual([admit, candidate.digest], [{ repoDir: w.checkout, git, baseTree: w.baseTree }, result.digest]);
+  const [{ forward, onOutput, onObservation, ...job }] = w.args('job');
+  assert.deepEqual([forward, onOutput, typeof onObservation, w.out], [steps.forward, input.onOutput, 'function', [['stdout', Buffer.from('relayed')], ['stderr', Buffer.from('warn')]]]);
+  assert.deepEqual(job, { name: VM, binding: BINDING, job: { cli: 'claude', credential: CRED }, daemonInfoPath: path.join(w.project, '.moe', 'daemon.json'),
+    signal: undefined, provider: pinned(), timeoutMs: undefined });
+});
+
+test('SJ2 the credential reaches only the job step\'s job object: no other step, provider, forward call, env, outcome or output', async t => {
+  const w = sjWorld(t);
+  const env = { ...process.env };
+  const results = [];
+  for (const options of [{}, { fail: 'import', hostile: Object.assign(new Error(CANARY), { code: CANARY }) }]) {
+    w.calls.length = 0;
+    const input = w.input();
+    results.push(await runSeatJob(input, sjSteps(w, options)));
+    const [{ job }] = w.args('job');
+    assert.deepEqual([job.credential, job.credential === input.credential, Object.isFrozen(job.credential)], [CRED, false, true]);
+    const rest = w.calls.map(([label, args]) => (label === 'job' ? [{ ...args[0], job: { cli: job.cli } }] : args));
+    assert.deepEqual([holds(rest), holds(results.at(-1)), holds(w.out), { ...process.env }], [false, false, false, env]);
+  }
+  assert.deepEqual([results[0].ok, results[1]], [true, { ok: false, code: 'SEAT_JOB_IMPORT_FAILED', vm: 'kept' }]);
+});
+
+test('SJ3 a QA job refuses a non-empty candidate before admission; an empty one is ok with no admission', async t => {
+  const w = sjWorld(t);
+  const before = w.state();
+  const qa = () => w.input({ binding: { ...BINDING, role: 'qa' } });
+  assert.deepEqual(await runSeatJob(qa(), sjSteps(w)), { ok: false, code: 'SEAT_JOB_QA_CANDIDATE_REFUSED', vm: 'kept' });
+  assert.deepEqual([w.labels(), w.state()], [ORDER.slice(0, 6), before]);
+  w.calls.length = 0;
+  // The job's own exit code and lease are reported as data, never a failure.
+  const job = { lease: 'release-failed', observation: { ...OBS, code: 7 } };
+  assert.deepEqual(await runSeatJob(qa(), sjSteps(w, { entries: [], job })), { ok: true, role: 'qa', commit: w.commit, baseTree: w.baseTree, tree: w.baseTree,
+    digest: validateImport([]).digest, paths: [], exitCode: 7, signal: null, lease: 'release-failed', executionReady: false });
+  assert.deepEqual([w.labels(), w.state()], [ORDER.slice(0, 6), before]);
+});
+
+test('SJ4 each stage failure is its one fixed code with no later stage; only unverified VM state stops the seat', async t => {
+  const w = sjWorld(t);
+  const before = w.state();
+  const trap = { get code() { throw opaque(); } };
+  for (const [at, [options, code, vm, last]] of [
+    [{ verified: false }, 'SEAT_JOB_SWEEP_UNVERIFIED', 'stopped', 'sweep'], [{ fail: 'sweep' }, 'SEAT_JOB_SWEEP_UNVERIFIED', 'stopped', 'sweep'],
+    [{ fail: 'reset' }, 'SEAT_JOB_RESET_FAILED', 'stopped', 'reset'], [{ fail: 'reset', code: 'TRANSFER_RESET_BUSY' }, 'TRANSFER_RESET_BUSY', 'stopped', 'reset'],
+    [{ fail: 'reset', hostile: trap }, 'SEAT_JOB_RESET_FAILED', 'stopped', 'reset'], [{ fail: 'export' }, 'SEAT_JOB_EXPORT_FAILED', 'kept', 'export'],
+    [{ fail: 'materialize' }, 'SEAT_JOB_MATERIALIZE_FAILED', 'kept', 'materialize'], [{ fail: 'job' }, 'SEAT_JOB_SESSION_FAILED', 'kept', 'job'],
+    [{ fail: 'job', code: 'AGENT_BUSY' }, 'AGENT_BUSY', 'kept', 'job'],
+    [{ job: { failure: 'SESSION_PROTOCOL_VIOLATION', observation: null } }, 'SESSION_PROTOCOL_VIOLATION', 'kept', 'job'],
+    [{ job: { failure: 'AGENT_TERMINATION_UNVERIFIED', terminationVerified: false, lease: 'kept' } }, 'AGENT_TERMINATION_UNVERIFIED', 'stopped', 'job'],
+    [{ fail: 'import' }, 'SEAT_JOB_IMPORT_FAILED', 'kept', 'import'], [{ imported: { candidate: null } }, 'SEAT_JOB_IMPORT_FAILED', 'kept', 'import'],
+    [{ fail: 'admit' }, 'SEAT_JOB_ADMISSION_FAILED', 'kept', 'admit'],
+    [{ entries: [{ kind: 'delete', path: 'zz.txt' }] }, 'ADMISSION_ENTRY_CONFLICT', 'kept', 'admit'], // the real admission refuses
+    [{ verified: false, stop: () => { throw opaque(); } }, 'SEAT_JOB_SWEEP_UNVERIFIED', 'stop-failed', 'sweep'],
+    [{ verified: false, stop: { ok: false, code: 'SEAT_STOP_FAILED', vm: 'delete-failed' } }, 'SEAT_JOB_SWEEP_UNVERIFIED', 'stop-failed', 'sweep'],
+  ].entries()) {
+    w.calls.length = 0;
+    assert.deepEqual(await runSeatJob(w.input(), sjSteps(w, options)), { ok: false, code, vm }, `row ${at}`);
+    const stop = vm === 'kept' ? [] : ['stop'];
+    assert.deepEqual([w.labels(), w.state()], [[...ORDER.slice(0, ORDER.indexOf(last) + 1), ...stop], before], `row ${at}`);
+    if (stop.length) assert.deepEqual(w.calls.at(-1)[1], [{ project: w.project, owner: SEAT, instance: VM }, { provider: pinned() }]);
+  }
+  const getter = Object.defineProperty(w.input(), 'binding', { get() { throw opaque(); }, enumerable: true });
+  const { onOutput: _, ...missing } = w.input();
+  w.calls.length = 0;
+  for (const [at, input] of [null, getter, missing, ...[{ checkout: 'repo' }, { project: `${w.project}\n` }, { commit: w.commit.slice(1) },
+    { commit: w.commit.toUpperCase() }, { cli: 'gemini' }, { credential: { ...CRED, name: 'OPENAI_API_KEY' } }, { credential: { ...CRED, x: 1 } },
+    { credential: { ...CRED, value: 'a space' } }, { binding: { ...BINDING, role: 'governor' } }, { binding: { ...BINDING, x: 1 } }, { instance: 'moe-vm-bad' },
+    { owner: { ...SEAT, runner: 'no-pid' } }, { onOutput: 'x' }, { signal: {} }, { timeoutMs: 0 }, { timeoutMs: 60_001 }, { extra: 1 }].map(w.input)].entries()) {
+    assert.deepEqual(await runSeatJob(input, sjSteps(w)), { ok: false, code: 'SEAT_JOB_INPUT_INVALID', vm: 'kept' }, `input ${at}`);
+    assert.deepEqual(w.calls, [], `input ${at}`);
+  }
+});
+
+test('SJ5 seat-job: the credential only on stdin, job bytes relayed, one marked outcome line last; exit 0 ok, 1 failure, 2 usage', async t => {
+  const w = sjWorld(t);
+  const [out, err] = [[], []];
+  const head = ['seat-job', '--project', w.project, '--worker', SEAT.workerId, '--runner', SEAT.runner, '--host', SEAT.host, '--instance', VM,
+    '--role', 'worker', '--task', BINDING.taskId, '--attempt', BINDING.attemptId, '--generation', '3', '--checkout', w.checkout, '--commit', w.commit, '--cli', 'claude'];
+  const set = (flag, value) => head.map((arg, at) => (head[at - 1] === flag ? value : arg));
+  const cli = (argv, stdin = JSON.stringify(CRED), options = {}) => runAgentSeat(argv, { ...sjSteps(w, options), stdin: Readable.from(stdin === null ? [] : [Buffer.from(stdin)]),
+    write: chunk => out.push(Buffer.from(chunk)), writeError: chunk => err.push(Buffer.from(chunk)) });
+  const USAGE = '{"seatJob":1,"ok":false,"code":"SEAT_JOB_INPUT_INVALID","vm":"kept"}\n';
+  for (const [at, [argv, stdin]] of [[[...head, '--credential', CANARY]], [set('--role', 'admin')], [set('--generation', 'x')], [set('--generation', '1e1')],
+    [set('--checkout', 'repo')], [head.slice(0, -1)], [head, null], [head, '{"name":"ANTHROPIC_API_KEY"}'], [head, 'not json'],
+    [head, JSON.stringify(CRED).padEnd(16_385)]].entries()) {
+    assert.equal(await cli(argv, stdin), 2, `usage ${at}`);
+    assert.deepEqual([Buffer.concat(out.splice(0)).toString(), w.calls], [USAGE, []], `usage ${at}`);
+  }
+  assert.equal(await cli(head, JSON.stringify(CRED).padEnd(16_384)), 0); // exactly the bound
+  const [relayed, line, end] = Buffer.concat(out.splice(0)).toString().split('\n');
+  assert.deepEqual([relayed, end, Buffer.concat(err.splice(0)).toString(), w.args('job')[0].binding, w.args('job')[0].job], ['relayed', '', 'warn', BINDING, { cli: 'claude', credential: CRED }]);
+  const outcome = JSON.parse(line);
+  assert.deepEqual([Object.keys(outcome)[0], outcome.seatJob, outcome.ok, outcome.paths, holds(outcome)], ['seatJob', 1, true, [{ kind: 'file', path: 'a.txt' }], false]);
+  assert.deepEqual([holds(process.argv), holds({ ...process.env })], [false, false]);
+  w.calls.length = 0;
+  assert.equal(await cli(head, undefined, { fail: 'import', relay: 'x\n' }), 1); // relayed bytes ending in '\n' get no extra one
+  assert.deepEqual(Buffer.concat(out.splice(0)).toString(), 'x\n{"seatJob":1,"ok":false,"code":"SEAT_JOB_IMPORT_FAILED","vm":"kept"}\n');
+  const spawned = spawnSync(process.execPath, [fileURLToPath(new URL('../local-runner/agent-seat.mjs', import.meta.url)), 'seat-job'],
+    { input: JSON.stringify(CRED), encoding: 'utf8', timeout: 20_000, windowsHide: true }); // the direct entry, as the wrappers run it
+  assert.deepEqual([spawned.status, spawned.stdout, spawned.stderr], [2, USAGE, '']);
 });
