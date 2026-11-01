@@ -40,7 +40,6 @@ const SETTING = { setting: 'executionProfile' };
 const OBSERVED = { ...SETTING, from: 'legacy', to: 'observe', transition: 'observe', outcome: 'applied' };
 const GAPS = [
   { capability: 'vm', reason: 'vm-provisioning-uncertified' },
-  { capability: 'client', reason: 'client-contract-unsupported' },
   { capability: 'check', reason: 'check-runner-uncertified' },
 ];
 

@@ -37,6 +37,7 @@ import { instantiateRecipe, readRecipeInstance, RECIPE_DEFINITIONS_PATH } from '
 import { RECIPE_ACTOR } from '../tools/submitPlan.js';
 import { getAttempt, openAttempt } from '../state/attemptStore.js';
 import { decodeClientHello, type ClientCapabilities } from '../server/clientCapabilities.js';
+import { assertExecutionProfileReady } from '../delivery/executionProfile.js';
 import type { MoeError } from '../util/errors.js';
 import type { ExecutionProfile, RecipeDefinition, Task } from '../types/schema.js';
 
@@ -397,7 +398,6 @@ const NOT_READY_WIRE = { code: NOT_READY.code, codeName: NOT_READY.codeName, mes
   + 'verified-local is not ready: protected local isolation, trusted evidence and revision-bound delivery are not certified.' };
 const GAPS = [
   { capability: 'vm', reason: 'vm-provisioning-uncertified' },
-  { capability: 'client', reason: 'client-contract-unsupported' },
   { capability: 'check', reason: 'check-runner-uncertified' },
 ];
 const EMPTY_RETENTION = { retainedStrictTasks: 0, retainedStrictTaskIds: [], retainedStrictAttempts: 0, retainedStrictAttemptIds: [], unreadableSnapshots: 0 };
@@ -529,10 +529,11 @@ describe.each(PROFILES)('D2a. nothing claims isolation after the passing control
 });
 
 describe('D2b. a client cannot negotiate trust (I×M)', () => {
-  it('a hello claiming verifiedLocal, runnerStatus and modelReceipts negotiates all three false', () => {
+  it('a hello claiming verifiedLocal, runnerStatus and modelReceipts negotiates only verifiedLocal, which is wire support, never readiness', () => {
     const hello = decodeClientHello({ protocolVersion: 1, capabilities: { verifiedLocal: true, runnerStatus: true, modelReceipts: true } });
     const pick = ({ verifiedLocal, runnerStatus, modelReceipts }: ClientCapabilities) => ({ verifiedLocal, runnerStatus, modelReceipts });
-    const off = { verifiedLocal: false, runnerStatus: false, modelReceipts: false };
-    expect([pick(hello.negotiatedCapabilities), pick(hello.capabilities)]).toEqual([off, off]);
+    const wireOnly = { verifiedLocal: true, runnerStatus: false, modelReceipts: false };
+    expect([pick(hello.negotiatedCapabilities), pick(hello.capabilities)]).toEqual([wireOnly, wireOnly]);
+    expect(thrownCode(() => assertExecutionProfileReady('verified-local'))).toBe('EXECUTION_PROFILE_NOT_READY');
   });
 });

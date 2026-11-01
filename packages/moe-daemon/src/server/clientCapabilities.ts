@@ -1,11 +1,14 @@
 import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 
 /** Wire support only, never trusted evidence or readiness certification.
- * attemptPhase is not managed runnerStatus; verified-local stays unavailable. */
+ * attemptPhase is not managed runnerStatus. verifiedLocal is wire support for the
+ * readiness projection (moe.get_execution_readiness, /ws GET_EXECUTION_READINESS);
+ * it is never readiness, which only the daemon's held evaluation grants through
+ * assertExecutionProfileReady. */
 const SERVER_CAPABILITIES = Object.freeze({
   executionProfiles: true, planRevisions: true, approvalRevisions: true,
   executionContracts: true, deliveryReceipts: true, requiredChecks: true,
-  runnerStatus: false, modelReceipts: false, verifiedLocal: false,
+  runnerStatus: false, modelReceipts: false, verifiedLocal: true,
 });
 
 export type ClientCapabilities = Record<keyof typeof SERVER_CAPABILITIES, boolean>;

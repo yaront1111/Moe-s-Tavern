@@ -39,9 +39,15 @@ const NOT_READY = {
 };
 const STRICT = { version: 2, profile: 'verified-local', planRevision: 3, deliveryPolicy: 'local-branch' };
 const LEGACY = { version: 2, profile: 'legacy', planRevision: 3, deliveryPolicy: 'legacy' };
-const GAPS: ActivationGap[] = [
+/** Every gap kind activationUnsupported accepts, the client kind included. */
+const GAP_KINDS: ActivationGap[] = [
   { capability: 'vm', reason: 'vm-provisioning-uncertified' },
   { capability: 'client', reason: 'client-contract-unsupported' },
+  { capability: 'check', reason: 'check-runner-uncertified' },
+];
+/** What activationGaps() returns under the default held readiness: no client gap. */
+const DEFAULT_GAPS: ActivationGap[] = [
+  { capability: 'vm', reason: 'vm-provisioning-uncertified' },
   { capability: 'check', reason: 'check-runner-uncertified' },
 ];
 const S1 = 'worker-s@2026-10-31T00:00:00Z';
@@ -50,7 +56,7 @@ const EMPTY_RETENTION = {
   retainedStrictTasks: 0, retainedStrictTaskIds: [], retainedStrictAttempts: 0, retainedStrictAttemptIds: [], unreadableSnapshots: 0,
 };
 const refusedRecord = (from: string, codeName: string): Row =>
-  ({ ...SETTING, from, to: 'verified-local', transition: 'activate', outcome: 'refused', codeName, unsupportedCapabilities: GAPS });
+  ({ ...SETTING, from, to: 'verified-local', transition: 'activate', outcome: 'refused', codeName, unsupportedCapabilities: DEFAULT_GAPS });
 const rollbackRecord = (from: string, to: string, retention: Row = EMPTY_RETENTION): Row =>
   ({ ...SETTING, from, to, transition: 'rollback', outcome: 'applied', ...retention });
 
@@ -122,26 +128,26 @@ describe('classifyProfileTransition (T1)', () => {
 });
 
 describe('activation capability gate', () => {
-  it('G1 reads daemon-owned facts only and returns fresh copies', () => {
-    expect(activationGaps()).toEqual(GAPS);
+  it('G1 reads daemon-owned facts only, has no client gap, and returns fresh copies', () => {
+    expect(activationGaps()).toEqual(DEFAULT_GAPS);
     for (const name of ['MOE_EXECUTION_PROFILE_READY', 'MOE_VERIFIED_LOCAL', 'MOE_VM_CERTIFIED']) vi.stubEnv(name, '1');
     const first = activationGaps();
-    expect(first).toEqual(GAPS);
+    expect(first).toEqual(DEFAULT_GAPS);
     first[0].reason = 'certified';
     first.pop();
-    expect(activationGaps()).toEqual(GAPS);
+    expect(activationGaps()).toEqual(DEFAULT_GAPS);
     const hello = decodeClientHello({ protocolVersion: 1, capabilities: { verifiedLocal: true } });
-    expect(hello.negotiatedCapabilities.verifiedLocal).toBe(false);
+    expect(hello.negotiatedCapabilities.verifiedLocal).toBe(true);
   });
 
-  it.each([[[GAPS[0]]], [[GAPS[1]]], [[GAPS[2]]], [GAPS]])('G2 refuses the unsupported set %j', (gaps) => {
+  it.each([[[GAP_KINDS[0]]], [[GAP_KINDS[1]]], [[GAP_KINDS[2]]], [GAP_KINDS]])('G2 refuses the unsupported set %j', (gaps) => {
     const error = activationUnsupported(gaps) as MoeError;
     expect(error).toBeInstanceOf(MoeError);
     expect(shape(error)).toEqual({
       code: -32003, codeName: 'EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED',
       context: { executionProfile: 'verified-local', unsupportedCapabilities: gaps },
     });
-    for (const gap of GAPS) {
+    for (const gap of GAP_KINDS) {
       expect(error.message.includes(`${gap.capability} (${gap.reason})`)).toBe(gaps.includes(gap));
     }
   });
@@ -164,14 +170,14 @@ describe('activation capability gate', () => {
       expect(await records()).toEqual([refusedRecord(stored ?? 'legacy', 'EXECUTION_PROFILE_NOT_READY')]);
     });
 
-  it('G4 with readiness stubbed as certified, unsupported vm/client/check still block activation', async () => {
+  it('G4 with readiness stubbed as certified, unsupported vm/check still block activation', async () => {
     await seed([], { settings: { executionProfile: 'observe' } });
     const before = projectBytes();
     // Test-only stand-in for a future certified readiness gate (planApproval.test.ts precedent).
     vi.spyOn(executionProfile, 'assertExecutionProfileReady').mockImplementation(() => {});
     expect(shape(await refusal(update({ executionProfile: 'verified-local' })))).toEqual({
       code: -32003, codeName: 'EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED',
-      context: { executionProfile: 'verified-local', unsupportedCapabilities: GAPS },
+      context: { executionProfile: 'verified-local', unsupportedCapabilities: DEFAULT_GAPS },
     });
     expect(projectBytes()).toBe(before);
     expect(h.state.project?.settings.executionProfile).toBe('observe');
