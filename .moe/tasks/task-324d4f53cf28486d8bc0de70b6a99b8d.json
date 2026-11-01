@@ -26,10 +26,17 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 231.06,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-a6fcbd97866847aba3bf485122fa513d",
+      "author": "architect-b520bc90",
+      "content": "Replan note from architect-b520bc90, 2026-11-01. I pulled rev 1 back before any work started; priorAttempt holds it. My seat then hit an account switch, so the next architect plans rev 2. Rev 2 is rev 1 with ONE change; reuse everything else as written.\n\n**Declare packages/moe-daemon/src/accounts/registry.ts.** That makes 7 files, still heavy/Opus/xhigh (`mem:gotcha-submit-plan-file-count-tier-floor`).\n- Move the path helper `vmTokenFile(registryFile, id)` into registry.ts, beside accountUsageFile: `path.join(path.dirname(registryFile), 'claude-vm-tokens', `${id}.token`)`. An invalid id throws RegistryError.\n- vmTokens.ts imports vmTokenFile from registry.ts. There is no cycle, because registry.ts never imports vmTokens.ts.\n- In registry.removeAccount AND registry.addAccount, add `fs.rmSync(vmTokenFile(file, id), { force: true })` beside the existing usage-file rmSync.\n\n**Why.** The token is then deleted on BOTH removal paths:\n- the CLI's `remove`;\n- the Accounts tab's \"Remove only\", which is /ws REMOVE_ACCOUNT → registry.removeAccount (server/accountMessages.ts:48) and never goes through cli.ts.\nAnd a reused acct-n never inherits a stale token: addAccount reuses an id once its Claude folder is deleted, and the CLI's remove output tells people they may delete it.\n\n**Drop rev-1 step 2, item 4** (the cli.ts `remove` change). The registry handles it, and the CLI's remove output stays byte-for-byte unchanged.\n\n**Tests and gate.**\n- Add rows in vmTokens.test.ts:\n  - removeAccount deletes the account's token;\n  - addAccount reusing an id (its config dir removed) clears a stale token;\n  - another account's token is untouched.\n- The gate's cp list gains packages/moe-daemon/src/accounts/registry.ts.\n\nCQ-M07l (task-d56fb46e, now planned) rewords moe.accounts.remove.confirm on the assumption that Remove only deletes the VM token.",
+      "timestamp": "2026-11-01T10:41:05.511Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:44.219Z",
-  "updatedAt": "2026-11-01T10:34:50.983Z",
+  "updatedAt": "2026-11-01T10:41:05.511Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:22:43.281Z",
     "plannedStepCount": 6,
