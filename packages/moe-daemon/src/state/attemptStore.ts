@@ -156,6 +156,21 @@ export function currentAttempt(state: StateManager, taskId: string): ExecutionAt
   return open.length === 0 ? null : detached(open[open.length - 1]);
 }
 
+/**
+ * How many open (running, finalizing or reconciling) attempts carry this
+ * workerId. Read-only, one pass, and it counts attempts whose worker record is
+ * gone too: moe.deregister_worker and the restart purge can leave a finalizing
+ * attempt behind its pruned worker, so "no worker record" never proves "no
+ * open attempt".
+ */
+export function countOpenAttempts(state: StateManager, workerId: string): number {
+  let count = 0;
+  for (const attempt of state.attempts.values()) {
+    if (attempt.workerId === workerId && OPEN_PHASES.has(attempt.phase)) count += 1;
+  }
+  return count;
+}
+
 /** Next generation for a task: max over every prior attempt + 1, never a count. */
 function nextGeneration(state: StateManager, taskId: string): number {
   let max = 0;
