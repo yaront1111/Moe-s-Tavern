@@ -97,7 +97,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,16 +121,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:05:46.941Z",
-  "updatedAt": "2026-11-01T11:23:51.087Z",
+  "updatedAt": "2026-11-01T11:47:08.628Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:59:21.881Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-01T11:47:08.628Z",
+    "wallClockMs": 10066747
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-cef53f62"
+    "worker-cef53f62",
+    "qa-c5835a34"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -257,5 +260,9 @@
     "kind": "completion",
     "sessionId": "worker-cef53f62@2026-11-01T10:59:03Z",
     "at": "2026-11-01T11:23:51.087Z"
-  }
+  },
+  "completedAt": "2026-11-01T11:47:08.628Z",
+  "reviewCompletedAt": "2026-11-01T11:47:08.628Z",
+  "reviewSummary": "APPROVED R14d3. Commit 6ac51c42 (completion, pushed, on moe/work-2026-10-24). Diff is 4 source files, +224/-39 numstat, under 400. Every hunk is this task's own. guest-supervisor.py, the checkArgv export and C1, probes and criteria are untouched.\n\nRe-ran task.verification verbatim (snapshot, env -i, Node 24.21.0): EXIT 0, 449 tests, 447 pass, 0 fail, 2 pre-existing skips. CS1-CS8 8/8 pass, and CS3's real supervisor ran.\n\nFull CI local-runner list at archive 6ac51c42: 675 pass, 3 skip. The only failures are snapshot-only, from the missing daemon dist: TY1 failed and channel C4-C9 were cancelled. These are known, not regressions. bundle, dispatch and pinned-client are green.\n\nDoD:\n1. CS1 covers the pinned and the injected ssh, the exact sshStreamArgv, and no exec.\n2. CS3 (real supervisor exits 74) is infra-failure; CS4 dead stdin and CS5 stall are timeout.\n3. CS6: 255 before or after hello is infra-failure with exitCode null; 79-82 are unchanged. CS2: refusals spawn nothing.\n4. CS8 covers the watchedSession pass-through. Old rows changed only in triple, sequencing or wiring, and none was weakened.\n5. Verification exits 0.\n\nGate 0 comments on fd196d13 predate the work.\n\nIndependent mutation sweep: 14 of 14 KILLED. Mutants: abort recheck, closing guard, mode bridge, owned-name check, 255 to job code, 255 to skipped, route dropped from the copy, exec fallback, watchedSession with no spread, spread last, constant executable, keyDir dropped, budget not timedOut, abort without kill.\n\nNon-blocking: a bad-shape child after openGuestStream gets no kill (pre-existing). Nothing found to cut.",
+  "requiredCheckAtDone": null
 }
