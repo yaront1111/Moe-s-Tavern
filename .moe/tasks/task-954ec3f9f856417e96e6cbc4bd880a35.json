@@ -9,9 +9,62 @@
     "bash scripts/tests/parity-check.sh passes and node scripts/tests/postflight-safe.mjs bash exits 0; PS 5.1 postflight passes on the same revision."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Two marking passes in the shared probe, in scripts/moe-agent.sh.\n\nRead first:\n- WT-10G's FINAL landed bytes (task-19cbba22, in rework when this was planned; this row dependsOn it);\n- comment-3c560179 on this task;\n- mem:gotcha-parity-check-literals.\n\nRoot cause. git update-index applies only the FIRST marking option per path: update_one returns after the CE_VALID branch. So `--no-assume-unchanged --no-skip-worktree` never clears S bits, and diff-files then skips a skip-worktree file that was edited or deleted.\n\nChange gate_integrity to run two passes, in this order, each piping the SAME `gate_git ls-files -z \"$@\"`:\n1. `| gate_git update-index --no-skip-worktree -z --stdin || return 1`\n2. `| gate_git update-index --no-assume-unchanged -z --stdin || return 1`\n\nThen run the unchanged diff-files check.\n\nerror handling: each pass keeps its `|| return 1`. A failed pass is a failed probe: integrity false, then 'inconclusive', and the branch is refused. It never becomes a silent pass.\n\nBoth passes MUST pass \"$@\". The worktree arm calls `gate_integrity -- ':(top,exclude).moe'`; a pass without the exclude would clear the sparse .moe S bits, diff-files would report .moe deleted, and every worktree gate would fail closed (the wt-pass mode).\n\nMove the arm's first-option comment onto these two lines. Then delete gate_integrity_wt's own `--no-skip-worktree` pass, which is now redundant (comment-3c560179). Keep its .moe presence check and its `gate_integrity -- ':(top,exclude).moe'` call, exactly as WT-10G landed them.\n\nThat removal is deliberate. The wt-hidden mode (skip-worktree + delete) and the wt-assume mode (assume-unchanged + edit) then exercise the shared probe's two passes, one mutant each.\n\nCheck with `bash -n scripts/moe-agent.sh`. Edit only with the main session's Edit tool (global rail).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The same fix in scripts/moe-agent.ps1. Keep the file UTF-8 with a BOM.\n\n- **Test-MoeGateIntegrity.** Replace its one `Clear-MoeGateIndexFlags $top $Exclude` call with two calls, in this order, each with $Exclude:\n  1. `Clear-MoeGateIndexFlags $top $Exclude 'update-index --no-skip-worktree -z --stdin'`\n  2. `Clear-MoeGateIndexFlags $top $Exclude 'update-index --no-assume-unchanged -z --stdin'`\n  Each literal is passed WHOLE, so parity-check finds it (mem:gotcha-parity-check-literals).\n- **error handling.** Each call returns $false from Test-MoeGateIntegrity when it fails (a non-zero cmd exit, or a caught exception inside Clear-MoeGateIndexFlags). The caller's existing try/catch, which treats a throw as integrity false (CQ-V04c), stays unchanged.\n- **Clear-MoeGateIndexFlags.** Remove the default value of its $Update parameter, so no caller can silently fall back to the broken combined pass. Every caller now passes the whole tail. Keep the cmd-pipe raw-bytes mechanism, the EAP handling and the Push/Pop-Location unchanged.\n- **Test-MoeGateIntegrityWorktree.** Delete its now-redundant `--no-skip-worktree` pre-pass. Keep the .moe Get-Item -Force presence check and the `Test-MoeGateIntegrity $Frozen ':(top,exclude).moe'` call. Move the first-option comment onto Test-MoeGateIntegrity.\n\nCheck that the file parses with zero errors under both engines, for example `[System.Management.Automation.Language.Parser]::ParseFile` with powershell.exe and with pwsh.exe, and that `head -c3 scripts/moe-agent.ps1 | od -An -tx1` prints `ef bb bf`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "A frozen mode that hides ONLY behind skip-worktree (DoD 1 and 2), byte-identical in scripts/tests/postflight.sh (the FROZENJS heredoc) and scripts/tests/postflight.ps1 ($frozenSuite).\n\nAdd the mode `skip-worktree-mutation` beside `hidden-mutation`. Its gate:\n- runs `update-index --skip-worktree` on `owned.txt` and rewrites it;\n- runs `update-index --skip-worktree` on the tracked `../seed.txt` (the repo-root file) and deletes it;\n- exits 0.\nThere is no assume-unchanged anywhere in the mode. It covers both \"edits or deletes\".\n\nAdd it to every list that names `hidden-mutation`:\n- the modes array;\n- the `failed` list;\n- the PUSH-BLOCKED list;\n- the wantOutcome `inconclusive` list;\n- the block asserting exactly one check run, exit 0 and outcome 'inconclusive'.\nThe mode then proves the run is classified inconclusive AND refused (PUSH-BLOCKED, the branch unmoved) on both wrappers.\n\nMake the identical edit in both files, then confirm the two suites are byte-identical:\n`cmp <(sed -n '/<<.FROZENJS.$/,/^FROZENJS$/p' scripts/tests/postflight.sh | sed '1d;$d') <(sed -n '/frozenSuite, @.$/,/^.@, \\[Text/p' scripts/tests/postflight.ps1 | sed '1d;$d')`\n\nIterate with `MOE_FROZEN_TEST_ONLY=skip-worktree-mutation,hidden-mutation,wt-hidden,wt-assume,wt-pass,pass`. That runs only the frozen suite; postflight.ps1 exits after it. Run it through postflight.sh, and through postflight.ps1 under powershell.exe from a /mnt/d cwd (mem:gotcha-pwsh7-reachable-from-wsl: WSLENV=MOE_FROZEN_TEST_ONLY).\n\nMutants: record each one's result in the step note, on a scratch copy outside the checkout.\n- (a) the old single combined pass in either wrapper: skip-worktree-mutation and wt-hidden must FAIL;\n- (b) only the --no-assume-unchanged pass dropped: wt-assume must FAIL;\n- (c) the exclude dropped from either pass: wt-pass must FAIL.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Parity literals, in scripts/tests/parity-check.sh and scripts/tests/parity-check.ps1.\n\nThe combined literal 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin' no longer appears in either wrapper.\n- In the sh baseline/index `for lit in` list and the ps1 'baseline / index' table, replace it with the two whole literals 'update-index --no-skip-worktree -z --stdin' and 'update-index --no-assume-unchanged -z --stdin'.\n- Change nothing else.\n\nRun `bash scripts/tests/parity-check.sh` and `pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\parity-check.ps1`; both must PASS.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification gate, run ONCE (DoD 3), on a snapshot of the exact bytes. The global rail allows launcher harnesses in place, or on a snapshot of the exact commit. This is WT-10G's proven recipe, with this row's six files overlaid.\n\nThe exact command, from /mnt/d/projexts/moes:\n`S=$(mktemp -d /mnt/d/moe-scratch/v-954ec3f9.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/parity-check.sh scripts/tests/parity-check.ps1; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S\" && U=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && cmp <(sed -n '/<<.FROZENJS.$/,/^FROZENJS$/p' scripts/tests/postflight.sh | sed '1d;$d') <(sed -n '/frozenSuite, @.$/,/^.@, \\[Text/p' scripts/tests/postflight.ps1 | sed '1d;$d') && bash scripts/tests/parity-check.sh && env $U bash scripts/tests/worktree-landing.sh && env $U MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell`\n\nRunning it:\n- It runs past the Bash tool's 10-minute cap. Launch it in the background with nohup and job control, per mem:gotcha-qa-session-env-and-signals-leak-into-harness (a plain background job ignores SIGINT and fails scenario W). Log to /mnt/d/moe-scratch, append `EXIT=$?`, then poll.\n- Exit 0 counts only with `PASS postflight.sh` and `PASS postflight.ps1` both in the log. Never cite EXIT=0 alone (mem:gotcha-pwsh7-reachable-from-wsl).\n- A failure that also reproduces on HEAD's scripts is pre-existing: prove it, report it, don't fix it here.\n- Delete the snapshot afterwards.\n\nSize: `git diff --numstat HEAD -- scripts/` should be well under 400.\n\nThe complete_task verification is the command above, with its fresh log tail. The summary names the step 3 mutants and the modes that killed them.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this diff, as the final step (load adversarial-self-review). Check:\n1. Do both passes, in both wrappers, carry the caller's pathspec (\"$@\" / $Exclude)? Does the worktree arm still keep .moe's sparse S bits, and does wt-pass still pass?\n2. Does a gate that sets both bits on one path, or S on a deleted file, or V on an edited file, still reach diff-files? Is 'passed' still possible only when both passes AND diff-files succeed?\n3. Does an empty tracked set (ls-files prints nothing) still return rc 0 on both passes, as today?\n4. Under Git Bash, does the pathspec argument still reach git.exe verbatim? It is the same argument WT-10G's rework settled; do not reintroduce a pattern MSYS rewrites.\n5. Does any caller of Clear-MoeGateIndexFlags still rely on the removed default?\n6. Is moe-agent.ps1 still UTF-8 with a BOM? Are the frozen suites byte-identical, and the parity literals whole?\n7. Did shared-mode behavior change anywhere except the probe's marking passes? Rail 4: shared mode stays unchanged apart from this fix.\n\nIf any byte changes, re-run step 5's exact command and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -30,14 +83,93 @@
       "author": "worker-009c883d",
       "content": "How this fix interacts with WT-10G (task-19cbba22, filed by its worker):\n- The worktree arm's gate_integrity_wt (sh) / Test-MoeGateIntegrityWorktree (ps1) runs its own skip-worktree pass first: `ls-files -z -- ':(top,exclude).moe' | update-index --no-skip-worktree -z --stdin` (ps1: Clear-MoeGateIndexFlags ... '--no-skip-worktree').\n- After that it calls the shared probe with the same exclude pathspec. sh gate_integrity passes \"$@\" to ls-files; ps1 uses Test-MoeGateIntegrity's $Exclude.\n\nWhen you split the shared pipe into two passes, apply \"$@\" / $Exclude to BOTH of them. Otherwise the arm would clear the .moe/ S bits, diff-files would see .moe/ as deleted, and every worktree gate would fail closed. That case is the wt-pass mode.\n\nOnce both passes honor the exclude, the arm's extra skip-worktree line is redundant and can go. The wt-hidden mode (skip-worktree + delete) still has to fail afterwards.",
       "timestamp": "2026-11-01T12:46:04.199Z"
+    },
+    {
+      "id": "comment-007346ae7ba649cebb4018e5770b84ec",
+      "author": "governor-f668f954",
+      "content": "Governor wiring note for whoever plans this row (refines the promotion reason). WT-19 (task-b1ca54f2), the WT epic's integration row, is at its 20-id dependsOn cap. So this row reaches WT-19's closure only if a lane row WT-19 already depends on also depends on it. \"After the lane's last wrapper editor\" would leave it outside that closure. Slot it inside the lane: give it dependsOn on its predecessor, and add it to its successor's dependsOn. The sibling Git Bash bug task-7b23ea0f (moe-agent.sh:5165) has the same constraint. If the two rows share the lane, place them next to each other.",
+      "timestamp": "2026-11-01T14:34:29.178Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T12:44:42.788Z",
-  "updatedAt": "2026-11-01T14:30:43.181Z",
+  "updatedAt": "2026-11-01T14:46:21.540Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:30:43.181Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T14:39:32.330Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-30d804be"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T14:46:21.516Z",
+  "executionContract": {
+    "intendedBehavior": "In shared and worktree mode, both wrappers' frozen-gate integrity probes clear skip-worktree and assume-unchanged in two separate update-index passes, each scoped to the caller's pathspec, before diff-files. A gate that hides a tracked edit or deletion behind either bit is then classified 'inconclusive' and refused (PUSH-BLOCKED, the branch unmoved), never 'passed'.",
+    "invariants": [
+      "Both marking passes use exactly the caller's pathspec. The worktree arm's .moe sparse bits are never cleared.",
+      "'passed' requires exit 0, matching HEAD and tree, both passes rc 0 and a clean diff-files.",
+      "The frozen suites in postflight.sh and postflight.ps1 stay byte-identical.",
+      "moe-agent.ps1 stays UTF-8 with a BOM, and every parity literal is whole in both wrappers.",
+      "Shared-mode behavior is unchanged except for the probe's marking passes."
+    ],
+    "compatibility": [
+      "The CQ-V04c outcome mapping and its refusal wording are unchanged.",
+      "WT-10G's arm keeps its .moe presence check, its pathspec and its refusal codes; only its redundant S pass goes.",
+      "Every existing frozen mode keeps its meaning."
+    ],
+    "sourceAssumptions": [
+      "moe-agent.sh: gate_integrity runs `gate_git ls-files -z \"$@\" | gate_git update-index --no-assume-unchanged --no-skip-worktree -z --stdin`. gate_integrity_wt adds its own --no-skip-worktree pass, then `gate_integrity -- ':(top,exclude).moe'`.",
+      "moe-agent.ps1: Test-MoeGateIntegrity -> Clear-MoeGateIndexFlags($Top, $Exclude, $Update), where $Update defaults to the combined literal. Test-MoeGateIntegrityWorktree passes 'update-index --no-skip-worktree -z --stdin'.",
+      "git update-index applies only the first marking option per path (update_one returns after the CE_VALID branch). Reproduced with git 2.43 in the task description.",
+      "parity-check.sh's baseline/index list and parity-check.ps1's 'baseline / index' table both require the combined literal today."
+    ],
+    "checkRefs": [
+      "bash -n scripts/moe-agent.sh",
+      "bash scripts/tests/parity-check.sh",
+      "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\parity-check.ps1",
+      "S=$(mktemp -d /mnt/d/moe-scratch/v-954ec3f9.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/parity-check.sh scripts/tests/parity-check.ps1; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S\" && U=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && cmp <(sed -n '/<<.FROZENJS.$/,/^FROZENJS$/p' scripts/tests/postflight.sh | sed '1d;$d') <(sed -n '/frozenSuite, @.$/,/^.@, \\[Text/p' scripts/tests/postflight.ps1 | sed '1d;$d') && bash scripts/tests/parity-check.sh && env $U bash scripts/tests/worktree-landing.sh && env $U MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Keep the combined pass and add a second one with the options swapped: rejected. It is the same two spawns, but it hides the first-option rule behind a line that still looks redundant. Two single-option passes say what they do.\n2. Keep WT-10G's arm-local --no-skip-worktree pass: rejected. Once the shared probe does both passes it is dead weight, and the arm's pass is what masked the shared hole: wt-hidden passed for the wrong reason. Removing it routes wt-hidden and wt-assume through the shared passes, so each pass has a killing mode.\n3. A second new shared mode that hides only behind assume-unchanged: not needed. wt-assume covers that pass once the arm's extra pass is gone, and hidden-mutation keeps its existing meaning.\n4. Slotting: the governor's comment-007346ae says WT-19 is at its 20-id dependsOn cap. This row was put INSIDE the lane: dependsOn WT-10G (already), and WT-10 (task-5c2e6cdf, unclaimed, 0/6 steps) now dependsOn this row. A closure check found no other open editor of the four wrapper/harness files that could race it.",
+    "codebaseInsights": "- sh: gate_integrity (HEAD and write-tree checks, then the marking pass, then diff-files) and gate_integrity_wt (.moe presence, its own S pass, then `gate_integrity -- ':(top,exclude).moe'`). run_frozen_gate picks between them.\n- ps1: Test-MoeGateIntegrity calls Clear-MoeGateIndexFlags ($Update defaults to the combined literal); Test-MoeGateIntegrityWorktree passes an explicit '--no-skip-worktree' tail. Clear-MoeGateIndexFlags runs `cmd /d /s /c \"git ls-files -z [-- excl] | git <Update>\"`, because a .NET stdin writer would prepend a BOM.\n- The frozen suite is byte-identical in postflight.sh (FROZENJS heredoc) and postflight.ps1 ($frozenSuite). Its mutation modes are tracked-, hidden-, index- and head-mutation; its outcome rules say exit 0 plus failed integrity is 'inconclusive' (CQ-V04c).\n- The tracked files are seed.txt at the repo root, plus 'nested project é/owned.txt' and gate.cjs.\n- MOE_FROZEN_TEST_ONLY narrows both harnesses to the named frozen modes.",
+    "risks": "- WT-10G (task-19cbba22) is in rework after a Git Bash MSYS reject, so its arm bytes may change before this row starts. The plan names symbols and behavior, not line numbers, and step 1 says to keep the pathspec handling exactly as WT-10G finally landed it.\n- The ps1 leg needs Windows node (node.exe), a /mnt/d cwd and the seat's MOE_*/CLAUDE* vars unset; a missing-node SKIP exits 0 falsely.\n- Six files (over the advisory 5), but every change is a few lines. The parity literal swap is forced, because the combined literal disappears from both wrappers.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1",
+      "scripts/tests/postflight-safe.mjs",
+      "scripts/tests/worktree-landing.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4011d5e98fa6732405946a5ca866bc3b3732c6c1",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T14:46:21.540Z",
+  "approvedPlanRevision": 1
 }

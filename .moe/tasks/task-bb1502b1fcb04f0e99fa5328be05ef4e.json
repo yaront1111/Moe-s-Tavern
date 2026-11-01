@@ -70,12 +70,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "SIZE-ONLY REJECT. Substance is green; no DoD item failed. Completion 799936d9 measures, by `git show --numstat --format= 799936d9 -- packages/`, +529/-27 = net 502, over the 400 net-changed-LOC cap. Runtime is only net 72 (claimEligibility.ts +56/-9, claimNextTask.ts +13/-3, waitForTask.ts +26/-11); tests are net 430 (new executionRoute.test.ts +428, plus +2/-1, +2/-1, +2/-2 in the three marker-adding test files). No epic/project rail waives size for this row (only CQ-M05 has one) and no ADD_RAIL proposal names it (checked .moe/proposals). A past approval is not a rail.\n\nWhat I verified (all pass): the exact verification command re-run in a fresh git-archive of 799936d9: tsc clean, 221 files, 6659 passed, 20 skipped, 0 failed, matching your counts. 13 QA mutants, all killed: no route check (17 fail), REVIEW or WORKING dropped from the status test, PLANNING made strict, recorded-attempt strictness removed, task-profile strictness removed, parse accepts null / any non-empty string, route dropped at the explicit claim, ranked pool, both waiter matches, and the wait hint. Route check sits after both readiness asserts; parse is before any write; PLANNING/legacy/observe unchanged. The 3 existing test edits only add executionRoute 'vm' (assertions unchanged); justified.\n\nFix route (do NOT rewrite or re-land the landed bytes): file the epic ADD_RAIL yourself with moe.propose_rail, naming commit 799936d9 and the per-file numstat above (+529/-27, net 502; runtime 72, tests 430). A task comment is not a proposal. Once approved, complete_task again as a no-byte retry and QA will check the rail text against numstat. Alternatively request_replan to split the test file.",
+  "reopenReason": "Size waiver prop-09077323 APPROVED by the human at 14:22:27Z. The CQ-M epic now carries the \"CQ-M07q size exception\" rail exactly once. The park reason is gone, so the row returns to REVIEW for QA round 2. Substance was already green (full suite 6679 passed, 13/13 mutants).",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -90,14 +90,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:30.039Z",
-  "updatedAt": "2026-11-01T12:01:51.327Z",
+  "updatedAt": "2026-11-01T14:46:54.882Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:18:30.441Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-01T14:46:54.882Z",
+    "wallClockMs": 16104441
   },
   "contextFetchedBy": [
     "qa-1e84238e",
@@ -284,7 +286,7 @@
     "sessionId": "qa-c5835a34@2026-11-01T11:49:01Z",
     "at": "2026-11-01T12:01:51.327Z"
   },
-  "reviewCompletedAt": "2026-11-01T10:41:33.003Z",
+  "reviewCompletedAt": "2026-11-01T14:46:54.882Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -320,8 +322,13 @@
       ]
     }
   ],
-  "blockedReason": "QA PARK, round 2: the size waiver is pending. Substance is green and no DoD item failed; the only open item is the 400 net-LOC cap. Completion 799936d9 measures +529/-27, net 502, under packages/ (runtime 72, tests 430). That is exactly the per-file numstat in epic ADD_RAIL prop-09077323d7384a6986bd7933f10ad623, which is still PENDING (filed 11:15Z, resolvedAt null); allRails.epic has no matching rail. A second size-only reject would burn a reopen on a no-byte retry, so the row parks for the human decision.\nEvidence: exact-commit gate on a git archive of 41680ea5 (env -i, Node 24.21.0, npm ci, tsc --noEmit, npm test): exit 0, 221 files, 6679 passed, 20 skipped, 0 failed. The recorded command at HEAD 67453739 exits 1 only on delivery/repairPolicy.test.ts H1-H3. That is a peer regression from 6ac51c42, filed as a HIGH bug row in the CQ-R epic. A/B: that file passes 46/46 with the 41680ea5 check-session.mjs. An extra mutant (route check before readiness) is killed. Full evidence is in the latest comment on this row.\nResume: APPROVED -> add the epic rail, set_task_status REVIEW; QA checks the rail text against the numstat and approves. REJECTED -> set_task_status PLANNING for an architect to split the review scope over the landed bytes, with no rewrite.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-01T11:59:46.527Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "QA PARK, round 2: the size waiver is pending. Substance is green and no DoD item failed; the only open item is the 400 net-LOC cap. Completion 799936d9 measures +529/-27, net 502, under packages/ (runtime 72, tests 430). That is exactly the per-file numstat in epic ADD_RAIL prop-09077323d7384a6986bd7933f10ad623, which is still PENDING (filed 11:15Z, resolvedAt null); allRails.epic has no matching rail. A second size-only reject would burn a reopen on a no-byte retry, so the row parks for the human decision.\nEvidence: exact-commit gate on a git archive of 41680ea5 (env -i, Node 24.21.0, npm ci, tsc --noEmit, npm test): exit 0, 221 files, 6679 passed, 20 skipped, 0 failed. The recorded command at HEAD 67453739 exits 1 only on delivery/repairPolicy.test.ts H1-H3. That is a peer regression from 6ac51c42, filed as a HIGH bug row in the CQ-R epic. A/B: that file passes 46/46 with the 41680ea5 check-session.mjs. An extra mutant (route check before readiness) is killed. Full evidence is in the latest comment on this row.\nResume: APPROVED -> add the epic rail, set_task_status REVIEW; QA checks the rail text against the numstat and approves. REJECTED -> set_task_status PLANNING for an architect to split the review scope over the landed bytes, with no rewrite.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-01T14:46:54.882Z",
+  "reviewSummary": "QA round 3: APPROVE. The epic rail \"CQ-M07q size exception\" (prop-09077323) waives size and appears once.\nSIZE: `git show --numstat --format= 799936d9 -- packages/` matches the rail file for file. Runtime net 72 (claimEligibility +56/-9, claimNextTask +13/-3, waitForTask +26/-11). Tests net 430 (executionRoute.test +428, deliveryBypass +2/-1, dependencyProjection +2/-1, dependencyReadiness.strict +2/-2). Total +529/-27, net 502. No growth: `git diff 799936d9 HEAD` over the 7 paths is empty.\nCOMMITS: 799936d9 (code), 41680ea5 (round-2 completion, board JSON) and 7e70cc18 (checkpoint) are all on moe/work-2026-10-24.\nGATE: task.verification re-run as recorded on a git archive of HEAD 62f83b4c, under env -i with Node 24.21.0. npm ci ok, tsc clean, exit 0: 222/222 files, 6701 passed, 20 skipped, 0 failed. executionRoute 47/47. repairPolicy 46/46 (the H1-H3 peer bug is fixed by 6bc52f2e).\nDoD:\n1. S1-S5, W1-W4: a marked strict claim succeeds. An unmarked one gets EXECUTION_ROUTE_REQUIRED with the exact context and no write; the pool skips the row; waiters match only when marked.\n2. U1/U2: PLANNING, legacy, observe and no-snapshot claims are unchanged with and without the marker.\n3. R1/R2: real readiness refuses a marked claim NOT_READY.\n4. I1/I2: 6 bad values get INVALID_INPUT on the explicit claim, the pool and the wait, with no write.\n5. Full suite, as above.\nSUBSTANCE: the route check runs last, after both readiness asserts. The parse happens before any write. All 4 predicate callers (claimNextTask:529/587, waitForTask:155/203) and both findMatchingTask callers pass the route. 14/14 mutants killed in rounds 1-2 on these bytes.\nRAILS: the marker only refuses; verified-local stays unavailable; WT-19 files are untouched.\nComplexity: lean. The U2 matrix is advisory only. Follow-up: task-4e2f2b45.",
+  "requiredCheckAtDone": null
 }
