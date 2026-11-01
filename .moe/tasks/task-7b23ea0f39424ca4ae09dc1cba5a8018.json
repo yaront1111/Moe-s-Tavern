@@ -1,0 +1,27 @@
+{
+  "id": "task-7b23ea0f39424ca4ae09dc1cba5a8018",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: under Git Bash, every hooked worktree completion is refused, because MSYS2_ARG_CONV_EXCL='*' leaves the POSIX -C scratch path unconverted (moe-agent.sh:5165)",
+  "description": "scripts/moe-agent.sh:5165 (moe_commit_with_hooks ... worktree, the WT-08 hooked completion) runs `MSYS2_ARG_CONV_EXCL='*' git -C \"$scratch\" sparse-checkout set ...`. Under Git Bash, $scratch is a POSIX create_secure_temp path, and '*' stops MSYS from converting it, so git.exe cannot change into it. private_git is then cleared, and every hooked worktree completion is refused: rc 1, no HOOK_COMMIT_SHA, and a misleading 'hooked-commit-config-mismatch'.\nProbe of the real sliced function (worker-cef53f62, 2026-11-01, /mnt/d/moe-scratch/p-19cbba22.nDWLjr/probe-hook.sh <wrapper> <root>):\n- WSL git 2.43: rc 0.\n- Git Bash (git 2.54, MSYS 3.6.7): rc 1.\n- The same bytes with only '*' changed to '!/' (or the patterns passed via --stdin, as WT-10G's gate arm now does): rc 0.\nThe ps1 twin (Invoke-MoeGit at moe-agent.ps1:4715) is unaffected, because PowerShell does no MSYS conversion. See mem gotcha-git-bash-stub-path-and-msys-sparse.",
+  "definitionOfDone": [
+    "Under Git Bash, moe_commit_with_hooks ... worktree commits a POSIX secure-temp scratch (rc 0, HOOK_COMMIT_SHA set, .moe absent), shown by a recorded Git Bash probe of the real function; Linux behavior is unchanged.",
+    "bash scripts/tests/parity-check.sh passes and the existing postflight hooked-completion cases stay green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 35,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T14:28:00.485Z",
+  "updatedAt": "2026-11-01T14:28:00.485Z"
+}

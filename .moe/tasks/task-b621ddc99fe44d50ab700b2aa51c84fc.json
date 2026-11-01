@@ -84,7 +84,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -164,7 +164,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:14.370Z",
-  "updatedAt": "2026-11-01T13:52:06.730Z",
+  "updatedAt": "2026-11-01T14:31:58.919Z",
   "dependsOn": [
     "task-af83018e892149a1a18cd6a946edeba5",
     "task-bde8654052f648f9b209174c3708322b",
@@ -193,13 +193,16 @@
     "qa-952969be",
     "qa-ba3f4f35",
     "architect-4ae016fb",
-    "worker-0e1ab990"
+    "worker-0e1ab990",
+    "qa-1e84238e"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-29T18:00:07.818Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-01T14:31:58.919Z",
+    "wallClockMs": 246711101
   },
   "tier": "heavy",
   "effort": "max",
@@ -324,6 +327,68 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "106284b0dd736a1000e1e70ab00a3bd8a71005a9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0e1ab990@2026-11-01T12:47:36Z",
+      "paths": [
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        "CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/CLAUDE.md",
+        "scripts/CLAUDE.md"
+      ],
+      "recordedBy": "worker-0e1ab990",
+      "recordedAt": "2026-11-01T13:52:28.037Z",
+      "treeId": "08eb7387cbfed353249432fae03059b79bffb265",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "CLAUDE.md",
+          "taskId": "task-1b2e6fe3ba1343c8ab02271510131155"
+        },
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-1b2e6fe3ba1343c8ab02271510131155"
+        },
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-f3f364a6c6864054901ec27f342a87f6"
+        },
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-76ae5c472f6a4651a45478b1893e07dc"
+        },
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-b1ca54f2716442be889a14623eb59983"
+        },
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-cda65eb0efb244efa8a506969bac47f9"
+        },
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-f3f364a6c6864054901ec27f342a87f6"
+        },
+        {
+          "path": "scripts/CLAUDE.md",
+          "taskId": "task-1b2e6fe3ba1343c8ab02271510131155"
+        },
+        {
+          "path": "scripts/CLAUDE.md",
+          "taskId": "task-69c024444381492c85878307df40c6e2"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -333,18 +398,24 @@
     "docs/CONFIGURATION.md",
     "CLAUDE.md",
     "packages/moe-daemon/CLAUDE.md",
-    "scripts/CLAUDE.md"
+    "scripts/CLAUDE.md",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json"
   ],
   "touchedFiles": [
     "docs/MCP_SERVER.md",
-    "docs/SCHEMA.md"
+    "docs/SCHEMA.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CONFIGURATION.md",
+    "CLAUDE.md",
+    "packages/moe-daemon/CLAUDE.md",
+    "scripts/CLAUDE.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-0e1ab990@2026-11-01T12:18:43Z",
-    "at": "2026-11-01T12:47:04.675Z"
+    "kind": "completion",
+    "sessionId": "worker-0e1ab990@2026-11-01T12:47:36Z",
+    "at": "2026-11-01T13:52:28.037Z"
   },
   "reviewStartedAt": "2026-11-01T13:52:06.728Z",
   "verification": {
@@ -354,5 +425,9 @@
     "reportedAt": "2026-11-01T13:52:06.728Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-V12 epic close-out, docs only. Synced 7 docs to the landed CQ-V code:\n- MCP_SERVER.md and SCHEMA.md (step-1, fd1c9f5f)\n- ARCHITECTURE.md: The verified-local path\n- CONFIGURATION.md: MOE_RUNNER_KEY_DIR, checkEnvironments, executionProfile/deliveryPolicy\n- CLAUDE.md, packages/moe-daemon/CLAUDE.md, scripts/CLAUDE.md\nNo code, .moe, Git or __acceptance__ edits. Peer hunks intact.\n\nRegression in a git-archive snapshot (env -i, node 24.21), at e34b3495:\n- daemon: 222/222 files, 6701 pass, 20 skip\n- tsc: 0\n- acceptance: 51/51 (bypass 22, producerConsumer 16, projection 13)\n- proxy: 316/316\n- postflight: sh 71 ok, pwsh7 65 ok, PS5.1 65 ok, 0 FAIL/SKIP, V07/V08/V08b modes ran\n- launcher node: 48 pass, 2 skip; trust docs 5/5; lint 0\nHEAD moved to b97c398e (WT-10G); re-ran there: daemon 222/222 EXIT 0 (below), parity PASS.\n\nReview: no DoD-1 bypass, no DoD-2 disagreement. One passedOn pair and one dependency predicate. Every catch fails closed. No /mcp, /ws or guest-bridge forgery path. verified-local is still unconditionally unavailable.\n\nFindings and owners:\n(a) task-5464e725 MED: guest-session STAMPED lacks qa_approve/qa_reject, so VM QA cannot decide verified-local (fails closed).\n(b) task-7aa6be67 LOW: strict-consumer DONE/ARCHIVED wording; decideCheckRepair JSDoc overclaim.\n(c) task-435e8989 LOW: packetManifest silent on an unserved requiredCheckSnapshot (V01 hand-forward).\n(d) CQ-M07 task-1a8f1d0e, comment-b825be98: activation residuals (no per-candidate dispatch invoker, trusted-install check-architecture, protected-wrapper limit, --base).\n(e) parity red at e34b3495 was peer task-19cbba22 WIP; green at b97c398e.\n(f) 799936d9 acceptance setup edit: task-bb1502b1 DONE, no assertion weakened.\n(g) JetBrains latestCheckRun.outcome: task-344a0acb DONE.\n(h) requiredCheckSatisfied absent when undeclared: documented, noted to CQ-M07."
+  "completionSummary": "CQ-V12 epic close-out, docs only. Synced 7 docs to the landed CQ-V code:\n- MCP_SERVER.md and SCHEMA.md (step-1, fd1c9f5f)\n- ARCHITECTURE.md: The verified-local path\n- CONFIGURATION.md: MOE_RUNNER_KEY_DIR, checkEnvironments, executionProfile/deliveryPolicy\n- CLAUDE.md, packages/moe-daemon/CLAUDE.md, scripts/CLAUDE.md\nNo code, .moe, Git or __acceptance__ edits. Peer hunks intact.\n\nRegression in a git-archive snapshot (env -i, node 24.21), at e34b3495:\n- daemon: 222/222 files, 6701 pass, 20 skip\n- tsc: 0\n- acceptance: 51/51 (bypass 22, producerConsumer 16, projection 13)\n- proxy: 316/316\n- postflight: sh 71 ok, pwsh7 65 ok, PS5.1 65 ok, 0 FAIL/SKIP, V07/V08/V08b modes ran\n- launcher node: 48 pass, 2 skip; trust docs 5/5; lint 0\nHEAD moved to b97c398e (WT-10G); re-ran there: daemon 222/222 EXIT 0 (below), parity PASS.\n\nReview: no DoD-1 bypass, no DoD-2 disagreement. One passedOn pair and one dependency predicate. Every catch fails closed. No /mcp, /ws or guest-bridge forgery path. verified-local is still unconditionally unavailable.\n\nFindings and owners:\n(a) task-5464e725 MED: guest-session STAMPED lacks qa_approve/qa_reject, so VM QA cannot decide verified-local (fails closed).\n(b) task-7aa6be67 LOW: strict-consumer DONE/ARCHIVED wording; decideCheckRepair JSDoc overclaim.\n(c) task-435e8989 LOW: packetManifest silent on an unserved requiredCheckSnapshot (V01 hand-forward).\n(d) CQ-M07 task-1a8f1d0e, comment-b825be98: activation residuals (no per-candidate dispatch invoker, trusted-install check-architecture, protected-wrapper limit, --base).\n(e) parity red at e34b3495 was peer task-19cbba22 WIP; green at b97c398e.\n(f) 799936d9 acceptance setup edit: task-bb1502b1 DONE, no assertion weakened.\n(g) JetBrains latestCheckRun.outcome: task-344a0acb DONE.\n(h) requiredCheckSatisfied absent when undeclared: documented, noted to CQ-M07.",
+  "completedAt": "2026-11-01T14:31:58.919Z",
+  "reviewCompletedAt": "2026-11-01T14:31:58.919Z",
+  "reviewSummary": "Reviewed completion 106284b0 (tree 08eb7387) and checkpoint fd1c9f5f, both on moe/work-2026-10-24: 7 docs, +258/-41 (net 217), plus board JSON. No code, __acceptance__ or .moe edits. Removals are rephrasings; peer hunks intact.\n\nFresh re-run at exact 106284b0 (git archive, env -i, node 24.21):\n- DoD4: daemon npm test EXIT 0, 222/222 files, 6701 passed, 20 skipped.\n- tsc 0; acceptance 51/51 (bypass 22, producerConsumer 16, projection 13); proxy 316/316; parity PASS; launcher 48 pass, 2 skip; trust-docs 5/5; lint 0.\n- DoD1: postflight.sh PASS, postflight.ps1 PASS on pwsh 7.6.9 and PS 5.1, 0 FAIL. All 18 V07/V08/V08b modes ran per engine. AD/AE skip on Windows (no symlinks), as in the worker's legs.\n\nDoD3: each of the 436 backticked tokens in added lines resolves in landed code or is an example or old context. Spot-checked: proxy stamping; runner key path, modes, loopback auth; wrapper-audience hiding; dispatch admission codes; reviewBinding order and legacy fence; repair latest-run filter; removeDependsOn of deleted ids; checkEnvironments/repairPolicy bounds and the settings allowlist; snapshot limits; projection verdict; gate outcome map; check-architecture defaults and exits; six strong codes in sh and ps1. No drift.\n\nDoD2: every non-test readiness site (claim, wait, report_blocked, get_context, list/search_tasks, set_task_dependencies, resourceStore, sweep, stale alert) passes the consumer to dependencyShortfall. No ad-hoc DONE/ARCHIVED check.\n\nAdversarial: one passedOn/trustedPassedOn pair (policy.ts:290, 398); assertExecutionProfileReady still unconditional; requiredCheckSnapshot stripped on update; guest bridge forwards no check, dispatch, observation, receipt or candidate tool; no key material. Owned findings: 5464e725 MED, 7aa6be67 LOW, 435e8989 LOW, activation residuals to CQ-M07 1a8f1d0e. All 9 hand-forward comments dispositioned.\n\nNon-blocking: qaApprove.ts:145 'satisfied at once' holds only because verified-local is refused first; fold into 7aa6be67.",
+  "requiredCheckAtDone": null
 }

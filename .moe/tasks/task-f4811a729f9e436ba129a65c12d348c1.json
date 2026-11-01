@@ -431,11 +431,17 @@
       "author": "worker-cef53f62",
       "content": "SUPERVISOR PIN MOVE (CQ-M07f, task-d6bc12fff910484d92368fa6825f523c). The 'reset' mode changes scripts/local-runner/guest-supervisor.py. Its new sha256 is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. It supersedes 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190 for the operator's single re-certify.\n\nCommit-to-be: the wrapper's completion commit `feat(task-d6bc12fff910484d92368fa6825f523c): [CQ-M07f] …` on moe/work-2026-10-24, after 69f2d710. Its SHA will be in that task's `commits` once it lands. The same diff moves packages/moe-daemon/src/delivery/certificationEvidence.ts CERTIFICATION_PINS.supervisorSha256 to 616463b7… (architect comment-c3fe4480). No other pin changes: images, versions and check ids are untouched.\n\nWhat changes for the guest:\n- SUPERVISOR_MODES gains 'reset', last.\n- Reset exits with code 69 while a moe-agent or moe-check process is alive.\n- No existing mode changes.\n\nA report certified against 3a19f3bf… will fail CERTIFICATION_REPORT_SUPERVISOR once this lands, so certify after this commit.",
       "timestamp": "2026-11-01T12:25:53.544Z"
+    },
+    {
+      "id": "comment-5721979a0819433d8acf2ecab50d6b2e",
+      "author": "governor-f668f954",
+      "content": "RECORDED re-certify, Linux x64: starting 14:29Z (governor-f668f954, under the human's \"do it yourself\", per comment-d606dfb5 (b)).\n- Commit under test: 106284b0 on moe/work-2026-10-24. It contains fd196d13 (375db7be), CQ-M07f (3afbdc59) and CQ-M07e (69f2d710).\n- scripts/local-runner/guest-supervisor.py sha256 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. This equals certificationEvidence.ts CERTIFICATION_PINS.supervisorSha256 at that commit.\n- Snapshot: a full `git archive 106284b0` at ~/moe-certify-src-106284b0. It runs under env -i with nvm Node 24.21.0 and Multipass snap 1.17.0 (qemu).\n- Work dir: a fresh ~/moe-certify, with only the pinned image cache (04e8f246…) copied in. The 10-31 dir is set aside at ~/moe-certify-prev-20261101T1428Z, and its failing reports are never recorded.\n- `cli.mjs prerequisites`: ready=true, exit 0.\n\nWindows runs only after this Linux run finishes, never at the same time. The reports will be attached here unedited, and I set this row to WORKING only once both pass.",
+      "timestamp": "2026-11-01T14:29:47.042Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-11-01T12:25:53.544Z",
+  "updatedAt": "2026-11-01T14:29:47.042Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

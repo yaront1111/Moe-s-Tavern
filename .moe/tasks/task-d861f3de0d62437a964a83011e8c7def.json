@@ -1,0 +1,38 @@
+{
+  "id": "task-d861f3de0d62437a964a83011e8c7def",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07n2] Commit a VM job's admitted tree onto the task branch (moe-agent.ps1)",
+  "description": "SPIDR split out of CQ-M07n (task-62ec51f179494706a39045154d07e544) by architect-30d804be on 2026-11-01. This is the PowerShell twin of CQ-M07m2 (task-91ee455a). Chain: mem:task-task-62ec51f179494706a39045154d07e544-handoff and mem:task-task-828e7d21602e4cf2a0f242e024db7dea-handoff.\n\nIt carries CQ-M07 DoD 5 for moe-agent.ps1: \"An agent job's changes reach the branch only through export and host admission, then the wrapper's landing.\" Human decision, 2026-11-01: worktree mode only. This row lands on the task branch and never touches the shared checkout.\n\n**Depends on:**\n- CQ-M07m2 (task-91ee455a). Its landed sh helper (e.g. land_vm_candidate) is the source of every code, refusal order, commit message and trailer, CAS and W-sync command. Port it; never re-derive it.\n- CQ-M07n1 (task-65b3e023): the same files, so the two rows run in order.\n\n**Contract consumed** (CQ-M07j, mem:task-task-1dc49ae27e22494a95e15ada3e9c1fe9-handoff). A worker seat-job's outcome line resolves:\n`{ok: true, role: 'worker', commit, baseTree, tree, digest, paths: [{path, kind}], exitCode, signal, lease, executionReady: false}`\n- `commit` is the head of the task worktree W (branch moe/task/<id>) when the job started.\n- admitCandidate already wrote `tree` into this repository's object store.\n\n**Objective.** Add the ps1 twin of the sh helper to scripts/moe-agent.ps1, named for its sh name (e.g. Invoke-MoeVmCandidateLanding). It turns one admitted tree into a commit on moe/task/<id>, so that the existing worktree-mode landing lands that commit exactly as it lands a host worker's work.\n\n**Behavior** (as CQ-M07m2 landed it):\n- **Refusals.** Each returns a fixed MOE_VM_CANDIDATE_* code and writes nothing. The helper refuses when:\n  - the workspace is not worktree mode;\n  - W's HEAD is not `commit`;\n  - W has a tracked or untracked change;\n  - `tree` is not a tree object.\n- **Empty candidate.** When `tree` equals `baseTree`, the helper does nothing. This is not an error.\n- **Effect.**\n  1. commit-tree with parent `commit`. Use the landing's message, trailers and settings.commitHooks rules, reusing the ps1 helpers the worktree landing already uses (New-MoeCommitMessage, Invoke-MoeWorktreeCommit's neighbours).\n  2. CAS refs/heads/moe/task/<id> from `commit`.\n  3. Sync W's index and files.\n- **Lost CAS or failed sync.** Park the new commit with Invoke-MoeRescueRef (refs/moe/rescue/<taskId>/<ts>) and return the fixed code.\n- The function is not wired into the loop; CQ-M07n3 calls it.\n\n**PowerShell specifics.**\n- Run git through the wrapper's existing Invoke-MoeGit / `& git -C` patterns, with explicit exit-code checks.\n- Under 5.1, relax $ErrorActionPreference around native stderr, as Invoke-MoeAccountHelper does.\n- Pass every ref, sha and path as its own argument.\n- Keep moe-agent.ps1 UTF-8 with a BOM.\n\n**Tests.** Rows go in scripts/tests/postflight-vm-route.ps1, which CQ-M07n1 creates.\n- Slice the function and its helpers out of moe-agent.ps1 with the PowerShell parser, as postflight.ps1 already does (`[Parser]::ParseFile` + FindAll FunctionDefinitionAst, then dot-source).\n- Drive the function in a temp repo with a real linked worktree.\n\n**NOT in scope:**\n- the seat VM, the seat-job call and the claim (CQ-M07n3);\n- the error paths (CQ-M07n);\n- shared mode (refused by CQ-M07n1);\n- moe-agent.sh.\n\n**Verification.** `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\postflight-vm-route.ps1`, then the same with pwsh.exe, run from WSL per mem:gotcha-pwsh7-reachable-from-wsl. Then `bash scripts/tests/parity-check.sh`. The full postflight.ps1 is not needed: the function is unwired, and CQ-M07n3 runs the full harness.",
+  "definitionOfDone": [
+    "An admitted tree with one changed file becomes exactly one commit on moe/task/<id> whose parent is the job's base commit and whose tree is the admitted tree, and W's index and files then match it (row).",
+    "W's HEAD not the base commit, a dirty W, a missing tree, or shared mode: CQ-M07m2's fixed MOE_VM_CANDIDATE_* code, with every ref, W and the shared checkout byte-identical before and after (rows).",
+    "A lost CAS on moe/task/<id>: the admitted commit is kept on a refs/moe/rescue/<taskId>/ ref and the code is returned; nothing else moves. An empty candidate (tree equal to baseTree) writes nothing and is not an error (rows).",
+    "No row sees the function write the shared checkout, its index or the target branch (asserted in every row).",
+    "postflight-vm-route.ps1 passes alone under Windows PowerShell 5.1 and pwsh 7, bash scripts/tests/parity-check.sh passes, and moe-agent.ps1 keeps its UTF-8 BOM."
+  ],
+  "taskRails": [
+    "Never fall back to running the agent CLI on the host under verified-local.",
+    "Legacy stays byte-for-byte unchanged in behavior.",
+    "Port CQ-M07m2's landed helper verbatim in behavior and codes; never move the landing target or the shared checkout."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-91ee455a601b411f97d5d951cc5f241c",
+    "task-65b3e023923e4ab6b71cb94e7bea2f9b"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.164,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T14:32:51.655Z",
+  "updatedAt": "2026-11-01T14:32:51.655Z"
+}

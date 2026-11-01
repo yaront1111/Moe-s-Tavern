@@ -1,0 +1,38 @@
+{
+  "id": "task-65b3e023923e4ab6b71cb94e7bea2f9b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07n1] Verified-local route gate in moe-agent.ps1",
+  "description": "SPIDR split out of CQ-M07n (task-62ec51f179494706a39045154d07e544) by architect-30d804be on 2026-11-01. This is the PowerShell twin of CQ-M07m1 (task-5adf0673), which lands first.\n- Chain and rules: mem:task-task-62ec51f179494706a39045154d07e544-handoff (ps1) and mem:task-task-828e7d21602e4cf2a0f242e024db7dea-handoff (sh).\n- Design: mem:decision-cq-m07-verified-local-activation.\n- Human decision, 2026-11-01: the VM route runs in worktree mode only.\n\n**Depends on:**\n- CQ-M07m1 (task-5adf0673). Its landed moe-agent.sh code is the source of every string and of the order of the checks: port it, never re-derive it. It also brings CQ-M07d's moe.get_execution_readiness and the fake proxy's FAKE_READINESS answers.\n- task-64809b19, the tail of every open row that edits scripts/moe-agent.ps1.\n\n**Objective.** Before any claim, a worker or QA iteration of moe-agent.ps1 decides its route from moe.get_execution_readiness ({profile, ready, missingCapabilities, evaluatedAt}), exactly as CQ-M07m1 does in moe-agent.sh. Today's path stays byte for byte unless the daemon answers verified-local.\n\n**Deliverable.** Edits to scripts/moe-agent.ps1. The rows go in a NEW scripts/tests/postflight-vm-route.ps1, which postflight.ps1 runs with one line and which also runs alone (the twin of postflight-vm-route.sh).\n- **When the check runs.** Once per worker/QA iteration, in the pre-flight, before the iteration's first claim_next_task.\n- **Today's path, untouched.** Any of these keeps today's path: legacy, observe or unreadable; a refusal; an unknown tool (an older daemon); a malformed reply. Architect and governor seats never call the tool.\n- **verified-local refusals.** Use CQ-M07m1's order, minus its WSL check:\n  1. MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED: gemini or grok. $cliType counts a custom command as claude.\n  2. MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED: settings.worktreeMode from .moe/project.json, resolved as validators.ts resolveWorktreeMode does (unset means 'off').\n  3. MOE_VERIFIED_LOCAL_NOT_READY: every missing id, in the daemon's order.\n  4. The placeholder MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE, which CQ-M07n3 replaces.\n\n  Each prints CQ-M07m1's exact `[ERROR] <CODE>: <detail>` line and exits 1, with no claim_next_task, no VM and no CLI.\n- **WSL.** moe-agent.sh's MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED has no ps1 twin, because moe-agent.ps1 IS the native Windows route the human chose for worker/QA seats. CQ-M07n lists that code as sh-only in parity-check.\n- **PowerShell specifics.** Read missingCapabilities through @(...) so one id stays an array. A $null or error answer from Invoke-MoeRpc keeps today's path. Keep moe-agent.ps1 UTF-8 with a BOM.\n\n**NOT in scope:**\n- the seat VM, the route marker, jobs and landing (CQ-M07n2, CQ-M07n3, CQ-M07n);\n- the parity-check families (CQ-M07n);\n- moe-agent.sh and the daemon;\n- postflight-fake-proxy.js, unless a ps1 row needs an answer CQ-M07m1 did not add.\n\n**Verification.** Run from WSL as mem:gotcha-qa-ps1-postflight-from-wsl and mem:gotcha-pwsh7-reachable-from-wsl describe:\n- `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\postflight-vm-route.ps1`, then the same with pwsh.exe;\n- then `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\postflight.ps1` with MOE_POSTFLIGHT_TIMEOUT_SEC=180;\n- then `bash scripts/tests/parity-check.sh`.",
+  "definitionOfDone": [
+    "Profile legacy, observe or unreadable, or a refused, unknown-tool or malformed readiness reply: every existing postflight.ps1 row passes unchanged, and a new row proves the worker's host CLI launch (the fake CLI's argv, cwd and env other than per-run ids) is identical across those answers.",
+    "verified-local with gemini or grok, or in shared mode: MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED or MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED with CQ-M07m1's exact line, exit 1, no claim_next_task call and no CLI (rows).",
+    "verified-local and not ready: MOE_VERIFIED_LOCAL_NOT_READY naming each missing id in the daemon's order; verified-local and ready: MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE. Both exit 1 with no claim and no host CLI (rows).",
+    "Architect and governor seats never call moe.get_execution_readiness (row).",
+    "postflight-vm-route.ps1 passes alone under Windows PowerShell 5.1 and pwsh 7, postflight.ps1 passes under Windows PowerShell 5.1, bash scripts/tests/parity-check.sh passes, and moe-agent.ps1 keeps its UTF-8 BOM."
+  ],
+  "taskRails": [
+    "Never fall back to running the agent CLI on the host under verified-local.",
+    "Legacy stays byte-for-byte unchanged in behavior.",
+    "Port CQ-M07m1's landed strings and check order verbatim; add no behavior it lacks, except dropping its WSL check."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-5adf0673fdad4c5f8a0956e7afcebe07",
+    "task-64809b196c4042f18c7665e1e8a14b18"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.162,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T14:32:16.023Z",
+  "updatedAt": "2026-11-01T14:32:16.023Z"
+}
