@@ -54,7 +54,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -70,7 +70,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T11:19:16.047Z",
-  "updatedAt": "2026-11-01T18:58:31.351Z",
+  "updatedAt": "2026-11-01T19:00:37.701Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:09.398Z",
@@ -80,11 +80,14 @@
     "firstClaimAt": "2026-11-01T18:49:20.999Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-01T19:00:37.701Z",
+    "wallClockMs": 676702
   },
   "contextFetchedBy": [
     "architect-12ae794e",
-    "worker-152f84fc"
+    "worker-152f84fc",
+    "qa-174e8876"
   ],
   "tier": "light",
   "effort": "high",
@@ -166,7 +169,52 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/tools/claimNextTask.ts",
-    "packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts"
+    "packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts",
+    ".moe/tasks/task-4e2f2b45926c47bb846a635077094106.json",
+    ".moe/tasks/task-65b3e023923e4ab6b71cb94e7bea2f9b.json",
+    ".moe/tasks/task-7aa6be67bcfb47bb8dca4ec6d6de35df.json",
+    ".moe/tasks/task-91ee455a601b411f97d5d951cc5f241c.json",
+    ".moe/tasks/task-9ae89d5e362c4bf3afb692de17ae8c5b.json",
+    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json"
   ],
-  "completionSummary": "claim_next_task's two hasNext:false wait_for_task hints (empty pool; all candidates lost to a concurrent claim) now carry executionRoute 'vm' exactly when the claim sent it, and omit the key otherwise. Change: one `routeArg` const after parseExecutionRoute in claimNextTask.ts, spread last into both hint args (twin of waitForTask.ts routeArg). Nothing else changed: reasons, statuses/workerId/epicId args and executionAdmissionRefusal are untouched; claimNextTask.test.ts, validators.ts and schema.ts untouched (WT-19 rail). New test file tools/claimNextTask.routeHint.test.ts H1-H5 (JSON round trip, toStrictEqual): pre-fix H1/H3/H4 failed, H2/H5 passed; a mutant dropping the empty-pool spread fails H1/H3. Full gate in a git-archive snapshot: tsc clean, 225 files, 6779 passed, 20 skipped, 0 failed."
+  "completionSummary": "claim_next_task's two hasNext:false wait_for_task hints (empty pool; all candidates lost to a concurrent claim) now carry executionRoute 'vm' exactly when the claim sent it, and omit the key otherwise. Change: one `routeArg` const after parseExecutionRoute in claimNextTask.ts, spread last into both hint args (twin of waitForTask.ts routeArg). Nothing else changed: reasons, statuses/workerId/epicId args and executionAdmissionRefusal are untouched; claimNextTask.test.ts, validators.ts and schema.ts untouched (WT-19 rail). New test file tools/claimNextTask.routeHint.test.ts H1-H5 (JSON round trip, toStrictEqual): pre-fix H1/H3/H4 failed, H2/H5 passed; a mutant dropping the empty-pool spread fails H1/H3. Full gate in a git-archive snapshot: tsc clean, 225 files, 6779 passed, 20 skipped, 0 failed.",
+  "commits": [
+    {
+      "sha": "c4510b7350e30593e37c97bd91649aea4753f004",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-152f84fc@2026-11-01T18:56:15Z",
+      "paths": [
+        ".moe/tasks/task-4e2f2b45926c47bb846a635077094106.json",
+        ".moe/tasks/task-65b3e023923e4ab6b71cb94e7bea2f9b.json",
+        ".moe/tasks/task-7aa6be67bcfb47bb8dca4ec6d6de35df.json",
+        ".moe/tasks/task-91ee455a601b411f97d5d951cc5f241c.json",
+        ".moe/tasks/task-9ae89d5e362c4bf3afb692de17ae8c5b.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        "packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "recordedBy": "worker-152f84fc",
+      "recordedAt": "2026-11-01T18:58:50.979Z",
+      "treeId": "01bde397d74d4546c2d1f67c73bb9d8c2b66b730",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-152f84fc@2026-11-01T18:56:15Z",
+    "at": "2026-11-01T18:58:50.979Z"
+  },
+  "completedAt": "2026-11-01T19:00:37.701Z",
+  "reviewCompletedAt": "2026-11-01T19:00:37.701Z",
+  "reviewSummary": "APPROVED. Reviewed completion c4510b73 (on moe/work-2026-10-24, kind=completion, recorded by worker-152f84fc). Source diff is tiny: claimNextTask.ts +4/-2 (one `routeArg = executionRoute ? { executionRoute } : {}` const after parseExecutionRoute, spread LAST into exactly the two hasNext:false moe.wait_for_task hints at ~626 and ~790) plus new claimNextTask.routeHint.test.ts (+79, H1-H5). Well under 400 LOC; the other 6 files in the commit are daemon-driven .moe/tasks board JSONs. grep confirms only two 'moe.wait_for_task' hints in the file; reasons and statuses/workerId/epicId args are byte-identical; executionAdmissionRefusal, pool filter and explicit-claim checks untouched; marker stays refuse-only (it only echoes into a hint, never grants readiness or skips a check). WT-19 rail honoured: claimNextTask.test.ts, state/validators.ts, types/schema.ts untouched. Re-ran task.verification myself in a fresh git-archive snapshot (/tmp/moe-4e2f2b45-qa-*, env -i, Node 24.21.0): npm ci ok, `tsc --noEmit` clean, `npm test` = 225 files passed, 6779 passed | 20 skipped, 0 failed (matches the worker's evidence). Independent mutant check in the snapshot copy only: dropping `...routeArg` from both hints fails H1, H3 and H4 (H2/H5 unmarked cases still pass, so the omit-when-unmarked half is pinned too); restored, and routeHint + executionRoute.test.ts = 52 passed. Tests are mutation-resistant: JSON round trip via JSON.parse(JSON.stringify(...)) + toStrictEqual, so a leaked `executionRoute: undefined` or a missing/extra key fails. DoD 1 (both hints carry 'vm' exactly when sent, omit otherwise, new non-WT-19 test file) and DoD 2 (no other claim behavior change; full suite in snapshot green) both met. Unrun: none required; JetBrains/launcher gates are out of scope for this daemon-only change. Complexity pass (ponytail-review): nothing to cut; the const mirrors waitForTask.ts routeArg exactly.",
+  "requiredCheckAtDone": null
 }
