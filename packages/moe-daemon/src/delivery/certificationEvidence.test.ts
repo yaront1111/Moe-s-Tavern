@@ -1,26 +1,23 @@
-// CQ-M07a: the certification-evidence reader. The drift rows load the runner sources themselves (repairPolicy.test.ts idiom),
-// so a moved pin, a new or reordered check id, or a loosened or tightened validateCertificationReport rule fails here.
+// CQ-M07a: the certification-evidence reader. The drift rows load the runner sources themselves (repairPolicy.test.ts idiom), so a moved
+// pin, a new or reordered check id, or a loosened or tightened validateCertificationReport clause fails here (each VARIANTS row tests one clause).
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {
-  CERTIFICATION_PINS, CERTIFICATION_REFUSALS, CERTIFY_CHECK_IDS, MAX_REPORT_BYTES, certificationStoreDir, checkCertificationReport,
-  hostIdentity, readCertificationStore, readHostCertificationEvidence,
-} from './certificationEvidence.js';
+import { CERTIFICATION_PINS, CERTIFICATION_REFUSALS, CERTIFY_CHECK_IDS, MAX_REPORT_BYTES, certificationStoreDir, checkCertificationReport, hostIdentity,
+  readCertificationStore, readHostCertificationEvidence } from './certificationEvidence.js';
 
 interface CertifyModule { CERTIFY_CHECKS: ReadonlyArray<{ id: string }>; validateCertificationReport(value: unknown): unknown }
 interface Manifest { versions: string[]; images: Record<string, { sha256: string }>; hosts: Array<Record<'platform' | 'arch' | 'versionSuffix', string>> }
 const runner = (name: string) => new URL(`../../../../scripts/local-runner/${name}`, import.meta.url);
 const certify = (): Promise<CertifyModule> => import(runner('certify.mjs').href);
-type Row = { id: string; result: string; code: string | null };
-type Report = Record<string, unknown>;
+type Row = { id: string; result: string; code: string | null }; type Report = Record<string, unknown>;
 
 const host = hostIdentity() ?? CERTIFICATION_PINS.hosts[1];
 const last = CERTIFY_CHECK_IDS.length - 1;
 const passing = (): Row[] => CERTIFY_CHECK_IDS.map(id => ({ id, result: 'passed', code: null }));
-/** Check `at` failed with `code`, the body rows after it not-run, teardown passed. */
-const failedAt = (at: number, code: string | null = 'CERTIFY_X'): Row[] => passing().map((row, i) => (i === at ? { ...row, result: 'failed', code }
+/** Check `at` failed with code CERTIFY_X, the body rows after it not-run, teardown passed. */
+const failedAt = (at: number): Row[] => passing().map((row, i) => (i === at ? { ...row, result: 'failed', code: 'CERTIFY_X' }
   : i > at && i < last ? { ...row, result: 'not-run' } : row));
 const edit = (rows: Row[], at: number, patch: Report) => rows.map((row, i) => (i === at ? { ...row, ...patch } : row));
 const without = (value: Report, key: string) => Object.fromEntries(Object.entries(value).filter(([k]) => k !== key));
@@ -36,34 +33,38 @@ function valid(over: Report = {}): Report {
 }
 const injected = valid({ transport: 'injected', certified: false });
 const failedNative = valid({ certified: false, checks: failedAt(3) });
-const failCode = (code: string | null) => valid({ certified: false, checks: failedAt(3, code) });
+const failCode = (code: unknown) => valid({ certified: false, checks: edit(failedAt(3), 3, { code }) });
 const provider = (version: unknown, name = 'multipass', extra: Report = {}) => valid({ provider: { name, version, ...extra } });
 const swapped = valid({ checks: edit(edit(passing(), 0, { id: CERTIFY_CHECK_IDS[1] }), 1, { id: CERTIFY_CHECK_IDS[0] }) });
 
 const VARIANTS: Array<[string, Report, boolean]> = [
-  ['the valid native certified report', valid(), true], ['provider.version null', provider(null), true],
-  ['injected, certified false', injected, true], ['injected with arch null', { ...injected, arch: null }, true],
-  ['injected with a null hash', { ...injected, supervisorSha256: null }, true], ['native, failed then not-run', failedNative, true],
-  ['a 64-char failure code', failCode(`C${'X'.repeat(63)}`), true], ['certified with arch null', valid({ arch: null }), false],
-  ['certified with a null hash', valid({ image: { sourceSha256: null, providerImageHash: 'b'.repeat(64) } }), false],
-  ['a provider version with a space', provider('1.17 .0'), false], ['a 65-char provider version', provider('1'.repeat(65)), false],
-  ['a 65-char failure code', failCode(`C${'X'.repeat(64)}`), false], ['a lowercase failure code', failCode('certify_x'), false],
-  ['a failure code with a leading digit', failCode('9CERTIFY'), false], ['a lowercase first letter', failCode('cERTIFY_X'), false],
-  ['not-run on teardown', valid({ certified: false, checks: edit(failedAt(3), last, { result: 'not-run' }) }), false],
+  ['the valid native certified report', valid(), true], ['injected with a null hash', { ...injected, supervisorSha256: null }, true], ['injected, certified false', injected, true],
+  ['native, failed then not-run', failedNative, true], ['a 64-char version of every class', provider('1.17.0-Rc+win'.padEnd(64, '0')), true],
+  ['injected with arch null', { ...injected, arch: null }, true], ['provider.version null', provider(null), true], ['a 64-char failure code', failCode(`C${'9'.repeat(63)}`), true],
+  ['a null-prototype report', Object.assign(Object.create(null), valid()), true], ['injected with arch ia32', { ...injected, arch: 'ia32' }, false],
+  ['certified with a null hash', valid({ image: { sourceSha256: null, providerImageHash: 'b'.repeat(64) } }), false], ['certified with arch null', valid({ arch: null }), false],
+  ['a 63-char hash', valid({ supervisorSha256: 'e'.repeat(63) }), false], ['a 65-char hash', valid({ supervisorSha256: 'e'.repeat(65) }), false],
+  ['an uppercase hash', valid({ supervisorSha256: 'E'.repeat(64) }), false], ['certified as 1', valid({ certified: 1 }), false],
+  ['a non-string hash', valid({ image: { ...(valid().image as Report), providerImageHash: ['b'.repeat(64)] } }), false], ['a numeric provider version', provider(1170), false],
+  ['a 65-char provider version', provider('1'.repeat(65)), false], ['an empty provider version', provider(''), false], ['another provider name', provider(null, 'lxd'), false],
+  ['a provider version with a space', provider('1.17 .0'), false], ['a 65-char failure code', failCode(`C${'X'.repeat(64)}`), false], ['two check ids swapped', swapped, false],
+  ['a non-string failure code', failCode(['CERTIFY_X']), false], ['a failed row without a code', failCode(null), false], ['a lowercase later letter', failCode('CERTIFY_x'), false],
+  ['code on a passed row', valid({ checks: edit(passing(), 0, { code: 'CERTIFY_X' }) }), false], ['a failure code with a leading digit', failCode('9CERTIFY'), false],
+  ['an unknown check result', { ...injected, checks: edit(passing(), 2, { result: 'skipped' }) }, false], ['one check row short', valid({ checks: passing().slice(0, -1) }), false],
   ['not-run with no earlier failure', valid({ certified: false, checks: edit(passing(), 2, { result: 'not-run' }) }), false],
-  ['a failed row without a code', failCode(null), false], ['one check row short', valid({ checks: passing().slice(0, -1) }), false],
-  ['one check row extra', valid({ checks: [...passing(), passing()[last]] }), false], ['two check ids swapped', swapped, false],
-  ['a missing top-level key', without(valid(), 'executionReady'), false], ['an extra top-level key', valid({ signature: null }), false],
-  ['a missing provider key', valid({ provider: { name: 'multipass' } }), false], ['an extra provider key', provider(null, 'multipass', { driver: 'qemu' }), false],
-  ['a missing image key', valid({ image: { sourceSha256: 'b'.repeat(64) } }), false], ['an extra image key', valid({ image: { ...(valid().image as Report), url: null } }), false],
-  ['a missing check-row key', valid({ checks: [without(passing()[0], 'code'), ...passing().slice(1)] }), false],
-  ['an extra check-row key', valid({ checks: edit(passing(), 0, { at: 0 }) }), false],
-  ['another kind', valid({ kind: 'isolation-smoke' }), false], ['version 2', valid({ version: 2 }), false],
-  ['an unknown platform', valid({ platform: 'freebsd' }), false], ['an unknown transport', { ...injected, transport: 'remote' }, false],
-  ['another provider name', provider(null, 'lxd'), false], ['executionReady true', valid({ executionReady: true }), false],
-  ['a non-ISO startedAt', valid({ startedAt: '2026-11-01' }), false], ['injected but certified', { ...injected, certified: true }, false],
-  ['certified despite a failure', valid({ checks: failedAt(3) }), false], ['code on a passed row', valid({ checks: edit(passing(), 0, { code: 'CERTIFY_X' }) }), false],
+  ['not-run on teardown', valid({ certified: false, checks: edit(failedAt(3), last, { result: 'not-run' }) }), false], ['a lowercase first letter', failCode('cERTIFY_X'), false],
+  ['one check row extra', valid({ checks: [...passing(), passing()[last]] }), false], ['array-like checks', valid({ checks: { ...passing(), length: last + 1 } }), false],
+  ['a missing check-row key', valid({ checks: [without(passing()[0], 'code'), ...passing().slice(1)] }), false], ['an extra symbol key', { ...valid(), [Symbol('x')]: 1 }, false],
+  ['a missing provider key', valid({ provider: { name: 'multipass' } }), false], ['an extra image key', valid({ image: { ...(valid().image as Report), url: null } }), false],
+  ['an extra check-row key', valid({ checks: edit(passing(), 0, { at: 0 }) }), false], ['a missing image key', valid({ image: { sourceSha256: 'b'.repeat(64) } }), false],
+  ['an extra top-level key', valid({ signature: null }), false], ['an extra provider key', provider(null, 'multipass', { driver: 'qemu' }), false],
+  ['a missing top-level key', without(valid(), 'executionReady'), false], ['a non-ISO startedAt', valid({ startedAt: '2026-11-01' }), false],
+  ['an unknown transport', { ...injected, transport: 'remote' }, false], ['executionReady null', valid({ executionReady: null }), false],
+  ['an unknown platform', valid({ platform: 'freebsd' }), false], ['another kind', valid({ kind: 'isolation-smoke' }), false], ['version 2', valid({ version: 2 }), false],
+  ['injected but certified', { ...injected, certified: true }, false], ['certified despite a failure', valid({ checks: failedAt(3) }), false],
+  ['executionReady true', valid({ executionReady: true }), false], ['a finishedAt without millis', valid({ finishedAt: '2026-11-01T09:20:00Z' }), false],
 ];
+for (const { platform, arch, versionSuffix: v } of CERTIFICATION_PINS.hosts) VARIANTS.push([`a ${platform}/${arch} report`, { ...provider(`1.17.0${v}`), platform, arch }, true]);
 
 describe('drift', () => {
   it('CERTIFY_CHECK_IDS are certify.mjs CERTIFY_CHECKS ids in order; the pins equal certified-provider.json and guest-supervisor.py', async () => {
