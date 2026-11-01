@@ -1,0 +1,33 @@
+{
+  "id": "task-bb1502b1fcb04f0e99fa5328be05ef4e",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07q] Strict WORKING and REVIEW claims require the VM route",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation. Epic rail: no unsupported isolation downgrade; a caller field may refuse, never grant.\n\nObjective: a verified-local (strict) task is never handed to a seat that would run its agent CLI on the host, for example an older wrapper or a hand-run CLI. The wrapper's VM route (CQ-M07m/n) marks its claims; an unmarked strict WORKING or REVIEW claim is refused. Readiness stays assertExecutionProfileReady's alone.\n\nDeliverable: claim_next_task (packages/moe-daemon/src/tools/claimNextTask.ts and the claim-eligibility path it uses) gains an optional `executionRoute: 'vm'` argument in its inputSchema.\n- For a task whose resolveTaskExecutionProfile(settings, task.executionPolicySnapshot) is verified-local, a WORKING or REVIEW claim without the marker is refused on an explicit taskId claim and skipped by the ranked pool and moe.wait_for_task, with one fixed code (e.g. EXECUTION_ROUTE_REQUIRED) and a message that says a VM-route seat must claim it.\n- PLANNING claims (architects stay on the host) and every claim of a legacy/observe task are unchanged, with or without the marker.\n- Any other executionRoute value is INVALID_INPUT. The marker never satisfies readiness.\n\nNOT in scope: the wrappers sending the marker (CQ-M07m/n); readiness; docs (CQ-M07 sweep).\n\nVerification: the FULL daemon vitest suite (shared tool) in a git-archive snapshot with this task's files overlaid: cd <snapshot>/packages/moe-daemon && npm ci && npm test, under env -i with the nvm Node 24 PATH. Never in the shared checkout.",
+  "definitionOfDone": [
+    "With readiness mocked ready (mem:convention-verified-local-test-fixture), a strict WORKING claim and a strict REVIEW claim with executionRoute 'vm' succeed; without it an explicit taskId claim is refused with the fixed code and the ranked pool skips the row (vitest through the tool).",
+    "PLANNING claims of strict tasks, and every claim of legacy or observe tasks, behave exactly as before with or without the marker (vitest).",
+    "With the default not-ready snapshot, a strict claim carrying the marker is still refused EXECUTION_PROFILE_NOT_READY (vitest).",
+    "An executionRoute other than 'vm' is refused INVALID_INPUT (vitest).",
+    "The full daemon suite passes in a git-archive snapshot; the completion cites the counts."
+  ],
+  "taskRails": [
+    "Put new test rows in a new test file: packages/moe-daemon/src/tools/claimNextTask.test.ts, state/validators.ts and types/schema.ts are declared by WT-19 (task-b1ca54f2), which is still open.",
+    "The marker may only refuse; never let it grant readiness or skip any other claim check."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.05,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:07:30.039Z",
+  "updatedAt": "2026-11-01T08:07:30.039Z"
+}

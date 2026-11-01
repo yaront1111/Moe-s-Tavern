@@ -135,7 +135,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:04:48.032Z",
-  "updatedAt": "2026-11-01T09:05:13.297Z",
+  "updatedAt": "2026-11-01T09:05:41.368Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:20:22.737Z",
     "plannedStepCount": 7,
@@ -233,7 +233,10 @@
     ".moe/tasks/task-7c2922313102436bb732e36bd8f1c69d.json",
     ".moe/tasks/task-b8734a784d6b42d98bd5f2493e2e228e.json",
     ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
-    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json",
+    ".moe/tasks/task-08062ce85dc94dcd80c62053e30f561f.json",
+    ".moe/tasks/task-5a635bc90aaa47acabede9307dd1579b.json",
+    ".moe/tasks/task-5c4b5fab53ce41e294af5c70de1af51d.json"
   ],
   "completionSummary": "CQ-R14c delivered: provisionGuest now mints the per-VM SSH transport keys, and purgeOwned removes them. Four files: provision.mjs (+47/-3), lifecycle.mjs (+10), local-runner.test.mjs (+193/-12), docs/TROUBLESHOOTING.md (+2). The pinned-client test file, guest-supervisor.py, the R02 pin and every readiness evaluator are untouched.\n\n**provisionGuest**\n- It resolves `provider.ssh ?? sshExecutable(platform.id)` after the prerequisites and the primary-name check, and before buildUserData, the image cache and the reservation. A null, absent or non-regular-file client refuses with the new fixed PROVISION_TRANSPORT_UNAVAILABLE, so nothing is fetched, reserved or launched.\n- It calls createTransportKeys() once and passes the keys to buildUserData as `transport`, so every launch retry sends byte-identical user-data.\n- Once provisionOwned owns the VM and the win32 image-id proof has passed, it writes `<keyDir>/<name>.key` (client private key) and `<name>.known_hosts` (`<name> <host public key>\\n`). keyDir is `provider.keyDir ?? defaultKeyDir()`: mkdir recursive 0700, files written with flag 'wx' and mode 0600. Any failure is a fresh PROVISION_TRANSPORT_FAILED with no cause and no fs message. The owned record stays for cleanup.\n- The result is unchanged and holds no key bytes, path or address. The host private key is never written to host disk. The client private key never enters user-data.\n\n**purgeOwned**\n- It names both files first, before any provider call. If it cannot (relative or control-character keyDir), it throws LIFECYCLE_INPUT_INVALID and the VM is not deleted.\n- After the instance is verified absent and before the record is marked deleted, it unlinks both files. ENOENT is fine; any other error is LIFECYCLE_STATE_UNKNOWN and the record stays. A later cleanup re-queries, skips the delete and unlinks again.\n\n**Tests**\n- Harness: `transportStub(t)` gives a stub ssh file and a temp key dir in its own scratch root. It is wired into provisionHarness, provisionWith, the lif",
   "commits": [
@@ -275,6 +278,24 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "6837f88fa32718f42e6f8dc67f0050cb0ea9a6fe",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1e84238e@2026-11-01T09:01:23Z",
+      "paths": [
+        ".moe/tasks/task-08062ce85dc94dcd80c62053e30f561f.json",
+        ".moe/tasks/task-5a635bc90aaa47acabede9307dd1579b.json",
+        ".moe/tasks/task-5c4b5fab53ce41e294af5c70de1af51d.json",
+        ".moe/tasks/task-7c2922313102436bb732e36bd8f1c69d.json"
+      ],
+      "recordedBy": "qa-1e84238e",
+      "recordedAt": "2026-11-01T09:05:41.368Z",
+      "treeId": "33fc96c23779811aa101661ae47259797fa32206",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -286,9 +307,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-009c883d@2026-11-01T08:50:41Z",
-    "at": "2026-11-01T09:01:04.196Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-1e84238e@2026-11-01T09:01:23Z",
+    "at": "2026-11-01T09:05:41.368Z"
   },
   "completedAt": "2026-11-01T09:05:13.297Z",
   "reviewCompletedAt": "2026-11-01T09:05:13.297Z",

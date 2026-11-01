@@ -1,0 +1,35 @@
+{
+  "id": "task-7a0dadf992014449a4c9aaf8426cfd24",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07p] VS Code launch route parity for verified-local",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8); M07 DoD 6. Design: mem:decision-cq-m07-verified-local-activation. Depends on CQ-M07o (task-8dbc76d7): JetBrains goes first and is the reference behavior.\n\nObjective: VS Code / Antigravity reaches parity with CQ-M07o's launch route and refusal, so the docs can call verified-local supported.\n\nDeliverable (moe-vscode: src/util/AgentLauncher.ts, the daemon connection it uses, and tests):\n- Profile absent, legacy or observe: today's launch commands, unchanged.\n- verified-local, worker or QA: GET_EXECUTION_READINESS { refresh: true } over /ws with a bounded wait. Not ready, no daemon or no reply: a message naming each missing capability (or the connection failure); no terminal, no VM, no host fallback. Ready: the protected wrapper; on Windows the native PowerShell wrapper (the human's WSL decision).\n- Only claude and codex run under verified-local; gemini, grok and custom commands are refused, naming the CLI.\n- The extension's CLIENT_HELLO declares verifiedLocal true.\n\nNOT in scope: an Accounts UI (VS Code has none), the wrappers, docs.\n\nVerification: cd moe-vscode && npm test && npm run compile, in a snapshot outside the shared checkout (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "Profile absent, legacy or observe: launch commands are unchanged for every role (launcher tests).",
+    "verified-local and not ready, no daemon, or no reply: the refusal names each missing capability and no terminal is created (test with a fake terminal API).",
+    "verified-local and ready: worker and QA launch the protected wrapper (native PowerShell on Windows); architect and governor are unchanged (tests).",
+    "gemini, grok and custom commands are refused under verified-local, naming the CLI (tests).",
+    "npm test and npm run compile pass in a snapshot."
+  ],
+  "taskRails": [
+    "Never fall back to a host launch of a worker/QA agent CLI under verified-local; refuse instead."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-8dbc76d7678b416bbfdbbbe9f58a33f8"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.09,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:08:23.273Z",
+  "updatedAt": "2026-11-01T08:08:23.273Z"
+}

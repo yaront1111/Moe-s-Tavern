@@ -1,0 +1,38 @@
+{
+  "id": "task-9076afab319b4056989e370039efba3d",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07g] Seat-owned VM ledger records and cleanup proof",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation, decision 1 (one VM per seat).\n\nGATE: BACKLOG until task-fd196d13's transport design has its governor ruling; then move it to PLANNING. It depends on fd196d13 because that fix may add per-VM transport material (keys, host keys) to the owned ledger records this slice changes.\n\nObjective: a seat VM lives across tasks, so its owned-ledger record cannot be owned by one task attempt (scripts/local-runner/lifecycle.mjs validOwner is { taskId, attemptId, generation }). Give the ledger a seat owner, and let reconcile and cleanup delete a seat VM only once the seat is proven gone.\n\nDeliverable:\n- lifecycle.mjs: a second, exactly validated owner kind { workerId, runner: '<pid>@<start token>' (the wrappers' runner identity format), host } beside the attempt owner. Attempt-owned records and every existing R06 path stay byte-compatible.\n- scripts/local-runner/vm-control.mjs (statusReport, reconcileReport, cleanupReport): seat-owned rows appear in moe-vm-status-v1 additively, so the existing JetBrains ManagedVmPresentation.kt and VS Code ManagedVm.ts parsers still parse every row (leave the keys they read unchanged). cleanup deletes a seat VM only when the daemon proves the seat gone (no worker record or DEAD, no open attempt for that worker) AND the instance's job lease is free AND the runner process is not alive on this host; anything unproven is preserved (fail closed, mem:decision-cq-managed-vm-producer). If today's daemon projections cannot prove \"seat gone\", split out a read-only daemon slice rather than guess.\n\nNOT in scope: provisioning a seat VM (CQ-M07i); the cap (CQ-M07h); IDE panel changes.\n\nVerification: in a git-archive snapshot (mem:gotcha-local-runner-tests recipe) with this task's files overlaid: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-vm-control.test.mjs",
+  "definitionOfDone": [
+    "A seat-owner record round-trips through createLedger reserve, launch and delete; malformed seat owners are refused; attempt-owned records behave exactly as before (rows).",
+    "statusReport lists seat-owned VMs with an owner kind, and every row key the IDE parsers read is unchanged (rows).",
+    "cleanup preserves a seat VM whose worker is registered, whose runner process is alive, or whose job lease is held, and deletes it only when all three are proven gone (rows with a fake daemon and a fake process probe).",
+    "reconcile treats a crashed seat's reserved or launched record with the same fail-closed proof (rows).",
+    "Both test files pass in a git-archive snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by governor at the M07 planner's request (R13 comment-af1028a5): fd196d13's transport design is ruled (comment-d954b3df). Seat-ledger cleanup must also unlink ~/.moe/guest-ssh/<name>.{key,known_hosts} once the VM is verified absent, as R14c's purgeOwned does. dependsOn fd196d13 still gates WORKING.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-fd196d137c44497188d2639f149e259b"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.12,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:08:59.472Z",
+  "updatedAt": "2026-11-01T08:16:03.094Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-01T08:16:03.094Z",
+    "seq": 1
+  }
+}

@@ -91,20 +91,30 @@
     {
       "stepId": "step-6",
       "description": "VERIFY ONCE (load verification-before-completion).\n\nRun on a snapshot of HEAD plus this task's files, never against the shared checkout's live wrappers, which peers edit (mem:gotcha-shared-tree-long-harness-needs-snapshot, mem:gotcha-gate-hermetic-snapshot-from-wsl).\n\n1. GATE: this is complete_task's verification. Run fresh; it must exit 0:\n   bash scripts/tests/worktree-landing.sh && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh\n2. Windows seat (DoD 2), per mem:gotcha-qa-windows-launcher-tests-from-wsl:\n   - `powershell -NoProfile -File scripts/tests/worktree-landing.ps1` and `pwsh -NoProfile -File scripts/tests/worktree-landing.ps1` pass every case;\n   - `node scripts/tests/postflight-safe.mjs powershell` and `node scripts/tests/postflight-safe.mjs pwsh` pass.\n3. Held-out check: `git diff --quiet <WT-08T landed sha> -- scripts/tests/worktree-landing.sh scripts/tests/worktree-landing.ps1`.\n4. DoD 3 grep over the worktree arm of both wrappers:\n   - no --force, '-f ', --force-with-lease or '+' refspec on any push;\n   - neither MOE_PUSH_REBASE nor push_branch / Push-MoeBranch is reachable from it.\n5. Code parity: this diff must be empty:\n   diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|PUSH)_[A-Z_]+' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|PUSH)_[A-Z_]+' scripts/moe-agent.ps1 | sort -u)\n6. Size: git diff --numstat over the five owned paths totals at most 380 net. Every other dirty path belongs to a peer; name it and leave it untouched.\n\nRecord the per-case pass lists for bash, PS5.1 and PS7 in the step note.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-31T23:51:27.873Z"
+      "note": "VERIFY ONCE: green on a git-archive snapshot of HEAD d861c534, which holds steps 1-5 (5a349d26; later HEAD commits touch only local-runner and .moe files). MOE_/CLAUDE/GIT_CONFIG_ variables were stripped.\n\n1. GATE `bash scripts/tests/worktree-landing.sh && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh` exited 0 (07:40:46-07:56:36Z).\n   - worktree-landing: 18 passed, 0 failed, 0 errors.\n   - postflight-safe: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}.\n   - PASS parity-check.sh.\n2. Windows seat (powershell.exe 5.1.26100 and pwsh.exe from WSL):\n   - worktree-landing.ps1: 18/18 RC 0 on PS5.1 and 18/18 RC 0 on PS7.\n   - postflight-safe powershell: NONE/Z, exit 0 (07:44-08:09).\n   - postflight-safe pwsh: NONE/Z, exit 0 (08:09-08:34).\n   - Per-case list, identical on bash, PS5.1 and PS7:\n     - local: hunks-merge, conflict, reflog-linear, cas-contains-c, relanding-idempotent, branch-sync, target-checked-out, board-path;\n     - remote: push-first-no-force, race-fetch-fails, push-transport-fails, push-applied-client-fails, push-outcome-unknown, push-rejected-retry, diverged, push-unanswered-repush, push-remote-rejected, push-unanswered-peer-lands.\n3. Held-out check: `git diff --quiet 8ad04de7 -- scripts/tests/worktree-landing.sh scripts/tests/worktree-landing.ps1` exits 0, for HEAD and for the working tree.\n4. DoD 3:\n   - No push line in either twin carries --force, '-f ', --force-with-lease or a '+' refspec.\n   - Worktree-arm pushes are push_task_branch/Push-MoeTaskBranch (WT-07), reconcile_push/Resolve-MoePushOutcome and wt_publish/Publish-MoeWorktreeLanding.\n   - MOE_PUSH_REBASE is read only in push_branch/Push-MoeBranch. Those are called only from run_landing/Invoke-MoeLanding, which worktree exits never reach: they dispatch to worktree_postflight (sh) and Invoke-MoeWorktreePostflight (ps1) first.\n5. Code-family parity diff over MOE_(WORKTREE|LAND|CONTROL|BOARD|PUSH)_: empty, 23 codes each.\n6. Size at the end of step 5: +397/-70 = 327 net (sh 132, ps1 146, postflight.sh 18, postflight.ps1 23, ci.yml 6, postflight-worktree.cjs 2) ≤380.\n\nPeers' dirty paths (.moe/roles/*, .moe/skills/*, other tasks' .moe/tasks/*.json, .moe/decisions/, scripts/local-runner/guest-ssh.mjs) are untouched. No files changed in this step. The step-7 review fix is re-verified fresh on a new snapshot in step 7.",
+      "startedAt": "2026-10-31T23:51:27.873Z",
+      "completedAt": "2026-11-01T08:35:36.079Z"
     },
     {
       "stepId": "step-7",
       "description": "ADVERSARIAL SELF-REVIEW, once (load adversarial-self-review). Replay QA's race and the doc's error table against the code.\n\nRef safety:\n- Can any path move the local target to a commit the remote is not known to hold: a failed or unknown push, a fetch failure, a rejected push?\n- Can any path push with force or call push_branch?\n\nRace: two seats land in remote mode at once, with no gate.\n- Does exactly one of them publish per round?\n- Does the loser start a new round on '!'?\n- Does a seat whose fetches all fail publish nothing, and never report DIVERGED?\n\nUnknown outcome:\n- No completion row and no finalize.\n- The journal is kept with 'push unknown:', and a push-unknown rescue ref exists.\n- The next pre-flight's replay fetches first and closes landed only when C is contained.\n\nDivergence: L is read before the fetch, so a peer's mirror between your L read and your fetch cannot fake DIVERGED.\n\nEdge inputs:\n- MOE_LAND_NET_BACKOFF_SEC set to garbage;\n- a target name with unusual characters;\n- origin missing while another remote exists: remote mode, and the fetch fails closed;\n- a porcelain line for another ref;\n- a '+' flag;\n- a failing pre-push hook.\n\nShared mode stays byte-identical (rail 4): postflight-safe passes unchanged.\n\nRails: error handling on every git call, tests present, no force push, sh/ps1 parity, and nothing under .moe written from W.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "ADVERSARIAL SELF-REVIEW: one real race was found and fixed. Everything else passed review.\n\nFIXED: the remote replay's rc=1 drop could delete a live lander's journal.\n- Worktree mode writes no live marker (live_marker_write is only in preflight_landing, which returns early in worktree mode), and receipt_replay runs after every claim poll on every non-governor seat.\n- So a peer's replay that read round 1's J1 (B0, C1) could, after its backoff and fetch, `rm` round 2's J2 (C2, B1) at the same <gitdir>/moe/receipt/<task>.json. The lander's receipt_ledger_send then found no file, and no completion row was recorded for C2.\n- Fix: re-read before deleting.\n  - sh: `receipt_journal_fields \"$f\"` must equal the `$fields` read at the loop top.\n  - ps1: targetBefore and targetAfter must be unchanged.\n  - Otherwise the replay prints `[receipt] … was rewritten or removed meanwhile; left to its lander.` and keeps the journal.\n  - The journal write is tmp+mv, so a re-read sees J1 or J2 whole. A ponytail comment names the millisecond re-read→rm window and the upgrade path (a per-journal lock).\n- Test: new postflight-worktree.cjs row `wt-replay-remote` (+22 net). The git-stub knobs WT_GIT_SWAP/WT_GIT_SWAP_TO make the first `fetch` move a prepared journal over the live one, i.e. during reconcile_push. The row checks three runs:\n  1. an unknown push keeps J1;\n  2. a swap mid-reconcile keeps J2 and logs no PUSH_FAILED;\n  3. J1 restored is dropped with MOE_PUSH_FAILED, origin is unmoved, and no row or landed finalize is recorded.\n- Red-green: the row fails when the guard line is deleted (scratch copy) and passes with it.\n- Scope: that cjs is the shared worktree suite postflight.{sh,ps1} run, and step 5 already touched it. The held-out worktree-landing.{sh,ps1} are byte-identical to 8ad04de7.\n\nChecked and OK:\n- Ref safety: the local target moves only through the ff-only CAS mirror, after porcelain ' '/'*'/'=', reconcile 0, or the fetched B. A failed, unknown or rejected push, or a failed fetch, never mirrors. No forced push; push_branch is unreachable.\n- Race: the server's non-ff refusal lets one seat publish per round, and the loser re-rounds on `!`. When every fetch fails, the result is FETCH_FAILED, never DIVERGED, because L is read before the fetch.\n- Unknown outcome: no row and no finalize, a 'push unknown:' journal and a rescue ref. The replay fetches first.\n- Edge inputs:\n  - a garbage backoff becomes 5;\n  - an odd target makes the refspec fetch fail closed;\n  - origin missing with another remote present is remote mode, and FETCH_FAILED;\n  - a porcelain line for another ref is skipped;\n  - a '+' flag goes to reconcile.\n\nResiduals:\n1. A failing pre-push hook prints no porcelain line, which goes to 3 pushes and then unknown: a safe wedge. Shared pushes run hooks too.\n2. Peers' replays may repeat idempotent steps, and each poll re-reconciles an unknown journal.\n3. The sh backoff is uncapped; ps1 falls back to 5 on overflow.\n\nFinal gate, fresh, on a snapshot of HEAD fdb5330a plus these 3 files (byte-identical to the tree; later HEAD commits touch only local-runner files). bash -n and the PS5.1 parse are clean; the BOM is kept.\n- GATE `bash scripts/tests/worktree-landing.sh && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh` rc 0:\n  - worktree-landing: 18 passed, 0 failed;\n  - postflight-safe bash: NONE/Z;\n  - PASS parity-check.sh.\n- PS5.1 and PS7 worktree-landing.ps1: 18/18 each.\n- postflight-safe powershell and pwsh: NONE/Z, exit 0.\n- parity-check.ps1: PASS.\n- The 38-case cjs suite also passed on PS5.1 and PS7 in place.\n- Codes: 23 each. Size: 352 net (sh 134, ps1 149) ≤380.",
+      "startedAt": "2026-11-01T08:35:39.810Z",
+      "completedAt": "2026-11-01T09:11:41.391Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-0e1ab990",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -172,7 +182,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:53:21.112Z",
-  "updatedAt": "2026-11-01T07:33:40.007Z",
+  "updatedAt": "2026-11-01T09:11:57.192Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:06.410Z",
@@ -182,7 +192,7 @@
     "firstClaimAt": "2026-10-30T13:26:40.758Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 7
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -199,7 +209,9 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:32:42.685Z",
@@ -250,5 +262,54 @@
   },
   "planApprovedAt": "2026-10-30T13:32:42.732Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-10-31T22:45:42.167Z"
+  "workStartedAt": "2026-10-31T22:45:42.167Z",
+  "commits": [
+    {
+      "sha": "5a349d26c759c66fbe1f5ec8029f596ecd731d9b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0e1ab990@2026-11-01T07:33:31Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+        ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-0e1ab990",
+      "recordedAt": "2026-11-01T07:33:57.535Z",
+      "treeId": "d9760ff0421c33c1f6da04e29c177f9d63496978",
+      "status": "WORKING",
+      "pushed": false
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    ".github/workflows/ci.yml",
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-0e1ab990@2026-11-01T07:33:31Z",
+    "at": "2026-11-01T07:33:57.535Z"
+  },
+  "reviewStartedAt": "2026-11-01T09:11:57.190Z",
+  "verification": {
+    "command": "bash scripts/tests/worktree-landing.sh && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "Run fresh 2026-11-01T08:17:37Z-08:34:03Z in a git-archive snapshot of HEAD fdb5330a + this task's 3 changed files (byte-identical to the working tree; later HEAD commits touch only local-runner files), MOE_/CLAUDE/GIT_CONFIG_ env stripped.\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS parity-check.sh\nrc=0\nWindows seat, same snapshot: PS5.1 + PS7 worktree-landing.ps1 18/18 each; postflight-safe powershell and pwsh NONE/Z exit 0; parity-check.ps1 PASS (08:17:39-09:10:40Z).",
+    "reportedAt": "2026-11-01T09:11:57.190Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "WT-09: remote-mode worktree completion landing (design §1.2, §2.2 L4/L9/L10/L12, §2.3, §2.6) in both wrapper twins.\n- B = refs/remotes/origin/<T>, fetched with no '+' (3 tries, MOE_LAND_NET_BACKOFF_SEC apart). L is read before the fetch. FETCH_FAILED and TARGET_DIVERGED fail closed. The local T mirrors by an ff-only CAS (MIRROR_SKIPPED is a WARN). W is cut from origin's T.\n- L9 `push --porcelain origin C:refs/heads/T`, classified by the destination's line:\n  - ' ', '*' or '=': published;\n  - `![rejected]`: re-round;\n  - `![remote rejected]`: final PUSH_FAILED;\n  - anything else: reconcile_push. That fetches: contains C means published; moved without C means PUSH_FAILED; still B means re-push, 3 pushes in all; otherwise OUTCOME_UNKNOWN (no ref move, 'push unknown:' journal, rescue ref, no row and no finalize).\n  - Never forced. MOE_PUSH_REBASE is unreachable.\n- Journal publicationMode is local|remote. A remote row is pushed:true only on 'pushed '. The replay settles a remote journal on origin. Rounds refuse UNRECONCILED_INTENT while a remote C is absent locally.\n- Review fix: the replay's rc=1 drop re-reads the journal and drops it only if unchanged. Worktree mode has no live marker, so a peer's replay could delete a live lander's next-round journal, losing its completion row. New row wt-replay-remote in postflight-worktree.cjs; a mutant without the guard fails it.\n- postflight.{sh,ps1} remote-base arms; ci.yml runs worktree-landing on Linux, PS5.1 and PS7.\n- Size: 352 net (sh 134, ps1 149) ≤380.\nResiduals:\n1. A failing pre-push hook prints no porcelain line, which goes to unknown: a safe wedge (shared pushes run hooks too).\n2. With no live marker, replays may repeat idempotent steps, and each poll re-reconciles an unknown journal.\n3. The sh backoff is uncapped (ps1 caps on overflow).\n4. The re-read→delete gap is a ms window (ponytail note)."
 }

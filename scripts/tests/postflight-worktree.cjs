@@ -114,7 +114,8 @@ function commitOn(p,ref,files){
 }
 
 // PATH-first git stub: WT_GIT_VERSION answers a version probe at any argv position,
-// WT_GIT_FAIL fails any call with that argv element; the rest runs the real git. sh
+// WT_GIT_FAIL fails any call with that argv element, the first fetch moves WT_GIT_SWAP over
+// WT_GIT_SWAP_TO; the rest runs the real git. sh
 // engines find `git`; PowerShell finds git.ps1 (a .cmd would mangle `%` in --format).
 function stub(){
   const dir=path.join(root,'git-stub');
@@ -123,6 +124,7 @@ function stub(){
 for a in "$@"; do
   if [ -n "$WT_GIT_VERSION" ] && { [ "$a" = --version ] || [ "$a" = version ]; }; then echo "git version $WT_GIT_VERSION"; exit 0; fi
   if [ -n "$WT_GIT_FAIL" ] && [ "$a" = "$WT_GIT_FAIL" ]; then echo "fatal: wt stub fails $a" >&2; exit 1; fi
+  if [ "$a" = fetch ] && [ -n "$WT_GIT_SWAP" ] && [ -f "$WT_GIT_SWAP" ]; then mv -f "$WT_GIT_SWAP" "$WT_GIT_SWAP_TO"; fi
 done
 exec "${realGit.replace(/\\/g,'/')}" "$@"
 `);
@@ -137,6 +139,7 @@ exec "${realGit.replace(/\\/g,'/')}" "$@"
 foreach ($a in $args) {
   if ($env:WT_GIT_VERSION -and ($a -ceq '--version' -or $a -ceq 'version')) { "git version $env:WT_GIT_VERSION"; exit 0 }
   if ($env:WT_GIT_FAIL -and $a -ceq $env:WT_GIT_FAIL) { [Console]::Error.WriteLine("fatal: wt stub fails $a"); exit 1 }
+  if ($a -ceq 'fetch' -and $env:WT_GIT_SWAP -and (Test-Path -LiteralPath $env:WT_GIT_SWAP)) { Move-Item -LiteralPath $env:WT_GIT_SWAP -Destination $env:WT_GIT_SWAP_TO -Force }
 }
 if ($MyInvocation.ExpectingInput) { $input | & ${real} @args } else { & ${real} @args }
 exit $LASTEXITCODE
@@ -184,7 +187,7 @@ async function launch(p,run,knobs={},opts={}){
     HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),TMPDIR:wrapperTmp,TMP:wrapperTmp,TEMP:wrapperTmp,
     FAKE_TASK_STATUS:'WORKING',FAKE_CLAIM_WORKSPACE:p.ws(),...knobs};
   for(const k of Object.keys(env))if(env[k]==null)delete env[k];
-  if(env.WT_GIT_VERSION||env.WT_GIT_FAIL){
+  if(env.WT_GIT_VERSION||env.WT_GIT_FAIL||env.WT_GIT_SWAP){
     env[pathKey]=stub()+path.delimiter+(inherited[pathKey]||'');
     if(!win)env.BASH_ENV=path.join(stub(),'env.sh');
   }
@@ -662,6 +665,23 @@ async function wtReplay(){
   assert.deepEqual([mainOf(p),parents(p.top,c),present(journal(p)),done(p),finals(p)],[c,[main],false,row,[['landed',c]]],
     'main moved again, the journal stayed, the replayed row differs, or no landed finalize'+tail(r.log));
 }
+// WT-09 (§2.6): a replay drops a remote journal whose C can never apply (origin moved past B without it), but never
+// one rewritten while its reconcile ran (a live lander's next round; WT_GIT_SWAP rewrites it at that fetch).
+async function wtReplayRemote(){
+  const p=repo('wt-replay-remote',{settings:LANDS}),bare=path.join(root,'wt-replay-remote.git'),net={MOE_LAND_NET_BACKOFF_SEC:'0'};
+  git(root,'init','-q','--bare',bare);git(p.top,'remote','add','origin',bare);git(p.top,'push','-q','origin','main');
+  let r=await landRun(p,'wt-replay-remote-1',{'src/a.txt':'done\n'},{...REVIEW,...net,WT_GIT_FAIL:'push'});
+  const j1=readOr(journal(p)),peer=commitOn(p,'refs/wt-replay-remote/peer',{'src/peer.txt':'peer\n'}),swap=path.join(root,'wt-replay-remote.j2');
+  assert.ok(r.log.includes('MOE_PUSH_OUTCOME_UNKNOWN')&&j1,'no unknown push outcome, or no kept journal'+tail(r.log));
+  const j2=JSON.stringify({...JSON.parse(j1.replace(/^﻿/,'')),targetBefore:peer});
+  git(p.top,'push','-q','origin',peer+':refs/heads/main');write(swap,j2);
+  r=await landRun(p,'wt-replay-remote-2',{},{...net,WT_GIT_SWAP:swap,WT_GIT_SWAP_TO:journal(p)});
+  assert.deepEqual([present(swap),readOr(journal(p)),r.log.includes('rewritten or removed meanwhile'),/MOE_PUSH_FAILED/.test(r.log)],[false,j2,true,false],
+    'no swap, or the replay dropped a journal rewritten meanwhile'+tail(r.log));
+  write(journal(p),j1);r=await landRun(p,'wt-replay-remote-3',{},net);
+  assert.deepEqual([present(journal(p)),/MOE_PUSH_FAILED: task \S+ -- origin moved past/.test(r.log),revOf(bare,'refs/heads/main'),done(p).length,finals(p).filter(x=>x[0]==='landed')],
+    [false,true,peer,0,[]],'the journal stayed, origin moved, or C was recorded or finalized'+tail(r.log));
+}
 // A failed sync (MOE_WORKTREE_SYNC_FAILED) leaves the landing standing; the next pre-flight syncs the recorded C in,
 // but never a C the target lacks (even one T adds nothing to), nor over newer task work (a C^{tree} sync drops it).
 async function wtSync(){
@@ -727,7 +747,7 @@ const cases={lifecycle,resume,'half-made':halfMade,
 for(const t of ['claude','codex','gemini','grok'])cases['launch-'+t]=()=>launchAs(t);
 Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link-partial':linkPartial,'project-yml':projectYml,'serena-outside':serenaOutside,
   'wt-checkpoint':wtCheckpoint,'wt-deny':wtDeny,'wt-recover':wtRecover,'wt-recover-moe':wtRecoverMoe,'wt-control-seats':wtControlSeats,
-  'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-sync':wtSync,'wt-fails':wtFails,
+  'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-replay-remote':wtReplayRemote,'wt-sync':wtSync,'wt-fails':wtFails,
   'wt-contention':wtContention,codes});
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{

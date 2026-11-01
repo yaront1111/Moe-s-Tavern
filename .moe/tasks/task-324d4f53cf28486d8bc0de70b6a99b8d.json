@@ -1,0 +1,33 @@
+{
+  "id": "task-324d4f53cf28486d8bc0de70b6a99b8d",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07k] Per-account VM tokens for rotation accounts",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation, decision 5 (human, 2026-11-01: per-account tokens).\n\nObjective: a VM agent job for a claude seat can use the seat's leased rotation account without the wrapper reading any Claude config folder. The human's 2026-10-26 sign-off forbids opening an account's .credentials.json, and the guest accepts only ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN for claude (scripts/local-runner/guest-bridge.mjs, the job frame).\n\nDeliverable:\n- accounts CLI (packages/moe-daemon/src/accounts/cli.ts) subcommand `vm-token <id>`: obtain a long-lived token for that rotation account and store it at <dir of the accounts list>/claude-vm-tokens/<id>.token, next to ~/.moe/claude-accounts.json (MOE_ACCOUNTS_FILE moves both in tests). Dir 0700 and file 0600 on POSIX; exclusive temp file then rename. The store is outside every Claude config folder and every project. `vm-token <id> --remove` deletes it.\n  - How the token is obtained is the planner's call, with the reason: run `claude setup-token` under that account's CLAUDE_CONFIG_DIR and capture the token from its output (MOE_CLAUDE_BIN fakes it in tests, as the existing CLI tests do), or a hidden paste prompt if capturing setup-token's interactive output is unreliable.\n  - The token is never printed, logged, put in an argv, put in an env (except the minting child's own) or sent to the daemon.\n  - Risk to answer in the plan: a minted token could belong to a different Claude account than the rotation entry. Say how the plan detects that, or document it.\n- Wrapper-side reader in scripts/moe-account-lease.mjs, subcommand `vm-credential <id>`: writes only the token to stdout, for a pipe into the VM job runner (never argv). It reads only from that store (regular file, no symlink, size cap, exact token shape); anything else prints nothing and exits with a fixed code.\n- The daemon's account projection (what the JetBrains Accounts tab reads) reports token presence as a boolean from a stat. The daemon never opens the token file.\n\nNOT in scope: the Accounts tab button (CQ-M07l), the wrappers' use (CQ-M07m/n), codex keys (they come from the wrapper's environment).\n\nVerification, in a git-archive snapshot with this task's files overlaid, under env -i with the nvm Node 24 PATH: cd <snapshot>/packages/moe-daemon && npm ci && npx vitest run src/accounts/ && cd <snapshot> && node --test scripts/tests/moe-account-lease.test.mjs",
+  "definitionOfDone": [
+    "`accounts vm-token <id>` with a fake claude stores the token at the store path with POSIX modes 0700/0600 and prints no token byte (vitest on cli.ts with MOE_CLAUDE_BIN).",
+    "`vm-token <id> --remove` deletes the file; an unknown id or a failed mint stores nothing and exits non-zero with a fixed message (vitest).",
+    "`moe-account-lease.mjs vm-credential <id>` prints exactly the stored token; a missing, symlinked, oversize or malformed token file prints nothing and exits with a fixed code (node --test rows).",
+    "The account projection reports vmToken true or false from a stat, and no daemon code path reads the token bytes (vitest).",
+    "Both named test commands pass in a git-archive snapshot."
+  ],
+  "taskRails": [
+    "Never open a file inside a Claude config folder (claude-accounts/<id>) and never read .credentials.json.",
+    "No token byte in any argv, log line, chat message, task comment or daemon payload."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.06,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:07:44.219Z",
+  "updatedAt": "2026-11-01T08:07:44.219Z"
+}

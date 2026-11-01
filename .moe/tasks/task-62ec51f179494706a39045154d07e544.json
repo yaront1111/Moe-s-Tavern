@@ -1,0 +1,36 @@
+{
+  "id": "task-62ec51f179494706a39045154d07e544",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07n] Wrapper VM route in moe-agent.ps1",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8); M07 DoD 1, 2 and 5 on the PowerShell wrapper. Design: mem:decision-cq-m07-verified-local-activation. Depends on CQ-M07m (task-828e7d21), whose behavior and messages it mirrors.\n\nGATE: BACKLOG with CQ-M07m; plan it once CQ-M07m has landed.\n\nObjective: moe-agent.ps1 reaches parity with CQ-M07m. It is the route the JetBrains launcher (CQ-M07o) uses for worker and QA seats on Windows under verified-local, even with WSL agent mode on (human decision 2026-11-01), so Windows Multipass runs from its pinned client.\n\nDeliverable (scripts/moe-agent.ps1, rows in scripts/tests/postflight.ps1, parity strings in scripts/tests/parity-check.{sh,ps1} if new codes need listing):\n- Every CQ-M07m behavior and message, byte-identical where parity-check compares them: readiness preflight and refusals, seat-start before any claim with the capacity wait, executionRoute 'vm' claims, seat-job instead of the host CLI, the VM token pipe for claude and the environment keys for codex, seat-stop on every exit path including Ctrl+C and the ps1 in-process supervisor's relaunch.\n- The credential is piped without ever entering an argv or a child env, in both Windows PowerShell 5.1 and pwsh 7.\n- moe-agent.ps1 stays UTF-8 with a BOM.\n\nNOT in scope: any new behavior beyond CQ-M07m.\n\nVerification: scripts/tests/postflight.ps1 run under Windows PowerShell from WSL (mem:gotcha-launcher-ps1-rows-from-wsl, mem:gotcha-qa-ps1-postflight-from-wsl) and bash scripts/tests/parity-check.sh.",
+  "definitionOfDone": [
+    "Profile absent, legacy or observe: every existing postflight.ps1 row passes unchanged, and a new row proves the host CLI launch is byte-identical to before.",
+    "verified-local rows mirror CQ-M07m's: ready (no host CLI; seat-start, seat-job, seat-stop in order; executionRoute 'vm'), not ready, gemini or grok refused (rows).",
+    "The credential never appears in any child's argv or env under PowerShell 5.1 and 7 (row).",
+    "seat-stop runs on normal exit, Ctrl+C and a failed job (rows).",
+    "postflight.ps1 and bash scripts/tests/parity-check.sh pass, and moe-agent.ps1 keeps its UTF-8 BOM."
+  ],
+  "taskRails": [
+    "Never fall back to running the agent CLI on the host under verified-local.",
+    "Legacy stays byte-for-byte unchanged in behavior."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-828e7d21602e4cf2a0f242e024db7dea"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.17,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:11:06.834Z",
+  "updatedAt": "2026-11-01T08:11:06.834Z"
+}

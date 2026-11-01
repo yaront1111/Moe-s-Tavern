@@ -6143,6 +6143,8 @@ receipt_replay() {
             # WT-09 (§2.6): origin settles the journaled C; nothing is merged, gated or built.
             rc=0; reconcile_push "${target#refs/heads/}" "$before" "$after" || rc=$?
             [ "$rc" != 2 ] || { echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_OUTCOME_UNKNOWN: task $tid -- $after is still unsettled on origin ($LAND_PUSH_DETAIL); $f kept."; continue; }
+            # Drop only the journal read above: a live lander's next round may have rewritten it meanwhile (ponytail: the re-read and rm leave a millisecond window; a per-journal lock closes it).
+            if [ "$rc" = 1 ] && [ "$(receipt_journal_fields "$f")" != "$fields" ]; then echo -e "${BLUE}[receipt]${NC} $f was rewritten or removed meanwhile; left to its lander."; continue; fi
             [ "$rc" != 1 ] || { rm -f "$f"; echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_FAILED: task $tid -- origin moved past $before without $after, which can never apply; dropped $f (attempt $aid stays finalizing)."; continue; }
             mirror_land_target "${target#refs/heads/}" "$after"; landed="$after"
         elif ! landed=$(receipt_landed_as "$target" "$after" "$before"); then

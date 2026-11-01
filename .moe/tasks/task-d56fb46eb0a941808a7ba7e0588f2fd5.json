@@ -1,0 +1,33 @@
+{
+  "id": "task-d56fb46eb0a941808a7ba7e0588f2fd5",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07l] JetBrains Accounts tab: VM token action",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation, decision 5. Depends on CQ-M07k (task-324d4f53: the `accounts vm-token` CLI and the presence flag) and on CQ-M07o (task-8dbc76d7), so the two JetBrains slices never edit util/TerminalAgentLauncher.kt at the same time.\n\nObjective: the human can mint, replace and remove each rotation account's VM token from the JetBrains Accounts tab, and see which accounts have one, without the plugin ever touching a token.\n\nDeliverable (moe-jetbrains, JetBrains only: VS Code has no Accounts tab; CQ-M07's docs say so):\n- An Accounts tab action per account that opens a terminal running `accounts vm-token <id>` (and one for `--remove`), through the same path sign-in uses (TerminalAgentLauncher runAccountsCommand / accountsCommandLine / buildAccountsCommand): the same shells (POWERSHELL, WSL_BASH, BASH), quoting and WSL path handling.\n- A per-account VM-token indicator from CQ-M07k's presence flag. A daemon that sends no flag (an older daemon) shows unknown, never present.\n\nNOT in scope: token storage and minting (CQ-M07k); launch routing (CQ-M07o).\n\nVerification: ./gradlew test under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\", or a snapshot run of the exact commit.",
+  "definitionOfDone": [
+    "The action builds `accounts vm-token <id>` and `accounts vm-token <id> --remove` command lines for the POWERSHELL, WSL_BASH and BASH shells with the same quoting as sign-in (JUnit on the pure builder).",
+    "The indicator shows present, absent and unknown (flag missing) per account (JUnit on the pure presentation).",
+    "The command line carries no token argument and the plugin never reads the token store (JUnit plus code review note in the completion).",
+    "./gradlew test passes under the lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-324d4f53cf28486d8bc0de70b6a99b8d",
+    "task-8dbc76d7678b416bbfdbbbe9f58a33f8"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.07,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:08:14.792Z",
+  "updatedAt": "2026-11-01T08:08:14.792Z"
+}

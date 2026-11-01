@@ -1,0 +1,33 @@
+{
+  "id": "task-eb783f598086440f8e758445f8717ef8",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07h] Host-wide agent VM cap derived from host size",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation, decision 2 (human, 2026-11-01: cap derived from host size). Depends on CQ-M07g (task-9076afab) for the seat owner kind it counts.\n\nGATE: BACKLOG with CQ-M07g; move it to PLANNING once CQ-M07g has a plan.\n\nObjective: at most max(1, min(floor(CPUs / 2), floor((RAM - 8 GiB) / 4 GiB))) agent seat VMs run on this host at once, across every project, because each VM is 2 CPUs, 4 GB RAM and 20 GB disk. A seat over the cap waits BEFORE claiming any task and never falls back to the host. Check VMs (CQ-R11) keep their own dispatch and do not count.\n\nDeliverable: new scripts/local-runner/seat-capacity.mjs with its tests.\n- hostAgentVmCap({ cpus, totalmem }): the pure formula.\n- A host-wide count of live seat-owned ledger records across every project's ledger under the runner-state root (vm-control.mjs ownedLedgerDir's parent): reserved and launched count, deleted does not, attempt-owned (check) records do not.\n- An admission function that, under one host lock (exclusive lock file, bounded wait, recovery of a lock whose holder is dead), admits a reservation only below the cap, else a fixed code (e.g. SEAT_CAPACITY_FULL).\n- Add the module to `shipped` in scripts/tests/local-runner-bundle.test.mjs, not `required` (mem:decision-local-runner-planning-gotchas).\n\nNOT in scope: provisioning (CQ-M07i); the wrappers' wait-and-retry loop (CQ-M07m/n).\n\nVerification: in a git-archive snapshot (mem:gotcha-local-runner-tests recipe) with this task's files overlaid: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test <the new test file> scripts/tests/local-runner-bundle.test.mjs",
+  "definitionOfDone": [
+    "hostAgentVmCap matches the formula at its boundaries, for example 2 CPUs/8 GiB gives 1, 16 CPUs/64 GiB gives 8, and 8 CPUs/12 GiB gives 1 (rows).",
+    "Two concurrent admissions at cap minus one admit exactly one (row racing two admissions around the lock).",
+    "Seat records of other projects count; attempt-owned (check) and deleted records do not (rows).",
+    "A lock left by a dead holder is recovered within the bound, and a live holder's lock is never broken (rows).",
+    "The named tests pass in a git-archive snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-9076afab319b4056989e370039efba3d"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.13,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:09:15.830Z",
+  "updatedAt": "2026-11-01T08:09:15.830Z"
+}

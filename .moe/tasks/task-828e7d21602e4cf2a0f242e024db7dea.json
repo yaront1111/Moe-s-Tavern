@@ -1,0 +1,43 @@
+{
+  "id": "task-828e7d21602e4cf2a0f242e024db7dea",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07m] Wrapper VM route in moe-agent.sh",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8); M07 DoD 1, 2 and 5 on the bash wrapper. Design: mem:decision-cq-m07-verified-local-activation. Depends on CQ-M07d (readiness tool), CQ-M07q (claim marker), CQ-M07j (seat job runner), CQ-M07k (VM tokens), and on WT-19 (task-b1ca54f2) and CQ-V04c (task-c4e076cd), which with about twenty other open rows still edit scripts/moe-agent.{sh,ps1}.\n\nGATE: BACKLOG until CQ-M07j has landed and the open wrapper editors are done. Before planning, re-check the plans and declaredPaths of open tasks naming scripts/moe-agent.sh, and depend on the chain tails that cover them.\n\nObjective: under verified-local, moe-agent.sh runs a worker or QA seat's agent CLI only inside that seat's VM, never on the host. Legacy, observe and absent profiles stay byte-for-byte unchanged. The wrapper remains the only Git writer and lander.\n\nDeliverable (scripts/moe-agent.sh, rows in scripts/tests/postflight.sh, answers in scripts/tests/postflight-fake-proxy.js):\n- Worker/QA preflight calls moe.get_execution_readiness (CQ-M07d). Profile not verified-local: today's path, untouched. verified-local and not ready: `[ERROR] MOE_VERIFIED_LOCAL_NOT_READY: <missing ids>` and stop, with no VM and no CLI. Inside WSL: a MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED refusal (human decision: worker/QA run natively on Windows). An agent CLI other than claude or codex: a fixed refusal.\n- Seat: seat-start (CQ-M07i) before any claim; the capacity code means wait and retry while holding no task; seat-stop runs on every exit path (normal exit, the exit trap, Ctrl+C teardown, a failed job).\n- Per task: claim_next_task with executionRoute 'vm' (CQ-M07q), then seat-job (CQ-M07j) instead of the host CLI. claude: the credential is piped from `moe-account-lease.mjs vm-credential <leased account>` (CQ-M07k). codex: OPENAI_API_KEY or CODEX_API_KEY from the wrapper's own environment. A missing token gives a fixed refusal and one #general escalation, with the task held. A seat-job failure never falls back to the host; the plan states how the task is held or resumed.\n- Landing (including the CQ-V07/V08 strong landing and worktree mode) consumes the admitted candidate as CQ-M07j hands it over; no new Git writer.\n\nNOT in scope: moe-agent.ps1 (CQ-M07n); IDE code.\n\nVerification: bash scripts/tests/postflight.sh (the launcher harnesses may run in place per the global rail; MOE_POSTFLIGHT_TIMEOUT_SEC widens a slow box). parity-check runs at CQ-M07n, once both twins carry the new strings.",
+  "definitionOfDone": [
+    "Profile absent, legacy or observe: every existing postflight.sh row passes unchanged, and a new row proves the host CLI launch is byte-identical to before.",
+    "verified-local and ready: the host agent CLI stub never runs; the seat-start, per-task seat-job and seat-stop stubs run in that order, and the claim carries executionRoute 'vm' (rows).",
+    "verified-local and not ready, inside WSL, or with gemini or grok: the named refusal, with no seat-start and no CLI (rows).",
+    "The credential never appears in any child's argv or env; it reaches seat-job only through the pipe (row inspecting the stubs).",
+    "seat-stop runs on normal exit, the Ctrl+C teardown and a failed job (rows).",
+    "bash scripts/tests/postflight.sh passes."
+  ],
+  "taskRails": [
+    "Never fall back to running the agent CLI on the host under verified-local.",
+    "Legacy stays byte-for-byte unchanged in behavior.",
+    "Edit the wrapper only with the main session's editing tools (global rail), and read mem:gotcha-bash-hot-reload-incremental-parse before changing launch code above the main loop."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b0485bb1cacf4d3b84979e9256078737",
+    "task-bb1502b1fcb04f0e99fa5328be05ef4e",
+    "task-1dc49ae27e22494a95e15ada3e9c1fe9",
+    "task-324d4f53cf28486d8bc0de70b6a99b8d",
+    "task-b1ca54f2716442be889a14623eb59983",
+    "task-c4e076cd306f4f84a4aa08bf2a4682b2"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.16,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:10:54.033Z",
+  "updatedAt": "2026-11-01T08:10:54.033Z"
+}

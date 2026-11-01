@@ -1,0 +1,37 @@
+{
+  "id": "task-1dc49ae27e22494a95e15ada3e9c1fe9",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07j] Seat job run: snapshot in, admitted candidate out",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8); M07 DoD 2 and 5 on the runner side. Design: mem:decision-cq-m07-verified-local-activation. Depends on CQ-M07i (task-18809c69, the seat VM) and CQ-M07f (task-d6bc12ff, reset mode); transitively on task-fd196d13's transport.\n\nGATE: BACKLOG until task-fd196d13's transport design is ruled and CQ-M07i/f have plans; then move it to PLANNING. Expect a SPIDR split at planning if the forward transport needs its own slice.\n\nObjective: run one worker or QA job on the seat's VM through scripts/local-runner/agent-lifecycle.mjs runAgentJob. Source goes in only by snapshot transfer; changes come out only by the guest export, importCandidate (snapshot-import.mjs) and admitCandidate (admission.mjs). The host never runs the agent CLI.\n\nDeliverable: runSeatJob in scripts/local-runner/agent-seat.mjs plus a seat-job CLI subcommand (one JSON outcome line, fixed codes):\n- Order: verified sweep (guest-session.mjs endAgentJobs) -> resetWorkspace (CQ-M07f) -> exportSourceSnapshot (source-export.mjs) of the task's checkout, shared or worktree mode (QA reviews the task's landed state; say which base) -> materializeSnapshot -> runAgentJob -> importCandidate -> admitCandidate.\n- The credential arrives on stdin, never argv or env, and reaches only the job frame. The job CLI's stdout/stderr are relayed as bytes, so the wrapper's stream parser still sees usage events.\n- forward: the daemon transport for the agent's moe.* calls. The planner proves which one is correct (the authenticated /runner channel of runner-client.mjs, if its allowlist and identity stamping fit, or the /mcp path moe-proxy uses) and keeps the job lease task-keyed.\n- Hand-off to landing: nothing the guest sends reaches the host checkout before admission. The planner picks, with the reason: write exactly the admitted candidate's paths into the task's checkout, or pass the admitted tree id to the wrapper's landing (CQ-V07/V08 strong landing).\n- A QA job's candidate must be empty; a non-empty one is refused and nothing is applied.\n- Every failure is a fixed code. No host fallback. The seat VM stays (seat-owned) unless its state is unverified, in which case stopSeat runs.\n\nNOT in scope: the wrappers' integration and landing (CQ-M07m/n).\n\nVerification: in a git-archive snapshot (mem:gotcha-local-runner-tests recipe) with this task's files overlaid: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test <the seat test file> scripts/tests/local-runner.test.mjs",
+  "definitionOfDone": [
+    "A worker job with a fake provider and a fake CLI that changes one guest file yields an admitted tree containing exactly that change, and nothing reaches the host checkout before admission (rows).",
+    "The credential appears only in the job frame: never in an argv, an env, a log or the outcome line (rows on the fake provider's argv, env and outputs).",
+    "A QA job with a non-empty candidate is refused and nothing is applied (row).",
+    "Each stage's failure (sweep unverified, reset, export, materialize, session, import, admission) returns its fixed code with no partial apply (table).",
+    "The named tests pass in a git-archive snapshot."
+  ],
+  "taskRails": [
+    "Never fall back to running the agent CLI on the host.",
+    "No seat runs Multipass; tests use fakes."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-18809c69885f4af6bff87d7e764f269b",
+    "task-d6bc12fff910484d92368fa6825f523c"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.15,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:09:44.562Z",
+  "updatedAt": "2026-11-01T08:09:44.562Z"
+}

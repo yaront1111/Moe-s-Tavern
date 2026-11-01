@@ -1,0 +1,36 @@
+{
+  "id": "task-18809c69885f4af6bff87d7e764f269b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07i] Seat VM start and stop",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8); M07 DoD 5 (VM deleted on every exit path through the owned ledger). Design: mem:decision-cq-m07-verified-local-activation, decision 1. Depends on CQ-M07g (task-9076afab, seat owner) and CQ-M07h (task-eb783f59, cap); transitively on task-fd196d13's transport.\n\nGATE: BACKLOG until task-fd196d13's transport design is ruled and CQ-M07g/h have plans; then move it to PLANNING.\n\nObjective: the host side of one VM per seat. Provision the seat's owned VM once when a worker or QA seat starts, and delete it through the owned ledger when the seat stops, on every path.\n\nDeliverable: new scripts/local-runner/agent-seat.mjs with startSeat and stopSeat, plus a CLI entry the wrappers call (subcommands seat-start and seat-stop; one JSON line out; fixed codes; exit codes documented in the module header; the planner picks the entry file and names it for CQ-M07m/n).\n- startSeat: capacity admission (CQ-M07h) BEFORE any reserve or provider call; then provisionGuest (provision.mjs) into vm-control.mjs ownedLedgerDir(project) with the seat owner and this host's pinned client; R07 readiness; installAgents (pinned agent cache) and installToolchain (snapshot-transfer.mjs); then print the instance. Any failure after reserve deletes the VM with deleteOwned by its exact owned name; a failed delete keeps the record for cleanup (CQ-M07g).\n- stopSeat: deleteOwned by exact owned name, idempotent; it never touches another record.\n- Transport, keys and timeouts follow whatever task-fd196d13 lands.\n- Add the module to `shipped` in scripts/tests/local-runner-bundle.test.mjs.\n\nNOT in scope: running jobs (CQ-M07j); the wrappers (CQ-M07m/n).\n\nVerification: in a git-archive snapshot (mem:gotcha-local-runner-tests recipe) with this task's files overlaid: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test <the new test file> scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+  "definitionOfDone": [
+    "startSeat provisions exactly one owned VM with the seat owner and reports its instance; each refusal is a fixed code (fake-provider rows).",
+    "With the cap full, startSeat returns the capacity code before any ledger reserve or provider call (row).",
+    "A failure at any stage after reserve leaves no VM: deleteOwned runs with the exact owned name, and a failed delete keeps the record (table).",
+    "stopSeat deletes only the seat's VM and is idempotent (rows).",
+    "The named tests pass in a git-archive snapshot."
+  ],
+  "taskRails": [
+    "No seat runs Multipass; tests use fakes, and the real-VM run is the human's or the governor's."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-9076afab319b4056989e370039efba3d",
+    "task-eb783f598086440f8e758445f8717ef8"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.14,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:09:29.478Z",
+  "updatedAt": "2026-11-01T08:09:29.478Z"
+}

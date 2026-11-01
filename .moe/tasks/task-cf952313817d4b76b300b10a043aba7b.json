@@ -1,0 +1,35 @@
+{
+  "id": "task-cf952313817d4b76b300b10a043aba7b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07b] Daemon readiness evaluator for verified-local",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation. Depends on CQ-M07a (task-5a635bc9), whose certification reader it consumes.\n\nObjective: compute a readiness snapshot for verified-local from facts the daemon observes itself, never from anything a caller, a setting-as-grant, an env var, a persisted label or a project file can supply.\n\nDeliverable: new packages/moe-daemon/src/delivery/executionReadiness.ts plus its vitest file, exporting evaluateExecutionReadiness(deps) -> Promise of a frozen ReadinessSnapshot { ready, missingCapabilities: string[] (stable order), evaluatedAt, evidence: { reportSha256, platform, arch, providerVersion } | null }.\n- Every input is injected (production defaults are wired in CQ-M07c):\n  - CQ-M07a's certification result;\n  - the LIVE Multipass version from this host's pinned client: read-only `version --format json`, the shipped platform module's pinned executable (never a PATH lookup), a bounded timeout. It must equal the accepted report's provider.version; a timeout, error or malformed output is a missing capability. No seat runs Multipass; the daemon is not a seat, and unit tests always inject the probe;\n  - one named daemon-observed check per capability in today's list (executionProfile.ts): protected-host-control-plane (the daemon's own install real path is outside the project; MOE_RUNTIME_PROTECTED or any env var never counts), isolated-agent-and-qa-vms and isolated-check-vm (the accepted report's certify rows that prove them passed: name the check ids), authenticated-runner-evidence (this project's runner channel key exists, as server/runnerChannel.ts files it), revision-bound-local-delivery (settings.deliveryPolicy is 'local-branch'; a setting may only refuse here, never grant).\n- Add ids for evidence failures (for example certification-report-missing, provider-version-mismatch) and keep one stable ordering; consumers (CQ-M07d's projection, IDE dialogs) list them verbatim.\n\nNOT in scope: holding the snapshot, assertExecutionProfileReady, activationGaps and scheduling (CQ-M07c); the MCP and /ws projection (CQ-M07d).\n\nVerification: the new vitest file in a git-archive snapshot with this task's files overlaid (cd <snapshot>/packages/moe-daemon && npm ci && npx vitest run src/delivery/executionReadiness.test.ts, under env -i with the nvm Node 24 PATH), never in the shared checkout.",
+  "definitionOfDone": [
+    "With every injected fact present and matching, evaluateExecutionReadiness returns ready true and an empty missingCapabilities (vitest).",
+    "Each capability failing alone gives ready false with exactly that id; several failing list all of them in the stable order (vitest table).",
+    "A live version different from the report's, a probe timeout, a probe error and malformed probe output each give a fixed id; the fake probe records exactly the pinned executable path and argv `version --format json` (vitest).",
+    "MOE_RUNTIME_PROTECTED=1 and other MOE_* or HOME env values, a readiness label persisted in settings or task JSON, and a valid report placed inside the project or .moe/ never make it ready (vitest rows).",
+    "The named vitest run passes in a git-archive snapshot."
+  ],
+  "taskRails": [
+    "Unit tests never spawn a real Multipass client; the probe is always injected outside production wiring."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-5a635bc90aaa47acabede9307dd1579b"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.02,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:06:50.081Z",
+  "updatedAt": "2026-11-01T08:06:50.081Z"
+}

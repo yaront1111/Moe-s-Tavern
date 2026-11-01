@@ -2127,6 +2127,9 @@ function Invoke-MoeReceiptReplay {
                     $rc = Resolve-MoePushOutcome $git.Top $t ([string]$j.targetBefore) $after
                     if ($rc -eq 2) { Write-Host "[WARN] MOE_PUSH_OUTCOME_UNKNOWN: task $($j.taskId) -- $after is still unsettled on origin ($($script:MoePushDetail)); $($f.FullName) kept." -ForegroundColor Yellow; continue }
                     if ($rc -eq 1) {
+                        # Drop only the journal read above: a live lander's next round may have rewritten it meanwhile (ponytail: the re-read and delete leave a millisecond window; a per-journal lock closes it).
+                        $now = $null; try { $now = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { }
+                        if ($null -eq $now -or [string]$now.targetAfter -cne $after -or [string]$now.targetBefore -cne [string]$j.targetBefore) { Write-Host "[receipt] $($f.FullName) was rewritten or removed meanwhile; left to its lander." -ForegroundColor Cyan; continue }
                         Remove-Item -LiteralPath $f.FullName -Force
                         Write-Host "[WARN] MOE_PUSH_FAILED: task $($j.taskId) -- origin moved past $($j.targetBefore) without $after, which can never apply; dropped $($f.FullName) (attempt $($j.attemptId) stays finalizing)." -ForegroundColor Yellow; continue
                     }

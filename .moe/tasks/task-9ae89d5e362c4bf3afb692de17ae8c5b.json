@@ -1,0 +1,36 @@
+{
+  "id": "task-9ae89d5e362c4bf3afb692de17ae8c5b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07c] Wire the readiness snapshot into assertExecutionProfileReady",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8); M07 DoD 4. Design: mem:decision-cq-m07-verified-local-activation. Depends on CQ-M07b (task-cf952313), the evaluator.\n\nObjective: assertExecutionProfileReady('verified-local') (packages/moe-daemon/src/delivery/executionProfile.ts) passes exactly when the daemon's own latest readiness evaluation says ready. Every caller (settings validator, plan submission, claims, completion, delivery policy, qa_approve, rollout activation) follows without per-call-site edits.\n\nDeliverable:\n- A leaf-safe holder for the current ReadinessSnapshot. Default: not ready, every capability missing. Only the daemon's evaluator sets it. executionProfile.ts stays a LEAF (runtime imports only util/errors and that holder).\n- assertExecutionProfileReady: legacy/observe unchanged. verified-local returns when the held snapshot is ready, else throws the same EXECUTION_PROFILE_NOT_READY error with missingCapabilities = the held list and a message naming them.\n- packages/moe-daemon/src/state/profileRollout.ts activationGaps(): the vm and check gaps come from the held snapshot instead of constants. The client gap is unchanged until CQ-M07d.\n- Daemon startup (packages/moe-daemon/src/index.ts): evaluate once at start, then on a bounded interval (the planner picks, e.g. 5 min) with production deps: the store from CQ-M07a, the pinned-client probe, the install-root check, the runner key and the live settings. A failed evaluation leaves the snapshot not ready. Unit tests never evaluate unless they inject.\n\nCompatibility: every existing test that pins the refusal keeps passing unchanged, because the default snapshot is not ready: executionProfile.test.ts, profileRollout.test.ts, __e2e__/rolloutControls.e2e.test.ts, CQ-M06a's benchmarks/rolloutDecision.test.ts and the readiness-mocked strong tests (mem:convention-verified-local-test-fixture).\n\nNOT in scope: the MCP tool, /ws projection and SERVER_CAPABILITIES.verifiedLocal (CQ-M07d); route enforcement on claims (CQ-M07q).\n\nVerification: the FULL daemon vitest suite (a shared readiness contract gets broad regression) in a git-archive snapshot with this task's files overlaid: cd <snapshot>/packages/moe-daemon && npm ci && npm test, under env -i with the nvm Node 24 PATH. Never in the shared checkout.",
+  "definitionOfDone": [
+    "With a held ready snapshot, a settings update to executionProfile 'verified-local' succeeds and a verified-local task can be submitted and claimed; with the default snapshot each of those is refused EXECUTION_PROFILE_NOT_READY (vitest through the real tools).",
+    "The refusal's missingCapabilities equals the held snapshot's list (vitest).",
+    "M07 DoD 4 proof rows: env vars (MOE_RUNTIME_PROTECTED=1 and others), settings.executionProfile and deliveryPolicy values, a readiness label persisted in project.json or a task JSON, caller arguments on claim_next_task, submit_plan, settings updates and qa_approve, and a valid report file inside the project or .moe/ each leave verified-local refused (vitest).",
+    "activationGaps() lists vm and check only when the held snapshot misses the matching capabilities (vitest).",
+    "The daemon start path evaluates and sets the snapshot with injected deps, and a throwing evaluation leaves it not ready (vitest).",
+    "The full daemon suite passes in a git-archive snapshot; the completion cites the counts."
+  ],
+  "taskRails": [
+    "executionProfile.ts must stay a leaf: no import of delivery/policy.ts or any state store."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-cf952313817d4b76b300b10a043aba7b"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.03,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:07:04.449Z",
+  "updatedAt": "2026-11-01T08:07:04.449Z"
+}

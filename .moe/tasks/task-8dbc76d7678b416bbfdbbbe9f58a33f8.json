@@ -1,0 +1,37 @@
+{
+  "id": "task-8dbc76d7678b416bbfdbbbe9f58a33f8",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07o] JetBrains Start Agent routes worker/QA seats to a Moe VM under verified-local",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8); M07 DoD 1-3 on the JetBrains side. Design: mem:decision-cq-m07-verified-local-activation. JetBrains is the primary IDE and goes first; VS Code follows in CQ-M07p. Depends on CQ-M07d (task-b0485bb1) for GET_EXECUTION_READINESS.\n\nObjective: under verified-local, Start Agent and Start Agents for a worker or QA seat either launch that seat's wrapper on the VM route or refuse before any terminal opens. Architect and governor seats stay on the host, unchanged.\n\nDeliverable, in moe-jetbrains (util/TerminalAgentLauncher.kt resolveContext, launchRole, startAgent and startAgents, plus a pure decision helper and its JUnit tests):\n- Profile absent, legacy or observe (read as util/RuntimeSelectionPolicy.kt does today): byte-for-byte today's commands for all four roles, WSL toggle on or off, Windows or not.\n- verified-local, worker or QA: send GET_EXECUTION_READINESS { refresh: true } over /ws and wait a bounded time for EXECUTION_READINESS.\n  - Not ready, daemon not connected, or no reply in time: a dialog naming each missing capability (or the connection failure). No terminal, no VM, no host fallback.\n  - Ready: launch the protected wrapper. On Windows, ALWAYS the native PowerShell wrapper, even with \"Run Agents in WSL\" on (human decision: the pinned Multipass client runs on Windows). Architect and governor keep honoring the WSL toggle.\n  - An agent CLI other than claude or codex (the guest JOBS table: gemini, grok, a custom command) is refused with a dialog naming it.\n- The plugin never runs Multipass, never provisions and never starts the agent CLI itself: the wrapper's VM route (CQ-M07m/n) does that.\n- CLIENT_HELLO declares capabilities.verifiedLocal true.\n\nNOT in scope: the wrapper's VM route; VS Code (CQ-M07p); the Accounts tab (CQ-M07l); docs (CQ-M07 sweep).\n\nVerification: ./gradlew test under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease), from WSL: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\", or a snapshot run of the exact commit (mem:gotcha-jetbrains-gate-snapshot).",
+  "definitionOfDone": [
+    "Profile absent, legacy or observe: the launch command for every role equals today's output, WSL toggle on and off (JUnit table pinned to current output).",
+    "verified-local and ready: worker and QA launch the native PowerShell wrapper on Windows even with the WSL toggle on, while architect and governor commands are unchanged (JUnit on the pure decision).",
+    "verified-local and not ready, no daemon, or no reply in time: the decision is a refusal carrying the missing capability list, and no terminal widget is created (JUnit on the decision plus the launcher with a fake terminal manager).",
+    "verified-local with agentCommand gemini, grok or a custom command: refused, naming the CLI (JUnit).",
+    "CLIENT_HELLO carries verifiedLocal true (JUnit on the hello payload).",
+    "./gradlew test passes under the lease."
+  ],
+  "taskRails": [
+    "Never fall back to a host or WSL launch of a worker/QA agent CLI under verified-local; refuse instead.",
+    "Legacy launches stay byte-for-byte unchanged."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b0485bb1cacf4d3b84979e9256078737"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.08,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:08:02.990Z",
+  "updatedAt": "2026-11-01T08:08:02.990Z"
+}

@@ -1,0 +1,34 @@
+{
+  "id": "task-b0485bb1cacf4d3b84979e9256078737",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07d] Readiness projection for wrappers and IDEs",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation. Depends on CQ-M07c (task-9ae89d5e), which holds the readiness snapshot.\n\nObjective: wrappers and both IDE plugins can ask the daemon whether verified-local is ready and which capabilities are missing. Neither MCP nor /ws forwards error context (docs/CONFIGURATION.md), so a refusal alone can never carry the list to a dialog.\n\nDeliverable (FIXED contract: CQ-M07m/n and CQ-M07o/p plan against these exact names and fields):\n- MCP tool `moe.get_execution_readiness`, registered in getTools() (packages/moe-daemon/src/tools/index.ts), read-only and NOT blocking. Args: { workerId?, refresh?: boolean }. Returns { profile: 'legacy'|'observe'|'verified-local'|'unreadable', ready: boolean, missingCapabilities: string[], evaluatedAt: string|null }. profile is the project's live resolveExecutionProfile, with 'unreadable' for a malformed setting instead of a throw. refresh re-runs the evaluator, awaited and rate-limited (the planner picks the window).\n- /ws `GET_EXECUTION_READINESS` { refresh? } answered by `EXECUTION_READINESS` with the same payload, following the GET_METRICS -> METRICS convention in packages/moe-daemon/src/server/WebSocketServer.ts.\n- packages/moe-daemon/src/server/clientCapabilities.ts: SERVER_CAPABILITIES.verifiedLocal becomes true. That is wire support only, never readiness. activationGaps' client gap then disappears; update the expectations that pinned it (state/profileRollout.test.ts, __e2e__/rolloutControls.e2e.test.ts). The CQ-M05 size-exception rail governs M05's own landing only; editing these expectations here is in scope.\n- If the plan exceeds the size caps, split the capability flip into its own slice rather than dropping a row.\n\nNOT in scope: the MCP_SERVER.md section (CQ-M07's docs sweep), IDE code, wrapper code, claim routing (CQ-M07q).\n\nVerification: the FULL daemon vitest suite (wire-protocol change) in a git-archive snapshot with this task's files overlaid: cd <snapshot>/packages/moe-daemon && npm ci && npm test, under env -i with the nvm Node 24 PATH. Never in the shared checkout.",
+  "definitionOfDone": [
+    "moe.get_execution_readiness returns the held snapshot's ready and missingCapabilities plus the live profile, proven for ready, not ready and an unreadable executionProfile setting (vitest through the tool registry).",
+    "GET_EXECUTION_READINESS over /ws is answered by EXECUTION_READINESS carrying the same payload (WebSocketServer vitest).",
+    "A burst of refresh requests runs the evaluator at most once per rate window (vitest with an injected clock).",
+    "Neither the tool nor the /ws reply writes state or an activity record, and nothing they return or accept changes readiness (vitest).",
+    "SERVER_CAPABILITIES.verifiedLocal is true and activationGaps no longer lists the client gap; the rolloutControls and profileRollout expectations are updated (vitest).",
+    "The full daemon suite passes in a git-archive snapshot; the completion cites the counts."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-9ae89d5e362c4bf3afb692de17ae8c5b"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.04,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:07:17.354Z",
+  "updatedAt": "2026-11-01T08:07:17.354Z"
+}
