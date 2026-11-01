@@ -88,7 +88,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -123,7 +123,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:49.306Z",
-  "updatedAt": "2026-11-01T12:26:33.842Z",
+  "updatedAt": "2026-11-01T12:33:05.988Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T08:15:59.560Z",
@@ -133,11 +133,14 @@
     "firstClaimAt": "2026-11-01T09:05:33.505Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-01T12:33:05.987Z",
+    "wallClockMs": 12452482
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-cef53f62"
+    "worker-cef53f62",
+    "qa-97c4310b"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -215,7 +218,70 @@
     "scripts/local-runner/guest-ssh.mjs",
     "scripts/local-runner/snapshot-transfer.mjs",
     "scripts/tests/local-runner.test.mjs",
+    "packages/moe-daemon/src/delivery/certificationEvidence.ts",
+    ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+    ".moe/tasks/task-5c4b5fab53ce41e294af5c70de1af51d.json",
+    ".moe/tasks/task-c7cead1b2bc24863bea5141129ef47b1.json",
+    ".moe/tasks/task-d6bc12fff910484d92368fa6825f523c.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "CQ-M07f adds the supervisor reset mode for seat VM reuse. The new guest-supervisor.py sha256 is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e, which supersedes 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190 for the operator's single re-certify. I posted that on R13 (comment-a7f0756a) and CQ-M07 (comment-fa0f6000).\n\nGuest, scripts/local-runner/guest-supervisor.py:\n- `reset` reads no stdin. If a moe-agent or moe-check process is alive (a /proc scan of real, effective, saved and fs uids), it exits 69 (EX_UNAVAILABLE, a new and unique code) with nothing removed and no frame.\n- Otherwise it removes WORKSPACE, WORKSPACE_MANIFEST and each SESSIONS/home-* entry, then writes {kind:'reset'} and exits 0. Each entry goes by lstat: a link is unlinked as itself, and a directory only through the fd-based shutil.rmtree.\n- Other exits: 71 when there is no identity account or rmtree cannot avoid symlink attacks; 74 on a probe, removal or write failure; 77 when not root; 64 for any other argv.\n- The main allowlist is only appended to, with 'reset' last. No existing mode changed.\n\nHost:\n- guest-ssh.mjs: SUPERVISOR_MODES gains 'reset'.\n- snapshot-transfer.mjs: new resetWorkspace({name, provider, timeoutMs}). It runs between two mount checks, over openGuestStream with no fallback, and accepts exactly one {kind:'reset'} frame.\n- Exit 69 maps to TRANSFER_RESET_BUSY through the internal, frozen RESET_EXITS. Every other non-zero exit, ssh's 255 included, is TRANSFER_EXIT_FAILED.\n- runSupervisorStream refuses any caller-supplied exits map with TRANSFER_INPUT_INVALID (architect comment).\n\nPin coupling (comment-c3fe4480): certificationEvidence.ts CERTIFICATION_PINS.supervisorSha256 moved to 616463b7…, and no other pin changed. Snapshot npm ci plus vitest on certificationEvidence and 6 sibling test files: 437/437 pass. With the HEAD pin, the drift test fails.\n\nTests: RS1-RS5 (real python) and RW1-RW3 (fakes); SS1 and SS9 now cover 9 modes and 7 transfers. Eve",
+  "commits": [
+    {
+      "sha": "3afbdc59e8e00c838c2c8610aec114b690396a79",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cef53f62@2026-11-01T12:08:59Z",
+      "paths": [
+        ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+        ".moe/tasks/task-5c4b5fab53ce41e294af5c70de1af51d.json",
+        ".moe/tasks/task-c7cead1b2bc24863bea5141129ef47b1.json",
+        ".moe/tasks/task-d6bc12fff910484d92368fa6825f523c.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "packages/moe-daemon/src/delivery/certificationEvidence.ts",
+        "scripts/local-runner/guest-ssh.mjs",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/snapshot-transfer.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-cef53f62",
+      "recordedAt": "2026-11-01T12:27:03.385Z",
+      "treeId": "9589e85496a3dd1f56777d9692229e6117e0241f",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/local-runner/guest-supervisor.py",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-5c4b5fab53ce41e294af5c70de1af51d"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/local-runner/guest-ssh.mjs",
+    "scripts/local-runner/snapshot-transfer.mjs",
+    "scripts/tests/local-runner.test.mjs",
     "packages/moe-daemon/src/delivery/certificationEvidence.ts"
   ],
-  "completionSummary": "CQ-M07f adds the supervisor reset mode for seat VM reuse. The new guest-supervisor.py sha256 is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e, which supersedes 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190 for the operator's single re-certify. I posted that on R13 (comment-a7f0756a) and CQ-M07 (comment-fa0f6000).\n\nGuest, scripts/local-runner/guest-supervisor.py:\n- `reset` reads no stdin. If a moe-agent or moe-check process is alive (a /proc scan of real, effective, saved and fs uids), it exits 69 (EX_UNAVAILABLE, a new and unique code) with nothing removed and no frame.\n- Otherwise it removes WORKSPACE, WORKSPACE_MANIFEST and each SESSIONS/home-* entry, then writes {kind:'reset'} and exits 0. Each entry goes by lstat: a link is unlinked as itself, and a directory only through the fd-based shutil.rmtree.\n- Other exits: 71 when there is no identity account or rmtree cannot avoid symlink attacks; 74 on a probe, removal or write failure; 77 when not root; 64 for any other argv.\n- The main allowlist is only appended to, with 'reset' last. No existing mode changed.\n\nHost:\n- guest-ssh.mjs: SUPERVISOR_MODES gains 'reset'.\n- snapshot-transfer.mjs: new resetWorkspace({name, provider, timeoutMs}). It runs between two mount checks, over openGuestStream with no fallback, and accepts exactly one {kind:'reset'} frame.\n- Exit 69 maps to TRANSFER_RESET_BUSY through the internal, frozen RESET_EXITS. Every other non-zero exit, ssh's 255 included, is TRANSFER_EXIT_FAILED.\n- runSupervisorStream refuses any caller-supplied exits map with TRANSFER_INPUT_INVALID (architect comment).\n\nPin coupling (comment-c3fe4480): certificationEvidence.ts CERTIFICATION_PINS.supervisorSha256 moved to 616463b7…, and no other pin changed. Snapshot npm ci plus vitest on certificationEvidence and 6 sibling test files: 437/437 pass. With the HEAD pin, the drift test fails.\n\nTests: RS1-RS5 (real python) and RW1-RW3 (fakes); SS1 and SS9 now cover 9 modes and 7 transfers. Eve"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-cef53f62@2026-11-01T12:08:59Z",
+    "at": "2026-11-01T12:27:03.385Z"
+  },
+  "completedAt": "2026-11-01T12:33:05.987Z",
+  "reviewCompletedAt": "2026-11-01T12:33:05.987Z",
+  "reviewSummary": "APPROVED CQ-M07f, completion 3afbdc59 (HEAD; owned files clean).\n\nGATE on a pure git archive of 3afbdc59, plan command: 561 tests, 558 pass, 0 fail, 3 opt-in skips, EXIT=0. Supervisor sha256 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e (parent 3a19f3bf).\n\nDAEMON snapshot (npm ci, vitest): certificationEvidence drift, executionReadiness, requiredChecks, repairPolicy, contextInvalidation: 380/380 pass. The pin is the only daemon edit (comment-c3fe4480). certified-provider.json and readiness untouched.\n\nDoD:\n1. RS1: 0 plus one frame, targets gone, materialize then 0.\n2. RS2: 69, no frame, tree unchanged.\n3. RS3: links unlinked, targets kept.\n4. SEAT_KEPT bytes and modes kept.\n5. RW1-RW3: 69 is RESET_BUSY, other exits (255 too) EXIT_FAILED, one spawn, no fallback, caller exits refused.\n6. Gate green; sha posted on R13 and CQ-M07.\n\nMUTATION: 18 of 18 killed (busy, lstat, symlink, sessions, rmtree guard, exits map, frame keys, mount checks, root order).\n\nSIZE: about +348/-16 own lines; the commit also carries peer 5c4b5fab's HS rows (+116).\n\nNON-BLOCKING: stale 'never reused or deleted' comment at guest-supervisor.py:953 (fix with the next pin move); the real-guest proof is the operator re-certify on 616463b7.",
+  "requiredCheckAtDone": null
 }
