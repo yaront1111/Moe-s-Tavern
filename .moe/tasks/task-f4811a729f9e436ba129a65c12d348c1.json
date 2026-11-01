@@ -110,7 +110,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -472,7 +472,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-11-01T19:03:23.352Z",
+  "updatedAt": "2026-11-01T19:21:22.096Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",
@@ -505,13 +505,16 @@
     "worker-c75a6f39",
     "governor-4764040b",
     "worker-88af1437",
-    "worker-c7cdb959"
+    "worker-c7cdb959",
+    "qa-1b5727b1"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-29T23:06:03.532Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-01T19:21:22.096Z",
+    "wallClockMs": 245718564
   },
   "tier": "heavy",
   "effort": "max",
@@ -764,5 +767,9 @@
     "reportedAt": "2026-11-01T19:02:59.686Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Step 5 (amend-2) done; steps 1-4 done earlier.\nVALIDATIONS (both PASS; HEAD snapshot, Node 24):\n- linux x64: comment-5cee94b1, sha256 e793c7c6b4468fe2f33ab7c41f299800af382334e09f7c48d22cc70cc0181b12.\n- win32 x64: comment-d2f5081c, sha256 48dd267538e707af6d9b830b6dd855049229879d5dbbf2da8adf8c8a05beb9a0.\nEach: validateCertificationReport accepts it; certified true, transport native, executionReady false; all 13 checks passed (code null); bytes = JSON.stringify(report)+LF = the comment's line.\nPIN: supervisorSha256 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. It equals sha256(guest-supervisor.py) at HEAD c4510b73 and CERTIFICATION_PINS.supervisorSha256. Image 04e8f246…6c94 = the x64 pin; Multipass 1.17.0 / 1.17.0+win. Both runs certified 106284b0, an ancestor of HEAD; scripts/local-runner is unchanged since.\nDARWIN: x64 and arm64 ship as 'unsupported: no report' under the approved TASK rail prop-29ce59fa. Refusal at HEAD: readCertificationStore accepts only the host's own platform+arch report, so a darwin host lacks isolated-agent-and-qa-vms and isolated-check-vm in the daemon readiness evaluation. assertExecutionProfileReady (CQ-M07c) therefore refuses verified-local with EXECUTION_PROFILE_NOT_READY. Nothing enables verified-local.\nDOCS: docs/CERTIFICATION.md gets two table rows (platform, arch, Multipass, image, supervisor, finishedAt, report sha256), both reports verbatim in json blocks (block+LF hashes to the row), the recording rule, the darwin paragraph and measured durations (16 min / 6 min). docs/design/protected-profile-threat-model.md: the guest-loopback bullet now describes the SSH transport (scope growth routed by comment-6063dace).\nDoD fresh: node --test scripts/tests/local-runner.test.mjs -> exit 0, 387 tests, 386 pass, 0 fail, 1 skip (macOS native smoke). HEAD then moved to 52c139c4 (JetBrains + daemon test + board only; nothing the gate reads).\nRouted: CQ-M06 comment-5450daac (host certification store undocumented)."
+  "completionSummary": "Step 5 (amend-2) done; steps 1-4 done earlier.\nVALIDATIONS (both PASS; HEAD snapshot, Node 24):\n- linux x64: comment-5cee94b1, sha256 e793c7c6b4468fe2f33ab7c41f299800af382334e09f7c48d22cc70cc0181b12.\n- win32 x64: comment-d2f5081c, sha256 48dd267538e707af6d9b830b6dd855049229879d5dbbf2da8adf8c8a05beb9a0.\nEach: validateCertificationReport accepts it; certified true, transport native, executionReady false; all 13 checks passed (code null); bytes = JSON.stringify(report)+LF = the comment's line.\nPIN: supervisorSha256 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. It equals sha256(guest-supervisor.py) at HEAD c4510b73 and CERTIFICATION_PINS.supervisorSha256. Image 04e8f246…6c94 = the x64 pin; Multipass 1.17.0 / 1.17.0+win. Both runs certified 106284b0, an ancestor of HEAD; scripts/local-runner is unchanged since.\nDARWIN: x64 and arm64 ship as 'unsupported: no report' under the approved TASK rail prop-29ce59fa. Refusal at HEAD: readCertificationStore accepts only the host's own platform+arch report, so a darwin host lacks isolated-agent-and-qa-vms and isolated-check-vm in the daemon readiness evaluation. assertExecutionProfileReady (CQ-M07c) therefore refuses verified-local with EXECUTION_PROFILE_NOT_READY. Nothing enables verified-local.\nDOCS: docs/CERTIFICATION.md gets two table rows (platform, arch, Multipass, image, supervisor, finishedAt, report sha256), both reports verbatim in json blocks (block+LF hashes to the row), the recording rule, the darwin paragraph and measured durations (16 min / 6 min). docs/design/protected-profile-threat-model.md: the guest-loopback bullet now describes the SSH transport (scope growth routed by comment-6063dace).\nDoD fresh: node --test scripts/tests/local-runner.test.mjs -> exit 0, 387 tests, 386 pass, 0 fail, 1 skip (macOS native smoke). HEAD then moved to 52c139c4 (JetBrains + daemon test + board only; nothing the gate reads).\nRouted: CQ-M06 comment-5450daac (host certification store undocumented).",
+  "completedAt": "2026-11-01T19:21:22.096Z",
+  "reviewCompletedAt": "2026-11-01T19:21:22.096Z",
+  "reviewSummary": "APPROVE CQ-R13 (epic-final). Reviewed completion dccdec14 (on branch and origin), checkpoints 80038a06/e53ec31b, and the step-2/3 hunks swept into peer commits 7b818c9a/92d96620. All task paths clean at HEAD.\nDoD4: re-ran `node --test scripts/tests/local-runner.test.mjs` (env -i, Node 24.21.0, git archive of HEAD e02eca26): exit 0, 387 tests, 386 pass, 0 fail, 1 skip (macOS smoke). CI local-runner line (12 files, daemon dist built in snapshot): exit 0, 706/703/0 fail/3 skips (LA5, K9, macOS). 4 daemon certification/readiness vitest files: 297/297. Lint OK; show --check clean.\nDoD1: validated both report files myself. linux x64 e793c7c6…, win32 x64 48dd2675…: validateCertificationReport accepts; native, certified, executionReady false; 13 checks passed in CERTIFY_CHECKS order. Supervisor 616463b7 = HEAD guest-supervisor.py = CERTIFICATION_PINS; image 04e8f246 = x64 pin; 1.17.0/1.17.0+win fit the daemon pins. bytes = JSON.stringify+LF = docs block+LF = comment line; table rows match. 106284b0 is an ancestor; local-runner changed since only in guest-session.mjs (e182c645, host side), pin unchanged. darwin x64/arm64 'unsupported: no report' per approved rail prop-29ce59fa; no doc claims darwin support.\nDoD2: RX1-RX4 read. Credential never leaks; forged ledger owner/name refused with 0 provider calls; non-loopback daemon.json refused pre-spawn and per forward; pinned export immune to ref move + replace object; supervisor hash mismatch refused. controller-replacement passed in both real reports; ssh host key pinned (GS rows).\nDoD3: RX5. The daemon store accepts only the host's own platform/arch, and a refusal leaves both isolation capabilities missing -> EXECUTION_PROFILE_NOT_READY.\nQA mutants: 5/5 killed (RX6, LC2, DC4, KI3, KI1).\nSize: own scripts +154/-8 (net 146), docs +226/-20, approved scope (docs-vs-code precedent).\nAdvisory: ARCHITECTURE.md:428 \"launched as a local file\" is stale for Windows since 97286b6f; routed to CQ-M06 comment-39558fd2.",
+  "requiredCheckAtDone": null
 }

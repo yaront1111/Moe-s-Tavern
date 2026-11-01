@@ -96,7 +96,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:23.273Z",
-  "updatedAt": "2026-11-01T19:20:49.272Z",
+  "updatedAt": "2026-11-01T19:21:11.189Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T11:19:44.514Z",
     "plannedStepCount": 4,
@@ -200,7 +200,52 @@
     "moe-vscode/tests/verified-local-launch.test.cjs",
     "moe-vscode/src/util/AgentLauncher.ts",
     "moe-vscode/src/extension.ts",
-    "moe-vscode/tests/protected-runtime.test.cjs"
+    "moe-vscode/tests/protected-runtime.test.cjs",
+    ".moe/tasks/task-19cbba2272ee4a1c9f0a9c933f339f59.json",
+    ".moe/tasks/task-3954cc09f74045a0ac8fa4b795dcb0a9.json",
+    ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
+    ".moe/tasks/task-828e7d21602e4cf2a0f242e024db7dea.json",
+    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json"
   ],
-  "completionSummary": "VS Code now matches CQ-M07o's verified-local launch route.\n- MoeDaemonClient.ts:\n  - declaredProfile is a fresh, strict read that never pins.\n  - parseExecutionReadiness is strict: the 4 fields are checked, unknown keys are ignored, and ready-with-ids gives null.\n  - CLIENT_HELLO {planRevisions, verifiedLocal} is sent via ws.send as each socket's first frame, before 'connected'. Every VS Code approval path already sends expectedPlanRevision.\n  - requestExecutionReadiness sends GET_EXECUTION_READINESS {refresh:true}, waits at most 20 s and never rejects. One reply settles every waiter. A readiness ERROR (operation, payload.operation, or 'Unknown message type') becomes DAEMON_ERROR and never reaches onError. Close, disconnect and dispose give DISCONNECTED.\n- AgentLauncher.ts:\n  - A worker/QA seat under a verified-local or untrusted declaration runs today's sync checks, then refuses gemini, grok and custom commands by name before asking for readiness. It launches the installed platform wrapper (PowerShell on Windows) only on an answered verified-local ready reply. Anything else shows one error with CQ-M07o's sentences and opens no terminal.\n  - A missing readiness source refuses.\n  - Absent, legacy and observe launches, and architect and governor, keep today's command and stay synchronous.\n  - launchAllAgents asks for readiness once for worker+QA and shows at most one error. Self-review fix: a seat that carries that shared decision stays gated if the declaration changes before the stagger timers fire (A2).\n- extension.ts passes daemonClient.requestExecutionReadiness to all three launch calls.\n- protected-runtime.test.cjs: only L1 changed (ready source + await).\n\nTests: the new verified-local-launch.test.cjs has 26 rows covering every DoD item. They failed before the change and pass after it; the guard was also mutation-checked.\n\nGate (plan checkRef, Linux snapshot): EXIT 0, 388 tests, 384 pass, 4 skipped (Windows-only).\n\nSIZE: net 565 (+583/-18; runtime 213, tests 352)"
+  "completionSummary": "VS Code now matches CQ-M07o's verified-local launch route.\n- MoeDaemonClient.ts:\n  - declaredProfile is a fresh, strict read that never pins.\n  - parseExecutionReadiness is strict: the 4 fields are checked, unknown keys are ignored, and ready-with-ids gives null.\n  - CLIENT_HELLO {planRevisions, verifiedLocal} is sent via ws.send as each socket's first frame, before 'connected'. Every VS Code approval path already sends expectedPlanRevision.\n  - requestExecutionReadiness sends GET_EXECUTION_READINESS {refresh:true}, waits at most 20 s and never rejects. One reply settles every waiter. A readiness ERROR (operation, payload.operation, or 'Unknown message type') becomes DAEMON_ERROR and never reaches onError. Close, disconnect and dispose give DISCONNECTED.\n- AgentLauncher.ts:\n  - A worker/QA seat under a verified-local or untrusted declaration runs today's sync checks, then refuses gemini, grok and custom commands by name before asking for readiness. It launches the installed platform wrapper (PowerShell on Windows) only on an answered verified-local ready reply. Anything else shows one error with CQ-M07o's sentences and opens no terminal.\n  - A missing readiness source refuses.\n  - Absent, legacy and observe launches, and architect and governor, keep today's command and stay synchronous.\n  - launchAllAgents asks for readiness once for worker+QA and shows at most one error. Self-review fix: a seat that carries that shared decision stays gated if the declaration changes before the stagger timers fire (A2).\n- extension.ts passes daemonClient.requestExecutionReadiness to all three launch calls.\n- protected-runtime.test.cjs: only L1 changed (ready source + await).\n\nTests: the new verified-local-launch.test.cjs has 26 rows covering every DoD item. They failed before the change and pass after it; the guard was also mutation-checked.\n\nGate (plan checkRef, Linux snapshot): EXIT 0, 388 tests, 384 pass, 4 skipped (Windows-only).\n\nSIZE: net 565 (+583/-18; runtime 213, tests 352)",
+  "commits": [
+    {
+      "sha": "b3a1fc055311d6723747af31d5a4c9c4f9a5273e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c7cdb959@2026-11-01T19:07:04Z",
+      "paths": [
+        ".moe/tasks/task-19cbba2272ee4a1c9f0a9c933f339f59.json",
+        ".moe/tasks/task-3954cc09f74045a0ac8fa4b795dcb0a9.json",
+        ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
+        ".moe/tasks/task-828e7d21602e4cf2a0f242e024db7dea.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/protected-runtime.test.cjs",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ],
+      "recordedBy": "worker-c7cdb959",
+      "recordedAt": "2026-11-01T19:21:11.189Z",
+      "treeId": "26c96b83757bc2f5dadf7954290cf39cdca73ce0",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/verified-local-launch.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/src/util/AgentLauncher.ts",
+    "moe-vscode/tests/protected-runtime.test.cjs",
+    "moe-vscode/src/extension.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c7cdb959@2026-11-01T19:07:04Z",
+    "at": "2026-11-01T19:21:11.189Z"
+  }
 }
