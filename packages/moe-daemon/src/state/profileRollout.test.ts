@@ -16,7 +16,9 @@ import { getAttempt, openAttempt, setAttemptPhase } from './attemptStore.js';
 import { decodeClientHello } from '../server/clientCapabilities.js';
 import * as executionProfile from '../delivery/executionProfile.js';
 import { MoeError } from '../util/errors.js';
-import { activationGaps, activationUnsupported, classifyProfileTransition, type ActivationGap } from './profileRollout.js';
+import {
+  activationGaps, activationUnsupported, classifyProfileTransition, strictRetention, type ActivationGap,
+} from './profileRollout.js';
 import type { Project, Task } from '../types/schema.js';
 
 type Row = Record<string, unknown>;
@@ -337,4 +339,29 @@ describe('rollback retention', () => {
       expect(h.state.getTask('task-1')?.status).toBe('WORKING');
       expect(getAttempt(h.state, attempt.id)?.phase).toBe('running');
     });
+
+  it('S3 sorts the retained ids ascending, then caps them, whatever order the tasks were loaded in', async () => {
+    const pad = (i: number) => String(i).padStart(2, '0');
+    const TASKS = Array.from({ length: 12 }, (_v, i) => `task-r${pad(i)}`);
+    const ATTEMPTS = TASKS.map((id) => id.replace('task-', 'attempt-'));
+    await seed(TASKS.map((id) => ({ id, status: 'WORKING', planRevision: 3, executionPolicySnapshot: STRICT })));
+    for (let i = 0; i < TASKS.length; i++) {
+      await openAttempt(h.state, {
+        id: ATTEMPTS[i], taskId: TASKS[i], workerId: 'worker-r', runnerId: 'runner-r',
+        workspace: h.testDir, executionPolicySnapshot: STRICT,
+      } as never);
+    }
+    // loadEntities inserts in fs.readdirSync order, and NTFS already lists S1's ids sorted: force a known
+    // descending iteration order in the same Map, so the result cannot depend on the directory listing.
+    const descending = [...h.state.tasks].sort(([a], [b]) => (a < b ? 1 : -1));
+    h.state.tasks.clear();
+    for (const [id, task] of descending) h.state.tasks.set(id, task);
+    expect([...h.state.tasks.keys()]).toEqual([...TASKS].reverse());
+
+    expect(strictRetention(h.state)).toEqual({
+      retainedStrictTasks: 12, retainedStrictTaskIds: TASKS.slice(0, 10),
+      retainedStrictAttempts: 12, retainedStrictAttemptIds: ATTEMPTS.slice(0, 10),
+      unreadableSnapshots: 0,
+    });
+  });
 });
