@@ -11,14 +11,56 @@
     "The full daemon suite passes in a git-archive snapshot; the completion cites the counts."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Flip the server capability and update profileRollout.test.ts. First read `mem:task-task-9ae89d5e362c4bf3afb692de17ae8c5b-handoff` (CQ-M07c's holder) and `mem:task-task-b0485bb1cacf4d3b84979e9256078737-handoff` (CQ-M07d, which leaves this flip to you).\n\n1. **packages/moe-daemon/src/server/clientCapabilities.ts.**\n   - In SERVER_CAPABILITIES, set verifiedLocal to true. Leave every other key unchanged; runnerStatus and modelReceipts stay false.\n   - Rewrite the doc comment: verifiedLocal is wire support for the readiness projection (moe.get_execution_readiness, /ws GET_EXECUTION_READINESS). It is never readiness, which only the daemon's held evaluation grants through assertExecutionProfileReady.\n   - Change nothing in decodeClientHello.\n2. **packages/moe-daemon/src/state/profileRollout.test.ts.**\n   - Split GAPS in two:\n     - `GAP_KINDS`: the existing three entries, vm, client and check. G2's it.each table and its `for (const gap of ...)` loop keep testing activationUnsupported, the refusal builder, which still accepts any gap list including a client gap. Point them at GAP_KINDS so they test exactly what they tested before.\n     - `DEFAULT_GAPS` = [vm, check], with today's reason strings. That is what activationGaps() returns while CQ-M07c's held readiness is the default.\n   - refusedRecord's unsupportedCapabilities becomes DEFAULT_GAPS.\n   - In G1: every `activationGaps()` expectation becomes DEFAULT_GAPS, and the fresh-copy mutation checks stay as they are. The hello assertion becomes `hello.negotiatedCapabilities.verifiedLocal` toBe(true). Retitle G1 so it says the client gap is gone: 'G1 reads daemon-owned facts only, has no client gap, and returns fresh copies'.\n   - Change no other row.\n\nError handling: none is added; the flip is a constant. Every refusal path stays the same, with readiness still refusing first.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/clientCapabilities.ts",
+        "packages/moe-daemon/src/state/profileRollout.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update the two e2e files. Change only these expectations.\n\n1. **packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts.** GAPS (lines ~41-45) becomes [vm, check], with the same reason strings. It feeds only the refused-activation records, and those now carry unsupportedCapabilities [vm, check].\n2. **packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts.**\n   - GAPS (lines ~398-402) becomes [vm, check]. It feeds refusedRecord at ~404.\n   - Rewrite the D2b row at ~532 as 'a hello claiming verifiedLocal, runnerStatus and modelReceipts negotiates only verifiedLocal, which is wire support, never readiness':\n     - pick(hello.negotiatedCapabilities) and pick(hello.capabilities) both toEqual { verifiedLocal: true, runnerStatus: false, modelReceipts: false };\n     - ADD, in the same row, that assertExecutionProfileReady('verified-local') still throws codeName 'EXECUTION_PROFILE_NOT_READY' after the hello. That keeps the row's original point, that a client cannot negotiate trust. Import assertExecutionProfileReady if the file doesn't already.\n   - Leave NOT_READY_WIRE, every other constant and every other row untouched.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts",
+        "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update the last two pinned files.\n\n1. **packages/moe-daemon/src/server/WebSocketServer.test.ts.** In describe('capability negotiation v1'), set the local serverCapabilities constant's verifiedLocal (~line 289) to true. Its rows derive allClaimed and the negotiated expectations from that constant. Make sure each still asserts exactly what it did, now with verifiedLocal true. Change no other describe, including CQ-M07d's GET_EXECUTION_READINESS rows.\n2. **packages/moe-daemon/src/delivery/readinessHolder.test.ts** (created by CQ-M07c; listed in newFiles only because the plan-time existence check runs before it lands).\n   - **activationGaps rows:**\n     - default → [vm, check];\n     - READY → [];\n     - only isolated-check-vm missing → [check];\n     - only isolated-agent-and-qa-vms missing → [vm];\n     - only authenticated-runner-evidence missing → [].\n   - **The client toggle.** The file-scoped vi.hoisted toggle over the partial vi.mock of '../server/clientCapabilities.js' existed only to stand in for this flip. Delete the mock and the toggle, so the DoD 1 positive rows run on the real decodeClientHello.\n   - **The toggle-OFF row.** The row 'READY held, toggle off → EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED [client]' becomes: 'READY held, unmocked: activationGaps() is [] and updateSettings({ executionProfile: \"verified-local\", deliveryPolicy: \"local-branch\" }) succeeds'.\n   - Keep the DoD 1 negative row as it is: default held, updateSettings refused EXECUTION_PROFILE_NOT_READY. That is DoD 3 here: the flip grants no readiness.\n\nChange no other row, and weaken no assertion.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/readinessHolder.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh, after steps 1-3: the FULL daemon suite, because this is a wire-protocol change. Run it in a git-archive snapshot; never npm ci, npm test or a build in the shared checkout (global rail).\n\nFirst confirm HEAD carries CQ-M07d's landing: `git log moe/work-2026-10-24 --grep 'Moe-Task: task-b0485bb1cacf4d3b84979e9256078737' --format=%h` must print a sha. If it prints nothing, stop and call moe.report_blocked with blockedOnTaskIds ['task-b0485bb1cacf4d3b84979e9256078737'].\n\nRun exactly this. Its command, exit code and output tail are the complete_task verification evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-41d0c5a9-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/server/clientCapabilities.ts packages/moe-daemon/src/state/profileRollout.test.ts packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts packages/moe-daemon/src/server/WebSocketServer.test.ts packages/moe-daemon/src/delivery/readinessHolder.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'`\n\nExpect exit 0 and 0 failures. Cite the file and test counts, passed and skipped, in complete_task.\n\nIf some other test also pinned verifiedLocal false or the client gap, do not edit it here. Stop, add it to a moe.add_comment on this task naming file:line, and call moe.request_replan; the plan's file list must name every edited file.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read `git diff HEAD -- packages/moe-daemon/src` as an attacker would.\n\n- **Source scope.** The source diff is the single SERVER_CAPABILITIES value plus its comment.\n- **Test expectations.** Every test change is an expectation that pinned the client gap or a negotiated false, or the removed CQ-M07c stand-in mock.\n  - No assertion was deleted without an equal or stronger replacement.\n  - G2 still covers all three gap kinds through GAP_KINDS.\n  - D2b gained the readiness refusal.\n- **No readiness grant.** With the default held readiness, verified-local is still refused EXECUTION_PROFILE_NOT_READY everywhere. Check the rolloutControls and profileRollout refusal records and the readinessHolder negative row.\n- **Other pins.** `grep -rn \"client-contract-unsupported\\|verifiedLocal: false\" packages/moe-daemon/src --include=*.test.ts` should show only intentional rows, such as G2's GAP_KINDS table.\n\nFix anything found, re-run step 4's gate, and submit its fresh output.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 3,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Architect correction before any work: plan rev 1's step 2 left out its affectedFiles (packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts and __e2e__/workstreamComposition.e2e.test.ts), so the planned file set is incomplete. architect-b520bc90 is resubmitting the same plan with those two paths declared. No step was started.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -29,5 +71,130 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T10:11:22.050Z",
-  "updatedAt": "2026-11-01T10:11:22.050Z"
+  "updatedAt": "2026-11-01T10:18:08.281Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T10:14:12.421Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T10:18:08.257Z",
+  "executionContract": {
+    "intendedBehavior": "SERVER_CAPABILITIES.verifiedLocal is true, so a client that declares it negotiates verifiedLocal true and activationGaps loses its client gap. Readiness still comes only from the daemon's held evaluation: with the default held value, verified-local is refused EXECUTION_PROFILE_NOT_READY everywhere.",
+    "acceptanceCriteria": [
+      "decodeClientHello negotiates verifiedLocal true; runnerStatus and modelReceipts stay false.",
+      "activationGaps returns [vm, check] by default and [] with a held ready snapshot.",
+      "The default held readiness still refuses a verified-local settings update with EXECUTION_PROFILE_NOT_READY.",
+      "The five pinned test files are updated without weakening other assertions."
+    ],
+    "invariants": [
+      "The flip grants no readiness: assertExecutionProfileReady and the holder are unchanged.",
+      "runnerStatus and modelReceipts stay false.",
+      "The only source change is the SERVER_CAPABILITIES value and its comment."
+    ],
+    "compatibility": [
+      "Every refusal path keeps its code. Activation refusal records now list [vm, check].",
+      "IDE CLIENT_HELLO changes belong to CQ-M07o/p."
+    ],
+    "approvedScope": [
+      "clientCapabilities.ts SERVER_CAPABILITIES.verifiedLocal and its doc comment.",
+      "Expectation updates in profileRollout.test.ts, rolloutControls.e2e.test.ts, workstreamComposition.e2e.test.ts, WebSocketServer.test.ts and readinessHolder.test.ts."
+    ],
+    "reuse": [
+      "The existing test fixtures and helpers in each file. The real decodeClientHello replaces CQ-M07c's stand-in mock."
+    ],
+    "sourceAssumptions": [
+      "clientCapabilities.ts:5-9 SERVER_CAPABILITIES has verifiedLocal: false today.",
+      "profileRollout.ts:41-48 clientSupportsVerifiedLocal() calls decodeClientHello({protocolVersion:1, capabilities:{verifiedLocal:true}}).",
+      "The pins sit at profileRollout.test.ts:42-46 and :133-134, rolloutControls.e2e.test.ts:41-45, workstreamComposition.e2e.test.ts:398-405 and :532-537, and WebSocketServer.test.ts:286-290."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-41d0c5a9-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/server/clientCapabilities.ts packages/moe-daemon/src/state/profileRollout.test.ts packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts packages/moe-daemon/src/server/WebSocketServer.test.ts packages/moe-daemon/src/delivery/readinessHolder.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- **Flip-agnostic CQ-M07c rows** (expectations computed from the capability) were rejected. Adaptive expectations weaken the tests, so this slice updates them explicitly.\n- **Deleting G2's client row** was rejected. activationUnsupported still accepts any gap list, so GAP_KINDS keeps its coverage.\n- **Keeping CQ-M07c's clientCapabilities mock** was rejected. With the flip it is redundant, and a mock left in place hides what the real gate does.\n- **Rev 2** is rev 1 unchanged except that step 2 now declares its two e2e files.\n- **Tier.** With 6 distinct files the daemon floors the plan at heavy, so it runs on Opus at xhigh. The work stays mechanical.",
+    "codebaseInsights": "- SERVER_CAPABILITIES (clientCapabilities.ts:5-9) is module-private. decodeClientHello negotiates server AND claimed per key.\n- profileRollout.activationGaps' client gap comes from clientSupportsVerifiedLocal() → decodeClientHello, so the flip removes it with no change in profileRollout.ts.\n- Pins found by grep:\n  - profileRollout.test.ts:42-46 (GAPS) and :133-134 (the hello row);\n  - rolloutControls.e2e.test.ts:41-45;\n  - workstreamComposition.e2e.test.ts:398-405 and :532-537 (D2b);\n  - WebSocketServer.test.ts:286-290;\n  - CQ-M07c's readinessHolder.test.ts (its plan's DoD 4 rows and client toggle).",
+    "risks": "- **readinessHolder.test.ts must exist.** It only exists once CQ-M07c lands; the dependsOn chain M07d2 → M07d → M07c guarantees that.\n- **Unknown pins.** A pin not found by grep stops the task (request_replan) rather than growing the file list silently.\n- **IDE behavior.** IDE plugins built before CQ-M07o/p ignore a true server capability they don't use.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/clientCapabilities.ts",
+      "packages/moe-daemon/src/state/profileRollout.ts",
+      "packages/moe-daemon/src/state/profileRollout.test.ts",
+      "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 3,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "c803af466c538eb107a1582b3f38f7db0c84643c",
+    "planRevision": 3
+  },
+  "planApprovedAt": "2026-11-01T10:18:08.281Z",
+  "approvedPlanRevision": 3,
+  "priorAttempt": {
+    "attemptedAt": "2026-11-01T10:16:19.460Z",
+    "reason": "Architect correction before any work: plan rev 1's step 2 left out its affectedFiles (packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts and __e2e__/workstreamComposition.e2e.test.ts), so the planned file set is incomplete. architect-b520bc90 is resubmitting the same plan with those two paths declared. No step was started.",
+    "implementationPlan": [
+      {
+        "stepId": "step-1",
+        "description": "Flip the server capability and update profileRollout.test.ts. First read `mem:task-task-9ae89d5e362c4bf3afb692de17ae8c5b-handoff` (CQ-M07c's holder) and `mem:task-task-b0485bb1cacf4d3b84979e9256078737-handoff` (CQ-M07d, which leaves this flip to you).\n\n1. **packages/moe-daemon/src/server/clientCapabilities.ts.**\n   - In SERVER_CAPABILITIES, set verifiedLocal to true. Leave every other key unchanged; runnerStatus and modelReceipts stay false.\n   - Rewrite the doc comment: verifiedLocal is wire support for the readiness projection (moe.get_execution_readiness, /ws GET_EXECUTION_READINESS). It is never readiness, which only the daemon's held evaluation grants through assertExecutionProfileReady.\n   - Change nothing in decodeClientHello.\n2. **packages/moe-daemon/src/state/profileRollout.test.ts.**\n   - Split GAPS in two:\n     - `GAP_KINDS`: the existing three entries, vm, client and check. G2's it.each table and its `for (const gap of ...)` loop keep testing activationUnsupported, the refusal builder, which still accepts any gap list including a client gap. Point them at GAP_KINDS so they test exactly what they tested before.\n     - `DEFAULT_GAPS` = [vm, check], with today's reason strings. That is what activationGaps() returns while CQ-M07c's held readiness is the default.\n   - refusedRecord's unsupportedCapabilities becomes DEFAULT_GAPS.\n   - In G1: every `activationGaps()` expectation becomes DEFAULT_GAPS, and the fresh-copy mutation checks stay as they are. The hello assertion becomes `hello.negotiatedCapabilities.verifiedLocal` toBe(true). Retitle G1 so it says the client gap is gone: 'G1 reads daemon-owned facts only, has no client gap, and returns fresh copies'.\n   - Change no other row.\n\nError handling: none is added; the flip is a constant. Every refusal path stays the same, with readiness still refusing first.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "packages/moe-daemon/src/server/clientCapabilities.ts",
+          "packages/moe-daemon/src/state/profileRollout.test.ts"
+        ]
+      },
+      {
+        "stepId": "step-2",
+        "description": "Update the two e2e files. Change only these expectations.\n\n1. **packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts.** GAPS (lines ~41-45) becomes [vm, check], with the same reason strings. It feeds only the refused-activation records, and those now carry unsupportedCapabilities [vm, check].\n2. **packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts.**\n   - GAPS (lines ~398-402) becomes [vm, check]. It feeds refusedRecord at ~404.\n   - Rewrite the D2b row at ~532 as 'a hello claiming verifiedLocal, runnerStatus and modelReceipts negotiates only verifiedLocal, which is wire support, never readiness':\n     - pick(hello.negotiatedCapabilities) and pick(hello.capabilities) both toEqual { verifiedLocal: true, runnerStatus: false, modelReceipts: false };\n     - ADD, in the same row, that assertExecutionProfileReady('verified-local') still throws codeName 'EXECUTION_PROFILE_NOT_READY' after the hello. That keeps the row's original point, that a client cannot negotiate trust. Import assertExecutionProfileReady if the file doesn't already.\n   - Leave NOT_READY_WIRE, every other constant and every other row untouched.",
+        "status": "PENDING",
+        "affectedFiles": []
+      },
+      {
+        "stepId": "step-3",
+        "description": "Update the last two pinned files.\n\n1. **packages/moe-daemon/src/server/WebSocketServer.test.ts.** In describe('capability negotiation v1'), set the local serverCapabilities constant's verifiedLocal (~line 289) to true. Its rows derive allClaimed and the negotiated expectations from that constant. Make sure each still asserts exactly what it did, now with verifiedLocal true. Change no other describe, including CQ-M07d's GET_EXECUTION_READINESS rows.\n2. **packages/moe-daemon/src/delivery/readinessHolder.test.ts** (created by CQ-M07c; listed in newFiles only because the plan-time existence check runs before it lands).\n   - **activationGaps rows:**\n     - default → [vm, check];\n     - READY → [];\n     - only isolated-check-vm missing → [check];\n     - only isolated-agent-and-qa-vms missing → [vm];\n     - only authenticated-runner-evidence missing → [].\n   - **The client toggle.** The file-scoped vi.hoisted toggle over the partial vi.mock of '../server/clientCapabilities.js' existed only to stand in for this flip. Delete the mock and the toggle, so the DoD 1 positive rows run on the real decodeClientHello.\n   - **The toggle-OFF row.** The row 'READY held, toggle off → EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED [client]' becomes: 'READY held, unmocked: activationGaps() is [] and updateSettings({ executionProfile: \"verified-local\", deliveryPolicy: \"local-branch\" }) succeeds'.\n   - Keep the DoD 1 negative row as it is: default held, updateSettings refused EXECUTION_PROFILE_NOT_READY. That is DoD 3 here: the flip grants no readiness.\n\nChange no other row, and weaken no assertion.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+        ],
+        "newFiles": [
+          "packages/moe-daemon/src/delivery/readinessHolder.test.ts"
+        ]
+      },
+      {
+        "stepId": "step-4",
+        "description": "VERIFY ONCE, fresh, after steps 1-3: the FULL daemon suite, because this is a wire-protocol change. Run it in a git-archive snapshot; never npm ci, npm test or a build in the shared checkout (global rail).\n\nFirst confirm HEAD carries CQ-M07d's landing: `git log moe/work-2026-10-24 --grep 'Moe-Task: task-b0485bb1cacf4d3b84979e9256078737' --format=%h` must print a sha. If it prints nothing, stop and call moe.report_blocked with blockedOnTaskIds ['task-b0485bb1cacf4d3b84979e9256078737'].\n\nRun exactly this. Its command, exit code and output tail are the complete_task verification evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-41d0c5a9-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/server/clientCapabilities.ts packages/moe-daemon/src/state/profileRollout.test.ts packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts packages/moe-daemon/src/server/WebSocketServer.test.ts packages/moe-daemon/src/delivery/readinessHolder.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'`\n\nExpect exit 0 and 0 failures. Cite the file and test counts, passed and skipped, in complete_task.\n\nIf some other test also pinned verifiedLocal false or the client gap, do not edit it here. Stop, add it to a moe.add_comment on this task naming file:line, and call moe.request_replan; the plan's file list must name every edited file.",
+        "status": "PENDING",
+        "affectedFiles": []
+      },
+      {
+        "stepId": "step-5",
+        "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read `git diff HEAD -- packages/moe-daemon/src` as an attacker would.\n\n- **Source scope.** The source diff is the single SERVER_CAPABILITIES value plus its comment.\n- **Test expectations.** Every test change is an expectation that pinned the client gap or a negotiated false, or the removed CQ-M07c stand-in mock.\n  - No assertion was deleted without an equal or stronger replacement.\n  - G2 still covers all three gap kinds through GAP_KINDS.\n  - D2b gained the readiness refusal.\n- **No readiness grant.** With the default held readiness, verified-local is still refused EXECUTION_PROFILE_NOT_READY everywhere. Check the rolloutControls and profileRollout refusal records and the readinessHolder negative row.\n- **Other pins.** `grep -rn \"client-contract-unsupported\\|verifiedLocal: false\" packages/moe-daemon/src --include=*.test.ts` should show only intentional rows, such as G2's GAP_KINDS table.\n\nFix anything found, re-run step 4's gate, and submit its fresh output.",
+        "status": "PENDING",
+        "affectedFiles": []
+      }
+    ],
+    "stepsCompleted": []
+  },
+  "planningEntry": {
+    "from": "WORKING",
+    "at": "2026-11-01T10:16:19.460Z",
+    "seq": 1
+  }
 }

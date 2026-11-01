@@ -34,6 +34,8 @@ export interface RunnerIdentity {
 
 /** Unpadded base64url of 32 bytes. */
 const KEY_RE = /^[A-Za-z0-9_-]{43}$/;
+/** The stored-key format authenticateRunner accepts. */
+export function isRunnerKey(value: unknown): value is string { return typeof value === 'string' && KEY_RE.test(value); }
 const POSIX = process.platform !== 'win32';
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest();
