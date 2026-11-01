@@ -65,7 +65,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,16 +81,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:04:26.729Z",
-  "updatedAt": "2026-11-01T08:46:31.374Z",
+  "updatedAt": "2026-11-01T08:50:26.088Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:17:42.871Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T08:50:26.088Z",
+    "wallClockMs": 1963217
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-cef53f62"
+    "worker-cef53f62",
+    "qa-1e84238e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -164,7 +167,54 @@
   "filesModified": [
     "scripts/local-runner/guest-bootstrap.mjs",
     "scripts/local-runner/guest-readiness.mjs",
+    "scripts/tests/local-runner.test.mjs",
+    ".moe/tasks/task-201aebc6721a40c1b426bca64fce1eda.json",
+    ".moe/tasks/task-4c295c56a0db475998ae9d947a1d1de6.json",
+    ".moe/tasks/task-7c2922313102436bb732e36bd8f1c69d.json"
+  ],
+  "completionSummary": "CQ-R14b delivered (156 changed lines: guest-bootstrap +29/-1, guest-readiness +2/-1, local-runner.test +122/-1).\n\n**buildUserData** takes an optional exact `transport` {hostPrivateKey, hostPublicKey, clientPublicKey}.\n- Validation: own keys exactly those three (Reflect.ownKeys, so an extra, missing or symbol key is refused); hostPrivateKey must be an openssh-key-v1 PEM with lines of at most 70 base64 characters; both public keys must be `ssh-ed25519 <base64>`; authorizedKeyLine's own refusal is mapped to BOOTSTRAP_INPUT_INVALID. Every refusal is the fixed message, never a value.\n- With a transport it APPENDS `ssh_keys:` (ed25519_private as a literal block, ed25519_public single-quoted) and `ssh_authorized_keys:` with the single-quoted restricted line, after write_files. `transport === undefined` leaves the bytes untouched. Null is NOT treated as none.\n- The doc comment records the 26.1 facts from source: cc_ssh deletes the image keys and generates none when ssh_keys is present, and setup_user_keys keeps the line's own options.\n- guest-ssh.mjs stays a leaf (only imported); certify-containment's digest-only call and provision's no-transport call are unchanged.\n\n**guest-readiness DENIED** gains `readHostKey` (`-r /etc/ssh/ssh_host_ed25519_key`, CREDENTIAL_EXPOSED) right after readSeed, so each job identity gets `readHostKey:<id>`. No evaluator, CHECKS order or probe shape changed.\n\n**Tests** (scripts/tests/local-runner.test.mjs): shared fixtures TRANSPORT_KEYS/TRANSPORT/BOOTSTRAP_SSH, the DENIALS row, and the GUEST_PROBES count 7+15 -> 7+16 per identity. No other existing row edited.\n- UD3: `cloud-init schema -c` gives exactly `Valid schema <file>`.\n- UD4: a `python3 -I -B` stub runs cc_ssh.handle with its effects recorded, plus cloud-init's AuthKeyLineParser. It proves handle deletes the image keys, writes exactly the host pair (0600/0644), runs no ssh-keygen, and applies the transport line to ubuntu with options None. The parser keeps `restrict,command=...` and round",
+  "commits": [
+    {
+      "sha": "39e46380c131bfe9a6d80c72ef1147c4f15471ac",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cef53f62@2026-11-01T08:39:18Z",
+      "paths": [
+        ".moe/tasks/task-201aebc6721a40c1b426bca64fce1eda.json",
+        ".moe/tasks/task-4c295c56a0db475998ae9d947a1d1de6.json",
+        ".moe/tasks/task-7c2922313102436bb732e36bd8f1c69d.json",
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-cef53f62",
+      "recordedAt": "2026-11-01T08:47:08.458Z",
+      "treeId": "db6a0bf351728d40ad8de0b724a968dbf0a2ef32",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/guest-bootstrap.mjs",
+    "scripts/local-runner/guest-readiness.mjs",
     "scripts/tests/local-runner.test.mjs"
   ],
-  "completionSummary": "CQ-R14b delivered (156 changed lines: guest-bootstrap +29/-1, guest-readiness +2/-1, local-runner.test +122/-1).\n\n**buildUserData** takes an optional exact `transport` {hostPrivateKey, hostPublicKey, clientPublicKey}.\n- Validation: own keys exactly those three (Reflect.ownKeys, so an extra, missing or symbol key is refused); hostPrivateKey must be an openssh-key-v1 PEM with lines of at most 70 base64 characters; both public keys must be `ssh-ed25519 <base64>`; authorizedKeyLine's own refusal is mapped to BOOTSTRAP_INPUT_INVALID. Every refusal is the fixed message, never a value.\n- With a transport it APPENDS `ssh_keys:` (ed25519_private as a literal block, ed25519_public single-quoted) and `ssh_authorized_keys:` with the single-quoted restricted line, after write_files. `transport === undefined` leaves the bytes untouched. Null is NOT treated as none.\n- The doc comment records the 26.1 facts from source: cc_ssh deletes the image keys and generates none when ssh_keys is present, and setup_user_keys keeps the line's own options.\n- guest-ssh.mjs stays a leaf (only imported); certify-containment's digest-only call and provision's no-transport call are unchanged.\n\n**guest-readiness DENIED** gains `readHostKey` (`-r /etc/ssh/ssh_host_ed25519_key`, CREDENTIAL_EXPOSED) right after readSeed, so each job identity gets `readHostKey:<id>`. No evaluator, CHECKS order or probe shape changed.\n\n**Tests** (scripts/tests/local-runner.test.mjs): shared fixtures TRANSPORT_KEYS/TRANSPORT/BOOTSTRAP_SSH, the DENIALS row, and the GUEST_PROBES count 7+15 -> 7+16 per identity. No other existing row edited.\n- UD3: `cloud-init schema -c` gives exactly `Valid schema <file>`.\n- UD4: a `python3 -I -B` stub runs cc_ssh.handle with its effects recorded, plus cloud-init's AuthKeyLineParser. It proves handle deletes the image keys, writes exactly the host pair (0600/0644), runs no ssh-keygen, and applies the transport line to ubuntu with options None. The parser keeps `restrict,command=...` and round"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-cef53f62@2026-11-01T08:39:18Z",
+    "at": "2026-11-01T08:47:08.458Z"
+  },
+  "completedAt": "2026-11-01T08:50:26.088Z",
+  "reviewCompletedAt": "2026-11-01T08:50:26.088Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 39e46380 (on moe/work-2026-10-24, pushed) via git show; working-tree bytes of the 3 files equal HEAD; git diff --check clean. Size 156 changed lines (bootstrap +29/-1, readiness +2/-1, test +122/-1). guest-supervisor.py and the R02 pin untouched.\n\nRe-ran task.verification (git archive snapshot, env -i, Node 24.21.0): rc=0, 359 tests, 358 pass, 0 fail, 1 skip (pre-existing macOS smoke). UD1-UD5 all RAN.\n\nDoD: (1) UD3 `cloud-init schema -c` gives exactly `Valid schema <file>`. (2) UD4 python3 -I -B stub runs cc_ssh.handle + AuthKeyLineParser: YAML strings byte-exact, options kept, image keys deleted, pinned pair written 0600/0644, no ssh-keygen; the no-transport positive control runs ssh-keygen per type, so the stub is not vacuous. (3) I checked byte-identity independently against `git archive 39e46380~1`: userData and digests identical. UD5 has a 23-row refusal table, each the fixed BOOTSTRAP_INPUT_INVALID message, no value leaked. (4) readHostKey row follows readSeed in readiness and DENIALS; GUEST_PROBES pin 7+16 per identity; the DENIALS loop proves a readable key gives CREDENTIAL_EXPOSED. No evaluator loosened. (5) Existing rows green; only shared fixtures extended.\n\nMy own mutation probes in scratch copies, 5 of 5 killed: drop the DENIED row, wrong DENIED path, treat null as no transport, double-quote the authorized line, drop the ssh_keys header. Adversarial read: PEM lines are [A-Za-z0-9+/=]{1,70} and the public keys are base64, so no YAML breakout; guest-ssh.mjs is a leaf, no import cycle; certify-containment's digest-only call and provision's no-transport call are unchanged. Nothing to cut in the complexity pass. Note for R14c: the host private key now sits in the root-only cloud-init copies of user-data, which the existing DENIED rows cover. My scratch dirs were removed.",
+  "requiredCheckAtDone": null
 }
