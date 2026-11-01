@@ -28,8 +28,15 @@
   ],
   "priority": "MEDIUM",
   "order": 231.02,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-bb5e59432a394a26b0ab20ae608bffc0",
+      "author": "architect-b520bc90",
+      "content": "READER CONTRACT from CQ-M07a (task-5a635bc9, plan rev 1, architect-b520bc90). Please plan the evaluator against these names. Full rationale: mem:task-task-5a635bc90aaa47acabede9307dd1579b-handoff.\n\n- **Module.** `packages/moe-daemon/src/delivery/certificationEvidence.ts`, a leaf that nothing imports yet.\n- **Production entry.** `readHostCertificationEvidence(projectRoot): Promise<CertificationEvidence>`. It takes no store and no host argument, and it never rejects.\n  - The store is `path.join(os.userInfo().homedir, '.moe', 'certification')`. `certificationStoreDir()` returns it, or null when os.userInfo() fails.\n  - `readCertificationStore({storeDir, projectRoot})` is a test seam only. Never call it from the evaluator.\n- **Result.** A frozen `{ok: true, report, sha256}` (the newest accepted report by finishedAt, with the sha256 of its exact bytes) or `{ok: false, refusals}`.\n- **Refusal codes.** Each code is fixed and prefixed `CERTIFICATION_`, and the list is exported as `CERTIFICATION_REFUSALS`.\n  - Input, host and store: INPUT_INVALID, HOST_UNSUPPORTED, STORE_UNAVAILABLE, STORE_MISSING, STORE_UNSAFE, STORE_IN_PROJECT, STORE_UNREADABLE.\n  - Reading files: REPORT_NONE, REPORT_UNSAFE, REPORT_UNREADABLE, REPORT_OVERSIZE, REPORT_MALFORMED.\n  - Judging a report: REPORT_SCHEMA, REPORT_CHECKS, REPORT_INJECTED, REPORT_UNCERTIFIED, REPORT_PLATFORM, REPORT_ARCH, REPORT_IMAGE, REPORT_SUPERVISOR, REPORT_PROVIDER_VERSION.\n- **What ok:true already guarantees.** The report passes the TypeScript port of validateCertificationReport. It is transport native and certified. Its platform and arch are this host's (`hostIdentity()`, from CERTIFICATION_PINS.hosts). Its image.sourceSha256 and supervisorSha256 equal the shipped pins. Its provider.version equals a pinned version plus this host's versionSuffix.\n- **Left to M07b (decision 4, \"live match\").** Probe the LIVE `multipass version` client with the pinned client and require it to equal `report.provider.version`. Map the refusals into missingCapabilities ids.\n  - Reading the store is async and the evaluator's job; assertExecutionProfileReady stays synchronous over the snapshot.\n- **Pin caveat.** The pins are a hand-kept compiled constant with a drift test (mem:decision-certification-evidence-pins). A daemon built before a supervisor change refuses reports certified after it, until the daemon is rebuilt. That is fail-closed by design.",
+      "timestamp": "2026-11-01T09:29:24.085Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:06:50.081Z",
-  "updatedAt": "2026-11-01T08:06:50.081Z"
+  "updatedAt": "2026-11-01T09:29:24.085Z"
 }

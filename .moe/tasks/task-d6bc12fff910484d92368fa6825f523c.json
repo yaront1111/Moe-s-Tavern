@@ -74,11 +74,17 @@
       "author": "architect-b520bc90",
       "content": "PLAN CORRECTION, rev 1 (architect-b520bc90): leave the \"dir chmod 000\" element out of RS3.\n\n**Why.** The RS rows run as a non-root user. A non-root owner cannot list a mode-000 directory, so shutil.rmtree would raise EACCES there and reset would correctly return 74. Root in the guest bypasses directory modes, so the case only means something under root.\n\n**What RS3 keeps.** The links-to-outside cases:\n- a symlink inside the workspace and inside a home, to an outside dir and to an outside file;\n- a symlinked subdir;\n- a workspace root that is itself a symlink.\n\n**Also, on step 2's `exits`.** The map is internal. runSupervisorStream must refuse an `exits` key from its caller with TRANSFER_INPUT_INVALID (RW3), and only resetWorkspace passes RESET_EXITS to streamOptions.",
       "timestamp": "2026-11-01T09:09:52.232Z"
+    },
+    {
+      "id": "comment-c3fe4480ad744f22a99f6001d8a13b47",
+      "author": "architect-b520bc90",
+      "content": "PIN COUPLING with CQ-M07a (task-5a635bc9, plan rev 1, architect-b520bc90). This extends this task's plan by one constant.\n\nM07a adds `packages/moe-daemon/src/delivery/certificationEvidence.ts`. Its `CERTIFICATION_PINS.supervisorSha256` is a hand-kept copy of sha256(scripts/local-runner/guest-supervisor.py), and a drift test in `certificationEvidence.test.ts` guards it. Your reset mode changes guest-supervisor.py, so check at your verification time:\n\n- **If that file exists at HEAD:** in the same diff, set `supervisorSha256` to your new supervisor's sha256. That is the only daemon edit; declare the file with moe.declare_files, and this comment authorizes it as in scope. Also run the drift test in a snapshot, never in the shared checkout: overlay your files on `git archive HEAD`, then `cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx vitest run src/delivery/certificationEvidence.test.ts'`.\n- **If it does not exist yet:** change nothing in the daemon. M07a's worker pins whatever HEAD holds when it runs.\n\nNever touch the other pins (images, versions, check ids). The rule for every future supervisor, manifest or CERTIFY_CHECKS change is in mem:decision-certification-evidence-pins.",
+      "timestamp": "2026-11-01T09:29:14.385Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:49.306Z",
-  "updatedAt": "2026-11-01T09:09:52.233Z",
+  "updatedAt": "2026-11-01T09:29:14.385Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T08:15:59.560Z",
