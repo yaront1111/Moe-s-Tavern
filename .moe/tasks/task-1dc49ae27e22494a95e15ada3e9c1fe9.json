@@ -14,9 +14,58 @@
     "Never fall back to running the agent CLI on the host.",
     "No seat runs Multipass; tests use fakes."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "runSeatJob composition in scripts/local-runner/agent-seat.mjs.\nFILE NOTE: agent-seat.mjs and scripts/tests/local-runner-seat.test.mjs are CREATED BY CQ-M07i (task-18809c69, a dependsOn). They are listed as newFiles only because they did not exist when this plan was written; by the time this row is claimable they exist. EDIT them, never recreate or overwrite M07i's content.\nRails: never fall back to running the agent CLI on the host; no seat runs Multipass, and tests use fakes. Read mem:gotcha-local-runner-tests first.\nexport runSeatJob(input, steps = {}).\ninput is exactly { project, owner, instance, binding, checkout, commit, cli, credential, onOutput, signal?, timeoutMs? }. Validate every field before any call, else SEAT_JOB_INPUT_INVALID:\n- project and checkout: absolute;\n- owner: validSeatOwner;\n- instance: isOwnedInstanceName;\n- binding: { role 'worker'|'qa', workerId, taskId, attemptId, generation }, whose shape scopeRequest validates;\n- commit: a full 40- or 64-hex id;\n- cli: 'claude' or 'codex';\n- credential: { name, value } with exact keys;\n- onOutput: a function.\nThe credential is copied once into the job object and nowhere else.\nsteps holds the injectable defaults:\n- sweep = endAgentJobs;\n- reset = resetWorkspace (CQ-M07f: { name, provider, timeoutMs }, resolving 'reset');\n- exportSnapshot = exportSourceSnapshot;\n- materialize = materializeSnapshot;\n- job = runAgentJob;\n- importCandidate;\n- admit = admitCandidate;\n- stop = stopSeat (CQ-M07i);\n- forward = seatForward(project) (CQ-M07j1: forward(tool, args, { signal }) resolves the daemon's raw MCP result).\nprovider = { executable: platformFor(process.platform).executable }. git = exportGit(checkout), resolved once for export and admission.\nOrder, one fixed code per stage, a stage's own fixed code passing through when it matches /^[A-Z][A-Z0-9_]{0,63}$/:\n(1) sweep(instance, provider) must resolve { verified: true }, else SEAT_JOB_SWEEP_UNVERIFIED.\n(2) reset({ name: instance, provider }): failure is SEAT_JOB_RESET_FAILED.\n(3) exportSnapshot({ repoDir: checkout, commit, git }), then REPLACE its overlay with validateImport([]) (source-snapshot.mjs). The guest workspace is then exactly the commit's tree. The checkout's dirty bytes are peers' or pre-existing, never this VM job's: under verified-local all task work happens in the VM and lands as admitted trees. Failure is SEAT_JOB_EXPORT_FAILED.\n(4) materialize({ name: instance, snapshot, provider }): SEAT_JOB_MATERIALIZE_FAILED.\n(5) job({ name: instance, binding, job: { cli, credential }, daemonInfoPath: path.join(project, '.moe', 'daemon.json'), forward, onOutput, onObservation, signal, provider, timeoutMs }). A rejection, or failure !== null, is SEAT_JOB_SESSION_FAILED. The observation's exit code is data, reported, never a failure.\n(6) importCandidate({ name: instance, provider }): SEAT_JOB_IMPORT_FAILED.\n(7) A qa binding with candidate.entries.length > 0 is SEAT_JOB_QA_CANDIDATE_REFUSED: nothing is admitted or applied. A qa binding with an empty candidate skips admission.\n(8) worker: admit({ repoDir: checkout, git, baseTree: snapshot.tree, candidate }): SEAT_JOB_ADMISSION_FAILED. admitCandidate writes only git objects through its private index, never the checkout's working tree or index.\nLanding hand-off, decided: runSeatJob NEVER writes the task checkout. It resolves a frozen { ok: true, role, commit, baseTree, tree, digest, paths: candidate entries as { path, kind } (no bytes), exitCode, signal, lease, executionReady: false }. CQ-M07m/n land that exact admitted tree on `commit` through the wrapper's existing candidate path (record_candidate treeSha on baseRevision, CQ-V07/V08 delivery). Writing guest paths into a shared checkout would collide with peers' bytes and attribution holds.\nThe seat VM is stopped (stop({ project, owner, instance })) ONLY on unverified state:\n- the sweep is unverified;\n- reset failed;\n- or the job resolved terminationVerified false.\nEvery other failure keeps it, because the next job's sweep and reset re-verify it. A failure resolves a frozen { ok: false, code, vm: 'kept'|'stopped'|'stop-failed' }; no stage after a failure runs. The host never spawns the agent CLI.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/agent-seat.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Rows for runSeatJob in scripts/tests/local-runner-seat.test.mjs (created by CQ-M07i and already in CI; edit it, never recreate it). Prefix SJ; grep first that it is unused.\n- SJ1 (DoD 1). The checkout is a temp git repo with one committed file a.txt plus an uncommitted dirty b.txt, using the REAL exportSourceSnapshot and the REAL admitCandidate. VM-side stages are fakes: each has its own provider-level rows in the R-series (endAgentJobs, resetWorkspace, materializeSnapshot, runAgentJob, importCandidate).\n  - The fake materialize asserts the overlay is empty, so b.txt never reaches the guest.\n  - The fake job returns { failure: null, terminationVerified: true, observation: { kind: 'observation', type: 'exit', code: 0, signal: null }, lease: 'released' }.\n  - The fake importCandidate returns validateImport([{ kind: 'file', path: 'a.txt', executable: false, data: <new bytes> }]).\n  Result: ok, and `git ls-tree -r <tree>` differs from the commit's tree in exactly a.txt's blob. The checkout's `git status --porcelain=v1 -z`, its index bytes and every file's bytes are identical before and after.\n- SJ2 (DoD 2). A canary credential value travels only in the job step's job.credential. A deep scan of every other step's arguments finds it absent: sweep, reset, export, materialize, import, admit, stop, every provider object and forward's calls. It is also absent from process.env (unchanged), the resolved outcome, and every onOutput or stderr write.\n- SJ3 (DoD 3). A qa binding with a one-entry candidate gives SEAT_JOB_QA_CANDIDATE_REFUSED; admit is never called and the checkout is unchanged. A qa binding with an empty candidate gives ok with no admit call.\n- SJ4 (DoD 4, table). Failing each stage in turn gives its fixed code, with no later stage called and no admit call:\n  - sweep unverified: vm 'stopped';\n  - reset throws: 'stopped';\n  - export throws: 'kept';\n  - materialize throws: 'kept';\n  - the job rejects or returns failure non-null: 'kept'; with terminationVerified false: 'stopped';\n  - import throws: 'kept';\n  - admission throws: 'kept'.\n  Also: a stop that throws gives 'stop-failed'; invalid input gives SEAT_JOB_INPUT_INVALID with every step untouched. The checkout stays byte-identical in every row.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/local-runner-seat.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "The seat-job CLI subcommand, in agent-seat.mjs's runAgentSeat, and its rows.\n(a) Exact argv, in fixed order, values free of control characters:\n`seat-job --project <abs> --worker <id> --runner <pid@token> --host <host> --instance <moe-vm-…> --role worker|qa --task <taskId> --attempt <attemptId> --generation <n> --checkout <abs> --commit <full id> --cli claude|codex`\nFor QA the wrapper passes the task's last landed completion commit, so QA reviews exactly what landed; for a worker, the checkout's HEAD at job start. The module header documents both for CQ-M07m/n.\n(b) The credential arrives ONLY on stdin as one JSON object {\"name\":…,\"value\":…}. Read it to EOF, bounded to 16 KiB; anything else is SEAT_JOB_INPUT_INVALID, exit 2. It is never accepted as a flag or read from env.\n(c) onOutput relays the job CLI's bytes unchanged: stdout chunks to process.stdout, stderr chunks to process.stderr, so the wrapper's stream parser still sees usage events.\n(d) After the job settles, write ONE outcome line to stdout, prefixed by '\\n' when the last relayed stdout byte was not a newline: JSON with a top-level \"seatJob\": 1 marker plus runSeatJob's frozen result. No path, key, credential or stderr text.\n(e) Exit codes: 0 ok; 1 failure; 2 usage. Update the header with the seat-job contract.\nRow SJ5:\n- usage errors exit 2 and run nothing: a credential flag, a bad role, a non-numeric generation, a relative checkout, a missing stdin JSON;\n- an injected job step relaying stdout 'x' (no newline) gives stdout 'x\\n' plus the outcome line containing \"seatJob\":1, and stderr carries the relayed stderr bytes;\n- the stdin credential reaches the job step, while process.argv and process.env never hold it;\n- a failure exits 1.\nerror handling: every exit path prints exactly one fixed-code outcome line, or the usage line.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate, run once (DoD 5), in a git-archive snapshot outside the checkout, never the shared tree (mem:gotcha-local-runner-tests recipe):\nS=$(mktemp -d /tmp/m07j-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && for f in scripts/local-runner/agent-seat.mjs scripts/tests/local-runner-seat.test.mjs; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat.test.mjs scripts/tests/local-runner.test.mjs\nIt must report 0 fail. A row failing with HEAD-only bytes too is pre-existing: report it, don't fix it here.\nThen measure: git diff --numstat HEAD for both files. QA counts additions + deletions against 400. If over, merge rows sharing setup; if still over, file an EPIC ADD_RAIL size exception via moe.propose_rail with the exact numstat before complete_task.\nThe fresh gate output is the complete_task verification evidence.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this diff, as the final step (load adversarial-self-review). Check:\n1. Can any path write the task checkout (working tree or index) or run the agent CLI on the host?\n2. Does the credential reach anything but the job frame: argv, env, a log, the outcome, an error, or another step?\n3. Can a QA job's non-empty candidate reach admission?\n4. Is the overlay always stripped, so peers' dirty bytes never enter the guest or the admitted tree?\n5. Does every failure stop later stages and return its fixed code? Is stopSeat run exactly on the unverified states?\n6. Is the outcome line always last, newline-separated and marked?\n7. Is stdin bounded, with a malformed credential refused before any stage?\n8. Concurrency: two seat-jobs on one instance must be refused by runAgentJob's AGENT_BUSY and the task-keyed lease, never interleaved. Say so in the header.\nIf any byte changes, re-run step 4's exact command and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,17 +75,77 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-18809c69885f4af6bff87d7e764f269b",
-    "task-d6bc12fff910484d92368fa6825f523c"
+    "task-d6bc12fff910484d92368fa6825f523c",
+    "task-c7cead1b2bc24863bea5141129ef47b1"
   ],
   "priority": "MEDIUM",
   "order": 231.15,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:09:44.562Z",
-  "updatedAt": "2026-11-01T11:42:04.046Z",
+  "updatedAt": "2026-11-01T12:12:54.659Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:04.046Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T12:05:00.960Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T12:12:54.635Z",
+  "executionContract": {
+    "intendedBehavior": "runSeatJob runs one worker or QA job on the seat's VM: verified sweep, resetWorkspace, an export of the given commit with the overlay stripped, materialize, runAgentJob over CQ-M07j1's /mcp forward, importCandidate, then admitCandidate for workers. It returns the admitted tree for the wrapper to land and never writes the task checkout. A QA candidate must be empty. The seat-job CLI takes the credential only on stdin, relays the job's stdout and stderr as bytes, and ends with one marked JSON outcome line.",
+    "invariants": [
+      "Nothing from the guest reaches the host checkout; admission writes only git objects.",
+      "The credential reaches only the job frame.",
+      "No host fallback: the agent CLI never runs on the host.",
+      "Each stage failure is one fixed code with no later stage run; stopSeat runs only on unverified VM state."
+    ],
+    "compatibility": [
+      "startSeat/stopSeat and the seat-start/seat-stop CLI from CQ-M07i are unchanged; runAgentJob, materializeSnapshot, importCandidate, admitCandidate and exportSourceSnapshot are used unchanged."
+    ],
+    "sourceAssumptions": [
+      "admitCandidate({repoDir, git, baseTree, candidate}) resolves {baseTree, tree, digest} via a private GIT_INDEX_FILE and hash-object -w; it checks candidate entries against baseTree.",
+      "materializeSnapshot uses workspaceEntries(snapshot) = base plus overlay; exportSourceSnapshot({repoDir, commit, git}) returns {version, commit, tree, base, overlay, excluded}, overlay being the checkout's dirty bytes.",
+      "runAgentJob resolves {sessionId, observation, failure, terminationVerified, lease, executionReady:false}; the credential reaches only the job frame (guest-session.mjs contract, R14d2 BS rows).",
+      "CQ-M07f resetWorkspace({name, provider, timeoutMs}) resolves 'reset'; CQ-M07j1 seatForward(projectPath) returns forward(tool, args, {signal}) resolving the raw MCP result; CQ-M07i creates agent-seat.mjs (startSeat, stopSeat, runAgentSeat) and local-runner-seat.test.mjs."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/m07j-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && for f in scripts/local-runner/agent-seat.mjs scripts/tests/local-runner-seat.test.mjs; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat.test.mjs scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Forward over /runner: rejected. It would give guest calls runner trust; it was split out as CQ-M07j1 over /mcp.\n2. Writing the admitted paths into the checkout: rejected. It collides with peers' bytes and attribution holds; the wrapper lands the admitted tree through the V07/V08 candidate path instead.\n3. Keeping the export overlay: rejected. A shared checkout's dirty bytes are peers'.\n4. A full fake-guest provider harness: rejected on size. VM stages are provider-tested in the R-series; this task proves the composition, with real export and admission on a temp repo.",
+    "codebaseInsights": "- guest-mcp-shim.py relays frame.result verbatim.\n- The bridge's TOOLS allowlist plus STAMPED identity mirror moe-proxy.\n- jobFrame allows only AGENT_JOBS[cli] credential names and values matching /^[\\x21-\\x7e]{1,4096}$/.\n- workspaceEntries merges base and overlay.\n- admitCandidate's checkEntries validates against baseTree.\n- The submit_plan existence gate refuses files a dependency will create, so they are listed as newFiles with an explicit note.",
+    "risks": "- QA may ask for a provider-level credential row. runGuestSession's BS rows cover frame-only delivery; cite them.\n- A crash between admission and the wrapper landing loses the tree id. The objects stay in the repository; CQ-M07m/n own recovery.\n- The size is tight (about 330 numstat lines); use the step 4 fallback.",
+    "keyFiles": [
+      "scripts/local-runner/agent-lifecycle.mjs",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/local-runner/snapshot-transfer.mjs",
+      "scripts/local-runner/snapshot-import.mjs",
+      "scripts/local-runner/admission.mjs",
+      "scripts/local-runner/source-export.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6bc52f2e235fb3af0ea152c93e55a58f26170e1c",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T12:12:54.659Z",
+  "approvedPlanRevision": 1
 }
