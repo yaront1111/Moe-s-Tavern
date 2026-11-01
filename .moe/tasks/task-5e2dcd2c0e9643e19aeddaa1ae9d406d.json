@@ -84,7 +84,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -119,16 +119,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:05:28.654Z",
-  "updatedAt": "2026-11-01T10:46:57.719Z",
+  "updatedAt": "2026-11-01T10:55:39.031Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:52:52.678Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-01T10:55:39.031Z",
+    "wallClockMs": 7366353
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-cef53f62"
+    "worker-cef53f62",
+    "qa-1e84238e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -219,6 +222,24 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "8acf93c3f0748224b0f17fa2fc2bac4b7458a88f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cef53f62@2026-11-01T10:34:43Z",
+      "paths": [
+        ".moe/tasks/task-5e2dcd2c0e9643e19aeddaa1ae9d406d.json",
+        ".moe/tasks/task-bb1502b1fcb04f0e99fa5328be05ef4e.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-cef53f62",
+      "recordedAt": "2026-11-01T10:47:27.559Z",
+      "treeId": "b848236adefbb21ada115605e42e37bc5e345bdf",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -226,7 +247,10 @@
     "scripts/tests/local-runner-bridge.test.mjs",
     "scripts/tests/local-runner-daemon-bind.test.mjs",
     "scripts/tests/local-runner.test.mjs",
-    "scripts/tests/local-runner-bundle.test.mjs"
+    "scripts/tests/local-runner-bundle.test.mjs",
+    ".moe/tasks/task-5e2dcd2c0e9643e19aeddaa1ae9d406d.json",
+    ".moe/tasks/task-bb1502b1fcb04f0e99fa5328be05ef4e.json",
+    ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
   ],
   "touchedFiles": [
     "scripts/local-runner/guest-session.mjs",
@@ -238,9 +262,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-cef53f62@2026-11-01T10:22:33Z",
-    "at": "2026-11-01T10:34:11.606Z"
+    "kind": "completion",
+    "sessionId": "worker-cef53f62@2026-11-01T10:34:43Z",
+    "at": "2026-11-01T10:47:27.559Z"
   },
   "reviewStartedAt": "2026-11-01T10:46:57.718Z",
   "verification": {
@@ -250,5 +274,9 @@
     "reportedAt": "2026-11-01T10:46:57.718Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-R14d2: runGuestSession now runs the supervisor's bridge mode over the pinned OpenSSH stream, never `multipass exec`.\n\n**Runtime (scripts/local-runner/guest-session.mjs)**\n- isOwnedInstanceName joined the input checks, so a bad name stays SESSION_INPUT_INVALID before any daemon or provider call.\n- The provider is copied and frozen at entry.\n- After daemon admission, the only spawn is `await openGuestStream({name, mode:'bridge', provider})`. Any transport refusal or spawn throw is SESSION_SPAWN_FAILED, with nothing spawned.\n- relay has two new guards:\n  - an abort that landed during the info read takes the one teardown path, with the 'error' listener attached;\n  - the job frame is written only while the session is not closing.\n- ssh's own 255 lands in the existing `code !== 0` branch as SESSION_PROVIDER_FAILED. No supervisor code is derived from it.\n- Ending stdin is still the cancel and host-gone signal, and the supervisor's 74 comes back as ssh's exit status.\n- The header and JSDoc comments were updated. The guest-session import of bridgeArgv is dropped; the export and B15 stay.\n\n**Test wiring**\n- The bridge openSession and the H4 spawn-throw row, daemon-bind session() and the local-runner AJ harness gain an info fake plus ssh and keyDir.\n- AJ expectations use streamCall('bridge'), and the session's info read is added to CLEAN_LOG.\n- The bundle test's `shipped` gains guest-stream.mjs.\n\n**New rows BS1-BS8** (local-runner-bridge.test.mjs):\n1. The route: pinned and injected ssh, exact sshStreamArgv, no env, one info read and then the spawn, no 'exec', no KEY.\n2. Four transport refusals, each SPAWN_FAILED with 0 spawns.\n3. An abort during info gives ABORTED, and no stdin.write is ever called.\n4. A job frame cut short by a carrier into the real supervisor: exit 74, PROVIDER_FAILED.\n5. Dead stdin: TIMEOUT plus SIGKILL.\n6. A stdout stall mid output frame with the reply write stuck: TIMEOUT plus SIGKILL, no bytes delivered.\n7. 255 before hello, after hello and after a wh"
+  "completionSummary": "CQ-R14d2: runGuestSession now runs the supervisor's bridge mode over the pinned OpenSSH stream, never `multipass exec`.\n\n**Runtime (scripts/local-runner/guest-session.mjs)**\n- isOwnedInstanceName joined the input checks, so a bad name stays SESSION_INPUT_INVALID before any daemon or provider call.\n- The provider is copied and frozen at entry.\n- After daemon admission, the only spawn is `await openGuestStream({name, mode:'bridge', provider})`. Any transport refusal or spawn throw is SESSION_SPAWN_FAILED, with nothing spawned.\n- relay has two new guards:\n  - an abort that landed during the info read takes the one teardown path, with the 'error' listener attached;\n  - the job frame is written only while the session is not closing.\n- ssh's own 255 lands in the existing `code !== 0` branch as SESSION_PROVIDER_FAILED. No supervisor code is derived from it.\n- Ending stdin is still the cancel and host-gone signal, and the supervisor's 74 comes back as ssh's exit status.\n- The header and JSDoc comments were updated. The guest-session import of bridgeArgv is dropped; the export and B15 stay.\n\n**Test wiring**\n- The bridge openSession and the H4 spawn-throw row, daemon-bind session() and the local-runner AJ harness gain an info fake plus ssh and keyDir.\n- AJ expectations use streamCall('bridge'), and the session's info read is added to CLEAN_LOG.\n- The bundle test's `shipped` gains guest-stream.mjs.\n\n**New rows BS1-BS8** (local-runner-bridge.test.mjs):\n1. The route: pinned and injected ssh, exact sshStreamArgv, no env, one info read and then the spawn, no 'exec', no KEY.\n2. Four transport refusals, each SPAWN_FAILED with 0 spawns.\n3. An abort during info gives ABORTED, and no stdin.write is ever called.\n4. A job frame cut short by a carrier into the real supervisor: exit 74, PROVIDER_FAILED.\n5. Dead stdin: TIMEOUT plus SIGKILL.\n6. A stdout stall mid output frame with the reply write stuck: TIMEOUT plus SIGKILL, no bytes delivered.\n7. 255 before hello, after hello and after a wh",
+  "completedAt": "2026-11-01T10:55:39.031Z",
+  "reviewCompletedAt": "2026-11-01T10:55:39.031Z",
+  "reviewSummary": "QA approve, CQ-R14d2 (10:55Z).\nDelivery: completion 8acf93c3 (pushed) plus checkpoint e84d121f, both on moe/work-2026-10-24. The 5 files are clean in the tree. Every local-runner.test hunk under the contested trailer is this task's own AJ wiring. Size by numstat vs 799936d9: 221 lines (+192/-29), under 400.\nRe-run on fresh 8acf93c3 snapshots (env -i, Node 24.21.0):\n- Plan command, 4 files: EXIT 0 in 1m19s. 485 tests, 483 pass, 0 fail, 2 opt-in skips (LA5, macOS smoke). BS1-BS8 green; BS4 ran the real supervisor.\n- Description command: EXIT 0. 90 tests, 89 pass, 1 skip.\nDoD:\n1. BS1 asserts the injected and the pinned sshExecutable, exact sshStreamArgv, no env, info then spawn, with no exec and no KEY.\n2. BS4 (real supervisor 74) gives PROVIDER_FAILED; BS5 (dead stdin) and BS6 (half output frame, stuck write) give TIMEOUT + SIGKILL. None delivers an observation.\n3. BS7: 255 with [], [HELLO] or [HELLO,OUTPUT,EXIT] gives PROVIDER_FAILED. BS2: 4 refusals give SPAWN_FAILED with 0 spawns, and errors carry no path or secret.\n4. BS8: close [74], no kill, ABORTED. Existing rows changed only spawn triple, log sequencing or provider wiring; none weakened.\n5. Passes (description command above).\nMutation probes: 11/11 killed. abort guard, closing guard, abort-after-write and listener order by BS3; 255 remap by BS7; mode 'check'; isOwnedInstanceName dropped by H1; refusal→PROVIDER_FAILED by BS2/H4; provider not copied by AJ; ssh/keyDir dropped; multipass exec fallback by BS2.\nReal probe: a nonexistent ssh gives SESSION_SPAWN_FAILED, no uncaught error.\nRails: guest-supervisor.py sha256 3a19f3bf07cf unchanged; readiness, guest-bridge and the provider pin untouched; bridgeArgv export and B15 intact; no forbidden pattern; no Multipass run.\nNon-blocking: INFO/infoRun duplicated in two test files.",
+  "requiredCheckAtDone": null
 }
