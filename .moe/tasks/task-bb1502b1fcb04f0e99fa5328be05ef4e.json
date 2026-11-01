@@ -18,44 +18,59 @@
     {
       "stepId": "step-1",
       "description": "Add the route requirement to the ONE admission predicate in packages/moe-daemon/src/util/claimEligibility.ts. Read `mem:decision-cq-m07-verified-local-activation` first, plus the predicate's doc comment (lines ~47-68).\n\n1. **Exports.**\n   - `type ExecutionRoute = 'vm'`.\n   - `parseExecutionRoute(value: unknown): ExecutionRoute | undefined`: undefined stays undefined, the exact string 'vm' returns 'vm', and anything else throws invalidInput('executionRoute', \"must be 'vm' when present\"). That covers 'host', 'VM', '', null, numbers and objects.\n2. **`executionAdmissionRefusal(state, task, workerId?, executionRoute?: ExecutionRoute)`.** Keep every existing check and its order; the route check comes LAST, so it can only add a refusal.\n   - Resolve `profile = resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot)` once, and assertExecutionProfileReady(profile), exactly as today.\n   - In the own-seat resume block, assert the recorded attempt profile as today. Mark the task strict when the task-level profile, or that recorded profile, is 'verified-local'.\n   - After both readiness checks pass: if strict, task.status is 'WORKING' or 'REVIEW', and executionRoute !== 'vm', return\n     `new MoeError(MoeErrorCode.NOT_ALLOWED, 'Task <id> runs under verified-local: only a VM-route seat may claim it in <status> (claim_next_task executionRoute \"vm\").', { taskId, status, executionProfile: 'verified-local', requiredRoute: 'vm' }, 'EXECUTION_ROUTE_REQUIRED')`.\n   - PLANNING rows, legacy and observe rows, and a marked strict claim are unchanged. Readiness still refuses first, so the marker never satisfies or skips it.\n3. **Doc comment.** The only caller field read is executionRoute, and it can only refuse. It is a guard against accidental host runs (an older wrapper, a hand-run CLI), not authentication. CQ-M07m/n's wrapper VM route sends it.\n\nError handling: the function still returns MoeErrors and never throws them; only parseExecutionRoute throws, and it does so before any work.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/claimEligibility.ts"
-      ]
+      ],
+      "note": "No-byte retry after the size-only qa_reject #1 (failedDodItems empty). The step-1 bytes landed in completion 799936d9: util/claimEligibility.ts +56/-9 (ExecutionRoute, EXECUTION_ROUTE_REQUIRED, parseExecutionRoute, and the route check LAST in executionAdmissionRefusal). git diff 799936d9 HEAD on the file is empty and the working tree is clean for it, so this session modified no files. QA's route was taken: epic ADD_RAIL size waiver prop-09077323d7384a6986bd7933f10ad623 (PENDING) names 799936d9 and the exact per-file numstat (+529/-27, net 502; runtime 72, tests 430). The other dirty paths in the checkout belong to other sessions and were left untouched.",
+      "startedAt": "2026-11-01T11:15:20.349Z",
+      "completedAt": "2026-11-01T11:15:34.765Z"
     },
     {
       "stepId": "step-2",
       "description": "Thread the marker through both claim paths, so the ranked pool, the explicit claim and the waiter all read the same predicate with the same route. A drift between them recreates the wake→claim→refuse spin.\n\n1. **packages/moe-daemon/src/tools/claimNextTask.ts.**\n   - inputSchema gains `executionRoute: { type: 'string', enum: ['vm'], description: 'Set only by a wrapper that runs the claimed WORKING/REVIEW session in a Moe VM (CQ-M07m/n). A verified-local WORKING or REVIEW task is refused (explicit taskId) or skipped (ranked pool) without it. It can only refuse: it never grants readiness or skips another check.' }`.\n   - At the top of the handler, before any read-modify-write, call `const executionRoute = parseExecutionRoute(params.executionRoute)`. An invalid value gives INVALID_INPUT and nothing is written.\n   - Pass it to both executionAdmissionRefusal calls (~:519 explicit, ~:577 ranked pool). The explicit path throws, as today; the pool skips, as today.\n2. **packages/moe-daemon/src/tools/waitForTask.ts.**\n   - inputSchema gains the same `executionRoute`. Parse it at the top of the handler the same way.\n   - Store it on the waiter record next to workerId.\n   - Pass it to every executionAdmissionRefusal call: the own-held match at ~:152 and the candidate filter at ~:200. A VM-route waiter then matches strict rows, and any other waiter skips them.\n\nChange nothing else in either file. Every existing claim and wait behaves exactly as before when executionRoute is absent and the row is not strict WORKING/REVIEW.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "packages/moe-daemon/src/tools/waitForTask.ts"
-      ]
+      ],
+      "note": "No-byte retry (size-only qa_reject #1). The step-2 bytes landed in 799936d9: tools/claimNextTask.ts +13/-3 and tools/waitForTask.ts +26/-11. Both have the executionRoute inputSchema field (claimNextTask.ts:346, waitForTask.ts:266), parse at the top of the handler, and pass the parsed route at all 4 executionAdmissionRefusal call sites at HEAD: claimNextTask.ts:529 (explicit claim, throws), :587 (ranked pool, skips), waitForTask.ts:155 (own-held match) and :203 (candidate filter). git diff 799936d9 HEAD on both files is empty and the working tree is clean for them, so this session modified no files. Size waiver prop-09077323d7384a6986bd7933f10ad623 is PENDING.",
+      "startedAt": "2026-11-01T11:15:36.900Z",
+      "completedAt": "2026-11-01T11:15:40.760Z"
     },
     {
       "stepId": "step-3",
       "description": "Write a NEW test file, packages/moe-daemon/src/tools/executionRoute.test.ts. The task rail forbids editing claimNextTask.test.ts, state/validators.ts and types/schema.ts, which WT-19 declares.\n\n**Setup.**\n- Use ToolTestHarness and the raw-JSON seeding of tools/executionProfileAdmission.test.ts:\n  - strict snapshot STRICT = { version: 2, profile: 'verified-local', planRevision: 1, deliveryPolicy: 'local-branch' };\n  - legacy and observe snapshots;\n  - project settings executionProfile 'verified-local', deliveryPolicy 'local-branch'.\n- Readiness: follow `mem:convention-verified-local-test-fixture`, but make the vi.mock of '../delivery/executionProfile.js' toggleable through vi.hoisted. While the toggle is on, assertExecutionProfileReady is a no-op (readiness mocked ready); while it is off, it is the real function. Default on, reset in afterEach.\n- Pin the real assertion once: vi.importActual's assertExecutionProfileReady('verified-local') throws EXECUTION_PROFILE_NOT_READY.\n- Call the tools through their handlers, as the admission test does. Assert exact values.\n\n**Rows.**\n1. **DoD 1, readiness mocked ready.**\n   - A strict WORKING task and a strict REVIEW task are each claimed by explicit taskId with executionRoute 'vm': success, the row is assigned to the caller, and an attempt is opened.\n   - Without the marker, each explicit claim throws codeName EXECUTION_ROUTE_REQUIRED. Its context is { taskId, status, executionProfile: 'verified-local', requiredRoute: 'vm' }, and nothing is written: the assignee stays unchanged and no attempt is opened.\n   - The ranked pool (no taskId) without the marker returns hasNext false, or the legacy row when one is seeded. With the marker it returns the strict row.\n   - An own-seat resume of a held strict WORKING row without the marker is refused EXECUTION_ROUTE_REQUIRED.\n   - wait_for_task with statuses ['WORKING']: a waiter without the marker never matches a strict row, and a waiter with it does. Mirror executionProfileAdmission.test.ts's waiter rows, and clear activeWaiters timers in afterEach.\n2. **DoD 2, unchanged behavior.**\n   - A strict PLANNING claim (architect) succeeds with or without the marker.\n   - Legacy and observe WORKING and REVIEW claims succeed with or without the marker, explicit and ranked.\n   - Results match the same claim without the field: same task, same status.\n3. **DoD 3.** With the toggle off, so the real assertion runs, a strict WORKING claim WITH executionRoute 'vm' is refused EXECUTION_PROFILE_NOT_READY, not EXECUTION_ROUTE_REQUIRED, and nothing is written.\n4. **DoD 4.** executionRoute 'host', 'VM', '', null, 1 and {} are each refused INVALID_INPUT, on claim_next_task and on wait_for_task, before any write.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/executionRoute.test.ts"
-      ]
+      ],
+      "note": "No-byte retry (size-only qa_reject #1). The step-3 bytes landed in 799936d9: the new tools/executionRoute.test.ts (+428, 47 tests across the DoD 1-4 rows), plus executionRoute 'vm' added to strict claims in 3 existing test files (+2/-1, +2/-1, +2/-2) with assertions unchanged, which QA accepted as justified. In round 1 QA killed 13 of 13 independent mutants against these tests. I did NOT shrink the U2 matrix: QA marked that advisory and said not to rewrite landed bytes for it, and the size goes through waiver prop-09077323d7384a6986bd7933f10ad623 (PENDING). git diff 799936d9 HEAD over the 4 test paths is empty, so this session modified no files.",
+      "startedAt": "2026-11-01T11:15:45.858Z",
+      "completedAt": "2026-11-01T11:15:50.058Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh, after steps 1-3: the FULL daemon suite, because these are shared claim tools. Run it in a git-archive snapshot; never npm ci, npm test or a build in the shared checkout (global rail).\n\nRun exactly this. Its command, exit code and output tail are the complete_task verification evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-bb1502b1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/claimEligibility.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/waitForTask.ts packages/moe-daemon/src/tools/executionRoute.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'`\n\nExpect exit 0 and 0 failures; every existing claim, wait and admission test passes unchanged. Cite the file and test counts, passed and skipped, in complete_task.\n\nIf an existing test fails, compare it against the same command without the overlay before changing anything. Never edit claimNextTask.test.ts (WT-19).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh full-suite gate, the round-1 command with all 7 paths overlaid, run at 11:16Z in snapshot /tmp/moe-bb1502b1-6LBGV7 of HEAD 56fb4b45. Exit 0. npm ci added 74 packages, tsc --noEmit was clean, and vitest passed 221 of 221 files: 6679 passed, 20 skipped (6699 total), 0 failed. tools/executionRoute.test.ts passed 47 of 47. The test count is up from 6659 in round 1 because peers landed more tests since (CQ-V04c 08317ae7, CQ-M07a 56fb4b45). git diff 799936d9 HEAD over the 7 overlaid paths is empty, so the overlay was a no-op and the run measures the landed bytes. No files modified.",
+      "startedAt": "2026-11-01T11:15:58.565Z",
+      "completedAt": "2026-11-01T11:17:43.128Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read `git diff HEAD -- packages/moe-daemon/src/util/claimEligibility.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/waitForTask.ts` and the new test file as an attacker would.\n\n- **Refuse only.** No path lets executionRoute skip readiness, the finalizing hold, dependsOn, plan-reuse or team gates. The route check runs after readiness and can only return a refusal.\n- **One predicate.** The explicit claim, the ranked pool, the own-held waiter match and the waiter filter all pass the same parsed route. `grep -n \"executionAdmissionRefusal(\" packages/moe-daemon/src/tools/*.ts` must show the route argument at every call.\n- **No write before refusal.** Parsing happens before any read-modify-write, and the explicit refusal is thrown before the dependsOn gate and the assignment write.\n- **Scope.** PLANNING, legacy and observe rows are unchanged. The waiter record carries the route, so a later TASK_UPDATED re-match uses it.\n- **Not authentication.** The doc comment says so; it is a guard against accidental host runs.\n\nFix anything found, re-run step 4's gate, and submit its fresh output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of the landed runtime diff (git show 799936d9, the 3 runtime files); no files modified.\n- Refuse only: the route check runs after both readiness asserts (the task profile, then the own recorded attempt), and 'vm' only reaches the existing return null. The finalizing hold, dependsOn, plan-reuse and team gates are separate caller filters and unchanged.\n- One predicate: grep finds exactly 4 non-test executionAdmissionRefusal callers, all passing the parsed route (claimNextTask.ts:529 and :587, waitForTask.ts:155 and :203). findMatchingTask's only callers (waitForTask.ts:310 immediate, :437 TASK_UPDATED re-match) pass the closure's parsed route. WebSocketServer uses activeWaiters only to get and delete on disconnect, so leaving the route off the waiter record is safe (the deviation from the plan).\n- No write before refusal: parseExecutionRoute is the first check after the identity/statuses parse in both handlers, before any write or waiter registration. Inputs: strict === 'vm'; null, '' and 'VM' get INVALID_INPUT.\n- Concurrency: a pure predicate under the claim mutex; the parsed value is immutable.\n- Theoretical only: strictness reads only the caller's OWN recorded attempt, the same scope readiness has always had.\n- Found, out of scope, filed as task-4e2f2b45926c47bb846a635077094106 (bug, LOW, dependsOn this row): claim_next_task's two hasNext:false wait_for_task hints (claimNextTask.ts:624, :788) drop executionRoute, while wait_for_task's hints carry it. It fails closed (a liveness gap for hint-following VM seats only). Not fixed here: the plan says to change nothing else, and the waiver pins the exact numstat.\nStep 4's fresh gate stands (exit 0; 221 files; 6679 passed, 20 skipped).",
+      "startedAt": "2026-11-01T11:17:51.262Z",
+      "completedAt": "2026-11-01T11:19:26.428Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -68,23 +83,30 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:30.039Z",
-  "updatedAt": "2026-11-01T10:42:15.810Z",
+  "updatedAt": "2026-11-01T11:20:19.047Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:18:30.441Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5,
+    "executedStepCount": 10,
     "rejectCount": 1,
     "reopenCount": 1
   },
   "contextFetchedBy": [
-    "qa-1e84238e"
+    "qa-1e84238e",
+    "worker-0e1ab990"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T10:22:16.573Z",
   "executionContract": {
@@ -156,28 +178,20 @@
     "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
     "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts"
   ],
-  "reviewStartedAt": "2026-11-01T10:30:23.746Z",
+  "reviewStartedAt": "2026-11-01T11:20:19.043Z",
   "verification": {
     "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-bb1502b1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/claimEligibility.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/waitForTask.ts packages/moe-daemon/src/tools/executionRoute.test.ts packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'",
     "exitCode": 0,
-    "outputTail": " Test Files  221 passed (221)\n      Tests  6659 passed | 20 skipped (6679)\n   Start at  12:28:52\n   Duration  38.61s (tests 93%, transform 4%, import 3%)\n\n(npm ci and tsc --noEmit ran first in the same && chain; chain exit code 0. Snapshot = HEAD git archive plus the 7 overlaid files. The plan's command overlays 4 files; this adds the 3 existing test files that now send executionRoute 'vm'.)",
-    "reportedAt": "2026-11-01T10:30:23.746Z",
+    "outputTail": " ✓ src/tools/executionRoute.test.ts (47 tests) 7625ms\n...\n     ✓ bounds a stopped TERM-resistant owned helper without killing a peer 2251ms\n     ✓ retains ownership and refuses a duplicate when even KILL cannot finish the helper 8242ms\n\n Test Files  221 passed (221)\n      Tests  6679 passed | 20 skipped (6699)\n   Start at  13:16:27\n   Duration  38.75s (tests 93%, transform 4%, import 3%)\n\n(Run fresh 2026-11-01 11:16Z on snapshot /tmp/moe-bb1502b1-6LBGV7 of HEAD 56fb4b45. Output was captured to /tmp/moe-bb1502b1-gate.log, and the chain exited 0. npm ci added 74 packages and tsc --noEmit was clean before npm test. git diff 799936d9 HEAD over the 7 overlaid paths is empty, so the overlay is a no-op.)",
+    "reportedAt": "2026-11-01T11:20:19.043Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "packages/moe-daemon/src/util/claimEligibility.ts",
     "packages/moe-daemon/src/tools/claimNextTask.ts",
-    "packages/moe-daemon/src/tools/waitForTask.ts",
-    "packages/moe-daemon/src/tools/executionRoute.test.ts",
-    "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
-    "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
-    "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts",
-    ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
-    ".moe/tasks/task-5a635bc90aaa47acabede9307dd1579b.json",
-    ".moe/tasks/task-bb1502b1fcb04f0e99fa5328be05ef4e.json",
-    ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
+    "packages/moe-daemon/src/tools/waitForTask.ts"
   ],
-  "completionSummary": "claim_next_task and wait_for_task now take an optional executionRoute: 'vm'. Any other value (host, VM, '', null, 1, {}) is INVALID_INPUT, raised before any write. The ONE predicate, executionAdmissionRefusal(state, task, workerId?, executionRoute?) in util/claimEligibility.ts, refuses a verified-local WORKING or REVIEW row without the marker, after both readiness asserts, so the marker can only refuse. The task-level profile or the own seat's recorded attempt profile makes a row strict. The explicit claim throws EXECUTION_ROUTE_REQUIRED (NOT_ALLOWED; context {taskId,status,executionProfile,requiredRoute:'vm'}) before any write. The ranked pool and both waiter paths skip the row. PLANNING, legacy and observe claims are unchanged, and a marked claim under real readiness is still EXECUTION_PROFILE_NOT_READY. All 4 callers pass the parsed route. New tools/executionRoute.test.ts has 47 tests; a mutation check that disabled the refusal made 17 fail. Deviations: (1) no route field on the ActiveWaiter record, since the subscribe closure holds it; (2) wait_for_task hints carry the route when sent, to avoid a wake-claim-skip spin; (3) 3 existing tests (deliveryBypass.acceptance, dependencyProjection.acceptance, dependencyReadiness.strict) claimed strict rows without the marker and failed 32 tests on the first full run, so I added executionRoute 'vm' to their claim args with assertions unchanged. None of the WT-19 files was touched. Full daemon suite in a /tmp snapshot plus 7 overlaid files: tsc clean, 221 files passed, 6659 tests passed, 20 skipped, 0 failed (6679 total).",
+  "completionSummary": "NO-BYTE RETRY after the size-only qa_reject #1 (failedDodItems empty). The implementation is unchanged in completion 799936d9. git diff 799936d9 HEAD over all 7 paths is empty, and this session modified no files.\n\nSize route as QA directed: I filed epic ADD_RAIL prop-09077323d7384a6986bd7933f10ad623 (PENDING at 11:19Z). It names 799936d9 and the exact numstat from git show --numstat --format= 799936d9 -- packages/: +529/-27, net 502, 556 changed lines. Runtime net 72: util/claimEligibility.ts +56/-9, tools/claimNextTask.ts +13/-3, tools/waitForTask.ts +26/-11. Tests net 430: tools/executionRoute.test.ts +428 (new), __acceptance__/deliveryBypass.acceptance.test.ts +2/-1, __acceptance__/dependencyProjection.acceptance.test.ts +2/-1, state/dependencyReadiness.strict.test.ts +2/-2. The U2 matrix was not shrunk, because QA marked it advisory and said not to rewrite landed bytes. If the proposal is still PENDING when this returns, park it as the QA handoff says.\n\nFresh gate, full daemon suite in a git-archive snapshot of HEAD 56fb4b45: exit 0, tsc clean, 221 of 221 files, 6679 passed, 20 skipped, 0 failed. executionRoute.test.ts is 47 of 47. That is up from 6659 in round 1 only because peers have landed tests since.\n\nAdversarial re-review of the landed runtime diff found no defect in scope:\n- All 4 executionAdmissionRefusal callers pass the parsed route.\n- Both findMatchingTask callers pass the closure's route; WebSocketServer only deletes waiters on disconnect.\n- Parse runs before any write, and the route check runs after both readiness asserts.\n\nOut of scope, filed as task-4e2f2b45926c47bb846a635077094106 (bug, LOW, dependsOn this row): claim_next_task's two hasNext:false wait_for_task hints (claimNextTask.ts:624, :788) drop executionRoute. It fails closed; it is a liveness gap for VM seats that follow the hint. Not fixed here: the plan says change nothing else, and the waiver pins the numstat.",
   "commits": [
     {
       "sha": "799936d97216fb5093d42962f728a482afde1110",

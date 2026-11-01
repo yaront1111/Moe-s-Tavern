@@ -1,0 +1,33 @@
+{
+  "id": "task-4e2f2b45926c47bb846a635077094106",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: claim_next_task's no-match wait_for_task hints drop executionRoute",
+  "description": "claimNextTask.ts:624 and :788 return nextAction moe.wait_for_task with args {statuses, workerId, epicId} even when the claim carried executionRoute 'vm' (CQ-M07q, 799936d9). wait_for_task's own claim and re-wait hints do carry it. Repro: a VM-route seat calls claim_next_task {statuses:['WORKING'], executionRoute:'vm'} on an empty pool and follows the hint, so it waits unmarked and is never woken for a strict WORKING/REVIEW row. This fails closed (nothing unsafe is claimed); it is a liveness gap for hint-following VM seats (the CQ-M07m/n agent loop).",
+  "definitionOfDone": [
+    "Both claim_next_task hasNext:false wait_for_task hints carry executionRoute 'vm' exactly when the claim sent it, and omit the field otherwise (vitest through the tool, in a new or non-WT-19 test file).",
+    "No other claim behavior changes; the full daemon suite passes in a git-archive snapshot."
+  ],
+  "taskRails": [
+    "Do not edit claimNextTask.test.ts, state/validators.ts or types/schema.ts while WT-19 (task-b1ca54f2) is open.",
+    "The marker may only refuse; never let it grant readiness or skip any other claim check."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-bb1502b1fcb04f0e99fa5328be05ef4e"
+  ],
+  "priority": "LOW",
+  "order": 232.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T11:19:16.047Z",
+  "updatedAt": "2026-11-01T11:19:16.047Z"
+}
