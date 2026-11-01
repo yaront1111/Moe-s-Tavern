@@ -22,16 +22,6 @@ import {
   startReadinessEvaluation, type ReadinessEvaluator,
 } from './readinessHolder.js';
 
-// Stands in for CQ-M07d's client flip in the DoD 1 positive rows only; off, decodeClientHello is the real one.
-const client = vi.hoisted(() => ({ verifiedLocal: false }));
-vi.mock('../server/clientCapabilities.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../server/clientCapabilities.js')>();
-  return { ...actual, decodeClientHello: (payload: unknown) => {
-    const agreed = actual.decodeClientHello(payload);
-    return client.verifiedLocal ? { ...agreed, negotiatedCapabilities: { ...agreed.negotiatedCapabilities, verifiedLocal: true } } : agreed;
-  } };
-});
-
 type Row = Record<string, unknown>;
 const ISO = '2026-11-01T12:00:00.000Z';
 const EVIDENCE = { reportSha256: 'a'.repeat(64), platform: 'linux', arch: 'x64', providerVersion: '1.17.0' };
@@ -55,7 +45,7 @@ async function refusal(act: () => unknown): Promise<MoeError> {
   return error;
 }
 
-afterEach(() => { clearReadiness(); client.verifiedLocal = false; vi.useRealTimers(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+afterEach(() => { clearReadiness(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe('the held value and assertExecutionProfileReady (DoD 2)', () => {
   it('holds a frozen DEFAULT_READINESS until evaluated, refused with today\'s exact message and context', async () => {
@@ -218,18 +208,18 @@ it('productionReadinessInputs wires the own install root, this project\'s key pa
     .toEqual([project, runnerKeyPath(project), 'moe-daemon', true, 'D:\\Programs', true, 'function', 'function', true]);
 });
 
-describe('activationGaps (DoD 4): vm and check follow the held value; the client gate is real', () => {
+describe('activationGaps (DoD 4): vm and check follow the held value; the real client gate leaves no client gap', () => {
   const VM = { capability: 'vm', reason: 'vm-provisioning-uncertified' };
-  const CLIENT = { capability: 'client', reason: 'client-contract-unsupported' };
   const CHECK = { capability: 'check', reason: 'check-runner-uncertified' };
-  it.each([['the default', undefined, [VM, CLIENT, CHECK]], ['READY', READY, [CLIENT]], ['NOT_READY', NOT_READY, [CLIENT]],
-    ['only isolated-check-vm missing', only('isolated-check-vm'), [CLIENT, CHECK]],
-    ['only isolated-agent-and-qa-vms missing', only('isolated-agent-and-qa-vms'), [VM, CLIENT]],
-    ['only authenticated-runner-evidence missing', only('authenticated-runner-evidence'), [CLIENT]],
+  it.each([['the default', undefined, [VM, CHECK]], ['READY', READY, []], ['NOT_READY', NOT_READY, []],
+    ['only isolated-check-vm missing', only('isolated-check-vm'), [CHECK]],
+    ['only isolated-agent-and-qa-vms missing', only('isolated-agent-and-qa-vms'), [VM]],
+    ['only authenticated-runner-evidence missing', only('authenticated-runner-evidence'), []],
   ])('%s', async (_n, held, expected) => {
     if (held) await hold(held);
     const [first, second] = [activationGaps(), activationGaps()];
-    expect([first, second, first[0] === second[0]]).toEqual([expected, expected, false]);
+    // Fresh copies: neither the array nor any gap object is shared between calls (an empty list still checks the array).
+    expect([first, second, first === second, first.some((gap, i) => gap === second[i])]).toEqual([expected, expected, false, false]);
   });
 });
 
@@ -262,7 +252,6 @@ describe('through the real tools (DoD 1 and DoD 3)', () => {
     executionRoute: 'vm', ...args }, h.state);
   /** Each strict path refused, the client gate open, nothing written, and the held value untouched. */
   async function stillRefused(args: Row = {}): Promise<void> {
-    client.verifiedLocal = true;
     const before = { held: heldReadiness(), tasks: ['task-p', 'task-w', 'task-r'].map((id) => bytes('tasks', `${id}.json`)), project: bytes('project.json') };
     for (const act of [() => plan(args), () => claim(args), () => h.state.updateSettings({ ...ACTIVATE, ...args } as never)]) {
       const error = await refusal(act);
@@ -277,13 +266,10 @@ describe('through the real tools (DoD 1 and DoD 3)', () => {
   beforeEach(() => h.init());
   afterEach(async () => { await h.state.flushActivityLog(); h.cleanup(); });
 
-  it('DoD 1: a held READY lets the settings update, submit_plan and claim succeed; without the client gate only [client] remains', async () => {
+  it('DoD 1: READY held, unmocked: activationGaps() is [] and the settings update, submit_plan and claim succeed', async () => {
     await seed({ deliveryPolicy: 'local-branch' });
     await hold(READY);
-    const unsupported = await refusal(() => h.state.updateSettings(ACTIVATE));
-    expect([unsupported.codeName, (unsupported.context as Row).unsupportedCapabilities]).toEqual(['EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED',
-      [{ capability: 'client', reason: 'client-contract-unsupported' }]]);
-    client.verifiedLocal = true;
+    expect(activationGaps()).toEqual([]);
     await h.state.updateSettings(ACTIVATE);
     expect((JSON.parse(bytes('project.json')) as { settings: Row }).settings).toMatchObject(STRICT_SETTINGS);
     await plan();
@@ -293,7 +279,6 @@ describe('through the real tools (DoD 1 and DoD 3)', () => {
   });
   it('DoD 1: the default refuses the settings update, submit_plan and claim with EXECUTION_PROFILE_NOT_READY, writing nothing', async () => {
     await seed({ deliveryPolicy: 'local-branch' });
-    client.verifiedLocal = true;
     expect((await refusal(() => h.state.updateSettings(ACTIVATE))).codeName).toBe(NOT_READY_CODE);
     h.state.project!.settings = { ...h.state.project!.settings, ...STRICT_SETTINGS } as never;
     fs.writeFileSync(path.join(h.moePath, 'project.json'), JSON.stringify(h.state.project, null, 2));

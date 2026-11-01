@@ -292,7 +292,7 @@ describe('MoeWebSocketServer Integration', () => {
       const serverCapabilities = {
         executionProfiles: true, planRevisions: true, approvalRevisions: true,
         executionContracts: true, deliveryReceipts: true, requiredChecks: true,
-        runnerStatus: false, modelReceipts: false, verifiedLocal: false,
+        runnerStatus: false, modelReceipts: false, verifiedLocal: true,
       };
       const allClaimed = Object.fromEntries(Object.keys(serverCapabilities).map(key => [key, true]));
       const hello = (capabilities: Record<string, unknown> = allClaimed) => ({
