@@ -38,6 +38,9 @@ Each failure is one fixed code; no path, guest byte or credential reaches the re
    Linux x64 `qemu` (the snap), macOS x64 or arm64 `qemu`. Keep the installer's default location: Moe runs only the
    pinned client (`%ProgramFiles%\Multipass\bin\multipass.exe`, `/snap/bin/multipass`, `/usr/local/bin/multipass`),
    never a `multipass` found on `PATH`, and reports `PROVIDER_NOT_FOUND` when it is missing.
+   On Linux a refresh hold (`sudo snap refresh --hold multipass`) is allowed and keeps the certified 1.17.0 when a
+   newer Multipass reaches the stable channel; `snap list multipass` then shows the note `held`. Any other note,
+   alone or with `held` (devmode, classic, jailmode, try, disabled, broken), fails the `multipass-snap` item.
 2. Run `node scripts/local-runner/cli.mjs prerequisites --cache-dir <work-dir>/images`. Certify caches the image in
    `<work-dir>/images`. The command exits 0 only when every item is satisfied, and each unmet item names its `action`.
    On Linux the strictly confined snap reads only paths under your home directory with no hidden segment, so the

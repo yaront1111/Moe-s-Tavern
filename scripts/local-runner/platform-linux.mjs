@@ -60,9 +60,11 @@ async function probeSnap(run, snapExecutable) {
     ['Name', 'Version', 'Rev', 'Tracking', 'Publisher', 'Notes']);
   if (!Array.isArray(rows) || rows.length !== 1) return rows === false ? false : null;
   const [name, version, , , publisher, notes] = rows[0];
-  // --unicode=never renders a verified publisher as `name**`. Any note (devmode, classic, jailmode, try,
-  // disabled, broken) is weaker confinement or an inactive snap.
-  return name === 'multipass' && version === '1.17.0' && publisher === 'canonical**' && notes === '-';
+  // --unicode=never renders a verified publisher as `name**`. Notes `-` is a plain strictly confined snap.
+  // `held` alone is only snapd's refresh hold (`snap refresh --hold multipass`): it keeps the certified 1.17.0
+  // and changes no confinement or activation. Every other note, alone or combined with `held` (devmode,
+  // classic, jailmode, try, disabled, broken), is weaker confinement or an inactive snap.
+  return name === 'multipass' && version === '1.17.0' && publisher === 'canonical**' && (notes === '-' || notes === 'held');
 }
 
 /** The required plugs with no connected slot, in sorted order; null when unknown. */

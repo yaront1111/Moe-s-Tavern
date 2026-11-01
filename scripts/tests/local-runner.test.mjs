@@ -2399,6 +2399,7 @@ const SNAP_MULTIPASS = '/snap/bin/multipass';
 const SNAP_LIST = 'list multipass --unicode=never --color=never';
 const DISK = GUEST_RESOURCES.diskBytes + HOST_DISK_HEADROOM_BYTES;
 // snapd's --unicode=never table: a verified publisher renders as `canonical**`; Notes `-` is strict confinement.
+// `held` is snapd's refresh hold, not a confinement mode.
 const snapRow = ({ version = '1.17.0', publisher = 'canonical**', notes = '-' } = {}) => `multipass  ${version}  14535  latest/stable  ${publisher}  ${notes}`;
 const snapList = (...rows) => `${['Name       Version  Rev    Tracking       Publisher    Notes', ...rows].join('\n')}\n`;
 const plugRow = (plug, slot = `:${plug === 'all-home' ? 'home' : plug}`) => `${plug === 'all-home' ? 'home' : plug}  multipass:${plug}  ${slot}  -`;
@@ -2471,7 +2472,10 @@ test('Linux prerequisites pin the snap client and the required plugs of the v1.1
 
 test('only the strictly confined Canonical-verified Multipass 1.17.0 snap satisfies multipass-snap', async () => {
   const rejected = [{ version: '1.16.1' }, { version: '1.17.0+win' }, { publisher: 'canonical' }, { publisher: 'canonical*' }, { publisher: 'someone**' },
-    ...['devmode', 'classic', 'jailmode', 'disabled', 'try', 'broken', 'devmode,disabled'].map(notes => ({ notes }))];
+    ...['devmode', 'classic', 'jailmode', 'disabled', 'try', 'broken', 'devmode,disabled', 'disabled,held', 'devmode,held', 'held,jailmode'].map(notes => ({ notes }))];
+  // The operator's real row after `snap refresh --hold multipass`: `multipass  1.17.0  19760  latest/stable  canonical**  held`.
+  const held = await linuxPrerequisites({}, linuxTransport({ [SNAP_LIST]: snapList(snapRow({ notes: 'held' })) }));
+  assert.deepEqual([held.ready, held.prerequisites], [true, LINUX_READY]);
   for (const [answer, expected] of [
     ...rejected.map(row => [snapList(snapRow(row)), F]), [failWith({ code: 'ENOENT' }), F],
     [snapList(), U], [snapList(snapRow(), snapRow()), U], [snapList(`${snapRow()}  extra`), U], [snapList('multipass  1.17.0  14535'), U], [snapRow(), U],
@@ -2479,7 +2483,7 @@ test('only the strictly confined Canonical-verified Multipass 1.17.0 snap satisf
     [failWith({ code: 1, stderr: 'error: no matching snaps installed' }), U], [failWith({ killed: true, code: 'ETIMEDOUT' }), U],
   ]) {
     const result = await linuxPrerequisites({}, linuxTransport({ [SNAP_LIST]: answer }));
-    assert.deepEqual([result.ready, satisfiedOf(result)], [false, only(1, expected)], JSON.stringify(answer)?.slice(0, 90));
+    assert.deepEqual([result.ready, result.prerequisites], [false, linuxItems(only(1, expected))], JSON.stringify(answer)?.slice(0, 90));
   }
 });
 
