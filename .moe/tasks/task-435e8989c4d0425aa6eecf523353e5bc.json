@@ -13,35 +13,54 @@
     {
       "stepId": "step-1",
       "description": "Tests first, then the fix. Every vitest/npm run happens in a git-archive snapshot, never in the shared checkout (global rail).\n\n**Fix**, in packages/moe-daemon/src/context/contextPacket.ts only (getContext.ts stays untouched). buildPacketManifest stays pure over the assembled body.\n- Today the loop over CONDITIONAL_SECTIONS lists 'task.requiredCheckSnapshot' only when it is servable.\n- Add one more case. When it is NOT served and the body's own `task.executionContract.requiredChecks` is a non-empty array, push `{ path: 'task.requiredCheckSnapshot', mandatory: true, status: 'missing', reason: 'unbound-snapshot' }`.\n  - Read it with the existing own() helper, so an inherited name reads as absent.\n  - getContext.ts:556-593 serves the snapshot only when readRequiredCheckSnapshot binds it, and always serves a set executionContract. So this fires exactly when requiredChecks are declared and readRequiredCheckSnapshot returned null: the snapshot is absent, malformed, or bound to other definitions.\n- Smallest shape: map each conditional section to the body path that makes it required (e.g. `{ 'task.requiredCheckSnapshot': 'task.executionContract.requiredChecks' }`), or a one-line predicate for the single entry.\n- A missing section adds nothing to mandatoryChars. `complete` turns false through the existing every-served rule.\n- Update the CONDITIONAL_SECTIONS doc comment, which today says \"never reported missing\": the section is mandatory when served, and missing (unbound-snapshot) when requiredChecks are declared but no bound snapshot is served.\n- Error handling: no new throw. A non-array or empty requiredChecks is not a declaration, and an odd body shape still reads as missing or absent, as today.\n\n**Tests**, in packages/moe-daemon/src/tools/getContextPacket.test.ts, with toStrictEqual like the file's existing tests.\n- Pure builder, next to the 'odd shapes' test. With the snapshot unserved:\n  - requiredChecks [{...}] → the missing section with reason 'unbound-snapshot', complete false, mandatoryChars unchanged by it;\n  - requiredChecks [], absent, `{}`, `'x'`, or inherited via the prototype → no snapshot section.\n  - A served snapshot is still `served` and mandatory, with or without requiredChecks.\n- Through get_context: seed `executionContract: { ...CONTRACT, requiredChecks: [{ id: 'unit', command: 'npm test', scripts: ['scripts/check.sh'] }] }`.\n  - (a) No requiredCheckSnapshot.\n  - (b) A well-formed snapshot whose definitionDigest is for OTHER definitions.\n  - Both: `res.task` has no requiredCheckSnapshot, the manifest lists the unbound-snapshot section, and complete is false. Check every caller of the file's first it.each (worker-w, qa-q, architect-a, governor-g, '') in the default view, so it is never role-trimmed.\n  - (c) A bound snapshot: `{ version: 1, revision: 'a'.repeat(40), definitionDigest: definitionDigest(validateExecutionContract(contract)!.requiredChecks!), entries: [{ path: 'scripts/check.sh', oid: 'b'.repeat(40) }] }`, digesting the definitions exactly as readRequiredCheckSnapshot does. It is served whole (toStrictEqual to the stored value) and listed served and mandatory for every caller in BOTH views. budget.mandatoryChars includes its JSON length.\n  - Imports: definitionDigest from ../delivery/requiredChecks.js; validateExecutionContract from ../state/validators.js. Importing is fine; editing validators.ts is not needed.\n- The existing first test keeps pinning \"no requiredChecks → no snapshot section\" unchanged; do not weaken it.\n- Run the new rows once BEFORE the fix: (a), (b) and the declared builder row must fail.\n\n**Iterate in a snapshot**, from the repo root:\n- Create it: `S=$(mktemp -d /tmp/moe-435e8989-XXXXXX) && git archive HEAD | tar -x -C \"$S\"`.\n- After each edit: `cp --parents packages/moe-daemon/src/context/contextPacket.ts packages/moe-daemon/src/tools/getContextPacket.test.ts \"$S\"`.\n- Once: `cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" npm ci --no-audit --no-fund`.\n- Then, under the same env -i: `npx vitest run src/tools/getContextPacket.test.ts src/delivery/requiredChecks.snapshot.test.ts src/context/contextDelta.test.ts`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/context/contextPacket.ts",
         "packages/moe-daemon/src/tools/getContextPacket.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/contextPacket.ts",
+        "packages/moe-daemon/src/tools/getContextPacket.test.ts"
+      ],
+      "note": "Red first: builder, (a), (b) failed pre-fix; green after. tsc clean; 141 tests pass across the 3 files in a snapshot. Dirty peer paths untouched.",
+      "startedAt": "2026-11-01T19:43:14.937Z",
+      "completedAt": "2026-11-01T19:43:59.632Z"
     },
     {
       "stepId": "step-2",
       "description": "Docs, in docs/MCP_SERVER.md with the Edit tool. Change only these two sentences. Another open task may also declare this file; the Edit tool's witness lands it, so never use a shell write.\n- moe.get_context paragraph (~line 190), which ends \"... and omitted otherwise.\": add that packetManifest then lists it `missing` with reason `unbound-snapshot` whenever the contract declares `requiredChecks`.\n- Packet manifest paragraph (~line 308): replace \"`task.requiredCheckSnapshot` is listed only when served.\" with the new rule. It is listed `served` (mandatory, never role-trimmed or truncated) when served. When the contract declares `requiredChecks` but no snapshot bound to them is served (absent, malformed, or bound to other definitions), it is listed `missing` with reason `unbound-snapshot`. Otherwise it is not listed.\n- docs/SCHEMA.md's PacketManifest shape has no reason enum, so it needs no change.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Two doc sentences updated via Edit tool.",
+      "startedAt": "2026-11-01T19:44:02.150Z",
+      "completedAt": "2026-11-01T19:44:08.928Z"
     },
     {
       "stepId": "step-3",
       "description": "Gate (DoD 3): the full daemon suite plus the typecheck in a fresh git-archive snapshot, run ONCE after the last byte change. Its output is complete_task's evidence:\n\ncd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-435e8989-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/context/contextPacket.ts packages/moe-daemon/src/tools/getContextPacket.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'\n\n- It must exit 0 with tsc clean and 0 failed tests.\n- If an UNRELATED test fails, A/B it: run the same command without the cp of your files. If it fails there too, it is a peer regression: file it as its own bug row and cite both runs (`mem:gotcha-cq-plan-size-vs-qa-cap`).\n- Pass the command, its exit code and the vitest summary tail to complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Full gate in fresh snapshot: exit 0, tsc clean, 227 files / 6863 passed / 20 skipped / 0 failed.",
+      "startedAt": "2026-11-01T19:44:09.667Z",
+      "completedAt": "2026-11-01T19:44:59.653Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this row's diff. Load adversarial-self-review.\n- Can the new section appear for a task WITHOUT requiredChecks? Check: the contract absent, a non-array value, an empty array, an inherited value.\n- Can a served snapshot ever be listed missing, or be listed twice?\n- Is it never role-trimmed? It must not be in any ROLE_OMITTED list.\n- Does `complete` turn false only through the new missing row?\n- contextDelta and servedContext digest the same packet; confirm that nothing else enumerates manifest sections strictly: `grep -rn packetManifest packages scripts moe-jetbrains/src moe-vscode/src`. scripts/tests/prompt-cache-launcher.test.mjs only carries a fixture.\n- Mutant check, in the snapshot copy only: drop the new branch. Rows (a) and (b) must fail. Restore it.\n- Size is expected under 150 changed lines.\n- If any tracked byte changed in this step, rerun step 3 for fresh evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review: new row only when requiredChecks is a non-empty own-property array and nothing is served (own() reads; inherited/non-array/empty/absent covered by builder test). Served snapshot never listed missing (branch only when unservable) and listed once. ROLE_OMITTED has no snapshot path. Only other packetManifest consumers are generated initFiles and a launcher fixture. Mutant (branch dropped in snapshot copy) fails exactly the 3 new rows; restored byte-identical. Diff +82/-6. No tracked bytes changed here.",
+      "startedAt": "2026-11-01T19:45:00.625Z",
+      "completedAt": "2026-11-01T19:45:23.460Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -49,7 +68,7 @@
   "reopenReason": "Governor promotion (human delegation; the user's \"move from backlog whts needed\"). This is an observability gap, not a bypass, but VM seats under verified-local rely on packetManifest to see a missing protected-check overlay. So it lands before activation: CQ-M07 (task-1a8f1d0e) now dependsOn this row. No open plan declares getContext.ts or contextPacket.ts today.",
   "createdBy": "WORKER",
   "parentTaskId": null,
-  "priority": "HIGH",
+  "priority": "LOW",
   "order": 290.5,
   "comments": [
     {
@@ -61,7 +80,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T13:36:09.052Z",
-  "updatedAt": "2026-11-01T19:02:24.047Z",
+  "updatedAt": "2026-11-01T19:45:27.492Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:30:39.580Z",
@@ -70,16 +89,23 @@
   "metrics": {
     "firstClaimAt": "2026-11-01T18:52:44.788Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-12ae794e"
+    "architect-12ae794e",
+    "worker-24f14750"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T18:55:33.344Z",
   "executionContract": {
@@ -144,5 +170,20 @@
   "approvedPlanRevision": 1,
   "dependsOn": [
     "task-5464e7259cfd479793d93f9651fb3eba"
-  ]
+  ],
+  "workStartedAt": "2026-11-01T19:43:14.937Z",
+  "reviewStartedAt": "2026-11-01T19:45:27.490Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-435e8989-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/context/contextPacket.ts packages/moe-daemon/src/tools/getContextPacket.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'",
+    "exitCode": 0,
+    "outputTail": "Test Files  227 passed (227)\n      Tests  6863 passed | 20 skipped (6883)\n   Start at  21:44:16\n   Duration  39.82s",
+    "reportedAt": "2026-11-01T19:45:27.490Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/context/contextPacket.ts",
+    "packages/moe-daemon/src/tools/getContextPacket.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "buildPacketManifest now lists task.requiredCheckSnapshot as {mandatory:true,status:'missing',reason:'unbound-snapshot'} (complete false) when the served executionContract declares a non-empty requiredChecks array and no bound snapshot is served (absent, malformed, or bound to other definitions), for every caller role. A served snapshot stays served/mandatory and untrimmed; tasks without requiredChecks have byte-identical manifests. getContext.ts is untouched. Tests: pure builder row (declared, empty/absent/non-array/inherited, served) plus get_context rows for absent, stale-bound and bound snapshots across all callers and both views. Mutant check kills all 3 new red rows. docs/MCP_SERVER.md updated in the two sentences. Gate: full daemon suite plus tsc in a fresh git-archive snapshot, 227 files, 6863 passed, 20 skipped, 0 failed."
 }
