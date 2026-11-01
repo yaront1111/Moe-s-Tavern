@@ -1,0 +1,33 @@
+{
+  "id": "task-c7cead1b2bc24863bea5141129ef47b1",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07j1] Seat job forward over the daemon's /mcp",
+  "description": "SPIDR split out of CQ-M07j (task-1dc49ae27e22494a95e15ada3e9c1fe9) by architect-b520bc90 on 2026-11-01, as that row anticipated: \"Expect a SPIDR split at planning if the forward transport needs its own slice\". CQ-M07j's runSeatJob passes this forward to runAgentJob. Depends on CQ-M07i (task-18809c69), which creates the two files this edits.\n\n**Decision: forward over the daemon's /mcp (the moe-proxy path), never /runner.**\n- The /runner channel (runner-client.mjs) gives every call the authenticated runner identity (McpAdapter options.runner). record_check_dispatch trusts that identity as runner-attested evidence. A guest agent's calls must never carry runner trust: if the bridge allowlist ever grew, that would be a confused deputy.\n- The bridge already scopes every guest request before forward sees it:\n  - guest-bridge.mjs TOOLS gives an exact per-role allowlist and stamps the binding's taskId/workerId;\n  - guest-session.mjs STAMPED adds sessionId/attemptId/generation.\n  That mirrors what moe-proxy does on /mcp.\n- runAgentJob's own moe.acquire_resource/release_resource go through the same forward under the binding's taskId, so the job lease stays task-keyed.\n\nObjective: export `seatForward(projectPath, { WebSocketImpl = globalThis.WebSocket, timeoutMs = 30_000 } = {})` from scripts/local-runner/agent-seat.mjs. It returns `forward(tool, args, { signal })`.\n- Each call opens ONE socket to ws://<loopback host>:<port>/mcp of this project's daemon. readDaemonInfo (vm-control.mjs) supplies the port and host: it is bounded, refuses on a project mismatch, and admits only a loopback bind proven by /health.\n- It sends one JSON-RPC tools/call { name: tool, arguments: args } and resolves the daemon's RAW `result` object unchanged ({ content: [...] }). guest-mcp-shim.py relays frame.result verbatim as the agent's MCP tools/call result, so it must never be the parsed inner text, which is what vm-control's mcpCaller and runner-client's call return.\n- An error reply, a close or error event, the timeout or an aborted signal (already aborted, or aborting mid-call) rejects with one fixed code. runGuestSession maps any rejection to BRIDGE_UPSTREAM_FAILED and never echoes it. The socket closes in finally on every path.\n- It sends no headers and never reads the runner key file.\n\nNOT in scope: runSeatJob and the seat-job CLI (CQ-M07j), and the wrappers (CQ-M07m/n).\n\nVerification: in a git-archive snapshot (mem:gotcha-local-runner-tests recipe) with this task's files overlaid: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat.test.mjs",
+  "definitionOfDone": [
+    "forward sends exactly one tools/call {name, arguments} per call over ws://127.0.0.1 (or [::1]):<daemon.json port>/mcp of this project and resolves the daemon's raw result object unchanged (rows with a fake WebSocket, VC-M1 style).",
+    "An error reply, a close, an error event, the timeout, and a signal aborted before or during the call each reject with a fixed code, and the socket is closed on every path (rows).",
+    "No runner key is read or sent: the fake WebSocket sees no headers argument, and a runner key dir pointed at a missing path changes nothing (row).",
+    "A daemon.json for another project or a non-loopback /health bind refuses before any socket opens (row, reusing readDaemonInfo).",
+    "The named test passes in a git-archive snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-18809c69885f4af6bff87d7e764f269b"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.145,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T12:10:48.664Z",
+  "updatedAt": "2026-11-01T12:10:48.664Z"
+}

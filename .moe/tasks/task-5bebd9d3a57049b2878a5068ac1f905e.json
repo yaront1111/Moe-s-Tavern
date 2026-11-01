@@ -56,7 +56,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -69,16 +69,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T11:59:05.110Z",
-  "updatedAt": "2026-11-01T12:07:12.520Z",
+  "updatedAt": "2026-11-01T12:11:48.668Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T12:03:34.768Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-01T12:11:48.668Z",
+    "wallClockMs": 493900
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-cef53f62"
+    "worker-cef53f62",
+    "qa-c5835a34"
   ],
   "tier": "light",
   "effort": "high",
@@ -174,5 +177,9 @@
     "kind": "completion",
     "sessionId": "worker-cef53f62@2026-11-01T12:05:05Z",
     "at": "2026-11-01T12:07:12.520Z"
-  }
+  },
+  "completedAt": "2026-11-01T12:11:48.668Z",
+  "reviewCompletedAt": "2026-11-01T12:11:48.668Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 8eddc284 (on moe/work-2026-10-24, kind=completion, pushed). Diff is fixture-only: packages/moe-daemon/src/delivery/repairPolicy.test.ts +32/-10, all above the H describe. The other 2 paths are .moe/tasks board records. H1-H3 bodies are byte-identical. scripts/local-runner/check-session.mjs is unchanged since 6ac51c42 (git diff HEAD clean for both files).\nDoD1: H1-H3 pass against 6ac51c42's check-session.mjs: vitest -t 'real host check sessions' gave 3 passed. No expectation weakened or deleted.\nDoD2: exitingProvider's fake run records its args, answers only ['info', name, '--format','json'] with an ipv4 address, and throws on anything else. ssh/keyDir are tmpdir strings, never created or executed. settle() asserts runCalls is exactly that one info read and spawnCommands is exactly [SSH]. No real multipass, ssh or execFile appears in the file; the one 'multipass' hit is a comment.\nMutation probes in the snapshot, both killed (3 failed each): (a) the fake run's expected info name changed; (b) the spawn assertion changed from [SSH] to ['ssh']. The fixture assertions are load-bearing.\nDoD3: I re-ran task.verification: git archive HEAD + this test file into a mktemp snapshot, env -i, Node v24.21.0, npm ci OK, tsc --noEmit clean, npm test. Result: 222 files passed, 6701 passed | 20 skipped, no failures. This matches the worker's counts (baseline 3 failed/6698). The shared checkout was not built or installed.\nNot run: Gradle and scripts harnesses (out of scope for a daemon test-fixture change). Complexity pass: nothing to cut. The commit also carries a board record, .moe/tasks/task-5a635bc9...json, which the wrapper staged.",
+  "requiredCheckAtDone": null
 }
