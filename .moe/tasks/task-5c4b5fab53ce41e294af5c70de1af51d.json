@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -82,7 +82,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:36.745Z",
-  "updatedAt": "2026-11-01T12:22:43.533Z",
+  "updatedAt": "2026-11-01T12:36:56.443Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T08:16:01.364Z",
@@ -92,12 +92,15 @@
     "firstClaimAt": "2026-11-01T09:01:53.141Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T12:36:56.443Z",
+    "wallClockMs": 12903302
   },
   "contextFetchedBy": [
     "architect-b520bc90",
     "worker-0e1ab990",
-    "qa-97c4310b"
+    "qa-97c4310b",
+    "qa-1e84238e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -240,11 +243,13 @@
     "sessionId": "qa-97c4310b@2026-11-01T12:18:20Z",
     "at": "2026-11-01T12:22:43.533Z"
   },
-  "blockedReason": "QA CQ-M07e: code verified, tests not delivered. Completion 69f2d710 landed certify.mjs only. scripts/tests/local-runner.test.mjs (HS1-HS5, DoD 1-3) was held as contested and is in no commit: `git grep HS1 HEAD -- scripts/tests/local-runner.test.mjs` finds nothing. The dirty file also holds live peer hunks from task-d6bc12ff (CQ-M07f, WORKING, step-3 IN_PROGRESS on that file), so the plan's command no longer reproduces in the shared tree: it fails at link time with `snapshot-transfer.mjs does not provide an export named resetWorkspace` (peer's uncommitted import). Verified in a git-archive snapshot of HEAD plus ONLY the two M07e test hunks, env -i, nvm Node 24.21.0: EXIT=0, 379 tests, 378 pass, 0 fail, 1 skipped (macOS smoke), HS1-HS5 and CF1-CF8 green; certify.mjs byte-identical to HEAD; ~/.moe/certification 0 files before and after. The certify.mjs diff has no defect: one reportBytes serialization, exclusive 0600 create, non-recursive mkdir plus lstat so nothing is written through a link, an unsafe pre-existing store is refused and never chmodded, only os.userInfo().homedir, failures resolve failed with a fixed code and one stderr line, workDir report/result/exit untouched. Blocked, not rejected: a reopened worker cannot land the file while a live peer is mid-step on it (MOE_ATTR_CONTESTED_EDITING), and a re-edit would ship the peer's unfinished hunks. The peer's whole-file landing carries the HS rows. This row auto-resumes to REVIEW when task-d6bc12ff reaches DONE. QA then checks `git archive HEAD` holds HS1-HS5 and re-runs the plan command on the pure archive. If the peer lands without them, reject for delivery only: re-edit the file with a witnessed Edit/Write tool (scratch copy /tmp/qa-m07e/worker.patch). The code landed, so the operator's re-certify already files reports.",
-  "blockedOnTaskIds": [
-    "task-d6bc12fff910484d92368fa6825f523c"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-01T12:22:04.982Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "completedAt": "2026-11-01T12:36:56.443Z",
+  "reviewCompletedAt": "2026-11-01T12:36:56.443Z",
+  "reviewSummary": "QA APPROVE CQ-M07e (reopen 0). Delivery: certify.mjs in completion 69f2d710; the worker's HS1-HS5 test hunks were held as contested there and rode in peer completion 3afbdc59 (CQ-M07f). All 116 added lines of the worker's saved patch are at HEAD (local-runner.test.mjs:3390); certify.mjs at HEAD equals 69f2d710. ~190 changed LOC, under 400; test diff additions only.\n\nRe-run: pure git archive HEAD snapshot (scripts, daemon src/package files, .github), NO overlay, env -i + nvm Node 24.21.0, node --test scripts/tests/local-runner.test.mjs: EXIT=0, 387 tests, 386 pass, 0 fail, 0 cancelled, 1 skipped (macOS smoke). HS1-HS5 and CF1-CF8 green. ~/.moe/certification holds 0 files after.\n\nDoD: (1) HS1 byte-identical, dir 0700/file 0600; HS2 existing file never overwritten. (2) HS3 injected, uncertified and non-report inputs skipped, no .moe created; CF1's injected run leaves the real store unchanged. (3) HS5 store failures never reject, workDir report and report object unchanged; HS4 refusals (symlinked store/.moe, 0755 store left 0755, foreign uid, bad home/name/report) write nothing through a link. (4) snapshot run above.\n\nCode read in full: one reportBytes serialization; createNew 'wx' 0600 unlinks only its own file; realDir non-recursive mkdir then lstat, unsafe store refused never chmodded; only os.userInfo().homedir; one fixed warn line; files only native && certified. Schema/validator unchanged (M07a port unaffected). Forbidden-pattern grep clean.\n\nMutation sweep on certify.mjs (^(HS|CF)): 8/8 KILLED.\n\nNon-blocking: certify() wiring line untestable (native entry not injectable); no row pins real-report key order vs the validator copy (equal by inspection); Windows skips uid/mode checks. Real certify run is the operator's; no Multipass here.",
+  "requiredCheckAtDone": null
 }
