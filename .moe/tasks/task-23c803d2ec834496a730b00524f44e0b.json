@@ -16,9 +16,47 @@
     "Legacy stays byte-for-byte unchanged in behavior.",
     "Port CQ-M07m3's landed behavior and strings verbatim; a credential never enters an argv, an env, a file or a log."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Port sources first, then the rows (tests first).\n\n**PORT SOURCES (never re-derive).**\n- CQ-M07m3's own last commit, never HEAD (CQ-M07m later edits the same code): `git log -1 --format=%H moe/work-2026-10-24 --grep 'Moe-Task: task-3954cc09f74045a0ac8fa4b795dcb0a9' -- scripts/moe-agent.sh`.\n  - `git show <sha>:scripts/moe-agent.sh`: the seat route (seam, seat-start, the claim marker, the post-claim backstop, the seat-job branch, credential piping, outcome parse, landing call, seat-stop in cleanup_temp).\n  - `git show <sha>:scripts/tests/postflight-vm-route.sh`: its rows and its agent-seat stub.\n  - The landed sh text wins over this plan.\n- The landed agent-seat CLI, scripts/local-runner/agent-seat.mjs (CQ-M07i/j); read its header.\n  - `seat-start --project <abs> --worker <id> --runner <pid@token> --host <host>`\n  - `seat-stop` adds `--instance <moe-vm-...>`\n  - `seat-job --project --worker --runner --host --instance --role worker|qa --task --attempt --generation --checkout <abs> --commit <full id> --cli claude|codex`, in fixed order\n  - Each prints ONE JSON line. Exit 0 ok, 1 failure, 2 usage; seat-start also 75 for capacity.\n  - seat-job reads the credential ONLY from stdin as one JSON {name, value}, to EOF, at most 16 KiB. It relays the job's stdout/stderr bytes and ends with one stdout line carrying \"seatJob\":1 plus runSeatJob's result: {ok:true, role, commit, baseTree, tree, exitCode, ...} or {ok:false, code, vm}.\n- CQ-M07n2's Invoke-MoeVmCandidateLanding($Commit, $BaseTree, $Tree, $M), with $M = @{TaskId; Title; Status; ReopenCount; CliExit; Sid}, returning @{Rc; Outcome; Code; ...}.\n- CQ-M07n1's gate and row helper in scripts/tests/postflight-vm-route.ps1.\n\n**ROWS**, in scripts/tests/postflight-vm-route.ps1. n1 created it and n2 extended it; it sits under newFiles only because it did not exist at planning time. EXTEND it, never recreate it. Port m3's rows one for one, as a `[vm seat]` section reusing n1's helper (fixture, fake CLIs, call log, FAKE_READINESS) and n2's worktree fixture.\n- **Agent-seat stub** (node), selected by MOE_AGENT_SEAT_PATH exactly as m3's stub is. It records each invocation's subcommand, argv, env and (seat-job only) stdin bytes to a log, answers m3's JSON, and exits 0.\n- **V1 (DoD 1).** verified-local and ready; a worktree claim (FAKE_CLAIM_WORKSPACE as m3 sets it); worker + the claude fake.\n  - The host CLI fake never runs.\n  - The stub log is seat-start, then seat-job, then seat-stop at exit.\n  - Every claim_next_task in the call log carries executionRoute 'vm'. That covers both claim sites when m3 has a row for the single-shot wait's re-claim (port it).\n  - A legacy T row from n1 still claims WITHOUT the key.\n- **V2 (DoD 2).** The stub's seat-job writes a real tree object into W's repository and answers ok with that commit, baseTree and tree. Afterwards refs/heads/moe/task/<id> is one new commit with that tree and parent `commit`, landed through Invoke-MoeVmCandidateLanding.\n- **V3 (DoD 3).** Rotation on, with m3's account fixture: MOE_ACCOUNTS_FILE and FAKE_ACCOUNT_HOME as the [accounts] rows do. The leased account's VM token file holds a canary matching `^sk-ant-oat\\d{2}-[A-Za-z0-9_-]{20,}$`.\n  - The canary reaches the stub ONLY in seat-job's stdin JSON.\n  - It is absent from every recorded argv and env, from all wrapper output, and from every file under the run's project and temp dirs except the token store itself (task rail: no file or log).\n  - The whole harness runs on both engines, so this covers 5.1 and 7.\n- **V4 (DoD 4).** seat-stop is recorded on a normal exit (V1), and on Ctrl+C sent mid-job.\n  - The stub's seat-job writes a ready marker, then sleeps.\n  - Run the wrapper through a supervisor copied from postflight.ps1's frozen-suite interrupt supervisor: Start-Process -WindowStyle Hidden; wait for the marker; FreeConsole, AttachConsole(<wrapper pid>), SetConsoleCtrlHandler(null, true), GenerateConsoleCtrlEvent(0, 0); bounded WaitForExit; taskkill /T /F of its OWN child only on timeout (global rail: kill only PIDs you started).\n  - Assert seat-stop follows seat-job in the stub log.\n- **V5 (DoD 5).** A claim whose workspace is shared: m3's MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED line, no seat-job in the stub log, and seat-stop still recorded.\n- **V6 (DoD 5).** MOE_AGENT_SEAT_PATH is ignored under MOE_RUNTIME_PROTECTED=1. Use m3's method.\n  - Prefer a behavioral proof that never reaches real Multipass: run a COPY of moe-agent.ps1 in a temp install dir whose own local-runner\\agent-seat.mjs is a second, 'shipped' stub, inside postflight.ps1's [protected runtime] fixture shape. Then assert the shipped stub ran and the seam stub did not.\n  - NEVER let a test run the real agent-seat.mjs seat-start: it can provision a real VM on a host with Multipass.\n- **Error handling in the harness.** Every row restores the env it sets in finally, and bounds every wait. It never prints a line starting with SKIP.\n- Run the new rows once on today's n1/n2 wrapper: they must FAIL (n1's placeholder refuses before any seat call).",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Seat route, part 1, in scripts/moe-agent.ps1 (Edit tool only; keep the UTF-8 BOM, ASCII only). Port m3's code verbatim: strings, order and seam. Every function carries a `Twin: <m3 function>` comment.\n\n**SEAM.** A resolver returns MOE_AGENT_SEAT_PATH when it is set AND not `$script:MoeRuntimeProtected`; otherwise the shipped path m3 uses, e.g. `Join-Path $PSScriptRoot 'local-runner\\agent-seat.mjs'`. The variable is read nowhere else.\n\n**PLACEHOLDER.** Replace CQ-M07n1's MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE refusal with the seat route: when the gate sees verified-local and ready, this iteration is a VM-route iteration. The CLI, shared-mode and not-ready refusals stay exactly as n1 landed them.\n\n**SEAT START.** Once per wrapper pass, before the iteration's claim, when `$script:MoeSeatInstance` (or m3's twin name) is empty:\n- `& node $seat seat-start --project $projectPath --worker $WorkerId --runner $script:MoeProcessStartedAt --host $script:MoeHost`, with each value ONE array element. The runner token may contain spaces.\n- Relax $ErrorActionPreference to 'Continue' around the native call, so 5.1 stderr ErrorRecords cannot throw.\n- Parse the ONE JSON line.\n- ok: keep the instance for the whole pass.\n- Anything else (exit 1, 2 or 75; no line; bad JSON; an empty runner identity): m3's MOE_SEAT_START_FAILED line, then `exit 1`. That is fail closed and never the host CLI; CQ-M07n adds the capacity wait.\n- Spawn it with the four credential variables removed (see step 3's helper).\n\n**CLAIM MARKER.** On VM-route iterations only, build a per-iteration COPY, `$iterClaimArgs = $claimRpcArgs.PSObject.Copy()`, then `Add-Member -NotePropertyName executionRoute -NotePropertyValue 'vm'`. Use it at BOTH claim sites: the pre-flight claim (~7787) and the single-shot wait's re-claims (~7872). Never mutate $claimRpcArgs, so a legacy iteration never carries the key.\n\n**POST-CLAIM BACKSTOP.** After the claim's workspace is resolved, on a VM-route iteration with a task bound: if `$script:MoeWtMode -cne 'worktree'`, refuse with m3's MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED line and m3's exit path (report_blocked or not, as m3 does) before any job.\n\n**Error handling.** Every native call checks $LASTEXITCODE and its parsed JSON explicitly. A failure under the VM route always ends in m3's code plus exit 1, never in a host launch.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Seat route, part 2, in scripts/moe-agent.ps1: the job and the stop. Port m3 verbatim.\n\n**ENV SCRUB HELPER.** Every seat-* spawn (start, job, stop) runs with ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY and CODEX_API_KEY removed from $env:, each saved and restored in a finally. The in-process hot-reload supervisor keeps env across passes, so a missed restore would leak into the next pass.\n\n**JOB BRANCH.** A new first branch of the launch dispatch, before codex/gemini/grok/claude (~8362), taken on VM-route iterations. It replaces the host CLI.\n- **Credential.**\n  - claude: lease as m3 does, then `$token = Invoke-MoeAccountHelper -HelperArgs @('vm-credential', $script:AccountLeasedId)`. $null on any non-zero exit means fail closed with m3's line.\n  - codex: fail closed with m3's line; CQ-M07n adds the keys.\n  - `$json = @{ name = <m3's name>; value = $token } | ConvertTo-Json -Compress`.\n  - The token lives only in these variables. It never enters an argv, an env, a file, Write-Host or a transcript line (task rail). Clear the variables right after the spawn.\n- **Spawn.** `$json | & node $seat seat-job <m3's argv, each value one element>`.\n  - --attempt `$script:MoeAttemptId`, --generation `$script:MoeAttemptGeneration`, --checkout `$script:MoeWtPath`, --task `$preflightTaskId`, --role `$Role`, --cli claude.\n  - --commit: a worker sends W's HEAD (`Invoke-MoeGit -Top $script:MoeWtPath -GitArgs @('rev-parse','HEAD')`); QA sends the task's last landed completion commit, taken from where m3 takes it.\n  - If any value is missing, fail closed with m3's code.\n- **Stdin.** PowerShell's pipe appends CRLF, and 5.1's $OutputEncoding is ASCII (fine for sk-ant-oat tokens). Read M07j's landed stdin reader. If it JSON.parses the whole buffer, trailing whitespace is accepted. If it rejects trailing bytes, write stdin through System.Diagnostics.Process with RedirectStandardInput, no newline, then close it.\n- **Relay and outcome.**\n  - Use `2>&1 | ForEach-Object { ... }` with $ErrorActionPreference 'Continue'.\n  - Write an [System.Management.Automation.ErrorRecord] to stderr as text. Never parse it as an outcome.\n  - Relay each stdout string as the sh relays it, keeping the LAST stdout line that parses as JSON with `seatJob` -eq 1 (-is [int] or [long]).\n  - ok:true sets `$script:CliExitCode` from its exitCode.\n  - A missing outcome or ok:false takes m3's happy-path handling (a non-zero CliExitCode); CQ-M07n owns the failed-job detail.\n  - Usage receipts and stream parsing behave as m3's do.\n- **Landing.** For a worker with ok:true, call `Invoke-MoeVmCandidateLanding -Commit $o.commit -BaseTree $o.baseTree -Tree $o.tree -M @{ TaskId; Title; Status; ReopenCount; CliExit; Sid = $moeSid }`, mapped as m3 maps land_vm_candidate. Then fall through to the normal post-flight. QA lands nothing of its own.\n\n**SEAT STOP.** In the outer finally (~9700), before Invoke-MoeDeregister, when the seat holds an instance:\n- `seat-stop ... --instance <it>`, best-effort and bounded as m3 bounds it (e.g. Start-Process -PassThru + WaitForExit(<m3's limit>) + taskkill of that own PID on timeout), with the scrub helper. Then clear the instance.\n- That one funnel covers normal exit, Ctrl+C, terminating errors, `exit` and the hot-reload hand-over. CQ-M07n moves the reload-branch stop ahead of its early deregister.\n\n**Error handling.** Every native call checks its exit code and parsed JSON. Failures under the VM route end in m3's codes, never a host launch; seat-stop failures only warn.\n\n**Done when** the step-1 rows pass alone on powershell.exe and pwsh.exe from WSL (mem:gotcha-pwsh7-reachable-from-wsl), and `bash scripts/tests/parity-check.sh` passes (BOM intact).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Gate (DoD 6). Run it ONCE, after the last byte change. Its output is complete_task's evidence.\n\nIt takes 20-30 min: launch it in the background (Bash run_in_background) and wait for the completion notice. It runs from the repo root on D:, with the seat's MOE_*, CLAUDE* and FAKE_* variables removed and MOE_POSTFLIGHT_TIMEOUT_SEC passed through WSLENV (mem:gotcha-qa-ps1-postflight-from-wsl):\n\ncd /mnt/d/projexts/moes && L=/mnt/d/moe-scratch/n3-gate.log && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'F=\"D:\\projexts\\moes\\scripts\\tests\"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight.ps1\" && bash scripts/tests/parity-check.sh' > \"$L\" 2>&1; echo \"exit=$?\"; tr -d '\\0\\r' < \"$L\" | grep -xE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c\n\nIt must print exit=0 and these counts:\n- `1 PASS parity-check.sh`;\n- `3 PASS postflight-vm-route.ps1`;\n- `1 PASS postflight.ps1`.\n\nA leg that never ran can still exit 0, so check the counts (mem:gotcha-pwsh7-reachable-from-wsl). If postflight.ps1 fails, rerun the parent revision's scripts before blaming the change.\n\nThe complete_task verification is this command, its exit code and that output.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this row's diff. Load adversarial-self-review.\n\n**Checklist.**\n- Can the host CLI run on ANY VM-route path? Check: a seat-start failure, a missing token, codex, a missing attempt id, a shared claim, a resume of a held task, the launch-outage probe, -AutoClaim:$false, and -Loop on a second iteration.\n- Can the token reach an argv, env, file, log, transcript or exception message, on either engine? Check error paths: ConvertTo-Json errors, and a native call that throws mid-pipe.\n- Is the env restored after every seat-* spawn, on every path?\n- Can a legacy iteration ever carry executionRoute, or run seat-start?\n- Does seat-stop run exactly once per held instance, and never with a stale one after a reload?\n- Does 5.1 parse an ErrorRecord as the outcome?\n- Is the runner token with spaces passed as one argument?\n\n**Three mutants**, on a scratch copy only, never the tracked file.\n- Setup: `mkdir -p /mnt/d/moe-scratch/n3-mut/docs && cp -r scripts /mnt/d/moe-scratch/n3-mut/ && cp -r docs/roles /mnt/d/moe-scratch/n3-mut/docs/`. Mutate byte-safely, keeping the BOM. Run the copy's postflight-vm-route.ps1 by its D:\\ path on 5.1. Delete the copy afterwards.\n- (1) Pass the token as an argv value: V3 must fail.\n- (2) Mutate $claimRpcArgs in place instead of a copy: n1's legacy T row or V1 must fail.\n- (3) Drop the seat-stop call from the finally: V1 or V4 must fail.\n\n**Size.** Measure `git diff --numstat -- scripts/moe-agent.ps1 scripts/tests/postflight-vm-route.ps1`. Expect about 150 wrapper lines and about 300 test lines. Over 400 changed lines, file the EPIC ADD_RAIL size waiver before complete_task, with moe.propose_rail and the CQ-M07k rail template with per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap). Never trim rows to fit.\n\n**Fresh evidence.** If any tracked byte changed in this step, rerun step 4.\n\n**Handoff.** Write the Serena note task-task-23c803d2ec834496a730b00524f44e0b-handoff for CQ-M07n: the function names, the instance variable, the scrub helper, the stub seam, and the reload-branch ordering it must fix.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -35,5 +73,87 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:34:00.801Z",
-  "updatedAt": "2026-11-01T14:34:00.801Z"
+  "updatedAt": "2026-11-01T19:02:54.528Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T18:55:43.120Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-12ae794e"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T19:02:54.498Z",
+  "executionContract": {
+    "intendedBehavior": "Under a well-formed verified-local and ready answer, a worker or QA seat of moe-agent.ps1 never runs its agent CLI on the host. Once per wrapper pass, before the claim, it starts one seat VM. It claims with executionRoute 'vm', and refuses a claim whose workspace is not worktree. It runs each task as a seat-job, sending the leased account's VM token only on stdin, and lands a worker's admitted tree through Invoke-MoeVmCandidateLanding. It stops the VM in the outer finally on every exit. Strings, order and the MOE_AGENT_SEAT_PATH seam are CQ-M07m3's.",
+    "acceptanceCriteria": [
+      "V1: the host CLI fake never runs; the agent-seat stub records seat-start, seat-job and seat-stop in that order; every claim carries executionRoute 'vm'.",
+      "V2: the admitted tree becomes one commit on moe/task/<id> through Invoke-MoeVmCandidateLanding.",
+      "V3: the canary token reaches seat-job only on stdin; it is absent from every argv, env, output and file except the token store, on 5.1 and 7.",
+      "V4: seat-stop runs on a normal exit and on Ctrl+C sent mid-job with GenerateConsoleCtrlEvent.",
+      "V5/V6: a shared claim refuses MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED with no seat-job; MOE_AGENT_SEAT_PATH is ignored under MOE_RUNTIME_PROTECTED=1.",
+      "The vm-route rows pass alone on both engines; postflight.ps1 passes on 5.1; parity-check passes; the BOM is kept."
+    ],
+    "invariants": [
+      "No host agent-CLI launch on any VM-route path; every failure is fail-closed with m3's code.",
+      "The credential never enters an argv, an env, a file or a log.",
+      "$claimRpcArgs is never mutated; legacy iterations are byte-for-byte unchanged.",
+      "The four credential env vars are restored after every seat-* spawn.",
+      "Tests never run real Multipass or the real seat-start, and kill only PIDs they started."
+    ],
+    "compatibility": [
+      "CQ-M07n1's CLI, shared-mode and not-ready refusals stay as landed; only its placeholder is replaced.",
+      "Invoke-MoeVmCandidateLanding (CQ-M07n2) is called, not changed.",
+      "The agent-seat CLI argv and outcome follow CQ-M07i/j's landed contract."
+    ],
+    "approvedScope": [
+      "moe-agent.ps1: the seam resolver, seat-start and the instance variable, the claim-args copy at both claim sites, the post-claim backstop, the job dispatch branch, the env-scrub helper, and seat-stop in the outer finally.",
+      "postflight-vm-route.ps1: a [vm seat] section with rows V1-V6 and the agent-seat stub."
+    ],
+    "reuse": [
+      "Invoke-MoeAccountHelper vm-credential (fail-closed $null), $script:AccountLeasedId, $script:MoeProcessStartedAt/$script:MoeHost, $script:MoeAttemptId/Generation, $script:MoeWtMode/$script:MoeWtPath, Invoke-MoeGit.",
+      "n1's row helper, n2's worktree fixture, and postflight.ps1's interrupt supervisor and [protected runtime] fixture shapes."
+    ],
+    "sourceAssumptions": [
+      "moe-agent.ps1:3476-3491 computes the runner identity once per process for every role.",
+      "moe-agent.ps1:7300 Invoke-MoeAccountHelper returns $null on any non-zero exit.",
+      "The claim sites are moe-agent.ps1 ~7787 (pre-flight) and ~7872 (single-shot wait re-claim); the dispatch starts ~8362 and the outer finally ~9700.",
+      "CQ-M07j's seat-job outcome is {seatJob:1, ok, role, commit, baseTree, tree, exitCode, ...} or {seatJob:1, ok:false, code, vm} (task-1dc49ae2 plan)."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && L=/mnt/d/moe-scratch/n3-gate.log && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'F=\"D:\\projexts\\moes\\scripts\\tests\"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight.ps1\" && bash scripts/tests/parity-check.sh' > \"$L\" 2>&1; echo \"exit=$?\"; tr -d '\\0\\r' < \"$L\" | grep -xE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Mutating $claimRpcArgs with executionRoute: rejected, since the object persists across iterations and a later legacy iteration would carry the marker. Use a per-iteration PSObject.Copy(). 2) Passing the token by env to seat-job: forbidden by the task rail and by M07j's contract (stdin only). 3) Testing the protected seam by running the real agent-seat.mjs: rejected, because it could provision a real VM on a Multipass host. Use a wrapper copy with a shipped stub. 4) A dedicated Ctrl+C harness: reuse postflight.ps1's proven AttachConsole + GenerateConsoleCtrlEvent supervisor shape.",
+    "codebaseInsights": "- The ps1 runner identity, the attempt pin, the worktree vars and the account helper already exist and are the twins of the sh globals m3 uses.\n- The outer finally is the one funnel for Ctrl+C, `exit`, errors and the hot-reload hand-over on 5.1; the console handlers are inert there.\n- Invoke-MoeAccountHelper is fail-closed for vm-credential.\n- m3 was still unplanned at submit time (19:01Z, architect-98c94b4c), so the steps point at m3's landed commit. The concrete contracts come from the M07i/j plans and n2's plan.",
+    "risks": "1) m3's design may differ in details (names, QA commit source, usage parsing, bounded stop): port the landed bytes.\n2) 5.1 stdin piping appends CRLF; check M07j's reader.\n3) 5.1 merges stderr into ErrorRecords, which must never be parsed as the outcome.\n4) The token must not survive in a variable dumped by an error message.\n5) Size will likely pass 400: file the EPIC waiver before complete_task.\n6) The Ctrl+C row needs the stub to keep the wrapper mid-job until the event; bound every wait.\n7) Test processes: kill only own PIDs (global rail).",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-vm-route.ps1",
+      "scripts/tests/postflight.ps1",
+      "scripts/local-runner/agent-seat.mjs",
+      "scripts/moe-agent.sh",
+      "scripts/tests/postflight-vm-route.sh",
+      "scripts/moe-account-lease.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "52c139c48973afae31684d811273f29f78141c9d",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T19:02:54.528Z",
+  "approvedPlanRevision": 1
 }
