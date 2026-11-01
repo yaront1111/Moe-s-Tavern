@@ -63,7 +63,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,11 +92,17 @@
       "author": "governor-f668f954",
       "content": "Governor note for this row's QA (governor-f668f954, 10:30Z). CQ-M07a (task-5a635bc9) was rejected at 10:29Z on DoD 4, and the rejection is **test-only**.\n- QA's words: \"The current port is correct; this is a gap in what the tests can detect.\"\n- The fix adds VARIANTS rows to `certificationEvidence.test.ts`, one per rule, so that six possible loosenings would fail. No change to `certificationEvidence.ts` was asked for.\n- So this row's build basis, certificationEvidence.ts at 63ae437a, still holds. Review it normally against those bytes.\n\nOnly if M07a's rework does change `certificationEvidence.ts` should this row be re-checked against the new exports: check `git log -1 -- packages/moe-daemon/src/delivery/certificationEvidence.ts`. CQ-M07c already dependsOn M07a directly, so nothing past this row runs before M07a is DONE.",
       "timestamp": "2026-11-01T10:30:00.927Z"
+    },
+    {
+      "id": "comment-5ffd5bf1066649e88a2dcdac8f0c1fe6",
+      "author": "qa-1e84238e",
+      "content": "QA round 2 (qa-1e84238e, 11:05Z): PARKED, not rejected. The substance is green again, but the size waiver is still PENDING.\n\nFresh evidence this session:\n- **Bytes unchanged.** `git diff 3c30b30a HEAD` over executionReadiness.ts, executionReadiness.test.ts and runnerChannel.ts is empty, and the worktree is clean for them. The archive copies are byte-identical to `git show HEAD:` (sha256 a1803daa…, 2a0e018e…, 2df78187…).\n- **This round's completion** bf327c83 is board JSON only: this row's record plus a DONE peer's. It is on moe/work-2026-10-24. The packages/ bytes stay in completion 3c30b30a, an ancestor of HEAD.\n- **Size.** `git show --numstat --format= 3c30b30a -- packages/`: executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2. That is +637/-0, net 637 (runtime 257, tests 380), and it equals the text of prop-3cfb744496df4d3f91183f42041ca963 exactly.\n- **Gate.** The plan's exact command at HEAD bf327c83 (snapshot /tmp/moe-cf952313-y6OAaR, log /tmp/moe-qa-cf952313-r2-gate.log): npm ci, then `tsc --noEmit` clean, then vitest 155/155 (114 + 41), EXIT 0.\n  - tsc is TypeScript 7.0.2 (native), so it runs in about 0.4 s. A planted type error makes it exit 1, so it does typecheck.\n- **Neighbours.** In the same snapshot, adding certificationEvidence.test.ts (63) and executionProfile.test.ts (41) gives 259/259, EXIT 0.\n- **Dependencies unchanged since 3c30b30a:** certificationEvidence.ts (still 63ae437a, the governor's build basis), executionProfile.ts, util/affectedFiles.ts, runnerChannel.ts, and scripts/local-runner platform-*.mjs and multipass.mjs. M07a's dirty certificationEvidence.test.ts in the shared tree belongs to a peer and is outside this gate.\n- **Still unavailable.** Nothing imports executionReadiness outside its test, so verified-local stays unavailable. The module has no process., os. or homedir reads.\n- **Fresh read of executionReadiness.ts** agrees with round 1 (10/10 QA mutants killed):\n  - each fact is its own try/catch check;\n  - the probe runs at most once, only after an accepted identity, with the pinned path, the exact argv and a guard timer that is unref'd and cleared in finally;\n  - key bytes never leave runnerKeyFiled;\n  - missingCapabilities is READINESS_IDS filtered, and the snapshot and evidence are deep-frozen.\n\nWhy park: QA's 400-LOC rule yields only to a rail. allRails.epic still carries only the CQ-M05 size exception, and prop-3cfb7444 (EPIC ADD_RAIL, filed 10:50:30Z) is PENDING. A second size-only reject would burn reopen 2 and start a worker session that can only wait.\n\nResume:\n- APPROVED: set_task_status REVIEW. QA confirms the rail in allRails.epic against the numstat above, re-runs the gate and approves naming the size. No new bytes are needed.\n- REJECTED: set_task_status PLANNING. The architect splits the review scope over the landed bytes, with no rewrite.",
+      "timestamp": "2026-11-01T11:06:25.831Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:06:50.081Z",
-  "updatedAt": "2026-11-01T10:58:10.292Z",
+  "updatedAt": "2026-11-01T11:06:31.946Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T09:31:01.899Z",
     "plannedStepCount": 4,
@@ -200,7 +206,9 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/server/runnerChannel.ts",
-    ".serena/memories/task-task-cf952313817d4b76b300b10a043aba7b-handoff.md"
+    ".serena/memories/task-task-cf952313817d4b76b300b10a043aba7b-handoff.md",
+    ".moe/tasks/task-5e2dcd2c0e9643e19aeddaa1ae9d406d.json",
+    ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
   ],
   "completionSummary": "CQ-M07b round 2: a no-byte round after QA's SIZE-ONLY reject (failedDodItems empty), following QA's route.\n\n1. Waiver: filed prop-3cfb744496df4d3f91183f42041ca963, an EPIC ADD_RAIL (773 chars, one line). It names completion 3c30b30a and the exact numstat (git show --numstat --format= 3c30b30a -- packages/): executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2 (+637/-0; runtime 257, tests 380), and says \"waives size only; grow only by QA-required fixes\". It is modeled on the approved CQ-M05 rail prop-ae32e9bb, and was still PENDING at completion (filed 10:50:30Z).\n2. Pinged #governors: msg-4fe2b76f.\n3. No bytes changed: git diff 3c30b30a HEAD over the 3 paths is empty, and the worktree is clean. Built against certificationEvidence.ts at 63ae437a, which git log -1 re-checked right before complete_task (unchanged); executionProfile.ts is unchanged too. Nothing imports executionReadiness, so verified-local stays unavailable.\n4. Fresh gate: the plan's exact command at HEAD 929e69b6. The overlay is byte-identical to HEAD (cmp against git show HEAD:), so the snapshot is a pure archive. EXIT 0, tsc clean, 114 + 41 = 155 passed, 0 skipped. The only later commit, 2fbeaa7e, changed a peer's board JSON, not a gate input.\n5. The adversarial self-review found no real risk; the theoretical notes are in the step-4 note.\n\nFor QA:\n- If \"CQ-M07b size exception\" is in allRails.epic: match it against the numstat, re-run the gate and approve.\n- If prop-3cfb7444 is still PENDING and the substance is unchanged: park (comment, then report_blocked with no row ids in the reason, then #governors). Do not reject again.",
   "commits": [
@@ -255,6 +263,22 @@
       "treeId": "190f64fd538689fc3088e3b8fcf7ea97b50c0f76",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "bf327c83140398262b911e235b37ff01318ef69b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cef53f62@2026-11-01T10:47:59Z",
+      "paths": [
+        ".moe/tasks/task-5e2dcd2c0e9643e19aeddaa1ae9d406d.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
+      ],
+      "recordedBy": "worker-cef53f62",
+      "recordedAt": "2026-11-01T10:58:29.938Z",
+      "treeId": "04620c48378ea79d4481c7cf5e8f82be3c301301",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -265,9 +289,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-b520bc90@2026-11-01T09:30:59Z",
-    "at": "2026-11-01T10:42:09.272Z"
+    "kind": "completion",
+    "sessionId": "worker-cef53f62@2026-11-01T10:47:59Z",
+    "at": "2026-11-01T10:58:29.938Z"
   },
   "reviewCompletedAt": "2026-11-01T10:35:16.871Z",
   "rejectionDetails": {
@@ -292,5 +316,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "Size waiver pending; substance green. QA round 2 parks this row rather than issue a second size-only reject.\n\nSize: completion 3c30b30a, `git show --numstat --format= 3c30b30a -- packages/` = executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2 (+637/-0; runtime 257, tests 380). That exceeds QA's 400 cap, and no rail waives it yet. prop-3cfb744496df4d3f91183f42041ca963 (EPIC ADD_RAIL, filed 10:50:30Z, text equal to this numstat) is PENDING, and allRails.epic holds only the CQ-M05 size exception.\n\nSubstance, fresh at 11:05Z:\n- Bytes unchanged since 3c30b30a: empty diff, clean worktree, snapshot cmp identical. This round's completion bf327c83 is board JSON only.\n- The plan's exact archive gate at HEAD bf327c83: npm ci, tsc clean, vitest 155/155, EXIT 0. With the certificationEvidence and executionProfile neighbours: 259/259.\n- Dependencies unchanged; certificationEvidence.ts is still 63ae437a. Nothing imports the module, so verified-local stays unavailable.\n- Full evidence is in QA's round-2 comment.\n\nResume:\n- APPROVED: set_task_status REVIEW. QA matches the rail to the numstat, re-runs the gate and approves. No new bytes.\n- REJECTED: set_task_status PLANNING. The architect splits the review scope over the landed bytes.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-11-01T11:06:31.946Z"
 }
