@@ -19,11 +19,17 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development. Create packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts (~130 lines), a doc-contract guard following mem pattern-doc-contract-guard-test.\n\nFixture:\n- REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..'), copied from src/benchmarks/non-routineWorkloads.test.ts. No absolute paths.\n- readDoc(rel) throws a NAMED error when the file is missing or empty. Split lines with /\\r?\\n/ and keep 1-indexed line numbers in failure messages, e.g. `README.md:12: <line>`.\n- report = JSON.parse(docs/baselines/cq-m04/report.json); readme = docs/baselines/cq-m06/README.md.\n- fmt(x) = Number.isInteger(x) ? String(x) : x.toFixed(2), except observedTokensPerAcceptedChange, which is quoted as String(value) exactly as report.json stores it.\n\nCases. Each must fail for the named mutation:\nG1 Decision. Exactly one line matches /^Decision: (promotion|non-promotion)$/. While assertExecutionProfileReady('verified-local') (delivery/executionProfile.js) throws codeName EXECUTION_PROFILE_NOT_READY, that line must be 'Decision: non-promotion'. Mutation: write 'Decision: promotion' -> red.\nG2 Figures recomputed from report.json. The README must contain each of these as a whole token:\n- summary.workloads;\n- summary.acceptance accepted, rejected and notAssessed;\n- fmt(mean planning.plannerSessions) over the rows with a number, and that observed count;\n- the count of rows whose retrieval.sourceRetrievals is null;\n- summary.efficiency.observedTokens, and String(observedTokensPerAcceptedChange);\n- 'incomplete' when efficiency.complete is false;\n- the median latency.endToEndMs over observed rows (middle value; for an even count, Math.round of the mean of the two middle values);\n- the count of rows whose latency.firstCodeChangeMs is null;\n- every inputs.moeCommits sha and every inputs.corpusVersions value.\nMutation: change one digit of any quoted figure -> red.\nG3 Gates are tied to live authorities. A '## Gates' table has a row for 'readiness' whose status is 'unmet' while readiness refuses. For each entry of CQ-M05's activationGaps() (state/profileRollout.js; adapt to the landed name), a row names its capability and its exact reason with status 'unsupported'. Rows for 'matched pilot' and 'retrieval baseline' have status 'unmet'. Mutation: delete a gap row, or change its reason -> red.\nG4 Honesty statements present verbatim: 'Skipped real-VM tests do not certify support.', 'Claimed savings: none.' and 'Tokens are not monetary cost.'. Each target row reads 'unmeasured' in its pilot column. Mutation: delete any one -> red.\nG5 Percentages. Every token matching /\\d+(?:\\.\\d+)?%/ is '50%' or '30%' and sits on a line containing 'target' (case-insensitive). Mutation: add 'planner sessions fell 40%' -> red.\nG6 Platform support. A '## Platform support' table exists with at least one row, and every status cell is in {certified, not certified, unsupported, not run}. Mutation: a status 'supported (tests skipped)' -> red.\n\nRun `npx vitest run src/benchmarks/rolloutDecision.test.ts`: it is red with the named missing-README error.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts"
+      ],
+      "note": "Guard written (G1-G6 plus 5 helper self-tests). RED proven in a Linux snapshot of HEAD 746d88c4 (git archive, npm ci under env -i, node v24.21.0): 20 guard cases fail with ROLLOUT_DECISION_INPUT_MISSING for docs/baselines/cq-m06/README.md; the 5 helper tests pass. Probed live authorities in the snapshot: assertExecutionProfileReady('verified-local') throws EXECUTION_PROFILE_NOT_READY (never-evaluated default); activationGaps() returns only vm (vm-provisioning-uncertified) and check (check-runner-uncertified). The client gap is gone at HEAD because peer wip 746d88c4 (CQ-M07d2) advertises verifiedLocal wire support, so the README must not claim an unsupported client row; G3 binds rows to the live gaps in both directions. Report figures: 20 workloads, planner mean 1 over 20 rows, sourceRetrievals and firstCodeChangeMs null in 20 of 20, median end-to-end 669869 ms over 20 (even count, Math.round of the middle pair), observedTokens 38926322 incomplete, 1946316.1 per accepted change. Pre-existing dirty paths of other sessions (.moe/*, ci.yml, scripts/local-runner/seat-capacity.mjs and its test, local-runner-bundle.test.mjs) were left untouched.",
+      "startedAt": "2026-11-01T19:30:24.810Z",
+      "completedAt": "2026-11-01T19:33:03.657Z"
     },
     {
       "stepId": "step-2",
@@ -49,7 +55,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-9be3bcf5",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -58,8 +64,7 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-c53999b2dd2c4ad08bacb73c50371cfa",
-    "task-f4811a729f9e436ba129a65c12d348c1",
-    "task-4e412148225f480c8c0d5a1706a3cc76"
+    "task-f4811a729f9e436ba129a65c12d348c1"
   ],
   "priority": "HIGH",
   "order": 230.1,
@@ -69,25 +74,35 @@
       "author": "architect-b58e1112",
       "content": "@governor-693b7073 Edge fix from architect-b58e1112, re-sent here because the chat copy (msg-8a87df81 in chan-18116c9a) was loop-guarded with no routing targets.\n\nDropping R13 (f4811a72), I06 (4e412148) and V12 (b621ddc9) from CQ-M05 removed the only thing holding back this row and M06. worker-c0a1ac70 has already claimed M05, so this row becomes claimable the moment M05 lands, before R13's operator reports and before I06 lands. M05 itself needs none of the three, so keep that drop and move the edges down a row:\n- This row (M06a beb698a4): addDependsOn f4811a72 and 4e412148. Its step 2 builds the '## Platform support' table from what R13 and I06 LANDED.\n- M06 (ced85748): addDependsOn f4811a72, 4e412148 and b621ddc9. It checks M06a's platform lines against R13 and I06. Its docs sweep also shares CONFIGURATION.md, SCHEMA.md, MCP_SERVER.md and CLAUDE.md with V12's plan, and its planningNotes rely on V12 being upstream; that held only through M05 → V12.\n- M06b (4359d60b): no edge needed. It is a daemon-only e2e and consumes none of the three.\n\nThere is no cycle risk. Apply the edges before M05 reaches DONE. Undo is removeDependsOn of the same ids.",
       "timestamp": "2026-10-31T16:12:34.290Z"
+    },
+    {
+      "id": "comment-de2c66b70a734d3ba16fd9068448409b",
+      "author": "governor-978922c1",
+      "content": "Governor edge change (governor-978922c1): early start. I dropped the dependsOn on CQ-I06 (task-4e412148), so this row is claimable now; CQ-M05 and CQ-R13 are DONE. I06 is in REVIEW, and its completion 9335606c landed. It is an evidence-only row, so what you consume is its completion summary, its step-1 comment and its Serena handoff. Read them with get_context {taskId:'task-4e412148225f480c8c0d5a1706a3cc76', view:'full'}. R13's certified rows are in docs/CERTIFICATION.md at HEAD (win32 x64 and linux x64 certified; darwin unsupported: no report).\n\nCQ-M06 still depends on I06 directly. If a QA reject on I06 changes its evidence, re-sync step 2's platform rows before you complete.",
+      "timestamp": "2026-11-01T19:29:40.154Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:50:58.592Z",
-  "updatedAt": "2026-10-31T16:18:01.615Z",
+  "updatedAt": "2026-11-01T19:33:03.657Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:53:46.332Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-32ff5555"
+    "architect-32ff5555",
+    "worker-9be3bcf5"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T22:55:16.436Z",
   "executionContract": {
@@ -129,5 +144,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T22:55:16.536Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T19:30:24.810Z"
 }
