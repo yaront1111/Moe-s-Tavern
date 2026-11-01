@@ -77,7 +77,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -90,7 +90,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T13:35:53.219Z",
-  "updatedAt": "2026-11-01T19:38:41.266Z",
+  "updatedAt": "2026-11-01T19:42:49.563Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:30:34.773Z",
@@ -100,11 +100,14 @@
     "firstClaimAt": "2026-11-01T18:51:30.594Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T19:42:49.563Z",
+    "wallClockMs": 3078969
   },
   "contextFetchedBy": [
     "architect-1a34a669",
-    "worker-9be3bcf5"
+    "worker-9be3bcf5",
+    "qa-1b5727b1"
   ],
   "tier": "standard",
   "effort": "high",
@@ -274,5 +277,9 @@
     "kind": "completion",
     "sessionId": "worker-9be3bcf5@2026-11-01T19:00:37Z",
     "at": "2026-11-01T19:03:03.295Z"
-  }
+  },
+  "completedAt": "2026-11-01T19:42:49.563Z",
+  "reviewCompletedAt": "2026-11-01T19:42:49.563Z",
+  "reviewSummary": "Reviewed completion e182c645 (tree ac3b9d88 matches the recorded treeId; on moe/work-2026-10-24). Non-board diff is +20/-8: guest-session.mjs, local-runner-bridge.test.mjs, MCP_SERVER.md, CONFIGURATION.md. guest-bridge.mjs is untouched (FORBIDDEN_IDENTITY_KEYS, TOOLS, scopeRequest unchanged). Re-ran `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs` in place at the repo root: exit 0, 113 tests, 112 pass, 0 fail, 1 skipped. A bare git-archive snapshot of e182c645 also passes everything except TY1, which needs packages/moe-daemon/dist (known snapshot-only failure). DoD 1: STAMPED now maps moe.qa_approve and moe.qa_reject to EXECUTION, the same six tools as moe-proxy. reply() takes the values from the frozen binding and the session id after scopeRequest. DoD 2: H3's stamps map pins both QA tools, and a second session under the QA binding refuses guest attemptId/generation as BRIDGE_IDENTITY_MISMATCH and guest sessionId as BRIDGE_ARGUMENT_DENIED, with nothing forwarded. Mutation probes in a scratch archive: dropping qa_approve, dropping qa_reject, the full pre-fix map, and qa_reject stamped with sessionId only each fail H3 (4 of 4 killed); the restored file passes. DoD 3: the MCP_SERVER.md sentence names the guest session and all six tools, and the CONFIGURATION.md MOE_SESSION_ID and MOE_ATTEMPT_ID rows list qa_approve and qa_reject. The scripts/CLAUDE.md and proxy README lists were already correct. Non-blocking note: the diff accidentally changed the title of the existing test 'H4 replies, ...' to 'H4replies, ...' (space dropped, local-runner-bridge.test.mjs:813). The test still runs and passes, and nothing selects it by name (no '^H4 ' pattern in CI, docs or scripts), so I did not reopen. Restore the space the next time that file is touched.",
+  "requiredCheckAtDone": null
 }
