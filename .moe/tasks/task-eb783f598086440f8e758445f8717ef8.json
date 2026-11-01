@@ -66,27 +66,33 @@
     {
       "stepId": "step-4",
       "description": "Verification gate, run once (DoD 5). Run it in a git-archive snapshot outside the checkout, never in the shared tree (mem:gotcha-local-runner-tests recipe; the bundle test needs packages/moe-daemon/tsconfig.json and moe-vscode/moe-jetbrains build inputs, so archive them too):\nS=$(mktemp -d /tmp/m07h-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json packages/moe-daemon/tsconfig.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && for f in scripts/local-runner/seat-capacity.mjs scripts/tests/local-runner-seat-capacity.test.mjs scripts/tests/local-runner-bundle.test.mjs .github/workflows/ci.yml; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat-capacity.test.mjs scripts/tests/local-runner-bundle.test.mjs\nIt must report 0 fail. If a bundle row fails at HEAD without this task's files too (compare by re-running with only HEAD bytes), report it as pre-existing rather than fixing it here.\nThen measure: git diff --numstat HEAD -- <the four files>, counting the new files with wc -l. QA counts additions + deletions against 400. If over, merge rows that share setup first; if still over, file an EPIC ADD_RAIL size exception via moe.propose_rail, quoting the exact numstat, before complete_task.\nThe fresh gate output is the complete_task verification evidence.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/seat-capacity.mjs",
         "scripts/tests/local-runner-seat-capacity.test.mjs",
         "scripts/tests/local-runner-bundle.test.mjs",
         ".github/workflows/ci.yml"
-      ]
+      ],
+      "note": "Gate run fresh at HEAD b7d926de (the checkpoint holding this task's four files; no dirty diff on them) in snapshot /tmp/m07h-gate.4xxcdM: node --test seat-capacity + bundle -> tests 21, pass 21, fail 0, exit 0. No bundle row fails, so nothing pre-existing to report. Size by git show --numstat b7d926de: ci.yml +1/-1, seat-capacity.mjs +173, bundle.test +2/-2, seat-capacity.test +178 = 357 changed lines, under 400; no size rail needed. lifecycle.mjs/vm-control.mjs unchanged since M07g 493ea8a4, so no re-sync needed. No files modified in this step.",
+      "startedAt": "2026-11-01T19:33:25.785Z",
+      "completedAt": "2026-11-01T19:34:06.065Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this diff, as the final step (load adversarial-self-review). Check:\n1. Can admission ever reserve without holding the lock, or count outside it?\n2. Is there any path that unlinks or renames a lock whose holder probe was not exactly false, or whose bytes changed since that probe?\n3. Does release ever remove another holder's lock?\n4. Do a crash or throw at every await leave either no lock or a lock a later admission can recover? Walk temp, link, count, reserve and release.\n5. Are symlinked or non-hex entries ever counted or followed?\n6. Does NaN or Infinity reach the cap?\n7. Is kill only ever reached through runnerProbe (signal 0), and does the dead-pid row signal nothing?\n8. Windows: EPERM on rename or link of a delete-pending file must mean retry, not crash.\n9. Does any message or report carry a path or holder text?\nIf any byte changes, re-run step 4's exact command and submit that fresh output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/seat-capacity.mjs",
         "scripts/tests/local-runner-seat-capacity.test.mjs"
-      ]
+      ],
+      "note": "Adversarial self-review of seat-capacity.mjs + test (git show b7d926de; no dirty diff). No byte changed, so step 4's fresh gate (21/21, exit 0) stands. 1) admitSeatVm: acquire, then count, FULL check, assertHeld and reserve all inside try/finally(release); nothing counts or reserves outside the lock. 2) removeIf is reached only via deadHolder (probe(...) === false) with expected = the bytes probed, or via release with own bytes; it renames to a unique tomb, compares, unlinks only on equal bytes, else links back (EEXIST on restore = newer lock wins, moved holder fails closed at assertHeld; documented residual). 3) release compares before deleting, never removes a foreign lock. 4) Crash walk: during temp write leaves only a .tmp debris file (skipped by the count: not a hex dir); after link, during count/reserve or before release, the lock names a dead pid, which the probe recovers; mid-removeIf leaves no lock plus a .stale debris file. 5) readdir withFileTypes + isDirectory skips symlinks/junctions (SC2 covers a junction); only lowercase 32-hex names; lock read O_NOFOLLOW|O_NONBLOCK + isFile + 1 KiB. 6) cpus safe int, totalmem finite, cap safe int >= 1: NaN/Infinity rejected (SC1, SC5). 7) Module never calls kill; runnerProbe uses kill(pid, 0) only; the SC4 dead pid comes from a spawnSync child that already exited, so nothing is signalled. 8) link EPERM/EBUSY/EACCES = taken, rename via renameOver (EPERM retry x5) then poll; deadline checked every iteration. 9) MESSAGES fixed, no path/holder text (SC6). Theoretical residuals, not fixed: a release whose rename keeps failing (persistent Windows EPERM) leaves our live-pid lock, so others see LOCK_BUSY until this process exits, then recover; on a filesystem without hard links, link fails EPERM with no lock present, so acquire retries without delay until waitMs and answers LOCK_BUSY (bounded, fails closed); Windows has no O_NOFOLLOW, so a symlinked lock is read through, but only compared, and rename moves the link, not its target. Forbidden-token grep on both files: no hits.",
+      "startedAt": "2026-11-01T19:34:41.031Z",
+      "completedAt": "2026-11-01T19:35:28.361Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-8a4aed6a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -106,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:09:15.830Z",
-  "updatedAt": "2026-11-01T19:31:40.569Z",
+  "updatedAt": "2026-11-01T19:36:55.136Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:00.097Z",
@@ -116,7 +122,7 @@
     "firstClaimAt": "2026-11-01T11:52:12.442Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -128,7 +134,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T11:58:13.768Z",
@@ -177,5 +185,70 @@
   },
   "planApprovedAt": "2026-11-01T11:58:13.791Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-01T19:19:33.504Z"
+  "workStartedAt": "2026-11-01T19:19:33.504Z",
+  "commits": [
+    {
+      "sha": "b7d926deddb5e2196889daa3dd53642f2698d983",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-8a4aed6a@2026-11-01T19:18:43Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-b0485bb1cacf4d3b84979e9256078737.json",
+        ".moe/tasks/task-eb783f598086440f8e758445f8717ef8.json",
+        "scripts/local-runner/seat-capacity.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/tests/local-runner-seat-capacity.test.mjs"
+      ],
+      "recordedBy": "worker-8a4aed6a",
+      "recordedAt": "2026-11-01T19:32:19.232Z",
+      "treeId": "97fd39bfd662b461e71d974bc6adb71791081454",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-3ad573a754574dfd92083b2e813c0bff"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-4fdc7590cd054a45a379c477ffe45ac7"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-f622843305224cf49ca24478b26c3351"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/local-runner/seat-capacity.mjs",
+    "scripts/tests/local-runner-seat-capacity.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    ".github/workflows/ci.yml"
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-seat-capacity.test.mjs",
+    "scripts/local-runner/seat-capacity.mjs",
+    ".github/workflows/ci.yml",
+    "scripts/tests/local-runner-bundle.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-8a4aed6a@2026-11-01T19:18:43Z",
+    "at": "2026-11-01T19:32:19.232Z"
+  },
+  "reviewStartedAt": "2026-11-01T19:36:55.134Z",
+  "verification": {
+    "command": "S=$(mktemp -d /tmp/m07h-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json packages/moe-daemon/tsconfig.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && for f in scripts/local-runner/seat-capacity.mjs scripts/tests/local-runner-seat-capacity.test.mjs scripts/tests/local-runner-bundle.test.mjs .github/workflows/ci.yml; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat-capacity.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ SC0 the CI local-runner step runs this file once (0.741895ms)\n✔ SC1 hostAgentVmCap is max(1, min(floor(CPUs / 2), floor((RAM - 8 GiB) / 4 GiB))) and refuses non-numeric input (0.444413ms)\n✔ SC2 every project counts its live seat records; check, deleted, collision, foreign dirs and links do not (68.114271ms)\n✔ SC2 seatAdmissionFor reserves into a ledger its root count walks (5.778077ms)\n✔ SC3 two concurrent admissions at cap minus one admit exactly one (121.285241ms)\n✔ SC4 a dead holder's lock is recovered within the bound; a live, unknown or unparseable holder's never is (822.476303ms)\n✔ SC5 every exit releases the lock, release and assertHeld touch only their own lock, and invalid input writes nothing (26.276143ms)\n✔ SC6 every refusal message is fixed text with no path or holder (5.252063ms)\nℹ tests 21\nℹ suites 0\nℹ pass 21\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1853.54556",
+    "reportedAt": "2026-11-01T19:36:55.134Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "New scripts/local-runner/seat-capacity.mjs (173 lines) exports:\n- hostAgentVmCap: max(1, min(floor(CPUs/2), floor((RAM-8GiB)/4GiB))), refusing NaN, Infinity, negative and non-numeric input.\n- countSeatVms: walks only real lowercase 32-hex project dirs under the runner-state root. Reserved, launching, owned, absent and failed seat records count, and so does every invalid record file (fail closed). Check-owned, deleted and collision records do not count.\n- seatAdmissionFor(project): returns {root, ledger}.\n- acquireSeatLock: a host lock file published whole via a temp file plus link(), read with O_NOFOLLOW. It is recovered only when runnerProbe answers exactly false, by rename-to-tomb, compare and restore; release removes only its own bytes.\n- admitSeatVm: counts, checks FULL, asserts the lock is held and reserves, all under the lock, then releases in finally.\nEvery refusal is one fixed SEAT_CAPACITY_* code with no path or holder text.\n\nTests are in scripts/tests/local-runner-seat-capacity.test.mjs (178 lines), rows SC0-SC6:\n- SC0: CI runs the file.\n- SC1: formula boundaries, including 2/8->1, 16/64->8 and 8/12->1.\n- SC2: cross-project count; check, deleted, collision, junction and non-hex entries are excluded.\n- SC3: a race of two admissions at cap-1 admits exactly one.\n- SC4: a dead holder is recovered (an injected probe and a real exited pid); live, unknown, unparseable, other-host and other-platform holders are never broken.\n- SC5: every exit releases; release and assertHeld touch only their own lock.\n- SC6: fixed messages.\n\nThe bundle test lists seat-capacity.mjs in `shipped` (not `required`), and ci.yml:244 runs the new file.\n\nSize: 357 changed lines (+354/-3). The plan's two deviations are both stronger: release uses rename+compare, and the deadline is checked on every iteration. The residual races are documented in the module header and in the step-5 note.\n\nThe gate was re-run fresh at HEAD b0ca24d8 after a peer checkpoint moved HEAD: 21/21 pass, exit 0."
 }
