@@ -130,7 +130,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:05:11.290Z",
-  "updatedAt": "2026-11-01T10:22:34.331Z",
+  "updatedAt": "2026-11-01T10:23:32.597Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:42:54.472Z",
     "plannedStepCount": 6,
@@ -222,7 +222,10 @@
     "scripts/local-runner/snapshot-import.mjs",
     "scripts/tests/local-runner.test.mjs",
     ".moe/tasks/task-b8734a784d6b42d98bd5f2493e2e228e.json",
-    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json",
+    ".moe/tasks/task-62ec51f179494706a39045154d07e544.json",
+    ".moe/tasks/task-828e7d21602e4cf2a0f242e024db7dea.json",
+    ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
   ],
   "completionSummary": "CQ-R14d1: all six supervisor transfer modes (materialize, export, verify, agents, toolchain, dependencies) now stream over the pinned OpenSSH client, never `multipass exec` stdio, and there is no fallback.\n\n- **New scripts/local-runner/guest-stream.mjs, openGuestStream.**\n  - The ssh client is `provider.ssh ?? sshExecutable(platform)`; the keyDir is `provider.keyDir ?? defaultKeyDir()`.\n  - The address is read fresh on every call from multipass info ipv4[0], with no caching.\n  - It spawns exactly sshStreamArgv with piped stdio.\n  - It refuses with TRANSPORT_INPUT_INVALID or TRANSPORT_ADDRESS_UNKNOWN before any spawn.\n- **guest-readiness.mjs:** readGuestInfo returns `address` (null when there is no ipv4[0]). No evaluator changed.\n- **snapshot-transfer.mjs:**\n  - snapshotArgv is removed.\n  - supervise opens the stream through openGuestStream; any refusal or spawn throw is TRANSFER_SPAWN_FAILED.\n  - ssh 255 is always TRANSFER_EXIT_FAILED, both before and after frames.\n  - MODES still holds only the six transfer modes, so bridge and check are refused.\n- **snapshot-import.mjs:** the owned-name check now uses isOwnedInstanceName directly.\n\nTests (local-runner.test.mjs):\n- Transfer rows now expect the ssh spawn triple (`streamCall`) and one extra `info` call per stream.\n- New rows SS1-SS9 cover:\n  - the argv, the fresh address and the default client;\n  - the input and address refusals;\n  - the readiness address;\n  - the measured carrier failures: real-Python truncation gives exit 65 and EXIT_FAILED, a dead stdin gives TIMEOUT, and a 2 MiB stdout stall gives TIMEOUT;\n  - ssh 255 in each case;\n  - a refusal inside a transfer;\n  - all six entry points using ssh only.\n- A mutation sweep killed all 15 mutants (exec fallback, cached address, 255 remap, first-valid ipv4, dropped checks, bridge in MODES, dropped kill).\n\nRails held: guest-supervisor.py sha256 is still 3a19f3bf…, no Multipass was run, and everything was verified only in snapshots. certify-bridge.mjs line 5 and guest",
   "commits": [
@@ -252,6 +255,24 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "9018937359be3005e8763e389d0135e81f9ab551",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1e84238e@2026-11-01T10:14:05Z",
+      "paths": [
+        ".moe/tasks/task-62ec51f179494706a39045154d07e544.json",
+        ".moe/tasks/task-828e7d21602e4cf2a0f242e024db7dea.json",
+        ".moe/tasks/task-b8734a784d6b42d98bd5f2493e2e228e.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
+      ],
+      "recordedBy": "qa-1e84238e",
+      "recordedAt": "2026-11-01T10:23:32.597Z",
+      "treeId": "661c3f116920e2104514dc9974b7a0f6fac66dab",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -264,9 +285,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-009c883d@2026-11-01T09:05:21Z",
-    "at": "2026-11-01T09:34:21.684Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-1e84238e@2026-11-01T10:14:05Z",
+    "at": "2026-11-01T10:23:32.597Z"
   },
   "completedAt": "2026-11-01T10:22:34.331Z",
   "reviewCompletedAt": "2026-11-01T10:22:34.331Z",
