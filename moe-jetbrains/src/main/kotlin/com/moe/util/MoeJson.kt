@@ -723,7 +723,10 @@ object MoeJson {
             peakPercent = obj.getStrictFiniteDoubleOrNull("peakPercent"),
             blockedUntil = obj.getStrictStringOrNull("blockedUntil")?.takeIf { it.isNotBlank() },
             active = getStrictBooleanOrDefault(obj, "active", false),
-            seats = obj.getStrictStringListOrNull("seats") ?: emptyList()
+            seats = obj.getStrictStringListOrNull("seats") ?: emptyList(),
+            // A real JSON boolean only; anything else (a string, a number, null) is
+            // unknown. Not getStrictBooleanOrDefault: absent must stay distinct from false.
+            vmToken = obj.get("vmToken")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
         )
     }
 

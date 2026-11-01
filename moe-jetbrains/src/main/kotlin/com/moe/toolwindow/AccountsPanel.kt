@@ -45,7 +45,9 @@ internal fun AccountText.resolve(): String = MoeBundle.message(key, *args.toType
  * The Accounts tab: this machine's Claude accounts, in the order Moe uses
  * them. List edits go to the daemon over the socket; sign in, check and sign
  * out run the daemon's `accounts` CLI in an IDE terminal tab, because claude's
- * own prompts need a person and the daemon never runs claude.
+ * own prompts need a person and the daemon never runs claude. VM tokens are
+ * minted and removed by the same `accounts` CLI in a terminal tab; the plugin
+ * never reads, writes or passes a token, and shows only the daemon's flag.
  */
 class AccountsPanel(private val project: Project) : JBPanel<AccountsPanel>(BorderLayout()), Disposable {
     private val service = project.service<MoeProjectService>()
@@ -67,6 +69,8 @@ class AccountsPanel(private val project: Project) : JBPanel<AccountsPanel>(Borde
     private val moveUpButton = button(AccountKeys.BUTTON_MOVE_UP) { selected()?.let { service.moveAccount(it.id, -1) } }
     private val moveDownButton = button(AccountKeys.BUTTON_MOVE_DOWN) { selected()?.let { service.moveAccount(it.id, 1) } }
     private val removeButton = button(AccountKeys.BUTTON_REMOVE) { remove() }
+    private val setVmTokenButton = button(AccountKeys.BUTTON_SET_VM_TOKEN) { vmToken(remove = false) }
+    private val removeVmTokenButton = button(AccountKeys.BUTTON_REMOVE_VM_TOKEN) { vmToken(remove = true) }
     private val labelValidator = object : InputValidator {
         override fun checkInput(inputString: String?): Boolean = AccountPresentation.isValidLabel(inputString.orEmpty())
         override fun canClose(inputString: String?): Boolean = checkInput(inputString)
@@ -103,7 +107,10 @@ class AccountsPanel(private val project: Project) : JBPanel<AccountsPanel>(Borde
         }
         val buttonRow = JPanel(WrapLayout(FlowLayout.LEFT, 4, 4)).apply {
             isOpaque = false
-            for (button in listOf(addButton, signInButton, checkButton, signOutButton, renameButton, moveUpButton, moveDownButton, removeButton)) {
+            for (button in listOf(
+                addButton, signInButton, checkButton, signOutButton, renameButton, moveUpButton, moveDownButton, removeButton,
+                setVmTokenButton, removeVmTokenButton
+            )) {
                 add(button)
             }
         }
@@ -202,6 +209,15 @@ class AccountsPanel(private val project: Project) : JBPanel<AccountsPanel>(Borde
         moveDownButton.isEnabled = allowed.moveDown
         removeButton.isEnabled = allowed.removeOnly || allowed.signOutAndRemove
         switchSpinner.isEnabled = allowed.switchAt
+        setVmTokenButton.isEnabled = allowed.setVmToken
+        removeVmTokenButton.isEnabled = allowed.removeVmToken
+        // A daemon that sends no flag has no vm-token command: say why both are off.
+        val current = rotation
+        val unsupported = current != null && current.error == null && current.cli != null &&
+            selected()?.let { it.vmToken == null } == true
+        val tip = if (unsupported) MoeBundle.message(AccountKeys.VM_TOKEN_UNSUPPORTED) else null
+        setVmTokenButton.toolTipText = tip
+        removeVmTokenButton.toolTipText = tip
     }
 
     private fun selectedId(): String? = tableModel.rows.getOrNull(table.selectedRow)?.id
@@ -275,6 +291,22 @@ class AccountsPanel(private val project: Project) : JBPanel<AccountsPanel>(Borde
         choices.getOrNull(choice)?.second?.invoke()
     }
 
+    /** Mints (or with [remove], deletes) the selected account's VM token in a terminal tab. */
+    private fun vmToken(remove: Boolean) {
+        // Captured before the dialog, so a refresh while it is open cannot retarget it.
+        val account = selected() ?: return
+        val title = MoeBundle.message(if (remove) AccountKeys.VM_TOKEN_REMOVE_TITLE else AccountKeys.VM_TOKEN_SET_TITLE)
+        val choice = Messages.showOkCancelDialog(
+            project,
+            MoeBundle.message(if (remove) AccountKeys.VM_TOKEN_REMOVE_CONFIRM else AccountKeys.VM_TOKEN_SET_CONFIRM, account.label),
+            title,
+            title,
+            MoeBundle.message(AccountKeys.CANCEL),
+            if (remove) Messages.getWarningIcon() else Messages.getQuestionIcon()
+        )
+        if (choice == Messages.OK) runCli(AccountPresentation.vmTokenArgs(account.id, remove))
+    }
+
     private fun runCli(args: List<String>) {
         val current = rotation ?: return
         val cli = current.cli ?: return
@@ -341,6 +373,7 @@ class AccountsPanel(private val project: Project) : JBPanel<AccountsPanel>(Borde
                 3 -> row.fiveHour.resolve()
                 4 -> row.weekly.resolve()
                 5 -> row.status.resolve()
+                6 -> row.vmToken.resolve()
                 else -> ""
             }
         }
@@ -350,6 +383,6 @@ class AccountsPanel(private val project: Project) : JBPanel<AccountsPanel>(Borde
         const val DEFAULT_SWITCH_PERCENT = 90
         /** Spinner clicks settle into one SET_ACCOUNT_SWITCH_PERCENT. */
         const val SWITCH_DEBOUNCE_MS = 600
-        val COLUMN_WIDTHS = listOf(32, 160, 110, 150, 150, 170)
+        val COLUMN_WIDTHS = listOf(32, 160, 110, 150, 150, 170, 100)
     }
 }

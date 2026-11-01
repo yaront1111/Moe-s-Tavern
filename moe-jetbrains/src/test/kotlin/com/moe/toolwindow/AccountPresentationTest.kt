@@ -25,6 +25,12 @@ import com.moe.toolwindow.AccountKeys.STATUS_SPENT_UNTIL
 import com.moe.toolwindow.AccountKeys.USAGE_NONE
 import com.moe.toolwindow.AccountKeys.USAGE_PERCENT
 import com.moe.toolwindow.AccountKeys.USAGE_RESETS
+import com.moe.toolwindow.AccountKeys.VM_TOKEN_STATE_ABSENT
+import com.moe.toolwindow.AccountKeys.VM_TOKEN_STATE_PRESENT
+import com.moe.toolwindow.AccountKeys.VM_TOKEN_STATE_UNKNOWN
+import com.moe.util.TerminalAgentLauncher
+import com.moe.util.TerminalAgentLauncher.AccountsShell
+import java.io.File
 import java.lang.reflect.Modifier
 import java.text.MessageFormat
 import java.time.Instant
@@ -50,8 +56,9 @@ class AccountPresentationTest {
         peakPercent: Double? = null,
         blockedUntil: String? = null,
         active: Boolean = false,
-        seats: List<String> = emptyList()
-    ) = ClaudeAccount(id, label, signIn, null, windows, peakPercent, blockedUntil, active, seats)
+        seats: List<String> = emptyList(),
+        vmToken: Boolean? = null
+    ) = ClaudeAccount(id, label, signIn, null, windows, peakPercent, blockedUntil, active, seats, vmToken)
 
     private fun rotation(accounts: List<ClaudeAccount>, error: String? = null, cli: AccountCli? = this.cli) =
         AccountRotation("/home/dev/.moe/claude-accounts.json", 90, error, cli, accounts)
@@ -85,13 +92,20 @@ class AccountPresentationTest {
             listOf(
                 AccountRow(
                     "acct-1", 1, "Work Max", text(SIGN_IN_SUBSCRIPTION),
-                    text(USAGE_RESETS, 92, "14:05"), text(USAGE_PERCENT, 61), text(STATUS_SPENT_UNTIL, "14:05")
+                    text(USAGE_RESETS, 92, "14:05"), text(USAGE_PERCENT, 61), text(STATUS_SPENT_UNTIL, "14:05"),
+                    text(VM_TOKEN_STATE_UNKNOWN)
                 ),
-                AccountRow("acct-2", 2, "Personal", text(SIGN_IN_SIGNED_OUT), text(USAGE_NONE), text(USAGE_NONE), text(STATUS_SIGN_IN_NEEDED)),
-                AccountRow("acct-3", 3, "acct-3", text(SIGN_IN_OTHER), text(USAGE_NONE), text(USAGE_NONE), text(STATUS_SIGN_IN_NEEDED)),
+                AccountRow(
+                    "acct-2", 2, "Personal", text(SIGN_IN_SIGNED_OUT), text(USAGE_NONE), text(USAGE_NONE),
+                    text(STATUS_SIGN_IN_NEEDED), text(VM_TOKEN_STATE_UNKNOWN)
+                ),
+                AccountRow(
+                    "acct-3", 3, "acct-3", text(SIGN_IN_OTHER), text(USAGE_NONE), text(USAGE_NONE),
+                    text(STATUS_SIGN_IN_NEEDED), text(VM_TOKEN_STATE_UNKNOWN)
+                ),
                 AccountRow(
                     "acct-4", 4, "Spare", text(SIGN_IN_SUBSCRIPTION),
-                    text(USAGE_PERCENT, 12), text(USAGE_NONE), text(STATUS_ACTIVE_SEATS, 2)
+                    text(USAGE_PERCENT, 12), text(USAGE_NONE), text(STATUS_ACTIVE_SEATS, 2), text(VM_TOKEN_STATE_UNKNOWN)
                 )
             ),
             AccountPresentation.rows(rotation(listOf(spent, signedOut, otherLogin, activeWithSeats)), now, zone)
@@ -216,7 +230,8 @@ class AccountPresentationTest {
         val two = rotation(listOf(spent, signedOut))
         val none = AccountActions(
             add = false, rename = false, moveUp = false, moveDown = false, removeOnly = false,
-            signIn = false, signOut = false, signOutAndRemove = false, check = false, switchAt = false
+            signIn = false, signOut = false, signOutAndRemove = false, check = false, switchAt = false,
+            setVmToken = false, removeVmToken = false
         )
 
         assertEquals(none, AccountPresentation.actions(null, null, connected = true))
@@ -263,6 +278,90 @@ class AccountPresentationTest {
         for (bad in listOf(max + "x", "a\tb", "a\nb", "a\u0000b", "a\u007Fb")) assertFalse("'$bad'", AccountPresentation.isValidLabel(bad))
     }
 
+    // ------------------------------------------------------------- VM tokens
+
+    @Test
+    fun `the VM token column shows set, not set and unknown`() {
+        val accounts = listOf(account("a", vmToken = true), account("b", vmToken = false), account("c", vmToken = null))
+        assertEquals(
+            listOf(text(VM_TOKEN_STATE_PRESENT), text(VM_TOKEN_STATE_ABSENT), text(VM_TOKEN_STATE_UNKNOWN)),
+            AccountPresentation.rows(rotation(accounts), now, zone).map { it.vmToken }
+        )
+    }
+
+    @Test
+    fun `VM token actions need the CLI, a selection and a daemon that reports the flag`() {
+        val accounts = listOf(account("set", vmToken = true), account("unset", vmToken = false), account("old"))
+        fun vm(selectedId: String?, connected: Boolean = true, cli: AccountCli? = this.cli) =
+            AccountPresentation.actions(rotation(accounts, cli = cli), selectedId, connected).let { it.setVmToken to it.removeVmToken }
+
+        for (connected in listOf(true, false)) {
+            assertEquals("set, connected=$connected", true to true, vm("set", connected))
+            assertEquals("unset, connected=$connected", true to false, vm("unset", connected))
+            // An older daemon sends no flag, and its CLI has no vm-token command.
+            assertEquals("old, connected=$connected", false to false, vm("old", connected))
+            assertEquals("no selection, connected=$connected", false to false, vm(null, connected))
+            assertEquals("gone, connected=$connected", false to false, vm("acct-gone", connected))
+            assertEquals("no cli, connected=$connected", false to false, vm("set", connected, cli = null))
+        }
+        val bad = AccountPresentation.actions(rotation(accounts, error = "bad file"), "set", connected = true)
+        assertEquals(false to false, bad.setVmToken to bad.removeVmToken)
+    }
+
+    @Test
+    fun `VM token command lines quote like sign-in in every shell`() {
+        val set = AccountPresentation.vmTokenArgs("acct-1", remove = false)
+        val remove = AccountPresentation.vmTokenArgs("acct-1", remove = true)
+        assertEquals(listOf("vm-token", "acct-1"), set)
+        assertEquals(listOf("vm-token", "acct-1", "--remove"), remove)
+
+        // The fixtures of TerminalAgentLauncherTest's accounts-command tests.
+        val windowsCli = AccountCli(
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\Users\\O'Brien\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js"
+        )
+        val psPrefix = "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\Program Files\\nodejs\\node.exe' " +
+            "'C:\\Users\\O''Brien\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js' " +
+            "'--accounts-file' 'D:\\moe`\$\\claude-accounts.json'"
+        fun ps(args: List<String>) =
+            TerminalAgentLauncher.buildAccountsCommand(windowsCli, "D:\\moe\$\\claude-accounts.json", args, AccountsShell.POWERSHELL)
+        assertEquals("$psPrefix 'vm-token' 'acct-1'\"", ps(set))
+        assertEquals("$psPrefix 'vm-token' 'acct-1' '--remove'\"", ps(remove))
+
+        val wslCli = AccountCli(
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\Users\\Yaron\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js"
+        )
+        val wslPrefix = "node '/mnt/c/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.2/plugins/moe-jetbrains/daemon/accounts/cli.js' " +
+            "'--accounts-file' '/mnt/c/Users/Yaron/.moe/claude-accounts.json'"
+        fun wsl(args: List<String>) =
+            TerminalAgentLauncher.buildAccountsCommand(wslCli, "C:\\Users\\Yaron\\.moe\\claude-accounts.json", args, AccountsShell.WSL_BASH)
+        assertEquals("$wslPrefix 'vm-token' 'acct-1'", wsl(set))
+        assertEquals("$wslPrefix 'vm-token' 'acct-1' '--remove'", wsl(remove))
+
+        val bashPrefix = "'/usr/local/bin/node' '/opt/moe/daemon/accounts/cli.js' '--accounts-file' '/home/o'\"'\"'neil/.moe/claude-accounts.json'"
+        fun bash(args: List<String>) = TerminalAgentLauncher.buildAccountsCommand(
+            AccountCli("/usr/local/bin/node", "/opt/moe/daemon/accounts/cli.js"),
+            "/home/o'neil/.moe/claude-accounts.json",
+            args,
+            AccountsShell.BASH
+        )
+        assertEquals("$bashPrefix 'vm-token' 'acct-1'", bash(set))
+        assertEquals("$bashPrefix 'vm-token' 'acct-1' '--remove'", bash(remove))
+    }
+
+    @Test
+    fun `the plugin never names the VM token store`() {
+        val sources = File(System.getProperty("user.dir"), "src/main").walkTopDown()
+            .filter { it.isFile && it.extension in setOf("kt", "java", "properties", "xml") }
+            .toList()
+        // Never pass vacuously: the scan must see the sources it guards.
+        assertTrue("the scan found no plugin sources", sources.any { it.name == "AccountPresentation.kt" })
+        for (file in sources) {
+            assertFalse("${file.path} names the VM token store", file.readText().contains("claude-vm-tokens"))
+        }
+    }
+
     // ------------------------------------------------------------- bundle guard
 
     @Test
@@ -277,13 +376,15 @@ class AccountPresentationTest {
             .filter { Modifier.isStatic(it.modifiers) && it.type == String::class.java }
             .map { it.get(null) as String }
         assertEquals("AccountKeys must not repeat a key", keys.size, keys.toSet().size)
-        assertEquals(61, keys.size)
+        assertEquals(72, keys.size)
         assertEquals(AccountKeys.COLUMNS.size, AccountKeys.COLUMNS.toSet().size)
         assertTrue(keys.containsAll(AccountKeys.COLUMNS))
 
         // What the presentation emits, plus the panel's own parameterized texts.
-        val emitted = AccountPresentation.rows(rotation(listOf(spent, signedOut, otherLogin, activeWithSeats, account("r"))), now, zone)
-            .flatMap { listOf(it.signIn, it.fiveHour, it.weekly, it.status) } +
+        val rowAccounts = listOf(spent, signedOut, otherLogin, activeWithSeats, account("r")) +
+            listOf(account("t", vmToken = true), account("f", vmToken = false))
+        val emitted = AccountPresentation.rows(rotation(rowAccounts), now, zone)
+            .flatMap { listOf(it.signIn, it.fiveHour, it.weekly, it.status, it.vmToken) } +
             listOf(account("a", active = true), account("b", active = true, seats = listOf("w")), account("c", seats = listOf("w")))
                 .flatMap { AccountPresentation.rows(rotation(listOf(it)), now, zone).map { row -> row.status } } +
             AccountPresentation.chips(rotation(listOf(spent, activeWithSeats) + (1..3).map { account("u$it", peakPercent = 1.0) }), now, zone) +
@@ -292,10 +393,13 @@ class AccountPresentationTest {
             AccountPresentation.chips(rotation(listOf(signedOut)), now, zone)
         val panelArgs = mapOf(
             AccountKeys.FILE to 1, AccountKeys.ERROR to 1, AccountKeys.HEADER to 1, AccountKeys.HEADER_TOOLTIP to 1,
-            AccountKeys.SIGN_OUT_CONFIRM to 1, AccountKeys.REMOVE_CONFIRM to 1, AccountKeys.TERMINAL_UNAVAILABLE to 1
+            AccountKeys.SIGN_OUT_CONFIRM to 1, AccountKeys.REMOVE_CONFIRM to 1, AccountKeys.TERMINAL_UNAVAILABLE to 1,
+            AccountKeys.VM_TOKEN_SET_CONFIRM to 1, AccountKeys.VM_TOKEN_REMOVE_CONFIRM to 1
         )
         val emittedKeys = emitted.map { it.key }.toSet()
-        val presentationPrefixes = listOf("moe.accounts.signIn.", "moe.accounts.usage.", "moe.accounts.status.", "moe.accounts.chip.")
+        val presentationPrefixes = listOf(
+            "moe.accounts.signIn.", "moe.accounts.usage.", "moe.accounts.status.", "moe.accounts.chip.", "moe.accounts.vmTokenState."
+        )
         assertEquals(
             "the presentation keys this test formats",
             keys.filter { key -> presentationPrefixes.any { key.startsWith(it) } }.toSet(),

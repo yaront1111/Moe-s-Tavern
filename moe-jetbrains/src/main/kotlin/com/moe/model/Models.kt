@@ -324,7 +324,14 @@ data class ClaudeAccount(
     /** The account the next claude launch gets. */
     val active: Boolean,
     /** Worker ids whose last launch leased this account. */
-    val seats: List<String>
+    val seats: List<String>,
+    /**
+     * Whether Moe holds a VM token for this account (for Moe VM jobs, CQ-M07k),
+     * as the daemon reports it from a stat. Null when the daemon does not report
+     * it (an older daemon); the tab shows that as unknown, never as set. It is
+     * never a token.
+     */
+    val vmToken: Boolean? = null
 )
 
 data class UsageWindow(

@@ -905,11 +905,12 @@ class MoeJsonTest {
                 "five_hour": { "percent": 92.5, "resetsAt": "2026-10-20T14:05:00.000Z" },
                 "seven_day": { "percent": 40, "resetsAt": null }
               },
-              "peakPercent": 92.5, "blockedUntil": "2026-10-20T14:05:00.000Z", "active": false, "seats": ["worker-a"]
+              "peakPercent": 92.5, "blockedUntil": "2026-10-20T14:05:00.000Z", "active": false, "seats": ["worker-a"],
+              "vmToken": true
             },
             {
               "id": "acct-2", "label": "Personal", "signIn": "signed_out", "signInCheckedAt": null,
-              "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": []
+              "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false
             },
             {
               "id": "acct-3", "label": "acct-3", "signIn": "subscription", "signInCheckedAt": "2026-10-20T09:00:00.000Z",
@@ -938,7 +939,8 @@ class MoeJsonTest {
                 peakPercent = 92.5,
                 blockedUntil = "2026-10-20T14:05:00.000Z",
                 active = false,
-                seats = listOf("worker-a")
+                seats = listOf("worker-a"),
+                vmToken = true
             ),
             ClaudeAccount(
                 id = "acct-2",
@@ -949,7 +951,8 @@ class MoeJsonTest {
                 peakPercent = null,
                 blockedUntil = null,
                 active = false,
-                seats = emptyList()
+                seats = emptyList(),
+                vmToken = false
             ),
             ClaudeAccount(
                 id = "acct-3",
@@ -960,7 +963,9 @@ class MoeJsonTest {
                 peakPercent = 12.0,
                 blockedUntil = null,
                 active = true,
-                seats = listOf("worker-b", "qa-c")
+                seats = listOf("worker-b", "qa-c"),
+                // An older daemon sends no flag: unknown, never set.
+                vmToken = null
             )
         )
     )
@@ -1041,12 +1046,13 @@ class MoeJsonTest {
                 {
                   "id": "acct-3", "label": "", "signIn": "bogus", "signInCheckedAt": 5,
                   "windows": { "five_hour": 5, "seven_day": { "percent": "40", "resetsAt": 7 } },
-                  "peakPercent": "NaN", "blockedUntil": {}, "active": "true", "seats": ["worker-a", 2]
+                  "peakPercent": "NaN", "blockedUntil": {}, "active": "true", "seats": ["worker-a", 2],
+                  "vmToken": "sk-ant-oat01-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCd"
                 },
                 { "id": "acct-3", "label": "a second acct-3" },
                 {
                   "id": "acct-4", "signIn": "other", "signInCheckedAt": " ",
-                  "windows": { "five_hour": { "percent": 5, "resetsAt": "" } }, "blockedUntil": ""
+                  "windows": { "five_hour": { "percent": 5, "resetsAt": "" } }, "blockedUntil": "", "vmToken": 1
                 }
               ]
             }
@@ -1087,6 +1093,22 @@ class MoeJsonTest {
             ),
             rotation
         )
+        // A token-shaped vmToken value never survives parsing.
+        assertFalse(rotation.toString().contains("sk-ant"))
+    }
+
+    @Test
+    fun `parseAccountRotation reads vmToken as a real JSON boolean only`() {
+        val cases = listOf(
+            "true" to true, "false" to false,
+            "\"true\"" to null, "\"false\"" to null, "1" to null, "0" to null, "null" to null, "{}" to null, "[]" to null
+        )
+        for ((literal, expected) in cases) {
+            val rotation = parseRotation(
+                """{ "registryFile": "/home/dev/.moe/claude-accounts.json", "accounts": [ { "id": "acct-1", "vmToken": $literal } ] }"""
+            )
+            assertEquals("vmToken $literal", expected, rotation?.accounts?.single()?.vmToken)
+        }
     }
 
     @Test
