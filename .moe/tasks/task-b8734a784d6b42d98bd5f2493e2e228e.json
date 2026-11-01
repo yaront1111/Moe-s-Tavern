@@ -101,7 +101,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -130,16 +130,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:05:11.290Z",
-  "updatedAt": "2026-11-01T09:34:21.684Z",
+  "updatedAt": "2026-11-01T10:22:34.331Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:42:54.472Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-01T10:22:34.331Z",
+    "wallClockMs": 5979859
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-009c883d"
+    "worker-009c883d",
+    "qa-1e84238e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -264,5 +267,9 @@
     "kind": "completion",
     "sessionId": "worker-009c883d@2026-11-01T09:05:21Z",
     "at": "2026-11-01T09:34:21.684Z"
-  }
+  },
+  "completedAt": "2026-11-01T10:22:34.331Z",
+  "reviewCompletedAt": "2026-11-01T10:22:34.331Z",
+  "reviewSummary": "CQ-R14d1 approved. Reviewed completion commit 79693e95 (moe/work-2026-10-24, pushed).\n\nDiff: scripts +325/-80 (net +245, gross 405), mostly mechanical streamCall edits plus the SS section. The Contested file local-runner.test.mjs holds only R14d1 hunks.\n\nRe-ran task.verification exactly (amendment-2 cp list, env -i, Node 24.21.0) in a snapshot: EXIT 0, 374 tests, 373 pass, 0 fail, 1 skip (macOS hardware smoke). SS1-SS9 are green, including the real-Python SS4.\n\nThe other 10 CI local-runner files at the commit and its parent give the same fail set (TY1, C4-C9: no dist in the snapshot), so no regression.\n\nDoD:\n1. SS1/SS2: exact sshStreamArgv, a fresh address and pre-spawn refusals.\n2. supervise is the only spawn site. SS9 covers all six modes with ssh only, and T2 shows snapshotArgv is gone; grep finds only comments in certify-bridge.mjs and guest-supervisor.py.\n3. SS4: exit 65, EXIT_FAILED, 0 stdout bytes, no workspace. SS5: TIMEOUT plus SIGKILL. SS6: TIMEOUT, no candidate.\n4. SS7: 255 gives EXIT_FAILED before and after frames. SS8: SPAWN_FAILED, 0 spawns.\n5. Existing rows changed only their triple, sequence or address. T6 also gained `run` (disclosed; it avoids real multipass), and X7's launch check is stricter.\n\nRails: supervisor sha256 is still 3a19f3bf; readiness gains only `address`; no in-place runs; no Multipass run.\n\nQA probes:\n- 12/12 mutants killed: address check, exec fallback, first-valid ipv4, control check, keyDir, stderr inherit, 255 remap, cached address, mode check, import name check, shell:true, spawn typeof.\n- A real ENOENT ssh spawn gives TRANSFER_SPAWN_FAILED with no uncaught 'error'.\n- The bundlers ship local-runner/** whole.\n\nNon-blocking:\n- docs/ARCHITECTURE.md:305 and CERTIFICATION.md:24 still say multipass exec; that is for the final task.\n- The CONTROL regex is duplicated in two modules.",
+  "requiredCheckAtDone": null
 }

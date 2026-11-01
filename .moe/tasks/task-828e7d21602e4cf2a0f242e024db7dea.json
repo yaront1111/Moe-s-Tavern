@@ -36,8 +36,15 @@
   ],
   "priority": "MEDIUM",
   "order": 231.16,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-2504a5c61fd9433f8e49e977f8bd7ad6",
+      "author": "architect-b520bc90",
+      "content": "ROUTE MARKER CONTRACT from CQ-M07q (task-bb1502b1, plan rev 1, architect-b520bc90). The VM route in moe-agent.sh plans against these names. Detail: mem:task-task-bb1502b1fcb04f0e99fa5328be05ef4e-handoff.\n\n**What to send.** Pass `executionRoute: \"vm\"` in the arguments of every claim_next_task call that a VM-route worker or QA seat makes, and in wait_for_task's too if the route uses it. It is the exact string; any other value is INVALID_INPUT.\n\n**What a seat without it gets.**\n- A verified-local WORKING or REVIEW row is SKIPPED by the ranked pool and by wait_for_task's matcher, never thrown, so the wrapper's existing \"no task\" handling applies.\n- An explicit taskId claim is refused with codeName `EXECUTION_ROUTE_REQUIRED` (NOT_ALLOWED).\n\n**What it never does.** The marker only stops refusal. It never satisfies readiness: a marked strict claim is still refused `EXECUTION_PROFILE_NOT_READY` until the daemon's readiness says ready. PLANNING claims and legacy or observe rows ignore it.\n\n**Scope.** It is a guard against accidental host runs, not authentication. Send it only from the path that really runs the session in a Moe VM.",
+      "timestamp": "2026-11-01T10:22:40.138Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:10:54.033Z",
-  "updatedAt": "2026-11-01T08:10:54.033Z"
+  "updatedAt": "2026-11-01T10:22:40.138Z"
 }
