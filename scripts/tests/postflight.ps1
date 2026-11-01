@@ -4960,7 +4960,7 @@ exit 0
     function Invoke-WtrRun([string]$Name, [string]$PathPrefix = '') {
         foreach ($f in 'session-new.txt', '.moe\evidence-rpcs.jsonl', '.moe\attempts') { Remove-Item -LiteralPath (Join-Path $wtrDir $f) -Recurse -Force -ErrorAction SilentlyContinue }
         $knobs = @{ MOE_PROXY_PATH = $fakeProxy; USERPROFILE = $homeDir; MOE_DISABLE_HEARTBEAT = '1'; FAKE_TASK_STATUS = 'WORKING'
-            FAKE_CLAIM_WORKSPACE = '{"mode":"worktree","target":"main"}'; PATH = $PathPrefix + $env:PATH }
+            FAKE_CLAIM_WORKSPACE = '{"mode":"worktree","target":"main"}'; PATH = $PathPrefix + $env:PATH; MOE_LAND_NET_BACKOFF_SEC = '0' }
         $saved = @{}
         foreach ($k in $knobs.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $knobs[$k]) }
         $out = Join-Path $tempRoot "wrapper-wtr-$Name.out"
@@ -5035,6 +5035,29 @@ exit 0
     if (Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) { Stop-Wtr 'index-deleted' 'the CLI ran' $run }
     if ([IO.File]::ReadAllText((Join-Path $wtrW 'src\a.txt')) -cne "agent edit`n" -or [IO.File]::ReadAllText((Join-Path $wtrW 'src\new.txt')) -cne "agent new`n") { Stop-Wtr 'index-deleted' 'the edited or the untracked file lost its bytes' $run }
     if (Test-Path -LiteralPath $wtrIndex) { Stop-Wtr 'index-deleted' "the refusal wrote W's index" $run }
+    # (e) WT-09: with a remote, W is cut from refs/remotes/origin/main, fetched first (origin is
+    # one commit ahead of the local main); with no such ref the seat refuses with CREATE_FAILED.
+    $null = Invoke-WtrGit @('-C', $wtrDir, 'worktree', 'remove', '--force', '--force', $wtrW)
+    $null = Invoke-WtrGit @('-C', $wtrDir, 'branch', '-q', '-D', 'moe/task/task-postflight')
+    $wtrOrigin = Join-Path $tempRoot 'wtr-origin.git'
+    $null = Invoke-WtrGit @('-C', $wtrDir, 'remote', 'add', 'origin', $wtrOrigin)
+    $run = Invoke-WtrRun 'remote-no-base'
+    if ($run.Code -ne 1 -or $run.Text -cnotmatch 'MOE_LAND_FETCH_FAILED' -or $run.Text -cnotmatch '\[ERROR\] MOE_WORKTREE_CREATE_FAILED: refs/remotes/origin/main does not exist') {
+        Stop-Wtr 'remote-no-base' 'not exit 1 with FETCH_FAILED, then CREATE_FAILED for the missing origin base' $run
+    }
+    if (@(Get-WtrBlocks).Count -ne 1 -or (Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) -or
+        @(Invoke-WtrGit @('-C', $wtrDir, 'worktree', 'list', '--porcelain') | Where-Object { $_.StartsWith('worktree ') }).Count -ne 1) {
+        Stop-Wtr 'remote-no-base' 'not one report_blocked, the CLI ran, or W was registered' $run
+    }
+    $null = Invoke-WtrGit @('init', '-q', '--bare', $wtrOrigin)
+    $null = Invoke-WtrGit @('-C', $wtrDir, 'push', '-q', 'origin', 'main')
+    $wtrO1 = "$(Invoke-WtrGit @('-C', $wtrOrigin, '-c', 'user.name=Moe Test', '-c', 'user.email=moe@test.local', 'commit-tree', 'main^{tree}', '-p', 'main', '-m', 'origin ahead'))"
+    $null = Invoke-WtrGit @('-C', $wtrOrigin, 'update-ref', 'refs/heads/main', $wtrO1)
+    $run = Invoke-WtrRun 'remote-base'
+    if ($run.Code -ne 0 -or $run.Text -cnotmatch '(?m)^\[worktree\] created .+ on moe/task/task-postflight\r?$') { Stop-Wtr 'remote-base' "exit $($run.Code), or no [worktree] created line" $run }
+    if ("$(Invoke-WtrGit @('-C', $wtrDir, 'rev-parse', 'moe/task/task-postflight'))" -cne $wtrO1 -or "$(Invoke-WtrGit @('-C', $wtrDir, 'rev-parse', 'main'))" -ceq $wtrO1) {
+        Stop-Wtr 'remote-base' "W's branch does not start at origin's main tip" $run
+    }
     Write-Host '[worktree reuse] ok'
 
     # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the

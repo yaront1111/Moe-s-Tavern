@@ -5467,7 +5467,7 @@ wtr_run() {
   : > "$CLI_ARGS_FILE"; rm -rf "$WTR_DIR/.moe/evidence-rpcs.jsonl" "$WTR_DIR/.moe/attempts"
   set +e
   env PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 FAKE_TASK_STATUS=WORKING \
-    FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
+    FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' MOE_LAND_NET_BACKOFF_SEC=0 "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
     "$WRAPPER" --project "$WTR_DIR" --worker-id worker-wtr --role worker --team Smoke --no-start-daemon \
     --command "$FAKE_CLI" --no-loop --poll-interval 0 >"$TMP_DIR/wrapper-wtr-$name.out" 2>&1
   wtr_code=$?
@@ -5536,6 +5536,24 @@ grep -q '\[ERROR\].* MOE_WORKTREE_CREATE_FAILED: .* has no index file but holds 
 printf 'agent edit\n' | cmp -s - "$WTR_W/src/a.txt" && printf 'agent new\n' | cmp -s - "$WTR_W/src/new.txt" \
   || wtr_fail index-deleted "the edited or the untracked file lost its bytes"
 [ ! -e "$wtr_index" ] || wtr_fail index-deleted "the refusal wrote W's index"
+# (e) WT-09: with a remote, W is cut from refs/remotes/origin/main, fetched first (origin is
+# one commit ahead of the local main); with no such ref the seat refuses with CREATE_FAILED.
+wtr_git worktree remove --force --force "$WTR_W"; wtr_git branch -q -D moe/task/task-postflight
+wtr_git remote add origin "$TMP_DIR/wtr-origin.git"
+wtr_run remote-no-base
+[ "$wtr_code" -eq 1 ] && grep -q 'MOE_LAND_FETCH_FAILED' "$TMP_DIR/wrapper-wtr-remote-no-base.out" \
+  && grep -q '\[ERROR\].* MOE_WORKTREE_CREATE_FAILED: refs/remotes/origin/main does not exist' "$TMP_DIR/wrapper-wtr-remote-no-base.out" \
+  || wtr_fail remote-no-base "not exit 1 with FETCH_FAILED, then CREATE_FAILED for the missing origin base"
+[ "$(wtr_blocks)" = 1 ] && [ ! -s "$CLI_ARGS_FILE" ] && [ "$(wtr_git worktree list --porcelain | grep -c '^worktree ')" = 1 ] \
+  || wtr_fail remote-no-base "not one report_blocked, the CLI ran, or W was registered"
+git init -q --bare "$TMP_DIR/wtr-origin.git"; wtr_git push -q origin main
+wtr_o1=$(git -C "$TMP_DIR/wtr-origin.git" -c user.name='Moe Test' -c user.email=moe@test.local commit-tree 'main^{tree}' -p main -m 'origin ahead')
+git -C "$TMP_DIR/wtr-origin.git" update-ref refs/heads/main "$wtr_o1"
+wtr_run remote-base
+[ "$wtr_code" -eq 0 ] && grep -Eq '^\[worktree\] created .+ on moe/task/task-postflight$' "$TMP_DIR/wrapper-wtr-remote-base.out" \
+  || wtr_fail remote-base "exit $wtr_code, or no [worktree] created line"
+[ "$(wtr_git rev-parse moe/task/task-postflight)" = "$wtr_o1" ] && [ "$(wtr_git rev-parse main)" != "$wtr_o1" ] \
+  || wtr_fail remote-base "W's branch does not start at origin's main tip"
 echo "[worktree reuse] ok"
 
 # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the JetBrains

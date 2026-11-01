@@ -293,16 +293,22 @@ jobs:
       - name: Test Bash wrapper postflight and parity
         if: runner.os == 'Linux'
         run: |
+          bash scripts/tests/worktree-landing.sh
           node scripts/tests/postflight-safe.mjs bash
           bash scripts/tests/parity-check.sh
 
       - name: Test Windows PowerShell wrapper postflight
         if: runner.os == 'Windows'
-        run: node scripts/tests/postflight-safe.mjs powershell
+        run: |
+          powershell -NoProfile -File scripts/tests/worktree-landing.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/tests/postflight-safe.mjs powershell
 
       - name: Test PowerShell 7 wrapper postflight and parity
         if: runner.os == 'Windows'
         run: |
+          pwsh -NoProfile -File scripts/tests/worktree-landing.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/tests/postflight-safe.mjs pwsh
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File scripts/tests/parity-check.ps1

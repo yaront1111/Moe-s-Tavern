@@ -142,7 +142,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:13:22.145Z",
-  "updatedAt": "2026-10-31T22:36:50.205Z",
+  "updatedAt": "2026-10-31T22:38:40.011Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:17:55.701Z",
     "plannedStepCount": 7,
@@ -251,7 +251,8 @@
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
     ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
-    ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json"
+    ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
   ],
   "completionSummary": "CQ-V08b delivered in moe-agent.sh/.ps1 + postflight.sh/.ps1 (337+/39-).\nR1: one gate in run_landing / Invoke-MoeLanding right after the owner guard: under the strong profile every checkpoint landing (post-flight exit, pre-flight, idle and resume recoveries) is refused MOE_COMMIT_REFUSED_STRONG_CHECKPOINT - no ref, rescue ref, temp index or baseline write. Strong = the session's pinned profile for its own task OR the newest readable .moe/attempts record (highest generation, tie=strong, no snapshot=legacy) OR the task's receipt journal profile; env never read.\nR2: a strong receipt journal outlives the receipt ack; finalize defers only on an unacked receipt and drops the journal only once the attempt is closed; the replay re-sends the receipt (duplicate), finalizes a lost finalize once, drops the journal at closed, else WARN+keep. V08's existence refusal blocks a second strong completion, so nothing lands twice. Legacy/observe unchanged.\nTests: 7 frozen modes, byte-identical in both suites: reconcile-strong-finalize-lost, strong-checkpoint-held(-env/-forged/-journal), strong-recovery-held(-gate).\nEvidence: fresh postflight.sh exit 0 (frozen 92/92, PASS postflight.sh); the 7 modes PASS under pwsh 7.6.9 and PS 5.1 on final bytes; parity-check.sh/.ps1 PASS; RED vs HEAD; 7 mutants red in sh+ps1, restored green; node --test prompt-cache-launcher/agent-runtime/resume-progress 48 pass/0 fail/2 skip (after fix 84e45fa5 landed).\nDeviation: strong-recovery-held run 2 refuses only its exit: V07's INTENT_UNWRITABLE refusal settles the baseline (landed=1), so nothing is recovered; -gate covers the refused recovery (a gate-failed rescue keeps landed=0).\nV12 residuals (Serena task-task-7f82e200c224418896667560a49fe0ab-handoff): worktree checkpoints ungated; a CLI-forged attempt record can mask unpinned idle recoveries (host-isolation boundary); CONFLICT + lost finalize wedge; per-pre-flight WARN liveness; one more attempts scan per checkpoint (~2.5-3 s python on drvfs).",
   "commits": [
@@ -274,6 +275,22 @@
       "treeId": "46f62a1994a302976bbeab7be4494c87231e591f",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "b94ccb69240a50c26c554d478a02665b7efe5727",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1f1f912c@2026-10-31T22:12:12Z",
+      "paths": [
+        ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-1f1f912c",
+      "recordedAt": "2026-10-31T22:38:40.010Z",
+      "treeId": "d6c24b08a362e8337a617f036627f615f15045de",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -285,9 +302,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-1ec18131@2026-10-31T20:19:04Z",
-    "at": "2026-10-31T22:09:29.811Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-1f1f912c@2026-10-31T22:12:12Z",
+    "at": "2026-10-31T22:38:40.010Z"
   },
   "completedAt": "2026-10-31T22:36:50.205Z",
   "reviewCompletedAt": "2026-10-31T22:36:50.205Z",

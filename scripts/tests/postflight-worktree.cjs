@@ -596,9 +596,10 @@ async function wtStray(){
     'the stray or pre-existing bytes changed, or were committed');
 }
 // checkpointPush pushes the task branch without force; a divergent remote is CHECKPOINT-UNPUSHED and keeps both refs.
+// origin holds main: a remote seat cuts W from origin's target (WT-09).
 async function wtPush(){
   const p=repo('wt-push',{settings:{...LANDS,checkpointPush:true}}),bare=path.join(root,'wt-push.git');
-  git(root,'init','-q','--bare',bare);git(p.top,'remote','add','origin',bare);
+  git(root,'init','-q','--bare',bare);git(p.top,'remote','add','origin',bare);git(p.top,'push','-q','origin','main');
   let r=await landRun(p,'wt-push-1',{'src/a.txt':'one\n'});
   const one=revOf(p.top,p.branch);
   assert.deepEqual([revOf(bare,p.branch),ledger(p).pop().pushed],[one,true],'the remote task branch is not the local tip, or pushed is not true'+tail(r.log));
@@ -682,14 +683,15 @@ async function wtSync(){
   const s=revOf(p.top,p.branch);
   assert.deepEqual([parents(p.top,s),revOf(p.W,'HEAD')],[[t,c],s],'the pre-flight did not sync C into the task branch'+tail(r.log));
 }
-// Fail closed, main unmoved: a qualityGate or a remote (WT-09/WT-10), a merge-tree failure that is no conflict
+// Fail closed, main unmoved: a qualityGate (WT-10), a remote whose fetch fails (WT-09), a merge-tree failure that is no conflict
 // (exit 1 without a tree), an unwritable journal, three lost CAS rounds.
 async function wtFails(){
   const bare=n=>{const b=path.join(root,n+'.git');git(root,'init','-q','--bare',b);return b;};
   for(const [n,settings,knobs,setup,code,why] of [
     ['wt-gate',{qualityGate:'node -e 0'},{},null,'MOE_COMMIT_FAILED',/qualityGate/],
     ['wt-merge-tree',{},{WT_GIT_FAIL:'merge-tree'},null,'MOE_COMMIT_FAILED',/merge-tree exited/],
-    ['wt-remote',{},{},p=>git(p.top,'remote','add','origin',bare('wt-remote')),'MOE_COMMIT_FAILED',/remote/],
+    ['wt-remote',{},{MOE_LAND_NET_BACKOFF_SEC:'0'},async p=>{await landRun(p,'wt-remote-0',{});git(p.top,'remote','add','origin',bare('wt-remote'));},
+      'MOE_LAND_FETCH_FAILED',/git fetch origin main failed 3 times/],
     ['wt-journal',{},{},p=>write(path.dirname(journal(p)),'x\n'),'MOE_COMMIT_FAILED',/receipt journal .* could not be written/],
     ['wt-exhausted',{},{WT_GIT_FAIL:'update-ref'},p=>landRun(p,'wt-exhausted-0',{'src/a.txt':'done\n'}),'MOE_COMMIT_FAILED_REF_CONTENTION',/all 3 rounds/]]){
     const p=repo(n,{settings:{...LANDS,...settings}}),main=mainOf(p);
