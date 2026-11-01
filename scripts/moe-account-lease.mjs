@@ -12,6 +12,9 @@
 // value is ever printed; .credentials.json and every other file in the folder
 // are never opened. From `claude auth status --json` it reads the exit code
 // and authMethod; nothing else in that output is printed, stored or sent.
+// `vm-credential` also reads the account's VM token from
+// <accounts dir>/claude-vm-tokens/<id>.token, which `accounts vm-token` writes
+// outside every Claude config folder, and prints it only to stdout.
 //
 //   gate                                         go | off | skip<TAB><note>
 //   pick              (stdin: the lease reply)   leased<TAB><id><TAB><peak|?><TAB><configDir>
@@ -20,7 +23,9 @@
 //   trust <configDir> <projectDir> [<launchDir>] trusted | granted | refused<TAB><sec><TAB><reason>
 //   statusline        claude's statusLine command: prints a line, writes MOE_ACCOUNT_SAMPLE_FILE
 //   statusline-settings <file>                   writes the --settings JSON that installs it
+//   vm-credential <id>                           the account's VM token on stdout (for a pipe), from <accounts dir>/claude-vm-tokens/
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +35,9 @@ export const ACCOUNT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export const TOKEN_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'];
 /** Cloud-provider switches: with one set, claude ignores logins, so rotation stands down. Same list as registry.ts. */
 export const PROVIDER_ENV = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
+/** A Claude long-lived token as `claude setup-token` prints it. Same as the daemon's accounts/vmTokens.ts. */
+export const VM_TOKEN_RE = /^sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,1000}$/;
+export const MAX_VM_TOKEN_BYTES = 1100;
 
 const SELF = fileURLToPath(import.meta.url);
 const WINDOW_RE = /^[a-z][a-z0-9_]{0,39}$/;
@@ -40,7 +48,7 @@ const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
 const OFF_RE = /^(0|false|off|no)$/i;
 const UNREADABLE = 'unavailable\tunreadable reply from the daemon';
 const USAGE = 'usage: node moe-account-lease.mjs gate | pick | signin-state <configDir> <claude command...> '
-  + '| trust <configDir> <projectDir> [<launchDir>] | statusline | statusline-settings <file>';
+  + '| trust <configDir> <projectDir> [<launchDir>] | statusline | statusline-settings <file> | vm-credential <id>';
 const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 const TRUST_LOCK_WAIT_MS = 2000;
 const TRUST_POLL_MS = 50;
@@ -470,6 +478,41 @@ function statusline(env) {
   console.log(formatStatus(input, accountId, windows));
 }
 
+/** The machine's account list: the daemon's registry.ts registryFilePath rule. */
+export function accountsFile(env = process.env) {
+  const override = env.MOE_ACCOUNTS_FILE?.trim();
+  return override ? path.resolve(override) : path.join(os.homedir(), '.moe', 'claude-accounts.json');
+}
+
+/** Where `accounts vm-token` stores the account's token (registry.ts vmTokenFile); null for a bad id. */
+export function vmTokenPath(env, id) {
+  return ACCOUNT_ID_RE.test(id ?? '') ? path.join(path.dirname(accountsFile(env)), 'claude-vm-tokens', `${id}.token`) : null;
+}
+
+/** The stored token; null unless a regular file in a real store folder holds exactly one token. Never throws. No mode check: WSL drvfs reports 0777. */
+export function readVmCredential(env, id) {
+  const file = vmTokenPath(env, id);
+  let fd = null;
+  try {
+    if (!file || !fs.lstatSync(path.dirname(file)).isDirectory() || !fs.lstatSync(file).isFile()) return null;
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_VM_TOKEN_BYTES) return null;
+    const buffer = Buffer.alloc(MAX_VM_TOKEN_BYTES + 1);
+    const size = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const token = buffer.toString('utf8', 0, size);
+    return size <= MAX_VM_TOKEN_BYTES && VM_TOKEN_RE.test(token) ? token : null;
+  } catch {
+    return null;
+  } finally {
+    try {
+      if (fd !== null) fs.closeSync(fd);
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
 export function main(argv, env = process.env) {
   const [command, ...args] = argv;
   switch (command) {
@@ -512,6 +555,19 @@ export function main(argv, env = process.env) {
         return 2;
       }
       fs.writeFileSync(args[0], json, { mode: 0o600 });
+      return 0;
+    }
+    case 'vm-credential': {
+      if (!args[0]) {
+        console.error(USAGE);
+        return 2;
+      }
+      const token = readVmCredential(env, args[0]);
+      if (token === null) {
+        console.error('MOE_VM_TOKEN_UNAVAILABLE');
+        return 3;
+      }
+      process.stdout.write(token); // stdout only, for a pipe into the VM job runner; never argv
       return 0;
     }
     default:
