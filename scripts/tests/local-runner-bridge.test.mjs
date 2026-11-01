@@ -775,7 +775,7 @@ test('H2 the stream must be hello, then requests and output, then one observatio
 test('H3 each role tool is forwarded with only the host-bound identity, and refused requests never reach forward', { timeout: 30_000 }, async () => {
   const execution = { attemptId: BINDING.attemptId, generation: BINDING.generation, sessionId: SESSION_ID };
   const stamps = { 'moe.get_context': { sessionId: SESSION_ID }, 'moe.start_step': execution, 'moe.complete_step': execution,
-    'moe.complete_task': execution };
+    'moe.complete_task': execution, 'moe.qa_approve': execution, 'moe.qa_reject': execution };
   for (const binding of [BINDING, QA]) {
     const tools = Object.keys(TOOLS[binding.role]);
     const caller = { ...binding };
@@ -799,9 +799,18 @@ test('H3 each role tool is forwarded with only the host-bound identity, and refu
   await exchange(proc, run, denied.map(([, tool, args], index) => ({ kind: 'request', id: index + 1, tool, args })), denied.length);
   assert.deepEqual(run.forwarded, []);
   assert.deepEqual(proc.replies(), denied.map(([code], index) => refused(index + 1, code)));
+  // Under the QA binding a guest still presents none of the three identity fields on either decision tool.
+  const qaDenied = [...['moe.qa_approve', 'moe.qa_reject'].flatMap(tool => [
+    ['BRIDGE_IDENTITY_MISMATCH', tool, { attemptId: QA.attemptId }], ['BRIDGE_IDENTITY_MISMATCH', tool, { generation: QA.generation }],
+    ['BRIDGE_IDENTITY_MISMATCH', tool, { attemptId: 'attempt-9' }], ['BRIDGE_ARGUMENT_DENIED', tool, { sessionId: SESSION_ID }]])];
+  const qaProc = fakeProvider();
+  const qaRun = openSession(qaProc, { binding: QA });
+  await exchange(qaProc, qaRun, qaDenied.map(([, tool, args], index) => ({ kind: 'request', id: index + 1, tool, args })), qaDenied.length);
+  assert.deepEqual(qaRun.forwarded, []);
+  assert.deepEqual(qaProc.replies(), qaDenied.map(([code], index) => refused(index + 1, code)));
 });
 
-test('H4 replies, bounds and failures each answer once or end the session with a fixed code', { timeout: 30_000 }, async () => {
+test('H4replies, bounds and failures each answer once or end the session with a fixed code', { timeout: 30_000 }, async () => {
   assert.deepEqual([MAX_DAEMON_INFO_BYTES, MAX_PENDING_REQUESTS, MAX_ARGUMENT_DEPTH, MAX_RESPONSE_BYTES], [16_384, 64, 64, 1_048_576]);
   // Guest argument depth is checked iteratively before forward, even at 100k levels.
   const comment = (id, content) => ({ kind: 'request', id, tool: 'moe.add_comment', args: { content } });

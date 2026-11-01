@@ -28,8 +28,10 @@ const MAX_TIMEOUT_MS = 60_000;
 const LOOPBACK = new Set(['127.0.0.1', '::1']);
 const CONTROL = /[\x00-\x1f\x7f]/;
 const EXECUTION = ['attemptId', 'generation', 'sessionId'];
-// Host identity stamped after scoping, only onto tools whose daemon schema accepts it.
-const STAMPED = { 'moe.get_context': ['sessionId'], 'moe.start_step': EXECUTION, 'moe.complete_step': EXECUTION, 'moe.complete_task': EXECUTION };
+// Host identity stamped after scoping, only onto the tools whose daemon schema accepts it: the same six moe-proxy stamps
+// (EXECUTION_IDENTITY_TOOLS). qa_approve and qa_reject need it under verified-local (delivery/reviewBinding.ts).
+const STAMPED = { 'moe.get_context': ['sessionId'], 'moe.start_step': EXECUTION, 'moe.complete_step': EXECUTION, 'moe.complete_task': EXECUTION,
+  'moe.qa_approve': EXECUTION, 'moe.qa_reject': EXECUTION };
 const TIMEOUT = Symbol('timeout');
 // Only internal code literals reach here, so a message never carries a path, caller value, guest byte or upstream text.
 const sessionError = code => Object.assign(new Error(`Guest bridge session failed: ${code}.`), { code });
