@@ -12,39 +12,61 @@
     {
       "stepId": "step-1",
       "description": "Fix the hooked worktree completion's sparse-checkout call in scripts/moe-agent.sh: moe_commit_with_hooks, the `${6:-} = worktree` branch (WT-08's hooked completion).\n\nRead first:\n- mem:gotcha-git-bash-stub-path-and-msys-sparse;\n- WT-10G's landed gate arm in run_frozen_gate (task-19cbba22). It already passes these patterns on stdin; mirror its form and its comment.\n\nRoot cause. `MSYS2_ARG_CONV_EXCL='*'` stops MSYS from converting EVERY argument, including `-C \"$scratch\"`. $scratch comes from create_secure_temp (`mktemp -d`), which under Git Bash is a POSIX /tmp path. git.exe cannot chdir into it, private_git is cleared, and every hooked worktree completion is refused with rc 1 and a misleading 'hooked-commit-config-mismatch'.\n\nChange. Pass the patterns on stdin and drop the exclusion, inside the same `{ …; } > \"$err\" 2>&1` group:\n`printf '%s\\n' '/*' '!/.moe/' | git -C \"$scratch\" sparse-checkout set --no-cone --stdin && git -C \"$scratch\" read-tree -mu \"$tree\"`\nStdin is never converted, and -C now converts normally. Keep both patterns exactly.\n\nerror handling: unchanged and fail-closed. Any failure of the group clears private_git, and so does a .moe that exists or is a link afterwards. The completion is then refused, with the snapshot retained for rescue. Never drop `--stdin`: `--no-cone` with neither patterns nor `--stdin` silently writes the default `/*` + `!/*/`, top-level files only.\n\nOut of scope:\n- moe-agent.sh's WT-04 install (~line 3118) keeps `MSYS2_ARG_CONV_EXCL='*'`. Its -C path comes from rev-parse and is already Windows-form, so it is safe (the gotcha memory says so).\n- moe-agent.ps1 is unaffected, because PowerShell does no MSYS conversion.\n\nEdit with the main session's Edit tool. Run `bash -n scripts/moe-agent.sh`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "moe_commit_with_hooks worktree branch (moe-agent.sh ~5165): sparse patterns '/*' '!/.moe/' now go on stdin (`printf | git -C \"$scratch\" sparse-checkout set --no-cone --stdin`), MSYS2_ARG_CONV_EXCL='*' dropped, so -C \"$scratch\" converts under Git Bash. Same { ...; } > \"$err\" 2>&1 group, so any failure or a .moe in the scratch still clears private_git (fail-closed refusal). WT-04 install (line 3118) untouched, its -C path is Windows-form. bash -n OK. 23 other dirty paths in the checkout belong to peers; not touched.",
+      "startedAt": "2026-11-01T21:56:09.016Z",
+      "completedAt": "2026-11-01T21:56:27.182Z"
     },
     {
       "stepId": "step-2",
       "description": "Regression test in scripts/tests/hook-isolation-bash.test.mjs. That file already runs moe_commit_with_hooks under real Git Bash on Windows CI (the 'Test Bash landing and postflight runner' step, every OS). It missed this bug because it stubs create_secure_temp with a Windows-form FIXTURE_SCRATCH path and never passes the 6th `worktree` argument.\n\nAdd one worktree case:\n- The fixture base also tracks `.moe/tasks/fixture.json` and a nested `lib/keep.txt`.\n- The script slices the REAL create_secure_temp out of moe-agent.sh, using the same indexOf approach as the moe_commit_with_hooks slice. Under Git Bash the scratch is then the production POSIX `mktemp -d` path. The script removes `$SECURE_TEMP_DIR` at the end.\n- It calls `moe_commit_with_hooks … worktree`.\n- The fixture's pre-commit hook runs in the scratch worktree. It exits non-zero unless `lib/keep.txt` exists and `.moe` does not. That kills a dropped `--stdin`, whose default patterns skip lib/, and a materialized .moe.\n- Assert: rc 0; HOOK_COMMIT_SHA set; its parent is base and its tree is $tree; HEAD and the worktree list unchanged, as the existing assertions do.\n\nThe existing cases stay unchanged.\n\nOn Linux the case passes before and after the fix. On win32 (Git Bash) it fails on the old bytes. Record that as DoD 1's Git Bash probe of the real function (mem:gotcha-pwsh7-reachable-from-wsl):\n- run the file with Windows node, `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/hook-isolation-bash.test.mjs`;\n- once on a scratch copy with the old line: the worktree case must FAIL;\n- once on the fixed bytes: it must PASS;\n- plus a dropped-`--stdin` mutant, which must fail on both platforms.\nPut the results in the step note.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/hook-isolation-bash.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/hook-isolation-bash.test.mjs"
+      ],
+      "note": "Added one worktree case to hook-isolation-bash.test.mjs, plus a secureTemp slice of the REAL create_secure_temp (same indexOf approach as the helper slice). Existing 8 cases unchanged. Fixture tracks a.txt, lib/keep.txt and .moe/tasks/fixture.json. The script calls create_secure_temp in the parent first (the wrapper needs that: inside $() the SECURE_TEMP_DIR assignment is lost), runs moe_commit_with_hooks ... worktree, records rc, HOOK_COMMIT_SHA and SECURE_TEMP_DIR, then rm -rf $SECURE_TEMP_DIR regardless of rc. The pre-commit hook runs in the scratch and exits 1 unless lib/keep.txt exists and .moe does not. Asserts: secure temp is a POSIX path (starts with /), rc 0, sha set, parent=base, tree=$tree, lib/keep.txt and .moe/tasks/fixture.json in the commit, hook marker present, HEAD and original index unchanged, one worktree left.\n\nGit Bash probe of the real function (DoD 1), scratch copies under /mnt/d/moe-scratch, Windows node.exe from a /mnt/d cwd, since removed:\n- fixed bytes: Windows node (Git Bash) 9/9 pass; Linux node 9/9 pass.\n- old line (git show HEAD:scripts/moe-agent.sh, MSYS2_ARG_CONV_EXCL='*' + argv patterns): Windows node 8 pass, the worktree case FAILS with 'hooked-commit-config-mismatch', status 1, exactly the reported symptom. Linux node 9/9 pass, so Linux behavior is the same before and after.\n- dropped-`--stdin` mutant (fixed bytes with ` --stdin` removed from the hooked sparse-checkout line): worktree case FAILS on both Linux node and Windows node, with 'lib/keep.txt missing' (default /* + !/*/ patterns skip lib/).",
+      "startedAt": "2026-11-01T21:58:26.934Z",
+      "completedAt": "2026-11-01T21:58:32.027Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification gate, run ONCE (DoD 2), on a snapshot of the exact bytes. The global rail allows that for launcher harnesses.\n\n`S=$(mktemp -d /mnt/d/moe-scratch/v-7b23ea0f.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/tests/hook-isolation-bash.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S\" && U=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && env $U node --test scripts/tests/hook-isolation-bash.test.mjs && env $U \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/hook-isolation-bash.test.mjs && env $U bash scripts/tests/worktree-landing.sh && env $U MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash`\n\n- The full postflight.sh carries the existing hooked-completion cases, worktree ones included. It runs past the 10-minute tool cap: launch it in the background with nohup and job control (mem:gotcha-qa-session-env-and-signals-leak-into-harness), log to /mnt/d/moe-scratch, append `EXIT=$?`, poll, and cite `PASS postflight.sh`.\n- The ps1 harnesses are not needed, because moe-agent.ps1 does not change.\n- A failure that also reproduces on HEAD's scripts is pre-existing: report it, don't fix it.\n- Delete the snapshot afterwards.\n\nThe complete_task verification is this command with its fresh log tail. The summary also carries step 2's Git Bash before/after probe and the mutant results.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "note": "Plan's step-3 command run once, verbatim, on a git archive snapshot (HEAD scripts + overlay of the 2 changed files, cmp OK), under job control with SigIgn=0x5, log /mnt/d/moe-scratch/gate-7b23ea0f.log, 21:58:45Z to 22:17:38Z (about 19 min), EXIT=0:\n- bash -n OK; PASS parity-check.sh\n- node --test hook-isolation-bash.test.mjs (Linux node): tests 9, pass 9, fail 0\n- Windows node.exe --test (Git Bash): tests 9, pass 9, fail 0\n- worktree-landing.sh: 18 passed, 0 failed, 0 errors\n- postflight-safe bash: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nps1 harnesses not run: moe-agent.ps1 is unchanged. Snapshot deleted; no step modified files.",
+      "startedAt": "2026-11-01T21:58:37.617Z",
+      "completedAt": "2026-11-01T22:17:53.472Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review (load adversarial-self-review), as the final step. Check:\n1. Does any path still pass a POSIX -C path under `MSYS2_ARG_CONV_EXCL='*'`? Grep every MSYS2_ARG_CONV_EXCL in moe-agent.sh and confirm that each one's -C path is Windows-form.\n2. Can the stdin form ever drop a pattern? Check the printf quoting, the pipe inside the `{ …; }` group, the pipeline's exit status and the `> \"$err\" 2>&1` redirect.\n3. Is Linux behavior byte-identical apart from moving the patterns from argv to stdin: the same patterns, the same read-tree, the same refusal?\n4. Does the new test case clean up its SECURE_TEMP_DIR and fixture when it fails, too? Is it skipped on no platform?\n\nIf any byte changes, re-run step 3's command and submit that fresh output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/hook-isolation-bash.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/hook-isolation-bash.test.mjs"
+      ],
+      "note": "Adversarial self-review of `git diff -- scripts/moe-agent.sh scripts/tests/hook-isolation-bash.test.mjs` (+73/-1). This step changed no bytes (the paths above are the task's two files, listed for attribution), so step 3's gate result still covers the files as they stand; no re-run was needed.\n1. POSIX -C under MSYS2_ARG_CONV_EXCL='*': the only live use left is moe-agent.sh:3118 (WT-04 install). Its -C is \"$w\" = \"$MOE_TOP/.worktrees/$tid\" (line 3050), and MOE_TOP=\"$top\" (line 2947) comes from git rev-parse, so it is Windows-form under Git Bash. The other two hits (5166, 5324) are comments. moe-agent.ps1 is untouched.\n2. Stdin form dropping a pattern: both patterns are single-quoted, so they are not globbed or expanded. `printf '%s\\n' '/*' '!/.moe/'` writes both lines, and git reads to EOF. `|` binds tighter than `&&`, so read-tree still runs only after sparse-checkout succeeds. set -e is on, but there is no pipefail here (the pipefail uses are in other subshells). The group sits in an `if !` condition, so the pipeline status is git's, which fails closed: private_git is cleared and the completion is refused. A short write is not realistic (a builtin printf, two short lines). The `> \"$err\" 2>&1` redirect covers the whole group and leaves git's stdin as the pipe. The same-line .moe check is unchanged. --stdin is guarded by the test: the dropped-`--stdin` mutant fails on Linux and Git Bash.\n3. Linux byte-identical: same two patterns, same read-tree -mu \"$tree\", same refusal paths. Only the patterns moved from argv to stdin, and the harmless env var is gone. The old bytes and the new both pass 9/9 on Linux node, and the full postflight.sh stays green.\n4. New test cleanup: the script runs rm -rf \"$SECURE_TEMP_DIR\" whatever moe_commit_with_hooks returned. The fixture dir goes in t.after with force. Only the 30 s spawn timeout, killing bash, could leak a /tmp dir. There is no skip option, so it runs on every platform. It asserts the secure temp is POSIX (starts with /), so the case cannot silently stop covering the MSYS bug. create_secure_temp is called in the parent first, as the wrapper does at line 379, so the cached dir is removable.\nTheoretical only, no action: each hooked call in a process that never cached SECURE_TEMP_DIR would mktemp a fresh dir inside $(). The real wrapper caches it at line 379, so there is no production leak. Inputs: the patterns are constants and $scratch/$tree are internally generated and quoted; no injection surface. No forbidden tokens in the diff.",
+      "startedAt": "2026-11-01T22:17:56.423Z",
+      "completedAt": "2026-11-01T22:18:32.465Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -57,7 +79,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:28:00.485Z",
-  "updatedAt": "2026-11-01T14:49:59.354Z",
+  "updatedAt": "2026-11-01T22:18:57.457Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:34:26.353Z",
@@ -66,10 +88,12 @@
   "metrics": {
     "firstClaimAt": "2026-11-01T14:46:42.788Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-30d804be"
+    "architect-30d804be",
+    "worker-24f14750"
   ],
   "dependsOn": [
     "task-954ec3f9f856417e96e6cbc4bd880a35"
@@ -78,7 +102,12 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T14:49:59.329Z",
   "executionContract": {
@@ -128,5 +157,19 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-01T14:49:59.354Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T21:56:09.016Z",
+  "reviewStartedAt": "2026-11-01T22:18:57.455Z",
+  "verification": {
+    "command": "S=$(mktemp -d /mnt/d/moe-scratch/v-7b23ea0f.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/tests/hook-isolation-bash.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S\" && U=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && env $U node --test scripts/tests/hook-isolation-bash.test.mjs && env $U \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/hook-isolation-bash.test.mjs && env $U bash scripts/tests/worktree-landing.sh && env $U MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\n✔ Bash hook isolation worktree commits from a POSIX secure-temp scratch without .moe\nℹ tests 9 / ℹ pass 9 / ℹ fail 0   (Linux node)\nℹ tests 9 / ℹ pass 9 / ℹ fail 0   (Windows node.exe, Git Bash)\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nEND 2026-11-01T22:17:38Z\nEXIT=0",
+    "reportedAt": "2026-11-01T22:18:57.455Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/hook-isolation-bash.test.mjs"
+  ],
+  "completionSummary": "Hooked worktree completions now work under Git Bash. In moe_commit_with_hooks (moe-agent.sh ~5165) the sparse patterns '/*' '!/.moe/' go on stdin (`printf '%s\\n' '/*' '!/.moe/' | git -C \"$scratch\" sparse-checkout set --no-cone --stdin`) and `MSYS2_ARG_CONV_EXCL='*'` is gone, so MSYS converts the POSIX -C \"$scratch\". Same `{ ...; } > \"$err\" 2>&1` group, same read-tree -mu \"$tree\", same .moe check: any failure still clears private_git and refuses the completion. moe-agent.ps1 is unchanged. WT-04's install (line 3118) keeps the '*' guard; its -C is Windows-form from rev-parse.\n\nTest: one new worktree case in hook-isolation-bash.test.mjs (+70 lines; the 8 existing cases are unchanged). It slices the REAL create_secure_temp, so the scratch is the POSIX mktemp path. The fixture tracks lib/keep.txt and .moe/tasks/fixture.json, and the pre-commit hook fails unless lib/keep.txt exists and .moe does not.\n\nGit Bash probe of the real function (Windows node.exe, scratch copies):\n- fixed bytes: 9/9 on Windows node (Git Bash) and 9/9 on Linux node.\n- old line (HEAD): the worktree case FAILS on Git Bash with 'hooked-commit-config-mismatch', rc 1, the reported symptom. It passes on Linux, so Linux behavior is unchanged.\n- dropped-`--stdin` mutant: FAILS on both platforms ('lib/keep.txt missing').\n\nGate (the plan's command, run once, fresh, on a snapshot with cmp-verified overlay, via a scratch driver that wraps it verbatim, 21:58:45Z-22:17:38Z, EXIT=0): parity-check PASS, node tests 9/9 twice, worktree-landing 18/0/0, postflight-safe bash exit 0, lastScenario Z, failureClass NONE. The files were not touched after the gate started. The ps1 harnesses were not run because the ps1 is unchanged. The checkout holds 23 other dirty paths from peers; I did not touch them."
 }

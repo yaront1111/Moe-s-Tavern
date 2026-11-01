@@ -5162,7 +5162,9 @@ moe_commit_with_hooks() {
     private_git=$(git -C "$scratch" rev-parse --absolute-git-dir 2>/dev/null) || private_git=""
     if [ "${6:-}" = worktree ] && [ -n "$private_git" ]; then
         root="$scratch"; index="$private_git/index"
-        if ! { MSYS2_ARG_CONV_EXCL='*' git -C "$scratch" sparse-checkout set --no-cone '/*' '!/.moe/' \
+        # The patterns go via stdin, which MSYS never converts: Git Bash rewrites a '!/.moe/' argument
+        # into a Windows path, and MSYS2_ARG_CONV_EXCL='*' would also stop converting the POSIX -C "$scratch".
+        if ! { printf '%s\n' '/*' '!/.moe/' | git -C "$scratch" sparse-checkout set --no-cone --stdin \
             && git -C "$scratch" read-tree -mu "$tree"; } > "$err" 2>&1 || [ -e "$scratch/.moe" ] || [ -L "$scratch/.moe" ]; then
             private_git=""
         fi
