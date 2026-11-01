@@ -37,6 +37,9 @@ sealed interface RuntimeSelection {
 /** LEGACY keeps the historical runtime selection; PROTECTED runs only the runtime installed with the plugin. */
 enum class RuntimeProfile { LEGACY, PROTECTED }
 
+/** What .moe/project.json alone declares: absent, legacy or observe; verified-local; or unreadable strictly. */
+enum class DeclaredProfile { LEGACY_LIKE, VERIFIED_LOCAL, UNTRUSTED }
+
 /** Never blocks the caller; only an explicit human confirmation may answer true. */
 fun interface DowngradeConfirmer {
     fun ask(basePath: String, answer: (Boolean) -> Unit)
@@ -148,6 +151,21 @@ object RuntimeSelectionPolicy {
             if (pinned.add(key)) askDowngrade(basePath, key, aliases)
         }
         return RuntimeProfile.PROTECTED
+    }
+
+    /**
+     * The repository declaration alone, read as strictly as [profile] reads it. A pure read: it never pins, persists
+     * or asks for a downgrade, so [profile] is unaffected. Never throws: an unreadable setting is UNTRUSTED.
+     */
+    fun declaredProfile(basePath: String): DeclaredProfile {
+        if (basePath.isBlank()) return DeclaredProfile.LEGACY_LIKE
+        return try {
+            if (declaresVerifiedLocal(Paths.get(basePath, ".moe", "project.json"))) DeclaredProfile.VERIFIED_LOCAL else DeclaredProfile.LEGACY_LIKE
+        } catch (ex: Exception) {
+            val failure = if (ex is UntrustedSetting) ex.message else ex.javaClass.simpleName
+            log.warn("Moe reads the declared execution profile as untrusted: $failure")
+            DeclaredProfile.UNTRUSTED
+        }
     }
 
     // A confirmed downgrade also covers each matched spelling, under its own key, so no spelling of the folder asks again.
