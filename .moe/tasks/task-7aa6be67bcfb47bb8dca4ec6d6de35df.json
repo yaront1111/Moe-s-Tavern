@@ -108,7 +108,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,7 +121,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T13:36:02.164Z",
-  "updatedAt": "2026-11-01T19:11:33.462Z",
+  "updatedAt": "2026-11-01T20:20:07.303Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:30:37.377Z",
@@ -131,11 +131,14 @@
     "firstClaimAt": "2026-11-01T18:52:26.434Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-01T20:20:07.302Z",
+    "wallClockMs": 5260868
   },
   "contextFetchedBy": [
     "architect-548034a1",
-    "worker-152f84fc"
+    "worker-152f84fc",
+    "qa-1b5727b1"
   ],
   "dependsOn": [
     "task-bb1502b1fcb04f0e99fa5328be05ef4e",
@@ -249,5 +252,9 @@
     "kind": "completion",
     "sessionId": "worker-152f84fc@2026-11-01T19:01:22Z",
     "at": "2026-11-01T19:11:33.461Z"
-  }
+  },
+  "completedAt": "2026-11-01T20:20:07.302Z",
+  "reviewCompletedAt": "2026-11-01T20:20:07.302Z",
+  "reviewSummary": "Reviewed completion 154a1c71 (tree 2b8e81d3), on moe/work-2026-10-24; no later commit touches its 7 source paths. Size: +117/-30, net 87 non-board LOC.\n\nGate (git-archive snapshot of exactly 154a1c71, env -i, Node 24.21.0): npm ci ok; tsc clean; npm test 225/225 files, 6787 passed, 20 skipped, 0 failed (20:18-20:18:49Z).\n\nMutation check: with the parent's 4 runtime files restored, the strict test file fails exactly the 8 new rows (C1 x2, C2, R1-R3, S1, D1). The tests assert exact strings.\n\nDoD 1: heldOnEvidence takes DONE/ARCHIVED/missing ids that are not satisfied, and the strict text names them via describeUnmetDependency (R1: delivery-receipt; R2: prerequisite-missing). Legacy stays DONE-only, because legacy counts ARCHIVED and missing as satisfied.\n\nDoD 2: the claim refusal, dependencyEvidenceRefusal, set_task_dependencies, report_blocked and all 4 descriptions state the rule for a strict consumer. Every legacy literal is byte-identical when reassembled, and the exact-text rows in dependencyUnblock.test.ts and reportBlocked.test.ts pass unedited. The strict check is isVerifiedLocal, with a throw counted as strict (fail-closed). No code, context, status or recorded-id change.\n\nDoD 3: the repairActivation comment matches the code, checked against the :52 diagnostics filter, the CHECK_DISPATCH_ALREADY_OBSERVED marker and activateRepair's duplicate skip (its only caller). The code is unchanged.\n\nScope: +1 test line in deliveryBypass.acceptance.test.ts:242 (verifiedLocal:true); disclosed and justified.\n\nNon-blocking: the strict IIFE is repeated in 3 tools; the docs/MCP_SERVER.md residuals go to the CQ-M07 docs sweep.",
+  "requiredCheckAtDone": null
 }
