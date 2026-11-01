@@ -62,7 +62,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,7 +94,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T22:34:12.712Z",
-  "updatedAt": "2026-11-01T23:32:07.110Z",
+  "updatedAt": "2026-11-01T23:38:28.398Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T22:46:16.541Z",
@@ -104,11 +104,14 @@
     "firstClaimAt": "2026-11-01T22:53:36.711Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T23:38:28.398Z",
+    "wallClockMs": 2691687
   },
   "contextFetchedBy": [
     "architect-98c94b4c",
-    "worker-9be3bcf5"
+    "worker-9be3bcf5",
+    "qa-174e8876"
   ],
   "tier": "standard",
   "effort": "high",
@@ -190,7 +193,44 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "scripts/tests/local-runner-bridge.test.mjs",
+    ".moe/tasks/task-7d7d608264164f98a46a69910284f98c.json",
+    ".moe/tasks/task-b712ce096fc743328b8baac69acb4d07.json",
+    ".moe/tasks/task-efca737f34e54c25b9ffad616a5a1166.json"
+  ],
+  "completionSummary": "Root cause: a probe race in OBSERVE's done(), not a relay ordering gap. A dead lingering child can read 'X (dead)' with empty ShdPnd. The architect saw 5/2000 such views; my 107k-iteration replica never hit that window, and the fixed predicate read 0 alive. Fix, test-only in scripts/tests/local-runner-bridge.test.mjs (+32 lines): a shared CANNOT_RUN predicate that counts State Z or X, SIGKILL in ShdPnd, or PF_EXITING in /proc/<pid>/stat flags. OBSERVE.done() now uses it, and a new deterministic 'S11 probe:' row pins it. guest-supervisor.py, relay(), pump() and the six S11 rows are unchanged. The gate ran in a Linux git-archive snapshot under env -i and nice -n 19. The file passed once and again fresh at the end (90 pass, 0 fail, 1 skipped). Mutants: M1 (pump killpg removed) fails all 6 S11 'after' rows (open: ETIMEDOUT; closed: 'a job process could still run'). M2 ('ZX' to 'Z') and M3 (PF_EXITING dropped) each fail the 'S11 probe' row on an assertion diff. Stress: 50 of 50 consecutive runs passed with a background scripts suite loop running. Load was 2.3 at start, 5.5/5.6/5.8/5.2/4.2 at runs 10-50. The background loop exited via its stop file and nothing was killed by name.",
+  "commits": [
+    {
+      "sha": "fb32db908eeeea9d3abd88617bd401402d9cf0ad",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-9be3bcf5@2026-11-01T23:08:57Z",
+      "paths": [
+        ".moe/tasks/task-7d7d608264164f98a46a69910284f98c.json",
+        ".moe/tasks/task-b712ce096fc743328b8baac69acb4d07.json",
+        ".moe/tasks/task-efca737f34e54c25b9ffad616a5a1166.json",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-9be3bcf5",
+      "recordedAt": "2026-11-01T23:32:26.527Z",
+      "treeId": "769850dd95c7d81617471f3d9f9c610ec6e70fbd",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "scripts/tests/local-runner-bridge.test.mjs"
   ],
-  "completionSummary": "Root cause: a probe race in OBSERVE's done(), not a relay ordering gap. A dead lingering child can read 'X (dead)' with empty ShdPnd. The architect saw 5/2000 such views; my 107k-iteration replica never hit that window, and the fixed predicate read 0 alive. Fix, test-only in scripts/tests/local-runner-bridge.test.mjs (+32 lines): a shared CANNOT_RUN predicate that counts State Z or X, SIGKILL in ShdPnd, or PF_EXITING in /proc/<pid>/stat flags. OBSERVE.done() now uses it, and a new deterministic 'S11 probe:' row pins it. guest-supervisor.py, relay(), pump() and the six S11 rows are unchanged. The gate ran in a Linux git-archive snapshot under env -i and nice -n 19. The file passed once and again fresh at the end (90 pass, 0 fail, 1 skipped). Mutants: M1 (pump killpg removed) fails all 6 S11 'after' rows (open: ETIMEDOUT; closed: 'a job process could still run'). M2 ('ZX' to 'Z') and M3 (PF_EXITING dropped) each fail the 'S11 probe' row on an assertion diff. Stress: 50 of 50 consecutive runs passed with a background scripts suite loop running. Load was 2.3 at start, 5.5/5.6/5.8/5.2/4.2 at runs 10-50. The background loop exited via its stop file and nothing was killed by name."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-9be3bcf5@2026-11-01T23:08:57Z",
+    "at": "2026-11-01T23:32:26.527Z"
+  },
+  "completedAt": "2026-11-01T23:38:28.398Z",
+  "reviewCompletedAt": "2026-11-01T23:38:28.398Z",
+  "reviewSummary": "Approved. Reviewed completion fb32db90 (on moe/work-2026-10-24, pushed). Code diff is one file, scripts/tests/local-runner-bridge.test.mjs +29/-3; guest-supervisor.py byte-identical (relay/pump/GUARD unchanged). Re-ran in a fresh Linux git-archive snapshot of fb32db90, env -i, nice -n 19, node v24, load 3-4: (1) `node --test scripts/tests/local-runner-bridge.test.mjs` exit 0, 91 tests, 90 pass, 0 fail, 1 skipped; six S11 'after' rows and new 'S11 probe' row pass. (2) Mutant M1 (pump killpg -> pass): all 6 S11 'after' rows fail ('open': spawnSync ETIMEDOUT; 'closed': 'a job process could still run'), so the 'killed before the one observation' invariant still bites. (3) M2 ('ZX' -> 'Z') and M3 (PF_EXITING dropped) each fail 'S11 probe' on a deepEqual diff. (4) Stress: 10 consecutive runs under nice -n 19 at load 2.6-3.1, 10/10 exit 0; worker reported 50/50 at load 4-6 (I did not re-run all 50). DoD 1: comment-b590f98b names the root cause as a probe race in OBSERVE's done(), not a relay ordering gap, with source reasoning and the architect's 5/2000 'X (dead)' + ShdPnd 0x0 numbers; the worker's own replica never hit the window and says so. DoD 2 met by the worker's 50/50 plus my 10/10. Audit: every cannot_run clause is a kernel fact (zombie/dead/SIGKILL pending/PF_EXITING), no retry or sleep; flags is field [6] after the last ')' like GLOBAL_PIDS; both /proc reads sit in one try so a reaped process counts as gone; pin row includes negatives (live, PF_FORKNOEXEC 0x40, pending SIGTERM). LINGER, ENDINGS and the S11 assertions are unchanged. Caveat: the intermittent failure was not reproduced live, so the pin row and mutants are the deterministic proof. No stray processes from my runs; scratch dirs removed.",
+  "requiredCheckAtDone": null
 }
