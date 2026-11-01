@@ -1,0 +1,38 @@
+{
+  "id": "task-91ee455a601b411f97d5d951cc5f241c",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07m2] Commit a VM job's admitted tree onto the task branch (moe-agent.sh)",
+  "description": "SPIDR split out of CQ-M07m (task-828e7d21602e4cf2a0f242e024db7dea) by architect-b520bc90 on 2026-11-01. Chain: mem:task-task-828e7d21602e4cf2a0f242e024db7dea-handoff.\n\nThis row carries two requirements:\n- M07m's landing deliverable: \"Landing ... consumes the admitted candidate as CQ-M07j hands it over; no new Git writer\";\n- CQ-M07 DoD 5: \"An agent job's changes reach the branch only through export and host admission, then the wrapper's landing\".\n\nHuman decision, 2026-11-01: the VM route runs in worktree mode only. So this lands on the task branch and never touches the shared checkout.\n\nDepends on CQ-M07m1 (task-5adf0673), because both edit the same files and must run in order.\n\n**Contract consumed** (CQ-M07j, mem:task-task-1dc49ae27e22494a95e15ada3e9c1fe9-handoff). A worker seat-job's outcome line resolves:\n`{ok: true, role: 'worker', commit, baseTree, tree, digest, paths: [{path, kind}], exitCode, signal, lease, executionReady: false}`\n- `commit` is the head of the task worktree W (branch moe/task/<id>) when the job starts.\n- `tree` is a git tree id that admitCandidate already wrote into this repository's object store. It writes objects only; W's index and files are untouched.\n\n**Objective.** Add a helper to moe-agent.sh (a function, e.g. `land_vm_candidate`) that turns one admitted tree into a commit on moe/task/<id>. The existing worktree-mode landing then lands that commit exactly as it lands a host worker's work: WT-08/09/10 completion to the target, under the strong-profile rules of CQ-V07/V08.\n\n**Refusals.** Each returns a fixed MOE_VM_CANDIDATE_* code and writes nothing. The helper refuses when:\n- the claim's workspace is not worktree mode;\n- W's HEAD is not `commit`;\n- W has any tracked or untracked change;\n- `tree` is not a tree object.\n\n**Empty candidate.** When `tree == baseTree`, the helper commits nothing. This is a no-op, not an error.\n\n**Effect.**\n1. `commit-tree <tree>` with parent `commit`. Use the task's message and trailers as the landing builds them. Signing and hooks follow settings.commitHooks, as the existing landing does.\n2. Update refs/heads/moe/task/<id> by CAS from `commit`.\n3. Bring W's index and files to the new commit. W is task-private.\n\nIf the CAS is lost or the W update fails, park the new commit on a rescue ref (the existing rescue_ref helper, refs/moe/rescue/<taskId>/<ts>) so the admitted work is never lost, and return a fixed code.\n\n**Why this bypasses the strong checkpoint gate.** run_landing's CQ-V08b gate refuses every checkpoint for a verified-local task. That gate protects the landing target. This helper moves only the task-private branch and never the target, so it does not go through run_landing's checkpoint path. Two consequences:\n- A WORKING exit (the agent did not finish) keeps its progress on the task branch, so the next job's export starts from it.\n- The target still moves only through the verified completion.\n\nThe helper is not wired into the loop here; CQ-M07m3 calls it after a worker's seat-job.\n\n**Tests.** Rows drive the helper directly in a temp repo with a real linked worktree. Slice the function out of moe-agent.sh, as postflight.sh's WT_SH_FUNCS harness does. Put the rows in scripts/tests/postflight-vm-route.sh (created by CQ-M07m1).\n\n**Codes.** New codes use the MOE_VM_ prefix. parity-check.sh does not compare that family until CQ-M07n.\n\n**Planner: check these first.**\n- How WT-07/WT-08 decide what lands: dirty W bytes, or commits already on moe/task/<id>.\n- That a completion lands such a commit through the strong completion path: record_candidate, the gate on the merged tree, record_check_run, then CAS to the target.\n- If either does not hold, say so in the plan and adjust; never let an unverified commit reach the target.\n\n**NOT in scope:**\n- seat-start/stop, the seat-job call and the claim (CQ-M07m3);\n- the job's error paths (CQ-M07m);\n- shared mode (refused by CQ-M07m1);\n- moe-agent.ps1 (CQ-M07n).\n\n**Verification.** `bash scripts/tests/postflight-vm-route.sh`, then `bash scripts/tests/postflight.sh`. Both run in place, per the global rail for launcher harnesses.",
+  "definitionOfDone": [
+    "An admitted tree with one changed file becomes exactly one commit on moe/task/<id> whose parent is the job's base commit and whose tree is the admitted tree; W's index and files then match it (row).",
+    "W's HEAD not the base commit, a dirty W, a missing tree, or shared mode: a fixed MOE_VM_CANDIDATE_* code, with every ref, W and the shared checkout byte-identical before and after (rows).",
+    "A lost CAS on moe/task/<id>: the admitted commit is kept on a refs/moe/rescue/<taskId>/ ref and the code is returned; nothing else moves (row).",
+    "An empty candidate (tree equal to baseTree) writes nothing and is not an error (row).",
+    "No row sees the helper write the shared checkout, its index or the target branch (asserted in every row).",
+    "bash scripts/tests/postflight-vm-route.sh and bash scripts/tests/postflight.sh pass."
+  ],
+  "taskRails": [
+    "Never fall back to running the agent CLI on the host under verified-local.",
+    "Legacy stays byte-for-byte unchanged in behavior.",
+    "Edit the wrapper only with the main session's editing tools (global rail), and read mem:gotcha-bash-hot-reload-incremental-parse before changing launch code above the main loop."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-5adf0673fdad4c5f8a0956e7afcebe07"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.154,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T14:22:12.430Z",
+  "updatedAt": "2026-11-01T14:22:12.430Z"
+}

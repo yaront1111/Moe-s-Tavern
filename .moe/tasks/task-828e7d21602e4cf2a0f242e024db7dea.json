@@ -16,9 +16,67 @@
     "Legacy stays byte-for-byte unchanged in behavior.",
     "Edit the wrapper only with the main session's editing tools (global rail), and read mem:gotcha-bash-hot-reload-incremental-parse before changing launch code above the main loop."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Capacity wait and seat-start failure, in scripts/moe-agent.sh.\n\nSCOPE NOTE. On 2026-11-01 this row was SPIDR-split. Its prerequisites land the route first:\n- CQ-M07m1 (task-5adf0673): the readiness gate and refusals; it creates scripts/tests/postflight-vm-route.sh.\n- CQ-M07m2 (task-91ee455a): the admitted-tree helper on the task branch.\n- CQ-M07m3 (task-3954cc09): the seat VM plus the claude happy path, the claim marker, and seat-stop in the EXIT trap.\nThis row adds the error paths and runs the full gate. Read mem:task-task-828e7d21602e4cf2a0f242e024db7dea-handoff and the three rows' landed code first. Edit their seat-start, seat-job and EXIT-trap code; never duplicate it.\n\nFILE NOTE. scripts/tests/postflight-vm-route.sh is CREATED by CQ-M07m1, a transitive dependsOn. It is listed as newFiles only because it did not exist at planning time. EDIT it; never recreate it.\n\nRails:\n- Never fall back to the host CLI under verified-local.\n- Legacy stays byte-for-byte unchanged.\n- Edit only with the main session's Edit/Write tools (TOOL witness).\n- Read mem:gotcha-bash-hot-reload-incremental-parse before touching code above the main loop.\n\nBehavior. In the seat-start that runs before the claim (CQ-M07m3):\n- **Exit 75** (SEAT_CAPACITY_FULL or SEAT_CAPACITY_LOCK_BUSY):\n  - print `[seat] MOE_SEAT_CAPACITY_WAIT: <code>; no task is claimed; retrying in <POLL_INTERVAL>s (Ctrl+C to stop)`;\n  - sleep POLL_INTERVAL and retry seat-start;\n  - no claim_next_task runs until seat-start is ok;\n  - Ctrl+C during the wait exits through the EXIT trap.\n- **Any other non-ok answer, usage exit 2 included:** keep CQ-M07m3's `[ERROR] MOE_SEAT_START_FAILED: <code>` and exit 1. The code is the JSON line's fixed code, or `exit <n>` when the line is unreadable; never stderr text.\n- **Holding a task while waiting.** A seat that re-provisions after a failed job (step 3) already holds its task, so it waits holding it. Name this residual in a comment.\n\nTests (error handling rows) in postflight-vm-route.sh, with `--poll-interval 1`:\n- Capacity: the agent-seat stub answers 75 twice, then ok. The stub log shows three seat-starts, and the fake-proxy call log shows no claim_next_task before the third. The job then runs, and the host CLI stub never runs.\n- Failure: a stub seat-start that exits 1 with {ok:false, code:'SEAT_PROVISION_FAILED'}. The wrapper prints MOE_SEAT_START_FAILED: SEAT_PROVISION_FAILED and exits 1, with no claim and no CLI.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "VM credentials beyond the claude happy path (DoD 4), in scripts/moe-agent.sh.\n\n**codex.**\n- The credential is the wrapper's own OPENAI_API_KEY, else CODEX_API_KEY. Those are the only codex names the guest JOBS table accepts.\n- Check it BEFORE seat-start and the claim, because the environment cannot change under a running wrapper. With neither set:\n  - print `[ERROR] MOE_VM_CREDENTIAL_UNAVAILABLE: codex needs OPENAI_API_KEY or CODEX_API_KEY in the wrapper's environment`;\n  - post one best-effort #general line, in announce_account_untrusted's style (never a value or a path);\n  - exit 1, with nothing claimed or provisioned.\n- The value reaches the JSON wrapper only through a pipe fed by the printf builtin: never an argv, a file or a log.\n- Every seat-* child already runs with the credential variables removed (CQ-M07m3's scrub). Extend it if codex needs it.\n\n**claude.** A missing token is either vm-credential exit 3, or no leased account because rotation is off or unavailable.\n- Print `[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=<id|none>`.\n- Post one #general escalation per account per lease loop, naming the account and the fix (`accounts vm-token <id>`), never a path or token.\n- The task stays held. Sleep MOE_ACCOUNT_RETRY_SEC (the existing knob, default 300), then retry with a fresh lease.\n- Never launch on the host. Ctrl+C during the wait exits through the EXIT trap (seat-stop).\n\nerror handling: a vm-credential that exits with any code other than 0 or 3 is treated as unavailable too. Fail closed.\n\nTests in postflight-vm-route.sh:\n- **codex canary (DoD 4).** Put a canary in OPENAI_API_KEY. seat-job's stdin JSON is exactly {name:'OPENAI_API_KEY', value:<canary>}. The canary is absent from every argv and env the stubs record, and from the wrapper's stdout and stderr.\n- **codex without a key.** MOE_VM_CREDENTIAL_UNAVAILABLE, exit 1, no seat-start, no claim, exactly one chat_send in the fake-proxy log.\n- **claude missing token.** The vm-credential stub exits 3 once, then succeeds, with MOE_ACCOUNT_RETRY_SEC=1. Expect one escalation, one wait, then the job. The host CLI stub never runs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "A failed job (DoD 5, failed-job part), in scripts/moe-agent.sh.\n\nWhat counts as a failed job:\n- seat-job exits non-zero;\n- it prints no outcome line marked \"seatJob\":1;\n- the outcome says ok:false.\n\nOn a failed job:\n1. Print `[WARN] MOE_SEAT_JOB_FAILED: <code or exit n>` (the fixed code only).\n2. Run seat-stop for the seat's instance. It is idempotent: it answers 'gone' when CQ-M07j's runSeatJob already stopped the VM.\n3. Forget the instance, so the next iteration provisions a fresh VM before its claim.\n4. Set CLI_EXIT_CODE to seat-job's exit (1 when it exited 0 without a valid outcome). The wrapper's existing launch classification then applies unchanged:\n   - a fast failure feeds LAUNCH_FAIL_STREAK and its backoff;\n   - a later one feeds RESUME_ATTEMPTS, with the MOE_RESUME_MAX_ATTEMPTS cap and its #general escalation.\n5. The task stays held and resumes through alreadyAssigned.\n\nNothing is landed from a failed job: there is no admitted tree. CQ-M07m2's helper is not called.\n\nWhy every failed job deletes the VM: DoD 5 asks for it, and the wrapper never reuses a VM whose job failed. The cost is one re-provision per failure. Never the host CLI.\n\nerror handling: a seat-stop that fails here prints `[WARN] MOE_SEAT_STOP_FAILED: <code>` and still forgets the instance. The ledger keeps the record for CQ-M07g cleanup, as stopSeat documents.\n\nTests in postflight-vm-route.sh, two rows:\n- (a) The stub seat-job exits 1 with {seatJob:1, ok:false, code:'SEAT_JOB_SESSION_FAILED', vm:'kept'}.\n- (b) The stub seat-job exits 0 with no outcome line.\nIn each row:\n- the stub log shows seat-stop right after the job;\n- the next iteration does a fresh seat-start before its resume claim (alreadyAssigned) and its next seat-job;\n- the host CLI stub never runs.\nUse `--loop`, with a fake-proxy claim limit so the run ends.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate, run ONCE (DoD 6), plus the DoD audit across the M07m chain.\n\n1. Run `bash -n scripts/moe-agent.sh` and `bash scripts/tests/parity-check.sh`. The new codes use MOE_SEAT_, MOE_VM_ and MOE_VERIFIED_LOCAL_, which parity-check.sh does not compare; CQ-M07n adds them with the ps1 twin.\n2. Run the full harness in place, as the global rail allows for launcher harnesses: `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`. It runs postflight-vm-route.sh through CQ-M07m1's one-line hook.\n   - It takes about 15-20 min, past the Bash tool's 10-minute foreground cap.\n   - Launch it with job control, per mem:gotcha-qa-session-env-and-signals-leak-into-harness: `( set -m; MOE_POSTFLIGHT_TIMEOUT_SEC=360 nohup bash -c 'bash scripts/tests/postflight.sh > <log> 2>&1; echo EXIT=$? >> <log>' >/dev/null 2>&1 & )`, then poll for EXIT=.\n   - A plain background job ignores SIGINT and fails scenario W.\n   - It must end EXIT=0 and print PASS postflight.sh. A row that also fails on HEAD's bytes is pre-existing: report it, don't fix it here.\n3. DoD audit. The completion summary must map each DoD item to its row names:\n   - DoD 1: CQ-M07m1's byte-identity row, plus every existing postflight.sh row.\n   - DoD 2: CQ-M07m3's order row.\n   - DoD 3: CQ-M07m1's refusal rows.\n   - DoD 4: CQ-M07m3's claude canary row and this row's codex canary.\n   - DoD 5: CQ-M07m3's normal-exit and Ctrl+C rows, and this row's failed-job rows.\n   - DoD 6: this run.\n4. Size: `git diff --numstat HEAD` for the changed files. QA counts additions plus deletions against 400. If over, merge rows that share setup; if still over, file an EPIC ADD_RAIL size exception (moe.propose_rail) with the exact numstat before complete_task.\n\nThe fresh harness output tail is the complete_task verification evidence. Its command is `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this diff, as the final step (load adversarial-self-review). Check:\n1. Can any path, under verified-local, run the host agent CLI: a capacity wait, a missing credential, a failed job, a set -e abort or a resume?\n2. Can a credential value reach an argv, an env, a file, a log, a chat line or an error? Check codex and claude, including the escalation text.\n3. Does every failed job run seat-stop and forget the instance? Does a later iteration always re-provision before claiming?\n4. Can the capacity wait claim anything? Does Ctrl+C in each wait still reach the EXIT trap's seat-stop?\n5. Do the launch-failure and resume budgets still bound a seat whose jobs keep failing? There must be no tight loop, and exactly one escalation at the cap.\n6. Do legacy, observe and unreadable iterations behave byte-identically, with every pre-existing postflight.sh row unchanged?\n7. Did any new code use a compared parity family (MOE_COMMIT_, MOE_ATTR_, MOE_CHECKPOINT_, MOE_ATTRIBUTION_, MOE_ACCOUNT_, MOE_WORKTREE_, MOE_LAND_ ...)?\nIf any byte changes, re-run step 4's exact harness command and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -32,7 +90,9 @@
     "task-1dc49ae27e22494a95e15ada3e9c1fe9",
     "task-324d4f53cf28486d8bc0de70b6a99b8d",
     "task-b1ca54f2716442be889a14623eb59983",
-    "task-c4e076cd306f4f84a4aa08bf2a4682b2"
+    "task-c4e076cd306f4f84a4aa08bf2a4682b2",
+    "task-3954cc09f74045a0ac8fa4b795dcb0a9",
+    "task-64809b196c4042f18c7665e1e8a14b18"
   ],
   "priority": "MEDIUM",
   "order": 231.16,
@@ -46,10 +106,79 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:10:54.033Z",
-  "updatedAt": "2026-11-01T11:42:06.253Z",
+  "updatedAt": "2026-11-01T14:25:25.934Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:06.253Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T12:25:21.951Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "architect-30d804be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T14:25:25.910Z",
+  "executionContract": {
+    "intendedBehavior": "Under verified-local and ready, a worker or QA seat of moe-agent.sh handles the VM route's error paths without ever running its agent CLI on the host.\n\n- **Capacity.** A seat-start answering capacity (exit 75) waits POLL_INTERVAL and retries, claiming nothing. Any other seat-start failure stops with MOE_SEAT_START_FAILED.\n- **codex credential.** codex takes OPENAI_API_KEY or CODEX_API_KEY from the wrapper's environment, through a pipe only. With neither set, the seat refuses before any VM or claim.\n- **claude credential.** A missing VM token holds the task, posts one escalation per account, and retries after MOE_ACCOUNT_RETRY_SEC.\n- **Failed job.** A failed job runs seat-stop, forgets the VM and keeps the task held. The existing launch-failure and resume budgets bound its retries.\n\nThe full postflight.sh harness passes, with the rows of CQ-M07m1, m2 and m3.",
+    "invariants": [
+      "Under verified-local the host agent CLI never runs, on any path.",
+      "A credential value never appears in an argv, an env, a file, a log, a chat line or an error.",
+      "No claim_next_task runs while seat-start answers capacity.",
+      "Every failed job deletes the seat's VM through seat-stop. The next iteration provisions a fresh one before claiming.",
+      "Legacy, observe and unreadable iterations, and architect and governor seats, are byte-identical to before."
+    ],
+    "compatibility": [
+      "CQ-M07m1's gate, CQ-M07m2's helper and CQ-M07m3's seat route are extended, never duplicated or bypassed.",
+      "The launch-failure streak and backoff, the MOE_RESUME_MAX_ATTEMPTS cap and the MOE_ACCOUNT_RETRY_SEC knob keep their meanings.",
+      "parity-check.sh stays green: the new codes avoid the compared families until CQ-M07n."
+    ],
+    "sourceAssumptions": [
+      "agent-seat.mjs (CQ-M07i, CQ-M07j): seat-start exits 0, 75 (SEAT_CAPACITY_FULL or SEAT_CAPACITY_LOCK_BUSY), 1 or 2, with one JSON line. seat-job ends its stdout with a JSON outcome marked \"seatJob\":1 and exits 0, 1 or 2. seat-stop is idempotent ('gone').",
+      "moe-account-lease.mjs vm-credential <id> (CQ-M07k): the token on stdout, else MOE_VM_TOKEN_UNAVAILABLE and exit 3.",
+      "guest-supervisor.py JOBS: codex accepts OPENAI_API_KEY or CODEX_API_KEY; claude accepts ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN.",
+      "moe-agent.sh: the launch classification (CLI_EXIT_FOR_LAUNCH, LAUNCH_FAIL_STREAK, RESUME_ATTEMPTS and its MOE_RESUME_MAX_ATTEMPTS escalation, about line 10022 and line 8383), announce_account_untrusted's #general pattern, and cleanup_temp as the single EXIT funnel.",
+      "CQ-M07m1 creates scripts/tests/postflight-vm-route.sh, run by postflight.sh; CQ-M07m3 adds MOE_AGENT_SEAT_PATH and the agent-seat stub log."
+    ],
+    "checkRefs": [
+      "MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh",
+      "bash scripts/tests/parity-check.sh",
+      "bash -n scripts/moe-agent.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. One task for the whole bash VM route: rejected. It is about 900 changed lines and exceeds the 400-line QA cap. It was split by path into m1 (the gate and refusals), m2 (the landing helper), m3 (the happy path) and M07m (the error paths and the full gate).\n2. Shared-mode landing: rejected by the human on 2026-11-01. The route is worktree mode only, so m1 refuses shared mode before any claim and m3 re-checks it after the claim.\n3. Checking the codex key after the claim, with the task held: rejected. The wrapper's environment cannot change while it runs, so holding a task for it only blocks other seats. The check runs before any VM or claim.\n4. Keeping the VM after a failed job whose outcome says vm 'kept': rejected. DoD 5 says seat-stop runs on a failed job, and a fresh VM is the fail-safe. The cost is one re-provision per failure.",
+    "codebaseInsights": "- cleanup_temp (the EXIT trap) is the one funnel for every exit path; the INT/TERM trap ends in exit 0.\n- The launch classification near line 10022 already turns a CLI exit code into a streak with backoff, or into resume attempts with a capped escalation. Feeding the seat-job's exit through it reuses those budgets.\n- get_account_lease and announce_account_untrusted show the wait-and-escalate pattern for account problems.\n- parity-check.sh compares only fixed code families, so sh-only MOE_SEAT_, MOE_VM_ and MOE_VERIFIED_LOCAL_ codes keep CI green until CQ-M07n.",
+    "risks": "- The full harness takes about 15-20 min and must run with job control, or scenario W fails.\n- A seat that re-provisions after a failed job waits on capacity while holding its task. This residual is documented; a governor can release the task.\n- Rows from m1-m3 may change shape while those rows are implemented. Read the landed harness before adding rows.\n- Size: about 300 lines is expected; the step 4 waiver route is the fallback.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/tests/postflight-vm-route.sh",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/postflight.sh",
+      "scripts/moe-account-lease.mjs",
+      "scripts/local-runner/agent-seat.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "106284b0dd736a1000e1e70ab00a3bd8a71005a9",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T14:25:25.934Z",
+  "approvedPlanRevision": 1
 }
