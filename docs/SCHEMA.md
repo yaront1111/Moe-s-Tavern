@@ -159,7 +159,10 @@ interface ProjectSettings {
   // weakens deliveryPolicy. 'verified-local' is refused EXECUTION_PROFILE_NOT_READY
   // until local isolation, trusted runner evidence and revision-bound delivery are
   // certified. Any other value is refused as invalid input, never read as the
-  // default. See `executionPolicySnapshot` below.
+  // default. See `executionPolicySnapshot` below. A change through the settings
+  // path records one PROJECT_SETTINGS_UPDATED activity event (an observe, a refused
+  // activate, or a rollback that keeps stored verified-local task snapshots and open
+  // verified-local attempts strict); a hand edit of project.json records nothing.
   executionProfile?: 'legacy' | 'observe' | 'verified-local';
 
   // What moe.qa_approve requires before DONE (packages/moe-daemon/src/delivery/policy.ts).
@@ -1985,7 +1988,11 @@ interface ActivityEvent {
 type ActivityEventType =
   // Project
   | 'PROJECT_CREATED'
-  | 'PROJECT_SETTINGS_UPDATED'
+  | 'PROJECT_SETTINGS_UPDATED' // An executionProfile transition only (state/profileRollout.ts). Payload: { setting: 'executionProfile',
+                               // from: <profile> | 'unreadable', to, transition: 'observe' | 'activate' | 'rollback', outcome: 'applied' | 'refused' };
+                               // a refused activate adds codeName and unsupportedCapabilities [{ capability: 'vm' | 'client' | 'check', reason }];
+                               // a rollback adds retainedStrictTasks, retainedStrictTaskIds, retainedStrictAttempts, retainedStrictAttemptIds
+                               // (ids sorted, at most 10) and unreadableSnapshots
   | 'GLOBAL_RAILS_UPDATED'
   
   // Epic

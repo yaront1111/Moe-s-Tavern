@@ -1,0 +1,27 @@
+{
+  "id": "task-b712ce096fc743328b8baac69acb4d07",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: local-runner-bridge S11 (SIGTERM, pipes held) intermittently sees a live lingering child when the observation is written",
+  "description": "CQ-M06 epic-final gate. At HEAD 0d913716, `node --test scripts/tests/*.test.mjs` in a Linux snapshot failed once (load average about 5). The failing test was \"S11 after SIGTERM, the job's lingering child that holds the output pipes is killed before the one observation\", at scripts/tests/local-runner-bridge.test.mjs:1261: report.dead was [true, false]. The file passed 3/3 alone and the full suite passed on rerun. Decide between two causes: a probe race, where done() (State Z, or SIGKILL in ShdPnd) misreads a process already mid-exit; or a real killpg-before-observation ordering gap in relay(). Then fix the probe or the relay. Evidence log: /tmp/moe-m06-gate.mpEtE8/logs/scripts-test4.log (may be cleaned).",
+  "definitionOfDone": [
+    "The root cause is named: a probe race or a relay ordering gap, with evidence",
+    "S11 is deterministic under load, for example 50 consecutive runs of local-runner-bridge.test.mjs while another full suite runs, without weakening the 'killed before the one observation' invariant"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 236.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T22:34:12.712Z",
+  "updatedAt": "2026-11-01T22:34:12.712Z"
+}

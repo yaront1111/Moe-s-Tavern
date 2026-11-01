@@ -17,48 +17,84 @@
     {
       "stepId": "step-1",
       "description": "INVENTORY, no edits. This is the CQ-M epic-final task and the last gate of the whole CQ rollout. Its DoD items 1-3 are delivered by its SPIDR slices: CQ-M06a (task-beb698a44f27417fa9dba51e85968e84, the promotion decision record) and CQ-M06b (task-4359d60bbc9b4d1b83353edfbdaa518a, the six-workstream composition fixtures). This task re-verifies them unchanged, sweeps the docs, runs the full multi-package/platform regression and reviews the whole epic.\n\nRead from LANDED code and Serena handoffs, never from plans. Take each row's completion sha from get_context epicSiblings landing, run `git show --stat <sha>` first, then read only the hunks you need:\n- CQ-M05 (task-c53999b2): state/profileRollout.ts, the PROJECT_SETTINGS_UPDATED payload, complete_task's strict-attempt readiness, and its step-6 docs list (mem decision-cq-m05-rollout-controls);\n- CQ-M06a: docs/baselines/cq-m06/README.md and src/benchmarks/rolloutDecision.test.ts;\n- CQ-M06b: src/__e2e__/workstreamComposition.e2e.test.ts;\n- each workstream final's landed suites and stated limits: F12 (task-72184c65), C11 (task-4e0264fc), V12 (task-b621ddc9), R13 (task-f4811a72), I06 (task-4e412148).\n\nList in the step note:\n(a) every contract CQ-M changed that docs/CONFIGURATION.md, docs/SCHEMA.md, docs/MCP_SERVER.md or CLAUDE.md still misstates or omits, with the code path:line behind it;\n(b) the exact suite command for every package and platform at the final gate;\n(c) each platform's real evidence so far: what ran natively, where, and what was skipped.\n\nDo not edit docs/plans/2026-10-24-ai-code-quality-and-context.md: src/benchmarks/non-routineWorkloads.test.ts reads it.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Inventory at HEAD b93bfa7b (no edits). Shared tree: the 4 owned docs are clean. Dirty paths are peers' .moe/roles, skills, task JSON and .moe/decisions/, all untouched.\n\n(a) Docs gaps against LANDED code:\n- CQ-M05 rollout controls are missing from CONFIGURATION.md:193, SCHEMA.md:157-163, the SCHEMA.md ActivityEventType PROJECT_SETTINGS_UPDATED comment (~1988), the MCP_SERVER.md get_activity_log section (3038), complete_task strict completion (579) and get_context Execution policy context (330). Facts from state/profileRollout.ts:\n  - one PROJECT_SETTINGS_UPDATED per transition (:146-147, :156, :166-168);\n  - classifyProfileTransition (:34-40);\n  - refused activation records codeName plus unsupportedCapabilities (:155-157); the EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED gate runs after the validator (:151-153, :68-77);\n  - rollback adds strictRetention (:95-120, ids sorted and capped at 10 :30, :112);\n  - only StateManager.updateSettings records it (StateManager.ts updateSettings -> updateProjectSettings), so a FileWatcher hand edit records nothing;\n  - append failures are swallowed (activityLog.ts:140-141), and rotation is LOG_RETENTION_COUNT (default 5) generations (LogRotator.ts:12, :51).\n- complete_task: completeTask.ts:222-225 asserts readiness as 'verified-local' when `strict` (executionAuthorization.ts:52-53: task effective profile OR the open attempt's own snapshot).\n- CLAUDE.md:88: the settings bullet lacks executionProfile and deliveryPolicy.\n- Routed comment-5450daac (host certification store): undocumented. certify.mjs:149, :162, :190, :103 ('wx' 0600), :128-135 (0700, never chmodded), and certificationEvidence.ts:113-117. Home: the CONFIGURATION.md File Structure section (in scope).\n- Routed comment-39558fd2 (ARCHITECTURE.md:428 stale Windows image route): ARCHITECTURE.md is not in this plan's affectedFiles and is declared by open peers WT-18 (task-1b2e6fe3) and CQ-RF07 (task-f3f364a6). I route it on to RF07 by comment rather than editing.\n- Out of scope (M07's own integration row, task-1a8f1d0e): the readiness holder (delivery/readinessHolder.ts, M07c) is undocumented in these docs. The existing CONFIGURATION wording 'refused ... until ... certified' stays true (executionProfile.ts:115-128).\n\n(b) Gate commands (Linux snapshot, env -i, node v24.21.0):\n- daemon `npm test` plus `npx tsc --noEmit`;\n- proxy `npm test`;\n- claude-plugin `npm run build && npm test`;\n- `node --test scripts/tests/*.test.mjs` (daemon dist built first for TY1 and C4-C9);\n- `npm run lint`, `bash scripts/tests/parity-check.sh` and `bash scripts/tests/postflight.sh`;\n- moe-vscode `npm ci && npm test && npm run compile`.\nWindows:\n- `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <archive>\\moe-jetbrains && .\\gradlew.bat test --rerun\"` under the jetbrains-gradle lease;\n- the launcher node --test suites with Windows node v24.16.0 (powershell.exe 5.1, pwsh.exe and Git Bash present).\n\n(c) Platform facts: Linux 6.18.33.1 WSL2 x86_64, 16 cpus, load 3.5-6. /snap/bin/multipass is present; java is not on PATH. nvm node 18/20/22/24.21.0. Real-VM, native smoke and certify are not run by this task. There is no macOS host. Certification comes only from docs/CERTIFICATION.md (linux x64 and win32 x64 certified at 106284b0, executionReady false; darwin unsupported).\nM06a's README drift: I06 is now DONE (QA at 65ba4a72 reproduced the cited figures), so the parenthetical 'that task was in review at the time of writing' is stale. Step 4 handles it.",
+      "startedAt": "2026-11-01T19:57:30.472Z",
+      "completedAt": "2026-11-01T20:02:08.291Z"
     },
     {
       "stepId": "step-2",
       "description": "Docs sweep, part 1: configuration and schema. Make surgical sentence edits and document only what LANDED.\n\ndocs/CONFIGURATION.md, the `executionProfile` row (~line 186). Describe the CQ-M05 rollout controls:\n- observe is recorded as a PROJECT_SETTINGS_UPDATED transition and changes no authorization outcome;\n- a verified-local request is refused EXECUTION_PROFILE_NOT_READY and recorded with the unsupported vm/client/check capabilities;\n- a rollback to legacy or observe rewrites only project.json, is recorded, and keeps stored verified-local task snapshots and active strict attempts strict;\n- a hand edit of project.json is not recorded;\n- link docs/baselines/cq-m06/README.md for the promotion decision.\n\ndocs/SCHEMA.md, the ProjectSettings `executionProfile` comment (~lines 157-163): the same in one or two lines. Document the activity payload keys only if SCHEMA.md already documents activity event payloads; check first, and never invent a new section.\n\nCLAUDE.md, the 'Working in this repo' settings bullet: add `executionProfile` and `deliveryPolicy` to the listed settings, if they are absent (one clause).\n\nThen run the doc guard tests that read these files with `npx vitest run src/util/daemonGitDocs.test.ts src/util/taskTimeBudgetDocs.test.ts`, plus any other test that greps these docs (find them with grep).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/CONFIGURATION.md",
         "docs/SCHEMA.md",
         "CLAUDE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "CLAUDE.md"
+      ],
+      "note": "Docs only, all made with Edit, so each has a TOOL witness. No test was written (TDD does not apply to docs; this task forbids production or test changes).\n\ndocs/CONFIGURATION.md\n- executionProfile row: appended 'Recorded rollout controls'. Each claim and its code:\n  - one PROJECT_SETTINGS_UPDATED per changing update that names executionProfile: profileRollout.ts:146-147, :166-168;\n  - observe changes no outcome: every strictness check compares against 'verified-local' (executionAuthorization.ts:52-53, profileRollout.ts:87);\n  - activate is refused and recorded with codeName and unsupportedCapabilities: :144-158;\n  - ACTIVATION_UNSUPPORTED (-32003) only after readiness passes: :151-153, :68-77, errors.ts:28;\n  - rollback rewrites only project.json, with counts and up to 10 sorted ids: :161-168, :95-120, :30;\n  - complete_task keeps refusing a strict attempt: completeTask.ts:222-225;\n  - live-only strictness rolls back: executionAuthorization.ts:52-53;\n  - best-effort append: activityLog.ts:140-141; rotation: LogRotator.ts:12, :51;\n  - a hand edit is not recorded: the only emitter is profileRollout.ts:147, reached only from StateManager.updateSettings;\n  - link to docs/baselines/cq-m06/README.md.\n- File Structure: new 'host certification store' paragraph (routed comment-5450daac), traced to certify.mjs:12, :103, :128-135, :141-158, :162, :190; cli.mjs:17, :21; certificationEvidence.ts:113-117 and its hostIdentity filter; executionReadiness.ts:219-226.\n\ndocs/SCHEMA.md\n- The ProjectSettings executionProfile comment: two lines on the record and the rollback retention.\n- The ActivityEventType PROJECT_SETTINGS_UPDATED payload comment: the payload keys. SCHEMA already documents payloads, for example ACCOUNT_SWITCHED.\n\nCLAUDE.md:88\n- Added `executionProfile` (refused; decision link) and `deliveryPolicy` to the settings list.\n\nDoc guards, run in Linux snapshot /tmp/moe-m06-s2.SO7lRV: git archive HEAD b93bfa7b with only these 3 files overlaid, cmp OK, lock equal modulo CR, npm ci, env -i, node v24.21.0.\n- vitest daemonGitDocs, taskTimeBudgetDocs, executionContractDocs, getCommitScope, rolloutDecision and workstreamComposition.e2e: 6 files, 177/177 passed.\n- node --test scripts/tests/account-trust-docs.test.mjs: 5/5 passed.",
+      "startedAt": "2026-11-01T20:02:12.715Z",
+      "completedAt": "2026-11-01T20:04:50.287Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs sweep, part 2: docs/MCP_SERVER.md. Check every claim against the landed code, with path:line in the step note.\n- `### moe.get_activity_log` (~line 2805): the PROJECT_SETTINGS_UPDATED event and its exact payload.\n  - Always: setting, from, to, transition, outcome.\n  - Refused activation adds codeName and unsupportedCapabilities.\n  - Rollback adds retainedStrictTasks/Ids, retainedStrictAttempts/Ids and unreadableSnapshots.\n  - Ids are capped at 10, sorted. The record is a best-effort audit: rotation keeps 5 generations, and a hand edit is not recorded.\n- `### moe.complete_task` (~line 516), strict completion: EXECUTION_PROFILE_NOT_READY also refuses a running attempt whose own snapshot is verified-local after a project rollback, so attempt-level strictness is never downgraded. Live-only strictness (an attempt captured as legacy) still rolls back.\n- `### moe.get_context` Execution policy context (~line 300): effectiveProfile is task-level; attemptSnapshot shows the open attempt's own strictness.\n- The WS UPDATE_SETTINGS / SETTINGS_UPDATED section, if one exists: a refused activation still answers ERROR with the canonical message, and transitions are recorded.\nRun the same doc guard tests as step 2 again.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md only, edited with Edit. No tests changed: this is a docs-only task.\n\n1. `### moe.get_activity_log` Notes:\n   - Truncation bullet, from getActivityLog.ts:92-109.\n   - PROJECT_SETTINGS_UPDATED payload, from profileRollout.ts:146-147 (setting, from), :156 (refused: to, transition, outcome, codeName, unsupportedCapabilities), :168 (applied, plus strictRetention on rollback), :95-120 (retained* keys, unreadableSnapshots, never echoed) and :30 (ids capped at 10, sorted at :112).\n   - codeName set from REFUSED_ACTIVATIONS (:31).\n   - Best-effort audit: activityLog.ts:140-141, LogRotator.ts:12/:51 and the single emitter at :147.\n2. `### moe.complete_task` Strict completion. A new sentence after the BRANCH-POLICY-FAIL ordering sentence:\n   - strict = the task's effective profile OR the open attempt's own snapshot (executionAuthorization.ts:52-53);\n   - readiness is asserted as verified-local when strict (completeTask.ts:222-225);\n   - live-only strictness rolls back.\n3. `### moe.get_context` Execution policy context: effectiveProfile is task-level (getContext.ts:137, resolveTaskExecutionProfile). After a rollback, attemptSnapshot.profile shows the attempt's own strictness. start_step, complete_step and complete_task all go through assertExecutionAuthorized (startStep.ts:41, completeStep.ts:53, completeTask.ts:216).\n4. No WS UPDATE_SETTINGS / SETTINGS_UPDATED section exists in MCP_SERVER.md (the Plugin WebSocket Messages headings at 3193+ have none), so none was invented. CONFIGURATION.md's executionProfile row already covers the plugin UPDATE_SETTINGS path. The WS ERROR frame carries code and codeName for a MoeError (WebSocketServer.ts:1220).\n\nDoc guards re-run in snapshot /tmp/moe-m06-s2.SO7lRV (all 4 docs overlaid, cmp OK):\n- vitest daemonGitDocs, taskTimeBudgetDocs, executionContractDocs, getCommitScope, rolloutDecision and workstreamComposition.e2e: 6 files, 177/177 passed;\n- account-trust-docs: 5/5 passed.",
+      "startedAt": "2026-11-01T20:04:52.436Z",
+      "completedAt": "2026-11-01T20:06:18.611Z"
     },
     {
       "stepId": "step-4",
       "description": "Decision consistency. Re-check the promotion decision against the final state; do not re-decide it.\n\nConfirm that:\n- assertExecutionProfileReady still refuses verified-local;\n- the platform and hardware statements in docs/baselines/cq-m06/README.md (CQ-M06a's file) match what R13 and I06 landed and what this box offers. Probe with `command -v multipass`, `java -version` and the WSL/Windows facts noted in step 1;\n- the composition fixtures and workstream suites the README cites exist at the cited paths.\n\nIf a statement has drifted, edit only that line of the README. Report it in complete_step.modifiedFiles: it is M06a's file, so it is not in this plan's affectedFiles. Keep src/benchmarks/rolloutDecision.test.ts unchanged and green; run it with `npx vitest run src/benchmarks/rolloutDecision.test.ts`.\n\nNever record promotion: the readiness authority still refuses and no matched pilot exists. A pilot needs a separate, explicitly approved batch task, never this one. If step 5 later contradicts a platform statement, fix the line and re-run step 5 in full, so that the gate is fresh after the last edit.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/baselines/cq-m06/README.md"
+      ],
+      "note": "Decision unchanged: non-promotion. Four drifted or incomplete lines of M06a's docs/baselines/cq-m06/README.md were edited (+4/-4, with Edit). This is M06a's file, so it is outside this plan's affectedFiles. rolloutDecision.test.ts is unchanged.\n\nChecks:\n- assertExecutionProfileReady still refuses verified-local: executionProfile.ts:115-128 refuses unless heldReadiness().ready with no missing capabilities. G1 and G3 are green.\n- This project's settings have no executionProfile and no deliveryPolicy, so the live readiness evaluation always lists revision-bound-local-delivery (executionReadiness.ts:155-160, :252) and refuses. The live readiness projection was not readable: moe-call get_execution_readiness answered `Tool not found` (a wrapper-audience tool, tools/index.ts:253).\n- Host certification stores: ~/.moe/certification holds the linux x64 report and C:\\Users\\Yaron\\.moe\\certification holds the win32 x64 report. Their sha256 are e793c7c6… and 48dd2675…, equal to the CERTIFICATION.md rows.\n- Cited paths all exist: cq-m04 report.json, report.md and README; CERTIFICATION.md; rolloutDecision.test.ts; workstreamComposition, executionContract, contextInvalidation, plannerBoundaries and rolloutControls e2e; local-runner.test.mjs.\n\nEdits:\n1. vm row: the activationGaps() vm/check listing holds under the DEFAULT held readiness, which the guard reads. A live evaluation that accepts a store report and a matching Multipass would drop it (executionReadiness.ts:219-238), and both stores hold the R13 reports. Readiness still refuses here (deliveryPolicy). The refused record names the gap only while it is listed. Status stays `unsupported`, per G3.\n2. client residuals row: added I06's fourth unowned item, VS Code lossy JSON.parse literals (I06 completion summary).\n3. Platform source line: 'in review at the time of writing' became 'CQ-I06 is now done; its QA review re-ran the client figures below and found them unchanged' (I06 reviewSummary: 29 suites, 544 tests; VS Code 388/384/0/4).\n4. this-host row: added the store probe and its hashes. Status stays `not run`.\n\nGuard: rolloutDecision.test.ts in snapshot /tmp/moe-m06-s2.SO7lRV with the README overlaid (cmp OK): 25/25 passed.",
+      "startedAt": "2026-11-01T20:06:21.226Z",
+      "completedAt": "2026-11-01T20:09:49.953Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE, fresh, after all edits. This is the last gate of the whole CQ rollout, so run every package and label each result by platform.\n\nLinux-native snapshot (mem gotcha-daemon-linux-snapshot-gate):\n- `git archive HEAD` of the WHOLE repo;\n- overlay ONLY this task's four docs, plus the decision README if step 4 edited it;\n- run `npm ci` per package under `env -i` with a Linux-only PATH and NO_COLOR=1, so no MOE_* variable is set, after checking each lockfile matches its tree modulo CR;\n- cmp the overlaid files against the snapshot.\nRun:\n- `cd packages/moe-daemon && npm test`. THIS is the complete_task verification: supply its command, exit code and output tail. Also run `npx tsc --noEmit`.\n- `cd packages/moe-proxy && npm test` (snapshot only: its pretest rebuilds dist, so never run it in the shared tree).\n- `cd packages/moe-claude-plugin && npm run build && npm test`.\n- `node --test scripts/tests/*.test.mjs`. Record every real-VM or local-runner case that skipped, and why.\n- `npm run lint` at the root, `bash scripts/tests/parity-check.sh` and `bash scripts/tests/postflight.sh`.\n- `cd moe-vscode && npm ci && npm test && npm run compile`.\n\nWindows host. WSL has no JDK (mems gotcha-jetbrains-gradle-gate-from-powershell, gotcha-qa-windows-launcher-tests-from-wsl, convention-jetbrains-gradle-lease):\n- `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`, then count the TEST-*.xml results newer than the start time;\n- the launcher node --test suites natively on Windows (PowerShell 5.1, pwsh 7 and Git Bash engines) from a scratch copy of scripts/.\n\nAnything that cannot run here (no Multipass, no macOS, no real VM) is recorded as NOT RUN, never as passed or certified.\n\nCompare counts with each package's pre-change HEAD baseline. A newly failing test is a regression. Error handling: never patch production code in this docs-and-gate task and never weaken an assertion. Instead, file a bug task naming the owning task, and use moe.report_blocked with blockedOnTaskIds when it breaks a DoD item.\n\nPut a per-package results table in the step note: command, platform, pass/skip/fail and exit code.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Full regression, fresh, after all doc edits. Linux runs used a git-archive snapshot of HEAD e237ab63 plus my 5 doc overlays, each checked with cmp. The later HEAD ff3d95f4 changes only .moe task JSON. Packages were installed with npm ci; env -i with node v24.21.0. Windows runs used Windows-side copies. No new failures; no bug filed from the gate.\n\n| Gate | Platform | Result | Exit |\n|---|---|---|---|\n| daemon `npm test`, dists built (complete_task evidence) | Linux | 227 files; 6869 pass, 14 skip, 0 fail. Baseline 6869. Skips: 7 Windows-only, 7 pwsh absent from PATH | 0 |\n| daemon `npm test`, before the build | Linux | 6863 pass, 20 skip. The extra 6 skips are the baselineRun real-daemon E2E, gated on dist | 0 |\n| daemon `npx tsc --noEmit` | Linux | clean | 0 |\n| proxy `npm test` | Linux | 8 files, 316/316 | 0 |\n| claude-plugin `npm run build && npm test` | Linux | 2 files, 18/18 | 0/0 |\n| `node --test scripts/tests/*.test.mjs` (41 files) | Linux | 1337 tests: 1191 pass, 0 fail, 145 skip, 1 todo (WSL-share contract, task-3def0804). Skips: 56 pwsh, 42 PS 5.1, 36 Windows installer, 5 pwsh-prefixed, 2 no PS engine, 1 Windows only, 1 MOE_PINNED_CODEX, 1 K9 root mount namespace, 1 macOS native smoke | 0 |\n| root `npm run lint` | Linux | OK | 0 |\n| `bash scripts/tests/parity-check.sh` | Linux | PASS | 0 |\n| `bash scripts/tests/postflight.sh` | Linux | PASS, 71 scenarios ok, about 15 min | 0 |\n| moe-vscode `npm test && npm run compile` | Linux | 388 tests: 384 pass, 0 fail, 4 skip (= baseline); compile clean | 0/0 |\n| JetBrains `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\ced8-m06-jb\\moe-jetbrains && .\\gradlew.bat test --rerun\"` (jetbrains-gradle lease, released) | Windows | BUILD SUCCESSFUL in 45s. Fresh XML: 29 suites, 544 tests, 0 fail, 0 err (= baseline) | 0 |\n| Windows-node launcher suites (v24.16.0; powershell.exe 5.1, pwsh.exe, Git Bash) | Windows | prompt-cache-launcher 99/99. daemon-json-cap: 57 pass, 0 fail, 3 skip (Git Bash msys branch), 3 todo (task-3def0804). seat-registration 58/58. moe-account-lease: 53 pass, 2 skip (no symlinks; POSIX perms). push-failure-message 8/8. taskless-binding-notice 10/10. install-dependencies-windows 21/21 | 0 each |\n| `pwsh -File scripts/tests/parity-check.ps1` | Windows | PASS | 0 |\n| `node scripts/tests/postflight-safe.mjs powershell` | Windows | failureClass NONE, last scenario Z, about 25 min | 0 |\n| `node scripts/tests/postflight-safe.mjs pwsh` | Windows | failureClass NONE, last scenario Z | 0 |\n\nThe first Windows attempts failed only because my scratch copy lacked docs/, .github/, moe-jetbrains/src and the package dists with their production deps (ENOENT, ERR_MODULE_NOT_FOUND). All passed after those were copied, so this was not a product defect.\n\nNOT RUN:\n- real-VM certification and guest tests (K9, certify);\n- macOS native smoke and any macOS host;\n- worktree-landing.ps1 and the PS landing-guard steps;\n- the Docker build;\n- interactive IDE sessions (MANUAL_TESTS).\n\nSkipped real-VM tests certify nothing.",
+      "startedAt": "2026-11-01T20:10:09.676Z",
+      "completedAt": "2026-11-01T21:33:10.415Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL REVIEW of the WHOLE CQ-M epic diff and its composition with the other five workstreams. Do it once, as the last step; load adversarial-self-review.\n\nGather the completion shas of every CQ-M row from epicSiblings landing: M01a-f, M01, M02, M03a-e, M03, M04, M04b, M04c, M05, M06a and M06b. Run `git show --stat` per sha, then read targeted hunks; do not dump the full diff.\n\nCheck:\n1. Producer/consumer drift:\n   - M01's snapshot floor against M05's rollback retention and complete_task's attempt-level readiness;\n   - M02's usage correlation against M04's report fields and M06a's quoted figures;\n   - M05's record payload against the docs written in steps 2-3.\n2. Any path that enables verified-local, or claims isolation, readiness, trust or verified completion: an env var, a persisted label, a client hello, a caller field, the observe record or a snapshot.\n3. Delivery policies ranked with max(), or a change to legacy/observe live-policy behavior.\n4. Any savings or support claim in the docs without matched evidence; any skipped test cited as certification.\n5. Every docs claim from steps 2-3 traced to code (path:line).\n6. Error handling: refusals stay fail-closed and write nothing.\n7. .moe hand edits, Git writes, or peers' bytes reverted.\n\nRecord each finding and its disposition in the step note. A real defect becomes a new task, or a report_blocked when it breaks a DoD item, never a silent fix.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "CLAUDE.md",
+        "docs/MCP_SERVER.md",
+        "docs/baselines/cq-m06/README.md"
+      ],
+      "note": "Adversarial review of the whole CQ-M epic (adversarial-self-review loaded). I ran `git show --stat` on all 26 CQ-M row commits:\n- M01a 204d5a6d, M01b 77cca30e, M01c 803a38d4, M01d 71c7dbe8, M01e a20baef3, M01f 475e743c, M01 baeacbf3/917591fc;\n- M02 db3172ef;\n- M03a 19dfa681/35579c2e, M03b 063599f0, M03c f96bb8c3, M03d d0ad42a3, M03e 9525d8d3, M03 cc1040f2;\n- M04 07fefe29, M04b 01fb5f7d, M04c 3b69dcce/400928ae;\n- M05 edc04736/48ea49f6;\n- M06a 4468588d/b0ca24d8, M06b 5923b5c3, M06b1 e3659d58.\nThen I read targeted hunks.\n\nReview items:\n1. Drift: none.\n   - One strictness rule is shared: M01's floor (`resolveTaskExecutionProfile`, delivery/executionProfile.ts:100-104), M05's retention (`isStrict`, profileRollout.ts:88) and complete_task's attempt-level strictness (util/executionAuthorization.ts:51-53) all use `readExecutionPolicySnapshot(..).profile === 'verified-local'`.\n   - Report fields line up across producer, artifact and consumer. sourceRetrievals, firstCodeChangeMs, plannerSessions, reasoningTokens and endToEndMs appear in scripts/baseline-report.mjs (producer), in report.json (20 rows each, frozen) and in rolloutDecision.test (consumer, 25/25 in the gate).\n   - M05's payload matches the docs from steps 2-3: outcome applied/refused (:156, :168), transitions (:34-40), ids (:112, cap :30).\n2. No path enables verified-local.\n   - There is one settings write path: StateManager.ts:1300 → updateProjectSettings → validators.ts:355 assertExecutionProfileReady, which grants only on the readinessHolder evaluation (executionProfile.ts:110-116).\n   - MOE_EXECUTION_PROFILE_READY occurs only inside benchmark fixture text, which asserts that it is refused.\n   - Client hello and gaps can only refuse.\n   - Composition D1/D2a passed.\n3. No max() over policies. resolveTaskDeliveryPolicy (delivery/policy.ts:175-181) asserts readiness before any policy is read. A captured policy is never consulted, and legacy/observe behaviour is unchanged.\n4. No savings claims. M06a's targets are labelled unmeasured (G5 guard). My diff adds no figures. Skipped real-VM tests are stated as certifying nothing.\n5. Docs claims are traced to code. Re-checked: maxPayloadChars default 500 (getActivityLog.ts:8); the id-size note (profileRollout.ts:29); the payload fields.\n6. Fail-closed refusals. A refused activation throws after writing only its audit record; project.json is untouched (:153-158). Strict completion refuses as before.\n7. No .moe edits and no Git writes by me; only read-only git commands were used. My diff is the 5 owned docs (+31/-10). Peers' dirty paths are untouched, and the gate ran on clean HEAD snapshots.\n\nFindings:\n- F1 (LOW, filed as task-efca737f34e54c25b9ffad616a5a1166): disposition of QA comment-8e9714d3. strictRetention's `.sort()` is pinned only through S1's filesystem load order (unsorted readdirSync at persistence.ts:42). On NTFS a `.sort()` deletion survives. Not fixed here, since this is a docs-only task.\n- T1 (theoretical): the claim that 10 ids stay under 500 chars holds for daemon ids (37/40 chars, about 431 chars). A hand-made 64-char id would show ` [truncated]`, which is visible and audit-only.\n- T2 (theoretical, pre-existing): the JetBrains ActivityLogPanel filter list (:36-43) omits PROJECT_SETTINGS_UPDATED and other newer types. Such events still render under All. VS Code types include it.\n- T3: a hand-edited verified-local → verified-local request is classified as an activate and refused (fail-closed).\n\nNo DoD-breaking defect.",
+      "startedAt": "2026-11-01T21:33:12.429Z",
+      "completedAt": "2026-11-01T21:34:07.318Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -90,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:05.297Z",
-  "updatedAt": "2026-11-01T19:20:55.833Z",
+  "updatedAt": "2026-11-01T22:34:49.948Z",
   "dependsOn": [
     "task-c53999b2dd2c4ad08bacb73c50371cfa",
     "task-ad95cb270e9e46df8672eb094d0c1e74",
@@ -110,13 +146,15 @@
   "metrics": {
     "firstClaimAt": "2026-10-24T16:04:32.374Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-bb003851",
     "worker-b5749787",
     "qa-952969be",
-    "architect-32ff5555"
+    "architect-32ff5555",
+    "worker-152f84fc"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -141,7 +179,11 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json"
+    "docs/CONFIGURATION.md",
+    "docs/SCHEMA.md",
+    "CLAUDE.md",
+    "docs/MCP_SERVER.md",
+    "docs/baselines/cq-m06/README.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -156,7 +198,14 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T22:53:26.670Z",
   "executionContract": {
@@ -201,5 +250,15 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T22:53:26.765Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T19:57:30.472Z",
+  "reviewStartedAt": "2026-11-01T22:34:49.946Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Run fresh 2026-11-01 ~22:31Z in snapshot /tmp/moe-m06-gate.mpEtE8/repo: git archive of HEAD 0d913716 plus the 5 owned docs, cmp-identical to the tree. The rails forbid npm test in the shared checkout. Env: env -i, node v24.21.0, npm ci, daemon and proxy dists built.\n ✓ src/util/heartbeatStop.test.ts (9 tests | 3 skipped)\n ✓ src/index.test.ts (47 tests | 1 skipped)\n ✓ src/context/repositorySource.test.ts (138 tests | 3 skipped)\n ✓ src/accounts/cli.test.ts (14 tests | 1 skipped)\n ✓ src/util/claudeHook.test.ts (12 tests | 4 skipped)\n ✓ src/util/gitExecutable.test.ts (12 tests | 2 skipped)\n Test Files  227 passed (227)\n      Tests  6869 passed | 14 skipped (6883)\n   Duration  56.34s\nEXIT=0  (= I06 baseline 6869; skips = 7 Windows-only + 7 pwsh absent under env -i). Also `npx tsc --noEmit` exit 0.",
+    "reportedAt": "2026-11-01T22:34:49.946Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-M06 epic-final. Docs only, edited with the Edit tool (+31/-10):\n- CONFIGURATION.md: executionProfile recorded rollout controls; host certification store paragraph.\n- SCHEMA.md: executionProfile comment; PROJECT_SETTINGS_UPDATED payload.\n- MCP_SERVER.md: get_activity_log payload and truncation; complete_task strictness from the task OR the open attempt's snapshot; get_context effectiveProfile is task-level.\n- CLAUDE.md:88: executionProfile and deliveryPolicy added to the settings list.\n- cq-m06 README (4 lines): the vm gap is under the default held readiness; R13 reports are in both host stores; readiness still refuses (deliveryPolicy is not local-branch); I06 is done; the host-store probe. Decision: NON-PROMOTION. Targets unmeasured; no savings claimed.\n\nGate, all exit 0. Linux snapshot at HEAD e237ab63/f09af892/0d913716 plus overlays:\n- daemon 6869 pass / 14 skip (= baseline); tsc clean;\n- proxy 316/316; claude-plugin 18/18;\n- scripts 1354 tests, 0 fail (one S11 load flake was rerun green; bug task-b712ce09);\n- lint and parity PASS; postflight.sh 71 scenarios PASS;\n- vscode 388/384/0/4; compile clean.\nWindows:\n- gradlew.bat test --rerun: 29 suites, 544 tests, 0 fail;\n- Windows-node launcher suites on PS 5.1, pwsh and Git Bash: green;\n- parity.ps1 PASS; postflight-safe powershell and pwsh: NONE, at e237ab63 and f09af892.\nNOT RUN: real-VM certification and guest tests, macOS, Docker, worktree-landing.ps1, interactive IDE sessions. Skipped VM tests certify nothing.\n\nEpic review: no producer/consumer drift; no path that enables verified-local; no max() over policies; refusals fail closed; no .moe or Git writes. QA comment-8e9714d3's .sort() pin gap is filed as task-efca737f. Detail is in the step 5 and step 6 notes and in Serena task-task-ced85748-handoff."
 }

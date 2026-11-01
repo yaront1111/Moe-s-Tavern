@@ -24,9 +24,9 @@ A promotion needs every gate met. None is. Status words: `unmet` (not satisfied)
 | Gate | Status | Evidence |
 |---|---|---|
 | readiness | unmet | `assertExecutionProfileReady('verified-local')` refuses with `EXECUTION_PROFILE_NOT_READY`: no held readiness evaluation grants it. |
-| vm | unsupported | `activationGaps()` lists `vm-provisioning-uncertified`. A settings change to `verified-local` is refused (while readiness is unmet the code is `EXECUTION_PROFILE_NOT_READY`) and recorded as a refused `PROJECT_SETTINGS_UPDATED` activation whose `unsupportedCapabilities` names the gap (CQ-M05). |
+| vm | unsupported | `activationGaps()` lists `vm-provisioning-uncertified` under the daemon's default held readiness (never evaluated, or the last evaluation failed), which is what the guard test reads. A daemon whose evaluation accepts a host-store certification report and a matching Multipass client stops listing it. The CQ-R13 reports are filed in both of this host's stores, and this record did not read a live daemon's held value. Readiness still refuses here, because this project's `deliveryPolicy` is not `local-branch`. A settings change to `verified-local` is refused (while readiness is unmet the code is `EXECUTION_PROFILE_NOT_READY`) and recorded as a refused `PROJECT_SETTINGS_UPDATED` activation whose `unsupportedCapabilities` names the gap while it is listed (CQ-M05). |
 | check | unsupported | `activationGaps()` lists `check-runner-uncertified`; refused and recorded the same way. |
-| client residuals | unmet | `activationGaps()` no longer lists a client gap, because the daemon advertises `verifiedLocal` wire support. CQ-I06 still records open client items: the profile and evidence status UI and the VS Code `latestCheckRun` view have no owner (human decision), and the client tests are headless only. |
+| client residuals | unmet | `activationGaps()` no longer lists a client gap, because the daemon advertises `verifiedLocal` wire support. CQ-I06 still records open client items: the profile and evidence status UI, the VS Code `latestCheckRun` view and VS Code's lossy `JSON.parse` literals have no owner (human decision), and the client tests are headless only. |
 | matched pilot | unmet | Not run. It needs a separately approved paid batch on the same corpus digest, caps and role models. |
 | retrieval baseline | unmet | sourceRetrievals is unknown in 20 of 20 workloads, so no retrieval comparison can be made against this baseline. |
 
@@ -63,7 +63,7 @@ Pilot: unmeasured. Claimed savings: none.
 ## Platform support
 Status words: `certified` means a recorded certification report validated (`validateCertificationReport`), nothing more;
 it does not enable `verified-local`. Both reports certified commit `106284b0`, not HEAD, and each has `executionReady`
-false. Source: `docs/CERTIFICATION.md` (CQ-R13) and the CQ-I06 completion summary (that task was in review at the time of writing).
+false. Source: `docs/CERTIFICATION.md` (CQ-R13) and the CQ-I06 completion summary (CQ-I06 is now done; its QA review re-ran the client figures below and found them unchanged).
 
 | Platform | Status | Evidence |
 |---|---|---|
@@ -72,7 +72,7 @@ false. Source: `docs/CERTIFICATION.md` (CQ-R13) and the CQ-I06 completion summar
 | darwin x64 | unsupported | No report and no macOS host (task rail `prop-29ce59fa`); no support is claimed. |
 | darwin arm64 | unsupported | Same: no report. |
 | any platform, `verified-local` enabled | unsupported | The readiness gate above refuses it everywhere. |
-| this host (WSL2 Linux 6.18.33.1, x86_64), probed by this task | not run | Only `uname -a`, `command -v multipass` (`/snap/bin/multipass` present) and `command -v java` (not on PATH) were probed. No certification or VM was run for this record. |
+| this host (WSL2 Linux 6.18.33.1, x86_64), probed by this task | not run | Only `uname -a`, `command -v multipass` (`/snap/bin/multipass` present) and `command -v java` (not on PATH) were probed, plus (by CQ-M06) the host certification stores: the WSL store holds the linux x64 report and the Windows store the win32 x64 report, whose sha256 match the two rows above. No certification or VM was run for this record. |
 | JetBrains client | not certified | CQ-I06: the Windows Gradle test run passed (29 suites, 544 tests, 0 failures); headless only, no IDE session. |
 | VS Code client | not certified | CQ-I06: lint, compile and tests passed (388 tests, 384 pass, 0 fail, 4 Windows-only skips); headless only, no IDE session, and no `latestCheckRun` view. |
 
