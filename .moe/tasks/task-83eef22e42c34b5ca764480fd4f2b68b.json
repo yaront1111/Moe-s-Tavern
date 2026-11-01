@@ -75,7 +75,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -88,16 +88,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T11:11:14.527Z",
-  "updatedAt": "2026-11-01T11:32:56.898Z",
+  "updatedAt": "2026-11-01T12:15:16.780Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T11:16:27.154Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T12:15:16.780Z",
+    "wallClockMs": 3529626
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-0e1ab990"
+    "worker-0e1ab990",
+    "qa-1e84238e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -237,5 +240,9 @@
     "kind": "completion",
     "sessionId": "worker-0e1ab990@2026-11-01T11:21:37Z",
     "at": "2026-11-01T11:32:56.898Z"
-  }
+  },
+  "completedAt": "2026-11-01T12:15:16.780Z",
+  "reviewCompletedAt": "2026-11-01T12:15:16.780Z",
+  "reviewSummary": "Reviewed completion 40e59946 on moe/work-2026-10-24. HEAD 6bc52f2e has no moe-jetbrains drift or dirt, so the in-place gate tests the exact bytes. Re-ran under the jetbrains-gradle lease (12:12:24Z, released after): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" gave EXIT 0, BUILD SUCCESSFUL in 27s (Windows gate). TEST-*.xml (12:12-12:13Z): 526 tests, 0 fail/err/skip; MoeProjectConnectionTest 13/13, PlanApprovalContractTest 20/20 (not in the commit), MoeMessageDispatcherErrorTest 5/5. DoD1: JUnit checks that CLIENT_HELLO is the first frame, appears once, is before GET_STATE and carries the exact payload. It is sent in onOpen under wsLock before connected=true; every other send runs later. The payload matches daemon decodeClientHello, and planRevisions satisfies assertApprovalCapabilities. DoD2: request payload is {refresh:true}; Answered matches exactly (ready false; ready true with null evaluatedAt and an extra key). DoD3: 9-case MALFORMED table; DAEMON_ERROR for the operation-tagged and 'Unknown message type' errors, with no generic notification; an unrelated ERROR still publishes and the request then times out; TIMEOUT at 300 ms and the pending set empties; DISCONNECTED via onError, disconnect and server close; NOT_CONNECTED with zero frames. Future: never exceptional, bounded by completeOnTimeout, added before the remove hook and the send. DoD4: approval after the hello carries expectedPlanRevision. DoD5: gate above. Rails: only the 2 capabilities declared; no path reports a bad answer as ready; no forbidden patterns. Scope: only the 5 planned files; TerminalAgentLauncher, RuntimeSelectionPolicy, Models.kt and MoeJson.kt untouched. Size: +339/-5 (334 net incl. 173 test lines) plus 4 .moe/tasks records. Complexity pass: lean. Unverified: live daemon EXECUTION_READINESS needs CQ-M07d (task-b0485bb1), which is not yet in WebSocketServer.ts; rows use a loopback server. No manual IDE run.",
+  "requiredCheckAtDone": null
 }
