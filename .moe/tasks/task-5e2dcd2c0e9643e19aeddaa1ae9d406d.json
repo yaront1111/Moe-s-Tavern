@@ -19,21 +19,36 @@
     {
       "stepId": "step-1",
       "description": "Gate 0 first (task rail). Confirm the governor's Gate 0 PASS comment on task-fd196d137c44497188d2639f149e259b covers Windows (a)-(c) and Linux (a)-(d). Without it, moe.report_blocked with blockedOnTaskIds [] and the reason 'waiting on the governor Gate 0 PASS for the SSH transport', and edit nothing.\n\nThen, in scripts/local-runner/guest-session.mjs:\n(1) Imports. Drop bridgeArgv from the guest-bridge import (the export itself stays until fd196d13 removes it). Import openGuestStream from './guest-stream.mjs' (R14d1) and isOwnedInstanceName beside invoker.\n(2) runGuestSession input checks.\n  - Add `isOwnedInstanceName(name)` to the existing all-inputs condition. A bad name therefore stays SESSION_INPUT_INVALID before any daemon or provider call, as bridgeArgv(name) made it.\n  - Keep the executable and spawn checks: executable still drives the PKILL/PGREP queries and openGuestStream's info read.\n  - Drop options.argv and options.start, and store `name` and the `provider` record in options instead.\n(3) After the daemon-admission check: `let child; try { child = await openGuestStream({ name: options.name, mode: 'bridge', provider: options.provider }); } catch { child = null; }`, then the existing child-shape check and SESSION_SPAWN_FAILED. A transport refusal therefore spawns nothing.\n(4) relay(), for the new await.\n  - Right after `options.signal?.addEventListener('abort', ...)`, add `if (options.signal?.aborted) session.onAbort();`. An abort that lands during the info read still aborts through the one teardown path, which keeps the child's error listener attached.\n  - Write the job frame only when `!session.closing`, so the credential never goes to a session already torn down.\n  Error handling:\n  - ssh's own exit 255 already lands in close's `code !== 0` branch as SESSION_PROVIDER_FAILED. Comment that no supervisor code is ever derived from it (ruling condition 5).\n  - Stdin end is still the cancel and host-gone signal, and the supervisor's 74 comes back as ssh's status.\n(5) Rewrite the header comment: one OpenSSH bridge stream (guest-stream.mjs) to the guest's forced-command supervisor, not `multipass exec`. Its argv is sshStreamArgv for this VM's pinned key, known_hosts and fresh address, and nothing is added to its env. Update the JSDoc provider line to {executable, run, spawn, ssh, keyDir}.\nThe credential still reaches only the first stdin frame: never argv, spawn options, env or an error.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-session.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-session.mjs"
+      ],
+      "note": "Gate 0 PASS confirmed: Windows comment-2566639b, Linux comment-888759e9, and governor comment-a88ca3de says the rails on c, d1, d2 and d3 are satisfied.\n\nguest-session.mjs:\n- bridgeArgv import dropped. It is still exported from guest-bridge.\n- openGuestStream (guest-stream.mjs) and isOwnedInstanceName (lifecycle) are imported.\n- An isOwnedInstanceName check was added to the input condition.\n- options now hold name and a frozen provider copy {...provider, executable, spawn}, so a later caller edit cannot change the route. options.argv and options.start are gone.\n- After admission: `await openGuestStream({name, mode:'bridge', provider})`. Any throw is SESSION_SPAWN_FAILED.\n- relay:\n  - added `if (signal.aborted) session.onAbort()` after the listener;\n  - the job frame is written only when not closing;\n  - a comment says ssh 255 goes to SESSION_PROVIDER_FAILED and no supervisor code is derived from it.\n- The header, JSDoc and endAgentJobs comments were updated.\n\nPre-existing dirty paths from other sessions were left untouched: .moe/roles, skills, tasks, scripts/moe-agent.*, postflight*.",
+      "startedAt": "2026-11-01T10:23:30.331Z",
+      "completedAt": "2026-11-01T10:25:51.176Z"
     },
     {
       "stepId": "step-2",
       "description": "Wire the existing test harnesses to the SSH route. Every harness that reaches the session spawn needs an info answer: openGuestStream reads the address through provider.run, and a provider without run would try a real multipass. Mark each change `// CQ-R14d2`.\n(1) scripts/tests/local-runner-bridge.test.mjs:\n  - Add BRIDGE_SSH = path.join(tmpdir(), 'moe-stream', 'ssh') and BRIDGE_KEYS = path.join(tmpdir(), 'moe-stream', 'keys'), which are strings only.\n  - Add a minimal valid v1.17.0 info detail INFO: { state: 'Running', image_hash: 'a'.repeat(64), image_release: '24.04 LTS', cpu_count: '2', memory: {}, disks: { sda1: {} }, mounts: {}, ipv4: ['10.0.0.2'] }.\n  - Add `infoRun`, which answers only `info <NAME> --format json` with { stdout: JSON.stringify({ errors: [], info: { [NAME]: INFO } }), stderr: '' } and rejects anything else.\n  - openSession's provider becomes { spawn: provider.spawn, run: infoRun, ssh: BRIDGE_SSH, keyDir: BRIDGE_KEYS }.\n  - SPAWNED becomes [BRIDGE_SSH, sshStreamArgv({ ...transportFiles(NAME, BRIDGE_KEYS), name: NAME, address: '10.0.0.2', mode: 'bridge' }), { shell: false, windowsHide: true, stdio: ['pipe','pipe','pipe'] }].\n  - Import sshStreamArgv and transportFiles only if not already bound: R14a's GS rows import from guest-ssh.mjs, and a duplicate binding is a SyntaxError.\n  - B15 keeps testing bridgeArgv, which is still exported.\n(2) scripts/tests/local-runner-daemon-bind.test.mjs: its session() provider becomes { spawn: proc.spawn, run, ssh, keyDir }, with the same small INFO fake for its NAME.\n(3) scripts/tests/local-runner.test.mjs, AJ section:\n  - agentHarness's provider gains ssh: STREAM_SSH and keyDir: STREAM_KEYS (R14d1's constants).\n  - The two bridgeArgv(GUEST) spawn expectations become streamCall('bridge'). The pinned-client AJ row now asserts that the spawn is STREAM_SSH, and that every run call (info, PKILL, PGREP) went through platformFor(process.platform).executable.\n  - h.log sequences gain the session's one info call right before 'spawn'.\n  - Drop bridgeArgv from that section's import if it becomes unused.\n(4) scripts/tests/local-runner-bundle.test.mjs: add 'guest-stream.mjs' to `shipped` beside 'guest-ssh.mjs', and extend the comment above it with CQ-R14d1's stream opener (amendment comment-596b708b).\n\nRule: nothing else in an existing row may change. If a row needs more than its spawn triple, info/log sequencing or this wiring, stop and name it in the step summary.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-bridge.test.mjs",
         "scripts/tests/local-runner-daemon-bind.test.mjs",
         "scripts/tests/local-runner.test.mjs",
         "scripts/tests/local-runner-bundle.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-daemon-bind.test.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "Wired every session harness to the SSH route. Each change is marked CQ-R14d2.\n\n- **bridge test:**\n  - New BRIDGE_SSH and BRIDGE_KEYS strings, the INFO detail, and infoRun (answers only `info NAME --format json`), bundled as SSH_ROUTE.\n  - SPAWNED is now [BRIDGE_SSH, sshStreamArgv(... 10.0.0.2, 'bridge'), PIPES]; sshStreamArgv and transportFiles were already imported from R14a.\n  - openSession's provider is {...SSH_ROUTE, spawn}.\n  - The H4 spawn-throw/bad-shape row's provider override became {...SSH_ROUTE, spawn}, provider wiring only. Without it, the info read would execFile a real multipass.\n- **daemon-bind:** the session() provider is {...SSH_ROUTE, spawn}. The name is SSH_ROUTE because the file already has `function keyDir`; a first try failed with a duplicate-binding SyntaxError.\n- **local-runner AJ:**\n  - The provider gains ...STREAM, and the harness records h.ran (each run's executable).\n  - CLEAN_LOG gains infoArgs(GUEST) before 'spawn'.\n  - onlyAllowed compares against streamCall('bridge').\n  - AJ3 asserts [[streamCall('bridge')]] and that h.ran holds only the platform pin.\n  - AJ5's mounts row drops CLEAN_LOG[4] (the session info) together with 'spawn'.\n  - bridgeArgv was dropped from the import.\n- **bundle:** guest-stream.mjs is added to `shipped`, with a comment.\n\npinned-client MX8/MX9 call runAgentJob, but their daemon admission refuses first, so they are unaffected.\n\nSnapshot run of the 4 files: 470 tests, 467 pass + daemon-bind fixed (8/8), 2 pre-existing opt-in skips (LA5, macOS smoke).",
+      "startedAt": "2026-11-01T10:25:53.152Z",
+      "completedAt": "2026-11-01T10:33:37.749Z"
     },
     {
       "stepId": "step-3",
@@ -58,7 +73,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-cef53f62",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -92,20 +107,25 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:05:28.654Z",
-  "updatedAt": "2026-11-01T08:59:11.392Z",
+  "updatedAt": "2026-11-01T10:33:37.749Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:52:52.678Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-b520bc90"
+    "architect-b520bc90",
+    "worker-cef53f62"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T08:58:58.843Z",
   "executionContract": {
@@ -155,5 +175,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-01T08:58:58.865Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T10:23:30.331Z"
 }

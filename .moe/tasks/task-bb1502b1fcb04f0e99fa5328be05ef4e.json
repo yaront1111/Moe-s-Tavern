@@ -98,7 +98,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:30.039Z",
-  "updatedAt": "2026-11-01T10:30:23.748Z",
+  "updatedAt": "2026-11-01T10:30:44.175Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:18:30.441Z",
     "plannedStepCount": 5,
@@ -206,7 +206,54 @@
     "packages/moe-daemon/src/tools/executionRoute.test.ts",
     "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
     "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+    "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts",
+    ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+    ".moe/tasks/task-5a635bc90aaa47acabede9307dd1579b.json",
+    ".moe/tasks/task-bb1502b1fcb04f0e99fa5328be05ef4e.json",
+    ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
+  ],
+  "completionSummary": "claim_next_task and wait_for_task now take an optional executionRoute: 'vm'. Any other value (host, VM, '', null, 1, {}) is INVALID_INPUT, raised before any write. The ONE predicate, executionAdmissionRefusal(state, task, workerId?, executionRoute?) in util/claimEligibility.ts, refuses a verified-local WORKING or REVIEW row without the marker, after both readiness asserts, so the marker can only refuse. The task-level profile or the own seat's recorded attempt profile makes a row strict. The explicit claim throws EXECUTION_ROUTE_REQUIRED (NOT_ALLOWED; context {taskId,status,executionProfile,requiredRoute:'vm'}) before any write. The ranked pool and both waiter paths skip the row. PLANNING, legacy and observe claims are unchanged, and a marked claim under real readiness is still EXECUTION_PROFILE_NOT_READY. All 4 callers pass the parsed route. New tools/executionRoute.test.ts has 47 tests; a mutation check that disabled the refusal made 17 fail. Deviations: (1) no route field on the ActiveWaiter record, since the subscribe closure holds it; (2) wait_for_task hints carry the route when sent, to avoid a wake-claim-skip spin; (3) 3 existing tests (deliveryBypass.acceptance, dependencyProjection.acceptance, dependencyReadiness.strict) claimed strict rows without the marker and failed 32 tests on the first full run, so I added executionRoute 'vm' to their claim args with assertions unchanged. None of the WT-19 files was touched. Full daemon suite in a /tmp snapshot plus 7 overlaid files: tsc clean, 221 files passed, 6659 tests passed, 20 skipped, 0 failed (6679 total).",
+  "commits": [
+    {
+      "sha": "799936d97216fb5093d42962f728a482afde1110",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-009c883d@2026-11-01T10:22:38Z",
+      "paths": [
+        ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+        ".moe/tasks/task-5a635bc90aaa47acabede9307dd1579b.json",
+        ".moe/tasks/task-bb1502b1fcb04f0e99fa5328be05ef4e.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json",
+        "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+        "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/executionRoute.test.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/util/claimEligibility.ts"
+      ],
+      "recordedBy": "worker-009c883d",
+      "recordedAt": "2026-11-01T10:30:44.175Z",
+      "treeId": "8c058006038a33c9ed855a40af75464a0ffdcb2d",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/claimEligibility.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "packages/moe-daemon/src/tools/executionRoute.test.ts",
+    "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+    "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
     "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts"
   ],
-  "completionSummary": "claim_next_task and wait_for_task now take an optional executionRoute: 'vm'. Any other value (host, VM, '', null, 1, {}) is INVALID_INPUT, raised before any write. The ONE predicate, executionAdmissionRefusal(state, task, workerId?, executionRoute?) in util/claimEligibility.ts, refuses a verified-local WORKING or REVIEW row without the marker, after both readiness asserts, so the marker can only refuse. The task-level profile or the own seat's recorded attempt profile makes a row strict. The explicit claim throws EXECUTION_ROUTE_REQUIRED (NOT_ALLOWED; context {taskId,status,executionProfile,requiredRoute:'vm'}) before any write. The ranked pool and both waiter paths skip the row. PLANNING, legacy and observe claims are unchanged, and a marked claim under real readiness is still EXECUTION_PROFILE_NOT_READY. All 4 callers pass the parsed route. New tools/executionRoute.test.ts has 47 tests; a mutation check that disabled the refusal made 17 fail. Deviations: (1) no route field on the ActiveWaiter record, since the subscribe closure holds it; (2) wait_for_task hints carry the route when sent, to avoid a wake-claim-skip spin; (3) 3 existing tests (deliveryBypass.acceptance, dependencyProjection.acceptance, dependencyReadiness.strict) claimed strict rows without the marker and failed 32 tests on the first full run, so I added executionRoute 'vm' to their claim args with assertions unchanged. None of the WT-19 files was touched. Full daemon suite in a /tmp snapshot plus 7 overlaid files: tsc clean, 221 files passed, 6659 tests passed, 20 skipped, 0 failed (6679 total)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-009c883d@2026-11-01T10:22:38Z",
+    "at": "2026-11-01T10:30:44.175Z"
+  }
 }

@@ -643,7 +643,19 @@ print(sorted({n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and
 // the supervisor, exits 74 on host EOF unless it is hung.
 const NAME = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
 const SESSION_ID = 'worker-1@2026-10-26T00:00:00.000Z';
-const SPAWNED = ['multipass', bridgeArgv(NAME), { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
+// CQ-R14d2: the session opens its bridge over the SSH route (guest-stream.mjs). Its one info read gets this fake answer;
+// the ssh client and the key directory are strings only, so no row runs a real ssh or multipass.
+const BRIDGE_SSH = join(tmpdir(), 'moe-stream', 'ssh');
+const BRIDGE_KEYS = join(tmpdir(), 'moe-stream', 'keys');
+const INFO = { state: 'Running', image_hash: 'a'.repeat(64), image_release: '24.04 LTS', cpu_count: '2', memory: {}, disks: { sda1: {} }, mounts: {},
+  ipv4: ['10.0.0.2'] };
+const infoRun = async (executable, args) => {
+  if (JSON.stringify(args) !== JSON.stringify(['info', NAME, '--format', 'json'])) throw new Error('unexpected provider call');
+  return { stdout: JSON.stringify({ errors: [], info: { [NAME]: INFO } }), stderr: '' };
+};
+const SSH_ROUTE = Object.freeze({ run: infoRun, ssh: BRIDGE_SSH, keyDir: BRIDGE_KEYS });
+const SPAWNED = [BRIDGE_SSH, sshStreamArgv({ ...transportFiles(NAME, BRIDGE_KEYS), name: NAME, address: '10.0.0.2', mode: 'bridge' }),
+  { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
 const daemonFile = (name, info = {}) => {
   writeFileSync(join(DAEMON_DIR, name), typeof info === 'string' ? info : JSON.stringify({ port: HEALTH_PORT, pid: 1, projectPath: '/p', ...info }));
   return join(DAEMON_DIR, name);
@@ -677,7 +689,7 @@ function fakeProvider({ hung = false, first = (chunk, done) => done(), write = (
 function openSession(provider, { answer = tool => ({ content: [{ type: 'text', text: tool }] }), ...options } = {}) {
   const run = { outputs: [], observations: [], forwarded: [], signals: [] };
   run.promise = runGuestSession({
-    name: NAME, binding: BINDING, job: HOST_JOB, sessionId: SESSION_ID, daemonInfoPath: DAEMON, provider: { spawn: provider.spawn }, timeoutMs: 1_000,
+    name: NAME, binding: BINDING, job: HOST_JOB, sessionId: SESSION_ID, daemonInfoPath: DAEMON, provider: { ...SSH_ROUTE, spawn: provider.spawn }, timeoutMs: 1_000, // CQ-R14d2
     forward: (tool, args, { signal }) => { run.forwarded.push([tool, args]); run.signals.push(signal); return answer(tool, args, { signal }); },
     onOutput: (stream, data) => run.outputs.push([stream, data]), onObservation: frame => run.observations.push(frame), ...options,
   });
@@ -866,7 +878,7 @@ test('H4 replies, bounds and failures each answer once or end the session with a
     await spawned(proc);
     proc.emit('error', Object.assign(new Error('secret'), { code: 'ENOENT' }));
   });
-  for (const spawn of [() => { throw new Error('secret'); }, () => ({})]) await ends('SESSION_SPAWN_FAILED', { provider: { spawn } });
+  for (const spawn of [() => { throw new Error('secret'); }, () => ({})]) await ends('SESSION_SPAWN_FAILED', { provider: { ...SSH_ROUTE, spawn } }); // CQ-R14d2
   let outputs = 0;
   await ends('SESSION_CALLBACK_FAILED', { onOutput: () => { outputs += 1; throw new Error('secret'); } }, proc => proc.send(HELLO, OUTPUT, OUTPUT));
   assert.equal(outputs, 1);

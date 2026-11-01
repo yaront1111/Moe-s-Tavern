@@ -5458,7 +5458,7 @@ test('A6 every Git call runs in the admission envelope with plumbing subcommands
 import { setTimeout as wait } from 'node:timers/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { runAgentJob } from '../local-runner/agent-lifecycle.mjs';
-import { bridgeArgv, jobFrame } from '../local-runner/guest-bridge.mjs';
+import { jobFrame } from '../local-runner/guest-bridge.mjs'; // CQ-R14d2: the bridge spawn is streamCall('bridge'), not bridgeArgv
 import { MAX_RESPONSE_BYTES } from '../local-runner/guest-session.mjs';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -5513,10 +5513,11 @@ function fakeBridge({ requests = GUEST_REQUESTS, frames = [EXITED], exit = 0 } =
 // the last repeating. Each spawn gets a fresh bridge, bridge(index) when a function. The forward refuses a call whose
 // signal is already aborted.
 function agentHarness(t, { guest, pkill = [0], pgrep = [1], bridge, acquire = leaseOf(), release = releasedOf(), onCall } = {}) {
-  const h = { log: [], forwarded: [], outputs: [], observations: [], slept: [], fake: fakeGuest(guest), procs: [] };
+  const h = { log: [], forwarded: [], outputs: [], observations: [], slept: [], fake: fakeGuest(guest), procs: [], ran: [] };
   const take = list => (list.length > 1 ? list.shift() : list[0]);
   const run = async (executable, args, options) => {
     h.log.push(args);
+    h.ran.push(executable); // CQ-R14d2: every provider command's client
     const kill = isDeepStrictEqual(args, PKILL);
     if (!kill && !isDeepStrictEqual(args, PGREP)) return h.fake.run(executable, args, options);
     const code = take(kill ? pkill : pgrep);
@@ -5534,7 +5535,7 @@ function agentHarness(t, { guest, pkill = [0], pgrep = [1], bridge, acquire = le
   writeFileSync(daemonInfoPath, JSON.stringify({ port: agentHealth.address().port, pid: 1, projectPath: '/p' }));
   h.input = { name: GUEST, binding: AGENT, job: JOB, daemonInfoPath, forward, timeoutMs: 1_000, sleep: async ms => { h.slept.push(ms); },
     onOutput: (stream, data) => h.outputs.push([stream, data]), onObservation: frame => h.observations.push(frame),
-    provider: { run, spawn: (...args) => {
+    provider: { run, ...STREAM, spawn: (...args) => { // CQ-R14d2: the bridge opens over the SSH route
       h.log.push('spawn');
       const proc = fakeBridge(typeof bridge === 'function' ? bridge(h.procs.length) : bridge);
       h.procs.push(proc);
@@ -5546,11 +5547,12 @@ function agentHarness(t, { guest, pkill = [0], pgrep = [1], bridge, acquire = le
 const ACQUIRE_CALL = ['moe.acquire_resource', { resourceId: GUEST, taskId: owner.taskId, workerId: 'worker-1' }];
 const RELEASE_CALL = (ifAcquiredAt = ACQUIRED) =>
   ['moe.release_resource', { resourceId: GUEST, workerId: 'worker-1', taskId: owner.taskId, ifHolderWorkerId: 'worker-1', ifAcquiredAt }];
-const CLEAN_LOG = [PKILL, PGREP, infoArgs(GUEST), execArgs('mountinfo'), 'spawn', PKILL, PGREP];
+// CQ-R14d2: the session's own info read (openGuestStream's fresh address) comes right before its spawn.
+const CLEAN_LOG = [PKILL, PGREP, infoArgs(GUEST), execArgs('mountinfo'), infoArgs(GUEST), 'spawn', PKILL, PGREP];
 const ALLOWED = CLEAN_LOG.filter(entry => entry !== 'spawn').map(argv => JSON.stringify(argv));
-// No delete, stop, purge, restart, mount, transfer, materialize or export: only these commands and the bridge argv.
+// No delete, stop, purge, restart, mount, transfer, materialize or export: only these commands and the bridge stream.
 const onlyAllowed = h => assert.deepEqual([h.log.filter(args => args !== 'spawn' && !ALLOWED.includes(JSON.stringify(args))),
-  h.procs.flatMap(proc => proc.calls).filter(([, argv]) => !isDeepStrictEqual(argv, bridgeArgv(GUEST)))], [[], []]);
+  h.procs.flatMap(proc => proc.calls).filter(call => !isDeepStrictEqual(call, streamCall('bridge')))], [[], []]);
 const OUT = { kind: 'output', stream: 'stdout', data: 'QQ==' };
 
 test('AJ1 invalid input, a caller session id and an aborted signal refuse before any daemon or provider call', async t => {
@@ -5604,7 +5606,8 @@ test('AJ3 a clean job: lease, verified sweep, no mounts, one bridge session with
   assert.deepEqual(result, { sessionId, observation: EXITED, failure: null, terminationVerified: true, lease: 'released', executionReady: false });
   assert.deepEqual([Object.isFrozen(result), h.observations, h.log, h.fake.unexpected], [true, [EXITED], CLEAN_LOG, []]);
   const [proc] = h.procs;
-  assert.deepEqual(h.procs.flatMap(({ calls }) => calls), [[platformFor(process.platform).executable, bridgeArgv(GUEST), PIPES]]);
+  // CQ-R14d2: the one spawn is the pinned ssh client; every provider command (info, PKILL, PGREP) uses this host's pin.
+  assert.deepEqual([h.procs.flatMap(({ calls }) => calls), [...new Set(h.ran)]], [[streamCall('bridge')], [platformFor(process.platform).executable]]);
   const [job, ...replies] = proc.frames();
   assert.deepEqual(job, { kind: 'job', version: 1, cli: 'claude', role: 'worker', credential: JOB.credential });
   assert.equal(proc.written[0].equals(jobFrame({ cli: 'claude', role: 'worker', credential: JOB.credential })), true);
@@ -5661,7 +5664,8 @@ test('AJ5 a failed session, an unverified sweep, mounts or a refused release kee
     ['TRANSFER_MOUNTS_UNKNOWN', { answers: healthy({ mountinfo: { code: 0, stdout: '' } }) }]]) {
     const h = agentHarness(t, { guest });
     const result = await runAgentJob(h.input);
-    assert.deepEqual([result.failure, result.lease, h.log, h.calls()], [failure, 'released', CLEAN_LOG.filter(entry => entry !== 'spawn'),
+    // CQ-R14d2: no session opens, so neither its info read (CLEAN_LOG[4]) nor its spawn is logged.
+    assert.deepEqual([result.failure, result.lease, h.log, h.calls()], [failure, 'released', CLEAN_LOG.filter((entry, index) => index !== 4 && entry !== 'spawn'),
       [ACQUIRE_CALL, RELEASE_CALL()]]);
   }
   for (const [release, timeoutMs = 1_000] of [[{ ...releasedOf(), isError: true }], [releasedOf([])],
