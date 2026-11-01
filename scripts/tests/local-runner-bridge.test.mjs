@@ -1217,16 +1217,25 @@ if how.startswith('SIG'):
     os.kill(os.getpid(), getattr(signal, how))
 sys.exit(int(how))
 `;
+// What proc(5) shows of a process that can run no more: State Z (zombie) or X (its reaper is releasing it), SIGKILL
+// pending in ShdPnd, or PF_EXITING (0x4) in /proc/<pid>/stat's flags, which is set as do_exit begins and never
+// cleared. The pending sets read empty once the reaper releases a task, and status is no atomic snapshot, so status
+// alone can read a dead process as live (task-b712ce09: 'X (dead)' with ShdPnd 0x0 on Linux 6.18).
+const CANNOT_RUN = `import signal
+def cannot_run(state, shdpnd, flags):
+    return state[0] in 'ZX' or bool(int(shdpnd, 16) & (1 << signal.SIGKILL - 1)) or bool(flags & 0x4)
+`;
 // The harness runs relay() on stdout. As the observation is written it records, for each pid the job reported, whether
-// that process can run no more: reaped, a zombie, or SIGKILL pending in proc(5)'s ShdPnd (Linux only; null elsewhere).
-const OBSERVE = `import base64, signal, time
+// that process can run no more: reaped, or CANNOT_RUN (Linux only; null elsewhere).
+const OBSERVE = `${CANNOT_RUN}import base64, time
 reported, dead = bytearray(), None
 def done(pid):
     try:
         status = dict(line.split(':\\t', 1) for line in open('/proc/%d/status' % pid) if ':\\t' in line)
+        flags = int(open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[6])  # [6] after comm: flags
     except (FileNotFoundError, ProcessLookupError):  # reaped before the open, or between the open and the read (ESRCH)
         return True
-    return status['State'][0] == 'Z' or bool(int(status['ShdPnd'], 16) & (1 << signal.SIGKILL - 1))
+    return cannot_run(status['State'], status['ShdPnd'], flags)
 write = m.write_frame
 def write_frame(fd, value):
     global dead
@@ -1270,6 +1279,23 @@ for (const [how, ending, observation] of ENDINGS) {
     });
   }
 }
+
+// The probe's own classification, pinned without a process: a view of a live process, PF_FORKNOEXEC (0x40) and a pending
+// SIGTERM never count as unable to run, while a zombie, a releasing 'X (dead)', SIGKILL pending and PF_EXITING do.
+test('S11 probe: CANNOT_RUN counts exactly the views of a process that can run no more', { skip: NO_GUEST }, () => {
+  const views = [
+    ['Z (zombie)', '0000000000000000', 0],
+    ['X (dead)', '0000000000000000', 0],
+    ['R (running)', '0000000000000100', 0],
+    ['R (running)', '0000000000000000', 4],
+    ['S (sleeping)', '0000000000000000', 0],
+    ['R (running)', '0000000000000000', 64],
+    ['S (sleeping)', '0000000000004000', 0],
+  ];
+  const run = spawnSync('python3', ['-I', '-c', `${CANNOT_RUN}import json, sys\nprint(json.dumps([cannot_run(*v) for v in json.loads(sys.argv[1])]))`, JSON.stringify(views)], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout), [true, true, true, true, false, false, false]);
+});
 
 // S12 and S16 signal the harness from the harness: a root runner's job, inside GUARD's PID namespace, cannot see it.
 // The thread reads relay()'s frames from out_fd's pipe; once the job's start byte has arrived, and `settle` seconds

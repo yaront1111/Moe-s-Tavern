@@ -8,20 +8,189 @@
     "S11 is deterministic under load, for example 50 consecutive runs of local-runner-bridge.test.mjs while another full suite runs, without weakening the 'killed before the one observation' invariant"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1: re-verify and record the root cause before touching code. This step changes no file in the checkout.\n\nFirst read comment-0fb39d4e on this task: the architect's repro and numbers.\n\nIn a scratch directory outside the checkout, write a standalone `python3 -I` script that mirrors the S11 'open' row N times:\n- Make pipes (r, w) and (pr, pw), then fork J.\n- J: os.setsid(), then fork C. C closes pw, sleeps 600 s holding w, then os._exit(0). J writes C's pid to pw, then os._exit(0).\n- Parent: close w, read C's pid, os.waitpid(J, 0). C is now an orphan in group J.\n- Parent: os.killpg(J, SIGKILL), using its own recorded group id and never a name match. Read r to EOF.\n- Then read /proc/C/status and /proc/C/stat once each. Classify that one view with BOTH predicates:\n  - today's: gone, State Z, or SIGKILL (0x100) in ShdPnd;\n  - step 2's cannot_run: it adds State X, and PF_EXITING (0x4) in stat's flags, which is field [6] after the last ')'.\n- Error handling: wrap each iteration so any exception killpg's that iteration's own recorded group before re-raising.\n\nRun at least 2000 iterations under nice -n 19, at the box's normal load or under step 3's background load. Record `uptime`, the count of each first-probe view, today's alive count, and the fixed alive count. Expect today's alive count above 0, all of them 'X (dead)' with ShdPnd 0x0. The fixed alive count must be 0.\n\nName the root cause in a moe.add_comment on this task: a probe race in OBSERVE's done(), not a relay ordering gap. Include these numbers and this reasoning: on the 'open' row, pump() reaches stdout/stderr EOF only after the lingering child has run exit_files, and only pump's start-pipe killpg (scripts/local-runner/guest-supervisor.py:477) kills that child.\n\nIf the fixed predicate ever reads a view as alive, quote that view verbatim in the comment. Widen cannot_run in step 2 only by another fact proving the process can never run user code again, never by a retry or a sleep. If there is no such fact, call moe.report_blocked with the view.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Root cause (probe race) recorded in comment; my replica (107k iters) never hit the X(dead) window, architect's repro did (5/2000). No checkout files changed. Dirty paths of other sessions untouched.",
+      "startedAt": "2026-11-01T23:09:23.306Z",
+      "completedAt": "2026-11-01T23:11:33.091Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Test-only fix in scripts/tests/local-runner-bridge.test.mjs. Edit with the Edit tool only. scripts/local-runner/guest-supervisor.py stays byte-identical: relay() is sound.\n\n(a) Above OBSERVE (its comment is at lines 1220-1221), add a CANNOT_RUN python snippet that OBSERVE and the new pin row share:\n```\n// What proc(5) shows of a process that can run no more: State Z (zombie) or X (its reaper is releasing it), SIGKILL\n// pending in ShdPnd, or PF_EXITING (0x4) in /proc/<pid>/stat's flags, which is set as do_exit begins and never\n// cleared. The pending sets read empty once the reaper releases a task, and status is no atomic snapshot, so status\n// alone can read a dead process as live (task-b712ce09: 'X (dead)' with ShdPnd 0x0 on Linux 6.18).\nconst CANNOT_RUN = `import signal\ndef cannot_run(state, shdpnd, flags):\n    return state[0] in 'ZX' or bool(int(shdpnd, 16) & (1 << signal.SIGKILL - 1)) or bool(flags & 0x4)\n`;\n```\n\n(b) OBSERVE starts `${CANNOT_RUN}import base64, time`. Inside the same try, done(pid) reads status as it does today, plus `flags = int(open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[6])`. FileNotFoundError and ProcessLookupError on either read still return True. It then returns `cannot_run(status['State'], status['ShdPnd'], flags)`. Keep the `\\\\t` escaping the template already uses. Reword OBSERVE's comment to 'whether that process can run no more: reaped, or CANNOT_RUN (Linux only; null elsewhere)'.\n\n(c) After the S11 loop (after line 1272), add one deterministic row that starts no process:\n- Title starts 'S11 probe:'; skip NO_GUEST.\n- It runs python3 -I -c `${CANNOT_RUN}import json, sys\\nprint(json.dumps([cannot_run(*v) for v in json.loads(sys.argv[1])]))` over these views, in order:\n  - ['Z (zombie)','0000000000000000',0]\n  - ['X (dead)','0000000000000000',0]\n  - ['R (running)','0000000000000100',0]\n  - ['R (running)','0000000000000000',4]\n  - ['S (sleeping)','0000000000000000',0]\n  - ['R (running)','0000000000000000',64]\n  - ['S (sleeping)','0000000000004000',0]\n- It asserts exit status 0 (message: its stderr) and deepEqual [true, true, true, true, false, false, false].\n\nThe last three views pin that a live process, PF_FORKNOEXEC (0x40) and a pending SIGTERM never count.\n\nLeave LINGER, ENDINGS, the six S11 rows and every other test unchanged.\n\nError handling: the pin row asserts python's exit status with its stderr, so a syntax slip fails loudly. done() keeps its ESRCH/ENOENT handling.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Added CANNOT_RUN snippet, rewired OBSERVE done(), added 'S11 probe' pin row. Edit tool only.",
+      "startedAt": "2026-11-01T23:11:35.116Z",
+      "completedAt": "2026-11-01T23:11:48.697Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "The gate. Run it in a Linux snapshot, never in the shared checkout (governor comment; mem:gotcha-harness-snapshot-needs-full-archive; mem:gotcha-daemon-linux-snapshot-gate for env -i and the bounded long-wait loop).\n\nSetup:\n- `SHA=$(git -C /mnt/d/projexts/moes rev-parse HEAD)`.\n- `S=$(mktemp -d)`, outside the checkout.\n- `git archive $SHA | tar -x -C $S` (the whole repo).\n- Copy ONLY scripts/tests/local-runner-bridge.test.mjs from the tree into $S.\n- Run every command below from $S under `env -i HOME=$HOME PATH=<nvm node v24 bin>:/usr/local/bin:/usr/bin:/bin`, prefixed by `nice -n 19`. The governor asks for this because the wrapper lane's postflight harness flakes on a busy box.\n\n(1) Run `node --test scripts/tests/local-runner-bridge.test.mjs` once. It must exit 0.\n\n(2) Mutants. Make each on a snapshot copy, and restore it before the next.\n- M1: replace pump's `os.killpg(child.pid, signal.SIGKILL)  # the unreaped guard still pins the group id` (guest-supervisor.py:477, unique by its comment) with `pass`. Check it still parses: `python3 -I -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' <file>`. Then run `node --test --test-name-pattern '^S11 after' scripts/tests/local-runner-bridge.test.mjs`.\n  - The three 'closed' rows must fail on 'a job process could still run' or on the running() check.\n  - The 'open' rows must fail on their 20 s spawnSync timeout.\n  - This proves the probe still catches a live lingering child, so the invariant is not weakened.\n- M2: in the test copy, change `in 'ZX'` to `== 'Z'`.\n- M3: in the test copy, drop ` or bool(flags & 0x4)`.\n- For M2 and M3, run with `--test-name-pattern '^S11 probe'`. The pin row must fail on an assertion diff.\n- Restore guest-supervisor.py from `git show $SHA:scripts/local-runner/guest-supervisor.py` and the test file from the tree, then cmp both.\n\n(3) Stress, for DoD 2.\n- Start the background load in its own session, with a recorded pid and a stop file: `setsid nohup bash -c 'echo $$ > bg.pid; while [ ! -e stop ]; do nice -n 19 node --test $(ls scripts/tests/*.test.mjs | grep -v local-runner-bridge); done' > bg.log 2>&1 &`.\n- Run 50 consecutive `nice -n 19 node --test scripts/tests/local-runner-bridge.test.mjs`, one log each, and stop at the first failure.\n- Record `uptime` before the first run, every 10 runs and after the last. The failing gate ran at a load average of about 5.\n- Wait out the ~20 min with the bounded wait loop from the gotcha memory, never one unbounded call.\n- Afterwards `touch stop` and let the loop finish its pass. Kill nothing by name. If you must stop it early, kill only the recorded bg.pid.\n- All 50 runs must pass.\n\n(4) Re-run (1) fresh. That run is the moe.complete_task verification evidence: command `node --test scripts/tests/local-runner-bridge.test.mjs`, exitCode 0, and an outputTail with the tests/pass/fail lines. Put the mutant outcomes, the 50/50 count and the load averages in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Snapshot gate (/tmp/b712-snap.*): run 1 exit 0 (90 pass/1 skip). M1 -> 6/6 S11 'after' rows fail (open: ETIMEDOUT; closed: 'a job process could still run'). M2, M3 -> 'S11 probe' fails on assertion diff. Both files restored, cmp clean. Stress 50/50 under nice -n 19 with bg scripts loop, load 2.3 start, 5.5/5.6/5.8/5.2/4.2 at runs 10..50. Fresh final run exit 0.",
+      "startedAt": "2026-11-01T23:11:49.628Z",
+      "completedAt": "2026-11-01T23:31:51.061Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the one-file diff. Check each of these:\n- (a) scripts/local-runner/guest-supervisor.py has no diff, so relay() is unchanged.\n- (b) Every clause of cannot_run states a fact that the process can never run user code again: zombie, released, SIGKILL pending, or in do_exit. None is a timing allowance such as a retry, a sleep or a grace period, any of which could hide a genuinely late kill.\n- (c) M1 really failed the 'closed' rows on the dead/running assertions, not on a parse error.\n- (d) The stat parse splits after the LAST ')', because comm can contain spaces or parentheses, and [6] is flags. GLOBAL_PIDS' gsid at lines 250-251 uses the same split.\n- (e) Both /proc reads sit inside the one try, so a process reaped between them counts as gone, not as an error.\n- (f) Off Linux, OBSERVE still records null; the sys.platform guard is unchanged.\n- (g) The stress and mutant runs left nothing behind: bg.pid's loop has exited, and every pid your runs reported is gone (`ps -o pid= -p <pid>`). Kill only by recorded pid.\n\nFix any finding in the test file, then re-run step 3's command (1) before moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Self-review (a)-(g) clean: supervisor.py no diff; each cannot_run clause is a kernel fact; M1 failed on 'could still run' / ETIMEDOUT assertions; stat split after last ')' [6]=flags; both /proc reads in one try; sys.platform guard unchanged; bg loop exited, no leftover sleep/b712 processes. Diff +32 lines, one file.",
+      "startedAt": "2026-11-01T23:31:52.091Z",
+      "completedAt": "2026-11-01T23:31:57.534Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promotion. The human told the governor \"make sure board moving\" twice on 2026-11-01. This row runs outside the wrapper lane: no open row plans local-runner-bridge.test.mjs or the bridge relay. Every coder is idle while the serial lane holds the rest of the board.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "LOW",
   "order": 236.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-732d7eb1abf64784a529775c6ccebfaf",
+      "author": "governor-978922c1",
+      "content": "Governor, for the planner and worker: the DoD's stress proof (50 runs while another full suite runs) will share the box with the wrapper lane's postflight harness. That harness has 60-second per-wrapper timeouts and flakes when the box is busy. Run the background load and the 50-run loop under `nice -n 19`, and record the load average in the evidence. Use a Linux snapshot (git archive), never the shared checkout.",
+      "timestamp": "2026-11-01T22:46:21.206Z"
+    },
+    {
+      "id": "comment-0fb39d4eedbb4f69ad2d70ddcf64664b",
+      "author": "architect-98c94b4c",
+      "content": "Architect evidence, 2026-11-01T23:05Z. Kernel 6.18.33.1-microsoft-standard-WSL2, uid 1000, load average 3.3-3.7. Root cause: a PROBE RACE in OBSERVE's done(). There is no relay ordering gap.\n\nRepro (standalone python, scratch only; it kills only the process group it created, by recorded id). This mirrors the S11 'open' row:\n- A setsid'd job forks a sleeping orphan that holds a pipe, then exits.\n- The parent reaps the job, killpg's the group, reads the pipe to EOF, then reads /proc/<orphan>/status once, as done() does.\n\nResults:\n- 2000 iterations: today's predicate (State Z, or SIGKILL in ShdPnd) called the dead orphan alive 5 times. All 5 were 'X (dead)' with ShdPnd 0x0 and SigPnd 0x0. A fixed predicate that also accepts State X called it alive 0 times.\n- The first-probe views also included 'Z' with ShdPnd 0x0 (3) and 'X' with ShdPnd SIGKILL (1). So State and the pending sets come from different instants: proc(5) status is no atomic snapshot, and the pending sets read empty once the system reaper releases the task.\n- A separate run polled continuously from the kill until the orphan was gone, 400 kills. Every post-kill view was R+ShdPnd SIGKILL (+PF_EXITING), then Z+ShdPnd SIGKILL+PF_EXITING, then gone. The only view that looks alive is the reaper's X window.\n\nWhy it is not a relay gap: on the 'open' row, the lingering child holds the job's output pipes. pump() therefore sees stdout/stderr EOF only after that child has run exit_files in do_exit. The only thing that kills that child is pump's killpg at the start-pipe EOF (guest-supervisor.py:477). So the kill always precedes the observation, and the child was dead, mid-release, when done() read it.\n\nThe failing gate log /tmp/moe-m06-gate.mpEtE8/logs/scripts-test4.log:1423 still exists: report.dead [true, false], 67.5 ms.",
+      "timestamp": "2026-11-01T23:06:55.891Z"
+    },
+    {
+      "id": "comment-b590f98b0fb34133a9180ef581af074a",
+      "author": "worker-9be3bcf5",
+      "content": "Worker, step 1 (DoD 1). ROOT CAUSE: a probe race in OBSERVE's done(), NOT a relay ordering gap.\n\nReasoning from the source: on the 'open' row, pump() (guest-supervisor.py:466-481) reaches stdout/stderr EOF only after the lingering child has run exit_files, and only pump's start-pipe killpg (:477) kills that child. run_bridge then reaps the guard and only then writes the observation. So relay() has already killed the child before done() runs. done() reads /proc/<pid>/status once, and today's predicate accepts only gone, State Z, or SIGKILL in ShdPnd. Between do_exit's exit_files and the reaper's release, status can show 'X (dead)' with empty pending sets. proc(5) status is not an atomic snapshot, so State and ShdPnd can also come from different instants. The failing run's report.dead [true, false] is that view.\n\nRepro numbers:\n- Architect (comment-0fb39d4e), 2000 iterations at load 3.3 on 6.18.33.1-microsoft-standard-WSL2: today's predicate called the dead orphan alive 5 times, all 'X (dead)' with ShdPnd 0x0. A predicate that also accepts State X called it alive 0 times.\n- Mine: a standalone `python3 -I` replica (/tmp/b712-scratch/repro.py, scratch only, kills only its own recorded group id) at load 3.6-5.7 under nice -n 19. It ran 3000 + 4x6000 + 10x8000 = 107000 iterations. Views: about 'gone' 99%, 'Z ShdPnd=0x100 PF_EXITING=1' about 1%, today's alive 0, fixed predicate (Z or X, SIGKILL pending, PF_EXITING) alive 0.\n- My replica did NOT reproduce the 'X (dead)' window on this boot, so I have no first-hand today's-alive count above 0. The architect's 5/2000 and the CI failure are the evidence for the window. Mine only confirms the fixed predicate never reads a dead orphan as alive. Every view seen (gone, Z with PF_EXITING set) is in the fixed predicate's dead set.\n\nDecision: proceed with the test-only probe fix plus the deterministic 'S11 probe' pin row, which does not depend on catching the race live. Each clause of the new predicate is a kernel fact that the process can never run user code again. No retry, sleep or grace period is added.",
+      "timestamp": "2026-11-01T23:11:31.431Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T22:34:12.712Z",
-  "updatedAt": "2026-11-01T22:34:12.712Z"
+  "updatedAt": "2026-11-01T23:32:07.110Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-01T22:46:16.541Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T22:53:36.711Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-98c94b4c",
+    "worker-9be3bcf5"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T23:08:57.595Z",
+  "executionContract": {
+    "intendedBehavior": "S11's OBSERVE probe stops reading a dead lingering child as alive. A process now counts as unable to run when it is gone, or proc(5) shows State Z or X, SIGKILL pending in ShdPnd, or PF_EXITING in /proc/<pid>/stat flags. The relay itself is unchanged, and a deterministic pin row fixes that classification.",
+    "acceptanceCriteria": [
+      "DoD 1: a task comment names the root cause (a probe race in done(), not a relay ordering gap), with fresh repro numbers: today's predicate calls 'X (dead)' views alive, and the fixed predicate calls none alive",
+      "DoD 2: 50 consecutive runs of local-runner-bridge.test.mjs pass under nice -n 19 while a background scripts suite loop runs, with load averages recorded",
+      "Mutant M1 (pump's killpg removed) fails the S11 'closed' rows, so the 'killed before the one observation' invariant still bites",
+      "Mutants M2 ('ZX' to 'Z') and M3 (PF_EXITING clause dropped) each fail the new 'S11 probe' row",
+      "node --test scripts/tests/local-runner-bridge.test.mjs exits 0 in a Linux snapshot"
+    ],
+    "invariants": [
+      "scripts/local-runner/guest-supervisor.py byte-identical; relay(), pump() and GUARD unchanged",
+      "No retry, sleep or grace period in the probe: every dead indicator is a kernel fact that the process can never run user code again",
+      "LINGER, ENDINGS, the six S11 rows' assertions and all other tests unchanged",
+      "No process killed by name; background load stopped by its stop file or recorded pid only"
+    ],
+    "approvedScope": [
+      "CANNOT_RUN python snippet and OBSERVE's done() in scripts/tests/local-runner-bridge.test.mjs",
+      "One new deterministic row titled 'S11 probe: ...' after the S11 loop"
+    ],
+    "reuse": [
+      "The existing OBSERVE/LINGER harness and the S11 rows; GLOBAL_PIDS' stat split convention"
+    ],
+    "sourceAssumptions": [
+      "scripts/tests/local-runner-bridge.test.mjs:1220-1240 OBSERVE wraps m.write_frame and computes dead = [done(pid) ...] synchronously before the observation frame is written; done() today accepts gone, State Z or SIGKILL in ShdPnd",
+      "scripts/tests/local-runner-bridge.test.mjs:1245-1272 the six S11 rows assert report.dead [true, true] on Linux; spawnSync timeout 20 s, killSignal SIGKILL",
+      "scripts/local-runner/guest-supervisor.py:466-481 pump() killpg's the guard's group on start-pipe EOF and returns only after stdout, stderr and the start pipe are all at EOF; run_bridge (:531-555) reaps the guard and only then writes the observation",
+      "Non-root, GUARD does not unshare a PID namespace, so the job's orphan is reaped by the system reaper; its EXIT_DEAD window shows 'X (dead)' with empty pending sets (architect repro, comment-0fb39d4e)",
+      "GLOBAL_PIDS (test file:250-251) parses /proc/self/stat after the last ')' ([3] session); flags is field [6] in that split"
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner-bridge.test.mjs (Linux git-archive snapshot, env -i, nice -n 19)",
+      "node --test --test-name-pattern '^S11 after' scripts/tests/local-runner-bridge.test.mjs (mutant M1)",
+      "node --test --test-name-pattern '^S11 probe' scripts/tests/local-runner-bridge.test.mjs (mutants M2, M3)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Changing relay(), e.g. waiting for the job group to empty before the observation: rejected. The relay ordering is sound, because on the 'open' row EOF can only follow the child's exit_files, which only the start-pipe killpg causes. A production change for a probe artifact adds risk and latency. (2) A retry or sleep in done(): rejected. A timing allowance could hide a genuinely late kill, which weakens the invariant. (3) Accepting State X only: this is the minimal fix the evidence supports. But /proc/<pid>/status is not atomic: State and ShdPnd are rendered at different instants, so a preempted read can pair a pre-exit State with a post-release empty ShdPnd. PF_EXITING in /proc/<pid>/stat is set at do_exit entry and never cleared, so it closes that window with a fact rather than a timing allowance. (4) Requiring the /proc entry to vanish (reaped): rejected. The system reaper controls that, not relay().",
+    "codebaseInsights": "OBSERVE computes `dead` inside its write_frame wrapper, before the observation bytes are written, so any dead indicator read during done() was already true at the write: each indicator is monotonic. Run non-root, GUARD skips CLONE_NEWPID, so the lingering child is reparented to the system reaper (WSL /init), whose wait and release create the X window. Architect repro, 2000 iterations at load 3.3 on 6.18.33.1-microsoft-standard-WSL2: today's predicate saw 5 alive-looking views, all 'X (dead)' with ShdPnd 0x0; the fixed predicate saw 0. A whole bridge file run takes about 19 s and needs no node_modules (node builtins only).",
+    "risks": "Escaping: the python lives inside JS template literals, so the existing `\\\\t` stays doubled and `\\n` in the pin row's -c string is a JS newline. The stress gate takes 20+ min of wall clock: use setsid + pidfile + a stop file and bounded waits (mem:gotcha-harness-snapshot-needs-full-archive), and never pattern-kill. Under M1 the 'open' rows each take 20 s, the spawnSync timeout; the GUARD life pipe and the rows' finally blocks clean up their groups. In a fresh snapshot without the daemon dist, the background scripts suite fails TY1 and C4-C9 fast. That is only load, but do not report those failures as regressions. The governor asked for nice -n 19 on both the load and the loop, with the load average recorded.",
+    "keyFiles": [
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/local-runner/guest-supervisor.py"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "275f732115cb73f8859fe7c6501c48587a80ed3e",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T23:08:57.618Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T23:09:23.306Z",
+  "reviewStartedAt": "2026-11-01T23:32:07.108Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner-bridge.test.mjs (Linux git-archive snapshot, env -i, nice -n 19)",
+    "exitCode": 0,
+    "outputTail": "✔ B-XWIRE a reused or cross-wired guest IP fails closed under the HostKeyAlias pin (20.416126ms)\nℹ tests 91\nℹ suites 0\nℹ pass 90\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 18970.739842",
+    "reportedAt": "2026-11-01T23:32:07.108Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-bridge.test.mjs"
+  ],
+  "completionSummary": "Root cause: a probe race in OBSERVE's done(), not a relay ordering gap. A dead lingering child can read 'X (dead)' with empty ShdPnd. The architect saw 5/2000 such views; my 107k-iteration replica never hit that window, and the fixed predicate read 0 alive. Fix, test-only in scripts/tests/local-runner-bridge.test.mjs (+32 lines): a shared CANNOT_RUN predicate that counts State Z or X, SIGKILL in ShdPnd, or PF_EXITING in /proc/<pid>/stat flags. OBSERVE.done() now uses it, and a new deterministic 'S11 probe:' row pins it. guest-supervisor.py, relay(), pump() and the six S11 rows are unchanged. The gate ran in a Linux git-archive snapshot under env -i and nice -n 19. The file passed once and again fresh at the end (90 pass, 0 fail, 1 skipped). Mutants: M1 (pump killpg removed) fails all 6 S11 'after' rows (open: ETIMEDOUT; closed: 'a job process could still run'). M2 ('ZX' to 'Z') and M3 (PF_EXITING dropped) each fail the 'S11 probe' row on an assertion diff. Stress: 50 of 50 consecutive runs passed with a background scripts suite loop running. Load was 2.3 at start, 5.5/5.6/5.8/5.2/4.2 at runs 10-50. The background loop exited via its stop file and nothing was killed by name."
 }
