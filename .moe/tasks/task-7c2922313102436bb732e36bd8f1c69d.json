@@ -1,0 +1,161 @@
+{
+  "id": "task-7c2922313102436bb732e36bd8f1c69d",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R14c] Provisioning mints the per-VM SSH transport keys",
+  "description": "Third slice of task-fd196d137c44497188d2639f149e259b (DESIGN comment-350cb4d0, governor ruling comment-d954b3df). It depends on R14b (task-201aebc6), which needs buildUserData's `transport`, and on R14a, which needs guest-ssh.mjs.\n\n**Objective.** provisionGuest gives every owned guest fresh transport keys. It leaves the client half where streams look for it, and only while the VM is owned.\n\n**Deliverable.**\n- **Pinned client check.** provisionGuest in scripts/local-runner/provision.mjs resolves `provider.ssh ?? sshExecutable(platform.id)` once the prerequisites hold, before the image cache or the reservation. It refuses with a new fixed PROVISION_TRANSPORT_UNAVAILABLE when the client is null or not a regular file.\n- **Keys into user-data.** It calls createTransportKeys() once and passes `{hostPrivateKey, hostPublicKey, clientPublicKey}` as buildUserData's transport.\n- **Key files.** Once provisionOwned owns the VM, and after the win32 image-id proof, it writes `transportFiles(name, keyDir)`, where keyDir is `provider.keyDir ?? defaultKeyDir()`.\n  - It runs mkdir recursive 0700, then writes each file with flag 'wx' (O_CREAT|O_EXCL, so an existing path or symlink is never followed or overwritten) and mode 0o600.\n  - The two files are the client privateKey and `knownHostsLine(name, host publicKey) + '\\n'`.\n  - Any failure is a new fixed PROVISION_TRANSPORT_FAILED. The owned record stays for R06 cleanup.\n- **Nothing secret in the result.** The result's fields are unchanged and hold no key bytes, path or address. The private host key is never written on the host.\n- **Purge.** purgeOwned in scripts/local-runner/lifecycle.mjs (behind deleteOwned and cleanupOwned) unlinks both transportFiles(record.instance, provider.keyDir ?? defaultKeyDir()). This happens after the instance is verified absent and before the record is marked deleted. ENOENT is fine; any other unlink error throws LIFECYCLE_STATE_UNKNOWN, so a later cleanup retries.\n- **Harness defaults.** Test harnesses that run the real provisionGuest (local-runner.test.mjs and local-runner-pinned-client.test.mjs) inject provider.keyDir as a temp dir and provider.ssh as a temp regular file. No test then writes into the real home or depends on the host's ssh.\n\n**Why keyDir is in the home directory, not the ledger dir.** Win32-OpenSSH refuses a private key that other users can read. A dir such as C:\\moe-certify inherits Users:RX from C:\\, while the user profile grants only the user, SYSTEM and Administrators. Gate 0 checks this on real Windows. If Gate 0 reports that ssh.exe refused the inherited profile ACL, request_replan: this slice must then set an explicit owner-only ACL (ruling condition 1).\n\n**Not in scope:** opening streams (R14d1), the user-data format (R14b), readiness, platform modules and guest-supervisor.py.\n\n**Verification**, in a snapshot and never in place:\n`S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/provision.mjs scripts/local-runner/lifecycle.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-pinned-client.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-pinned-client.test.mjs`",
+  "definitionOfDone": [
+    "A provisioning row shows three things:\n- the launched user-data carries ssh_keys and the restricted ssh_authorized_keys line from one createTransportKeys() call;\n- afterwards `<keyDir>/<name>.key` holds that call's client private key, and `<keyDir>/<name>.known_hosts` holds exactly `<name> <host public key>\\n`;\n- on POSIX both files are 0600 in a 0700 dir.",
+    "With the pinned client missing (null, absent or not a regular file), provisionGuest rejects with PROVISION_TRANSPORT_UNAVAILABLE. A row asserts that nothing was fetched, reserved or launched.",
+    "A key path that already exists as a file or symlink makes provisioning reject with PROVISION_TRANSPORT_FAILED. The existing bytes or link target are unchanged and the owned record stays.",
+    "deleteOwned and cleanupOwned unlink both files once the instance is verified absent. An unlink error other than ENOENT leaves the record not deleted and reports LIFECYCLE_STATE_UNKNOWN. Both shown by rows.",
+    "No key bytes, key path or address appear in provisionGuest's result or in any rejection. A row checks that JSON.stringify of each contains neither 'PRIVATE KEY' nor the keyDir. Every existing provisioning, certify and pinned-client row stays green, and the description's verification command exits 0 in the snapshot under env -i with Node 24.21.0."
+  ],
+  "taskRails": [
+    "Gate 0: start no implementation step until the governor has posted a Gate 0 PASS comment on task-fd196d137c44497188d2639f149e259b covering Windows (a)-(c) and Linux (a)-(d). Without it, report_blocked with blockedOnTaskIds [] and the reason 'waiting on the governor Gate 0 PASS for the SSH transport'.",
+    "No seat runs Multipass. guest-supervisor.py (its sha256 3a19f3bf… is R13's commit-under-test pin), the R02 image pin and every readiness evaluator stay untouched.",
+    "Write tracked files only with the Edit/Write tools. Shell writes go only into scratch snapshots outside the checkout."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Gate 0 first (task rail). Confirm the governor's Gate 0 PASS comment on task-fd196d137c44497188d2639f149e259b covers Windows (a)-(c) and Linux (a)-(d). Without it, moe.report_blocked with blockedOnTaskIds [] and the reason 'waiting on the governor Gate 0 PASS for the SSH transport', and edit nothing.\n\nThen implement the transport half of provisionGuest in scripts/local-runner/provision.mjs (mem:decision-guest-ssh-transport).\n(1) Imports:\n  - `mkdir, stat, writeFile` from node:fs/promises;\n  - `createTransportKeys, defaultKeyDir, knownHostsLine, sshExecutable, transportFiles` from './guest-ssh.mjs'. R14a's module imports nothing local, so there is no ESM cycle.\n(2) MESSAGES gains two fixed codes, and neither message names a path:\n  - PROVISION_TRANSPORT_UNAVAILABLE: 'The pinned OpenSSH client every guest stream runs is missing.'\n  - PROVISION_TRANSPORT_FAILED: 'The guest transport key files could not be written; the owned instance stays for cleanup.'\n(3) Private requirePinnedClient(provider, platform):\n  - `const client = provider.ssh ?? sshExecutable(platform.id)`, then fs stat it. stat follows a distro symlink at the pinned, root-owned path.\n  - Throw PROVISION_TRANSPORT_UNAVAILABLE unless client is a non-empty string, stat succeeds and stats.isFile().\n  - Never consult PATH.\n(4) Private writeTransportFiles(name, provider, keys). Everything runs inside ONE try:\n  - `keyDir = provider.keyDir ?? defaultKeyDir()`;\n  - `{identityFile, knownHostsFile} = transportFiles(name, keyDir)`, which validates before any fs call;\n  - mkdir(keyDir, {recursive:true, mode:0o700});\n  - writeFile(identityFile, keys.client.privateKey, {flag:'wx', mode:0o600});\n  - writeFile(knownHostsFile, knownHostsLine(name, keys.host.publicKey) + '\\n', {flag:'wx', mode:0o600}).\n  Error handling: the catch throws a FRESH provisionError('PROVISION_TRANSPORT_FAILED') with no cause, so no fs message (which names the path) escapes. 'wx' is O_CREAT|O_EXCL: an existing file or symlink, even a dangling one, is never followed or overwritten.\n(5) In provisionGuest, right after the PRIMARY_NAME_CONFLICT check and before buildUserData, ensurePinnedImage and ledger.reserve:\n  - `await requirePinnedClient(provider, platform)`;\n  - `const keys = createTransportKeys()`, called once;\n  - buildUserData({supervisor, credential, transport:{hostPrivateKey: keys.host.privateKey, hostPublicKey: keys.host.publicKey, clientPublicKey: keys.client.publicKey}}). Every launch retry reuses that single user-data.\n  - After the win32 image-id proof and before waitForGuestReady: `await writeTransportFiles(name, provider, keys)`.\n  Add a comment on why the files come only now: deleteOwned and cleanupOwned purge only launched records (reserved and collision return 'not-launched'), so files written earlier could outlive their VM.\n(6) Nothing else changes:\n  - The result object is unchanged: no key, path or address.\n  - The host private key never touches host disk.\n  - Update provisionGuest's JSDoc, and add one header bullet: provider.ssh and provider.keyDir are test injection only. Production uses the pinned client and <homedir>/.moe/guest-ssh.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/provision.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Remove the VM's transport files in purgeOwned, in scripts/local-runner/lifecycle.mjs. Only deleteOwned and cleanupOwned call it.\n(1) Import `defaultKeyDir, transportFiles` from './guest-ssh.mjs'. It is a leaf, so there is no cycle. `unlink` is already imported.\n(2) The FIRST statement of purgeOwned, before any provider call:\n  `let files; try { files = transportFiles(record.instance, provider?.keyDir ?? defaultKeyDir()); } catch { throw lifecycleError('LIFECYCLE_INPUT_INVALID'); }`\n  This way a VM whose key paths cannot be named is never deleted. `provider?.` keeps a null provider failing in the existing invoker path, not with a TypeError.\n(3) After the existing verified-absence block and BEFORE `ledger.update(record, {phase:'deleted'})`, for identityFile then knownHostsFile:\n  `await unlink(file).catch(error => { if (error?.code !== 'ENOENT') throw lifecycleError('LIFECYCLE_STATE_UNKNOWN'); })`\n  Error handling:\n  - ENOENT means the file is already gone (a launch that never got keys, or a retry).\n  - Any other error leaves the record not deleted. deleteOwned rejects, and cleanupOwned reports it through REPORTABLE.\n  - A later cleanup re-queries, finds the VM absent, skips the delete and unlinks again.\n(4) Leave reconcileOwned, holdReason, the record schema and every L1-L22 guard untouched (R06 rail). Extend purgeOwned's doc comment by one line on why this order matters.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/lifecycle.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update the existing harnesses and rows in scripts/tests/local-runner.test.mjs. Goal: every row that reaches the real provisionGuest or purgeOwned uses a temp key dir and a stub client, never the real home or the host's ssh. Mark each change `// CQ-R14c`.\n(1) Helper transportStub(t), placed beside provisionHarness, returning {ssh, keyDir}:\n  - It uses its OWN scratch(t) root, never one inside a ledger dir: ledger.list() reports stray entries as invalid, and rows assert readdirSync(ledgerDir).\n  - It writes an empty regular file named ssh there.\n  - keyDir = path.join(root, 'guest-ssh'), not pre-created, so provisioning's mkdir is exercised.\n(2) provisionHarness spreads ...transportStub(t). provisionWith becomes `(h, { provider = { run: h.fake.run }, ...overrides } = {})` and passes `provider: { ssh: h.ssh, keyDir: h.keyDir, ...provider }`.\n  - Rows that pass their own provider keep their bytes: the Linux, macOS and R13a rows, and the Windows run overrides.\n  - An explicit `ssh: undefined` still reaches the default path.\n  - At planning time no provisionWith row passed a non-record provider; re-grep.\n(3) The lifecycle harness() provider becomes `{ run: fake.run, keyDir: path.join(scratch(t), 'guest-ssh') }`, so L-row purges unlink only under a temp dir.\n(4) Add the stub to these providers. Certify and smoke spread deps.provider (certify.mjs:112, native-smoke smoke()), and runCheckJob copies the whole provider into provision and remove, so one injection reaches provisioning, the canary check VMs and teardown:\n  - the real-child-process Windows row (`provider: { executable }`);\n  - smokeHarness deps.provider;\n  - certifyHarness deps.provider (`{ run, spawn: router.spawn }`);\n  - CJ8's runCheckJob input provider: `{ run, ssh: h.ssh, keyDir: h.keyDir }`.\n(5) The exact launched-user-data assertions after provisionHarness become prefix checks. R14b keeps the no-transport user-data a byte prefix. Leave the launchInstance rows that build LAUNCH from BOOTSTRAP.userData as they are.\n  - The Windows provisionGuest row: stdin.startsWith(BOOTSTRAP.userData).\n  - The timed-out launch rows: each launch startsWith it AND equals launches[0].stdin, because one key set per provisionGuest is reused by every retry.\n  - The real-child row: args deepEqual, and stdin prefixed.\n(6) CJ8 also asserts, per label, `existsSync(h.keyDir) ? readdirSync(h.keyDir) : []` deepEqual []. A check VM's keys go with it.\n\nLeave scripts/tests/local-runner-pinned-client.test.mjs unedited:\n  - MX4 stops at unready prerequisites, before the client check.\n  - MX7's cleanup unlinks only nonexistent paths of a fixed fake name (ENOENT).\n  Edit it only if a row actually fails, using the same injection.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Append a `// CQ-R14c transport keys` section with rows PK1-PK5 to the END of scripts/tests/local-runner.test.mjs.\n- Imports: every node:fs and lifecycle.mjs name these rows need is already bound in this file. R14b may already import from guest-ssh.mjs, so grep first, because a duplicate import binding is a SyntaxError. Add authorizedKeyLine and transportFiles only if absent.\n- Assert exact values, never truthiness.\n\nPK1 (DoD 1; DoD 5 for the result). Windows `provisionWith(h)` deepEqual winProvisioned().\n  - stdin = h.fake.launches[0].stdin. It startsWith BOOTSTRAP.userData; tail is the rest.\n  - hostPub is read from tail with /ed25519_public: '(ssh-ed25519 [A-Za-z0-9+\\/]+=*)'/.\n  - files = transportFiles(GUEST, h.keyDir). readdirSync(h.keyDir).sort() is exactly [GUEST+'.key', GUEST+'.known_hosts'].\n  - known_hosts === `${GUEST} ${hostPub}\\n`.\n  - The key file is an OPENSSH PRIVATE KEY PEM ending in a newline. In its base64-decoded body, the client blob is body.subarray(43, 94), after 15 bytes of magic, 8 for 'none', 8 for 'none', 4 for kdfopts, 4 for the key count and 4 for the length. clientPub = 'ssh-ed25519 ' + that blob in base64.\n  - tail includes authorizedKeyLine(clientPub), and clientPub !== hostPub.\n  - stdin has exactly one 'BEGIN OPENSSH PRIVATE KEY' (the host's) and none of the key file's base64 lines: the client private key never leaves the host.\n  - POSIX only: the keyDir mode & 0o777 is 0o700, and each file is 0o600.\n  - JSON.stringify(result) contains no 'PRIVATE KEY', no h.keyDir and no h.ssh.\nPK2 (DoD 2). Three fresh harnesses, each rejecting PROVISION_TRANSPORT_UNAVAILABLE:\n  - null: platform {...onWindows(), id:'aix'} with provider {run: h.fake.run, ssh: undefined};\n  - absent: ssh is a missing path;\n  - not a regular file: ssh is a directory.\n  Each asserts [h.download.calls.length, existsSync(h.cacheDir), existsSync(h.ledgerDir), h.fake.launches.length, existsSync(h.keyDir)] deepEqual [0, false, false, 0, false].\nPK3 (DoD 3). Pre-create keyDir. Each case rejects PROVISION_TRANSPORT_FAILED; the bytes and link targets are unchanged, a link is still a link, and (await h.ledger.read(GUEST)).phase === 'owned'.\n  - (a) <GUEST>.key is a regular file holding 'keep\\n'; known_hosts is not created.\n  - (b) POSIX only: <GUEST>.known_hosts is a symlink to an outside file holding 'target\\n'.\n  - (c) POSIX only: <GUEST>.key is a dangling symlink, and its target is not created.\nPK4 (DoD 4, positive). A lifecycle harness with nameAt(1) Running, seeded 'owned', and both files written in h.provider.keyDir.\n  - deleteOwned returns 'deleted', the dir is empty and the phase is 'deleted'.\n  - The same through cleanupOwned (attemptPhase 'closed', leaseHeld false): deleted [nameAt(1)].\n  - A delete that fails with the VM still present (script it like the 'a failed delete keeps the record' row) leaves both files.\n  - A record with no files still deletes.\nPK5 (DoD 4, negative).\n  - <name>.key is a directory. deleteOwned rejects LIFECYCLE_STATE_UNKNOWN after the provider delete ran, and the record is not 'deleted'.\n  - cleanupOwned then reports errors [{instance, code:'LIFECYCLE_STATE_UNKNOWN'}] and deleted [].\n  - After rmSync of that dir, cleanupOwned deletes, known_hosts is gone and the phase is 'deleted'.\n  - A relative provider.keyDir rejects LIFECYCLE_INPUT_INVALID with zero provider calls, and the VM stays present.\nSanitization (DoD 5). Every rejection in PK2, PK3 and PK5:\n  - passes the file's assertSanitized(error, code), whose own keys must be exactly ['code'], so there is no cause;\n  - JSON.stringify({message: error.message, ...error}) contains neither 'PRIVATE KEY' nor the keyDir.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add two rows to the Local Runner Issues table in docs/TROUBLESHOOTING.md, right after the `IMAGE_PROVIDER_HASH_MISMATCH` (`provision`) row. Use the table's Code (where) | Cause | Fix style. Check runs report these as their failure too: check-lifecycle's PROVISION_CODE passes PROVISION_* through.\n\n`PROVISION_TRANSPORT_UNAVAILABLE` (`provision`):\n  - Cause: Moe opens every guest stream with the in-box OpenSSH client at a pinned path, never one on PATH: `%SystemRoot%\\System32\\OpenSSH\\ssh.exe` on Windows, `/usr/bin/ssh` on Linux and macOS. That client is missing, so nothing was downloaded, reserved or launched.\n  - Fix: on Windows, add the optional feature 'OpenSSH Client' (Settings > System > Optional features). On Linux, install the distro's openssh-client package. Then re-run.\n\n`PROVISION_TRANSPORT_FAILED` (`provision`):\n  - Cause: Moe could not write the VM's client key, or its pinned host-key line, under `~/.moe/guest-ssh` (`%USERPROFILE%\\.moe\\guest-ssh`). It never writes through or over an existing file or link there. The VM stays owned until cleanup deletes it together with its files; certify's teardown already has.\n  - Fix: make sure that directory belongs to you and is writable, and that nothing outside Moe creates `moe-vm-*` entries in it. Then re-run.\n\nThe wording is yours, but keep the pinned paths and the never-through-an-existing-entry fact.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verify in a snapshot, never in place (global rail). From the repo root, run the task's verification command exactly as written. Its fresh exit code and output tail are the moe.complete_task evidence:\n\nS=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/provision.mjs scripts/local-runner/lifecycle.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-pinned-client.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-pinned-client.test.mjs\n\nHEAD already holds R14a's guest-ssh.mjs and R14b's buildUserData, because dependsOn gates this claim.\n\nIt must exit 0 with PK1-PK5 passing, every existing provisioning, L, certify, smoke, CJ and MX row green, and no failing or cancelled test.\n\nAlso run `ls ~/.moe/guest-ssh 2>/dev/null | grep -c moe-vm-` before and after, and quote both counts: no test may add a file there.\n\nKill only PIDs you started. No seat runs Multipass.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this task's own diff, once (skill adversarial-self-review).\n\nCheck these:\n- Ordering. Is the client check before ensurePinnedImage and reserve? Are the files written after provisionOwned and after the win32 proof? Does unlink run after verified absence and before phase 'deleted'?\n- Leaks. Is there any path, key byte or fs error message in a result, a rejection message or a cause? Is the client private key absent from user-data, and the host private key absent from disk?\n- 'wx' everywhere: no plain 'w', and no unlink-then-write retry in provisioning.\n- One createTransportKeys() per provisionGuest, so retries carry identical user-data.\n- Concurrency. Two concurrent provisions write distinct names into the same keyDir. mkdir is recursive and idempotent.\n- Retries. A cleanup retry after a non-ENOENT unlink re-unlinks without a second delete.\n- Null, empty or relative keyDir and ssh; Windows paths; umask; symlinked keyDir.\n- Tests. Is any test only truthy? Would a mutant that drops 'wx', writes the files before launch, unlinks before the absence check or marks deleted on an unlink error survive any PK row? If so, tighten that row.\n- Scope. guest-supervisor.py, the R02 pin, readiness and the pinned-client test file are untouched; the diff lists only the four planned files.\n\nRe-run step 6's command if anything changed.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-201aebc6721a40c1b426bca64fce1eda"
+  ],
+  "priority": "HIGH",
+  "order": 254.433,
+  "comments": [
+    {
+      "id": "comment-26654b31fe2340878287b013ad53c332",
+      "author": "architect-b520bc90",
+      "content": "AMENDMENT (architect-b520bc90), from governor addendum 8 and the Gate 0 Windows PASS, both in comment-2566639b on task-fd196d13.\n- **Key directory.** The keyDir default is `<homedir>/.moe/guest-ssh`, as R14a's defaultKeyDir() returns it. It is not `~/.moe/runner-keys`, which is the daemon's runner-channel HMAC store and has its own MOE_RUNNER_KEY_DIR override.\n- **No ACL step.** Gate 0 Windows proved that ssh.exe 9.5p2 accepts a key written `wx` 0o600 under the inherited profile ACL. This slice adds no icacls or explicit ACL step. The request_replan contingency in the description no longer applies, unless the Linux Gate 0 reports something new.\n- **Gate 0 status.** Windows (a)-(d) PASS. Linux Gate 0 is still pending, and the Gate 0 rail stays in force until the governor posts it.",
+      "timestamp": "2026-11-01T08:06:53.068Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:04:48.032Z",
+  "updatedAt": "2026-11-01T08:42:41.526Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T08:20:22.737Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T08:42:41.503Z",
+  "executionContract": {
+    "intendedBehavior": "provisionGuest refuses PROVISION_TRANSPORT_UNAVAILABLE before any fetch, reserve or launch when the pinned OpenSSH client (provider.ssh ?? sshExecutable(platform.id)) is not a regular file. Otherwise it mints one createTransportKeys() set and launches with the transport user-data. Once the VM is owned, after the win32 image proof, it writes <keyDir>/<name>.key (the client private key) and <keyDir>/<name>.known_hosts ('<name> <host public key>\\n') with flag 'wx', mode 0600, in a 0700 dir. Any write failure is PROVISION_TRANSPORT_FAILED, and the owned record stays. purgeOwned names both files before any provider call (LIFECYCLE_INPUT_INVALID otherwise) and unlinks them after the VM is verified absent and before the record is marked deleted. ENOENT is fine; any other error is LIFECYCLE_STATE_UNKNOWN and the record is kept for a retry.",
+    "invariants": [
+      "provisionGuest's result is unchanged. No key bytes, key path or address appear in any result or rejection: messages are fixed, own keys are exactly ['code'], and there is no cause.",
+      "The host private key exists only in the user-data on launch stdin, never on host disk. The client private key never enters user-data.",
+      "No existing file or symlink under keyDir is followed or overwritten ('wx').",
+      "A record is marked deleted only after both unlinks succeed or report ENOENT, and only after the VM is verified absent.",
+      "guest-supervisor.py (sha256 3a19f3bf…), the R02 image pin and every readiness evaluator are untouched. No seat runs Multipass."
+    ],
+    "compatibility": [
+      "Callers that pass no provider.ssh or provider.keyDir get sshExecutable(platform.id) and defaultKeyDir(): certify, the native smoke, check jobs, the certify recovery child and vm-control cleanup. Provisioning and purge therefore agree on one directory in production.",
+      "Existing L1-L22, provisioning, certify, smoke, CJ and MX rows stay green. The only edits are harness defaults and the prefix form of the exact launched-user-data assertions."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/guest-ssh.mjs (R14a) exports createTransportKeys() -> {client, host}, each {privateKey, publicKey}. It also exports knownHostsLine(name, publicKey), sshExecutable(platformId), defaultKeyDir() and transportFiles(name, keyDir) -> {identityFile, knownHostsFile}, which refuses a relative or control-char keyDir.",
+      "buildUserData (R14b) takes transport {hostPrivateKey, hostPublicKey, clientPublicKey}. Its output without a transport is a byte prefix of its output with one.",
+      "lifecycle.mjs purgeOwned (~line 361) is reached only from deleteOwned and cleanupOwned, and unlink is already imported. check-lifecycle.mjs PROVISION_CODE passes PROVISION_* codes through as a check failure.",
+      "Test file facts. fakeLaunch records each launch's stdin. BOOTSTRAP is buildUserData without a transport. assertSanitized requires own keys ['code']. certify.mjs:112 and native-smoke spread deps.provider. runCheckJob copies the whole provider."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/provision.mjs scripts/local-runner/lifecycle.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-pinned-client.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-pinned-client.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected alternatives:\n- Writing the key files before reservation or launch. A reserved or collision record is never purged ('not-launched'), so the files would outlive their VM.\n- keyDir under the ledger or certify dir. Win32-OpenSSH refuses a key that Users can read (governor addendum 8), and ledger.list() would see stray entries.\n- Object.hasOwn(provider,'ssh') null semantics. The description says `??`, and an unsupported platform id already exercises the null client.\n- chmod of a pre-existing keyDir. OpenSSH checks only the key file's mode.\n- Early keyDir validation before launch. Production always uses the absolute defaultKeyDir(); a bad injected keyDir fails closed as PROVISION_TRANSPORT_FAILED and the owned VM is left for cleanup.",
+    "codebaseInsights": "The provider is spread everywhere it flows: certify.mjs:112, native-smoke smoke(), and runCheckJob's kit copy (check-lifecycle.mjs:70). One test injection at deps.provider or the input provider therefore reaches provisioning, the canary check VMs and teardown. The lifecycle harness() keeps its ledger in its scratch dir, so keyDir must sit in a separate scratch(t). PROVISION_CODE in check-lifecycle passes the new codes through to a check run's failure.",
+    "risks": "- The test file is about 6500 lines with section-local imports, so a duplicate import binding is a SyntaxError that kills the whole file. Grep before importing.\n- Line numbers shift after R14b's edits. Find rows by content (BOOTSTRAP.userData after provisionHarness; CJ8's title).\n- Node's mkdir and writeFile modes are umask-masked, but 0700 and 0600 survive 022 and 077. Windows ignores mode bits; ssh.exe checks the inherited profile ACL, which Gate 0 passed.\n- A fs error message names the path, so never rethrow it or attach it as a cause.\n- MX7 and the vm-control rows purge fixed fake names under the real home. That is ENOENT only, never a write.",
+    "keyFiles": [
+      "scripts/local-runner/provision.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/guest-ssh.mjs",
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "docs/TROUBLESHOOTING.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d918eb96e85b16ac5a2b86a2b1abbe899975fa4c",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T08:42:41.526Z",
+  "approvedPlanRevision": 1
+}

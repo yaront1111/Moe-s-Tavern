@@ -916,6 +916,7 @@ import {
   MAX_CREDENTIAL_BYTES, MAX_SUPERVISOR_BYTES, verifySourceImage,
 } from '../local-runner/guest-bootstrap.mjs';
 import { GUEST_PROBES, readGuestInfo, runGuestProbe, waitForGuestReady } from '../local-runner/guest-readiness.mjs';
+import { authorizedKeyLine, createTransportKeys } from '../local-runner/guest-ssh.mjs';
 
 const GiB = 2 ** 30;
 const GUEST = nameAt(1);
@@ -926,6 +927,9 @@ const PROVIDER_HASH = 'cd'.repeat(32);
 const SUPERVISOR = Buffer.from('#!/bin/sh\nexec /usr/lib/moe/supervisor "$@"\n');
 const CREDENTIAL = Buffer.from('secret-credential-0123456789');
 const BOOTSTRAP = buildUserData({ supervisor: SUPERVISOR, credential: CREDENTIAL });
+const TRANSPORT_KEYS = createTransportKeys();
+const TRANSPORT = { hostPrivateKey: TRANSPORT_KEYS.host.privateKey, hostPublicKey: TRANSPORT_KEYS.host.publicKey, clientPublicKey: TRANSPORT_KEYS.client.publicKey };
+const BOOTSTRAP_SSH = buildUserData({ supervisor: SUPERVISOR, credential: CREDENTIAL, transport: TRANSPORT });
 const DENIALS = [
   ['readCredential', '-r', '/etc/moe/supervisor.credential', 'CREDENTIAL_EXPOSED'],
   ['readUserData', '-r', '/var/lib/cloud/instance/user-data.txt', 'CREDENTIAL_EXPOSED'],
@@ -935,6 +939,7 @@ const DENIALS = [
   ['readInstanceData', '-r', '/run/cloud-init/instance-data-sensitive.json', 'CREDENTIAL_EXPOSED'],
   ['readCombinedConfig', '-r', '/run/cloud-init/combined-cloud-config.json', 'CREDENTIAL_EXPOSED'],
   ['readSeed', '-r', '/dev/sr0', 'CREDENTIAL_EXPOSED'],
+  ['readHostKey', '-r', '/etc/ssh/ssh_host_ed25519_key', 'CREDENTIAL_EXPOSED'],
   ['writeSupervisor', '-w', '/opt/moe/bin/moe-supervisor', 'SUPERVISOR_WRITABLE'],
   ['writeSupervisorDir', '-w', '/opt/moe/bin', 'SUPERVISOR_WRITABLE'],
 ];
@@ -1216,6 +1221,122 @@ test('UD2 cloud-init 26.1 ssh_authkey_fingerprints opens no authorized_keys unde
   assert.deepEqual(opened(old), ['moe-agent', 'moe-check', 'ubuntu']);
 });
 
+// R14b: the pinned SSH host key and the restricted transport key. UD3 and UD4 run only where cloud-init 26.1 is installed.
+const cloudInit261 = t => {
+  const found = process.platform === 'linux' && existsSync(CLOUD_INIT)
+    ? spawnSync(CLOUD_INIT, ['--version'], { encoding: 'utf8', timeout: 60_000, env: { PATH: '/usr/bin:/bin' } }).stdout : null;
+  if (/^\S+ 26\.1-/.test(found ?? '')) return true;
+  t.skip(`needs ${CLOUD_INIT} 26.1, found ${JSON.stringify(found?.trim() ?? null)}`);
+  return false;
+};
+test('UD3 the user-data with a transport passes cloud-init 26.1 schema validation', t => {
+  if (!cloudInit261(t)) return;
+  const dir = mkdtempSync(path.join(tmpdir(), 'moe-cloud-config-ssh-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'ssh.yaml');
+  writeFileSync(file, BOOTSTRAP_SSH.userData);
+  const result = spawnSync(CLOUD_INIT, ['schema', '-c', file], { encoding: 'utf8', timeout: 60_000, env: { PATH: '/usr/bin:/bin' } });
+  assert.equal(result.error, undefined, String(result.error));
+  assert.deepEqual([result.status, result.stdout], [0, `Valid schema ${file}\n`], result.stderr);
+});
+
+// Runs cc_ssh's own handle on a cloud-config from stdin with every filesystem and process effect recorded instead of done,
+// and cloud-init's own parsers on its ssh_authorized_keys. Any exception inside handle is logged and swallowed by cloud-init,
+// so the recorded effects are the proof that it ran.
+const SSH_KEYS_STUB = `import contextlib, io, json, os, sys
+from unittest import mock
+from cloudinit import ssh_util, subp, util
+from cloudinit.config import cc_ssh
+class Datasource:
+    def publish_host_keys(self, keys): pass
+class Distro:
+    osfamily = 'debian'
+    def get_default_user(self): return {'name': 'ubuntu'}
+class Cloud:
+    distro = Distro()
+    datasource = Datasource()
+    def get_public_ssh_keys(self): return []
+cfg = util.load_yaml(sys.stdin.read())
+parser = ssh_util.AuthKeyLineParser()
+parsed = []
+for line in cfg.get('ssh_authorized_keys', []):
+    entry = parser.parse(line)
+    parsed.append({'options': entry.options, 'keytype': entry.keytype, 'base64': entry.base64, 'comment': entry.comment, 'str': str(entry)})
+deleted, written, commands, applied = [], [], [], []
+real_exists = os.path.exists
+patches = [
+    mock.patch.object(cc_ssh.glob, 'glob', lambda pattern: ['/etc/ssh/ssh_host_rsa_key', '/etc/ssh/ssh_host_rsa_key.pub']),
+    mock.patch.object(util, 'del_file', deleted.append),
+    mock.patch.object(util, 'write_file', lambda path, content, mode=None, *args, **kwargs: written.append([path, content, mode])),
+    mock.patch.object(util, 'ensure_dir', lambda *args, **kwargs: None),
+    mock.patch.object(os.path, 'exists', lambda path: False if str(path).startswith('/etc/ssh/') else real_exists(path)),
+    mock.patch.object(subp, 'subp', lambda cmd, *args, **kwargs: commands.append(cmd) or ('', '')),
+    mock.patch.object(cc_ssh, 'get_public_host_keys', lambda *args, **kwargs: []),
+    mock.patch.object(ssh_util, 'setup_user_keys', lambda keys, user, options=None: applied.append([sorted(keys), user, options])),
+]
+with contextlib.ExitStack() as stack, contextlib.redirect_stdout(io.StringIO()):
+    for patch in patches:
+        stack.enter_context(patch)
+    cc_ssh.handle('ssh', cfg, Cloud(), [])
+sys.stdout.write(json.dumps({'ssh_keys': cfg.get('ssh_keys'), 'ssh_authorized_keys': cfg.get('ssh_authorized_keys'), 'parsed': parsed,
+    'deleted': deleted, 'written': written, 'commands': commands, 'applied': applied}))
+`;
+test('UD4 cloud-init 26.1 cc_ssh writes exactly the pinned host key pair and keeps the transport line options; without ssh_keys it generates keys', t => {
+  if (!cloudInit261(t)) return;
+  const run = userData => {
+    const result = spawnSync('/usr/bin/python3', ['-I', '-B', '-c', SSH_KEYS_STUB], { input: userData, encoding: 'utf8', timeout: 60_000, env: { PATH: '/usr/bin:/bin' } });
+    assert.equal(result.error, undefined, String(result.error));
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const line = authorizedKeyLine(TRANSPORT.clientPublicKey);
+  const imageKeys = ['/etc/ssh/ssh_host_rsa_key', '/etc/ssh/ssh_host_rsa_key.pub'];
+  const ssh = run(BOOTSTRAP_SSH.userData);
+  assert.deepEqual(ssh.ssh_keys, { ed25519_private: TRANSPORT.hostPrivateKey, ed25519_public: TRANSPORT.hostPublicKey });
+  assert.deepEqual(ssh.ssh_authorized_keys, [line]);
+  assert.deepEqual(ssh.parsed, [{
+    options: 'restrict,command="exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor \\"$SSH_ORIGINAL_COMMAND\\""',
+    keytype: 'ssh-ed25519', base64: TRANSPORT.clientPublicKey.split(' ')[1], comment: 'moe-transport', str: line,
+  }]);
+  assert.deepEqual(ssh.deleted, imageKeys);
+  assert.deepEqual(ssh.written, [
+    ['/etc/ssh/ssh_host_ed25519_key', TRANSPORT.hostPrivateKey, 0o600], ['/etc/ssh/ssh_host_ed25519_key.pub', TRANSPORT.hostPublicKey, 0o644],
+  ]);
+  assert.deepEqual(ssh.commands, []);
+  assert.deepEqual(ssh.applied.map(([keys, user]) => [keys, user]), [[[line], 'ubuntu'], [[line], 'root']]);
+  assert.equal(ssh.applied[0][2], null);
+  // Positive control: the same stub on the no-transport user-data deletes the image keys and runs ssh-keygen per default type.
+  const plain = run(BOOTSTRAP.userData);
+  assert.deepEqual(plain.deleted, imageKeys);
+  assert.deepEqual(plain.written, []);
+  assert.deepEqual(plain.commands, ['rsa', 'ecdsa', 'ed25519'].map(type => ['ssh-keygen', '-t', type, '-N', '', '-f', `/etc/ssh/ssh_host_${type}_key`]));
+  assert.deepEqual(plain.applied.map(([keys, user]) => [keys, user]), [[[], 'ubuntu'], [[], 'root']]);
+});
+
+test('UD5 no transport leaves the user-data bytes as they were and a transport only appends; each malformed transport is refused', () => {
+  assert.doesNotMatch(BOOTSTRAP.userData, /ssh_keys|ssh_authorized_keys/);
+  assert.equal(buildUserData({ supervisor: SUPERVISOR, credential: CREDENTIAL, transport: undefined }).userData, BOOTSTRAP.userData);
+  const pem = TRANSPORT.hostPrivateKey.trimEnd().split('\n').map(text => `    ${text}`).join('\n');
+  assert.equal(BOOTSTRAP_SSH.userData, `${BOOTSTRAP.userData}ssh_keys:\n  ed25519_private: |\n${pem}\n  ed25519_public: '${TRANSPORT.hostPublicKey}'\n`
+    + `ssh_authorized_keys:\n  - '${authorizedKeyLine(TRANSPORT.clientPublicKey)}'\n`);
+  for (const key of ['supervisorSha256', 'shimSha256', 'shimToolsSha256']) assert.equal(BOOTSTRAP_SSH[key], BOOTSTRAP[key]);
+  const { hostPrivateKey, hostPublicKey, clientPublicKey } = TRANSPORT;
+  const pemOf = body => `-----BEGIN OPENSSH PRIVATE KEY-----\n${body}-----END OPENSSH PRIVATE KEY-----\n`;
+  for (const transport of [
+    null, [], 'x', 42, {}, { ...TRANSPORT, extra: 'x' }, { ...TRANSPORT, [Symbol('extra')]: 'x' }, { hostPrivateKey, hostPublicKey }, { hostPublicKey, clientPublicKey },
+    { ...TRANSPORT, hostPrivateKey: 'x' }, { ...TRANSPORT, hostPrivateKey: 42 }, { ...TRANSPORT, hostPrivateKey: pemOf(`${'A'.repeat(71)}\n`) },
+    { ...TRANSPORT, hostPrivateKey: pemOf('# comment\n') }, { ...TRANSPORT, hostPrivateKey: pemOf('') }, { ...TRANSPORT, hostPrivateKey: hostPrivateKey.trimEnd() },
+    { ...TRANSPORT, hostPrivateKey: `${hostPrivateKey}\n` }, { ...TRANSPORT, hostPublicKey: 'ssh-rsa AAAA' }, { ...TRANSPORT, clientPublicKey: 'ssh-rsa AAAA' },
+    { ...TRANSPORT, hostPublicKey: 'ssh-ed25519 a b' }, { ...TRANSPORT, clientPublicKey: `${clientPublicKey}\n` }, { ...TRANSPORT, clientPublicKey: `${clientPublicKey}'` },
+    { ...TRANSPORT, hostPublicKey: `${hostPublicKey}\u0007` }, { ...TRANSPORT, clientPublicKey: `${clientPublicKey} moe-transport` },
+  ]) {
+    assert.throws(() => buildUserData({ supervisor: SUPERVISOR, credential: CREDENTIAL, transport }), error => {
+      assert.equal(error.message, 'Guest bootstrap input was invalid.');
+      return assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID');
+    });
+  }
+});
+
 test('guest layout, identities and resource bounds are frozen constants shared with the launchers', () => {
   assert.deepEqual(launchResourceArgs(), ['--cpus', '2', '--memory', '4G', '--disk', '20G']);
   assert.notEqual(launchResourceArgs(), launchResourceArgs());
@@ -1280,7 +1401,7 @@ test('readGuestInfo runs bounded info on the owned name and parses the v1.17.0 d
 test('runGuestProbe executes only the frozen fixed-argv table without host-directory mapping', async () => {
   assert.deepEqual(Object.keys(GUEST_PROBES), Object.keys(EXPECTED_PROBES));
   assert.deepEqual(GUEST_PROBES, EXPECTED_PROBES);
-  assert.equal(Object.keys(GUEST_PROBES).length, 7 + 15 * IDENTITIES.length);
+  assert.equal(Object.keys(GUEST_PROBES).length, 7 + 16 * IDENTITIES.length);
   assert.equal(Object.isFrozen(GUEST_PROBES), true);
   for (const argv of Object.values(GUEST_PROBES)) {
     assert.equal(Object.isFrozen(argv), true);
