@@ -24,7 +24,17 @@
         "scripts/local-runner/guest-bridge.mjs",
         "scripts/tests/local-runner-bridge.test.mjs",
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Remove the dead `multipass exec` stream argv builders, and add the cross-wired-IP row. This row is the integration row of R14; WORKING claims are gated until R14a-R14d3 are DONE (dependsOn). Read `mem:gotcha-local-runner-tests` first.\n\n1. Precondition (read-only): `grep -rn \"bridgeArgv\\|checkArgv\\|snapshotArgv\" scripts/local-runner/*.mjs scripts/tests/*.test.mjs`. After R14d1-R14d3 the only hits may be: guest-bridge.mjs's own definitions, test B15 plus its import in local-runner-bridge.test.mjs, and C1's checkArgv half plus its import in local-runner-check.test.mjs.\n2. Error handling: if any runtime caller still uses a builder, that slice is incomplete. moe.add_comment on the owning slice row naming the file:line, then moe.report_blocked this row with blockedOnTaskIds [] and that reason. Never repair a slice's runtime here, and never leave a half-removed export.\n3. scripts/local-runner/guest-bridge.mjs: delete `bridgeArgv`, the `checkArgv` const and the comment block above them (the 'one Multipass argv that opens the bridge' text, about lines 201-210 at fdb5330a). Drop any import that is then unused, checked with grep, never by guess.\n4. scripts/tests/local-runner-bridge.test.mjs: delete test B15 and `bridgeArgv` from the import list.\n5. scripts/tests/local-runner-check.test.mjs: drop `checkArgv` from the import. In C1 delete only the checkArgv assertions and keep every checkFrame assertion unchanged. Retitle it 'C1 checkFrame is the exact check frame or BRIDGE_INPUT_INVALID'.\n6. Do NOT touch scripts/local-runner/guest-supervisor.py, even though its main() comment still names these builders: any byte there moves R13's commit-under-test pin (sha256 3a19f3bf...8190).\n7. scripts/tests/local-runner-bridge.test.mjs: add ONE row for the governor's Linux Gate 0 networking note (comment-888759e9). On this host, Windows hcs and WSL qemu Multipass both number zone1 10.97.0.0/24, so one guest IP can exist on both hosts at once, and an IP can be recycled. Drive R14d2's bridge-session entry point as landed, with its existing fake provider and fake ssh (never a real ssh or Multipass):\n   - two consecutive sessions to one owned VM each read the address fresh: the fake `info` is called once per session, and when its ipv4 changes between them, the second argv uses the new one;\n   - each ssh argv carries `HostKeyAlias=<that VM's owned name>` and that VM's own `<name>.known_hosts` from transportFiles, whatever the IP;\n   - a fake ssh that exits 255 with 'REMOTE HOST IDENTIFICATION HAS CHANGED' on stderr ends the session with R14d2's fixed ssh-255 code (SESSION_PROVIDER_FAILED in the design). No supervisor code is derived, and neither the address nor the stderr text appears in the error.\n   Title it 'B-XWIRE a reused or cross-wired guest IP fails closed under the HostKeyAlias pin'. If the landed session has no injectable info/ssh seam, put the row on R14d1's openGuestStream in this same file (with TRANSFER_EXIT_FAILED as the code) and say so in the step note. Never add a new test file: ci.yml is in the WT lane (governor comment-a88ca3de).\n\nDone when `grep -rn \"bridgeArgv\\|checkArgv\\|snapshotArgv\" scripts/local-runner/*.mjs scripts/tests/` prints nothing, `grep -n \"'exec'\" scripts/local-runner/*.mjs` lists only stdin-less bounded queries (guest-readiness runGuestProbe, guest-session remote(), certify-bridge probe and certify-containment's change probe), and B-XWIRE passes in step 4's gate. Write files only with Edit; report every path in complete_step.modifiedFiles.",
+          "reason": "Governor Linux Gate 0 (comment-888759e9) asked for a test row covering a cross-wired or recycled guest IP (zone1 10.97.0.0/24 exists on both the hcs and WSL qemu installs). Item 7 adds it to the existing bridge test file, so ci.yml stays untouched.",
+          "amendedBy": "architect-b520bc90",
+          "amendedAt": "2026-11-01T09:35:51.780Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
@@ -33,7 +43,17 @@
       "affectedFiles": [
         "docs/ARCHITECTURE.md",
         "docs/CERTIFICATION.md"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Docs for the new transport. First read the LANDED code (scripts/local-runner/guest-ssh.mjs, provision.mjs and lifecycle.mjs purge) and describe only what it does, never planned behavior.\n\n1. docs/ARCHITECTURE.md, section 'Local Runner Isolation':\n   - In the 'Supervisor modes' bullet, replace 'run as root through `multipass exec`' with 'run as root over the guest SSH route'.\n   - Add one bullet 'Host-guest transport' covering:\n     - all eight supervisor modes stream over the in-box OpenSSH client at a pinned path, never PATH: /usr/bin/ssh on Linux and macOS, %SystemRoot%\\System32\\OpenSSH\\ssh.exe on Windows;\n     - `-F none`, ed25519 only, the guest's host key pinned through cloud-init `ssh_keys` and checked under HostKeyAlias=<owned name>, no agent, forwarding, PTY or ProxyCommand;\n     - the address is `multipass info` ipv4[0], read fresh for every stream. A Windows hcs install and a WSL qemu install can both number zone1 10.97.0.0/24, so one guest IP can exist on both hosts at once, or be recycled. The fresh read plus the HostKeyAlias pin turn either case into ssh exit 255 and a fixed code, never a session with the wrong guest;\n     - a fresh per-VM client key at `<home>/.moe/guest-ssh/<name>.key` (0600, removed when the VM is purged). The guest accepts it only for the default user, as `restrict,command=\"exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor \\\"$SSH_ORIGINAL_COMMAND\\\"\"`, so it starts only supervisor modes;\n     - `multipass exec` now carries only stdin-less queries capped at 64 KiB (MAX_PROBE_BUFFER);\n     - the reason: Multipass 1.17.0 exec truncates stdin on Linux, delivers none on Windows (#3749) and stalls Windows stdout near 2 MiB (#5478);\n     - error handling: there is no fallback to exec stdio or to the host. An unusable route fails closed with a fixed code.\n   - Note that the job identities are denied the guest host key (readiness readHostKey).\n2. docs/CERTIFICATION.md:\n   - In the `bridge-framing` row, '2 MiB of frame bytes cross the guest SSH route exactly, in both directions.'\n   - In 'How to run it' step 1, add that the host needs the in-box OpenSSH client at that pinned path (provisioning refuses with PROVISION_TRANSPORT_UNAVAILABLE otherwise), and that certify writes per-VM keys under `<home>/.moe/guest-ssh` and removes them with each VM.\n\nKeep the Certified platforms table and every other row unchanged. Plain, short sentences.",
+          "reason": "Governor Linux Gate 0 (comment-888759e9) asked for the docs to mention the shared zone1 subnet across the two Multipass installs, and why the fresh address read plus the HostKeyAlias pin fail closed.",
+          "amendedBy": "architect-b520bc90",
+          "amendedAt": "2026-11-01T09:35:51.816Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-3",
@@ -54,7 +74,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 3,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -123,7 +143,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T00:20:13.476Z",
-  "updatedAt": "2026-11-01T09:30:26.306Z",
+  "updatedAt": "2026-11-01T09:35:51.816Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T00:20:28.365Z",
     "plannedStepCount": 5,
