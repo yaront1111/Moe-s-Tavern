@@ -1,0 +1,162 @@
+{
+  "id": "task-b8734a784d6b42d98bd5f2493e2e228e",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R14d1] Snapshot transfers stream over the SSH route",
+  "description": "Fourth slice of task-fd196d137c44497188d2639f149e259b (DESIGN comment-350cb4d0, governor ruling comment-d954b3df). It depends on R14c (task-7c292231), which writes the key files, and through it on R14a and R14b. It shares local-runner.test.mjs and guest-readiness.mjs with them.\n\n**Objective.** All six supervisor transfer modes stream over OpenSSH instead of `multipass exec` stdio. The modes are materialize, export, verify, agents, toolchain and dependencies. Multipass 1.17.0 truncates exec stdin on Linux (#5478), delivers none on Windows (#3749) and stalls Windows stdout near 2 MiB.\n\n**Deliverable.**\n- **openGuestStream.** scripts/local-runner/guest-ssh.mjs gains `openGuestStream({name, mode, provider})`, which:\n  - validates the name and mode;\n  - takes the executable from `provider.ssh ?? sshExecutable(process.platform)` and keyDir from `provider.keyDir ?? defaultKeyDir()`;\n  - reads the address fresh from readGuestInfo(name, provider);\n  - spawns `(provider.spawn ?? child_process.spawn)(executable, sshStreamArgv({...transportFiles(name, keyDir), name, address, mode}), {shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']})` and returns the child.\n  - It refuses before any spawn with TRANSPORT_INPUT_INVALID, or with TRANSPORT_ADDRESS_UNKNOWN when info fails or has no valid address.\n  - There is no fallback to exec stdio and none to the host.\n- **Address.** readGuestInfo in scripts/local-runner/guest-readiness.mjs also returns `address`: guestAddress(ipv4[0]) when ipv4 is an array, else null. No readiness evaluator changes.\n- **Transfers.** supervise() in scripts/local-runner/snapshot-transfer.mjs opens its stream with openGuestStream.\n  - A transport refusal becomes TRANSFER_SPAWN_FAILED.\n  - ssh's own exit 255 (connect, auth, host-key mismatch, remote signal death) becomes TRANSFER_EXIT_FAILED, like any non-zero exit and never a supervisor code (ruling condition 5).\n  - snapshotArgv is removed. scripts/local-runner/snapshot-import.mjs then checks its name with isOwnedInstanceName and keeps the TRANSFER_INPUT_INVALID refusal.\n- **Fake-carrier rows** in local-runner.test.mjs, one per measured failure mode, each ending in a fixed code:\n  1. **Linux truncation.** Stdin is cut at a 64 KiB boundary into the real supervisor's materialize mode. Exit 65 becomes TRANSFER_EXIT_FAILED, and no materialized frame is accepted.\n  2. **Windows dead stdin.** 0 bytes are delivered and nothing exits. The result is TRANSFER_TIMEOUT, and the child is killed.\n  3. **Windows stdout stall.** Export frames stop at 2,064,384 of 2 MiB, then silence. The result is TRANSFER_TIMEOUT, and the import yields no candidate.\n- **ssh 255 rows.** Exit 255 before the first frame and after it each give TRANSFER_EXIT_FAILED.\n- **Carrier row.** No transfer spawn ever uses the Multipass executable or an `exec` argv.\n\n**Not in scope:** the bridge session (R14d2), the check session and certify's provider pass-through (R14d3), provisioning and guest-supervisor.py.\n\n**Verification**, in a snapshot and never in place:\n`S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-ssh.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/snapshot-transfer.mjs scripts/local-runner/snapshot-import.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`",
+  "definitionOfDone": [
+    "openGuestStream spawns the pinned ssh client with exactly sshStreamArgv for the guest's freshly read info address. With a bad input, failed info or no IPv4, it refuses without spawning, with TRANSPORT_INPUT_INVALID or TRANSPORT_ADDRESS_UNKNOWN. Rows cover each.",
+    "All six transfer modes spawn only through openGuestStream. A row asserts that no transfer spawn uses the Multipass executable or an `exec` argv, and snapshotArgv no longer exists.",
+    "Each of the three measured failure modes has a fake-carrier row that ends in the fixed code the description names. No materialized, installed or verified frame and no import candidate is ever accepted.",
+    "ssh exit 255 before the first frame and after it each map to TRANSFER_EXIT_FAILED (two rows). A transport refusal maps to TRANSFER_SPAWN_FAILED, with no spawn.",
+    "Every existing transfer row stays green, with only its expected executable or argv updated: T, M, X, TC, TT, AH and AJ, plus the real-Python end-to-end rows. The description's verification command exits 0 in the snapshot, under env -i with Node 24.21.0."
+  ],
+  "taskRails": [
+    "Gate 0: start no implementation step until the governor has posted a Gate 0 PASS comment on task-fd196d137c44497188d2639f149e259b covering Windows (a)-(c) and Linux (a)-(d). Without it, report_blocked with blockedOnTaskIds [] and the reason 'waiting on the governor Gate 0 PASS for the SSH transport'.",
+    "No seat runs Multipass. guest-supervisor.py (its sha256 3a19f3bf… is R13's commit-under-test pin), the R02 image pin and every readiness evaluator stay untouched. Readiness only gains the returned `address` field.",
+    "Write tracked files only with the Edit/Write tools. Shell writes go only into scratch snapshots outside the checkout."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Gate 0 first (task rail). Confirm the governor's Gate 0 PASS comment on task-fd196d137c44497188d2639f149e259b covers Windows (a)-(c) and Linux (a)-(d). Without it, moe.report_blocked with blockedOnTaskIds [] and the reason 'waiting on the governor Gate 0 PASS for the SSH transport', and edit nothing.\n\nThen create scripts/local-runner/guest-stream.mjs, per amendment comment-fc0b853f. It is a new module because guest-ssh.mjs is a leaf, and readGuestInfo's module imports modules that import guest-ssh.\n\nExport `async openGuestStream({ name, mode, provider = {} } = {})`, built in this order:\n(1) Inputs, all refused with transportError('TRANSPORT_INPUT_INVALID') before any provider call:\n  - provider must be a non-array object, and mode must be in SUPERVISOR_MODES;\n  - executable = provider.ssh ?? sshExecutable(process.platform), a non-empty string with no control character, never a PATH lookup;\n  - spawn = provider.spawn ?? child_process.spawn, a function;\n  - files = transportFiles(name, provider.keyDir ?? defaultKeyDir()), inside a try so a homedir failure is also TRANSPORT_INPUT_INVALID.\n(2) Address. address = (await readGuestInfo(name, provider)).address, a fresh read on every call. Any readGuestInfo rejection, or a null address, is TRANSPORT_ADDRESS_UNKNOWN.\n(3) argv = sshStreamArgv({ ...files, name, address, mode }). It refuses unsafe paths, still before any spawn.\n(4) `return spawn(executable, argv, { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })`. A synchronous spawn throw propagates, and each caller maps it to its own fixed *_SPAWN_FAILED code; say so in the JSDoc.\nError handling: only the two fixed transport codes come out, and no message names a path, key or address. There is no fallback to `multipass exec` or to the host.\n\nIn scripts/local-runner/guest-readiness.mjs:\n  - import guestAddress from './guest-ssh.mjs' (a leaf, so no cycle);\n  - parseInfo's result gains `address: guestAddress(Array.isArray(detail.ipv4) ? detail.ipv4[0] : undefined)`, so only the first entry counts and anything else is null.\n  - Do not change validDetail: a Starting VM has no ipv4, and that detail stays valid. No readiness evaluator changes (task rail).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/guest-stream.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Switch the transfer core to the SSH route.\n\nIn scripts/local-runner/snapshot-transfer.mjs:\n(1) Delete snapshotArgv. Remove the GUEST_LAYOUT import and the child_process spawn import once nothing uses them, and import openGuestStream from './guest-stream.mjs'.\n(2) streamOptions keeps every check it has today: the provider is a record, executable is a non-empty control-free string (default 'multipass', now used only by info and probes), spawn is a function, plus timeoutMs, input and onFrame.\n  - The name and mode check becomes `if (!isOwnedInstanceName(name) || !MODES.includes(mode)) throw transferError('TRANSFER_INPUT_INVALID')`. MODES stays the six transfer modes, so 'bridge' and 'check' are refused here.\n  - spawn may now be omitted: `provider.spawn === undefined || typeof provider.spawn === 'function'`.\n  - It returns `{ name, mode, provider, timeoutMs, input, onFrame }`.\n(3) supervise becomes async:\n  - `let child; try { child = await openGuestStream({ name, mode, provider }); } catch { child = null; }`, then the existing child-shape check and TRANSFER_SPAWN_FAILED.\n  - Everything after the spawn stays byte-identical: timer, finish, close/data/end handlers and feed.\n  Error handling:\n  - a transport refusal or spawn throw is TRANSFER_SPAWN_FAILED, with no spawn on a refusal;\n  - ssh's own exit 255 (connect, auth, host-key mismatch, remote signal death) already lands in the close handler's `code !== 0` branch as TRANSFER_EXIT_FAILED. Add a comment that no supervisor code is ever derived from that exit (ruling condition 5).\n(4) Rewrite the header comment's `multipass exec --no-map-working-directory` sentences. Every transfer runs over the pinned OpenSSH client to the guest's forced-command supervisor (guest-stream.mjs, -T, no forwarding). It is still copy-only, with no mount or transfer subcommand, and mounts are checked before and after. Update runSupervisorStream's provider JSDoc to {executable, run, spawn, ssh, keyDir}.\n\nIn scripts/local-runner/snapshot-import.mjs:\n  - importCandidate's `snapshotArgv(name, 'export')` line becomes `if (!isOwnedInstanceName(name)) throw transferError('TRANSFER_INPUT_INVALID'); // R09c's own code for a name that is not owned`;\n  - import isOwnedInstanceName beside invoker, and transferError in place of snapshotArgv;\n  - update its provider JSDoc line the same way.\n\nNothing else changes in either module.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/snapshot-transfer.mjs",
+        "scripts/local-runner/snapshot-import.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update the existing rows in scripts/tests/local-runner.test.mjs. Find them by content, not line numbers, which R14b and R14c shifted.\n\n(1) Helpers, placed beside transferProvider and PIPES:\n  - STREAM_SSH = path.join(tmpdir(), 'moe-stream', 'ssh') and STREAM_KEYS = path.join(tmpdir(), 'moe-stream', 'keys'): strings only, nothing is created or run, and they are absolute on every OS;\n  - `streamCall = (mode, name = GUEST) => [STREAM_SSH, sshStreamArgv({ ...transportFiles(name, STREAM_KEYS), name, address: '10.0.0.2', mode }), PIPES]`.\n  Import sshStreamArgv and transportFiles from guest-ssh.mjs only if not already bound, because a duplicate binding is a SyntaxError.\n(2) Add `ssh: STREAM_SSH, keyDir: STREAM_KEYS` to every fake transfer provider: transferProvider(), bridgeContext(), the real-Python e2e session carrier, the toolchain, dependencies, agents and verify harness providers, and the launches-recording row. Without them the expected argv would hold the real home.\n(3) Every `['multipass', snapshotArgv(GUEST, mode), PIPES]` becomes streamCall(mode). Bare snapshotArgv(GUEST, mode) argv comparisons become streamCall(mode)[1].\n(4) Provider-call sequences. Each stream now reads info once more, immediately before its spawn:\n  - `[['info','mountinfo'], ['info','mountinfo','info','mountinfo']]` becomes `[['info','mountinfo','info'], ['info','mountinfo','info','info','mountinfo']]`;\n  - counts grow by 1 per stream;\n  - a scripted fakeGuest `info: [...]` sequence gets one more healthy guestDetail() per stream, so each mount check still sees the detail it meant. For example, the real-Python 'late' session becomes [d, d, d, HOST_MOUNT].\n(5) The real-Python e2e row:\n  - each launch is deepEqual [...streamCall(argv.at(-1)), 0];\n  - the run-call loop allows only `info` and the exec mountinfo probe;\n  - the launch loop asserts executable === STREAM_SSH and no 'exec' or 'multipass' in the argv.\n  The carrier keeps taking the mode from argv.at(-1), which both argv shapes end with. Adapt only its argv match.\n(6) The CQ-R07 readGuestInfo exact-shape row gains address ('10.0.0.2', or null for a detail without ipv4). That is the only R07-section edit, and every R07 test is retained.\n(7) Replace T2 (the snapshotArgv frozen argv row) with a row asserting:\n  - Object.hasOwn(await import('../local-runner/snapshot-transfer.mjs'), 'snapshotArgv') === false;\n  - runSupervisorStream refuses a non-owned name and the modes 'bridge', 'check' and 'exec' with TRANSFER_INPUT_INVALID, with zero provider calls and spawns.\n\nRule: nothing else in an existing row may change. If a row needs more than its spawn triple, info/id sequencing or address, stop and name it in the step summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "New rows SS1-SS9 in a `// CQ-R14d1 SSH stream route` section at the END of scripts/tests/local-runner.test.mjs. Every refusal passes assertSanitized or transferRefused: own keys exactly ['code'], and no path, address or key in the message. Mark the real-Python rows exactly like the existing real-supervisor rows' skip.\n- SS1. openGuestStream, for each of the 8 SUPERVISOR_MODES, over fakeGuest() and a recording spawn:\n  - it returns that spawn's child;\n  - it records exactly streamCall(mode);\n  - each call reads info again (ids +1 'info' per call).\n  With no provider.ssh, the executable is sshExecutable(process.platform).\n- SS2. Refusals, each with zero spawns:\n  - TRANSPORT_INPUT_INVALID: provider null, [] or 'x'; name 'moe-vm-x' or GUEST+'\\n'; mode 'exec', 'shell', '' or undefined; ssh '' or 'a\\nb'; spawn 42; keyDir 'keys' (zero provider calls too); keyDir containing % or ' (from sshStreamArgv).\n  - TRANSPORT_ADDRESS_UNKNOWN: a failing info run; an info with errors; malformed JSON; ipv4 absent, [], ['999.1.1.1'], ['010.0.0.1'], [42] or 'x'.\n- SS3. readGuestInfo address:\n  - ['10.1.2.3', '10.9.9.9'] gives '10.1.2.3';\n  - absent, [] or invalid gives null, and the detail is still valid.\n- SS4. Linux truncation, against the REAL supervisor's materialize mode.\n  - The carrier spawn forwards only the first floor(total/65536)*65536 stdin bytes, cut mid data frame (payload of at least 192 KiB), then ends stdin.\n  - materializeSnapshot rejects TRANSFER_EXIT_FAILED.\n  - The python child exited 65, as the carrier recorded, and no result resolved.\n- SS5. Windows dead stdin. The carrier swallows stdin and never exits.\n  - With timeoutMs 100, the result is TRANSFER_TIMEOUT.\n  - kills deepEqual ['SIGKILL'], and the post-stream mount check never ran.\n- SS6. Windows stdout stall. An export carrier writes the encoded export frames of a 2 MiB payload truncated to the first 2,064,384 bytes, then stays silent.\n  - importCandidate with timeoutMs 100 rejects TRANSFER_TIMEOUT, with kills ['SIGKILL'].\n  - No candidate is ever returned.\n- SS7. ssh exit 255, for materialize and export:\n  - closing 255 before any frame gives TRANSFER_EXIT_FAILED;\n  - closing 255 after one valid guest frame also gives TRANSFER_EXIT_FAILED, never a supervisor code.\n- SS8. Transport refusals become TRANSFER_SPAWN_FAILED with zero spawns:\n  - an info whose ipv4 is [] once the first mount check passed;\n  - a relative keyDir.\n- SS9 (carrier row). Drive all six public entry points through a recording spawn whose child closes 1 at once: materializeSnapshot, importCandidate, verifyWorkspace, installAgents, installToolchain and installDependencies, with inputs as in their existing rows.\n  - Each rejects TRANSFER_EXIT_FAILED.\n  - The six recorded spawns are exactly streamCall(mode) for the six modes.\n  - None uses provider.executable or 'multipass', and none has 'exec' in its argv.\n\nAssert exact values, never truthiness.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verify in a snapshot, never in place (global rail). This is the description's command with ONE correction: amendment comment-fc0b853f moved openGuestStream into the new, uncommitted guest-stream.mjs. So the cp list names guest-stream.mjs instead of the untouched guest-ssh.mjs, which is already in HEAD since R14a landed. Run from the repo root:\n\nS=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-stream.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/snapshot-transfer.mjs scripts/local-runner/snapshot-import.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs\n\nIt must exit 0 with SS1-SS9 and every T, M, X, TC, TT, AH, AJ, CB, certify and real-Python row green, and nothing failing or cancelled. Its fresh exit code and output tail are the moe.complete_task evidence.\n\nThen run the same snapshot once more with `node --test scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-pinned-client.test.mjs`, and quote its tail. Those files inject their own transfer steps and must stay green unedited.\n\nKill only PIDs you started. No seat runs Multipass.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's own diff, once (skill adversarial-self-review).\n- Can any transfer still reach `multipass exec` stdio or the host? Grep the diff and the two modules for 'exec', '--no-map-working-directory' and snapshotArgv.\n- Does every transport refusal happen before spawn? Is no address, path or key ever in an error, a result or a frame?\n- After a refusal or a spawn throw, is the child never left running? Is the timer started only after a child exists?\n- Is the info read fresh per stream: no cached address and no module state?\n- Do all six modes run, and do bridge and check stay out of MODES?\n- Is ssh 255 always TRANSFER_EXIT_FAILED, both before and after frames?\n- Did any existing assertion change beyond its spawn triple, info/id sequencing or address? Would a mutant that keeps exec as a fallback, reads the address once per module, or maps 255 to a supervisor code survive any SS row? If so, tighten that row.\n- Is guest-supervisor.py untouched (sha256 3a19f3bf...)? Is readiness changed only by the address field?\n- certify-bridge.mjs line 5 still names snapshotArgv in a comment. Leave it for R14d3, which owns that file, and say so in the step summary.\n\nRe-run step 5's commands if anything changed.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7c2922313102436bb732e36bd8f1c69d"
+  ],
+  "priority": "HIGH",
+  "order": 254.434,
+  "comments": [
+    {
+      "id": "comment-fc0b853ffa984aa083365218b4a38086",
+      "author": "architect-b520bc90",
+      "content": "PLANNING AMENDMENT (architect-b520bc90). This overrides one part of the description; the behavior and DoD are unchanged.\n\n**openGuestStream lives in a NEW module, scripts/local-runner/guest-stream.mjs, not in guest-ssh.mjs.** It needs readGuestInfo from guest-readiness.mjs. guest-readiness imports guest-bootstrap.mjs and lifecycle.mjs, and both import the leaf guest-ssh.mjs (R14b, R14c). So putting it in guest-ssh would create an ESM cycle.\n\nBecause the module is created rather than edited, this slice's files are: guest-stream.mjs (new), guest-readiness.mjs, snapshot-transfer.mjs, snapshot-import.mjs and local-runner.test.mjs. guest-ssh.mjs is not edited. Its transportError already defines TRANSPORT_ADDRESS_UNKNOWN (R14a).\n\nR14d2 adds guest-stream.mjs to the bundle test's `shipped` list.",
+      "timestamp": "2026-11-01T08:14:46.283Z"
+    },
+    {
+      "id": "comment-7dacd0f63bde4286af2d28753ab9f838",
+      "author": "architect-b520bc90",
+      "content": "PLANNING AMENDMENT 2 (architect-b520bc90). The verification command changes for one reason, and the DoD is unchanged.\n\n**Why.** Amendment comment-fc0b853f moved openGuestStream into the NEW, uncommitted scripts/local-runner/guest-stream.mjs. The description's command copies only the tree's edited files over `git archive HEAD`, and it lists guest-ssh.mjs, which this slice no longer edits (R14a landed it in dd28ab17). Without guest-stream.mjs the snapshot cannot import it.\n\n**The change.** The cp list names guest-stream.mjs in place of guest-ssh.mjs. This is the plan's checkRefs[0] (rev 1), and QA should run exactly this:\n\n`S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-stream.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/snapshot-transfer.mjs scripts/local-runner/snapshot-import.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`\n\n**Reading DoD 5.** \"Only its expected executable or argv updated\" includes the provider-call sequence. openGuestStream reads `info` fresh before every stream, as DoD 1 requires, so each stream adds one `info` id. Scripted `info: [...]` sequences also get one more healthy detail per stream. No other assertion in an existing row may change.",
+      "timestamp": "2026-11-01T08:52:42.201Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:05:11.290Z",
+  "updatedAt": "2026-11-01T08:52:42.201Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T08:42:54.472Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T08:52:33.967Z",
+  "executionContract": {
+    "intendedBehavior": "All six transfer modes (materialize, export, verify, agents, toolchain, dependencies) spawn only through openGuestStream. openGuestStream:\n- validates its inputs;\n- reads the guest's address fresh from multipass info ipv4[0] (strict dotted quad);\n- spawns the pinned OpenSSH client (provider.ssh ?? sshExecutable(process.platform)) with exactly sshStreamArgv({...transportFiles(name, keyDir), name, address, mode}) and PIPES.\nIt refuses before any spawn with TRANSPORT_INPUT_INVALID or TRANSPORT_ADDRESS_UNKNOWN. Transfers map a transport refusal or spawn failure to TRANSFER_SPAWN_FAILED, and any non-zero exit (ssh's 255 included) to TRANSFER_EXIT_FAILED. A stall still ends in TRANSFER_TIMEOUT with SIGKILL. readGuestInfo additionally returns address.",
+    "invariants": [
+      "No transfer spawn uses the Multipass executable or an `exec` argv, there is no fallback to exec stdio or to the host, and snapshotArgv no longer exists.",
+      "No error message, result or frame carries a path, address or key. Every refusal is a fixed code with own keys exactly ['code'].",
+      "guest-supervisor.py (sha256 3a19f3bf…), the R02 image pin and every readiness evaluator are untouched. readiness gains only the address field, and validDetail is unchanged.",
+      "Bridge and check modes stay outside the transfer MODES. openGuestStream accepts all eight supervisor modes for R14d2 and R14d3.",
+      "guest-stream.mjs imports guest-readiness.mjs and guest-ssh.mjs, and nothing imports it back, so there is no ESM cycle."
+    ],
+    "compatibility": [
+      "runSupervisorStream, materializeSnapshot, importCandidate, verifyWorkspace, installAgents, installToolchain and installDependencies keep their signatures and fixed codes. provider.executable still drives info and probes, and provider.ssh, provider.keyDir and provider.spawn are optional.",
+      "Existing T, M, X, TC, TT, AH, AJ, CB, certify and real-Python rows stay green. Their only edits are the expected spawn triple, the info/id sequences (one fresh info read per stream) and the readGuestInfo address field."
+    ],
+    "sourceAssumptions": [
+      "guest-ssh.mjs, landed in dd28ab17, exports SUPERVISOR_MODES, transportError (TRANSPORT_INPUT_INVALID, TRANSPORT_ADDRESS_UNKNOWN), sshExecutable, defaultKeyDir, transportFiles, guestAddress and sshStreamArgv. sshStreamArgv refuses % $ \" ' ` and control characters in paths.",
+      "In snapshot-transfer.mjs, snapshotArgv is used only by streamOptions and by snapshot-import.mjs importCandidate (as a name validator). GUEST_LAYOUT is imported only for snapshotArgv. certify-bridge.mjs line 84 materializes with context.provider, and its line 5 comment still names snapshotArgv (R14d3's file).",
+      "The test fakeGuest answers info from a detail whose ipv4 is ['10.0.0.2'] (guestDetail). Scripted info arrays shift until one entry is left. bridgeRouter routes by argv.at(-1), which both argv shapes end with."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-stream.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/snapshot-transfer.mjs scripts/local-runner/snapshot-import.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected alternatives:\n- Reusing the info that assertNoMounts just read, to avoid the extra query. Rejected: the DoD requires a fresh read by openGuestStream, and the bridge and check sessions (R14d2/d3) have no preceding mount check.\n- Putting openGuestStream in guest-ssh.mjs. Rejected because it would create an ESM cycle (amendment comment-fc0b853f).\n- Validating transport paths before the info read with a placeholder address. Rejected as hacky: a refusal still precedes any spawn, which is what the DoD requires.",
+    "codebaseInsights": "supervise() is the single spawn point for all six transfer modes, and runSupervisorStream reuses it for export. The test fakeSpawn and transferProvider record calls and the ids seen before the spawn (proc.before). certify-bridge's bridgeRouter routes by the last argv element, so only the expected argv changes there. PIPES is the shared spawn-options constant in the test file.",
+    "risks": "- Scripted info sequences (late-mount rows, the real-Python 'late' session) silently change which mount check sees which detail. Insert one healthy detail per stream.\n- A supervise refactor that awaits before the shape check must keep finish(), the timer and the listeners exactly as they are.\n- Duplicate import bindings in the test file are SyntaxErrors.\n- tmpdir() is absolute on every OS, so STREAM_KEYS passes transportFiles. On Windows, sshStreamArgv turns its backslashes into /.\n- SS4 needs python3, so gate it exactly like the existing real-supervisor rows.",
+    "keyFiles": [
+      "scripts/local-runner/guest-ssh.mjs",
+      "scripts/local-runner/snapshot-transfer.mjs",
+      "scripts/local-runner/snapshot-import.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/local-runner/certify-bridge.mjs",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "cf4833176af9ae1ebda861d26a536fd21a738c09",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T08:52:33.993Z",
+  "approvedPlanRevision": 1
+}

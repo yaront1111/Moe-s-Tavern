@@ -20,6 +20,7 @@ import { mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { defaultKeyDir, transportFiles } from './guest-ssh.mjs';
 import { classifyFailure, MAX_PROBE_BUFFER, providerError } from './multipass.mjs';
 
 export const OWNED_NAME_PREFIX = 'moe-vm-';
@@ -358,12 +359,21 @@ async function holdReason(record, attemptPhase, leaseHeld) {
   return lease === false ? null : 'lease-unknown';
 }
 
+// CQ-R14c: the VM's two transport files (client key, pinned known_hosts) go with it. They are named before any provider
+// call, so a VM whose key paths cannot be named is never deleted. They are unlinked only after the instance is verified
+// absent and before the record is marked deleted: an unlink failure keeps the record, and a later cleanup re-queries,
+// finds the VM absent, skips the delete and unlinks again.
 async function purgeOwned(record, ledger, provider) {
+  let files;
+  try { files = transportFiles(record.instance, provider?.keyDir ?? defaultKeyDir()); } catch { throw lifecycleError('LIFECYCLE_INPUT_INVALID'); }
   if ((await queryOwnedInstance(record.instance, provider)).present) {
     let failure;
     await deleteOwnedInstance(record.instance, provider).catch(error => { failure = error; });
     const after = await queryOwnedInstance(record.instance, provider).catch(() => undefined);
     if (after?.present !== false) throw failure ?? lifecycleError('LIFECYCLE_STATE_UNKNOWN');
+  }
+  for (const file of [files.identityFile, files.knownHostsFile]) {
+    await unlink(file).catch(error => { if (error?.code !== 'ENOENT') throw lifecycleError('LIFECYCLE_STATE_UNKNOWN'); });
   }
   await ledger.update(record, { phase: 'deleted' });
 }

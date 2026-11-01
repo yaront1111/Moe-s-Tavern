@@ -20,8 +20,15 @@
 // - `--cloud-init -` reads the user-data from stdin, so Moe never writes the supervisor credential to a file
 //   (Multipass keeps its own NoCloud seed in its daemon data directory; R07 probes the guest-side copies).
 // - launching the configured primary instance name auto-mounts the user's home directory.
+// Guest transport (CQ-R14c, DESIGN comment-350cb4d0 on task-fd196d13): every guest stream runs over the in-box OpenSSH client,
+// so each owned guest gets fresh ed25519 keys. The host key's private half travels only inside the user-data on launch
+// stdin, never on host disk. The client's private key and the pinned known_hosts line go to <keyDir>/<name>.key and
+// <keyDir>/<name>.known_hosts, and lifecycle.mjs purgeOwned removes both with the VM. provider.ssh and provider.keyDir are
+// test injection only: production uses the pinned client (sshExecutable) and <homedir>/.moe/guest-ssh (defaultKeyDir).
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { buildUserData, IMAGE_ARCHES, launchResourceArgs } from './guest-bootstrap.mjs';
 import { readGuestInfo, waitForGuestReady } from './guest-readiness.mjs';
+import { createTransportKeys, defaultKeyDir, knownHostsLine, sshExecutable, transportFiles } from './guest-ssh.mjs';
 import { ensurePinnedImage } from './image-cache.mjs';
 import { invoker, isOwnedInstanceName, provisionOwned } from './lifecycle.mjs';
 import { classifyFailure, providerError } from './multipass.mjs';
@@ -33,6 +40,8 @@ const MESSAGES = {
   PROVISION_LAUNCH_FAILED: 'The provider launch could not receive its cloud-init user-data.',
   PRIMARY_NAME_CONFLICT: 'The Multipass primary instance name looks Moe-owned; Moe never changes client.primary-name.',
   IMAGE_PROVIDER_HASH_MISMATCH: 'The launched instance does not report the pinned image; it was refused before readiness.',
+  PROVISION_TRANSPORT_UNAVAILABLE: 'The pinned OpenSSH client every guest stream runs is missing.',
+  PROVISION_TRANSPORT_FAILED: 'The guest transport key files could not be written; the owned instance stays for cleanup.',
 };
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -80,10 +89,35 @@ export async function launchInstance({
   try { await pending; } catch (error) { throw providerError(classifyFailure(error)); }
 }
 
+/** The pinned in-box OpenSSH client must be a regular file (stat follows a distro symlink); PATH is never consulted. */
+async function requirePinnedClient(provider, platform) {
+  const client = provider.ssh ?? sshExecutable(platform.id);
+  const present = typeof client === 'string' && client !== '' && await stat(client).then(stats => stats.isFile(), () => false);
+  if (!present) throw provisionError('PROVISION_TRANSPORT_UNAVAILABLE');
+}
+
+/**
+ * Writes the client private key and the pinned known_hosts line for one owned guest. Flag 'wx' is O_CREAT|O_EXCL, so an
+ * existing file or symlink (even a dangling one) is neither followed nor overwritten. Any failure is a fresh fixed error
+ * with no cause: an fs message names the path.
+ */
+async function writeTransportFiles(name, provider, keys) {
+  try {
+    const keyDir = provider.keyDir ?? defaultKeyDir();
+    const { identityFile, knownHostsFile } = transportFiles(name, keyDir); // validates keyDir before any fs call
+    await mkdir(keyDir, { recursive: true, mode: 0o700 });
+    await writeFile(identityFile, keys.client.privateKey, { flag: 'wx', mode: 0o600 });
+    await writeFile(knownHostsFile, `${knownHostsLine(name, keys.host.publicKey)}\n`, { flag: 'wx', mode: 0o600 });
+  } catch {
+    throw provisionError('PROVISION_TRANSPORT_FAILED');
+  }
+}
+
 /**
  * Provisions one owned guest. Nothing is downloaded, reserved or launched until every platform prerequisite
- * holds. After the reservation any failure leaves the ledger record for R06 reconcile and cleanup.
- * fetch and digest (image cache) and sleep (R06/R07) are injected for tests.
+ * and the pinned OpenSSH client hold. After the reservation any failure leaves the ledger record for R06 reconcile and
+ * cleanup. fetch and digest (image cache) and sleep (R06/R07) are injected for tests. The result carries no key, path or
+ * address.
  */
 export async function provisionGuest({
   platform, ledger, owner, cacheDir, supervisor, credential, provider = {}, fetch, digest, sleep,
@@ -99,7 +133,14 @@ export async function provisionGuest({
   const arch = pre?.arch ?? platform.arch;
   if (pre?.ready !== true || !IMAGE_ARCHES.includes(arch)) return { provisioned: false, bootstrapReady: false, executionReady: false, prerequisites: pre?.prerequisites };
   if (isOwnedInstanceName(pre.primaryName)) throw provisionError('PRIMARY_NAME_CONFLICT');
-  const bootstrap = buildUserData({ supervisor, credential });
+  // Before the image cache and the reservation: a host without the pinned client fetches, reserves and launches nothing.
+  await requirePinnedClient(provider, platform);
+  // ONE key set per call, so every launch retry carries the same user-data.
+  const keys = createTransportKeys();
+  const bootstrap = buildUserData({
+    supervisor, credential,
+    transport: { hostPrivateKey: keys.host.privateKey, hostPublicKey: keys.host.publicKey, clientPublicKey: keys.client.publicKey },
+  });
   const image = await ensurePinnedImage({ cacheDir, arch }, { fetch, digest });
   // Windows launches the installed manifest pin from the release stream, never a file (header); every other platform
   // launches the verified file in this host's path syntax. An unlaunchable image is refused before reserving.
@@ -114,6 +155,9 @@ export async function provisionGuest({
   if (source.imageSha256 && (await readGuestInfo(name, provider)).providerImageHash !== source.imageSha256) {
     throw provisionError('IMAGE_PROVIDER_HASH_MISMATCH');
   }
+  // Only now: deleteOwned and cleanupOwned purge launched records alone (reserved and collision records answer
+  // 'not-launched'), so files written earlier could outlive their VM. A failure here leaves the owned record for cleanup.
+  await writeTransportFiles(name, provider, keys);
   const ready = await waitForGuestReady({ ledger, name, owner, sourceImage: image.sourceImage, bootstrap, provider, sleep });
   return {
     provisioned: true, instance: name, bootstrapReady: ready.bootstrapReady, executionReady: false,

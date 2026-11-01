@@ -335,7 +335,9 @@ function harness(t, present = [], script) {
   const dir = scratch(t);
   const events = [];
   const fake = fakeMultipass({ present: new Map(present), script, events });
-  return { dir, events, fake, provider: { run: fake.run }, ledger: createLedger(dir, { random: sequence() }) };
+  // CQ-R14c: purges unlink the VM's transport files, so they only ever see a temp key dir (never the real home).
+  const provider = { run: fake.run, keyDir: path.join(scratch(t), 'guest-ssh') };
+  return { dir, events, fake, provider, ledger: createLedger(dir, { random: sequence() }) };
 }
 
 /** Writes a record through the ledger API only, reaching `phase` the way the lifecycle does. */
@@ -916,7 +918,7 @@ import {
   MAX_CREDENTIAL_BYTES, MAX_SUPERVISOR_BYTES, verifySourceImage,
 } from '../local-runner/guest-bootstrap.mjs';
 import { GUEST_PROBES, readGuestInfo, runGuestProbe, waitForGuestReady } from '../local-runner/guest-readiness.mjs';
-import { authorizedKeyLine, createTransportKeys } from '../local-runner/guest-ssh.mjs';
+import { authorizedKeyLine, createTransportKeys, transportFiles } from '../local-runner/guest-ssh.mjs';
 
 const GiB = 2 ** 30;
 const GUEST = nameAt(1);
@@ -1949,18 +1951,31 @@ const onWindows = (hypervisor = async () => true) => ({
   ...windowsPlatform, prerequisites: options => windowsPlatform.prerequisites({ ...options, host: WIN_HOST, hypervisor }),
 });
 
+// CQ-R14c: a regular-file stand-in for the pinned OpenSSH client and a temp key dir, in their OWN scratch root. A ledger dir
+// must hold only ledger entries (ledger.list() reports strays as invalid), and no row may write into the real home or
+// depend on the host's ssh. keyDir is not created, so provisioning's own mkdir is exercised.
+function transportStub(t) {
+  const root = scratch(t);
+  const ssh = path.join(root, 'ssh');
+  writeFileSync(ssh, '');
+  return { ssh, keyDir: path.join(root, 'guest-ssh') };
+}
+
 function provisionHarness(t, fakeOptions = {}, download = fakeFetch()) {
   const dir = scratch(t);
   const ledgerDir = path.join(dir, 'ledger');
   return {
     fake: fakeVm(fakeOptions), download, sleeps: [], ledgerDir, cacheDir: path.join(dir, 'image cache'),
-    ledger: createLedger(ledgerDir, { random: sequence() }), ...pinDigest(),
+    ledger: createLedger(ledgerDir, { random: sequence() }), ...pinDigest(), ...transportStub(t),
   };
 }
 
-const provisionWith = (h, overrides = {}) => provisionGuest({
+// A non-record provider (the null refusal row) reaches provisionGuest untouched; every record gets the stub client and key dir.
+const withTransport = (h, provider) => (provider !== null && typeof provider === 'object' && !Array.isArray(provider)
+  ? { ssh: h.ssh, keyDir: h.keyDir, ...provider } : provider);
+const provisionWith = (h, { provider = { run: h.fake.run }, ...overrides } = {}) => provisionGuest({
   platform: onWindows(), ledger: h.ledger, owner, cacheDir: h.cacheDir, supervisor: SUPERVISOR, credential: CREDENTIAL,
-  provider: { run: h.fake.run }, fetch: h.download.fetch, digest: h.digest, sleep: async ms => { h.sleeps.push(ms); }, ...overrides,
+  provider: withTransport(h, provider), fetch: h.download.fetch, digest: h.digest, sleep: async ms => { h.sleeps.push(ms); }, ...overrides,
 });
 
 const provisioned = (failures = [], imageHash = PROVIDER_HASH) => ({
@@ -2265,7 +2280,9 @@ test('provisioning does nothing until every Windows prerequisite is satisfied', 
 test('Windows provisionGuest verifies the cached pin, then launches release:<pin> once under one durable owned name', async t => {
   const h = provisionHarness(t);
   assert.deepEqual(await provisionWith(h), winProvisioned());
-  assert.deepEqual(h.fake.launches.map(({ args, stdin, ended }) => ({ args, stdin, ended })), [{ args: WIN_LAUNCH, stdin: BOOTSTRAP.userData, ended: true }]);
+  // CQ-R14c: the launched user-data is the no-transport bootstrap plus the transport block (R14b keeps it a byte prefix).
+  assert.deepEqual(h.fake.launches.map(({ args, stdin, ended }) => ({ args, startsWithBootstrap: stdin.startsWith(BOOTSTRAP.userData), ended })),
+    [{ args: WIN_LAUNCH, startsWithBootstrap: true, ended: true }]);
   assert.deepEqual(h.fake.launches[0].options, lifecycleOptions(960_000));
   // The identity read follows the launch, before R07's first poll.
   assert.deepEqual(h.fake.commands(), ['version', 'get', 'get', 'info', 'launch', 'info', 'info', ...Array(1 + BOUNDARY.length).fill('exec')]);
@@ -2286,7 +2303,9 @@ for (const [label, created, launches, sleeps] of [
   test(`a timed-out launch whose VM is ${label}`, async t => {
     const h = provisionHarness(t, { launch: count => (count === 1 ? { error: failWith({ killed: true, code: 'ETIMEDOUT' }), create: created } : {}) });
     assert.deepEqual(await provisionWith(h), winProvisioned());
-    assert.deepEqual(h.fake.launches.map(launch => [launch.args[3], launch.stdin === BOOTSTRAP.userData, launch.ended]), launches.map(name => [name, true, true]));
+    // CQ-R14c: one key set per provisionGuest, so every retry launches the byte-identical user-data (bootstrap + transport).
+    assert.deepEqual(h.fake.launches.map(launch => [launch.args[3], launch.stdin.startsWith(BOOTSTRAP.userData) && launch.stdin === h.fake.launches[0].stdin, launch.ended]),
+      launches.map(name => [name, true, true]));
     assert.deepEqual(readdirSync(h.ledgerDir), [`${GUEST}.json`]);
     assert.equal((await h.ledger.read(GUEST)).launchTries, launches.length);
     assert.deepEqual([...h.fake.present.keys()], [GUEST]);
@@ -2501,11 +2520,13 @@ process.exitCode = main();
   const cacheDir = path.join(dir, 'image cache');
   const result = await provisionGuest({
     platform: onWindows(), ledger: createLedger(path.join(dir, 'ledger state'), { random: sequence() }), owner, cacheDir,
-    supervisor: SUPERVISOR, credential: CREDENTIAL, provider: { executable }, fetch: fakeFetch().fetch, digest: pinDigest().digest, sleep: noSleep,
+    supervisor: SUPERVISOR, credential: CREDENTIAL, provider: { executable, ...transportStub(t) }, fetch: fakeFetch().fetch, digest: pinDigest().digest, sleep: noSleep,
   });
   assert.deepEqual(result, winProvisioned());
   const state = JSON.parse(readFileSync(statePath, 'utf8'));
-  assert.deepEqual(state.launches, [{ args: WIN_LAUNCH, stdin: BOOTSTRAP.userData }]);
+  // CQ-R14c: the user-data on stdin is the bootstrap plus the transport block.
+  assert.deepEqual(state.launches.map(({ args, stdin }) => ({ args, startsWithBootstrap: stdin.startsWith(BOOTSTRAP.userData) })),
+    [{ args: WIN_LAUNCH, startsWithBootstrap: true }]);
   assert.deepEqual(state.instances, { [GUEST]: 'Running' });
   assert.equal(existsSync(violations), false);
 });
@@ -2932,7 +2953,8 @@ function smokeHarness(t, { guest, deleteFails = false, ...fakeOptions } = {}) {
     fake.present.delete(args[2]);
     return Promise.resolve({ stdout: '', stderr: '' });
   };
-  const deps = { provider: { run }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random: sequence() };
+  // CQ-R14c: the smoke's provisioning and purge see only the stub client and a temp key dir.
+  const deps = { provider: { run, ...transportStub(t) }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random: sequence() };
   return { workDir, fake, download, deletes, smoke: (platform = onWindows()) => nativeSmokeCore({ platform, workDir, deps }) };
 }
 const evidence = changes => ({ kind: 'native-provider-smoke', platform: 'win32', arch: 'x64', result: 'passed', transport: 'injected', supportEstablished: false,
@@ -3166,7 +3188,8 @@ function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run,
     return proc;
   };
   t.after(() => children.forEach(({ proc }) => proc.close(null, 'SIGKILL')));
-  const deps = { provider: { run, spawn: router.spawn }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random,
+  // CQ-R14c: certify spreads deps.provider into provisioning, the canary check VMs and teardown, so one injection covers all three.
+  const deps = { provider: { run, spawn: router.spawn, ...transportStub(t) }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random,
     doctor: async () => ({ providerReady: true, version: '1.17.0' }), now: () => new Date(STARTED), containment: rig.containment, spawn,
     writer: { toolchain: async input => { ops.push(['toolchain', input]); return (writer.toolchain ?? (async () => TOOLCHAIN_STUB))(input); },
       installToolchain: async input => { ops.push(['install', input]); return writer.installToolchain?.(input); } },
@@ -5918,13 +5941,16 @@ test('CJ8 the real provisionGuest and deleteOwned purge exactly the VM this run 
     const purged = [];
     const run = (executable, args, options) => (args[0] !== 'delete' ? h.fake.run(executable, args, options)
       : Promise.resolve(purged.push(args[2]) && h.fake.present.delete(args[2]) && { stdout: '', stderr: '' }));
-    const result = await runCheckJob({ ...checkHarness().input, ledger: h.ledger, cacheDir: h.cacheDir, provider: { run }, onReady: () => {} }, {
+    // CQ-R14c: runCheckJob copies the whole provider into provision and remove, so the stub client and key dir reach both.
+    const result = await runCheckJob({ ...checkHarness().input, ledger: h.ledger, cacheDir: h.cacheDir, provider: { run, ssh: h.ssh, keyDir: h.keyDir }, onReady: () => {} }, {
       provision: options => provisionGuest({ ...options, fetch: h.download.fetch, digest: h.digest, sleep: async () => {} }),
       materialize: async () => {}, session: async () => PASSED_RUN, verify: async () => 'intact', toolchain: async () => TOOLCHAIN,
       installToolchain: async () => {}, dependencies: async () => assert.fail('dependencies'), installDependencies: async () => assert.fail('installDependencies') });
     const records = Object.fromEntries((await h.ledger.list()).records.map(record => [record.instance, record.phase]));
     assert.deepEqual([result, purged.filter(name => name !== GUEST), records, [GUEST, nameAt(0xa1), nameAt(0xa2)].map(name => h.fake.present.has(name))],
       [expected, [], { [nameAt(0xa1)]: 'owned', [nameAt(0xa2)]: 'collision', [GUEST]: taken ? 'collision' : 'deleted' }, [taken, true, true]], label);
+    // CQ-R14c: a check VM's transport keys go with it (or were never written).
+    assert.deepEqual(existsSync(h.keyDir) ? readdirSync(h.keyDir) : [], [], label);
   }
 });
 
@@ -6621,4 +6647,159 @@ test('RX6 runCheckJob pins every provider call to the platform\'s own Multipass 
     assert.deepEqual(['provision', 'installToolchain', 'materialize', 'session', 'verify', 'remove'].map(step => h.seen[step].provider.executable),
       Array(6).fill(expected), String(named));
   }
+});
+
+// CQ-R14c transport keys: PK1-PK5 run the real provisionGuest (over fakeVm) and purgeOwned (over fakeMultipass) with a stub
+// client and a temp key dir. provisionGuest writes <keyDir>/<name>.key and <name>.known_hosts with 'wx' once the VM is owned
+// and proven; deleteOwned and cleanupOwned unlink both after the instance is verified absent.
+const pemBody = pem => Buffer.from(pem.split('\n').filter(line => line !== '' && !line.startsWith('-----')).join(''), 'base64');
+/** A rejection predicate: the fixed code, own keys exactly ['code'], and neither key bytes nor the key dir in message or fields. */
+const transportQuiet = (keyDir, code) => error => {
+  assertSanitized(error, code);
+  const text = JSON.stringify({ message: error.message, ...error });
+  assert.deepEqual([text.includes('PRIVATE KEY'), text.includes(keyDir)], [false, false]);
+  return true;
+};
+
+test('PK1 provisioning launches one key set and leaves its client half under the key dir, 0600 in a 0700 dir', async t => {
+  const h = provisionHarness(t);
+  const result = await provisionWith(h);
+  assert.deepEqual(result, winProvisioned());
+  const stdin = h.fake.launches[0].stdin;
+  assert.equal(stdin.startsWith(BOOTSTRAP.userData), true);
+  const tail = stdin.slice(BOOTSTRAP.userData.length);
+  const hostPub = /ed25519_public: '(ssh-ed25519 [A-Za-z0-9+/]+=*)'/.exec(tail)?.[1];
+  assert.equal(typeof hostPub, 'string');
+  const files = transportFiles(GUEST, h.keyDir);
+  assert.deepEqual(readdirSync(h.keyDir).sort(), [`${GUEST}.key`, `${GUEST}.known_hosts`]);
+  assert.equal(readFileSync(files.knownHostsFile, 'utf8'), `${GUEST} ${hostPub}\n`);
+  const pem = readFileSync(files.identityFile, 'utf8');
+  assert.match(pem, /^-----BEGIN OPENSSH PRIVATE KEY-----\n[A-Za-z0-9+/=\n]+\n-----END OPENSSH PRIVATE KEY-----\n$/);
+  // openssh-key-v1: 15 magic, 8 'none', 8 'none', 4 kdfopts, 4 key count, 4 blob length, then the 51-byte public blob.
+  const clientPub = `ssh-ed25519 ${pemBody(pem).subarray(43, 94).toString('base64')}`;
+  assert.notEqual(clientPub, hostPub);
+  assert.equal(tail.includes(authorizedKeyLine(clientPub)), true);
+  // The client's private key never leaves the host; the host's private key (the one PEM in the user-data) never touches its disk.
+  assert.equal(stdin.split('BEGIN OPENSSH PRIVATE KEY').length - 1, 1);
+  // The first base64 line is the constant openssh-key-v1 header (magic, ciphers, key type) every key shares; the other four carry
+  // the key's own public blob and seed, and are unique to it.
+  const ownLines = text => text.split('\n').map(line => line.trim()).filter(line => line !== '' && !line.startsWith('-----')).slice(1);
+  const clientLines = ownLines(pem);
+  assert.equal(clientLines.length, 4);
+  assert.deepEqual(clientLines.map(line => stdin.includes(line)), [false, false, false, false]);
+  const hostPem = /ed25519_private: \|\n((?: {4}.*\n)+)/.exec(tail)?.[1];
+  assert.equal(typeof hostPem, 'string');
+  const hostLines = ownLines(hostPem);
+  assert.equal(hostLines.length, 4);
+  assert.deepEqual(hostLines.map(line => pem.includes(line)), [false, false, false, false]);
+  if (process.platform !== 'win32') {
+    assert.deepEqual([statSync(h.keyDir).mode & 0o777, statSync(files.identityFile).mode & 0o777, statSync(files.knownHostsFile).mode & 0o777], [0o700, 0o600, 0o600]);
+  }
+  const text = JSON.stringify(result);
+  assert.deepEqual([text.includes('PRIVATE KEY'), text.includes(h.keyDir), text.includes(h.ssh)], [false, false, false]);
+});
+
+test('PK2 a missing pinned client refuses before any fetch, reservation, launch or key file', async t => {
+  for (const [label, change] of [
+    ['no client for the platform', h => ({ platform: { ...onWindows(), id: 'aix' }, provider: { run: h.fake.run, ssh: undefined } })],
+    ['an absent path', h => ({ provider: { run: h.fake.run, ssh: path.join(path.dirname(h.ssh), 'missing-ssh') } })],
+    ['a directory', h => ({ provider: { run: h.fake.run, ssh: path.dirname(h.ssh) } })],
+    ['an empty path', h => ({ provider: { run: h.fake.run, ssh: '' } })],
+  ]) {
+    const h = provisionHarness(t);
+    await assert.rejects(provisionWith(h, change(h)), transportQuiet(h.keyDir, 'PROVISION_TRANSPORT_UNAVAILABLE'), label);
+    assert.deepEqual([h.download.calls.length, existsSync(h.cacheDir), existsSync(h.ledgerDir), h.fake.launches.length, existsSync(h.keyDir)],
+      [0, false, false, 0, false], label);
+  }
+});
+
+test('PK2b no key file exists until the VM is launched and its image id is proven', async t => {
+  for (const [label, options, code] of [
+    ['launch retries exhausted', { launch: () => ({ error: failWith({ code: 1, stderr: 'secret-diagnostic' }), create: false }) }, 'LIFECYCLE_RETRY_EXHAUSTED'],
+    ['an image id that is not the pin', { info: guestDetail({ image_hash: URL_ROUTE_ID }) }, 'IMAGE_PROVIDER_HASH_MISMATCH'],
+  ]) {
+    const h = provisionHarness(t, options);
+    await assert.rejects(provisionWith(h), transportQuiet(h.keyDir, code), label);
+    assert.equal(existsSync(h.keyDir), false, label);
+  }
+});
+
+test('PK3 an existing key path is never followed or overwritten; provisioning fails closed and the owned record stays', async t => {
+  const names = [`${GUEST}.key`, `${GUEST}.known_hosts`];
+  for (const [label, skip, plant, verify] of [
+    ['a regular key file', false, ({ key }) => writeFileSync(key, 'keep\n'), ({ key, hosts }) => {
+      assert.deepEqual([readFileSync(key, 'utf8'), existsSync(hosts)], ['keep\n', false]);
+    }],
+    ['a known_hosts symlink to an outside file', NOT_POSIX, ({ hosts, outside }) => {
+      writeFileSync(outside, 'target\n');
+      symlinkSync(outside, hosts);
+    }, ({ hosts, outside }) => {
+      assert.deepEqual([lstatSync(hosts).isSymbolicLink(), readlinkSync(hosts), readFileSync(outside, 'utf8')], [true, outside, 'target\n']);
+    }],
+    ['a dangling key symlink', NOT_POSIX, ({ key, outside }) => symlinkSync(outside, key), ({ key, outside }) => {
+      assert.deepEqual([lstatSync(key).isSymbolicLink(), readlinkSync(key), existsSync(outside)], [true, outside, false]);
+    }],
+  ]) {
+    if (skip) continue;
+    const h = provisionHarness(t);
+    mkdirSync(h.keyDir, { recursive: true, mode: 0o700 });
+    const paths = { key: path.join(h.keyDir, names[0]), hosts: path.join(h.keyDir, names[1]), outside: path.join(path.dirname(h.keyDir), 'outside') };
+    plant(paths);
+    await assert.rejects(provisionWith(h), transportQuiet(h.keyDir, 'PROVISION_TRANSPORT_FAILED'), label);
+    verify(paths);
+    assert.deepEqual([(await h.ledger.read(GUEST)).phase, [...h.fake.present.keys()], h.fake.commands().includes('delete')], ['owned', [GUEST], false], label);
+  }
+});
+
+const seedFiles = async (h, name = GUEST) => {
+  const record = await seed(h.ledger, 'owned');
+  const files = transportFiles(name, h.provider.keyDir);
+  mkdirSync(h.provider.keyDir, { recursive: true, mode: 0o700 });
+  writeFileSync(files.identityFile, 'client key\n', { mode: 0o600 });
+  writeFileSync(files.knownHostsFile, `${name} ssh-ed25519 AAAA\n`, { mode: 0o600 });
+  return { record, files };
+};
+const sweep = h => cleanupOwned({ ledger: h.ledger, provider: h.provider, attemptPhase: () => 'closed', leaseHeld: () => false });
+
+test('PK4 deleteOwned and cleanupOwned unlink both key files once the instance is verified absent', async t => {
+  const direct = harness(t, [...FOREIGNERS, [GUEST, 'Running']]);
+  await seedFiles(direct);
+  assert.equal(await deleteOwned({ ledger: direct.ledger, name: GUEST, owner, provider: direct.provider }), 'deleted');
+  assert.deepEqual([readdirSync(direct.provider.keyDir), (await direct.ledger.read(GUEST)).phase], [[], 'deleted']);
+  const swept = harness(t, [...FOREIGNERS, [GUEST, 'Running']]);
+  await seedFiles(swept);
+  assert.deepEqual(await sweep(swept), { deleted: [GUEST], preserved: [], errors: [], invalid: [] });
+  assert.deepEqual([readdirSync(swept.provider.keyDir), (await swept.ledger.read(GUEST)).phase], [[], 'deleted']);
+  // A delete that fails with the VM still present keeps the record and both files.
+  const stuck = harness(t, [...FOREIGNERS, [GUEST, 'Running']], args => (args[0] === 'delete' ? { error: failWith({ code: 3, stderr: 'secret-diagnostic' }) } : undefined));
+  const { files } = await seedFiles(stuck);
+  assert.deepEqual(await sweep(stuck), { deleted: [], preserved: [], errors: [{ instance: GUEST, code: 'LIFECYCLE_STATE_UNKNOWN' }], invalid: [] });
+  assert.deepEqual([readdirSync(stuck.provider.keyDir).sort(), (await stuck.ledger.read(GUEST)).phase, stuck.fake.present.get(GUEST)],
+    [[path.basename(files.identityFile), path.basename(files.knownHostsFile)].sort(), 'owned', 'Running']);
+  // A launched record that never got keys still deletes: ENOENT is fine.
+  const bare = harness(t, [...FOREIGNERS, [GUEST, 'Running']]);
+  await seed(bare.ledger, 'owned');
+  assert.equal(await deleteOwned({ ledger: bare.ledger, name: GUEST, owner, provider: bare.provider }), 'deleted');
+  assert.equal((await bare.ledger.read(GUEST)).phase, 'deleted');
+});
+
+test('PK5 an unlink failure keeps the record for a retry; a key path that cannot be named deletes nothing', async t => {
+  const h = harness(t, [...FOREIGNERS, [GUEST, 'Running']]);
+  const { files } = await seedFiles(h);
+  rmSync(files.identityFile);
+  mkdirSync(files.identityFile); // unlink of a directory fails with something other than ENOENT
+  const deleteCalls = () => h.fake.argv().filter(args => args[0] === 'delete').length;
+  await assert.rejects(deleteOwned({ ledger: h.ledger, name: GUEST, owner, provider: h.provider }), transportQuiet(h.provider.keyDir, 'LIFECYCLE_STATE_UNKNOWN'));
+  assert.deepEqual([deleteCalls(), (await h.ledger.read(GUEST)).phase, h.fake.present.has(GUEST)], [1, 'owned', false]);
+  assert.deepEqual(await sweep(h), { deleted: [], preserved: [], errors: [{ instance: GUEST, code: 'LIFECYCLE_STATE_UNKNOWN' }], invalid: [] });
+  // The retry finds the VM absent: it never deletes twice, and unlinks again once the obstacle is gone.
+  rmSync(files.identityFile, { recursive: true });
+  assert.deepEqual(await sweep(h), { deleted: [GUEST], preserved: [], errors: [], invalid: [] });
+  assert.deepEqual([deleteCalls(), existsSync(files.knownHostsFile), (await h.ledger.read(GUEST)).phase], [1, false, 'deleted']);
+  const relative = harness(t, [...FOREIGNERS, [GUEST, 'Running']]);
+  await seed(relative.ledger, 'owned');
+  relative.provider.keyDir = 'relative/guest-ssh';
+  await assert.rejects(deleteOwned({ ledger: relative.ledger, name: GUEST, owner, provider: relative.provider }), transportQuiet('relative/guest-ssh', 'LIFECYCLE_INPUT_INVALID'));
+  assert.deepEqual(await sweep(relative), { deleted: [], preserved: [], errors: [{ instance: GUEST, code: 'LIFECYCLE_INPUT_INVALID' }], invalid: [] });
+  assert.deepEqual([relative.fake.calls.length, relative.fake.present.get(GUEST), (await relative.ledger.read(GUEST)).phase], [0, 'Running', 'owned']);
 });
