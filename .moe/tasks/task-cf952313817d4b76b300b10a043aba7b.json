@@ -63,12 +63,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "Size-only reject: no DoD item failed. Completion 3c30b30a changes 637 net lines under packages/ (git show --numstat --format= 3c30b30a -- packages/): executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2 (+637/-0; runtime 257, tests 380). QA's default rejects anything over 400 net changed LOC unless a project or epic rail waives it. This epic's only size rail is scoped to CQ-M05, and .moe/proposals holds no proposal for this row. Same route as CQ-M05.\n\nThe substance passed in full, so no code change is needed:\n- Gate re-run on a fresh git archive of 3c30b30a under env -i with Node 24: npm ci, tsc --noEmit clean, then vitest over the executionReadiness, runnerChannel, certificationEvidence and executionProfile tests: 259/259, EXIT 0.\n- DoD 1-4 each map to vitest rows:\n  - 1: the deep-frozen ready snapshot.\n  - 2: the ALONE table, the it.each over certify rows, the ordered multi-failure row.\n  - 3: version mismatch, timeout, failed and malformed probes, with the pinned path and argv recorded.\n  - 4: env, label and in-project-store rows, plus a real-reader control that is ready.\n- I ran 10 mutants of my own; all were killed: own deliveryPolicy, the install-contains-project direction, key-in-project, the multipassd compare, ETIMEDOUT, duplicate rows (every to some), the Object.hasOwn refusal lookup, the .moe realpath, the sha256 regex, the PROBE_MAX_BYTES cap.\n- certificationEvidence.ts is still at 63ae437a and executionProfile.ts is unchanged. Nothing imports the new module, so verified-local stays unavailable.\n\nRoute: do not re-slice or rewrite the landed bytes.\n1. File moe.propose_rail as an EPIC ADD_RAIL, under 1000 chars, naming commit 3c30b30a, the three files with their numstat, and \"waives size only; grow only by QA-required fixes\".\n2. Ping #governors with the proposal id.\n3. Run a round that changes no bytes, with a fresh gate on a pure git archive of HEAD.\n4. Call complete_task.\nQA approves once the rail is in allRails.epic.",
+  "reopenReason": "Size waiver prop-3cfb7447 APPROVED by the human at 14:22:27Z. The CQ-M epic now carries the \"CQ-M07b size exception\" rail exactly once. The park reason is gone, so the row returns to REVIEW for QA round 2. Substance was already green (259/259, 10/10 mutants).",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [],
@@ -102,19 +102,22 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:06:50.081Z",
-  "updatedAt": "2026-11-01T11:07:09.182Z",
+  "updatedAt": "2026-11-01T14:51:37.785Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T09:31:01.899Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
     "executedStepCount": 8,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-01T14:51:37.785Z",
+    "wallClockMs": 19235886
   },
   "contextFetchedBy": [
     "qa-1e84238e",
     "architect-b520bc90",
-    "worker-cef53f62"
+    "worker-cef53f62",
+    "qa-c5835a34"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -310,7 +313,7 @@
     "sessionId": "qa-1e84238e@2026-11-01T10:58:55Z",
     "at": "2026-11-01T11:07:09.182Z"
   },
-  "reviewCompletedAt": "2026-11-01T10:35:16.871Z",
+  "reviewCompletedAt": "2026-11-01T14:51:37.785Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -334,8 +337,13 @@
       ]
     }
   ],
-  "blockedReason": "Size waiver pending; substance green. QA round 2 parks this row rather than issue a second size-only reject.\n\nSize: completion 3c30b30a, `git show --numstat --format= 3c30b30a -- packages/` = executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2 (+637/-0; runtime 257, tests 380). That exceeds QA's 400 cap, and no rail waives it yet. prop-3cfb744496df4d3f91183f42041ca963 (EPIC ADD_RAIL, filed 10:50:30Z, text equal to this numstat) is PENDING, and allRails.epic holds only the CQ-M05 size exception.\n\nSubstance, fresh at 11:05Z:\n- Bytes unchanged since 3c30b30a: empty diff, clean worktree, snapshot cmp identical. This round's completion bf327c83 is board JSON only.\n- The plan's exact archive gate at HEAD bf327c83: npm ci, tsc clean, vitest 155/155, EXIT 0. With the certificationEvidence and executionProfile neighbours: 259/259.\n- Dependencies unchanged; certificationEvidence.ts is still 63ae437a. Nothing imports the module, so verified-local stays unavailable.\n- Full evidence is in QA's round-2 comment.\n\nResume:\n- APPROVED: set_task_status REVIEW. QA matches the rail to the numstat, re-runs the gate and approves. No new bytes.\n- REJECTED: set_task_status PLANNING. The architect splits the review scope over the landed bytes.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-01T11:06:31.946Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Size waiver pending; substance green. QA round 2 parks this row rather than issue a second size-only reject.\n\nSize: completion 3c30b30a, `git show --numstat --format= 3c30b30a -- packages/` = executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2 (+637/-0; runtime 257, tests 380). That exceeds QA's 400 cap, and no rail waives it yet. prop-3cfb744496df4d3f91183f42041ca963 (EPIC ADD_RAIL, filed 10:50:30Z, text equal to this numstat) is PENDING, and allRails.epic holds only the CQ-M05 size exception.\n\nSubstance, fresh at 11:05Z:\n- Bytes unchanged since 3c30b30a: empty diff, clean worktree, snapshot cmp identical. This round's completion bf327c83 is board JSON only.\n- The plan's exact archive gate at HEAD bf327c83: npm ci, tsc clean, vitest 155/155, EXIT 0. With the certificationEvidence and executionProfile neighbours: 259/259.\n- Dependencies unchanged; certificationEvidence.ts is still 63ae437a. Nothing imports the module, so verified-local stays unavailable.\n- Full evidence is in QA's round-2 comment.\n\nResume:\n- APPROVED: set_task_status REVIEW. QA matches the rail to the numstat, re-runs the gate and approves. No new bytes.\n- REJECTED: set_task_status PLANNING. The architect splits the review scope over the landed bytes.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-01T14:51:37.785Z",
+  "reviewSummary": "CQ-M07b QA round 3 (qa-c5835a34): APPROVED. Size waived by epic rail \"CQ-M07b size exception\" (prop-3cfb7444, approved 14:22Z, present once); its text equals `git show --numstat --format= 3c30b30a -- packages/`: executionReadiness.ts +255 (A), executionReadiness.test.ts +380 (A), runnerChannel.ts +2 (M) = +637/-0, net 637 (runtime 257, tests 380). Reviewed on substance.\nDelivery: packages bytes in completion 3c30b30a; this round's completion bf327c83 (10:58Z, after the 10:35Z reject) is board JSON only; both on moe/work-2026-10-24; no commit touches the 3 paths after 3c30b30a; worktree clean for them.\nGate: recorded command re-run fresh at HEAD 62f83b4c (snapshot /tmp/moe-cf952313-GbuBO2, overlay cmp = HEAD): npm ci, tsc --noEmit 0 errors, vitest 114+41 = 155/155, 0 skipped, EXIT 0. Neighbours certificationEvidence (83) + executionProfile (41): 279/279.\nDrift: certificationEvidence.ts moved 63ae437a -> 3afbdc59 (CQ-M07f), a supervisorSha256 pin only, no export change; the gate covers it.\nDoD: 1 deep-frozen ready snapshot naming the report; 2 ALONE table (21 rows) + it.each over the 13 certify rows + ordered multi-failure row; 3 mismatch, timeout (killed, ETIMEDOUT, guard), failed and malformed probes, call records pinned path + argv version --format json; 4 env, label and in-project/.moe store rows via the real CQ-M07a reader, with a ready control; 5 gate green.\nContract: leaf-safe imports, no process/os/home reads, own deliveryPolicy only, one probe only after an accepted report, key bytes stay local, runnerChannel diff = isRunnerKey export, no importer (verified-local stays unavailable).\nMutants: 17/20 killed. 3 advisory survivors on correct code: realpath guard for a key dir symlinked into the project, external SIGKILL classed as timeout, control chars in paths. Each pinnable: 3 QA rows pass 117/117 on the original; each mutant fails its row. Follow-up card task-cd2977e10648489fa3d63b0a376ca6fa (BACKLOG, LOW).",
+  "requiredCheckAtDone": null
 }

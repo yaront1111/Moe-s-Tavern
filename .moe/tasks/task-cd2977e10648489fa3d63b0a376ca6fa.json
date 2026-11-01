@@ -1,0 +1,34 @@
+{
+  "id": "task-cd2977e10648489fa3d63b0a376ca6fa",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07b1] executionReadiness: pin three edge rows QA mutants survived",
+  "description": "A test-only follow-up from CQ-M07b QA round 3 (qa-c5835a34, 2026-11-01). The landed evaluator (completion 3c30b30a) behaves correctly. But no row in executionReadiness.test.ts pins three of its guards, so a refactor could drop any of them with the suite still green.\n\nQA proved each gap in a git-archive copy. The three rows below pass on the original module (117/117), and each matching mutant fails exactly its own row. The harness is /tmp/moe-qa-c5835a34-mut/pin.py.\n\nAdd these rows to packages/moe-daemon/src/delivery/executionReadiness.test.ts and change no other file:\n1. ALONE table: 'a valid key reached through a directory symlinked into the project'.\n   - Setup: symlinkSync(dir(project, 'secret'), path.join(root, 'keys-link'), 'junction'), then runnerKeyPath = await keyFor(project, path.join(root, 'keys-link')).\n   - Expect exactly ['authenticated-runner-evidence'].\n   - Why: realpath(keyPath) in runnerKeyFiled is the only guard against an intermediate-directory symlink into the project. lstat and O_NOFOLLOW cover only the final component.\n2. PROBES table: a rejection { killed: false, signal: 'SIGKILL', code: null } gives provider-probe-failed.\n   - Why: an external kill is not execFile's timeout. This kills the mutant where timedOut keys on signal instead of killed.\n3. ALONE table, POSIX only: a daemonInstallDir whose directory name contains a real newline character expects exactly ['protected-host-control-plane'].\n   - Why: this kills the mutant where absolute() drops the CONTROL test.\n\nSize: about 10 test lines. No runtime change.",
+  "definitionOfDone": [
+    "A row where runnerKeyPath reaches a valid key through a directory symlinked into the project expects exactly ['authenticated-runner-evidence']. It fails when runnerKeyFiled compares the unresolved keyPath instead of realpath(keyPath).",
+    "A probe rejection { killed: false, signal: 'SIGKILL', code: null } expects exactly ['isolated-agent-and-qa-vms', 'isolated-check-vm', 'provider-probe-failed']. It fails when timedOut keys on signal instead of killed.",
+    "On POSIX, a daemonInstallDir whose name contains a control character expects exactly ['protected-host-control-plane']. It fails when absolute() drops the CONTROL test.",
+    "executionReadiness.ts and runnerChannel.ts are byte-unchanged. The CQ-M07b archive gate (npm ci, tsc --noEmit, then vitest over executionReadiness.test.ts and runnerChannel.test.ts) passes in a git-archive snapshot, never in the shared checkout."
+  ],
+  "taskRails": [
+    "Test-only: edit only packages/moe-daemon/src/delivery/executionReadiness.test.ts. Unit tests never spawn a real Multipass client."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-cf952313817d4b76b300b10a043aba7b"
+  ],
+  "priority": "LOW",
+  "order": 233.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T14:50:43.192Z",
+  "updatedAt": "2026-11-01T14:50:43.192Z"
+}
