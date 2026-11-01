@@ -118,7 +118,8 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'strong-recovery-held','strong-recovery-held-gate',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none','reattach-session',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
-'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running','teardown-protected'];
+'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running','teardown-protected',
+'wt-pass','wt-default','wt-moe-dir','wt-moe-file','wt-moe-link','wt-moe-link-out','wt-before','wt-tracked','wt-hidden','wt-assume','wt-nested'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
 // supervisor stops the wrapper as soon as that claim is seen. freed-* is a
 // seat-freeing report_blocked (the task exits BLOCKED): whatever became of the
@@ -168,6 +169,127 @@ child.on('exit',(code,signal)=>{clearInterval(poll);clearTimeout(deadline);
 // box -- so the Windows cancellation bound tracks MOE_POSTFLIGHT_TIMEOUT_SEC
 // rather than a fixed 30 s. The outer spawnSync timeout is still the real cap.
 const CANCEL_MS=Math.max(30000,(Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-30)*1000);
+// WT-10G: the worktree-mode frozen gate (sh run_frozen_gate worktree, ps1
+// Invoke-MoeFrozenGate -WorktreeMode; WT-S 2.2 L6) is not wired into landing
+// until WT-10, so the wt-* modes drive the wrapper's real gate functions
+// directly: sh slices them out by name, ps1 imports every function through the
+// AST. Only the check-run recorder is stubbed. TMPDIR/TMP/TEMP point at a
+// per-mode dir this suite owns, so every gate root is owned scratch. The drivers
+// read the stored index bits: git otherwise hides S on files a .moe link makes present.
+const WT_GATE=`
+const fs=require('fs'),path=require('path'),cp=require('child_process');
+const get=(...a)=>cp.execFileSync('git',a,{encoding:'utf8'}).trim(),real=p=>fs.realpathSync.native(p);
+let moe=true;try{fs.lstatSync('.moe');}catch(e){moe=false;}
+fs.writeFileSync(process.env.WTG_OBS,JSON.stringify({dirs:[process.cwd(),process.env.MOE_PROJECT_PATH,get('rev-parse','--show-toplevel')].map(real),
+ parent:real('..'),head:get('rev-parse','HEAD'),tree:get('write-tree'),moe,flags:get('ls-files','-t','--','.moe')}));
+const mode=process.env.WTG_MODE,link=t=>fs.symlinkSync(t,'.moe',process.platform==='win32'?'junction':'dir');
+if(mode==='wt-moe-dir'){fs.mkdirSync('.moe');fs.writeFileSync(path.join('.moe','x'),'gate\\n');}
+if(mode==='wt-moe-file')fs.writeFileSync('.moe','gate\\n');
+if(mode==='wt-moe-link')link(path.resolve('..','missing-target'));
+if(mode==='wt-moe-link-out')link(process.env.WTG_CONTROL_MOE);
+if(mode==='wt-tracked')fs.writeFileSync('src.txt','gate changed\\n');
+if(mode==='wt-hidden'){get('update-index','--skip-worktree','src.txt');fs.unlinkSync('src.txt');}
+if(mode==='wt-assume'){get('update-index','--assume-unchanged','src.txt');fs.writeFileSync('src.txt','hidden gate change\\n');}
+`;
+const WT_SH_FUNCS=['gate_git','gate_integrity','gate_integrity_wt','stop_gate_child','remove_gate_root','cleanup_gate_workspace','freeze_candidate','run_frozen_gate'];
+function shFunctions(){const s=read(wrapper);return WT_SH_FUNCS.map(name=>{const i=s.indexOf('\n'+name+'() {');
+  assert.ok(i>=0,'moe-agent.sh has no '+name);return s.slice(i+1,s.indexOf('\n}\n',i)+3);}).join('');}
+const WT_SH=`set -e
+record_candidate_rpc() { return 0; }
+record_check_run_rpc() { printf '%s\\t%s\\n' "$GATE_RC" "$GATE_OUTCOME" >> "$WTG_CHECKS"; }
+GREEN= BLUE= NC= YELLOW= GATE_PENDING_ROOTS= GATE_OUTCOME= GATE_WORKSPACE= flags=
+PYTHON_CMD=$(command -v python3 || command -v python)
+MOE_TOP=$WTG_REPO MOE_REL=$WTG_REL QUALITY_GATE='node gate.cjs'
+freeze_candidate "$WTG_BASE" "$WTG_TREE"
+if run_frozen_gate $WTG_ARM; then rc=0; else rc=1; fi
+if [ -n "$GATE_WORKSPACE" ] && [ -d "$GATE_WORKSPACE" ]; then flags=$(git -C "$GATE_WORKSPACE" -c sparse.expectFilesOutsideOfPatterns=true ls-files -t -- .moe src.txt); fi
+if cleanup_gate_workspace; then clean=0; else clean=1; fi
+printf 'rc=%s\\nclean=%s\\ncommit=%s\\nflags=%s\\n' "$rc" "$clean" "$FROZEN_COMMIT" "$flags" > "$WTG_RESULT"
+`;
+// ASCII only: Windows PowerShell 5.1 reads a BOM-less script as ANSI.
+const WT_PS1=`$ErrorActionPreference='Stop'
+$errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($env:WTG_WRAPPER,[ref]$null,[ref]$errors)
+if ($errors.Count) { throw ('moe-agent.ps1 parse errors: '+($errors -join '; ')) }
+foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] },$false)) { . ([ScriptBlock]::Create($fn.Extent.Text)) }
+foreach ($st in $ast.EndBlock.Statements) {
+  if ($st -is [System.Management.Automation.Language.AssignmentStatementAst] -and $st.Left.Extent.Text -like '$script:MoeGate*') { . ([ScriptBlock]::Create($st.Extent.Text)) }
+}
+function Send-MoeCheckRun([hashtable]$Frozen,[hashtable]$Gate) {
+  [IO.File]::AppendAllText($env:WTG_CHECKS,[string]$Gate.ExitCode+[char]9+[string]$Gate.Outcome+[char]10)
+  return $true
+}
+$git=@{ Top=$env:WTG_REPO; Rel=$env:WTG_REL }
+$frozen=New-MoeFrozenCandidate $git $env:WTG_TREE $env:WTG_BASE
+if ($env:WTG_ARM) { $ok=@(Invoke-MoeFrozenGate $git $frozen 'node gate.cjs' -WorktreeMode)[-1] }
+else { $ok=@(Invoke-MoeFrozenGate $git $frozen 'node gate.cjs')[-1] }
+$flags=''
+if ($script:MoeGate -and (Test-Path -LiteralPath $script:MoeGate.Workspace)) {
+  $flags=(Invoke-MoeGit -Top $script:MoeGate.Workspace -GitArgs @('-c','sparse.expectFilesOutsideOfPatterns=true','ls-files','-t','--','.moe','src.txt')).Out -join [char]10
+}
+$clean=Remove-MoeGateWorkspace
+$rc=if ($ok -eq $true) { '0' } else { '1' }
+$cl=if ($clean) { '0' } else { '1' }
+[IO.File]::WriteAllText($env:WTG_RESULT,(@(('rc='+$rc),('clean='+$cl),('commit='+$frozen.Commit),('flags='+$flags)) -join [char]10)+[char]10)
+`;
+function wtGate(mode){
+  const repo=path.join(root,mode),tmp=path.join(root,mode+'-tmp'),home=path.join(root,mode+'-home'),moeDir=path.join(repo,'.moe');
+  const obsFile=path.join(root,mode+'-obs.json'),checksFile=path.join(root,mode+'-checks.txt'),resultFile=path.join(root,mode+'-result.txt');
+  for(const d of [repo,tmp,home])fs.mkdirSync(d,{recursive:true});
+  git(repo,'init','-q');
+  for(const [key,value] of [['core.autocrlf','false'],['user.name','Moe Test'],['user.email','moe@test.local']])git(repo,'config',key,value);
+  // '!/.moe/' excludes only a directory: a tracked FILE named .moe materializes,
+  // and the before-command check must refuse it.
+  if(mode==='wt-before')write(moeDir,'tracked file\n');
+  else{write(path.join(moeDir,'tasks','task-a.json'),'{"id":"task-a"}\n');write(path.join(moeDir,'project.json'),'{"id":"proj-wt"}\n');}
+  write(path.join(repo,'src.txt'),'source\n');write(path.join(repo,'gate.cjs'),WT_GATE);
+  git(repo,'add','--','.');git(repo,'commit','-qm','seed');
+  if(mode!=='wt-before')write(path.join(moeDir,'daemon.json'),'{"sentinel":"control runtime"}\n');
+  const map=p=>{let st;try{st=fs.lstatSync(p);}catch(e){return null;}
+    if(st.isSymbolicLink())return 'link:'+fs.readlinkSync(p);
+    if(!st.isDirectory())return read(p);
+    const o={};for(const n of fs.readdirSync(p).sort())o[n]=map(path.join(p,n));return o;};
+  const snap=()=>[git(repo,'rev-parse','HEAD'),git(repo,'ls-files','-s'),git(repo,'--no-optional-locks','status','--porcelain','-uall'),
+    cp.spawnSync('git',['-C',repo,'config','--get','core.sparseCheckout']).status,map(moeDir)];
+  const pre=snap(),env={};
+  for(const [key,value] of Object.entries(process.env))if(!/^GIT_|^(HOME|USERPROFILE|TMPDIR|TMP|TEMP)$/i.test(key))env[key]=value;
+  Object.assign(env,{HOME:home,USERPROFILE:home,TMPDIR:tmp,TMP:tmp,TEMP:tmp,WTG_WRAPPER:wrapper,WTG_REPO:repo,WTG_MODE:mode,
+    WTG_BASE:git(repo,'rev-parse','HEAD'),WTG_TREE:git(repo,'rev-parse','HEAD^{tree}'),WTG_OBS:obsFile,WTG_CHECKS:checksFile,WTG_RESULT:resultFile,WTG_CONTROL_MOE:moeDir});
+  if(mode!=='wt-default')env.WTG_ARM='worktree';
+  if(mode==='wt-nested')env.WTG_REL='sub';
+  const driver=path.join(root,win?'wt-driver.ps1':'wt-driver.sh');
+  if(!fs.existsSync(driver))write(driver,win?WT_PS1:shFunctions()+WT_SH);
+  const r=cp.spawnSync(engine,win?['-NoProfile','-File',driver]:[driver],{env,encoding:'utf8',timeout:120000,windowsHide:true});
+  const log=String(r.stdout||'')+String(r.stderr||'')+(r.error?'\n'+r.error:'');
+  assert.equal(r.status,0,mode+': driver failed\n'+log);
+  const res=read(resultFile),field=key=>(res.match(new RegExp('^'+key+'=(.*)$','m'))||[])[1];
+  const flags=res.slice(res.indexOf('flags=')+6).trim(),checks=fs.existsSync(checksFile)?read(checksFile).split('\n').filter(Boolean):[];
+  const obs=fs.existsSync(obsFile)?JSON.parse(read(obsFile)):null,integrity=log.includes('MOE_WORKTREE_GATE_INTEGRITY');
+  const moeFlags='S .moe/project.json\nS .moe/tasks/task-a.json';
+  assert.equal(field('clean'),'0',mode+': owned cleanup\n'+log);
+  assert.deepEqual(fs.readdirSync(tmp),[],mode+': owned gate scratch must be emptied\n'+log);
+  assert.equal(git(repo,'worktree','list','--porcelain').split('\n').filter(l=>l.startsWith('worktree ')).length,1,mode+'\n'+log);
+  assert.deepEqual(snap(),pre,mode+': the control checkout, its index and its .moe stay unchanged\n'+log);
+  if(obs){
+    assert.deepEqual(obs.dirs.map(d=>[path.basename(d),path.dirname(d)]),Array(3).fill(['tree',obs.parent]),mode+': cwd, MOE_PROJECT_PATH and toplevel are the gate checkout\n'+log);
+    assert.equal(path.dirname(obs.parent),fs.realpathSync.native(tmp),mode+': the gate root is owned scratch\n'+log);
+    assert.equal(fs.existsSync(obs.parent),false,mode+': the gate root is removed\n'+log);
+    assert.deepEqual([obs.head,obs.tree],[field('commit'),git(repo,'rev-parse','HEAD^{tree}')],mode+': the gate saw the frozen commit and tree\n'+log);
+  }
+  if(mode==='wt-pass'||mode==='wt-default'){
+    assert.equal(field('rc'),'0',log);assert.deepEqual(checks,['0\tpassed'],log);assert.equal(integrity,false,log);
+    assert.equal(obs.moe,mode==='wt-default',mode+': .moe in the gate checkout\n'+log);
+    assert.equal(obs.flags,mode==='wt-default'?moeFlags.replace(/^S/gm,'H'):moeFlags,mode+': .moe index entries\n'+log);
+  }else if(mode==='wt-before'||mode==='wt-nested'){
+    assert.equal(field('rc'),'1',log);assert.deepEqual(checks,[],log);assert.equal(obs,null,log);
+    assert.equal(integrity,mode==='wt-before',log);
+    if(mode==='wt-nested')assert.ok(log.includes('MOE_WORKTREE_PROJECT_NOT_TOP'),log);
+  }else{
+    assert.equal(field('rc'),'1',log);assert.deepEqual(checks,['0\tinconclusive'],log);
+    assert.equal(integrity,mode.startsWith('wt-moe-'),log);assert.equal(obs.moe,false,log);
+    assert.equal(flags,moeFlags+'\nH src.txt',mode+': index flags after the refusal\n'+log);
+  }
+}
 let count=0;
 try {
 if(!win){const source=read(wrapper),stop=source.slice(source.indexOf('stop_gate_child() {'),source.indexOf('cleanup_gate_workspace() {'));
@@ -179,6 +301,7 @@ for(const mode of modes.filter(m=>!process.env.MOE_FROZEN_TEST_ONLY||process.env
     assert.ok(probe.length>0&&probe.includes('--stdin')&&!/foreach/i.test(probe),'ps1 integrity probe must batch ls-files into one update-index --stdin, not spawn git per tracked file');
     count++;continue;
   }
+  if(mode.startsWith('wt-')){wtGate(mode);count++;continue;}
   const repo=path.join(root,mode),nested=path.join(repo,'nested project é'),owned=path.join(nested,'owned.txt');
   fs.mkdirSync(nested,{recursive:true});
   const gateSource=`

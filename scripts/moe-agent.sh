@@ -5227,8 +5227,19 @@ gate_git() {
 gate_integrity() {
     [ "$(gate_git rev-parse HEAD 2>/dev/null)" = "$FROZEN_COMMIT" ] || return 1
     [ "$(gate_git write-tree 2>/dev/null)" = "$FROZEN_TREE" ] || return 1
-    gate_git ls-files -z | gate_git update-index --no-assume-unchanged --no-skip-worktree -z --stdin || return 1
+    gate_git ls-files -z "$@" | gate_git update-index --no-assume-unchanged --no-skip-worktree -z --stdin || return 1
     gate_git diff-files --quiet --ignore-submodules=none --
+}
+# Worktree-mode integrity (WT-S §2.2 L6): the gate checkout never holds .moe, and
+# every tracked path outside .moe keeps the shared checks; .moe/ keeps its S bits.
+gate_integrity_wt() {
+    if [ -e "$GATE_WORKSPACE/.moe" ] || [ -L "$GATE_WORKSPACE/.moe" ]; then
+        echo "[WARN] MOE_WORKTREE_GATE_INTEGRITY: the qualityGate worktree holds .moe; refusing branch commit." >&2; return 1
+    fi
+    # update-index applies only its first marking option, so clear skip-worktree
+    # in its own pass: a file deleted behind it must reach diff-files.
+    gate_git ls-files -z -- ':(top,exclude).moe' | gate_git update-index --no-skip-worktree -z --stdin || return 1
+    gate_integrity -- ':(top,exclude).moe'
 }
 stop_gate_child() {
     [ -n "${GATE_PID:-}" ] || return 0
@@ -5249,6 +5260,9 @@ stop_gate_child() {
 # never changes a landing decision and never stops the loop.
 GATE_PENDING_ROOTS=""
 remove_gate_root() {
+    # A gate-made .moe link is unlinked, never followed (WT-S §1.10); a failed
+    # unlink keeps the root pending. Shared mode has no link: .moe is tracked or absent.
+    if [ -L "$1/tree/.moe" ]; then rm -f -- "$1/tree/.moe" || return 1; fi
     if [ -e "$1/tree/.git" ]; then
         git -C "$MOE_TOP" worktree remove --force "$1/tree" >/dev/null 2>&1 || return 1
     fi
@@ -5284,19 +5298,34 @@ freeze_candidate() {
     FROZEN_CANDIDATE_ID=$($PYTHON_CMD -c 'import uuid;print("cand-"+uuid.uuid4().hex)') || return 1
     record_candidate_rpc
 }
+# run_frozen_gate [worktree]: no argument is today's full shared checkout (rail 4);
+# `worktree` is the .moe-free sparse arm WT-10 calls (WT-S §2.2 L6).
 run_frozen_gate() {
     [ -n "${QUALITY_GATE:-}" ] || return 0
+    local integrity=gate_integrity
+    if [ "${1:-}" = worktree ]; then
+        integrity=gate_integrity_wt
+        # A nested project's <rel>/.moe is outside '!/.moe/': refuse before any directory.
+        if [ -n "${MOE_REL:-}" ]; then
+            echo "[WARN] MOE_WORKTREE_PROJECT_NOT_TOP: a worktree-mode qualityGate needs the project at the repository top; refusing branch commit." >&2; return 1
+        fi
+    fi
     cleanup_gate_workspace || true
     # Assignment runs in the parent; never create_secure_temp in a subshell.
     GATE_ROOT=$(mktemp -d -t moe-gate.XXXXXXXX) || return 1
     GATE_WORKSPACE="$GATE_ROOT/tree"; GATE_LOG="$GATE_ROOT/output.log"
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
     GATE_RC=0; GATE_OUTCOME=""; GATE_OUT=""; GATE_PID=""
-    if ! git -C "$MOE_TOP" -c core.hooksPath=/dev/null -c core.sparseCheckout=false \
+    if [ "$integrity" = gate_integrity_wt ]; then
+        # Sparse from the start, never a full checkout: .moe/ is never written.
+        { git -C "$MOE_TOP" -c core.hooksPath=/dev/null worktree add --detach --no-checkout "$GATE_WORKSPACE" "$FROZEN_COMMIT" \
+            && gate_git sparse-checkout set --no-cone '/*' '!/.moe/' && gate_git read-tree -mu HEAD; } >"$GATE_LOG" 2>&1 \
+            || { echo "[WARN] qualityGate workspace materialization failed." >&2; return 1; }
+    elif ! git -C "$MOE_TOP" -c core.hooksPath=/dev/null -c core.sparseCheckout=false \
         -c core.sparseCheckoutCone=false worktree add --detach "$GATE_WORKSPACE" "$FROZEN_COMMIT" >"$GATE_LOG" 2>&1; then
         echo "[WARN] qualityGate workspace materialization failed." >&2; return 1
     fi
-    gate_integrity || { echo "[WARN] qualityGate initial tree integrity failed." >&2; return 1; }
+    $integrity || { echo "[WARN] qualityGate initial tree integrity failed." >&2; return 1; }
     [ -d "$GATE_WORKSPACE/$MOE_REL" ] || return 1
     GATE_CHECK_ID=$($PYTHON_CMD -c 'import uuid;print("check-"+uuid.uuid4().hex)') || return 1
     echo -e "$BLUE Post-flight: quality gate: $QUALITY_GATE$NC"
@@ -5315,7 +5344,7 @@ run_frozen_gate() {
     # HEAD; a failing integrity probe is 'inconclusive', never 'passed'. The
     # probe runs once, and only after a zero exit.
     if [ "$GATE_RC" -ne 0 ]; then GATE_OUTCOME=code-failure
-    elif gate_integrity; then GATE_OUTCOME=passed
+    elif $integrity; then GATE_OUTCOME=passed
     else GATE_OUTCOME=inconclusive; fi
     GATE_RECORDED=true
     record_check_run_rpc || return 1

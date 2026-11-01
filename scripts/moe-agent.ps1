@@ -5184,18 +5184,18 @@ function Initialize-MoeGateProcess {
     if ($script:MoeGateTypeName -as [type]) { return }
     Add-Type -TypeDefinition $script:MoeGateProcessDefinition.Replace('MoeFrozenGateProcess', $script:MoeGateTypeName) -ErrorAction Stop
 }
-function Test-MoeGateIntegrity([hashtable]$Frozen) {
+function Test-MoeGateIntegrity([hashtable]$Frozen,[string]$Exclude='') {
     $top = $script:MoeGate.Workspace
     $head = Invoke-MoeGit -Top $top -GitArgs @('rev-parse','HEAD')
     $tree = Invoke-MoeGit -Top $top -GitArgs @('write-tree')
     if ($head.Rc -ne 0 -or ($head.Out -join '').Trim() -cne $Frozen.Commit -or $tree.Rc -ne 0 -or ($tree.Out -join '').Trim() -cne $Frozen.Tree) { return $false }
     # One ls-files | update-index --stdin pair, as in the sh twin: a git spawn per
     # tracked file cost about 31 s per probe on a 1000-file tree.
-    if (-not (Clear-MoeGateIndexFlags $top)) { return $false }
+    if (-not (Clear-MoeGateIndexFlags $top $Exclude)) { return $false }
     $diff = Invoke-MoeGit -Top $top -GitArgs @('diff-files','--quiet','--ignore-submodules=none','--')
     return ($diff.Rc -eq 0)
 }
-function Clear-MoeGateIndexFlags([string]$Top) {
+function Clear-MoeGateIndexFlags([string]$Top,[string]$Exclude='',[string]$Flags='--no-assume-unchanged --no-skip-worktree') {
     # The cmd pipe carries raw bytes. A .NET StandardInput writer does not: under
     # a UTF-8 console it writes a BOM first, corrupting the first NUL-separated path.
     $prev = $ErrorActionPreference
@@ -5203,11 +5203,24 @@ function Clear-MoeGateIndexFlags([string]$Top) {
     try {
         Push-Location -LiteralPath $Top
         try {
-            & $env:ComSpec /d /s /c 'git ls-files -z | git update-index --no-assume-unchanged --no-skip-worktree -z --stdin' 2>&1 | Out-Null
+            $list = if ($Exclude) { 'git ls-files -z -- "' + $Exclude + '"' } else { 'git ls-files -z' }
+            & $env:ComSpec /d /s /c ($list + ' | git update-index ' + $Flags + ' -z --stdin') 2>&1 | Out-Null
             return ($LASTEXITCODE -eq 0)
         } finally { Pop-Location }
     } catch { return $false }
     finally { $ErrorActionPreference = $prev }
+}
+# Worktree-mode integrity (WT-S §2.2 L6): the gate checkout never holds .moe, and
+# every tracked path outside .moe keeps the shared checks; .moe/ keeps its S bits.
+function Test-MoeGateIntegrityWorktree([hashtable]$Frozen) {
+    if ($null -ne (Get-Item -LiteralPath (Join-Path $script:MoeGate.Workspace '.moe') -Force -ErrorAction SilentlyContinue)) {
+        Write-Host '[WARN] MOE_WORKTREE_GATE_INTEGRITY: the qualityGate worktree holds .moe; refusing branch commit.' -ForegroundColor Yellow
+        return $false
+    }
+    # update-index applies only its first marking option, so clear skip-worktree
+    # in its own pass: a file deleted behind it must reach diff-files.
+    if (-not (Clear-MoeGateIndexFlags $script:MoeGate.Workspace ':(top,exclude).moe' '--no-skip-worktree')) { return $false }
+    return (Test-MoeGateIntegrity $Frozen ':(top,exclude).moe')
 }
 function Stop-MoeGateChild {
     $gate = $script:MoeGate
@@ -5228,6 +5241,13 @@ function Remove-MoeGateRoot([hashtable]$Entry) {
     if (-not $root.StartsWith($temp,[StringComparison]::OrdinalIgnoreCase) -or
         (Split-Path -Leaf $root) -notmatch '^moe-gate-[0-9a-f]{32}$' -or
         [IO.Path]::GetFullPath($Entry.Workspace) -cne (Join-Path $root 'tree')) { throw 'invalid owned gate path' }
+    # A gate-made .moe link is unlinked, never followed (WT-S §1.10); a throw keeps
+    # the root pending. Shared mode has no link: .moe is tracked or absent.
+    $moe=Join-Path $Entry.Workspace '.moe'
+    $item=Get-Item -LiteralPath $moe -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        if ($item.PSIsContainer) { [IO.Directory]::Delete($moe) } else { [IO.File]::Delete($moe) }
+    }
     if (Test-Path -LiteralPath (Join-Path $Entry.Workspace '.git')) {
         $r=Invoke-MoeGit -Top $Entry.Top -GitArgs @('worktree','remove','--force',$Entry.Workspace)
         if ($r.Rc -ne 0) { throw 'owned worktree removal failed' }
@@ -5270,8 +5290,19 @@ function New-MoeFrozenCandidate([hashtable]$Git,[string]$Tree,[string]$Base) {
     return @{ Tree=$Tree; Base=$Base; BaseRevision=$baseRevision; Commit=($r.Out -join '').Trim()
         CandidateId=('cand-'+[guid]::NewGuid().ToString('N')) }
 }
-function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Command) {
+# Without -WorktreeMode this is today's full shared checkout (rail 4); -WorktreeMode
+# is the .moe-free sparse arm WT-10 calls (WT-S §2.2 L6).
+function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Command,[switch]$WorktreeMode) {
     if (-not $Command) { return $true }
+    $integrity='Test-MoeGateIntegrity'
+    if ($WorktreeMode) {
+        $integrity='Test-MoeGateIntegrityWorktree'
+        # A nested project's <rel>/.moe is outside '!/.moe/': refuse before any directory.
+        if ($Git.Rel) {
+            Write-Host '[WARN] MOE_WORKTREE_PROJECT_NOT_TOP: a worktree-mode qualityGate needs the project at the repository top; refusing branch commit.' -ForegroundColor Yellow
+            return $false
+        }
+    }
     $null = Remove-MoeGateWorkspace # an earlier leftover never blocks this candidate's gate
     $root=Join-Path ([IO.Path]::GetTempPath()) ('moe-gate-'+[guid]::NewGuid().ToString('N'))
     $script:MoeGate=@{ Root=$root; Top=$Git.Top; Workspace=(Join-Path $root 'tree'); Log=(Join-Path $root 'output.log')
@@ -5279,10 +5310,17 @@ function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Comman
     $gate=$script:MoeGate
     try {
         New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
-        $r=Invoke-MoeGit -Top $Git.Top -GitArgs @('-c','core.hooksPath=NUL','-c','core.sparseCheckout=false',
-            '-c','core.sparseCheckoutCone=false','worktree','add','--detach',$gate.Workspace,$Frozen.Commit)
+        if ($WorktreeMode) {
+            # Sparse from the start, never a full checkout: .moe/ is never written.
+            $r=Invoke-MoeGit -Top $Git.Top -GitArgs @('-c','core.hooksPath=NUL','worktree','add','--detach','--no-checkout',$gate.Workspace,$Frozen.Commit)
+            if ($r.Rc -eq 0) { $r=Invoke-MoeGit -Top $gate.Workspace -GitArgs @('sparse-checkout','set','--no-cone','/*','!/.moe/') }
+            if ($r.Rc -eq 0) { $r=Invoke-MoeGit -Top $gate.Workspace -GitArgs @('read-tree','-mu','HEAD') }
+        } else {
+            $r=Invoke-MoeGit -Top $Git.Top -GitArgs @('-c','core.hooksPath=NUL','-c','core.sparseCheckout=false',
+                '-c','core.sparseCheckoutCone=false','worktree','add','--detach',$gate.Workspace,$Frozen.Commit)
+        }
         if ($r.Rc -ne 0) { throw 'qualityGate workspace materialization failed' }
-        if (-not (Test-MoeGateIntegrity $Frozen)) { throw 'qualityGate initial tree integrity failed' }
+        if (-not (& $integrity $Frozen)) { throw 'qualityGate initial tree integrity failed' }
         $cwd=if ($Git.Rel) { Join-Path $gate.Workspace $Git.Rel } else { $gate.Workspace }
         if (-not (Test-Path -LiteralPath $cwd -PathType Container)) { throw 'qualityGate project cwd missing' }
         Initialize-MoeGateProcess
@@ -5303,7 +5341,7 @@ function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Comman
         if ($gate.ExitCode -ne 0) { $gate.Outcome='code-failure' }
         else {
             $gate.Outcome='inconclusive'
-            try { if (Test-MoeGateIntegrity $Frozen) { $gate.Outcome='passed' } } catch { }
+            try { if (& $integrity $Frozen) { $gate.Outcome='passed' } } catch { }
         }
         $gate.Recorded=$true
         if (-not (Send-MoeCheckRun $Frozen $gate)) { throw 'qualityGate check persistence failed' }
