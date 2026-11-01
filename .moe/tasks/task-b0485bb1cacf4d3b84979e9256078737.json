@@ -81,12 +81,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "Size waiver prop-2954b7eb (EPIC ADD_RAIL, numstat-exact for completion 403c4f93, net 589) is pending the human's IDE click. QA round 1 found the substance green; the reopen-1 resubmit changed no bytes. A governor moves this row to REVIEW once the rail is approved. No worker action is needed.",
+  "reopenReason": "The human approved size waiver prop-2954b7eb at 20:24:31Z. The CQ-M07d size-exception rail now appears once in the CQ-M epic. QA checks the rail against `git show --numstat 403c4f93`, re-runs the gate and decides. No worker bytes are needed.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -129,14 +129,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:17.354Z",
-  "updatedAt": "2026-11-01T19:29:23.693Z",
+  "updatedAt": "2026-11-01T20:36:27.371Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:07:17.370Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-01T20:36:27.371Z",
+    "wallClockMs": 37750001
   },
   "contextFetchedBy": [
     "worker-5c5e1c38",
@@ -282,7 +284,7 @@
     "sessionId": "worker-5c5e1c38@2026-11-01T19:20:42Z",
     "at": "2026-11-01T19:29:23.693Z"
   },
-  "reviewCompletedAt": "2026-11-01T19:20:41.561Z",
+  "reviewCompletedAt": "2026-11-01T20:36:27.371Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -306,7 +308,13 @@
       ]
     }
   ],
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-01T19:28:46.735Z",
-  "blockedReason": "Size waiver prop-2954b7eb (EPIC ADD_RAIL, numstat-exact for completion 403c4f93, net 589) is pending the human's IDE click. QA round 1 found the substance green; the reopen-1 resubmit changed no bytes. A governor moves this row to REVIEW once the rail is approved. No worker action is needed."
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedReason": null,
+  "priorBlockedReason": "Size waiver prop-2954b7eb (EPIC ADD_RAIL, numstat-exact for completion 403c4f93, net 589) is pending the human's IDE click. QA round 1 found the substance green; the reopen-1 resubmit changed no bytes. A governor moves this row to REVIEW once the rail is approved. No worker action is needed.",
+  "blockedResourceId": null,
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-01T20:36:27.371Z",
+  "reviewSummary": "Round 2, no-byte retry. Approved under the epic rail \"CQ-M07d size exception\" (prop-2954b7eb, human-approved 20:24:31Z, in allRails.epic).\nRAIL vs NUMSTAT: git show --numstat --format= 403c4f93 -- packages/ gives getExecutionReadiness.ts +107, WebSocketServer.ts +20, index.ts +3 (runtime 130); getExecutionReadiness.test.ts +311, WebSocketServer.test.ts +149/-1 (tests net 459). Total +590/-1, net 589, exactly 5 files. Equals the rail text.\nCOMMIT: completion 403c4f93 is on moe/work-2026-10-24 (branch --contains). Round 2 changed no bytes, so lastCommitOutcome nothing/MOE_COMMIT_NOTHING_TO_COMMIT is expected, not a landing gap. 4 of the 5 files are byte-identical at HEAD. WebSocketServer.test.ts differs only by d67c23d1, CQ-M07d2's 1-line verifiedLocal expectation, as plan step 4 assigned.\nGATE: the recorded command at HEAD 5769775d (archive pinned to the sha; overlay cmp-checked as a no-op), env -i, Node v24.21.0. npm ci OK, tsc --noEmit OK, npm test EXIT 0: 227 files passed; 6863 tests passed, 20 skipped. 43 s wall, load avg 8-9. Passing: getExecutionReadiness 34, WebSocketServer 128, registry 2, daemonGitDocs 4, toolAudience 2, profileRollout 36, rolloutControls e2e 3, readinessHolder 56.\nDoD 1-4: re-read the whole runtime diff and the tests (exact toEqual payloads, call counts, .moe digests). 3 fresh mutants, all killed: lastStartedAt set only after a successful refresh; an activity append in the shared read (both DoD 4 rows); /ws refresh always true (2 rows). Round 1: 12/12 killed.\nADVERSARIAL: only refresh is read. McpAdapter tools/call adds no write (blocking:true only skips runExclusive). /ws messages are not serialized. The proxy's 30 s timeout covers the 11 s probe guard. No forbidden patterns.\nDoD 5 moved to CQ-M07d2 under the rail. That row is DONE (d67c23d1), and clientCapabilities.ts has verifiedLocal: true at HEAD.\nDoD 6: completion cites 226/6834/20; re-run green.\nSize: net 589, waived by the rail. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

@@ -1,0 +1,27 @@
+{
+  "id": "task-efca737f34e54c25b9ffad616a5a1166",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: profileRollout S1 pins the retained-id sort only through filesystem readdir order",
+  "description": "strictRetention's `list.sort()` (state/profileRollout.ts:112) is pinned only by S1 (profileRollout.test.ts:260-286). S1 loads its tasks through an unsorted readdirSync (state/persistence.ts:42). On NTFS that order already equals the sorted order (task-S- before task-s00), so deleting `.sort()` survives there; on ext4 it depends on hash order. Add a test that feeds ids in a known non-sorted order, independent of the filesystem, and asserts the sorted, capped lists (QA comment-8e9714d3 on task-ced85748, found in the CQ-M06 epic review).",
+  "definitionOfDone": [
+    "A test fails when `.sort()` is removed from strictRetention's ids() regardless of directory listing order, and passes with it",
+    "No production code change; cd packages/moe-daemon && npx vitest run src/state/profileRollout.test.ts exits 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 235.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T20:37:34.826Z",
+  "updatedAt": "2026-11-01T20:37:34.826Z"
+}

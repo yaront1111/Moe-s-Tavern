@@ -102,7 +102,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:23.273Z",
-  "updatedAt": "2026-11-01T20:34:46.131Z",
+  "updatedAt": "2026-11-01T20:35:53.259Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T11:19:44.514Z",
     "plannedStepCount": 4,
@@ -215,7 +215,8 @@
     ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
     ".moe/tasks/task-828e7d21602e4cf2a0f242e024db7dea.json",
     ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
-    ".moe/tasks/task-41d0c5a9855143ceb3ab81e61aaf9fa9.json"
+    ".moe/tasks/task-41d0c5a9855143ceb3ab81e61aaf9fa9.json",
+    ".moe/tasks/task-7d7d608264164f98a46a69910284f98c.json"
   ],
   "completionSummary": "VS Code now matches CQ-M07o's verified-local launch route.\n- MoeDaemonClient.ts:\n  - declaredProfile is a fresh, strict read that never pins.\n  - parseExecutionReadiness is strict: the 4 fields are checked, unknown keys are ignored, and ready-with-ids gives null.\n  - CLIENT_HELLO {planRevisions, verifiedLocal} is sent via ws.send as each socket's first frame, before 'connected'. Every VS Code approval path already sends expectedPlanRevision.\n  - requestExecutionReadiness sends GET_EXECUTION_READINESS {refresh:true}, waits at most 20 s and never rejects. One reply settles every waiter. A readiness ERROR (operation, payload.operation, or 'Unknown message type') becomes DAEMON_ERROR and never reaches onError. Close, disconnect and dispose give DISCONNECTED.\n- AgentLauncher.ts:\n  - A worker/QA seat under a verified-local or untrusted declaration runs today's sync checks, then refuses gemini, grok and custom commands by name before asking for readiness. It launches the installed platform wrapper (PowerShell on Windows) only on an answered verified-local ready reply. Anything else shows one error with CQ-M07o's sentences and opens no terminal.\n  - A missing readiness source refuses.\n  - Absent, legacy and observe launches, and architect and governor, keep today's command and stay synchronous.\n  - launchAllAgents asks for readiness once for worker+QA and shows at most one error. Self-review fix: a seat that carries that shared decision stays gated if the declaration changes before the stagger timers fire (A2).\n- extension.ts passes daemonClient.requestExecutionReadiness to all three launch calls.\n- protected-runtime.test.cjs: only L1 changed (ready source + await).\n\nTests: the new verified-local-launch.test.cjs has 26 rows covering every DoD item. They failed before the change and pass after it; the guard was also mutation-checked.\n\nGate (plan checkRef, Linux snapshot): EXIT 0, 388 tests, 384 pass, 4 skipped (Windows-only).\n\nSIZE: net 565 (+583/-18; runtime 213, tests 352)",
   "commits": [
@@ -257,6 +258,23 @@
       "treeId": "035993ed318aa26903bcb00c491ddfab61a292df",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "b96fe2265f9299cf345fe3d5d2c943a550ba1366",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1b5727b1@2026-11-01T20:25:16Z",
+      "paths": [
+        ".moe/tasks/task-41d0c5a9855143ceb3ab81e61aaf9fa9.json",
+        ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
+        ".moe/tasks/task-7d7d608264164f98a46a69910284f98c.json"
+      ],
+      "recordedBy": "qa-1b5727b1",
+      "recordedAt": "2026-11-01T20:35:53.259Z",
+      "treeId": "b69b8a74eb2b8e7594b2db22985553d3c135b17c",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -270,8 +288,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-1b5727b1@2026-11-01T19:23:42Z",
-    "at": "2026-11-01T19:40:04.200Z"
+    "sessionId": "qa-1b5727b1@2026-11-01T20:25:16Z",
+    "at": "2026-11-01T20:35:53.259Z"
   },
   "blockedReason": null,
   "blockedResourceId": null,
