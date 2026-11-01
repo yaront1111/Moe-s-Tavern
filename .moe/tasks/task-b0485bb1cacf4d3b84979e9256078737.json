@@ -16,54 +16,85 @@
     {
       "stepId": "step-1",
       "description": "Create the projection module and register the tool.\n\nRead first:\n- `mem:task-task-9ae89d5e362c4bf3afb692de17ae8c5b-handoff` (CQ-M07c's holder contract; also comment-7830f168 on this task);\n- `mem:decision-cq-m07-verified-local-activation` (the FIXED payload);\n- the LANDED delivery/readinessHolder.ts and delivery/executionProfile.ts. If a landed name differs, follow the code and say so in the step note.\n\n**New packages/moe-daemon/src/tools/getExecutionReadiness.ts** exports:\n1. `ExecutionReadinessPayload` = { profile: ExecutionProfile | 'unreadable'; ready: boolean; missingCapabilities: string[]; evaluatedAt: string | null }. These are EXACTLY the four fixed fields; CQ-M07m/n/o/p plan against them. Never add evidence, paths or versions.\n2. `READINESS_REFRESH_WINDOW_MS` = 30_000.\n3. `readinessProjectionDeps` = { now: () => Date.now(), refresh: (state) => refreshReadiness(productionReadinessInputs(state.projectPath, state.project?.settings)) }. It is a plain mutable object, so tests replace its members with vi.spyOn; no test may reach the production refresh.\n4. `readExecutionReadiness(state, { refresh }: { refresh?: unknown } = {}): Promise<ExecutionReadinessPayload>`:\n   - refresh must be absent or a boolean; anything else throws invalidInput('refresh', 'must be a boolean').\n   - refresh === true goes through a module-level single-flight and rate window:\n     - while a refresh is in flight, await that same promise;\n     - otherwise start one only when now - lastStartedAt >= READINESS_REFRESH_WINDOW_MS, or the clock went backwards (now < lastStartedAt). Record lastStartedAt before awaiting;\n     - a rejecting refresh is swallowed and still counts as started.\n   - Then read heldReadiness() once and return a fresh object: ready, a copy of missingCapabilities, evaluatedAt, and profile = resolveExecutionProfile(state.project?.settings). A throw from that becomes 'unreadable', never a throw.\n5. `_resetReadinessRefreshForTests()`, which clears lastStartedAt and the in-flight promise. It can only allow the next refresh.\n6. `getExecutionReadinessTool(_state): ToolDefinition` for 'moe.get_execution_readiness':\n   - inputSchema { workerId?: string, refresh?: boolean } with additionalProperties false;\n   - the handler returns readExecutionReadiness(state, { refresh: args.refresh });\n   - the description says it is read-only, grants nothing, and that refresh re-runs the daemon's evaluator at most once per 30 s. It must not claim anything about git: util/daemonGitDocs.test.ts scans tool descriptions.\n   - Set `blocking: true`, with a comment. This is the registry's mutex opt-out, as for submit_plan's bounded read-only preflight (tools/index.ts:95-101). The tool writes nothing, and a refresh awaits a bounded evaluation (probe 10 s, guard 11 s) that must never hold the fleet mutex. The contract's 'NOT blocking' means it never parks or long-polls, and this tool never does.\n\n**Writes.** The handler never calls state.touchWorker, appendActivity or any writer. workerId is accepted only because the proxy injects it.\n\n**tools/index.ts.** Import the factory and add getExecutionReadinessTool(state) to getTools(), so tools/registry.test.ts finds it registered.\n\nError handling: invalid refresh gives INVALID_INPUT. A failed evaluation never fails the read; the held value stays whatever the holder decided (fail closed).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/index.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/getExecutionReadiness.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getExecutionReadiness.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "note": "Created getExecutionReadiness.ts (payload type, 30 s window, readinessProjectionDeps seam, single-flight readExecutionReadiness, reset helper, blocking:true tool) and registered it in getTools(). Landed names matched the plan (heldReadiness, refreshReadiness, productionReadinessInputs, resolveExecutionProfile). One addition the plan did not list, forced by toolAudience.test.ts ('names exactly the registered tools'): a TOOL_AUDIENCE entry 'moe.get_execution_readiness': 'wrapper' in the same file (wrappers call it; IDEs and moe-call.sh have no role and still see every tool). Dirty peer paths in the checkout (.moe/*, repairActivation.ts, claimNextTask.ts, reportBlocked.ts, setTaskDependencies.ts, claimGuards.ts, scripts/local-runner/*) left untouched.",
+      "startedAt": "2026-11-01T19:08:50.596Z",
+      "completedAt": "2026-11-01T19:09:17.131Z"
     },
     {
       "stepId": "step-2",
       "description": "Add the /ws pair in packages/moe-daemon/src/server/WebSocketServer.ts, following the GET_METRICS → METRICS convention (lines ~171 and ~983).\n\n- Add `| { type: 'GET_EXECUTION_READINESS'; payload?: { refresh?: boolean } }` to the client message union.\n- In the switch:\n  - When payload.refresh is present and not a boolean, safeSend { type: 'ERROR', message: 'GET_EXECUTION_READINESS refresh must be a boolean' } and return.\n  - Otherwise safeSend { type: 'EXECUTION_READINESS', payload: await readExecutionReadiness(this.state, { refresh: payload.refresh === true }) }.\n- Like GET_METRICS, it is read-only: never wrap it in withMutex, since a refresh awaits a bounded evaluation, and never write state or an activity record.\n- Error handling: an unexpected throw is caught and answered with { type: 'ERROR', message: 'GET_EXECUTION_READINESS failed' }. Put no error detail, path or stack in the reply.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/server/WebSocketServer.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "note": "Added the GET_EXECUTION_READINESS union member, the import, and a case after GET_METRICS: non-boolean refresh -> ERROR 'GET_EXECUTION_READINESS refresh must be a boolean'; otherwise EXECUTION_READINESS with readExecutionReadiness's payload; an unexpected throw is answered with the fixed 'GET_EXECUTION_READINESS failed' (no detail), so the outer catch's message/context frame is never used. No withMutex, no writes. The file had no dirty bytes before this edit.",
+      "startedAt": "2026-11-01T19:09:19.327Z",
+      "completedAt": "2026-11-01T19:09:34.442Z"
     },
     {
       "stepId": "step-3",
       "description": "New packages/moe-daemon/src/tools/getExecutionReadiness.test.ts, covering DoD 1, 3 and 4 through the tool registry.\n\n**Setup.**\n- Use ToolTestHarness.\n- Call the tool the way state/profileRollout.test.ts:99-104 does: getTools(h.state).filter by name, then tool.blocking ? invoke() : runExclusive(invoke).\n- Hold values with CQ-M07c's refreshReadiness(inputs, async () => SNAPSHOT) and reset with clearReadiness().\n- beforeEach: vi.spyOn(readinessProjectionDeps, 'refresh') with a fake, and vi.spyOn(readinessProjectionDeps, 'now') with an injected clock, so no row ever reaches the production evaluator.\n- afterEach: clearReadiness(), _resetReadinessRefreshForTests(), vi.restoreAllMocks().\n- Assert exact objects with toEqual.\n\n**Rows.**\n1. **DoD 1.**\n   - Default held: { profile: 'legacy', ready: false, missingCapabilities: READINESS_CAPABILITIES, evaluatedAt: null }.\n   - A held READY snapshot: { ready: true, missingCapabilities: [], evaluatedAt: its time }.\n   - A held NOT_READY snapshot: its exact list.\n   - profile follows the live setting, seeded raw: 'observe' and 'verified-local'. A malformed executionProfile ('bogus', 42) gives 'unreadable' and no throw.\n   - The result has exactly the four keys.\n2. **DoD 3, rate window, injected clock.**\n   - Five concurrent refresh: true calls while the fake refresh is pending (a deferred) make exactly one refresh call, and all five return the refreshed value once it resolves.\n   - At +10 s, refresh: true makes no new call; at +31 s it makes one more.\n   - A clock moved backwards runs a refresh.\n   - A rejecting refresh does not reject the tool, which returns the held value.\n   - refresh absent or false makes no call; refresh 'yes' gives INVALID_INPUT.\n3. **DoD 4, writes nothing and changes nothing.**\n   - Hash every file under the harness's .moe before and after a batch of calls: with and without refresh, and with caller arguments ready: true, missingCapabilities: [] and evaluatedAt: 'x'. The hashes are identical, and the activity log has no new entry.\n   - heldReadiness() deep-equals its earlier value.\n   - Mutating a returned payload's array never changes heldReadiness().\n   - Pin `blocking === true`, with the reason in the test name (mutex opt-out for a bounded read-only evaluation).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/getExecutionReadiness.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getExecutionReadiness.test.ts"
+      ],
+      "note": "New getExecutionReadiness.test.ts, 34 tests in 3 describes: DoD 1 (default, READY, NOT_READY, failed-evaluation default, observe/verified-local, unreadable for 'bogus'/'VERIFIED-LOCAL'/42/null/{}, exactly four keys, no evidence leak), DoD 3 (five concurrent refreshes -> one call, +10 s none / +31 s one, exact window edge, backwards clock, rejecting and sync-throwing refresh, refresh 'yes'/1/0/null/{}/[] -> INVALID_INPUT), DoD 4 (SHA-256 of every file under .moe plus activity count and heldReadiness identity unchanged across grant-attempt arguments, no worker record, fresh copies, blocking pinned). Ran in snapshot /tmp/moe-b0485bb1-* (outside the repo, nvm Node 24, npm ci): tsc clean, the new file plus registry/toolAudience/daemonGitDocs = 4 files, 42 tests passed.",
+      "startedAt": "2026-11-01T19:09:37.146Z",
+      "completedAt": "2026-11-01T19:10:49.331Z"
     },
     {
       "stepId": "step-4",
       "description": "Add a describe('GET_EXECUTION_READINESS') to packages/moe-daemon/src/server/WebSocketServer.test.ts, covering DoD 2 and the /ws half of DoD 4. Reuse the file's existing connect/nextMessage helper (around lines 140-175) and read messages until the EXECUTION_READINESS or ERROR reply, skipping connect-time broadcasts. Spy readinessProjectionDeps as in step 3, so no row evaluates for real.\n\nRows:\n1. { type: 'GET_EXECUTION_READINESS' } is answered by { type: 'EXECUTION_READINESS', payload } where payload toEqual readExecutionReadiness(state) for the default held value. It is also ready: true for a held READY snapshot.\n2. { payload: { refresh: true } } calls the spied refresh exactly once, and the reply carries the refreshed held value.\n3. { payload: { refresh: 'x' } } is answered by { type: 'ERROR', message: 'GET_EXECUTION_READINESS refresh must be a boolean' }.\n4. Across these messages, project.json and the task files are byte-identical and no activity record is appended.\n\nChange no existing test in this file. The verifiedLocal expectation near line 289 belongs to CQ-M07d2 (task-41d0c5a9).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/server/WebSocketServer.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Added describe('GET_EXECUTION_READINESS') inside 'Plugin endpoint (/ws)' (plus imports; no existing test changed, the :289 verifiedLocal expectation is untouched for CQ-M07d2). Rows: default and held READY/NOT_READY replies equal readExecutionReadiness(state); 'unreadable' profile; refresh:true calls the spied refresh once with the state and a burst stays at one call; a failing refresh still answers the held value; refresh 'x'/1/0/null/{}/[] -> exactly the boolean ERROR frame; an unexpected throw (heldReadiness spied to throw) -> exactly 'GET_EXECUTION_READINESS failed' with no detail; every file under .moe, the activity count and heldReadiness identity are unchanged across six payloads. Snapshot run: tsc clean, WebSocketServer.test.ts (128) + getExecutionReadiness.test.ts (34) = 162 passed.",
+      "startedAt": "2026-11-01T19:10:50.197Z",
+      "completedAt": "2026-11-01T19:11:51.418Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE, fresh, after steps 1-4: the FULL daemon suite, because this is a new wire message plus a new MCP tool. Run it in a git-archive snapshot; never npm ci, npm test or a build in the shared checkout (global rail).\n\nFirst confirm HEAD carries CQ-M07c's landing: `git log moe/work-2026-10-24 --grep 'Moe-Task: task-9ae89d5e362c4bf3afb692de17ae8c5b' --format=%h` must print a sha. If it prints nothing, stop and call moe.report_blocked with blockedOnTaskIds ['task-9ae89d5e362c4bf3afb692de17ae8c5b'].\n\nRun exactly this. Its command, exit code and output tail are the complete_task verification evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-b0485bb1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/getExecutionReadiness.ts packages/moe-daemon/src/tools/getExecutionReadiness.test.ts packages/moe-daemon/src/tools/index.ts packages/moe-daemon/src/server/WebSocketServer.ts packages/moe-daemon/src/server/WebSocketServer.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'`\n\nExpect exit 0 and 0 failures; tools/registry.test.ts and util/daemonGitDocs.test.ts must pass. Cite the file and test counts, passed and skipped, in complete_task.\n\nState in the completion summary that DoD 5 (SERVER_CAPABILITIES.verifiedLocal and the client gap) is carried by CQ-M07d2 (task-41d0c5a9855143ceb3ab81e61aaf9fa9), split out under this task's own size clause. Never flip it here.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "CQ-M07c landing confirmed first (git log --grep prints 267e1363, 3761931b, e7668eae). Ran the plan's exact command in a fresh git-archive snapshot (npm ci, tsc --noEmit, npm test; env -i, nvm Node 24): 226 test files passed, 6834 tests passed, 20 skipped, EXIT=0. registry.test.ts, toolAudience.test.ts and daemonGitDocs.test.ts pass. DoD 5 (SERVER_CAPABILITIES.verifiedLocal + client gap) is carried by CQ-M07d2 (task-41d0c5a9855143ceb3ab81e61aaf9fa9) and was not touched.",
+      "startedAt": "2026-11-01T19:11:58.283Z",
+      "completedAt": "2026-11-01T19:12:50.008Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read `git diff HEAD -- packages/moe-daemon/src/tools/index.ts packages/moe-daemon/src/server/WebSocketServer.ts packages/moe-daemon/src/server/WebSocketServer.test.ts` and the two new files as an attacker would.\n\n- **Grant paths.** Nothing in the tool or the /ws case can change readiness, except through the rate-limited production refresh, which only re-runs the daemon's own evaluator. No caller field is read except refresh.\n- **No writes.** Neither path calls touchWorker, appendActivity, writeEntity or withMutex. `grep -n \"touchWorker\\|appendActivity\\|withMutex\\|runExclusive\" packages/moe-daemon/src/tools/getExecutionReadiness.ts` prints nothing.\n- **Rate window.** It holds under concurrency (single-flight), and a backwards clock never blocks refresh forever. A rejected refresh never surfaces as a tool error.\n- **Payload.** Exactly the four fixed fields, always fresh copies.\n- **Contract.** clientCapabilities.ts is untouched (CQ-M07d2), and the tool description says nothing about git.\n\nFix anything found, re-run step 5's gate, and submit its fresh output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review found no defect, so no source or test changed after step 5's gate (the gate evidence stands). Checked: (1) grep for touchWorker|appendActivity|withMutex|runExclusive|writeEntity in getExecutionReadiness.ts prints nothing, and the word 'git' never appears in it. (2) The only caller field read is refresh (strict boolean on both paths; INVALID_INPUT on the tool, the fixed boolean ERROR frame on /ws); workerId is accepted and ignored; the payload is exactly four keys, fresh copies, no evidence. (3) Single-flight has no await between the inFlight check and set, a clock that moved backwards never blocks, and the in-flight promise never rejects (a throwing or rejecting refresh is swallowed and still counts as started); the finally only clears its own promise. (4) /ws replies with a fixed message on an unexpected throw. (5) clientCapabilities.ts is untouched (CQ-M07d2). Theoretical only: the rate window and in-flight promise are module-level (one daemon per process); a production refresh can overlap the 5-min scheduler, which the holder's last-started-wins already orders. Mutation check in a throwaway snapshot: 7 mutants (no window, no single-flight, no copy, profile throw, backwards-clock block, no boolean check, un-swallowed refresh) all killed, source restored byte-identical (cmp).",
+      "startedAt": "2026-11-01T19:12:50.976Z",
+      "completedAt": "2026-11-01T19:13:35.360Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,20 +130,29 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:17.354Z",
-  "updatedAt": "2026-11-01T18:44:04.361Z",
+  "updatedAt": "2026-11-01T19:14:07.469Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:07:17.370Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
-    "architect-b520bc90"
+    "architect-b520bc90",
+    "worker-8a4aed6a"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T10:13:52.144Z",
   "executionContract": {
@@ -179,5 +219,29 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-01T10:13:52.169Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T19:08:50.596Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/tools/getExecutionReadiness.ts",
+    "packages/moe-daemon/src/tools/getExecutionReadiness.test.ts",
+    "packages/moe-daemon/src/tools/index.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+  ],
+  "reviewStartedAt": "2026-11-01T19:14:07.467Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-b0485bb1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/getExecutionReadiness.ts packages/moe-daemon/src/tools/getExecutionReadiness.test.ts packages/moe-daemon/src/tools/index.ts packages/moe-daemon/src/server/WebSocketServer.ts packages/moe-daemon/src/server/WebSocketServer.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'",
+    "exitCode": 0,
+    "outputTail": "Test Files  226 passed (226)\n     Tests  6834 passed | 20 skipped (6854)\n   Start at  21:12:04\n   Duration  39.88s (tests 92%, transform 4%, import 4%)\n\nEXIT=0",
+    "reportedAt": "2026-11-01T19:14:07.467Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/getExecutionReadiness.ts",
+    "packages/moe-daemon/src/tools/index.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/tools/getExecutionReadiness.test.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+  ],
+  "completionSummary": "CQ-M07d: wrappers and IDEs can now ask the daemon whether verified-local is ready and what is missing. Both paths return exactly { profile, ready, missingCapabilities, evaluatedAt }, as fresh copies.\n\nFiles:\n- tools/getExecutionReadiness.ts (new): the payload type, READINESS_REFRESH_WINDOW_MS = 30 s, the readinessProjectionDeps {now, refresh} seam, readExecutionReadiness, a test reset helper, and moe.get_execution_readiness with blocking:true.\n  - ready, missingCapabilities and evaluatedAt are the held snapshot's. profile is the live resolveExecutionProfile, or 'unreadable' for a malformed setting.\n  - refresh must be a boolean (INVALID_INPUT). It is awaited, single-flight, and starts at most once per 30 s; a backwards clock still runs one. A failing refresh is swallowed and the held value is returned.\n- tools/index.ts: import, getTools() registration, and a TOOL_AUDIENCE row 'moe.get_execution_readiness': 'wrapper'. The row was not in the plan; toolAudience.test.ts requires one per tool.\n- server/WebSocketServer.ts: GET_EXECUTION_READINESS answered by EXECUTION_READINESS, with no mutex and no writes. A non-boolean refresh gets a fixed ERROR frame, and an unexpected throw gets the fixed 'GET_EXECUTION_READINESS failed'.\n- Tests: getExecutionReadiness.test.ts (new, 34 tests) and a GET_EXECUTION_READINESS describe in WebSocketServer.test.ts (13 rows). No existing test changed.\n\nDoD:\n1. Ready, not ready and unreadable (bogus, VERIFIED-LOCAL, 42, null, {}) through the tool registry.\n2. /ws reply equals the tool payload.\n3. Five concurrent refreshes make one evaluator call; none at +10 s, one at +31 s; the exact window edge; the backwards clock.\n4. SHA-256 of every file under .moe, the activity count and heldReadiness identity are unchanged across grant-attempt arguments on both paths; no worker touch; payload mutation never changes the held value.\n5. NOT done here: SERVER_CAPABILITIES.verifiedLocal and the client gap belong to CQ-M07d2 (task-41d0c5a9855143ceb3ab81e61aaf"
 }

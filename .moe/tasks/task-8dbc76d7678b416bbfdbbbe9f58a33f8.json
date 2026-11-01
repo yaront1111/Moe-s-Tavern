@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -95,16 +95,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:02.990Z",
-  "updatedAt": "2026-11-01T19:06:18.786Z",
+  "updatedAt": "2026-11-01T19:13:26.376Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T11:01:53.876Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T19:13:26.376Z",
+    "wallClockMs": 29492500
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-24f14750"
+    "worker-24f14750",
+    "qa-174e8876"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -242,5 +245,9 @@
     "kind": "completion",
     "sessionId": "worker-24f14750@2026-11-01T18:50:03Z",
     "at": "2026-11-01T19:06:18.786Z"
-  }
+  },
+  "completedAt": "2026-11-01T19:13:26.376Z",
+  "reviewCompletedAt": "2026-11-01T19:13:26.376Z",
+  "reviewSummary": "QA qa-174e8876 reviewed completion e02eca26 (on moe/work-2026-10-24; shared-tree moe-jetbrains == commit). Gate re-run under jetbrains-gradle lease (released after): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\", EXIT 0, BUILD SUCCESSFUL 19:11:13-19:11:40Z; 29 suites, 544 tests, 0 fail/err/skip. VerifiedLocalLaunchTest 8/8, TerminalAgentLauncherTest 37/37, RuntimeSelectionPolicyTest 73/73, MoeProjectConnectionTest 13/13.\n\nSize: +472/-14, net 458; matches the epic rail CQ-M07o size exception exactly. Reviewed on substance.\n\nDoD:\n1. No diff hunk touches buildCommand or the builders. The 16-row pinned table passes. Legacy paths are unchanged.\n2. preferBash = !vm && wsl. On Windows a VM seat selects the PS wrapper even with WSL on. Under WSL the worker command = bashWrapPowerShell(native). Architect and governor keep the host ctx.\n3. decide returns Launch only for verified-local + ready + no missing ids. openSeat's fake manager records 0 calls on Refused. launchRole returns before building the command. startAgents shows one dialog and skips QA.\n4. vmSeat refuses gemini, grok and my-cli by name.\n5. The HELLO verifiedLocal row is green.\n6. The gate is green.\n\nRails: no host fallback (a null protected selection refuses; VM seats get only vmCtx); no EDT block (thenAccept -> invokeLater(project.disposed), and a bounded 25s get on the pooled thread); daemon text is sanitized; no Multipass; the services and Models.kt are untouched.\n\nNon-blocking notes:\n- awaitVmDecision maps ExecutionException to TIMEOUT and does not catch CancellationException. thenAccept has no exceptional branch. Both are safe only while requestExecutionReadiness never fails or cancels.\n- A non-claude/codex CLI aborts the whole Start Agents (all-or-nothing, as planned).\n- The live ready-daemon flow is unexercised until the CQ-M07 run (M07d not landed).",
+  "requiredCheckAtDone": null
 }
