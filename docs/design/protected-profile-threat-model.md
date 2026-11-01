@@ -62,11 +62,15 @@ file's port the same way (`scripts/local-runner/runner-client.mjs:107` for `/run
 So the listener on the port is never shown to be the verified process. Whatever listens there is a host
 process:
 - Repository content, as data, starts no listener.
-- A guest's loopback belongs to its own VM. The host drives the guest through `multipass exec` argvs built
-  from constants, over their stdio; the daemon bridge's is `scripts/local-runner/guest-bridge.mjs:204`
-  (bridgeArgv). Nothing in `scripts/local-runner` sets up a port forward, and R07's rule requires zero
-  host mounts (`scripts/local-runner/snapshot-transfer.mjs:69`). CQ-R13e (task-d00dafdf, not yet landed)
-  is the row that certifies on real hardware that no guest identity reaches the host's daemon ports.
+- A guest's loopback belongs to its own VM. The host drives the guest's supervisor over the pinned OpenSSH
+  client, with an argv built from constants that clears all forwardings
+  (`scripts/local-runner/guest-ssh.mjs:119`, sshStreamArgv, spawned by
+  `scripts/local-runner/guest-stream.mjs:19`). The guest's one authorized key carries `restrict` and a forced
+  command that runs only the supervisor (`scripts/local-runner/guest-ssh.mjs:77`). Nothing in
+  `scripts/local-runner` sets up a port forward, and R07's rule requires zero host mounts
+  (`scripts/local-runner/snapshot-transfer.mjs:74`). CQ-R13e's `guest-network` certify check
+  (`scripts/local-runner/certify-bridge.mjs:183`) shows on real hardware that no guest identity reaches the
+  host's daemon ports; it passed in both reports recorded in `docs/CERTIFICATION.md` (linux x64, win32 x64).
 - Browsers give a page no way to listen on a TCP port it chooses, and a network peer cannot open a
   listening socket on this host.
 

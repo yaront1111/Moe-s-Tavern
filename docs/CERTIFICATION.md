@@ -72,8 +72,9 @@ node <repo>\scripts\local-runner\cli.mjs certify --work-dir C:\moe-certify
 
 **Resources and duration.** A run launches nine VMs: the certify VM, three for `check-containment`, one each for
 `cancellation` and `recovery`, and three for `canary-check`. Two run at once, each with 2 CPUs, 4 GiB of memory and a
-20 GiB disk, so the host needs room for twice that. Readiness waits up to 15 minutes for each VM. No duration has been
-measured yet; each report's `startedAt` and `finishedAt` record its own.
+20 GiB disk, so the host needs room for twice that. Readiness waits up to 15 minutes for each VM. The recorded runs
+below took about 16 minutes (linux x64) and about 6 minutes (win32 x64); each report's `startedAt` and `finishedAt`
+record its own.
 
 **Network.** The first run downloads the pinned image (about 600 MB, from cloud-images.ubuntu.com), the pinned Node
 toolchain (nodejs.org) and one registry tarball, `is-number@7.0.0` (registry.npmjs.org). They stay in `<work-dir>/images`
@@ -122,10 +123,15 @@ recorded report rests on the operator who ran it. From the repository root:
 node --input-type=module -e "import { readFileSync } from 'node:fs'; import { validateCertificationReport } from './scripts/local-runner/certify.mjs'; const r = validateCertificationReport(JSON.parse(readFileSync(process.argv[1], 'utf8'))); console.log(r.platform, r.arch, r.transport, r.certified, r.supervisorSha256);" <report.json>
 ```
 
-CQ-R13 records a platform as certified only when:
+CQ-R13 records a platform and arch as certified only when its own report meets both of these:
 - `validateCertificationReport` accepts the report, `transport` is `'native'` and `certified` is `true`;
-- `supervisorSha256` equals the sha256 of `scripts/local-runner/guest-supervisor.py` at the commit under test;
-- the reports together cover `win32`, `linux` and `darwin`.
+- `supervisorSha256` equals the sha256 of `scripts/local-runner/guest-supervisor.py` at the commit under test, which
+  is also `CERTIFICATION_PINS.supervisorSha256` in `packages/moe-daemon/src/delivery/certificationEvidence.ts`.
+
+CQ-R13 required a passing report for `win32` x64 and for `linux` x64. No macOS host was available, so both `darwin`
+arches ship with no report and no support claim (CQ-R13's task rail, approved as prop-29ce59fa). Like any host
+without a recorded report, they stay unsupported: the daemon's certification store accepts only a report for the
+host's own platform and arch (`readCertificationStore`), and `verified-local` stays refused, as above.
 
 ## Certified platforms
 
@@ -133,7 +139,28 @@ A host with no recorded report is unsupported. Each recorded report follows the 
 
 | Platform | Arch | Multipass | Image sha256 | Supervisor sha256 | Finished | Report sha256 |
 |---|---|---|---|---|---|---|
-| `win32` | `x64` | unsupported: no report | | | | |
-| `linux` | `x64` | unsupported: no report | | | | |
+| `win32` | `x64` | `1.17.0+win` | `04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94` | `616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e` | `2026-11-01T14:55:29.922Z` | `48dd267538e707af6d9b830b6dd855049229879d5dbbf2da8adf8c8a05beb9a0` |
+| `linux` | `x64` | `1.17.0` | `04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94` | `616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e` | `2026-11-01T14:45:57.726Z` | `e793c7c6b4468fe2f33ab7c41f299800af382334e09f7c48d22cc70cc0181b12` |
 | `darwin` | `x64` | unsupported: no report | | | | |
 | `darwin` | `arm64` | unsupported: no report | | | | |
+
+Both reports come from native `cli.mjs certify` runs of commit `106284b0dd736a1000e1e70ab00a3bd8a71005a9`. Each block
+below is the report file's one JSON line; with its trailing newline it hashes to the table's report sha256.
+
+### `win32` `x64`
+
+`certification-win32-x64-20261101T144956Z-5dc2a2.json`, from Windows x64 with Multipass 1.17.0+win (`hcs`). The host's
+`qgc` /32 network adapter was disabled during the run (canonical/multipass#5486):
+
+```json
+{"kind":"isolation-certification","version":1,"platform":"win32","arch":"x64","transport":"native","provider":{"name":"multipass","version":"1.17.0+win"},"image":{"sourceSha256":"04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94","providerImageHash":"04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94"},"supervisorSha256":"616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e","startedAt":"2026-11-01T14:49:56.153Z","finishedAt":"2026-11-01T14:55:29.922Z","checks":[{"id":"provision","result":"passed","code":null},{"id":"readiness","result":"passed","code":null},{"id":"no-mounts","result":"passed","code":null},{"id":"bridge-framing","result":"passed","code":null},{"id":"bridge-eof","result":"passed","code":null},{"id":"guest-network","result":"passed","code":null},{"id":"writer-containment","result":"passed","code":null},{"id":"check-containment","result":"passed","code":null},{"id":"controller-replacement","result":"passed","code":null},{"id":"cancellation","result":"passed","code":null},{"id":"recovery","result":"passed","code":null},{"id":"canary-check","result":"passed","code":null},{"id":"teardown","result":"passed","code":null}],"certified":true,"executionReady":false}
+```
+
+### `linux` `x64`
+
+`certification-linux-x64-20261101T142954Z-2a9fc9.json`, from Ubuntu 24.04 x64 under WSL2 with the Multipass 1.17.0 snap
+(`qemu`):
+
+```json
+{"kind":"isolation-certification","version":1,"platform":"linux","arch":"x64","transport":"native","provider":{"name":"multipass","version":"1.17.0"},"image":{"sourceSha256":"04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94","providerImageHash":"04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94"},"supervisorSha256":"616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e","startedAt":"2026-11-01T14:29:54.550Z","finishedAt":"2026-11-01T14:45:57.726Z","checks":[{"id":"provision","result":"passed","code":null},{"id":"readiness","result":"passed","code":null},{"id":"no-mounts","result":"passed","code":null},{"id":"bridge-framing","result":"passed","code":null},{"id":"bridge-eof","result":"passed","code":null},{"id":"guest-network","result":"passed","code":null},{"id":"writer-containment","result":"passed","code":null},{"id":"check-containment","result":"passed","code":null},{"id":"controller-replacement","result":"passed","code":null},{"id":"cancellation","result":"passed","code":null},{"id":"recovery","result":"passed","code":null},{"id":"canary-check","result":"passed","code":null},{"id":"teardown","result":"passed","code":null}],"certified":true,"executionReady":false}
+```
