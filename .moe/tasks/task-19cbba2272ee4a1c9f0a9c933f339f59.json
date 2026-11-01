@@ -83,7 +83,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -115,7 +115,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:34:38.394Z",
-  "updatedAt": "2026-11-01T19:18:55.370Z",
+  "updatedAt": "2026-11-01T20:10:58.669Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:41:08.885Z",
@@ -127,12 +127,15 @@
     "plannedDistinctFileCount": 4,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-01T20:10:58.669Z",
+    "wallClockMs": 195953143
   },
   "contextFetchedBy": [
     "worker-cef53f62",
     "qa-97c4310b",
-    "worker-cb8c0ad0"
+    "worker-cb8c0ad0",
+    "qa-174e8876"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -288,7 +291,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "WT-10G reopen 1 fixed (QA qa-97c4310b: DoD 1 failed on Git Bash). Shared mode and moe-agent.ps1 are unchanged.\n\nFix (moe-agent.sh run_frozen_gate worktree arm, +5/-2): the sparse patterns now go on stdin: `printf '%s\\n' '/*' '!/.moe/' | gate_git sparse-checkout set --no-cone --stdin`, with a comment like :3117's. Stdin is never MSYS-converted, so no MSYS2_ARG_CONV_EXCL is needed; its '*' form would break the POSIX mktemp -C path. Patterns, order, the fail-closed refusal and the no-core.sparseCheckout=false rule are unchanged. ps1 needs nothing: PowerShell to git.exe does no conversion.\n\nHarness, +2 lines each (suite copies byte-identical): wtGate also tracks a nested lib/keep.txt. Without --stdin, git silently writes its default '/*' '!/*/'; the nested path makes that an integrity refusal. The mutants FAIL wt-pass on bash and PS 5.1 and PASS the b97c398e suite.\n\nGit Bash evidence (QA issue 2), the real run_frozen_gate worktree via a sliced-function driver; bash 5.3.9, MSYS 3.6.7, git 2.54.0.windows.1:\n- wt-pass, owned TMPDIR and default /tmp: rc 0, '0 passed', no MOE_WORKTREE_GATE_INTEGRITY, .moe absent with S bits, lib/keep.txt H, sparse '/*;!/.moe/;', root removed, control unchanged.\n- wt-moe-dir: refused, 'inconclusive'.\n- Mutants: argv as landed: '!C:/Program Files/Git/.moe/' and refused. '*' guard: materialization failed. No --stdin: integrity failed.\n\nSelf-review: the plan's 6 rule-mutants re-run on these bytes, all KILLED; no fix needed.\n\nVerification, fresh: the plan's command, 18:29:03-19:15:06Z, EXIT=0. Snapshot /mnt/d/moe-scratch/v-19cbba22.bwtvUp (HEAD 1feb9c0b, 4 files cmp OK, deleted afterwards).\n- Code sets equal, suite cmp OK, PASS parity.\n- worktree-landing 18/0/0.\n- postflight-safe bash NONE/Z.\n- node.exe PS 5.1 NONE/Z.\n- No later commit touches the 4 files.\n\nSize: task-wide +335/-15 = 320 net.\n\nA prior session died during the PS leg; its bytes were recovered into 1feb9c0b. task-7b23ea0f (the :5165 sibling) is planned with the same stdin form.",
-  "reviewCompletedAt": "2026-11-01T14:16:42.650Z",
+  "reviewCompletedAt": "2026-11-01T20:10:58.669Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The worktree-mode gate command sees the exact frozen HEAD/tree and MOE_PROJECT_PATH pointing to its disposable root, with .moe absent despite tracked .moe records; both postflight harnesses prove it."
@@ -331,5 +334,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-11-01T20:10:58.669Z",
+  "reviewSummary": "APPROVED: WT-10G reopen 1 fixed (qa-174e8876).\nLanding: completion 14f546ea (board) plus the same session's checkpoint 1feb9c0b (sh +5/-2, +2 per harness), both on moe/work-2026-10-24. No later commit touches the 4 files.\nVerification: the exact task.verification command (byte-compared), 19:24:39-20:09:03Z, EXIT=0. Snapshot of HEAD 7df10f5c (scripts/ = 14f546ea), deleted afterwards.\n- Code sets equal, suite cmp OK, PASS parity, worktree-landing 18/0/0.\n- postflight-safe bash NONE/Z; node.exe PS 5.1 NONE/Z.\n- MOE_FROZEN_TEST_ONLY unset, so all 11 wt-* modes and every shared mode ran on both engines.\nGit Bash (bash 5.3.9, MSYS, git 2.54.0.windows.1), real run_frozen_gate worktree via probe2.sh:\n- wt-pass with owned and default /tmp: rc 0, 0/passed, no MOE_WORKTREE_GATE_INTEGRITY. .moe absent with S bits, lib/keep.txt H, sparse '/*;!/.moe/;', frozen HEAD and tree, MOE_PROJECT_PATH = root tree. Roots removed, control unchanged.\n- wt-moe-dir: integrity refusal, inconclusive.\n- Red control b97c398e: '!C:/Program Files/Git/.moe/', H bits, refused.\nDoD:\n1. wt-pass on both harnesses, plus Git Bash.\n2. wt-moe-dir, -file, -link, -link-out refused; owned cleanup; control sentinels intact.\n3. wt-tracked, -hidden, -assume inconclusive; .moe stays S.\n4. wt-default and every old frozen mode pass; shared commands byte-identical.\n5. Command exit 0 with PS 5.1; code sets equal.\nRails: parity PASS; .moe-free on Git Bash too; shared mode unchanged; no forbidden patterns; harness hunks identical; ps1 unchanged this round.\nSize: 320 net (+335/-15), under 400. Ponytail: lean already, net -0.\nUnverified, not in the DoD: Git Bash link cleanup.\nFollow-ups already filed: task-954ec3f9, task-7b23ea0f.\nHandoff: folded into decision-worktree-gate-arm-contract, then archived (destination pre-checked free).",
+  "requiredCheckAtDone": null
 }
