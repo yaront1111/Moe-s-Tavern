@@ -11,9 +11,50 @@
     "Do not edit claimNextTask.test.ts, state/validators.ts or types/schema.ts while WT-19 (task-b1ca54f2) is open.",
     "The marker may only refuse; never let it grant readiness or skip any other claim check."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix and tests. Run every vitest/npm command in a git-archive snapshot, never in the shared checkout: the global rail forbids it, and the checkout's node_modules are Windows-native.\n\n**Fix**, in packages/moe-daemon/src/tools/claimNextTask.ts with the Edit tool. It is the twin of waitForTask.ts:287.\n- Right after `const executionRoute = parseExecutionRoute(params.executionRoute);` (~line 391), add `const routeArg = executionRoute ? { executionRoute } : {};`.\n- Spread `...routeArg` LAST into the args of BOTH hasNext:false moe.wait_for_task hints:\n  - the empty pool (~line 624, 'No claimable task right now; ...');\n  - the all-candidates-lost tail (~line 788, 'All candidate tasks were taken by concurrent workers; ...').\n- Change nothing else: not the reasons, the other args, the parse, executionAdmissionRefusal, or any other return. The marker stays refuse-only (task rail).\n- parseExecutionRoute (util/claimEligibility.ts:116) already throws INVALID_INPUT before either hint for any value but 'vm', so a hint only ever echoes 'vm'.\n- Error handling is unchanged: no new throw, no new I/O.\n\n**Tests**, in a NEW file, packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts.\n- Never touch claimNextTask.test.ts, state/validators.ts or types/schema.ts while WT-19 (task-b1ca54f2) is open (task rail).\n- Use ToolTestHarness (h.init, h.setupMoeFolder, h.createEpic, h.createTask, await h.state.load, h.cleanup) and call `claimNextTaskTool(h.state).handler(...)` directly, as claimNextTask.race.test.ts does.\n- Assert on the JSON round trip, `JSON.parse(JSON.stringify(result)).nextAction`, because that is what an MCP client receives. Use toStrictEqual, so a missing or extra key fails.\n- **H1 (empty pool, marked).** `{statuses:['WORKING'], workerId:'worker-a', executionRoute:'vm'}` on a board with no WORKING row → tool 'moe.wait_for_task', args exactly `{statuses:['WORKING'], workerId:'worker-a', executionRoute:'vm'}`.\n- **H2 (empty pool, unmarked).** The same claim without the marker → args exactly `{statuses:['WORKING'], workerId:'worker-a'}`, with no executionRoute key.\n- **H3 (empty pool with epicId 'epic-x', marked).** Args exactly `{statuses:['WORKING'], workerId:'worker-a', epicId:'epic-x', executionRoute:'vm'}`.\n- **H4/H5 (concurrent loss, marked and unmarked).**\n  - Seed one claimable legacy WORKING row.\n  - Spy h.state.updateTask to throw `new Error('Task already assigned to w-other')` for this claim's assignment write WITHOUT assigning anyone. This is the trick claimNextTask.test.ts:903-909 uses: the winner is then gone, so the loop continues and ends at the tail. Delegate every other call to the real updateTask.\n  - Expect hasNext false, a reason containing 'taken by concurrent workers', and args carrying executionRoute 'vm' exactly when the claim sent it.\n  - vi.restoreAllMocks() in afterEach.\n- Run the file once BEFORE the fix: H1, H3 and H4 must fail there, which proves they test the change.\n\n**Iterate in a snapshot**, from the repo root:\n- Create it: `S=$(mktemp -d /tmp/moe-4e2f2b45-XXXXXX) && git archive HEAD | tar -x -C \"$S\"`.\n- After each edit: `cp --parents packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts \"$S\"`.\n- Once: `cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" npm ci --no-audit --no-fund`.\n- Then, under the same env -i: `npx vitest run src/tools/claimNextTask.routeHint.test.ts src/tools/executionRoute.test.ts src/tools/claimNextTask.race.test.ts src/tools/claimNextTask.contract.test.ts src/tools/claimNextTask.test.ts src/tools/waitForTask.test.ts`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts"
+      ],
+      "note": "routeArg spread into both hints. Pre-fix H1/H3/H4 failed, H2/H5 passed. Post-fix, 6 related files: 198 passed. Dirty peer paths left alone.",
+      "startedAt": "2026-11-01T18:56:41.283Z",
+      "completedAt": "2026-11-01T18:57:21.001Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Gate (DoD 2): the full daemon suite plus the typecheck in a fresh git-archive snapshot, run ONCE after the last byte change. Its output is complete_task's evidence:\n\ncd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-4e2f2b45-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'\n\n- It must exit 0 with tsc clean and 0 failed tests. CQ-M07q's run at HEAD 62f83b4c was 222 files, 6701 passed, 20 skipped; expect that plus this file's tests and whatever peers have landed since.\n- If an UNRELATED test fails, A/B it: run the same command without the cp of your two files. If it fails there too, it is a peer regression. File it as its own bug row and cite both runs; never fold it into this row (`mem:gotcha-cq-plan-size-vs-qa-cap`).\n- Pass the command, its exit code and the vitest summary tail to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Full gate EXIT=0: tsc clean, 225 files, 6779 passed, 20 skipped.",
+      "startedAt": "2026-11-01T18:57:22.759Z",
+      "completedAt": "2026-11-01T18:58:10.532Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this row's diff. Load adversarial-self-review.\n- `grep -n \"'moe.wait_for_task'\" packages/moe-daemon/src/tools/claimNextTask.ts` must show exactly the two hints, both carrying ...routeArg.\n- The other hasNext:false answers must be untouched: alreadyAssigned resume, BLOCKED hold, NO_TEAM_MEMBERSHIP (whose nextAction is moe.join_team), and governor.\n- The marker must stay refuse-only: no change to executionAdmissionRefusal or to any pool or explicit-claim check (task rail).\n- `git diff` touches only the two planned files.\n- Mutant check, in the snapshot copy only: drop `...routeArg` from one hint. H1/H3 or H4 must fail. Restore it.\n- Then update `mem:decision-cq-m07-verified-local-activation` (Serena edit_memory). Its line \"claim_next_task's two hasNext:false wait_for_task hints DROP it until bug task-4e2f2b45 lands\" becomes: they carry it from this row's completion. The CQ-M07m/n wrappers may still send executionRoute on every wait themselves.\n- If any tracked byte changed in this step, rerun step 2 for fresh evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts"
+      ],
+      "note": "Self-review: exactly two hints carry routeArg; other hasNext:false answers untouched; executionAdmissionRefusal unchanged; diff touches only the two planned files. Mutant (drop first spread, snapshot only) failed H1/H3; restored. No tracked byte changed after the step-2 gate.",
+      "startedAt": "2026-11-01T18:58:11.383Z",
+      "completedAt": "2026-11-01T18:58:25.993Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,15 +65,108 @@
   "dependsOn": [
     "task-bb1502b1fcb04f0e99fa5328be05ef4e"
   ],
-  "priority": "HIGH",
+  "priority": "LOW",
   "order": 232.5,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T11:19:16.047Z",
-  "updatedAt": "2026-11-01T18:35:31.273Z",
+  "updatedAt": "2026-11-01T18:58:31.351Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:09.398Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T18:49:20.999Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-12ae794e",
+    "worker-152f84fc"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T18:52:34.559Z",
+  "executionContract": {
+    "intendedBehavior": "claim_next_task's two hasNext:false moe.wait_for_task hints (the empty pool, and the tail where every candidate was lost to a concurrent claim) carry executionRoute 'vm' in their args exactly when the claim sent it, and omit the key otherwise. A VM-route seat that follows the hint therefore waits marked and is woken for strict WORKING/REVIEW rows. Nothing else about claim_next_task changes.",
+    "acceptanceCriteria": [
+      "A marked claim on an empty pool returns wait_for_task args {statuses, workerId, [epicId], executionRoute:'vm'}; an unmarked one returns the same args without executionRoute.",
+      "A marked claim that loses every candidate to a concurrent assignment returns the 'taken by concurrent workers' hint with executionRoute 'vm'; an unmarked one, without it.",
+      "The full daemon suite and tsc pass in a git-archive snapshot."
+    ],
+    "invariants": [
+      "The marker only refuses: executionAdmissionRefusal, the ranked pool filter and the explicit-claim checks are unchanged.",
+      "Hint reasons and the statuses/workerId/epicId args are byte-identical to today.",
+      "claimNextTask.test.ts, state/validators.ts and types/schema.ts are untouched while WT-19 is open."
+    ],
+    "compatibility": [
+      "Unmarked claims (every host seat today) see exactly today's hint shape.",
+      "waitForTask.ts already echoes the route on its own hints (lines 287, 317, 394, 446); this makes claim_next_task match it."
+    ],
+    "approvedScope": [
+      "claimNextTask.ts: one routeArg const after parseExecutionRoute, spread into the two wait_for_task hint args.",
+      "New test file tools/claimNextTask.routeHint.test.ts (H1-H5)."
+    ],
+    "reuse": [
+      "The waitForTask.ts:287 routeArg pattern.",
+      "ToolTestHarness, and the updateTask throw trick from claimNextTask.test.ts:903-909."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/claimNextTask.ts:391 parses executionRoute in the handler scope that both hints share (~624, ~788).",
+      "util/claimEligibility.ts:116 parseExecutionRoute returns 'vm' or undefined and throws INVALID_INPUT for anything else.",
+      "The ~788 tail is reached when the assignment write throws 'Task already assigned' and the row has no owner (continue), with no skippedForNoTeam."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-4e2f2b45-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Adding the tests to executionRoute.test.ts was rejected: the CQ-M07q epic size rail pins that file's numstat. A new file is cleaner, and the DoD allows it. Also rejected: building the hint args in a helper. Two spreads of one const, mirroring waitForTask.ts, are the smallest change.",
+    "codebaseInsights": "- waitForTask.ts already does exactly this: `const routeArg = executionRoute ? { executionRoute } : {}` (line 287), spread into its 3 hints.\n- In claimNextTask.ts the only 'moe.wait_for_task' hints are ~624 and ~788.\n- noTeamMembershipRefusal points at moe.join_team, and the held-task answers at report_blocked/get_context, so neither needs the route.\n- claimNextTask.test.ts:897-919 reaches the ~788 tail by throwing 'Task already assigned to w-other' from updateTask without assigning anyone.",
+    "risks": "1) The full suite at HEAD may carry an unrelated peer regression: A/B it without this row's files, and file it separately.\n2) toEqual ignores undefined keys, so use toStrictEqual on the JSON round trip; otherwise an 'executionRoute: undefined' leak would pass.\n3) Keep every npm/vitest run in the snapshot (global rail).",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/waitForTask.ts",
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.race.test.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3761931b07ac7a51fc282bae73c220d17ceb0387",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T18:52:34.592Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T18:56:41.283Z",
+  "reviewStartedAt": "2026-11-01T18:58:31.349Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-4e2f2b45-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'",
+    "exitCode": 0,
+    "outputTail": "Test Files  225 passed (225)\n      Tests  6779 passed | 20 skipped (6799)\n   Start at  20:57:27\n   Duration  40.54s",
+    "reportedAt": "2026-11-01T18:58:31.349Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts"
+  ],
+  "completionSummary": "claim_next_task's two hasNext:false wait_for_task hints (empty pool; all candidates lost to a concurrent claim) now carry executionRoute 'vm' exactly when the claim sent it, and omit the key otherwise. Change: one `routeArg` const after parseExecutionRoute in claimNextTask.ts, spread last into both hint args (twin of waitForTask.ts routeArg). Nothing else changed: reasons, statuses/workerId/epicId args and executionAdmissionRefusal are untouched; claimNextTask.test.ts, validators.ts and schema.ts untouched (WT-19 rail). New test file tools/claimNextTask.routeHint.test.ts H1-H5 (JSON round trip, toStrictEqual): pre-fix H1/H3/H4 failed, H2/H5 passed; a mutant dropping the empty-pool spread fails H1/H3. Full gate in a git-archive snapshot: tsc clean, 225 files, 6779 passed, 20 skipped, 0 failed."
 }

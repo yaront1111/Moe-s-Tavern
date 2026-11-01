@@ -389,6 +389,8 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // Same rule for the VM-route marker: INVALID_INPUT before any write. It is
         // read only by executionAdmissionRefusal and can only add a refusal.
         const executionRoute = parseExecutionRoute(params.executionRoute);
+        // The no-match wait hints echo the marker so a hint-following VM seat waits marked.
+        const routeArg = executionRoute ? { executionRoute } : {};
 
         if (!state.project) {
           throw invalidState('StateManager', 'unloaded', 'loaded');
@@ -622,7 +624,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           hasNext: false,
           nextAction: {
             tool: 'moe.wait_for_task',
-            args: { statuses, workerId: params.workerId, epicId: params.epicId },
+            args: { statuses, workerId: params.workerId, epicId: params.epicId, ...routeArg },
             reason: 'No claimable task right now; block until one appears.'
           }
         };
@@ -786,7 +788,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           hasNext: false,
           nextAction: {
             tool: 'moe.wait_for_task',
-            args: { statuses, workerId: params.workerId, epicId: params.epicId },
+            args: { statuses, workerId: params.workerId, epicId: params.epicId, ...routeArg },
             reason: 'All candidate tasks were taken by concurrent workers; wait and retry.'
           }
         };

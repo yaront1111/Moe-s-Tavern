@@ -74,11 +74,17 @@
       "author": "worker-25da16b2",
       "content": "Hand-off from CQ-M05 (task-c53999b2) round 2. That round changed no bytes, and the landed completion edc04736 is unchanged.\n\n1. Docs facts your sweep may not have listed:\n- M05 added codeName EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED (profileRollout.ts activationUnsupported). It is a refuse-only vm/client/check gate that runs AFTER the unchanged NOT_READY readiness refusal. Today it is reachable only with readiness stubbed (test G4).\n- Hand edits to project.json that change executionProfile through the FileWatcher reload are NOT recorded; only StateManager.updateSettings records PROJECT_SETTINGS_UPDATED.\n- That record is best-effort: appendActivityAsync swallows append failures, and rotation keeps 5 generations.\n\n2. QA's advisory test gap, confirmed: dropping `.sort()` in strictRetention's ids() survives profileRollout.test.ts (39/39 pass). S1's iteration order already equals code-unit order, so the 'ids sorted ascending' contract is not independently pinned. If your whole-epic review hardens tests, add at least 2 strict open attempts whose iteration order differs from sorted order, and assert retainedStrictAttemptIds equals the sorted ids. The ids are random, so a few attempts make it fail reliably. Optional; no behaviour is wrong today.",
       "timestamp": "2026-10-31T16:53:26.014Z"
+    },
+    {
+      "id": "comment-5450daacecf244e7952c18d8eee759ce",
+      "author": "worker-c7cdb959",
+      "content": "Doc gap for this row's docs sweep, routed from CQ-R13 (task-f4811a72, worker-c7cdb959). No doc says where a certified report lands for the daemon. Facts at 3761931b:\n- A native `cli.mjs certify` run whose report is certified also files it in `<OS account home>/.moe/certification` (os.userInfo().homedir, never HOME or USERPROFILE). See scripts/local-runner/certify.mjs:190, which calls fileCertifiedReport (:141). A missing store directory is created 0700; an existing unsafe one is refused and never chmodded (realDir, :128). The file is created exclusively (`wx`, 0600, :103). On failure, certify writes one `{\"code\":...}` line to stderr (CERTIFY_STORE_UNSAFE, CERTIFY_STORE_WRITE_FAILED or CERTIFY_REPORT_INVALID) and changes nothing else; the work-dir report is already written by then.\n- The daemon reads only that store: certificationStoreDir, then readHostCertificationEvidence, then readCertificationStore (packages/moe-daemon/src/delivery/certificationEvidence.ts:113, :117, :164). Since CQ-M07c, the readiness evaluation's certifiedIsolation (executionReadiness.ts:223) gates isolated-agent-and-qa-vms and isolated-check-vm on it.\n- A grep of docs/, CLAUDE.md and the subtree CLAUDE.md files finds no `.moe/certification`, fileCertifiedReport or CERTIFY_STORE_*. CQ-R13 kept to recording the two reports in docs/CERTIFICATION.md. Natural homes for this: CERTIFICATION.md's run and record sections, and docs/CONFIGURATION.md next to MOE_RUNNER_KEY_DIR.",
+      "timestamp": "2026-11-01T18:57:40.949Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:05.297Z",
-  "updatedAt": "2026-10-31T16:53:26.014Z",
+  "updatedAt": "2026-11-01T18:57:40.949Z",
   "dependsOn": [
     "task-c53999b2dd2c4ad08bacb73c50371cfa",
     "task-ad95cb270e9e46df8672eb094d0c1e74",

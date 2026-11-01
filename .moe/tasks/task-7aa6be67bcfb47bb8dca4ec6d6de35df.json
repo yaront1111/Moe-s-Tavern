@@ -9,9 +9,63 @@
     "decideCheckRepair's doc comment matches its actual filter; cd packages/moe-daemon && npm test passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "report_blocked wording, in packages/moe-daemon/src/tools/reportBlocked.ts (DoD 1 and 2). This is text only: no status, code, recorded id or wire field changes.\n\n- Decide the consumer once: `const strict = (() => { try { return isVerifiedLocal(state, task); } catch { return true; } })();`, with isVerifiedLocal imported from ../delivery/policy.js. That is the same test as dependencyUnblock.ts isStrictConsumer. Error handling: a malformed settings.executionProfile throws in resolveExecutionProfile; the predicate then fails closed and withholds every prerequisite, so the strict wording is the accurate one.\n- heldOnEvidence (~:499): widen the filter from `status === 'DONE'` to an id whose status is DONE, ARCHIVED or missing (no task) and that `!isDependencySatisfied(state, id, task)`. For a legacy/observe consumer, ARCHIVED and missing ids are always satisfied, so its output is unchanged.\n- blockResolution (~:502-507): when !strict, keep today's text BYTE-IDENTICAL (state/dependencyUnblock.test.ts:830 pins it word for word). When strict: `It auto-unblocks (returning unassigned, claimable by anyone) once <ids> have retained verified delivery: this task runs verified-local, so DONE or ARCHIVED alone does not satisfy it, and a missing prerequisite never satisfies it.` Then, when any are held: ` Still withheld: <ids each through describeUnmetDependency(state, id, task)>.`\n- The dependenciesSatisfied message (~:272): keep today's text when !strict; when strict, say `Every selected prerequisite (<ids>) already has retained verified delivery - there is nothing to wait on, ...` with the rest of the sentence unchanged.\n- The tool description (:39) and the blockedOnTaskIds description (:52): after each 'DONE/ARCHIVED' rule, add `; a verified-local task needs each one's retained verified delivery instead, and a missing id never satisfies it`. Keep every other word. Never mention git: util/daemonGitDocs.test.ts scans tool descriptions.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Claim refusal wording, in packages/moe-daemon/src/tools/claimNextTask.ts and packages/moe-daemon/src/util/claimGuards.ts (DoD 2).\n\n- claimNextTask.ts ~:255-268, the dependency refusal: compute `strict` exactly as in step 1. When !strict, keep the NOT_ALLOWED text byte-identical (dependencyUnblock.test.ts:711 and :729 pin it). When strict, replace the parenthesis with `(a verified-local task's dependsOn gates WORKING claims until each prerequisite has retained verified delivery, not merely DONE/ARCHIVED, and a missing prerequisite never satisfies it)`, keeping the rest. Pass `verifiedLocal: strict` into the dependencyEvidenceRefusal ref.\n- util/claimGuards.ts dependencyEvidenceRefusal (:214): add an OPTIONAL `verifiedLocal?: boolean` to DependencyEvidenceRef. When it is true, the message says `... is DONE but lacks the retained verified delivery a verified-local task requires: <named>. dependsOn withholds WORKING claims until that evidence is recorded; ...` (the rest unchanged). When it is absent or false, the text stays byte-identical; dependencyUnblock.test.ts:697 pins it. Code, codeName and context stay unchanged.\n- claimNextTask.ts tool description (:326): after 'WORKING claims are withheld until every dependsOn task is DONE/ARCHIVED', add `(a verified-local task needs each one's retained verified delivery instead, and a missing id never satisfies it)`. Never mention git.\n- Edit with the Edit tool only. This task dependsOn 4e2f2b45, which edits claimNextTask.ts first, so apply the change to its landed lines.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/util/claimGuards.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "set_task_dependencies wording, in packages/moe-daemon/src/tools/setTaskDependencies.ts (DoD 2).\n- The description (:30): after 'until every listed task is DONE/ARCHIVED', add `(a verified-local task needs each one's retained verified delivery instead, and a missing id never satisfies it)`.\n- The messages (:139-142): compute `strict` from the UPDATED task, as in step 1, with the same try/catch error handling. When !strict, keep all three texts byte-identical. When strict:\n  - satisfied: `Dependencies <verb> on <id>; all <n> already have retained verified delivery - the task is claimable now.`\n  - unmet: `Dependencies <verb> on <id>; <n> unmet (<ids>) - WORKING claims stay gated until each has retained verified delivery (a missing prerequisite never satisfies a verified-local task).`\n  - The 'cleared' message is unchanged.\n- No other change. unmetDependsOn is already consumer-aware.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/setTaskDependencies.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Fix the decideCheckRepair doc comment in packages/moe-daemon/src/delivery/repairActivation.ts (:26-32; DoD 3). Comment only; the code stays byte-identical.\n\nState what the filter actually does:\n- It returns null when the run has no recorded dispatch or task, is not authenticated, belongs to a task that is not verified-local, or is on a candidate that is not the task's latest.\n- On the latest candidate, a decision that carries diagnostics acts only for the run it names (`diagnostics.checkRunId === run.id`, line ~52).\n- A decision without diagnostics (none or replan) is returned even for a late or replayed run on that candidate. That is benign:\n  - replan follows the task's plan revision, not the run;\n  - tools/recordCheckObservation.ts activateRepair applies a decision only when the observation is not a duplicate, so a replay is never re-applied.\n- Before citing any one-observation-per-dispatch rule, check it in state/checkObservationStore.ts. Cite only what the code does.\n- Keep the existing sentence about a malformed setting, snapshot or stored revision throwing INVALID_INPUT.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/repairActivation.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Tests in packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts. Reuse its strict fixture: task-consumer with the STRICT snapshot, task-1 DONE with candidate + pass + review, the readiness mock, deleteTaskTool and receipt(). Use exact strings or stringContaining on the new phrases; never just truthiness. Add these rows:\n- R1 (the description's failing sketch): task-1 ARCHIVED with no receipt; report_blocked on the consumer with blockedOnTaskIds ['task-1']. blockResolution contains 'task-1 [ARCHIVED, missing delivery-receipt]' and 'retained verified delivery', and does NOT contain 'once task-1 are DONE/ARCHIVED.'. It fails before step 1.\n- R2: a stored, since-deleted id. Set the consumer BLOCKED with blockedOnTaskIds ['task-1','task-gone'] directly, as the existing :170 case does, with task-gone absent. A repeat report_blocked (blockedOnTaskIds []) names 'task-gone [missing, missing prerequisite-missing]'.\n- R3: with task-1 DONE and verified (the beforeEach state is satisfied), report_blocked naming it answers dependenciesSatisfied:true with a message containing 'already has retained verified delivery'.\n- C1: extend the 'claim names %s proof without calling it DONE' rows (or add an it.each beside them). The refusal reason also contains 'retained verified delivery' and 'a missing prerequisite never satisfies it', and lacks '(dependsOn gates WORKING claims until they are DONE/ARCHIVED)'.\n- C2: in 'explicit claim refuses DONE without approval', the message contains 'retained verified delivery a verified-local task requires' and lacks 'settings.deliveryPolicy requires'.\n- S1: set_task_dependencies on the consumer, run as an architect seat as :216 does. Adding an unmet id (task-1 ARCHIVED, no receipt) gives a message with 'until each has retained verified delivery'; once task-1 is satisfied, the message has 'already have retained verified delivery'.\n- D1: the descriptions of claim_next_task, set_task_dependencies and report_blocked, plus report_blocked's blockedOnTaskIds property, each contain 'retained verified delivery' and 'never satisfies it'.\nDo NOT edit state/dependencyUnblock.test.ts or tools/reportBlocked.test.ts. Their unchanged exact-text rows are the proof that legacy/observe wording is byte-identical (DoD 2).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification (DoD 3), run once on the final bytes in a git-archive snapshot. Never run npm in the shared checkout (global rail). This is the complete_task verification command:\n\ncd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-7aa6be67-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/reportBlocked.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/util/claimGuards.ts packages/moe-daemon/src/tools/setTaskDependencies.ts packages/moe-daemon/src/delivery/repairActivation.ts packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'\n\n- Overlay ONLY these six paths: the checkout holds other sessions' dirty files, for example the untracked delivery/readinessHolder.ts.\n- env -i keeps a seat's MOE_* env out of vitest (mem:gotcha-qa-session-env-and-signals-leak-into-harness).\n- Expect EXIT 0, tsc clean, and zero failures. Note the passed and skipped counts.\n- If a pre-existing test fails, A/B it against a pure `git archive HEAD` snapshot before blaming this change.\n- Also confirm that `git diff --stat HEAD` for this task lists exactly the six paths.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this task's diff (load adversarial-self-review).\n1. Is every legacy/observe string byte-identical? Diff each old literal.\n2. Does every strict text match strictShortfall (state/dependencyUnblock.ts ~:72-88): ARCHIVED needs a receipt, and missing gives prerequisite-missing?\n3. Did any status, code, codeName, context field or recorded id change? It must not: this task is text only.\n4. The try/catch in the strict decision: does a throw ever escape a tool?\n5. Does no tool description mention git (util/daemonGitDocs.test.ts)?\n6. Does the repairActivation comment cite only verified behavior?\n7. Residual, not edited here: docs/MCP_SERVER.md :1242, :1464, :1508 and :1996 still say 'all blockedOnTaskIds DONE/ARCHIVED' without the verified-local rule (:1229 already states it). Name them in complete_task for the docs owner (the CQ-M07 final row's docs sweep); do not edit them in this row.\nIf any byte changes, re-run the step-6 command fresh.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,10 +78,59 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T13:36:02.164Z",
-  "updatedAt": "2026-11-01T18:35:31.347Z",
+  "updatedAt": "2026-11-01T18:58:28.090Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:30:37.377Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T18:52:26.434Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-548034a1"
+  ],
+  "dependsOn": [
+    "task-bb1502b1fcb04f0e99fa5328be05ef4e",
+    "task-4e2f2b45926c47bb846a635077094106"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T18:58:28.011Z",
+  "planningNotes": {
+    "approachesConsidered": "- Unified wording appended to every message for all consumers: rejected. It churns legacy text that dependencyUnblock.test.ts pins 'word for word' (:697, :711, :729, :830), and legacy users gain no accuracy.\n- Chosen: branch dynamic messages on the consumer's profile (isVerifiedLocal; a throw counts as strict) and unify only the static tool descriptions.\n- Routing the strict DONE-without-proof case through NOT_ALLOWED instead of DEPENDENCY_EVIDENCE_MISSING: rejected. It would change the wire codeName, and the task is text only.\n- Exporting dependencyUnblock.ts's isStrictConsumer: rejected. delivery/policy.ts already exports the same test as isVerifiedLocal, and claimNextTask already imports policy.js.\n- Dropping util/claimGuards.ts to stay at 5 files (and the standard tier): rejected. A strict consumer's evidence refusal would still blame settings.deliveryPolicy for verified-local proof, which DoD 2 ('the claim refusal') covers.",
+    "codebaseInsights": "- dependencyShortfall (state/dependencyUnblock.ts:58) gives legacy/observe consumers 'gone or ARCHIVED satisfies, DONE judged by evaluateDeliveryEvidence'.\n- strictShortfall (~:72) requires, even from ARCHIVED, a verified-local snapshot, an approved review on the latest candidate, a delivery receipt when ARCHIVED, and the policy evidence; a missing id gives prerequisite-missing.\n- describeUnmetDependency (:291) renders `id [STATUS, missing tokens]`.\n- reportBlocked.ts keeps a missing stored id recorded (the getTask guard at ~:235). Its heldOnEvidence today only looks at DONE.\n- dependencyEvidenceRefusal (util/claimGuards.ts:214) has only one caller, claimNextTask.ts:265.\n- activateRepair (tools/recordCheckObservation.ts:73) judges every observation but applies only non-duplicates.\n- dependencyReadiness.strict.test.ts already mocks readiness and imports reportBlockedTool, claimNextTaskTool, setTaskDependenciesTool and deleteTaskTool.\n- planSizeFloor (util/routing.ts:148) makes any plan with more than 5 distinct files heavy.",
+    "risks": "- 6 files, over the advisory 5, so the routing floor is heavy. Each edit is 1-10 lines.\n- 4e2f2b45 (claimNextTask.ts hints) lands first: this row now dependsOn it and on bb1502b1 (DONE), as the governor asked. Edit the landed lines.\n- Legacy strings must stay byte-identical; the existing exact-text tests prove it, so do not edit them.\n- No behavior change of any kind: no codes, codeNames, contexts or recorded ids.\n- The MCP_SERVER.md residuals are left to the docs owner and reported in complete_task.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/util/claimGuards.ts",
+      "packages/moe-daemon/src/tools/setTaskDependencies.ts",
+      "packages/moe-daemon/src/delivery/repairActivation.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "402bc8407bccf98d65cc45186b274f1a3c1319af",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T18:58:28.090Z",
+  "approvedPlanRevision": 1
 }
