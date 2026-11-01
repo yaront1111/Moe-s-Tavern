@@ -33,38 +33,59 @@
     {
       "stepId": "step-2",
       "description": "Docs sweep, part 2: architecture and configuration.\n\ndocs/ARCHITECTURE.md, `## Delivery Path` (about line 163): extend it in place into one coherent account of the CQ-V flow as it landed:\n- the loopback-only `/runner` channel and its host key (CQ-V03a), with its stated limit: under legacy and observe a host agent can read the key, so only verified-local with runner isolation may treat the channel as trusted;\n- recorded dispatch, then observation, then isAuthenticatedCheckRun, then the one shared passing-run predicate (CQ-V03b, V03, V04);\n- bounded repair (CQ-V05, V05b);\n- revision- and candidate-bound QA (CQ-V06);\n- consumer-aware dependency readiness (CQ-V09, V12b);\n- durable intent, crash reconciliation and recovery containment of strong local delivery (CQ-V07, V08, V08b);\n- changed-code architecture rules and the check-architecture command (CQ-V10);\n- the producer-consumer acceptance fixtures (CQ-V11): packages/moe-daemon/src/__acceptance__ reaches tools only through McpAdapter. A strict task whose required check is the daemon suite should list that directory among its executionContract.requiredChecks assertionRoots, so a candidate cannot weaken it unnoticed (the CQ-V11 handoff).\n- State plainly that verified-local remains unconditionally unavailable.\n\ndocs/CONFIGURATION.md:\n- add MOE_RUNNER_KEY_DIR to the env-var table: the default ~/.moe/runner-keys and one 0600 key file per project, never in the project tree or a guest;\n- confirm that settings.repairPolicy, which CQ-V05b owns, is present and matches resolveRepairPolicy's landed defaults and bounds;\n- document any setting or flag CQ-V10 landed.\nNever paste a real key value or a key file's contents. bdf6db6f also edits CONFIGURATION.md, so keep its hunks intact.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/ARCHITECTURE.md",
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Docs part 2, written from landed code (each name grep-verified in src/scripts).\nARCHITECTURE.md Delivery Path, extended in place:\n- intro: the other records also exist for runner-dispatched checks;\n- table: CheckRun row also daemon-written from record_check_observation; new CheckDispatch (checks/dispatches/<id>) and CheckObservation (checks/observations/<dispatchId>) rows;\n- end-to-end step 3: the gate CheckRun's honest outcome (CQ-V04c mapping); step 6: legacy/observe consumer rule, pointer to the strict one;\n- checks/ bullet: dispatches/ and observations/;\n- new '### The verified-local path': unconditionally unavailable (assertExecutionProfileReady); /runner loopback+key channel, key path/modes, provisioned at start, the legacy/observe limit, guest bridge forwards no check tool (V03a); dispatch admission (CHECK_DEFINITION_NOT_APPROVED / CHECK_ENVIRONMENT_NOT_APPROVED), observation marker, isAuthenticatedCheckRun, RUNNER_CHANNEL_REQUIRED (V03b/V03/V04); passedOn vs trustedPassedOn chosen in the same two places, judged under every deliveryPolicy (43088e9b), required-checks-undeclared, required-check-untrusted-checker:<id>/(qualityGate) (efbf1742), V01 protection limit (comment-bde17873); bounded repair (V05/V05b); revision/candidate-bound QA + proxy stamping (V06/V06a); consumer-aware readiness with prerequisite-missing / verified-local-snapshot / approved-review / delivery-receipt and every reader (V09/V12b); strong local delivery with all six wrapper codes (V07/V08/V08b); check-architecture flags, defaults, exit codes and the activation residuals (V10, comments ebcd8110/9087830c/5381881a); __acceptance__ fixtures and the assertionRoots convention (V11/V12a/V12b).\nCONFIGURATION.md:\n- env row MOE_RUNNER_KEY_DIR (daemon + runner-client.mjs; no key material);\n- new checkEnvironments row (approvedCheckEnvironments bounds, read live, UPDATE_SETTINGS refuses it: not in validateSettingsUpdate's allowlist);\n- executionProfile row: verified-local required-check rule, tokens, V01 limit, strict consumers;\n- deliveryPolicy row: 'legacy short-circuits' and 'approval always lands' qualified for verified-local tasks (43088e9b).\n- repairPolicy row re-verified against resolveRepairPolicy (3/2, integers 0-10, unknown key refused): unchanged.\nNo forbidden-pattern or 'never runs git' phrase added (daemonGitDocs.test guard). Peer hunks untouched; the docs were clean vs HEAD before this step.",
+      "startedAt": "2026-11-01T12:58:32.442Z",
+      "completedAt": "2026-11-01T13:10:06.785Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs sweep, part 3: the agent guides that every session loads. Make surgical sentence edits; never rewrite a paragraph.\n\nCLAUDE.md:\n- the moe-proxy row (about line 25): add qa_approve and qa_reject to the stamped tools, if CQ-V06a landed that;\n- the Run paragraph's Endpoints list (about line 48): add the loopback-only `/runner` path;\n- the command block: add `check-architecture` (CQ-V10) beside doctor, with its exit codes;\n- the lifecycle paragraph: for a strict consumer, dependsOn and blockedOnTaskIds readiness means verified delivery, not merely DONE or ARCHIVED.\n\npackages/moe-daemon/CLAUDE.md: the task-size bullet says 'missing/deleted ids count as satisfied'. Make it hold for legacy consumers only, and name the strict rule and its set_task_dependencies remedy.\n\nscripts/CLAUDE.md:\n- the Land on every exit bullet: add the strong-profile codes as landed, MOE_COMMIT_REFUSED_INTENT_INCOMPLETE and _UNWRITABLE, MOE_COMMIT_REFUSED_UNRECONCILED_INTENT, MOE_FINALIZE_DEFERRED_RECEIPT, MOE_DELIVERY_PROOF_NOT_TRANSFERRED and CQ-V08b's code;\n- say that its 'next pre-flight lands it as a checkpoint' sentence does not apply to a strong attempt (CQ-V08b);\n- the MCP-servers bullet: update it if CQ-V06a changed which tools carry the execution identity.\nc2a900aa also edits scripts/CLAUDE.md, so keep its hunks intact.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "CLAUDE.md",
         "packages/moe-daemon/CLAUDE.md",
         "scripts/CLAUDE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "CLAUDE.md",
+        "packages/moe-daemon/CLAUDE.md",
+        "scripts/CLAUDE.md"
+      ],
+      "note": "Surgical sentence edits, every claim grep-verified in landed code first.\nCLAUDE.md:\n- moe-proxy row: + qa_approve and qa_reject (moe-proxy/src/utils.ts:337 EXECUTION_IDENTITY_TOOLS);\n- Endpoints: + ws://127.0.0.1:<port>/runner, a trusted host runner only (WebSocketServer.ts:351 → authenticateRunner, isLoopback + host key);\n- command block: + check-architecture line with flags, 'from the repo root' and exit codes 0/1/2 (index.ts:1250-1260, checkArchitecture.ts:148/158);\n- lifecycle paragraph: + one sentence saying a verified-local consumer's dependsOn/blockedOnTaskIds readiness is retained verified delivery, not merely DONE/ARCHIVED, and a missing prerequisite never satisfies it (dependencyUnblock.ts strictShortfall).\npackages/moe-daemon/CLAUDE.md: 'missing/deleted ids count as satisfied' now holds for legacy/observe consumers only; a verified-local consumer stays held with prerequisite-missing until set_task_dependencies removeDependsOn drops the id. Re-verified that dependsOn still gates WORKING claims only (util/claimEligibility.ts:44).\nscripts/CLAUDE.md:\n- Land on every exit, rescue sentence: + except under the strong profile, where every checkpoint landing, recoveries included, is refused with MOE_COMMIT_REFUSED_STRONG_CHECKPOINT (moe-agent.sh:4052/6295, one gate for all checkpoint paths; no commit, ref, rescue ref or index entry; bytes and baseline stay);\n- + one sentence on strong completion codes: INTENT_INCOMPLETE/UNWRITABLE (sh:5490/5494), UNRECONCILED_INTENT (sh:5400), FINALIZE_DEFERRED_RECEIPT (sh:5587), DELIVERY_PROOF_NOT_TRANSFERRED (sh:6216/6509), MOE_PUSH_REBASE ignored (sh:5725). All six codes are also in HEAD's moe-agent.ps1.\n- Execution identity bullet: + qa_approve and qa_reject (CQ-V06a). The MCP-servers bullet lists env keys only, not tools, so it is unchanged.\nc2a900aa's scripts/CLAUDE.md hunks are intact (sentence-level inserts only). The real NEVER_RUNS_GIT regex finds 0 hits across all 7 docs. Peer-dirty paths (.moe/*, scripts/moe-agent.ps1, .moe/decisions/) are untouched.",
+      "startedAt": "2026-11-01T13:10:07.656Z",
+      "completedAt": "2026-11-01T13:18:29.203Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE: the epic-final gate.\n\nThe epic touched shared schema, wire and launcher surfaces, so this is FULL regression across every package it touched. Run it fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n- a `git archive` of the WHOLE repo at HEAD, with only this task's doc edits overlaid;\n- `npm ci --no-audit --no-fund` per package, after checking that each lockfile matches its tree modulo CR;\n- `env -i` with HOME, NO_COLOR=1 and a Linux-only PATH, so no MOE_* variable is set.\nNever run moe-proxy's npm test in the shared tree: its pretest cleans and rebuilds dist/.\n\n1. `cd packages/moe-daemon && npm test` must exit 0. Supply its command, exit code and output tail to complete_task (DoD 4).\n2. Also run these, and report each with its pass/skip numbers in the completion summary:\n   - `cd packages/moe-daemon && npx tsc --noEmit`.\n   - `cd packages/moe-daemon && npx vitest run src/__acceptance__`: the V11, V12a and V12b acceptance files must pass UNCHANGED. Run `git log --oneline -- packages/moe-daemon/src/__acceptance__`. Any edit after a file's owning task landed is a finding for step 5.\n   - `cd packages/moe-proxy && npm test`, in the snapshot only.\n   - `bash scripts/tests/postflight.sh`, which includes V07's intent-*, V08's reconcile-strong-* and V08b's modes. Widen MOE_POSTFLIGHT_TIMEOUT_SEC on a busy box.\n   - postflight.ps1 under pwsh, and under Windows PowerShell 5.1 when reachable. If an engine is unavailable, say so; never claim it ran.\n   - `bash scripts/tests/parity-check.sh`.\n   - `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs`.\n   - `npm run lint` at the repo root.\n3. Diagnose a red run; never retry it into green. Re-run a known load-sensitive timing test (for example waitForTask.test.ts) alone, and report both runs. A real failure in code this plan does not own becomes a step-5 finding.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh full regression at HEAD e34b3495.\nSetup:\n- whole-repo git archive at /tmp/moe-v12-gate.Z1Lvdm/repo;\n- overlaid ONLY this task's 7 docs (CLAUDE.md, packages/moe-daemon/CLAUDE.md, scripts/CLAUDE.md, docs/{ARCHITECTURE,CONFIGURATION,MCP_SERVER,SCHEMA}.md), cmp-equal to the worktree;\n- lockfiles clean vs HEAD; npm ci --no-audit --no-fund exit 0 in daemon and proxy;\n- every run under env -i, HOME + nvm node v24.21.0 PATH + NO_COLOR=1, umask 022, no MOE_*.\nResults:\n1. cd packages/moe-daemon && npm test: EXIT 0, 222/222 files, 6701 passed | 20 skipped (6721), 40.0s (13:21Z).\n2. npx tsc --noEmit (daemon): EXIT 0.\n3. npx vitest run src/__acceptance__: EXIT 0, 3/3 files, 51 passed (deliveryBypass 22, producerConsumer 16, dependencyProjection 13).\n   git log of the dir: the only edit after V11/V12a/V12b landed is 799936d9 (CQ-M07q, 11-01). It is setup-only (+executionRoute:'vm' on the runner-identity fixture, needed by M07q's strict-claim route rule) and changes no assertion; that is a step-5 finding owned by M07q.\n4. moe-proxy npm test (snapshot only): EXIT 0, 8/8 files, 316 passed.\n5. postflight, all on an archive of e34b3495, MOE_* scrubbed, MOE_POSTFLIGHT_TIMEOUT_SEC=360. Each leg: EXIT 0, 0 FAIL, 0 SKIP; frozen candidate 105 and owner guard 16. The V07 intent-* (5), V08 reconcile-strong-* (7) and V08b strong-checkpoint-held{,-env,-forged,-journal} and strong-recovery-held{,-gate} modes ran on every engine.\n   - sh: 12:55-13:12Z, 71 ok.\n   - pwsh 7.6.9 (child=pwsh): 12:58-13:23Z, 65 ok.\n   - Windows PowerShell 5.1.26100 (child=powershell): 12:55-13:22Z, 65 ok.\n   An earlier pwsh leg launched via powershell.exe Start-Process had no node on PATH and only printed SKIP. It was discarded, never counted.\n6. parity-check.sh: EXIT 1. One asymmetry: the 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin' string is missing from moe-agent.ps1.\n   Diagnosis: it was introduced by e34b3495 itself, the in-flight WT-10G checkpoint (task-19cbba22, WORKING), which landed the sh half. The ps1 half is that peer's uncommitted Clear-MoeGateIndexFlags hunk.\n   Proof: the same check with the peer's dirty ps1 in a separate probe copy gives PASS (EXIT 0). The failure is in code this plan does not own; it is a step-5 finding owned by task-19cbba22. Not retried into green.\n7. node --test prompt-cache-launcher/agent-runtime/resume-progress: EXIT 0, 50 tests, 48 pass, 2 skipped (PowerShell-only rows, no engine on Linux), 0 fail.\n8. account-trust-docs.test.mjs (docs guard): 5/5 pass.\n9. npm run lint (root): EXIT 0 (architect 39, worker 30, qa 36 of 40 lines).\n10. Load-sensitive waitForTask.test.ts: 10/10 in the full run (5.6s) and 10/10 run alone.\nsettings.qualityGate is unset, so no post-flight gate applies.",
+      "startedAt": "2026-11-01T13:18:45.530Z",
+      "completedAt": "2026-11-01T13:28:40.261Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL REVIEW of the WHOLE CQ-V epic diff, once, as the final step. Load adversarial-self-review.\n\nGather the diff from every CQ-V row's completion commits (the epicSiblings landing shas). Use `git show --stat` per sha, then targeted hunks, not a full-diff dump. Read it as an agent trying to ship unverified work, and check:\n\n1. Producer/consumer drift:\n   - V03a channel, V03b store, V03 tools, V04 dispatch and passedOn;\n   - V06's strictRevision against V04's isAuthenticatedCheckRun wiring in the same predicate;\n   - V05/V05b decisions against the V06 binding;\n   - V09's consumer-aware readiness at every site, including V12b's fixes;\n   - V07/V08/V08b journals against the daemon's receipts and finalize_attempt.\n2. Fail-open paths: every catch in delivery/, state/checkObservationStore.ts, state/dependencyUnblock.ts and delivery/reviewBinding.ts must fail closed.\n3. Duplication: exactly one passing-run predicate (passedOn) and one dependency predicate; no copies of either.\n4. Forgery:\n   - no caller-minted trusted evidence over /mcp or /ws;\n   - scripts/local-runner/guest-bridge.mjs TOOLS still forwards no check, dispatch, observation or receipt tool;\n   - no runner key is logged, returned or persisted outside its 0600 file.\n5. Rails:\n   - verified-local stays unconditionally unavailable: delivery/executionProfile.ts assertExecutionProfileReady still throws EXECUTION_PROFILE_NOT_READY, and only tests spy it;\n   - legacy and observe stay unchanged, because every pre-existing suite is unchanged;\n   - no .moe edits, no Git writes outside the wrappers, no forbidden-pattern tokens.\n6. Docs against code, for every contract steps 1-3 touched.\n7. Hand-forwards still open, each of which needs a named owner:\n   - CQ-V01's note that the C01 packet manifest does not flag an omitted protected-check overlay (check whether a C-series task owns it);\n   - JetBrains rendering of latestCheckRun.outcome, which is client work outside this epic.\n\nFindings:\n- Fix doc drift in this plan's files.\n- Do NOT patch a code defect outside this plan's files here. File it with moe.create_task in this epic, with the repro and a failing-test sketch, and name it in the completion summary.\n- If a defect lets any DoD-1 fixture class bypass a gate, or makes any projection disagree (DoD 2), do not complete. Call moe.report_blocked with blockedOnTaskIds naming the new task.\n\nWrite the Serena handoff memory 'task-task-b621ddc99fe44d50ab700b2aa51c84fc-handoff' with the epic close-out: regression numbers, findings and their owners.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review of the whole CQ-V epic. Method: `git show --stat` on each CQ-V landing sha, then the targeted hunks. This step changed no repo bytes: its planned affectedFiles is empty, so `modifiedFiles: []` is truthful and the MODIFIED-FILES-OMITTED warning is expected.\n\nCHECKS PASSED\n1. Producer and consumer agree at every hop:\n   - V03a /runner (loopback plus the x-moe-runner-key) to V03b checkObservationStore to the V03 tools to V04 dispatch, isAuthenticatedCheckRun and trustedPassedOn.\n   - V06 strictRevision sits in the same predicate.\n   - The V05/V05b repair decisions respect the V06 binding.\n   - V09/V12b consumer-aware readiness is used at every non-test site: claimNextTask, reportBlocked, getContext/contextPacket, the dependencyUnblock sweep and deliveryProjection.\n   - The V07/V08/V08b journals agree with the daemon's receipts and finalize_attempt.\n2. Fail-closed: every catch in delivery/, checkObservationStore, dependencyUnblock and reviewBinding refuses or returns unknown, never pass.\n3. No duplicates: there is exactly one passedOn rule pair and one dependency predicate (state/dependencyUnblock.ts).\n4. No forgery path:\n   - requiredCheckSnapshot is stripped on /mcp and by the WS UPDATE_TASK_DENYLIST, and a contract change bumps planRevision.\n   - guest-bridge TOOLS forwards no check, dispatch, observation, receipt or record_candidate tool.\n   - The runner key lives only in its 0600 file and is never logged or returned.\n5. Rails hold:\n   - assertExecutionProfileReady still throws unconditionally, and only tests spy it.\n   - Edits to pre-existing suites only add or extend: 929e69b6 (V04c) adds outcome asserts, and a2819d2d (V01a) adds the requiredChecks field.\n   - NEVER_RUNS_GIT: 0 hits. I made no .moe edits and no Git writes.\n6. The step 1-3 doc contracts were re-checked against the code.\n\nFINDINGS AND OWNERS\n(a) task-5464e725 (MEDIUM): guest-session STAMPED lacks qa_approve/qa_reject, so a VM QA seat cannot decide a verified-local task. It fails closed; it is not a bypass. Comments posted on CQ-M07 and M07j1.\n(b) task-7aa6be67 (LOW): the strict-consumer messages still say DONE/ARCHIVED, and the decideCheckRepair JSDoc overclaims late-observation filtering. Text only; the docs already state the real behaviour.\n(c) task-435e8989 (LOW): packetManifest is silent on a declared but unserved requiredCheckSnapshot. This is CQ-V01's hand-forward, which no C-series task owned.\n(d) CQ-M07 task-1a8f1d0e (comment-b825be98) owns the activation residuals:\n   - no per-candidate V04b dispatch invoker;\n   - trusted-install check-architecture;\n   - the opaque protected-wrapper limit (comment-bde17873);\n   - --base on baseRevision (comment-5381881a).\n(e) parity-check is red at HEAD e34b3495. It belongs to peer task-19cbba22 (WT-10G), whose ps1 half is not committed yet (comment-0eb8c1b5).\n(f) The 799936d9 __acceptance__ edit is owned by task-bb1502b1 (DONE). It is setup-only (executionRoute 'vm') and removes no assertion.\n(g) JetBrains latestCheckRun.outcome: task-344a0acb (DONE), verified in DeliveryPresentation.kt.\n(h) requiredCheckSatisfied is absent on an undeclared strong task. This is documented in SCHEMA.md and noted to CQ-M07.\n\nNo DoD-1 bypass and no DoD-2 disagreement, so no report_blocked.",
+      "startedAt": "2026-11-01T13:28:50.577Z",
+      "completedAt": "2026-11-01T13:44:19.475Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-0e1ab990",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -143,7 +164,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:14.370Z",
-  "updatedAt": "2026-11-01T12:46:19.130Z",
+  "updatedAt": "2026-11-01T13:52:06.730Z",
   "dependsOn": [
     "task-af83018e892149a1a18cd6a946edeba5",
     "task-bde8654052f648f9b209174c3708322b",
@@ -178,7 +199,7 @@
     "firstClaimAt": "2026-10-29T18:00:07.818Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 1
+    "executedStepCount": 5
   },
   "tier": "heavy",
   "effort": "max",
@@ -189,7 +210,11 @@
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T18:17:10.736Z",
@@ -265,5 +290,69 @@
   },
   "planApprovedAt": "2026-10-29T18:17:10.817Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-01T12:21:36.464Z"
+  "workStartedAt": "2026-11-01T12:21:36.464Z",
+  "commits": [
+    {
+      "sha": "fd1c9f5f8e39aef9a998cf2974f9ad881491d89a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0e1ab990@2026-11-01T12:18:43Z",
+      "paths": [
+        ".moe/tasks/task-5c4b5fab53ce41e294af5c70de1af51d.json",
+        ".moe/tasks/task-954ec3f9f856417e96e6cbc4bd880a35.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-0e1ab990",
+      "recordedAt": "2026-11-01T12:47:04.675Z",
+      "treeId": "445714adf1765f149ff253948b87050098cb64b1",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-cda65eb0efb244efa8a506969bac47f9"
+        },
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-cda65eb0efb244efa8a506969bac47f9"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CONFIGURATION.md",
+    "CLAUDE.md",
+    "packages/moe-daemon/CLAUDE.md",
+    "scripts/CLAUDE.md"
+  ],
+  "touchedFiles": [
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-0e1ab990@2026-11-01T12:18:43Z",
+    "at": "2026-11-01T12:47:04.675Z"
+  },
+  "reviewStartedAt": "2026-11-01T13:52:06.728Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Run fresh at HEAD b97c398e plus this task's 5 uncommitted doc files, in a git-archive snapshot under env -i (node v24.21.0):\n\n Test Files  222 passed (222)\n      Tests  6701 passed | 20 skipped (6721)\n   Start at  15:47:26\n   Duration  31.23s (tests 95%, import 4%, transform 1%)\n\nEXIT=0\nEND=13:47:57Z",
+    "reportedAt": "2026-11-01T13:52:06.728Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-V12 epic close-out, docs only. Synced 7 docs to the landed CQ-V code:\n- MCP_SERVER.md and SCHEMA.md (step-1, fd1c9f5f)\n- ARCHITECTURE.md: The verified-local path\n- CONFIGURATION.md: MOE_RUNNER_KEY_DIR, checkEnvironments, executionProfile/deliveryPolicy\n- CLAUDE.md, packages/moe-daemon/CLAUDE.md, scripts/CLAUDE.md\nNo code, .moe, Git or __acceptance__ edits. Peer hunks intact.\n\nRegression in a git-archive snapshot (env -i, node 24.21), at e34b3495:\n- daemon: 222/222 files, 6701 pass, 20 skip\n- tsc: 0\n- acceptance: 51/51 (bypass 22, producerConsumer 16, projection 13)\n- proxy: 316/316\n- postflight: sh 71 ok, pwsh7 65 ok, PS5.1 65 ok, 0 FAIL/SKIP, V07/V08/V08b modes ran\n- launcher node: 48 pass, 2 skip; trust docs 5/5; lint 0\nHEAD moved to b97c398e (WT-10G); re-ran there: daemon 222/222 EXIT 0 (below), parity PASS.\n\nReview: no DoD-1 bypass, no DoD-2 disagreement. One passedOn pair and one dependency predicate. Every catch fails closed. No /mcp, /ws or guest-bridge forgery path. verified-local is still unconditionally unavailable.\n\nFindings and owners:\n(a) task-5464e725 MED: guest-session STAMPED lacks qa_approve/qa_reject, so VM QA cannot decide verified-local (fails closed).\n(b) task-7aa6be67 LOW: strict-consumer DONE/ARCHIVED wording; decideCheckRepair JSDoc overclaim.\n(c) task-435e8989 LOW: packetManifest silent on an unserved requiredCheckSnapshot (V01 hand-forward).\n(d) CQ-M07 task-1a8f1d0e, comment-b825be98: activation residuals (no per-candidate dispatch invoker, trusted-install check-architecture, protected-wrapper limit, --base).\n(e) parity red at e34b3495 was peer task-19cbba22 WIP; green at b97c398e.\n(f) 799936d9 acceptance setup edit: task-bb1502b1 DONE, no assertion weakened.\n(g) JetBrains latestCheckRun.outcome: task-344a0acb DONE.\n(h) requiredCheckSatisfied absent when undeclared: documented, noted to CQ-M07."
 }
