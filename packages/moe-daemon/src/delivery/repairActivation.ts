@@ -27,9 +27,16 @@ import { decideRepair, resolveRepairPolicy, type RepairDecision, type RepairDiag
  * CQ-V05's decision for `run`, from the authenticated runs of the same check (the
  * dispatch's command and checkId) across the task's candidates. Null when the run
  * has no recorded dispatch or task, is not authenticated, belongs to a task that
- * is not verified-local, or is not the check's latest run on the current
- * candidate: a late or replayed observation never acts. A malformed setting,
- * snapshot or stored revision throws INVALID_INPUT.
+ * is not verified-local, or is on a candidate that is not the task's latest.
+ * On the latest candidate, a decision carrying diagnostics is returned only for
+ * the run it names (diagnostics.checkRunId), so a late run never re-targets a
+ * repair. A decision without diagnostics (none or replan) is returned even for a
+ * late or replayed run on that candidate. That is benign: replan follows the
+ * task's plan revision, not the run; checkObservationStore's marker admits one
+ * result run per dispatch (another id is CHECK_DISPATCH_ALREADY_OBSERVED); and
+ * moe.record_check_observation's activateRepair never applies a decision for a
+ * duplicate observation. A malformed setting, snapshot or stored revision throws
+ * INVALID_INPUT.
  */
 export function decideCheckRepair(state: StateManager, run: CheckRun): { task: Task; decision: RepairDecision } | null {
   const dispatch = run.dispatchId === undefined ? null : getCheckDispatch(state, run.dispatchId);

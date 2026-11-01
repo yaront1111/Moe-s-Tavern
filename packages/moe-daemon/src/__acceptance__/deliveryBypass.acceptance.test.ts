@@ -240,7 +240,7 @@ describe('CQ-V12a delivery bypass fixtures (strict task, through McpAdapter)', (
       h.state.tasks.set(TASK, { ...h.state.getTask(TASK)!, planRevision: 2, approvedPlanRevision: 2 });
       const err = await failure(consumerClaim());
       expect([err?.codeName, err?.message]).toEqual(['DEPENDENCY_EVIDENCE_MISSING', dependencyEvidenceRefusal({ taskId: CONSUMER,
-        prerequisiteTaskId: TASK, missing: OWED.map((token) => ({ token, reason: describeMissingEvidence(token) })) }).message]);
+        prerequisiteTaskId: TASK, missing: OWED.map((token) => ({ token, reason: describeMissingEvidence(token) })), verifiedLocal: true }).message]);
     });
 
     it('S3: a sessionId with no served-context receipt is CONTEXT_RECEIPT_STALE', async () => {

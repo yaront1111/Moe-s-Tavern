@@ -22,7 +22,7 @@ import {
 } from '../util/claimEligibility.js';
 import { resolveLaunch } from '../util/routing.js';
 import { dependencyShortfall, describeUnmetDependency, unmetDependsOn } from '../state/dependencyUnblock.js';
-import { describeMissingEvidence } from '../delivery/policy.js';
+import { describeMissingEvidence, isVerifiedLocal } from '../delivery/policy.js';
 import {
   assertNoLiveLease,
   claimLostRace,
@@ -248,17 +248,25 @@ function assertNotHeldByReconciliation(state: StateManager, task: Task, workerId
  * the delivery evidence it lacks (DEPENDENCY_EVIDENCE_MISSING). Evidence that
  * cannot be judged at all, an unrecognised deliveryPolicy, throws out of
  * dependencyShortfall as that INVALID_INPUT, ahead of both. The caller throws
- * the result before any write, like every other claim refusal.
+ * the result before any write, like every other claim refusal. For a
+ * verified-local consumer both refusals keep their code but state that rule
+ * instead: retained verified delivery, and a missing prerequisite never satisfies.
  */
 function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
   const unmet = unmetDependsOn(state, task).map((id) => ({ id, ...dependencyShortfall(state, id, task) }));
   const onEvidence = unmet.find((dep) => state.getTask(dep.id)?.status === 'DONE' && dep.missingEvidence.length > 0);
   const onStatus = unmet.filter((dep) => state.getTask(dep.id)?.status !== 'DONE' || dep.missingEvidence.length === 0)
     .map((dep) => dep.missingEvidence.length > 0 ? describeUnmetDependency(state, dep.id, task) : dep.id);
+  // Wording only; a profile that cannot be resolved counts as strict, as the predicate fails closed.
+  const strict = (() => { try { return isVerifiedLocal(state, task); } catch { return true; } })();
   if (onStatus.length > 0 || !onEvidence) {
+    const rule = strict
+      ? "a verified-local task's dependsOn gates WORKING claims until each prerequisite has retained verified delivery, " +
+        'not merely DONE/ARCHIVED, and a missing prerequisite never satisfies it'
+      : 'dependsOn gates WORKING claims until they are DONE/ARCHIVED';
     return notAllowed(
       'claim',
-      `Task ${task.id} has unmet dependencies: ${onStatus.join(', ')} (dependsOn gates WORKING claims until they are DONE/ARCHIVED). ` +
+      `Task ${task.id} has unmet dependencies: ${onStatus.join(', ')} (${rule}). ` +
       `An architect/governor can edit them with moe.set_task_dependencies.`
     );
   }
@@ -266,6 +274,7 @@ function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
     taskId: task.id,
     prerequisiteTaskId: onEvidence.id,
     missing: onEvidence.missingEvidence.map((token) => ({ token, reason: describeMissingEvidence(token) })),
+    verifiedLocal: strict,
   });
 }
 
@@ -323,7 +332,7 @@ function collisionNotice(taskId: string, collisions: CollisionEntry[], claimerId
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.claim_next_task',
-    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided. Agents claim only PLANNING (architect), WORKING (worker), or REVIEW (qa) — other columns are human-gated. WORKING claims are withheld until every dependsOn task is DONE/ARCHIVED. When nothing is claimable it returns hasNext:false with a nextAction (moe.wait_for_task; moe.enter_governance for governors); a worker that already holds a task gets hasNext:false with alreadyAssigned naming it instead of a new claim.',
+    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided. Agents claim only PLANNING (architect), WORKING (worker), or REVIEW (qa) — other columns are human-gated. WORKING claims are withheld until every dependsOn task is DONE/ARCHIVED (a verified-local task needs each one\'s retained verified delivery instead, and a missing id never satisfies it). When nothing is claimable it returns hasNext:false with a nextAction (moe.wait_for_task; moe.enter_governance for governors); a worker that already holds a task gets hasNext:false with alreadyAssigned naming it instead of a new claim.',
     inputSchema: {
       type: 'object',
       properties: {

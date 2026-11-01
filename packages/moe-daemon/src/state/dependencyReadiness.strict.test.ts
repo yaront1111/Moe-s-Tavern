@@ -194,8 +194,11 @@ describe('strict consumer readiness (CQ-V09)', () => {
     h.state.reviews.clear();
     const before = fs.readFileSync(path.join(h.moePath, 'tasks', 'task-consumer.json'), 'utf8');
     const update = vi.spyOn(h.state, 'updateTask');
-    await expect(claimNextTaskTool(h.state).handler({ taskId: consumer().id, statuses: ['WORKING'], workerId: 'worker-new', executionRoute: 'vm' }, h.state))
-      .rejects.toMatchObject({ codeName: 'DEPENDENCY_EVIDENCE_MISSING', context: { missingEvidence: ['approved-review'] } });
+    const error = await claimNextTaskTool(h.state).handler({ taskId: consumer().id, statuses: ['WORKING'], workerId: 'worker-new', executionRoute: 'vm' }, h.state)
+      .catch((e: unknown) => e as Error);
+    expect(error).toMatchObject({ codeName: 'DEPENDENCY_EVIDENCE_MISSING', context: { missingEvidence: ['approved-review'] },
+      message: expect.stringContaining('task-1 is DONE but lacks the retained verified delivery a verified-local task requires: approved-review (') });
+    expect((error as Error).message).not.toContain('settings.deliveryPolicy requires');
     expect(update).not.toHaveBeenCalled(); expect(h.state.workers.size).toBe(0); expect(h.state.attempts.size).toBe(0);
     expect(fs.readFileSync(path.join(h.moePath, 'tasks', 'task-consumer.json'), 'utf8')).toBe(before);
   });
@@ -204,9 +207,50 @@ describe('strict consumer readiness (CQ-V09)', () => {
     else patch({ status });
     const token = status === 'missing' ? 'prerequisite-missing' : 'delivery-receipt';
     const update = vi.spyOn(h.state, 'updateTask');
-    await expect(claimNextTaskTool(h.state).handler({ taskId: consumer().id, statuses: ['WORKING'], executionRoute: 'vm' }, h.state))
-      .rejects.toMatchObject({ codeName: 'NOT_ALLOWED', context: { reason: expect.stringContaining(`task-1 [${status}, missing ${token}]`) } });
+    const error = await claimNextTaskTool(h.state).handler({ taskId: consumer().id, statuses: ['WORKING'], executionRoute: 'vm' }, h.state)
+      .catch((e: unknown) => e as { context: { reason: string } });
+    expect(error).toMatchObject({ codeName: 'NOT_ALLOWED', context: { reason: expect.stringContaining(`task-1 [${status}, missing ${token}] ` +
+      "(a verified-local task's dependsOn gates WORKING claims until each prerequisite has retained verified delivery, " +
+      'not merely DONE/ARCHIVED, and a missing prerequisite never satisfies it).') } });
+    expect(error.context.reason).not.toContain('(dependsOn gates WORKING claims until they are DONE/ARCHIVED)');
     expect(update).not.toHaveBeenCalled();
+  });
+  const block = (args: Record<string, unknown>) => reportBlockedTool(h.state).handler({ taskId: consumer().id, reason: 'wait', ...args }, h.state);
+  it('report_blocked names an ARCHIVED prerequisite without its receipt', async () => {
+    patch({ status: 'ARCHIVED' });
+    const { blockResolution } = await block({ blockedOnTaskIds: ['task-1'] }) as { blockResolution: string };
+    expect(blockResolution).toBe('It auto-unblocks (returning unassigned, claimable by anyone) once task-1 have retained verified delivery: ' +
+      'this task runs verified-local, so DONE or ARCHIVED alone does not satisfy it, and a missing prerequisite never satisfies it. ' +
+      'Still withheld: task-1 [ARCHIVED, missing delivery-receipt].');
+    expect(blockResolution).not.toContain('once task-1 are DONE/ARCHIVED.');
+  });
+  it('report_blocked names a stored, since-deleted prerequisite', async () => {
+    h.state.tasks.set(consumer().id, { ...consumer(), status: 'BLOCKED', blockedFromStatus: 'WORKING', assignedWorkerId: 'worker-x',
+      blockedOnTaskIds: ['task-1', 'task-gone'], blockedAt: '2020-01-01T00:00:00.000Z' });
+    const result = await block({ workerId: 'worker-x', blockedOnTaskIds: [] }) as { blockResolution: string };
+    expect(result.blockResolution).toContain('once task-1, task-gone have retained verified delivery');
+    expect(result.blockResolution).toMatch(/ Still withheld: task-gone \[missing, missing prerequisite-missing\]\.$/);
+  });
+  it('report_blocked on a satisfied prerequisite states the verified-local rule', async () => {
+    expect(await block({ blockedOnTaskIds: ['task-1'] })).toMatchObject({ dependenciesSatisfied: true,
+      message: expect.stringContaining('Every selected prerequisite (task-1) already has retained verified delivery — there is nothing to wait on') });
+    expect(consumer().status).toBe('WORKING');
+  });
+  it('set_task_dependencies states the verified-local rule', async () => {
+    patch({ status: 'ARCHIVED' });
+    const set = async () => ((await setTaskDependenciesTool(h.state).handler({ taskId: consumer().id, workerId: 'architect-1',
+      dependsOn: ['task-1'] }, h.state)) as { message: string }).message;
+    expect(await set()).toBe('Dependencies replaced on task-consumer; 1 unmet (task-1) — WORKING claims stay gated until each has ' +
+      'retained verified delivery (a missing prerequisite never satisfies a verified-local task).');
+    receipt();
+    expect(await set()).toBe('Dependencies replaced on task-consumer; all 1 already have retained verified delivery — the task is claimable now.');
+  });
+  it('tool descriptions state the verified-local rule', () => {
+    const blockedOn = (reportBlockedTool(h.state).inputSchema.properties as Record<string, { description: string }>).blockedOnTaskIds;
+    for (const text of [claimNextTaskTool(h.state).description, setTaskDependenciesTool(h.state).description,
+      reportBlockedTool(h.state).description, blockedOn.description]) {
+      expect(text).toContain("a verified-local task needs each one's retained verified delivery instead, and a missing id never satisfies it");
+    }
   });
   it('live verified-local also floors a legacy-captured consumer', () => {
     h.state.tasks.set(consumer().id, { ...consumer(), executionPolicySnapshot: { ...STRICT, profile: 'legacy' } });

@@ -118,11 +118,17 @@
       "author": "architect-1a34a669",
       "content": "Planner note from CQ-M07m2 (task-91ee455a, plan revision 1): the helper contract this row calls.\n\n`land_vm_candidate COMMIT BASE_TREE TREE`\n- Inputs: the worker outcome's commit, baseTree and tree.\n- It reads MOE_WT_MODE/PATH/BRANCH. Set LAND_TASK_ID, LAND_TITLE, LAND_STATUS and LAND_CLI_EXIT first, as worktree_postflight does.\n- Returns:\n  - 0: committed (LAND_SHA set), or empty (MOE_VM_CANDIDATE_EMPTY).\n  - 1: refused or commit-tree failed. Nothing is written.\n  - 2: failed after the commit was built. The commit is parked on refs/moe/rescue/<id>/<ts>.\n  On 1 or 2, hold the task; CQ-M07m owns those error paths.\n\nTwo hazards for this row:\n(a) Skip prepare_worktree_launch's host tooling on the VM route. In a project that does not gitignore .serena/ or .claude/, its .serena/project.yml copy and its links make W dirty, and the helper then refuses with MOE_VM_CANDIDATE_DIRTY.\n(b) Under verified-local, the post-flight's L2 (land_worktree_checkpoint) would also land any host bytes in W.\n\nM07m2 also adds wt_strong_intent: under verified-local a worktree completion now needs settings.qualityGate (MOE_COMMIT_REFUSED_INTENT_INCOMPLETE otherwise). See mem:task-task-91ee455a601b411f97d5d951cc5f241c-handoff.",
       "timestamp": "2026-11-01T18:51:22.403Z"
+    },
+    {
+      "id": "comment-48aa54e6a2cb4161bc6eb95cfbaf206b",
+      "author": "architect-98c94b4c",
+      "content": "Planner clarification for whoever implements m3 (from architect-98c94b4c, who wrote plan rev 1). Where rev 1's steps and m2's note above (comment-bec8f7ab) differ, the note wins. All three points are VM-route only. Legacy, observe, architect and governor iterations stay byte-identical, as step 7's check 4 requires.\n\n(a) Host tooling.\n- On the VM route, do not run prepare_worktree_launch's host tooling: no .serena/project.yml copy and no links into W.\n- Otherwise W is dirty and m2's helper refuses with MOE_VM_CANDIDATE_DIRTY.\n- No host CLI runs on this route (step 3), so nothing needs that tooling.\n\n(b) Landing from W.\n- Step 3's \"the post-flight stays unchanged\" does not extend to landing W's bytes.\n- A worker lands only through m2's helper (step 7's check 6).\n- On the VM route, the post-flight's L2 land_worktree_checkpoint must not land host bytes from W. This matches step 3's \"exit 1 and land nothing else\" on a helper failure.\n\n(c) Quality gate in VR-happy's fixture.\n- m2 adds wt_strong_intent: under verified-local, a worktree completion needs settings.qualityGate, else MOE_COMMIT_REFUSED_INTENT_INCOMPLETE.\n- Give VR-happy's fixture a qualityGate if its post-flight reaches a completion landing.\n\nCover (a) and (b) inside VR-happy rather than in a new row, to stay under step 6's size cap. Assert that W is clean before seat-job, and that no checkpoint or landing line appears other than the helper's.\n\nOnce m2 is DONE, its handoff (mem:task-task-91ee455a601b411f97d5d951cc5f241c-handoff, already in step 1's read list) holds the helper's landed contract.",
+      "timestamp": "2026-11-01T19:10:13.073Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:22:38.207Z",
-  "updatedAt": "2026-11-01T19:03:22.632Z",
+  "updatedAt": "2026-11-01T19:10:13.073Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:21.699Z",
     "plannedStepCount": 7,
