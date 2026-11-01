@@ -5317,9 +5317,12 @@ run_frozen_gate() {
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
     GATE_RC=0; GATE_OUTCOME=""; GATE_OUT=""; GATE_PID=""
     if [ "$integrity" = gate_integrity_wt ]; then
-        # Sparse from the start, never a full checkout: .moe/ is never written.
+        # Sparse from the start, never a full checkout: .moe/ is never written. The
+        # patterns go via stdin: Git Bash's MSYS rewrites a '!/.moe/' argument into a
+        # Windows path, and MSYS2_ARG_CONV_EXCL='*' would also stop converting the POSIX -C path.
         { git -C "$MOE_TOP" -c core.hooksPath=/dev/null worktree add --detach --no-checkout "$GATE_WORKSPACE" "$FROZEN_COMMIT" \
-            && gate_git sparse-checkout set --no-cone '/*' '!/.moe/' && gate_git read-tree -mu HEAD; } >"$GATE_LOG" 2>&1 \
+            && printf '%s\n' '/*' '!/.moe/' | gate_git sparse-checkout set --no-cone --stdin \
+            && gate_git read-tree -mu HEAD; } >"$GATE_LOG" 2>&1 \
             || { echo "[WARN] qualityGate workspace materialization failed." >&2; return 1; }
     elif ! git -C "$MOE_TOP" -c core.hooksPath=/dev/null -c core.sparseCheckout=false \
         -c core.sparseCheckoutCone=false worktree add --detach "$GATE_WORKSPACE" "$FROZEN_COMMIT" >"$GATE_LOG" 2>&1; then

@@ -264,6 +264,8 @@ function wtGate(mode){
   if(mode==='wt-before')write(moeDir,'tracked file\n');
   else{write(path.join(moeDir,'tasks','task-a.json'),'{"id":"task-a"}\n');write(path.join(moeDir,'project.json'),'{"id":"proj-wt"}\n');}
   write(path.join(repo,'src.txt'),'source\n');write(path.join(repo,'gate.cjs'),WT_GATE);
+  // A nested tracked path outside .moe: the sparse patterns must materialize it.
+  write(path.join(repo,'lib','keep.txt'),'nested\n');
   git(repo,'add','--','.');git(repo,'commit','-qm','seed');
   if(mode!=='wt-before')write(path.join(moeDir,'daemon.json'),'{"sentinel":"control runtime"}\n');
   const map=p=>{let st;try{st=fs.lstatSync(p);}catch(e){return null;}
