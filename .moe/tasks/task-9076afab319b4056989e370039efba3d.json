@@ -115,7 +115,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -138,7 +138,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:59.472Z",
-  "updatedAt": "2026-11-01T19:43:13.425Z",
+  "updatedAt": "2026-11-01T20:07:37.418Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T08:16:03.094Z",
@@ -148,11 +148,14 @@
     "firstClaimAt": "2026-11-01T11:25:26.163Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-01T20:07:37.418Z",
+    "wallClockMs": 31331255
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-83c3fcad"
+    "worker-83c3fcad",
+    "qa-1b5727b1"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -264,5 +267,9 @@
     "kind": "completion",
     "sessionId": "worker-83c3fcad@2026-11-01T18:47:44Z",
     "at": "2026-11-01T19:18:17.932Z"
-  }
+  },
+  "completedAt": "2026-11-01T20:07:37.418Z",
+  "reviewCompletedAt": "2026-11-01T20:07:37.418Z",
+  "reviewSummary": "Reviewed completion 493ea8a4 (on moe/work-2026-10-24, the only commit touching the 3 files; HEAD bytes identical). Size: scripts numstat +338/-57 = 395, under 400, no rail needed. Forbidden-pattern grep of added lines: clean.\n\nGate (plan command, pure git archive of 493ea8a4, no overlays): node --test local-runner.test.mjs + local-runner-vm-control.test.mjs -> 406 tests, 405 pass, 0 fail, 1 pre-existing skip, EXIT=0. The unedited local-runner.test.mjs is green, so R06 attempt behavior holds.\nSibling importers (check, bridge, dispatch, daemon-bind, pinned-client) at the same snapshot: 208 tests, 206 pass, 0 fail, 2 skip.\n\nDoD:\n1 VC-SL1/SL2 (round-trip, key order, malformed table, mixed/platform-invalid records);\n2 VC-S2 (seatInstances, 5-key instances; both IDE parsers accept from/to reserved->collision via PHASES and seat reasons via the REASON regex);\n3 VC-C3 (fake daemon + fake probe, all 8 cases, key files unlinked only for deleted);\n4 VC-R2;\n5 the gate.\nmoe.get_seat_liveness (M07g0 DONE) replies exactly the shape seatStateOf reads.\n\nIndependent mutation sweep (/tmp/qa-m07g-mut/run.mjs, vm-control file): 27 of 28 KILLED, covering seat gate order, the runner exactly-false check, the lease, cleanup/reconcile routing, the hold skip, collision vs retire, the keyfile unlink, retire CAS (phase, owner), the seat-owner key count, platform/runner regexes, sameOwner, the probe's host/platform/signal/EPERM, liveness DEAD/workerId/negative/fraction/type checks, and status routing.\n\nNon-blocking test gap (the code is correct): defaulting runnerAlive to () => false in cleanupReport, reconcileReport or runVmControl SURVIVES. Every row injects the probe, so the production wiring to runnerProbe is unpinned. Routed to CQ-M07 as a comment.\n\nNot run: daemon vitest. Only repairPolicy.test.ts imports lifecycle.mjs, for ownedInstanceName, which is unchanged.",
+  "requiredCheckAtDone": null
 }
