@@ -102,7 +102,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:23.273Z",
-  "updatedAt": "2026-11-01T19:39:19.467Z",
+  "updatedAt": "2026-11-01T19:40:04.200Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T11:19:44.514Z",
     "plannedStepCount": 4,
@@ -212,7 +212,8 @@
     ".moe/tasks/task-3954cc09f74045a0ac8fa4b795dcb0a9.json",
     ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
     ".moe/tasks/task-828e7d21602e4cf2a0f242e024db7dea.json",
-    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json"
+    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+    ".moe/tasks/task-41d0c5a9855143ceb3ab81e61aaf9fa9.json"
   ],
   "completionSummary": "VS Code now matches CQ-M07o's verified-local launch route.\n- MoeDaemonClient.ts:\n  - declaredProfile is a fresh, strict read that never pins.\n  - parseExecutionReadiness is strict: the 4 fields are checked, unknown keys are ignored, and ready-with-ids gives null.\n  - CLIENT_HELLO {planRevisions, verifiedLocal} is sent via ws.send as each socket's first frame, before 'connected'. Every VS Code approval path already sends expectedPlanRevision.\n  - requestExecutionReadiness sends GET_EXECUTION_READINESS {refresh:true}, waits at most 20 s and never rejects. One reply settles every waiter. A readiness ERROR (operation, payload.operation, or 'Unknown message type') becomes DAEMON_ERROR and never reaches onError. Close, disconnect and dispose give DISCONNECTED.\n- AgentLauncher.ts:\n  - A worker/QA seat under a verified-local or untrusted declaration runs today's sync checks, then refuses gemini, grok and custom commands by name before asking for readiness. It launches the installed platform wrapper (PowerShell on Windows) only on an answered verified-local ready reply. Anything else shows one error with CQ-M07o's sentences and opens no terminal.\n  - A missing readiness source refuses.\n  - Absent, legacy and observe launches, and architect and governor, keep today's command and stay synchronous.\n  - launchAllAgents asks for readiness once for worker+QA and shows at most one error. Self-review fix: a seat that carries that shared decision stays gated if the declaration changes before the stagger timers fire (A2).\n- extension.ts passes daemonClient.requestExecutionReadiness to all three launch calls.\n- protected-runtime.test.cjs: only L1 changed (ready source + await).\n\nTests: the new verified-local-launch.test.cjs has 26 rows covering every DoD item. They failed before the change and pass after it; the guard was also mutation-checked.\n\nGate (plan checkRef, Linux snapshot): EXIT 0, 388 tests, 384 pass, 4 skipped (Windows-only).\n\nSIZE: net 565 (+583/-18; runtime 213, tests 352)",
   "commits": [
@@ -239,6 +240,21 @@
       "treeId": "26c96b83757bc2f5dadf7954290cf39cdca73ce0",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "c4400db7864c1a2466a345ac088ba5f3816a937a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1b5727b1@2026-11-01T19:23:42Z",
+      "paths": [
+        ".moe/tasks/task-41d0c5a9855143ceb3ab81e61aaf9fa9.json"
+      ],
+      "recordedBy": "qa-1b5727b1",
+      "recordedAt": "2026-11-01T19:40:04.200Z",
+      "treeId": "035993ed318aa26903bcb00c491ddfab61a292df",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -251,9 +267,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c7cdb959@2026-11-01T19:07:04Z",
-    "at": "2026-11-01T19:21:11.189Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-1b5727b1@2026-11-01T19:23:42Z",
+    "at": "2026-11-01T19:40:04.200Z"
   },
   "blockedReason": "Size waiver pending: QA substance is GREEN, parked for a human decision on EPIC ADD_RAIL prop-122b1bf2de6a4f36ba342369527ed8b9 (CQ-M07p size exception). Completion b3a1fc05 on moe/work-2026-10-24 measures +583/-18, net 565 under moe-vscode/ (runtime 213, tests 352), above the 400 QA cap; the per-file numstat equals the proposal text exactly, and no CQ-M07p rail exists in the epic yet. Recorded gate re-run verbatim in a fresh snapshot: npm ci, lint, compile, test EXIT 0, 388 tests, 384 pass, 0 fail, 4 Windows-only skips. All 5 DoD items and the no-host-fallback rail verified against the diff and the landed daemon wire; 26 QA mutants, 24 killed, 2 equivalent. Full evidence is in the QA comment on this row. Resume: on APPROVED, set_task_status REVIEW and QA checks the rail against the numstat, re-runs the gate and approves; on REJECTED, set_task_status PLANNING for an architect split. No new worker bytes are needed.",
   "blockedResourceId": null,
