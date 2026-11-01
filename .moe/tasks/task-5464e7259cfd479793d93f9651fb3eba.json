@@ -1,0 +1,28 @@
+{
+  "id": "task-5464e7259cfd479793d93f9651fb3eba",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: the guest session stamps no execution identity on qa_approve/qa_reject, so a VM QA seat can never decide a verified-local task",
+  "description": "Found by CQ-V12's whole-epic review (task-b621ddc9, worker-0e1ab990, 2026-11-01). This fails closed, so it is NOT a gate bypass. It does block the QA half of verified-local activation.\n\nDefect:\n- scripts/local-runner/guest-session.mjs:32 STAMPED adds the host identity to only four tools: moe.get_context (sessionId), moe.start_step, moe.complete_step and moe.complete_task (attemptId, generation, sessionId).\n- CQ-V06 changed the requirement. Under verified-local, moe.qa_approve and moe.qa_reject need QA's own attemptId, generation and served-context sessionId (delivery/reviewBinding.ts assertReviewBinding → STEP_ENTRY_IDENTITY_REQUIRED). CQ-V06a (task-a4ad3fdb) made moe-proxy stamp them (packages/moe-proxy/src/utils.ts:337).\n- Nothing on the guest path can supply them. scripts/local-runner/guest-bridge.mjs TOOLS.qa admits only summary/candidateId, and FORBIDDEN_IDENTITY_KEYS refuses attemptId/generation from the guest. So every VM QA decision on a strict task is refused.\n- CQ-M07j1 (task-c7cead1b) assumes STAMPED \"mirrors what moe-proxy does on /mcp\".\n\nRepro: scripts/tests/local-runner-bridge.test.mjs H3 (line ~774). With the QA binding, the forwarded moe.qa_approve/moe.qa_reject args carry taskId and workerId but no attemptId, generation or sessionId. H3's `stamps` map pins that today.\n\nFailing-test sketch: add 'moe.qa_approve': execution and 'moe.qa_reject': execution to H3's stamps map. It fails on today's code.\n\nFix:\n- Add both tools to STAMPED with EXECUTION, from the frozen host binding and the session's sessionId, never from guest args.\n- Refresh the \"only onto tools whose daemon schema accepts it\" comment.\n- Keep FORBIDDEN_IDENTITY_KEYS unchanged.",
+  "definitionOfDone": [
+    "guest-session.mjs stamps attemptId, generation and sessionId onto moe.qa_approve and moe.qa_reject from the host binding and session id, never from guest arguments",
+    "local-runner-bridge.test.mjs H3 pins the QA stamps and fails without the fix; a guest-supplied attemptId/generation/sessionId is still refused (BRIDGE_IDENTITY_MISMATCH / BRIDGE_ARGUMENT_DENIED)",
+    "node --test scripts/tests/local-runner-bridge.test.mjs passes, and any doc naming the guest-stamped tools matches the code"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 288.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T13:35:53.219Z",
+  "updatedAt": "2026-11-01T13:35:53.219Z"
+}

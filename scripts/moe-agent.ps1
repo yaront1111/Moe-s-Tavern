@@ -5195,7 +5195,7 @@ function Test-MoeGateIntegrity([hashtable]$Frozen,[string]$Exclude='') {
     $diff = Invoke-MoeGit -Top $top -GitArgs @('diff-files','--quiet','--ignore-submodules=none','--')
     return ($diff.Rc -eq 0)
 }
-function Clear-MoeGateIndexFlags([string]$Top,[string]$Exclude='',[string]$Flags='--no-assume-unchanged --no-skip-worktree') {
+function Clear-MoeGateIndexFlags([string]$Top,[string]$Exclude='',[string]$Update='update-index --no-assume-unchanged --no-skip-worktree -z --stdin') {
     # The cmd pipe carries raw bytes. A .NET StandardInput writer does not: under
     # a UTF-8 console it writes a BOM first, corrupting the first NUL-separated path.
     $prev = $ErrorActionPreference
@@ -5204,7 +5204,7 @@ function Clear-MoeGateIndexFlags([string]$Top,[string]$Exclude='',[string]$Flags
         Push-Location -LiteralPath $Top
         try {
             $list = if ($Exclude) { 'git ls-files -z -- "' + $Exclude + '"' } else { 'git ls-files -z' }
-            & $env:ComSpec /d /s /c ($list + ' | git update-index ' + $Flags + ' -z --stdin') 2>&1 | Out-Null
+            & $env:ComSpec /d /s /c ($list + ' | git ' + $Update) 2>&1 | Out-Null
             return ($LASTEXITCODE -eq 0)
         } finally { Pop-Location }
     } catch { return $false }
@@ -5219,7 +5219,7 @@ function Test-MoeGateIntegrityWorktree([hashtable]$Frozen) {
     }
     # update-index applies only its first marking option, so clear skip-worktree
     # in its own pass: a file deleted behind it must reach diff-files.
-    if (-not (Clear-MoeGateIndexFlags $script:MoeGate.Workspace ':(top,exclude).moe' '--no-skip-worktree')) { return $false }
+    if (-not (Clear-MoeGateIndexFlags $script:MoeGate.Workspace ':(top,exclude).moe' 'update-index --no-skip-worktree -z --stdin')) { return $false }
     return (Test-MoeGateIntegrity $Frozen ':(top,exclude).moe')
 }
 function Stop-MoeGateChild {

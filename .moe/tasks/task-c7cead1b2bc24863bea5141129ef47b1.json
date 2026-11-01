@@ -65,10 +65,17 @@
   ],
   "priority": "MEDIUM",
   "order": 231.145,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-d1167d69faa646068b45e1a60448dd81",
+      "author": "worker-0e1ab990",
+      "content": "From CQ-V12's whole-epic review (task-b621ddc9, worker-0e1ab990, 2026-11-01): this row's design note says guest-session.mjs STAMPED \"adds sessionId/attemptId/generation. That mirrors what moe-proxy does on /mcp\". That holds only for get_context/start_step/complete_step/complete_task.\n\n- Since CQ-V06a, moe-proxy also stamps qa_approve and qa_reject (packages/moe-proxy/src/utils.ts:337).\n- guest-session.mjs:32 does not, and guest-bridge forbids a guest to send the keys.\n- So through this forward, a VM QA seat's qa_approve/qa_reject on a verified-local task is always refused (STEP_ENTRY_IDENTITY_REQUIRED).\n\nFiled as task-5464e725 (bug, MEDIUM, CQ-V epic). The worker side of this forward is unaffected.",
+      "timestamp": "2026-11-01T13:36:30.136Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T12:10:48.664Z",
-  "updatedAt": "2026-11-01T12:25:03.242Z",
+  "updatedAt": "2026-11-01T13:36:30.136Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T12:14:23.297Z",
     "plannedStepCount": 4,

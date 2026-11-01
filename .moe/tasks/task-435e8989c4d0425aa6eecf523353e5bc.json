@@ -1,0 +1,28 @@
+{
+  "id": "task-435e8989c4d0425aa6eecf523353e5bc",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: packetManifest never reports a declared but unserved protected-check overlay (task.requiredCheckSnapshot)",
+  "description": "CQ-V01 (task-bde86540) handed this forward. It was still unowned at CQ-V12's whole-epic review (task-b621ddc9, worker-0e1ab990, 2026-11-01). No C-series row owns it: a board search for packetManifest finds only the docs-only CQ-C11a. The delivery gate fails closed (protected-checks-unapproved), so this is an observability gap for agents, not a bypass.\n\nDefect:\n- context/contextPacket.ts:17-18 makes task.requiredCheckSnapshot \"Mandatory when served (the approved protected-check overlay); never reported missing\".\n- tools/getContext.ts:556 serves it only when readRequiredCheckSnapshot(task) binds.\n- So a task can declare executionContract.requiredChecks while its snapshot is absent, malformed, or bound to other definitions. That task gets a packet with no overlay, and the packet manifest does not flag the gap.\n- The worker or QA seat cannot tell from the manifest that the protected check bytes are missing. Meanwhile delivery reports protected-checks-unapproved.\n\nFailing-test sketch:\n- A task with non-empty executionContract.requiredChecks and no requiredCheckSnapshot (or a mismatched one): expect packetManifest to list task.requiredCheckSnapshot with status missing (mandatory, and a reason such as unbound-snapshot).\n- Today it lists nothing.\n- A task without requiredChecks must still list nothing.",
+  "definitionOfDone": [
+    "When executionContract.requiredChecks is non-empty and readRequiredCheckSnapshot returns null, get_context's packetManifest reports task.requiredCheckSnapshot as missing (mandatory)",
+    "Tasks without requiredChecks are unchanged, and a served snapshot stays mandatory and is never role-trimmed or truncated",
+    "contextPacket/getContext tests cover both cases; the docs/MCP_SERVER.md packetManifest text matches; cd packages/moe-daemon && npm test passes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 290.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T13:36:09.052Z",
+  "updatedAt": "2026-11-01T13:36:09.052Z"
+}

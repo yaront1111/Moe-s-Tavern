@@ -1,0 +1,28 @@
+{
+  "id": "task-7aa6be67bcfb47bb8dca4ec6d6de35df",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: strict-consumer dependency messages still say DONE/ARCHIVED, and decideCheckRepair's doc overclaims late-observation filtering",
+  "description": "Found by CQ-V12's whole-epic review (task-b621ddc9, worker-0e1ab990, 2026-11-01). This is text only.\n- The structured readiness is correct: isDependencySatisfied, unmetDependsOn, satisfiedBlockedOnIds and dependsOnUnmet all take the consumer, and the V12b dependencyProjection fixtures pass.\n- No gate is affected. The gap is latent until verified-local is enabled.\n\n1) tools/reportBlocked.ts:499-507. heldOnEvidence lists only DONE ids, and blockResolution says \"auto-unblocks … once <ids> are DONE/ARCHIVED\". For a verified-local consumer, two kinds of id never unblock, and neither is described:\n   - an ARCHIVED prerequisite without its delivery receipt (delivery-receipt);\n   - a deleted id (prerequisite-missing).\n2) None of these texts says a verified-local consumer needs retained verified delivery, or that a missing id never satisfies it:\n   - tools/claimNextTask.ts:261 \"(dependsOn gates WORKING claims until they are DONE/ARCHIVED)\";\n   - the tools/setTaskDependencies.ts:30 description and the :141-142 messages (\"already DONE/ARCHIVED\", \"until they are DONE/ARCHIVED\");\n   - the tools/reportBlocked.ts tool and blockedOnTaskIds descriptions.\n3) delivery/repairActivation.ts:26-32. decideCheckRepair's doc says \"a late or replayed observation never acts\", but only a decision carrying diagnostics is matched to the latest run (line 52).\n   - A late run on the current candidate still returns none or replan.\n   - This is benign: replan follows the task's plan revision, not the run, and an observation marker allows one answer per dispatch.\n   - Fix the comment, not the behaviour.\n\nFailing-test sketch: a strict consumer is blocked on an ARCHIVED prerequisite with no receipt (spy assertExecutionProfileReady as state/dependencyReadiness.strict.test.ts does). Expect blockResolution to name that id through describeUnmetDependency (…missing delivery-receipt). It does not today.",
+  "definitionOfDone": [
+    "report_blocked's blockResolution names every recorded blockedOnTaskId the consumer-aware predicate withholds (DONE, ARCHIVED or missing) via describeUnmetDependency",
+    "The claim refusal, set_task_dependencies and report_blocked messages and tool descriptions state the verified-local rule (retained verified delivery; a missing prerequisite never satisfies) while legacy/observe wording stays accurate",
+    "decideCheckRepair's doc comment matches its actual filter; cd packages/moe-daemon && npm test passes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 289.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T13:36:02.164Z",
+  "updatedAt": "2026-11-01T13:36:02.164Z"
+}
