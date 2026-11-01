@@ -15,9 +15,41 @@
     "Legacy stays byte-for-byte unchanged in behavior.",
     "Port CQ-M07m1's landed strings and check order verbatim; add no behavior it lacks, except dropping its WSL check."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first: the rows, and the hook in postflight.ps1.\n\n**Port source.** Use CQ-M07m1's (task-5adf0673) own last commit, never HEAD. CQ-M07m3 (task-3954cc09) later replaces m1's placeholder in moe-agent.sh and may change its rows, while this row keeps the placeholder (CQ-M07n3 replaces it).\n- Find it: `git log -1 --format=%H moe/work-2026-10-24 --grep 'Moe-Task: task-5adf0673fdad4c5f8a0956e7afcebe07' -- scripts/moe-agent.sh`.\n- Read `git show <sha>:scripts/tests/postflight-vm-route.sh`; the gate in `git show <sha>:scripts/moe-agent.sh` (grep get_execution_readiness and MOE_VERIFIED_LOCAL_); and the FAKE_READINESS handler and call log in `git show <sha>:scripts/tests/postflight-fake-proxy.js`.\n- The landed sh text wins over any wording in this plan.\n\n**Create scripts/tests/postflight-vm-route.ps1** with the Write tool: ASCII only, or UTF-8 with a BOM like its siblings. It is the twin of postflight-vm-route.sh minus its WSL rows.\n- Header: what it pins, and how to run it alone on either engine. It exits 0 and prints `PASS postflight-vm-route.ps1` when every row passes, 1 on a failed row, 2 on a harness fault.\n  - It never prints a line starting with SKIP: postflight-safe.mjs fails the CI run on one.\n  - It never exits 0 without running: node missing is exit 2.\n- Setup:\n  - `$ErrorActionPreference='Stop'`.\n  - Remove every inherited MOE_*, CLAUDE* and FAKE_* variable except MOE_POSTFLIGHT_TIMEOUT_SEC and MOE_POSTFLIGHT_KEEP_TEMP. A WSL seat's variables reach Windows children (mem:gotcha-qa-ps1-postflight-from-wsl).\n  - Set MOE_ACCOUNT_ROTATION=off and MOE_DISABLE_HEARTBEAT=1.\n  - Root is `$PSScriptRoot\\..\\..`. The child engine is this one: pwsh when PSVersion >= 6, else powershell. The temp root is removed in finally.\n- Install the shared fake proxy only with `Copy-Item -LiteralPath (Join-Path $root 'scripts\\tests\\postflight-fake-proxy.js') -Destination $fakeProxy -ErrorAction Stop`. Never write or embed one.\n- Copy postflight.ps1's Invoke-WrapperProcess: per-run timeout from MOE_POSTFLIGHT_TIMEOUT_SEC, taskkill of its own child PID only, stderr appended.\n- Fake CLIs:\n  - a recorder .cmd under a custom name ($cliType counts it as claude) that writes its argv (%*), cwd and `set` output to a per-run file;\n  - gemini.cmd and grok.cmd, literally named, that only write a marker.\n- One row helper in the [protected runtime] style of postflight.ps1:\n  - a fresh project per row: .moe\\project.json with autoCommit false and the row's worktreeMode, plus messages\\chan-general.jsonl;\n  - FAKE_READINESS and MOE_PROXY_PATH set, and restored in finally;\n  - runs `-Project <dir> -WorkerId <role>-vr -Role <role> -NoStartDaemon -Command <cli> -NoLoop`;\n  - returns the exit code, the output, the tools in m1's call log, whether a CLI ran, and the launch record.\n\n**Rows.** Copy each expected line from postflight-vm-route.sh.\n- **L (DoD 1).** A worker with the recorder, once per answer m1's DoD-1 row uses: legacy, observe and unreadable payloads; refused, unknown-tool and malformed answers.\n  - Add two PowerShell-trap answers: a verified-local payload whose ready is the string \"true\", and one whose profile is \"Verified-Local\". Each behaves as m1's predicate makes it; under m1's exact checks they keep today's path.\n  - Each run exits 0, the CLI runs once, and the call log shows get_execution_readiness before the first claim_next_task.\n  - Every launch record equals the legacy one after normalizing ONLY the fields that differ between two runs of the SAME answer. Diff two legacy runs once to find them (e.g. MOE_SESSION_ID, attempt ids, temp paths) and name each in a comment. Normalizing more weakens the row.\n- **V1.** worker + gemini.cmd, verified-local not ready, worktreeMode unset → MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED. This proves the CLI check comes before shared mode and readiness.\n- **V2.** qa + grok.cmd, the same answer → the same code.\n- **V3.** worker, worktreeMode unset, not ready → MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED (shared mode comes before readiness). Add an 'off' or invalid-value variant only if m1 has one.\n- **V4 (DoD 3).** worktreeMode 'on', ready false, missingCapabilities in a NON-sorted order → MOE_VERIFIED_LOCAL_NOT_READY naming them in that order.\n- **V4b.** A single id: PowerShell unrolls one-element arrays.\n- **V5.** qa, worktreeMode 'on', ready true, [] → MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE.\n- **Every V row:** exit 1, exactly one of m1's [ERROR] lines, no claim_next_task in the call log, no CLI marker and no launch record. Every verified-local payload carries an ISO-8601 evaluatedAt.\n- **R1/R2 (DoD 4).** architect and governor with the verified-local ready answer, so they would refuse if they asked: no get_execution_readiness in the call log, and no refusal line.\n\n**Hook in scripts/tests/postflight.ps1.** Add one call plus its exit check, shaped like the `& node (... 'postflight-worktree.cjs') ...` lines:\n`& $psExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'postflight-vm-route.ps1')`\n`if ($LASTEXITCODE -ne 0) { throw 'VM route scenarios failed' }`\nPut it where m1 put its line in postflight.sh; otherwise right before `Write-Host 'PASS postflight.ps1'`, which is after the MOE_FROZEN_TEST_ONLY early exit.\n\n**Done when** a run against today's moe-agent.ps1 FAILS because no readiness call or refusal happens. That proves the rows catch a missing gate.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The gate in scripts/moe-agent.ps1.\n\nEdit with the main-session Edit tool. Keep the UTF-8 BOM, and add only ASCII unless m1's line itself has a non-ASCII character. Port m1's gate from its own commit (step 1): strings and check order verbatim, minus the WSL check and its test seam, because moe-agent.ps1 IS the native Windows route.\n\n**Function.** Name it in the file's Verb-Moe style, with a `Twin: <m1's sh function>` comment. Define it next to Stop-MoeWorktreeSeat; any point before the main loop works.\n\n**Call site.** Call it once per iteration, only when `$Role -eq 'worker' -or $Role -eq 'qa'`, at the twin of m1's call site.\n- The two pre-flights match line for line: team-join retry, chat_channels, chat_join/chat_read, get_pending_questions, then the governor branch, the launch-outage branch and claim_next_task (ps1 ~7730-7790).\n- It always runs before that iteration's first claim_next_task.\n- Gate exactly the paths m1 gates (launch outage, AutoClaim). Add none and drop none.\n\n**The call.** `Invoke-MoeRpc -Tool 'get_execution_readiness' -Args <m1's args> 6>$null`.\n- Invoke-MoeRpc returns $null for a transport failure, an isError result, or a JSON-RPC error. An older daemon answers -32601 'Tool not found' (McpAdapter.ts:294). For a non-JSON reply it returns the raw text. All of these keep today's path.\n- `6>$null` drops Invoke-MoeRpc's `[moe_rpc error: ...]` Write-Host line for this one call (checked on 5.1 and 7), as m1's `2>/dev/null` does, so an older daemon adds no line per iteration. If m1's sh call prints something here, print the same instead.\n\n**Error handling.** The gate fails safe on every error and never throws past the pre-flight:\n- Any failed or unusable readiness read keeps today's path: transport failure, refusal, unknown tool, non-JSON, or a payload m1's predicate rejects. This is safe because CQ-M07q's route-marker check keeps strict WORKING/REVIEW rows away from an unmarked claim.\n- Read project.json inside try/catch (Get-Content -Raw ... | ConvertFrom-Json -ErrorAction Stop). Under verified-local, an unreadable or malformed file is handled as m1 handles it; it is never treated as 'on'.\n- A refusal is a deliberate `exit 1`, never an exception.\n\n**Validate exactly as m1 does.** Four PowerShell traps, all checked on 5.1 and 7:\n1. -eq is case-insensitive and coercing: 'true' -eq $true and 1 -eq $true are both True. Use -is [string] with -ceq 'verified-local', -is [bool] for ready, and -is [string] for each id.\n2. Read missingCapabilities as `$r.PSObject.Properties['missingCapabilities']` and test `.Value -is [array]`. Never read it through Get-MoeProp or any function return: they unroll a one-element array to a scalar and an empty one to $null. Print the ids with @(...), in the daemon's order, joined as m1 joins them.\n3. pwsh 7's ConvertFrom-Json turns an ISO-8601 evaluatedAt into [datetime]; 5.1 keeps [string]. If m1 checks its type, accept [datetime] too.\n4. Never name a variable $profile: that is the automatic $PROFILE.\n\n**Refusals, in m1's order without WSL.**\n1. $cliType gemini or grok → MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED. A custom command counts as claude.\n2. settings.worktreeMode, read fresh each iteration from `Join-Path $moeDir 'project.json'` and resolved like validators.ts resolveWorktreeMode (line 293): absent → 'off'; exactly 'on' or 'off' by -ceq; anything else invalid. Only 'on' passes, else MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED.\n3. ready false → MOE_VERIFIED_LOCAL_NOT_READY.\n4. ready true → the placeholder MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE.\n\nEach refusal prints m1's exact line as `Write-Host \"[ERROR] ${Code}: $Detail\" -ForegroundColor Red`. The sh printf to stdout maps to ps1 Write-Host, as Stop-MoeWorktreeSeat shows; write `${Code}:`, because `$Code:` parses as a scope-qualified variable. Then `exit 1`, after any cleanup m1 does before its exit. The supervisor at the top of the file propagates the code, and the loop's finally deregisters, as for MOE_CLI_ARGV_REJECTED.\n\n**Done when** postflight-vm-route.ps1 passes alone under powershell.exe and pwsh.exe from WSL (mem:gotcha-pwsh7-reachable-from-wsl), and `bash scripts/tests/parity-check.sh` passes; it also checks the BOM.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Gate. Run it ONCE, after the last byte change. Its output is complete_task's evidence.\n\nIt takes 20-30 min: launch it in the background (Bash run_in_background) and wait for the completion notice rather than polling. It runs from the repo root on D:, with the seat's MOE_*, CLAUDE* and FAKE_* variables removed and MOE_POSTFLIGHT_TIMEOUT_SEC passed through WSLENV (mem:gotcha-qa-ps1-postflight-from-wsl):\n\ncd /mnt/d/projexts/moes && L=/mnt/d/moe-scratch/n1-gate.log && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'F=\"D:\\projexts\\moes\\scripts\\tests\"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight.ps1\" && bash scripts/tests/parity-check.sh' > \"$L\" 2>&1; echo \"exit=$?\"; tr -d '\\0\\r' < \"$L\" | grep -xE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c\n\nIt must print exit=0 and these counts:\n- `1 PASS parity-check.sh`;\n- `3 PASS postflight-vm-route.ps1` (5.1 alone, 7 alone, and nested in postflight.ps1);\n- `1 PASS postflight.ps1`.\n\nA leg that never ran can still exit 0, so check the counts. If postflight.ps1 fails, rerun the parent revision's scripts before blaming the change.\n\nThe complete_task verification is this command, its exit code and that output.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of your own diff, scoped to this row. Load the adversarial-self-review skill.\n\n- **Placement.** The gate runs before every claim_next_task of a worker/QA iteration, on exactly m1's paths. Nothing after it runs on a refusal. Architect and governor are untouched.\n- **Legacy.** No new output against an older daemon. The L rows normalize only per-run fields.\n- **Two mutants, on a scratch copy only, never the tracked file.**\n  - Setup: `mkdir -p /mnt/d/moe-scratch/n1-mut/docs && cp -r scripts /mnt/d/moe-scratch/n1-mut/ && cp -r docs/roles /mnt/d/moe-scratch/n1-mut/docs/`.\n  - Mutate the copy's moe-agent.ps1 byte-safely, keeping its BOM. Run the copy's postflight-vm-route.ps1 by its D:\\ path on 5.1. Delete the copy afterwards.\n  - Mutant 1: read missingCapabilities through Get-MoeProp. V4b must fail.\n  - Mutant 2: drop the role filter. R1 or R2 must fail.\n- **Size.** Measure `git diff --numstat -- scripts/moe-agent.ps1 scripts/tests/postflight.ps1`, plus the new file's line count. Expect about 60 wrapper lines and about 220 harness lines. Over 400 changed lines, file the EPIC ADD_RAIL size waiver before complete_task, with moe.propose_rail and the CQ-M07k rail template with per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap).\n- **Fresh evidence.** If any tracked byte changed in this step, rerun step 3.\n- **Handoff.** Write the Serena note task-task-65b3e023923e4ab6b71cb94e7bea2f9b-handoff for CQ-M07n2 and n3: the function name, the call site, and the harness helpers they can reuse.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -34,5 +66,90 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:32:16.023Z",
-  "updatedAt": "2026-11-01T14:32:16.023Z"
+  "updatedAt": "2026-11-01T18:48:15.645Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T18:26:23.394Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-12ae794e"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T18:48:15.616Z",
+  "executionContract": {
+    "intendedBehavior": "Before the first claim_next_task of every worker or QA iteration, moe-agent.ps1 calls moe.get_execution_readiness once. Only a well-formed verified-local answer changes anything. The seat then refuses in CQ-M07m1's order minus its WSL check: a gemini/grok CLI, then shared mode, then not ready, then the MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE placeholder. It prints CQ-M07m1's exact [ERROR] line and exits 1, with no claim_next_task and no host CLI. Every other answer keeps today's path unchanged: legacy, observe, unreadable, a refusal, an unknown tool, a transport failure, or a malformed reply. Architect and governor seats never call the tool.",
+    "acceptanceCriteria": [
+      "Legacy, observe, unreadable, refused, unknown-tool and malformed answers: the worker's host CLI launch (argv, cwd, env other than per-run ids) is identical, and every existing postflight.ps1 row passes unchanged.",
+      "verified-local with gemini or grok, or in shared mode: MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED or MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED with CQ-M07m1's exact line, exit 1, no claim_next_task and no CLI.",
+      "verified-local and not ready: MOE_VERIFIED_LOCAL_NOT_READY naming each missing id in the daemon's order. verified-local and ready: MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE. Both exit 1, with no claim and no host CLI.",
+      "Architect and governor seats never call moe.get_execution_readiness.",
+      "postflight-vm-route.ps1 passes alone on Windows PowerShell 5.1 and pwsh 7; postflight.ps1 passes on 5.1; parity-check.sh passes; moe-agent.ps1 keeps its UTF-8 BOM."
+    ],
+    "invariants": [
+      "Under a well-formed verified-local answer, a worker/QA seat never launches a host CLI, and no claim_next_task precedes the refusal.",
+      "For every non-verified-local answer the CLI launch is unchanged, and an older daemon's 'Tool not found' adds no output line.",
+      "Strings and check order are CQ-M07m1's, taken from its own last commit, not from a later HEAD that CQ-M07m3 changed.",
+      "moe-agent.ps1 keeps its UTF-8 BOM. moe-agent.sh, the daemon and parity-check.{sh,ps1} are untouched."
+    ],
+    "compatibility": [
+      "An older daemon answers JSON-RPC -32601 'Tool not found' (McpAdapter.ts:294). That keeps today's path, silently.",
+      "The shared fake proxy is copied, never edited, unless a ps1 row needs an answer CQ-M07m1 did not add.",
+      "No MOE_VERIFIED_LOCAL_ parity family yet: CQ-M07n adds it in the chain's last row."
+    ],
+    "approvedScope": [
+      "One new gate function in moe-agent.ps1, and its single call in the worker/QA pre-flight before claim_next_task.",
+      "The new harness scripts/tests/postflight-vm-route.ps1: L, V and R rows.",
+      "One call plus its exit check in scripts/tests/postflight.ps1."
+    ],
+    "reuse": [
+      "Invoke-MoeRpc, $cliType, $moeDir and the Stop-MoeWorktreeSeat output and exit shape in moe-agent.ps1.",
+      "postflight.ps1's Invoke-WrapperProcess and its [protected runtime] row style.",
+      "The shared postflight-fake-proxy.js, with CQ-M07m1's FAKE_READINESS answers and call log."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1 Invoke-MoeRpc (~line 1596) returns $null on a transport failure, isError or a JSON-RPC error, which it echoes as '[moe_rpc error: ...]' via Write-Host. For a non-JSON reply it returns the raw text.",
+      "Get-MoeProp (~2598) returns through `return`, which unrolls a one-element array to a scalar and an empty array to $null. Verified on 5.1 and 7; direct PSObject.Properties access keeps both arrays.",
+      "$cliType (~988): codex, gemini and grok by command basename; everything else is claude.",
+      "packages/moe-daemon/src/state/validators.ts resolveWorktreeMode (line 293): undefined → 'off'; exactly 'off' or 'on'; anything else INVALID_INPUT.",
+      "The supervisor at the top of moe-agent.ps1 propagates `exit N`; the main loop's finally deregisters.",
+      "pwsh 7 ConvertFrom-Json returns [datetime] for an ISO-8601 string, while 5.1 returns [string]. Verified on both.",
+      "scripts/tests/postflight-safe.mjs fails a CI run on any output line starting with SKIP."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && L=/mnt/d/moe-scratch/n1-gate.log && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=180 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'F=\"D:\\projexts\\moes\\scripts\\tests\"; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight-vm-route.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$F\\postflight.ps1\" && bash scripts/tests/parity-check.sh' > \"$L\" 2>&1; echo \"exit=$?\"; tr -d '\\0\\r' < \"$L\" | grep -xE 'PASS (postflight-vm-route\\.ps1|postflight\\.ps1|parity-check\\.sh)' | sort | uniq -c"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) A shared .cjs suite driving both engines (the postflight-owner-guard.cjs / worktree-landing pattern) would write the rows once. Rejected: CQ-M07m1 owns the sh rows, this row may not edit them, and the task fixes a native ps1 twin. 2) Reading missingCapabilities through Get-MoeProp: rejected, because it unrolls arrays (verified on both engines). 3) Re-deriving strings or order from the task text: forbidden by the task rail; m1's landed bytes are the source. 4) Writing the plan against m1's plan: m1 (architect-548034a1) was still unplanned at submit time (18:45Z), so the steps point at m1's landed commit instead.",
+    "codebaseInsights": "- The ps1 and sh pre-flights are line-for-line twins: team-join retry, chat_channels, chat_join/chat_read, get_pending_questions, then governor / launch outage / claim_next_task. m1's call site therefore maps 1:1 (ps1 ~7730-7790).\n- Pre-launch refusals use the Stop-MoeWorktreeSeat shape: Write-Host '[ERROR] ${Code}: ...' then exit 1, the twin of worktree_stop's printf to stdout. The supervisor propagates the code and the loop's finally deregisters.\n- postflight.ps1 runs shared suites as `& <exe> ...; if ($LASTEXITCODE -ne 0) { throw ... }`. Its [protected runtime] section is the compact row style to copy.\n- CI runs postflight.ps1 through postflight-safe.mjs on both engines, so the hook puts the new rows into CI.",
+    "risks": "1) CQ-M07m3 may land before this row starts and replace m1's placeholder in moe-agent.sh: port from m1's own last commit, never HEAD.\n2) PowerShell -eq is case-insensitive and coercing ('true' -eq $true and 1 -eq $true are both True): use -is type tests and -ceq. The L rows include the 'true' and 'Verified-Local' traps.\n3) pwsh 7 turns an ISO evaluatedAt into [datetime].\n4) $profile is the automatic $PROFILE.\n5) `$Code:` inside a string is a scope-qualified variable: write `${Code}:`.\n6) If m1's [ERROR] line has a non-ASCII character, 5.1's redirected output may not round-trip it; assert on ASCII substrings then.\n7) Size: if the diff passes 400 changed lines, file the EPIC waiver before complete_task.\n8) The full postflight.ps1 leg takes 12-25 min, and a leg that never ran still exits 0, so check the PASS counts.\n9) Mutants go in a scratch copy only. The global rail forbids shell writes to tracked files.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight-vm-route.sh",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/moe-agent.sh",
+      "packages/moe-daemon/src/state/validators.ts",
+      "scripts/tests/postflight-safe.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "c9f241d7a64bd8b52a07e82ce232e9335f34a86c",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T18:48:15.644Z",
+  "approvedPlanRevision": 1
 }

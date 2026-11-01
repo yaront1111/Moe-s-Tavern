@@ -18,54 +18,85 @@
     {
       "stepId": "step-1",
       "description": "Create packages/moe-daemon/src/delivery/readinessHolder.ts: the daemon's one held verified-local readiness value, its scheduler and its production inputs.\n\nRead first:\n- `mem:decision-verified-local-readiness-evaluator` (CQ-M07b's contract, and comment-1f5715e6 on this task);\n- `mem:decision-cq-m07-verified-local-activation` (the fixed contracts);\n- the LANDED delivery/executionReadiness.ts. If a landed name differs, follow the code and say so in the step note.\n\nKeep it leaf-safe. Its runtime imports are only node built-ins (node:child_process, node:util, node:url, node:path), ./executionReadiness.js, ./certificationEvidence.js (readHostCertificationEvidence) and ../server/runnerChannel.js (runnerKeyPath). Never import a state store, StateManager, policy.ts, executionProfile.ts or a logger.\n\nExports:\n1. **`HeldReadiness`** = { ready: boolean; missingCapabilities: readonly ReadinessId[]; evaluatedAt: string | null; evidence: ReadinessSnapshot['evidence'] }. **`DEFAULT_READINESS`**, deep-frozen: { ready: false, missingCapabilities: [...READINESS_CAPABILITIES], evaluatedAt: null, evidence: null }. A null evaluatedAt means never evaluated.\n2. **`heldReadiness(): HeldReadiness`** returns the module-private current value, which is DEFAULT_READINESS at load.\n3. **`clearReadiness(): void`** resets to DEFAULT_READINESS. It can only refuse; tests call it in afterEach.\n4. **`refreshReadiness(inputs: ReadinessInputs, evaluate = evaluateExecutionReadiness): Promise<HeldReadiness>`** is the ONLY way to hold a non-default value.\n   - It awaits evaluate(inputs). A throw or rejection stores DEFAULT_READINESS: a failed evaluation is not ready.\n   - It stores only a well-formed snapshot, else DEFAULT_READINESS. Well-formed means:\n     - a plain object;\n     - missingCapabilities is an array of unique READINESS_IDS, in READINESS_IDS order;\n     - typeof ready === 'boolean', and ready === (missingCapabilities.length === 0);\n     - evaluatedAt is a string for which new Date(v).toISOString() === v;\n     - evidence is null, or has exactly the keys { reportSha256 (64 lowercase hex), platform (string), arch (string | null), providerVersion (string | null) }.\n   - It stores a deep-frozen copy, never the evaluator's object.\n   - The last-started refresh wins: take a sequence number before awaiting, and store only if no later refresh has started, so a slow older evaluation never overwrites a newer one.\n5. **`READINESS_INTERVAL_MS`** = 300_000, and **`startReadinessEvaluation({ inputs: () => ReadinessInputs, evaluate?, intervalMs?, onChange? }): { first: Promise<HeldReadiness>; refresh(): Promise<HeldReadiness>; stop(): void }`**.\n   - It evaluates once immediately (`first`), then every intervalMs on a setInterval that is unref'd.\n   - It calls inputs() for every evaluation, so live settings are read each time. A throw from inputs() stores DEFAULT_READINESS.\n   - It is single-flight: a tick or a refresh() while an evaluation runs returns the in-flight promise.\n   - onChange(held) runs after an evaluation whose ready or missingCapabilities differ from the previous held value. A throw from onChange is swallowed.\n   - stop() clears the interval and is idempotent; no tick runs after it.\n6. **`productionReadinessInputs(projectRoot: string, settings: unknown): ReadinessInputs`**, the production inputs CQ-M07b left to this task:\n   - daemonInstallDir = path.resolve(fileURLToPath(new URL('../..', import.meta.url))). That is the package root holding dist/ and node_modules/: from dist/delivery in a build, from src/delivery under vitest;\n   - runnerKeyPath = runnerKeyPath(projectRoot);\n   - readCertification = () => readHostCertificationEvidence(projectRoot), never readCertificationStore;\n   - runProbe = promisify(execFile), typed as ProbeRunner;\n   - programFiles = process.env.ProgramFiles; now = () => new Date(); settings as given.\n\nError handling: no export throws, and every failure path ends in DEFAULT_READINESS (fail closed). The only env read is programFiles, which only locates the win32 client. Write files only with Edit/Write and report every path in complete_step.modifiedFiles.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/readinessHolder.ts"
       ],
-      "startedAt": "2026-11-01T14:52:28.560Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/readinessHolder.ts"
+      ],
+      "note": "RESUME: the prior session wrote readinessHolder.ts (186 lines). Its checkpoint e7668eae is on the branch. I re-read it against the plan and the landed executionReadiness.ts; every name matches (READINESS_CAPABILITIES, READINESS_IDS, ReadinessInputs, ReadinessSnapshot, ProbeRunner, evaluateExecutionReadiness), as do runnerKeyPath(projectPath) and readHostCertificationEvidence(projectRoot). Exports: HeldReadiness, DEFAULT_READINESS (deep-frozen), heldReadiness, clearReadiness (bumps the sequence, so it supersedes an in-flight refresh), refreshReadiness (validates the shape, stores a frozen copy, last-started wins, never rejects), READINESS_INTERVAL_MS=300_000, startReadinessEvaluation (single-flight, unref'd interval, inputs() read each time, onChange swallowed, idempotent stop), productionReadinessInputs. Runtime imports: node built-ins, certificationEvidence, executionReadiness and runnerChannel only. tsc --noEmit is clean at HEAD in snapshot /tmp/moe-9ae89d5e-iter-AbpbBH. The 20 peer dirty paths (.moe/roles, .moe/skills, other tasks' JSON) were left untouched.",
+      "startedAt": "2026-11-01T14:52:28.560Z",
+      "completedAt": "2026-11-01T18:30:49.995Z"
     },
     {
       "stepId": "step-2",
       "description": "Wire the holder into its three consumers. Leave every caller of assertExecutionProfileReady alone: the settings validator, plan submission, claims, completion, delivery policy, qa_approve and rollout activation all follow through the one function.\n\n1. **delivery/executionProfile.ts.**\n   - Import { heldReadiness } from './readinessHolder.js'. Update the LEAF header: runtime imports are only util/errors and the readiness holder, which imports no state store. Never import policy.ts or a state store (task rail).\n   - assertExecutionProfileReady: legacy and observe are unchanged. verified-local returns when heldReadiness().ready is true and its missingCapabilities is empty. Otherwise it throws the same MoeError(MoeErrorCode.NOT_ALLOWED, message, { executionProfile: 'verified-local', missingCapabilities: [...the held list] }, 'EXECUTION_PROFILE_NOT_READY').\n   - Message while never evaluated (evaluatedAt === null): today's text, byte for byte: 'Execution profile verified-local is not ready: protected local isolation, trusted evidence and revision-bound delivery are not certified.' __e2e__/workstreamComposition.e2e.test.ts pins it on the wire as NOT_READY_WIRE.\n   - Message once evaluated: 'Execution profile verified-local is not ready: missing <the ids joined by \", \">.' Ids are not secrets; never add paths, versions or report bytes.\n   - Rewrite its doc comment: ready only when the daemon's latest evaluation says so; no persisted label, env flag or caller assertion grants it.\n2. **state/profileRollout.ts activationGaps().**\n   - Keep the order vm, client, check and the exact reason strings.\n   - vm ('vm-provisioning-uncertified') appears only when heldReadiness().missingCapabilities includes 'isolated-agent-and-qa-vms'.\n   - check ('check-runner-uncertified') appears only when it includes 'isolated-check-vm'.\n   - client is unchanged; it belongs to CQ-M07d.\n   - Update activationGaps' doc comment and the sentence saying both 'stay unsupported constants'. Change nothing else in the file: under the CQ-M05 size rail, its landed bytes stay.\n3. **index.ts startDaemon.**\n   - After the StateManager has loaded and ensureRunnerKey has run, call `startReadinessEvaluation({ inputs: () => productionReadinessInputs(projectPath, state.project?.settings), onChange: held => logger.info({ ready: held.ready, missingCapabilities: held.missingCapabilities }, 'verified-local readiness evaluated') })`.\n   - Never await `first` on the startup path; attach a .catch that logs, although it never rejects.\n   - Call stop() in shutdown() before the servers close.\n   - Log ids only, never key paths or report bytes.\n\nError handling: a failed or throwing evaluation leaves verified-local refused. Startup never waits on, or fails because of, an evaluation.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/executionProfile.ts",
         "packages/moe-daemon/src/state/profileRollout.ts",
         "packages/moe-daemon/src/index.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/executionProfile.ts",
+        "packages/moe-daemon/src/state/profileRollout.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "executionProfile.ts: the LEAF header now says util/errors plus the readiness holder. assertExecutionProfileReady passes verified-local only when heldReadiness() has ready===true and an empty list. Otherwise it throws the same NOT_ALLOWED/EXECUTION_PROFILE_NOT_READY error with context { executionProfile, missingCapabilities: [...held] }. The message is today's exact text while evaluatedAt is null, and 'missing <ids>.' once evaluated. No caller was edited.\nprofileRollout.ts: only the new import and activationGaps plus its doc comment changed. vm is listed iff isolated-agent-and-qa-vms is held missing, check iff isolated-check-vm is; the order and reason strings are unchanged.\nindex.ts: startReadinessEvaluation runs after ensureRunnerKey, with inputs () => productionReadinessInputs(projectPath, state.project?.settings) and onChange logging ids at info. `first` is never awaited; it gets a .catch. readiness.stop() runs at the start of shutdown and on the listen-failure path.\nIn snapshot /tmp/moe-9ae89d5e-iter-AbpbBH: tsc --noEmit is clean. executionProfile.test, profileRollout.test, rolloutControls.e2e and workstreamComposition.e2e pass 129/129 (4 files). benchmarks/rolloutDecision.test.ts does not exist at HEAD because CQ-M06a has not landed, so it cannot run here.",
+      "startedAt": "2026-11-01T18:30:52.912Z",
+      "completedAt": "2026-11-01T18:32:31.569Z"
     },
     {
       "stepId": "step-3",
       "description": "New packages/moe-daemon/src/delivery/readinessHolder.test.ts, part 1: the holder, the scheduler, the assertion and the gaps (DoD 2, 4 and 5). Assert exact values with toEqual, never truthiness.\n\n**Fixtures.**\n- Snapshot builders typed from CQ-M07b:\n  - READY: ready true, [], a fixed ISO time, evidence with 'a'.repeat(64);\n  - NOT_READY: ['revision-bound-local-delivery', 'certification-report-missing'].\n- Fake evaluate functions.\n- afterEach: clearReadiness(), vi.useRealTimers(), vi.unstubAllEnvs().\n- Never run a production runProbe or readCertification (task rule: unit tests never evaluate unless they inject).\n\n**Rows.**\n1. **Default.** heldReadiness() is DEFAULT_READINESS (frozen) and toEqual { ready: false, missingCapabilities: READINESS_CAPABILITIES, evaluatedAt: null, evidence: null }. assertExecutionProfileReady('verified-local') throws codeName EXECUTION_PROFILE_NOT_READY with today's exact message and context. legacy and observe return undefined under every held value.\n2. **DoD 2.**\n   - After refreshReadiness(inputs, async () => NOT_READY), the assertion throws with context.missingCapabilities toEqual the held list, and the message contains every id.\n   - After refreshReadiness(…, async () => READY) it returns undefined.\n   - After clearReadiness() it throws again.\n3. **Holder validation**, it.each, where each case stores DEFAULT_READINESS:\n   - ready true with a non-empty list;\n   - ready false with [];\n   - an unknown id; ids out of READINESS_IDS order; a duplicate id;\n   - ready given as the string 'true';\n   - a non-ISO evaluatedAt;\n   - evidence with an extra key, or a short sha;\n   - null; an array;\n   - a throwing evaluate; a rejecting evaluate.\n\n   Two more rows here:\n   - The held value is a frozen copy: mutating the evaluator's object afterwards never changes heldReadiness().\n   - The last-started refresh wins: two refreshes whose deferreds resolve in reverse order keep the later one's result.\n4. **DoD 5: the start path with injected deps.**\n   - startReadinessEvaluation({ inputs, evaluate: a READY fake }): `first` resolves and heldReadiness() toEqual READY.\n   - A throwing evaluate, and an inputs() that throws, each leave DEFAULT_READINESS.\n   - Under vi.useFakeTimers():\n     - the interval re-evaluates after READINESS_INTERVAL_MS with a fresh inputs() call; READY then NOT_READY flips the held value, and onChange runs once per change;\n     - a slow evaluation that spans a tick runs evaluate only once (single-flight);\n     - after stop(), advancing time makes no call; calling stop() twice is fine;\n     - a throwing onChange is swallowed.\n5. **productionReadinessInputs(project, settings).**\n   - runnerKeyPath === runnerKeyPath(project).\n   - daemonInstallDir holds a package.json whose name is 'moe-daemon'.\n   - programFiles === process.env.ProgramFiles, and settings passes through.\n   - readCertification and runProbe are functions. Never call runProbe.\n6. **DoD 4: activationGaps().** The client gate is real here.\n   - default → [vm, client, check], with today's reasons;\n   - READY → [client] only;\n   - only isolated-check-vm missing → [client, check];\n   - only isolated-agent-and-qa-vms missing → [vm, client];\n   - only authenticated-runner-evidence missing → [client].\n\n   Each call returns fresh objects.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/readinessHolder.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/readinessHolder.test.ts"
+      ],
+      "note": "readinessHolder.test.ts part 1 (DoD 2, 4 and 5). Rows:\n- default frozen DEFAULT_READINESS plus today's exact refusal: the code, codeName, message and context;\n- legacy and observe pass under default, READY and NOT_READY;\n- DoD 2: the context list equals the held list, the context copy is fresh, the 'missing <ids>.' message once evaluated, READY passes, clear refuses again;\n- 19 malformed-or-failed rows, each storing DEFAULT even over a held READY;\n- 4 accepted shapes stored as deep-frozen copies;\n- last-started-wins, and clear supersedes an in-flight refresh;\n- scheduler: the start evaluation with injected deps; a throwing evaluate or inputs() resets to DEFAULT; intervalMs undefined/0/-5/NaN/Infinity use an unref'd 300_000; the fake-timer interval reads fresh inputs each time with onChange once per change; single-flight; stop is idempotent; a throwing onChange is swallowed;\n- productionReadinessInputs;\n- activationGaps for 6 held values, with fresh objects on every call.\nMoeError prefixes '[CODENAME] ' to the message, so the pins include it; the assertion's own text is byte-identical. In the scratch snapshot: 56/56 pass and tsc is clean. Mutation sweep (scratch only, files restored and cmp-checked): 30/31 killed. The survivor, dropping `&& missingCapabilities.length === 0` from the assertion, is equivalent: the holder already enforces ready === (list empty) on every stored value.",
+      "startedAt": "2026-11-01T18:32:35.042Z",
+      "completedAt": "2026-11-01T18:42:54.816Z"
     },
     {
       "stepId": "step-4",
       "description": "readinessHolder.test.ts, part 2: through the real tools (DoD 1 and DoD 3).\n\n**Setup.**\n- Use ToolTestHarness and the raw-JSON seeding that tools/executionProfileAdmission.test.ts uses, plus the strict fixture in `mem:convention-verified-local-test-fixture` (approvalMode TURBO, deliveryPolicy 'local-branch', checkEnvironments as needed).\n- The client capability belongs to CQ-M07d. Add a vi.hoisted toggle over a partial vi.mock of '../server/clientCapabilities.js': decodeClientHello reports negotiatedCapabilities.verifiedLocal true only while the toggle is on. It is off by default and reset in afterEach. It stands in for CQ-M07d's flip in the DoD 1 positive rows only.\n\n**Rows.**\n1. **DoD 1, positive.** Hold READY via refreshReadiness(…, async () => READY), with the client toggle on:\n   - h.state.updateSettings({ executionProfile: 'verified-local', deliveryPolicy: 'local-branch' }) succeeds, and project.json carries executionProfile 'verified-local';\n   - submit_plan on a PLANNING task (TURBO) succeeds with status WORKING and a captured verified-local executionPolicySnapshot;\n   - claim_next_task { statuses: ['WORKING'], taskId } by a worker claims it.\n\n   With READY held and the client toggle OFF, updateSettings is refused EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED with unsupportedCapabilities exactly [client]. That shows vm and check now come from the snapshot.\n2. **DoD 1, negative.** With the default held:\n   - updateSettings({ executionProfile: 'verified-local' }) is refused EXECUTION_PROFILE_NOT_READY;\n   - with strict settings seeded raw, submit_plan and the claim are refused EXECUTION_PROFILE_NOT_READY, and nothing is written: the task's status and attempts are unchanged.\n3. **DoD 3 proof rows.** Each row must leave verified-local refused: EXECUTION_PROFILE_NOT_READY, or any refusal for an unknown argument. heldReadiness() must also deep-equal its value from before the row.\n   - **Env:** vi.stubEnv MOE_RUNTIME_PROTECTED='1', MOE_EXECUTION_READY='1', MOE_VERIFIED_LOCAL='ready', MOE_RUNNER_KEY_DIR, and HOME and USERPROFILE set to a temp dir. Then submit_plan and claim.\n   - **Settings values:** executionProfile 'verified-local' with deliveryPolicy 'local-branch', 'legacy' and absent, seeded raw.\n   - **Labels:** project.json settings and a task JSON seeded with executionReadiness / readiness { ready: true, missingCapabilities: [] } and verifiedLocalReady: true.\n   - **Caller arguments:** claim_next_task, submit_plan, updateSettings and qa_approve, each given ready: true, executionReadiness: { ready: true, missingCapabilities: [] } and missingCapabilities: [].\n     - For qa_approve, seed a verified-local REVIEW task. Assert the call never returns success, the task stays REVIEW, and evaluateDeliveryEvidence(h.state, task) throws EXECUTION_PROFILE_NOT_READY, as __e2e__/workstreamComposition.e2e.test.ts does near line 250.\n   - **A valid report inside the project:**\n     - Write one canonical valid report into <project>/.moe/certification and into <project>/certification, built the way CQ-M07b's tests build one.\n     - Run refreshReadiness({ ...productionReadinessInputs(project, settings), runProbe: a recording fake }).\n     - Held stays not ready, and evidence?.reportSha256 is never the planted sha, because the real reader reads only os.userInfo().homedir. submit_plan and the claim are refused.\n     - Keep a capability failing, such as no runner key for the temp project, so a real store on the host can't flip ready.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/readinessHolder.test.ts"
+      ],
+      "note": "readinessHolder.test.ts part 2: real tools over ToolTestHarness with raw-JSON seeds (task-p PLANNING, plus strict task-w WORKING and task-r REVIEW), and a vi.hoisted client toggle over a partial mock of server/clientCapabilities.js (off by default, reset in afterEach).\n\nTwo deviations from the plan text, each forced by landed code:\n(a) deliveryPolicy is not an updatable project setting: validators refuse it INVALID_INPUT 'is not a supported project setting field'. So it is seeded raw, and the DoD 1 update requests { executionProfile: 'verified-local' } only.\n(b) CQ-M07q landed, so the strict WORKING claim passes executionRoute 'vm'.\n\nDoD 1 positive: READY held with the client gate off gives ACTIVATION_UNSUPPORTED with exactly [client]. With the gate on, the update persists verified-local; submit_plan goes to WORKING with snapshot {v2, verified-local, local-branch}; the claim assigns worker-1.\nDoD 1 negative: default held with the gate open refuses the update NOT_READY. Then, with strict seeded raw, stillRefused() checks:\n- submit_plan and claim give NOT_READY;\n- qa_approve gives a MoeError;\n- evaluateDeliveryEvidence on task-r gives NOT_READY;\n- task bytes, project.json and the attempts dir are unchanged, and heldReadiness() is unchanged.\n\nDoD 3 rows, each through stillRefused():\n- env: MOE_RUNTIME_PROTECTED, MOE_EXECUTION_READY, MOE_VERIFIED_LOCAL, MOE_EXECUTION_PROFILE, MOE_RUNNER_KEY_DIR, HOME and USERPROFILE;\n- deliveryPolicy local-branch, legacy and absent;\n- labels in project.json settings and in task JSON;\n- caller args { ready, executionReadiness, missingCapabilities } on claim, submit_plan, update and qa_approve;\n- a canonical valid host report planted in <project>/.moe/certification and <project>/certification, through refreshReadiness(productionReadinessInputs + a recording fake runProbe). The result is not ready, includes authenticated-runner-evidence, and the sha is not the planted one.\n\nIn the scratch snapshot: 56/56 pass.",
+      "startedAt": "2026-11-01T18:42:57.553Z",
+      "completedAt": "2026-11-01T18:43:10.367Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE, fresh, after steps 1-4: the FULL daemon suite, because a shared readiness contract gets broad regression. Run it in a git-archive snapshot; never npm ci, npm test or a build in the shared checkout (global rail), and never run Multipass.\n\nFirst confirm HEAD carries CQ-M07b's landing: `git log moe/work-2026-10-24 --grep 'Moe-Task: task-cf952313817d4b76b300b10a043aba7b' --format=%h` must print a sha. If it prints nothing, stop and call moe.report_blocked with blockedOnTaskIds ['task-cf952313817d4b76b300b10a043aba7b'].\n\nRun exactly this. Its command, exit code and output tail are the complete_task verification evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-9ae89d5e-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/delivery/readinessHolder.ts packages/moe-daemon/src/delivery/readinessHolder.test.ts packages/moe-daemon/src/delivery/executionProfile.ts packages/moe-daemon/src/state/profileRollout.ts packages/moe-daemon/src/index.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'`\n\nExpect exit 0 and 0 failures. Every existing refusal pin must pass unchanged:\n- executionProfile.test.ts and profileRollout.test.ts;\n- __e2e__/rolloutControls.e2e.test.ts and __e2e__/workstreamComposition.e2e.test.ts;\n- benchmarks/rolloutDecision.test.ts;\n- the readiness-mocked strong tests.\n\nCite the file and test counts, passed and skipped, in complete_task (DoD 6). If a pre-existing test fails, compare it against the same command without the overlay before touching anything. Never edit an existing test to make it pass.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification only; no files changed. CQ-M07b's landing is on moe/work-2026-10-24 (87f4841a, bf327c83 and others), and so is CQ-M07a's (652f5eb3). I ran the plan's exact gate fresh at HEAD e7668eae with the 5-file overlay, snapshot /tmp/moe-9ae89d5e-e3v6Xk: npm ci, then tsc --noEmit clean, then npm test. EXIT 0. Test Files 223 passed (223); Tests 6757 passed, 20 skipped (6777); 38.8 s. The refusal pins passed unchanged: executionProfile.test 41, profileRollout.test 36, rolloutControls.e2e 3, workstreamComposition.e2e 49 (NOT_READY_WIRE), requiredChecks.strong 83, executionRoute 47, executionProfileAdmission 39. The new readinessHolder.test has 56. benchmarks/rolloutDecision.test.ts does not exist at HEAD because CQ-M06a has not landed, so it could not run.",
+      "startedAt": "2026-11-01T18:43:14.334Z",
+      "completedAt": "2026-11-01T18:45:02.212Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Then read `git diff HEAD -- packages/moe-daemon/src/delivery/executionProfile.ts packages/moe-daemon/src/state/profileRollout.ts packages/moe-daemon/src/index.ts` and the two new files as an attacker would.\n\n- **Grant paths.** Only refreshReadiness and startReadinessEvaluation can hold a ready value, and only after shape validation. Grep the daemon for other writers: `grep -rn \"readinessHolder\" packages/moe-daemon/src --include=*.ts` should show index.ts, executionProfile.ts, profileRollout.ts and tests only. No tool argument, setting, label or env var reaches the holder.\n- **Leaf.** executionProfile.ts's runtime imports are util/errors and readinessHolder.js only. The holder imports no state store, policy.ts or logger. There is no import cycle.\n- **Fail closed.** A throwing evaluate, a throwing inputs() or a malformed snapshot each leave DEFAULT_READINESS. A ready snapshot later followed by a failed evaluation goes back to not ready.\n- **Startup.** Nothing awaits `first`. stop() runs on shutdown. The interval is unref'd, so the daemon's exit is never held.\n- **Compatibility.** The never-evaluated message is byte-identical, and the gap reason strings are unchanged. No caller of assertExecutionProfileReady was edited. The profileRollout.ts diff is activationGaps and its comments only.\n- **Concurrency.** Single-flight in the scheduler, plus last-started-wins in refreshReadiness.\n- **Secrets.** Logs and messages carry ids only.\n\nFix anything found, re-run step 5's gate, and submit its fresh output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of the diff of the 3 edited files plus the 2 new files. No real risk was found, so no bytes changed and step 5's gate output still stands: nothing was edited after it.\n\n- Grant paths: the only importers of readinessHolder are index.ts (start/stop), executionProfile.ts and profileRollout.ts (heldReadiness only), plus the test. No tool handler, setting, label or env var reaches refreshReadiness.\n- Leaf: executionProfile.ts runtime imports are util/errors and readinessHolder.js (the schema import is type-only). The holder imports node built-ins, certificationEvidence, executionReadiness and runnerChannel, none of which imports a state store, policy.ts or a logger. No cycle.\n- Fail closed: a throwing or rejecting evaluate, a throwing inputs() and a malformed snapshot each hold DEFAULT, even over a held READY (test rows plus mutants).\n- Startup: `first` is never awaited. The interval is unref'd (pinned by hasRef false). stop() runs at the start of shutdown and on the listen-failure path. ensureRunnerKey runs before the first evaluation, so the key is visible to it.\n- Compatibility: the never-evaluated text is byte-identical (workstreamComposition NOT_READY_WIRE passes), the reason strings and order are unchanged, and no assertExecutionProfileReady caller was edited.\n- Concurrency: single-flight, last-started-wins, and clear supersedes an in-flight refresh.\n- Secrets: logs and messages carry ids only.\n\nTheoretical notes for QA:\n(1) A revoked report or a deleted key keeps a held READY for up to 5 min, until the next tick. This is the accepted design (planningNotes).\n(2) An evaluation that is in flight when stop() runs may still write the held value; harmless at exit.\n(3) Once evaluated, the refusal context's missingCapabilities can carry evidence ids such as certification-report-missing, per the plan. benchmarks/defectWorkloads.ts pins the 5-id list, which only holds under the default, true in every test process.\n(4) The equivalent mutant (dropping the length===0 clause) is defence in depth.\n\nSize: +568/-20, net 548 (runtime 205, tests 343). Pre-filed the EPIC waiver prop-10edb6bb7d9c4747b59d7c83214d2dbf (PENDING).",
+      "startedAt": "2026-11-01T18:45:04.968Z",
+      "completedAt": "2026-11-01T18:46:15.847Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-24f14750",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -84,15 +115,22 @@
       "author": "architect-b520bc90",
       "content": "EVALUATOR CONTRACT from CQ-M07b (task-cf952313, plan rev 1, architect-b520bc90). Plan the holder and the wiring against these names. Full detail: mem:decision-verified-local-readiness-evaluator.\n\n**Module.** `packages/moe-daemon/src/delivery/executionReadiness.ts`. It's leaf-safe: runtime imports are only node built-ins, certificationEvidence.ts, runnerChannel.ts (`isRunnerKey`) and util/affectedFiles.ts, so a holder can import its ids and types. It reads no env, platform or home itself.\n\n**Entry.** `evaluateExecutionReadiness(inputs): Promise<ReadinessSnapshot>`.\n- It never rejects for a failing fact.\n- It returns a deep-frozen `{ ready, missingCapabilities, evaluatedAt, evidence | null }`.\n\n**Inputs you wire.** The evaluator has no defaults:\n- `projectRoot`;\n- `daemonInstallDir`: the daemon package root holding dist/ and node_modules/, taken from import.meta.url;\n- `runnerKeyPath`: `runnerKeyPath(projectRoot)`;\n- `settings`;\n- `readCertification`: `() => readHostCertificationEvidence(projectRoot)`;\n- `runProbe`: `promisify(execFile)`;\n- `programFiles`: `process.env.ProgramFiles`;\n- `now`.\n\n**Ids.**\n- `READINESS_IDS` is one stable order: `READINESS_CAPABILITIES` (today's five, same order) followed by ten evidence ids (certification-*, provider-*).\n- Your default before any evaluation (not ready, every capability missing) should equal READINESS_CAPABILITIES. A drift row in executionReadiness.test.ts compares that list with what assertExecutionProfileReady throws today. If you change the thrown list, update that row in the same diff.\n\n**Behavior to plan around.**\n- The probe runs only after an accepted report, so a host that never certified spawns no Multipass.\n- The evaluator is not single-flight, so coalesce concurrent evaluations in your scheduler.\n- A daemon running from inside the project it serves (the self-hosting layout) is never protected-host-control-plane. That is by design.",
       "timestamp": "2026-11-01T09:56:50.748Z"
+    },
+    {
+      "id": "comment-e7dde4c4c61b4b1bbd2577b50df19c39",
+      "author": "governor-978922c1",
+      "content": "Governor note for the next M07c worker (18:32Z). step-1 is still IN_PROGRESS from worker-009c883d, whose seat died in the 14:55-18:23Z outage. Its partial output is an untracked packages/moe-daemon/src/delivery/readinessHolder.ts: 8659 bytes, last written 14:53Z, with no checkpoint and no rescue ref. I declared that path on this task, so your landing carries it.\n\nResume step-1 against that file. Read it fully against the step text and the M07b evaluator contract (comment from architect-b520bc90, 09:56Z). Finish or correct it; don't assume it is complete, and don't delete and rewrite it blindly. Report it in complete_step.modifiedFiles as usual.",
+      "timestamp": "2026-11-01T18:32:46.591Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:04.449Z",
-  "updatedAt": "2026-11-01T18:29:16.995Z",
+  "updatedAt": "2026-11-01T18:48:13.421Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T09:56:54.252Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -103,7 +141,14 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T10:06:26.292Z",
   "executionContract": {
@@ -176,5 +221,49 @@
   },
   "planApprovedAt": "2026-11-01T10:06:26.313Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-01T14:52:28.560Z"
+  "workStartedAt": "2026-11-01T14:52:28.560Z",
+  "commits": [
+    {
+      "sha": "e7668eaeb8d380bad9b6bb2a536d69a171f4ddef",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-24f14750@2026-11-01T18:29:02Z",
+      "paths": [
+        ".moe/tasks/task-9ae89d5e362c4bf3afb692de17ae8c5b.json",
+        "packages/moe-daemon/src/delivery/readinessHolder.ts"
+      ],
+      "recordedBy": "worker-24f14750",
+      "recordedAt": "2026-11-01T18:29:33.323Z",
+      "treeId": "fd0b492d465892e0a2bb1d35d74151e4c426c989",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/readinessHolder.ts",
+    "packages/moe-daemon/src/delivery/executionProfile.ts",
+    "packages/moe-daemon/src/state/profileRollout.ts",
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-daemon/src/delivery/readinessHolder.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-24f14750@2026-11-01T18:29:02Z",
+    "at": "2026-11-01T18:29:33.323Z"
+  },
+  "declaredFiles": [
+    "packages/moe-daemon/src/delivery/readinessHolder.ts"
+  ],
+  "reviewStartedAt": "2026-11-01T18:48:13.419Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-9ae89d5e-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/delivery/readinessHolder.ts packages/moe-daemon/src/delivery/readinessHolder.test.ts packages/moe-daemon/src/delivery/executionProfile.ts packages/moe-daemon/src/state/profileRollout.ts packages/moe-daemon/src/index.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npm test'",
+    "exitCode": 0,
+    "outputTail": "HEAD c9f241d7, snapshot /tmp/moe-9ae89d5e-l1p1U4. npm ci ok; tsc --noEmit clean.\n ✓ src/delivery/readinessHolder.test.ts (56 tests) 506ms\n Test Files  224 passed (224)\n      Tests  6774 passed | 20 skipped (6794)\n   Start at  20:47:18\n   Duration  38.37s (tests 93%, transform 4%, import 4%)\nEXIT=0",
+    "reportedAt": "2026-11-01T18:48:13.419Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-M07c: assertExecutionProfileReady('verified-local') now passes exactly when the daemon's own latest held readiness evaluation is ready.\n\nFiles:\n- delivery/readinessHolder.ts (new, +186; landed in checkpoint e7668eae from a prior session, re-verified):\n  - heldReadiness and a deep-frozen DEFAULT_READINESS;\n  - clearReadiness, which can only refuse;\n  - refreshReadiness, the only writer: validates the shape, stores a frozen copy, last-started wins, any failure holds DEFAULT;\n  - startReadinessEvaluation: evaluates at start, then on an unref'd 5-min interval; single-flight; fresh inputs() each time; onChange swallowed; idempotent stop;\n  - productionReadinessInputs.\n- executionProfile.ts (+18/-15): still a leaf (util/errors + the holder). The never-evaluated message is byte-identical; once evaluated it says 'missing <ids>.'; context.missingCapabilities is the held list.\n- profileRollout.ts (+8/-5): activationGaps only. vm and check follow the held isolated-agent-and-qa-vms / isolated-check-vm; client is unchanged.\n- index.ts (+13): starts after ensureRunnerKey and never awaits `first`; stop() runs in shutdown and on listen failure; logs ids only.\n- readinessHolder.test.ts (new, 343 lines, 56 tests). No caller of the assertion was edited.\n\nDoD:\n1. Through the real tools: READY plus the client toggle lets the update, submit_plan (WORKING with a verified-local snapshot) and the claim succeed. READY without the client gate is refused with exactly [client]. The default refuses all three NOT_READY, with no writes.\n2. The context equals the held list.\n3. Env vars, three deliveryPolicy values, labels in project and task JSON, caller args on claim, submit_plan, update and qa_approve, and a valid report planted in <project>/certification and <project>/.moe/certification under the real evaluator: all stay refused, with no writes and the held value unchanged.\n4. Six gap rows.\n5. Scheduler rows, all with injected deps.\n6. Gate below.\n\nPlan deviations, both forced by the code: de"
 }

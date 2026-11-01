@@ -81,7 +81,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,16 +102,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T11:31:34.778Z",
-  "updatedAt": "2026-11-01T18:46:09.254Z",
+  "updatedAt": "2026-11-01T18:48:03.819Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T11:48:41.078Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T18:48:03.819Z",
+    "wallClockMs": 25162741
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-83c3fcad"
+    "worker-83c3fcad",
+    "qa-1b5727b1"
   ],
   "tier": "standard",
   "effort": "high",
@@ -183,7 +186,48 @@
     "packages/moe-daemon/src/state/attemptStore.ts",
     "packages/moe-daemon/src/tools/index.ts",
     "packages/moe-daemon/src/tools/getSeatLiveness.ts",
+    "packages/moe-daemon/src/tools/getSeatLiveness.test.ts",
+    ".moe/tasks/task-1dc49ae27e22494a95e15ada3e9c1fe9.json",
+    ".moe/tasks/task-a89361db41f24ef2aee19667aefc2135.json"
+  ],
+  "completionSummary": "Added wrapper-only, read-only moe.get_seat_liveness { workerId } returning exactly { workerId, registered, status, openAttempts }. attemptStore.ts exports countOpenAttempts (OPEN_PHASES stays private; counts running/finalizing/reconciling attempts, including those whose worker record is gone). New tools/getSeatLiveness.ts validates workerId (non-string, >255 chars before any scan, blank, control chars -> INVALID_INPUT). Registered in getTools() with TOOL_AUDIENCE 'wrapper'. New getSeatLiveness.test.ts covers unknown/registered/DEAD, attempt counting incl. pruned worker, no file or worker change, refusals, and registration/audience. Gate ran in git-archive snapshot /tmp/m07g0-gate.iTIy2a; no peer hunks in the overlaid files. MCP_SERVER.md section deferred to the CQ-M07 docs sweep, per the task.",
+  "commits": [
+    {
+      "sha": "c9f241d7a64bd8b52a07e82ce232e9335f34a86c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-83c3fcad@2026-11-01T18:44:25Z",
+      "paths": [
+        ".moe/tasks/task-1dc49ae27e22494a95e15ada3e9c1fe9.json",
+        ".moe/tasks/task-a89361db41f24ef2aee19667aefc2135.json",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/getSeatLiveness.test.ts",
+        "packages/moe-daemon/src/tools/getSeatLiveness.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "recordedBy": "worker-83c3fcad",
+      "recordedAt": "2026-11-01T18:46:32.996Z",
+      "treeId": "a762135ef9b2c4382e5c94e33dd6e9b26727481c",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/tools/getSeatLiveness.ts",
+    "packages/moe-daemon/src/tools/index.ts",
     "packages/moe-daemon/src/tools/getSeatLiveness.test.ts"
   ],
-  "completionSummary": "Added wrapper-only, read-only moe.get_seat_liveness { workerId } returning exactly { workerId, registered, status, openAttempts }. attemptStore.ts exports countOpenAttempts (OPEN_PHASES stays private; counts running/finalizing/reconciling attempts, including those whose worker record is gone). New tools/getSeatLiveness.ts validates workerId (non-string, >255 chars before any scan, blank, control chars -> INVALID_INPUT). Registered in getTools() with TOOL_AUDIENCE 'wrapper'. New getSeatLiveness.test.ts covers unknown/registered/DEAD, attempt counting incl. pruned worker, no file or worker change, refusals, and registration/audience. Gate ran in git-archive snapshot /tmp/m07g0-gate.iTIy2a; no peer hunks in the overlaid files. MCP_SERVER.md section deferred to the CQ-M07 docs sweep, per the task."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-83c3fcad@2026-11-01T18:44:25Z",
+    "at": "2026-11-01T18:46:32.996Z"
+  },
+  "completedAt": "2026-11-01T18:48:03.819Z",
+  "reviewCompletedAt": "2026-11-01T18:48:03.819Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit c9f241d7 (completion, on moe/work-2026-10-24, pushed) via git show, not the dirty tree. Package diff +246/-0 (attemptStore +15, getSeatLiveness.ts +49, test +179, index.ts +3), under the 400 cap.\n\nRe-ran task.verification in a fresh git-archive snapshot (env -i, nvm Node 24): npm ci, tsc --noEmit exit 0, vitest on getSeatLiveness/registry/toolAudience/attemptStore: 4 files, 91 tests passed, exit 0. Matches worker evidence. Snapshot removed.\n\nDoD: (1) unknown worker gives {registered:false,status:null,openAttempts:0}; registered gives its status, DEAD included; toEqual on all four keys; prototype-name ids give registered false. (2) openAttempts counts running/finalizing/reconciling, ignores closed and other workers' (3 vs 1); an open finalizing attempt with no worker record gives registered:false, openAttempts:1. OPEN_PHASES stays private (only countOpenAttempts is exported). (3) Read-only: test hashes every .moe file and clones the worker, calls the tool for registered, pruned and unknown ids, both unchanged incl. lastActivityAt; handler has no write/touch/activity/chat/emit call. Malformed ids (no args, null, {}, number, '', blank, 256 chars, newline, DEL) give INVALID_INPUT; 255 chars accepted; length check precedes trim/scan. (4) Registered in getTools(), TOOL_AUDIENCE 'wrapper', absent from architect/worker/qa/governor lists; registry and toolAudience tests pass. (5) Named vitest command passes in a snapshot.\n\nMutation checks in a throwaway snapshot: dropping the workerId match fails 1 test; making the handler bump lastActivityAt fails 1 test. Tests are mutation-resistant.\n\nScope matches plan; MCP_SERVER.md deferred to the CQ-M07 docs sweep as the task allows. No legacy behavior or wire shape changed. Nothing to cut in the complexity pass.\n\nConsumer note for CQ-M07g: gone = (!registered || status==='DEAD') && openAttempts===0; a match never proves a process is alive.",
+  "requiredCheckAtDone": null
 }
