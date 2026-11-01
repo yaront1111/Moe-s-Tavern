@@ -18,11 +18,12 @@
     {
       "stepId": "step-1",
       "description": "Create packages/moe-daemon/src/delivery/readinessHolder.ts: the daemon's one held verified-local readiness value, its scheduler and its production inputs.\n\nRead first:\n- `mem:decision-verified-local-readiness-evaluator` (CQ-M07b's contract, and comment-1f5715e6 on this task);\n- `mem:decision-cq-m07-verified-local-activation` (the fixed contracts);\n- the LANDED delivery/executionReadiness.ts. If a landed name differs, follow the code and say so in the step note.\n\nKeep it leaf-safe. Its runtime imports are only node built-ins (node:child_process, node:util, node:url, node:path), ./executionReadiness.js, ./certificationEvidence.js (readHostCertificationEvidence) and ../server/runnerChannel.js (runnerKeyPath). Never import a state store, StateManager, policy.ts, executionProfile.ts or a logger.\n\nExports:\n1. **`HeldReadiness`** = { ready: boolean; missingCapabilities: readonly ReadinessId[]; evaluatedAt: string | null; evidence: ReadinessSnapshot['evidence'] }. **`DEFAULT_READINESS`**, deep-frozen: { ready: false, missingCapabilities: [...READINESS_CAPABILITIES], evaluatedAt: null, evidence: null }. A null evaluatedAt means never evaluated.\n2. **`heldReadiness(): HeldReadiness`** returns the module-private current value, which is DEFAULT_READINESS at load.\n3. **`clearReadiness(): void`** resets to DEFAULT_READINESS. It can only refuse; tests call it in afterEach.\n4. **`refreshReadiness(inputs: ReadinessInputs, evaluate = evaluateExecutionReadiness): Promise<HeldReadiness>`** is the ONLY way to hold a non-default value.\n   - It awaits evaluate(inputs). A throw or rejection stores DEFAULT_READINESS: a failed evaluation is not ready.\n   - It stores only a well-formed snapshot, else DEFAULT_READINESS. Well-formed means:\n     - a plain object;\n     - missingCapabilities is an array of unique READINESS_IDS, in READINESS_IDS order;\n     - typeof ready === 'boolean', and ready === (missingCapabilities.length === 0);\n     - evaluatedAt is a string for which new Date(v).toISOString() === v;\n     - evidence is null, or has exactly the keys { reportSha256 (64 lowercase hex), platform (string), arch (string | null), providerVersion (string | null) }.\n   - It stores a deep-frozen copy, never the evaluator's object.\n   - The last-started refresh wins: take a sequence number before awaiting, and store only if no later refresh has started, so a slow older evaluation never overwrites a newer one.\n5. **`READINESS_INTERVAL_MS`** = 300_000, and **`startReadinessEvaluation({ inputs: () => ReadinessInputs, evaluate?, intervalMs?, onChange? }): { first: Promise<HeldReadiness>; refresh(): Promise<HeldReadiness>; stop(): void }`**.\n   - It evaluates once immediately (`first`), then every intervalMs on a setInterval that is unref'd.\n   - It calls inputs() for every evaluation, so live settings are read each time. A throw from inputs() stores DEFAULT_READINESS.\n   - It is single-flight: a tick or a refresh() while an evaluation runs returns the in-flight promise.\n   - onChange(held) runs after an evaluation whose ready or missingCapabilities differ from the previous held value. A throw from onChange is swallowed.\n   - stop() clears the interval and is idempotent; no tick runs after it.\n6. **`productionReadinessInputs(projectRoot: string, settings: unknown): ReadinessInputs`**, the production inputs CQ-M07b left to this task:\n   - daemonInstallDir = path.resolve(fileURLToPath(new URL('../..', import.meta.url))). That is the package root holding dist/ and node_modules/: from dist/delivery in a build, from src/delivery under vitest;\n   - runnerKeyPath = runnerKeyPath(projectRoot);\n   - readCertification = () => readHostCertificationEvidence(projectRoot), never readCertificationStore;\n   - runProbe = promisify(execFile), typed as ProbeRunner;\n   - programFiles = process.env.ProgramFiles; now = () => new Date(); settings as given.\n\nError handling: no export throws, and every failure path ends in DEFAULT_READINESS (fail closed). The only env read is programFiles, which only locates the win32 client. Write files only with Edit/Write and report every path in complete_step.modifiedFiles.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/readinessHolder.ts"
-      ]
+      ],
+      "startedAt": "2026-11-01T14:52:28.560Z"
     },
     {
       "stepId": "step-2",
@@ -87,14 +88,15 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:04.449Z",
-  "updatedAt": "2026-11-01T10:06:26.313Z",
+  "updatedAt": "2026-11-01T18:23:37.278Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T09:56:54.252Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-b520bc90"
+    "architect-b520bc90",
+    "worker-009c883d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -172,5 +174,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-01T10:06:26.313Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T14:52:28.560Z"
 }

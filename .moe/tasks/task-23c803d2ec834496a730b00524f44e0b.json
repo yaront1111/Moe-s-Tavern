@@ -1,0 +1,39 @@
+{
+  "id": "task-23c803d2ec834496a730b00524f44e0b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07n3] Seat VM and per-task seat job, happy path (moe-agent.ps1)",
+  "description": "SPIDR split out of CQ-M07n (task-62ec51f179494706a39045154d07e544) by architect-30d804be on 2026-11-01. This is the PowerShell twin of CQ-M07m3 (task-3954cc09): the happy path. CQ-M07n keeps the error paths. Chain: mem:task-task-62ec51f179494706a39045154d07e544-handoff and mem:task-task-828e7d21602e4cf2a0f242e024db7dea-handoff.\n\n**Depends on:**\n- CQ-M07m3 (task-3954cc09). Its landed moe-agent.sh code is the source of every string, of the order of the steps and of the stub seam. Port it; never re-derive it. Through it come CQ-M07i (seat-start/seat-stop), CQ-M07j (seat-job), CQ-M07q (the claim marker) and CQ-M07k (vm-credential). Their contracts are in that row's description.\n- CQ-M07n2 (task-d861f3de): the same files, and it provides the ps1 landing function.\n\n**Objective.** Under verified-local and ready (CQ-M07n1's gate), a worker or QA seat of moe-agent.ps1 never runs its agent CLI on the host. It is the route the JetBrains launcher (CQ-M07o) uses on Windows.\n\n**Deliverable.** In scripts/moe-agent.ps1, with rows in scripts/tests/postflight-vm-route.ps1:\n- **Seat start.** Run seat-start once, before the iteration's claim, when the seat holds no VM. Keep the instance for the whole wrapper pass.\n  - Pass `--runner $script:MoeProcessStartedAt --host $script:MoeHost`, each as ONE argument.\n  - Anything but ok refuses fail-closed, with CQ-M07m3's MOE_SEAT_START_FAILED line and exit 1.\n- **Claim.** On VM-route iterations only, claim with `executionRoute = 'vm'` added to a per-iteration COPY of $claimRpcArgs, at both claim sites (the pre-flight claim and the single-shot wait's re-claims). A legacy iteration never carries it.\n- **Post-claim backstop.** If the claim's workspace mode ($script:MoeWtMode) is not 'worktree', refuse with MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED before any job.\n- **Job.** A new branch of the launch dispatch, before codex/gemini/grok/claude, runs `node <agent-seat> seat-job …` in place of the host CLI.\n  - claude: the token comes from `Invoke-MoeAccountHelper vm-credential $script:AccountLeasedId`. It is wrapped as JSON {name, value} and piped to seat-job's stdin (`$json | & node …`), never as an argv, an env, a file or a log line.\n  - Every seat-* spawn runs with ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY and CODEX_API_KEY removed from the environment, restored in a finally, because the in-process supervisor keeps env across passes.\n  - codex, and a missing token, fail closed here as CQ-M07m3 does; CQ-M07n adds the rest.\n- **Outcome.** Relay the job's output. Parse the last stdout line marked \"seatJob\":1, and keep stderr records (5.1 ErrorRecords) apart from stdout lines.\n  - The outcome's exitCode becomes $script:CliExitCode.\n  - A worker's admitted tree goes through CQ-M07n2's function, then the normal post-flight.\n  - QA lands nothing of its own.\n- **Seat stop.** The outer finally runs seat-stop whenever the seat holds a VM, before Invoke-MoeDeregister. It is best-effort and bounded. That one funnel covers normal exit, Ctrl+C, terminating errors, `exit` and the hot-reload hand-over.\n- **Placeholder and seam.**\n  - Remove CQ-M07n1's MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE placeholder.\n  - Add CQ-M07m3's MOE_AGENT_SEAT_PATH stub seam, ignored when $script:MoeRuntimeProtected is set.\n- **PowerShell 5.1 and 7.** Relax $ErrorActionPreference around native stderr. Check that seat-job's stdin reader accepts the trailing newline PowerShell's pipe appends; if it does not, write stdin through a System.Diagnostics.Process with RedirectStandardInput instead. Keep moe-agent.ps1 UTF-8 with a BOM.\n\n**NOT in scope:**\n- the capacity wait, seat-start failure details, codex credentials, missing-token escalation, a failed job and the hot-reload row (CQ-M07n);\n- landing internals (CQ-M07n2);\n- moe-agent.sh;\n- the daemon.\n\n**Verification.** Run from WSL (mem:gotcha-qa-ps1-postflight-from-wsl, mem:gotcha-pwsh7-reachable-from-wsl):\n- `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\postflight-vm-route.ps1`, then the same with pwsh.exe;\n- then `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\postflight.ps1` with MOE_POSTFLIGHT_TIMEOUT_SEC=180;\n- then `bash scripts/tests/parity-check.sh`.",
+  "definitionOfDone": [
+    "verified-local and ready, claude worker: the host CLI stub never runs; the agent-seat stub records seat-start, then seat-job, then seat-stop at exit, and the claim carries executionRoute 'vm' (row).",
+    "That worker job's admitted tree lands through CQ-M07n2's function onto moe/task/<id> (row).",
+    "A canary token from the vm-credential stub reaches seat-job only on stdin: it is absent from every recorded argv and env and from all wrapper output, under Windows PowerShell 5.1 and pwsh 7 (row).",
+    "seat-stop runs on a normal exit and on Ctrl+C sent mid-job with GenerateConsoleCtrlEvent, as postflight.ps1's interrupt supervisor sends it (rows).",
+    "A claim whose workspace is shared refuses MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED with no seat-job, and MOE_AGENT_SEAT_PATH is ignored under MOE_RUNTIME_PROTECTED=1 (rows).",
+    "postflight-vm-route.ps1 passes alone under Windows PowerShell 5.1 and pwsh 7, postflight.ps1 passes under Windows PowerShell 5.1, bash scripts/tests/parity-check.sh passes, and moe-agent.ps1 keeps its UTF-8 BOM."
+  ],
+  "taskRails": [
+    "Never fall back to running the agent CLI on the host under verified-local.",
+    "Legacy stays byte-for-byte unchanged in behavior.",
+    "Port CQ-M07m3's landed behavior and strings verbatim; a credential never enters an argv, an env, a file or a log."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3954cc09f74045a0ac8fa4b795dcb0a9",
+    "task-d861f3de0d62437a964a83011e8c7def"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.166,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T14:34:00.801Z",
+  "updatedAt": "2026-11-01T14:34:00.801Z"
+}
