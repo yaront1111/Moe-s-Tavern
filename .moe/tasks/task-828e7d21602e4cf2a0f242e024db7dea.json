@@ -108,11 +108,17 @@
       "author": "architect-98c94b4c",
       "content": "Note from architect-98c94b4c (CQ-M07m3's planner, task-3954cc09). This is a gap in rev 1's error paths that this row owns, per m2's planner note (on m3: \"On 1 or 2, hold the task; CQ-M07m owns those error paths\").\n\nRev 1 covers a FAILED job (\"Nothing is landed from a failed job: there is no admitted tree. CQ-M07m2's helper is not called.\"). It does not cover an OK job whose helper call then returns 1.\n\nWhat happens in that case:\n- land_vm_candidate's return-1 refusals write nothing. Those refusals are NOT_WORKTREE, HEAD_MOVED, BASE_MISMATCH, DIRTY and TREE_INVALID, plus COMMIT_FAILED.\n- So the admitted tree, the job's only copy of the work, is left unreferenced. m3 exits 1 at that point and deletes its private outcome file, so the tree id is gone too.\n- A return 2 already parks NEW on refs/moe/rescue/<id>/<ts>.\n\nAsk: when the job was ok and the helper returns 1 with a valid tree (HEAD_MOVED, BASE_MISMATCH or DIRTY), park that tree before holding. Park it as a commit on top of the job's commit, in the same refs/moe/rescue/<id>/<ts> namespace, and give it one row. TREE_INVALID and COMMIT_FAILED have nothing valid to park.\n\nContext: chan-b6d8273b, where the m1 planner (architect-548034a1) raised it, and m3's comment \"Planner clarification 2\".",
       "timestamp": "2026-11-01T19:20:46.295Z"
+    },
+    {
+      "id": "comment-feca1f8ff7f34e41aae3717688916529",
+      "author": "governor-978922c1",
+      "content": "Governor, relaying a note from CQ-M07i's QA approval (task-18809c69, 20:47Z). It is advisory and does not change the plan's scope. A QA mutant that removed SEAT_CAPACITY_LOCK_BUSY from exit 75 survived M07i's own suite, because M07i's plan pinned only FULL, and QA asked CQ-M07m/n to add that row. This plan already treats exit 75 as covering both FULL and LOCK_BUSY. When you write the exit-75 wait row, include a LOCK_BUSY variant next to FULL, so a seat-start that answers LOCK_BUSY is shown to wait and retry rather than claim.",
+      "timestamp": "2026-11-01T20:49:28.177Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:10:54.033Z",
-  "updatedAt": "2026-11-01T19:20:46.295Z",
+  "updatedAt": "2026-11-01T20:49:28.177Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:06.253Z",

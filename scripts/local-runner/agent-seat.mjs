@@ -19,6 +19,11 @@
 // agent CLIs. Any failure after the reserve removes exactly that VM through deleteOwned, or retires a never-launched reservation.
 // seat-stop deletes only the named instance of this owner, idempotently. executionReady is always false: no isolation claim.
 // Residual: two concurrent seat-starts of one owner can each miss the other's in-flight reservation; a wrapper runs one at a time.
+// seatForward (CQ-M07j1) is the guest bridge's forward over this project's daemon /mcp, the moe-proxy path, never /runner: a /runner
+// call carries the authenticated runner identity (McpAdapter options.runner), which record_check_dispatch trusts as runner-attested
+// evidence, and a guest's calls must never carry it. The bridge's TOOLS allowlist and STAMPED identity already scope every guest
+// request, and runAgentJob's acquire/release_resource go through the same forward, so the job lease stays task-keyed. It needs
+// Node 22+'s global WebSocket (no headers, no Origin); without one every call refuses. Every refusal is SEAT_FORWARD_FAILED.
 import { randomBytes } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { lstat, readFile } from 'node:fs/promises';
@@ -31,7 +36,7 @@ import { provisionGuest } from './provision.mjs';
 import { admitSeatVm, countSeatVms, hostAgentVmCap, seatAdmissionFor } from './seat-capacity.mjs';
 import { installAgents, installToolchain } from './snapshot-transfer.mjs';
 import { fetchNodeToolchain } from './toolchain-cache.mjs';
-import { ownedLedgerDir, runnerProbe } from './vm-control.mjs';
+import { ownedLedgerDir, readDaemonInfo, runnerProbe } from './vm-control.mjs';
 
 const CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const CONTROL = /[\x00-\x1f\x7f]/;
@@ -145,6 +150,48 @@ export async function stopSeat(input, steps = {}) {
   } catch (error) {
     return error?.code === 'LIFECYCLE_NOT_OWNER' ? failed('LIFECYCLE_NOT_OWNER') : failed('SEAT_STOP_FAILED', 'delete-failed');
   }
+}
+
+// One fixed message and code for every refusal: never the daemon's text or codeName, a path, the args or a key.
+const forwardFailed = () => Object.assign(new Error('Seat forward failed.'), { code: 'SEAT_FORWARD_FAILED' });
+
+/** forward(tool, args, { signal }) for runAgentJob and the guest bridge: ONE socket and ONE tools/call per call to this project's
+ * proven loopback daemon, resolving the daemon's RAW result object ({ content: [...] }), never the parsed inner text. The socket,
+ * the timer and the abort listener are released on every path; every listener body is total (a throwing one is an uncaught exception). */
+export function seatForward(projectPath, { WebSocketImpl = globalThis.WebSocket, timeoutMs = 30_000 } = {}) {
+  let lastId = 0;
+  return async (tool, args, options) => {
+    const id = ++lastId; // a local, taken before any await: concurrent calls each match only their own reply
+    let [signal, socket, timer, onAbort] = [];
+    try {
+      signal = options?.signal; // inside the try: a throwing getter is one more refusal, never a raw error
+      if ((signal !== undefined && !(signal instanceof AbortSignal)) || signal?.aborted || typeof WebSocketImpl !== 'function') throw forwardFailed();
+      const frame = JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: tool, arguments: args } }); // refuses before any read or socket
+      const { port, host } = await readDaemonInfo(projectPath); // fresh per call: the daemon may restart on a new port
+      if (signal?.aborted) throw forwardFailed(); // aborted during the /health probe; nothing is opened
+      return await new Promise((resolve, reject) => { // from here to the listener registration everything is synchronous
+        timer = setTimeout(() => reject(forwardFailed()), timeoutMs);
+        onAbort = () => reject(forwardFailed());
+        signal?.addEventListener('abort', onAbort, { once: true });
+        socket = new WebSocketImpl(`ws://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/mcp`); // the URL alone: no protocols, options or headers
+        socket.addEventListener('open', () => { try { socket.send(frame); } catch { reject(forwardFailed()); } });
+        socket.addEventListener('message', event => {
+          try {
+            const reply = JSON.parse(event?.data);
+            if (!isRecord(reply) || reply.id !== id) return; // another call's (or no) reply: ignored
+            if (Object.hasOwn(reply, 'error') || !isRecord(reply.result)) reject(forwardFailed());
+            else resolve(reply.result);
+          } catch { reject(forwardFailed()); }
+        });
+        socket.addEventListener('close', () => reject(forwardFailed()));
+        socket.addEventListener('error', () => reject(forwardFailed()));
+      });
+    } catch { throw forwardFailed(); } finally {
+      clearTimeout(timer);
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
+      try { socket?.close(); } catch { /* already closed */ }
+    }
+  };
 }
 
 const FLAGS = Object.freeze({ 'seat-start': ['--project', '--worker', '--runner', '--host'],
