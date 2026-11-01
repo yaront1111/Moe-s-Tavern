@@ -8,10 +8,10 @@ import { test } from 'node:test';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const required = ['certified-provider.json', 'multipass.mjs', 'doctor.mjs', 'cli.mjs', 'vm-control.mjs'];
-// CQ-R10d2's agent cache, CQ-R11e1's toolchain cache and CQ-R13d/R13e1/R13f1/R13h/R13g's certify modules must ship too. Nothing wires them yet, so onboarding.mjs does not
-// check them and they stay out of `required`, which the onboarding refusal row walks.
+// CQ-R10d2's agent cache, CQ-R11e1's toolchain cache, CQ-R13d/R13e1/R13f1/R13h/R13g's certify modules and CQ-R14a's guest SSH primitives must ship too.
+// Nothing wires them yet, so onboarding.mjs does not check them and they stay out of `required`, which the onboarding refusal row walks.
 const shipped = [...required, 'agent-binaries.json', 'agent-cache.mjs', 'toolchain.json', 'toolchain-cache.mjs', 'certify.mjs', 'certify-bridge.mjs', 'certify-containment.mjs',
-  'certify-lifecycle.mjs', 'certify-recovery-child.mjs', 'certify-canary.mjs'];
+  'certify-lifecycle.mjs', 'certify-recovery-child.mjs', 'certify-canary.mjs', 'guest-ssh.mjs'];
 const excluded = ['sentinel.test.mjs', 'nested/sentinel.spec.mjs', 'nested/tests/data.json',
   'nested/__tests__/data.json', 'nested/fixtures/data.json', 'nested/__fixtures__/data.json'];
 const excludedPatterns = ['**/*.test.*', '**/*.spec.*', '**/tests/**', '**/__tests__/**', '**/fixtures/**', '**/__fixtures__/**'];

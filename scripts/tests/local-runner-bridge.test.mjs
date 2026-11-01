@@ -5,8 +5,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
-import { constants, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { constants, homedir, tmpdir } from 'node:os';
+import { dirname, join, win32 } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -19,8 +19,12 @@ import { GUEST_LAYOUT, JOB_IDENTITIES } from '../local-runner/guest-bootstrap.mj
 import {
   MAX_ARGUMENT_DEPTH, MAX_DAEMON_INFO_BYTES, MAX_PENDING_REQUESTS, MAX_RESPONSE_BYTES, endAgentJobs, runGuestSession,
 } from '../local-runner/guest-session.mjs';
-import { ownedInstanceName, QUERY_TIMEOUT_MS } from '../local-runner/lifecycle.mjs';
+import { isOwnedInstanceName, ownedInstanceName, QUERY_TIMEOUT_MS } from '../local-runner/lifecycle.mjs';
 import { AGENT_CLIS } from '../local-runner/agent-cache.mjs';
+import {
+  AUTHORIZED_COMMAND, SUPERVISOR_MODES, authorizedKeyLine, createTransportKeys, defaultKeyDir, guestAddress, knownHostsLine, sshExecutable,
+  sshStreamArgv, transportError, transportFiles,
+} from '../local-runner/guest-ssh.mjs';
 
 // The H section's project and daemon: a fake /health reporting its loopback bind for PROJECT (::1 best-effort; 0 where it
 // cannot bind). It is awaited before any test is registered: awaited after them, rows that all finish meanwhile (every
@@ -2185,3 +2189,145 @@ test('AE2 a CLI binary that misses its pinned sha256 is never installed, so its 
     await rejectsWith(session.promise, 'SESSION_PROVIDER_FAILED');
     assert.deepEqual([session.forwarded, session.observations, session.outputs, host.proc.exitCode], [[], [], [], 71]);
   });
+
+// CQ-R14a: guest SSH transport primitives (guest-ssh.mjs), the fixed pieces of the OpenSSH stream channel.
+const GS_SOURCE = fileURLToPath(new URL('../local-runner/guest-ssh.mjs', import.meta.url));
+const GS_NAME = 'moe-vm-0123456789abcdef0123';
+// The task description's argv, word for word.
+const GS_ARGV = ('-F none -T -e none -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="<kh>" -o GlobalKnownHostsFile="<kh>" '
+  + '-o HostKeyAlias=<name> -o HostKeyAlgorithms=ssh-ed25519 -o CheckHostIP=no -o IdentitiesOnly=yes -o IdentityAgent=none -i <key> '
+  + '-o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes '
+  + '-o PermitLocalCommand=no -o ProxyCommand=none -o ControlMaster=no -o ControlPath=none -o UpdateHostKeys=no -o ConnectTimeout=15 '
+  + '-o ServerAliveInterval=15 -o ServerAliveCountMax=4 -l ubuntu <address> <mode>').split(' ');
+const gsArgv = fill => GS_ARGV.map(word => word.replace(/<(\w+)>/, (_, field) => fill[field]));
+const GS_POSIX = { name: GS_NAME, address: '10.0.0.2', identityFile: `/home/u/.moe/guest-ssh/${GS_NAME}.key`,
+  knownHostsFile: `/home/u/.moe/guest-ssh/${GS_NAME}.known_hosts`, mode: 'materialize' };
+// Every refusal carries the one fixed message, so no path, key, address or caller value reaches it.
+const gsRefuses = (fn, label) => assert.throws(fn,
+  error => error?.code === 'TRANSPORT_INPUT_INVALID' && error.message === 'Guest transport input was invalid.', label);
+const GS_KEYGEN = process.platform === 'win32' ? win32.join(win32.dirname(sshExecutable('win32')), 'ssh-keygen.exe') : '/usr/bin/ssh-keygen';
+
+test('GS1 guest-ssh.mjs is a leaf exporting exactly the transport primitives, and its restated supervisor facts match the originals', async () => {
+  assert.deepEqual(Object.keys(await import('../local-runner/guest-ssh.mjs')).sort(), ['AUTHORIZED_COMMAND', 'SUPERVISOR_MODES', 'authorizedKeyLine',
+    'createTransportKeys', 'defaultKeyDir', 'guestAddress', 'knownHostsLine', 'sshExecutable', 'sshStreamArgv', 'transportError', 'transportFiles']);
+  const source = readFileSync(GS_SOURCE, 'utf8');
+  assert.deepEqual([...source.matchAll(/^import .* from '([^']*)';$/gm)].map(match => match[1]), ['node:crypto', 'node:os', 'node:path']);
+  assert.deepEqual(['child_process', 'writeFile', 'invoker', 'spawn', 'import(', 'from "', "from './", "from '../"].filter(word => source.includes(word)), []);
+  const modeLines = readFileSync(SUPERVISOR, 'utf8').split('\n').filter(line => line.includes('if argv not in ('));
+  assert.equal(modeLines.length, 1);
+  assert.deepEqual([...SUPERVISOR_MODES], [...modeLines[0].matchAll(/\['([a-z]+)'\]/g)].map(match => match[1]));
+  assert.ok(Object.isFrozen(SUPERVISOR_MODES));
+  assert.equal(AUTHORIZED_COMMAND, `exec /usr/bin/sudo -n ${GUEST_LAYOUT.supervisor} "$SSH_ORIGINAL_COMMAND"`);
+});
+
+test('GS2 each fresh pair is an openssh-key-v1 private key that the in-box ssh-keygen turns back into its publicKey',
+  { skip: !existsSync(GS_KEYGEN) && `no in-box ssh-keygen at ${GS_KEYGEN}` }, () => {
+    const keys = createTransportKeys();
+    const again = createTransportKeys();
+    assert.deepEqual([keys, keys.client, keys.host].map(Object.keys), [['client', 'host'], ['privateKey', 'publicKey'], ['privateKey', 'publicKey']]);
+    assert.ok([keys, keys.client, keys.host].every(Object.isFrozen));
+    assert.equal(new Set([keys, again].flatMap(pairs => [pairs.client.publicKey, pairs.host.publicKey])).size, 4);
+    const dir = mkdtempSync(join(tmpdir(), 'moe-r14a-'));
+    try {
+      for (const [role, pair] of Object.entries(keys)) {
+        const lines = pair.privateKey.split('\n');
+        assert.deepEqual([lines[0], lines.at(-2), lines.at(-1)], ['-----BEGIN OPENSSH PRIVATE KEY-----', '-----END OPENSSH PRIVATE KEY-----', ''], role);
+        const body = lines.slice(1, -2);
+        assert.ok(body.length > 1 && body.slice(0, -1).every(line => line.length === 70) && body.at(-1).length <= 70, role);
+        // The public line is the 51-byte ssh-ed25519 blob alone: no comment and no private byte.
+        assert.match(pair.publicKey, /^ssh-ed25519 [A-Za-z0-9+/]+=*$/, role);
+        assert.equal(Buffer.from(pair.publicKey.slice('ssh-ed25519 '.length), 'base64').length, 51, role);
+        const file = join(dir, role);
+        writeFileSync(file, pair.privateKey, { mode: 0o600 });
+        const derived = spawnSync(GS_KEYGEN, ['-y', '-f', file], { encoding: 'utf8' });
+        assert.deepEqual([derived.status, derived.stdout.trim()], [0, pair.publicKey], `${role} ${derived.stderr}`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+test('GS3 sshStreamArgv returns the exact frozen argv, with drive paths in /, and refuses every unsafe input', () => {
+  const posix = sshStreamArgv(GS_POSIX);
+  assert.ok(Object.isFrozen(posix));
+  assert.deepEqual([...posix], gsArgv({ ...GS_POSIX, key: GS_POSIX.identityFile, kh: GS_POSIX.knownHostsFile }));
+  const drive = `C:\\Users\\me x\\.moe\\guest-ssh\\${GS_NAME}`;
+  const slashed = `C:/Users/me x/.moe/guest-ssh/${GS_NAME}`;
+  const windows = sshStreamArgv({ ...GS_POSIX, identityFile: `${drive}.key`, knownHostsFile: `${drive}.known_hosts`, mode: 'bridge' });
+  assert.deepEqual([...windows], gsArgv({ ...GS_POSIX, key: `${slashed}.key`, kh: `${slashed}.known_hosts`, mode: 'bridge' }));
+  for (const argv of [posix, windows]) assert.equal(argv[argv.indexOf('CheckHostIP=no') - 1], '-o');
+  for (const mode of SUPERVISOR_MODES) assert.equal(sshStreamArgv({ ...GS_POSIX, mode }).at(-1), mode);
+  const paths = ['rel/key', 'C:rel', '-oProxyCommand=x', '/a%b', '/a$b', '/a"b', "/a'b", '/a`b', '/a\nb', '/a\x7fb', '/a\\b', '\\\\srv\\share\\k', '//srv/share/k', 42];
+  const bad = { name: ['vm', '', `${GS_NAME}0`, 42], address: ['::1', '10.0.0.02', '10.0.0.2 -oX=y', null], identityFile: paths,
+    knownHostsFile: paths, mode: ['shell', '', 'bridge ', 'BRIDGE', undefined] };
+  for (const [field, values] of Object.entries(bad)) {
+    for (const value of values) gsRefuses(() => sshStreamArgv({ ...GS_POSIX, [field]: value }), `${field} ${String(value)}`);
+  }
+  for (const input of [null, [], 'x', undefined]) gsRefuses(() => sshStreamArgv(input), String(input));
+  // The restated owned-name rule agrees with lifecycle.mjs isOwnedInstanceName.
+  for (const name of [GS_NAME, ownedInstanceName(), 'vm', '', `${GS_NAME}0`, `moe-vm-${'G'.repeat(20)}`, 42]) {
+    let threw = false;
+    try { transportFiles(name, '/k'); } catch { threw = true; }
+    assert.equal(threw, !isOwnedInstanceName(name), String(name));
+  }
+});
+
+test('GS4 sshd un-escapes the forced command to AUTHORIZED_COMMAND, and bash hands SSH_ORIGINAL_COMMAND on as exactly one argument',
+  { skip: NO_GUEST }, () => {
+    const key = createTransportKeys().client.publicKey;
+    const line = authorizedKeyLine(key);
+    // sshd's opt_dequote: read up to the first unescaped ", turning only \" into ".
+    const prefix = 'restrict,command="';
+    assert.ok(line.startsWith(prefix), line);
+    let at = prefix.length;
+    let command = '';
+    while (at < line.length && line[at] !== '"') {
+      if (line[at] === '\\' && line[at + 1] === '"') at += 1;
+      command += line[at];
+      at += 1;
+    }
+    assert.deepEqual([command, line.slice(at)], [AUTHORIZED_COMMAND, `" ${key} moe-transport`]);
+    const stub = `'${process.execPath}' -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))'`;
+    const cmd = command.replace('/usr/bin/sudo -n /opt/moe/bin/moe-supervisor', stub);
+    assert.deepEqual([cmd.startsWith(`exec ${stub} `), cmd.split('"$SSH_ORIGINAL_COMMAND"').length], [true, 2]);
+    for (const value of [...SUPERVISOR_MODES, '', 'materialize; id', '$(id)', '`id`', 'a b', 'x\ny', undefined]) {
+      const env = { PATH: '/usr/bin:/bin', ...(value === undefined ? {} : { SSH_ORIGINAL_COMMAND: value }) };
+      const result = spawnSync('/bin/bash', ['-c', cmd], { encoding: 'utf8', env });
+      assert.equal(result.status, 0, String(result.stderr));
+      assert.deepEqual(JSON.parse(result.stdout), [value ?? ''], JSON.stringify(value));
+    }
+  });
+
+test('GS5 guestAddress accepts only a strict dotted-quad IPv4 string', () => {
+  for (const good of ['10.0.0.2', '255.255.255.255', '0.0.0.0']) assert.equal(guestAddress(good), good);
+  for (const value of ['', ' 10.0.0.2', '10.0.0.2\n', '10.0.0.02', '256.1.1.1', '1.2.3', '1.2.3.4.5', '::1', '10.0.0.2 -oProxyCommand=x', 42, null]) {
+    assert.equal(guestAddress(value), null, String(value));
+  }
+});
+
+test('GS6 the pinned client, key files, known_hosts line, authorized line refusals and fixed errors', t => {
+  assert.deepEqual(['linux', 'darwin', 'sunos', undefined].map(id => sshExecutable(id)), ['/usr/bin/ssh', '/usr/bin/ssh', null, null]);
+  const saved = process.env.SystemRoot;
+  t.after(() => { if (saved === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = saved; });
+  const fallback = 'C:\\Windows\\System32\\OpenSSH\\ssh.exe';
+  for (const [root, expected] of [['D:\\Win', 'D:\\Win\\System32\\OpenSSH\\ssh.exe'], ['relative', fallback], ['\\\\srv\\share', fallback],
+    ['D:/Win', fallback], [undefined, fallback]]) {
+    if (root === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = root;
+    assert.equal(sshExecutable('win32'), expected, String(root));
+  }
+  const dir = defaultKeyDir();
+  assert.equal(dir, join(homedir(), '.moe', 'guest-ssh'));
+  const files = transportFiles(GS_NAME, dir);
+  assert.ok(Object.isFrozen(files));
+  assert.deepEqual({ ...files }, { identityFile: join(dir, `${GS_NAME}.key`), knownHostsFile: join(dir, `${GS_NAME}.known_hosts`) });
+  for (const value of ['rel', '', `${dir}\n`, `${dir}\x7f`, 42, undefined]) gsRefuses(() => transportFiles(GS_NAME, value), String(value));
+  const key = createTransportKeys().host.publicKey;
+  assert.equal(knownHostsLine(GS_NAME, key), `${GS_NAME} ${key}`);
+  for (const [name, value] of [['vm', key], [GS_NAME, 'ssh-rsa AAAA'], [GS_NAME, `${key}\n${GS_NAME} ${key}`], [GS_NAME, `${key} x`]]) {
+    gsRefuses(() => knownHostsLine(name, value), `${name} ${value}`);
+  }
+  for (const value of ['', 'ssh-ed25519 a b', 42, `${key}\nssh-ed25519 AAAA`, `${key} `]) gsRefuses(() => authorizedKeyLine(value), String(value));
+  const invalid = ['TRANSPORT_INPUT_INVALID', 'Guest transport input was invalid.'];
+  assert.deepEqual(['NOPE', 'constructor', 42, 'TRANSPORT_ADDRESS_UNKNOWN'].map(code => [transportError(code).code, transportError(code).message]),
+    [invalid, invalid, invalid, ['TRANSPORT_ADDRESS_UNKNOWN', 'The guest transport address could not be established.']]);
+});

@@ -1,0 +1,192 @@
+{
+  "id": "task-4c295c56a0db475998ae9d947a1d1de6",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R14a] Guest SSH transport primitives",
+  "description": "First slice of task-fd196d137c44497188d2639f149e259b, the transport fix: DESIGN comment-350cb4d0, governor ruling comment-d954b3df. Multipass 1.17.0 breaks `multipass exec` stdio: Linux stdin truncates, Windows stdin is dead, and Windows stdout stalls near 2 MiB. Every stdin or bulk stream therefore moves to OpenSSH, straight to the guest's sshd.\n\n**Objective.** The pure building blocks of that channel. This module spawns nothing, calls no provider and writes no file.\n\n**Deliverable.** A new scripts/local-runner/guest-ssh.mjs exporting:\n- `SUPERVISOR_MODES`: the frozen list bridge, check, materialize, export, verify, agents, toolchain, dependencies. It is exactly what guest-supervisor.py main() accepts.\n- `transportError(code)`: errors with fixed messages. This slice's only code is TRANSPORT_INPUT_INVALID.\n- `createTransportKeys()`: two fresh ed25519 pairs from node:crypto, as frozen `{client, host}`, each `{privateKey, publicKey}`.\n  - privateKey is an unencrypted openssh-key-v1 PEM: BEGIN/END OPENSSH PRIVATE KEY, base64 in 70-character lines, trailing newline.\n  - publicKey is `ssh-ed25519 <base64 blob>`, with no comment.\n- `AUTHORIZED_COMMAND`: exactly `exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor \"$SSH_ORIGINAL_COMMAND\"`.\n- `authorizedKeyLine(publicKey)`: `restrict,command=\"<AUTHORIZED_COMMAND, each \" written as \\\">\" <publicKey> moe-transport`.\n- `knownHostsLine(name, publicKey)`: `<name> <publicKey>`.\n- `sshExecutable(platformId)`:\n  - linux and darwin: `/usr/bin/ssh`;\n  - win32: `<SystemRoot>\\System32\\OpenSSH\\ssh.exe`, where SystemRoot is used only if drive-absolute, else C:\\Windows (the platform-windows.mjs rule);\n  - anything else: null.\n- `defaultKeyDir()`: `<os.homedir()>/.moe/runner-keys`.\n- `transportFiles(name, keyDir)`: frozen `{identityFile: <keyDir>/<name>.key, knownHostsFile: <keyDir>/<name>.known_hosts}`.\n- `guestAddress(value)`: the value when it is a strict dotted-quad IPv4 string (octets 0-255, no leading zeros), else null.\n- `sshStreamArgv({name, address, identityFile, knownHostsFile, mode})`: the frozen argv below, with `-o CheckHostIP=no` (ruling condition 4).\n\n  `-F none -T -e none -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=\"<kh>\" -o GlobalKnownHostsFile=\"<kh>\" -o HostKeyAlias=<name> -o HostKeyAlgorithms=ssh-ed25519 -o CheckHostIP=no -o IdentitiesOnly=yes -o IdentityAgent=none -i <key> -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes -o PermitLocalCommand=no -o ProxyCommand=none -o ControlMaster=no -o ControlPath=none -o UpdateHostKeys=no -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -l ubuntu <address> <mode>`\n\n  It refuses with TRANSPORT_INPUT_INVALID:\n  - a name that isOwnedInstanceName rejects;\n  - an address that guestAddress rejects;\n  - a path that is not POSIX-absolute or drive-absolute;\n  - a path containing % $ \" ' ` or a control character, since OpenSSH expands or splits on those;\n  - a backslash in a POSIX path;\n  - a mode outside SUPERVISOR_MODES.\n\n  A drive path's backslashes become / in the argv.\n\n**Tests and wiring.** Tests go in scripts/tests/local-runner-bridge.test.mjs, which ci.yml:244 already runs, so no R14 slice edits ci.yml. guest-ssh.mjs joins `shipped` in scripts/tests/local-runner-bundle.test.mjs.\n\n**Not in scope:** user-data (R14b), provisioning and key files (R14c), opening streams (R14d1), and any caller, readiness or guest-supervisor.py change.\n\n**Verification**, in a snapshot and never in place:\n`S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-ssh.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-bundle.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-bundle.test.mjs`",
+  "definitionOfDone": [
+    "scripts/local-runner/guest-ssh.mjs exports exactly the symbols the description lists, and `grep -cE \"child_process|writeFile|invoker|spawn\" scripts/local-runner/guest-ssh.mjs` prints 0.",
+    "Key round-trip row: for both pairs from one createTransportKeys() call, the platform's in-box ssh-keygen (/usr/bin/ssh-keygen, or ssh-keygen.exe beside the win32 client) run as `-y -f` on a 0600 temp copy prints exactly that pair's publicKey. The row skips with a reason only when that ssh-keygen is absent. Two calls yield four distinct public keys.",
+    "Argv rows: the exact frozen argv for one POSIX-path input and one drive-path input (backslashes become /), both containing `-o CheckHostIP=no`. A refusal table covers every invalid class in the description and expects TRANSPORT_INPUT_INVALID.",
+    "Forced-command row, on non-win32 hosts:\n- un-escaping authorizedKeyLine's command option as sshd does gives exactly AUTHORIZED_COMMAND;\n- run by real bash with the sudo+supervisor prefix replaced by a stub that prints its argv, each SUPERVISOR_MODES word and '', 'materialize; id', '$(id)', '`id`', 'a b' and 'x\\ny' each reach the stub as exactly one argument equal to SSH_ORIGINAL_COMMAND.",
+    "A guestAddress table accepts 10.0.0.2 and 255.255.255.255. It refuses '', ' 10.0.0.2', '10.0.0.02', '256.1.1.1', '1.2.3', '::1', '10.0.0.2 -oProxyCommand=x' and non-strings.",
+    "guest-ssh.mjs is listed in local-runner-bundle.test.mjs `shipped`, and the description's verification command exits 0 in the snapshot, under env -i with Node 24.21.0."
+  ],
+  "taskRails": [
+    "No seat runs Multipass. guest-supervisor.py (its sha256 3a19f3bf… is R13's commit-under-test pin), the R02 image pin and every readiness evaluator stay untouched.",
+    "Write tracked files only with the Edit/Write tools. Shell writes go only into scratch snapshots outside the checkout."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create scripts/local-runner/guest-ssh.mjs: the pure SSH transport primitives. Read the description, the PLANNING AMENDMENT comment-bdf6ce89 and governor comment-f4d90818 first. Write files with the Write/Edit tools only.\n\n**LEAF MODULE.** Import only `node:crypto` (generateKeyPairSync, randomBytes), `node:os` and `node:path`, never a local module. guest-bootstrap.mjs (R14b), lifecycle.mjs (R14c) and guest-stream.mjs (R14d1) import it, and an import back would be an ESM cycle. So restate the owned-name rule `/^moe-vm-[0-9a-f]{20}$/`; it is lifecycle.mjs isOwnedInstanceName, and GS3 cross-checks it. Header comment: what this is (the stream channel from DESIGN comment-350cb4d0 on task-fd196d13), the leaf rule and the OpenSSH facts used:\n- `-F none` ignores user and system config;\n- IdentityFile and UserKnownHostsFile get %-token and ${ENV} expansion, and `-o` values split on whitespace unless double-quoted;\n- sshd un-escapes \\\" inside an authorized_keys command=\"...\";\n- guest-supervisor.py main() accepts exactly the eight modes and returns 64 for anything else.\nNo spawn, provider call or file write.\n\n**Exports** (exactly these 11):\n- `SUPERVISOR_MODES` = Object.freeze(['bridge','check','materialize','export','verify','agents','toolchain','dependencies']).\n- `transportError(code)`: MESSAGES {TRANSPORT_INPUT_INVALID: 'Guest transport input was invalid.', TRANSPORT_ADDRESS_UNKNOWN: 'The guest transport address could not be established.'}. An unknown code falls back to TRANSPORT_INPUT_INVALID, the house pattern of provisionError and transferError. Error handling: a message never carries a path, key, address or caller value.\n- `createTransportKeys()` -> Object.freeze({client, host}), each Object.freeze({privateKey, publicKey}), from a private `ed25519Pair()` (the architect prototype passed `ssh-keygen -y` on both pairs):\n  - `u32 = n => { const b = Buffer.alloc(4); b.writeUInt32BE(n); return b; }` and `str = v => { const b = Buffer.from(v); return Buffer.concat([u32(b.length), b]); }`;\n  - pub = Buffer.from(publicKey.export({format:'jwk'}).x, 'base64url') and seed = Buffer.from(privateKey.export({format:'jwk'}).d, 'base64url');\n  - blob = concat(str('ssh-ed25519'), str(pub));\n  - check = randomBytes(4);\n  - secret = concat(check, check, str('ssh-ed25519'), str(pub), str(concat(seed, pub)), str('')), padded with bytes 1, 2, 3, ... to a multiple of 8;\n  - body = concat('openssh-key-v1\\0', str('none'), str('none'), str(''), u32(1), str(blob), str(secret));\n  - privateKey = '-----BEGIN OPENSSH PRIVATE KEY-----\\n' + base64(body) in 70-char lines + '\\n-----END OPENSSH PRIVATE KEY-----\\n';\n  - publicKey = 'ssh-ed25519 ' + base64(blob).\n- `AUTHORIZED_COMMAND` = 'exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor \"$SSH_ORIGINAL_COMMAND\"' (literal; GS1 checks the path equals GUEST_LAYOUT.supervisor).\n- `authorizedKeyLine(publicKey)`: refuse unless `/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/`; return `restrict,command=\"${AUTHORIZED_COMMAND.replaceAll('\"', '\\\\\"')}\" ${publicKey} moe-transport`.\n- `knownHostsLine(name, publicKey)`: owned name plus the same key shape, `${name} ${publicKey}`.\n- `sshExecutable(platformId)`: 'linux' and 'darwin' give '/usr/bin/ssh'. 'win32' gives `path.win32.join(driveRoot(process.env.SystemRoot, 'C:\\\\Windows'), 'System32', 'OpenSSH', 'ssh.exe')`, read at call time with platform-windows.mjs's driveRoot rule: /^[A-Za-z]:\\\\/ else the fallback. Anything else gives null.\n- `defaultKeyDir()` = path.join(os.homedir(), '.moe', 'guest-ssh'). Never runner-keys, which is the daemon's HMAC store.\n- `transportFiles(name, keyDir)`: owned name; keyDir a string with path.isAbsolute(keyDir) and no control character. Returns Object.freeze({identityFile: path.join(keyDir, `${name}.key`), knownHostsFile: path.join(keyDir, `${name}.known_hosts`)}).\n- `guestAddress(value)`: OCTET = '(?:25[0-5]|2[0-4]\\\\d|1\\\\d\\\\d|[1-9]?\\\\d)', `^OCTET(?:\\\\.OCTET){3}$`; a string match returns value, else null.\n- `sshStreamArgv(input)`: a non-record input is refused. sshPath(p) refuses non-strings and /[%$\"'`\\x00-\\x1f\\x7f]/. A drive-absolute path (/^[A-Za-z]:[\\\\/]/) gets backslashes replaced by '/'; otherwise it must be path.posix.isAbsolute with no backslash. Refuse a bad name, address, either path or a mode not in SUPERVISOR_MODES. Return Object.freeze of exactly: ['-F','none','-T','-e','none','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=\"${kh}\"`,'-o',`GlobalKnownHostsFile=\"${kh}\"`,'-o',`HostKeyAlias=${name}`,'-o','HostKeyAlgorithms=ssh-ed25519','-o','CheckHostIP=no','-o','IdentitiesOnly=yes','-o','IdentityAgent=none','-i',key,'-o','PasswordAuthentication=no','-o','KbdInteractiveAuthentication=no','-o','ForwardAgent=no','-o','ForwardX11=no','-o','ClearAllForwardings=yes','-o','PermitLocalCommand=no','-o','ProxyCommand=none','-o','ControlMaster=no','-o','ControlPath=none','-o','UpdateHostKeys=no','-o','ConnectTimeout=15','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=4','-l','ubuntu',address,mode].\n\nAll refusals throw transportError('TRANSPORT_INPUT_INVALID'). Global forbiddenPatterns apply to code and test strings: never write the prototype-accessor key; use 'constructor' to probe own keys.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/guest-ssh.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-ssh.mjs"
+      ],
+      "note": "New leaf module guest-ssh.mjs (node:crypto/os/path only), 11 exports per plan; defaultKeyDir = ~/.moe/guest-ssh per governor comment-f4d90818. Scratch probe: ssh-keygen -y reproduced both publicKeys; forbidden-word grep prints 0. 45 pre-existing dirty paths belong to other sessions, untouched.",
+      "startedAt": "2026-11-01T08:18:17.065Z",
+      "completedAt": "2026-11-01T08:19:51.762Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Tests: rows GS1-GS6 in a new trailing section '// CQ-R14a: guest SSH transport primitives' of scripts/tests/local-runner-bridge.test.mjs. Add a static import of guest-ssh.mjs and of isOwnedInstanceName from lifecycle.mjs (the file already imports ownedInstanceName and QUERY_TIMEOUT_MS). Use the file's `refuses` helper and NO_GUEST skip. Read `mem:gotcha-local-runner-tests` first; the GS prefix is unused (checked).\n- **GS1, exports and leaf.**\n  - Object.keys(await import(...)).sort() deep-equals the 11 names.\n  - The module source has no 'child_process', 'writeFile', 'invoker' or 'spawn', and no `from './`.\n  - SUPERVISOR_MODES deep-equals the words parsed from guest-supervisor.py's `if argv not in (...)` line.\n  - AUTHORIZED_COMMAND includes GUEST_LAYOUT.supervisor.\n- **GS2, key round trip.**\n  - keygen is '/usr/bin/ssh-keygen' on POSIX, or ssh-keygen.exe beside sshExecutable('win32'). Skip with a reason only when it is absent.\n  - For each pair of one createTransportKeys(): write privateKey to a 0600 file in a mkdtempSync dir (rmSync in finally). `spawnSync(keygen, ['-y','-f',file], {encoding:'utf8'})` must give status 0 and stdout.trim() === publicKey.\n  - PEM shape: header and footer, every body line at most 70 chars, ends with '\\n'.\n  - Two calls give 4 distinct publicKeys, and the result and both pairs are frozen.\n- **GS3, argv.**\n  - The exact frozen argv for a POSIX input (keyDir '/home/u/.moe/guest-ssh', address '10.0.0.2', mode 'materialize').\n  - A drive input ('C:\\\\Users\\\\me x\\\\.moe\\\\guest-ssh\\\\...') becomes `UserKnownHostsFile=\"C:/Users/me x/...\"` and `-i C:/Users/me x/...`, and contains '-o','CheckHostIP=no'.\n  - A refusal table with TRANSPORT_INPUT_INVALID:\n    - name: 'vm', '', NAME+'0', 42;\n    - address: '::1', '10.0.0.02', '10.0.0.2 -oX=y', null;\n    - each path: 'rel/key', 'C:rel', '/a%b', '/a$b', '/a\"b', \"/a'b\", '/a`b', '/a\\nb', '/a\\\\b', '\\\\\\\\srv\\\\share\\\\k';\n    - mode: 'shell', '', 'bridge ', 'BRIDGE', undefined;\n    - input: null, [], 'x'.\n  - Owned-name parity: for [NAME, 'vm', '', NAME+'0', 'moe-vm-'+'G'.repeat(20), 42], transportFiles(n, '/k') throws exactly when !isOwnedInstanceName(n).\n- **GS4, forced command** ({skip: NO_GUEST}).\n  - Un-escape the option value of authorizedKeyLine(key) the way sshd does: match /^restrict,command=\"((?:[^\"\\\\\\\\]|\\\\\\\\.)*)\" /, then replace \\\\\" with \". It must equal AUTHORIZED_COMMAND, and the line must end ' moe-transport'.\n  - Replace the '/usr/bin/sudo -n /opt/moe/bin/moe-supervisor' prefix with `'${process.execPath}' -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))'`. Assert the result still contains '\"$SSH_ORIGINAL_COMMAND\"' exactly once.\n  - Run `spawnSync('/bin/bash', ['-c', cmd], {encoding:'utf8', env:{PATH:'/usr/bin:/bin', SSH_ORIGINAL_COMMAND: v}})` for each SUPERVISOR_MODES word and '', 'materialize; id', '$(id)', '`id`', 'a b', 'x\\ny', plus once with the variable unset (gives ['']). JSON.parse(stdout) must deep-equal [v].\n- **GS5, address.** guestAddress accepts '10.0.0.2' and '255.255.255.255', and returns null for '', ' 10.0.0.2', '10.0.0.02', '256.1.1.1', '1.2.3', '::1', '10.0.0.2 -oProxyCommand=x', 42 and null.\n- **GS6, the rest.**\n  - sshExecutable: linux and darwin give /usr/bin/ssh; 'sunos' gives null.\n  - win32 with SystemRoot 'D:\\\\Win' gives 'D:\\\\Win\\\\System32\\\\OpenSSH\\\\ssh.exe'. With 'relative' or a UNC root it gives the C:\\\\Windows path. Set and restore process.env.SystemRoot in t.after, registered before mutating.\n  - defaultKeyDir() === join(homedir(), '.moe', 'guest-ssh').\n  - transportFiles is exact and frozen; it refuses a relative or control-char keyDir.\n  - knownHostsLine is exact; it refuses a bad name or a non-ed25519 key ('ssh-rsa AAAA').\n  - authorizedKeyLine refuses '', 'ssh-ed25519 a b' and 42.\n  - transportError('NOPE').code is TRANSPORT_INPUT_INVALID. No refusal's message includes the offending input.\n\nAlso add 'guest-ssh.mjs' to `shipped` in scripts/tests/local-runner-bundle.test.mjs and extend the comment above it ('CQ-R14a's guest SSH primitives'). Never add it to `required`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "GS1-GS6 appended to local-runner-bridge.test.mjs (+149/-3, imports: homedir, win32, isOwnedInstanceName, guest-ssh.mjs). GS3's expected argv is the task description's argv text split word for word. GS4 dequotes like sshd's opt_dequote and runs real bash with a node argv stub. guest-ssh.mjs added to `shipped` (not `required`). Focused snapshot run: 6/6 pass. RED proof: 25 scratch mutants of guest-ssh.mjs (unquoted kh, no % / backtick check, no restrict, loose octet, replace vs replaceAll, no padding, no CheckHostIP, drive backslash kept, POSIX backslash allowed, unanchored key, raw SystemRoot, runner-keys dir, 64-char lines, unfrozen argv/files/modes, any mode, unchecked address/name, leaking error, `in` vs hasOwn, reused pair) are all KILLED. Size: 290 changed lines in total (132 new + 149/3 + 3/3).",
+      "startedAt": "2026-11-01T08:19:52.877Z",
+      "completedAt": "2026-11-01T08:24:34.453Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, in a snapshot and never in place. Run exactly this test command; its command, exit code and output tail are complete_task's verification evidence:\n\n`S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-ssh.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-bundle.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-bundle.test.mjs`\n\nIt must exit 0 with 0 fail, and GS1-GS6 must run, not skip, on Linux. Read the 'fail' summary line.\n\nThen, read-only:\n- `grep -cE \"child_process|writeFile|invoker|spawn\" scripts/local-runner/guest-ssh.mjs` prints 0;\n- `git diff --check` is clean on the three files;\n- `git status --short` shows only this task's three paths among your edits.\n\nError handling: if a pre-existing row fails, rerun it on a pristine `git archive HEAD` snapshot to tell HEAD-red from your change. Fix your own failures in code; never weaken an assertion. Measure `git diff --numstat` plus `wc -l` of the new file: the total must stay under 400 changed lines (expected about 300). Delete only your own `$S`.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "The plan's exact command exits 1 on a single pre-existing row, 'daemon build excludes the test-only tool harness' (local-runner-bundle.test.mjs:243, added in CQ-I06c 5143b4c7). That row reads packages/moe-daemon/tsconfig.json, which the recipe's archive list omits (ENOENT). A pristine `git archive HEAD` snapshot without my files fails the same row: 13 tests, 12 pass, 1 fail. So it is HEAD-red under the recipe, not my change. I re-ran the identical command with `packages/moe-daemon/tsconfig.json` added to the archive list, changing nothing else: rc=0, 95 tests, 94 pass, 0 fail, 1 skipped (LA5, the pre-existing MOE_PINNED_CODEX row), with GS1-GS6 all run. Read-only checks: the forbidden-word grep prints 0; diff --check is clean on all three files; my paths are exactly the three (postflight-worktree.cjs was dirty before I started and is not mine); guest-supervisor.py sha256 is still 3a19f3bf. Size is 290 changed lines. Scratch dirs deleted.",
+      "startedAt": "2026-11-01T08:24:35.664Z",
+      "completedAt": "2026-11-01T08:27:27.743Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review and read the three-file diff as an attacker.\n- **Argv escape.** Can any input reach ssh as an option? Consider a path or address starting with '-', a whitespace split inside the quoted -o values, %-tokens, ${} or ~ expansion, or a backslash or quote on Windows.\n- **Forced command.** Does it hold for every byte sequence bash can receive in SSH_ORIGINAL_COMMAND, and is the authorized line one physical line with no newline injection?\n- **Keys.** Is the key truly fresh per call (no shared randomBytes or reused check bytes)? Is the seed ever exposed in publicKey, an error or a frozen field?\n- **Purity.** Is guest-ssh.mjs still a leaf with no top-level side effect? (Its env read must happen at call time.)\n- **Tests.** Would each GS row fail if its guarded line were deleted? Mentally mutate:\n  - drop the quote around kh;\n  - drop the % check;\n  - drop `restrict`;\n  - use a non-strict octet;\n  - replace replaceAll with replace;\n  - skip the padding.\nFix gaps in code or rows, then re-run the step-3 command if anything changed.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-ssh.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Adversarial review, one fix. A UNC-shaped POSIX path '//srv/share/k' passed sshPath; on a win32 host ssh.exe could open it over SMB, an NTLM reach-out. sshPath now also refuses a leading '//' (+1/-1 runtime, plus 1 comment line). GS3's path table gained '//srv/share/k', and the drop-guard mutant is KILLED by GS3. Considered and fine:\n- Option injection: paths start with '/' or a drive letter, the address is a strict IPv4, and the mode is allowlisted. ssh re-parses options after the host, but no allowed mode starts with '-'.\n- `-o` values: quoted, with % $ \" ' ` backslash and control characters refused, and no leading ~.\n- Forced command: \"$SSH_ORIGINAL_COMMAND\" stays one word for any NUL-free bytes, and unset gives ''. The key regex is anchored, so a newline cannot inject a second authorized or known_hosts line.\n- Keys: a fresh pair and a fresh randomBytes(4) per pair. publicKey is the 51-byte blob only.\n- Purity: no top-level env read, since SystemRoot and homedir are read at call time, and the input fields are destructured once (no getter TOCTOU).\nThe step-3 command was re-run fresh after the fix (with tsconfig.json in the archive): rc=0, 95 tests, 94 pass, 0 fail, 1 pre-existing skip (LA5). The forbidden-word grep prints 0, diff --check is clean, and the size is 291 changed lines.",
+      "startedAt": "2026-11-01T08:27:28.931Z",
+      "completedAt": "2026-11-01T08:29:39.186Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 254.431,
+  "comments": [
+    {
+      "id": "comment-1dcc85e6e1e0455f96b4c8d283208fbf",
+      "author": "architect-b520bc90",
+      "content": "AMENDMENT (architect-b520bc90), from governor ruling addendum 8, comment-2566639b on task-fd196d13. This overrides the description: `defaultKeyDir()` returns `<os.homedir()>/.moe/guest-ssh`, not `<os.homedir()>/.moe/runner-keys`.\n\nWhy: `~/.moe/runner-keys` is the daemon's runner-channel HMAC key store. See runnerChannel.ts:41-44, runner-client.mjs:24-27 and MCP_SERVER.md:985. That store has its own MOE_RUNNER_KEY_DIR override and `<32 hex>.key` files. Two classes of secret with different lifecycles must not share a directory.\n\nguest-ssh has no env override. The file names stay `<name>.key` and `<name>.known_hosts`. Gate 0 Windows passed with a key written as `wx` 0o600 under the profile's inherited ACL, and any directory under `<homedir>/.moe` inherits that same ACL.",
+      "timestamp": "2026-11-01T08:06:49.279Z"
+    },
+    {
+      "id": "comment-f4d908186f3442e5b4a9f68e54e7f8f2",
+      "author": "governor-f668f954",
+      "content": "Governor ruling (governor-f668f954, 2026-11-01 08:35Z). This supersedes one line of this row's description. **`defaultKeyDir()` returns `<os.homedir()>/.moe/guest-ssh`, NOT `<os.homedir()>/.moe/runner-keys`.** Planner, worker and QA: read the description with this substitution. The rest of the description and DoD is unchanged.\n\nWhy (fd196d13 Gate 0, comment-2566639b, addendum 8): `~/.moe/runner-keys` already belongs to the daemon's runner-channel HMAC key.\n- It holds `<first 32 hex of sha256(projectPath)>.key`, it has the `MOE_RUNNER_KEY_DIR` override, and the daemon provisions it at start (runnerChannel.ts:41-44, runner-client.mjs:24-27, docs/MCP_SERVER.md:985).\n- This host already has two live keys there.\n- SSH private keys and known_hosts must not share that directory, its `.key` naming or its env override.\n\n`~/.moe/guest-ssh` was proven on a real host (Linux, Gate 0 comment-888759e9, 0700 dir with a `wx` 0o600 key). On Windows, any directory under the profile's `.moe` inherits the same owner-only ACL that Gate 0 proved Win32-OpenSSH accepts.\n\n`MOE_RUNNER_KEY_DIR` does NOT apply to this directory. Tests inject keyDir through `provider` as designed. Add one row asserting `defaultKeyDir()` ends in `.moe/guest-ssh` and never equals the runner-channel default.",
+      "timestamp": "2026-11-01T08:12:12.370Z"
+    },
+    {
+      "id": "comment-bdf6ce8981144811adf8e9480dd07847",
+      "author": "architect-b520bc90",
+      "content": "PLANNING AMENDMENT (architect-b520bc90). This narrows the description and does not change the DoD.\n\n1. **guest-ssh.mjs is a LEAF module.** It imports only node:crypto, node:os and node:path, never a local module. R14b's guest-bootstrap.mjs, R14c's lifecycle.mjs (purge) and R14d1's new guest-stream.mjs all import it, and an import back would be an ESM cycle (see the cli/native-smoke gotcha). So it restates two facts and tests them against the originals:\n   - the owned-name rule `/^moe-vm-[0-9a-f]{20}$/`, which must agree with lifecycle.mjs isOwnedInstanceName on a table;\n   - the supervisor path `/opt/moe/bin/moe-supervisor`, which must equal GUEST_LAYOUT.supervisor.\n2. **transportError knows two codes.** TRANSPORT_INPUT_INVALID, plus TRANSPORT_ADDRESS_UNKNOWN, which is reserved for R14d1's openGuestStream. That keeps every transport message in one module.\n3. **defaultKeyDir() returns `<os.homedir()>/.moe/guest-ssh`**, per governor comment-f4d908186f.",
+      "timestamp": "2026-11-01T08:14:42.333Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:04:08.145Z",
+  "updatedAt": "2026-11-01T08:30:37.279Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T08:12:05.616Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "worker-009c883d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T08:17:29.346Z",
+  "executionContract": {
+    "intendedBehavior": "A leaf module, scripts/local-runner/guest-ssh.mjs, that holds every fixed piece of the OpenSSH stream channel: fresh ed25519 transport keys in openssh-key-v1, the restricted authorized_keys line and its forced command, the known_hosts line, the pinned client path per platform, the key directory and per-VM key files, strict IPv4 parsing and the hardened stream argv. It spawns nothing, calls no provider and writes no file.",
+    "acceptanceCriteria": [
+      "`ssh-keygen -y` reproduces each publicKey from its privateKey.",
+      "sshStreamArgv returns the exact frozen argv and refuses every unsafe input with TRANSPORT_INPUT_INVALID.",
+      "The forced command passes SSH_ORIGINAL_COMMAND to the supervisor as exactly one argument for every tested value."
+    ],
+    "invariants": [
+      "guest-ssh.mjs imports no local module.",
+      "No error message carries a caller value, path, key or address.",
+      "The key directory is <home>/.moe/guest-ssh."
+    ],
+    "sourceAssumptions": [
+      "lifecycle.mjs isOwnedInstanceName is /^moe-vm-[0-9a-f]{20}$/ (line 70).",
+      "GUEST_LAYOUT.supervisor is '/opt/moe/bin/moe-supervisor' (guest-bootstrap.mjs).",
+      "guest-supervisor.py main() accepts exactly the 8 modes (line 1650).",
+      "The bridge test defines `refuses` (line 38) and NO_GUEST (line 236)."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-ssh.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-bundle.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- **Calling ssh-keygen to make keys.** Rejected: one more external binary and spawn. Node crypto plus a 20-line openssh-key-v1 writer works with every OpenSSH since 6.5 and with Windows 9.5p2; the architect prototype passed `ssh-keygen -y` on both pairs.\n- **PKCS#8 PEM for ed25519.** Rejected: older OpenSSH, and sshd host keys, need openssh-key-v1.\n- **A case-statement allowlist in the forced command.** Rejected: the supervisor's own main() already accepts exactly the eight modes and returns 64 otherwise, and a quoted \"$SSH_ORIGINAL_COMMAND\" is one argv word. The prototype passed for ;, $(), backticks, spaces, a newline, '' and unset.\n- **Importing isOwnedInstanceName and GUEST_LAYOUT.** Rejected because it would create an ESM cycle; the leaf rule applies instead.",
+    "codebaseInsights": "This is the producer of the R14 contract. R14b uses authorizedKeyLine. R14c uses createTransportKeys, knownHostsLine, sshExecutable, defaultKeyDir and transportFiles. R14d1's guest-stream.mjs uses sshStreamArgv, guestAddress, transportFiles and TRANSPORT_ADDRESS_UNKNOWN.\n\nThe tests go in local-runner-bridge.test.mjs, which ci.yml:244 already runs. ci.yml itself is held by the WT lane rows.\n\nThe bundle test's `shipped` is a positive list; `required` is walked by the onboarding refusal row (`mem:decision-local-runner-planning-gotchas`).",
+    "risks": "- **Windows ssh-keygen.exe** checks the key file's ACL. A file in os.tmpdir() under the profile passes, and Windows CI runs GS2 natively.\n- **macOS CI** has /usr/bin/ssh-keygen, so GS2 runs there.\n- **The JWK fields** are base64url, so decode with 'base64url', not 'base64'.\n- **The cycle trap** returns if someone later adds a local import to guest-ssh.mjs; GS1 guards the leaf rule.\n- **Size.** Keep it under 400 changed lines.",
+    "keyFiles": [
+      "scripts/local-runner/guest-ssh.mjs",
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/platform-windows.mjs",
+      "scripts/local-runner/guest-supervisor.py"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "fdb5330ad41c4dbe4036d3ff97e4f9e642126c52",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T08:17:29.370Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T08:18:17.065Z",
+  "reviewStartedAt": "2026-11-01T08:30:37.277Z",
+  "verification": {
+    "command": "S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json packages/moe-daemon/tsconfig.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-ssh.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-bundle.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ GS1 guest-ssh.mjs is a leaf exporting exactly the transport primitives, and its restated supervisor facts match the originals\n✔ GS2 each fresh pair is an openssh-key-v1 private key that the in-box ssh-keygen turns back into its publicKey\n✔ GS3 sshStreamArgv returns the exact frozen argv, with drive paths in /, and refuses every unsafe input\n✔ GS4 sshd un-escapes the forced command to AUTHORIZED_COMMAND, and bash hands SSH_ORIGINAL_COMMAND on as exactly one argument\n✔ GS5 guestAddress accepts only a strict dotted-quad IPv4 string\n✔ GS6 the pinned client, key files, known_hosts line, authorized line refusals and fixed errors\n﹣ LA5 pinned codex forwards exactly MOE_ROLE to its MCP server # set MOE_PINNED_CODEX to the pinned codex member to run this row\n✔ cross-platform CI permanently runs provider and actual bundle regressions\nℹ tests 95\nℹ suites 0\nℹ pass 94\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 19269.09495",
+    "reportedAt": "2026-11-01T08:30:37.277Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/guest-ssh.mjs",
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs"
+  ],
+  "completionSummary": "CQ-R14a delivered.\n\n**guest-ssh.mjs** (new, 133 lines) is a leaf module: it imports only node:crypto, os and path, and it starts no process, writes no file and calls no provider.\n- 11 exports: SUPERVISOR_MODES, AUTHORIZED_COMMAND, transportError (TRANSPORT_INPUT_INVALID, plus TRANSPORT_ADDRESS_UNKNOWN per amendment comment-bdf6ce89), createTransportKeys, authorizedKeyLine, knownHostsLine, sshExecutable, defaultKeyDir, transportFiles, guestAddress and sshStreamArgv.\n- createTransportKeys writes openssh-key-v1 keys itself; `ssh-keygen -y` reproduces each publicKey.\n- defaultKeyDir is ~/.moe/guest-ssh, per governor comment-f4d90818.\n- One addition from self-review: sshStreamArgv also refuses a UNC-shaped POSIX path starting with '//', because a win32 ssh.exe would open it over SMB.\n\n**Tests:** GS1-GS6 at the end of local-runner-bridge.test.mjs.\n- GS3's expected argv is the task description's argv, word for word.\n- GS4 un-escapes the command the way sshd does and runs real bash.\n- guest-ssh.mjs is listed in `shipped` in local-runner-bundle.test.mjs.\n- 26 mutants in a scratch copy were all killed, including the six the plan named.\n- Size: 291 changed lines.\n\n**VERIFICATION DEVIATION.** The plan's exact command exits 1 at pristine HEAD, without my files: 13 bundle tests, 1 fail. The failing row, 'daemon build excludes the test-only tool harness', reads packages/moe-daemon/tsconfig.json, and the recipe's archive list leaves that file out. The command I submitted is the plan's command with only that one path added to `git archive`. Fresh result: rc=0, 95 tests, 94 pass, 0 fail, 1 pre-existing skip (LA5), and GS1-GS6 all ran. I noted this on task-fd196d13.\n\nOther checks: the forbidden-word grep prints 0, `git diff --check` is clean, and guest-supervisor.py still hashes to 3a19f3bf."
+}

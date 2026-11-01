@@ -15,10 +15,48 @@
     "No seat runs Multipass. Real-host checks belong to the governor.",
     "Never weaken the guest supervisor's integrity checks, the R02 image pin or guest readiness, and never fall back to running anything on the host."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-b520bc90",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Remove the dead `multipass exec` stream argv builders. This row is the integration row of R14; WORKING claims are gated until R14a-R14d3 are DONE (dependsOn). Read `mem:gotcha-local-runner-tests` first.\n\n1. Precondition (read-only): `grep -rn \"bridgeArgv\\|checkArgv\\|snapshotArgv\" scripts/local-runner/*.mjs scripts/tests/*.test.mjs`. After R14d1-R14d3 the only hits may be: guest-bridge.mjs's own definitions, test B15 plus its import in local-runner-bridge.test.mjs, and C1's checkArgv half plus its import in local-runner-check.test.mjs.\n2. Error handling: if any runtime caller still uses a builder, that slice is incomplete. moe.add_comment on the owning slice row naming the file:line, then moe.report_blocked this row with blockedOnTaskIds [] and that reason. Never repair a slice's runtime here, and never leave a half-removed export.\n3. scripts/local-runner/guest-bridge.mjs: delete `bridgeArgv`, the `checkArgv` const and the comment block above them (the 'one Multipass argv that opens the bridge' text, about lines 201-210 at fdb5330a). Drop any import that is then unused, checked with grep, never by guess.\n4. scripts/tests/local-runner-bridge.test.mjs: delete test B15 and `bridgeArgv` from the import list.\n5. scripts/tests/local-runner-check.test.mjs: drop `checkArgv` from the import. In C1 delete only the checkArgv assertions and keep every checkFrame assertion unchanged. Retitle it 'C1 checkFrame is the exact check frame or BRIDGE_INPUT_INVALID'.\n6. Do NOT touch scripts/local-runner/guest-supervisor.py, even though its main() comment still names these builders: any byte there moves R13's commit-under-test pin (sha256 3a19f3bf...8190).\n\nDone when `grep -rn \"bridgeArgv\\|checkArgv\\|snapshotArgv\" scripts/local-runner/*.mjs scripts/tests/` prints nothing, and `grep -n \"'exec'\" scripts/local-runner/*.mjs` lists only stdin-less bounded queries: guest-readiness runGuestProbe, guest-session remote(), certify-bridge probe and certify-containment's change probe. Write files only with Edit; report every path in complete_step.modifiedFiles.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Docs for the new transport. First read the LANDED code (scripts/local-runner/guest-ssh.mjs, provision.mjs and lifecycle.mjs purge) and describe only what it does, never planned behavior.\n\n1. docs/ARCHITECTURE.md, section 'Local Runner Isolation':\n   - In the 'Supervisor modes' bullet, replace 'run as root through `multipass exec`' with 'run as root over the guest SSH route'.\n   - Add one bullet 'Host-guest transport' covering:\n     - all eight supervisor modes stream over the in-box OpenSSH client at a pinned path, never PATH: /usr/bin/ssh on Linux and macOS, %SystemRoot%\\System32\\OpenSSH\\ssh.exe on Windows;\n     - `-F none`, ed25519 only, the guest's host key pinned through cloud-init `ssh_keys` and checked under HostKeyAlias=<owned name>, no agent, forwarding, PTY or ProxyCommand;\n     - a fresh per-VM client key at `<home>/.moe/guest-ssh/<name>.key` (0600, removed when the VM is purged). The guest accepts it only for the default user, as `restrict,command=\"exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor \\\"$SSH_ORIGINAL_COMMAND\\\"\"`, so it starts only supervisor modes;\n     - `multipass exec` now carries only stdin-less queries capped at 64 KiB (MAX_PROBE_BUFFER);\n     - the reason: Multipass 1.17.0 exec truncates stdin on Linux, delivers none on Windows (#3749) and stalls Windows stdout near 2 MiB (#5478);\n     - error handling: there is no fallback to exec stdio or to the host. An unusable route fails closed with a fixed code.\n   - Note that the job identities are denied the guest host key (readiness readHostKey).\n2. docs/CERTIFICATION.md:\n   - In the `bridge-framing` row, '2 MiB of frame bytes cross the guest SSH route exactly, in both directions.'\n   - In 'How to run it' step 1, add that the host needs the in-box OpenSSH client at that pinned path (provisioning refuses with PROVISION_TRANSPORT_UNAVAILABLE otherwise), and that certify writes per-VM keys under `<home>/.moe/guest-ssh` and removes them with each VM.\n\nKeep the Certified platforms table and every other row unchanged. Plain, short sentences.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/CERTIFICATION.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Hand off to R13 (no file edits).\n\nmoe.add_comment on task-f4811a729f9e436ba129a65c12d348c1 (CQ-R13), @mentioning governor-f668f954. Say:\n- The host-guest stream transport moved from `multipass exec` stdio to the guest SSH route. Name rows R14a task-4c295c56, R14b task-201aebc6, R14c task-7c292231, R14d1 task-b8734a78, R14d2 task-5e2dcd2c and R14d3 task-08062ce8, plus this row, each with its landing sha from `git log moe/work-2026-10-24 --grep 'Moe-Task: <id>' --format=%h`.\n- guest-supervisor.py is unchanged: `sha256sum scripts/local-runner/guest-supervisor.py` still prints 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190, so R13's commit-under-test supervisor pin did not move. Quote the fresh output.\n- A certify report proves the new transport only when it ran at a commit that contains this row's landing (the commit carrying 'Moe-Task: task-fd196d137c44497188d2639f149e259b').\n- Certify hosts now need the in-box OpenSSH client at its pinned path.\n- The real-host proof for task-fd196d13's DoD 5 is the governor's R13 certify re-run on Linux and Windows, getting past bridge-framing. No seat runs Multipass.\n\nAlso moe.add_comment on task-fd196d137c44497188d2639f149e259b with the same sha list. Error handling: if a slice has no landing commit, say so and don't invent one.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh: the full local-runner suite in a git-archive snapshot under env -i with the pinned Node, never in place. Read `mem:gotcha-runner-gate-needs-built-daemon-in-snapshot` first: TY1 and C4-C9 need the daemon built in the snapshot, and npm ci/build must never run in the shared checkout.\n\nRun exactly this test gate; its command, exit code and output tail are complete_task's verification evidence:\n`S=$(mktemp -d /tmp/r14-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-bridge.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs docs/ARCHITECTURE.md docs/CERTIFICATION.md \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run build >/dev/null' && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-pinned-client.test.mjs scripts/tests/local-runner-guard.test.mjs`\n\nIt must exit 0 with 0 fail. Read the 'fail' summary line, never a grep's exit code. Then, all read-only:\n- `git diff fdb5330ad41c4dbe4036d3ff97e4f9e642126c52..HEAD --stat -- scripts/local-runner/guest-supervisor.py scripts/local-runner/certified-provider.json` is empty (supervisor and R02 image pins unchanged).\n- `git diff fdb5330ad41c4dbe4036d3ff97e4f9e642126c52..HEAD -- scripts/local-runner/guest-readiness.mjs` shows only the readHostKey DENIED row and the returned `address` field.\n- `git diff --check` is clean on this row's five files.\n\nError handling: if a row fails, first rerun it on a pristine `git archive HEAD` without your files, to tell HEAD-red from your change. Fix your own regression in code; never weaken a test row. Delete only your own `$S`.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the whole R14 diff, not only this row's: `git diff fdb5330ad41c4dbe4036d3ff97e4f9e642126c52..HEAD -- scripts/local-runner scripts/tests docs`, restricted to the files the six R14 slices and this row touched. Hunt what the slices got wrong about each other.\n- **Contract drift.** provision, purge and openGuestStream must all use transportFiles and defaultKeyDir (`<home>/.moe/guest-ssh`, never runner-keys) identically, with the same `provider.ssh` / `provider.keyDir` overrides.\n- **Provider rebuilds.** Every place that rebuilds a provider must keep run/ssh/keyDir. Check with `grep -n \"provider: {\" scripts/local-runner/*.mjs`.\n- **Leftover exec streams.** No stream path still reaches `multipass exec` stdio.\n- **Exit 255 error handling.** Every ssh 255 path maps to a fixed non-supervisor code: TRANSFER_EXIT_FAILED, SESSION_PROVIDER_FAILED or 'infra-failure'.\n- **Secrets in output.** No key bytes, key path or guest address reaches a certify or check report, an error message or a log. Grep the report builders in certify*.mjs and check-evidence.mjs.\n- **Key file lifetime.** Key files exist only for owned VMs. They are written 'wx' 0600, never overwritten, and unlinked on purge.\n- **Paths.** Windows drive paths normalize to / in the argv, and %, $ and quote characters are refused.\n- **Concurrency.** Two concurrent provisionings get distinct names and so distinct files.\n- **Pin.** The stale guest-supervisor.py comment is intentional.\n\nFix a finding inside this row's files. For one elsewhere, moe.add_comment on R13 and @governor-f668f954 with file:line, and say so in the completion. Re-run the step-4 command if anything changed.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -27,15 +65,162 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 254.45,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-350cb4d0c93f4fa392c8890c1bb2f14e",
+      "author": "architect-b520bc90",
+      "content": "DESIGN (architect-b520bc90, 2026-11-01). Ruling requested from @governor-f668f954. Please @mention architect-b520bc90 in the ruling comment.\n\n**Decision.** Every stream that carries stdin or bulk stdout moves to a Moe-owned OpenSSH channel that goes straight to the guest's sshd. `multipass exec` stays only for stdin-less, bounded queries. `multipass transfer` is not used.\n\n| Stream | Today | New |\n|---|---|---|\n| materialize, dependencies, agents, toolchain (bulk in, one frame out) | exec stdio | SSH |\n| export (bulk out), verify (no input) | exec stdio | SSH |\n| bridge session: job frame, then response frames in; output, request and observation frames out; stdin EOF = cancel (74) | exec stdio | SSH |\n| check session: check frame, stdin held open | exec stdio | SSH |\n| queries: readiness probes, no-mount checks, info, certify probes, endAgentJobs pkill/pgrep | execFile; stdin never written; stdout capped at MAX_PROBE_BUFFER = 64 KiB | unchanged |\n\n**Channel.**\n- **Client.** The in-box OpenSSH client at a fixed absolute path, never PATH: `/usr/bin/ssh` on linux and darwin, and `%SystemRoot%\\System32\\OpenSSH\\ssh.exe` on win32. This box has OpenSSH_9.6p1 (Ubuntu) and OpenSSH_for_Windows_9.5p2.\n- **Argv.** Fixed. Only the owned name, the guest IPv4, two paths and the mode vary:\n  `-F none -T -e none -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=\"<kh>\" -o GlobalKnownHostsFile=\"<kh>\" -o HostKeyAlias=<name> -o HostKeyAlgorithms=ssh-ed25519 -o IdentitiesOnly=yes -o IdentityAgent=none -i <key> -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes -o PermitLocalCommand=no -o ProxyCommand=none -o ControlMaster=no -o ControlPath=none -o UpdateHostKeys=no -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -l ubuntu <ipv4> <mode>`\n  - `-F none` drops every user and system ssh_config.\n  - A path containing `%`, `$`, a quote or a control character is refused, because OpenSSH expands those. On Windows, paths use `/`.\n- **Address.** `multipass info` `ipv4[0]`, parsed as a strict dotted quad and read fresh for each stream. HostKeyAlias binds identity to the owned name, so a stale or recycled IP fails closed.\n- **Guest side.** user-data adds the transport key to the default user `ubuntu` only:\n  `restrict,command=\"exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor \\\"$SSH_ORIGINAL_COMMAND\\\"\"`\n  - The client sends only the mode word.\n  - The supervisor's own argv check is the allowlist: main() accepts exactly one of 8 modes and exits 64 for anything else.\n  - `restrict` means no PTY, no forwarding of any kind, no agent, no X11 and no user rc.\n  - Read in the cloud-init 26.1 source: setup_user_keys keeps a line's own options.\n\n**Keys and custody.**\n- **Per VM.** At provisioning, like the credential, Node crypto generates two fresh ed25519 pairs, written as openssh-key-v1.\n- **Guest host key.** The private half travels only inside user-data on `launch --cloud-init -` stdin, beside the credential, and is never written to host disk. It goes in as `ssh_keys: {ed25519_private, ed25519_public}`.\n  - In 26.1 cc_ssh (read in source), ssh_deletekeys (default) removes the image's host keys, and nothing else is generated when ssh_keys is present. So the guest has exactly one host key: the pinned one.\n  - On the guest it is root 0600. Its cloud-init copies are exactly the files the R07 DENIED probes already deny to job identities.\n- **Client key.** The private half is written once the VM is owned, O_EXCL|O_NOFOLLOW 0600, at `<keyDir>/<name>.key`. The host pin goes in `<keyDir>/<name>.known_hosts`.\n  - keyDir is `<homedir>/.moe/runner-keys` (0700), not the ledger dir. Win32-OpenSSH refuses a private key that other users can read, and a dir like C:\\moe-certify inherits Users:RX from C:\\, while the profile allows only the user, SYSTEM and Administrators.\n  - Tests inject keyDir through `provider`.\n  - purgeOwned unlinks both files once the VM is verified absent, before the record is marked deleted.\n- **Never in output.** Key bytes, paths and the address never reach env, logs, errors or certify/check reports.\n\n**What job identities can reach: nothing new.**\n- keys:<id> and sudo:<id> readiness are unchanged.\n- The client private key never enters the guest, and the host private key is root-only.\n- sshd was already listening: Multipass exec needs it.\n- The host opens no port, so R08's \"no daemon address in the guest\" still holds.\n- The new key is narrower than Multipass's own exec key: it can start supervisor modes only.\n\n**The three measured 1.17.0 failure modes.**\n1. **Linux exec stdin truncation (#5478 class).** No stream uses the Multipass client any more, and queries never write stdin. Proof row: a fake carrier cuts stdin at a 64 KiB boundary into the real supervisor. The supervisor exits 65, the result is TRANSFER_EXIT_FAILED, and a materialized frame is never accepted.\n2. **Windows dead stdin (#3749).** Streams' stdin goes through ssh.exe. Fake: 0 bytes delivered plus a hang gives TRANSFER_TIMEOUT, SESSION_TIMEOUT or check 'timeout'.\n3. **Windows stdout stall near 2 MiB (#5478).** Streams' stdout goes through ssh.exe. Queries stay at or under 64 KiB, and their exact-match evaluators refuse a cut. Fake: 2,064,384 of 2 MiB arrives, then a stall. It gives the fixed timeout codes, never a partial export.\n\nIntegrity stays end-to-end and guest-verified (digests, sha256 pins, host frame decoders), and SSH adds its MAC on top.\n\n**EOF and cancel.** The semantics are unchanged.\n- `stdin.end()` sends channel EOF. The supervisor reads it as host EOF and exits 74, and ssh exits with that status.\n- A SIGKILL of the local ssh closes the TCP session. The supervisor sees EOF or EPIPE, and GUARD kills the group, exactly as with the exec client.\n- ssh's own failures exit 255, a code no supervisor mode uses, and map to the existing fixed codes.\n- There is no fallback to exec stdio for any stream, and never to host execution.\n\n**Unchanged.**\n- guest-supervisor.py is untouched, so the 3a19f3bf pin does not move.\n- The R02 image pin, the readiness CHECKS and their exec carrier are unchanged.\n- user-data does change, so R13 re-runs certify. I will note that on R13.\n\n**Rejected.**\n- **(B) transfer staging.** It fixes only bulk host→guest. Bridge and check still need live stdin (dead on Windows) and still hit the stdout stall. It means two transports, a new supervisor mode that moves the pin, and a ubuntu-writable staging path.\n- **(C) paced stdin.** Linux only, and it rests on timing.\n- **(D) re-pin.** No 1.17.1 exists, and #3749 stays.\n\n**Gate 0 (governor, real hosts, about 15 minutes; no seat runs Multipass), before R14c and R14d start.** On each host, hand-launch a VM with HEAD's user-data plus `ssh_keys` and the restricted line, using ssh-keygen keys. Then check:\n- (a) `ssh <argv> <ip> materialize < the 2,796,635-byte stream` exits 0 with a materialized frame;\n- (b) `<ip> nonsense` exits 64;\n- (c) a wrong known_hosts gives 255;\n- (d) on Windows, at least 10 MiB unpaced in and at least 50 MiB out, using a throwaway unrestricted key with `cat`.\n\nIf Windows fails, the fallback is your scope call: win32 is \"unsupported: provider transport\" while Linux proceeds.\n\n**Split.** Each slice is under the caps and green on its own. Each is a prerequisite of this row, so it sits under M07. This row stays the integration row.\n- **R14a**, guest-ssh.mjs primitives: keypairs and the openssh-key-v1 writer, the authorized and known_hosts lines, the per-platform client path, the argv and the IPv4 parse. Tests go in a new local-runner-ssh.test.mjs (an `ssh-keygen -y` round trip, the forced command under real bash), plus ci.yml and the bundle `shipped` list.\n- **R14b**, buildUserData transport. Proved by `cloud-init schema -c` \"Valid schema\" and by rows against 26.1's own AuthKeyLineParser. Depends on a.\n- **R14c**, provisioning: provisionGuest mints the keys and refuses before reserving when the pinned client is missing. purgeOwned unlinks the key files. Depends on b.\n- **R14d1**, all six transfer modes over SSH, with the failure-mode rows. Depends on c.\n- **R14d2**, bridge and check sessions over SSH, with the failure-mode rows. Depends on d1, because they share a test file.\n- **This row**: removes the dead exec stream argv and updates the docs. Verified by the full local-runner suite in a git-archive snapshot under env -i with the pinned Node, then your R13 certify re-run on Linux and Windows.",
+      "timestamp": "2026-11-01T07:52:49.264Z"
+    },
+    {
+      "id": "comment-d954b3dfb4d9432c8dc5936078504b52",
+      "author": "governor-f668f954",
+      "content": "GOVERNOR RULING on DESIGN comment-350cb4d0 (governor-f668f954, 2026-11-01 08:05Z): **APPROVED**, with the conditions below. @architect-b520bc90 you may create the R14a–R14d2 slice rows and plan this row as the integration row.\n\n**Why approved.**\n- An OpenSSH channel straight to the guest's sshd takes every stdin and bulk stream off both broken carriers: the Multipass client's stdin (#3749) and its libssh chunking (#5478).\n- Stdin-less queries capped at 64 KiB stay on exec, and the exact-match evaluators refuse a cut.\n- There's no transfer, no second transport, no fallback to exec stdio or the host, and guest-supervisor.py is untouched, so the 3a19f3bf pin holds.\n- The argv hardening is complete: `-F none`, pinned known_hosts plus HostKeyAlias, ed25519 only, no agent, no forwarding, no LocalCommand, no ProxyCommand, no ControlMaster, `-e none`, and expansion-character paths refused.\n- The forced command quotes `\"$SSH_ORIGINAL_COMMAND\"`, so it's one argv word, and the supervisor's own 8-mode check is the allowlist. `restrict` covers pty, forwarding and user rc.\n\n**Real-host evidence already in (governor, 07:55Z, Windows 1.17.0+win hcs).** Throwaway VM moe-sshprobe-43c0ef, Ubuntu 24.04.5, Default Switch 10.97.0.41. Client: in-box `C:\\Windows\\System32\\OpenSSH\\ssh.exe` (OpenSSH_for_Windows_9.5p2), spawned by Windows Node 24.16 with piped stdio and unpaced writes. **9/9 PASS:**\n- stdin 1 KiB, 2,796,635 B, 10 MiB and 64 MiB arrive byte-exact by sha256; 64 MiB took 4.8 s.\n- stdout 2 MiB and 50 MiB arrive byte-exact with no stall; 50 MiB took 0.4 s.\n- 300 request/response round trips over one open stdin, at about 1.0 ms each.\n- stdin end reaches the remote as EOF.\n- Killing the local ssh.exe makes the remote reader see EOF.\nSo Gate 0 item (d) is done on Windows, and none of the three 1.17.0 failure modes appears over OpenSSH.\n\n**Conditions.**\n1. **Gate 0 stays mine and gates R14c/R14d.** Next I run (a) to (c) on Windows, then (a) to (d) on Linux (WSL2 snap qemu), hosts one at a time. The VM uses HEAD's `buildUserData` plus `ssh_keys` and your restricted line as written. On Windows the client key goes under `<homedir>/.moe/runner-keys`, written with `wx` and 0o600 and only the inherited profile ACL, to prove Win32-OpenSSH accepts it without icacls. Results land on this row. Don't let R14c or R14d start before my Gate 0 PASS comment. Put that in their task rail, or keep their dependsOn chain behind R14b, which they already have. If Win32-OpenSSH refuses the inherited ACL, R14c must set an explicit owner-only ACL. Windows is the platform with dead exec stdin, so it is NOT dropped.\n2. **ci.yml ordering.** ci.yml:244 lists the local-runner test files explicitly, so the new local-runner-ssh.test.mjs needs that line edited. ci.yml is also in the WT lane: WT-09 (task-0921d6d7, in flight now), 4fdc7590, 3ad573a7 and f6228433.\n   - The slice that edits ci.yml must dependsOn task-0921d6d76a6b40a685077245b19ac639.\n   - Once that slice exists, I add it as a dependsOn of the three later lane rows (all at least 8 rows deep, so no lane delay).\n   - No other open row declares the bundle shipped list or any local-runner file.\n3. **Stricter readiness, never looser.** Add one DENIED probe row per job identity for `/etc/ssh/ssh_host_ed25519_key` (`-r`, CREDENTIAL_EXPOSED class), in whichever slice owns the user-data change. The existing DENIED list already covers the cloud-init copies (user-data.txt/.i, cloud-config.txt, obj.pkl, instance-data-sensitive.json, combined-cloud-config.json, /dev/sr0), because the host key rides beside the credential. Add a test that pins the full list.\n4. **Argv.** Add `-o CheckHostIP=no` explicitly. It's the default since 8.5, but don't rely on a version default with HostKeyAlias.\n5. **Exit mapping.** ssh's 255 covers its own failures, a remote signal death and a host-key mismatch. Map it to the existing fixed codes, never to a supervisor code, and give each path its own fake row.\n6. **Rows.**\n   - Chain: R14a → b → c → d1 → d2. This row dependsOn all five, so all of them sit under M07 through this row.\n   - Each slice gets its own DoD, with a snapshot gate under env -i and the pinned Node, and stays within normal size caps. File any waiver before submit, not at review.\n   - No slice runs Multipass. After d2 the real-host proof is my R13 certify re-run, Linux then Windows.\n7. **Scope stays as designed.** Don't change the supervisor, the R02 pin or the readiness evaluators beyond item 3. darwin stays \"unsupported: no report\" (approved rail prop-29ce59fa); `/usr/bin/ssh` there is fine and untested.",
+      "timestamp": "2026-11-01T07:58:03.708Z"
+    },
+    {
+      "id": "comment-2566639b55d14b1daa2601f14277371f",
+      "author": "governor-f668f954",
+      "content": "GATE 0, WINDOWS: **PASS** (governor-f668f954, 08:10-08:20Z). @architect-b520bc90, ruling addendum item 8 is below. It's a required change to the key directory.\n\n**Setup.**\n- VM moe-gate0-61554f, launched as `release:04e8f246…` (image_hash = the x64 pin), Multipass 1.17.0+win hcs, 2 CPU, 4G, 20G.\n- user-data: HEAD's `buildUserData` (supervisor sha256 3a19f3bf…8190, the pin), plus `ssh_keys` {ed25519_private, ed25519_public} from ssh-keygen, plus your restricted line under top-level `ssh_authorized_keys`. YAML single-quoted, verbatim.\n- Client: in-box `C:\\Windows\\System32\\OpenSSH\\ssh.exe` 9.5p2, spawned by Windows Node 24.16. Argv is your exact list plus `CheckHostIP=no`.\n- Key written as R14c would write it: `wx` + 0o600, no icacls, inherited profile ACL. **Accepted.**\n\n**Results.**\n- **(a)** materialize, fed the exact 2,796,635-byte stream (sha 27abec6c) that `multipass exec` truncated or dropped: **exit 0** with a `materialized` frame, in 366 ms. Then `verify` exits 0 with `{kind:verified, changed:0}`, and `export` exits 0 with one well-formed `end` frame.\n- **(b)** `nonsense` → **64**. The injection `materialize; id` → **64**, with no stdout, because it reaches the supervisor as one argv word. No command at all → **64**.\n- **(c)** A known_hosts entry with another ed25519 key for the alias → **255**, \"REMOTE HOST IDENTIFICATION HAS CHANGED\", no stdout.\n- **(d)** From the 07:55Z probe: 64 MiB in, 50 MiB out, 300 round trips at about 1 ms, and EOF plus kill→EOF all pass.\n- **restrict:** a `-tt` PTY request is refused (\"PTY allocation request failed\"), exit 255, and no shell runs.\n\n**Guest state.**\n- cloud-init `26.1-0ubuntu1~24.04.1`: `status --format json` is done/done with errors [] and no recoverable errors, so BOOTSTRAP readiness is safe with ssh_keys plus the restricted line.\n- /etc/ssh has exactly one host key, `ssh_host_ed25519_key` (root 0600), plus its .pub. The image keys are gone, which confirms your cc_ssh reading.\n- moe-agent and moe-check cannot read the host key and have no authorized_keys, so IDENTITY_LOGIN_ENABLED stays clean.\n- ubuntu's authorized_keys has 2 lines: your restricted line with its options intact, and Multipass's ssh-rsa key. `multipass exec` still works.\n\n**Addendum 8, required: don't use `~/.moe/runner-keys`.**\n- That directory is the daemon's runner-channel HMAC key store: runnerChannel.ts:41-44, runner-client.mjs:24-27, MCP_SERVER.md:985. It has the `MOE_RUNNER_KEY_DIR` override and the `<32 hex>.key` naming.\n- This host already has two live `<hash>.key` files there.\n- Putting SSH private keys and known_hosts in the same directory, with the same `.key` extension and the same env override, couples two secret classes with different lifecycles. Any future sweep or rotation of one would hit the other.\n- Use a dedicated sibling instead, for example `<homedir>/.moe/guest-ssh` (0700), with `<name>.key` and `<name>.known_hosts`. The Windows ACL result above still holds there, because any directory under the profile's `.moe` inherits the same ACL.\n\nNext: Linux Gate 0 on the WSL2 snap. Hosts run one at a time, and the Windows VM is being deleted by exact name now.",
+      "timestamp": "2026-11-01T08:03:43.767Z"
+    },
+    {
+      "id": "comment-dbef47deac754c85bc184545b1292c5e",
+      "author": "architect-b520bc90",
+      "content": "SLICES FILED under ruling comment-d954b3df (architect-b520bc90). @governor-f668f954, two deviations are flagged below for your review.\n\n**Rows.** All are HIGH and PLANNING. This row now dependsOn all six, so each is under M07 through it.\n| Row | Task | Files | dependsOn |\n|---|---|---|---|\n| R14a primitives | task-4c295c56 | guest-ssh.mjs (new), local-runner-bridge.test.mjs, local-runner-bundle.test.mjs | (none) |\n| R14b user-data plus the DENIED host-key row | task-201aebc6 | guest-bootstrap.mjs, guest-readiness.mjs, local-runner.test.mjs | a |\n| R14c provisioning keys and purge | task-7c292231 | provision.mjs, lifecycle.mjs, local-runner.test.mjs, local-runner-pinned-client.test.mjs | b |\n| R14d1 transfers plus openGuestStream | task-b8734a78 | guest-ssh.mjs, guest-readiness.mjs, snapshot-transfer.mjs, snapshot-import.mjs, local-runner.test.mjs | c |\n| R14d2 bridge session | task-5e2dcd2c | guest-session.mjs, local-runner-bridge.test.mjs | d1 |\n| R14d3 check session plus certify pass-through | task-08062ce8 | check-session.mjs, certify-bridge.mjs, local-runner-check.test.mjs, local-runner.test.mjs | d1 |\n\n**Deviation 1: no slice edits ci.yml, so condition 2 is moot.** R14a's rows go in local-runner-bridge.test.mjs, which ci.yml:244 already runs. No new test file means no WT-09 dependency and no lane rows to rewire.\n\n**Deviation 2: d2 became d2 plus d3.** As one row, the session slice touched 6 or 7 files. Split, the two rows share no file and run in parallel after d1. certify-bridge's watchedSession rebuilds the provider as `{executable, spawn}`. That would drop the `run`/`ssh`/`keyDir` fields the route reads, so d3 owns the spread fix.\n\n**How each condition is carried.**\n- **(1) Gate 0.** c, d1, d2 and d3 each carry a rail: no implementation step before your Gate 0 PASS comment on this row, otherwise report_blocked. They are also chained behind b. R14c's description says it must request_replan if ssh.exe refuses the inherited profile ACL.\n- **(3) Stricter readiness.** It is in R14b: the readHostKey DENIED row, plus a row that pins the full DENIED list.\n- **(4) CheckHostIP=no.** It is in R14a's argv.\n- **(5) Exit 255.** It maps to the existing fixed codes, with before-frame and after-frame rows per carrier, in d1, d2 and d3.\n- **(6) Gates.** Every slice has a snapshot gate: HEAD archive plus its own files, under env -i with Node 24.21.0.\n- **(7) Scope.** Nothing changes guest-supervisor.py, the R02 pin or any evaluator beyond (3).\n\n**This row** is the integration row. It removes the dead `bridgeArgv` and `checkArgv`, updates docs, re-runs the full local-runner suite in a snapshot and comments on R13. Then comes your certify re-run.",
+      "timestamp": "2026-11-01T08:06:07.375Z"
+    },
+    {
+      "id": "comment-888759e94ebb408f888a9c5b4f405863",
+      "author": "governor-f668f954",
+      "content": "GATE 0, LINUX: **PASS**. **Gate 0 is complete on both hosts** (governor-f668f954, 08:20-08:30Z). R14c and R14d may start as soon as their dependsOn chain allows; nothing else from me gates them. @architect-b520bc90\n\n**Setup.**\n- VM moe-gate0-677870 on the WSL2 snap, Multipass 1.17.0 qemu, launched from the cached verified file `~/moe-certify/images/04e8f246….img` (the x64 pin), the same way provisionGuest does on Linux.\n- user-data: the same HEAD `buildUserData` (supervisor 3a19f3bf), `ssh_keys` and restricted line as on Windows. One probe-only unrestricted key was added for item (d) alone.\n- Client: `/usr/bin/ssh` OpenSSH_9.6p1 from Node 24.21 under env -i, with your exact argv plus `CheckHostIP=no`.\n- Key directory: the recommended dedicated `~/.moe/guest-ssh` (0700, key `wx` 0o600). Accepted.\n\n**Results.**\n- **(a)** materialize, fed the same 2,796,635-byte stream that Linux `multipass exec` cut to 2.1–2.5 MB: **exit 0**, `materialized` frame, 438 ms. Then verify exits 0 with changed:0, and export exits 0 with a clean `end`.\n- **(b)** `nonsense` → 64; `materialize; id` → 64; no command → 64.\n- **(c)** wrong known_hosts → 255, \"REMOTE HOST IDENTIFICATION HAS CHANGED\".\n- **(d)** stdin 1 KiB / 2.8 MB / 10 MiB / 64 MiB arrive byte-exact (64 MiB in 0.45 s). stdout 2 MiB and 50 MiB arrive byte-exact. 300 round trips at 1.1 ms each. EOF and kill→EOF both reach the guest.\n- **restrict:** the `-tt` PTY request is refused.\n\n**Guest state.**\n- cloud-init 26.1 is done/done with no errors or recoverable errors.\n- /etc/ssh has exactly the pinned ed25519 host key, root 0600.\n- moe-agent and moe-check can't read it and have no authorized_keys.\n\n**Networking note for the design and docs.** On this machine both Multipass installs number zone1 10.97.0.0/24:\n- Windows hcs uses the vEthernet \"Multipass vNetwork (zone1)\";\n- WSL qemu uses mpqemubrzone1, behind WSL NAT.\nEach host routes the subnet locally, so the same guest IP can exist on both at once. Reading the IP fresh per stream, plus the HostKeyAlias pin, is what turns that cross-wiring, or a recycled IP, into the fail-closed 255 that (c) shows. Please keep a test row for it, and mention it in the docs.\n\n**Cleanup.** Both VMs were deleted by exact name, and `multipass list` is empty on Windows and Linux. The probe key copies are removed. qgc stays disabled for the R13 re-certify.\n\nRuling conditions 2–8 still apply: the ci.yml edge on WT-09, the host-key DENIED row, CheckHostIP, the 255 mapping, the row chain under this row, and `~/.moe/guest-ssh` instead of runner-keys.",
+      "timestamp": "2026-11-01T08:09:21.860Z"
+    },
+    {
+      "id": "comment-4fedb3efe9d14b8ca340a15bc8e3c502",
+      "author": "architect-30d804be",
+      "content": "@architect-b520bc90 FYI from CQ-M07 (task-1a8f1d0e), human decisions 2026-11-01 (mem:decision-cq-m07-verified-local-activation). Four new M07 slices depend on this row and stay BACKLOG until your design has its governor ruling:\n- CQ-M07e (task-5c4b5fab): certify files certified reports in a host store.\n- CQ-M07f (task-d6bc12ff): a root-only guest-supervisor `reset` mode. The human chose one VM per SEAT, and materialize refuses an existing workspace.\n- CQ-M07g (task-9076afab): a seat owner kind in the owned ledger.\n- CQ-M07i/j: seat start/stop and per-job runs over your transport.\nTwo asks for your design comment:\n(1) The human wants ONE operator re-certify to cover both supervisor pin moves, yours and CQ-M07f's reset mode, which lands right after you.\n(2) If your transport puts per-VM material (keys, host keys) in ledger records, say so, so CQ-M07g builds on it. Seat VMs live across many jobs; say whether the job/session semantics (EOF, cancel) hold for repeated jobs on one VM.\nNo action needed beyond keeping these in view.",
+      "timestamp": "2026-11-01T08:11:42.721Z"
+    },
+    {
+      "id": "comment-a88ca3de43524a2b99151c7979770acd",
+      "author": "governor-f668f954",
+      "content": "@architect-b520bc90 Re your slice post comment-dbef47de: **both deviations are accepted.**\n- **Deviation 1:** R14a's rows go into local-runner-bridge.test.mjs, which ci.yml:244 already runs. So no slice edits ci.yml, and condition 2 is moot. Keep it that way: any later slice that needs a new test file must come back here first, because ci.yml is in the WT lane.\n- **Deviation 2:** splitting into d2 (guest-session.mjs, local-runner-bridge.test.mjs) and d3 (check-session.mjs, certify-bridge.mjs, local-runner-check.test.mjs, local-runner.test.mjs) is good. I checked the file sets: d2 and d3 share nothing and run in parallel after d1. Every other overlap is already ordered by the a→b→c→d1 chain: local-runner.test.mjs in b, c, d1 and d3; guest-readiness.mjs in b and d1; guest-ssh.mjs in a and d1; local-runner-bridge.test.mjs in a and d2. Giving d3 the certify-bridge provider spread is right.\n- **Gate 0 has passed on both hosts:** Windows comment-2566639b, Linux comment-888759e9. The \"no implementation step before Gate 0 PASS\" rails on c, d1, d2 and d3 are therefore satisfied. Win32-OpenSSH accepted the inherited profile ACL, so R14c's request_replan contingency doesn't trigger.\n- **Key directory change (addendum 8):** `~/.moe/guest-ssh`, not runner-keys. It's on R14a as comment-f4d90818. R14c's key files and purge follow `defaultKeyDir()`.\n\nOn architect-30d804be's question (2), for M07g: please answer it yourself, but for the record, what I measured is that each stream is its own ssh connection. So EOF and cancel are per job, and repeated jobs on one seat VM are each a fresh session. Per-VM key material lives in `guest-ssh/<name>.*` and is derived from the owned name. It never goes in ledger records.",
+      "timestamp": "2026-11-01T08:16:12.945Z"
+    },
+    {
+      "id": "comment-ec6077a21dc24bd38b438895deb2ff9a",
+      "author": "worker-009c883d",
+      "content": "R14a worker note for the remaining R14 slices (b, c, d1-d3) and their QA. The R14a verification recipe fails at pristine HEAD (`git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github moe-vscode moe-jetbrains/build.gradle.kts`): local-runner-bundle.test.mjs:243, 'daemon build excludes the test-only tool harness', reads packages/moe-daemon/tsconfig.json, which that list omits, so the run ends ENOENT with 1 fail. Add `packages/moe-daemon/tsconfig.json` to the archive list. With it, R14a's run gives rc=0 with 94 passing and 0 failing. Please put this in any R14 slice plan that runs the bundle test.",
+      "timestamp": "2026-11-01T08:30:23.448Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T00:20:13.476Z",
-  "updatedAt": "2026-11-01T07:33:39.300Z",
+  "updatedAt": "2026-11-01T08:30:23.448Z",
   "metrics": {
-    "firstClaimAt": "2026-11-01T00:20:28.365Z"
+    "firstClaimAt": "2026-11-01T00:20:28.365Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
     "architect-125fd305",
-    "architect-b520bc90"
-  ]
+    "architect-b520bc90",
+    "governor-f668f954"
+  ],
+  "commits": [
+    {
+      "sha": "242d8119f4e1c552f02b9fb1a6573334a344ef8d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-b520bc90@2026-11-01T07:33:30Z",
+      "paths": [
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+      ],
+      "recordedBy": "architect-b520bc90",
+      "recordedAt": "2026-11-01T07:33:55.798Z",
+      "treeId": "dc0c4bbb9f3b59818abce863d16c12e61b73e366",
+      "status": "PLANNING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-b520bc90@2026-11-01T07:33:30Z",
+    "at": "2026-11-01T07:33:55.798Z"
+  },
+  "dependsOn": [
+    "task-4c295c56a0db475998ae9d947a1d1de6",
+    "task-201aebc6721a40c1b426bca64fce1eda",
+    "task-7c2922313102436bb732e36bd8f1c69d",
+    "task-b8734a784d6b42d98bd5f2493e2e228e",
+    "task-5e2dcd2c0e9643e19aeddaa1ae9d406d",
+    "task-08062ce85dc94dcd80c62053e30f561f"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T08:11:36.725Z",
+  "executionContract": {
+    "intendedBehavior": "Every host-guest stream (the eight supervisor modes) uses the pinned OpenSSH route that R14a-R14d3 built. `multipass exec` carries only stdin-less queries capped at 64 KiB, and the dead exec stream argv builders are gone. ARCHITECTURE.md and CERTIFICATION.md describe the route. The full local-runner suite passes in a git-archive snapshot under env -i with Node 24.21.0. R13 is told the transport changed and the supervisor pin did not.",
+    "acceptanceCriteria": [
+      "No bridgeArgv, checkArgv or snapshotArgv remains in scripts/local-runner or scripts/tests.",
+      "Every remaining `'exec'` argv in scripts/local-runner is a stdin-less bounded query.",
+      "guest-supervisor.py and certified-provider.json are unchanged since fdb5330a. guest-readiness.mjs only gained the readHostKey row and the `address` field.",
+      "The step-4 snapshot gate exits 0 with 0 fail."
+    ],
+    "invariants": [
+      "There is no fallback to exec stdio or to host execution.",
+      "The guest-supervisor.py sha256 stays 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190.",
+      "No key bytes, key path or guest address appear in a report, an error or a log."
+    ],
+    "sourceAssumptions": [
+      "guest-bridge.mjs exports bridgeArgv (about line 204) and checkArgv (about line 210) at fdb5330a.",
+      "local-runner-bridge.test.mjs B15 tests bridgeArgv. local-runner-check.test.mjs C1 tests checkArgv and checkFrame.",
+      "ci.yml:244 lists the local-runner test files that the gate command runs."
+    ],
+    "checkRefs": [
+      "Step 4's gate: a `git archive HEAD` snapshot plus this row's five files; `npm ci && npm run build` in the snapshot's packages/moe-daemon; then `node --test` under env -i with Node 24.21.0 on the 12 local-runner test files that ci.yml:244 lists, plus the guard test as listed."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "The transport decision itself is DESIGN comment-350cb4d0, approved by governor ruling comment-d954b3df plus addendum 8 in comment-2566639b (Gate 0 Windows PASS). This row is only the integration of the six R14 slices. Two other options were rejected:\n- Removing the dead builders inside R14d2/R14d3: both would then edit guest-bridge.mjs (checkArgv is built from bridgeArgv), which breaks their file-disjoint parallelism.\n- A docs sweep left to R13: R13 is BLOCKED on operator certify reports, and the transport docs must land with the code.",
+    "codebaseInsights": "Approved channel:\n- streams: OpenSSH from the in-box client at a pinned path, `-F none`, ed25519 host key pinned via cloud-init ssh_keys under HostKeyAlias=<name>;\n- per-VM client key at <home>/.moe/guest-ssh/<name>.key, restricted with `restrict,command=\"exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor \\\"$SSH_ORIGINAL_COMMAND\\\"\"`;\n- the supervisor's own 8-mode argv check is the allowlist;\n- `multipass exec` is kept only for stdin-less queries capped at 64 KiB;\n- guest-supervisor.py is untouched (sha256 3a19f3bf...8190).\nsnapshotArgv is removed by R14d1. snapshot-import validates names with isOwnedInstanceName. certify-bridge watchedSession spreads the provider (R14d3).",
+    "risks": "- **Overlay mistakes.** A snapshot without the daemon built fails TY1 and C4-C9 and looks like a regression (see the memory). Overlay only this row's five files.\n- **The supervisor comment.** guest-supervisor.py's main() comment names the removed builders. Leave it: editing moves R13's pin.\n- **Incomplete slices.** If a slice left a runtime caller of a builder, block this row; don't fix that slice here.\n- **Real-host proof.** It is the governor's R13 certify re-run. No seat runs Multipass.",
+    "keyFiles": [
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/local-runner/guest-ssh.mjs",
+      "scripts/local-runner/provision.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/snapshot-transfer.mjs",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/check-session.mjs",
+      "docs/ARCHITECTURE.md",
+      "docs/CERTIFICATION.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "fdb5330ad41c4dbe4036d3ff97e4f9e642126c52",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T08:11:36.749Z",
+  "approvedPlanRevision": 1
 }
