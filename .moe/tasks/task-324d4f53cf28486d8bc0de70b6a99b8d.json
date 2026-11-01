@@ -104,7 +104,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -120,11 +120,17 @@
       "author": "architect-b520bc90",
       "content": "Replan note from architect-b520bc90, 2026-11-01. I pulled rev 1 back before any work started; priorAttempt holds it. My seat then hit an account switch, so the next architect plans rev 2. Rev 2 is rev 1 with ONE change; reuse everything else as written.\n\n**Declare packages/moe-daemon/src/accounts/registry.ts.** That makes 7 files, still heavy/Opus/xhigh (`mem:gotcha-submit-plan-file-count-tier-floor`).\n- Move the path helper `vmTokenFile(registryFile, id)` into registry.ts, beside accountUsageFile: `path.join(path.dirname(registryFile), 'claude-vm-tokens', `${id}.token`)`. An invalid id throws RegistryError.\n- vmTokens.ts imports vmTokenFile from registry.ts. There is no cycle, because registry.ts never imports vmTokens.ts.\n- In registry.removeAccount AND registry.addAccount, add `fs.rmSync(vmTokenFile(file, id), { force: true })` beside the existing usage-file rmSync.\n\n**Why.** The token is then deleted on BOTH removal paths:\n- the CLI's `remove`;\n- the Accounts tab's \"Remove only\", which is /ws REMOVE_ACCOUNT → registry.removeAccount (server/accountMessages.ts:48) and never goes through cli.ts.\nAnd a reused acct-n never inherits a stale token: addAccount reuses an id once its Claude folder is deleted, and the CLI's remove output tells people they may delete it.\n\n**Drop rev-1 step 2, item 4** (the cli.ts `remove` change). The registry handles it, and the CLI's remove output stays byte-for-byte unchanged.\n\n**Tests and gate.**\n- Add rows in vmTokens.test.ts:\n  - removeAccount deletes the account's token;\n  - addAccount reusing an id (its config dir removed) clears a stale token;\n  - another account's token is untouched.\n- The gate's cp list gains packages/moe-daemon/src/accounts/registry.ts.\n\nCQ-M07l (task-d56fb46e, now planned) rewords moe.accounts.remove.confirm on the assumption that Remove only deletes the VM token.",
       "timestamp": "2026-11-01T10:41:05.511Z"
+    },
+    {
+      "id": "comment-0b2c9fd8a8df44da9497e586101c3da8",
+      "author": "qa-97c4310b",
+      "content": "QA review (qa-97c4310b, 12:10Z): substance GREEN. Parking on the pending size waiver prop-52a37017fb9e4216ab2d93a606202505, not rejecting.\n\nEvidence:\n- Completion 257e8ad8 is on moe/work-2026-10-24. None of the 8 files changed between 257e8ad8 and HEAD 13eafb5c, and the shared tree is clean for them.\n- Recorded checkRefs gate re-run fresh (/tmp/moe-324d4f53-qa-1yEhSR, HEAD archive + overlay): EXIT=0. npm ci OK, tsc clean, vitest 8 files 97 passed/1 skipped (pre-existing Windows-only row), node --test 41 tests 40 pass/0 fail/1 skipped (pre-existing Windows-only row).\n- DoD 1 (mint with fake claude, 0700/0600, no 12-char token slice in any output), DoD 2 (--remove, unknown id, failed mint, bad paste, removed-during-prompt, broken store), DoD 3 (vm-credential exact stdout; missing/symlink/dir/symlinked store/oversize/api-key/newline/../ give exit 3 + empty stdout; no id exit 2), DoD 4 (vmToken from lstat; readFileSync/openSync spies see nothing under claude-vm-tokens), DoD 5 (gate): all mapped to code + tests.\n- Rails: no file opened in claude-accounts/<id> (only the mkdir, as login does); no .credentials.json; minting child env built by accountEnv (TOKEN_ENV/PROVIDER_ENV dropped); no message interpolates the token; vmTokens.ts exports no reader.\n- QA mutants 10/12 killed: hasVmToken lstat->stat, removeAccount rm dropped, addAccount rm dropped, outer-env leak to the minting child, lease store-dir check dropped, lease newline, lease trim, regex drift, symlinked-dir check dropped, no trim in the CLI.\n- Survivors (advisory, not DoD): (a) the readline SIGINT listener has no unit test. I checked it in a pty with `script`: the prompt shows no echo, a line exits 0 with the line on stdout, and Ctrl-C exits 1 with empty stdout. (b) writeTextAtomic's new 'wx' flag has no test.\n- Advisory: registry.ts is now 303 lines (plan step 1 said keep it under 300).\n- Size: `git show --numstat` packages/+scripts/ = +493/-11, net 482 (runtime 216, tests 266), exactly the per-file numstat in the proposal text. No epic rail waives it yet, so I can't approve.\n\nResume path: on APPROVED, the governor adds the rail and runs set_task_status REVIEW; a fresh QA checks the rail text against `git show --numstat 257e8ad8`, re-runs the gate, and approves with no new bytes. On REJECTED, the row goes to PLANNING for a split that reuses these landed bytes.",
+      "timestamp": "2026-11-01T12:10:02.348Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:44.219Z",
-  "updatedAt": "2026-11-01T11:35:17.951Z",
+  "updatedAt": "2026-11-01T12:10:15.803Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:22:43.281Z",
     "plannedStepCount": 6,
@@ -133,7 +139,8 @@
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-009c883d"
+    "worker-009c883d",
+    "qa-97c4310b"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -352,5 +359,9 @@
     "kind": "completion",
     "sessionId": "worker-009c883d@2026-11-01T11:15:17Z",
     "at": "2026-11-01T11:35:17.951Z"
-  }
+  },
+  "blockedReason": "QA substance GREEN; parked only on the pending EPIC size waiver prop-52a37017fb9e4216ab2d93a606202505 (filed by the worker 11:32Z, still PENDING 12:10Z). Completion 257e8ad8 on moe/work-2026-10-24; the 8 files are unchanged since. Recorded checkRefs gate re-run fresh by QA: EXIT=0; tsc clean; vitest 97 passed/1 pre-existing skip; node --test 40 pass/0 fail/1 pre-existing skip. All 5 DoD items mapped to code and tests; both task rails hold (no file opened in an account config folder, no token byte in argv, env, output or payload; the daemon only lstats). QA mutants 10/12 killed; the 2 survivors are advisory (SIGINT path pty-checked by QA; the new wx flag is untested). Size: +493/-11, net 482 over packages/ and scripts/, exactly the proposal's per-file numstat; no epic rail waives it yet, so no approval. Full evidence is in the QA comment. Resume: on APPROVED, add the rail and set_task_status REVIEW; a fresh QA checks the rail against git show --numstat 257e8ad8, re-runs the gate and approves (no new bytes). On REJECTED, set_task_status PLANNING for a split that reuses the landed bytes.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-11-01T12:10:15.803Z"
 }

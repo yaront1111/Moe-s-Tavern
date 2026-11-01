@@ -113,7 +113,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -135,16 +135,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:16:19.929Z",
-  "updatedAt": "2026-11-01T11:11:56.827Z",
+  "updatedAt": "2026-11-01T12:09:51.668Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:29:51.661Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-01T12:09:51.668Z",
+    "wallClockMs": 236400007
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-0e1ab990"
+    "worker-0e1ab990",
+    "qa-1e84238e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -243,6 +246,23 @@
       "treeId": "7c9c50a17cda35b364c25118ec79476bffcf052b",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "08317ae745ba5d4c5ca9a222003e44d0a3cb573b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0e1ab990@2026-11-01T10:53:03Z",
+      "paths": [
+        ".moe/tasks/task-83eef22e42c34b5ca764480fd4f2b68b.json",
+        ".moe/tasks/task-c4e076cd306f4f84a4aa08bf2a4682b2.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
+      ],
+      "recordedBy": "worker-0e1ab990",
+      "recordedAt": "2026-11-01T11:12:20.038Z",
+      "treeId": "a0b4172bfbc0d7a6ab1e07b26944436d23adf317",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -250,7 +270,10 @@
     "scripts/tests/postflight-fake-proxy.js",
     "scripts/moe-agent.sh",
     "scripts/tests/postflight.ps1",
-    "scripts/moe-agent.ps1"
+    "scripts/moe-agent.ps1",
+    ".moe/tasks/task-83eef22e42c34b5ca764480fd4f2b68b.json",
+    ".moe/tasks/task-c4e076cd306f4f84a4aa08bf2a4682b2.json",
+    ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
   ],
   "touchedFiles": [
     "scripts/tests/postflight-fake-proxy.js",
@@ -262,9 +285,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-0e1ab990@2026-11-01T10:12:31Z",
-    "at": "2026-11-01T10:52:29.936Z"
+    "kind": "completion",
+    "sessionId": "worker-0e1ab990@2026-11-01T10:53:03Z",
+    "at": "2026-11-01T11:12:20.038Z"
   },
   "reviewStartedAt": "2026-11-01T11:11:56.824Z",
   "verification": {
@@ -274,5 +297,9 @@
     "reportedAt": "2026-11-01T11:11:56.824Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-V04c: both wrappers now classify the frozen quality gate's run BEFORE recording it and send the CQ-V02 `outcome`.\nMapping:\n- exit != 0 -> 'code-failure';\n- exit 0 and gate_integrity / Test-MoeGateIntegrity true -> 'passed';\n- exit 0 and integrity false or throwing -> 'inconclusive' (fail closed);\n- an interrupted gate recorded on teardown (sh finish_gate_observation, ps1 finally) -> 'infra-failure'.\nRefusal order, [WARN] wording, rescue, baseline, the payload fields and the legacy deliveryPolicy are unchanged. An exit-0-but-mutated gate no longer leaves a run that delivery/policy.ts passedOn counts (passedOn, line 298, accepts only outcome undefined|'passed' at exit 0; pinned by qaApprove.test 'does not accept %s as the required check'; no daemon change).\nChanges:\n- moe-agent.sh: GATE_OUTCOME classified in run_frozen_gate before GATE_RECORDED, record_check_run_rpc sends it as a 9th argv and adds `outcome` only when non-empty, finish_gate_observation sets infra-failure.\n- moe-agent.ps1 (BOM kept, 0 CR): Outcome in $script:MoeGate, classification after Stop-MoeGateChild with try/catch around Test-MoeGateIntegrity, Send-MoeCheckRun adds outcome when set, finally sets infra-failure.\n- postflight-fake-proxy.js checkReply: refuses an unknown or incoherent outcome (passed needs exit 0, code-failure a nonzero exit), mirroring the daemon.\n- postflight.sh/.ps1 (test hunks byte-identical): new modes index-mutation and head-mutation; a per-check outcome assertion for every gate run; the four mutation modes assert exactly one run, exit 0, 'inconclusive'; pass asserts [[0,'passed']].\nEvidence:\n- Fresh full `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`: exit 0, frozen 94/94, worktree 37 ok/0 failed.\n- parity-check.sh PASS; parity-check.ps1 (pwsh) PASS; node --test postflight-safe.test.mjs 12/12.\n- ps1 frozen-candidate suite only (MOE_FROZEN_TEST_ONLY = every mode; the whole postflight.ps1 harness was NOT run): PASS 94/94 under pwsh 7.6.9 and under Windows Po"
+  "completionSummary": "CQ-V04c: both wrappers now classify the frozen quality gate's run BEFORE recording it and send the CQ-V02 `outcome`.\nMapping:\n- exit != 0 -> 'code-failure';\n- exit 0 and gate_integrity / Test-MoeGateIntegrity true -> 'passed';\n- exit 0 and integrity false or throwing -> 'inconclusive' (fail closed);\n- an interrupted gate recorded on teardown (sh finish_gate_observation, ps1 finally) -> 'infra-failure'.\nRefusal order, [WARN] wording, rescue, baseline, the payload fields and the legacy deliveryPolicy are unchanged. An exit-0-but-mutated gate no longer leaves a run that delivery/policy.ts passedOn counts (passedOn, line 298, accepts only outcome undefined|'passed' at exit 0; pinned by qaApprove.test 'does not accept %s as the required check'; no daemon change).\nChanges:\n- moe-agent.sh: GATE_OUTCOME classified in run_frozen_gate before GATE_RECORDED, record_check_run_rpc sends it as a 9th argv and adds `outcome` only when non-empty, finish_gate_observation sets infra-failure.\n- moe-agent.ps1 (BOM kept, 0 CR): Outcome in $script:MoeGate, classification after Stop-MoeGateChild with try/catch around Test-MoeGateIntegrity, Send-MoeCheckRun adds outcome when set, finally sets infra-failure.\n- postflight-fake-proxy.js checkReply: refuses an unknown or incoherent outcome (passed needs exit 0, code-failure a nonzero exit), mirroring the daemon.\n- postflight.sh/.ps1 (test hunks byte-identical): new modes index-mutation and head-mutation; a per-check outcome assertion for every gate run; the four mutation modes assert exactly one run, exit 0, 'inconclusive'; pass asserts [[0,'passed']].\nEvidence:\n- Fresh full `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh`: exit 0, frozen 94/94, worktree 37 ok/0 failed.\n- parity-check.sh PASS; parity-check.ps1 (pwsh) PASS; node --test postflight-safe.test.mjs 12/12.\n- ps1 frozen-candidate suite only (MOE_FROZEN_TEST_ONLY = every mode; the whole postflight.ps1 harness was NOT run): PASS 94/94 under pwsh 7.6.9 and under Windows Po",
+  "completedAt": "2026-11-01T12:09:51.668Z",
+  "reviewCompletedAt": "2026-11-01T12:09:51.668Z",
+  "reviewSummary": "APPROVED. Reviewed completion 08317ae7 (board JSON) plus the same session's checkpoint 929e69b6 (the code, ~135 net non-board LOC); both on moe/work-2026-10-24.\n\nDoD 1/2: both wrappers classify BEFORE record_check_run: rc!=0 -> code-failure; exit 0 + integrity ok -> passed; exit 0 + integrity false/throwing -> inconclusive (fail closed); interrupted -> infra-failure. 'passed' has one assignment path. Refusal order and [WARN] wording unchanged. Daemon rule confirmed: policy.ts passedOn counts only outcome undefined|'passed' at exit 0 (qaApprove.test line 1440). Disclosed ps1 `$interrupted = Started -and -not Recorded` accepted.\n\nDoD 3: postflight.sh/.ps1 test hunks byte-identical; new index-mutation and head-mutation modes; per-check outcome assertion; fake proxy refuses incoherent outcomes. parity-check.sh PASS; bash -n OK; ps1 BOM kept, 0 CR. I did NOT run postflight.ps1/pwsh: the worker's pwsh 7.6.9 and PS 5.1 frozen-suite 94/94 is accepted as reported, unverified by me.\n\nDoD 4: my fresh `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh` run 3 (11:51Z-12:09Z): EXIT=0, PASS postflight.sh, frozen 94, owner guard 16, worktree ok, scenario W ok. Runs 1 and 2 failed at scenario W (SIGINT test) only because I launched them as plain background jobs (SIGINT ignored, SigIgn=7); with job control it passes, and W passed 6/6 in isolation on an exact-commit snapshot. W has no gate path: a launch artifact, not a defect. postflight-safe.test.mjs 12/12. My own mutant (integrity probe dropped) is red on the mutation modes; the worker's other mutants were not re-run by me.\n\nRails: no hand .moe edits, no agent Git writes, verified-local untouched, legacy policy unchanged.",
+  "requiredCheckAtDone": null
 }
