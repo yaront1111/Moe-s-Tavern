@@ -1,0 +1,33 @@
+{
+  "id": "task-41d0c5a9855143ceb3ab81e61aaf9fa9",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07d2] Advertise verifiedLocal wire support",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8), split out of CQ-M07d (task-b0485bb1) under that task's own clause: \"If the plan exceeds the size caps, split the capability flip into its own slice rather than dropping a row\". It carries CQ-M07d's DoD 5. Design: mem:decision-cq-m07-verified-local-activation. Depends on CQ-M07d, which also edits server/WebSocketServer.test.ts, and through it on CQ-M07c, which creates delivery/readinessHolder.test.ts.\n\n**Objective.** Advertise wire support for verified-local, so a client that declares capabilities.verifiedLocal negotiates true, and activationGaps' client gap disappears. This is wire support only, never readiness: assertExecutionProfileReady and the held readiness snapshot (CQ-M07c) still decide.\n\n**Deliverable.**\n- packages/moe-daemon/src/server/clientCapabilities.ts: SERVER_CAPABILITIES.verifiedLocal becomes true.\n- Update every expectation that pinned the client gap or a negotiated false:\n  - state/profileRollout.test.ts: GAPS, and the hello row that asserts verifiedLocal false;\n  - __e2e__/rolloutControls.e2e.test.ts: GAPS in the refusal records;\n  - __e2e__/workstreamComposition.e2e.test.ts: GAPS. Its row \"a hello claiming verifiedLocal, runnerStatus and modelReceipts negotiates all three false\" becomes verifiedLocal true, with the other two still false;\n  - server/WebSocketServer.test.ts: the negotiated or server capabilities near line 289;\n  - delivery/readinessHolder.test.ts: CQ-M07c's activationGaps rows and its client-toggle rows.\n- Every other assertion stays as strong as it was.\n- The CQ-M05 size-exception rail governs M05's own landing only, so editing these expectations here is in scope.\n\n**NOT in scope.** Readiness (assertExecutionProfileReady, readinessHolder.ts); the projection tool and the /ws message (CQ-M07d); IDE CLIENT_HELLO (CQ-M07o and CQ-M07p); claim routing (CQ-M07q); docs (the CQ-M07 sweep).\n\n**Verification.** This is a wire-protocol change, so run the FULL daemon vitest suite in a git-archive snapshot with this task's files overlaid: cd <snapshot>/packages/moe-daemon && npm ci && npx tsc --noEmit && npm test, under env -i with the nvm Node 24 PATH. Never run it in the shared checkout.",
+  "definitionOfDone": [
+    "SERVER_CAPABILITIES.verifiedLocal is true: decodeClientHello({ protocolVersion: 1, capabilities: { verifiedLocal: true } }) negotiates verifiedLocal true while runnerStatus and modelReceipts stay false (vitest).",
+    "activationGaps() never lists the client gap: with the default held readiness it returns exactly [vm, check], and with a held ready snapshot it returns [] (vitest).",
+    "With the default held readiness, a settings update to executionProfile 'verified-local' is still refused EXECUTION_PROFILE_NOT_READY, so the flip grants no readiness (vitest).",
+    "These files are updated, and the diff weakens no other assertion: profileRollout.test.ts, rolloutControls.e2e.test.ts, workstreamComposition.e2e.test.ts, WebSocketServer.test.ts and readinessHolder.test.ts.",
+    "The full daemon suite passes in a git-archive snapshot; the completion cites the counts."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b0485bb1cacf4d3b84979e9256078737"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.045,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T10:11:22.050Z",
+  "updatedAt": "2026-11-01T10:11:22.050Z"
+}

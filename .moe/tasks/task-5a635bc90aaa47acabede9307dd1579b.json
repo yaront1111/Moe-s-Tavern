@@ -101,7 +101,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:06:33.518Z",
-  "updatedAt": "2026-11-01T09:59:23.238Z",
+  "updatedAt": "2026-11-01T09:59:42.551Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T09:10:01.886Z",
     "plannedStepCount": 4,
@@ -206,7 +206,44 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/delivery/certificationEvidence.ts",
-    "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+    "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+    ".moe/tasks/task-5a635bc90aaa47acabede9307dd1579b.json",
+    ".moe/tasks/task-b8734a784d6b42d98bd5f2493e2e228e.json",
+    ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json",
+    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
   ],
-  "completionSummary": "CQ-M07a delivered: two new files, packages/moe-daemon/src/delivery/certificationEvidence.ts (185 lines) and its vitest file (214 lines, 63 tests). Nothing imports the module yet, and executionProfile.ts is untouched: assertExecutionProfileReady still cannot pass.\n\nThe .ts file is:\n(1) A TS port of certify.mjs validateCertificationReport: CERTIFY_CHECK_IDS (13), checkCertificationReport, which never throws and returns a deep-frozen copy or CERTIFICATION_REPORT_SCHEMA|CHECKS. Also hostIdentity.\n(2) A compiled CERTIFICATION_PINS constant (versions 1.17.0, 4 host suffixes, x64/arm64 image sha256, guest-supervisor.py sha256).\n(3) A fail-closed reader. readHostCertificationEvidence(projectRoot) is the production entry; readCertificationStore({storeDir, projectRoot}) is the test seam. The store is always os.userInfo().homedir/.moe/certification: never env, settings or a caller argument (HOME/USERPROFILE do not move it; tested).\n- Store checks: lstat (missing, symlink, non-dir), POSIX owner and mode&0o077, realpath containment against the project root and .moe.\n- Report checks: name regex; O_NOFOLLOW|O_NONBLOCK; fstat isFile; a 64 KiB cap+1 read; canonical bytes JSON.stringify+'\\n'; schema; injected, uncertified, platform, arch, image, supervisor and provider-version refusals.\n- It returns frozen {ok, report, sha256} for the newest valid report (a finishedAt tie goes to the greater name), or {ok:false, refusals[]} from 21 CERTIFICATION_* codes. Any unexpected error maps to STORE_UNREADABLE; it never rejects.\n\nTests:\n- Drift checks against certified-provider.json and the guest-supervisor.py sha.\n- A differential table of about 41 variants against the real certify.mjs validator.\n- A 16-row mismatch table plus store-safety, containment, input, platform-stub and home-relocation rows.\n\nMutation sweep: 64 mutants, 56 killed. The 8 survivors are equivalent on Linux or review-only (detail in Serena task-…-handoff). Example: Node readdir on POSIX is already sorted, so a sort mutant "
+  "completionSummary": "CQ-M07a delivered: two new files, packages/moe-daemon/src/delivery/certificationEvidence.ts (185 lines) and its vitest file (214 lines, 63 tests). Nothing imports the module yet, and executionProfile.ts is untouched: assertExecutionProfileReady still cannot pass.\n\nThe .ts file is:\n(1) A TS port of certify.mjs validateCertificationReport: CERTIFY_CHECK_IDS (13), checkCertificationReport, which never throws and returns a deep-frozen copy or CERTIFICATION_REPORT_SCHEMA|CHECKS. Also hostIdentity.\n(2) A compiled CERTIFICATION_PINS constant (versions 1.17.0, 4 host suffixes, x64/arm64 image sha256, guest-supervisor.py sha256).\n(3) A fail-closed reader. readHostCertificationEvidence(projectRoot) is the production entry; readCertificationStore({storeDir, projectRoot}) is the test seam. The store is always os.userInfo().homedir/.moe/certification: never env, settings or a caller argument (HOME/USERPROFILE do not move it; tested).\n- Store checks: lstat (missing, symlink, non-dir), POSIX owner and mode&0o077, realpath containment against the project root and .moe.\n- Report checks: name regex; O_NOFOLLOW|O_NONBLOCK; fstat isFile; a 64 KiB cap+1 read; canonical bytes JSON.stringify+'\\n'; schema; injected, uncertified, platform, arch, image, supervisor and provider-version refusals.\n- It returns frozen {ok, report, sha256} for the newest valid report (a finishedAt tie goes to the greater name), or {ok:false, refusals[]} from 21 CERTIFICATION_* codes. Any unexpected error maps to STORE_UNREADABLE; it never rejects.\n\nTests:\n- Drift checks against certified-provider.json and the guest-supervisor.py sha.\n- A differential table of about 41 variants against the real certify.mjs validator.\n- A 16-row mismatch table plus store-safety, containment, input, platform-stub and home-relocation rows.\n\nMutation sweep: 64 mutants, 56 killed. The 8 survivors are equivalent on Linux or review-only (detail in Serena task-…-handoff). Example: Node readdir on POSIX is already sorted, so a sort mutant ",
+  "commits": [
+    {
+      "sha": "63ae437a4521eb36d6c10f598874c1e06da92c84",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cef53f62@2026-11-01T09:29:24Z",
+      "paths": [
+        ".moe/tasks/task-5a635bc90aaa47acabede9307dd1579b.json",
+        ".moe/tasks/task-b8734a784d6b42d98bd5f2493e2e228e.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json",
+        ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json",
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+        "packages/moe-daemon/src/delivery/certificationEvidence.ts"
+      ],
+      "recordedBy": "worker-cef53f62",
+      "recordedAt": "2026-11-01T09:59:42.551Z",
+      "treeId": "5c3c606d34a1575dd722c801927bc3557de21f9b",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+    "packages/moe-daemon/src/delivery/certificationEvidence.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-cef53f62@2026-11-01T09:29:24Z",
+    "at": "2026-11-01T09:59:42.551Z"
+  }
 }
