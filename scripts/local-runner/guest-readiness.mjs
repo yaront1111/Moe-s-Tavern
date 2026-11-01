@@ -15,6 +15,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { AGENT_CLIS, loadAgentManifest } from './agent-cache.mjs';
 import { loadCertifiedProvider } from './doctor.mjs';
 import { bootstrapError, GUEST_LAYOUT, GUEST_RESOURCES, IMAGE_ARCHES, JOB_IDENTITIES } from './guest-bootstrap.mjs';
+import { guestAddress } from './guest-ssh.mjs';
 import { invoker, lifecycleError, QUERY_TIMEOUT_MS, STATES } from './lifecycle.mjs';
 import { classifyFailure, MAX_PROBE_BUFFER, providerError } from './multipass.mjs';
 
@@ -143,6 +144,8 @@ function parseInfo(stdout, name) {
     memoryTotal: detail.memory.total ?? null,
     diskTotal: detail.disks.sda1.total === undefined ? null : Number(detail.disks.sda1.total),
     mountCount: Object.keys(detail.mounts).length,
+    // The SSH stream address (CQ-R14d1): only the first entry counts, and a Starting VM has none, which stays valid.
+    address: guestAddress(Array.isArray(detail.ipv4) ? detail.ipv4[0] : undefined),
   };
 }
 

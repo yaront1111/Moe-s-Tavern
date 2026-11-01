@@ -918,10 +918,18 @@ import {
   MAX_CREDENTIAL_BYTES, MAX_SUPERVISOR_BYTES, verifySourceImage,
 } from '../local-runner/guest-bootstrap.mjs';
 import { GUEST_PROBES, readGuestInfo, runGuestProbe, waitForGuestReady } from '../local-runner/guest-readiness.mjs';
-import { authorizedKeyLine, createTransportKeys, transportFiles } from '../local-runner/guest-ssh.mjs';
+import { authorizedKeyLine, createTransportKeys, sshStreamArgv, transportFiles } from '../local-runner/guest-ssh.mjs';
 
 const GiB = 2 ** 30;
 const GUEST = nameAt(1);
+// CQ-R14d1: every transfer stream is `<ssh> sshStreamArgv(...)` to the guest's info address (guestDetail's ipv4[0]).
+// Strings only: nothing is created or run at these paths, and tmpdir() is absolute on every OS. Defined here, above
+// every row that streams, because the file's top-level awaits let an earlier row run before later lines evaluate.
+const STREAM_SSH = path.join(tmpdir(), 'moe-stream', 'ssh');
+const STREAM_KEYS = path.join(tmpdir(), 'moe-stream', 'keys');
+const STREAM = Object.freeze({ ssh: STREAM_SSH, keyDir: STREAM_KEYS });
+const streamCall = (mode, name = GUEST) => [STREAM_SSH,
+  sshStreamArgv({ ...transportFiles(name, STREAM_KEYS), name, address: '10.0.0.2', mode }), { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
 const IDENTITIES = ['moe-agent', 'moe-check'];
 const PINS = (await loadCertifiedProvider()).images;
 const SOURCE = { arch: 'x64', url: PINS.x64.url, sha256: PINS.x64.sha256 };
@@ -1356,13 +1364,14 @@ test('readGuestInfo runs bounded info on the owned name and parses the v1.17.0 d
   const fake = fakeGuest();
   assert.deepEqual(await readGuestInfo(GUEST, { run: fake.run }), {
     state: 'Running', providerImageHash: PROVIDER_HASH, imageRelease: '24.04 LTS', cpuCount: 2,
-    memoryTotal: 4 * GiB - 2 ** 24, diskTotal: 19 * GiB, mountCount: 0,
+    memoryTotal: 4 * GiB - 2 ** 24, diskTotal: 19 * GiB, mountCount: 0, address: '10.0.0.2',
   });
   assert.deepEqual(fake.calls, [{ executable: 'multipass', args: infoArgs(GUEST), options: lifecycleOptions(QUERY_TIMEOUT_MS) }]);
   const starting = guestDetail({ image_hash: 'CD'.repeat(32), state: 'Starting', cpu_count: '', memory: {}, disks: { sda1: {} }, mounts: { '/home/ubuntu/x': {} } });
   const upper = fakeGuest({ info: starting });
   assert.deepEqual(await readGuestInfo(GUEST, { executable: '/opt/multipass bin/multipass', run: upper.run }), {
     state: 'Starting', providerImageHash: PROVIDER_HASH, imageRelease: '24.04 LTS', cpuCount: null, memoryTotal: null, diskTotal: null, mountCount: 1,
+    address: '10.0.0.2',
   });
   assert.equal(upper.calls[0].executable, '/opt/multipass bin/multipass');
   for (const [label, detail] of [
@@ -3412,7 +3421,7 @@ function bridgeRouter({ materialize, scripts, onEof } = {}) {
 }
 function bridgeContext(options, bounds) {
   const [guest, router] = [fakeGuest(), bridgeRouter(options)];
-  return { guest, router, context: { name: GUEST, provider: { run: guest.run, spawn: router.spawn }, bounds: { sessionMs: 2_000, exitMs: 200, transferMs: 5_000, ...bounds } } };
+  return { guest, router, context: { name: GUEST, provider: { run: guest.run, ...STREAM, spawn: router.spawn }, bounds: { sessionMs: 2_000, exitMs: 200, transferMs: 5_000, ...bounds } } };
 }
 const [framingCheck, eofCheck] = BRIDGE_CHECKS;
 const checkOf = (id, command) => ({ kind: 'check', version: 1, id, command, protected: [] });
@@ -3432,9 +3441,9 @@ test('CB2 bridge-framing materializes the generated snapshot, then streams the 2
   const { guest, router, context } = bridgeContext();
   const result = await framingCheck.run(context);
   assert.deepEqual([result, Object.isFrozen(result)], [{ result: 'passed', code: null }, true]);
-  assert.deepEqual(router.calls.map(({ args }) => args), [['multipass', snapshotArgv(GUEST, 'materialize'), PIPES], ['multipass', checkArgv(GUEST), PIPES]]);
+  assert.deepEqual(router.calls.map(({ args }) => args), [streamCall('materialize'), ['multipass', checkArgv(GUEST), PIPES]]);
   assert.equal(router.calls[0].proc.frames()[0].digest, workspaceEntries(certifySnapshot()).digest);
-  assert.deepEqual([router.calls[1].proc.frame, router.calls[1].proc.written.length, guest.ids()], [checkOf('certify-framing', CB_FRAMING), 1, ['info', 'mountinfo', 'info', 'mountinfo']]);
+  assert.deepEqual([router.calls[1].proc.frame, router.calls[1].proc.written.length, guest.ids()], [checkOf('certify-framing', CB_FRAMING), 1, ['info', 'mountinfo', 'info', 'info', 'mountinfo']]);
 });
 
 test('CB3 bridge-framing fails with one fixed code per rule: digest, session outcome, then exact bytes', async () => {
@@ -4153,7 +4162,7 @@ import { lstatSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
 import { createFrameDecoder, encodeFrame, MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES } from '../local-runner/guest-bridge.mjs';
 import {
-  assertNoMounts, hostFrames, materializeSnapshot, runSupervisorStream, SNAPSHOT_CHUNK_BYTES, snapshotArgv, workspaceEntries,
+  assertNoMounts, hostFrames, materializeSnapshot, runSupervisorStream, SNAPSHOT_CHUNK_BYTES, workspaceEntries,
 } from '../local-runner/snapshot-transfer.mjs';
 
 const fileOf = (path, bytes, executable = false) => ({ kind: 'file', path, executable, data: Buffer.from(bytes) });
@@ -4182,15 +4191,13 @@ test('T1 workspaceEntries is the validated base plus overlay replacements and ad
   ]) assert.throws(() => workspaceEntries(snapshot), transferRefused(code), label);
 });
 
-test('T2 snapshotArgv is the frozen supervisor argv where only the owned name varies', () => {
-  for (const mode of ['materialize', 'export']) {
-    const argv = snapshotArgv(GUEST, mode);
-    assert.deepEqual(argv, ['exec', '--no-map-working-directory', GUEST, '--', 'sudo', '-n', '/opt/moe/bin/moe-supervisor', mode]);
-    assert.equal(Object.isFrozen(argv), true);
-  }
-  for (const [name, mode] of [[GUEST, 'bridge'], [GUEST, 'MATERIALIZE'], [GUEST, undefined], ['primary', 'materialize'],
-    [`${GUEST}\n`, 'export'], [`moe-vm-\0${'a'.repeat(19)}`, 'export'], [undefined, 'export']]) {
-    assert.throws(() => snapshotArgv(name, mode), transferRefused('TRANSFER_INPUT_INVALID'), `${name} ${mode}`);
+test('T2 snapshotArgv is gone, and a non-owned name or a non-transfer mode is refused before any provider call or spawn', async () => {
+  assert.equal(Object.hasOwn(await import('../local-runner/snapshot-transfer.mjs'), 'snapshotArgv'), false);
+  for (const [name, mode] of [[GUEST, 'bridge'], [GUEST, 'check'], [GUEST, 'exec'], [GUEST, 'MATERIALIZE'], [GUEST, undefined],
+    ['primary', 'materialize'], [`${GUEST}\n`, 'export'], [`moe-vm-\0${'a'.repeat(19)}`, 'export'], [undefined, 'export']]) {
+    const t = transferProvider();
+    await assert.rejects(runSupervisorStream({ name, mode, provider: t.provider, onFrame: () => {} }), transferRefused('TRANSFER_INPUT_INVALID'), `${name} ${mode}`);
+    assert.deepEqual([t.guest.calls, t.proc.calls], [[], []], `${name} ${mode}`);
   }
 });
 
@@ -4237,7 +4244,7 @@ function fakeSpawn(respond = proc => proc.reply({ kind: 'materialized', digest: 
 function transferProvider(guestOptions, respond, spawnOptions) {
   const guest = fakeGuest(guestOptions);
   const proc = fakeSpawn(respond, spawnOptions);
-  return { guest, proc, provider: { run: guest.run, spawn: (...args) => { proc.before = guest.ids(); return proc.spawn(...args); } } };
+  return { guest, proc, provider: { run: guest.run, ...STREAM, spawn: (...args) => { proc.before = guest.ids(); return proc.spawn(...args); } } };
 }
 const PIPES = { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] };
 const dataFrames = bytes => Array.from({ length: Math.ceil(bytes.length / SNAPSHOT_CHUNK_BYTES) },
@@ -4252,8 +4259,8 @@ test('T4 a clean materialize streams the merged view on the supervisor stdin and
   const result = await materializeSnapshot({ name: GUEST, snapshot, provider: t.provider });
   assert.deepEqual(result, { instance: GUEST, digest, files: 4, bytes, executionReady: false });
   assert.equal(Object.isFrozen(result), true);
-  assert.deepEqual([t.proc.before, t.guest.ids(), t.guest.unexpected], [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], []]);
-  assert.deepEqual([t.proc.calls, t.proc.kills], [[['multipass', snapshotArgv(GUEST, 'materialize'), PIPES]], []]);
+  assert.deepEqual([t.proc.before, t.guest.ids(), t.guest.unexpected], [['info', 'mountinfo', 'info'], ['info', 'mountinfo', 'info', 'info', 'mountinfo'], []]);
+  assert.deepEqual([t.proc.calls, t.proc.kills], [[streamCall('materialize')], []]);
   assert.equal(dataFrames(BIG).length, 3);
   assert.deepEqual(t.proc.frames(), [{ kind: 'snapshot', version: 1, files: 4, bytes, digest },
     { kind: 'file', path: 'empty', executable: false, size: 0 },
@@ -4280,11 +4287,11 @@ test('T5 invalid input or mounts before the stream refuse it without a spawn, an
     await assert.rejects(materializeSnapshot({ name: GUEST, snapshot, provider: t.provider }), transferRefused(code), label);
     assert.deepEqual([t.guest.ids(), t.proc.calls], [['info', 'mountinfo'], []], label);
   }
-  for (const [label, options] of [['late provider mount', { info: [guestDetail(), guestDetail({ mounts: HOST_MOUNT })] }],
+  for (const [label, options] of [['late provider mount', { info: [guestDetail(), guestDetail(), guestDetail({ mounts: HOST_MOUNT })] }],
     ['late virtiofs', { answers: healthy({ mountinfo: [mountinfo(), mountinfo([...MOUNTS, SHARED_LINE('virtiofs')])] }) }]]) {
     const t = transferProvider(options);
     await assert.rejects(materializeSnapshot({ name: GUEST, snapshot, provider: t.provider }), transferRefused('TRANSFER_MOUNTS_PRESENT'), label);
-    assert.deepEqual([t.proc.calls.length, t.guest.ids().length], [1, 4], label);
+    assert.deepEqual([t.proc.calls.length, t.guest.ids().length], [1, 5], label);
   }
 });
 
@@ -4316,19 +4323,19 @@ test('T6 a wrong, missing, repeated or malformed answer, a failed exit or a hang
   assert.deepEqual(early.proc.kills, ['SIGKILL']);
   const boom = new Error('host check');
   const direct = fakeSpawn(proc => proc.reply({ kind: 'any' }));
-  await assert.rejects(runSupervisorStream({ name: GUEST, mode: 'export', provider: { spawn: direct.spawn }, onFrame: () => { throw boom; } }),
-    error => error === boom);
-  assert.deepEqual([direct.calls[0][1], direct.kills], [snapshotArgv(GUEST, 'export'), ['SIGKILL']]);
-  const base = { name: GUEST, mode: 'export', provider: { spawn: fakeSpawn().spawn }, onFrame: () => {} };
+  await assert.rejects(runSupervisorStream({ name: GUEST, mode: 'export', provider: { run: fakeGuest().run, ...STREAM, spawn: direct.spawn },
+    onFrame: () => { throw boom; } }), error => error === boom);
+  assert.deepEqual([direct.calls[0][1], direct.kills], [streamCall('export')[1], ['SIGKILL']]);
+  const base = { name: GUEST, mode: 'export', provider: { run: fakeGuest().run, ...STREAM, spawn: fakeSpawn().spawn }, onFrame: () => {} };
   for (const [label, options] of [['no options', null], ['mode', { mode: 'bridge' }], ['onFrame', { onFrame: undefined }],
     ['input string', { input: 'abc' }], ['input object', { input: {} }], ['timeout 0', { timeoutMs: 0 }], ['timeout 1.5', { timeoutMs: 1.5 }]]) {
     await assert.rejects(runSupervisorStream(options && { ...base, ...options }), transferRefused('TRANSFER_INPUT_INVALID'), label);
   }
   for (const spawn of [() => { throw new Error('/private/secret'); }, () => ({}), () => null]) {
-    await assert.rejects(runSupervisorStream({ ...base, provider: { spawn } }), transferRefused('TRANSFER_SPAWN_FAILED'));
+    await assert.rejects(runSupervisorStream({ ...base, provider: { ...base.provider, spawn } }), transferRefused('TRANSFER_SPAWN_FAILED'));
   }
   const odd = fakeSpawn(() => {});
-  await assert.rejects(runSupervisorStream({ ...base, provider: { spawn: odd.spawn }, input: ['not a buffer'] }), transferRefused('TRANSFER_INPUT_INVALID'));
+  await assert.rejects(runSupervisorStream({ ...base, provider: { ...base.provider, spawn: odd.spawn }, input: ['not a buffer'] }), transferRefused('TRANSFER_INPUT_INVALID'));
   assert.deepEqual([odd.written, odd.kills], [[], ['SIGKILL']]);
 });
 
@@ -4471,13 +4478,13 @@ test('T7 end to end, materializeSnapshot copies the merged view through the real
     const snapshot = snapshotOf([fileOf('a.txt', 'old'), fileOf('bin/tool', '#!/bin/sh\nexit 0\n', true), fileOf('docs/old.md', 'gone')],
       [fileOf('a.txt', 'new text'), fileOf('src/new.js', BIG), { kind: 'delete', path: 'docs/old.md' }]);
     const merged = workspaceEntries(snapshot);
-    const copy = () => materializeSnapshot({ name: GUEST, snapshot, provider: { run: guest.run, spawn }, timeoutMs: 30_000 });
+    const copy = () => materializeSnapshot({ name: GUEST, snapshot, provider: { run: guest.run, ...STREAM, spawn }, timeoutMs: 30_000 });
     assert.deepEqual(await copy(), { instance: GUEST, digest: merged.digest, files: 3, bytes: 8 + 17 + BIG.length, executionReady: false });
     assert.deepEqual([launches.map(({ call, before }) => [call, before]), guest.ids(), guest.unexpected],
-      [[[['multipass', snapshotArgv(GUEST, 'materialize'), PIPES], ['info', 'mountinfo']]], ['info', 'mountinfo', 'info', 'mountinfo'], []]);
+      [[[streamCall('materialize'), ['info', 'mountinfo', 'info']]], ['info', 'mountinfo', 'info', 'info', 'mountinfo'], []]);
     assertMaterialized(paths, merged);
     await assert.rejects(copy(), transferRefused('TRANSFER_EXIT_FAILED'));
-    assert.deepEqual([launches.length, launches[1].child.exitCode, guest.ids().length], [2, 73, 6]);
+    assert.deepEqual([launches.length, launches[1].child.exitCode, guest.ids().length], [2, 73, 8]);
     assertMaterialized(paths, merged); // the first workspace is untouched
   });
 
@@ -4652,8 +4659,8 @@ test('TT1 toolchain streams exactly the verified bytes between mount checks', as
   assert.deepEqual(result, { instance: GUEST, sha256: record.sha256, version: '1.2.3', executionReady: false });
   assert.equal(Object.isFrozen(result), true);
   assert.deepEqual(p.proc.frames(), toolchainRows(BIG));
-  assert.deepEqual([p.proc.before, p.guest.ids(), p.guest.unexpected], [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], []]);
-  assert.deepEqual([p.proc.calls, p.proc.kills], [[['multipass', snapshotArgv(GUEST, 'toolchain'), PIPES]], []]);
+  assert.deepEqual([p.proc.before, p.guest.ids(), p.guest.unexpected], [['info', 'mountinfo', 'info'], ['info', 'mountinfo', 'info', 'info', 'mountinfo'], []]);
+  assert.deepEqual([p.proc.calls, p.proc.kills], [[streamCall('toolchain')], []]);
 });
 test('TT2 invalid input, cache drift, mounts and guest refusals have fixed codes', async t => {
   assert.equal(typeof installToolchain, 'function');
@@ -4681,7 +4688,7 @@ test('TT2 invalid input, cache drift, mounts and guest refusals have fixed codes
     const p = transferProvider(undefined, proc => proc.reply(frames, exit));
     await assert.rejects(installToolchain({ name: GUEST, toolchain, provider: p.provider }), transferRefused(code));
   }
-  for (const info of [guestDetail({ mounts: HOST_MOUNT }), [guestDetail(), guestDetail({ mounts: HOST_MOUNT })]]) {
+  for (const info of [guestDetail({ mounts: HOST_MOUNT }), [guestDetail(), guestDetail(), guestDetail({ mounts: HOST_MOUNT })]]) {
     const p = transferProvider({ info }, proc => proc.reply(done));
     await assert.rejects(installToolchain({ name: GUEST, toolchain, provider: p.provider }), transferRefused('TRANSFER_MOUNTS_PRESENT'));
     assert.equal(p.proc.calls.length, Array.isArray(info) ? 1 : 0);
@@ -4693,13 +4700,13 @@ test('TT3 host to real supervisor installs a fixture and refuses replacement', {
   const target = path.join(scratch(t), 'opt', 'toolchain'), guest = fakeGuest(), children = [];
   t.after(() => children.forEach(child => child.exitCode === null && child.signalCode === null && child.kill('SIGKILL')));
   const spawn = (exe, argv, options) => {
-    assert.deepEqual(argv, snapshotArgv(GUEST, 'toolchain'));
+    assert.deepEqual(argv, streamCall('toolchain')[1]);
     const code = `${PY_LOAD}sys.exit(m.install_toolchain(0, 1, sys.argv[2]))`;
     const child = spawnChild('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, target], options);
     children.push(child);
     return child;
   };
-  const install = () => installToolchain({ name: GUEST, toolchain, provider: { run: guest.run, spawn } });
+  const install = () => installToolchain({ name: GUEST, toolchain, provider: { run: guest.run, ...STREAM, spawn } });
   assert.equal((await install()).sha256, toolchain.sha256);
   assertToolchainTree(target);
   await assert.rejects(install(), transferRefused('TRANSFER_EXIT_FAILED'));
@@ -4804,8 +4811,8 @@ test('TD1 installDependencies streams exactly the sealed tree between two mount 
   assert.deepEqual(result, { instance: GUEST, digest: tree.digest, files: tree.entries.length,
     bytes: tree.entries.reduce((n, e) => n + e.size, 0), executionReady: false });
   assert.equal(Object.isFrozen(result), true);
-  assert.deepEqual([p.proc.before, p.guest.ids(), p.guest.unexpected], [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], []]);
-  assert.deepEqual([p.proc.calls, p.proc.kills], [[['multipass', snapshotArgv(GUEST, 'dependencies'), PIPES]], []]);
+  assert.deepEqual([p.proc.before, p.guest.ids(), p.guest.unexpected], [['info', 'mountinfo', 'info'], ['info', 'mountinfo', 'info', 'info', 'mountinfo'], []]);
+  assert.deepEqual([p.proc.calls, p.proc.kills], [[streamCall('dependencies')], []]);
   assert.deepEqual(Buffer.concat(p.proc.written), framesOf([...hostFrames(tree)]));
 });
 
@@ -4832,7 +4839,7 @@ test('TD2 installDependencies rejects invalid input before I/O and refuses untru
     const p = transferProvider(undefined, proc => proc.reply(frames, exit));
     await assert.rejects(dependencyTransfer.installDependencies({ name: GUEST, tree, provider: p.provider }), transferRefused(code));
   }
-  for (const info of [guestDetail({ mounts: HOST_MOUNT }), [guestDetail(), guestDetail({ mounts: HOST_MOUNT })]]) {
+  for (const info of [guestDetail({ mounts: HOST_MOUNT }), [guestDetail(), guestDetail(), guestDetail({ mounts: HOST_MOUNT })]]) {
     const p = transferProvider({ info });
     await assert.rejects(dependencyTransfer.installDependencies({ name: GUEST, tree, provider: p.provider }), transferRefused('TRANSFER_MOUNTS_PRESENT'));
     assert.equal(p.proc.calls.length, Array.isArray(info) ? 1 : 0);
@@ -4853,13 +4860,13 @@ test('TD3 installDependencies installs through the real supervisor and refuses a
   const tree = treeOf(), paths = dependencyLayout(scratch(t)), guest = fakeGuest(), launches = [];
   t.after(() => launches.forEach(child => child.exitCode === null && child.signalCode === null && child.kill('SIGKILL')));
   const spawn = (executable, argv, options) => {
-    assert.deepEqual([executable, argv, options], ['multipass', snapshotArgv(GUEST, 'dependencies'), PIPES]);
+    assert.deepEqual([executable, argv, options], streamCall('dependencies'));
     const code = `${PY_LOAD}sys.exit(m.${argv.at(-1)}(0, 1, sys.argv[2], sys.argv[3], (os.getuid(), os.getgid())))`;
     const child = spawnChild('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, paths.workspace, paths.manifest], options);
     launches.push(child);
     return child;
   };
-  const install = () => dependencyTransfer.installDependencies({ name: GUEST, tree, provider: { run: guest.run, spawn } });
+  const install = () => dependencyTransfer.installDependencies({ name: GUEST, tree, provider: { run: guest.run, ...STREAM, spawn } });
   tree.entries[0].data[0] ^= 1; // sealed records cannot freeze their buffer: the guest must hash actual bytes
   await assert.rejects(install(), transferRefused('TRANSFER_EXIT_FAILED'));
   assert.deepEqual([launches[0].exitCode, readdirSync(paths.lib)], [65, []]);
@@ -5023,8 +5030,8 @@ test('X4 a clean export resolves exactly what validateImport derives from the tr
   const result = await importCandidate({ name: GUEST, provider: t.provider });
   assert.deepEqual(result, { instance: GUEST, candidate: validateImport(entries), executionReady: false });
   assert.equal(Object.isFrozen(result), true);
-  assert.deepEqual([t.proc.before, t.guest.ids(), t.guest.unexpected], [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], []]);
-  assert.deepEqual([t.proc.calls, t.proc.kills, t.proc.written], [[['multipass', snapshotArgv(GUEST, 'export'), PIPES]], [], []]);
+  assert.deepEqual([t.proc.before, t.guest.ids(), t.guest.unexpected], [['info', 'mountinfo', 'info'], ['info', 'mountinfo', 'info', 'info', 'mountinfo'], []]);
+  assert.deepEqual([t.proc.calls, t.proc.kills, t.proc.written], [[streamCall('export')], [], []]);
   await assert.rejects(importCandidate(), transferRefused('TRANSFER_INPUT_INVALID'));
   for (const [label, options, code] of [
     ['primary', { name: 'primary' }, 'TRANSFER_INPUT_INVALID'], ['provider', { provider: [] }, 'LIFECYCLE_INPUT_INVALID'],
@@ -5044,7 +5051,7 @@ test('X4 a clean export resolves exactly what validateImport derives from the tr
   const late = transferProvider({ answers: healthy({ mountinfo: [mountinfo(), mountinfo([...MOUNTS, SHARED_LINE('virtiofs')])] }) },
     proc => proc.reply(exportFrames(entries)));
   await assert.rejects(importCandidate({ name: GUEST, provider: late.provider }), transferRefused('TRANSFER_MOUNTS_PRESENT'));
-  assert.deepEqual([late.proc.calls.length, late.guest.ids()], [1, ['info', 'mountinfo', 'info', 'mountinfo']]);
+  assert.deepEqual([late.proc.calls.length, late.guest.ids()], [1, ['info', 'mountinfo', 'info', 'info', 'mountinfo']]);
 });
 
 test('X5 a well-formed hostile export is refused by validateImport with its R09a code and no candidate', async () => {
@@ -5087,7 +5094,7 @@ test('X6 a protocol violation or bound is refused at its frame, and a cut, faile
   ]) {
     const t = transferProvider(undefined, proc => proc.stdout.write(framesOf(frames)));
     await assert.rejects(importCandidate({ name: GUEST, provider: t.provider, timeoutMs: 2_000 }), transferRefused(code), label);
-    assert.deepEqual([t.proc.kills, t.guest.ids()], [['SIGKILL'], ['info', 'mountinfo']], label);
+    assert.deepEqual([t.proc.kills, t.guest.ids()], [['SIGKILL'], ['info', 'mountinfo', 'info']], label);
   }
   const full = transferProvider(undefined, proc => proc.reply(exportFrames([...deletes(MAX_IMPORT_ENTRIES - 1), { kind: 'delete', path: longest }])));
   const admitted = (await importCandidate({ name: GUEST, provider: full.provider })).candidate.entries;
@@ -5157,7 +5164,7 @@ test('X7 end to end, a dirty checkout round-trips through the real supervisor an
         s.launches.push({ call: [executable, argv, options], child });
         return child;
       };
-      const provider = { run: s.guest.run, spawn };
+      const provider = { run: s.guest.run, ...STREAM, spawn };
       s.copy = () => materializeSnapshot({ name: GUEST, snapshot, provider, timeoutMs: 30_000 });
       s.take = () => importCandidate({ name: GUEST, provider, timeoutMs: 30_000 });
       sessions.push(s);
@@ -5200,7 +5207,7 @@ test('X7 end to end, a dirty checkout round-trips through the real supervisor an
       await assert.rejects(attacked.take(), transferRefused(code), label);
       assert.deepEqual(attacked.launches.map(({ call }) => call[1].at(-1)), ['materialize', 'export'], label);
     }
-    const late = session({ info: [guestDetail(), guestDetail(), guestDetail({ mounts: HOST_MOUNT })] });
+    const late = session({ info: [guestDetail(), guestDetail(), guestDetail(), guestDetail({ mounts: HOST_MOUNT })] });
     await late.copy();
     await assert.rejects(late.take(), transferRefused('TRANSFER_MOUNTS_PRESENT'));
     assert.deepEqual(late.launches.map(({ call }) => call[1].at(-1)), ['materialize']);
@@ -5208,15 +5215,16 @@ test('X7 end to end, a dirty checkout round-trips through the real supervisor an
     const seen = Buffer.concat(stdout);
     assert.deepEqual([SECRET, Buffer.from(SECRET).toString('base64'), Buffer.from('added by agent\n').toString('base64')]
       .map(needle => seen.includes(needle)), [false, false, true]);
-    // DoD 3 across every run: only info, the mountinfo probe and the two supervisor argvs, each exec unmapped, no mount or transfer.
+    // DoD 3 across every run: only info and the unmapped mountinfo probe go to Multipass, and the two supervisor streams
+    // go only over ssh (CQ-R14d1), never exec; no mount or transfer.
     const launches = sessions.flatMap(s => s.launches);
     assert.deepEqual([sessions.flatMap(s => s.guest.unexpected), new Set(sessions.flatMap(s => s.guest.ids())), launches.length],
       [[], new Set(['info', 'mountinfo']), process.platform === 'darwin' ? 16 : 18]);
     for (const { call: [executable, argv, options], child } of launches) {
-      assert.deepEqual([executable, argv, options, child.exitCode], ['multipass', snapshotArgv(GUEST, argv.at(-1)), PIPES, 0]);
+      assert.deepEqual([executable, argv, options, child.exitCode], [...streamCall(argv.at(-1)), 0]);
+      assert.equal(argv.some(arg => ['exec', 'multipass', 'mount', 'umount', 'transfer'].includes(arg)), false, argv.join(' '));
     }
-    for (const argv of [...sessions.flatMap(s => s.guest.calls.map(({ executable, args }) => [executable, ...args])),
-      ...launches.map(({ call: [executable, argv] }) => [executable, ...argv])]) {
+    for (const argv of sessions.flatMap(s => s.guest.calls.map(({ executable, args }) => [executable, ...args]))) {
       assert.equal(argv[0], 'multipass');
       assert.equal(argv[1] === 'info' || (argv[1] === 'exec' && argv[2] === '--no-map-working-directory'), true, argv.join(' '));
       assert.equal(argv.some(arg => ['mount', 'umount', 'transfer'].includes(arg)), false, argv.join(' '));
@@ -6086,7 +6094,7 @@ test('VH1 verifyWorkspace sends no input and maps its one frame to intact or cha
     const t = transferProvider(undefined, proc => proc.reply(VERIFIED(changed)));
     assert.equal(await verifyWorkspace({ name: GUEST, provider: t.provider, timeoutMs: 5_000 }), expected);
     assert.deepEqual([t.proc.before, t.guest.ids(), t.guest.unexpected, t.proc.calls, t.proc.written, t.proc.kills],
-      [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], [], [['multipass', snapshotArgv(GUEST, 'verify'), PIPES]], [], []]);
+      [['info', 'mountinfo', 'info'], ['info', 'mountinfo', 'info', 'info', 'mountinfo'], [], [streamCall('verify')], [], []]);
   }
 });
 
@@ -6113,7 +6121,7 @@ test('VH2 any other stream, mount state, provider failure or input is a fixed re
     assert.equal(t.proc.calls.length, spawned, label);
   }
   const guest = fakeGuest();
-  await assert.rejects(verifyWorkspace({ name: GUEST, provider: { run: guest.run, spawn: () => { throw new Error('/private/secret'); } } }),
+  await assert.rejects(verifyWorkspace({ name: GUEST, provider: { run: guest.run, ...STREAM, spawn: () => { throw new Error('/private/secret'); } } }),
     transferRefused('TRANSFER_SPAWN_FAILED'));
   for (const [label, options] of [['no options', undefined], ['primary', { name: 'primary' }], ['timeout', { timeoutMs: 600_001 }],
     ['spawn', { provider: { run: guest.run, spawn: 'spawn' } }], ['provider', { provider: null }]]) {
@@ -6153,7 +6161,7 @@ test('CJ10 end to end, the real supervisor verify reports a passed job\'s edits 
         `${PY_LOAD}sys.exit(m.${argv.at(-1)}(1, sys.argv[2], sys.argv[3]))`, PY_SUPERVISOR, paths.workspace, paths.manifest], options);
       const h = checkHarness({ session: () => { edit(name => path.join(paths.workspace, name)); return PASSED_RUN; } });
       const { verify, ...deps } = h.deps; // the default, verifyWorkspace
-      const result = await runCheckJob({ ...h.input, provider: { run: guest.run, spawn }, timeoutMs: 30_000 }, deps);
+      const result = await runCheckJob({ ...h.input, provider: { run: guest.run, ...STREAM, spawn }, timeoutMs: 30_000 }, deps);
       assert.deepEqual([result.outcome, result.workspace, result.vm, typeof verify], ['passed', expected, 'deleted', 'function'], label);
     }
     assert.deepEqual(guest.unexpected, []);
@@ -6404,8 +6412,8 @@ test('AH1 a clean install streams both cache-verified binaries between two mount
   const result = await agentInstall(cache, p);
   assert.deepEqual(result, { instance: GUEST, agents: 2, bytes: BIG.length + CODEX.length, executionReady: false });
   assert.equal(Object.isFrozen(result), true);
-  assert.deepEqual([p.proc.before, p.guest.ids(), p.guest.unexpected, cache.fetches], [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], [], []]);
-  assert.deepEqual([p.proc.calls, p.proc.kills], [[['multipass', snapshotArgv(GUEST, 'agents'), PIPES]], []]);
+  assert.deepEqual([p.proc.before, p.guest.ids(), p.guest.unexpected, cache.fetches], [['info', 'mountinfo', 'info'], ['info', 'mountinfo', 'info', 'info', 'mountinfo'], [], []]);
+  assert.deepEqual([p.proc.calls, p.proc.kills], [[streamCall('agents')], []]);
   assert.deepEqual(p.proc.frames(), [binaryOf('claude', BIG), binaryOf('codex', CODEX), [AGENTS_END]].flat());
   assert.ok(p.proc.peak <= encodeFrame(dataFrames(BIG)[0]).length + p.proc.stdin.writableHighWaterMark, String(p.proc.peak));
 });
@@ -6430,7 +6438,7 @@ test('AH2 every refusal is a fixed code, input errors touch neither provider nor
   const before = transferProvider({ info: guestDetail({ mounts: HOST_MOUNT }) }, proc => proc.reply(INSTALLED));
   await assert.rejects(agentInstall(cache, before), transferRefused('TRANSFER_MOUNTS_PRESENT'));
   assert.deepEqual([before.guest.ids(), before.proc.calls], [['info', 'mountinfo'], []]);
-  const during = transferProvider({ info: [guestDetail(), guestDetail({ mounts: HOST_MOUNT })] }, proc => proc.reply(INSTALLED));
+  const during = transferProvider({ info: [guestDetail(), guestDetail(), guestDetail({ mounts: HOST_MOUNT })] }, proc => proc.reply(INSTALLED));
   await assert.rejects(agentInstall(cache, during), transferRefused('TRANSFER_MOUNTS_PRESENT'));
   assert.equal(during.proc.calls.length, 1);
   for (const [label, reply, code] of [
@@ -6470,9 +6478,9 @@ test('AH3 end to end, installAgents installs both stand-ins as 0555 through the 
     children.push(spawnChild('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, agents], options));
     return children.at(-1);
   };
-  const result = await agentInstall(cache, { provider: { run: guest.run, spawn } }, { timeoutMs: 30_000 });
+  const result = await agentInstall(cache, { provider: { run: guest.run, ...STREAM, spawn } }, { timeoutMs: 30_000 });
   assert.deepEqual(result, { instance: GUEST, agents: 2, bytes: BIG.length + CODEX.length, executionReady: false });
-  assert.deepEqual([readdirSync(agents).sort(), guest.ids(), guest.unexpected, cache.fetches], [['claude', 'codex'], ['info', 'mountinfo', 'info', 'mountinfo'], [], []]);
+  assert.deepEqual([readdirSync(agents).sort(), guest.ids(), guest.unexpected, cache.fetches], [['claude', 'codex'], ['info', 'mountinfo', 'info', 'info', 'mountinfo'], [], []]);
   assert.deepEqual(agentsState(agents), [['claude', BIG, 0o555], ['codex', CODEX, 0o555]]);
 });
 
@@ -6802,4 +6810,201 @@ test('PK5 an unlink failure keeps the record for a retry; a key path that cannot
   await assert.rejects(deleteOwned({ ledger: relative.ledger, name: GUEST, owner, provider: relative.provider }), transportQuiet('relative/guest-ssh', 'LIFECYCLE_INPUT_INVALID'));
   assert.deepEqual(await sweep(relative), { deleted: [], preserved: [], errors: [{ instance: GUEST, code: 'LIFECYCLE_INPUT_INVALID' }], invalid: [] });
   assert.deepEqual([relative.fake.calls.length, relative.fake.present.get(GUEST), (await relative.ledger.read(GUEST)).phase], [0, 'Running', 'owned']);
+});
+
+// CQ-R14d1 SSH stream route: every transfer opens its stream through openGuestStream, the pinned OpenSSH client with exactly
+// sshStreamArgv to the guest's freshly read info address, never `multipass exec` stdio. SS4-SS6 replay the three measured
+// Multipass 1.17.0 carrier failures (Linux 64 KiB stdin truncation, Windows dead stdin, Windows stdout stall near 2 MiB)
+// through a fake carrier; each ends in a fixed code with no accepted frame and no candidate.
+import { openGuestStream } from '../local-runner/guest-stream.mjs';
+import { SUPERVISOR_MODES, sshExecutable } from '../local-runner/guest-ssh.mjs';
+
+/** A fake guest plus a recording spawn that returns one marker child; each spawn records the provider calls before it. */
+function streamHarness(guestOptions, providerChanges = {}) {
+  const guest = fakeGuest(guestOptions);
+  const spawns = [];
+  const child = Object.freeze({ marker: 'child' });
+  const provider = { run: guest.run, ...STREAM, spawn: (...args) => { spawns.push({ args, before: guest.ids() }); return child; }, ...providerChanges };
+  return { guest, spawns, child, provider };
+}
+/** A rejection predicate: the fixed code, own keys exactly ['code'], and no client path, key dir, address or key text. */
+const streamQuiet = (code, needles = []) => error => {
+  assertSanitized(error, code);
+  const text = JSON.stringify({ message: error.message, ...error });
+  assert.deepEqual([STREAM_SSH, STREAM_KEYS, '10.0.0.2', 'PRIVATE KEY', ...needles].filter(needle => text.includes(needle)), []);
+  return true;
+};
+const ONE_FILE = () => snapshotOf([fileOf('a', 'A')]);
+
+test('SS1 openGuestStream spawns the ssh client with exactly sshStreamArgv for a freshly read info address, in every supervisor mode', async () => {
+  assert.deepEqual(SUPERVISOR_MODES, ['bridge', 'check', 'materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies']);
+  const h = streamHarness();
+  for (const [at, mode] of SUPERVISOR_MODES.entries()) {
+    assert.equal(await openGuestStream({ name: GUEST, mode, provider: h.provider }), h.child, mode);
+    assert.deepEqual(h.spawns.at(-1), { args: streamCall(mode), before: Array(at + 1).fill('info') }, mode);
+  }
+  assert.deepEqual([h.spawns.length, h.guest.calls.map(({ executable, args }) => [executable, ...args]), h.guest.unexpected],
+    [8, Array(8).fill(['multipass', ...infoArgs(GUEST)]), []]);
+  // The address is read on every call, never cached: a guest whose address changed is reached at the new one.
+  const moved = streamHarness({ info: [guestDetail(), guestDetail({ ipv4: ['10.0.0.9', '10.0.0.2'] })] });
+  for (let call = 0; call < 2; call += 1) await openGuestStream({ name: GUEST, mode: 'export', provider: moved.provider });
+  assert.deepEqual(moved.spawns.map(({ args }) => args[1].at(-2)), ['10.0.0.2', '10.0.0.9']);
+  // With no provider.ssh, the pinned in-box client.
+  const pinned = streamHarness(undefined, { ssh: undefined });
+  await openGuestStream({ name: GUEST, mode: 'verify', provider: pinned.provider });
+  assert.deepEqual(pinned.spawns[0].args, [sshExecutable(process.platform), ...streamCall('verify').slice(1)]);
+});
+
+test('SS2 openGuestStream refuses bad input or an unknown address with a fixed transport code and never spawns', async () => {
+  const percent = path.join(tmpdir(), 'moe%h'), quote = path.join(tmpdir(), "moe'k");
+  for (const [label, top, changes, infoCalls] of [
+    ['provider null', { provider: null }, {}, 0], ['provider array', { provider: [] }, {}, 0], ['provider string', { provider: 'x' }, {}, 0],
+    ['name moe-vm-x', { name: 'moe-vm-x' }, {}, 0], ['name newline', { name: `${GUEST}\n` }, {}, 0],
+    ...['exec', 'shell', '', undefined].map(mode => [`mode ${String(mode)}`, { mode }, {}, 0]),
+    ['ssh empty', {}, { ssh: '' }, 0], ['ssh newline', {}, { ssh: 'a\nb' }, 0], ['spawn 42', {}, { spawn: 42 }, 0],
+    ['keyDir relative', {}, { keyDir: 'keys' }, 0], ['keyDir %', {}, { keyDir: percent }, 1], ["keyDir '", {}, { keyDir: quote }, 1],
+  ]) {
+    const h = streamHarness(undefined, changes);
+    await assert.rejects(openGuestStream({ name: GUEST, mode: 'export', provider: h.provider, ...top }),
+      streamQuiet('TRANSPORT_INPUT_INVALID', [percent, quote]), label);
+    assert.deepEqual([h.spawns.length, h.guest.calls.length], [0, infoCalls], label);
+  }
+  for (const [label, guestOptions, stdout] of [
+    ['a failing info', { info: { error: failWith({ code: 'ENOENT' }) } }],
+    ['an info with errors', undefined, JSON.stringify({ errors: ['secret'], info: { [GUEST]: guestDetail() } })],
+    ['malformed JSON', undefined, 'not json'],
+    ...[undefined, [], ['999.1.1.1'], ['010.0.0.1'], [42], 'x'].map(ipv4 => [`ipv4 ${JSON.stringify(ipv4)}`, { info: guestDetail({ ipv4 }) }]),
+  ]) {
+    const seen = [];
+    const run = async (executable, args) => { seen.push([...args]); return { stdout, stderr: '' }; };
+    const h = streamHarness(guestOptions, stdout === undefined ? {} : { run });
+    await assert.rejects(openGuestStream({ name: GUEST, mode: 'export', provider: h.provider }), streamQuiet('TRANSPORT_ADDRESS_UNKNOWN'), label);
+    assert.deepEqual([h.spawns.length, [...h.guest.calls.map(({ args }) => args), ...seen]], [0, [infoArgs(GUEST)]], label);
+  }
+});
+
+test('SS3 readGuestInfo returns ipv4[0] as address only when it is a strict dotted quad, else null, and the detail stays valid', async () => {
+  const infoOf = detail => readGuestInfo(GUEST, { run: fakeGuest({ info: detail }).run });
+  assert.equal((await infoOf(guestDetail({ ipv4: ['10.1.2.3', '10.9.9.9'] }))).address, '10.1.2.3');
+  for (const ipv4 of [undefined, [], ['999.1.1.1'], ['010.0.0.1'], [42], 'x', ['10.0.0.2 '], [['10.0.0.2']], ['bad', '10.0.0.2']]) {
+    const info = await infoOf(guestDetail({ ipv4 }));
+    assert.deepEqual([info.address, info.state, info.mountCount], [null, 'Running', 0], JSON.stringify(ipv4));
+  }
+  const starting = await infoOf(guestDetail({ state: 'Starting', ipv4: undefined }));
+  assert.deepEqual([starting.state, starting.address], ['Starting', null]);
+});
+
+test('SS4 a Linux carrier that cuts stdin at a 64 KiB boundary mid data frame ends TRANSFER_EXIT_FAILED from the real supervisor\'s exit 65',
+  { skip: NOT_POSIX, timeout: 60_000 }, async t => {
+    const snapshot = snapshotOf([fileOf('big.bin', Buffer.alloc(256 * 1024, 5))]);
+    const frames = [...hostFrames(workspaceEntries(snapshot))];
+    const total = frames.reduce((sum, frame) => sum + frame.length, 0);
+    const cut = Math.floor(total / 65_536) * 65_536;
+    const dataStart = frames[0].length + frames[1].length;
+    assert.deepEqual([frames.length, cut > dataStart, cut < dataStart + frames[2].length], [4, true, true]); // inside the one data frame
+    const paths = layoutIn(scratch(t));
+    const guest = fakeGuest();
+    const carried = { calls: [], forwarded: 0, stdout: [], python: null };
+    t.after(() => carried.python?.exitCode === null && carried.python.signalCode === null && carried.python.kill('SIGKILL'));
+    // The carrier forwards only the first `cut` stdin bytes to the real supervisor, then ends its stdin; the rest is lost.
+    const spawn = (executable, argv, options) => {
+      carried.calls.push([executable, argv, options]);
+      const code = `${PY_LOAD}sys.exit(m.${argv.at(-1)}(0, 1, sys.argv[2], sys.argv[3], (os.getuid(), os.getgid())))`;
+      const python = spawnChild('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, paths.workspace, paths.manifest], options);
+      carried.python = python;
+      python.stdout.on('data', chunk => carried.stdout.push(chunk));
+      python.stdin.on('error', () => {});
+      const carrier = Object.assign(new EventEmitter(), { stdout: python.stdout, stderr: python.stderr, kill: signal => python.kill(signal) });
+      carrier.stdin = new Writable({ write(chunk, encoding, done) {
+        const part = chunk.subarray(0, Math.max(0, cut - carried.forwarded));
+        if (part.length === 0) return done();
+        carried.forwarded += part.length;
+        python.stdin.write(part, () => { if (carried.forwarded === cut) python.stdin.end(); done(); });
+      } });
+      python.on('error', error => carrier.emit('error', error));
+      python.on('close', (exit, signal) => carrier.emit('close', exit, signal));
+      return carrier;
+    };
+    await assert.rejects(materializeSnapshot({ name: GUEST, snapshot, provider: { run: guest.run, ...STREAM, spawn }, timeoutMs: 30_000 }),
+      streamQuiet('TRANSFER_EXIT_FAILED'));
+    assert.deepEqual([carried.calls, carried.forwarded, carried.python.exitCode, Buffer.concat(carried.stdout).length],
+      [[streamCall('materialize')], cut, 65, 0]);
+    assert.deepEqual([existsSync(paths.workspace), existsSync(paths.manifest), guest.ids()], [false, false, ['info', 'mountinfo', 'info']]);
+  });
+
+test('SS5 a Windows carrier that delivers no stdin and never exits ends TRANSFER_TIMEOUT, killed, before the post-stream mount check', async () => {
+  const snapshot = ONE_FILE();
+  const guest = fakeGuest();
+  const dead = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), calls: [], kills: [], swallowed: 0 });
+  dead.stdin = new Writable({ write(chunk, encoding, done) { dead.swallowed += chunk.length; done(); } });
+  dead.kill = signal => { dead.kills.push(signal); setImmediate(() => dead.emit('close', null, signal)); return true; };
+  const spawn = (...args) => { dead.calls.push(args); return dead; };
+  await assert.rejects(materializeSnapshot({ name: GUEST, snapshot, provider: { run: guest.run, ...STREAM, spawn }, timeoutMs: 100 }),
+    streamQuiet('TRANSFER_TIMEOUT'));
+  assert.deepEqual([dead.calls, dead.kills, dead.swallowed, guest.ids()],
+    [[streamCall('materialize')], ['SIGKILL'], Buffer.concat([...hostFrames(workspaceEntries(snapshot))]).length, ['info', 'mountinfo', 'info']]);
+});
+
+test('SS6 a Windows carrier whose export stdout stalls at 2,064,384 bytes of a 2 MiB file ends TRANSFER_TIMEOUT, killed, with no candidate', async () => {
+  const stream = framesOf(exportFrames([fileOf('big.bin', Buffer.alloc(2 * 1024 * 1024, 9))]));
+  assert.deepEqual([stream.length > 2_064_384], [true]);
+  const t = transferProvider(undefined, proc => proc.stdout.write(stream.subarray(0, 2_064_384)));
+  await assert.rejects(importCandidate({ name: GUEST, provider: t.provider, timeoutMs: 100 }), streamQuiet('TRANSFER_TIMEOUT'));
+  assert.deepEqual([t.proc.calls, t.proc.kills, t.guest.ids()], [[streamCall('export')], ['SIGKILL'], ['info', 'mountinfo', 'info']]);
+});
+
+test('SS7 ssh exit 255 before the first frame or after it is TRANSFER_EXIT_FAILED, never a supervisor code', async () => {
+  const snapshot = ONE_FILE();
+  const materialized = { kind: 'materialized', digest: workspaceEntries(snapshot).digest };
+  for (const [label, mode, transfer, frames] of [
+    ['materialize, no frame', 'materialize', provider => materializeSnapshot({ name: GUEST, snapshot, provider }), []],
+    ['materialize, after its frame', 'materialize', provider => materializeSnapshot({ name: GUEST, snapshot, provider }), [materialized]],
+    ['export, no frame', 'export', provider => importCandidate({ name: GUEST, provider }), []],
+    ['export, after a complete stream', 'export', provider => importCandidate({ name: GUEST, provider }), exportFrames([])],
+  ]) {
+    const t = transferProvider(undefined, proc => proc.reply(frames, 255));
+    await assert.rejects(transfer(t.provider), streamQuiet('TRANSFER_EXIT_FAILED'), label);
+    assert.deepEqual([t.proc.calls, t.guest.ids()], [[streamCall(mode)], ['info', 'mountinfo', 'info']], label);
+  }
+});
+
+test('SS8 a transport refusal inside a transfer is TRANSFER_SPAWN_FAILED and spawns nothing', async () => {
+  const snapshot = ONE_FILE();
+  for (const [label, guestOptions, changes, ids] of [
+    ['no ipv4 once the first mount check passed', { info: [guestDetail(), guestDetail({ ipv4: [] })] }, {}, ['info', 'mountinfo', 'info']],
+    ['a relative keyDir', undefined, { keyDir: 'keys' }, ['info', 'mountinfo']],
+  ]) {
+    for (const transfer of [provider => materializeSnapshot({ name: GUEST, snapshot, provider }), provider => importCandidate({ name: GUEST, provider })]) {
+      const t = transferProvider(guestOptions);
+      await assert.rejects(transfer({ ...t.provider, ...changes }), streamQuiet('TRANSFER_SPAWN_FAILED'), label);
+      assert.deepEqual([t.proc.calls, t.guest.ids()], [[], ids], label);
+    }
+  }
+});
+
+test('SS9 all six transfer modes spawn only the ssh client with exactly streamCall, never the Multipass executable or exec', async t => {
+  const MULTIPASS = path.join(tmpdir(), 'moe-stream', 'multipass');
+  const spawns = [], guests = [];
+  const provider = () => {
+    const guest = fakeGuest();
+    const proc = fakeSpawn(child => child.reply([], 1));
+    guests.push(guest);
+    return { executable: MULTIPASS, run: guest.run, ...STREAM, spawn: (...args) => { spawns.push(args); return proc.spawn(...args); } };
+  };
+  const cache = await agentCache(t);
+  for (const transfer of [
+    p => materializeSnapshot({ name: GUEST, snapshot: ONE_FILE(), provider: p }),
+    p => importCandidate({ name: GUEST, provider: p }),
+    p => verifyWorkspace({ name: GUEST, provider: p }),
+    p => agentInstall(cache, { provider: p }),
+    p => installToolchain({ name: GUEST, toolchain: cachedToolchain(t, Buffer.from('toolchain')), provider: p }),
+    p => dependencyTransfer.installDependencies({ name: GUEST, tree: treeOf(), provider: p }),
+  ]) await assert.rejects(transfer(provider()), streamQuiet('TRANSFER_EXIT_FAILED'));
+  assert.deepEqual(spawns, ['materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies'].map(mode => streamCall(mode)));
+  for (const [executable, argv] of spawns) {
+    assert.deepEqual([executable, ...argv].filter(arg => arg === MULTIPASS || arg === 'exec' || /multipass/.test(arg)), [], argv.join(' '));
+  }
+  // provider.executable still drives info and the mount probe, and nothing else.
+  assert.deepEqual(guests.map(guest => [...new Set(guest.calls.map(({ executable }) => executable)), guest.ids()]),
+    Array(6).fill([MULTIPASS, ['info', 'mountinfo', 'info']]));
 });
