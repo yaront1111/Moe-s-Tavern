@@ -65,7 +65,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T20:27:53.237Z",
-  "updatedAt": "2026-11-01T23:06:40.453Z",
+  "updatedAt": "2026-11-01T23:09:20.771Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T22:46:14.937Z",
@@ -88,11 +88,14 @@
     "firstClaimAt": "2026-11-01T22:46:34.581Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-01T23:09:20.771Z",
+    "wallClockMs": 1366190
   },
   "contextFetchedBy": [
     "architect-548034a1",
-    "worker-83c3fcad"
+    "worker-83c3fcad",
+    "qa-1b5727b1"
   ],
   "tier": "standard",
   "effort": "high",
@@ -175,7 +178,46 @@
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/lifecycle.mjs",
+    "scripts/local-runner/guest-readiness.mjs",
+    ".moe/tasks/task-7d7d608264164f98a46a69910284f98c.json",
+    ".moe/tasks/task-efca737f34e54c25b9ffad616a5a1166.json"
+  ],
+  "completionSummary": "waitForGuestReady now uses lifecycle's exported sameOwner (seat records by workerId/runner/host, attempt records by taskId/attemptId/generation), so a foreign seat owner, an attempt owner on a seat record, a seat owner on an attempt record, {}, null and undefined are refused LIFECYCLE_NOT_OWNER before any provider call or ledger write. Added test GR-S1 (with a matching-seat-owner positive control) and the SEAT constant. Attempt-record behavior is unchanged.",
+  "commits": [
+    {
+      "sha": "275f732115cb73f8859fe7c6501c48587a80ed3e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-83c3fcad@2026-11-01T23:04:17Z",
+      "paths": [
+        ".moe/tasks/task-7d7d608264164f98a46a69910284f98c.json",
+        ".moe/tasks/task-efca737f34e54c25b9ffad616a5a1166.json",
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-83c3fcad",
+      "recordedAt": "2026-11-01T23:07:03.153Z",
+      "treeId": "7c77d0ad47b1c617d07a60f92f1ddc3ce57d391e",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/lifecycle.mjs",
     "scripts/local-runner/guest-readiness.mjs"
   ],
-  "completionSummary": "waitForGuestReady now uses lifecycle's exported sameOwner (seat records by workerId/runner/host, attempt records by taskId/attemptId/generation), so a foreign seat owner, an attempt owner on a seat record, a seat owner on an attempt record, {}, null and undefined are refused LIFECYCLE_NOT_OWNER before any provider call or ledger write. Added test GR-S1 (with a matching-seat-owner positive control) and the SEAT constant. Attempt-record behavior is unchanged."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-83c3fcad@2026-11-01T23:04:17Z",
+    "at": "2026-11-01T23:07:03.153Z"
+  },
+  "completedAt": "2026-11-01T23:09:20.771Z",
+  "reviewCompletedAt": "2026-11-01T23:09:20.771Z",
+  "reviewSummary": "Reviewed completion 275f7321 (on moe/work-2026-10-24, kind=completion). Code diff, 3 files, ~31 LOC: guest-readiness.mjs +2/-4 (inline taskId/attemptId/generation check becomes `if (!sameOwner(record, owner)) throw lifecycleError('LIFECYCLE_NOT_OWNER')`, still before the phase check and all provider calls); lifecycle.mjs +2/-1 (sameOwner exported plus a comment, body unchanged, so provisionOwned/deleteOwned/retireRecord are unchanged); local-runner.test.mjs +27 additions only (SEAT and GR-S1). Working tree equals HEAD for these files; no `owner?.` left in guest-readiness.mjs.\n\nRe-ran task.verification exactly as written (git-archive snapshot, clean env, nvm Node 24, both local-runner test files): exit 0, tests 407, pass 406, fail 0, skipped 1 (opt-in macOS native smoke). Matches the worker's claim. All pre-existing tests pass unchanged (DoD 2).\n\nMutation check (second snapshot, old guest-readiness.mjs from 275f7321~1 plus the new test): GR-S1 fails with 'Missing expected rejection: another workerId', so the row fails without the fix.\n\nDoD 1: GR-S1 covers a foreign workerId, runner and host on a seat record, an attempt owner, {}, undefined and null, and a seat owner on an attempt record. All are refused LIFECYCLE_NOT_OWNER (sanitized), with zero provider calls and unchanged record bytes. The positive control (matching seat owner boots, outcome([]), image recorded on the seat record) guards against refusing every seat record. DoD 2: attempt-record semantics are identical (ATTEMPT_KEYS has the same three strict-equality comparisons). Invariants hold: verified-local stays unavailable, and the owner check precedes the phase check and provider calls. Snapshots removed; QA edited and committed nothing.",
+  "requiredCheckAtDone": null
 }
