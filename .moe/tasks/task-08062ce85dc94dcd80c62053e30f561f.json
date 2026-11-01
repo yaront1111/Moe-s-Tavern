@@ -1,0 +1,151 @@
+{
+  "id": "task-08062ce85dc94dcd80c62053e30f561f",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R14d3] Check session over the SSH route",
+  "description": "Sixth slice of task-fd196d137c44497188d2639f149e259b (DESIGN comment-350cb4d0, governor ruling comment-d954b3df). It depends on R14d1 (task-b8734a78) for openGuestStream, and it shares local-runner.test.mjs with R14d1. It touches neither file of R14d2 (task-5e2dcd2c), so the two can run in parallel.\n\n**Objective.** runCheckSession runs the supervisor's check mode over OpenSSH. Certify's watched check sessions must keep the provider fields the route needs. certify's framing session streams about 2 MiB of job stdout, which is the size Windows exec stalls at.\n\n**Deliverable.**\n- **The spawn.** In scripts/local-runner/check-session.mjs, runCheckSession's child comes from `openGuestStream({name, mode: 'check', provider})`, awaited before the check-frame write.\n  - A transport refusal resolves 'infra-failure', with nothing spawned.\n  - ssh's own exit 255 resolves 'infra-failure'. It is never treated as 79, 80, 81 or 82, and never as any other supervisor code (ruling condition 5).\n  - checkArgv is no longer imported. The export stays until the integration row removes it.\n- **Certify pass-through.** watchedSession in scripts/local-runner/certify-bridge.mjs passes `{...context.provider, executable, spawn: watched}` to runCheckSession. Today it rebuilds the provider as `{executable, spawn}`, which would drop `run` (the info read), `ssh` and `keyDir`.\n- **Fake-carrier rows** in scripts/tests/local-runner-check.test.mjs:\n  1. a check frame cut short reaches the real supervisor, which refuses, and the result is 'infra-failure';\n  2. dead stdin, with no hello, gives 'timeout' when the budget fires;\n  3. a stdout stall after hello gives 'timeout';\n  4. ssh exit 255 before hello, and again after hello, gives 'infra-failure', with exitCode null;\n  5. certify's watchedSession forwards provider.run, ssh and keyDir to the route.\n- **Certify assertions.** local-runner.test.mjs certify assertions that expect checkArgv now expect the SSH route.\n\n**Not in scope:** the bridge session (R14d2), transfers (R14d1), removing checkArgv (integration row), guest-supervisor.py and certify's probes and criteria.\n\n**Verification**, in a snapshot and never in place:\n`S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/check-session.mjs scripts/local-runner/certify-bridge.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs`",
+  "definitionOfDone": [
+    "runCheckSession spawns only through openGuestStream with mode 'check'. A row asserts the pinned ssh executable and sshStreamArgv, and that `multipass exec` is never used.",
+    "Each of the three measured failure modes has a fake-carrier row ending in 'infra-failure' or 'timeout', as the description lists, and never 'passed' or 'code-failure'.",
+    "ssh exit 255 before and after hello each resolve to 'infra-failure' with exitCode null (two rows). A transport refusal resolves to 'infra-failure' with no spawn. Exits 79, 80, 81 and 82 keep their existing outcomes.",
+    "certify's watchedSession forwards provider.run, ssh and keyDir to runCheckSession (a row). Every existing C, CJ, CC, CB and certify row stays green, with only its expected executable or argv updated.",
+    "The description's verification command exits 0 in the snapshot, under env -i with Node 24.21.0."
+  ],
+  "taskRails": [
+    "Gate 0: start no implementation step until the governor has posted a Gate 0 PASS comment on task-fd196d137c44497188d2639f149e259b covering Windows (a)-(c) and Linux (a)-(d). Without it, report_blocked with blockedOnTaskIds [] and the reason 'waiting on the governor Gate 0 PASS for the SSH transport'.",
+    "No seat runs Multipass. guest-supervisor.py (its sha256 3a19f3bf… is R13's commit-under-test pin), the R02 image pin and every readiness evaluator stay untouched.",
+    "Write tracked files only with the Edit/Write tools. Shell writes go only into scratch snapshots outside the checkout."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Gate 0 first (task rail). Confirm the governor's Gate 0 PASS comment on task-fd196d137c44497188d2639f149e259b covers Windows (a)-(c) and Linux (a)-(d). Without it, moe.report_blocked with blockedOnTaskIds [] and the reason 'waiting on the governor Gate 0 PASS for the SSH transport', and edit nothing.\n\nThen, in scripts/local-runner/check-session.mjs:\n(1) Imports. Drop checkArgv from the guest-bridge import (the export stays until fd196d13 removes it). Import openGuestStream from './guest-stream.mjs' and isOwnedInstanceName from './lifecycle.mjs'.\n(2) Input checks. The existing condition gains `isOwnedInstanceName(name)`, so a bad name stays CHECK_SESSION_INPUT_INVALID before any spawn, as checkArgv made it. Keep the executable and spawn checks: executable now drives openGuestStream's info read. options becomes { name, provider, frame: checkFrame(check), budgetMs, timeoutMs, signal }.\n(3) After the existing pre-spawn abort check: `let child; try { child = await openGuestStream({ name: options.name, mode: 'check', provider: options.provider }); } catch { child = null; }`, then the existing shape check returning result('infra-failure'). A transport refusal therefore spawns nothing.\n(4) watch().\n  - Right after registering the abort listener, add `if (options.signal?.aborted) s.onAbort();`. An abort during the info read then still kills through stop(s, true), with every listener attached.\n  - Write the check frame only when `!s.closing`.\n  - The budget still starts at spawn, so the info read never consumes it.\n  Error handling:\n  - ssh's own exit 255 already ends in outcomeOf as 'infra-failure', and exitCode is null because infra-failure is not OBSERVED.\n  - Comment that 79, 80, 81 and 82 can only be the supervisor's own exit relayed by ssh, which uses 255 for its own failures, and that no supervisor code is ever derived from 255 (ruling condition 5).\n(5) Update the header and the JSDoc provider line ({executable, run, spawn, ssh, keyDir}) to name the OpenSSH route instead of `multipass exec`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/check-session.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "In scripts/local-runner/certify-bridge.mjs:\n(1) watchedSession passes `provider: { ...context.provider, executable: typeof executable === 'string' ? executable : 'multipass', spawn: watched }` to runCheckSession. Today it rebuilds `{executable, spawn}`, which drops run (the info read), ssh and keyDir, so every certify check session would read info through a real multipass and spawn the host's default ssh. watched itself is unchanged.\n(2) Rewrite the header comment (lines 1-7).\n  - The bridge checks now prove host EOF and exact frame bytes over the OpenSSH stream (-T, no pty) to the forced-command supervisor, not `multipass exec`.\n  - Its argv sentence names the stream argvs (guest-stream.mjs openGuestStream: sshStreamArgv for check and materialize) plus the fixed `multipass exec` probe literals that stay on exec. snapshotArgv no longer exists (R14d1), and checkArgv is no longer used here.\nNothing else changes: probes, criteria, bounds and checks are out of scope.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/certify-bridge.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update the existing rows to the SSH route. Find them by content. Rule: only the expected spawn triple, info/id sequencing and provider wiring change; if a row needs more, stop and name it.\n\n(1) scripts/tests/local-runner-check.test.mjs\n  - Add CHECK_SSH and CHECK_KEYS, tmpdir-based strings.\n  - Add a minimal valid INFO detail: { state: 'Running', image_hash: 'a'.repeat(64), image_release: '24.04 LTS', cpu_count: '2', memory: {}, disks: { sda1: {} }, mounts: {}, ipv4: ['10.0.0.2'] }.\n  - Add infoRun, answering only `info <NAME> --format json`.\n  - Add `checkCall = (name = NAME) => [CHECK_SSH, sshStreamArgv({ ...transportFiles(name, CHECK_KEYS), name, address: '10.0.0.2', mode: 'check' }), PIPES]`.\n  - Wire every provider: hostCheck's, and the two real-supervisor rows' `provider: { spawn }`, become `{ spawn, run: infoRun, ssh: CHECK_SSH, keyDir: CHECK_KEYS }`.\n  - The `['multipass', checkArgv(NAME), ...]` expectations become checkCall(), or its first two elements.\n  - C1 keeps testing checkArgv, which is still exported.\n  - Import sshStreamArgv and transportFiles only if not already bound.\n\n(2) scripts/tests/local-runner.test.mjs (certify and CQ-R11 sections)\n  - Add `streamFor = (provider, mode, name = GUEST) => [provider.ssh, sshStreamArgv({ ...transportFiles(name, provider.keyDir), name, address: '10.0.0.2', mode }), PIPES]`. certifyHarness's deps.provider carries R14c's transportStub ssh and keyDir, and bridgeContext carries R14d1's STREAM_* constants. So each expectation uses its own harness provider, or R14d1's streamCall where that provider is the STREAM one.\n  - Replace every checkArgv(...) session expectation with streamFor or streamCall('check', name). That covers the CB framing, eof and network rows, the containment session.args[1] row (nameAt(8)), the cancel row that pinned windowsPlatform.executable (nameAt(2); the executable becomes that harness provider's ssh), and CJ6's proc.argv.\n  - The certify-cancel stub that calls input.provider.spawn('multipass', checkArgv(...)) calls it with streamFor(input.provider, 'check', input.name) instead.\n  - CJ6's check-harness provider gains run (fakeGuest's), ssh and keyDir if it lacks them.\n  - Each check session adds one info read before its spawn to any asserted provider-call sequence.\n  - Drop checkArgv from the CQ-R11 import once unused.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "New rows CS1-CS8 in a `// CQ-R14d3 check over the SSH route` section at the END of scripts/tests/local-runner-check.test.mjs. Each failure row asserts the exact outcome and exitCode, and that the outcome is never 'passed' or 'code-failure'.\n- CS1. Route.\n  - proc.calls deepEqual [checkCall()].\n  - The provider's run saw exactly one info call before the spawn, and no argv anywhere contains 'exec'.\n- CS2. Transport refusals are 'infra-failure' with proc.calls []:\n  - run rejects;\n  - info has ipv4 [];\n  - keyDir is 'keys' (relative).\n- CS3. Linux truncation against the REAL supervisor's check mode. Reuse the existing real-supervisor spawn behind a stdin-cutting carrier that forwards only the first half of the check frame and then ends the child's stdin.\n  - The python child exits nonzero, as recorded.\n  - The outcome is 'infra-failure' with exitCode null.\n  Gate it exactly like the existing real-supervisor rows.\n- CS4. Windows dead stdin. The write callback never fires and no hello comes. budgetMs 100 and timeoutMs 1000, so the budget fires first.\n  - The outcome is 'timeout'.\n  - kills include 'SIGKILL'.\n- CS5. Windows stdout stall. The carrier sends hello and the first half of an output frame, then silence. With budgetMs 100, the outcome is 'timeout'.\n- CS6. ssh exit 255.\n  - Before hello: 'infra-failure', exitCode null.\n  - After hello and one observation: 'infra-failure', exitCode null, never the observed job code.\n  - Contrast row over the same carrier: the supervisor's own 79 (no frame), 80 (after the observation), 81 (no frame) and 82 (no frame) keep 'skipped', 'inconclusive', 'infra-failure' and 'code-failure' (exitCode 82, CANDIDATE_REFUSAL).\n- CS7. Abort during the info read. run's info waits on a promise; the test aborts and then releases it.\n  - The outcome is 'infra-failure'.\n  - The check frame was never written: proc.written is empty, and kills include 'SIGKILL'.\n- CS8. certify watchedSession pass-through. Import watchedSession from certify-bridge.mjs and call it with context.provider = { executable: E, run: a recording infoRun, ssh: CHECK_SSH, keyDir: CHECK_KEYS, spawn: a recorder }.\n  - The recorder got exactly checkCall()'s triple.\n  - run saw the info call with executable E.\n\nAssert exact values, never truthiness. Kill only processes the test spawned.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verify in a snapshot, never in place (global rail). Run the task's verification command exactly as written, from the repo root. HEAD already holds R14d1's guest-stream.mjs and R14d2's session change, because dependsOn gates this claim:\n\nS=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/check-session.mjs scripts/local-runner/certify-bridge.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs\n\nIt must exit 0 with CS1-CS8 and every C, CJ, CC, CB, certify, canary and real-supervisor row green, and nothing failing or cancelled. Its fresh exit code and output tail are the moe.complete_task evidence.\n\nKill only PIDs you started. No seat runs Multipass.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's own diff, once (skill adversarial-self-review).\n- Can any check session still reach `multipass exec`? Is a transport refusal always 'infra-failure' with no spawn?\n- Is 255 always 'infra-failure' with exitCode null, both before and after hello? Would a mutant mapping 255 to a supervisor code, or reading exitCode from the observation on 255, survive CS6?\n- Could an abort during the info read leave a child running or write the frame? Does the budget still start only at spawn?\n- Does watchedSession now forward run, ssh and keyDir while keeping its own watched spawn? Would a mutant that rebuilds {executable, spawn} survive CS8?\n- Are 79-82 unchanged? Did any existing assertion change beyond its triple, sequencing or wiring?\n- Are checkArgv and C1 intact for the integration row?\n- Are guest-supervisor.py (sha256 3a19f3bf...), the probes and the criteria untouched?\n- Does the diff list only the four planned files?\n\nRe-run step 5's command if anything changed.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b8734a784d6b42d98bd5f2493e2e228e",
+    "task-5e2dcd2c0e9643e19aeddaa1ae9d406d"
+  ],
+  "priority": "HIGH",
+  "order": 254.436,
+  "comments": [
+    {
+      "id": "comment-11effd309ec7455a823ed4b08f367366",
+      "author": "architect-b520bc90",
+      "content": "DEPENDENCY UPDATE (architect-b520bc90). This row now dependsOn R14d2 (task-5e2dcd2c) as well as R14d1.\n\n**Why.** R14d2's plan edits scripts/tests/local-runner.test.mjs: the AJ agentHarness wiring and its bridgeArgv spawn expectations. This row edits the same file for the CJ and certify check-session rows. The epic rail serializes overlapping affectedFiles. The description's \"the two can run in parallel\" no longer holds.\n\n**Also for this row's plan.** The comment on line 5 of scripts/local-runner/certify-bridge.mjs still names snapshotArgv, which R14d1 deletes. Fix it while this row edits that file for the watchedSession provider spread.",
+      "timestamp": "2026-11-01T08:59:11.421Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:05:46.941Z",
+  "updatedAt": "2026-11-01T09:01:40.214Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T08:59:21.881Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T09:01:40.145Z",
+  "executionContract": {
+    "intendedBehavior": "runCheckSession validates its inputs, including isOwnedInstanceName(name). It then opens its stream only through openGuestStream({name, mode: 'check', provider}): the pinned ssh client with exactly sshStreamArgv for the fresh info address. Outcomes:\n- a transport refusal is 'infra-failure' with nothing spawned;\n- ssh's own exit 255 is 'infra-failure' with exitCode null, before or after hello;\n- the supervisor's 79, 80, 81 and 82 keep their outcomes;\n- the budget still starts at spawn, so a dead stdin or a stdout stall ends in 'timeout';\n- an abort during the info read ends in 'infra-failure' without writing the frame.\ncertify's watchedSession forwards the whole context provider (run, ssh, keyDir) with its own watched spawn.",
+    "invariants": [
+      "No check session spawn uses the Multipass executable or an `exec` argv. checkArgv stays exported, and C1 stays green, until the integration row removes it.",
+      "ssh's 255 is never interpreted as a supervisor code, and exitCode is null for every infra-failure.",
+      "Probes, certify criteria, bounds and the check frame are unchanged. guest-supervisor.py (sha256 3a19f3bf…), the R02 pin and readiness are untouched."
+    ],
+    "compatibility": [
+      "runCheckSession keeps its signature, the CHECK_SESSION_INPUT_INVALID refusal and its outcome set. provider.executable still drives info, and run, ssh, keyDir and spawn are optional.",
+      "certify-containment and certify-lifecycle already spread input.provider, and check-lifecycle passes its full provider kit, so only watchedSession needed the spread."
+    ],
+    "sourceAssumptions": [
+      "check-session.mjs builds options.argv with checkArgv(name) and spawns synchronously today (around lines 46-66). watch() starts the budget at spawn, and outcomeOf maps any other exit before hello to 'infra-failure'.",
+      "certify-bridge.mjs watchedSession (around line 66) rebuilds the provider as {executable, spawn: watched}. Line 5 still names snapshotArgv, which R14d1 removed.",
+      "Test sites today: local-runner-check.test.mjs has hostCheck and two real-supervisor rows using `provider: { spawn }`. local-runner.test.mjs has certify CB, network, containment and cancel rows and CJ6 expecting checkArgv."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/check-session.mjs scripts/local-runner/certify-bridge.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected alternatives:\n- Interpreting a 255 after an observation as the job's code. Ruling condition 5 says never.\n- Moving the budget start before the info read. The budget is documented as the host's wall clock from spawn, and the info read is already bounded by QUERY_TIMEOUT_MS.\n- Leaving watchedSession's rebuild and injecting run/ssh in each certify caller. watchedSession is the one choke point.",
+    "codebaseInsights": "Only watchedSession drops provider fields. The other session callers (certify-containment, certify-lifecycle, certify-canary through runCheckJob, check-lifecycle) spread or pass the full provider. Certify-harness rows carry R14c's transportStub ssh and keyDir, while bridgeContext carries R14d1's STREAM constants, so expected argvs must come from each harness's own provider.",
+    "risks": "- CS4 needs budgetMs below timeoutMs, or the write deadline's stop(s, true) yields 'infra-failure' instead of 'timeout'.\n- Duplicate import bindings are SyntaxErrors.\n- The certify cancel row pinned windowsPlatform.executable as the spawn executable; it becomes the harness provider's ssh.\n- Real-supervisor rows need python3, so gate them like the existing ones.",
+    "keyFiles": [
+      "scripts/local-runner/check-session.mjs",
+      "scripts/local-runner/certify-bridge.mjs",
+      "scripts/local-runner/guest-stream.mjs",
+      "scripts/tests/local-runner-check.test.mjs",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4e479ba2e7f0d74e622ab1ebaf608e1f09f5da1b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T09:01:40.214Z",
+  "approvedPlanRevision": 1
+}

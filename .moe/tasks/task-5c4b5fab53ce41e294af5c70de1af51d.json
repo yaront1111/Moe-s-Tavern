@@ -1,0 +1,127 @@
+{
+  "id": "task-5c4b5fab53ce41e294af5c70de1af51d",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07e] Certify files certified reports in the host certification store",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation, decision 4 (human, 2026-11-01: \"a certified run writes its report into a fixed per-user store\").\n\nGATE: BACKLOG until task-fd196d13's transport design has its governor ruling (that row's DoD 1); then move it to PLANNING. It depends on fd196d13 because both may edit the certify flow in scripts/local-runner. HIGH: land it BEFORE the operator's re-certify, so those reports reach the store without a manual copy.\n\nObjective: a native, certified certify run also files its report where the daemon reads it (CQ-M07a, task-5a635bc9).\n\nDeliverable: scripts/local-runner/certify.mjs. After writeReport, when transport is 'native' and certified is true, write the identical bytes into <OS account home>/.moe/certification/ (home from os.userInfo().homedir, as CQ-M07a reads it), under the same file name: dir 0700, file 0600, exclusive create, never overwrite.\n- A failed store write never changes the workDir report, the run's result or its exit. Surface it as a fixed field or code; the planner decides, and if the report schema changes, validateCertificationReport and CQ-M07a's port change together.\n- An injected (certifyCore) run never certifies, so it never writes the store; test the filing through an exported helper with an injected home.\n\nNOT in scope: the daemon reader; any certify check; operator docs (CQ-M07 sweep).\n\nVerification: in a git-archive snapshot of `scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github` with this task's files overlaid: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs (mem:gotcha-local-runner-tests).",
+  "definitionOfDone": [
+    "A native certified report is filed in the store under its own name, owner-only, and an existing file of that name is never overwritten (node --test rows with an injected home).",
+    "Injected or uncertified runs write nothing to the store (rows).",
+    "A store write failure leaves the workDir report and the run's result unchanged (row).",
+    "The local-runner suite passes in a git-archive snapshot under env -i with the nvm Node 24."
+  ],
+  "taskRails": [
+    "No seat runs Multipass; the real certify run is the operator's."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "In scripts/local-runner/certify.mjs, file each native certified report in the host certification store (mem:decision-cq-m07-verified-local-activation, decision 4).\n(1) One serialization. Extract `reportBytes = report => `${JSON.stringify(report)}\\n``, used by writeReport and by the new helper, so the store copy is byte-identical by construction. writeReport now returns the basename it created. Its naming, 'wx' 0600 and unlink-on-failure stay unchanged.\n(2) MESSAGES gains two fixed codes, and no message names a path:\n  - CERTIFY_STORE_UNSAFE: 'The host certification store is unusable: missing home, a symlink, not a directory, not owned by this account or not owner-only.'\n  - CERTIFY_STORE_WRITE_FAILED: 'The certified report could not be filed exclusively in the host certification store.'\n(3) Export `async fileCertifiedReport({ report, name, home, warn = line => process.stderr.write(line) } = {})`. It never rejects and resolves a frozen { store: 'filed' | 'skipped' | 'failed', code }:\n  - 'skipped', code null, touching nothing, unless report.transport === 'native' && report.certified === true;\n  - validateCertificationReport(report), or failed CERTIFY_REPORT_INVALID;\n  - name must match /^certification-(win32|linux|darwin)-(x64|arm64)-\\d{8}T\\d{6}Z-[0-9a-f]{6}\\.json$/ with platform and arch equal to the report's, or failed CERTIFY_STORE_WRITE_FAILED;\n  - home must be an absolute, control-free string, or failed CERTIFY_STORE_UNSAFE;\n  - store = path.join(home, '.moe', 'certification'), created with mkdir(store, {recursive: true, mode: 0o700});\n  - lstat <home>/.moe and the store: each must be a directory and not a symlink (decision 4: symlinks refused). On POSIX each must be owned by process.getuid(), and the store's mode & 0o077 must be 0. Any failure is CERTIFY_STORE_UNSAFE: the store is never chmodded, and nothing is written through a link.\n  - open(path.join(store, name), 'wx', 0o600), then write reportBytes(report), sync and close. An existing file is never overwritten (EEXIST). On any failure after open, unlink only the file this call created. Every write failure is CERTIFY_STORE_WRITE_FAILED.\n  Error handling: every failure path calls warn exactly once with `${JSON.stringify({ code })}\\n`, inside try/catch so a throwing warn changes nothing, and resolves 'failed'.\n(4) In certify(), after `const name = await writeReport(...)`: `if (native && report.certified === true) await fileCertifiedReport({ report, name, home: hostHome() })`, then `return report` unchanged.\n  - hostHome() is `try { return os.userInfo().homedir; } catch { return null; }`. It uses os.userInfo().homedir, NOT os.homedir(), and has no env override.\n  - The workDir report, the returned report, the CLI's stdout and its exit are unchanged by any store outcome.\n(5) Add a header bullet for CQ-M07e: the store path, the refusals, and that injected runs never file. Also note that the daemon reader (CQ-M07a) owns the project and .moe/ containment refusals.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/certify.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add rows HS1-HS5, in a `// CQ-M07e host certification store` section beside the certify rows in scripts/tests/local-runner.test.mjs. Import fileCertifiedReport by extending the existing certify.mjs import line; a duplicate binding is a SyntaxError.\n\nFixtures:\n  - NATIVE = certification({ transport: 'native', certified: true }), whose every check passed;\n  - NAME = `certification-win32-x64-${STARTED stamp}-0a0b0c.json`;\n  - home = scratch(t), injected;\n  - warn = a recorder.\nAssert exact values, never truthiness.\n- HS1 (DoD 1).\n  - The helper resolves { store: 'filed', code: null }.\n  - readFileSync(<home>/.moe/certification/NAME, 'utf8') === `${JSON.stringify(NATIVE)}\\n`.\n  - readdirSync(store) is exactly [NAME].\n  - POSIX only: the store mode & 0o777 is 0o700 and the file is 0o600.\n  - warn was never called.\n- HS2 (DoD 1). With that file pre-created holding 'old\\n', the result is { store: 'failed', code: 'CERTIFY_STORE_WRITE_FAILED' }, the bytes stay 'old\\n', and warn got exactly ['{\"code\":\"CERTIFY_STORE_WRITE_FAILED\"}\\n'].\n- HS3 (DoD 2). These are skipped, with existsSync(<home>/.moe) === false and no warn:\n  - certification() (injected);\n  - certification({ transport: 'native', certified: false, checks: <one failed> }).\n  - Also, CF1's injected certifyCore run leaves the real store's listing unchanged. This is a read-only before/after readdir of path.join(os.userInfo().homedir, '.moe', 'certification'), where absent stays absent.\n- HS4. Refusals, each 'failed' with the code shown, nothing created through a link, and one warn line:\n  - POSIX: store is a symlink to an outside dir → UNSAFE, and the target stays empty;\n  - POSIX: <home>/.moe is a symlink → UNSAFE;\n  - POSIX: a pre-existing store at 0o755 → UNSAFE, and its mode is left at 0o755;\n  - home is 'relative', '' or null → UNSAFE;\n  - a NAME whose arch segment disagrees with the report, or holding '/' → WRITE_FAILED;\n  - a report whose certified contradicts its checks → CERTIFY_REPORT_INVALID.\n- HS5 (DoD 3). Write a workDir report file holding `${JSON.stringify(NATIVE)}\\n` and keep a structuredClone of NATIVE. Call the helper with an UNSAFE home, and once more with a warn that throws.\n  - Both resolve 'failed' and never reject.\n  - The workDir file's bytes are unchanged, and NATIVE still deepEquals the clone and stays deep-frozen.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify in a snapshot, never in place (global rail; mem:gotcha-local-runner-tests). HEAD already holds fd196d13's transport changes, because dependsOn gates this claim. Run from the repo root:\n\nS=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/certify.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs\n\nIt must exit 0 with HS1-HS5 and every CF, certify and CLI row green, and nothing failing or cancelled. Its fresh exit code and output tail are the moe.complete_task evidence.\n\nAlso quote `ls ~/.moe/certification 2>/dev/null | wc -l` before and after. No test may add a file there.\n\nNo seat runs Multipass; the real certify run is the operator's (task rail).",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's own diff, once (skill adversarial-self-review).\n- Can an injected (certifyCore) or uncertified run ever reach the store?\n- Can the store copy differ from the workDir bytes? It must not: one reportBytes.\n- Can any store outcome change the returned report, stdout or the exit code? Can warn throw through?\n- Is anything ever written through a symlinked .moe or store, or into an existing name?\n- Is a pre-existing shared store refused rather than chmodded?\n- Is os.homedir(), HOME or USERPROFILE used anywhere? It must not be: only os.userInfo().homedir.\n- Concurrency: two certified runs file distinct names (the 6-hex suffix), and 'wx' settles any clash without overwrite.\n- Is TOCTOU between lstat and open acceptable? Yes: same-user processes are outside the threat model (decision 4, CQ-RF05). Say so in a comment.\n- Would a mutant that drops 'wx', drops the symlink check, files injected reports or rethrows a store failure survive any HS row? If so, tighten that row.\n- Does the diff list only the two planned files?\n\nRe-run step 3's command if anything changed.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by governor at the M07 planner's request (R13 comment-af1028a5): fd196d13's transport design is ruled (comment-d954b3df). The certification store is its own owner-only dir, separate from ~/.moe/guest-ssh and runner-keys. dependsOn fd196d13 still gates WORKING.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-fd196d137c44497188d2639f149e259b"
+  ],
+  "priority": "HIGH",
+  "order": 231.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:08:36.745Z",
+  "updatedAt": "2026-11-01T09:05:17.231Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-01T08:16:01.364Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T09:01:53.141Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T09:05:17.211Z",
+  "executionContract": {
+    "intendedBehavior": "After certify() writes the workDir report, a NATIVE run whose report is certified also files a byte-identical copy at <os.userInfo().homedir>/.moe/certification/<same basename>:\n- the store dir is 0700 and the file 0600;\n- the file is created exclusively and never overwritten;\n- .moe and the store must be real directories, not symlinks, owned by this account, and the store owner-only on POSIX.\nfileCertifiedReport never rejects. A failure resolves { store: 'failed', code } with CERTIFY_STORE_UNSAFE, CERTIFY_STORE_WRITE_FAILED or CERTIFY_REPORT_INVALID, and writes that one fixed JSON code line to stderr. The workDir report, the returned report, stdout and the exit code stay unchanged. Injected and uncertified runs never touch the store.",
+    "invariants": [
+      "certifyCore can never file: it is never native, and the helper skips any report that is not native and certified.",
+      "The store copy's bytes equal the workDir report's bytes (one reportBytes serialization).",
+      "No env override and no os.homedir(). Nothing is written through a symlink, an existing file is never overwritten, and a pre-existing unsafe store is refused, never chmodded.",
+      "The report schema and validateCertificationReport are unchanged, so CQ-M07a's port is unaffected."
+    ],
+    "compatibility": [
+      "runIsolationCertify still takes exactly { workDir } and returns the same frozen report. cli.mjs prints the same stdout and exits 0 only when certified.",
+      "The workDir report file keeps its name, bytes and modes."
+    ],
+    "sourceAssumptions": [
+      "certify.mjs writeReport (around line 91) builds certification-<platform>-<arch|unknown>-<YYYYMMDDTHHMMSSZ>-<6 hex>.json, writes `${JSON.stringify(report)}\\n` with 'wx' 0600, and returns nothing today. certify() calls it last and returns the frozen report.",
+      "Decision 4 (human, 2026-11-01, mem:decision-cq-m07-verified-local-activation): store <os.userInfo().homedir>/.moe/certification, no env override, symlinks refused. The daemon reader CQ-M07a (task-5a635bc9) accepts only native certified reports that match the live host.",
+      "The test fixture certification(changes) is an all-passed win32/x64 report with transport 'injected' and certified false. CF1 runs an injected certifyCore."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/certify.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected ways to surface a store failure:\n- A report field. The report is written before the store copy and must be byte-identical, and a new field would move the schema plus M07a's port.\n- A thrown error. That changes the run's result and the CLI exit (DoD 3).\n- An extra key on the returned object. validateCertificationReport refuses extra keys on any printed report.\nChosen: one fixed JSON code line on stderr, plus the helper's resolved status for tests. Store permissions are refused, never chmodded, so a shared store fails visibly.",
+    "codebaseInsights": "The native entry runIsolationCertify takes exactly {workDir} and cannot be injected, by design. So the filing is a separate exported helper with an injected home, and certify() calls it only for native certified reports. cli.mjs prints the returned report and exits 0 only when certified === true.",
+    "risks": "- os.userInfo() can throw (no passwd entry), which hostHome maps to null and then UNSAFE.\n- Windows: mode, uid and symlink rows skip on win32; lstat treats junctions as symbolic links.\n- The HS3 real-store check is read-only and must never create the dir.\n- A duplicate import binding is a SyntaxError, so extend the existing certify import line.",
+    "keyFiles": [
+      "scripts/local-runner/certify.mjs",
+      "scripts/local-runner/cli.mjs",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4e479ba2e7f0d74e622ab1ebaf608e1f09f5da1b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T09:05:17.231Z",
+  "approvedPlanRevision": 1
+}

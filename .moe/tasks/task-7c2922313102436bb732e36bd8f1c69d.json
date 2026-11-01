@@ -106,7 +106,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -135,16 +135,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:04:48.032Z",
-  "updatedAt": "2026-11-01T09:00:44.594Z",
+  "updatedAt": "2026-11-01T09:05:13.297Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:20:22.737Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-01T09:05:13.297Z",
+    "wallClockMs": 2690560
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-009c883d"
+    "worker-009c883d",
+    "qa-1e84238e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -223,7 +226,72 @@
     "scripts/local-runner/provision.mjs",
     "scripts/local-runner/lifecycle.mjs",
     "scripts/tests/local-runner.test.mjs",
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-201aebc6721a40c1b426bca64fce1eda.json",
+    ".moe/tasks/task-5e2dcd2c0e9643e19aeddaa1ae9d406d.json",
+    ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json",
+    ".moe/tasks/task-7c2922313102436bb732e36bd8f1c69d.json",
+    ".moe/tasks/task-b8734a784d6b42d98bd5f2493e2e228e.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+  ],
+  "completionSummary": "CQ-R14c delivered: provisionGuest now mints the per-VM SSH transport keys, and purgeOwned removes them. Four files: provision.mjs (+47/-3), lifecycle.mjs (+10), local-runner.test.mjs (+193/-12), docs/TROUBLESHOOTING.md (+2). The pinned-client test file, guest-supervisor.py, the R02 pin and every readiness evaluator are untouched.\n\n**provisionGuest**\n- It resolves `provider.ssh ?? sshExecutable(platform.id)` after the prerequisites and the primary-name check, and before buildUserData, the image cache and the reservation. A null, absent or non-regular-file client refuses with the new fixed PROVISION_TRANSPORT_UNAVAILABLE, so nothing is fetched, reserved or launched.\n- It calls createTransportKeys() once and passes the keys to buildUserData as `transport`, so every launch retry sends byte-identical user-data.\n- Once provisionOwned owns the VM and the win32 image-id proof has passed, it writes `<keyDir>/<name>.key` (client private key) and `<name>.known_hosts` (`<name> <host public key>\\n`). keyDir is `provider.keyDir ?? defaultKeyDir()`: mkdir recursive 0700, files written with flag 'wx' and mode 0600. Any failure is a fresh PROVISION_TRANSPORT_FAILED with no cause and no fs message. The owned record stays for cleanup.\n- The result is unchanged and holds no key bytes, path or address. The host private key is never written to host disk. The client private key never enters user-data.\n\n**purgeOwned**\n- It names both files first, before any provider call. If it cannot (relative or control-character keyDir), it throws LIFECYCLE_INPUT_INVALID and the VM is not deleted.\n- After the instance is verified absent and before the record is marked deleted, it unlinks both files. ENOENT is fine; any other error is LIFECYCLE_STATE_UNKNOWN and the record stays. A later cleanup re-queries, skips the delete and unlinks again.\n\n**Tests**\n- Harness: `transportStub(t)` gives a stub ssh file and a temp key dir in its own scratch root. It is wired into provisionHarness, provisionWith, the lif",
+  "commits": [
+    {
+      "sha": "4e479ba2e7f0d74e622ab1ebaf608e1f09f5da1b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-009c883d@2026-11-01T08:50:41Z",
+      "paths": [
+        ".moe/tasks/task-201aebc6721a40c1b426bca64fce1eda.json",
+        ".moe/tasks/task-5e2dcd2c0e9643e19aeddaa1ae9d406d.json",
+        ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json",
+        ".moe/tasks/task-7c2922313102436bb732e36bd8f1c69d.json",
+        ".moe/tasks/task-b8734a784d6b42d98bd5f2493e2e228e.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+        ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/provision.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-009c883d",
+      "recordedAt": "2026-11-01T09:01:04.196Z",
+      "treeId": "2799f5b46f5c81d2e138c1e1986ceb2618b008bf",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-48f0b3aaa82c4b938d3a15f3710a66e5"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/provision.mjs",
+    "scripts/local-runner/lifecycle.mjs",
+    "scripts/tests/local-runner.test.mjs",
     "docs/TROUBLESHOOTING.md"
   ],
-  "completionSummary": "CQ-R14c delivered: provisionGuest now mints the per-VM SSH transport keys, and purgeOwned removes them. Four files: provision.mjs (+47/-3), lifecycle.mjs (+10), local-runner.test.mjs (+193/-12), docs/TROUBLESHOOTING.md (+2). The pinned-client test file, guest-supervisor.py, the R02 pin and every readiness evaluator are untouched.\n\n**provisionGuest**\n- It resolves `provider.ssh ?? sshExecutable(platform.id)` after the prerequisites and the primary-name check, and before buildUserData, the image cache and the reservation. A null, absent or non-regular-file client refuses with the new fixed PROVISION_TRANSPORT_UNAVAILABLE, so nothing is fetched, reserved or launched.\n- It calls createTransportKeys() once and passes the keys to buildUserData as `transport`, so every launch retry sends byte-identical user-data.\n- Once provisionOwned owns the VM and the win32 image-id proof has passed, it writes `<keyDir>/<name>.key` (client private key) and `<name>.known_hosts` (`<name> <host public key>\\n`). keyDir is `provider.keyDir ?? defaultKeyDir()`: mkdir recursive 0700, files written with flag 'wx' and mode 0600. Any failure is a fresh PROVISION_TRANSPORT_FAILED with no cause and no fs message. The owned record stays for cleanup.\n- The result is unchanged and holds no key bytes, path or address. The host private key is never written to host disk. The client private key never enters user-data.\n\n**purgeOwned**\n- It names both files first, before any provider call. If it cannot (relative or control-character keyDir), it throws LIFECYCLE_INPUT_INVALID and the VM is not deleted.\n- After the instance is verified absent and before the record is marked deleted, it unlinks both files. ENOENT is fine; any other error is LIFECYCLE_STATE_UNKNOWN and the record stays. A later cleanup re-queries, skips the delete and unlinks again.\n\n**Tests**\n- Harness: `transportStub(t)` gives a stub ssh file and a temp key dir in its own scratch root. It is wired into provisionHarness, provisionWith, the lif"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-009c883d@2026-11-01T08:50:41Z",
+    "at": "2026-11-01T09:01:04.196Z"
+  },
+  "completedAt": "2026-11-01T09:05:13.297Z",
+  "reviewCompletedAt": "2026-11-01T09:05:13.297Z",
+  "reviewSummary": "APPROVED. Commit 4e479ba2 on moe/work-2026-10-24, owned paths clean. Diff: provision.mjs +47/-3, lifecycle.mjs +10, local-runner.test.mjs +193/-12, TROUBLESHOOTING.md +2 (~267 lines). Matches the plan; pinned-client test, guest-supervisor.py, R02 pin, readiness untouched.\n\nRe-ran task.verification in a git-archive snapshot (env -i, Node 24.21.0): rc=0, 380 tests, 379 pass, 0 fail, 1 skip. ~/.moe/guest-ssh moe-vm- count 0 before and after. Windows node run of both files: 376 tests, 0 fail.\n\nDoD1: PK1 shows one key set in user-data; key file is the client private key; known_hosts is exactly `<name> <host pub>\\n`; 0700/0600; client private key not in user-data, host private key not on disk.\nDoD2: PK2 (null/absent/empty/directory client): PROVISION_TRANSPORT_UNAVAILABLE, 0 fetches, 0 launches.\nDoD3: PK3 (existing file, symlink, dangling symlink): PROVISION_TRANSPORT_FAILED, bytes and links unchanged, record 'owned'.\nDoD4: PK4 (deleteOwned, cleanupOwned) and PK5 (non-ENOENT unlink: LIFECYCLE_STATE_UNKNOWN, record kept; relative keyDir: LIFECYCLE_INPUT_INVALID).\nDoD5: no 'PRIVATE KEY' or keyDir in result or rejections, own keys ['code']. Existing rows green.\n\nMy 10 mutants on a clean archive: 9 killed. One survivor, non-blocking: writing the key files after waitForGuestReady passes all rows; the spec does not pin that order. R14d1 or the RF row should add a readiness-fails-then-keys-purged row.",
+  "requiredCheckAtDone": null
 }

@@ -1,0 +1,40 @@
+{
+  "id": "task-5a635bc90aaa47acabede9307dd1579b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07a] Daemon reader for host certification evidence",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8, the integration row). Design: mem:decision-cq-m07-verified-local-activation (human decisions 2026-11-01; report trust = \"host store, live match\").\n\nObjective: give the daemon one fail-closed reader that turns this host's certification store into checked evidence. CQ-M07b's readiness evaluator consumes it. Nothing in this slice grants readiness.\n\nDeliverable: new packages/moe-daemon/src/delivery/certificationEvidence.ts plus its vitest file.\n- Store: <OS account home>/.moe/certification/. Take the home from the OS account record (os.userInfo().homedir; check on Windows that it ignores USERPROFILE), never os.homedir(), which honors HOME/USERPROFILE. No env var, setting or caller argument relocates it; tests pass the directory as a function parameter.\n- Read discipline, as scripts/local-runner/runner-client.mjs readSmall: regular files only, no symlink (O_NOFOLLOW where supported, lstat otherwise), a size cap, strict JSON. A store whose real path is inside the project root or its .moe/ is refused.\n- A report is accepted only if it has exactly the schema of scripts/local-runner/certify.mjs validateCertificationReport (a TypeScript port, with a drift test against certify.mjs: the same keys, the check ids in CERTIFY_CHECKS order, the code rules) AND transport 'native', certified true, platform and arch equal to this host (process.platform; process.arch mapped to x64/arm64), image.sourceSha256 equal to the shipped pin for that arch (scripts/local-runner/certified-provider.json), supervisorSha256 equal to the sha256 of the shipped guest-supervisor.py, and provider.version equal to a pinned version plus this platform's suffix. The LIVE Multipass version is not read here (CQ-M07b).\n- Pins come from the daemon's own install, never the project: either a compiled constant generated from certified-provider.json and guest-supervisor.py with a drift test, or files resolved inside the daemon's install root and refused when inside the project. The plugin layout is <root>/daemon/dist next to <root>/scripts/local-runner (moe-jetbrains/build.gradle.kts); the repo layout differs. The planner picks one and says why.\n- Returns a frozen result: the newest matching report (by finishedAt) with its sha256, or a list of fixed refusal codes. It never throws on bad input.\n\nNOT in scope: certify writing the store (CQ-M07e); the live version probe, the readiness snapshot and assertExecutionProfileReady (CQ-M07b/c); any client.\n\nVerification: the new vitest file plus the drift test, run in a git-archive snapshot with this task's files overlaid, never in the shared checkout (global rail). For example: S=$(mktemp -d) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && <copy this task's files> && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci && npx vitest run src/delivery/certificationEvidence.test.ts'",
+  "definitionOfDone": [
+    "A valid native, certified report for this host's platform and arch with the shipped image and supervisor pins is returned with its sha256, proven by vitest rows that pass a temp store as a parameter.",
+    "Each single mismatch is refused with its own fixed code and no report: injected transport, certified false, another platform, another arch, another image sha, another supervisor sha, an unpinned provider version, an extra or missing key, check rows out of CERTIFY_CHECKS order, malformed JSON and an oversize file (vitest table).",
+    "A symlinked store or report file, a non-regular file, and a store resolving inside the project root or its .moe/ are refused; HOME/USERPROFILE pointing at a directory holding a valid report changes nothing, because the default store comes from the OS account record (vitest).",
+    "A drift test fails when the TypeScript schema port or the pins diverge from scripts/local-runner/certify.mjs, certified-provider.json or guest-supervisor.py.",
+    "The named vitest run passes in a git-archive snapshot, not in the shared checkout."
+  ],
+  "taskRails": [
+    "Nothing in this slice may make assertExecutionProfileReady pass; it only reads and checks evidence.",
+    "Never relocate the store from an env var, a setting or a caller argument."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.01,
+  "comments": [
+    {
+      "id": "comment-e9e780c91e204addaf6eda811af762d6",
+      "author": "architect-b520bc90",
+      "content": "WRITER CONTRACT for the reader (architect-b520bc90). CQ-M07e (task-5c4b5fab) is planned, at rev 1. Please plan this reader to match it.\n\n- **Path.** The store is `path.join(os.userInfo().homedir, '.moe', 'certification')`. It uses os.userInfo().homedir, never os.homedir(), and has no env override.\n- **When it files.** Only a report with transport 'native' and certified true is filed, after validateCertificationReport passes.\n- **File name.** The file has the same basename as the workDir report: `certification-<win32|linux|darwin>-<x64|arm64>-<YYYYMMDDTHHMMSSZ>-<6 hex>.json`.\n- **Bytes.** The file holds exactly `JSON.stringify(report) + '\\n'`. It is byte-identical to the workDir copy and unsigned.\n- **Modes.**\n  - The store dir is created 0700, and the file is opened with 'wx' at 0600, so it is never overwritten.\n  - The writer refuses, with CERTIFY_STORE_UNSAFE, when <home>/.moe or the store is a symlink or not a directory. On POSIX it also refuses when either is not owned by the current uid, or when the store's mode & 0o077 is not 0. It never chmods.\n- **Not in the report.** The report schema is unchanged. A store failure shows up only as one fixed JSON code line on certify's stderr.\n- **Left to the reader**, per decision 4:\n  - the \"store resolving inside the project or .moe/\" refusal;\n  - the live-match checks (platform, arch, live Multipass version, shipped image and supervisor pins).\n  The writer has no project context.",
+      "timestamp": "2026-11-01T09:05:24.952Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:06:33.518Z",
+  "updatedAt": "2026-11-01T09:05:24.952Z"
+}
