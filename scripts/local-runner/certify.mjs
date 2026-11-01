@@ -9,8 +9,13 @@
 // read c.platform, c.cacheDir and c.supervisor) and 'controller-replacement', which replaces this VM's supervisor, so it is last on it.
 // CQ-R13h adds 'cancellation' and 'recovery' (certify-lifecycle.mjs) last before 'teardown', with LIFECYCLE_BOUNDS in BOUNDS.
 // CQ-R13g adds 'canary-check' (certify-canary.mjs) after them; it needs host network for the toolchain and one registry tarball.
+// CQ-M07e: a native, certified run also files a byte-identical copy of its report in <os.userInfo().homedir>/.moe/certification (dir 0700,
+// file 0600, exclusive, never overwritten; no env override). .moe and the store must be real directories owned by this account and the
+// store owner-only, else it is refused, never chmodded. A store failure only writes one fixed JSON code line to stderr: the workDir
+// report, the result and the exit never change. An injected run never files. The daemon reader (CQ-M07a) owns the project and .moe/ containment refusals.
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, open, readFile, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, unlink } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { BRIDGE_BOUNDS, BRIDGE_CHECKS } from './certify-bridge.mjs';
 import { CANARY_CHECKS } from './certify-canary.mjs';
@@ -34,6 +39,8 @@ const MESSAGES = {
   CERTIFY_UNSUPPORTED_HOST: 'This host has no platform module; isolation cannot be certified here.',
   CERTIFY_REPORT_INVALID: 'The certification report does not match the current schema and checks.',
   CERTIFY_REPORT_WRITE_FAILED: 'The certification report could not be created exclusively.',
+  CERTIFY_STORE_UNSAFE: 'The host certification store is unusable: missing home, a symlink, not a directory, not owned by this account or not owner-only.',
+  CERTIFY_STORE_WRITE_FAILED: 'The certified report could not be filed exclusively in the host certification store.',
 };
 const certifyError = code => Object.assign(new Error(MESSAGES[code]), { code });
 const isRecord = value => value !== null && typeof value === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(value));
@@ -87,22 +94,72 @@ async function providerVersion(doctor = runDoctor, executable) {
   return report?.providerReady === true && typeof report.version === 'string' && VERSION.test(report.version) ? report.version : null;
 }
 
+// The one serialization: the workDir report and the store copy are the same bytes by construction.
+const reportBytes = report => `${JSON.stringify(report)}\n`;
+
+// Creates `file` exclusively and owner-only. An existing name (or link) fails at open, before anything is created or removed;
+// a failure after the create removes only the file this call created.
+async function createNew(file, text) {
+  const handle = await open(file, 'wx', 0o600);
+  try {
+    try { await handle.writeFile(text, 'utf8'); await handle.sync(); } finally { await handle.close(); }
+  } catch (error) { await unlink(file).catch(() => {}); throw error; }
+}
+
 // <workDir>/certification-<platform>-<arch>-<YYYYMMDDTHHMMSSZ>-<6 hex>.json, Windows-safe, exclusive and owner-only: never overwrites.
+// Resolves the file's base name.
 async function writeReport(workDir, report, random = randomBytes) {
-  let file, handle;
   try {
     const suffix = random(3);
     if (!Buffer.isBuffer(suffix) || suffix.length !== 3) throw certifyError('CERTIFY_REPORT_WRITE_FAILED');
     const stamp = `${report.startedAt.slice(0, 19).replace(/[-:]/g, '')}Z`;
-    file = path.join(workDir, `certification-${report.platform}-${report.arch ?? 'unknown'}-${stamp}-${suffix.toString('hex')}.json`);
+    const name = `certification-${report.platform}-${report.arch ?? 'unknown'}-${stamp}-${suffix.toString('hex')}.json`;
     await mkdir(workDir, { recursive: true, mode: 0o700 });
-    handle = await open(file, 'wx', 0o600);
-    try { await handle.writeFile(`${JSON.stringify(report)}\n`, 'utf8'); await handle.sync(); } finally { await handle.close(); }
-  } catch {
-    if (handle) await unlink(file).catch(() => {});
-    throw certifyError('CERTIFY_REPORT_WRITE_FAILED');
+    await createNew(path.join(workDir, name), reportBytes(report));
+    return name;
+  } catch { throw certifyError('CERTIFY_REPORT_WRITE_FAILED'); }
+}
+
+const STORE_NAME = /^certification-(win32|linux|darwin)-(x64|arm64)-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/;
+const STORE_CODES = ['CERTIFY_STORE_UNSAFE', 'CERTIFY_STORE_WRITE_FAILED', 'CERTIFY_REPORT_INVALID'];
+
+// A real directory (never a link or junction) owned by this account, and for the store also owner-only on POSIX. Created 0700 when
+// missing (its parent must exist), never chmodded: a pre-existing unsafe one is refused. mkdir fails EEXIST on a link, so nothing is created through it.
+async function realDir(dir, ownerOnly) {
+  try {
+    await mkdir(dir, { mode: 0o700 }).catch(error => { if (error?.code !== 'EEXIST') throw error; });
+    const info = await lstat(dir);
+    const posix = typeof process.getuid === 'function';
+    if (info.isDirectory() && !info.isSymbolicLink() && (!posix || (info.uid === process.getuid() && (!ownerOnly || (info.mode & 0o077) === 0)))) return;
+  } catch { /* unsafe below */ }
+  throw certifyError('CERTIFY_STORE_UNSAFE');
+}
+
+/** CQ-M07e: files a native, certified report in the host store. Never rejects; resolves a frozen { store: 'filed' | 'skipped' | 'failed', code }.
+ * Any other report is 'skipped' and touches nothing. A failure writes one `{"code":...}` line through `warn` and changes nothing else. A
+ * same-user race between the checks and the open is outside the threat model (decision 4, CQ-RF05). */
+export async function fileCertifiedReport(input) {
+  const { report, name, home, warn = line => process.stderr.write(line) } = isRecord(input) ? input : {};
+  try {
+    if (report?.transport !== 'native' || report.certified !== true) return Object.freeze({ store: 'skipped', code: null });
+    const copy = validateCertificationReport(report);
+    const [, platform, arch] = STORE_NAME.exec(typeof name === 'string' ? name : '') ?? [];
+    if (platform !== copy.platform || arch !== copy.arch) throw certifyError('CERTIFY_STORE_WRITE_FAILED');
+    if (!validWorkDir(home)) throw certifyError('CERTIFY_STORE_UNSAFE');
+    const store = path.join(home, '.moe', 'certification');
+    await realDir(path.dirname(store), false);
+    await realDir(store, true);
+    await createNew(path.join(store, name), reportBytes(copy)); // any failure here is an fs error: CERTIFY_STORE_WRITE_FAILED below
+    return Object.freeze({ store: 'filed', code: null });
+  } catch (error) {
+    const code = STORE_CODES.find(known => { try { return error?.code === known; } catch { return false; } }) ?? 'CERTIFY_STORE_WRITE_FAILED';
+    try { Promise.resolve(warn(`${JSON.stringify({ code })}\n`)).catch(() => {}); } catch { /* the warning is best effort */ }
+    return Object.freeze({ store: 'failed', code });
   }
 }
+
+// The OS account's home, never HOME, USERPROFILE or os.homedir(); null when it has none.
+const hostHome = () => { try { return os.userInfo().homedir; } catch { return null; } };
 
 async function certify(platform, workDir, deps, native, bounds) {
   const startedAt = isoNow(deps.now);
@@ -129,7 +186,8 @@ async function certify(platform, workDir, deps, native, bounds) {
     image: { sourceSha256: sha(image?.source?.sha256), providerImageHash: sha(image?.provider?.imageHash) }, supervisorSha256: c.supervisorSha256,
     startedAt, finishedAt: isoNow(deps.now), checks, certified: native && checks.every(row => row.result === 'passed'), executionReady: false,
   });
-  await writeReport(workDir, report, deps.random);
+  const name = await writeReport(workDir, report, deps.random);
+  if (native && report.certified === true) await fileCertifiedReport({ report, name, home: hostHome() });
   return report;
 }
 
