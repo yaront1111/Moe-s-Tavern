@@ -1,0 +1,27 @@
+{
+  "id": "task-7d7d608264164f98a46a69910284f98c",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: waitForGuestReady owner check passes any seat owner on a seat record",
+  "description": "scripts/local-runner/guest-readiness.mjs:252 compares only owner.taskId/attemptId/generation with the record's. On a CQ-M07g seat record all three are undefined on both sides, so ANY seat owner (or {}) passes the LIFECYCLE_NOT_OWNER check. Today provisionGuest calls it right after provisionOwned's sameOwner check, so the impact is defense-in-depth only. Fix: use lifecycle's owner comparison (sameOwner semantics, seat keys for seat records), plus a row where a foreign seat owner is refused. Found in CQ-M07i (task-18809c69).",
+  "definitionOfDone": [
+    "waitForGuestReady refuses LIFECYCLE_NOT_OWNER for a seat record whose owner differs in workerId, runner or host, and for an attempt owner on a seat record (rows).",
+    "Attempt-record behavior is unchanged (existing readiness rows green in a git-archive snapshot)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 234.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T20:27:53.237Z",
+  "updatedAt": "2026-11-01T20:27:53.237Z"
+}
