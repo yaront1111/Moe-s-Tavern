@@ -53,7 +53,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -66,7 +66,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T20:37:34.826Z",
-  "updatedAt": "2026-11-01T22:54:41.140Z",
+  "updatedAt": "2026-11-01T22:56:15.248Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T22:46:13.327Z",
@@ -76,11 +76,14 @@
     "firstClaimAt": "2026-11-01T22:46:48.530Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-01T22:56:15.248Z",
+    "wallClockMs": 566718
   },
   "contextFetchedBy": [
     "architect-98c94b4c",
-    "worker-83c3fcad"
+    "worker-83c3fcad",
+    "qa-1b5727b1"
   ],
   "tier": "light",
   "effort": "high",
@@ -161,7 +164,40 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "packages/moe-daemon/src/state/profileRollout.test.ts",
+    ".moe/tasks/task-efca737f34e54c25b9ffad616a5a1166.json"
+  ],
+  "completionSummary": "Added test S3 to the 'rollback retention' describe in profileRollout.test.ts, plus strictRetention in the existing import. profileRollout.ts is untouched. S3 seeds 12 strict tasks (task-r00..r11) with one strict attempt each under explicit ids (attempt-r00..r11). It clears and refills the same h.state.tasks Map in descending order, asserts that order as a precondition, then expects strictRetention to return counts 12/12 and the literal ascending first-10 id lists. Snapshot of 87ffc957 plus only the test file: 37/37 pass. Mutant A (sort removed) and mutant B (sort after cap) each fail only S3 on an assertion diff; S1 stays green under both, which is the gap this closes. profileRollout.ts was restored from the pinned SHA and cmp'd against the tree; the final run is green.",
+  "commits": [
+    {
+      "sha": "11dcc872228697e52c1c45932fdd8cd5336ab068",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-83c3fcad@2026-11-01T22:53:24Z",
+      "paths": [
+        ".moe/tasks/task-efca737f34e54c25b9ffad616a5a1166.json",
+        "packages/moe-daemon/src/state/profileRollout.test.ts"
+      ],
+      "recordedBy": "worker-83c3fcad",
+      "recordedAt": "2026-11-01T22:54:59.949Z",
+      "treeId": "5481c6662f6d8a295fb10894882b6e557705dbc9",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "packages/moe-daemon/src/state/profileRollout.test.ts"
   ],
-  "completionSummary": "Added test S3 to the 'rollback retention' describe in profileRollout.test.ts, plus strictRetention in the existing import. profileRollout.ts is untouched. S3 seeds 12 strict tasks (task-r00..r11) with one strict attempt each under explicit ids (attempt-r00..r11). It clears and refills the same h.state.tasks Map in descending order, asserts that order as a precondition, then expects strictRetention to return counts 12/12 and the literal ascending first-10 id lists. Snapshot of 87ffc957 plus only the test file: 37/37 pass. Mutant A (sort removed) and mutant B (sort after cap) each fail only S3 on an assertion diff; S1 stays green under both, which is the gap this closes. profileRollout.ts was restored from the pinned SHA and cmp'd against the tree; the final run is green."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-83c3fcad@2026-11-01T22:53:24Z",
+    "at": "2026-11-01T22:54:59.949Z"
+  },
+  "completedAt": "2026-11-01T22:56:15.248Z",
+  "reviewCompletedAt": "2026-11-01T22:56:15.248Z",
+  "reviewSummary": "Reviewed completion 11dcc872 (on moe/work-2026-10-24; kind=completion recorded). Diff: +28/-1 in profileRollout.test.ts plus the task's own .moe json; profileRollout.ts byte-identical (git diff empty across the commit and vs tree). Re-ran `npx vitest run src/state/profileRollout.test.ts` in a fresh git-archive snapshot of 11dcc872 outside the checkout, native npm ci, env -i node v24.21.0: 1 file, 37/37 pass. Mutants on the snapshot copy of profileRollout.ts:112: (A) .sort() removed -> 1 failed/36 passed, only S3, AssertionError on toEqual diff; (B) slice(0,10).sort() -> same, only S3. S1 stays green under both, confirming the gap S3 closes. Restored from git show, cmp ok, final run 37/37. DoD1: S3 fails without the sort regardless of readdir order. It reorders the same Map in place (clear+set), asserts the descending key-order precondition, and expects literal ascending ids (TASKS.slice(0,10)), with 12 ids > cap 10 so the cap order is pinned too. DoD2: no production change, command exits 0. S1/S2 and other tests untouched. No complexity findings. Size far under 400.",
+  "requiredCheckAtDone": null
 }
