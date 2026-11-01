@@ -82,7 +82,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -103,16 +103,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T10:11:22.050Z",
-  "updatedAt": "2026-11-01T19:39:41.163Z",
+  "updatedAt": "2026-11-01T20:15:29.037Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:14:12.421Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-01T20:15:29.037Z",
+    "wallClockMs": 36076616
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-83c3fcad"
+    "worker-83c3fcad",
+    "qa-174e8876"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -322,5 +325,9 @@
     "reportedAt": "2026-11-01T19:39:18.748Z",
     "source": "agent-reported"
   },
-  "completionSummary": "SERVER_CAPABILITIES.verifiedLocal is true; this is wire support only. The source diff is that value plus its doc comment, in clientCapabilities.ts. Pinned expectations were updated in five test files:\n- profileRollout.test.ts: GAP_KINDS keeps the client kind for G2's activationUnsupported coverage. DEFAULT_GAPS=[vm,check] is used for G1, refusedRecord and G4. G1's hello now negotiates true.\n- rolloutControls.e2e and workstreamComposition.e2e: GAPS is [vm,check]. D2b now negotiates verifiedLocal only and gains an assertExecutionProfileReady('verified-local') NOT_READY assertion.\n- WebSocketServer.test.ts: serverCapabilities.verifiedLocal is true.\n- readinessHolder.test.ts: CQ-M07c's stand-in clientCapabilities mock and toggle are removed. The activationGaps rows are default [vm,check], READY [], check-only [check] and vm-only [vm]. The fresh-copy check is stronger: array identity plus no shared gap. The DoD1 positive row is now READY held, unmocked, activationGaps() [], and the update, plan and claim succeed. The default row still refuses with NOT_READY.\n\nThe flip grants no readiness. The only consumer of the negotiated capability is activationGaps, and WebSocketServer gates only on planRevisions.\n\nGATE: the plan's verbatim command on HEAD b0ca24d8 exited 1 (227 files: 226 passed, 1 failed; 20 failed | 6839 passed | 20 skipped). All 20 failures come from the peer CQ-M06a WIP checkpoint b0ca24d8: its benchmarks/rolloutDecision.test.ts landed before its input docs/baselines/cq-m06/README.md, so each failure is ROLLOUT_DECISION_INPUT_MISSING (ENOENT). None comes from this task. The submitted run is the same command on HEAD 8e828d87 with only that peer file removed from the snapshot: exit 0, npm ci and tsc --noEmit clean, Test Files 226 passed (226), Tests 6834 passed | 20 skipped (6854). The verbatim command goes green once CQ-M06a lands its README. I commented on task-beb698a4 that its Gates table must drop 'client'."
+  "completionSummary": "SERVER_CAPABILITIES.verifiedLocal is true; this is wire support only. The source diff is that value plus its doc comment, in clientCapabilities.ts. Pinned expectations were updated in five test files:\n- profileRollout.test.ts: GAP_KINDS keeps the client kind for G2's activationUnsupported coverage. DEFAULT_GAPS=[vm,check] is used for G1, refusedRecord and G4. G1's hello now negotiates true.\n- rolloutControls.e2e and workstreamComposition.e2e: GAPS is [vm,check]. D2b now negotiates verifiedLocal only and gains an assertExecutionProfileReady('verified-local') NOT_READY assertion.\n- WebSocketServer.test.ts: serverCapabilities.verifiedLocal is true.\n- readinessHolder.test.ts: CQ-M07c's stand-in clientCapabilities mock and toggle are removed. The activationGaps rows are default [vm,check], READY [], check-only [check] and vm-only [vm]. The fresh-copy check is stronger: array identity plus no shared gap. The DoD1 positive row is now READY held, unmocked, activationGaps() [], and the update, plan and claim succeed. The default row still refuses with NOT_READY.\n\nThe flip grants no readiness. The only consumer of the negotiated capability is activationGaps, and WebSocketServer gates only on planRevisions.\n\nGATE: the plan's verbatim command on HEAD b0ca24d8 exited 1 (227 files: 226 passed, 1 failed; 20 failed | 6839 passed | 20 skipped). All 20 failures come from the peer CQ-M06a WIP checkpoint b0ca24d8: its benchmarks/rolloutDecision.test.ts landed before its input docs/baselines/cq-m06/README.md, so each failure is ROLLOUT_DECISION_INPUT_MISSING (ENOENT). None comes from this task. The submitted run is the same command on HEAD 8e828d87 with only that peer file removed from the snapshot: exit 0, npm ci and tsc --noEmit clean, Test Files 226 passed (226), Tests 6834 passed | 20 skipped (6854). The verbatim command goes green once CQ-M06a lands its README. I commented on task-beb698a4 that its Gates table must drop 'client'.",
+  "completedAt": "2026-11-01T20:15:29.037Z",
+  "reviewCompletedAt": "2026-11-01T20:15:29.037Z",
+  "reviewSummary": "Reviewed recorded commits 746d88c4 (checkpoint) + d67c23d1 (completion), both on moe/work-2026-10-24, ancestors of HEAD ff3d95f4; no later commit touches the 6 files and none is dirty. Size: packages/ +38/-44 (net -6) — tiny.\nGate re-run: the plan's checkRefs command VERBATIM (no rm needed now that CQ-M06a 4468588d landed its README) on HEAD ff3d95f4, snapshot /tmp/moe-41d0c5a9-qa-aBNk3g, overlay cmp'd equal to d67c23d1: npm ci + tsc --noEmit clean, Test Files 227 passed (227), Tests 6863 passed | 20 skipped (6883), GATE_EXIT=0.\nDoD1: clientCapabilities.ts only flips SERVER_CAPABILITIES.verifiedLocal + comment; decodeClientHello untouched. G1 (profileRollout) asserts the {verifiedLocal:true} hello negotiates true; D2b (workstreamComposition) asserts all-three-claimed negotiates {true,false,false} for negotiated AND server caps.\nDoD2: readinessHolder rows default [vm,check], READY [], check-only [check], vm-only [vm]; fresh-copy check strengthened (array identity + per-element, non-vacuous on []).\nDoD3: readinessHolder default row (now unmocked) still refuses updateSettings NOT_READY; D2b adds assertExecutionProfileReady('verified-local') -> NOT_READY; profileRollout/rolloutControls refusal records carry NOT_READY with [vm,check].\nDoD4: all 5 files updated; only the unreachable [client]-only refusal row was replaced (by activationGaps()==[] + successful update/plan/claim); G2 keeps client-kind coverage via GAP_KINDS; removed vi.mock stand-in is per plan. Grep: only intentional pin left is GAP_KINDS.\nNo-readiness-grant: the only non-test consumer is profileRollout.clientSupportsVerifiedLocal->activationGaps; WebSocketServer gates on planRevisions only; no client/proxy reads negotiatedCapabilities.\nNotes (non-blocking, out of scope per task): docs/MCP_SERVER.md:3210/3215 still show verifiedLocal:false — belongs to the CQ-M07 docs sweep. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:09:15.830Z",
-  "updatedAt": "2026-11-01T19:43:13.458Z",
+  "updatedAt": "2026-11-01T20:15:51.094Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:00.097Z",
@@ -122,11 +122,14 @@
     "firstClaimAt": "2026-11-01T11:52:12.442Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-01T20:15:51.094Z",
+    "wallClockMs": 30218652
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-8a4aed6a"
+    "worker-8a4aed6a",
+    "qa-1b5727b1"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -266,5 +269,9 @@
     "reportedAt": "2026-11-01T19:36:55.134Z",
     "source": "agent-reported"
   },
-  "completionSummary": "New scripts/local-runner/seat-capacity.mjs (173 lines) exports:\n- hostAgentVmCap: max(1, min(floor(CPUs/2), floor((RAM-8GiB)/4GiB))), refusing NaN, Infinity, negative and non-numeric input.\n- countSeatVms: walks only real lowercase 32-hex project dirs under the runner-state root. Reserved, launching, owned, absent and failed seat records count, and so does every invalid record file (fail closed). Check-owned, deleted and collision records do not count.\n- seatAdmissionFor(project): returns {root, ledger}.\n- acquireSeatLock: a host lock file published whole via a temp file plus link(), read with O_NOFOLLOW. It is recovered only when runnerProbe answers exactly false, by rename-to-tomb, compare and restore; release removes only its own bytes.\n- admitSeatVm: counts, checks FULL, asserts the lock is held and reserves, all under the lock, then releases in finally.\nEvery refusal is one fixed SEAT_CAPACITY_* code with no path or holder text.\n\nTests are in scripts/tests/local-runner-seat-capacity.test.mjs (178 lines), rows SC0-SC6:\n- SC0: CI runs the file.\n- SC1: formula boundaries, including 2/8->1, 16/64->8 and 8/12->1.\n- SC2: cross-project count; check, deleted, collision, junction and non-hex entries are excluded.\n- SC3: a race of two admissions at cap-1 admits exactly one.\n- SC4: a dead holder is recovered (an injected probe and a real exited pid); live, unknown, unparseable, other-host and other-platform holders are never broken.\n- SC5: every exit releases; release and assertHeld touch only their own lock.\n- SC6: fixed messages.\n\nThe bundle test lists seat-capacity.mjs in `shipped` (not `required`), and ci.yml:244 runs the new file.\n\nSize: 357 changed lines (+354/-3). The plan's two deviations are both stronger: release uses rename+compare, and the deadline is checked on every iteration. The residual races are documented in the module header and in the step-5 note.\n\nThe gate was re-run fresh at HEAD b0ca24d8 after a peer checkpoint moved HEAD: 21/21 pass, exit 0."
+  "completionSummary": "New scripts/local-runner/seat-capacity.mjs (173 lines) exports:\n- hostAgentVmCap: max(1, min(floor(CPUs/2), floor((RAM-8GiB)/4GiB))), refusing NaN, Infinity, negative and non-numeric input.\n- countSeatVms: walks only real lowercase 32-hex project dirs under the runner-state root. Reserved, launching, owned, absent and failed seat records count, and so does every invalid record file (fail closed). Check-owned, deleted and collision records do not count.\n- seatAdmissionFor(project): returns {root, ledger}.\n- acquireSeatLock: a host lock file published whole via a temp file plus link(), read with O_NOFOLLOW. It is recovered only when runnerProbe answers exactly false, by rename-to-tomb, compare and restore; release removes only its own bytes.\n- admitSeatVm: counts, checks FULL, asserts the lock is held and reserves, all under the lock, then releases in finally.\nEvery refusal is one fixed SEAT_CAPACITY_* code with no path or holder text.\n\nTests are in scripts/tests/local-runner-seat-capacity.test.mjs (178 lines), rows SC0-SC6:\n- SC0: CI runs the file.\n- SC1: formula boundaries, including 2/8->1, 16/64->8 and 8/12->1.\n- SC2: cross-project count; check, deleted, collision, junction and non-hex entries are excluded.\n- SC3: a race of two admissions at cap-1 admits exactly one.\n- SC4: a dead holder is recovered (an injected probe and a real exited pid); live, unknown, unparseable, other-host and other-platform holders are never broken.\n- SC5: every exit releases; release and assertHeld touch only their own lock.\n- SC6: fixed messages.\n\nThe bundle test lists seat-capacity.mjs in `shipped` (not `required`), and ci.yml:244 runs the new file.\n\nSize: 357 changed lines (+354/-3). The plan's two deviations are both stronger: release uses rename+compare, and the deadline is checked on every iteration. The residual races are documented in the module header and in the step-5 note.\n\nThe gate was re-run fresh at HEAD b0ca24d8 after a peer checkpoint moved HEAD: 21/21 pass, exit 0.",
+  "completedAt": "2026-11-01T20:15:51.094Z",
+  "reviewCompletedAt": "2026-11-01T20:15:51.094Z",
+  "reviewSummary": "Reviewed recorded bytes: checkpoint b7d926de (code) + completion 8e828d87 (task json), both on moe/work-2026-10-24; 4 owned files have no dirty diff and no drift to HEAD e237ab63. ci.yml hunk (Moe-Contested trailer) is this task's one-line append only. Size 357 changed lines (+354/-3), under 400.\nGate: re-ran task.verification verbatim at HEAD e237ab63 -> 21 tests, 21 pass, 0 fail, exit 0. Windows node v24.16 from %TEMP% archive: seat-capacity file 8/8 pass.\nDoD: (1) SC1 rows 2/8->1, 16/64->8, 8/12->1 plus 0/0, 64/32, 5/20, 15.99/16 GiB step; NaN/Infinity/neg/string refused. (2) SC3 races two admissions at cap-1 with a 50ms delay inside the critical section: one reserved, one FULL, count 2, no debris. (3) SC2: two projects counted; attempt, deleted, collision, non-hex, uppercase, junction and file entries skipped; invalid record counts occupied. (4) SC4: injected-false and real exited pid recovered in <2s; alive/undefined/unparseable/own pid/other host/other platform -> LOCK_BUSY with bytes unchanged; swapped lock restored. (5) gate green.\nCode: count+assertHeld+reserve inside try/finally(release); removal only via rename-compare-restore when probe === false; fixed messages. Bundle `shipped` (not required); ci.yml list extended.\nMutation sweep (/tmp/qa-m07h-mut, 28): 25 killed. Non-blocking survivors: admit without assertHeld (defense in depth, not injectable), unreadable lock treated as gone (spins, still never breaks), 1 KiB cap dropped.\nNote for M07i/m/n: call admission from a short-lived node process; a lock restored after its holder's release reads alive until that pid exits (documented residual). Forbidden-pattern grep: none.",
+  "requiredCheckAtDone": null
 }
