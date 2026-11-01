@@ -104,12 +104,12 @@
     }
   ],
   "planRevision": 3,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "This is the architect correcting their own plan before any work started: no worker is assigned and every step is PENDING. The rev-1 plan removes the VM token only in the CLI's `remove` command, but two paths miss it:\n\n1. **The Accounts tab's \"Remove only\".** It sends /ws REMOVE_ACCOUNT, which calls registry.removeAccount directly (server/accountMessages.ts:48), so it would leave a live long-lived token orphaned.\n2. **Reused ids.** addAccount reuses the lowest acct-n once its Claude folder is deleted (registry.ts addAccount; the CLI's remove tells people they may delete that folder). A new account could then inherit the old account's token.\n\nThe fix is the usage-file pattern already used in accounts/registry.ts:\n- add a vmTokenFile path helper beside accountUsageFile;\n- rmSync the token in removeAccount and in addAccount.\n\nRev 1 does not declare registry.ts, so I am replanning to add it and drop the cli.ts remove change. Everything else in rev 1 stays.",
+  "reopenReason": "Size waiver prop-52a37017 APPROVED by the human at 14:22:28Z. The CQ-M epic now carries the \"CQ-M07k size exception\" rail exactly once. The park reason is gone, so the row returns to REVIEW for QA. Substance was already green (all 5 DoD items mapped, gate exit 0).",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -130,12 +130,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:44.219Z",
-  "updatedAt": "2026-11-01T12:13:48.335Z",
+  "updatedAt": "2026-11-01T14:43:56.776Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:22:43.281Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-01T14:43:56.776Z",
+    "wallClockMs": 15673495
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -394,8 +396,14 @@
     "sessionId": "architect-b520bc90@2026-11-01T10:42:40Z",
     "at": "2026-11-01T12:13:48.335Z"
   },
-  "blockedReason": "QA substance GREEN; parked only on the pending EPIC size waiver prop-52a37017fb9e4216ab2d93a606202505 (filed by the worker 11:32Z, still PENDING 12:10Z). Completion 257e8ad8 on moe/work-2026-10-24; the 8 files are unchanged since. Recorded checkRefs gate re-run fresh by QA: EXIT=0; tsc clean; vitest 97 passed/1 pre-existing skip; node --test 40 pass/0 fail/1 pre-existing skip. All 5 DoD items mapped to code and tests; both task rails hold (no file opened in an account config folder, no token byte in argv, env, output or payload; the daemon only lstats). QA mutants 10/12 killed; the 2 survivors are advisory (SIGINT path pty-checked by QA; the new wx flag is untested). Size: +493/-11, net 482 over packages/ and scripts/, exactly the proposal's per-file numstat; no epic rail waives it yet, so no approval. Full evidence is in the QA comment. Resume: on APPROVED, add the rail and set_task_status REVIEW; a fresh QA checks the rail against git show --numstat 257e8ad8, re-runs the gate and approves (no new bytes). On REJECTED, set_task_status PLANNING for a split that reuses the landed bytes.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-01T12:10:15.803Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "QA substance GREEN; parked only on the pending EPIC size waiver prop-52a37017fb9e4216ab2d93a606202505 (filed by the worker 11:32Z, still PENDING 12:10Z). Completion 257e8ad8 on moe/work-2026-10-24; the 8 files are unchanged since. Recorded checkRefs gate re-run fresh by QA: EXIT=0; tsc clean; vitest 97 passed/1 pre-existing skip; node --test 40 pass/0 fail/1 pre-existing skip. All 5 DoD items mapped to code and tests; both task rails hold (no file opened in an account config folder, no token byte in argv, env, output or payload; the daemon only lstats). QA mutants 10/12 killed; the 2 survivors are advisory (SIGINT path pty-checked by QA; the new wx flag is untested). Size: +493/-11, net 482 over packages/ and scripts/, exactly the proposal's per-file numstat; no epic rail waives it yet, so no approval. Full evidence is in the QA comment. Resume: on APPROVED, add the rail and set_task_status REVIEW; a fresh QA checks the rail against git show --numstat 257e8ad8, re-runs the gate and approves (no new bytes). On REJECTED, set_task_status PLANNING for a split that reuses the landed bytes.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-01T14:43:56.776Z",
+  "reviewCompletedAt": "2026-11-01T14:43:56.776Z",
+  "reviewSummary": "QA round 2 (qa-97c4310b): APPROVED.\n\nCompletion 257e8ad8 is on moe/work-2026-10-24. The 8 files are unchanged through HEAD 62f83b4c, so there are no new bytes since round 1.\n\nSize: git show --numstat 257e8ad8 gives +493/-11, net 482, with per-file numbers exactly matching the epic rail \"CQ-M07k size exception\" (prop-52a37017, approved by the human). The rail waives size only, so I reviewed on substance.\n\nFresh gate: the recorded checkRefs command (HEAD archive plus the 8 files, env -i nvm Node 24) gave EXIT=0. npm ci OK, tsc clean. vitest: 8 files, 97 passed, 1 pre-existing Windows skip. node --test: 40 pass, 0 fail, 1 pre-existing Windows skip.\n\nDoD:\n(1) A fake-claude mint stores exactly the token, dir 0700 and file 0600, with no 12-character token slice in any output. The child sees the account's config dir and no outer credentials.\n(2) --remove deletes the token. An unknown id, a failed mint, a bad paste, a removal during the prompt and a broken store all store nothing and exit 1 with a fixed MOE_* line.\n(3) vm-credential prints exactly the token. A missing, symlinked, directory, symlinked-store, oversize, malformed, trailing-newline or ../ case gives exit 3 and an empty stdout; no id gives exit 2.\n(4) vmToken comes from an lstat. A grep finds no daemon reader, and the spies saw no read under claude-vm-tokens.\n(5) The gate passes in a snapshot.\n\nRails hold: no file is opened in an account config folder, and no token reaches argv, env, output or payload. The drift test pins the regex, cap, id rule and path.\n\nAdvisory: the 'wx' flag is untested, registry.ts is 303 lines, and a real setup-token run waits for the M07 board run. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
