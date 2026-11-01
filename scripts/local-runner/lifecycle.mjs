@@ -147,7 +147,8 @@ export function validSeatOwner(owner) {
 }
 
 export const isSeatRecord = record => isRecord(record) && Object.hasOwn(record, 'workerId');
-const sameOwner = (record, owner) => (isSeatRecord(record) ? SEAT_OWNER_KEYS : ATTEMPT_KEYS).every(key => owner?.[key] === record[key]);
+// The single owner comparison every ledger reader uses: a seat record by workerId, runner and host; an attempt record by taskId, attemptId and generation.
+export const sameOwner = (record, owner) => (isSeatRecord(record) ? SEAT_OWNER_KEYS : ATTEMPT_KEYS).every(key => owner?.[key] === record[key]);
 
 const isSha256 = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const IMAGE_KEYS = ['sourceSha256', 'providerImageHash'];

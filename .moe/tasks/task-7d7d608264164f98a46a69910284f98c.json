@@ -8,14 +8,69 @@
     "Attempt-record behavior is unchanged (existing readiness rows green in a git-archive snapshot)."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the seat-record readiness test rows first, then make them pass by reusing lifecycle's owner comparison. Use the main session's Edit tool for all three files (rail: no shell writes to tracked files). Read mem:gotcha-local-runner-tests first (sections 'running scripts/tests/local-runner*.test.mjs on a clean git-archive export' and 'CQ-M07g task-9076afab').\n\n(a) Test, scripts/tests/local-runner.test.mjs. Directly after the test 'readiness is refused before any provider call unless the caller owns an owned record' (it ends with `assert.equal((await ledger.read(nameAt(6))).image, undefined);` and `});`), add a module-level `const SEAT = Object.freeze({ workerId: 'worker-a1', runner: '4242@tok a', host: 'host-a' });` (this file has no SEAT identifier yet) and ONE new test named 'GR-S1 readiness on a seat record refuses a foreign seat owner or an attempt owner before any provider call; its own seat owner boots it'. It reuses only existing helpers: scratch, createLedger, sequence, seed, GUEST, fakeGuest, SOURCE, BOOTSTRAP, noSleep, owner, assertSanitized, bootGuest, outcome, PROVIDER_HASH, readFileSync, path. The architect prototyped this body in a git-archive snapshot:\n- `const dir = scratch(t); const ledger = createLedger(dir, { random: sequence() });`\n- `assert.equal((await seed(ledger, 'owned', 1, SEAT)).instance, GUEST);` (the first reserve on sequence() is nameAt(1) = GUEST; reserve writes a seat record for a seat owner) and `const attempt = await seed(ledger, 'owned');` (nameAt(2), an attempt record).\n- `const file = path.join(dir, `${GUEST}.json`); const before = readFileSync(file); const fake = fakeGuest();`\n- `const call = (name, who) => waitForGuestReady({ ledger, name, owner: who, sourceImage: SOURCE, bootstrap: BOOTSTRAP, provider: { run: fake.run }, sleep: noSleep });`\n- labelled rows, each `await assert.rejects(call(GUEST, who), error => assertSanitized(error, 'LIFECYCLE_NOT_OWNER'), label)`: 'another workerId' { ...SEAT, workerId: 'worker-b2' }, 'another runner' { ...SEAT, runner: '4343@tok a' }, 'another host' { ...SEAT, host: 'host-b' }, 'an attempt owner' owner, 'an empty owner' {}, 'no owner' undefined, 'a null owner' null. Then `call(attempt.instance, SEAT)` must also reject LIFECYCLE_NOT_OWNER ('a seat owner on an attempt record').\n- `assert.equal(fake.calls.length, 0);` (every refusal comes before any provider call) and `assert.deepEqual(readFileSync(file), before);` (no ledger write).\n- positive control: `const run = await bootGuest({ ledger }, {}, { owner: SEAT }); assert.deepEqual(run.result, outcome([])); assert.deepEqual((await ledger.read(GUEST)).image, { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH });`. The matching seat owner must still boot its own seat VM (CQ-M07i's seat start reaches this through provisionGuest), so a fix that refused every seat record fails here.\nAgainst the unchanged runtime GR-S1 is RED with 'Missing expected rejection: another workerId' (today a foreign seat owner boots the guest and records the image). The architect observed this; re-running RED is optional.\n\n(b) Fix. scripts/local-runner/lifecycle.mjs:150: change `const sameOwner =` to `export const sameOwner =` and leave the body byte-identical. Add a one-line comment saying it is the single owner comparison every ledger reader uses: a seat record by workerId, runner and host; an attempt record by taskId, attemptId and generation. scripts/local-runner/guest-readiness.mjs: add sameOwner to the existing './lifecycle.mjs' import, keeping alphabetical order (invoker, lifecycleError, QUERY_TIMEOUT_MS, sameOwner, STATES). In waitForGuestReady, replace the three-line `if (owner?.taskId !== record.taskId || owner?.attemptId !== ... ) { throw lifecycleError('LIFECYCLE_NOT_OWNER'); }` block with `if (!sameOwner(record, owner)) throw lifecycleError('LIFECYCLE_NOT_OWNER');`. Keep the order: validInputs, pinnedSource, invoker, ledger.read, owner check, phase check.\n\nError handling: the refusal stays the existing sanitized lifecycleError (code only, no diagnostics), thrown before any provider call or ledger write. sameOwner reads `owner?.[key]`, so a null, undefined or {} owner is refused, never a TypeError. Do not add owner-shape validation (validOwner/validSeatOwner) or a new error code. The contract is sameOwner semantics, exactly as provisionOwned and deleteOwned already apply them. Attempt records keep identical semantics: ATTEMPT_KEYS is taskId, attemptId and generation with strict equality, the same three comparisons the removed block made. So every existing readiness test row stays unchanged and green (DoD 2).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "note": "Added GR-S1 + SEAT; exported sameOwner (comment only); waitForGuestReady uses sameOwner. Other dirty paths belong to peers, untouched.",
+      "startedAt": "2026-11-01T23:04:42.944Z",
+      "completedAt": "2026-11-01T23:05:01.636Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification: run this one command fresh, from the repo root (/mnt/d/projexts/moes), after the last edit:\n\nS=$(mktemp -d /tmp/moe-gr-s1-XXXXXX) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp scripts/local-runner/lifecycle.mjs scripts/local-runner/guest-readiness.mjs \"$S/scripts/local-runner/\" && cp scripts/tests/local-runner.test.mjs \"$S/scripts/tests/\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-vm-control.test.mjs\n\nIt follows mem:gotcha-local-runner-tests. It archives HEAD with the files local-runner.test.mjs reads outside scripts/ (packages/moe-daemon/src/state/resourceStore.ts and the daemon package files), overlays exactly this task's three files, and runs the two test files that exercise waitForGuestReady and lifecycle's owner checks (VC-SL1 drives provisionOwned and deleteOwned with seat owners). It uses a clean Linux env on nvm Node 24. No npm install or build: these tests use only Node built-ins (rail: never build in the shared checkout). Expected: exit 0 with tests 407, pass 406, fail 0, skipped 1. The skip is the opt-in macOS native-provider smoke, also skipped at HEAD. The architect measured the same command at HEAD before the change at 406/405/0/1 (about 80 s), and with the prototype at 407/406/0/1. Any failure is real: fix it and re-run. Submit this run's command, exitCode and outputTail (with the summary lines) as the complete_task verification. Then remove $S.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "note": "Snapshot gate exit 0: tests 407 pass 406 fail 0 skipped 1.",
+      "startedAt": "2026-11-01T23:05:02.456Z",
+      "completedAt": "2026-11-01T23:06:32.356Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of the three-file diff (`git diff -- scripts/local-runner/lifecycle.mjs scripts/local-runner/guest-readiness.mjs scripts/tests/local-runner.test.mjs`), then moe.complete_task with step 2's evidence. Check:\n(1) guest-readiness.mjs no longer compares owner fields inline: `grep -n 'owner?\\.' scripts/local-runner/guest-readiness.mjs` prints nothing. The owner check still comes before the phase check and every provider call.\n(2) sameOwner's body, ATTEMPT_KEYS and SEAT_OWNER_KEYS are byte-identical; only the export keyword and the comment changed. So provisionOwned, deleteOwned and retireRecord behave exactly as before.\n(3) The local-runner.test.mjs diff is additions only: SEAT and GR-S1. No existing test row changed.\n(4) Concurrency: the check reads the same record the old check read, so it opens no new window. The read-then-act window is pre-existing and documented at swapRecord.\n(5) Inputs: GR-S1 covers null, undefined, {}, an attempt owner, a seat owner on an attempt record, and each single-field seat difference (workerId, runner, host), plus the matching-owner positive control.\n(6) Nothing else changed: no .moe edit, no other file. The code and the test text carry none of the project's global forbiddenPatterns.\nIf the review changes any byte, re-run step 2's command and submit that fresh output instead. Out of scope: other attempt-only ledger readers such as certify-lifecycle's recordOf. CQ-M07g's QA recorded them as safe with seat records. No docs change: no doc text describes this check.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "note": "Self-review: no inline owner?. left; owner check precedes phase check/provider; sameOwner body unchanged (export + comment only); test diff additions only; no bytes changed after the gate run.",
+      "startedAt": "2026-11-01T23:06:33.226Z",
+      "completedAt": "2026-11-01T23:06:36.734Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promotion. The human told the governor \"make sure board moving\" twice on 2026-11-01. This row runs outside the wrapper lane: no open row plans scripts/local-runner/guest-readiness.mjs or its tests. Every coder is idle while the serial lane holds the rest of the board.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "LOW",
@@ -23,5 +78,104 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T20:27:53.237Z",
-  "updatedAt": "2026-11-01T20:27:53.237Z"
+  "updatedAt": "2026-11-01T23:06:40.453Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-01T22:46:14.937Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T22:46:34.581Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-548034a1",
+    "worker-83c3fcad"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T23:04:15.459Z",
+  "executionContract": {
+    "intendedBehavior": "waitForGuestReady accepts exactly the owner lifecycle's sameOwner accepts. On a CQ-M07g seat record, that is only an owner whose workerId, runner and host all equal the record's. On an attempt record, it is only an owner whose taskId, attemptId and generation equal the record's. Any other owner gets LIFECYCLE_NOT_OWNER before any provider call or ledger write: a foreign seat owner, an attempt owner on a seat record, a seat owner on an attempt record, {}, null or undefined.",
+    "acceptanceCriteria": [
+      "GR-S1 refuses LIFECYCLE_NOT_OWNER on a seat record for another workerId, runner or host, an attempt owner, {}, undefined and null, and for a seat owner on an attempt record. It makes zero provider calls and leaves the record bytes unchanged.",
+      "GR-S1's positive control: the matching seat owner boots the guest (outcome([])), and the image is recorded on the seat record.",
+      "Every pre-existing test in scripts/tests/local-runner.test.mjs and scripts/tests/local-runner-vm-control.test.mjs passes unchanged in the git-archive snapshot gate."
+    ],
+    "invariants": [
+      "executionReady stays false; verified-local stays unavailable; no isolation is claimed",
+      "The owner check precedes the phase check and every provider call",
+      "Attempt-record ownership semantics are unchanged"
+    ],
+    "compatibility": [
+      "provisionGuest, certify-containment controllerReplacement and every attempt-owner caller behave as before",
+      "provisionOwned, deleteOwned and retireRecord keep the same sameOwner"
+    ],
+    "approvedScope": [
+      "lifecycle.mjs sameOwner: add the export keyword and a comment; body unchanged",
+      "guest-readiness.mjs waitForGuestReady: the owner check becomes sameOwner(record, owner)",
+      "local-runner.test.mjs: the SEAT constant and test GR-S1"
+    ],
+    "reuse": [
+      "lifecycle.mjs sameOwner, already used by provisionOwned, deleteOwned and retireRecord, instead of a second owner comparison"
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/lifecycle.mjs:150 sameOwner is a module-private const that picks SEAT_OWNER_KEYS when isSeatRecord(record), else ATTEMPT_KEYS",
+      "scripts/local-runner/guest-readiness.mjs:252 waitForGuestReady compares only owner taskId/attemptId/generation with the record's",
+      "scripts/tests/local-runner.test.mjs seed(ledger, phase, launchTries, who) reserves through ledger.reserve, which writes a seat record for a validSeatOwner owner; bootGuest(h, fakeOptions, overrides) spreads overrides last, so { owner: SEAT } replaces the owner"
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/moe-gr-s1-XXXXXX) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp scripts/local-runner/lifecycle.mjs scripts/local-runner/guest-readiness.mjs \"$S/scripts/local-runner/\" && cp scripts/tests/local-runner.test.mjs \"$S/scripts/tests/\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-vm-control.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Export lifecycle.mjs sameOwner and call it from waitForGuestReady. Chosen: one owner comparison for every ledger reader, as the task asks, and a one-keyword change to lifecycle.mjs. (2) Re-implement the seat/attempt key choice inside guest-readiness.mjs with isSeatRecord. Rejected: a second copy of SEAT_OWNER_KEYS/ATTEMPT_KEYS that can drift. (3) A new assertOwner helper in lifecycle.mjs adopted by provisionOwned and deleteOwned too. Rejected: wider diff, no behavior gain (ponytail). (4) Validate owner shape up front as BOOTSTRAP_INPUT_INVALID. Rejected: it changes the refusal code that the existing rows pin for null/undefined owners on attempt records.",
+    "codebaseInsights": "lifecycle.mjs:150 `const sameOwner = (record, owner) => (isSeatRecord(record) ? SEAT_OWNER_KEYS : ATTEMPT_KEYS).every(key => owner?.[key] === record[key])` is module-private. provisionOwned (342), deleteOwned (483) and retireRecord (298) use it. guest-readiness.mjs:252 compares only taskId/attemptId/generation. On a seat record all three are undefined, so any seat owner, {} or undefined passes. ledger.reserve writes a seat record (workerId, runner, host, platform=process.platform) for a validSeatOwner owner, so the test fixture seed(ledger, 'owned', 1, SEAT) works unchanged. The seat test file injects a fake provision, so before GR-S1 no test drove waitForGuestReady with a seat owner. Architect prototype in a git-archive snapshot: GR-S1 RED on HEAD runtime; GREEN with the fix; 6/6 probe mutants killed (swapped sameOwner args, refuse-every-seat, old inline check, each seat key dropped); full two-file gate 407/406/0 fail/1 skip.",
+    "risks": "No open task declares these three files (checked across all 34 open rows), so landing is uncontested. The positive control matters most: a fix that refused every seat record would break CQ-M07i seat start via provisionGuest, and only GR-S1's bootGuest row catches that. The test is platform-neutral: temp ledger, fake provider, and process.platform is a valid record platform on win32/darwin/linux; CI runs this file on all three OSes. Mid-epic bug row: the narrow gate is enough; the epic-final row owns full regression.",
+    "keyFiles": [
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/tests/local-runner-vm-control.test.mjs",
+      "scripts/local-runner/provision.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4874b2cde340c4c1bfdf08c89874f149673775b4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T23:04:15.481Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T23:04:42.944Z",
+  "reviewStartedAt": "2026-11-01T23:06:40.451Z",
+  "verification": {
+    "command": "S=$(mktemp -d /tmp/moe-gr-s1-XXXXXX) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp scripts/local-runner/lifecycle.mjs scripts/local-runner/guest-readiness.mjs \"$S/scripts/local-runner/\" && cp scripts/tests/local-runner.test.mjs \"$S/scripts/tests/\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-vm-control.test.mjs",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 407\nℹ suites 0\nℹ pass 406\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 80732.111804\nexit=0",
+    "reportedAt": "2026-11-01T23:06:40.451Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/lifecycle.mjs",
+    "scripts/local-runner/guest-readiness.mjs"
+  ],
+  "completionSummary": "waitForGuestReady now uses lifecycle's exported sameOwner (seat records by workerId/runner/host, attempt records by taskId/attemptId/generation), so a foreign seat owner, an attempt owner on a seat record, a seat owner on an attempt record, {}, null and undefined are refused LIFECYCLE_NOT_OWNER before any provider call or ledger write. Added test GR-S1 (with a matching-seat-owner positive control) and the SEAT constant. Attempt-record behavior is unchanged."
 }

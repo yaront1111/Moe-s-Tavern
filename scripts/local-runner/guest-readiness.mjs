@@ -16,7 +16,7 @@ import { AGENT_CLIS, loadAgentManifest } from './agent-cache.mjs';
 import { loadCertifiedProvider } from './doctor.mjs';
 import { bootstrapError, GUEST_LAYOUT, GUEST_RESOURCES, IMAGE_ARCHES, JOB_IDENTITIES } from './guest-bootstrap.mjs';
 import { guestAddress } from './guest-ssh.mjs';
-import { invoker, lifecycleError, QUERY_TIMEOUT_MS, STATES } from './lifecycle.mjs';
+import { invoker, lifecycleError, QUERY_TIMEOUT_MS, sameOwner, STATES } from './lifecycle.mjs';
 import { classifyFailure, MAX_PROBE_BUFFER, providerError } from './multipass.mjs';
 
 const CONTROL = /[\x00-\x1f\x7f]/;
@@ -249,9 +249,7 @@ export async function waitForGuestReady({
   const source = await pinnedSource(sourceImage);
   invoker(name, provider);
   const record = await ledger.read(name);
-  if (owner?.taskId !== record.taskId || owner?.attemptId !== record.attemptId || owner?.generation !== record.generation) {
-    throw lifecycleError('LIFECYCLE_NOT_OWNER');
-  }
+  if (!sameOwner(record, owner)) throw lifecycleError('LIFECYCLE_NOT_OWNER');
   if (record.phase !== 'owned') throw lifecycleError('LIFECYCLE_PHASE_INVALID');
   const { supervisorSha256 } = bootstrap;
   const { info, failure } = await awaitCloudInit({ name, provider, sleep, pollMs, polls: Math.ceil(maxWaitMs / pollMs) });

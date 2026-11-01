@@ -1729,6 +1729,33 @@ test('readiness is refused before any provider call unless the caller owns an ow
   assert.equal((await ledger.read(nameAt(6))).image, undefined);
 });
 
+const SEAT = Object.freeze({ workerId: 'worker-a1', runner: '4242@tok a', host: 'host-a' });
+
+test('GR-S1 readiness on a seat record refuses a foreign seat owner or an attempt owner before any provider call; its own seat owner boots it', async t => {
+  const dir = scratch(t);
+  const ledger = createLedger(dir, { random: sequence() });
+  assert.equal((await seed(ledger, 'owned', 1, SEAT)).instance, GUEST);
+  const attempt = await seed(ledger, 'owned');
+  const file = path.join(dir, `${GUEST}.json`);
+  const before = readFileSync(file);
+  const fake = fakeGuest();
+  const call = (name, who) => waitForGuestReady({ ledger, name, owner: who, sourceImage: SOURCE, bootstrap: BOOTSTRAP, provider: { run: fake.run }, sleep: noSleep });
+  const foreign = [
+    ['another workerId', { ...SEAT, workerId: 'worker-b2' }], ['another runner', { ...SEAT, runner: '4343@tok a' }],
+    ['another host', { ...SEAT, host: 'host-b' }], ['an attempt owner', owner], ['an empty owner', {}],
+    ['no owner', undefined], ['a null owner', null],
+  ];
+  for (const [label, who] of foreign) {
+    await assert.rejects(call(GUEST, who), error => assertSanitized(error, 'LIFECYCLE_NOT_OWNER'), label);
+  }
+  await assert.rejects(call(attempt.instance, SEAT), error => assertSanitized(error, 'LIFECYCLE_NOT_OWNER'), 'a seat owner on an attempt record');
+  assert.equal(fake.calls.length, 0);
+  assert.deepEqual(readFileSync(file), before);
+  const run = await bootGuest({ ledger }, {}, { owner: SEAT });
+  assert.deepEqual(run.result, outcome([]));
+  assert.deepEqual((await ledger.read(GUEST)).image, { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH });
+});
+
 test('every boundary failure is collected once, without diagnostics, and executionReady stays false', async t => {
   const h = await guestHarness(t);
   const secret = 'secret-diagnostic /private/path';
