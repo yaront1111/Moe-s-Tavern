@@ -82,7 +82,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:36.745Z",
-  "updatedAt": "2026-11-01T12:22:04.982Z",
+  "updatedAt": "2026-11-01T12:22:43.533Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T08:16:01.364Z",
@@ -202,6 +202,31 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "efa592ee324dc89c246f8efd65a73e0e16696bf3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-97c4310b@2026-11-01T12:18:20Z",
+      "paths": [
+        ".moe/tasks/task-5c4b5fab53ce41e294af5c70de1af51d.json"
+      ],
+      "recordedBy": "qa-97c4310b",
+      "recordedAt": "2026-11-01T12:22:43.533Z",
+      "treeId": "62a67f543305a54ae2b15d06d5d30f6fb99df553",
+      "status": "BLOCKED",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-d6bc12fff910484d92368fa6825f523c"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -211,9 +236,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-0e1ab990@2026-11-01T12:08:57Z",
-    "at": "2026-11-01T12:18:11.677Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-97c4310b@2026-11-01T12:18:20Z",
+    "at": "2026-11-01T12:22:43.533Z"
   },
   "blockedReason": "QA CQ-M07e: code verified, tests not delivered. Completion 69f2d710 landed certify.mjs only. scripts/tests/local-runner.test.mjs (HS1-HS5, DoD 1-3) was held as contested and is in no commit: `git grep HS1 HEAD -- scripts/tests/local-runner.test.mjs` finds nothing. The dirty file also holds live peer hunks from task-d6bc12ff (CQ-M07f, WORKING, step-3 IN_PROGRESS on that file), so the plan's command no longer reproduces in the shared tree: it fails at link time with `snapshot-transfer.mjs does not provide an export named resetWorkspace` (peer's uncommitted import). Verified in a git-archive snapshot of HEAD plus ONLY the two M07e test hunks, env -i, nvm Node 24.21.0: EXIT=0, 379 tests, 378 pass, 0 fail, 1 skipped (macOS smoke), HS1-HS5 and CF1-CF8 green; certify.mjs byte-identical to HEAD; ~/.moe/certification 0 files before and after. The certify.mjs diff has no defect: one reportBytes serialization, exclusive 0600 create, non-recursive mkdir plus lstat so nothing is written through a link, an unsafe pre-existing store is refused and never chmodded, only os.userInfo().homedir, failures resolve failed with a fixed code and one stderr line, workDir report/result/exit untouched. Blocked, not rejected: a reopened worker cannot land the file while a live peer is mid-step on it (MOE_ATTR_CONTESTED_EDITING), and a re-edit would ship the peer's unfinished hunks. The peer's whole-file landing carries the HS rows. This row auto-resumes to REVIEW when task-d6bc12ff reaches DONE. QA then checks `git archive HEAD` holds HS1-HS5 and re-runs the plan command on the pure archive. If the peer lands without them, reject for delivery only: re-edit the file with a witnessed Edit/Write tool (scratch copy /tmp/qa-m07e/worker.patch). The code landed, so the operator's re-certify already files reports.",
   "blockedOnTaskIds": [

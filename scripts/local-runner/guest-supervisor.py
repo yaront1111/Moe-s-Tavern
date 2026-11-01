@@ -46,6 +46,14 @@
 # Mode 'dependencies' (CQ-R11e4): one snapshot into root-owned DEPENDENCIES (0755 directories, 0644 files) and a
 # private manifest, then {kind: 'materialized', digest} and 0; 65 malformed/mismatched stream, 73 existing tree or
 # manifest, 74 I/O failure, 77 not root, 64 any other argv. Stream refusals leave no new tree, manifest or staging.
+# Mode 'reset' (CQ-M07f): reads no stdin and returns a seat's reused VM to a clean workspace between jobs. It removes
+# WORKSPACE, WORKSPACE_MANIFEST and every SESSIONS home-* entry, each by lstat, so a link is unlinked as itself and
+# never followed, and a directory only through the fd-based shutil.rmtree. It never touches TOOLCHAIN, AGENTS,
+# DEPENDENCIES, the bootstrap files, readiness state or SESSIONS itself. Then {kind: 'reset'} and 0; 69 (EX_UNAVAILABLE,
+# no other mode's code) a moe-agent or moe-check process is alive, and nothing was removed; 71 no identity account, or
+# an rmtree that cannot avoid symlink attacks; 74 a removal or write failure, which can leave part removed (a retry
+# completes it); 77 not root. No refusal writes a frame. The other modes take 0, 64-66, 71, 73-77 and 79-82; 78 is
+# retired.
 import base64
 import contextlib
 import errno
@@ -1489,6 +1497,72 @@ def verify(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST):
         os.close(root)
 
 
+# CQ-M07f reset, for a seat's VM reused across jobs: materialize refuses an existing workspace or manifest (73).
+RESET_BUSY = os.EX_UNAVAILABLE  # 69
+
+
+# Whether any process runs with one of uids as its real, effective, saved or filesystem uid. The guest's root PID
+# namespace lists every job, those inside a GUARD's own PID namespace too. A process that exits mid-scan is skipped;
+# any other failure propagates, so reset fails closed.
+def identity_alive(uids, proc='/proc'):
+    for name in os.listdir(proc):
+        if not name.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, name, 'status'), 'rb') as status:
+                lines = status.read().split(b'\n')
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        for line in lines:
+            if line.startswith(b'Uid:'):
+                if any(int(field) in uids for field in line.split()[1:]):
+                    return True
+                break
+    return False
+
+
+# lstat, never stat: a link (or file) at path is unlinked as itself, never followed. A directory goes only through the
+# fd-based rmtree, which opens each level relative to its parent's descriptor and unlinks a link inside as a link.
+def remove_entry(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(info.st_mode):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
+
+
+# Reset runs between jobs under the host's job lease (R06). With no job identity process alive, nothing left in the
+# guest can start one, so the probe cannot be raced; a job-owned home can hold any link, and none is followed. SESSIONS
+# is root's own 0711 directory (session_home), so no job can swap it or a home in it.
+def reset(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, sessions=SESSIONS, uids=None, alive=identity_alive):
+    if uids is None:
+        try:
+            uids = [pwd.getpwnam(name).pw_uid for name in (AGENT_IDENTITY, CHECK_IDENTITY)]
+        except KeyError:
+            return os.EX_OSERR
+    if not shutil.rmtree.avoids_symlink_attacks:
+        return os.EX_OSERR
+    try:
+        if alive(set(uids)):
+            return RESET_BUSY
+        remove_entry(workspace)
+        remove_entry(manifest)
+        try:
+            names = os.listdir(sessions)
+        except FileNotFoundError:
+            names = []
+        for name in names:
+            if name.startswith('home-'):
+                remove_entry(os.path.join(sessions, name))
+        write_frame(out_fd, {'kind': 'reset'})
+        return 0
+    except OSError:
+        return os.EX_IOERR
+
+
 # CQ-R10d3a agents. Each binary is staged root-only in a 0700 directory INSIDE agents (dir_fd-relative, so a swapped
 # agents path cannot redirect it) and checked against its header. Only after the end frame, with nothing after it, is
 # each renamed onto agents/<cli>: a whole-file replacement of any older install, never a write in place. A handled
@@ -1646,11 +1720,14 @@ def install_toolchain(in_fd, out_fd, toolchain=TOOLCHAIN):
 # geteuid and the keywords (seams) of start_job or check_job are injectable from Python only (tests), never from argv or
 # the environment. No refusal writes to stdout.
 def main(argv, geteuid=os.geteuid, **seams):
-    # bridgeArgv and snapshotArgv pass exactly these, CQ-R11c's checkArgv passes ['check'] and CQ-R10d3 ['agents'].
-    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify'], ['agents'], ['toolchain'], ['dependencies']):
+    # openGuestStream (guest-stream.mjs) sends exactly one of these as $SSH_ORIGINAL_COMMAND; guest-ssh.mjs
+    # SUPERVISOR_MODES lists them in this order.
+    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify'], ['agents'], ['toolchain'], ['dependencies'], ['reset']):
         return os.EX_USAGE
     if geteuid() != 0:
         return os.EX_NOPERM
+    if argv == ['reset']:
+        return reset(1)
     if argv == ['dependencies']:
         return dependencies(0, 1)
     if argv == ['toolchain']:

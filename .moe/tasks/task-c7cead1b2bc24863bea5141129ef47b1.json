@@ -11,9 +11,48 @@
     "The named test passes in a git-archive snapshot."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "seatForward in scripts/local-runner/agent-seat.mjs.\nFILE NOTE: agent-seat.mjs and scripts/tests/local-runner-seat.test.mjs are CREATED BY CQ-M07i (task-18809c69, this row's dependsOn). They are listed as newFiles only because they did not exist when this plan was written; by the time this row is claimable they exist. EDIT them with the Edit/Write tools, never recreate or overwrite M07i's startSeat/stopSeat/runAgentSeat bytes. CQ-M07j also declares both paths, so a shell write would leave them HELD at landing. Read mem:gotcha-local-runner-tests first (forbidden-pattern literals, numstat counting).\n\nexport function seatForward(projectPath, { WebSocketImpl = globalThis.WebSocket, timeoutMs = 30_000 } = {}) returns forward(tool, args, { signal }). Reuse readDaemonInfo from ./vm-control.mjs (add it to M07i's existing vm-control import). It is the bounded, no-follow daemon.json read that refuses another project and admits only a /health-proven loopback bind. Per call, in this order:\n(1) const id = ++lastId (one counter per forward, captured locally: concurrent calls must each match their own id). Refuse before any read, inside the same try that maps every failure to the fixed code: a third argument whose signal is neither undefined nor an AbortSignal; an already-aborted signal; a WebSocketImpl that is not a function. Serialize the frame { jsonrpc: '2.0', id, method: 'tools/call', params: { name: tool, arguments: args } } now, so a non-serializable args refuses before any read or socket.\n(2) await readDaemonInfo(projectPath), fresh on every call because the daemon may restart on a new port. Any throw refuses.\n(3) Re-check signal.aborted after that await: an abort that landed during the /health probe refuses with no socket. From here to the abort-listener registration everything is synchronous, so no abort can slip in between.\n(4) Inside one Promise:\n  - Start the timeoutMs timer (a backstop for a caller without a signal; an invalid delay becomes 1 ms in Node, so it fails closed).\n  - Add the abort listener with { once: true }.\n  - Construct exactly new WebSocketImpl(url) with ONE argument. url is ws://127.0.0.1:<port>/mcp, or ws://[::1]:<port>/mcp when host is '::1' (mcpCaller's spelling). No protocols, no options, no headers. This module never imports runner-client.mjs and never reads a runner key. A constructor throw refuses.\n  - 'open' sends the frame once.\n  - 'message': non-JSON data refuses. A reply whose id is not this call's is ignored. A reply with an own `error` member, or whose `result` is not a plain object, refuses. Otherwise resolve reply.result itself: the RAW { content: [...] } object, never content[0].text parsed. guest-mcp-shim.py relays frame.result verbatim, agent-lifecycle leaseCall parses content itself, and runGuestSession checks isError itself.\n  - 'close' and 'error' refuse; so do the timer and the abort listener.\n(5) .finally: clearTimeout; signal?.removeEventListener('abort', ...), because runGuestSession passes ONE long-lived session signal to every forward and a leaked listener per call accumulates; socket?.close() inside try/catch.\nerror handling: every refusal is ONE fixed code, SEAT_FORWARD_FAILED, with a fixed message ('Seat forward failed.'). It never carries the daemon's message or codeName, a path, a key or the args. Every listener body is total: Node reports a throwing EventTarget listener as an uncaughtException (verified on Node 24). runGuestSession maps any rejection to BRIDGE_UPSTREAM_FAILED and never echoes it.\nHeader: add 3-5 lines on seatForward.\n- It goes over /mcp (the moe-proxy path), never /runner. A /runner call carries the authenticated runner identity (McpAdapter options.runner), which record_check_dispatch trusts as runner-attested evidence, and a guest's calls must never carry it.\n- The bridge's TOOLS allowlist and STAMPED identity already scope every guest request, as moe-proxy does.\n- runAgentJob's acquire/release_resource go through the same forward under the binding's taskId, so the job lease stays task-keyed.\n- It needs Node 22+'s global WebSocket; without one, every call refuses.\nNOT here: runSeatJob and the seat-job CLI (CQ-M07j), the wrappers (CQ-M07m/n), any vm-control.mjs change.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/agent-seat.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Rows SF1-SF4 in scripts/tests/local-runner-seat.test.mjs, which CQ-M07i created; edit it, never recreate it. First grep `test('SF`: it was unused at planning. M07i owns AS0-AS6 and CQ-M07j will add SJ1-SJ5. Import seatForward beside M07i's agent-seat.mjs import.\nHelpers, named sf* so they cannot clash with M07i's (reuse an equivalent if M07i already added one):\n- sfHealth(t, project, { listen = '127.0.0.1', report = listen, onRequest } = {}): a node:http server on listen:0 that answers /health with { status: 'healthy', projectPath: project, bindHost: report }. It counts hits, calls onRequest, resolves port 0 where the host cannot bind (VC-M1 healthOn), and closes in t.after (closeAllConnections + close).\n- sfSocket(...): VC-M1's EventTarget FakeSocket. It records its constructor arguments, every sent frame (parsed) and close() calls. By default it dispatches 'open' in a microtask; a row can script the construct phase (e.g. 'error' instead of 'open') and the after-send phase. Use new Event('open'|'close'|'error') and new MessageEvent('message', { data }).\n- daemon.json is { port, pid: 1, startedAt: 'x', projectPath: project } under a scratch project's .moe/.\nSF1 (DoD 1), transport and raw result:\n- forward('moe.acquire_resource', { resourceId: 'r', taskId: 'task-a', workerId: 'w' }, { signal }), with a live AbortController signal, resolves the raw result deepStrictEqual to the one the fake sent, NOT the parsed text. That result carries an extra member, e.g. { content: [{ type: 'text', text: '{\"granted\":true}' }], structuredContent: { k: 1 } }.\n- Exactly one socket. Its constructor arguments deep-equal [`ws://127.0.0.1:${port}/mcp`]. sent deep-equals [{ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'moe.acquire_resource', arguments: <the args verbatim> } }]. closed === 1. getEventListeners(signal, 'abort') (node:events) is empty after the resolve.\n- Two concurrent calls on the same forward: two sockets, ids 2 and 3, one frame each, and each resolves its own reply. The fake echoes the call's arguments in its text.\n- ::1: with daemon.json bindHost '::1' and a ::1 /health, the URL is ws://[::1]:<port>/mcp. Where ::1 cannot bind, emit t.diagnostic and skip that part (VC-M1).\nSF2 (DoD 2): every failure rejects with code SEAT_FORWARD_FAILED and a message free of the daemon's text ('/secret').\n- Give the test { timeout: 10_000 } and the forward timeoutMs 60_000, so only the event under test can reject. A mutant that drops a listener then fails by test timeout instead of hanging.\n- Socket rows, each asserting made.length === 1 and made[0].closed === 1:\n  - an error reply { error: { code: -32602, message: '/secret', data: { codeName: 'NOT_FOUND' } } };\n  - a 'close' event with no reply;\n  - an 'error' event instead of 'open';\n  - non-JSON data;\n  - { result: null };\n  - a reply under another id, then silence, with timeoutMs 20: it must reject, never resolve that reply;\n  - silence with timeoutMs 20 (the timeout), after which the abort listener list is empty;\n  - silence, then the send hook aborts the controller (abort mid-call).\n- Pre-socket refusals, each asserting made.length === 0 where a fake is supplied:\n  - AbortSignal.abort() already aborted, with zero /health hits;\n  - a /health onRequest that aborts the controller (abort during the probe: one hit, no socket);\n  - args { n: 1n }, which cannot be serialized;\n  - WebSocketImpl null;\n  - a constructor that throws new Error('/secret') (code only).\nSF3 (DoD 3), no key and no headers:\n- Register the env restore with t.after BEFORE mutating env (gotcha), then point MOE_RUNNER_KEY_DIR at path.join(<scratch>, 'missing').\n- The same call resolves the same raw result, the constructor saw exactly one argument (the URL), and the sent frames are identical to a run without the variable.\nSF4 (DoD 4): refusal before any socket, through readDaemonInfo. Each case gives made.length === 0 and SEAT_FORWARD_FAILED:\n- a daemon.json naming another project (path.join(project, 'other')) while /health is healthy for this one;\n- a /health reporting bindHost '0.0.0.0' for this project;\n- a daemon.json with bindHost '0.0.0.0';\n- no daemon.json.\nNo platform skips: M07i put this file in ci.yml, so it runs on the Linux, macOS and Windows legs. Keep the rows table-driven, within about 160 lines.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/local-runner-seat.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run ONCE (DoD 5), in a git-archive snapshot outside the checkout, never in the shared tree (mem:gotcha-local-runner-tests recipe):\nS=$(mktemp -d /tmp/m07j1-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && for f in scripts/local-runner/agent-seat.mjs scripts/tests/local-runner-seat.test.mjs; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat.test.mjs\nIt must report 0 fail, with M07i's AS rows still green. A row that also fails with HEAD-only bytes is pre-existing: report it, don't fix it here.\nThen measure: git diff --numstat HEAD -- both files. QA counts additions + deletions against 400; about 200 is expected. If over, merge rows that share setup. If still over, file an EPIC ADD_RAIL size exception (moe.propose_rail) with the exact numstat before complete_task.\nThe fresh test output is the complete_task verification evidence.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this diff, as the final step (load adversarial-self-review). Check:\n1. Can any path open a socket before readDaemonInfo has proven this project's loopback daemon in the same call, or after the signal aborted?\n2. Does any call open more than one socket or send more than one frame? Does any path leave a socket open, a timer pending or an abort listener attached?\n3. Can any rejection carry the daemon's message, a codeName, a path, the args or a key? Is the code always SEAT_FORWARD_FAILED?\n4. Does anything pass a second argument to the WebSocket constructor, import runner-client.mjs or read MOE_RUNNER_KEY_DIR?\n5. Is the resolved value the daemon's raw result object, never the parsed inner text?\n6. Can any listener throw? Node's EventTarget turns that into an uncaughtException.\n7. With two concurrent calls on one forward, does each match only its own id?\n8. Did M07i's startSeat/stopSeat/runAgentSeat bytes and its AS rows stay untouched?\nIf any byte changes, re-run step 3's exact command and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -29,5 +68,82 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T12:10:48.664Z",
-  "updatedAt": "2026-11-01T12:10:48.664Z"
+  "updatedAt": "2026-11-01T12:25:03.242Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T12:14:23.297Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T12:25:03.216Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/local-runner/agent-seat.mjs exports seatForward(projectPath, { WebSocketImpl = globalThis.WebSocket, timeoutMs = 30_000 } = {}), which returns forward(tool, args, { signal }).\n\nEach call proves this project's loopback daemon through vm-control readDaemonInfo. It then opens ONE socket, with no headers, to ws://127.0.0.1 (or [::1]):<port>/mcp, sends one tools/call { name, arguments } and resolves the daemon's raw result object unchanged.\n\nThese all reject with the one fixed code SEAT_FORWARD_FAILED: an error reply, a non-object result, unparsable data, a close or error event, the timeout, a refused daemon.json or /health, and an abort before or during the call. On every path the socket, the timer and the abort listener are released.\n\nIt never uses /runner and never reads a runner key.",
+    "invariants": [
+      "A guest call never reaches /runner and never carries a runner key or any header: the WebSocket constructor gets exactly one argument, the URL.",
+      "No socket opens unless the signal is live and readDaemonInfo proved this project's loopback daemon in the same call.",
+      "One socket and one tools/call frame per call. On every path the socket is closed, the timer cleared and the abort listener removed.",
+      "Every rejection is SEAT_FORWARD_FAILED with a fixed message: no upstream text, path, args or key.",
+      "The resolved value is the daemon's raw result, never the parsed text."
+    ],
+    "compatibility": [
+      "CQ-M07i's startSeat, stopSeat and runAgentSeat, and its AS rows, are unchanged.",
+      "vm-control.mjs (readDaemonInfo, mcpCaller) is used unchanged. seatForward(project) is the shape CQ-M07j's runSeatJob passes to runAgentJob.",
+      "runGuestSession (BRIDGE_UPSTREAM_FAILED on any rejection, its own isError check) and agent-lifecycle leaseCall (parses content itself) consume the raw result as is."
+    ],
+    "approvedScope": [
+      "agent-seat.mjs: export seatForward(projectPath, { WebSocketImpl, timeoutMs }) returning forward(tool, args, { signal }); the readDaemonInfo import; 3-5 header lines.",
+      "local-runner-seat.test.mjs: rows SF1-SF4 and their sf* helpers."
+    ],
+    "reuse": [
+      "readDaemonInfo (vm-control.mjs) supplies the daemon.json bounds, the project match and the /health loopback proof.",
+      "The socket pattern follows vm-control mcpCaller. A new function is still needed: mcpCaller parses content[0].text, maps the daemon's codeName and takes no signal, and vm-control.mjs stays outside this slice."
+    ],
+    "sourceAssumptions": [
+      "vm-control.mjs readDaemonInfo(projectPath) resolves {port, host: '127.0.0.1'|'::1'} only after three checks: a bounded no-follow regular daemon.json, a canonicalProjectPath match, and a loopbackDaemonHost /health proof. Any refusal throws DAEMON_UNREACHABLE.",
+      "McpAdapter.handleSingle answers tools/call without an initialize, with { jsonrpc, id, result: { content: [{ type: 'text', text }] } } or { jsonrpc, id, error: { code, message, data } }.",
+      "WebSocketServer.isAllowedUpgradeOrigin admits an absent Origin. Node 24's global WebSocket sends no Origin header (probed 2026-11-01), and vm-control mcpCaller already dials /mcp the same way.",
+      "WebSocketServer.cleanupMcpWorkers on a /mcp close only cancels waiters registered on that socket. moe-proxy also opens one connection per call.",
+      "guest-session.mjs reply() calls forward(scoped.tool, args, { signal: session.controller.signal }) under bounded(). It maps any rejection, and clean.isError, to BRIDGE_UPSTREAM_FAILED. guest-mcp-shim.py relays frame['result'] verbatim.",
+      "agent-lifecycle.mjs leaseCall destructures { isError, content } from forward's result and parses content[0].text itself."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/m07j1-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && for f in scripts/local-runner/agent-seat.mjs scripts/tests/local-runner-seat.test.mjs; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Forward over /runner via runner-client.mjs: rejected. Its socket carries the authenticated runner identity, which record_check_dispatch trusts as runner-attested evidence. A guest's calls must never carry it, or a widened bridge allowlist becomes a confused deputy.\n2. Reusing vm-control mcpCaller: rejected. It parses content[0].text, which breaks guest-mcp-shim.py's verbatim relay and leaseCall. It maps the daemon's codeName and takes no signal. Changing it would edit vm-control.mjs, outside this slice.\n3. A tool allowlist inside forward: rejected. /mcp carries no authority beyond any loopback client's. The bridge's TOOLS/STAMPED already scope guest requests, and runAgentJob's lease calls are fixed.\n4. One persistent socket: rejected. Per-call sockets match moe-proxy, survive a daemon restart on a new port, and make close-on-every-path trivial.",
+    "codebaseInsights": "- The daemon /mcp needs no initialize. Success is result.content[0].text; failure is a JSON-RPC error.\n- Node 24's global WebSocket sends no Origin header, which the daemon would refuse.\n- runGuestSession already probes /health before each forward (daemonRefusal). seatForward probes again because leaseCall has no probe of its own; the double probe is intentional.\n- Node turns a throwing EventTarget listener into an uncaughtException.\n- getEventListeners(signal, 'abort') can observe listener cleanup.",
+    "risks": "- Listener leak: runGuestSession reuses ONE session signal for every forward, so a missing removeEventListener accumulates and warns.\n- Id capture: the id must be a local taken before the await, or concurrent calls cross-match.\n- An abort during the /health probe settles only after the probe (at most 5 s, loopbackDaemonHost's default). The post-await check covers it with no socket.\n- Mutation resistance: event rows need a large timeoutMs plus a test timeout, or the timer masks a dropped listener.\n- Size: about 45 runtime plus 160 test lines, so the 400-line cap is not at risk.",
+    "keyFiles": [
+      "scripts/local-runner/vm-control.mjs",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/agent-lifecycle.mjs",
+      "scripts/local-runner/guest-mcp-shim.py",
+      "scripts/local-runner/runner-client.mjs",
+      "scripts/tests/local-runner-vm-control.test.mjs",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "efa592ee324dc89c246f8efd65a73e0e16696bf3",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T12:25:03.242Z",
+  "approvedPlanRevision": 1
 }

@@ -74,11 +74,17 @@
       "author": "qa-97c4310b",
       "content": "ADVISORY from the CQ-M07a QA (qa-97c4310b, approved 2026-11-01). Non-blocking; fold it in only if this row touches certificationEvidence.test.ts anyway.\n- The drift table in certificationEvidence.test.ts catches every clause-level mutant of the checkCertificationReport port: 95 of 112 QA mutants killed, plus 15 of 15 reader mutants.\n- 6 strict-to-loose equality swaps (=== to ==) still survive: report.kind, version, transport, provider.name, executionReady and the check-row id. certify.mjs mirrors 3 of them.\n- The shipped port is correct: it refuses these inputs exactly as certify.mjs does. The gap is only that a future == regression would go unseen.\n- To kill them, add refused VARIANTS rows with JSON type-confusion values:\n  - version '1' or true;\n  - kind ['isolation-certification'];\n  - transport ['injected'] with certified false;\n  - provider name ['multipass'];\n  - executionReady 0;\n  - one check id as ['provision'].\n- The file sits at the 400-line cap for its slice: fold the rows 2-3 per line.",
       "timestamp": "2026-11-01T12:04:01.423Z"
+    },
+    {
+      "id": "comment-fa0f600012ed40708cf1fb2400ea0461",
+      "author": "worker-cef53f62",
+      "content": "SUPERVISOR PIN MOVE (CQ-M07f, task-d6bc12fff910484d92368fa6825f523c). After the reset mode, the sha256 of guest-supervisor.py is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. It supersedes 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190 for the operator's single re-certify.\n\nCommit-to-be: the M07f completion commit `feat(task-d6bc12fff910484d92368fa6825f523c): …` on moe/work-2026-10-24, after 69f2d710. That task's `commits` will carry the SHA.\n\nThe same diff sets certificationEvidence.ts CERTIFICATION_PINS.supervisorSha256 to 616463b7…. I verified that in a snapshot: npm ci, then vitest on certificationEvidence and 6 sibling test files, 437 tests passed. With the old pin, the drift test fails.\n\nNo other pin moved. Certify after this commit lands, or the report fails CERTIFICATION_REPORT_SUPERVISOR.",
+      "timestamp": "2026-11-01T12:25:58.327Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:17:20.276Z",
-  "updatedAt": "2026-11-01T12:04:01.423Z",
+  "updatedAt": "2026-11-01T12:25:58.327Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:17:38.753Z"
   },

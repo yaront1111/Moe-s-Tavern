@@ -3060,7 +3060,8 @@ if (typeof answer === 'string') process.stdout.write(answer); else process.exitC
 });
 
 // CQ-R13d native isolation certify: the injected core only (the native run is operator-only, never CI)
-import { CERTIFY_CHECKS, certifyCore, runIsolationCertify, validateCertificationReport } from '../local-runner/certify.mjs';
+import { CERTIFY_CHECKS, certifyCore, fileCertifiedReport, runIsolationCertify, validateCertificationReport } from '../local-runner/certify.mjs';
+import { userInfo } from 'node:os';
 
 const REAL_SUPERVISOR_SHA256 = createHash('sha256').update(readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url))).digest('hex');
 const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'writer-containment', 'check-containment',
@@ -3384,6 +3385,120 @@ test('CF8 CLI certify prints the report and exits 0 only when certified', async 
     const invalid = { code: 'CLI_INPUT_INVALID', providerReady: false, executionReady: false, message: USAGE };
     assert.deepEqual(await cli(args, async () => assert.fail('no certify on invalid input')), [2, [invalid]], JSON.stringify(args));
   }
+});
+
+// CQ-M07e host certification store: fileCertifiedReport with an injected home. The real store is only ever listed, never written.
+const HS_NAME = `certification-win32-x64-${STARTED.slice(0, 19).replace(/[-:]/g, '')}Z-0a0b0c.json`;
+const hsReport = () => validateCertificationReport(certification({ transport: 'native', certified: true })); // deep-frozen, like certify's own
+const hsStore = home => path.join(home, '.moe', 'certification');
+const hsLine = code => `${JSON.stringify({ code })}\n`;
+async function hsFile(home, over = {}) {
+  const warned = [];
+  const result = await fileCertifiedReport({ report: hsReport(), name: HS_NAME, home, warn: line => warned.push(line), ...over });
+  return [result, warned];
+}
+const hsFailed = code => [{ store: 'failed', code }, [hsLine(code)]];
+const hsRealStore = () => { try { return readdirSync(hsStore(userInfo().homedir)); } catch { return null; } };
+
+test('HS1 a native certified report is filed under its own name, byte-identical and owner-only', async t => {
+  const home = scratch(t);
+  const [result, warned] = await hsFile(home);
+  const file = path.join(hsStore(home), HS_NAME);
+  assert.deepEqual([result, warned, readdirSync(hsStore(home)), readFileSync(file, 'utf8'), Object.isFrozen(result)],
+    [{ store: 'filed', code: null }, [], [HS_NAME], `${JSON.stringify(hsReport())}\n`, true]);
+  if (process.platform !== 'win32') assert.deepEqual([statSync(hsStore(home)).mode & 0o777, statSync(file).mode & 0o777], [0o700, 0o600]);
+  // A second report under another name joins it; neither is touched.
+  const other = HS_NAME.replace('0a0b0c', '0d0e0f');
+  assert.deepEqual(await hsFile(home, { name: other }), [{ store: 'filed', code: null }, []]);
+  assert.deepEqual([readdirSync(hsStore(home)).sort(), readFileSync(file, 'utf8')], [[HS_NAME, other].sort(), `${JSON.stringify(hsReport())}\n`]);
+});
+
+test('HS2 an existing file of that name is never overwritten', async t => {
+  const home = scratch(t);
+  mkdirSync(hsStore(home), { recursive: true, mode: 0o700 });
+  const file = path.join(hsStore(home), HS_NAME);
+  writeFileSync(file, 'old\n');
+  assert.deepEqual(await hsFile(home), hsFailed('CERTIFY_STORE_WRITE_FAILED'));
+  assert.deepEqual([readFileSync(file, 'utf8'), readdirSync(hsStore(home))], ['old\n', [HS_NAME]]);
+  // The same report filed twice: the second refuses and the first copy survives.
+  const again = scratch(t);
+  assert.deepEqual(await hsFile(again), [{ store: 'filed', code: null }, []]);
+  assert.deepEqual(await hsFile(again), hsFailed('CERTIFY_STORE_WRITE_FAILED'));
+  assert.deepEqual([readFileSync(path.join(hsStore(again), HS_NAME), 'utf8'), readdirSync(hsStore(again))], [`${JSON.stringify(hsReport())}\n`, [HS_NAME]]);
+});
+
+test('HS3 an injected, uncertified or non-report input is skipped and never touches the store', async t => {
+  const failedRun = checksOf(['provision', 'failed', 'PRIMARY_NAME_CONFLICT'], ['readiness', 'not-run'], ['no-mounts', 'not-run'], ...BRIDGE_NOT_RUN, ['teardown', 'passed']);
+  const skipped = [{ store: 'skipped', code: null }, []];
+  for (const report of [certification(), certification({ transport: 'native', certified: false, checks: failedRun }), { ...hsReport(), certified: 'true' },
+    { ...hsReport(), transport: 'injected' }, null, undefined, 'report', 7, []]) {
+    const home = scratch(t);
+    assert.deepEqual([await hsFile(home, { report }), existsSync(path.join(home, '.moe'))], [skipped, false], JSON.stringify(report)?.slice(0, 60));
+  }
+  for (const input of [undefined, null, 'input', {}]) assert.deepEqual(await fileCertifiedReport(input), skipped[0]);
+  // CF1's injected certifyCore run leaves the real store as it found it (listed read-only: absent stays absent).
+  const before = hsRealStore();
+  const h = certifyHarness(t);
+  assert.equal((await h.certify()).certified, false);
+  assert.deepEqual(hsRealStore(), before);
+});
+
+test('HS4 an unsafe store, home, name or report is refused with its fixed code and writes nothing through a link', async t => {
+  const unsafe = hsFailed('CERTIFY_STORE_UNSAFE');
+  for (const home of ['relative', '', null, undefined, 7, `${scratch(t)}\n`]) assert.deepEqual(await hsFile(home), unsafe, String(home));
+  const clean = scratch(t);
+  for (const name of [HS_NAME.replace('x64', 'arm64'), HS_NAME.replace('win32', 'linux'), `x/${HS_NAME}`, `../${HS_NAME}`, `${HS_NAME}\n`, HS_NAME.toUpperCase(), 'other.json', '', null, undefined]) {
+    assert.deepEqual(await hsFile(clean, { name }), hsFailed('CERTIFY_STORE_WRITE_FAILED'), String(name));
+  }
+  const contradicting = certification({ transport: 'native', certified: true, checks: checksOf(['provision', 'failed', 'X'], ['readiness', 'not-run'], ['no-mounts', 'not-run'], ...BRIDGE_NOT_RUN, ['teardown', 'passed']) });
+  assert.deepEqual(await hsFile(clean, { report: contradicting }), hsFailed('CERTIFY_REPORT_INVALID'));
+  assert.equal(existsSync(path.join(clean, '.moe')), false);
+  if (process.platform === 'win32') return;
+  // A store that is a symlink, a .moe that is one, a shared (0755) store and a store owned by someone else.
+  const [outside, linkedStore] = [scratch(t), scratch(t)];
+  mkdirSync(path.join(linkedStore, '.moe'), { mode: 0o700 });
+  symlinkSync(outside, hsStore(linkedStore));
+  assert.deepEqual(await hsFile(linkedStore), unsafe);
+  const [target, linkedMoe] = [scratch(t), scratch(t)];
+  symlinkSync(target, path.join(linkedMoe, '.moe'));
+  assert.deepEqual(await hsFile(linkedMoe), unsafe);
+  const shared = scratch(t);
+  mkdirSync(hsStore(shared), { recursive: true, mode: 0o700 });
+  chmodSync(hsStore(shared), 0o755);
+  assert.deepEqual(await hsFile(shared), unsafe);
+  assert.deepEqual([readdirSync(outside), readdirSync(target), readdirSync(hsStore(shared)), statSync(hsStore(shared)).mode & 0o777], [[], [], [], 0o755]);
+  const foreign = scratch(t);
+  const getuid = process.getuid;
+  process.getuid = () => getuid.call(process) + 1;
+  try { assert.deepEqual(await hsFile(foreign), unsafe); } finally { process.getuid = getuid; }
+  assert.equal(existsSync(path.join(foreign, '.moe', 'certification', HS_NAME)), false);
+});
+
+test('HS5 a store failure never rejects and leaves the workDir report and the report object unchanged', async t => {
+  const workDir = scratch(t);
+  const [report, file] = [hsReport(), path.join(workDir, HS_NAME)];
+  const [clone, bytes] = [structuredClone(report), `${JSON.stringify(report)}\n`];
+  writeFileSync(file, bytes);
+  const unsafe = { store: 'failed', code: 'CERTIFY_STORE_UNSAFE' };
+  let calls = 0;
+  const throwing = () => { calls += 1; throw new Error('/private/path secret'); };
+  const rejecting = async () => { calls += 1; throw new Error('/private/path secret'); };
+  const results = [await fileCertifiedReport({ report, name: HS_NAME, home: 'relative', warn: () => {} }),
+    await fileCertifiedReport({ report, name: HS_NAME, home: null, warn: throwing }),
+    await fileCertifiedReport({ report, name: HS_NAME, home: null, warn: rejecting }),
+    await fileCertifiedReport({ report, name: HS_NAME, home: null, warn: 7 })];
+  await new Promise(resolve => setImmediate(resolve)); // an async warn's rejection would surface here as an unhandled one
+  assert.deepEqual([results, calls], [[unsafe, unsafe, unsafe, unsafe], 2]);
+  // A report whose own getter throws is not a report: failed, never a rejection, and only the fixed code reaches warn.
+  const hostile = Object.defineProperty({}, 'transport', { enumerable: true, get() { throw new Error('/private/path secret'); } });
+  assert.deepEqual(await hsFile(workDir, { report: hostile }), hsFailed('CERTIFY_STORE_WRITE_FAILED'));
+  assert.equal(existsSync(path.join(workDir, '.moe')), false);
+  assert.deepEqual([readFileSync(file, 'utf8'), readdirSync(workDir), report, deepFrozen(report)], [bytes, [HS_NAME], clone, true]);
+  // With no warn given, the one fixed code line goes to stderr and nothing else does.
+  const [write, lines] = [process.stderr.write, []];
+  process.stderr.write = chunk => { lines.push(String(chunk)); return true; };
+  try { assert.deepEqual(await fileCertifiedReport({ report, name: HS_NAME, home: 'relative' }), unsafe); } finally { process.stderr.write = write; }
+  assert.deepEqual(lines, [hsLine('CERTIFY_STORE_UNSAFE')]);
 });
 
 // CQ-R13e1 bridge certify checks: the real runCheckSession and materializeSnapshot over one spawn router that answers the
@@ -4495,6 +4610,234 @@ test('T7 end to end, materializeSnapshot copies the merged view through the real
     assert.deepEqual([launches.length, launches[1].child.exitCode, guest.ids().length], [2, 73, 8]);
     assertMaterialized(paths, merged); // the first workspace is untouched
   });
+
+// CQ-M07f supervisor reset: the real reset() under python3 -I -B with injected paths, uids (the test user) and alive,
+// called directly as in M1 (main's root routing needs geteuid 0). A planted seat holds a materialized workspace, its
+// manifest, two session homes and sessions/other.txt, with stand-ins beside them for everything reset must keep.
+import { resetWorkspace } from '../local-runner/snapshot-transfer.mjs';
+
+const NO_SAFE_RMTREE = NOT_POSIX || (spawnSync('python3', ['-I', '-B', '-c',
+  'import shutil, sys; sys.exit(0 if shutil.rmtree.avoids_symlink_attacks else 1)']).status !== 0
+  && 'this python3 has no symlink-safe rmtree, so reset refuses (71) by design');
+const SEAT_KEPT = ['etc/moe/supervisor.credential', 'lib/dependencies.manifest.json', 'lib/dependencies/node_modules/a/index.js',
+  'lib/sessions/other.txt', 'opt/moe/agents/claude', 'opt/moe/bin/moe-supervisor', 'opt/moe/toolchain/bin/node'];
+const SEAT_REMOVED = ['lib/sessions/home-a1b2c3', 'lib/sessions/home-a1b2c3/.config', 'lib/sessions/home-a1b2c3/.config/state',
+  'lib/sessions/home-d4e5f6', 'lib/sessions/home-d4e5f6/.config', 'lib/sessions/home-d4e5f6/.config/state', 'lib/workspace',
+  'lib/workspace.manifest.json', 'lib/workspace/run.sh', 'lib/workspace/src', 'lib/workspace/src/a.c'];
+const RESET_FRAME = [{ kind: 'reset' }];
+function plantSeat(dir) {
+  const seat = { ...layoutIn(dir), sessions: path.join(dir, 'lib', 'sessions'),
+    snapshot: snapshotOf([fileOf('src/a.c', 'int a;\n'), fileOf('run.sh', '#!/bin/sh\n', true)]) };
+  const run = materializeIn(dir, framesOf([...hostFrames(workspaceEntries(seat.snapshot))]));
+  assert.equal(run.status, 0, String(run.stderr));
+  for (const home of ['home-a1b2c3', 'home-d4e5f6']) {
+    mkdirSync(path.join(seat.sessions, home, '.config'), { recursive: true });
+    writeFileSync(path.join(seat.sessions, home, '.config', 'state'), home);
+  }
+  for (const [at, name] of SEAT_KEPT.entries()) {
+    mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+    writeFileSync(path.join(dir, name), `kept ${name}`);
+    chmodSync(path.join(dir, name), at % 2 ? 0o600 : 0o755);
+  }
+  return seat;
+}
+// Every entry under dir by lstat, never following a link: [name, mode, its bytes' sha256 | link target | 'dir'].
+const seatTree = dir => readdirSync(dir, { recursive: true }).sort().map(name => {
+  const file = path.join(dir, name), info = lstatSync(file);
+  return [name, info.mode, info.isSymbolicLink() ? readlinkSync(file) : info.isDirectory() ? 'dir' : sha(readFileSync(file))];
+});
+function resetIn(seat, { setup = '', uids = '(os.getuid(),)', alive = 'lambda uids: False', out = '1' } = {}) {
+  const code = `${PY_LOAD}${setup}\nsys.exit(m.reset(${out}, sys.argv[2], sys.argv[3], sys.argv[4], uids=${uids}, alive=${alive}))`;
+  return spawnSync('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, seat.workspace, seat.manifest, seat.sessions], { timeout: 60_000 });
+}
+
+test('RS1 reset removes the workspace, its manifest and each session home, keeps every other byte and mode, and the seat materializes again',
+  { skip: NO_SAFE_RMTREE }, t => {
+    const dir = scratch(t);
+    const seat = plantSeat(dir);
+    const before = seatTree(dir);
+    assert.deepEqual(before.map(([name]) => name).filter(name => !SEAT_KEPT.includes(name) && !SEAT_KEPT.some(kept => kept.startsWith(`${name}/`))), SEAT_REMOVED);
+    const run = resetIn(seat);
+    assert.deepEqual([run.status, createFrameDecoder().push(run.stdout), String(run.stderr)], [0, RESET_FRAME, '']);
+    assert.deepEqual(seatTree(dir), before.filter(([name]) => !SEAT_REMOVED.includes(name)));
+    assert.deepEqual(readdirSync(seat.sessions), ['other.txt']);
+    const again = materializeIn(dir, framesOf([...hostFrames(workspaceEntries(seat.snapshot))]));
+    assert.deepEqual([again.status, createFrameDecoder().push(again.stdout)],
+      [0, [{ kind: 'materialized', digest: workspaceEntries(seat.snapshot).digest }]], String(again.stderr));
+    // The re-materialized seat, the then clean seat and one with no sessions directory at all each reset to 0.
+    for (const target of [seat, seat, { ...layoutIn(scratch(t)), sessions: path.join(scratch(t), 'none') }]) {
+      const clean = resetIn(target);
+      assert.deepEqual([clean.status, createFrameDecoder().push(clean.stdout)], [0, RESET_FRAME], String(clean.stderr));
+    }
+    assert.deepEqual(seatTree(dir), before.filter(([name]) => !SEAT_REMOVED.includes(name)));
+  });
+
+test('RS2 while a job identity process is alive reset exits 69, removes nothing and writes no frame; the probe scans /proc uids',
+  { skip: NO_SAFE_RMTREE }, t => {
+    const dir = scratch(t);
+    const seat = plantSeat(dir);
+    const before = seatTree(dir);
+    const recorder = 'lambda uids: sys.stderr.write(type(uids).__name__ + repr(sorted(uids))) or True';
+    const named = "import types\nm.pwd.getpwnam = lambda name: types.SimpleNamespace(pw_uid={'moe-agent': 4001, 'moe-check': 4002}[name])";
+    for (const [label, options, seen] of [['injected uids', {}, `set[${process.getuid()}]`], ['both identity accounts', { uids: 'None', setup: named }, 'set[4001, 4002]']]) {
+      const busy = resetIn(seat, { ...options, alive: recorder });
+      assert.deepEqual([busy.status, busy.stdout.length, String(busy.stderr), seatTree(dir)], [69, 0, seen, before], label);
+    }
+    // identity_alive reads each numeric /proc entry's Uid: line (real, effective, saved, filesystem). A pid gone mid-scan is
+    // skipped; any other failure propagates, so reset fails closed (RS4).
+    const proc = scratch(t), broken = scratch(t);
+    for (const [pid, status] of [['1', 'Uid:\t0\t0\t0\t0\nGid:\t4005\t0\t0\t0\n'], ['123', 'Name:\tjob\nUid:\t1000\t1000\t4001\t1000\n'],
+      ['124', 'Uid:\t0\t0\t0\t4002\n'], ['self', 'Uid:\t4003\t4003\t4003\t4003\n']]) {
+      mkdirSync(path.join(proc, pid));
+      writeFileSync(path.join(proc, pid, 'status'), status);
+    }
+    mkdirSync(path.join(proc, '999')); // exited: no status
+    mkdirSync(path.join(broken, '7', 'status'), { recursive: true }); // an unreadable status: IsADirectoryError
+    // The real /proc only on Linux, the guest's OS: macOS has none.
+    const probe = `${PY_LOAD}import json
+seen = [m.identity_alive({os.getuid()}), m.identity_alive({3999999})] if sys.platform == 'linux' else []
+seen += [m.identity_alive({uid}, sys.argv[2]) for uid in (4001, 4002, 4003, 4005, 0)]
+try:
+    m.identity_alive({4001}, sys.argv[3])
+except OSError as error:
+    seen.append(type(error).__name__)
+print(json.dumps(seen))`;
+    const scan = spawnSync('python3', ['-I', '-B', '-c', probe, PY_SUPERVISOR, proc, broken]);
+    assert.deepEqual([scan.status, JSON.parse(String(scan.stdout))],
+      [0, [...(process.platform === 'linux' ? [true, false] : []), true, true, false, false, true, 'IsADirectoryError']], String(scan.stderr));
+  });
+
+test('RS3 links planted in the workspace and in a session home are unlinked as links, and their outside targets are untouched',
+  { skip: NO_SAFE_RMTREE }, t => {
+    const dir = scratch(t), outside = scratch(t);
+    mkdirSync(path.join(outside, 'dir'));
+    writeFileSync(path.join(outside, 'dir', 'kept'), 'outside dir file');
+    writeFileSync(path.join(outside, 'file'), 'outside file');
+    const seat = plantSeat(dir);
+    const home = path.join(seat.sessions, 'home-a1b2c3');
+    for (const [target, link] of [[path.join(outside, 'dir'), path.join(seat.workspace, 'src', 'linked-dir')],
+      [path.join(outside, 'file'), path.join(seat.workspace, 'linked-file')], [path.join(outside, 'dir'), path.join(home, '.config', 'linked-dir')],
+      [path.join(outside, 'file'), path.join(home, 'linked-file')], [path.join(outside, 'dir'), path.join(seat.sessions, 'home-linked')]]) symlinkSync(target, link);
+    const outsideBefore = seatTree(outside);
+    const run = resetIn(seat);
+    assert.deepEqual([run.status, createFrameDecoder().push(run.stdout)], [0, RESET_FRAME], String(run.stderr));
+    assert.deepEqual([seatTree(outside), readdirSync(seat.sessions), existsSync(seat.workspace), existsSync(seat.manifest)],
+      [outsideBefore, ['other.txt'], false, false]);
+    // A workspace and a manifest that are themselves links are unlinked, never followed.
+    const linked = { ...layoutIn(scratch(t)), sessions: path.join(scratch(t), 'none') }, target = scratch(t);
+    writeFileSync(path.join(target, 'kept'), 'target');
+    mkdirSync(linked.lib);
+    symlinkSync(target, linked.workspace);
+    symlinkSync(path.join(target, 'kept'), linked.manifest);
+    const unlinked = resetIn(linked);
+    assert.deepEqual([unlinked.status, readdirSync(linked.lib), readdirSync(target), readFileSync(path.join(target, 'kept'), 'utf8')],
+      [0, [], ['kept'], 'target'], String(unlinked.stderr));
+  });
+
+test('RS4 reset refuses with 71 for an unsafe rmtree or no identity account, and 74 for a failed probe, removal or frame write',
+  { skip: NO_SAFE_RMTREE }, t => {
+    const dir = scratch(t);
+    const seat = plantSeat(dir);
+    const before = seatTree(dir);
+    for (const [label, options, status] of [
+      ['an rmtree that cannot avoid symlink attacks', { setup: 'm.shutil.rmtree.avoids_symlink_attacks = False' }, 71],
+      ['no identity account', { uids: 'None', setup: 'def missing(name):\n    raise KeyError(name)\nm.pwd.getpwnam = missing' }, 71],
+      ['a failed process probe', { setup: "def failing(uids):\n    raise OSError(5, 'injected')", alive: 'failing' }, 74],
+    ]) {
+      const run = resetIn(seat, options);
+      assert.deepEqual([run.status, run.stdout.length, seatTree(dir)], [status, 0, before], `${label} ${run.stderr}`);
+    }
+    // A removal failure stops at once with 74 and no frame: here the manifest's, after the workspace went.
+    const eio = "real = os.unlink\ndef unlink(name, *args, **kwargs):\n    if name == sys.argv[3]:\n        raise OSError(5, 'injected')\n"
+      + '    return real(name, *args, **kwargs)\nos.unlink = unlink';
+    const failed = resetIn(seat, { setup: eio });
+    assert.deepEqual([failed.status, failed.stdout.length, existsSync(seat.workspace), existsSync(seat.manifest), readdirSync(seat.sessions).sort()],
+      [74, 0, false, true, ['home-a1b2c3', 'home-d4e5f6', 'other.txt']], String(failed.stderr));
+    // A frame it cannot write is 74 once the removal is done; nothing outside the three targets was touched.
+    const unwritable = resetIn(seat, { setup: 'out = os.open(os.devnull, os.O_RDONLY)', out: 'out' });
+    assert.deepEqual([unwritable.status, unwritable.stdout.length, seatTree(dir)], [74, 0, before.filter(([name]) => !SEAT_REMOVED.includes(name))],
+      String(unwritable.stderr));
+  });
+
+test('RS5 the supervisor CLI accepts only the bare reset argv, reset needs root, and as root main routes it to reset(1)', { skip: NOT_POSIX }, () => {
+  for (const args of [['reset', 'x'], ['RESET'], ['reset ']]) {
+    const run = spawnSync('python3', ['-I', '-B', PY_SUPERVISOR, ...args]);
+    assert.deepEqual([run.status, run.stdout.length], [64, 0], `${args} ${run.stderr}`);
+  }
+  const recorder = 'm.reset = lambda *a, **k: sys.stderr.write(repr((a, k))) and 42';
+  for (const [uid, status, stderr] of [[1000, 77, ''], [0, 42, '((1,), {})']]) {
+    const run = spawnSync('python3', ['-I', '-B', '-c', `${PY_LOAD}${recorder}\nsys.exit(m.main(['reset'], geteuid=lambda: ${uid}))`, PY_SUPERVISOR]);
+    assert.deepEqual([run.status, String(run.stderr), run.stdout.length], [status, stderr, 0], `euid ${uid}`);
+  }
+});
+
+test('RW1 resetWorkspace sends no input, accepts one {kind: reset} frame between two mount checks, and maps every outcome to one fixed code',
+  async () => {
+    const done = { kind: 'reset' };
+    const t = transferProvider(undefined, proc => proc.reply(done));
+    assert.equal(await resetWorkspace({ name: GUEST, provider: t.provider }), 'reset');
+    assert.deepEqual([t.proc.calls, t.proc.written, t.proc.kills, t.proc.before, t.guest.ids(), t.guest.unexpected],
+      [[streamCall('reset')], [], [], ['info', 'mountinfo', 'info'], ['info', 'mountinfo', 'info', 'info', 'mountinfo'], []]);
+    for (const [label, respond, code, kills = ['SIGKILL']] of [
+      ['exit 69, a live job identity', proc => proc.reply([], 69), 'TRANSFER_RESET_BUSY'],
+      ...[64, 65, 71, 74, 77, 255].map(exit => [`exit ${exit}`, proc => proc.reply([], exit), 'TRANSFER_EXIT_FAILED']),
+      ['exit 255 after the frame', proc => proc.reply(done, 255), 'TRANSFER_EXIT_FAILED'],
+      ['a signal exit', proc => proc.reply([], null, 'SIGKILL'), 'TRANSFER_EXIT_FAILED'],
+      ['exit 0 with no frame', proc => proc.reply([]), 'TRANSFER_FRAME_INVALID', []],
+      ['an extra key', proc => proc.reply({ kind: 'reset', x: 1 }), 'TRANSFER_FRAME_INVALID'],
+      ['two frames', proc => proc.reply([done, done]), 'TRANSFER_FRAME_INVALID'],
+      ['another kind', proc => proc.reply({ kind: 'verified' }), 'TRANSFER_FRAME_INVALID'],
+      ['a hang', () => {}, 'TRANSFER_TIMEOUT'],
+    ]) {
+      const p = transferProvider(undefined, respond);
+      await assert.rejects(resetWorkspace({ name: GUEST, provider: p.provider, timeoutMs: label === 'a hang' ? 50 : 5_000 }), transferRefused(code), label);
+      assert.deepEqual([p.proc.calls, p.proc.kills, p.guest.ids()], [[streamCall('reset')], kills, ['info', 'mountinfo', 'info']], label);
+    }
+    // Refused before the stream: bad input calls nothing, a mount before it or a transport refusal spawns nothing.
+    for (const [label, options, guestOptions, code, ids] of [
+      ['a non-owned name', { name: 'primary' }, undefined, 'TRANSFER_INPUT_INVALID', []],
+      ['timeout 0', { timeoutMs: 0 }, undefined, 'TRANSFER_INPUT_INVALID', []],
+      ['a host mount', {}, { info: guestDetail({ mounts: HOST_MOUNT }) }, 'TRANSFER_MOUNTS_PRESENT', ['info', 'mountinfo']],
+      ['no ipv4 after the mount check', {}, { info: [guestDetail(), guestDetail({ ipv4: [] })] }, 'TRANSFER_SPAWN_FAILED', ['info', 'mountinfo', 'info']],
+      ['a relative keyDir', { keyDir: 'keys' }, undefined, 'TRANSFER_SPAWN_FAILED', ['info', 'mountinfo']],
+    ]) {
+      const p = transferProvider(guestOptions, proc => proc.reply(done));
+      const { keyDir, ...top } = options;
+      await assert.rejects(resetWorkspace({ name: GUEST, provider: keyDir ? { ...p.provider, keyDir } : p.provider, ...top }), transferRefused(code), label);
+      assert.deepEqual([p.proc.calls, p.guest.ids()], [[], ids], label);
+    }
+    const late = transferProvider({ info: [guestDetail(), guestDetail(), guestDetail({ mounts: HOST_MOUNT })] }, proc => proc.reply(done));
+    await assert.rejects(resetWorkspace({ name: GUEST, provider: late.provider }), transferRefused('TRANSFER_MOUNTS_PRESENT'));
+    assert.deepEqual([late.proc.calls, late.guest.ids()], [[streamCall('reset')], ['info', 'mountinfo', 'info', 'info', 'mountinfo']]);
+  });
+
+test('RW2 only the reset entry point maps 69: every other transfer, and a raw reset stream, keep TRANSFER_EXIT_FAILED', async () => {
+  for (const [label, run, mode] of [
+    ['materialize', provider => materializeSnapshot({ name: GUEST, snapshot: snapshotOf([fileOf('a', 'A')]), provider }), 'materialize'],
+    ['verify', provider => verifyWorkspace({ name: GUEST, provider }), 'verify'],
+    ['a raw reset stream', provider => runSupervisorStream({ name: GUEST, mode: 'reset', provider, onFrame: () => {} }), 'reset'],
+  ]) {
+    const p = transferProvider(undefined, proc => proc.reply([], 69));
+    await assert.rejects(run(p.provider), transferRefused('TRANSFER_EXIT_FAILED'), label);
+    assert.deepEqual(p.proc.calls, [streamCall(mode)], label);
+  }
+});
+
+test('RW3 runSupervisorStream refuses any caller-supplied exits map before a provider call, so the reset map stays internal', async () => {
+  const p = transferProvider(undefined, proc => proc.reply({ kind: 'reset' }));
+  const base = { name: GUEST, provider: p.provider, onFrame: () => {} };
+  for (const [label, options] of [['a 255 map on reset', { mode: 'reset', exits: { 255: 'TRANSFER_RESET_BUSY' } }],
+    ['a copy of the reset map', { mode: 'reset', exits: Object.freeze({ 69: 'TRANSFER_RESET_BUSY' }) }],
+    ['a map on materialize', { mode: 'materialize', exits: { 69: 'TRANSFER_RESET_BUSY' } }], ['null', { mode: 'reset', exits: null }],
+    ['an empty map', { mode: 'export', exits: {} }]]) {
+    await assert.rejects(runSupervisorStream({ ...base, ...options }), transferRefused('TRANSFER_INPUT_INVALID'), label);
+  }
+  assert.deepEqual([p.guest.calls, p.proc.calls], [[], []]);
+  // An explicitly undefined exits is today's call, unchanged.
+  const frames = [];
+  assert.equal(await runSupervisorStream({ ...base, mode: 'reset', exits: undefined, onFrame: frame => frames.push(frame) }), undefined);
+  assert.deepEqual([frames, p.proc.calls], [[{ kind: 'reset' }], [streamCall('reset')]]);
+});
 
 // CQ-R11e2: offline, copy-only Node toolchain install; all tarballs are local fixtures.
 import * as toolchainTransfer from '../local-runner/snapshot-transfer.mjs';
@@ -6849,14 +7192,14 @@ const streamQuiet = (code, needles = []) => error => {
 const ONE_FILE = () => snapshotOf([fileOf('a', 'A')]);
 
 test('SS1 openGuestStream spawns the ssh client with exactly sshStreamArgv for a freshly read info address, in every supervisor mode', async () => {
-  assert.deepEqual(SUPERVISOR_MODES, ['bridge', 'check', 'materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies']);
+  assert.deepEqual(SUPERVISOR_MODES, ['bridge', 'check', 'materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies', 'reset']);
   const h = streamHarness();
   for (const [at, mode] of SUPERVISOR_MODES.entries()) {
     assert.equal(await openGuestStream({ name: GUEST, mode, provider: h.provider }), h.child, mode);
     assert.deepEqual(h.spawns.at(-1), { args: streamCall(mode), before: Array(at + 1).fill('info') }, mode);
   }
   assert.deepEqual([h.spawns.length, h.guest.calls.map(({ executable, args }) => [executable, ...args]), h.guest.unexpected],
-    [8, Array(8).fill(['multipass', ...infoArgs(GUEST)]), []]);
+    [9, Array(9).fill(['multipass', ...infoArgs(GUEST)]), []]);
   // The address is read on every call, never cached: a guest whose address changed is reached at the new one.
   const moved = streamHarness({ info: [guestDetail(), guestDetail({ ipv4: ['10.0.0.9', '10.0.0.2'] })] });
   for (let call = 0; call < 2; call += 1) await openGuestStream({ name: GUEST, mode: 'export', provider: moved.provider });
@@ -6994,7 +7337,7 @@ test('SS8 a transport refusal inside a transfer is TRANSFER_SPAWN_FAILED and spa
   }
 });
 
-test('SS9 all six transfer modes spawn only the ssh client with exactly streamCall, never the Multipass executable or exec', async t => {
+test('SS9 all seven transfer modes spawn only the ssh client with exactly streamCall, never the Multipass executable or exec', async t => {
   const MULTIPASS = path.join(tmpdir(), 'moe-stream', 'multipass');
   const spawns = [], guests = [];
   const provider = () => {
@@ -7011,12 +7354,13 @@ test('SS9 all six transfer modes spawn only the ssh client with exactly streamCa
     p => agentInstall(cache, { provider: p }),
     p => installToolchain({ name: GUEST, toolchain: cachedToolchain(t, Buffer.from('toolchain')), provider: p }),
     p => dependencyTransfer.installDependencies({ name: GUEST, tree: treeOf(), provider: p }),
+    p => resetWorkspace({ name: GUEST, provider: p }),
   ]) await assert.rejects(transfer(provider()), streamQuiet('TRANSFER_EXIT_FAILED'));
-  assert.deepEqual(spawns, ['materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies'].map(mode => streamCall(mode)));
+  assert.deepEqual(spawns, ['materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies', 'reset'].map(mode => streamCall(mode)));
   for (const [executable, argv] of spawns) {
     assert.deepEqual([executable, ...argv].filter(arg => arg === MULTIPASS || arg === 'exec' || /multipass/.test(arg)), [], argv.join(' '));
   }
   // provider.executable still drives info and the mount probe, and nothing else.
   assert.deepEqual(guests.map(guest => [...new Set(guest.calls.map(({ executable }) => executable)), guest.ids()]),
-    Array(6).fill([MULTIPASS, ['info', 'mountinfo', 'info']]));
+    Array(7).fill([MULTIPASS, ['info', 'mountinfo', 'info']]));
 });

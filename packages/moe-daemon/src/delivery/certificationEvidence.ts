@@ -25,7 +25,7 @@ export const CERTIFICATION_PINS = deepFreeze({
     { platform: 'darwin', arch: 'x64', versionSuffix: '+mac' }, { platform: 'darwin', arch: 'arm64', versionSuffix: '+mac' }],
   images: { x64: '04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94',
     arm64: '50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e' },
-  supervisorSha256: '3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190',
+  supervisorSha256: '616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e',
 } as const);
 export type CertificationHost = (typeof CERTIFICATION_PINS.hosts)[number];
 export interface CertificationCheckRow { readonly id: string; readonly result: 'passed' | 'failed' | 'not-run'; readonly code: string | null }

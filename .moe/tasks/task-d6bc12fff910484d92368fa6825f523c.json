@@ -19,43 +19,76 @@
     {
       "stepId": "step-1",
       "description": "Add a root-only `reset` mode to scripts/local-runner/guest-supervisor.py (mem:decision-cq-m07-verified-local-activation decision 1; mem:gotcha-local-runner-supervisor-tests).\n(1) `RESET_BUSY = os.EX_UNAVAILABLE` (69). 69 is free: taken today are 0, 64-66, 71, 73-77, 79-82, and 78 is retired.\n(2) `def identity_alive(uids, proc='/proc')`. Scan the numeric entries of /proc and read each `<pid>/status` Uid: line (real, effective, saved, fs). Return True if any uid is in `uids`.\n  - A pid that vanishes mid-read (FileNotFoundError or ProcessLookupError) is skipped.\n  - Any other OSError propagates, so reset fails closed.\n  - The root PID namespace's /proc lists jobs inside their own PID namespaces too.\n(3) `def reset(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, sessions=SESSIONS, uids=None, alive=identity_alive)`, in this order:\n  - uids None: resolve AGENT_IDENTITY and CHECK_IDENTITY with pwd, KeyError → 71;\n  - `if not shutil.rmtree.avoids_symlink_attacks: return os.EX_OSERR` (71). The fd-based rmtree is required.\n  - `if alive(set(uids)): return RESET_BUSY`, removing nothing;\n  - remove workspace: lstat, ENOENT is fine; a directory goes through shutil.rmtree, anything else (link, file) through os.unlink, so a link at the root is never followed;\n  - remove manifest: os.unlink, ENOENT is fine;\n  - for each name in os.listdir(sessions) starting with 'home-' (a missing sessions dir is fine), the same lstat rule: rmtree a directory, else unlink. sessions itself stays.\n  - write_frame(out_fd, {'kind': 'reset'}) and return 0.\n  Error handling: any OSError → os.EX_IOERR (74), with no frame. Reset never touches TOOLCHAIN, AGENTS, DEPENDENCIES, the bootstrap files or readiness state.\n(4) main():\n  - append ['reset'] LAST to the argv allowlist tuple;\n  - route `if argv == ['reset']: return reset(1)` after the geteuid check, so non-root gets 77;\n  - fix the stale comment above the allowlist: openGuestStream (guest-stream.mjs) sends exactly one of these as $SSH_ORIGINAL_COMMAND.\n(5) Header: add a 'Mode reset (CQ-M07f)' paragraph. It reads no stdin, writes {kind: 'reset'} and 0, and lists its codes: 69 a moe-agent or moe-check process is alive (nothing removed), 71 no identity account or no symlink-safe rmtree, 74 a removal or write failure, 77 not root. Add 69 to the taken-codes text. Wrap at 120 columns, and check the new lines only with `git diff -U0 | grep '^+' | awk 'length>121'`.\nThis moves R13's certified supervisor sha256 (3a19f3bf…). That is expected, and recorded in step 6.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-supervisor.py"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "note": "guest-supervisor.py gains the root-only 'reset' mode. New pieces:\n- RESET_BUSY = os.EX_UNAVAILABLE (69).\n- identity_alive(uids, proc='/proc'): a /proc/<pid>/status Uid: scan. A pid that vanishes (FileNotFoundError or ProcessLookupError) is skipped; any other OSError propagates.\n- remove_entry(path): lstat first. ENOENT is fine, a dir goes through shutil.rmtree, anything else through os.unlink.\n- reset(out_fd, workspace, manifest, sessions, uids=None, alive=identity_alive), in plan order:\n  - pwd lookup KeyError → 71;\n  - rmtree.avoids_symlink_attacks False → 71;\n  - alive → 69, nothing removed;\n  - remove the workspace, the manifest and sessions/home-*, with a missing sessions dir fine;\n  - write the {kind:'reset'} frame and return 0. Any OSError → 74.\n- main(): ['reset'] is appended LAST and routed after the geteuid check. The stale builder-names comment now names openGuestStream and $SSH_ORIGINAL_COMMAND.\n- Header: a 'Mode reset (CQ-M07f)' paragraph with codes 69/71/74/77 and the taken-codes list.\n\nDeviation: the allowlist line stays a single 136-char line, because GS1 parses only the one line containing 'if argv not in ('. It was already 127 chars. Every other new line is ≤120 columns, and the diff is ASCII-only. A scratch smoke test passed: rc 0 plus one frame, sessions/other.txt and the link target kept, real identity_alive true/false, main 77/64.\n\nCurrent sha256 is c59fc493… (header rewrap pending final). It moves R13's 3a19f3bf pin as planned.\n\nPeer M07e (task-5c4b5fab) has its own hunk in local-runner.test.mjs near the certify import (~line 3060). It is disjoint from mine and left untouched.",
+      "startedAt": "2026-11-01T12:11:56.674Z",
+      "completedAt": "2026-11-01T12:13:32.035Z"
     },
     {
       "stepId": "step-2",
       "description": "Teach the host about 'reset'.\n(1) scripts/local-runner/guest-ssh.mjs: append 'reset' LAST to SUPERVISOR_MODES. local-runner-bridge.test.mjs GS parity row (around line 2218) parses main()'s allowlist and requires the same order. Update the header bullet about main() accepting exactly SUPERVISOR_MODES only if its wording names the count.\n(2) scripts/local-runner/snapshot-transfer.mjs:\n  - MODES gains 'reset'.\n  - MESSAGES gains TRANSFER_RESET_BUSY: 'The guest still runs a job identity process; its workspace was not reset.'\n  - streamOptions accepts an optional frozen `exits` record, defaulting to none, and supervise's close handler uses `transferError(exits && Object.hasOwn(exits, code) ? exits[code] : 'TRANSFER_EXIT_FAILED')`. Only reset passes one: `RESET_EXITS = Object.freeze({ 69: 'TRANSFER_RESET_BUSY' })`. So ssh's 255 and every other non-zero exit stay TRANSFER_EXIT_FAILED (ruling condition 5).\n  - Export `async resetWorkspace({ name, provider = {}, timeoutMs } = {})`. Its onFrame accepts exactly one frame whose keys are exactly ['kind'] and whose kind is 'reset'; anything else is TRANSFER_FRAME_INVALID. It runs `transfer(name, provider, streamOptions({ name, mode: 'reset', provider, timeoutMs, input: [], onFrame, exits: RESET_EXITS }), () => reset)`, so the mounts are checked before and after, and resolves 'reset'.\n  - It goes through openGuestStream like every transfer: no fallback, no exec, no host path. The JSDoc says it does not decide WHEN reset runs (CQ-M07j).\nError handling: every outcome is one fixed TRANSFER_* code (INPUT_INVALID, SPAWN_FAILED, TIMEOUT, EXIT_FAILED, RESET_BUSY, FRAME_INVALID, MOUNTS_*).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-ssh.mjs",
         "scripts/local-runner/snapshot-transfer.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-ssh.mjs",
+        "scripts/local-runner/snapshot-transfer.mjs"
+      ],
+      "note": "guest-ssh.mjs: 'reset' is appended LAST to SUPERVISOR_MODES. The header bullet names no count, so it is unchanged.\n\nsnapshot-transfer.mjs:\n- 'reset' is added to MODES.\n- New message TRANSFER_RESET_BUSY.\n- New internal frozen RESET_EXITS = {69: 'TRANSFER_RESET_BUSY'}, not exported.\n- streamOptions takes `exits` and refuses with TRANSFER_INPUT_INVALID anything except `undefined`, or RESET_EXITS together with mode 'reset'. Since the object is internal, runSupervisorStream callers can never supply a map (RW3).\n- supervise's close handler maps through `exits` only when it is set. Otherwise every non-zero exit, 255 included, stays TRANSFER_EXIT_FAILED.\n- Exported resetWorkspace({name, provider, timeoutMs}):\n  - input is [];\n  - it accepts exactly one frame whose only key is kind, with value 'reset';\n  - it runs transfer(), so mounts are checked before and after, over openGuestStream;\n  - it resolves 'reset'. The JSDoc says it does not decide when reset runs (CQ-M07j).\n\nThe module loads under Node 24.21.0, and its export list includes resetWorkspace. The added lines are ASCII-only. Existing entry points and runSupervisorStream keep their signatures.",
+      "startedAt": "2026-11-01T12:13:32.906Z",
+      "completedAt": "2026-11-01T12:14:21.491Z"
     },
     {
       "stepId": "step-3",
       "description": "Rows in scripts/tests/local-runner.test.mjs, in a `// CQ-M07f supervisor reset` section beside the CQ-R09c materialize (M) rows.\n- Python rows (RS) call the real supervisor through the existing PY_LOAD / PY_SUPERVISOR harness (`python3 -I -B`, importlib), with injected paths under scratch(t), uids=(os.getuid(),) and an injected alive. As in M1, reset() is never called through main as non-root.\n- Plant a full seat state: a materialized workspace (via m.materialize with owner (uid, gid)) plus its manifest, two sessions/home-* dirs with files, and a sessions/other.txt.\n- Plant sibling stand-ins for TOOLCHAIN, AGENTS and bootstrap files (bin/moe-supervisor, etc/supervisor.credential), and record their sha256 and modes.\n\nRows:\n- RS1 (DoD 1, 4).\n  - reset exits 0, and the out pipe holds exactly one {kind: 'reset'} frame.\n  - The workspace, the manifest and both homes are gone, while sessions/ and other.txt remain.\n  - Every sibling stand-in is byte- and mode-identical.\n  - A following m.materialize into the same paths returns 0.\n- RS2 (DoD 2). With alive returning True, the result is 69. Nothing changed (the file list and bytes are equal before and after) and no frame was written. alive got exactly the injected uid set.\n- RS3 (DoD 3).\n  - Inside the workspace and inside a home, plant symlinks to an OUTSIDE dir and an OUTSIDE file, a symlinked subdir, and a dir chmod 000.\n  - After reset (0), the outside dir and file are byte-identical and still exist.\n  - A workspace path that is itself a symlink to an outside dir is unlinked, not followed.\n- RS4. Refusals:\n  - monkeypatch shutil.rmtree.avoids_symlink_attacks = False: 71, nothing removed;\n  - uids None with the pwd lookup patched to KeyError: 71;\n  - an alive that raises OSError: 74;\n  - a patched os.unlink EIO on the manifest: 74, no frame.\n- RS5. main routing.\n  - main(['reset'], geteuid=lambda: 0) with m.reset swapped for a recorder returns the recorder's value.\n  - geteuid 1000 gives 77.\n  - ['reset', 'x'] gives 64.\n- RW1 (DoD 5). resetWorkspace over transferProvider fakes:\n  - 0 plus {kind: 'reset'} resolves 'reset'; the spawn triple is streamCall('reset'), and the ids show mounts checked before and after;\n  - exit 69 → TRANSFER_RESET_BUSY;\n  - 64, 65, 71, 74, 77 and 255 → TRANSFER_EXIT_FAILED;\n  - 0 with no frame, a {kind: 'reset', x: 1} frame, or two frames → TRANSFER_FRAME_INVALID;\n  - a transport refusal → TRANSFER_SPAWN_FAILED with no spawn;\n  - a late host mount → TRANSFER_MOUNTS_PRESENT.\n  Each exercises exactly one spawn: no retry and no fallback.\n- RW2. Only the reset mode's map applies. A materialize stream exiting 69 is still TRANSFER_EXIT_FAILED.\n- RW3. runSupervisorStream({ mode: 'reset', exits: { 255: 'TRANSFER_RESET_BUSY' } }), or any caller-supplied exits that is not RESET_EXITS for the reset mode, is refused with TRANSFER_INPUT_INVALID. That keeps the map internal.\n\nIf R14d1's SS9 carrier row is present, add resetWorkspace as its seventh entry point instead of a separate carrier row. Assert exact values, never truthiness. Kill only processes the test spawned. Grep row prefixes before naming.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "packages/moe-daemon/src/delivery/certificationEvidence.ts"
+      ],
+      "note": "Added rows RS1-RS5 (supervisor reset with real python) and RW1-RW3 (host resetWorkspace and the exits map) after T7. Updated SS1 (SUPERVISOR_MODES has 9 modes, with reset last) and SS9 (all seven transfer modes). Snapshot gate (HEAD archive plus my 4 files): 561 tests, 558 pass, 0 fail, 3 skipped (LA5, K9 and the macOS smoke, all pre-existing env skips). All RS/RW rows, the peer's HS1-HS5 and GS1 parity are green. Mutation check, run in scratch only: dropping the busy check fails RS2 and RS4; stat instead of lstat fails RS3; dropping the rmtree guard fails RS4; removing every sessions entry fails RS1, RS3 and RS4; dropping the frame fails RS1, RS3 and RS4; mapping every exit to busy fails RW1; accepting a caller exits map fails RW3. Dropping only the `mode === 'reset'` half of the guard is an equivalent mutant: RESET_EXITS is module-private and only resetWorkspace passes it. Pin coupling (architect comment-c3fe4480): certificationEvidence.ts supervisorSha256 3a19f3bf… → 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e (declared via declare_files). Snapshot npm ci + vitest on certificationEvidence, executionReadiness, repairPolicy, requiredChecks, webSocketOrigin, proposeRail and contextInvalidation e2e: 7 files, 437 tests, all passed. RED check: with the HEAD pin the drift test fails on the supervisorSha256 line. The landed test file also carries task-5c4b5fab's HS1-HS5 hunks unchanged, per QA's comment.",
+      "startedAt": "2026-11-01T12:14:22.269Z",
+      "completedAt": "2026-11-01T12:23:40.669Z"
     },
     {
       "stepId": "step-4",
       "description": "Verify in a snapshot, never in place (global rail; mem:gotcha-local-runner-tests). HEAD already holds every R14 slice and fd196d13, because dependsOn gates this claim. The supervisor bytes are shared by the bridge, check and guard rows, so their files run too. From the repo root:\n\nS=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-supervisor.py scripts/local-runner/guest-ssh.mjs scripts/local-runner/snapshot-transfer.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-guard.test.mjs\n\nIt must exit 0 with RS1-RS5, RW1-RW3 and every M, T, X, S, I, K, KI, C, G and GS row green (the GS parity row included), and nothing failing or cancelled. Its fresh exit code and output tail are the moe.complete_task evidence.\n\nPrint `sha256sum \"$S\"/scripts/local-runner/guest-supervisor.py`, and confirm it equals the working tree's file.\n\nKill only PIDs you started, by recorded PID. No seat runs Multipass.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the plan's verification command fresh in a git-archive snapshot (/tmp/tmp.PPk1NgE6hU, HEAD 69f2d710 plus my 4 files). EXIT=0. Totals: tests 561, pass 558, fail 0, cancelled 0, skipped 3 (LA5 pinned codex, K9 real mounts, macOS native smoke — pre-existing environment skips). RS1-RS5, RW1-RW3, GS1 parity and every M/T/X/S/I/K/KI/C/G/GS/SS row passed. The snapshot supervisor's sha256 (616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e) equals the working tree's. No files changed in this step.",
+      "startedAt": "2026-11-01T12:23:44.195Z",
+      "completedAt": "2026-11-01T12:25:21.302Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, once (skill adversarial-self-review). Then record the pin move.\n\nReview:\n- Can reset follow a symlink anywhere: at the workspace root, a session home root, or inside either? Is the fd-based rmtree enforced?\n- Can a job identity race the probe? Reset runs between jobs under the host's job lease, and a guest with no live identity process has nothing to start one. Say so in a comment.\n- Is anything removed when busy? Is anything outside the three targets touched?\n- Is 69 unique? Is 255 never mapped? Could the exits map be supplied by a caller?\n- Is every existing guarantee kept, including materialize's EX_CANTCREAT and the readiness probes (task rail)?\n- Would a mutant that drops the busy check, uses a following removal, unlinks sessions/ itself or maps every exit to RESET_BUSY survive? Kill each with a row.\n- Does the diff list only the four planned files?\n\nThen record the pin move:\n- Post a comment on task-f4811a729f9e436ba129a65c12d348c1 (R13) and on task-1a8f1d0e199046a289e94a5453d758b8 (CQ-M07). It names the new guest-supervisor.py sha256 from step 4, the commit-to-be, and that it supersedes 3a19f3bf… for the operator's re-certify.\n- Repeat the sha256 in the moe.complete_task summary.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/guest-ssh.mjs",
+        "scripts/local-runner/snapshot-transfer.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        "packages/moe-daemon/src/delivery/certificationEvidence.ts"
+      ],
+      "note": "Ran the adversarial self-review on the task's 5 paths. That is the 4 planned files plus certificationEvidence.ts, which comment-c3fe4480 authorized.\n\n- Symlinks: remove_entry uses lstat, so a link is unlinked as itself. Directories go only through shutil.rmtree, and reset refuses with 71 unless rmtree.avoids_symlink_attacks. If a path is swapped for a link between the lstat and the rmtree, the fd-based rmtree raises OSError, which gives 74, and nothing is followed. RS3 covers links inside the workspace and a home, a home that is itself a link, and a workspace or manifest that is a link.\n- Races: reset runs between jobs under the host's job lease (R06). With no moe-agent or moe-check process alive, nothing in the guest can start one, so the /proc probe cannot be raced. This is written in the code comment above reset(). /var/lib/moe and SESSIONS (0711) are root's, so a job cannot swap them.\n- When busy: alive() runs before any removal, so code 69 removes nothing and writes no frame (RS2). Only WORKSPACE, WORKSPACE_MANIFEST and SESSIONS/home-* are removed; RS1 shows every other byte and mode survives.\n- Exit codes: 69 is unique; HEAD had no EX_UNAVAILABLE. RESET_EXITS is frozen, module-private and maps only 69, so 255 and signal or null codes stay TRANSFER_EXIT_FAILED (RW1, RW2). A caller-supplied exits map is refused before any provider call (RW3).\n- Kept guarantees: the main allowlist is only appended to, and materialize EX_CANTCREAT and the readiness probes are untouched. GS1 parity is green.\n- Mutants: every mutant the plan named is killed (see step-3). Dropping only `mode === 'reset'` from the guard is equivalent.\n- Theoretical, no fix: a zombie job process counts as alive, which is the safe direction (busy, retry). A malformed /proc Uid line would raise ValueError, giving exit 1 and EXIT_FAILED, which fails closed.\n\nPin move posted: R13 comment-a7f0756a and CQ-M07 comment-fa0f6000 name 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e, which supersedes 3a19f3bf….",
+      "startedAt": "2026-11-01T12:25:23.364Z",
+      "completedAt": "2026-11-01T12:26:08.229Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,11 +113,17 @@
       "author": "architect-b520bc90",
       "content": "PIN COUPLING with CQ-M07a (task-5a635bc9, plan rev 1, architect-b520bc90). This extends this task's plan by one constant.\n\nM07a adds `packages/moe-daemon/src/delivery/certificationEvidence.ts`. Its `CERTIFICATION_PINS.supervisorSha256` is a hand-kept copy of sha256(scripts/local-runner/guest-supervisor.py), and a drift test in `certificationEvidence.test.ts` guards it. Your reset mode changes guest-supervisor.py, so check at your verification time:\n\n- **If that file exists at HEAD:** in the same diff, set `supervisorSha256` to your new supervisor's sha256. That is the only daemon edit; declare the file with moe.declare_files, and this comment authorizes it as in scope. Also run the drift test in a snapshot, never in the shared checkout: overlay your files on `git archive HEAD`, then `cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx vitest run src/delivery/certificationEvidence.test.ts'`.\n- **If it does not exist yet:** change nothing in the daemon. M07a's worker pins whatever HEAD holds when it runs.\n\nNever touch the other pins (images, versions, check ids). The rule for every future supervisor, manifest or CERTIFY_CHECKS change is in mem:decision-certification-evidence-pins.",
       "timestamp": "2026-11-01T09:29:14.385Z"
+    },
+    {
+      "id": "comment-b69e692777c248999c668023be6ffc04",
+      "author": "qa-97c4310b",
+      "content": "FYI from QA (task-5c4b5fab / CQ-M07e review), no action needed beyond not dropping bytes. scripts/tests/local-runner.test.mjs holds task-5c4b5fab's finished HS1-HS5 rows as uncommitted hunks beside yours. Its completion 69f2d710 landed certify.mjs only and held this file as contested. Its hunks are: (1) the certify.mjs import line at ~3063 (adds fileCertifiedReport) plus `import { userInfo } from 'node:os'`; (2) the `// CQ-M07e host certification store` section after CF8 at ~3390 (+114 lines, rows HS1-HS5). Please keep both when you land the file. A whole-file landing carries them, and 5c4b5fab is blocked on your task reaching DONE so QA can re-verify them at HEAD. Your own hunks (T7 region ~4614, SS1/SS8/SS9) are not part of its review. A scratch copy of its two hunks is at /tmp/qa-m07e/worker.patch.",
+      "timestamp": "2026-11-01T12:21:50.251Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:49.306Z",
-  "updatedAt": "2026-11-01T09:29:14.385Z",
+  "updatedAt": "2026-11-01T12:26:33.842Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T08:15:59.560Z",
@@ -93,16 +132,24 @@
   "metrics": {
     "firstClaimAt": "2026-11-01T09:05:33.505Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-b520bc90"
+    "architect-b520bc90",
+    "worker-cef53f62"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T09:09:42.082Z",
   "executionContract": {
@@ -150,5 +197,25 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-01T09:09:42.103Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T12:11:56.674Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/delivery/certificationEvidence.ts"
+  ],
+  "reviewStartedAt": "2026-11-01T12:26:33.840Z",
+  "verification": {
+    "command": "S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-supervisor.py scripts/local-runner/guest-ssh.mjs scripts/local-runner/snapshot-transfer.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-guard.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ GS1 guest-ssh.mjs is a leaf exporting exactly the transport primitives ...\n✔ RS1 reset removes the workspace, its manifest and each session home, keeps every other byte and mode, and the seat materializes again\n✔ RS2 while a job identity process is alive reset exits 69, removes nothing and writes no frame; the probe scans /proc uids\n✔ RS3 links planted in the workspace and in a session home are unlinked as links, and their outside targets are untouched\n✔ RS4 reset refuses with 71 for an unsafe rmtree or no identity account, and 74 for a failed probe, removal or frame write\n✔ RS5 the supervisor CLI accepts only the bare reset argv, reset needs root, and as root main routes it to reset(1)\n✔ RW1 resetWorkspace sends no input, accepts one {kind: reset} frame between two mount checks, and maps every outcome to one fixed code\n✔ RW2 only the reset entry point maps 69: every other transfer, and a raw reset stream, keep TRANSFER_EXIT_FAILED\n✔ RW3 runSupervisorStream refuses any caller-supplied exits map before a provider call, so the reset map stays internal\n✔ SS7 ssh exit 255 before the first frame or after it is TRANSFER_EXIT_FAILED, never a supervisor code\n✔ SS8 a transport refusal inside a transfer is TRANSFER_SPAWN_FAILED and spawns nothing\n✔ SS9 all seven transfer modes spawn only the ssh client with exactly streamCall, never the Multipass executable or exec\nℹ tests 561\nℹ suites 0\nℹ pass 558\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 88304.767936\nEXIT=0\n616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e  /tmp/tmp.PPk1NgE6hU/scripts/local-runner/guest-supervisor.py",
+    "reportedAt": "2026-11-01T12:26:33.840Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/local-runner/guest-ssh.mjs",
+    "scripts/local-runner/snapshot-transfer.mjs",
+    "scripts/tests/local-runner.test.mjs",
+    "packages/moe-daemon/src/delivery/certificationEvidence.ts"
+  ],
+  "completionSummary": "CQ-M07f adds the supervisor reset mode for seat VM reuse. The new guest-supervisor.py sha256 is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e, which supersedes 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190 for the operator's single re-certify. I posted that on R13 (comment-a7f0756a) and CQ-M07 (comment-fa0f6000).\n\nGuest, scripts/local-runner/guest-supervisor.py:\n- `reset` reads no stdin. If a moe-agent or moe-check process is alive (a /proc scan of real, effective, saved and fs uids), it exits 69 (EX_UNAVAILABLE, a new and unique code) with nothing removed and no frame.\n- Otherwise it removes WORKSPACE, WORKSPACE_MANIFEST and each SESSIONS/home-* entry, then writes {kind:'reset'} and exits 0. Each entry goes by lstat: a link is unlinked as itself, and a directory only through the fd-based shutil.rmtree.\n- Other exits: 71 when there is no identity account or rmtree cannot avoid symlink attacks; 74 on a probe, removal or write failure; 77 when not root; 64 for any other argv.\n- The main allowlist is only appended to, with 'reset' last. No existing mode changed.\n\nHost:\n- guest-ssh.mjs: SUPERVISOR_MODES gains 'reset'.\n- snapshot-transfer.mjs: new resetWorkspace({name, provider, timeoutMs}). It runs between two mount checks, over openGuestStream with no fallback, and accepts exactly one {kind:'reset'} frame.\n- Exit 69 maps to TRANSFER_RESET_BUSY through the internal, frozen RESET_EXITS. Every other non-zero exit, ssh's 255 included, is TRANSFER_EXIT_FAILED.\n- runSupervisorStream refuses any caller-supplied exits map with TRANSFER_INPUT_INVALID (architect comment).\n\nPin coupling (comment-c3fe4480): certificationEvidence.ts CERTIFICATION_PINS.supervisorSha256 moved to 616463b7…, and no other pin changed. Snapshot npm ci plus vitest on certificationEvidence and 6 sibling test files: 437/437 pass. With the HEAD pin, the drift test fails.\n\nTests: RS1-RS5 (real python) and RW1-RW3 (fakes); SS1 and SS9 now cover 9 modes and 7 transfers. Eve"
 }

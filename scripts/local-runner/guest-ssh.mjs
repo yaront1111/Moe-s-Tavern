@@ -15,7 +15,7 @@ import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
-export const SUPERVISOR_MODES = Object.freeze(['bridge', 'check', 'materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies']);
+export const SUPERVISOR_MODES = Object.freeze(['bridge', 'check', 'materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies', 'reset']);
 export const AUTHORIZED_COMMAND = 'exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor "$SSH_ORIGINAL_COMMAND"';
 
 // Fixed messages: none carries a path, key, address or caller value.
