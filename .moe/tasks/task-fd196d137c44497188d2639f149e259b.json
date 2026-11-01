@@ -113,11 +113,17 @@
       "author": "worker-009c883d",
       "content": "R14a worker note for the remaining R14 slices (b, c, d1-d3) and their QA. The R14a verification recipe fails at pristine HEAD (`git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github moe-vscode moe-jetbrains/build.gradle.kts`): local-runner-bundle.test.mjs:243, 'daemon build excludes the test-only tool harness', reads packages/moe-daemon/tsconfig.json, which that list omits, so the run ends ENOENT with 1 fail. Add `packages/moe-daemon/tsconfig.json` to the archive list. With it, R14a's run gives rc=0 with 94 passing and 0 failing. Please put this in any R14 slice plan that runs the bundle test.",
       "timestamp": "2026-11-01T08:30:23.448Z"
+    },
+    {
+      "id": "comment-7987490159bd4cb2ae25d8110f07d68c",
+      "author": "qa-1e84238e",
+      "content": "QA note from the R14a review (qa-1e84238e, approved dd28ab17). Three non-blocking follow-ups for the integration pass:\n\n1. **GS2 on Windows depends on the ACL of os.tmpdir().** Win32 ssh-keygen checks key-file permissions. Node's `mode: 0o600` does nothing on Windows, so the temp key inherits the ACL of %TEMP%.\n   - On YARON-PC, %TEMP% carries an explicit Modify ACE for an orphaned SID (S-1-5-21-1675792512-…-896777178). GS2 therefore fails there with 'Bad permissions'.\n   - In an owner-only directory (icacls /inheritance:r), ssh-keygen.exe -y reproduced both publicKeys exactly, so the key format is fine.\n   - A GitHub windows-latest runner probably has a clean %TEMP%; this is unverified.\n   - If a Windows run goes red, harden GS2's temp dir to owner-only on win32 rather than adding a skip. The DoD allows a skip only when ssh-keygen is absent.\n2. **Two small GS test gaps** found by QA mutants. The code is correct and both mutants fail closed.\n   - The owned-name parity row uses an uppercase 'G'×20, so an owned-name regex loosened to [0-9a-z] survives. Add a lowercase 'g'×20 row.\n   - No row passes a drive path that already uses '/' (C:/…), so a drive regex narrowed to backslash only survives.\n3. **The R14 slice verification recipe omits packages/moe-daemon/tsconfig.json from `git archive`.** That makes it HEAD-red on the bundle row 'daemon build excludes the test-only tool harness'. R14b-d recipes need that path.",
+      "timestamp": "2026-11-01T08:39:20.136Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T00:20:13.476Z",
-  "updatedAt": "2026-11-01T08:30:23.448Z",
+  "updatedAt": "2026-11-01T08:39:20.136Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T00:20:28.365Z",
     "plannedStepCount": 5,

@@ -71,7 +71,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -103,16 +103,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:04:08.145Z",
-  "updatedAt": "2026-11-01T08:30:37.279Z",
+  "updatedAt": "2026-11-01T08:39:09.393Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:12:05.616Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T08:39:09.393Z",
+    "wallClockMs": 1623777
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-009c883d"
+    "worker-009c883d",
+    "qa-1e84238e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -186,7 +189,48 @@
   "filesModified": [
     "scripts/local-runner/guest-ssh.mjs",
     "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    ".moe/tasks/task-201aebc6721a40c1b426bca64fce1eda.json",
+    ".moe/tasks/task-4c295c56a0db475998ae9d947a1d1de6.json",
+    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+  ],
+  "completionSummary": "CQ-R14a delivered.\n\n**guest-ssh.mjs** (new, 133 lines) is a leaf module: it imports only node:crypto, os and path, and it starts no process, writes no file and calls no provider.\n- 11 exports: SUPERVISOR_MODES, AUTHORIZED_COMMAND, transportError (TRANSPORT_INPUT_INVALID, plus TRANSPORT_ADDRESS_UNKNOWN per amendment comment-bdf6ce89), createTransportKeys, authorizedKeyLine, knownHostsLine, sshExecutable, defaultKeyDir, transportFiles, guestAddress and sshStreamArgv.\n- createTransportKeys writes openssh-key-v1 keys itself; `ssh-keygen -y` reproduces each publicKey.\n- defaultKeyDir is ~/.moe/guest-ssh, per governor comment-f4d90818.\n- One addition from self-review: sshStreamArgv also refuses a UNC-shaped POSIX path starting with '//', because a win32 ssh.exe would open it over SMB.\n\n**Tests:** GS1-GS6 at the end of local-runner-bridge.test.mjs.\n- GS3's expected argv is the task description's argv, word for word.\n- GS4 un-escapes the command the way sshd does and runs real bash.\n- guest-ssh.mjs is listed in `shipped` in local-runner-bundle.test.mjs.\n- 26 mutants in a scratch copy were all killed, including the six the plan named.\n- Size: 291 changed lines.\n\n**VERIFICATION DEVIATION.** The plan's exact command exits 1 at pristine HEAD, without my files: 13 bundle tests, 1 fail. The failing row, 'daemon build excludes the test-only tool harness', reads packages/moe-daemon/tsconfig.json, and the recipe's archive list leaves that file out. The command I submitted is the plan's command with only that one path added to `git archive`. Fresh result: rc=0, 95 tests, 94 pass, 0 fail, 1 pre-existing skip (LA5), and GS1-GS6 all ran. I noted this on task-fd196d13.\n\nOther checks: the forbidden-word grep prints 0, `git diff --check` is clean, and guest-supervisor.py still hashes to 3a19f3bf.",
+  "commits": [
+    {
+      "sha": "dd28ab17128fa3247200cff6a36a75ab7abf43f6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-009c883d@2026-11-01T08:17:36Z",
+      "paths": [
+        ".moe/tasks/task-201aebc6721a40c1b426bca64fce1eda.json",
+        ".moe/tasks/task-4c295c56a0db475998ae9d947a1d1de6.json",
+        ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json",
+        "scripts/local-runner/guest-ssh.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "recordedBy": "worker-009c883d",
+      "recordedAt": "2026-11-01T08:30:59.160Z",
+      "treeId": "c4ecc368a5af01bf9bc008a477acf0ac14bccc8e",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/guest-ssh.mjs",
+    "scripts/tests/local-runner-bridge.test.mjs",
     "scripts/tests/local-runner-bundle.test.mjs"
   ],
-  "completionSummary": "CQ-R14a delivered.\n\n**guest-ssh.mjs** (new, 133 lines) is a leaf module: it imports only node:crypto, os and path, and it starts no process, writes no file and calls no provider.\n- 11 exports: SUPERVISOR_MODES, AUTHORIZED_COMMAND, transportError (TRANSPORT_INPUT_INVALID, plus TRANSPORT_ADDRESS_UNKNOWN per amendment comment-bdf6ce89), createTransportKeys, authorizedKeyLine, knownHostsLine, sshExecutable, defaultKeyDir, transportFiles, guestAddress and sshStreamArgv.\n- createTransportKeys writes openssh-key-v1 keys itself; `ssh-keygen -y` reproduces each publicKey.\n- defaultKeyDir is ~/.moe/guest-ssh, per governor comment-f4d90818.\n- One addition from self-review: sshStreamArgv also refuses a UNC-shaped POSIX path starting with '//', because a win32 ssh.exe would open it over SMB.\n\n**Tests:** GS1-GS6 at the end of local-runner-bridge.test.mjs.\n- GS3's expected argv is the task description's argv, word for word.\n- GS4 un-escapes the command the way sshd does and runs real bash.\n- guest-ssh.mjs is listed in `shipped` in local-runner-bundle.test.mjs.\n- 26 mutants in a scratch copy were all killed, including the six the plan named.\n- Size: 291 changed lines.\n\n**VERIFICATION DEVIATION.** The plan's exact command exits 1 at pristine HEAD, without my files: 13 bundle tests, 1 fail. The failing row, 'daemon build excludes the test-only tool harness', reads packages/moe-daemon/tsconfig.json, and the recipe's archive list leaves that file out. The command I submitted is the plan's command with only that one path added to `git archive`. Fresh result: rc=0, 95 tests, 94 pass, 0 fail, 1 pre-existing skip (LA5), and GS1-GS6 all ran. I noted this on task-fd196d13.\n\nOther checks: the forbidden-word grep prints 0, `git diff --check` is clean, and guest-supervisor.py still hashes to 3a19f3bf."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-009c883d@2026-11-01T08:17:36Z",
+    "at": "2026-11-01T08:30:59.160Z"
+  },
+  "completedAt": "2026-11-01T08:39:09.393Z",
+  "reviewCompletedAt": "2026-11-01T08:39:09.393Z",
+  "reviewSummary": "APPROVED. Commit dd28ab17 is on moe/work-2026-10-24. 291 changed lines.\n\n**Verification**, re-run by QA under env -i with Node 24.21.0:\n- Submitted command (the plan recipe plus tsconfig.json): rc=0, 94 pass, 0 fail, 1 old skip (LA5). GS1-GS6 ran.\n- The plan's exact recipe exits 1 on the tsconfig ENOENT row. The same list fails that row at the parent fdb5330a, so the recipe is HEAD-red and the deviation is justified.\n\n**DoD**\n1. 11 exports, as amended. The module imports only node built-ins. The grep prints 0.\n2. GS2: ssh-keygen -y reproduces both keys, and two calls give 4 distinct keys.\n3. GS3 checks the exact POSIX and drive argv with CheckHostIP=no and refuses every class.\n4. GS4 dequotes like sshd, and real bash passes each value as one argument.\n5. The GS5 table is complete.\n6. guest-ssh.mjs is in `shipped`.\n\n**Rails:** supervisor sha 3a19f3bf unchanged, no readiness or pin edits, defaultKeyDir is ~/.moe/guest-ssh, no forbidden patterns.\n\n**Mutation sweep:** 21 of 25 killed. The 4 survivors are non-blocking:\n- 2 are equivalent (isArray, typeof).\n- An owned-name regex loosened to [0-9a-z] survives. A lowercase 'g'×20 row would kill it.\n- A drive regex that accepts only backslashes survives (no 'C:/' row; it fails closed).\n\n**Windows:** GS1, GS3, GS5 and GS6 pass; GS4 skips as planned.\n- GS2 fails on THIS host only. %TEMP% has an orphaned-SID Modify ACE, so ssh-keygen says 'Bad permissions'.\n- In an owner-only dir, ssh-keygen.exe reproduced both keys, so the format is OK.\n- Residual risk: GS2 depends on the tmpdir ACL. Noted for fd196d13.",
+  "requiredCheckAtDone": null
 }
