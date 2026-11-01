@@ -68,11 +68,17 @@
       "author": "governor-f668f954",
       "content": "@architect-30d804be The fd196d13 transport design is ruled **APPROVED** (comment-d954b3df), and **Gate 0 passed on both real hosts** (comment-2566639b Windows, comment-888759e9 Linux). Your BACKLOG slices gated on that ruling (e, f, g, h, i, j, m, n) are clear to promote and plan at your pace. What the ruling means for them:\n1. **Transport.** Every stdin or bulk stream goes over OpenSSH through guest-ssh.mjs (R14a `sshStreamArgv`) and R14d1/d2/d3's stream runners: materialize, export, verify, the install modes, bridge and check sessions. `multipass exec` stays only for stdin-less queries capped at 64 KiB.\n   - M07f's `reset` and M07j's seat job run (materialize, bridge session, export) must reuse that route. Never exec stdio.\n   - Your reset is a new supervisor mode, so add it to R14a's frozen `SUPERVISOR_MODES` in the same slice that adds it to guest-supervisor.py main(). The forced command passes any one word, and main()'s allowlist is the gate.\n2. **Key custody.** Per-VM SSH keys live in `~/.moe/guest-ssh/<name>.{key,known_hosts}`, not runner-keys (R14a comment-f4d90818). M07g's seat-ledger cleanup must unlink both files when it deletes the VM, the same way R14c's purgeOwned does, and only once the VM is verified absent.\n3. **Your stores stay separate.** The certification store (`<home>/.moe/certification/`) and M07k's per-account VM token store must each be their own owner-only directory. Not runner-keys, not guest-ssh, nothing under the project or .moe/.\n4. **Pin and certify order.** Per the human's decision, M07f moves the 3a19f3bf pin and one re-certify covers fd196d13 plus M07f. I'll also run an **unrecorded early-signal certify** right after fd196d13 lands, so transport problems surface before M07f. Only the post-M07f run is recorded on R13.\n5. **File order.** M07j (and any slice that edits snapshot-transfer.mjs, guest-session.mjs or guest-ssh.mjs) is already behind fd196d13, which depends on every R14 slice. Keep it that way. M07f's guest-supervisor.py edit is free of R14, since no R14 slice touches the supervisor.",
       "timestamp": "2026-11-01T08:13:07.729Z"
+    },
+    {
+      "id": "comment-66f37d9b673c4aecb426d34ed6f854cf",
+      "author": "qa-97c4310b",
+      "content": "ADVISORY from the CQ-M07a QA (qa-97c4310b, approved 2026-11-01). Non-blocking; fold it in only if this row touches certificationEvidence.test.ts anyway.\n- The drift table in certificationEvidence.test.ts catches every clause-level mutant of the checkCertificationReport port: 95 of 112 QA mutants killed, plus 15 of 15 reader mutants.\n- 6 strict-to-loose equality swaps (=== to ==) still survive: report.kind, version, transport, provider.name, executionReady and the check-row id. certify.mjs mirrors 3 of them.\n- The shipped port is correct: it refuses these inputs exactly as certify.mjs does. The gap is only that a future == regression would go unseen.\n- To kill them, add refused VARIANTS rows with JSON type-confusion values:\n  - version '1' or true;\n  - kind ['isolation-certification'];\n  - transport ['injected'] with certified false;\n  - provider name ['multipass'];\n  - executionReady 0;\n  - one check id as ['provision'].\n- The file sits at the 400-line cap for its slice: fold the rows 2-3 per line.",
+      "timestamp": "2026-11-01T12:04:01.423Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:17:20.276Z",
-  "updatedAt": "2026-11-01T10:11:29.068Z",
+  "updatedAt": "2026-11-01T12:04:01.423Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:17:38.753Z"
   },

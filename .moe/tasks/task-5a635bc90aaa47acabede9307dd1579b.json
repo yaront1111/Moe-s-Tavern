@@ -68,8 +68,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-97c4310b",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -88,14 +88,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:06:33.518Z",
-  "updatedAt": "2026-11-01T11:45:48.622Z",
+  "updatedAt": "2026-11-01T12:03:50.503Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T09:10:01.886Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
     "executedStepCount": 8,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-01T12:03:50.503Z",
+    "wallClockMs": 10428617
   },
   "contextFetchedBy": [
     "qa-1e84238e",
@@ -299,6 +301,27 @@
       "status": "UNKNOWN",
       "pushed": false,
       "message": "MOE_RESCUE_REF task=task-5a635bc90aaa47acabede9307dd1579b ref=refs/moe/rescue/task-5a635bc90aaa47acabede9307dd1579b/20261101T114322Z sha=4ad29feef0c30cbcca8ccf0f43e02f12abbfd14d reason=teardown"
+    },
+    {
+      "sha": "d394e9e7879e64d2c660d57406723dc9d90b1979",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-97c4310b@2026-11-01T11:45:46Z",
+      "paths": [
+        ".moe/tasks/task-18809c69885f4af6bff87d7e764f269b.json",
+        ".moe/tasks/task-1dc49ae27e22494a95e15ada3e9c1fe9.json",
+        ".moe/tasks/task-4e2f2b45926c47bb846a635077094106.json",
+        ".moe/tasks/task-5a635bc90aaa47acabede9307dd1579b.json",
+        ".moe/tasks/task-62ec51f179494706a39045154d07e544.json",
+        ".moe/tasks/task-828e7d21602e4cf2a0f242e024db7dea.json",
+        ".moe/tasks/task-eb783f598086440f8e758445f8717ef8.json"
+      ],
+      "recordedBy": "qa-97c4310b",
+      "recordedAt": "2026-11-01T11:46:10.193Z",
+      "treeId": "5997b9b8712f6136809318ed4aaefa14498bdcd4",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -308,12 +331,11 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "rescue",
-    "code": "teardown",
-    "sessionId": "qa-97c4310b@2026-11-01T11:39:44Z",
-    "at": "2026-11-01T11:43:22.919Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-97c4310b@2026-11-01T11:45:46Z",
+    "at": "2026-11-01T11:46:10.193Z"
   },
-  "reviewCompletedAt": "2026-11-01T10:29:24.165Z",
+  "reviewCompletedAt": "2026-11-01T12:03:50.503Z",
   "rejectionDetails": {
     "failedDodItems": [
       "A drift test fails when the TypeScript schema port or the pins diverge from scripts/local-runner/certify.mjs, certified-provider.json or guest-supervisor.py."
@@ -366,5 +388,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-11-01T12:03:50.503Z",
+  "reviewSummary": "Round 2 (after reject #1 on DoD 4): APPROVED at HEAD d394e9e7. Prior seat session (11:39Z) left only board JSON (4ad29fee, d394e9e7).\nDelivery: completion 56fb4b45 (test +33/-32) is on moe/work-2026-10-24 over 63ae437a. Module blob 7c305fcd unchanged since 63ae437a; HEAD files = 56fb4b45. packages/ is 185+215=400 lines: at the cap, not over.\nDoD 5 gate: the exact task.verification command in fresh snapshot /tmp/moe-5a635bc9-mYMsUj: npm ci 74 pkgs, tsc --noEmit clean, vitest 83/83, EXIT=0, ~4 s.\nDoD 4: round-1 survivors Q1-Q6 are all killed. Independent QA sweep (/tmp/qa-5a635bc9-r2, files restored and sha256-checked): 95/112 killed, including every clause drop and clause->true, enum add/drop, regex bound/anchor/class, the typeof/isArray/ownKeys guards, every<->some, the pin and check-id order mutants, and source drift in guest-supervisor.py, certified-provider.json, certify.mjs rules and IMAGE_ARCHES.\nAdvisory survivors (not a DoD gap under round 1's clause-level bar):\n- 6 ===->== swaps (kind, version, transport, provider.name, executionReady, check id) plus 3 certify.mjs mirrors. A probe showed the shipped port refuses all 9 type-confusion inputs exactly as certify.mjs does, so only a future == regression would go unseen. No reader trust impact: judge() re-checks transport, certified, platform, arch, the pins and the version strictly.\n- 4 null==undefined swaps (JSON has no undefined) and 2 equivalent.\n- '_' added to the VERSION class: PROVIDER_VERSION still refuses.\n- The copy freezes the caller's nested objects: not a rule.\nRouted to the CQ-M07 integration row.\nDoD 1-3: module and reader rows unchanged since the round-1 QA check. 15/15 reader spot mutants killed (os.homedir/HOME, pins, transport/certified/platform/arch, canonical bytes, cap, root and .moe containment, mode, newest-wins).\nRails: assertExecutionProfileReady untouched; 0 forbidden patterns; only importer is M07b's landed row.\nComplexity: lean already. net: -0 lines possible.",
+  "requiredCheckAtDone": null
 }
