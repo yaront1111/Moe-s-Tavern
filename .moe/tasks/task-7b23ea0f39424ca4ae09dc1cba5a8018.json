@@ -79,7 +79,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:28:00.485Z",
-  "updatedAt": "2026-11-01T22:40:08.747Z",
+  "updatedAt": "2026-11-01T22:40:38.400Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:34:26.353Z",
@@ -174,7 +174,8 @@
     "scripts/moe-agent.sh",
     "scripts/tests/hook-isolation-bash.test.mjs",
     ".moe/tasks/task-7b23ea0f39424ca4ae09dc1cba5a8018.json",
-    ".moe/tasks/task-954ec3f9f856417e96e6cbc4bd880a35.json"
+    ".moe/tasks/task-954ec3f9f856417e96e6cbc4bd880a35.json",
+    ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json"
   ],
   "completionSummary": "Hooked worktree completions now work under Git Bash. In moe_commit_with_hooks (moe-agent.sh ~5165) the sparse patterns '/*' '!/.moe/' go on stdin (`printf '%s\\n' '/*' '!/.moe/' | git -C \"$scratch\" sparse-checkout set --no-cone --stdin`) and `MSYS2_ARG_CONV_EXCL='*'` is gone, so MSYS converts the POSIX -C \"$scratch\". Same `{ ...; } > \"$err\" 2>&1` group, same read-tree -mu \"$tree\", same .moe check: any failure still clears private_git and refuses the completion. moe-agent.ps1 is unchanged. WT-04's install (line 3118) keeps the '*' guard; its -C is Windows-form from rev-parse.\n\nTest: one new worktree case in hook-isolation-bash.test.mjs (+70 lines; the 8 existing cases are unchanged). It slices the REAL create_secure_temp, so the scratch is the POSIX mktemp path. The fixture tracks lib/keep.txt and .moe/tasks/fixture.json, and the pre-commit hook fails unless lib/keep.txt exists and .moe does not.\n\nGit Bash probe of the real function (Windows node.exe, scratch copies):\n- fixed bytes: 9/9 on Windows node (Git Bash) and 9/9 on Linux node.\n- old line (HEAD): the worktree case FAILS on Git Bash with 'hooked-commit-config-mismatch', rc 1, the reported symptom. It passes on Linux, so Linux behavior is unchanged.\n- dropped-`--stdin` mutant: FAILS on both platforms ('lib/keep.txt missing').\n\nGate (the plan's command, run once, fresh, on a snapshot with cmp-verified overlay, via a scratch driver that wraps it verbatim, 21:58:45Z-22:17:38Z, EXIT=0): parity-check PASS, node tests 9/9 twice, worktree-landing 18/0/0, postflight-safe bash exit 0, lastScenario Z, failureClass NONE. The files were not touched after the gate started. The ps1 harnesses were not run because the ps1 is unchanged. The checkout holds 23 other dirty paths from peers; I did not touch them.",
   "commits": [
@@ -195,6 +196,22 @@
       "treeId": "7cbdb7282a84f70f4940e8ee8dd90cfef1f07a54",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "62b3cf9cef187e81c8739c11dbf9948e62f88b4f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-174e8876@2026-11-01T22:19:48Z",
+      "paths": [
+        ".moe/tasks/task-7b23ea0f39424ca4ae09dc1cba5a8018.json",
+        ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json"
+      ],
+      "recordedBy": "qa-174e8876",
+      "recordedAt": "2026-11-01T22:40:38.400Z",
+      "treeId": "6e265fd0316ce9d7efcd164b22c32d7946014e79",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -204,9 +221,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-24f14750@2026-11-01T21:55:44Z",
-    "at": "2026-11-01T22:19:32.569Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-174e8876@2026-11-01T22:19:48Z",
+    "at": "2026-11-01T22:40:38.400Z"
   },
   "completedAt": "2026-11-01T22:40:08.747Z",
   "reviewCompletedAt": "2026-11-01T22:40:08.747Z",
