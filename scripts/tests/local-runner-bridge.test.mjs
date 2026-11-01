@@ -2343,3 +2343,131 @@ test('GS6 the pinned client, key files, known_hosts line, authorized line refusa
   assert.deepEqual(['NOPE', 'constructor', 42, 'TRANSPORT_ADDRESS_UNKNOWN'].map(code => [transportError(code).code, transportError(code).message]),
     [invalid, invalid, invalid, ['TRANSPORT_ADDRESS_UNKNOWN', 'The guest transport address could not be established.']]);
 });
+
+// CQ-R14d2 bridge over the SSH route. runGuestSession's one spawn is openGuestStream's ssh client, after one info read
+// through provider.run. Each carrier failure measured on Multipass 1.17.0 `exec` stdio (DESIGN comment-350cb4d0 on
+// task-fd196d13) ends in a fixed SESSION_* code and delivers no observation.
+test('BS1 the session spawns only the pinned ssh client with sshStreamArgv, after one info read, never `multipass exec`', { timeout: 30_000 }, async () => {
+  for (const pinned of [false, true]) {
+    const proc = fakeProvider();
+    const log = [];
+    const provider = { run: async (executable, args) => { log.push([executable, ...args]); return infoRun(executable, args); }, keyDir: BRIDGE_KEYS,
+      spawn: (...args) => { log.push(['spawn']); return proc.spawn(...args); }, ...(pinned ? {} : { ssh: BRIDGE_SSH }) };
+    const run = openSession(proc, { provider });
+    assert.deepEqual(await exchange(proc, run, [REQUEST], 1), { observation: EXIT, executionReady: false });
+    // Without provider.ssh the client is the platform's pinned in-box OpenSSH.
+    assert.deepEqual(proc.calls, [[pinned ? sshExecutable(process.platform) : BRIDGE_SSH, SPAWNED[1], SPAWNED[2]]]);
+    assert.equal(Object.hasOwn(proc.calls[0][2], 'env'), false);
+    assert.deepEqual(log, [['multipass', 'info', NAME, '--format', 'json'], ['spawn']]);
+    assert.equal([...proc.calls[0][1], ...log.flat()].includes('exec'), false);
+    assert.equal(JSON.stringify([proc.calls, log]).includes(KEY), false);
+  }
+});
+
+// rejectsWith also proves that the error carries no path and no credential (KEY holds 'secret').
+test('BS2 a transport refusal is SESSION_SPAWN_FAILED with nothing spawned', { timeout: 30_000 }, async () => {
+  const noAddress = async () => ({ stdout: JSON.stringify({ errors: [], info: { [NAME]: { ...INFO, ipv4: [] } } }), stderr: '' });
+  const refusals = [['run rejects', { run: async () => { throw new Error(KEY); } }], ['no ipv4', { run: noAddress }],
+    ['relative keyDir', { keyDir: 'keys' }], ['empty ssh', { ssh: '' }]];
+  for (const [label, route] of refusals) {
+    const proc = fakeProvider();
+    const run = openSession(proc, { provider: { ...SSH_ROUTE, ...route, spawn: proc.spawn } });
+    await rejectsWith(run.promise, 'SESSION_SPAWN_FAILED', label);
+    assert.deepEqual([proc.calls, proc.job, run.observations], [[], null, []], label);
+  }
+});
+
+test('BS3 an abort during the info read is SESSION_ABORTED and the job frame never reaches the stream', { timeout: 30_000 }, async () => {
+  const proc = fakeProvider();
+  const writes = []; // every stdin.write call, even one a destroyed stream would refuse
+  const write = proc.stdin.write.bind(proc.stdin);
+  proc.stdin.write = (chunk, ...rest) => { writes.push(chunk); return write(chunk, ...rest); };
+  let release;
+  const reading = new Promise(resolve => { release = resolve; });
+  let asked = false;
+  const controller = new AbortController();
+  const run = openSession(proc, { signal: controller.signal, provider: { ...SSH_ROUTE, spawn: proc.spawn,
+    run: async (executable, args) => { asked = true; await reading; return infoRun(executable, args); } } });
+  await until(() => asked, 'info read');
+  controller.abort();
+  release();
+  await rejectsWith(run.promise, 'SESSION_ABORTED');
+  assert.deepEqual([proc.calls, writes, proc.job, proc.kills, run.observations, getEventListeners(controller.signal, 'abort').length],
+    [[SPAWNED], [], null, [], [], 0]);
+});
+
+// The Linux carrier fault (#5478): this carrier forwards only the first half of the job frame to the real bridge mode
+// (bridgeMain) and then ends its stdin. The supervisor refuses before hello with its EOF code, 74, which reaches the
+// session only as the provider's nonzero exit.
+function cutCarrier(host) {
+  const carrier = {};
+  carrier.spawn = (...args) => {
+    const real = host.spawn(...args);
+    const child = Object.assign(new EventEmitter(), { stdout: real.stdout, stderr: real.stderr, kill: signal => real.kill(signal) });
+    child.stdin = new Writable({ write(chunk, encoding, done) {
+      if (!real.stdin.writableEnded) real.stdin.end(chunk.subarray(0, chunk.length >> 1));
+      done();
+    } });
+    real.stdin.on('error', () => {}); // a supervisor that already exited is the row's subject, not a test failure
+    real.on('error', error => child.emit('error', error));
+    real.on('close', (...status) => child.emit('close', ...status));
+    return child;
+  };
+  return carrier;
+}
+
+test('BS4 a job frame cut short reaches the real supervisor, which refuses, and the session is SESSION_PROVIDER_FAILED',
+  { skip: NO_GUEST, timeout: 30_000 }, async () => {
+    const host = bridgeMain();
+    const run = openSession(cutCarrier(host), { timeoutMs: 10_000 });
+    await rejectsWith(run.promise, 'SESSION_PROVIDER_FAILED');
+    assert.deepEqual([host.launches, host.proc.exitCode, run.outputs, run.observations, run.forwarded], [[SPAWNED], 74, [], [], []]);
+  });
+
+// The Windows carrier faults (#3749): nothing reaches the guest's stdin, so no write callback ever fires, and the guest
+// never sees EOF, so only the local kill ends the client.
+test('BS5 a dead stdin with no hello is SESSION_TIMEOUT and the client is killed locally', { timeout: 30_000 }, async () => {
+  const proc = fakeProvider({ hung: true, first: () => {} });
+  const run = openSession(proc, { timeoutMs: 100 });
+  await rejectsWith(run.promise, 'SESSION_TIMEOUT');
+  assert.deepEqual([proc.calls, proc.kills, proc.written, run.outputs, run.observations, run.forwarded], [[SPAWNED], ['SIGKILL'], [], [], [], []]);
+});
+
+// After hello only forwards and stdin writes are bounded. A stall with nothing owed is bounded by the caller's signal,
+// never by the session (unchanged contract); this one owes a reply, so the reply write's own bound ends it.
+test('BS6 a stdout stall partway through an output frame, with the reply write stuck, is SESSION_TIMEOUT and delivers no byte',
+  { timeout: 30_000 }, async () => {
+    const proc = fakeProvider({ hung: true, write: () => {} });
+    const run = openSession(proc, { timeoutMs: 100 });
+    const partial = encodeFrame(OUTPUT);
+    proc.send(HELLO, REQUEST, partial.subarray(0, partial.length >> 1));
+    await rejectsWith(run.promise, 'SESSION_TIMEOUT');
+    assert.deepEqual([proc.kills, run.forwarded.length, proc.written.length, run.outputs, run.observations], [['SIGKILL'], 1, 1, [], []]);
+  });
+
+// ssh's own 255 (a connection or authentication failure) is the provider's failure before or after hello, even after a
+// whole observation: no supervisor code is ever derived from it.
+test('BS7 ssh exit 255 before and after hello is SESSION_PROVIDER_FAILED', { timeout: 30_000 }, async () => {
+  for (const frames of [[], [HELLO], [HELLO, OUTPUT, EXIT]]) {
+    const proc = fakeProvider();
+    const run = openSession(proc);
+    proc.send(...frames);
+    proc.exit(255);
+    await rejectsWith(run.promise, 'SESSION_PROVIDER_FAILED', JSON.stringify(frames));
+    assert.deepEqual([proc.calls, proc.kills, run.observations], [[SPAWNED], [], []], JSON.stringify(frames));
+  }
+});
+
+// Cancel is unchanged: ending stdin is the signal, and the supervisor's 74 comes back as ssh's own exit status.
+test('BS8 an abort after hello ends stdin, the 74 exit beats the kill timer and the session is SESSION_ABORTED', { timeout: 30_000 }, async () => {
+  const proc = fakeProvider();
+  const statuses = [];
+  proc.on('close', code => statuses.push(code));
+  const controller = new AbortController();
+  const run = openSession(proc, { signal: controller.signal });
+  proc.send(HELLO, OUTPUT);
+  await until(() => run.outputs.length === 1, 'hello received'); // output is accepted only after hello
+  controller.abort();
+  await rejectsWith(run.promise, 'SESSION_ABORTED');
+  assert.deepEqual([statuses, proc.kills, proc.stdin.destroyed, run.observations], [[74], [], true, []]);
+});

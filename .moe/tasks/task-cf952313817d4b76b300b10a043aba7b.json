@@ -81,7 +81,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:06:50.081Z",
-  "updatedAt": "2026-11-01T10:36:24.157Z",
+  "updatedAt": "2026-11-01T10:42:09.272Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T09:31:01.899Z",
     "plannedStepCount": 4,
@@ -91,7 +91,8 @@
     "reopenCount": 1
   },
   "contextFetchedBy": [
-    "qa-1e84238e"
+    "qa-1e84238e",
+    "architect-b520bc90"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -184,7 +185,8 @@
     ".moe/tasks/task-41d0c5a9855143ceb3ab81e61aaf9fa9.json",
     ".moe/tasks/task-b0485bb1cacf4d3b84979e9256078737.json",
     ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json",
-    ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json"
+    ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+    ".moe/tasks/task-d56fb46eb0a941808a7ba7e0588f2fd5.json"
   ],
   "completionSummary": "CQ-M07b delivered. Built against the LANDED CQ-M07a certificationEvidence.ts at 63ae437a, which `git log -1` re-checked right before completion; it is unchanged, as is executionProfile.ts.\n\n**Files**\n- server/runnerChannel.ts adds only the `isRunnerKey` export.\n- New delivery/executionReadiness.ts (leaf-safe) exports:\n  - READINESS_CAPABILITIES, READINESS_EVIDENCE_IDS, READINESS_IDS and ReadinessId;\n  - AGENT_VM_ROWS and CHECK_VM_ROWS;\n  - CERTIFICATION_REFUSAL_IDS, an exhaustive Record over all 21 codes;\n  - pinnedMultipassClient (a port of the platform-*.mjs executables), PROBE_ARGS, PROBE_TIMEOUT_MS and PROBE_MAX_BYTES;\n  - ProbeRunner, ReadinessInputs, ReadinessSnapshot and evaluateExecutionReadiness.\n- New executionReadiness.test.ts with 114 rows.\n\n**How the evaluator works**\n- There are 4 isolated checks: control plane, runner key, own deliveryPolicy, and certification followed by a live probe. It never rejects for a failing fact.\n- missingCapabilities is filtered from READINESS_IDS. The snapshot, its array and its evidence are frozen.\n- The probe runs at most once, only after an accepted report: the pinned path, argv `version --format json`, a 10 s timeout, a 64 KiB cap, and an 11 s guard timer that is unref'd and cleared on every path.\n- It reads no env, platform, home or project file; a source row enforces this.\n\n**DoD 1–4:** all covered by vitest rows. The env, label and in-project store rows include a real-reader control that is ready from a store outside the project.\n\n**Additions**\n- The key is read with O_NOFOLLOW.\n- A malformed ok:true value gives certification-unreadable.\n- The accepted report is read once (an adversarial-review fix, pinned by a test that was proven red first).\n\nA mutation sweep killed all 29 applicable mutants. Nothing imports the module, so verified-local stays unavailable.\n\nGate: the plan's exact command, a fresh git archive of HEAD c803af46. EXIT 0, 155/155 tests passed, tsc clean.",
   "commits": [
@@ -223,6 +225,22 @@
       "treeId": "d9112403c170e79e7aad349ade8e2b4a7830ea15",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "37d62f2af19ff282762cbcd0f6469242df82dc3d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-b520bc90@2026-11-01T09:30:59Z",
+      "paths": [
+        ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+        ".moe/tasks/task-d56fb46eb0a941808a7ba7e0588f2fd5.json"
+      ],
+      "recordedBy": "architect-b520bc90",
+      "recordedAt": "2026-11-01T10:42:09.272Z",
+      "treeId": "190f64fd538689fc3088e3b8fcf7ea97b50c0f76",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -234,8 +252,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-1e84238e@2026-11-01T10:30:45Z",
-    "at": "2026-11-01T10:36:24.157Z"
+    "sessionId": "architect-b520bc90@2026-11-01T09:30:59Z",
+    "at": "2026-11-01T10:42:09.272Z"
   },
   "reviewCompletedAt": "2026-11-01T10:35:16.871Z",
   "rejectionDetails": {

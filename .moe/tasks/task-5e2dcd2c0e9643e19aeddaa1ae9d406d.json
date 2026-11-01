@@ -53,27 +53,39 @@
     {
       "stepId": "step-3",
       "description": "New rows BS1-BS8 in a `// CQ-R14d2 bridge over the SSH route` section at the END of scripts/tests/local-runner-bridge.test.mjs. Each failure row asserts run.observations deepEqual [], the exact code via rejectsWith, and kills exactly as stated.\n- BS1. Route.\n  - proc.calls deepEqual [SPAWNED], and the spawn options have no env key.\n  - The provider's run saw exactly one call, the info read, before the spawn, and nothing with 'exec'.\n  - JSON.stringify(proc.calls) does not contain KEY.\n- BS2. Transport refusals are SESSION_SPAWN_FAILED with proc.calls []:\n  - run rejects;\n  - info has ipv4 [];\n  - keyDir is 'keys' (relative);\n  - ssh is ''.\n  The error message contains neither KEY nor a path.\n- BS3. Abort during the info read. run's info answer waits on a promise; the test aborts the signal and then releases info.\n  - The session rejects SESSION_ABORTED.\n  - proc.job stays null: the credential frame was never written.\n- BS4. Linux truncation against the REAL supervisor's bridge mode. Reuse the file's real-supervisor host harness (supervised() or bridgeMain()) behind a stdin-cutting carrier that forwards only the first half of the job frame and then ends the child's stdin.\n  - The python child exits nonzero, as recorded.\n  - The session rejects SESSION_PROVIDER_FAILED.\n  Gate it exactly like the existing real-supervisor rows.\n- BS5. Windows dead stdin. The carrier never calls any write callback and sends nothing.\n  - With timeoutMs 100, the result is SESSION_TIMEOUT.\n  - kills deepEqual ['SIGKILL'].\n- BS6. Windows stdout stall. The carrier sends hello, one request, then the first half of an output frame. After that, its stdin write callbacks stop firing.\n  - The reply write's bound expires: SESSION_TIMEOUT, with kills ['SIGKILL'].\n  - onOutput never saw a byte of the partial frame.\n  - A stall with nothing owed is bounded by the caller's signal, never by the session (unchanged contract). Say that in the row comment.\n- BS7. ssh exit 255, before hello and after hello. Each is SESSION_PROVIDER_FAILED.\n- BS8. Cancel. Abort after hello. Stdin ends, and the fake exits 74 before the kill timer.\n  - The result is SESSION_ABORTED, with kills [].\n\nAssert exact values, never truthiness. Kill only processes the test itself spawned.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-bridge.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Added rows BS1-BS8 at the end of local-runner-bridge.test.mjs, in a `// CQ-R14d2 bridge over the SSH route` section.\n\n- **BS1:** run twice, with the injected ssh and with the platform's pinned sshExecutable. proc.calls equals [[client, sshStreamArgv, PIPES]], with no env key. The log is [[multipass info NAME --format json], [spawn]]: no 'exec' element and no KEY.\n- **BS2:** four refusals, each SESSION_SPAWN_FAILED with calls [] and job null. They are run rejects (with KEY), ipv4 [], keyDir 'keys' and ssh ''. rejectsWith checks that no path or 'secret' is in the message.\n- **BS3:** an abort during a gated info read gives SESSION_ABORTED. A wrapped stdin.write recorded no write at all, job is null, kills are [] and there are 0 abort listeners.\n- **BS4 (real supervisor via bridgeMain, NO_GUEST-gated):** cutCarrier forwards half the job frame and then ends stdin. The supervisor exits 74 before hello, and the session gives SESSION_PROVIDER_FAILED with no output, observation or forward.\n- **BS5:** a dead stdin (hung, first never acks, timeoutMs 100) gives SESSION_TIMEOUT, kills ['SIGKILL'].\n- **BS6:** HELLO and REQUEST, then half an OUTPUT frame, with the reply write stuck. The result is SESSION_TIMEOUT, kills ['SIGKILL'], outputs []. The row comment states the caller-signal contract.\n- **BS7:** exit 255 with frames [], [HELLO] and [HELLO, OUTPUT, EXIT] each gives SESSION_PROVIDER_FAILED with no observation.\n- **BS8:** an abort after hello gives close status [74], kills [], stdin destroyed and SESSION_ABORTED.\n\nSnapshot run (`^BS`): 8/8 pass.\n\nMutation probe on guest-session.mjs, run in /tmp copies against the ^(BS|H\\d) rows: 5/5 KILLED.\n- abort-guard dropped: BS3.\n- closing-guard dropped: BS3, via the recorded write.\n- 255 remap: BS7.\n- refusal mapped to PROVIDER_FAILED: BS2 and H4.\n- provider ssh/keyDir dropped: BS1-BS7 and H rows.",
+      "startedAt": "2026-11-01T10:38:28.116Z",
+      "completedAt": "2026-11-01T10:41:25.300Z"
     },
     {
       "stepId": "step-4",
       "description": "Verify in a snapshot, never in place (global rail). The description's command covered two files. This slice touches five (amendment comment-596b708b plus the AJ and daemon-bind wiring), and the bundle test reads moe-vscode, moe-jetbrains and packages files. So archive all of HEAD (which already holds R14d1's guest-stream.mjs) and run all four affected test files. Run from the repo root:\n\nS=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-session.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs\n\nIt must exit 0 with BS1-BS8 and every B, S, I, H, AJ, GS, daemon-bind and bundle row green, and nothing failing or cancelled. Its fresh exit code and output tail are the moe.complete_task evidence.\n\nKill only PIDs you started. No seat runs Multipass.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Snapshot verification only. Nothing ran in place and no Multipass ran.\n\n- **Plan command:** whole-HEAD git archive plus the 5 working files, under env -i with Node 24.21.0, running the bridge, daemon-bind, local-runner and bundle tests. EXIT 0: 485 tests, 483 pass, 0 fail, 0 cancelled, 2 skipped. The two skips are both opt-in: LA5 (needs MOE_PINNED_CODEX) and the macOS native-provider hardware smoke.\n- **Description command (DoD 5):** the partial archive plus guest-session and the bridge test, bridge test only. EXIT 0: 90 tests, 89 pass, 0 fail, 1 skip (LA5).\n\nAll BS1-BS8, B, S, I, H, AJ, GS, daemon-bind and bundle rows are green.",
+      "startedAt": "2026-11-01T10:41:29.049Z",
+      "completedAt": "2026-11-01T10:44:18.821Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's own diff, once (skill adversarial-self-review).\n- Can the session still reach `multipass exec`? Is a transport refusal always SESSION_SPAWN_FAILED with no spawn?\n- Could an abort during the info read leave a child running, an unhandled child 'error' event, or a credential write? Do BS3 and the relay guard kill those mutants?\n- Is ssh 255 SESSION_PROVIDER_FAILED both before and after hello?\n- Did any timer or teardown path change, beyond the aborted-before-relay check and the job-frame guard?\n- Is the credential in no argv, option, env or error?\n- Are bridgeArgv and B15 still intact for the integration row?\n- Did any existing assertion change beyond its spawn triple, info/log sequencing or provider wiring?\n- Are guest-supervisor.py (sha256 3a19f3bf...) and readiness untouched?\n- Does the diff list only the five planned files?\n\nRe-run step 4's command if anything changed.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of this task's own diff against 799936d9. It covers the five planned files, about 221 changed lines:\n- guest-session +25/-15;\n- bridge test +143/-3;\n- local-runner.test +12/-8;\n- daemon-bind +9/-1;\n- bundle +3/-2.\nThe moe-agent.* and postflight* hunks in the tree belong to other sessions and were left untouched.\n\n1. **Spawn route.** The session's only spawn is openGuestStream (ssh + sshStreamArgv). endAgentJobs' PKILL/PGREP still go through `multipass exec` via the invoker, by design and out of scope. A transport refusal is SESSION_SPAWN_FAILED with 0 spawns (BS2).\n2. **Abort during the info read.** It goes through relay's one teardown path, with the 'error' listener attached first. BS3 kills both guard mutants: the recorded stdin.write list stays [].\n3. **Real ENOENT probe.** A real child_process.spawn of a nonexistent provider.ssh, run from /tmp, rejects SESSION_SPAWN_FAILED with no uncaught 'error'. The await continuation attaches listeners before the nextTick error.\n4. **ssh 255** gives SESSION_PROVIDER_FAILED before hello, after hello, and even after a whole EXIT observation (BS7).\n5. **Timers and teardown.** No timer or teardown change beyond the aborted check and the closing guard.\n6. **Credential.** It appears in no argv, spawn option, env or error (BS1/BS2, H6).\n7. **bridgeArgv and B15.** guest-bridge.mjs is unchanged, so bridgeArgv and B15 are intact.\n8. **Existing rows.** They changed only their spawn triple, info/log sequencing or provider wiring (H4 provider, AJ3/AJ5, CLEAN_LOG).\n9. **Pinned files.** guest-supervisor.py sha256 is still 3a19f3bf…; readiness and guest-bridge are untouched.\n\nNo code changed during review, so step 4's EXIT 0 stands.",
+      "startedAt": "2026-11-01T10:44:21.573Z",
+      "completedAt": "2026-11-01T10:46:23.693Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-cef53f62",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -107,12 +119,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:05:28.654Z",
-  "updatedAt": "2026-11-01T10:33:37.749Z",
+  "updatedAt": "2026-11-01T10:46:57.719Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:52:52.678Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-b520bc90",
@@ -124,7 +136,10 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T08:58:58.843Z",
@@ -176,5 +191,64 @@
   },
   "planApprovedAt": "2026-11-01T08:58:58.865Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-01T10:23:30.331Z"
+  "workStartedAt": "2026-11-01T10:23:30.331Z",
+  "commits": [
+    {
+      "sha": "e84d121fdc93984c9d987a93f6d9b4c93cf70c2e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-cef53f62@2026-11-01T10:22:33Z",
+      "paths": [
+        ".moe/tasks/task-5e2dcd2c0e9643e19aeddaa1ae9d406d.json",
+        ".moe/tasks/task-bb1502b1fcb04f0e99fa5328be05ef4e.json",
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/tests/local-runner-daemon-bind.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-cef53f62",
+      "recordedAt": "2026-11-01T10:34:11.606Z",
+      "treeId": "939638ba101f19defa415fffb4a51ad71bf2acb0",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/local-runner/guest-session.mjs",
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/tests/local-runner-daemon-bind.test.mjs",
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs"
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/guest-session.mjs",
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/tests/local-runner-daemon-bind.test.mjs",
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-cef53f62@2026-11-01T10:22:33Z",
+    "at": "2026-11-01T10:34:11.606Z"
+  },
+  "reviewStartedAt": "2026-11-01T10:46:57.718Z",
+  "verification": {
+    "command": "S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-session.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ SS7 ssh exit 255 before the first frame or after it is TRANSFER_EXIT_FAILED, never a supervisor code (2.078825ms)\n✔ SS8 a transport refusal inside a transfer is TRANSFER_SPAWN_FAILED and spawns nothing (0.675193ms)\n✔ SS9 all six transfer modes spawn only the ssh client with exactly streamCall, never the Multipass executable or exec (23.159404ms)\nℹ tests 485\nℹ suites 0\nℹ pass 483\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0\nℹ duration_ms 92244.406085\nEXIT=0\n(skips: LA5 opt-in MOE_PINNED_CODEX; opt-in macOS native provider smoke. BS1-BS8 all ✔.)",
+    "reportedAt": "2026-11-01T10:46:57.718Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-R14d2: runGuestSession now runs the supervisor's bridge mode over the pinned OpenSSH stream, never `multipass exec`.\n\n**Runtime (scripts/local-runner/guest-session.mjs)**\n- isOwnedInstanceName joined the input checks, so a bad name stays SESSION_INPUT_INVALID before any daemon or provider call.\n- The provider is copied and frozen at entry.\n- After daemon admission, the only spawn is `await openGuestStream({name, mode:'bridge', provider})`. Any transport refusal or spawn throw is SESSION_SPAWN_FAILED, with nothing spawned.\n- relay has two new guards:\n  - an abort that landed during the info read takes the one teardown path, with the 'error' listener attached;\n  - the job frame is written only while the session is not closing.\n- ssh's own 255 lands in the existing `code !== 0` branch as SESSION_PROVIDER_FAILED. No supervisor code is derived from it.\n- Ending stdin is still the cancel and host-gone signal, and the supervisor's 74 comes back as ssh's exit status.\n- The header and JSDoc comments were updated. The guest-session import of bridgeArgv is dropped; the export and B15 stay.\n\n**Test wiring**\n- The bridge openSession and the H4 spawn-throw row, daemon-bind session() and the local-runner AJ harness gain an info fake plus ssh and keyDir.\n- AJ expectations use streamCall('bridge'), and the session's info read is added to CLEAN_LOG.\n- The bundle test's `shipped` gains guest-stream.mjs.\n\n**New rows BS1-BS8** (local-runner-bridge.test.mjs):\n1. The route: pinned and injected ssh, exact sshStreamArgv, no env, one info read and then the spawn, no 'exec', no KEY.\n2. Four transport refusals, each SPAWN_FAILED with 0 spawns.\n3. An abort during info gives ABORTED, and no stdin.write is ever called.\n4. A job frame cut short by a carrier into the real supervisor: exit 74, PROVIDER_FAILED.\n5. Dead stdin: TIMEOUT plus SIGKILL.\n6. A stdout stall mid output frame with the reply write stuck: TIMEOUT plus SIGKILL, no bytes delivered.\n7. 255 before hello, after hello and after a wh"
 }
