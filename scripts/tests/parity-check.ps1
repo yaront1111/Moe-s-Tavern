@@ -94,7 +94,7 @@ $required = [ordered]@{
     # and relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are
     # compared above).
     'account rotation prose' = @('moe-account-lease.mjs', '[account] ', 'launching without rotation.', 'every signed-in account is spent; the held task stays held. (Ctrl+C to stop)', 'relaunching on the next account; the held task stays held.', 'Relaunching now on the next account.')
-    'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin')
+    'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-skip-worktree -z --stdin', 'update-index --no-assume-unchanged -z --stdin')
     'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt', 'lease_account', 'report_account_usage', 'release_task')
     'candidate evidence fields' = @('attemptId', 'generation', 'candidateId', 'treeSha', 'runnerId', 'runner-observed')
     # The landing outcomes finalize_attempt carries: both wrappers map every exit

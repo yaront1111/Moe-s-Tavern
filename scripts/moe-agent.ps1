@@ -5189,13 +5189,16 @@ function Test-MoeGateIntegrity([hashtable]$Frozen,[string]$Exclude='') {
     $head = Invoke-MoeGit -Top $top -GitArgs @('rev-parse','HEAD')
     $tree = Invoke-MoeGit -Top $top -GitArgs @('write-tree')
     if ($head.Rc -ne 0 -or ($head.Out -join '').Trim() -cne $Frozen.Commit -or $tree.Rc -ne 0 -or ($tree.Out -join '').Trim() -cne $Frozen.Tree) { return $false }
-    # One ls-files | update-index --stdin pair, as in the sh twin: a git spawn per
-    # tracked file cost about 31 s per probe on a 1000-file tree.
-    if (-not (Clear-MoeGateIndexFlags $top $Exclude)) { return $false }
+    # ls-files | update-index --stdin pairs, as in the sh twin: a git spawn per
+    # tracked file cost about 31 s per probe on a 1000-file tree. update-index
+    # applies only its first marking option, so clear each bit in its own pass:
+    # an edit or deletion hidden behind either must reach diff-files.
+    if (-not (Clear-MoeGateIndexFlags $top $Exclude 'update-index --no-skip-worktree -z --stdin')) { return $false }
+    if (-not (Clear-MoeGateIndexFlags $top $Exclude 'update-index --no-assume-unchanged -z --stdin')) { return $false }
     $diff = Invoke-MoeGit -Top $top -GitArgs @('diff-files','--quiet','--ignore-submodules=none','--')
     return ($diff.Rc -eq 0)
 }
-function Clear-MoeGateIndexFlags([string]$Top,[string]$Exclude='',[string]$Update='update-index --no-assume-unchanged --no-skip-worktree -z --stdin') {
+function Clear-MoeGateIndexFlags([string]$Top,[string]$Exclude,[string]$Update) {
     # The cmd pipe carries raw bytes. A .NET StandardInput writer does not: under
     # a UTF-8 console it writes a BOM first, corrupting the first NUL-separated path.
     $prev = $ErrorActionPreference
@@ -5217,9 +5220,6 @@ function Test-MoeGateIntegrityWorktree([hashtable]$Frozen) {
         Write-Host '[WARN] MOE_WORKTREE_GATE_INTEGRITY: the qualityGate worktree holds .moe; refusing branch commit.' -ForegroundColor Yellow
         return $false
     }
-    # update-index applies only its first marking option, so clear skip-worktree
-    # in its own pass: a file deleted behind it must reach diff-files.
-    if (-not (Clear-MoeGateIndexFlags $script:MoeGate.Workspace ':(top,exclude).moe' 'update-index --no-skip-worktree -z --stdin')) { return $false }
     return (Test-MoeGateIntegrity $Frozen ':(top,exclude).moe')
 }
 function Stop-MoeGateChild {

@@ -5227,7 +5227,10 @@ gate_git() {
 gate_integrity() {
     [ "$(gate_git rev-parse HEAD 2>/dev/null)" = "$FROZEN_COMMIT" ] || return 1
     [ "$(gate_git write-tree 2>/dev/null)" = "$FROZEN_TREE" ] || return 1
-    gate_git ls-files -z "$@" | gate_git update-index --no-assume-unchanged --no-skip-worktree -z --stdin || return 1
+    # update-index applies only its first marking option, so clear each bit in its
+    # own pass: an edit or deletion hidden behind either must reach diff-files.
+    gate_git ls-files -z "$@" | gate_git update-index --no-skip-worktree -z --stdin || return 1
+    gate_git ls-files -z "$@" | gate_git update-index --no-assume-unchanged -z --stdin || return 1
     gate_git diff-files --quiet --ignore-submodules=none --
 }
 # Worktree-mode integrity (WT-S §2.2 L6): the gate checkout never holds .moe, and
@@ -5236,9 +5239,6 @@ gate_integrity_wt() {
     if [ -e "$GATE_WORKSPACE/.moe" ] || [ -L "$GATE_WORKSPACE/.moe" ]; then
         echo "[WARN] MOE_WORKTREE_GATE_INTEGRITY: the qualityGate worktree holds .moe; refusing branch commit." >&2; return 1
     fi
-    # update-index applies only its first marking option, so clear skip-worktree
-    # in its own pass: a file deleted behind it must reach diff-files.
-    gate_git ls-files -z -- ':(top,exclude).moe' | gate_git update-index --no-skip-worktree -z --stdin || return 1
     gate_integrity -- ':(top,exclude).moe'
 }
 stop_gate_child() {
