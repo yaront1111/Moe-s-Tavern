@@ -224,11 +224,12 @@ function expectedCommand(env, wrapper, projectPath) {
         `bash ${shQuote(wrapper)} --role worker --project ${shQuote(projectPath)} --worker-id 'worker-ID' --command 'claude'`;
 }
 
-test('L1 a protected launch uses only the installed wrapper, daemon and proxy, plus the marker', () => {
+test('L1 a protected launch uses only the installed wrapper, daemon and proxy, plus the marker', async () => {
     const dir = project(declare('verified-local'), true);
     const ext = extension();
     const f = loadLauncher(dir);
-    f.launcher.launchAgent('worker', 'claude', ext);
+    const readiness = async () => ({ answered: { profile: 'verified-local', ready: true, missingCapabilities: [], evaluatedAt: null } });
+    await f.launcher.launchAgent('worker', 'claude', ext, { readiness });
     const bundled = path.join(ext, 'bundled');
     assert.equal(launchedCommand(f, dir), expectedCommand(installedEnv(bundled), path.join(bundled, WRAPPER), dir));
 });

@@ -102,11 +102,17 @@
       "author": "architect-b520bc90",
       "content": "ROUTE MARKER CONTRACT from CQ-M07q (task-bb1502b1, plan rev 1, architect-b520bc90). The VM route in moe-agent.sh plans against these names. Detail: mem:task-task-bb1502b1fcb04f0e99fa5328be05ef4e-handoff.\n\n**What to send.** Pass `executionRoute: \"vm\"` in the arguments of every claim_next_task call that a VM-route worker or QA seat makes, and in wait_for_task's too if the route uses it. It is the exact string; any other value is INVALID_INPUT.\n\n**What a seat without it gets.**\n- A verified-local WORKING or REVIEW row is SKIPPED by the ranked pool and by wait_for_task's matcher, never thrown, so the wrapper's existing \"no task\" handling applies.\n- An explicit taskId claim is refused with codeName `EXECUTION_ROUTE_REQUIRED` (NOT_ALLOWED).\n\n**What it never does.** The marker only stops refusal. It never satisfies readiness: a marked strict claim is still refused `EXECUTION_PROFILE_NOT_READY` until the daemon's readiness says ready. PLANNING claims and legacy or observe rows ignore it.\n\n**Scope.** It is a guard against accidental host runs, not authentication. Send it only from the path that really runs the session in a Moe VM.",
       "timestamp": "2026-11-01T10:22:40.138Z"
+    },
+    {
+      "id": "comment-e98f63a941074e4e99bb12460dfc20bd",
+      "author": "architect-98c94b4c",
+      "content": "Note from architect-98c94b4c (CQ-M07m3's planner, task-3954cc09). This is a gap in rev 1's error paths that this row owns, per m2's planner note (on m3: \"On 1 or 2, hold the task; CQ-M07m owns those error paths\").\n\nRev 1 covers a FAILED job (\"Nothing is landed from a failed job: there is no admitted tree. CQ-M07m2's helper is not called.\"). It does not cover an OK job whose helper call then returns 1.\n\nWhat happens in that case:\n- land_vm_candidate's return-1 refusals write nothing. Those refusals are NOT_WORKTREE, HEAD_MOVED, BASE_MISMATCH, DIRTY and TREE_INVALID, plus COMMIT_FAILED.\n- So the admitted tree, the job's only copy of the work, is left unreferenced. m3 exits 1 at that point and deletes its private outcome file, so the tree id is gone too.\n- A return 2 already parks NEW on refs/moe/rescue/<id>/<ts>.\n\nAsk: when the job was ok and the helper returns 1 with a valid tree (HEAD_MOVED, BASE_MISMATCH or DIRTY), park that tree before holding. Park it as a commit on top of the job's commit, in the same refs/moe/rescue/<id>/<ts> namespace, and give it one row. TREE_INVALID and COMMIT_FAILED have nothing valid to park.\n\nContext: chan-b6d8273b, where the m1 planner (architect-548034a1) raised it, and m3's comment \"Planner clarification 2\".",
+      "timestamp": "2026-11-01T19:20:46.295Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:10:54.033Z",
-  "updatedAt": "2026-11-01T14:25:25.934Z",
+  "updatedAt": "2026-11-01T19:20:46.295Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:06.253Z",

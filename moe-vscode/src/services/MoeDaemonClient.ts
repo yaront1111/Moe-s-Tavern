@@ -312,6 +312,58 @@ function declaresVerifiedLocal(file: string): boolean {
     throw new Error('executionProfile is not legacy, observe or verified-local');
 }
 
+// ---- Verified-local launch readiness: a mirror of JetBrains CQ-M07o/M07o1 (CQ-M07p) ----
+
+/** What .moe/project.json alone declares: absent, legacy or observe; verified-local; or unreadable strictly. */
+export type DeclaredProfile = 'legacy-like' | 'verified-local' | 'untrusted';
+
+/** A fresh strict read: never pins (runtimeProfile is unaffected) and never throws; unreadable is 'untrusted'. */
+export function declaredProfile(basePath: string): DeclaredProfile {
+    try {
+        if (basePath.trim() === '') { return 'legacy-like'; }
+        return declaresVerifiedLocal(path.join(basePath, '.moe', 'project.json')) ? 'verified-local' : 'legacy-like';
+    } catch (err) {
+        log(`Moe reads the declared execution profile as untrusted: ${errorText(err)}`);
+        return 'untrusted';
+    }
+}
+
+/** The daemon's held execution readiness, as sent in EXECUTION_READINESS (CQ-M07d wire). */
+export interface ExecutionReadiness {
+    profile: string;
+    ready: boolean;
+    missingCapabilities: string[];
+    evaluatedAt: string | null;
+}
+export type ReadinessFailure = 'NOT_CONNECTED' | 'DISCONNECTED' | 'TIMEOUT' | 'DAEMON_ERROR' | 'MALFORMED';
+/** Only `answered` carries a readiness; every failure is `failed`. */
+export type ReadinessReply = { answered: ExecutionReadiness } | { failed: ReadinessFailure };
+
+export const READINESS_TIMEOUT_MS = 20_000;
+const READINESS_REQUEST = 'GET_EXECUTION_READINESS';
+const READINESS_PROFILES = ['legacy', 'observe', 'verified-local', 'unreadable'];
+const MAX_MISSING_IDS = 64;
+const MAX_ID_LENGTH = 128;
+const isCapabilityId = (id: unknown): id is string => typeof id === 'string' && id.length >= 1 && id.length <= MAX_ID_LENGTH;
+
+/** Exactly the four fields, strictly; unknown keys are ignored and never kept. Wrong or contradictory gives null. */
+export function parseExecutionReadiness(payload: unknown): ExecutionReadiness | null {
+    if (!isPlainObject(payload)) { return null; }
+    const { profile, ready, missingCapabilities: ids, evaluatedAt } = payload;
+    if (typeof profile !== 'string' || !READINESS_PROFILES.includes(profile) || typeof ready !== 'boolean') { return null; }
+    if (!Array.isArray(ids) || ids.length > MAX_MISSING_IDS || !ids.every(isCapabilityId)) { return null; }
+    if (!hasOwn(payload, 'evaluatedAt') || (evaluatedAt !== null && typeof evaluatedAt !== 'string')) { return null; }
+    if (ready && ids.length > 0) { return null; }
+    return { profile, ready, missingCapabilities: [...ids], evaluatedAt };
+}
+
+/** An ERROR about a readiness request: its operation names it, or (an older daemon, no operation) its message does. */
+function isReadinessError(message: Record<string, unknown>): boolean {
+    const payload = isPlainObject(message.payload) ? message.payload : {};
+    return message.operation === READINESS_REQUEST || payload.operation === READINESS_REQUEST ||
+        [message.message, payload.message].some(text => typeof text === 'string' && text.includes(READINESS_REQUEST));
+}
+
 /**
  * `relative` under `root`, accepted as its real file only inside the real root (exact
  * comparison) and outside the real project (folded where the file system folds case).
@@ -576,6 +628,7 @@ export class MoeDaemonClient implements vscode.Disposable {
     private disposed = false;
 
     private state: StateSnapshot | undefined;
+    private readonly readinessWaiters = new Set<(reply: ReadinessReply) => void>();
 
     constructor(extensionPath: string) {
         this.extensionPath = extensionPath;
@@ -698,11 +751,7 @@ export class MoeDaemonClient implements vscode.Disposable {
                             return;
                         }
                         opened = true;
-                        log('Connected to Moe daemon');
-                        this.reconnectAttempts = 0;
-                        this.setConnectionState('connected');
-                        this.startPingInterval();
-                        this.requestState();
+                        this.handleSocketOpen(ws);
                         resolveOnce();
                     });
 
@@ -752,6 +801,49 @@ export class MoeDaemonClient implements vscode.Disposable {
         } finally {
             this.connectInProgress = false;
         }
+    }
+
+    /**
+     * CLIENT_HELLO is the socket's first frame, sent directly before 'connected' so no listener frame can precede it.
+     * planRevisions: every approval path sends expectedPlanRevision, and after a hello the daemon refuses approvals
+     * without that capability. verifiedLocal: the launcher honors execution readiness (CQ-M07p).
+     */
+    private handleSocketOpen(ws: WebSocket): void {
+        try {
+            ws.send(JSON.stringify({
+                type: 'CLIENT_HELLO',
+                payload: { protocolVersion: 1, capabilities: { planRevisions: true, verifiedLocal: true } }
+            }));
+        } catch (err) {
+            log(`Failed to send CLIENT_HELLO: ${errorText(err)}`);
+        }
+        log('Connected to Moe daemon');
+        this.reconnectAttempts = 0;
+        this.setConnectionState('connected');
+        this.startPingInterval();
+        this.requestState();
+    }
+
+    /**
+     * GET_EXECUTION_READINESS {refresh:true}. Never rejects: every failure resolves as a named `failed`.
+     * The reply carries no correlation id, so one reply answers every pending waiter.
+     */
+    requestExecutionReadiness(timeoutMs = READINESS_TIMEOUT_MS): Promise<ReadinessReply> {
+        if (this._connectionState !== 'connected') { return Promise.resolve({ failed: 'NOT_CONNECTED' }); }
+        return new Promise<ReadinessReply>((resolve) => {
+            const settle = (reply: ReadinessReply): void => {
+                if (!this.readinessWaiters.delete(settle)) { return; }
+                clearTimeout(timer);
+                resolve(reply);
+            };
+            const timer = setTimeout(() => settle({ failed: 'TIMEOUT' }), timeoutMs);
+            this.readinessWaiters.add(settle);
+            if (!this.sendMessage(READINESS_REQUEST, { refresh: true })) { settle({ failed: 'NOT_CONNECTED' }); }
+        });
+    }
+
+    private settleReadiness(reply: ReadinessReply): void {
+        for (const settle of [...this.readinessWaiters]) { settle(reply); }
     }
 
     disconnect(options: { manual?: boolean } = {}): void {
@@ -1531,8 +1623,19 @@ export class MoeDaemonClient implements vscode.Disposable {
                     log(`Archived ${payload?.archived ?? 0} done tasks`);
                     break;
 
+                case 'EXECUTION_READINESS': {
+                    const readiness = parseExecutionReadiness(payload);
+                    this.settleReadiness(readiness ? { answered: readiness } : { failed: 'MALFORMED' });
+                    break;
+                }
+
                 case 'ERROR': {
                     log(`Daemon error: ${message.message ?? payload?.message ?? 'unknown'}`);
+                    // A readiness failure answers the launcher, which shows its own message, never the generic error UI.
+                    if (isPlainObject(message) && isReadinessError(message)) {
+                        this.settleReadiness({ failed: 'DAEMON_ERROR' });
+                        break;
+                    }
                     // The daemon puts operation/code/codeName at the TOP level;
                     // the nested payload lookup is the older shape and stays on
                     // as the fallback. Reading only the nested one is why a
@@ -1583,6 +1686,8 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     private setConnectionState(state: ConnectionState): void {
         this._connectionState = state;
+        // No readiness request outlives its socket: close, disconnect() and dispose() all land here.
+        if (state === 'disconnected') { this.settleReadiness({ failed: 'DISCONNECTED' }); }
         this._onConnectionChanged.fire(state);
     }
 
