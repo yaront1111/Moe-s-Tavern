@@ -1,0 +1,33 @@
+{
+  "id": "task-83eef22e42c34b5ca764480fd4f2b68b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07o1] JetBrains daemon client for execution readiness",
+  "description": "Prerequisite slice carved out of CQ-M07o (task-8dbc76d7678b416bbfdbbbe9f58a33f8) by architect-b520bc90 on 2026-11-01. As one task, M07o measured about 540 lines across 10-11 files, past QA's 400-line cap and the 10-file plan limit. This slice is the plugin's /ws client half: M07o's DoD 5 plus the readiness request its launcher needs. CQ-M07o keeps the launcher decision and dependsOn this row. Design: mem:decision-cq-m07-verified-local-activation. Wire contract: CQ-M07d (task-b0485bb1), as planned.\n\nObjective: the JetBrains plugin negotiates client capabilities on every connection, and it can ask the daemon for execution readiness and wait a bounded time for the answer.\n\nDeliverable, in moe-jetbrains:\n- **New com/moe/model/ExecutionReadiness.kt.** Kept out of Models.kt, which CQ-M07l edits. It holds:\n  - `data class ExecutionReadiness(profile: String, ready: Boolean, missingCapabilities: List<String>, evaluatedAt: String?)`;\n  - `sealed interface ReadinessReply { Answered(readiness); Failed(reason: ReadinessFailure) }`;\n  - `enum class ReadinessFailure { NOT_CONNECTED, DISCONNECTED, TIMEOUT, DAEMON_ERROR, MALFORMED }`;\n  - a strict parser for the EXECUTION_READINESS payload. It accepts exactly the four fields: profile one of legacy, observe, verified-local or unreadable; ready a real JSON boolean; missingCapabilities an array of strings; evaluatedAt a string or null. Anything else is null, so it is never read as ready.\n- **CLIENT_HELLO.** MoeCommandSender sends `{\"protocolVersion\":1,\"capabilities\":{\"planRevisions\":true,\"verifiedLocal\":true}}`. MoeProjectService sends it on every WebSocket open, before GET_STATE.\n  - planRevisions must be declared. After any hello, the daemon refuses every plan approval unless planRevisions was negotiated (WebSocketServer.ts assertApprovalCapabilities). The plugin already sends expectedPlanRevision on approveTask and on the board drag.\n  - Declare no other capability. A second hello on the same socket is refused CLIENT_CAPABILITIES_LOCKED, so send it once per socket.\n- **The readiness request.** `MoeProjectService.requestExecutionReadiness(timeoutMs = 20_000): CompletableFuture<ReadinessReply>`. 20 s covers the daemon evaluator's 11 s provider-probe guard.\n  - It sends GET_EXECUTION_READINESS {\"refresh\":true}.\n  - It never completes exceptionally. When not connected, or when the send fails, it returns an already-completed Failed(NOT_CONNECTED).\n  - MoeMessageDispatcher routes EXECUTION_READINESS to a new callback, which completes every pending request with Answered, or with Failed(MALFORMED) for a payload the parser refuses.\n  - An ERROR whose operation is GET_EXECUTION_READINESS, or whose message names it, completes pending requests with Failed(DAEMON_ERROR). That covers the daemon's 'GET_EXECUTION_READINESS failed' and an older daemon's 'Unknown message type: GET_EXECUTION_READINESS'.\n  - Disconnect and dispose complete pending requests with Failed(DISCONNECTED). Each request completes with Failed(TIMEOUT) after timeoutMs and leaves the pending set.\n\nNOT in scope: TerminalAgentLauncher, RuntimeSelectionPolicy and any launch decision (CQ-M07o); VS Code (CQ-M07p); the daemon (CQ-M07d/d2); docs (the CQ-M07 sweep).\n\nVerification: ./gradlew test under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). From WSL: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\". A snapshot run of the exact commit also counts (mem:gotcha-jetbrains-gate-snapshot).",
+  "definitionOfDone": [
+    "On every WebSocket open the plugin sends CLIENT_HELLO {protocolVersion: 1, capabilities: {planRevisions: true, verifiedLocal: true}} before GET_STATE (JUnit on the exact payload and the send order).",
+    "requestExecutionReadiness sends GET_EXECUTION_READINESS {refresh: true}, and an EXECUTION_READINESS reply completes it as Answered with the strictly parsed profile, ready, missingCapabilities and evaluatedAt (JUnit).",
+    "A malformed reply, the daemon's GET_EXECUTION_READINESS error, no connection, a disconnect, or no reply within the timeout completes the request as Failed with that reason, never as Answered (JUnit, short timeout).",
+    "Plan approval still sends expectedPlanRevision after the hello, and PlanApprovalContractTest passes unchanged.",
+    "./gradlew test passes under the jetbrains-gradle lease."
+  ],
+  "taskRails": [
+    "Declare in CLIENT_HELLO only capabilities the plugin honors: planRevisions and verifiedLocal.",
+    "A failed, malformed, late or missing readiness answer is never reported as ready."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.075,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T11:11:14.527Z",
+  "updatedAt": "2026-11-01T11:11:14.527Z"
+}
