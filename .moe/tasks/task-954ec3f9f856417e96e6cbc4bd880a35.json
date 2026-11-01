@@ -104,7 +104,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -133,7 +133,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T12:44:42.788Z",
-  "updatedAt": "2026-11-01T21:05:35.876Z",
+  "updatedAt": "2026-11-01T21:55:43.166Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:30:43.181Z",
@@ -143,11 +143,14 @@
     "firstClaimAt": "2026-11-01T14:39:32.330Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-01T21:55:43.166Z",
+    "wallClockMs": 26170836
   },
   "contextFetchedBy": [
     "architect-30d804be",
-    "worker-5c5e1c38"
+    "worker-5c5e1c38",
+    "qa-1b5727b1"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -236,7 +239,52 @@
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
     "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    ".moe/tasks/task-954ec3f9f856417e96e6cbc4bd880a35.json",
+    ".moe/tasks/task-c7cead1b2bc24863bea5141129ef47b1.json"
+  ],
+  "completionSummary": "Shared frozen-gate integrity now clears skip-worktree. Both wrappers run two marking passes, each over the caller's pathspec: `--no-skip-worktree` first, then `--no-assume-unchanged`. update-index applies only its first marking option, so the old combined pass never cleared S bits.\n- sh: gate_integrity has 2 pipes, each `|| return 1`. The redundant S pass in gate_integrity_wt is gone.\n- ps1: Test-MoeGateIntegrity makes 2 Clear-MoeGateIndexFlags calls with whole literals, each `return $false`. Clear-MoeGateIndexFlags has no defaults now. The redundant pass in Test-MoeGateIntegrityWorktree is gone.\n- BOM kept. ParseFile reports 0 errors on 5.1 and 7.6.9.\n\nTests:\n- New frozen mode `skip-worktree-mutation`, byte-identical in postflight.sh and postflight.ps1 (suite cmp OK). It sets S on owned.txt and edits it, then sets S on ../seed.txt and deletes it, then exits 0. There is no assume-unchanged anywhere in it.\n- The mode is in all 5 hidden-mutation lists, so it asserts: 'inconclusive', PUSH-BLOCKED, branch unmoved, and a rescue ref.\n- parity-check.{sh,ps1}: the combined literal is replaced by the two split literals. RED before (missing from both wrappers), PASS after on sh, pwsh and 5.1.\n\nMutants, one mode per run, on a scratch snapshot, under both bash and PS 5.1:\n- A, the old combined pass: skip-worktree-mutation FAIL (\"stays PUSH-BLOCKED\" assertion, because it landed) and wt-hidden FAIL (\"qualityGate passed\").\n- B, the V pass dropped: wt-assume FAIL.\n- C1, the S pass without its pathspec: wt-pass FAIL.\n- C2, the V pass without its pathspec: survives, as expected. .moe entries hold only S bits (mem:gotcha-git-index-flags-sparse rule 5). The plan's \"(c) either pass\" overstates this. Both passes keep the pathspec anyway.\n\nVerification: the plan's exact command, 20:19:30-21:04:06Z, HEAD 0ac74a40 with the 6 files overlaid, EXIT=0.\n- PASS parity.\n- worktree-landing 18/0/0.\n- postflight-safe bash NONE/Z and powershell (PS 5.1) NONE/Z. NONE requires the PASS marker.\n- MOE_FRO",
+  "commits": [
+    {
+      "sha": "9df0c31b8d81dd454d32dae88ba2e5a77b17c067",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5c5e1c38@2026-11-01T20:11:11Z",
+      "paths": [
+        ".moe/tasks/task-954ec3f9f856417e96e6cbc4bd880a35.json",
+        ".moe/tasks/task-c7cead1b2bc24863bea5141129ef47b1.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-5c5e1c38",
+      "recordedAt": "2026-11-01T21:05:57.638Z",
+      "treeId": "dde89a17574f3daf6b27c503f499ecd52cdc3a9a",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/parity-check.sh",
     "scripts/tests/parity-check.ps1"
   ],
-  "completionSummary": "Shared frozen-gate integrity now clears skip-worktree. Both wrappers run two marking passes, each over the caller's pathspec: `--no-skip-worktree` first, then `--no-assume-unchanged`. update-index applies only its first marking option, so the old combined pass never cleared S bits.\n- sh: gate_integrity has 2 pipes, each `|| return 1`. The redundant S pass in gate_integrity_wt is gone.\n- ps1: Test-MoeGateIntegrity makes 2 Clear-MoeGateIndexFlags calls with whole literals, each `return $false`. Clear-MoeGateIndexFlags has no defaults now. The redundant pass in Test-MoeGateIntegrityWorktree is gone.\n- BOM kept. ParseFile reports 0 errors on 5.1 and 7.6.9.\n\nTests:\n- New frozen mode `skip-worktree-mutation`, byte-identical in postflight.sh and postflight.ps1 (suite cmp OK). It sets S on owned.txt and edits it, then sets S on ../seed.txt and deletes it, then exits 0. There is no assume-unchanged anywhere in it.\n- The mode is in all 5 hidden-mutation lists, so it asserts: 'inconclusive', PUSH-BLOCKED, branch unmoved, and a rescue ref.\n- parity-check.{sh,ps1}: the combined literal is replaced by the two split literals. RED before (missing from both wrappers), PASS after on sh, pwsh and 5.1.\n\nMutants, one mode per run, on a scratch snapshot, under both bash and PS 5.1:\n- A, the old combined pass: skip-worktree-mutation FAIL (\"stays PUSH-BLOCKED\" assertion, because it landed) and wt-hidden FAIL (\"qualityGate passed\").\n- B, the V pass dropped: wt-assume FAIL.\n- C1, the S pass without its pathspec: wt-pass FAIL.\n- C2, the V pass without its pathspec: survives, as expected. .moe entries hold only S bits (mem:gotcha-git-index-flags-sparse rule 5). The plan's \"(c) either pass\" overstates this. Both passes keep the pathspec anyway.\n\nVerification: the plan's exact command, 20:19:30-21:04:06Z, HEAD 0ac74a40 with the 6 files overlaid, EXIT=0.\n- PASS parity.\n- worktree-landing 18/0/0.\n- postflight-safe bash NONE/Z and powershell (PS 5.1) NONE/Z. NONE requires the PASS marker.\n- MOE_FRO"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5c5e1c38@2026-11-01T20:11:11Z",
+    "at": "2026-11-01T21:05:57.638Z"
+  },
+  "completedAt": "2026-11-01T21:55:43.166Z",
+  "reviewCompletedAt": "2026-11-01T21:55:43.166Z",
+  "reviewSummary": "APPROVED. Completion 9df0c31b, on moe/work-2026-10-24 == HEAD. Its 6 script files equal the worktree. Non-board diff +29/-23 (net 6) over the 6 planned files, plus 2 board JSONs. No drift.\nDiff:\n- sh gate_integrity: two `ls-files -z \"$@\"` passes, --no-skip-worktree then --no-assume-unchanged, each `|| return 1`. gate_integrity_wt keeps its presence check and exclude call.\n- ps1: two Clear-MoeGateIndexFlags calls with whole literals, each `return $false`. No param defaults, and no other caller.\n- BOM kept. Parity literals split in both checkers. No doc cites the old literal.\nDoD1:\n- git 2.43 repro: the old pass leaves diff-files rc 0 for S+edit and S+delete. The new passes give rc 1 for S+edit, S+delete, S+V+edit and V+edit, and an empty set gives rc 0.\n- skip-worktree-mutation asserts inconclusive, PUSH-BLOCKED and the branch unmoved on both engines.\nDoD2:\n- Suite cmp OK.\n- My mutant A (the old combined pass), MOE_FROZEN_TEST_ONLY=skip-worktree-mutation: bash FAIL (\"stays PUSH-BLOCKED\", \"qualityGate passed\"); PS 5.1 FAIL the same way, landing beb7570b. Good bytes PASS on both.\nDoD3: re-ran the task.verification command on `git archive 9df0c31b scripts` + overlay (cmp OK), job control, SigIgn=0x5. 21:09:14-21:54:02Z (44m48s), EXIT=0:\n- suite cmp OK; PASS parity-check.sh\n- worktree-landing 18/0/0\n- bash {\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}\n- powershell (5.1) {\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}\nContention (a proxy, not CPU):\n- Start 21:08:46Z: 13 live seats, 2 CODING (152f84fc, c7cdb959). Gradle leases free. tasklist: java 2, node 8, powershell 1, pwsh 2.\n- End 21:54:41Z: 13 live seats, 1 CODING. Leases free. tasklist: java 2, node 7, powershell 4.\nNotes:\n- Only the S-pass exclude is load-bearing; the V-pass mutant survives, as the worker said.\n- git applies assume-unchanged whatever the argv order, so the fix needs two calls; reordering flags does nothing.\n- Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
