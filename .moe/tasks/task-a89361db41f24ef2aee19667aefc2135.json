@@ -1,0 +1,35 @@
+{
+  "id": "task-a89361db41f24ef2aee19667aefc2135",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07g0] Read-only seat liveness projection",
+  "description": "Read-only daemon slice split out of CQ-M07g (task-9076afab319b4056989e370039efba3d) by architect-b520bc90 on 2026-11-01. That task's own instruction applies: \"If today's daemon projections cannot prove 'seat gone', split out a read-only daemon slice rather than guess.\"\n\n**Why today's projections cannot prove it:**\n- **list_workers** shows registered workers only, and nothing about their attempts.\n- **get_context servedContext** names a task's open attempt, but not which worker owns it.\n- **An attempt can outlive its worker record.** moe.deregister_worker \"close[s] every attempt of this worker still in the finalizing phase (keyed on the attempt, so it works even after the worker record was pruned)\". So \"no worker record\" does not prove \"no open attempt\".\n\nDesign: mem:decision-cq-m07-verified-local-activation, decision 1 (one VM per seat). Depends on CQ-M07d (task-b0485bb1) only because both add one registration to packages/moe-daemon/src/tools/index.ts.\n\nObjective: one read-only MCP call answers whether a worker seat is gone: no worker record or DEAD, and no open execution attempt carries its workerId. CQ-M07g's seat-VM cleanup calls it over loopback /mcp (scripts/local-runner/vm-control.mjs mcpCaller) with no workerId.\n\nDeliverable (packages/moe-daemon):\n- **New tool `moe.get_seat_liveness { workerId }`.** It returns exactly `{ workerId, registered: boolean, status: <worker status> | null, openAttempts: <count> }`.\n  - registered/status come from state.workers.\n  - openAttempts counts the attempts in state.attempts whose workerId matches and whose phase is running, finalizing or reconciling (attemptStore OPEN_PHASES). Attempts whose worker record is gone count too.\n- **attemptStore.ts.** It exports a small counting helper, so OPEN_PHASES stays private.\n- **Read-only.** No state write, no touchWorker or lastActivityAt change, no activity record and no chat post. A missing, non-string, blank, over-long or control-character workerId is refused INVALID_INPUT.\n- **Registration.** The tool goes in getTools(), with TOOL_AUDIENCE 'wrapper'. It is called by scripts, never shown to agent seats.\n\nNOT in scope:\n- the ledger and vm-control changes (CQ-M07g);\n- provisioning (CQ-M07i);\n- the MCP_SERVER.md section, deferred to the CQ-M07 docs sweep as CQ-M07d did. No test requires it.\n\nVerification: in a git-archive snapshot with this task's files overlaid, under env -i with the nvm Node 24 PATH: cd <snapshot>/packages/moe-daemon && npm ci && npx tsc --noEmit && npx vitest run src/tools/getSeatLiveness.test.ts src/tools/registry.test.ts src/state/attemptStore.test.ts",
+  "definitionOfDone": [
+    "moe.get_seat_liveness returns registered false, status null and openAttempts 0 for an unknown worker, and registered true with the worker's status for a registered one (vitest).",
+    "openAttempts counts that worker's running, finalizing and reconciling attempts, ignores closed ones and other workers' attempts, and still counts an open attempt whose worker record was pruned (vitest).",
+    "The call writes nothing (no worker activity change, no activity record, no file change), and a malformed workerId is refused INVALID_INPUT (vitest).",
+    "The tool is registered (tools/registry.test.ts passes) with TOOL_AUDIENCE 'wrapper'.",
+    "The named vitest command passes in a git-archive snapshot."
+  ],
+  "taskRails": [
+    "Read-only: the tool never mutates state, touches a worker or grants anything."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b0485bb1cacf4d3b84979e9256078737"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.115,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T11:31:34.778Z",
+  "updatedAt": "2026-11-01T11:31:34.778Z"
+}

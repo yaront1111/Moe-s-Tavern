@@ -11,6 +11,9 @@ import com.moe.model.Decision
 import com.moe.model.MetricsAggregate
 import com.moe.model.MoeState
 import com.moe.model.PinEntry
+import com.moe.model.ExecutionReadinessJson
+import com.moe.model.ReadinessFailure
+import com.moe.model.ReadinessReply
 import com.moe.util.MoeJson
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -22,7 +25,9 @@ class MoeMessageDispatcher(
     private val updateState: (MoeState) -> Unit,
     private val onProjectMismatch: () -> Unit,
     private val onDaemonShuttingDown: () -> Unit,
-    private val onWorkerDeregistered: (workerId: String) -> Unit = {}
+    private val onWorkerDeregistered: (workerId: String) -> Unit = {},
+    /** Called on the receiving thread (completing a future needs no EDT). */
+    private val onExecutionReadiness: (ReadinessReply) -> Unit = {}
 ) {
     private val log = Logger.getInstance(MoeMessageDispatcher::class.java)
     private val gson = Gson()
@@ -35,6 +40,11 @@ class MoeMessageDispatcher(
     /** Strict: a JSON string only. Never coerces a number and never throws on an object or array. */
     private fun JsonElement?.stringOrNull(): String? =
         if (this != null && this.isJsonPrimitive && this.asJsonPrimitive.isString) this.asString else null
+
+    /** An ERROR about a readiness request: its operation, or (older daemons, no operation) its message, names it. */
+    private fun isReadinessError(json: JsonObject): Boolean =
+        json.get("operation").stringOrNull() == READINESS_REQUEST ||
+            json.get("message").stringOrNull()?.contains(READINESS_REQUEST) == true
 
     fun addListener(listener: MoeStateListener) {
         if (isDisposed()) {
@@ -177,7 +187,20 @@ class MoeMessageDispatcher(
                     publishState(newState)
                 }
             }
+            "EXECUTION_READINESS" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject
+                val readiness = payload?.let { ExecutionReadinessJson.parse(it) }
+                onExecutionReadiness(
+                    if (readiness != null) ReadinessReply.Answered(readiness)
+                    else ReadinessReply.Failed(ReadinessFailure.MALFORMED)
+                )
+            }
             "ERROR" -> {
+                if (isReadinessError(json)) {
+                    // The launcher shows its own dialog: no generic error notification.
+                    onExecutionReadiness(ReadinessReply.Failed(ReadinessFailure.DAEMON_ERROR))
+                    return
+                }
                 val errorMessage = json.get("message").safeAsString() ?: "Unknown error"
                 val operation = json.get("operation").safeAsString() ?: "unknown"
                 publishError(operation, errorMessage)
@@ -572,5 +595,9 @@ class MoeMessageDispatcher(
         invokeLater {
             listeners.forEach { it.onAccountAdded(accountId) }
         }
+    }
+
+    private companion object {
+        const val READINESS_REQUEST = "GET_EXECUTION_READINESS"
     }
 }

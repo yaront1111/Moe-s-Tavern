@@ -318,6 +318,32 @@ class MoeCommandSender(
         }
     }
 
+    /**
+     * Sends CLIENT_HELLO, once per socket (a second hello is refused
+     * CLIENT_CAPABILITIES_LOCKED). It declares only what this plugin honors.
+     * planRevisions is required: after any hello the daemon refuses approvals
+     * without it (WebSocketServer.ts assertApprovalCapabilities), and
+     * [approveTask] and the board drag already send expectedPlanRevision.
+     * Best-effort and quiet: no ensureConnected, never throws.
+     */
+    fun sendClientHello(): Boolean {
+        val payload = JsonObject().apply {
+            addProperty("protocolVersion", 1)
+            add("capabilities", JsonObject().apply {
+                addProperty("planRevisions", true)
+                addProperty("verifiedLocal", true)
+            })
+        }
+        return sendMessage("CLIENT_HELLO", payload)
+    }
+
+    /**
+     * Sends GET_EXECUTION_READINESS {refresh:true}. Best-effort and quiet: the
+     * caller checks the connection itself, so a probe publishes no status.
+     */
+    fun requestExecutionReadiness(): Boolean =
+        sendMessage("GET_EXECUTION_READINESS", JsonObject().apply { addProperty("refresh", true) })
+
     fun requestActivityLog(limit: Int = 100) {
         if (!ensureConnected()) return
         val payload = JsonObject().apply { addProperty("limit", limit) }

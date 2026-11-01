@@ -13,9 +13,43 @@
   "taskRails": [
     "Never fall back to a host launch of a worker/QA agent CLI under verified-local; refuse instead."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the daemon-client half to moe-vscode/src/services/MoeDaemonClient.ts, plus part 1 of a new test file. Read `mem:task-task-8dbc76d7678b416bbfdbbbe9f58a33f8-handoff`, `mem:task-task-83eef22e42c34b5ca764480fd4f2b68b-handoff` and `mem:gotcha-client-hello-locks-approval-capabilities` first. CQ-M07o and CQ-M07o1 (JetBrains) are the reference behavior. Mirror their semantics and sentences.\n\n**Size budget for the whole task: at most 400 net changed lines** (runtime ~160, tests ~170).\n\n**Keep the new logic inside MoeDaemonClient.ts and AgentLauncher.ts.** A new module imported by AgentLauncher.ts would break protected-runtime.test.cjs's vm loader, which resolves only the deps it is given.\n\n**1. Declared profile.** Export `declaredProfile(basePath): 'legacy-like' | 'verified-local' | 'untrusted'` next to runtimeProfile.\n- It is a fresh read through the existing private declaresVerifiedLocal: true is 'verified-local', false is 'legacy-like', and any throw is 'untrusted'.\n- It never pins, never throws and logs as runtimeProfile does. A blank basePath is 'legacy-like'.\n- runtimeProfile is unchanged.\n\n**2. Readiness types and parser.**\n- Types: `ExecutionReadiness { profile; ready; missingCapabilities: string[]; evaluatedAt: string | null }`, `ReadinessFailure = 'NOT_CONNECTED' | 'DISCONNECTED' | 'TIMEOUT' | 'DAEMON_ERROR' | 'MALFORMED'` and `ReadinessReply = { answered: ExecutionReadiness } | { failed: ReadinessFailure }`. Constant `READINESS_TIMEOUT_MS = 20_000`.\n- `parseExecutionReadiness(payload: unknown): ExecutionReadiness | null` is strict like CQ-M07o1's:\n  - a plain object;\n  - profile one of legacy, observe, verified-local or unreadable;\n  - ready a real boolean;\n  - missingCapabilities an array of at most 64 strings, each 1-128 characters;\n  - evaluatedAt present, as a string or null;\n  - ready true with ids present is null;\n  - unknown keys ignored and never retained.\n\n**3. CLIENT_HELLO.** Move the body of the ws 'open' handler that follows the stale-socket check (the log, reconnectAttempts, setConnectionState, startPingInterval and requestState) into `private handleSocketOpen(ws: WebSocket): void`. clearHandshakeTimer, `opened` and resolveOnce stay in the closure.\n- handleSocketOpen FIRST calls `ws.send(JSON.stringify({ type: 'CLIENT_HELLO', payload: { protocolVersion: 1, capabilities: { planRevisions: true, verifiedLocal: true } } }))` in a try/catch that logs.\n  - It sends directly, not through sendMessage: sendMessage needs state 'connected', and setConnectionState fires listeners synchronously, which could send frames ahead of the hello.\n- Declare planRevisions because after any hello the daemon refuses approvals without it. VS Code already sends expectedPlanRevision (approveTask, the board drag), and the daemon refuses token-less approval today anyway, so no new failure mode appears. Declare nothing else.\n\n**4. The readiness request.** `requestExecutionReadiness(timeoutMs = READINESS_TIMEOUT_MS): Promise<ReadinessReply>` never rejects:\n- not connected: resolve { failed: 'NOT_CONNECTED' } and send nothing;\n- otherwise register a pending waiter (with its timer) BEFORE sendMessage('GET_EXECUTION_READINESS', { refresh: true }). A false send resolves NOT_CONNECTED;\n- the timer resolves TIMEOUT and removes the waiter.\n- handleMessage case 'EXECUTION_READINESS': parse, then resolve EVERY pending waiter with answered, or failed MALFORMED, and clear their timers. The reply has no correlation id.\n- In case 'ERROR', first: when the top-level or payload operation is GET_EXECUTION_READINESS, or the message contains it, resolve every waiter with DAEMON_ERROR and return without firing _onError. That covers the daemon's two errors and an older daemon's 'Unknown message type'. The launcher shows its own message.\n- The current socket's close, disconnect() and dispose() resolve waiters with DISCONNECTED.\n\n**5. Tests: new moe-vscode/tests/verified-local-launch.test.cjs, part 1.** Reuse the transpile-into-vm harness of tests/protected-runtime.test.cjs and the fake-socket pattern of tests/plan-approval-client.test.cjs (client['ws'], client['_connectionState'], client['handleMessage']).\n- handleSocketOpen with a fake ws: frame 0 is CLIENT_HELLO with exactly that payload, and GET_STATE follows.\n- A round trip: the request frame is { type: 'GET_EXECUTION_READINESS', payload: { refresh: true } }, and a delivered EXECUTION_READINESS gives the parsed answered value.\n- Malformed: each bad field gives failed MALFORMED.\n- Errors: an ERROR with operation GET_EXECUTION_READINESS, and one with the message 'Unknown message type: GET_EXECUTION_READINESS', each give DAEMON_ERROR, and onError is not fired.\n- Timing and connection: timeoutMs 50 gives TIMEOUT; disconnect() gives DISCONNECTED; not connected gives NOT_CONNECTED with no frame.\n- declaredProfile over temp projects: absent, legacy and observe give legacy-like; verified-local gives verified-local; 'strong' and malformed JSON give untrusted.\n\nError handling: nothing here throws to a caller. Every failure resolves as a named failed reply and never as answered-ready.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "newFiles": [
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Gate worker and QA launches in moe-vscode/src/util/AgentLauncher.ts, wire the readiness source in moe-vscode/src/extension.ts, and add part 2 of the tests.\n\n**1. AgentLauncher.ts.** Export pure helpers, with the same rules as JetBrains VerifiedLocalLaunch:\n- `isVmSeat(role, declared)`: worker or qa, and declared !== 'legacy-like'. 'untrusted' counts, failing closed: a project that might be verified-local never gets a host fallback.\n- `agentRefusal(command)`: null for claude and codex (the guest JOBS table). Otherwise 'Verified-local runs worker and QA agents only in a Moe VM, which has claude and codex. \\'<shown>\\' cannot run there, so no agent was started. Pick Claude or Codex.' `<shown>` is trimmed, capped at 200 characters, with control characters replaced by '?'. For the custom provider, it is the custom command.\n- `verifiedLocalDecision(seats, reply)`: { launch: true } only for answered with profile 'verified-local' and ready. Otherwise { refused: message }, using CQ-M07o's sentences:\n  - not ready: 'Moe did not start the <seats> agent: verified-local is not ready on this machine. Missing: a, b.' plus 'Nothing was started, and Moe never runs these agents on this machine instead.';\n  - another profile: named;\n  - each failure: one fixed sentence.\n  - Ids and the profile keep only [A-Za-z0-9._-], each capped at 64 characters, at most 32 shown.\n\n**2. launchAgent** becomes `async` and returns Promise<void>. options gains `readiness?: () => Promise<ReadinessReply>`.\n- **Not a VM seat** (absent, legacy or observe, or architect or governor): today's code path, byte-for-byte. It reaches no await, so the terminal is still created synchronously.\n- **VM seat:**\n  a. Run today's synchronous checks first, in today's order: workspace, runtime selection, the protected-runtime refusal, script presence. Existing messages stay identical, so protected-runtime.test.cjs L2 and L3 keep passing.\n  b. agentRefusal on the resolved command: show it, and stop.\n  c. `const reply = options?.readiness ? await options.readiness() : { failed: 'NOT_CONNECTED' }`. A missing source fails closed and never launches.\n  d. A refusal: showErrorMessage(message) and return. createTerminal is never called.\n  e. Launch: today's protected launch, the platform's installed wrapper (native PowerShell on Windows).\n- **launchAllAgents:** architect at 0 ms and governor at 4500 ms are unchanged. For worker and qa:\n  - not VM seats: today's timers;\n  - VM seats: request readiness ONCE at call time. The 1500 ms and 3000 ms timers launch through a shared decision. A refusal shows ONE error and opens no terminal for either.\n\n**3. extension.ts.** Every launchAgent and launchAllAgents call (around :334, :340, :359) passes `readiness: () => daemonClient ? daemonClient.requestExecutionReadiness() : Promise.resolve({ failed: 'NOT_CONNECTED' })`. Mark the promise with `void` so lint stays clean.\n\n**4. Existing test.** In moe-vscode/tests/protected-runtime.test.cjs, L1 launches a verified-local worker and expects its terminal at once. Pass options { readiness: async () => ({ answered: { profile: 'verified-local', ready: true, missingCapabilities: [], evaluatedAt: null } }) }, await launchAgent, and keep its expected command unchanged. No other row changes.\n\n**Tests in verified-local-launch.test.cjs, part 2.** Use a fake terminal API like protected-runtime.test.cjs's loadLauncher, which records createTerminal and showErrorMessage.\n- **DoD 1.** For absent, legacy and observe projects, each of the 4 roles launches synchronously with a command equal to what today's builder gives for the same inputs (the expectedCommand approach). For verified-local, architect and governor still launch synchronously, without consulting readiness.\n- **DoD 2.** A verified-local worker with readiness:\n  - not ready, with ids, gives zero terminals and one error naming each id;\n  - NOT_CONNECTED, TIMEOUT and DAEMON_ERROR each give zero terminals and the named reason;\n  - no readiness option at all gives a refusal, never a launch;\n  - an untrusted project behaves the same.\n- **DoD 3.** A ready reply launches the worker with the installed platform wrapper (ps1 on Windows, sh elsewhere, as protected-runtime.test.cjs does) and the protected marker.\n- **DoD 4.** gemini, grok and custom 'my-cli' give zero terminals and an error naming the CLI, checked before any readiness request (the source is never called).\n- **launchAllAgents** under verified-local with not ready: architect and governor terminals open, the worker and QA ones do not, and there is exactly one error. Use node:test mock timers, or await the shared decision.\n\nError handling: the try/catch still covers the async path. Any failure shows one error and opens no terminal, and a VM seat never reaches the legacy script.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/tests/protected-runtime.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, after steps 1-2, in a Linux snapshot (`mem:gotcha-vscode-gate-from-wsl`). Never run npm ci or install in the shared checkout (global rail).\n\nRun exactly this. Its command, exit code and output tail are the complete_task evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-7a0dadf9-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/util/AgentLauncher.ts moe-vscode/src/extension.ts moe-vscode/tests/protected-runtime.test.cjs moe-vscode/tests/verified-local-launch.test.cjs \"$S\" && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'umask 022 && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'`\n\n- The whole-repo archive matters: two existing tests read moe-jetbrains/src/test/resources/client-verdicts.json.\n- Expect exit 0. Cite the test counts, passed and skipped (Windows-only rows skip on Linux), and confirm verified-local-launch.test.cjs and protected-runtime.test.cjs pass.\n\nState in the completion summary that a live daemon answer needs CQ-M07d. These tests use fakes speaking its planned wire format.\n\nError handling: if any part fails, fix the cause and re-run the whole command fresh; never cite a partial run.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read `git diff HEAD -- moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/util/AgentLauncher.ts moe-vscode/src/extension.ts moe-vscode/tests/protected-runtime.test.cjs`, plus the new test file, as an attacker would.\n\n- **No host fallback.** No worker or QA path under verified-local or untrusted calls createTerminal without an answered verified-local ready reply. A missing readiness source refuses.\n- **Legacy unchanged.** Legacy and observe launches and architect/governor launches are byte-for-byte today's, and synchronous.\n- **Never falsely ready.** The parser is strict, ready with ids is refused, and every failure is named.\n- **Hello.** It is sent once per socket, as the first frame, declaring only planRevisions and verifiedLocal.\n- **Concurrency.** A reply racing a timeout resolves each waiter once. Waiters always clear their timers and leave the set. launchAllAgents shows exactly one refusal.\n- **Messages.** Daemon text is sanitized, no secret or env value is shown, and the sentences match CQ-M07o's.\n- **Scope.** No Multipass, no provisioning, no agent CLI started by the extension, and no Accounts UI.\n- **Size.** At most 400 net changed lines, measured with `git diff --numstat HEAD` plus `wc -l` of the new test file. If it is over, file an EPIC ADD_RAIL size exception (moe.propose_rail) with the exact numstat before complete_task, and cite it.\n\nFix anything found, re-run step 3's gate, and submit its fresh output. Error handling and every test row must still hold after any fix.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -31,5 +65,87 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:23.273Z",
-  "updatedAt": "2026-11-01T08:08:23.273Z"
+  "updatedAt": "2026-11-01T11:25:12.594Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T11:19:44.514Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T11:25:12.573Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code reaches parity with CQ-M07o. Under a declared verified-local (or strictly unreadable) profile, a worker or QA launch runs today's synchronous runtime checks, refuses gemini, grok and custom commands, then asks the daemon for readiness (GET_EXECUTION_READINESS {refresh:true}, 20 s bound). It launches the installed platform wrapper only for an answered verified-local ready reply; anything else shows one error naming the missing capabilities or the failure, and opens no terminal. Architect and governor, and every role under absent, legacy or observe, launch exactly as today. Every socket's first frame is CLIENT_HELLO declaring planRevisions and verifiedLocal.",
+    "acceptanceCriteria": [
+      "Absent, legacy or observe: every role's command is unchanged and launched synchronously.",
+      "verified-local and not ready, not connected, timed out, daemon error, or no readiness source: one error naming the reason or each missing id, and zero terminals.",
+      "verified-local and ready: worker and QA launch the installed platform wrapper (native PowerShell on Windows); architect and governor are unchanged.",
+      "gemini, grok and custom commands are refused for VM seats, naming the CLI, before any readiness request.",
+      "npm run lint, npm run compile and npm test pass in a Linux snapshot."
+    ],
+    "invariants": [
+      "No worker/QA agent CLI is launched on the host under verified-local: a refusal never calls createTerminal.",
+      "Legacy launches are byte-for-byte unchanged and synchronous.",
+      "A failed, malformed, contradictory, late or missing readiness answer is never treated as ready.",
+      "CLIENT_HELLO declares only planRevisions and verifiedLocal, once per socket, as its first frame.",
+      "The extension never runs Multipass, provisions or starts an agent CLI itself."
+    ],
+    "compatibility": [
+      "runtimeProfile, selectProtectedAgentRuntime and every existing message and refusal text are unchanged.",
+      "protected-runtime.test.cjs changes only L1 (adds a ready readiness source and awaits).",
+      "launchAgent and launchAllAgents keep their signatures; options.readiness is new and optional, and missing means refuse for VM seats only."
+    ],
+    "approvedScope": [
+      "MoeDaemonClient.ts: declaredProfile, ExecutionReadiness, ReadinessFailure, ReadinessReply, READINESS_TIMEOUT_MS, parseExecutionReadiness, handleSocketOpen with CLIENT_HELLO, requestExecutionReadiness, the EXECUTION_READINESS case, the readiness ERROR diversion and waiter failure on close, disconnect and dispose.",
+      "AgentLauncher.ts: isVmSeat, agentRefusal, verifiedLocalDecision, async launchAgent with options.readiness, and launchAllAgents' single shared decision.",
+      "extension.ts: passing the readiness source to every launch call."
+    ],
+    "reuse": [
+      "The private declaresVerifiedLocal (strict read) and selectProtectedAgentRuntime.",
+      "protected-runtime.test.cjs's transpile and vm harness, plus the loadLauncher fake terminal; plan-approval-client.test.cjs's fake socket pattern.",
+      "CQ-M07o's decision table and sentences, and CQ-M07o1's wire handling."
+    ],
+    "sourceAssumptions": [
+      "MoeDaemonClient.ts: runtimeProfile at :281, private declaresVerifiedLocal at :296, ws 'open' handler at :693 (requestState at :705), sendMessage at :785 (requires _connectionState 'connected'), approveTask at :860 (always sends expectedPlanRevision), handleMessage at :1306, case 'ERROR' at :1534.",
+      "AgentLauncher.ts: launchAgent at :213 (synchronous; selects protectedness through runtimeProfile; createTerminal at :283), launchAllAgents at :298 (setTimeout staggers of 1500, 3000 and 4500 ms); there is no WSL mode in VS Code.",
+      "extension.ts calls launchAgent and launchAllAgents at :334, :340 and :359, with daemonClient at module scope.",
+      "tests run as `node --test tests/*.test.cjs`, transpiling TS with typescript into a vm context with a stubbed vscode; protected-runtime.test.cjs L1 (:227) launches a verified-local worker synchronously.",
+      "Daemon wire per the CQ-M07d plan: EXECUTION_READINESS {profile, ready, missingCapabilities, evaluatedAt}; ERROR shapes as in mem:gotcha-client-hello-locks-approval-capabilities."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-7a0dadf9-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/util/AgentLauncher.ts moe-vscode/src/extension.ts moe-vscode/tests/protected-runtime.test.cjs moe-vscode/tests/verified-local-launch.test.cjs \"$S\" && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'umask 022 && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- **A separate VerifiedLocalLaunch.ts module, as in JetBrains.** Rejected: AgentLauncher.ts would import it, and protected-runtime.test.cjs's vm loader resolves only the deps it passes, so every existing launcher test would break.\n- **Gating only when a readiness source is passed.** Rejected as fail-open: a missing source refuses VM seats instead.\n- **Sending the hello through sendMessage.** Rejected: it needs state 'connected', and setConnectionState fires listeners synchronously, which could put other frames ahead of the hello.\n- **Splitting client and launcher like JetBrains.** Not needed: the VS Code change is about 330 lines over 5 files, with no WSL branch.",
+    "codebaseInsights": "- **VS Code has no WSL agent mode,** so the native PowerShell wrapper on Windows is automatic (isWin goes to buildPowerShellCommand, and selectProtectedAgentRuntime picks the platform wrapper).\n- **runtimeProfile pins** a verified-local project for the session. declaredProfile must be a fresh, unpinned read so the gate follows the current declaration, as JetBrains does.\n- **Test harness.** Tests transpile TS with typescript into vm contexts with a stubbed vscode, and loadLauncher records createTerminal and showErrorMessage, which is the fake terminal API.\n- **Revision-less approval** is already refused by the daemon (prop-5e7763ed), so declaring planRevisions creates no new refusal.",
+    "risks": "- **Async launchAgent.** The legacy path must reach no await, or tests that inspect terminals synchronously (L4 and the DoD 1 rows) break.\n- **Timers in tests.** launchAllAgents uses setTimeout staggers. Use mock timers or await the shared decision; never sleep for real.\n- **The Edit-tool BOM trap** (`mem:gotcha-vscode-gate-from-wsl`): never paste a literal U+FEFF.\n- **No live run yet.** A live ready daemon is first exercised in the CQ-M07 real-board run.",
+    "keyFiles": [
+      "moe-vscode/src/util/AgentLauncher.ts",
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/extension.ts",
+      "moe-vscode/tests/protected-runtime.test.cjs",
+      "moe-vscode/tests/plan-approval-client.test.cjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6ac51c42b4bcb018ae7e4a0897d85ca436ec0244",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T11:25:12.594Z",
+  "approvedPlanRevision": 1
 }
