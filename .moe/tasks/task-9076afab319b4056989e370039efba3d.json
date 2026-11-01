@@ -138,7 +138,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:59.472Z",
-  "updatedAt": "2026-11-01T19:17:56.711Z",
+  "updatedAt": "2026-11-01T19:18:17.932Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T08:16:03.094Z",
@@ -227,7 +227,42 @@
   "filesModified": [
     "scripts/local-runner/lifecycle.mjs",
     "scripts/tests/local-runner-vm-control.test.mjs",
+    "scripts/local-runner/vm-control.mjs",
+    ".moe/tasks/task-8dbc76d7678b416bbfdbbbe9f58a33f8.json",
+    ".moe/tasks/task-9076afab319b4056989e370039efba3d.json"
+  ],
+  "completionSummary": "CQ-M07g: the owned-VM ledger gets seat owners, and cleanup and reconcile delete or retire a seat record only on full proof. 3 files; numstat 395 (+338/-57), under 400, so no size rail.\n\n**lifecycle.mjs**\n- validSeatOwner is exactly {workerId ≤128, runner `<pid>@<token>` ≤200, host ≤255}, with no control chars.\n- validRecord accepts exactly one owner shape. A seat record carries workerId, runner, host and platform; platform is stamped from process.platform at reserve.\n- validOwner is checked first, so attempt record bytes and key order are unchanged.\n- sameOwner gates provisionOwned and deleteOwned.\n- ledger.retire is a CAS unlink of a reserved seat record.\n- seatHoldReason checks, in order: seat gone, runner exactly false, lease free. A throw or any other answer holds the record. Reasons: seat-registered, seat-attempt-open, seat-unknown, runner-alive, runner-unknown.\n- reconcileSeats: a held record gets no provider call. A launched record is phase-synced. A reserved record that is present becomes collision; one that is absent has its key files unlinked and is retired.\n- reconcileOwned skips seat records; its shape is unchanged.\n- cleanupOwned routes seat records to the proof, so callers that pass no seat deps keep them as seat-unknown.\n- Key files are unlinked via purgeOwned.\n\n**vm-control.mjs**\n- seatInstances is a new root key; `instances` keeps its 5 keys.\n- runnerProbe calls kill(pid, 0) only, for a record of this host and platform; EPERM reads true, ESRCH false.\n- localRunnerHost mirrors both wrappers' host spelling.\n- seatStateOf maps moe.get_seat_liveness (M07g0).\n- The reconcile report adds `held` and `retired`.\n\n**Tests:** VC-SL1-3, VC-S2, VC-C3 (DoD 3), VC-R2 (DoD 4), VC-P1.\n- Gate: 406 tests, 405 pass, 0 fail, 1 pre-existing skip. local-runner.test.mjs is unedited and green.\n- pinned-client, daemon-bind, dispatch and bundle: 56/56.\n- 26-mutant sweep: all killed.\n\n**Follow-ups:**\n- The IDE reason maps show the new seat codes as unknown codes.\n- The cleanup",
+  "commits": [
+    {
+      "sha": "493ea8a4b3dd88b5586a950858a46ea6cb20e94b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-83c3fcad@2026-11-01T18:47:44Z",
+      "paths": [
+        ".moe/tasks/task-8dbc76d7678b416bbfdbbbe9f58a33f8.json",
+        ".moe/tasks/task-9076afab319b4056989e370039efba3d.json",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "recordedBy": "worker-83c3fcad",
+      "recordedAt": "2026-11-01T19:18:17.932Z",
+      "treeId": "664c7757396cbe41a8cac2c49c6ba941cce2b88c",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-vm-control.test.mjs",
+    "scripts/local-runner/lifecycle.mjs",
     "scripts/local-runner/vm-control.mjs"
   ],
-  "completionSummary": "CQ-M07g: the owned-VM ledger gets seat owners, and cleanup and reconcile delete or retire a seat record only on full proof. 3 files; numstat 395 (+338/-57), under 400, so no size rail.\n\n**lifecycle.mjs**\n- validSeatOwner is exactly {workerId ≤128, runner `<pid>@<token>` ≤200, host ≤255}, with no control chars.\n- validRecord accepts exactly one owner shape. A seat record carries workerId, runner, host and platform; platform is stamped from process.platform at reserve.\n- validOwner is checked first, so attempt record bytes and key order are unchanged.\n- sameOwner gates provisionOwned and deleteOwned.\n- ledger.retire is a CAS unlink of a reserved seat record.\n- seatHoldReason checks, in order: seat gone, runner exactly false, lease free. A throw or any other answer holds the record. Reasons: seat-registered, seat-attempt-open, seat-unknown, runner-alive, runner-unknown.\n- reconcileSeats: a held record gets no provider call. A launched record is phase-synced. A reserved record that is present becomes collision; one that is absent has its key files unlinked and is retired.\n- reconcileOwned skips seat records; its shape is unchanged.\n- cleanupOwned routes seat records to the proof, so callers that pass no seat deps keep them as seat-unknown.\n- Key files are unlinked via purgeOwned.\n\n**vm-control.mjs**\n- seatInstances is a new root key; `instances` keeps its 5 keys.\n- runnerProbe calls kill(pid, 0) only, for a record of this host and platform; EPERM reads true, ESRCH false.\n- localRunnerHost mirrors both wrappers' host spelling.\n- seatStateOf maps moe.get_seat_liveness (M07g0).\n- The reconcile report adds `held` and `retired`.\n\n**Tests:** VC-SL1-3, VC-S2, VC-C3 (DoD 3), VC-R2 (DoD 4), VC-P1.\n- Gate: 406 tests, 405 pass, 0 fail, 1 pre-existing skip. local-runner.test.mjs is unedited and green.\n- pinned-client, daemon-bind, dispatch and bundle: 56/56.\n- 26-mutant sweep: all killed.\n\n**Follow-ups:**\n- The IDE reason maps show the new seat codes as unknown codes.\n- The cleanup"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-83c3fcad@2026-11-01T18:47:44Z",
+    "at": "2026-11-01T19:18:17.932Z"
+  }
 }
