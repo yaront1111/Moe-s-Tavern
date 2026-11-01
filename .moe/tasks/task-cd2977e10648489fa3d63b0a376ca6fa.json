@@ -38,7 +38,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -54,7 +54,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:50:43.192Z",
-  "updatedAt": "2026-11-01T19:01:14.550Z",
+  "updatedAt": "2026-11-01T20:18:07.593Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:53:34.314Z",
@@ -64,11 +64,14 @@
     "firstClaimAt": "2026-11-01T18:49:23.197Z",
     "plannedStepCount": 2,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 2
+    "executedStepCount": 2,
+    "doneAt": "2026-11-01T20:18:07.593Z",
+    "wallClockMs": 5324396
   },
   "contextFetchedBy": [
     "architect-548034a1",
-    "worker-152f84fc"
+    "worker-152f84fc",
+    "qa-174e8876"
   ],
   "tier": "light",
   "effort": "medium",
@@ -144,5 +147,9 @@
     "kind": "completion",
     "sessionId": "worker-152f84fc@2026-11-01T18:59:22Z",
     "at": "2026-11-01T19:00:51.098Z"
-  }
+  },
+  "completedAt": "2026-11-01T20:18:07.593Z",
+  "reviewCompletedAt": "2026-11-01T20:18:07.593Z",
+  "reviewSummary": "Reviewed completion 647c74db (on moe/work-2026-10-24). Diff: +6 lines in executionReadiness.test.ts plus the task's own .moe json; nothing else. Matches plan: ALONE row 'valid key through a directory symlinked into the project' (junction, keyFor through link, expects ['authenticated-runner-evidence']); ALONE row 'install path whose name holds a control character' (win32 skip, else a REAL dir inst\\nall outside the project, expects ['protected-host-control-plane']); PROBES row 'an externally SIGKILLed client' ({killed:false,signal:'SIGKILL'} -> [...ISOLATION,'provider-probe-failed']).\n\nRe-ran the gate myself in a fresh git-archive snapshot (not the shared checkout): git diff --quiet HEAD on executionReadiness.ts + runnerChannel.ts clean (DoD 4); npm ci 0; tsc --noEmit 0; vitest executionReadiness + runnerChannel = 158/158 (117+41), none skipped.\n\nMutants in the snapshot, restored after each (cmp vs checkout copy identical): M1 realpath(keyPath)->keyPath fails exactly the symlinked-dir row (1 failed/116 passed); M2 timedOut killed===true->signal==='SIGKILL' fails exactly the externally-SIGKILLed row; M3 drop !CONTROL.test from absolute() fails exactly the control-character row. DoD 1-3 each pin their guard; no row is vacuous.\n\nRails: test-only, one test file, injected runProbe so no real Multipass, no forbidden patterns, no deleted/weakened tests. 6 net lines; mid-epic. Not run: JetBrains and other packages (no runtime change). Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
