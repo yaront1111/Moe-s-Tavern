@@ -302,7 +302,7 @@ and `verified-local` stays refused until certification and the client gates pass
   stdin and installs the root-owned supervisor, the MCP shim and the locked job identities `moe-agent` and `moe-check`.
   Readiness needs a clean cloud-init `done`, then zero mounts, the installed hashes, the credential denied to both
   identities, locked unprivileged identities and bounded resources.
-- **Supervisor modes** (`guest-supervisor.py`, run as root through `multipass exec`; its header defines every code).
+- **Supervisor modes** (`guest-supervisor.py`, run as root over the guest SSH route; its header defines every code).
   `bridge` runs one agent job, `check` one approved check, `materialize` copies a snapshot into the workspace, `export`
   streams the workspace's changes back, `verify` compares the workspace with its manifest, and `agents`, `toolchain` and
   `dependencies` install pinned bytes. Exit codes: 0 done, 64 usage, 65 malformed input, 66 no workspace, 71 the job
@@ -311,6 +311,25 @@ and `verified-local` stays refused until certification and the client gates pass
   82 (the candidate's own package files were refused). In the guest a guard starts each job as its locked identity with
   no new privileges and in a fresh PID namespace (a check job also in its own loopback-only network namespace, under
   its rlimits), so no descendant, `setsid` or not, outlives the job.
+- **Host-guest transport** (`guest-ssh.mjs`, `guest-stream.mjs`). All eight supervisor modes stream over the in-box
+  OpenSSH client at a pinned path, never a PATH lookup: `/usr/bin/ssh` on Linux and macOS,
+  `%SystemRoot%\System32\OpenSSH\ssh.exe` on Windows.
+  - The argv is fixed: `-F none`, ed25519 only, and no agent, forwarding, PTY or ProxyCommand. The guest's host key is
+    pinned through cloud-init `ssh_keys` and checked under `HostKeyAlias=<owned name>`.
+  - The address is `multipass info` `ipv4[0]`, read fresh for every stream. A Windows `hcs` install and a WSL `qemu`
+    install can both number zone1 `10.97.0.0/24`, so one guest IP can exist on both hosts at once, or be recycled. The
+    fresh read plus the HostKeyAlias pin turn either case into ssh exit 255 and a fixed code, never a session with the
+    wrong guest.
+  - Provisioning writes a fresh per-VM client key to `<home>/.moe/guest-ssh/<name>.key` and the pinned host key line to
+    `<name>.known_hosts` (both 0600, never overwritten). Purging the VM removes both. The guest accepts the key only
+    for the default user, as `restrict,command="exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor \"$SSH_ORIGINAL_COMMAND\""`,
+    so it starts only supervisor modes. Readiness also checks that neither job identity can read the guest host key
+    (`readHostKey`).
+  - `multipass exec` now carries only stdin-less queries capped at 64 KiB (`MAX_PROBE_BUFFER`).
+  - Why: Multipass 1.17.0 `exec` truncates stdin on Linux, delivers none on Windows (#3749) and stalls Windows stdout
+    near 2 MiB (#5478).
+  - Error handling: there is no fallback to `exec` stdio or to the host. An unusable route fails closed with a fixed
+    code.
 - **Check lifecycle** (`check-lifecycle.mjs`, `check-session.mjs`, `check-dispatch.mjs`). Each run gets a fresh VM:
   provisioning and readiness; the pinned Node toolchain and an offline dependency tree, built on the host from the
   approved definition's lockfiles (`toolchain-cache.mjs`, `dependency-cache.mjs`); a copy-only materialization; an

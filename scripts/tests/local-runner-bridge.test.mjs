@@ -12,7 +12,7 @@ import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import {
-  AGENT_JOBS, MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, bridgeArgv, createFrameDecoder, encodeFrame, jobFrame as hostJobFrame, parseGuestFrame,
+  AGENT_JOBS, MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, createFrameDecoder, encodeFrame, jobFrame as hostJobFrame, parseGuestFrame,
   scopeRequest, TOOLS,
 } from '../local-runner/guest-bridge.mjs';
 import { GUEST_LAYOUT, JOB_IDENTITIES } from '../local-runner/guest-bootstrap.mjs';
@@ -222,17 +222,6 @@ test('B14 a malformed binding is BRIDGE_INPUT_INVALID and a non-request frame is
   assert.equal(scopeRequest(req('moe.get_context'), { ...BINDING, workerId: 'w'.repeat(128) }).args.workerId.length, 128);
   for (const frame of [HELLO, parseGuestFrame(OUTPUT), { ...REQUEST, id: 0 }, { ...REQUEST, extra: 1 }, null]) {
     refuses(() => scopeRequest(frame, BINDING), 'BRIDGE_PROTOCOL_VIOLATION');
-  }
-});
-
-test('B15 bridgeArgv is the one fixed supervisor command for an owned instance name only', () => {
-  const name = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
-  const argv = bridgeArgv(name);
-  assert.deepEqual(argv, ['exec', '--no-map-working-directory', name, '--', 'sudo', '-n', '/opt/moe/bin/moe-supervisor', 'bridge']);
-  assert.ok(Object.isFrozen(argv));
-  for (const bad of ['primary', 'moe-vm-', `moe-vm-${'A'.repeat(20)}`, `moe-vm-${'a'.repeat(21)}`, `moe-vm-${'a'.repeat(19)} `,
-    'moe-vm- aaaaaaaaaaaaaaaaaaa', '', undefined, 7]) {
-    refuses(() => bridgeArgv(bad), 'BRIDGE_INPUT_INVALID', String(bad));
   }
 });
 
@@ -2267,6 +2256,9 @@ test('GS3 sshStreamArgv returns the exact frozen argv, with drive paths in /, an
   const slashed = `C:/Users/me x/.moe/guest-ssh/${GS_NAME}`;
   const windows = sshStreamArgv({ ...GS_POSIX, identityFile: `${drive}.key`, knownHostsFile: `${drive}.known_hosts`, mode: 'bridge' });
   assert.deepEqual([...windows], gsArgv({ ...GS_POSIX, key: `${slashed}.key`, kh: `${slashed}.known_hosts`, mode: 'bridge' }));
+  // A drive path already in / is accepted as is (R14a QA: a backslash-only drive rule survived without this).
+  assert.deepEqual([...sshStreamArgv({ ...GS_POSIX, identityFile: `${slashed}.key`, knownHostsFile: `${slashed}.known_hosts`, mode: 'bridge' })],
+    [...windows]);
   for (const argv of [posix, windows]) assert.equal(argv[argv.indexOf('CheckHostIP=no') - 1], '-o');
   for (const mode of SUPERVISOR_MODES) assert.equal(sshStreamArgv({ ...GS_POSIX, mode }).at(-1), mode);
   const paths = ['rel/key', 'C:rel', '-oProxyCommand=x', '/a%b', '/a$b', '/a"b', "/a'b", '/a`b', '/a\nb', '/a\x7fb', '/a\\b', '\\\\srv\\share\\k', '//srv/share/k', 42];
@@ -2277,7 +2269,7 @@ test('GS3 sshStreamArgv returns the exact frozen argv, with drive paths in /, an
   }
   for (const input of [null, [], 'x', undefined]) gsRefuses(() => sshStreamArgv(input), String(input));
   // The restated owned-name rule agrees with lifecycle.mjs isOwnedInstanceName.
-  for (const name of [GS_NAME, ownedInstanceName(), 'vm', '', `${GS_NAME}0`, `moe-vm-${'G'.repeat(20)}`, 42]) {
+  for (const name of [GS_NAME, ownedInstanceName(), 'vm', '', `${GS_NAME}0`, `moe-vm-${'G'.repeat(20)}`, `moe-vm-${'g'.repeat(20)}`, 42]) {
     let threw = false;
     try { transportFiles(name, '/k'); } catch { threw = true; }
     assert.equal(threw, !isOwnedInstanceName(name), String(name));
@@ -2470,4 +2462,41 @@ test('BS8 an abort after hello ends stdin, the 74 exit beats the kill timer and 
   controller.abort();
   await rejectsWith(run.promise, 'SESSION_ABORTED');
   assert.deepEqual([statuses, proc.kills, proc.stdin.destroyed, run.observations], [[74], [], true, []]);
+});
+
+// Governor Linux Gate 0 (comment-888759e9 on task-fd196d13): the Windows hcs and the WSL qemu Multipass installs both
+// number zone1 10.97.0.0/24, so one guest IP can exist on both hosts at once, and an IP can be recycled. Each session
+// reads the address fresh, and the host key is checked under HostKeyAlias=<owned name> against that VM's own
+// known_hosts, so another guest answering at the address is ssh's own 255: a fixed code, never a session with it.
+test('B-XWIRE a reused or cross-wired guest IP fails closed under the HostKeyAlias pin', { timeout: 30_000 }, async () => {
+  const addresses = ['10.97.0.41', '10.97.0.42'];
+  const reads = [];
+  const run = async (executable, args) => {
+    await infoRun(executable, args); // refuses anything but the exact info read
+    reads.push(addresses[reads.length]);
+    return { stdout: JSON.stringify({ errors: [], info: { [NAME]: { ...INFO, ipv4: [reads.at(-1)] } } }), stderr: '' };
+  };
+  const first = fakeProvider();
+  const done = openSession(first, { provider: { ...SSH_ROUTE, run, spawn: first.spawn } });
+  assert.deepEqual(await exchange(first, done, [REQUEST], 1), { observation: EXIT, executionReady: false });
+  // The address moved, and the guest now answering there holds another host key.
+  const second = fakeProvider();
+  const crossed = openSession(second, { provider: { ...SSH_ROUTE, run, spawn: second.spawn } });
+  await until(() => second.calls.length === 1, 'second spawn');
+  second.stderr.write('@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.\n');
+  second.exit(255);
+  await assert.rejects(crossed.promise, error => error?.code === 'SESSION_PROVIDER_FAILED' && Object.keys(error).join() === 'code'
+    && !error.message.includes(addresses[1]) && !/IDENTIFICATION|verification|[\\/]/.test(error.message));
+  assert.deepEqual([second.kills, crossed.outputs, crossed.observations, crossed.forwarded], [[], [], [], []]);
+  assert.deepEqual(reads, addresses); // one fresh read per session, nothing cached
+  const argvs = [first, second].map(proc => proc.calls[0][1]);
+  const files = transportFiles(NAME, BRIDGE_KEYS);
+  assert.deepEqual(argvs, addresses.map(address => sshStreamArgv({ ...files, name: NAME, address, mode: 'bridge' })));
+  // Whatever the IP, the pin is the owned name and that VM's own files: the two argvs differ only in the address.
+  assert.deepEqual(argvs[0].filter((arg, i) => arg !== argvs[1][i]), [addresses[0]]);
+  for (const argv of argvs) {
+    assert.ok(argv.includes(`HostKeyAlias=${NAME}`));
+    assert.ok(argv.find(arg => arg.startsWith('UserKnownHostsFile=')).endsWith(`/${NAME}.known_hosts"`));
+    assert.ok(argv[argv.indexOf('-i') + 1].endsWith(`/${NAME}.key`));
+  }
 });

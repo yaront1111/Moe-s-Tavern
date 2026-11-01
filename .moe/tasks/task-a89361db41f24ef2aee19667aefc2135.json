@@ -13,9 +13,49 @@
   "taskRails": [
     "Read-only: the tool never mutates state, touches a worker or grants anything."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Counting helper, tool and registration.\n(a) state/attemptStore.ts: export countOpenAttempts(state, workerId): number. It makes one pass over state.attempts.values(), counting attempts where attempt.workerId === workerId and OPEN_PHASES.has(attempt.phase); OPEN_PHASES stays private. Read-only: no write, no detached() copies needed. Doc comment: it counts attempts whose worker record is gone too, because moe.deregister_worker and the restart purge can leave a finalizing attempt behind its pruned worker.\n(b) New tools/getSeatLiveness.ts exports getSeatLivenessTool(_state): ToolDefinition, following tools/listWorkers.ts.\n  - Name 'moe.get_seat_liveness'.\n  - inputSchema { type: 'object', properties: { workerId: { type: 'string' } }, required: ['workerId'], additionalProperties: false }.\n  - Description: wrapper-only and read-only; answers whether a seat is gone (no worker record or DEAD, and no open attempt carrying its workerId); a match is never proof a process is alive.\n  The handler reads `(args as { workerId?: unknown } | undefined)?.workerId`, so null or non-object args are refused too. readWorkerId:\n  - non-string: invalidInput('workerId', ...);\n  - more than 255 chars: refused BEFORE any trim or scan, an O(1) refusal under the state mutex, exactly as tools/claimNextTask.ts readIdentityField orders it;\n  - blank after trim: refused;\n  - hasControlChar (exported by state/candidateStore.ts): refused.\n  255 matters: CQ-M07g's ledger caps workerId at 128, so every id it records is accepted here.\n  Then `const worker = state.workers.get(workerId)` and return exactly { workerId, registered: worker !== undefined, status: worker?.status ?? null, openAttempts: countOpenAttempts(state, workerId) }. No state write, no touchWorker or lastActivityAt change, no activity record, no chat post and no emitter call. Not `blocking`: it is a fast read under the mutex McpAdapter already takes.\n(c) tools/index.ts: import the factory, add it to getTools(), and add `'moe.get_seat_liveness': 'wrapper'` to TOOL_AUDIENCE. toolAudience.test.ts requires TOOL_AUDIENCE keys to equal the registered names exactly.\nerror handling: every refusal is a MoeError with codeName INVALID_INPUT; there is no other failure path, because state reads cannot throw.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/getSeatLiveness.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Tests in new tools/getSeatLiveness.test.ts, using ToolTestHarness the way state/attemptStore.test.ts and tools/heartbeat.test.ts do: init, setupMoeFolder({ schemaVersion: 6 }), createEpic, createTask, createWorker, await state.load(), and cleanup in afterEach. Seed attempts with openAttempt(h.state, { taskId, workerId, runnerId, workspace }); openAttempt allows one open attempt per task and does not check the assignee. Use setAttemptPhase for the finalizing, reconciling and closed attempts. Call the tool through getSeatLivenessTool(h.state).handler(args, h.state). Cases:\n1. DoD 1. An unknown id gives exactly toEqual({ workerId: 'worker-x', registered: false, status: null, openAttempts: 0 }). A registered IDLE worker gives { workerId, registered: true, status: 'IDLE', openAttempts: 0 }. A DEAD record gives registered true, status 'DEAD'.\n2. DoD 2.\n  - worker-1 holds running (task-1), finalizing (task-2), reconciling (task-3) and closed (task-4) attempts, and worker-2 holds a running attempt on task-5. worker-1 gives openAttempts 3 and worker-2 gives 1.\n  - An attempt opened for 'worker-gone', which has no worker record (the post-prune shape), gives { registered: false, status: null, openAttempts: 1 }.\n3. DoD 3, writes nothing. worker-1 has a fixed old lastActivityAt. Snapshot every file under h.moePath (relative path to sha256 of its bytes, walked recursively) plus structuredClone(h.state.workers.get('worker-1')). Call the tool for worker-1, worker-gone and an unknown id. Both snapshots must be unchanged, lastActivityAt included.\n4. DoD 3, refusals. Each of these rejects with a MoeError whose codeName is INVALID_INPUT: no args, {}, { workerId: 42 }, '', '   ', a 256-char id, 'w\\nx', 'w\\u007fx'. A 255-char id is accepted.\n5. DoD 4. getTools({} as StateManager) names include it; TOOL_AUDIENCE['moe.get_seat_liveness'] === 'wrapper'; toolsForRole(tools, role) excludes it for architect, worker, qa and governor.\nAssert exact values, never mere truthiness, so a handler that does nothing fails.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/getSeatLiveness.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run once (DoD 5). Run it in a git-archive snapshot outside the checkout: the shared checkout is the live runtime, so never npm ci, build or test there.\nS=$(mktemp -d /tmp/m07g0-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/attemptStore.ts packages/moe-daemon/src/tools/index.ts packages/moe-daemon/src/tools/getSeatLiveness.ts packages/moe-daemon/src/tools/getSeatLiveness.test.ts; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'umask 022 && npm ci && npx tsc --noEmit && npx vitest run src/tools/getSeatLiveness.test.ts src/tools/registry.test.ts src/tools/toolAudience.test.ts src/state/attemptStore.test.ts'\nIt must exit 0. If the shared tools/index.ts carries a peer's uncommitted hunk that breaks the snapshot, overlay only your own hunks (git diff of that file applied in the snapshot) and say so in the evidence.\nThe fresh output is the complete_task verification evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this diff, as the final step (load adversarial-self-review). Check:\n1. Can any code path in the handler write state, touch a worker, append activity or emit? Grep the new file for state method calls.\n2. Does an over-long id get refused before any scan?\n3. Do prototype-name ids such as 'constructor' and 'toString' answer registered false, with no throw? (Map lookups.)\n4. Is a worker record present but DEAD reported as registered true with status 'DEAD', for the consumer to map?\n5. Is the reply's key set exactly the four keys?\n6. Is OPEN_PHASES still private?\n7. Is the tool absent from every seat's tools/list?\nIf any byte changes, re-run step 3's exact command and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -31,5 +71,65 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T11:31:34.778Z",
-  "updatedAt": "2026-11-01T11:31:34.778Z"
+  "updatedAt": "2026-11-01T11:52:01.308Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T11:48:41.078Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T11:52:01.286Z",
+  "executionContract": {
+    "intendedBehavior": "A wrapper-only, read-only MCP tool moe.get_seat_liveness { workerId } returns exactly { workerId, registered, status, openAttempts }. openAttempts counts that worker's running, finalizing and reconciling attempts, including ones whose worker record was pruned. CQ-M07g's vm-control calls it over loopback /mcp to prove a seat gone.",
+    "invariants": [
+      "The call never writes state, files, activity, chat or worker presence.",
+      "OPEN_PHASES stays private to attemptStore.ts.",
+      "Malformed workerId is INVALID_INPUT; over-long is refused before any scan."
+    ],
+    "compatibility": [
+      "No existing tool, wire shape or record changes; TOOL_AUDIENCE gains one 'wrapper' entry."
+    ],
+    "sourceAssumptions": [
+      "McpAdapter tools/call never filters by TOOL_AUDIENCE and never touches workers generically (server/McpAdapter.ts tools/call branch).",
+      "attemptStore.ts OPEN_PHASES = running, finalizing, reconciling; openAttempt checks no assignee; setAttemptPhase only forbids leaving closed.",
+      "toolAudience.test.ts requires TOOL_AUDIENCE keys to equal registered tool names exactly; registry.test.ts requires every *Tool factory registered."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/m07g0-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/attemptStore.ts packages/moe-daemon/src/tools/index.ts packages/moe-daemon/src/tools/getSeatLiveness.ts packages/moe-daemon/src/tools/getSeatLiveness.test.ts; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'umask 022 && npm ci && npx tsc --noEmit && npx vitest run src/tools/getSeatLiveness.test.ts src/tools/registry.test.ts src/tools/toolAudience.test.ts src/state/attemptStore.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Extending list_workers, or get_context servedContext, was rejected. Neither can say whether an open attempt carries a pruned worker's id, and changing their shapes touches consumers. A dedicated wrapper tool is additive.",
+    "codebaseInsights": "- invalidInput() carries codeName INVALID_INPUT.\n- hasControlChar is exported from state/candidateStore.ts.\n- ToolTestHarness provides createWorker/createTask; openAttempt allows one open attempt per task.\n- No test requires an MCP_SERVER.md section; it is deferred to the CQ-M07 docs sweep.",
+    "risks": "- The consumer contract is fixed by CQ-M07g's plan (vm-control seatStateOf): reply keys and the 'DEAD' status spelling must match exactly.\n- tools/index.ts is also edited by CQ-M07d, which is why this task dependsOn it.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/tools/index.ts",
+      "packages/moe-daemon/src/tools/listWorkers.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/toolAudience.test.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6745373907e8adb7b39c0f914b73c491aa3de0d7",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T11:52:01.308Z",
+  "approvedPlanRevision": 1
 }

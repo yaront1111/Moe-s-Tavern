@@ -121,7 +121,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:05:46.941Z",
-  "updatedAt": "2026-11-01T11:47:08.628Z",
+  "updatedAt": "2026-11-01T11:48:30.417Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T08:59:21.881Z",
     "plannedStepCount": 6,
@@ -209,7 +209,8 @@
     "scripts/tests/local-runner-check.test.mjs",
     "scripts/tests/local-runner.test.mjs",
     ".moe/tasks/task-08062ce85dc94dcd80c62053e30f561f.json",
-    ".moe/tasks/task-bb1502b1fcb04f0e99fa5328be05ef4e.json"
+    ".moe/tasks/task-bb1502b1fcb04f0e99fa5328be05ef4e.json",
+    ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json"
   ],
   "completionSummary": "CQ-R14d3: check sessions run the supervisor's check mode over the pinned OpenSSH stream, never `multipass exec`.\n\n**Runtime**\n- check-session.mjs:\n  - isOwnedInstanceName joined the input check, so CHECK_SESSION_INPUT_INVALID still comes before any call.\n  - The provider is frozen and copied at entry.\n  - The only spawn is `await openGuestStream({name, mode:'check', provider})`; a transport refusal or spawn throw is 'infra-failure' with nothing spawned.\n  - watch(): an abort that landed during the info read takes stop(s,true), and the frame is written only while not closing.\n  - The budget still starts at spawn. ssh 255 is always 'infra-failure' with exitCode null. 79-82 are unchanged.\n  - The checkArgv import is dropped; the export and C1 stay for fd196d13.\n- certify-bridge.mjs: watchedSession passes `{...context.provider, executable, spawn: watched}`, so run, ssh and keyDir reach the route. The header now names sshStreamArgv instead of snapshotArgv and checkArgv.\n\n**Tests**\n- local-runner-check.test.mjs:\n  - CHECK_ROUTE and checkCall wiring for hostCheck, C3, C4, C7 and C9.\n  - C5 and C8b wait one setImmediate before scripting, because the spawn now follows the async info read.\n  - New rows CS1-CS8:\n    - CS1: pinned and injected ssh, exact argv, no exec.\n    - CS2: 4 refusals, 0 spawns.\n    - CS3: real supervisor behind a frame-cutting carrier; python exits 74; infra-failure.\n    - CS4: dead stdin gives timeout plus SIGKILL.\n    - CS5: stdout stall gives timeout.\n    - CS6: 255 before and after hello gives infra-failure with exitCode null; 79-82 contrast.\n    - CS7: abort during info; zero writes, SIGKILL.\n    - CS8: watchedSession pass-through.\n- local-runner.test.mjs:\n  - streamFor helper.\n  - CB2, CB4, GN1, CC4, LC1, LC2 and CJ6 expect the SSH route; CB2's ids gain one 'info'.\n  - containmentRig's session provider aliases its never-launched VM's info read to GUEST (infoAs). This is wiring only, and the change exec keeps its own name.\n\n**Evidence**\n- Fresh snap",
   "commits": [
@@ -246,6 +247,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "6745373907e8adb7b39c0f914b73c491aa3de0d7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-c5835a34@2026-11-01T11:38:06Z",
+      "paths": [
+        ".moe/tasks/task-08062ce85dc94dcd80c62053e30f561f.json",
+        ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json"
+      ],
+      "recordedBy": "qa-c5835a34",
+      "recordedAt": "2026-11-01T11:48:30.417Z",
+      "treeId": "4e6b0eb9f3b95403d341709952503a60858291a4",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -257,9 +274,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-cef53f62@2026-11-01T10:59:03Z",
-    "at": "2026-11-01T11:23:51.087Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-c5835a34@2026-11-01T11:38:06Z",
+    "at": "2026-11-01T11:48:30.417Z"
   },
   "completedAt": "2026-11-01T11:47:08.628Z",
   "reviewCompletedAt": "2026-11-01T11:47:08.628Z",

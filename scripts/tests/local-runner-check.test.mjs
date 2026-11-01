@@ -11,7 +11,7 @@ import { MAX_HOST_FRAME_BYTES, createFrameDecoder, encodeFrame, parseGuestFrame 
 import { spawn as spawnChild } from 'node:child_process';
 import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
-import { checkArgv, checkFrame as hostCheckFrame } from '../local-runner/guest-bridge.mjs';
+import { checkFrame as hostCheckFrame } from '../local-runner/guest-bridge.mjs';
 import {
   DEPENDENCIES_CANDIDATE_INVALID, DEPENDENCIES_FAILED, MAX_BUDGET_MS, MAX_CHECK_TAIL_BYTES, PROTECTED_CHANGED, PROTECTED_MISMATCH, runCheckSession,
 } from '../local-runner/check-session.mjs';
@@ -1163,7 +1163,7 @@ test('KI9 a fault that is not the candidate\'s in any directory, or a package.js
     }
   });
 
-// CQ-R11c: the host check session. C1-C2 cover guest-bridge.mjs's checkArgv and checkFrame, C3-C6 runCheckSession through
+// CQ-R11c: the host check session. C1-C2 cover guest-bridge.mjs's checkFrame, C3-C6 runCheckSession through
 // a spawn-compatible fake provider, and C7 runCheckSession through the real supervisor's check mode.
 const NAME = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
 const OID = 'a'.repeat(40);
@@ -1187,11 +1187,7 @@ const CHECK_ROUTE = Object.freeze({ run: infoRun, ssh: CHECK_SSH, keyDir: CHECK_
 const checkCall = (name = NAME) => [CHECK_SSH, sshStreamArgv({ ...transportFiles(name, CHECK_KEYS), name, address: '10.0.0.2', mode: 'check' }),
   { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
 
-test('C1 checkArgv is the fixed check argv for owned names only, and checkFrame is the exact check frame or BRIDGE_INPUT_INVALID', () => {
-  const argv = checkArgv(NAME);
-  assert.deepEqual(argv, ['exec', '--no-map-working-directory', NAME, '--', 'sudo', '-n', '/opt/moe/bin/moe-supervisor', 'check']);
-  assert.ok(Object.isFrozen(argv));
-  for (const name of ['vm', '', 'moe-x', `${NAME}0`, 42, undefined]) assert.throws(() => checkArgv(name), { code: 'BRIDGE_INPUT_INVALID' }, String(name));
+test('C1 checkFrame is the exact check frame or BRIDGE_INPUT_INVALID', () => {
   assert.deepEqual(hostCheckFrame(HOST_CHECK), literalFrame(HOST_CHECK));
   for (const check of [withCheck({ id: 'a'.padEnd(64, '9._-Z') }), withCheck({ command: 'x'.repeat(1000) }), withCheck({ command: ' a\xa0b ' }),
     ...[many(2000), [], entries('a'.repeat(500)), entries('\u{1F600}'.repeat(250)), entries('a.b', 'a/b'), entries('\uffff', '\u{10000}')]

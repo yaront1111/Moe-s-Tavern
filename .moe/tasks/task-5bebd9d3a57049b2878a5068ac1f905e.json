@@ -1,0 +1,30 @@
+{
+  "id": "task-5bebd9d3a57049b2878a5068ac1f905e",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: daemon repairPolicy.test.ts H1-H3 fail since CQ-R14d3 moved the check session onto the SSH route",
+  "description": "Found by QA (qa-c5835a34) on 2026-11-01 while re-running a full daemon gate at HEAD 67453739 for another row.\n\nSymptom: packages/moe-daemon/src/delivery/repairPolicy.test.ts, \"decideRepair over real host check sessions\", rows H1, H2 and H3 fail. The full suite gives 222 files: 3 failed, 6698 passed, 20 skipped (git-archive snapshot, env -i, Node 24.21.0, npm ci, tsc --noEmit clean, npm test). H1 expects outcome code-failure with exitCode 82, but gets infra-failure with exitCode null.\n\nCause: 6ac51c42 (CQ-R14d3, task-08062ce85dc94dcd80c62053e30f561f, DONE) changed runCheckSession in scripts/local-runner/check-session.mjs to open its stream through openGuestStream (guest-stream.mjs).\n- openGuestStream first reads the guest address through provider.run, which defaults to execFile of a REAL `multipass info <name> --format json`. It also needs ssh and keyDir.\n- R14d3 updated scripts/tests/local-runner-check.test.mjs (CHECK_ROUTE: a fake run via infoOf, plus string ssh and keyDir).\n- It did not update this daemon test, which imports check-session.mjs directly. The test's exitingProvider(code) supplies only spawn, so the address read fails and every H session settles infra-failure.\n\nProof, an A/B in one snapshot: repairPolicy.test.ts passes 46/46 with check-session.mjs from 41680ea5 (before R14d3) and fails 3 of 46 with HEAD's.\n\nImpact:\n- Every full daemon-suite gate at HEAD shows these 3 failures: workers' and QA's snapshot gates, and CI's daemon test:coverage job.\n- On a host with multipass on PATH, the H rows would exec a real `multipass info`.\n\nExpected fix (the architect confirms): test-side. Give the H rows' fake provider the SSH-route shape the scripts test uses: a fake run that answers only `info <owned name> --format json` with an ipv4 address, plus ssh and keyDir strings. Allow for the spawn now following an async info read; see the R14d3 section of the gotcha-local-runner-tests memory. The runtime check-session.mjs looks intended and stays unchanged unless the architect finds a runtime defect.",
+  "definitionOfDone": [
+    "repairPolicy.test.ts H1-H3 pass again against scripts/local-runner/check-session.mjs as landed in 6ac51c42, and every existing H1-H3 expectation is kept: none is weakened or deleted.",
+    "The H rows' fake provider never runs a real multipass or ssh binary: its run answers the info read, and ssh and keyDir are strings only.",
+    "The full daemon vitest suite passes in a git-archive snapshot (env -i, Node 24, npm ci, tsc --noEmit, npm test), and the completion cites the counts."
+  ],
+  "taskRails": [
+    "Fix the test fixture in packages/moe-daemon/src/delivery/repairPolicy.test.ts. Change scripts/local-runner/check-session.mjs only if the plan names a runtime defect."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 317.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T11:59:05.110Z",
+  "updatedAt": "2026-11-01T11:59:05.110Z"
+}

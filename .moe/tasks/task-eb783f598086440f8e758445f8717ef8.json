@@ -11,9 +11,59 @@
     "The named tests pass in a git-archive snapshot."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "New scripts/local-runner/seat-capacity.mjs, part 1: the formula and the host-wide count. Read mem:gotcha-local-runner-tests first: no forbidden-pattern literals even in tests; numstat additions plus deletions count against 400.\n(a) capacityError(code): an Error with fixed message text, as lifecycle.mjs lifecycleError does. Codes: SEAT_CAPACITY_INPUT_INVALID, SEAT_CAPACITY_UNKNOWN, SEAT_CAPACITY_FULL, SEAT_CAPACITY_LOCK_BUSY, SEAT_CAPACITY_LOCK_LOST. No path, stderr or holder text ever enters a message.\n(b) export hostAgentVmCap({ cpus = os.availableParallelism(), totalmem = os.totalmem() } = {}) = max(1, min(floor(cpus / 2), floor((totalmem - 8 GiB) / 4 GiB))), with GiB = 1024 ** 3. cpus must be a non-negative safe integer and totalmem a non-negative finite number, else SEAT_CAPACITY_INPUT_INVALID: NaN would otherwise flow through Math.max. Document that the OS-reported total sits slightly below the nominal size, so a box on a 4 GiB step boundary rounds down, which is conservative.\n(c) export countSeatVms(root): readdir(root, { withFileTypes: true }). ENOENT gives { count: 0, invalid: 0 }; any other failure is SEAT_CAPACITY_UNKNOWN. Only real directories named /^[0-9a-f]{32}$/ count; they are ownedLedgerDir's per-project dirs. Files, symlinks and other names are skipped, including the lock and temp files this module writes at the root. For each such dir, call createLedger(path.join(root, name, 'vms')).list(); its throw (LEDGER_RECORD_INVALID on an unreadable dir) is SEAT_CAPACITY_UNKNOWN. Count records where isSeatRecord(record) and the phase is in LIVE_PHASES = reserved, launching, owned, absent or failed (lifecycle.mjs reserved plus LAUNCHED). Attempt-owned check records, 'deleted' and 'collision' (foreign, never ours) do not count. Every invalid record file also counts as occupied (fail closed: an unreadable record may be a seat VM) and is reported: return { count: live + invalid, invalid }.\n(d) export seatAdmissionFor(projectPath) returns { root, ledger }. dir = ownedLedgerDir(projectPath) from vm-control.mjs; root = path.dirname(path.dirname(dir)), the runner-state root that MOE_RUNNER_STATE_DIR or ~/.moe/runner-state names; ledger = createLedger(dir). This guarantees that the reserving ledger is one the count walks.\nImports: createLedger, isSeatRecord and validSeatOwner from lifecycle.mjs; ownedLedgerDir, runnerProbe and localRunnerHost from vm-control.mjs. All five are added by CQ-M07g (task-9076afab), which this task depends on.\nTests in the new scripts/tests/local-runner-seat-capacity.test.mjs:\n- SC1, the formula: (2, 8 GiB) gives 1, (16, 64 GiB) gives 8, (8, 12 GiB) gives 1, (0, 0) gives 1, (64, 32 GiB) gives 6, (5, 20 GiB) gives 2. -1, 1.5, NaN, '4' and a negative totalmem are SEAT_CAPACITY_INPUT_INVALID. The defaults return an integer of at least 1.\n- SC2, the count. Build real ledgers under a temp root:\n  - project A holds seat reserved, seat owned, seat deleted, an attempt owned record and one hand-written invalid .json;\n  - project B holds seat launching and seat collision;\n  - a dir 'notes' holding a seat record is ignored.\n  The result is { count: 4, invalid: 1 }. A root that is a regular file is SEAT_CAPACITY_UNKNOWN; a missing root is { count: 0, invalid: 0 }.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/seat-capacity.mjs",
+        "scripts/tests/local-runner-seat-capacity.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "seat-capacity.mjs, part 2: the host lock and admission.\n(a) The lock file is <root>/seat-capacity.lock, holding one JSON line { runner: `${process.pid}@<16 hex random>`, host: localRunnerHost(), platform: process.platform, acquiredAt }. That shape is what M07g's runnerProbe reads, so the dead-holder check reuses it.\n(b) acquire: write the bytes to a private temp file `<root>/.seat-capacity.<pid>.<random>.tmp` ('wx', 0o600, synced), then link(temp, lockFile), then unlink the temp in finally. link() publishes the lock with its full content atomically, so a lock is never seen half-written. That is why an unparseable lock is never treated as dead.\n  - link succeeded: held.\n  - EEXIST (or EPERM/EBUSY/EACCES, which Windows returns around a delete-pending file): read the lock.\n    - Gone (ENOENT): retry at once.\n    - probe(holder) === false, meaning the same host and platform and kill(pid, 0) gave ESRCH: recover it, then retry.\n    - Anything else (alive, unknown, another host or platform, unparseable): never touch it; poll every pollMs (default 50) until waitMs (default 10_000) runs out, then SEAT_CAPACITY_LOCK_BUSY.\n  - Any other link or temp-write error: SEAT_CAPACITY_UNKNOWN.\n(c) recover(seenBytes): rename(lockFile, a unique tomb `<root>/.seat-capacity.<pid>.<random>.stale`).\n  - ENOENT: someone else recovered or released it; retry.\n  - Any other rename error, such as a Windows EPERM while a reader holds it: poll again.\n  - Then read the tomb. If its bytes equal seenBytes, unlink the tomb: exactly the dead holder's lock is gone. If they differ, the lock was replaced between the read and the rename, so it is a live lock: link(tomb, lockFile) to restore it, unlink the tomb, and never delete it. If that restore hits EEXIST, the moved holder's assertHeld fails and it aborts without reserving, failing closed.\n  Document the residual: a holder that has already passed assertHeld when its lock is moved can still write. That takes three contenders interleaving during a dead-lock recovery, inside a microsecond window.\n(d) The handle offers assertHeld(), where the lock bytes must still equal ours or the call throws SEAT_CAPACITY_LOCK_LOST, and release(), which unlinks only while the bytes equal ours, so it never removes another holder's lock.\n(e) export admitSeatVm({ root, ledger, owner, cap = hostAgentVmCap(), waitMs, pollMs, probe = runnerProbe }). Validation first, else SEAT_CAPACITY_INPUT_INVALID: root absolute with no control characters; ledger.reserve is a function; validSeatOwner(owner) holds; cap is a positive safe integer. Then mkdir(root, { recursive: true, mode: 0o700 }); a failure is SEAT_CAPACITY_UNKNOWN. Acquire, then in try/finally(release):\n  1. countSeatVms(root);\n  2. count >= cap is SEAT_CAPACITY_FULL;\n  3. assertHeld();\n  4. return await ledger.reserve(owner).\n  The reservation is written while the lock is held, so the count and the write are one step for every admitter. A reserve throw propagates unchanged after release.\nTests:\n- SC3, DoD 2. cap 2, with one live seat record in another project's ledger. Run Promise.all of two admitSeatVm calls with different seat owners, each on a ledger whose reserve first awaits a 50 ms delay. The delay sits inside the critical section, so a missing or broken lock would admit both. Exactly one fulfills with a reserved seat record and the other rejects SEAT_CAPACITY_FULL; afterwards countSeatVms gives 2 and no lock file remains.\n- SC4, DoD 4.\n  - A lock whose probe answers false is recovered: admission succeeds well inside waitMs, and the stale bytes are gone.\n  - The same holds with the default probe and a real dead pid: spawnSync(process.execPath, ['-e', '']).pid, with host localRunnerHost() and platform process.platform. Never signal any process.\n  - A probe answering true, a probe answering undefined, and unparseable bytes each give SEAT_CAPACITY_LOCK_BUSY after a small waitMs, with the lock bytes unchanged and no record reserved.\n- SC5. A FULL refusal and a throwing reserve both leave no lock file, and the next admission proceeds at once. An invalid owner or a relative root is SEAT_CAPACITY_INPUT_INVALID before any file is written.\nerror handling: every exit path releases the lock, and every refusal is one fixed code.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/seat-capacity.mjs",
+        "scripts/tests/local-runner-seat-capacity.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Ship and CI.\n(a) scripts/tests/local-runner-bundle.test.mjs: add 'seat-capacity.mjs' to `shipped`, never `required` (mem:decision-local-runner-planning-gotchas: onboarding walks `required`). Extend the comment above it with CQ-M07h's seat capacity.\n(b) .github/workflows/ci.yml:244: append scripts/tests/local-runner-seat-capacity.test.mjs to the 'Test local runner prerequisite bundles' node --test list. CI lists every file explicitly, so a new file would otherwise never run.\n(c) Row SC0 in the new test file mirrors local-runner-pinned-client.test.mjs MX0: the CI local-runner step's run line names this file exactly once.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bundle.test.mjs",
+        ".github/workflows/ci.yml",
+        "scripts/tests/local-runner-seat-capacity.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate, run once (DoD 5). Run it in a git-archive snapshot outside the checkout, never in the shared tree (mem:gotcha-local-runner-tests recipe; the bundle test needs packages/moe-daemon/tsconfig.json and moe-vscode/moe-jetbrains build inputs, so archive them too):\nS=$(mktemp -d /tmp/m07h-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json packages/moe-daemon/tsconfig.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && for f in scripts/local-runner/seat-capacity.mjs scripts/tests/local-runner-seat-capacity.test.mjs scripts/tests/local-runner-bundle.test.mjs .github/workflows/ci.yml; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat-capacity.test.mjs scripts/tests/local-runner-bundle.test.mjs\nIt must report 0 fail. If a bundle row fails at HEAD without this task's files too (compare by re-running with only HEAD bytes), report it as pre-existing rather than fixing it here.\nThen measure: git diff --numstat HEAD -- <the four files>, counting the new files with wc -l. QA counts additions + deletions against 400. If over, merge rows that share setup first; if still over, file an EPIC ADD_RAIL size exception via moe.propose_rail, quoting the exact numstat, before complete_task.\nThe fresh gate output is the complete_task verification evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/seat-capacity.mjs",
+        "scripts/tests/local-runner-seat-capacity.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        ".github/workflows/ci.yml"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this diff, as the final step (load adversarial-self-review). Check:\n1. Can admission ever reserve without holding the lock, or count outside it?\n2. Is there any path that unlinks or renames a lock whose holder probe was not exactly false, or whose bytes changed since that probe?\n3. Does release ever remove another holder's lock?\n4. Do a crash or throw at every await leave either no lock or a lock a later admission can recover? Walk temp, link, count, reserve and release.\n5. Are symlinked or non-hex entries ever counted or followed?\n6. Does NaN or Infinity reach the cap?\n7. Is kill only ever reached through runnerProbe (signal 0), and does the dead-pid row signal nothing?\n8. Windows: EPERM on rename or link of a delete-pending file must mean retry, not crash.\n9. Does any message or report carry a path or holder text?\nIf any byte changes, re-run step 4's exact command and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/seat-capacity.mjs",
+        "scripts/tests/local-runner-seat-capacity.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -29,10 +79,69 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:09:15.830Z",
-  "updatedAt": "2026-11-01T11:42:00.097Z",
+  "updatedAt": "2026-11-01T11:58:13.791Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:00.097Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T11:52:12.442Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T11:58:13.768Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/local-runner/seat-capacity.mjs exports hostAgentVmCap, countSeatVms, seatAdmissionFor and admitSeatVm. Admission takes an exclusive host lock file under the runner-state root. It recovers only a lock whose holder is proven dead on this host and platform, and never breaks a live, unknown or unreadable holder. Under the lock it counts live seat-owned VM records across every project's ledger, plus unreadable records as occupied, and reserves only below the cap; otherwise it refuses SEAT_CAPACITY_FULL.",
+    "invariants": [
+      "The count and the reservation happen under one held lock.",
+      "A lock is removed only when its holder probe is exactly false and its bytes are unchanged since that probe; release removes only the caller's own bytes.",
+      "Attempt-owned (check), deleted and collision records never count; reserved and launched seat records always do.",
+      "Every refusal is a fixed SEAT_CAPACITY_* code with no path or holder text."
+    ],
+    "compatibility": [
+      "No change to lifecycle.mjs, vm-control.mjs, ledger records or vm-control reports; the bundle test only gains a shipped entry and CI one more test file."
+    ],
+    "sourceAssumptions": [
+      "CQ-M07g exports createLedger().list, isSeatRecord and validSeatOwner (lifecycle.mjs), and ownedLedgerDir, runnerProbe(record, {kill, host, platform}) and localRunnerHost() (vm-control.mjs); runnerProbe returns false only for a same-host, same-platform pid answering ESRCH.",
+      "vm-control.mjs ownedLedgerDir = <MOE_RUNNER_STATE_DIR | ~/.moe/runner-state>/<32 hex>/vms, created 0700.",
+      "lifecycle.mjs listRecords skips '.'-prefixed names and returns { records, invalid }."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/m07h-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json packages/moe-daemon/tsconfig.json .github moe-vscode moe-jetbrains/build.gradle.kts | tar -x -C \"$S\" && for f in scripts/local-runner/seat-capacity.mjs scripts/tests/local-runner-seat-capacity.test.mjs scripts/tests/local-runner-bundle.test.mjs .github/workflows/ci.yml; do cp \"/mnt/d/projexts/moes/$f\" \"$S/$f\"; done && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-seat-capacity.test.mjs scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Per-contender ticket files ordered by name: rejected. Clock skew or a same-millisecond tie lets two holders both see themselves as oldest.\n2. OS sockets or named pipes as the lock: rejected. They are not cross-platform without macOS gaps, and the spec names a lock file.\n3. An mtime-based stale rule: rejected. It would break a live but slow holder, against DoD 4. Instead link()-publish makes a half-written lock impossible, and only a probe-proven dead holder is recovered, via rename-and-compare.\n4. Counting through vm-control's statusReport: rejected. It queries Multipass per record; the cap needs only ledger records.",
+    "codebaseInsights": "- CI lists local-runner test files explicitly (ci.yml:244). local-runner-pinned-client.test.mjs MX0 is the pattern for a row asserting the file runs.\n- local-runner-bundle.test.mjs `shipped` is the list for modules nothing wires yet.\n- os.availableParallelism exists on Node 18.14+.",
+    "risks": "- A pid reused by a long-lived process makes a crashed holder's lock look alive. Admission then times out with LOCK_BUSY until that pid exits; an operator can remove the lock file. Document it in the module header.\n- Invalid records count as occupied, so a corrupt file reduces capacity until cleaned; this is reported as `invalid`.\n- A seat's own lingering absent or failed record also counts, until M07g cleanup or M07i resolves it.\n- Under WSL, os values describe the WSL VM, but verified-local seats run natively on Windows (decision 3).",
+    "keyFiles": [
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/vm-control.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs",
+      "scripts/tests/local-runner-pinned-client.test.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6745373907e8adb7b39c0f914b73c491aa3de0d7",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T11:58:13.791Z",
+  "approvedPlanRevision": 1
 }

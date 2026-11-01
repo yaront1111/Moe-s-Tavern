@@ -21,7 +21,7 @@ Each failure is one fixed code; no path, guest byte or credential reaches the re
 | `provision` | One owned VM provisions from the pinned Ubuntu 24.04 image with the real `guest-supervisor.py` and a fresh 32-byte credential. |
 | `readiness` | The real boot reaches a clean cloud-init `done`/`done`, then readiness holds: zero mounts, the installed supervisor and MCP shim hashes, the credential and its cloud-init copies denied to the job identities, and locked, unprivileged identities. |
 | `no-mounts` | The guest has no host-sharing mount. |
-| `bridge-framing` | 2 MiB of frame bytes cross `multipass exec` exactly, in both directions. |
+| `bridge-framing` | 2 MiB of frame bytes cross the guest SSH route exactly, in both directions. |
 | `bridge-eof` | Host EOF on stdin reaches the supervisor with no pty: it kills the job and exits 74. |
 | `guest-network` | Neither job identity can connect to the VM gateway, at certify's own loopback listener or at the default daemon port 9876. |
 | `writer-containment` | The agent identity can read neither the supervisor credential nor the root-only workspace manifest, and can write neither `/opt/moe`, another job's home, the supervisor nor the installed toolchain. |
@@ -41,6 +41,10 @@ Each failure is one fixed code; no path, guest byte or credential reaches the re
    On Linux a refresh hold (`sudo snap refresh --hold multipass`) is allowed and keeps the certified 1.17.0 when a
    newer Multipass reaches the stable channel; `snap list multipass` then shows the note `held`. Any other note,
    alone or with `held` (devmode, classic, jailmode, try, disabled, broken), fails the `multipass-snap` item.
+   The host also needs the in-box OpenSSH client at its pinned path: `/usr/bin/ssh` on Linux and macOS,
+   `%SystemRoot%\System32\OpenSSH\ssh.exe` on Windows. Without it provisioning refuses with
+   `PROVISION_TRANSPORT_UNAVAILABLE`. Certify writes each VM's transport keys under `<home>/.moe/guest-ssh` and removes
+   them with that VM.
 2. Run `node scripts/local-runner/cli.mjs prerequisites --cache-dir <work-dir>/images`. Certify caches the image in
    `<work-dir>/images`. The command exits 0 only when every item is satisfied, and each unmet item names its `action`.
    On Linux the strictly confined snap reads only paths under your home directory with no hidden segment, so the
