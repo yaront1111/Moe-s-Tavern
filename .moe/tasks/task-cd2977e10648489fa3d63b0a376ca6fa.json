@@ -16,20 +16,29 @@
     {
       "stepId": "step-1",
       "description": "Add the three rows to packages/moe-daemon/src/delivery/executionReadiness.test.ts, using the Edit tool only (global rail). Change no other file. The rows pin the evaluator's existing error handling; there is no runtime change. Reuse the file's own helpers (dir, keyFor, rejecting, root, project) and its tables.\n\n1. DoD 1, in the ALONE table (row type: [name, id, setup returning Over | null | Promise<Over>]):\n['a valid key reached through a directory symlinked into the project', 'authenticated-runner-evidence', async () => { symlinkSync(dir(project, 'secret'), path.join(root, 'keys-link'), 'junction'); return { runnerKeyPath: await keyFor(project, path.join(root, 'keys-link')) }; }]\n- keyFor files the REAL key through the link, so only realpath(keyPath) in runnerKeyFiled (executionReadiness.ts:150) sees that it lives inside the project. lstat and O_NOFOLLOW check only the final component.\n- A Windows EPERM on the junction is already skipped by the table's it.for.\n\n2. DoD 2, in the PROBES table:\n['an externally SIGKILLed client', rejecting({ killed: false, signal: 'SIGKILL', code: null }), 'provider-probe-failed']\n- The table's it.each already asserts [...ISOLATION, id], i.e. exactly ['isolated-agent-and-qa-vms', 'isolated-check-vm', 'provider-probe-failed'], with the evidence still named.\n- timedOut (:164) keys on killed === true, not on the signal.\n\n3. DoD 3, in the ALONE table, POSIX only:\n['an install path whose name holds a control character', 'protected-host-control-plane', () => (process.platform === 'win32' ? null : { daemonInstallDir: dir(root, 'inst\\nall') })]\n- The directory must REALLY exist, outside the project and disjoint from it, so that the ONLY refusal is absolute()'s CONTROL test (:102-107). A missing directory would also fail realpath, and the mutant would survive.\n- null on win32 uses the table's existing ctx.skip().\n\nUnit tests never spawn a real Multipass client (task rail): every row uses the injected runProbe.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/executionReadiness.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/executionReadiness.test.ts"
+      ],
+      "note": "Added three rows (ALONE x2, PROBES x1) with Edit tool.",
+      "startedAt": "2026-11-01T18:59:53.946Z",
+      "completedAt": "2026-11-01T19:00:01.812Z"
     },
     {
       "stepId": "step-2",
       "description": "Verification, mutants and a short self-review (DoD 1-4). Never run npm in the shared checkout (global rail): the gate runs in a git-archive snapshot.\n\nThe gate command, run fresh on the final bytes. This is the complete_task verification command:\ncd /mnt/d/projexts/moes && git diff --quiet HEAD -- packages/moe-daemon/src/delivery/executionReadiness.ts packages/moe-daemon/src/server/runnerChannel.ts && S=$(mktemp -d /tmp/moe-cd2977e1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/delivery/executionReadiness.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/delivery/executionReadiness.test.ts src/server/runnerChannel.test.ts'\n\nExpect EXIT 0, tsc clean, and on Linux every test passing with none skipped: 114 + 3 = 117 in executionReadiness.test.ts plus 41 in runnerChannel.test.ts, unless a peer has landed more rows. The leading git diff proves DoD 4: this task leaves executionReadiness.ts and runnerChannel.ts byte-unchanged.\n\nMutants, in the same snapshot and never in the checkout. Back up src/delivery/executionReadiness.ts, apply each mutant with sed, run `npx vitest run src/delivery/executionReadiness.test.ts`, and restore the backup after each one. Each mutant must fail its own new row:\n- M1: `[await realpath(keyPath), await project]` becomes `[keyPath, await project]`. Row 1 must fail.\n- M2: in timedOut, `error.killed === true` becomes `error.signal === 'SIGKILL'`. Row 2 must fail.\n- M3: drop `&& !CONTROL.test(value)` from absolute. Row 3 must fail.\nRecord each mutant's failing test names in complete_step, and `cmp` the restored module with HEAD's copy before finishing.\n\nSelf-review: is any row vacuous? (For example, does the newline directory really exist, and is the junction really inside the project?) Is any row platform-fragile beyond the existing win32 skips? Did any byte outside the test file change?",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate EXIT 0, 158/158 (117+41). Mutants each failed only their row: M1 'a valid key reached through a directory symlinked into the project'; M2 'an externally SIGKILLed client'; M3 'an install path whose name holds a control character'. Restored module cmp OK vs HEAD. Runtime files unchanged. Self-review: newline dir really exists via dir(); junction target is inside project; win32 skip via null.",
+      "startedAt": "2026-11-01T19:00:02.465Z",
+      "completedAt": "2026-11-01T19:00:22.113Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -45,7 +54,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:50:43.192Z",
-  "updatedAt": "2026-11-01T18:52:15.841Z",
+  "updatedAt": "2026-11-01T19:00:25.013Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T14:53:34.314Z",
@@ -54,17 +63,22 @@
   "metrics": {
     "firstClaimAt": "2026-11-01T18:49:23.197Z",
     "plannedStepCount": 2,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-548034a1"
+    "architect-548034a1",
+    "worker-152f84fc"
   ],
   "tier": "light",
   "effort": "medium",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6-luna",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-01T18:52:15.815Z",
   "planningNotes": {
@@ -88,5 +102,18 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-01T18:52:15.841Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T18:59:53.946Z",
+  "reviewStartedAt": "2026-11-01T19:00:25.011Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && git diff --quiet HEAD -- packages/moe-daemon/src/delivery/executionReadiness.ts packages/moe-daemon/src/server/runnerChannel.ts && S=$(mktemp -d /tmp/moe-cd2977e1-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/delivery/executionReadiness.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/delivery/executionReadiness.test.ts src/server/runnerChannel.test.ts'",
+    "exitCode": 0,
+    "outputTail": "Test Files 2 passed (2); Tests 158 passed (158)",
+    "reportedAt": "2026-11-01T19:00:25.011Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/executionReadiness.test.ts"
+  ],
+  "completionSummary": "Added three rows to executionReadiness.test.ts (symlinked key dir, external SIGKILL probe, control-char install dir). Each QA mutant now fails exactly its row; runtime files byte-unchanged; archive gate 158/158."
 }

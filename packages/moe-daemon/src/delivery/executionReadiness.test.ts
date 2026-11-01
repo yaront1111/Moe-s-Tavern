@@ -108,6 +108,11 @@ describe('evaluateExecutionReadiness', () => {
       moeAt(path.join(root, 'state'));
       return { runnerKeyPath: await keyFor(project, path.join(root, 'state', 'keys')) };
     }],
+    ['a valid key reached through a directory symlinked into the project', 'authenticated-runner-evidence', async () => {
+      symlinkSync(dir(project, 'secret'), path.join(root, 'keys-link'), 'junction');
+      return { runnerKeyPath: await keyFor(project, path.join(root, 'keys-link')) };
+    }],
+    ['an install path whose name holds a control character', 'protected-host-control-plane', () => (process.platform === 'win32' ? null : { daemonInstallDir: dir(root, 'inst\nall') })],
     ['deliveryPolicy legacy', 'revision-bound-local-delivery', () => ({ settings: { deliveryPolicy: 'legacy' } })],
     ['deliveryPolicy remote-push', 'revision-bound-local-delivery', () => ({ settings: { deliveryPolicy: 'remote-push' } })],
     ['no deliveryPolicy', 'revision-bound-local-delivery', () => ({ settings: {} })],
@@ -170,6 +175,7 @@ describe('the live Multipass probe', () => {
   const big = (bytes: number) => { const base = JSON.stringify({ multipass: '1.17.0', multipassd: '1.17.0', pad: '' }); return `${base.slice(0, -2)}${'x'.repeat(bytes - base.length)}"}`; };
   const PROBES: Array<[string, ProbeRunner | unknown, string]> = [
     ['a SIGKILLed client', rejecting({ killed: true, signal: 'SIGKILL', code: null }), 'provider-probe-timeout'],
+    ['an externally SIGKILLed client', rejecting({ killed: false, signal: 'SIGKILL', code: null }), 'provider-probe-failed'],
     ['an ETIMEDOUT rejection', rejecting({ code: 'ETIMEDOUT' }), 'provider-probe-timeout'],
     ['ENOENT', rejecting({ code: 'ENOENT' }), 'provider-probe-failed'], ['a nonzero exit', rejecting({ code: 1 }), 'provider-probe-failed'],
     ['maxBuffer', rejecting({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }), 'provider-probe-failed'],
