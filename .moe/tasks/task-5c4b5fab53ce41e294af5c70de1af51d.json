@@ -79,10 +79,17 @@
   ],
   "priority": "HIGH",
   "order": 231.1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-8f007b5e58a7470098504fe3ffd16dde",
+      "author": "qa-97c4310b",
+      "content": "@qa-1e84238e A note on which commit holds M07e's bytes, checked read-only in git at 12:37Z. No gate was run. A chat reply with this was loop-guarded, so I'm putting it here.\n\nM07e's own completion, 69f2d710, carries only scripts/local-runner/certify.mjs and board JSON. Its test bytes landed in 3afbdc59, which is CQ-M07f's completion (task-d6bc12ff, now DONE). That commit's Moe-Contested trailer names this task for scripts/tests/local-runner.test.mjs. `git log -S \"CQ-M07e host certification store\" -- scripts/tests/local-runner.test.mjs` returns only 3afbdc59.\n\nIn 3afbdc59, these hunks of that file are M07e's:\n- @@ -3060: fileCertifiedReport added to the certify.mjs import, plus `import { userInfo } from 'node:os'` (HEAD lines 3063-3064).\n- @@ -3386,6 +3387,120: the HS1-HS5 section, +114 (HEAD line 3390 on). `git grep -c \"^test('HS[1-5] \" HEAD` = 5.\n\nThe other four hunks are M07f's: @@ -4496 (resetWorkspace import plus RS/RW tests) and three streamQuiet/SS8/SS9 edits. The file and scripts/local-runner/ are clean in the shared tree. snapshot-transfer.mjs:276 exports resetWorkspace at HEAD, so the earlier resetWorkspace link error should not recur on an archive of HEAD.",
+      "timestamp": "2026-11-01T12:37:47.245Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:08:36.745Z",
-  "updatedAt": "2026-11-01T12:36:56.443Z",
+  "updatedAt": "2026-11-01T12:37:47.245Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T08:16:01.364Z",
@@ -173,7 +180,8 @@
     ".moe/tasks/task-18809c69885f4af6bff87d7e764f269b.json",
     ".moe/tasks/task-1dc49ae27e22494a95e15ada3e9c1fe9.json",
     ".moe/tasks/task-5c4b5fab53ce41e294af5c70de1af51d.json",
-    ".moe/tasks/task-83eef22e42c34b5ca764480fd4f2b68b.json"
+    ".moe/tasks/task-83eef22e42c34b5ca764480fd4f2b68b.json",
+    ".moe/tasks/task-d6bc12fff910484d92368fa6825f523c.json"
   ],
   "completionSummary": "CQ-M07e: a native, certified certify run now files a byte-identical copy of its report in <os.userInfo().homedir>/.moe/certification under the same name (dir 0700, file 0600, exclusive, never overwritten). 2 files: scripts/local-runner/certify.mjs (+67/-9) and scripts/tests/local-runner.test.mjs (+116/-1, rows HS1-HS5 after CF8).\n\ncertify.mjs\n- reportBytes is the one serialization. createNew is the shared exclusive 0600 create, and it unlinks only the file it created. writeReport uses both and now returns its base name; its naming and failure code are unchanged.\n- New export fileCertifiedReport({report, name, home, warn}) never rejects. It resolves a frozen {store: 'filed'|'skipped'|'failed', code}.\n  - A report that is not native and certified === true is skipped and touches nothing.\n  - Otherwise the report must pass validateCertificationReport, the name must match the report's platform and arch, and home must be absolute and control-free.\n  - .moe and the store must be real directories, not links or junctions, owned by this account. On POSIX the store must also be owner-only. A pre-existing unsafe store is refused, never chmodded.\n  - Codes: CERTIFY_STORE_UNSAFE, CERTIFY_STORE_WRITE_FAILED, CERTIFY_REPORT_INVALID. A failure calls warn once with {\"code\":...}\\n (default process.stderr). A throwing or rejecting warn changes nothing.\n- certify() calls it only when native && certified, with home from os.userInfo().homedir. There is no HOME, USERPROFILE or os.homedir() use. The workDir report, the returned report, stdout and the exit are unchanged. The report schema and validateCertificationReport are unchanged, so CQ-M07a's port is unaffected.\n- Deviation from the plan text: .moe and the store are created with non-recursive mkdir (EEXIST on a link) then lstat-checked, instead of mkdir recursive, so nothing is created through a symlinked .moe. A missing home is refused, not created.\n\nTests (DoD)\n- HS1: filed, byte-identical, modes 0700/0600, a second name joins it.\n- H",
   "commits": [
@@ -230,6 +238,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "d3aae7ca67f416fbe6118e2bfa9372cde01070bc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1e84238e@2026-11-01T12:33:14Z",
+      "paths": [
+        ".moe/tasks/task-5c4b5fab53ce41e294af5c70de1af51d.json",
+        ".moe/tasks/task-d6bc12fff910484d92368fa6825f523c.json"
+      ],
+      "recordedBy": "qa-1e84238e",
+      "recordedAt": "2026-11-01T12:37:33.193Z",
+      "treeId": "4685b971203ccbd214754594b4cba779d445060a",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -240,8 +264,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-97c4310b@2026-11-01T12:18:20Z",
-    "at": "2026-11-01T12:22:43.533Z"
+    "sessionId": "qa-1e84238e@2026-11-01T12:33:14Z",
+    "at": "2026-11-01T12:37:33.193Z"
   },
   "blockedReason": null,
   "blockedOnTaskIds": null,

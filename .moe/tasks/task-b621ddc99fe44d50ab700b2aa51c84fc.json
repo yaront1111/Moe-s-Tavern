@@ -17,11 +17,18 @@
     {
       "stepId": "step-1",
       "description": "Docs sweep, part 1: the tool and record contracts.\n\nMethod: read each CQ-V row's LANDED diff. Take its completion sha from get_context epicSiblings landing.lastCompletion, run `git show --stat <sha>` first, then only the hunks you need. Document what LANDED, never what a plan assumed. Where a slice already documented its own contract (V02 and V03 in both files; V06a in packages/moe-proxy/README.md), only fix drift.\n\ndocs/MCP_SERVER.md, the expected gaps from the approved plans:\n- `### moe.qa_approve` and `### moe.qa_reject` (CQ-V06):\n  - the optional attemptId, generation and sessionId, which are required under verified-local;\n  - candidateId, which must be the current candidate under the approved plan revision;\n  - every refusal codeName;\n  - the strict revision rule in the shared passing-run predicate;\n  - the proxy stamping the identity (CQ-V06a).\n- `### moe.claim_next_task`, `### moe.wait_for_task`, `### moe.report_blocked` and `### moe.set_task_dependencies` (CQ-V09, V12b):\n  - consumer-aware readiness: a strict consumer needs verified delivery;\n  - the unmet tokens (legacy-delivery, prerequisite-missing, archived-without-verified-delivery);\n  - set_task_dependencies' audited added and removed lists.\n- `### moe.get_context` and `### moe.list_tasks`: dependsOnUnmet is the consumer-aware count.\n- The CQ-V04 dispatch flow and the CQ-V05b repair transitions, wherever they landed. Both were unplanned when this plan was written.\n\ndocs/SCHEMA.md:\n- under `## CheckRun` and the delivery projection: the latestCheckRun.outcome key (CQ-V12b), present only when recorded;\n- any record field a CQ-V row added without documenting it.\n\nThis step's error handling: every refusal codeName and token the docs name must exist in landed code. Grep packages/moe-daemon/src for each one, and correct or remove any that does not exist. Edit surgically with the Edit tool. These files are peer hotspots (C11a, bc8410af), so never rewrite or revert another task's hunks.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md",
         "docs/SCHEMA.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Docs part 1. MCP_SERVER.md:\n- get_context dependsOn/dependsOnUnmet/blockedOnTaskIds are consumer-aware (CQ-V09); task.requiredCheckSnapshot served.\n- Proxy identity stamping now includes qa_approve/qa_reject (CQ-V06a).\n- submit_plan: requiredCheckRevision param plus a protected-required-checks note (CQ-V01).\n- record_candidate: protectedEntries.\n- record_check_observation: repair drift fixed. A non-latest run still returns, and applies, none/replan decisions.\n- report_blocked, list_tasks, claim_next_task, wait_for_task and set_task_dependencies: legacy/observe vs strict-dependent rules (prerequisite-missing, verified-local-snapshot, approved-review, delivery-receipt; admission precedes the gate; removeDependsOn drops a deleted id).\n- qa_approve: identity params, strict review binding (V06 codes in order), 43088e9b qualification, full token list (V01, V04, efbf1742), errors.\n- qa_reject: identity params, strict binding with no revision check, errors.\n\nSCHEMA.md:\n- ProjectSettings: deliveryPolicy qualified; checkEnvironments and repairPolicy added.\n- Task.requiredCheckSnapshot section.\n- Candidate.protectedEntries.\n- New \"Task delivery projection\" section: /ws-only TaskDelivery, latestCheckRun.outcome, requiredCheckSatisfied semantics.\n\nEvery code name and token was grep-verified in src. The diff has no forbidden tokens. Review finding for step 5: guest-session.mjs STAMPED omits qa_approve/qa_reject.",
+      "startedAt": "2026-11-01T12:21:36.464Z",
+      "completedAt": "2026-11-01T12:46:19.130Z"
     },
     {
       "stepId": "step-2",
@@ -57,7 +64,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-0e1ab990",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -136,7 +143,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:14.370Z",
-  "updatedAt": "2026-10-30T14:53:05.306Z",
+  "updatedAt": "2026-11-01T12:46:19.130Z",
   "dependsOn": [
     "task-af83018e892149a1a18cd6a946edeba5",
     "task-bde8654052f648f9b209174c3708322b",
@@ -164,12 +171,14 @@
     "architect-e4b7eee0",
     "qa-952969be",
     "qa-ba3f4f35",
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-0e1ab990"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-29T18:00:07.818Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 7
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 1
   },
   "tier": "heavy",
   "effort": "max",
@@ -179,7 +188,9 @@
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T18:17:10.736Z",
   "executionContract": {
@@ -253,5 +264,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T18:17:10.817Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T12:21:36.464Z"
 }

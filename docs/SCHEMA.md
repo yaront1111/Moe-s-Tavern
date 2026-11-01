@@ -163,15 +163,38 @@ interface ProjectSettings {
   executionProfile?: 'legacy' | 'observe' | 'verified-local';
 
   // What moe.qa_approve requires before DONE (packages/moe-daemon/src/delivery/policy.ts).
-  // Absent or null = 'legacy': the soft NO-COMPLETION-COMMIT warning, approval
-  // always lands. Strict values refuse approval with DELIVERY_EVIDENCE_MISSING
+  // Absent or null = 'legacy': for a legacy or observe task, the soft
+  // NO-COMPLETION-COMMIT warning and no evidence refusal. Strict values refuse
+  // approval with DELIVERY_EVIDENCE_MISSING
   // unless: 'local-branch' a completion commit is recorded for the review round;
   // 'remote-push' one recorded as pushed; 'merged-pull-request' / 'manual-artifact'
   // the approval attests a merged pull request / manual artifact. Under any
   // strict value, a qualityGate the wrapper runs for the task also needs a
-  // runner-observed exit-0 CheckRun on the current candidate. Any other value is
+  // runner-observed exit-0 CheckRun on the current candidate, and each approved
+  // executionContract.requiredChecks definition its own (CQ-V01). A verified-local
+  // task's checks are judged under every value, 'legacy' included (task-43088e9b),
+  // but such a task is refused EXECUTION_PROFILE_NOT_READY first. Any other value is
   // refused as invalid input, never read as the default.
   deliveryPolicy?: 'legacy' | 'local-branch' | 'remote-push' | 'merged-pull-request' | 'manual-artifact';
+
+  // Human-approved isolated check environment ids (CQ-V04): the exact
+  // CheckRun.environment values a runner reports, e.g. 'moe-local-vm-v1:<sha256>'.
+  // Absent, null or [] approves none. Read live for verified-local tasks only, by
+  // delivery/policy.ts and moe.record_check_dispatch admission
+  // (CHECK_ENVIRONMENT_NOT_APPROVED), so removing an id revokes the evidence
+  // recorded in it. At most 50 non-blank ids of at most 255 characters without
+  // control characters; anything else is refused INVALID_INPUT where it is read.
+  // Set in .moe/project.json only: a settings update refuses the key as unknown
+  // and keeps the stored value, so the IDE never edits it.
+  checkEnvironments?: string[];
+
+  // Repair budgets for a failing required check of a verified-local task
+  // (CQ-V05/V05b, delivery/repairPolicy.ts). Each an integer from 0 to 10;
+  // defaults { maxCodeRepairs: 3, maxInfraRetries: 2 }. An unknown key or any
+  // other shape is refused INVALID_INPUT, returned as
+  // moe.record_check_observation's repairError. Legacy and observe tasks ignore
+  // it. Set in .moe/project.json only, like checkEnvironments.
+  repairPolicy?: { maxCodeRepairs?: number; maxInfraRetries?: number };
 
   // Branch a worker is expected to be on when it calls moe.complete_task:
   // a literal branch name or a `*` glob (e.g. "moe/work-*", what the agent
@@ -791,13 +814,28 @@ type ExecutionPolicySnapshot =
 | `reuse` | string list | existing implementations reused, or why a new one is introduced |
 | `sourceAssumptions` | string list | source facts with path or symbol references |
 | `checkRefs` | string list | verification commands exactly as they will be run |
-| `requiredChecks` | `ProtectedCheckDefinition[]` (at most 20) | approved check commands (`id`, `command`, and optional `configs`/`scripts`/`assertionRoots` path lists of at most 50). Approval material, never evidence; the measured snapshot and check runs are documented with the CQ-V delivery records |
+| `requiredChecks` | `ProtectedCheckDefinition[]` (at most 20) | approved check commands (`id`, `command`, and optional `configs`/`scripts`/`assertionRoots` path lists of at most 50). Approval material, never evidence; the measured snapshot is `requiredCheckSnapshot` below, and check runs are documented with the CQ-V delivery records |
 
 Every string list holds at most 50 entries, each at most 1000 chars.
 
 - **Validation** (`validateExecutionContract`, run by every `updateTask` writer): strict, refusing `INVALID_INPUT` with `context.field`; unknown keys are refused; strings are preserved and never truncated; the stored object is a fresh canonical copy; empty lists are omitted. `undefined`, `null` or an empty contract clears it.
 - **Writers.** `moe.submit_plan` replaces it, and an omitted contract clears it. `moe.get_context` projects it for every role when set.
 - **Revision.** A material change increments `planRevision` once, in the same write. Object key order is not material; list order is.
+
+### `requiredCheckSnapshot` (CQ-V01)
+
+`Task.requiredCheckSnapshot` is the protected file identity `moe.submit_plan` measured for the contract's `requiredChecks`: the Git object id of every blob under the definitions' `configs`, `scripts` and `assertionRoots` paths at one tree. It is daemon-owned: only the `PLAN_SUBMITTED` write sets or clears it (a plan without `requiredChecks` clears it), and every other writer, board echo included, has the key stripped.
+
+```typescript
+interface RequiredCheckSnapshot {
+  version: 1;
+  revision: string;          // the 40-hex TREE id requiredCheckRevision (default HEAD) resolved to, never a mutable ref
+  definitionDigest: string;  // sha256 hex of the definitions ([id, command, configs, scripts, assertionRoots] each)
+  entries: { path: string; oid: string }[];  // <=2000 blobs, strictly ascending by path; every configs/scripts path has one
+}
+```
+
+Readers must use `readRequiredCheckSnapshot` (`delivery/requiredChecks.ts`), which answers `null` for a malformed snapshot or one whose `definitionDigest` no longer matches the current definitions; the delivery policy then reports `protected-checks-unapproved`. It is approval material, never verification evidence: a candidate's `protectedEntries` must equal `entries`, and each definition's command needs its own passing run (see `moe.qa_approve` in docs/MCP_SERVER.md).
 
 ### `landingRetry` (WT-03)
 
@@ -1351,6 +1389,11 @@ interface Candidate {
   readonly baseRevision: string;   // Runner-REPORTED commit sha (7-40 hex) the bytes were built on
   readonly treeSha: string;        // Runner-REPORTED tree or commit sha (7-40 hex) naming the bytes
   readonly deliveryTarget: string; // Where the runner intends to land them, e.g. "refs/heads/wave1-pilot"
+  readonly protectedEntries?: readonly { readonly path: string; readonly oid: string }[];
+                                   // CQ-V01: runner-REPORTED `git ls-tree -r` entries for the task's protected
+                                   // check paths in this tree (<=2000, normalized paths, lowercase 40-hex oids,
+                                   // strictly ascending by UTF-8 bytes). Absent = not measured; [] = none exist.
+                                   // Compared with Task.requiredCheckSnapshot; never verified against git
   readonly createdAt: string;      // ISO 8601, the daemon's clock at first record (never the caller's)
 }
 ```
@@ -1603,6 +1646,30 @@ The existing receipt is consulted before the candidate, so a replay always recon
   "pushResult": null
 }
 ```
+
+---
+
+## Task delivery projection
+
+**Served, never stored.** A `Task` the daemon sends a plugin over `/ws` (the `STATE_SNAPSHOT`, broadcasts and direct mutation replies, all through `WebSocketServer.servedTask`) may carry a computed `delivery` key, projected by `packages/moe-daemon/src/state/deliveryProjection.ts` from the candidate, check-run, receipt and attempt stores. It is never written to `.moe/tasks/`, and MCP responses do not carry it. The key is absent when the task has neither a candidate nor an attempt phase.
+
+```typescript
+interface TaskDelivery {
+  currentCandidate?: { id: string; treeSha: string; shortSha: string; baseRevision: string }; // the task's latest Candidate; shortSha = treeSha's first 8
+  latestCheckRun?: {                 // the LAST run reported on the current candidate, counted or not: display only
+    command: string; exitCode: number;
+    source?: 'runner-observed' | 'agent-reported'; // omitted when the stored value is not one of these
+    outcome?: CheckOutcome;                        // omitted when absent (rows recorded without one) or not a CheckOutcome
+  };
+  requiredCheckSatisfied?: boolean;  // delivery/policy.ts's verdict on the owed checks, never the latest run's (below)
+  deliveryReceipt?: { target: string; landedRevision: string };  // the current candidate's DeliveryReceipt
+  attemptPhase?: 'running' | 'finalizing' | 'reconciling' | 'closed'; // the candidate's producer attempt, else the task's current one
+}
+```
+
+- **`requiredCheckSatisfied`** is `evaluateDeliveryEvidence` on the checks alone: `false` while it reports a `required-check:`, `protected-check-changed:` or `required-check-untrusted-checker:` token, `protected-checks-unapproved`, `protected-checks-unmeasured` or `unreadable-required-check`, and `true` once every owed check is satisfied, so a passing `latestCheckRun` the policy does not count (an agent report, say) still reads `false`. It is absent under the `legacy` policy (except for a `verified-local` task, whose checks every policy judges), when no check is owed, and when the policy cannot be read, which today includes every `verified-local` task (`EXECUTION_PROFILE_NOT_READY`).
+- **Fail-soft.** A record that fails its shape check (including a latest run whose `treeSha` is not the candidate's), or a lookup that throws, drops only its own field, with a debug log. Nothing is repaired, and a bad record cannot break a board connection.
+- **Clients.** The JetBrains board (`DeliveryPresentation.kt`) shows `latestCheckRun` as reported, never as proof: an exit-0 run with no `outcome` or with `passed` reads as passed, and any other outcome as not passed. It shows `requiredCheckSatisfied` separately as counted or not counted.
 
 ---
 
