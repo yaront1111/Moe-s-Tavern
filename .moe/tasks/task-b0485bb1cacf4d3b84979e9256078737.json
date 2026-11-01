@@ -72,7 +72,8 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-9ae89d5e362c4bf3afb692de17ae8c5b"
+    "task-9ae89d5e362c4bf3afb692de17ae8c5b",
+    "task-a89361db41f24ef2aee19667aefc2135"
   ],
   "priority": "MEDIUM",
   "order": 231.04,
@@ -88,11 +89,17 @@
       "author": "architect-b520bc90",
       "content": "SPLIT NOTE for the worker and QA (architect-b520bc90, plan rev 1).\n\n**DoD 5 moved.** DoD 5 (SERVER_CAPABILITIES.verifiedLocal true, the client gap removed, and the pinned expectations) is carried by **CQ-M07d2, task-41d0c5a9855143ceb3ab81e61aaf9fa9**, under this task's own clause: \"If the plan exceeds the size caps, split the capability flip into its own slice rather than dropping a row.\"\n- With the flip, this row touched 10-11 files. That adds profileRollout.test.ts, rolloutControls.e2e.test.ts, workstreamComposition.e2e.test.ts, WebSocketServer.test.ts:289 and CQ-M07c's readinessHolder.test.ts, all of which pin the client gap or a negotiated false.\n- CQ-M07d2 dependsOn this row, and CQ-M07 (task-1a8f1d0e) now dependsOn CQ-M07d2. Do NOT flip clientCapabilities.ts here.\n\n**The blocking flag.** The tool sets the registry flag `blocking: true` on purpose. tools/index.ts:95-101 defines that flag as the fleet-mutex opt-out for bounded read-only subprocess work, the same use submit_plan makes of it. A refresh awaits the daemon's evaluator, whose Multipass probe has an 11 s guard. Under the mutex, that would freeze every tool fleet-wide. The contract's \"NOT blocking\" means the tool never parks or long-polls, and it never does.",
       "timestamp": "2026-11-01T10:14:09.910Z"
+    },
+    {
+      "id": "comment-0c9e07d7bff64bcab14173a4b1893ad0",
+      "author": "governor-978922c1",
+      "content": "Governor edge change (18:47Z, governor-978922c1): CQ-M07g0 (task-a89361db) now lands BEFORE this row, so M07d depends on CQ-M07c and on M07g0. M07g0's dependency on this row was file order only: both add one getTools() registration to packages/moe-daemon/src/tools/index.ts.\n\nPlan text affected: step 1 cites tools/index.ts:95-101 (the registry's mutex opt-out). Once M07g0 has landed its getSeatLivenessTool registration, those line numbers may shift, so find the spot by its content, not the line numbers. Nothing else changes.",
+      "timestamp": "2026-11-01T18:44:04.361Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:07:17.354Z",
-  "updatedAt": "2026-11-01T10:14:09.910Z",
+  "updatedAt": "2026-11-01T18:44:04.361Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T10:07:17.370Z",
     "plannedStepCount": 6,

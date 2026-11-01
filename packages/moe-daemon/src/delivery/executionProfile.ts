@@ -1,7 +1,9 @@
-// A LEAF: runtime imports only util/errors, so a state store can import it
-// without a cycle. It must never import delivery/policy.ts or any state store.
+// A LEAF: runtime imports only util/errors and the readiness holder (which imports
+// no state store), so a state store can import it without a cycle. It must never
+// import delivery/policy.ts or any state store.
 import type { DeliveryPolicy, ExecutionPolicySnapshot, ExecutionProfile } from '../types/schema.js';
 import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
+import { heldReadiness } from './readinessHolder.js';
 
 /** Keyed by the type, so the recognised list cannot drift from DeliveryPolicy without a compile error. */
 const POLICIES: Record<DeliveryPolicy, true> = {
@@ -101,25 +103,26 @@ export function resolveTaskExecutionProfile(settings?: ProfileSettings, snapshot
   return stored?.profile === 'verified-local' ? 'verified-local' : current;
 }
 
+/** Today's refusal text, byte for byte, while the daemon has never held an evaluation. */
+const NEVER_EVALUATED =
+  'Execution profile verified-local is not ready: protected local isolation, trusted evidence and revision-bound delivery are not certified.';
+
 /**
- * Unconditionally unavailable until the stronger execution path is certified.
- * No persisted readiness label, environment flag, or caller assertion grants it.
+ * verified-local is ready only when the daemon's own latest readiness evaluation
+ * (delivery/readinessHolder.ts) says so. No persisted readiness label, environment
+ * flag, or caller assertion grants it. legacy and observe always pass.
  */
 export function assertExecutionProfileReady(profile: unknown): void {
   if (decodeProfile(profile, 'executionProfile') !== 'verified-local') return;
+  const held = heldReadiness();
+  if (held.ready === true && held.missingCapabilities.length === 0) return;
+  const missingCapabilities = [...held.missingCapabilities];
   throw new MoeError(
     MoeErrorCode.NOT_ALLOWED,
-    'Execution profile verified-local is not ready: protected local isolation, trusted evidence and revision-bound delivery are not certified.',
-    {
-      executionProfile: 'verified-local',
-      missingCapabilities: [
-        'protected-host-control-plane',
-        'isolated-agent-and-qa-vms',
-        'isolated-check-vm',
-        'authenticated-runner-evidence',
-        'revision-bound-local-delivery',
-      ],
-    },
+    held.evaluatedAt === null
+      ? NEVER_EVALUATED
+      : `Execution profile verified-local is not ready: missing ${missingCapabilities.join(', ')}.`,
+    { executionProfile: 'verified-local', missingCapabilities },
     'EXECUTION_PROFILE_NOT_READY',
   );
 }

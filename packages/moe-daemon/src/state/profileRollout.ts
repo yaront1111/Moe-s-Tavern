@@ -17,6 +17,7 @@ import type { ExecutionProfile, Project, ProjectSettings } from '../types/schema
 import { validateSettingsUpdate } from './validators.js';
 import { currentAttempt } from './attemptStore.js';
 import { readExecutionPolicySnapshot, resolveExecutionProfile } from '../delivery/executionProfile.js';
+import { heldReadiness } from '../delivery/readinessHolder.js';
 import { decodeClientHello } from '../server/clientCapabilities.js';
 import { atomicWriteJsonAsync } from '../util/atomicWrite.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
@@ -50,14 +51,16 @@ function clientSupportsVerifiedLocal(): boolean {
 /**
  * What still blocks verified-local, ordered vm, client, check, as fresh objects on
  * every call. Daemon-owned facts only: never an env var, a persisted label or a
- * caller field. No certified VM provisioning (R13) or isolated check runner
- * exists yet, so both stay unsupported constants until a later activation task
- * supplies a certified daemon-owned source.
+ * caller field. vm and check come from the daemon's held readiness evaluation
+ * (delivery/readinessHolder.ts): each is listed while its isolation capability is
+ * missing, which includes the never-evaluated default. client is the I01 gate.
  */
 export function activationGaps(): ActivationGap[] {
-  const gaps: ActivationGap[] = [{ capability: 'vm', reason: 'vm-provisioning-uncertified' }];
+  const missing = heldReadiness().missingCapabilities;
+  const gaps: ActivationGap[] = [];
+  if (missing.includes('isolated-agent-and-qa-vms')) gaps.push({ capability: 'vm', reason: 'vm-provisioning-uncertified' });
   if (!clientSupportsVerifiedLocal()) gaps.push({ capability: 'client', reason: 'client-contract-unsupported' });
-  gaps.push({ capability: 'check', reason: 'check-runner-uncertified' });
+  if (missing.includes('isolated-check-vm')) gaps.push({ capability: 'check', reason: 'check-runner-uncertified' });
   return gaps;
 }
 
