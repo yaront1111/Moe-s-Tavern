@@ -78,7 +78,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -101,16 +101,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T12:10:48.664Z",
-  "updatedAt": "2026-11-01T21:02:02.560Z",
+  "updatedAt": "2026-11-01T21:03:50.777Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T12:14:23.297Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T21:03:50.777Z",
+    "wallClockMs": 31767480
   },
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-8a4aed6a"
+    "worker-8a4aed6a",
+    "qa-174e8876"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -206,18 +209,42 @@
       "treeId": "202813c2457807c0519541f3d3b7974e9cf6921e",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "3d32405ad162777f44939368abd0c919c171e662",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8a4aed6a@2026-11-01T20:47:49Z",
+      "paths": [
+        ".moe/tasks/task-18809c69885f4af6bff87d7e764f269b.json",
+        ".moe/tasks/task-62ec51f179494706a39045154d07e544.json",
+        ".moe/tasks/task-828e7d21602e4cf2a0f242e024db7dea.json",
+        ".moe/tasks/task-c7cead1b2bc24863bea5141129ef47b1.json",
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "recordedBy": "worker-8a4aed6a",
+      "recordedAt": "2026-11-01T21:02:21.242Z",
+      "treeId": "885a06f47f14200d8a282424787029bcc59176ce",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/local-runner/agent-seat.mjs",
-    "scripts/tests/local-runner-seat.test.mjs"
+    "scripts/tests/local-runner-seat.test.mjs",
+    ".moe/tasks/task-18809c69885f4af6bff87d7e764f269b.json",
+    ".moe/tasks/task-62ec51f179494706a39045154d07e544.json",
+    ".moe/tasks/task-828e7d21602e4cf2a0f242e024db7dea.json",
+    ".moe/tasks/task-c7cead1b2bc24863bea5141129ef47b1.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-b520bc90@2026-11-01T12:14:21Z",
-    "at": "2026-11-01T14:26:30.307Z"
+    "kind": "completion",
+    "sessionId": "worker-8a4aed6a@2026-11-01T20:47:49Z",
+    "at": "2026-11-01T21:02:21.242Z"
   },
   "workStartedAt": "2026-11-01T20:48:26.090Z",
   "reviewStartedAt": "2026-11-01T21:02:02.559Z",
@@ -228,5 +255,13 @@
     "reportedAt": "2026-11-01T21:02:02.559Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-M07j1 delivered: scripts/local-runner/agent-seat.mjs exports seatForward(projectPath, { WebSocketImpl = globalThis.WebSocket, timeoutMs = 30_000 } = {}), which returns forward(tool, args, { signal }).\n\nEach call proves this project's loopback daemon with readDaemonInfo (vm-control.mjs, unchanged), then opens ONE socket with the URL as the only constructor argument, to ws://127.0.0.1 (or [::1]):<daemon.json port>/mcp. It sends ONE tools/call { name, arguments } and resolves the daemon's RAW result object, never the parsed text. It goes over /mcp, never /runner. runner-client.mjs is not imported and MOE_RUNNER_KEY_DIR is not read.\n\nThese all reject with the one fixed code SEAT_FORWARD_FAILED and message 'Seat forward failed.': an error reply (also an error beside a result), a non-object result, bad JSON, a close or error event, a send that throws, the timeout, an abort before or during the call, a bad signal (including a throwing getter), a missing WebSocketImpl, a constructor throw, and a refused daemon.json or /health. The socket, the timer and the abort listener are released on every path. Ids are taken locally before any await, so concurrent calls match only their own reply.\n\nTests: SF1-SF4 plus sf* helpers in scripts/tests/local-runner-seat.test.mjs. They cover the raw result and transport, ::1 where bindable, concurrent ids 2 and 3, every failure above, no key and no headers, and refusal before any socket for another project's daemon.json or a non-loopback bind. A scratch mutation probe killed 21 of 21 mutants, after two rows were added for the first two survivors. M07i's startSeat, stopSeat and runAgentSeat bytes and its AS0-AS6 rows are untouched; only its header comment and the vm-control import changed.\n\nGate: the plan's git-archive snapshot command, run fresh after the last edit: 11 tests, 11 pass, 0 fail, exit 0. Size: +48/-1 and +128/-2 = 179 of 400.\n\nResiduals, documented and not fixed: a tools/call the daemon already dispatched keeps running after an"
+  "completionSummary": "CQ-M07j1 delivered: scripts/local-runner/agent-seat.mjs exports seatForward(projectPath, { WebSocketImpl = globalThis.WebSocket, timeoutMs = 30_000 } = {}), which returns forward(tool, args, { signal }).\n\nEach call proves this project's loopback daemon with readDaemonInfo (vm-control.mjs, unchanged), then opens ONE socket with the URL as the only constructor argument, to ws://127.0.0.1 (or [::1]):<daemon.json port>/mcp. It sends ONE tools/call { name, arguments } and resolves the daemon's RAW result object, never the parsed text. It goes over /mcp, never /runner. runner-client.mjs is not imported and MOE_RUNNER_KEY_DIR is not read.\n\nThese all reject with the one fixed code SEAT_FORWARD_FAILED and message 'Seat forward failed.': an error reply (also an error beside a result), a non-object result, bad JSON, a close or error event, a send that throws, the timeout, an abort before or during the call, a bad signal (including a throwing getter), a missing WebSocketImpl, a constructor throw, and a refused daemon.json or /health. The socket, the timer and the abort listener are released on every path. Ids are taken locally before any await, so concurrent calls match only their own reply.\n\nTests: SF1-SF4 plus sf* helpers in scripts/tests/local-runner-seat.test.mjs. They cover the raw result and transport, ::1 where bindable, concurrent ids 2 and 3, every failure above, no key and no headers, and refusal before any socket for another project's daemon.json or a non-loopback bind. A scratch mutation probe killed 21 of 21 mutants, after two rows were added for the first two survivors. M07i's startSeat, stopSeat and runAgentSeat bytes and its AS0-AS6 rows are untouched; only its header comment and the vm-control import changed.\n\nGate: the plan's git-archive snapshot command, run fresh after the last edit: 11 tests, 11 pass, 0 fail, exit 0. Size: +48/-1 and +128/-2 = 179 of 400.\n\nResiduals, documented and not fixed: a tools/call the daemon already dispatched keeps running after an",
+  "touchedFiles": [
+    "scripts/local-runner/agent-seat.mjs",
+    "scripts/tests/local-runner-seat.test.mjs"
+  ],
+  "completedAt": "2026-11-01T21:03:50.777Z",
+  "reviewCompletedAt": "2026-11-01T21:03:50.777Z",
+  "reviewSummary": "QA APPROVE CQ-M07j1. Reviewed completion 3d32405a (on moe/work-2026-10-24; scripts/ tree == HEAD).\nGate: git-archive of 3d32405a in /tmp, env -i, Node v24.21.0: node --test scripts/tests/local-runner-seat.test.mjs = 11 pass, 0 fail, exit 0 (AS0-AS6 and SF1-SF4).\nSize: agent-seat.mjs +48/-1, test +128/-2 = 179 of 400. vm-control.mjs untouched; no forbidden literals.\nDoD:\n1. One tools/call over loopback /mcp ([::1] too); resolves reply.result itself. SF1 deepStrictEqual with an extra structuredContent member, one socket, ctor args == [url], concurrent ids 2/3 each match own reply.\n2. All failure paths (error reply, error beside result, non-object result, bad JSON, close, error, throwing send, timeout, other-id reply, abort pre/mid/during probe, bad signal, throwing getter, BigInt arg, null WebSocketImpl, throwing ctor) reject SEAT_FORWARD_FAILED with no daemon text. SF2 asserts socket closed and zero abort listeners on each row.\n3. runner-client not imported, key dir not read, ctor gets URL alone. SF3 compares frames/args with MOE_RUNNER_KEY_DIR at a missing path.\n4. SF4: other project's daemon.json, non-loopback /health or daemon.json bind, no daemon.json each refuse with zero sockets via unchanged readDaemonInfo.\n5. Named test passes in the snapshot.\nAdversarial read: local id before any await; signal getter inside try; frame serialized before any read/socket; abort re-checked after the /health await; total listener bodies; finally releases timer, listener, socket.\nNon-blocking: an already-dispatched tools/call keeps running after abort/timeout (as moe-proxy); abort during /health settles after the probe (max 5s); task-5464e725 is out of scope. Not exercised: a real daemon/VM socket (fake WebSocket plus real loopback /health, per plan); belongs to CQ-M07j/V12. No simplification findings.",
+  "requiredCheckAtDone": null
 }
