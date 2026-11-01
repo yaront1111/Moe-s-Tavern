@@ -121,7 +121,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -138,7 +138,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T08:09:29.478Z",
-  "updatedAt": "2026-11-01T20:40:07.992Z",
+  "updatedAt": "2026-11-01T20:47:49.814Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-01T11:42:01.899Z",
@@ -148,7 +148,9 @@
     "firstClaimAt": "2026-11-01T11:58:27.244Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-01T20:47:49.813Z",
+    "wallClockMs": 31762569
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -212,7 +214,8 @@
   "approvedPlanRevision": 1,
   "contextFetchedBy": [
     "architect-b520bc90",
-    "worker-83c3fcad"
+    "worker-83c3fcad",
+    "qa-1b5727b1"
   ],
   "workStartedAt": "2026-11-01T20:17:16.298Z",
   "reviewStartedAt": "2026-11-01T20:40:07.990Z",
@@ -227,7 +230,66 @@
     "scripts/local-runner/agent-seat.mjs",
     "scripts/tests/local-runner-seat.test.mjs",
     "scripts/tests/local-runner-bundle.test.mjs",
+    ".github/workflows/ci.yml",
+    ".moe/epics/epic-b8c6bbda4def46cbb8d1b351f8ea3eeb.json",
+    ".moe/tasks/task-18809c69885f4af6bff87d7e764f269b.json",
+    ".moe/tasks/task-435e8989c4d0425aa6eecf523353e5bc.json",
+    ".moe/tasks/task-b0485bb1cacf4d3b84979e9256078737.json"
+  ],
+  "completionSummary": "CQ-M07i delivered: scripts/local-runner/agent-seat.mjs (new, 181 lines) exports startSeat, stopSeat and runAgentSeat, with a CLI. The CLI forms are `seat-start --project <abs> --worker <id> --runner <pid@token> --host <h>`, and seat-stop takes the same flags plus `--instance <moe-vm-…>`. Each call prints one JSON line and exits 0 on success, 75 on SEAT_CAPACITY_FULL or LOCK_BUSY, 1 on any other failure, and 2 on a usage error.\n\nstartSeat:\n- Sweeps the same worker's leftover seat records: its own, and a previous runner whose probe answers false.\n- Pre-checks the cap (count >= hostAgentVmCap gives SEAT_CAPACITY_FULL before any reserve or provider call).\n- Reads the supervisor.\n- Reserves through admitSeatVm under the host lock, inside provisionGuest.\n- Installs the toolchain, then the agents.\n- Returns {ok:true, instance, executionReady:false}.\n\nEvery failure after the reserve deletes exactly that VM by name through deleteOwned and reports vm deleted, retired or delete-failed. The record is kept if the delete fails. The cleanup runs before the code is read, so a hostile error cannot skip it.\n\nstopSeat:\n- Deletes only its own named VM and is idempotent: a missing record gives 'gone', a deleted one gives 'deleted', and a reserved one is retired.\n- Another owner's record gives LIFECYCLE_NOT_OWNER, and a collision gives 'none'.\n\nTests: scripts/tests/local-runner-seat.test.mjs (new, 211 lines) covers the DoD across AS0–AS6:\n- AS1: refusals and the happy path.\n- AS2: capacity.\n- AS3: cleanup at every failing stage.\n- AS4: stop.\n- AS5: the sweep.\n- AS6: the CLI and exit codes.\n\nFakes only, with no Multipass, per the rail. agent-seat.mjs is appended to the bundle test's `shipped` list, and ci.yml:244 runs the new file.\n\nGate: 407 tests, 406 pass, 0 fail, 1 macOS skip that was already there. 28 of 28 mutants killed. Size 398 of 400.\n\nResiduals, documented but not fixed:\n- Two concurrent seat-starts for the same owner are not serialized; wrappers launch one at a time.\n- A stopS",
+  "commits": [
+    {
+      "sha": "1a8e7999a4624f752c606a18a9a452e96fc64795",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-83c3fcad@2026-11-01T20:15:52Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/epics/epic-b8c6bbda4def46cbb8d1b351f8ea3eeb.json",
+        ".moe/tasks/task-18809c69885f4af6bff87d7e764f269b.json",
+        ".moe/tasks/task-435e8989c4d0425aa6eecf523353e5bc.json",
+        ".moe/tasks/task-b0485bb1cacf4d3b84979e9256078737.json",
+        "scripts/local-runner/agent-seat.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/tests/local-runner-seat.test.mjs"
+      ],
+      "recordedBy": "worker-83c3fcad",
+      "recordedAt": "2026-11-01T20:41:24.468Z",
+      "treeId": "2a0f63fdd7b2df8180aac8624f3307ab21ef76c9",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-3ad573a754574dfd92083b2e813c0bff"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-4fdc7590cd054a45a379c477ffe45ac7"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-f622843305224cf49ca24478b26c3351"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/agent-seat.mjs",
+    "scripts/tests/local-runner-seat.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
     ".github/workflows/ci.yml"
   ],
-  "completionSummary": "CQ-M07i delivered: scripts/local-runner/agent-seat.mjs (new, 181 lines) exports startSeat, stopSeat and runAgentSeat, with a CLI. The CLI forms are `seat-start --project <abs> --worker <id> --runner <pid@token> --host <h>`, and seat-stop takes the same flags plus `--instance <moe-vm-…>`. Each call prints one JSON line and exits 0 on success, 75 on SEAT_CAPACITY_FULL or LOCK_BUSY, 1 on any other failure, and 2 on a usage error.\n\nstartSeat:\n- Sweeps the same worker's leftover seat records: its own, and a previous runner whose probe answers false.\n- Pre-checks the cap (count >= hostAgentVmCap gives SEAT_CAPACITY_FULL before any reserve or provider call).\n- Reads the supervisor.\n- Reserves through admitSeatVm under the host lock, inside provisionGuest.\n- Installs the toolchain, then the agents.\n- Returns {ok:true, instance, executionReady:false}.\n\nEvery failure after the reserve deletes exactly that VM by name through deleteOwned and reports vm deleted, retired or delete-failed. The record is kept if the delete fails. The cleanup runs before the code is read, so a hostile error cannot skip it.\n\nstopSeat:\n- Deletes only its own named VM and is idempotent: a missing record gives 'gone', a deleted one gives 'deleted', and a reserved one is retired.\n- Another owner's record gives LIFECYCLE_NOT_OWNER, and a collision gives 'none'.\n\nTests: scripts/tests/local-runner-seat.test.mjs (new, 211 lines) covers the DoD across AS0–AS6:\n- AS1: refusals and the happy path.\n- AS2: capacity.\n- AS3: cleanup at every failing stage.\n- AS4: stop.\n- AS5: the sweep.\n- AS6: the CLI and exit codes.\n\nFakes only, with no Multipass, per the rail. agent-seat.mjs is appended to the bundle test's `shipped` list, and ci.yml:244 runs the new file.\n\nGate: 407 tests, 406 pass, 0 fail, 1 macOS skip that was already there. 28 of 28 mutants killed. Size 398 of 400.\n\nResiduals, documented but not fixed:\n- Two concurrent seat-starts for the same owner are not serialized; wrappers launch one at a time.\n- A stopS"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-83c3fcad@2026-11-01T20:15:52Z",
+    "at": "2026-11-01T20:41:24.468Z"
+  },
+  "completedAt": "2026-11-01T20:47:49.813Z",
+  "reviewCompletedAt": "2026-11-01T20:47:49.813Z",
+  "reviewSummary": "Reviewed completion 1a8e7999 on moe/work-2026-10-24; the tree's task files are identical to it.\n\nGate: the plan's command on a git archive of 1a8e7999 under Node v24.21 exits 0. 407 tests: 406 pass, 0 fail, 1 macOS skip that was already there (84 s). On Windows Node v24.16, AS0-AS6 pass.\n\nDoD:\n1. AS1: 9 fixed-code refusals; one seat record with the right owner; steps in order with the pinned executable and a 32-byte credential.\n2. AS2: order is ['count'] only, with no provider calls; a race lost under the lock reserves nothing.\n3. AS3: in the 9-stage table each stage removes the exact name; a reserve then throw gives retired; a stuck delete gives delete-failed with the record kept.\n4. AS4: only A is deleted, idempotently; B gives NOT_OWNER with its bytes unchanged.\n5. Green.\n\nRail: no multipass; everything is faked. Dependency contracts checked: admit gets the raw ledger, the probe is synchronous, and the toolchain shape matches.\n\nQA mutants: 8 of 10 killed. Survivors:\n- cleanup owner: equivalent.\n- LOCK_BUSY dropped from exit 75: untested but non-blocking, since the plan pinned only FULL. CQ-M07m/n should add that row.\n\nSize: 398 of 400; forbidden-pattern grep clean. Residuals were documented and accepted.",
+  "requiredCheckAtDone": null
 }
