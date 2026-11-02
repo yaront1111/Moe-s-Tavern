@@ -138,19 +138,44 @@ function finalizeReply() {
   assert.equal(args.taskId,a.taskId); assert.equal(args.workerId,a.workerId);
   assert.equal(args.generation,a.generation); assert.ok(safeId(args.runnerId));
   assert.ok(['finalizing','closed'].includes(a.phase));
-  assert.ok(['landed','nothing-to-commit','rescued','failed'].includes(args.outcome));
+  assert.ok(['landed','nothing-to-commit','rescued','failed','unlanded'].includes(args.outcome));
   if (args.outcome === 'landed') {
     assert.ok(sha(args.landedRevision));
     const rows = readRows(rpcLog);
     assert.ok(rows.some(r => r.tool === 'record_commit' && r.args.outcome === 'committed'
       && r.args.kind === 'completion' && r.args.sha === args.landedRevision));
-  } else assert.equal(args.landedRevision,undefined);
+  } else if (args.outcome === 'unlanded') unlandedCheck(a);
+  else assert.equal(args.landedRevision,undefined);
+  // finalizeAttempt.ts: an unlanded close stores task.landingRetry (count + 1), landed and
+  // nothing-to-commit clear it; a closed replay answers again and routes nothing.
+  const retry = path.join(moe,'landing-retry.json');
+  if (a.phase === 'finalizing' && args.outcome === 'unlanded') fs.writeFileSync(retry,JSON.stringify({reason:args.unlandedReason,
+    paths:args.conflictPaths || [],rescueRef:args.rescueRef,targetTip:args.targetTip || null,
+    count:(fs.existsSync(retry) ? JSON.parse(fs.readFileSync(retry,'utf8')).count : 0) + 1,at:new Date().toISOString()}));
+  else if (a.phase === 'finalizing' && ['landed','nothing-to-commit'].includes(args.outcome)) fs.rmSync(retry,{force:true});
   a.phase = 'closed'; fs.writeFileSync(file,JSON.stringify(a));
   payload = {success:true,taskId:a.taskId,attemptId:a.id,generation:a.generation,phase:'closed',
     outcome:args.outcome,landedRevision:args.landedRevision || null};
   if (mode === 'finalize-loss' || (mode === 'finalize-loss-once'
     && readRows(rpcLog).filter(r=>r.tool === tool).length === 1)) return null;
   return payload;
+}
+// WT-03's unlanded contract (finalizeAttempt.ts validateUnlanded): a worktree attempt only,
+// landedRevision null, one of five reasons, a rescue ref of this task, a 40-hex or null
+// targetTip, at most 500 distinct relative conflict paths, and nothing published before it:
+// this session's completion rows are all failed, coded and pushed:false.
+function unlandedCheck(a) {
+  assert.equal(a.workspaceMode,'worktree','"unlanded" is only valid for a worktree attempt');
+  assert.equal(args.landedRevision,null);
+  assert.ok(['conflict','contention','gate','diverged','remote'].includes(args.unlandedReason),'unlandedReason '+args.unlandedReason);
+  const pre = `refs/moe/rescue/${args.taskId}/`, cp = args.conflictPaths === undefined ? [] : args.conflictPaths;
+  assert.ok(typeof args.rescueRef === 'string' && args.rescueRef.length <= 255 && args.rescueRef.startsWith(pre)
+    && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(args.rescueRef.slice(pre.length)),'rescueRef '+args.rescueRef);
+  assert.ok(args.targetTip === undefined || args.targetTip === null || sha(args.targetTip),'targetTip '+args.targetTip);
+  assert.ok(Array.isArray(cp) && cp.length <= 500 && new Set(cp).size === cp.length && cp.every(p => typeof p === 'string'
+    && !/[\\\x00-\x1f\x7f]/.test(p) && p.split('/').every(s => s && s !== '.' && s !== '..')),'conflictPaths '+JSON.stringify(cp));
+  const done = readRows(rpcLog).filter(r => r.tool === 'record_commit' && r.args.kind === 'completion').map(r => r.args);
+  assert.ok(done.length > 0 && done.every(r => r.outcome === 'failed' && r.code && r.pushed === false),'completion rows '+JSON.stringify(done));
 }
 // receiptStore.ts in miniature: one receipt per candidate, an identical replay
 // writes nothing (duplicate), a differing one is DELIVERY_RECEIPT_CONFLICT.
@@ -498,6 +523,9 @@ switch (tool) {
       if (!Array.isArray(ctxCommits)) throw new Error('FAKE_CTX_COMMITS must be a JSON array');
       ctxPayload.task.commits = ctxCommits;
     }
+    // task.landingRetry (WT-03): present only while the finalize_attempt store above holds one.
+    const retryFile = path.join(moe, 'landing-retry.json');
+    if (fs.existsSync(retryFile)) ctxPayload.task.landingRetry = JSON.parse(fs.readFileSync(retryFile, 'utf8'));
     // FAKE_CTX_PAD_BYTES: pad task.description with ~N bytes of multibyte text so
     // the served context passes the 128 KiB single-argv limit (env vars cap there
     // too, so the harness cannot carry it in one). The unit is 25 UTF-8 bytes but

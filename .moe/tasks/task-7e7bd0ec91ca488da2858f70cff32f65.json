@@ -1,0 +1,35 @@
+{
+  "id": "task-7e7bd0ec91ca488da2858f70cff32f65",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-21] VS Code: deregister agent seats whose terminal closed, matching JetBrains",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-20 (task-7fa27666bdb94325b62c205e3599b165: moe-vscode/src/util/AgentSeatTracker.ts with AgentSeatTracker and wireAgentSeats). It also depends on VSC-6 (task-9f6a725ff14c4c08b4acb203884e7ae5, MoeDaemonClient.ts) and VSC-1 (task-2ef8e36c29f4490884dff27c9f3ed9fb, extension.ts) ONLY to serialize edits to those files in shared-checkout mode; after the worktree switch a governor may drop those two (moe.set_task_dependencies).\n\nObjective: a VS Code agent seat whose terminal is closed keeps every task it held, because a wrapper killed with its terminal never runs the exit trap that deregisters it. JetBrains fixes this with AgentSeatTracker (MoeProjectService.agentSeats, TerminalAgentLauncher.trackSeat). Plug VSC-20's port into VS Code:\n- moe-vscode/src/util/AgentLauncher.ts: LaunchOptions gains an optional `onLaunched(workerId, terminal)`, called right after createTerminal in launchRole, so both launchAgent and launchAllAgents' staggered roles report every seat. Add no value import: tests/verified-local-launch.test.cjs loads AgentLauncher.ts under node:vm with a require map.\n- moe-vscode/src/services/MoeDaemonClient.ts: `deregisterWorker(workerId, reason): boolean`, sending DEREGISTER_WORKER `{ workerId, reason }` as JetBrains' MoeCommandSender.deregisterWorker does (false when not connected), and the daemon's WORKER_DEREGISTERED reply (packages/moe-daemon/src/server/WebSocketServer.ts, case 'DEREGISTER_WORKER') surfaced as an `onWorkerDeregistered` event carrying the worker id, as MoeMessageDispatcher handles it. Add no value import (seven test files load this file under node:vm; mem:gotcha-vscode-vm-test-harness).\n- moe-vscode/src/extension.ts: one AgentSeatTracker persisted in context.workspaceState under `moe.agentSeats`, deregistering with reason 'terminal_closed'; every launch passes onLaunched (tracker.launched plus a terminal-to-worker map); wireAgentSeats gets vscode.window.onDidCloseTerminal, connected transitions from client.onConnectionChanged and acks from onWorkerDeregistered; its Disposable joins context.subscriptions.\n- new moe-vscode/tests/agent-seats.test.cjs.\n\nShared files: MoeDaemonClient.ts with VSC-12, extension.ts with VSC-14, AgentLauncher.ts with VSC-15. In shared-checkout mode do not run concurrently with them; after the worktree switch they merge independently.\n\nNot in scope: deregistering seats this window did not launch, a board-level worker view, any moe-jetbrains file.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/agent-seats.test.cjs drives the real transpiled MoeDaemonClient: deregisterWorker('worker-1', 'terminal_closed') sends exactly one DEREGISTER_WORKER frame with payload {workerId:'worker-1', reason:'terminal_closed'}; when disconnected it returns false and sends nothing; a WORKER_DEREGISTERED frame fires onWorkerDeregistered once with the worker id.",
+    "With the real AgentLauncher.ts under a vm harness, launchAgent calls onLaunched exactly once with the generated worker id and the created terminal, and launchAllAgents calls it once per launched role after the staggers fire.",
+    "moe-vscode/src/extension.ts creates the tracker over context.workspaceState key moe.agentSeats, passes onLaunched to every launch, calls wireAgentSeats with vscode.window.onDidCloseTerminal, the client's connection and deregistration events, and pushes the returned Disposable into context.subscriptions (asserted by the test from the source).",
+    "Every existing suite that loads AgentLauncher.ts or MoeDaemonClient.ts passes unchanged.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7fa27666bdb94325b62c205e3599b165",
+    "task-9f6a725ff14c4c08b4acb203884e7ae5",
+    "task-2ef8e36c29f4490884dff27c9f3ed9fb"
+  ],
+  "priority": "HIGH",
+  "order": 12.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:45:34.901Z",
+  "updatedAt": "2026-11-02T09:45:34.901Z"
+}

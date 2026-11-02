@@ -1985,7 +1985,19 @@ function Find-MoeSeatFinalizingAttempts {
     }
     return @($ids)
 }
-function Send-MoeFinalize([string]$Outcome, [string]$Sha = '') {
+# finalize_attempt's unlanded fields (WT-11): the reason, the conflict paths
+# (safe relative paths, deduped, at most 500), the rescue ref and B (null when
+# unknown). Twin: finalize_args.
+function Get-MoeUnlandedFields([string]$Why, [array]$Paths, [string]$Rescue, [string]$Tip) {
+    $ok = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($p in @($Paths)) {
+        $p = [string]$p
+        if ($p -and $ok.Count -lt 500 -and -not $ok.Contains($p) -and $p -cnotmatch '[\\\x00-\x1f\x7f]' -and
+            @($p.Split('/') | Where-Object { $_ -cin '', '.', '..' }).Count -eq 0) { $ok.Add($p) }
+    }
+    return @{ landedRevision = $null; unlandedReason = $Why; conflictPaths = [string[]]$ok.ToArray(); rescueRef = $Rescue; targetTip = $(if ($Tip) { $Tip } else { $null }) }
+}
+function Send-MoeFinalize([string]$Outcome, [string]$Sha = '', [hashtable]$Extra = @{}) {
     if ($Role -ne 'worker' -or -not $preflightTaskId) { return $true }
     if (-not $script:MoeAttemptId -or $null -eq $script:MoeAttemptGeneration) {
         $ids = @(Find-MoeSeatFinalizingAttempts)
@@ -2005,6 +2017,7 @@ function Send-MoeFinalize([string]$Outcome, [string]$Sha = '') {
     $payload = @{ taskId=$preflightTaskId; attemptId=$script:MoeAttemptId; generation=$script:MoeAttemptGeneration
         workerId=$WorkerId; runnerId=$script:MoeRunnerId; outcome=$Outcome }
     if ($Outcome -eq 'landed') { $payload.landedRevision=$Sha }
+    foreach ($k in $Extra.Keys) { $payload[$k] = $Extra[$k] }
     if (Send-MoeEvidence 'finalize_attempt' $payload 3) { return $true }
     Write-Host '[WARN] finalize_attempt acknowledgement exhausted; stopping new-task loop (no repeated Git effect).' -ForegroundColor Yellow
     return $false
@@ -2089,6 +2102,22 @@ function Send-MoeOwedLedgerRow($Journal, [string]$Sha) {
     return ($null -ne $reply -and (Get-MoeProp $reply 'success') -eq $true)
 }
 
+# finalize_attempt under a receipt journal's attempt, whichever seat replays it.
+function Get-MoeJournalAttempt($J, [string]$Outcome) {
+    return @{ taskId=[string]$J.taskId; attemptId=[string]$J.attemptId; generation=$J.generation; workerId=[string]$J.workerId; runnerId=$script:MoeRunnerId; outcome=$Outcome }
+}
+# A journaled C origin can never take routes its still-finalizing attempt
+# unlanded 'remote' under the journal's identity: the task tip rescued, the
+# failed row (pushed:false), the finalize. Twin: replay_unlanded.
+function Invoke-MoeReplayUnlanded([hashtable]$Git, $J) {
+    $tid = [string]$J.taskId; $sid = if ($moeSid) { $moeSid } else { "$WorkerId@unknown" }
+    $t = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', "refs/heads/moe/task/$tid^{commit}")
+    $r = if ($t.Rc -eq 0) { Invoke-MoeRescueRef -Git $Git -TaskId $tid -Reason 'remote' -Sid $sid -Sha (($t.Out -join '').Trim()) } else { $null }
+    if (-not $r -or $null -eq (Send-MoeRecordCommit @{ taskId = $tid; outcome = 'failed'; kind = 'completion'; ref = [string]$J.target; role = $Role; workerId = $WorkerId
+        sessionId = $sid; code = 'MOE_PUSH_FAILED'; message = "origin moved past $($J.targetBefore) without the journaled landing"; pushed = $false })) { return $false }
+    return (Send-MoeEvidence 'finalize_attempt' ((Get-MoeJournalAttempt $J 'unlanded') + (Get-MoeUnlandedFields 'remote' @() $r.Ref ([string]$J.targetBefore))) 3)
+}
+
 # Crash replay of delivery receipts, run right AFTER the pre-flight claim: a
 # seat's still-finalizing attempt makes that claim refuse (ATTEMPT_FINALIZING),
 # which also keeps a single-shot run out of the taskless wait -- close the
@@ -2131,8 +2160,13 @@ function Invoke-MoeReceiptReplay {
                         # Drop only the journal read above: a live lander's next round may have rewritten it meanwhile (ponytail: the re-read and delete leave a millisecond window; a per-journal lock closes it).
                         $now = $null; try { $now = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { }
                         if ($null -eq $now -or [string]$now.targetAfter -cne $after -or [string]$now.targetBefore -cne [string]$j.targetBefore) { Write-Host "[receipt] $($f.FullName) was rewritten or removed meanwhile; left to its lander." -ForegroundColor Cyan; continue }
+                        Write-Host "[WARN] MOE_PUSH_FAILED: task $($j.taskId) -- origin moved past $($j.targetBefore) without $after, which can never apply." -ForegroundColor Yellow
+                        # WT-11: a still-finalizing attempt is routed unlanded first; a failed route keeps the journal.
+                        if ((Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId) -ceq 'finalizing' -and -not (Invoke-MoeReplayUnlanded $git $j)) {
+                            Write-Host "[WARN] receipt journal $($f.FullName) kept: the unlanded route of attempt $($j.attemptId) failed." -ForegroundColor Yellow; continue
+                        }
                         Remove-Item -LiteralPath $f.FullName -Force
-                        Write-Host "[WARN] MOE_PUSH_FAILED: task $($j.taskId) -- origin moved past $($j.targetBefore) without $after, which can never apply; dropped $($f.FullName) (attempt $($j.attemptId) stays finalizing)." -ForegroundColor Yellow; continue
+                        Write-Host "[receipt] dropped $($f.FullName)." -ForegroundColor Cyan; continue
                     }
                     Update-MoeLandTargetMirror $git.Top $t $after; $landedAs = $after
                 } else { $landedAs = Find-MoeJournaledLanding $git.Top $j }
@@ -2173,8 +2207,7 @@ function Invoke-MoeReceiptReplay {
                 if (-not $wt -and -not (Send-MoeReceipt $f.FullName $j)) { continue }
                 $phase = Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId
                 if ($phase -ceq 'finalizing') {
-                    $closed = Send-MoeEvidence 'finalize_attempt' @{ taskId=[string]$j.taskId; attemptId=[string]$j.attemptId; generation=$j.generation
-                        workerId=[string]$j.workerId; runnerId=$script:MoeRunnerId; outcome='landed'; landedRevision=$landedAs } 3
+                    $closed = Send-MoeEvidence 'finalize_attempt' ((Get-MoeJournalAttempt $j 'landed') + @{ landedRevision=$landedAs }) 3
                     if (-not $closed) { Write-Host "[WARN] attempt $($j.attemptId) is still finalizing after its replayed receipt; its finalizing holds stay until it closes." -ForegroundColor Yellow; continue }
                     $phase = 'closed'
                 }
@@ -6173,12 +6206,12 @@ function Invoke-MoeLandFetch([string]$Top, [string]$T) {
 function Sync-MoeLandTarget([string]$Top, [string]$T, [hashtable]$Res, [hashtable]$L) {
     $tip = { param($r) $x = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '-q', '--verify', "$r^{commit}"); if ($x.Rc -eq 0) { ($x.Out -join '').Trim() } else { '' } }
     $localTip = & $tip "refs/heads/$T"   # never $l: PowerShell names are case-insensitive, and $L is the hashtable
-    if (-not $L.Remote) { if (-not $localTip) { $L.Msg = "refs/heads/$T does not resolve" }; return $localTip }
-    if (-not (Invoke-MoeLandFetch $Top $T)) { $Res.Code = 'MOE_LAND_FETCH_FAILED'; $L.Why = 'remote'; $L.Msg = "git fetch origin $T failed 3 times: $($script:MoeLandFetchErr)"; return '' }
-    $b = & $tip "refs/remotes/origin/$T"
+    if (-not $L.Remote) { $L.B = $localTip; if (-not $localTip) { $L.Msg = "refs/heads/$T does not resolve" }; return $localTip }
+    if (-not (Invoke-MoeLandFetch $Top $T)) { $Res.Code = 'MOE_LAND_FETCH_FAILED'; $L.Msg = "git fetch origin $T failed 3 times: $($script:MoeLandFetchErr)"; return '' }
+    $b = & $tip "refs/remotes/origin/$T"; $L.B = $b   # B (WT-11's targetTip) even when it diverged
     if (-not $b) { $L.Msg = "refs/remotes/origin/$T does not resolve"; return '' }
     $rc = if ($localTip) { (Invoke-MoeGit -Top $Top -GitArgs @('merge-base', '--is-ancestor', $localTip, $b)).Rc } else { 0 }
-    if ($rc -eq 1) { $Res.Code = 'MOE_LAND_TARGET_DIVERGED'; $L.Why = 'diverged'; $L.Msg = "refs/heads/$T holds commits origin's $T lacks"; return '' }
+    if ($rc -eq 1) { $Res.Code = 'MOE_LAND_TARGET_DIVERGED'; $L.Msg = "refs/heads/$T holds commits origin's $T lacks"; return '' }
     if ($rc -ne 0) { $L.Msg = "git merge-base --is-ancestor exited $rc"; return '' }
     Update-MoeLandTargetMirror $Top $T $b
     return $b
@@ -6285,7 +6318,7 @@ function Publish-MoeWorktreeLanding([hashtable]$Git, [string]$Journal, [hashtabl
     if ($rc -eq 3) {
         $rc = Resolve-MoePushOutcome $Git.Top $t $B $C
         if ($rc -eq 1) {
-            $L.Why = 'remote'; Write-Host "[WARN] MOE_PUSH_FAILED: task $preflightTaskId -- origin's $t moved past $B without $C, which can never apply." -ForegroundColor Yellow
+            Write-Host "[WARN] MOE_PUSH_FAILED: task $preflightTaskId -- origin's $t moved past $B without $C, which can never apply." -ForegroundColor Yellow
         } elseif ($rc -eq 2) {
             Write-Host "[WARN] MOE_PUSH_OUTCOME_UNKNOWN: task $preflightTaskId -- the push of $C to origin's $t is unsettled ($($script:MoePushDetail)); no ref moves, and the attempt stays finalizing until a pre-flight replay settles it." -ForegroundColor Yellow
             Set-MoeJournalPushResult $Journal "push unknown: $($script:MoePushDetail)"
@@ -6294,7 +6327,7 @@ function Publish-MoeWorktreeLanding([hashtable]$Git, [string]$Journal, [hashtabl
             $script:MoeFinalizeDone = $true; $script:MoeFinalizeRc = $true; $Res.Code = 'MOE_PUSH_OUTCOME_UNKNOWN'; $L.Msg = $script:MoePushDetail
         }
     } elseif ($rc -eq 2) {
-        Remove-Item -LiteralPath $Journal -Force -ErrorAction SilentlyContinue; $Res.Code = 'MOE_PUSH_FAILED'; $L.Why = 'remote'; $L.Msg = "origin refused ${C}: $sum"
+        Remove-Item -LiteralPath $Journal -Force -ErrorAction SilentlyContinue; $Res.Code = 'MOE_PUSH_FAILED'; $L.Msg = "origin refused ${C}: $sum"
     }
     if ($rc -ne 0) { return $rc }
     Set-MoeJournalPushResult $Journal "pushed $C to origin/$t"
@@ -6343,7 +6376,7 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
     }
     $rounds = if ($Settings.configuredGate) { 2 } else { 3 }
     for ($round = 1; $round -le $rounds; $round++) {
-        $Res.Outcome = 'failed'; $Res.Code = 'MOE_COMMIT_FAILED'; $L.Msg = ''; $L.Why = ''
+        $Res.Outcome = 'failed'; $Res.Code = 'MOE_COMMIT_FAILED'; $L.Msg = ''
         $b = Sync-MoeLandTarget $top $Res.Branch $Res $L
         $bt = if ($b) { Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '-q', '--verify', "$b^{tree}") } else { $null }
         if (-not $bt -or $bt.Rc -ne 0) { if (-not $L.Msg) { $L.Msg = "$Ref does not resolve" }; return $false }
@@ -6352,7 +6385,7 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
         $z = @(($mt.Out -join "`n").Split([char]0)); $m = $z[0]
         if ($mt.Rc -eq 1 -and $m -cmatch $rev) {
             $names = @(); for ($i = 1; $i -lt $z.Count -and $z[$i]; $i++) { $names += $z[$i] }
-            $Res.Code = 'MOE_COMMIT_FAILED_CONFLICT'; $L.Msg = "merging $($L.T) into $Ref conflicts in: $($names -join ' ')"; return $false
+            $Res.Code = 'MOE_COMMIT_FAILED_CONFLICT'; $L.Paths = $names; $L.Msg = "merging $($L.T) into $Ref conflicts in: $($names -join ' ')"; return $false
         }
         if ($mt.Rc -ne 0 -or $m -cnotmatch $rev -or ((Invoke-MoeGit -Top $top -GitArgs @('cat-file', '-t', $m)).Out -join '').Trim() -cne 'tree') {
             $L.Msg = "git merge-tree exited $($mt.Rc)"; return $false
@@ -6515,6 +6548,40 @@ function Release-MoeLandLease {
     return $false
 }
 
+# The landingRetry reason of a worktree completion that provably published
+# nothing (WT-11); '' for any other code. Twin: unlanded_reason.
+function Get-MoeUnlandedReason([string]$Code) {
+    $map = @{ MOE_COMMIT_FAILED_CONFLICT = 'conflict'; MOE_WORKTREE_UNRESOLVED_CONFLICT = 'conflict'; MOE_COMMIT_FAILED_REF_CONTENTION = 'contention'
+        MOE_COMMIT_FAILED_LAND_LEASE = 'contention'; MOE_COMMIT_FAILED_GATE = 'gate'; MOE_LAND_TARGET_DIVERGED = 'diverged'; MOE_LAND_FETCH_FAILED = 'remote'; MOE_PUSH_FAILED = 'remote' }
+    if ($Code -and $map.ContainsKey($Code)) { return $map[$Code] }
+    return ''
+}
+
+# WT-11 (design §2.5), Ctrl+C deferred: release the land lease, park the task
+# tip on a rescue ref (unless L2's contention parked its commit already), record
+# the failed row (pushed:false), finalize the attempt unlanded with the retry
+# data (B as targetTip, null before L4 read one). A failed rescue or row
+# finalizes nothing: the bytes, the hold and the finalizing attempt stay, the
+# seat stops. Twin: take_unlanded_route.
+function Invoke-MoeUnlandedRoute([hashtable]$Git, [hashtable]$Res, [hashtable]$L, [hashtable]$M, [hashtable]$Row, [string]$Why) {
+    Set-MoeCtrlCDeferred $true
+    try { Release-MoeLandLease | Out-Null } catch {}
+    $t = $L.T
+    if (-not $t) { $x = Invoke-MoeGit -Top $script:MoeWtPath -GitArgs @('rev-parse', '-q', '--verify', "refs/heads/$($script:MoeWtBranch)^{commit}"); if ($x.Rc -eq 0) { $t = ($x.Out -join '').Trim() } }
+    if (-not $Res.Ref -and $t -and $Git) {
+        $r = Invoke-MoeRescueRef -Git $Git -TaskId $preflightTaskId -Reason $Why -Title $M.Title -Status $M.Status -Sid $M.Sid -Sha $t
+        if ($r) { $Res.Ref = $r.Ref; $Res.Sha = $r.Sha }
+    }
+    if ($Res.Ref -and $null -ne (Send-MoeRecordCommit ($Row + @{ outcome = 'failed'; code = $Res.Code; message = $L.Msg; pushed = $false }))) {
+        $Res.Unlanded = Get-MoeUnlandedFields $Why $L.Paths $Res.Ref $L.B
+        Complete-MoePostflight | Out-Null
+    } else {
+        $script:MoeFinalizeDone = $true; $script:MoeFinalizeRc = $false
+        Write-Host "[WARN] task ${preflightTaskId}: the unlanded route's rescue ref or row failed; its bytes stay on $($script:MoeWtBranch), the attempt stays finalizing and the seat stops." -ForegroundColor Yellow
+    }
+    Set-MoeCtrlCDeferred $false
+}
+
 # A worktree completion exit (design §2.2): L0-L2 commit W's dirt to its
 # branch (owner guard, no ledger row of its own), then the net change lands
 # on the target (literal consolidationBranch, else main) as ONE squash commit:
@@ -6535,7 +6602,7 @@ function Invoke-MoeWorktreeCompletion([hashtable]$Settings, [hashtable]$M) {
     $res = @{ Outcome = 'failed'; Kind = 'completion'; Sha = ''; Ref = ''; Code = 'MOE_COMMIT_FAILED'; Branch = $target; Landed = @()
         PathCount = 0; InferredCount = 0; SkippedCount = 0; UnattributedCount = 0; Pushed = $false; StopLoop = [bool]$l2.StopLoop; Held = '' }
     $script:MoeLandingResult = $res
-    $L = @{ Msg = ''; T = ''; Journal = $(if ($git) { Get-MoeReceiptJournalPath $git.GitDir $tid } else { '' }); Why = ''
+    $L = @{ Msg = ''; T = ''; Journal = $(if ($git) { Get-MoeReceiptJournalPath $git.GitDir $tid } else { '' }); B = ''; Paths = @($l2.Paths)
         Remote = [bool]($git -and -not (Test-MoeNoRemote $git.Top)) }
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -6566,12 +6633,15 @@ function Invoke-MoeWorktreeCompletion([hashtable]$Settings, [hashtable]$M) {
         } elseif ($res.Code -cne 'MOE_PUSH_OUTCOME_UNKNOWN') {   # unknown: the publish kept the journal and parked C
             Write-Host "[WARN] $($res.Code): task $tid -- $($L.Msg); $target did not move and the task's bytes stay on $branch." -ForegroundColor Yellow
             # A refusal (an owed journal row) moves nothing, a rescue ref included.
-            if ($rescue -and $res.Outcome -ne 'refused') {
-                $why = if ($L.Why) { $L.Why } elseif ($res.Code -eq 'MOE_COMMIT_FAILED_REF_CONTENTION') { 'ref-contention' } else { 'commit-failed' }
-                $r = Invoke-MoeRescueRef -Git $git -TaskId $tid -Reason $why -Title $M.Title -Status $M.Status -Sid $M.Sid -Sha $L.T
-                if ($r) { $res.Ref = $r.Ref; $res.Sha = $r.Sha }
+            $why = if ($res.Outcome -ne 'refused') { Get-MoeUnlandedReason $res.Code } else { '' }
+            if ($why) { Invoke-MoeUnlandedRoute $git $res $L $M $row $why }
+            else {
+                if ($rescue -and $res.Outcome -ne 'refused') {
+                    $r = Invoke-MoeRescueRef -Git $git -TaskId $tid -Reason 'commit-failed' -Title $M.Title -Status $M.Status -Sid $M.Sid -Sha $L.T
+                    if ($r) { $res.Ref = $r.Ref; $res.Sha = $r.Sha }
+                }
+                Send-MoeRecordCommit ($row + @{ outcome = $res.Outcome; code = $res.Code; message = $L.Msg }) | Out-Null
             }
-            Send-MoeRecordCommit ($row + @{ outcome = $res.Outcome; code = $res.Code; message = $L.Msg }) | Out-Null
         }
     } catch {
         Write-Host "[WARN] worktree completion landing failed for task ${tid}: $_; its bytes stay on $branch." -ForegroundColor Yellow
@@ -6936,6 +7006,7 @@ function Complete-MoePostflight {
         if ($r.Outcome -eq 'committed' -and $script:MoeWtCompletion) { $outcome='failed' }
         elseif ($r.Outcome -eq 'committed') { $outcome='landed'; $sha=$r.Sha }
         elseif ($r.Outcome -eq 'nothing') { $outcome='nothing-to-commit' }
+        elseif ($r.Unlanded) { $outcome='unlanded' }   # WT-11: Invoke-MoeUnlandedRoute's retry data
         elseif ($r.Ref -and $r.Sha) { $outcome='rescued' }
         else { $outcome='failed' }
         # CQ-V08: a strong landing finalizes only once its receipt is recorded. While
@@ -6950,7 +7021,7 @@ function Complete-MoePostflight {
             return $true
         }
     }
-    $script:MoeFinalizeRc=[bool](Send-MoeFinalize $outcome $sha)
+    $script:MoeFinalizeRc=[bool](Send-MoeFinalize $outcome $sha $(if ($outcome -eq 'unlanded') { $r.Unlanded } else { @{} }))
     # CQ-V08b: the strong journal goes only once its attempt is closed; a lost
     # finalize or an attempt still open keeps it for the next replay. Twin: finalize_postflight.
     if ($script:MoeFinalizeRc -and $outcome -eq 'landed' -and $script:PinnedAttemptProfile -ceq 'verified-local' -and $r.ReceiptJournal -and

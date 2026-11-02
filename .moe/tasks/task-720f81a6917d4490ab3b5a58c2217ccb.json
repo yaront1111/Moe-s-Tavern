@@ -1,0 +1,33 @@
+{
+  "id": "task-720f81a6917d4490ab3b5a58c2217ccb",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-14] VS Code: read-only Accounts view in the Moe sidebar",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-13 (task-065e4812d96247cc8394b3cd0416475d: moe-vscode/src/util/AccountPresentation.ts), which itself depends on VSC-12 (the client's accountRotation and onAccountsChanged) and VSC-7 (the accounts corpus).\n\nObjective: show Claude account rotation in VS Code the way JetBrains' Accounts tab lists it (moe-jetbrains AccountsPanel.kt): one item per AccountPresentation row, the chips line, and an empty or disconnected state, refreshed on onAccountsChanged and on connection changes. Read-only in this row.\n\nDeliverable: new moe-vscode/src/providers/AccountsTreeProvider.ts (a TreeDataProvider modelled on ManagedVmTreeProvider.ts); moe-vscode/package.json gains a \"moe.accounts\" view in the moe views container and a \"moe.accounts.refresh\" command with a view/title entry; moe-vscode/src/extension.ts registers both; new moe-vscode/tests/accounts-view.test.cjs drives the provider under node:vm with a fake vscode and a fake client.\n\nNot in scope: add, remove, move, rename, switch-percent and sign-in actions (VSC-15), any MoeDaemonClient.ts change, any moe-jetbrains file.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/package.json declares the moe.accounts view in the moe views container and the moe.accounts.refresh command with a view/title entry for that view, and tests/accounts-view.test.cjs asserts both from package.json.",
+    "With a fake client holding a two-account rotation, the provider's getChildren returns one item per AccountPresentation row, in row order, with labels and descriptions resolved to the MoeBundle English.",
+    "Firing onAccountsChanged or onConnectionChanged makes the provider fire onDidChangeTreeData; a disconnected client or a null rotation yields the single empty-state item; dispose() removes every listener it added.",
+    "moe-vscode/src/extension.ts registers the provider and the refresh command and pushes both disposables into context.subscriptions.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-065e4812d96247cc8394b3cd0416475d"
+  ],
+  "priority": "MEDIUM",
+  "order": 15,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:41:43.527Z",
+  "updatedAt": "2026-11-02T09:41:43.527Z"
+}

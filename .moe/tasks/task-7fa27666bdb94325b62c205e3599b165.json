@@ -1,0 +1,33 @@
+{
+  "id": "task-7fa27666bdb94325b62c205e3599b165",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-20] VS Code: AgentSeatTracker port with seat wiring that passes the shared seat corpus",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-19 (task-b3daad343a474830a6bd243991d5353d), which lands moe-jetbrains/src/test/resources/client-seat-tracker.json. This row must pass it UNCHANGED (held-out test).\n\nObjective: a pure TypeScript port of JetBrains' AgentSeatTracker (moe-jetbrains/src/main/kotlin/com/moe/services/AgentSeatTracker.kt): the same constructor callbacks (load, save, deregister) and operations (launched, closed, resendGone, acked), plus a dependency-injected wiring function so VSC-21 only has to plug real objects in: `wireAgentSeats({ tracker, onDidCloseTerminal, workerIdOf(terminal), onConnected, onAcked })` that calls closed() for a closed terminal it can map to a worker id, resendGone() on every connected transition, acked() on each ack, and returns a Disposable that unsubscribes all three.\n\nDeliverable: new moe-vscode/src/util/AgentSeatTracker.ts (no vscode import and no runtime import: every dependency arrives as a parameter) and new moe-vscode/tests/agent-seat-tracker.test.cjs that loads it under node:vm with a require map that throws on every name (tests/managed-vm.test.cjs loads the pure ManagedVm.ts this way), replays every corpus row, and tests wireAgentSeats with fake event sources.\n\nNot in scope: AgentLauncher.ts, MoeDaemonClient.ts and extension.ts (VSC-21), any moe-jetbrains file, the corpus.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/agent-seat-tracker.test.cjs replays every row of moe-jetbrains/src/test/resources/client-seat-tracker.json against AgentSeatTracker.ts and passes, with failing ids reported together.",
+    "With fake event sources, wireAgentSeats calls closed() once for a closed terminal that maps to a worker id and not at all for one that does not, calls resendGone() on each connected transition, calls acked() for each ack, and after dispose() reacts to none of them.",
+    "AgentSeatTracker.ts loads under a require map that throws on every module name and contains no vscode reference.",
+    "A scratch-copy mutant in which acked() does not save makes the test fail (mutant discarded afterwards); client-seat-tracker.json and every moe-jetbrains file are unchanged by this task's diff.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b3daad343a474830a6bd243991d5353d"
+  ],
+  "priority": "HIGH",
+  "order": 8.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:45:11.915Z",
+  "updatedAt": "2026-11-02T09:45:11.915Z"
+}

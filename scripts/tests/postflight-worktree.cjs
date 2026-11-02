@@ -684,6 +684,10 @@ async function wtReplayRemote(){
   write(journal(p),j1);r=await landRun(p,'wt-replay-remote-3',{},net);
   assert.deepEqual([present(journal(p)),/MOE_PUSH_FAILED: task \S+ -- origin moved past/.test(r.log),revOf(bare,'refs/heads/main'),done(p).length,finals(p).filter(x=>x[0]==='landed')],
     [false,true,peer,0,[]],'the journal stayed, origin moved, or C was recorded or finalized'+tail(r.log));
+  // WT-11: a journaled attempt still finalizing is routed unlanded 'remote' under the journal's identity, T rescued.
+  const t=revOf(p.top,p.branch);write(journal(p),j1);r=await landRun(p,'wt-replay-remote-4',{},{...net,FAKE_ATTEMPT_PHASE:'finalizing'});
+  assert.deepEqual([present(journal(p)),done(p).map(x=>[x.outcome,x.code,x.pushed]),unlanded(p).map(x=>[x.outcome,x.unlandedReason,x.targetTip]),revOf(p.top,(retryOf(p)||{}).rescueRef)],
+    [false,[['failed','MOE_PUSH_FAILED',false]],[['unlanded','remote',JSON.parse(j1.replace(/^﻿/,'')).targetBefore]],t],'the replay did not route the attempt unlanded'+tail(r.log));
 }
 // A failed sync (MOE_WORKTREE_SYNC_FAILED) leaves the landing standing; the next pre-flight syncs the recorded C in,
 // but never a C the target lacks (even one T adds nothing to), nor over newer task work (a C^{tree} sync drops it).
@@ -859,6 +863,80 @@ function leaseRetry(){
     'rpc acquire_resource task-new -','[OK] task task-new holds the land lease git-land-main.','rc=0 task-new t2'],'the retry before the next lease: '+r.stderr);
 }
 
+// WT-11 (design §2.5): a completion that publishes nothing parks T on a rescue ref, records its failed row pushed:false
+// and finalizes 'unlanded' with its reason, conflict paths and B (null before L4 reads one); an unknown push finalizes
+// nothing. The next session merges the target (origin's, fetched, in remote mode) into W first: its prompt starts
+// LANDING-CONFLICT: <paths> (markers, MERGE_HEAD) or LANDING-RETRY: <reason> (a clean merge); a failed fetch stops it.
+const retryOf=p=>JSON.parse(readOr(path.join(p.dir,'.moe','landing-retry.json'))||'null');
+const unlanded=p=>rpcs(p).filter(x=>x.tool==='finalize_attempt').map(x=>x.args),promptOf=f=>((rows(f).pop()||{}).context||'').split('\n')[0];
+async function wtUnlanded(){
+  const bare=(p,n,push=true)=>{const b=path.join(root,n+'.git');git(root,'init','-q','--bare',b);git(p.top,'remote','add','origin',b);if(push)git(p.top,'push','-q','origin','main');return b;};
+  const origin=p=>revOf(p.top,'refs/remotes/origin/main'),none=()=>null,hook=path.join(root,'wt-unlanded-rejected.git','hooks','pre-receive'),ps={};
+  for(const [n,settings,knobs,setup,code,reason,tipOf,next,mhOf] of [
+    ['conflict',{},{},p=>commitOn(p,'refs/heads/main',{'src/a.txt':'main a\n'}),'MOE_COMMIT_FAILED_CONFLICT','conflict',mainOf,'LANDING-CONFLICT: src/a.txt',mainOf],
+    ['contention',{},{WT_GIT_FAIL:'-m',FAKE_EVIDENCE_MODE:'finalize-loss-once'},null,'MOE_COMMIT_FAILED_REF_CONTENTION','contention',mainOf,'LANDING-RETRY: contention',none],
+    ['gate',{qualityGate:gateCmd()},{WT_GATE_EXIT:'3'},null,'MOE_COMMIT_FAILED_GATE','gate',mainOf,'LANDING-RETRY: gate',none],
+    ['lease',{qualityGate:gateCmd()},{FAKE_LEASE_MODE:'timeout',MOE_LAND_LEASE_WAIT_SEC:'3'},null,'MOE_COMMIT_FAILED_LAND_LEASE','contention',none,'LANDING-RETRY: contention',none],
+    ['diverged',{},{},p=>{bare(p,'wt-unlanded-diverged');commitOn(p,'refs/heads/main',{'src/l.txt':'local\n'});},'MOE_LAND_TARGET_DIVERGED','diverged',origin,'LANDING-RETRY: diverged',none],
+    ['fetch',{},{},p=>bare(p,'wt-unlanded-fetch',false),'MOE_LAND_FETCH_FAILED','remote',none,null,none],
+    // The resume merges origin's main as fetched now (a peer push), never the local main.
+    ['rejected',{},{},p=>{bare(p,'wt-unlanded-rejected');write(hook,'#!/bin/sh\nexit 1\n');fs.chmodSync(hook,0o755);},'MOE_PUSH_FAILED','remote',origin,'LANDING-RETRY: remote',
+      p=>{fs.rmSync(hook);const peer=commitOn(p,'refs/wt-unlanded/peer',{'src/peer.txt':'peer\n'});git(p.top,'push','-q','origin',peer+':refs/heads/main');return peer;}]]){
+    const p=ps[n]=repo('wt-unlanded-'+n,{settings:{...LANDS,...settings}}),rec=path.join(root,`wt-unlanded-${n}.jsonl`),net={MOE_LAND_NET_BACKOFF_SEC:'0'};
+    await landRun(p,`wt-unlanded-${n}-0`,{'src/a.txt':'task a\n'});
+    if(setup)setup(p);
+    const main=mainOf(p),t=revOf(p.top,p.branch),tip=tipOf(p);
+    let r=await landRun(p,'wt-unlanded-'+n,{},{...REVIEW,...net,WT_GATE_LOG:path.join(root,`wt-unlanded-${n}-gate.jsonl`),...knobs});
+    const f=unlanded(p),ref=f.length?f[0].rescueRef:null;
+    assert.deepEqual([mainOf(p),done(p).map(x=>[x.outcome,x.code,x.pushed]),f.map(x=>[x.outcome,x.unlandedReason,x.conflictPaths,x.targetTip,x.landedRevision])],
+      [main,[['failed',code,false]],Array(knobs.FAKE_EVIDENCE_MODE?2:1).fill(['unlanded',reason,n==='conflict'?['src/a.txt']:[],tip,null])],`${n}: main moved, the row or the finalize`+tail(r.log));
+    assert.deepEqual([revOf(p.top,ref),retryOf(p)&&[retryOf(p).rescueRef,retryOf(p).count]],[t,[ref,1]],`${n}: the rescue ref ${ref} or the stored landingRetry (a replayed finalize counts once)`);
+    const mh=mhOf(p);r=await launch(p,`wt-unlanded-${n}-resume`,{WT_CLI_RECORD:rec,...net,...(n==='conflict'?{MOE_DISABLE_CHECKPOINT:'1'}:{})});
+    if(!next){refused(r,'MOE_WORKTREE_RESUME_FAILED');assert.equal(readOr(path.join(p.W,'src','a.txt')),'task a\n','W lost the bytes');continue;}
+    assert.deepEqual([promptOf(rec),revOf(p.W,'MERGE_HEAD'),mainOf(p)],[next,mh,main],`${n}: the resume prompt, MERGE_HEAD or main`+tail(r.log));
+  }
+  // Resolved to T itself: still ONE task-branch commit [T, B] on T's tree, then C on main; the merge is quit.
+  let p=ps.conflict;const t=revOf(p.top,p.branch),b=mainOf(p);
+  let r=await landRun(p,'wt-unlanded-conflict-done',{'src/a.txt':'task a\n'},{...REVIEW,MOE_DISABLE_CHECKPOINT:'1'});
+  const l2=parents(p.top,revOf(p.top,p.branch))[0],tree=x=>git(p.top,'rev-parse',x+'^{tree}');
+  assert.deepEqual([parents(p.top,l2),tree(l2),git(p.top,'show',mainOf(p)+':src/a.txt'),revOf(p.W,'MERGE_HEAD')],[[t,b],tree(t),'task a\n',null],'resolved to T'+tail(r.log));
+  // An unknown push publishes nothing provable: no finalize of any outcome, no landingRetry.
+  p=repo('wt-unlanded-unknown',{settings:LANDS});bare(p,'wt-unlanded-unknown');
+  r=await landRun(p,'wt-unlanded-unknown',{'src/a.txt':'done\n'},{...REVIEW,MOE_LAND_NET_BACKOFF_SEC:'0',WT_GIT_FAIL:'push'});
+  assert.deepEqual([r.log.includes('MOE_PUSH_OUTCOME_UNKNOWN'),finals(p),retryOf(p)],[true,[],null],'an unknown push finalized'+tail(r.log));
+}
+// The conflict chain: the resume leaves markers and MERGE_HEAD; its checkpoint is one commit on T keeping MERGE_HEAD and
+// the unmerged stages; a completion with markers lands nothing (MOE_WORKTREE_UNRESOLVED_CONFLICT, routed conflict again);
+// resolved, C lands B's other change and the partial edit, the task-branch commit is [T', B] and the merge is quit.
+async function wtResume(){
+  const p=repo('wt-resume',{settings:LANDS}),rec=path.join(root,'wt-resume-cli.jsonl'),mh=()=>revOf(p.W,'MERGE_HEAD');
+  await landRun(p,'wt-resume-0',{'src/a.txt':'task a\n'});
+  const b=commitOn(p,'refs/heads/main',{'src/a.txt':'main a\n','src/m.txt':'main m\n'});
+  await landRun(p,'wt-resume-1',{},REVIEW);
+  const t=revOf(p.top,p.branch);
+  let r=await landRun(p,'wt-resume-2',{'src/p.txt':'partial\n'},{WT_CLI_RECORD:rec}),t2=revOf(p.top,p.branch);
+  assert.deepEqual([promptOf(rec),mh(),/^<<<<<<< /m.test(read(path.join(p.W,'src','a.txt'))),parents(p.top,t2),git(p.W,'ls-files','-u','--','src/a.txt').trim().split('\n').length],
+    ['LANDING-CONFLICT: src/a.txt',b,true,[t],3],'the prompt, MERGE_HEAD, the markers, the one-parent checkpoint or the unmerged stages'+tail(r.log));
+  r=await landRun(p,'wt-resume-3',{},REVIEW);
+  assert.deepEqual([mainOf(p),mh(),r.log.includes('[WARN] MOE_WORKTREE_UNRESOLVED_CONFLICT'),unlanded(p).map(x=>[x.outcome,x.unlandedReason,x.conflictPaths])],
+    [b,b,true,[['unlanded','conflict',['src/a.txt']]]],'a completion with markers'+tail(r.log));
+  r=await landRun(p,'wt-resume-4',{'src/a.txt':'resolved\n'},REVIEW);
+  const c=mainOf(p),l2=parents(p.top,revOf(p.top,p.branch))[0];
+  assert.deepEqual([parents(p.top,c),['a','m','p'].map(f=>git(p.top,'show',`${c}:src/${f}.txt`)),parents(p.top,l2)[1],mh(),retryOf(p),finals(p)],
+    [[b],['resolved\n','main m\n','partial\n'],b,null,null,[['landed',c]]],'the resolved landing'+tail(r.log));
+}
+// The marker scan, from this wrapper's own function: each marker shape (CRLF too) and a path out of W are hits; a
+// resolved deletion (absent) and marker look-alikes are not.
+function markerScan(){
+  const w=path.join(root,'marker-scan'),q=s=>"'"+s.replace(/'/g,"''")+"'";
+  const files={'lt.txt':'a\n<<<<<<< HEAD\n','gt.txt':'>>>>>>> theirs\r\n','eq.txt':'a\r\n=======\r\nb\r\n','ok.txt':'<<<<<<<x\n ======= \n=======x\n'};
+  for(const [f,b] of Object.entries(files))write(path.join(w,f),b);
+  const args=[...Object.keys(files),'gone.txt','../x'];
+  const r=win?cp.spawnSync(engine,['-NoProfile','-NonInteractive','-Command',`${wrapperFn('Find-MoeConflictMarkers')}\nFind-MoeConflictMarkers ${q(w)} @(${args.map(q).join(',')})`],{encoding:'utf8'})
+    :cp.spawnSync(engine,['-c',`${wrapperFn('wt_marker_scan')}\nwt_marker_scan "$@"`,'_',w,...args],{encoding:'utf8',env:{...inherited,PYTHON_CMD:py}});
+  assert.deepEqual(String(r.stdout).trim().split(/\r?\n/).sort(),['../x','eq.txt','gt.txt','lt.txt'],'the marker scan: '+r.stderr);
+}
+
 // DoD: both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_/MOE_MIGRATION_ codes.
 function codes(){
   const set=f=>[...new Set(read(path.join(path.dirname(wrapper),f)).match(/MOE_(?:WORKTREE|LAND|CONTROL|BOARD|MIGRATION)_[A-Z0-9_]+/g))].sort();
@@ -871,7 +949,8 @@ for(const t of ['claude','codex','gemini','grok'])cases['launch-'+t]=()=>launchA
 Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link-partial':linkPartial,'project-yml':projectYml,'serena-outside':serenaOutside,
   'wt-checkpoint':wtCheckpoint,'wt-deny':wtDeny,'wt-recover':wtRecover,'wt-recover-moe':wtRecoverMoe,'wt-control-seats':wtControlSeats,
   'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-replay-remote':wtReplayRemote,'wt-sync':wtSync,'wt-fails':wtFails,
-  'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,codes});
+  'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
+  'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,codes});
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{
   let ok=0,failed=0;

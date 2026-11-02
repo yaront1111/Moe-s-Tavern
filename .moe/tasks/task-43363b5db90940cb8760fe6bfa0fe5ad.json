@@ -1,0 +1,60 @@
+{
+  "id": "task-43363b5db90940cb8760fe6bfa0fe5ad",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-18] Integration and hardening: VS Code parity and plugin-reuse epic",
+  "description": "Epic-final row for epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0); decision doc docs/plans/2026-11-02-vscode-reuse.md. Depends on every other row in the epic. The slices each proved only their own part; this row gates the whole epic.\n\nObjective and deliverable:\n1. Full regression of both plugins, in snapshots (GLOBAL rail: no in-place builds or installs). moe-vscode: `npm ci && npm run lint && npm run compile && npm test && npm run package`, then `node scripts/tests/onboarding.mjs` on the unzipped vsix's extension/bundled dir, in a snapshot whose absolute path has no UUID-shaped segment (npm 12 redacts UUIDs in `npm list` output and vsce then packages nothing; see VSC-16). moe-jetbrains: `gradlew.bat test buildPlugin --rerun` under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease, mem:gotcha-jetbrains-snapshot-gradle-test), then the onboarding smoke on the unzipped zip. Report counts against the 882a4c39 baseline (VS Code: 388 tests, 384 pass, 4 skip).\n2. Cross-client corpus integrity: every moe-jetbrains/src/test/resources/client-*.json is read by at least one Kotlin test and at least one moe-vscode test, and no corpus row carries a client-specific expectation.\n3. An adversarial pass over the whole epic diff (find each row's commits with `git log --grep <task id>`; read the combined diff of moe-vscode/, moe-jetbrains/, scripts/bundle-manifest.json and .github/workflows/ci.yml): contracts that drifted between a corpus row and its consumer, duplicated helpers (a second copy of account text or of shell quoting), strict vm-harness require maps broken by a new import, listeners or terminals never disposed, notifications fired from snapshots.\n4. The docs sweep held back from the slices: moe-vscode/README.md (task notifications, the Delivery section, Release Agent, the Accounts view, settings parity, worktree exclusion), moe-vscode/CHANGELOG.md (one entry for the epic), moe-vscode/MANUAL_TESTS.md (manual checks for notifications, the Accounts view and its sign-in terminal, worktree exclusion, and running the extension through VS Code Remote-WSL, which is VS Code's answer to JetBrains' \"Run Agents in WSL\" toggle), and the slice table in docs/plans/2026-11-02-vscode-reuse.md (final status and landing commit per row).\n5. Any cleanup a slice explicitly parked in its summary.\n\nNot in scope: the epic's files-to-avoid (CLAUDE.md, scripts/CLAUDE.md, docs/ARCHITECTURE.md, docs/CONFIGURATION.md, docs/MCP_SERVER.md, docs/SCHEMA.md, docs/TROUBLESHOOTING.md, docs/roles/**, packages/moe-daemon/src/generated/initFiles.ts, scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/postflight*, scripts/tests/worktree-*). If one of them needs a change, file a follow-up row instead.\n\nVerification: the snapshot runs of item 1, each cited with its command, exit code and counts.",
+  "definitionOfDone": [
+    "In a UUID-free git-archive snapshot of the epic's final HEAD, moe-vscode `npm ci && npm run lint && npm run compile && npm test && npm run package` exits 0 with counts reported against the 882a4c39 baseline, and `node scripts/tests/onboarding.mjs` passes on the unzipped vsix's extension/bundled dir.",
+    "Under the jetbrains-gradle lease in a snapshot, `gradlew.bat test buildPlugin --rerun` reports BUILD SUCCESSFUL with the JUnit total, and the onboarding smoke passes on the unzipped plugin zip.",
+    "Every moe-jetbrains/src/test/resources/client-*.json is referenced by at least one test under moe-jetbrains/src/test/kotlin and one under moe-vscode/tests (grep listing in the summary).",
+    "moe-vscode/README.md, CHANGELOG.md and MANUAL_TESTS.md describe the epic's user-visible changes, including the Remote-WSL manual check, and the slice table in docs/plans/2026-11-02-vscode-reuse.md shows each row's final status and landing commit.",
+    "The summary lists the adversarial findings over the whole epic diff, each fixed in this task or filed as a new row with its id.",
+    "The diff touches none of the files listed as not in scope."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-2ef8e36c29f4490884dff27c9f3ed9fb",
+    "task-09e784e5dd214833b8b9df66038941cc",
+    "task-a5f39d5535404f6e9e59f762c046f5e0",
+    "task-db97dacb7b3843b4a6f747c154123501",
+    "task-0f2cc6eb40324b37bafa8be4cf65caa3",
+    "task-9f6a725ff14c4c08b4acb203884e7ae5",
+    "task-93729f32ef6f408cbd411813c5c93838",
+    "task-185f728fd79c4658a86b8a0b40a66595",
+    "task-06dda5c1df29433ab4eb5c4230b38581",
+    "task-743e577af8204d6aa48d11fab01c979d",
+    "task-e8255fb1ab274ca9bf67d49c34a9635e",
+    "task-daf5abdd282a4c46b280eb0a48e74cd9",
+    "task-065e4812d96247cc8394b3cd0416475d",
+    "task-720f81a6917d4490ab3b5a58c2217ccb",
+    "task-357ed3ae786b4477a39840a7b86a88a6",
+    "task-6fbd08111de142508fb0402d06f24e3f",
+    "task-6a0f0be32acb4dc8b3977f32405277a5",
+    "task-b3daad343a474830a6bd243991d5353d",
+    "task-7fa27666bdb94325b62c205e3599b165",
+    "task-7e7bd0ec91ca488da2858f70cff32f65"
+  ],
+  "priority": "HIGH",
+  "order": 19,
+  "comments": [
+    {
+      "id": "comment-71c36bc183f5428882fcc509beb58f40",
+      "author": "architect-93e0e956",
+      "content": "Architect note from the VSC-0 breakdown session, added after this row was created:\n1. dependsOn holds all 20 slice rows (VSC-1 to VSC-17 and VSC-19 to VSC-21), which is the daemon's cap. VSC-0 (task-a3e414a3, the breakdown row that writes docs/plans/2026-11-02-vscode-reuse.md) is NOT in the list. Before item 4 (the slice-table update), confirm VSC-0 is DONE and the doc is on the branch.\n2. Rows VSC-19, VSC-20 and VSC-21 (task-b3daad34, task-7fa27666, task-7e7bd0ec) were added after the description was written. They port JetBrains' AgentSeatTracker, so closing an agent's terminal deregisters its worker (DEREGISTER_WORKER with reason terminal_closed, acknowledged by WORKER_DEREGISTERED). Treat them as part of items 2-4. client-seat-tracker.json is in the corpus-integrity check. Add seat deregistration on terminal close to the README feature list and add a MANUAL_TESTS.md check (launch a seat, close its terminal, see the worker deregistered and its task released).",
+      "timestamp": "2026-11-02T09:46:18.049Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:42:20.055Z",
+  "updatedAt": "2026-11-02T09:46:18.049Z"
+}

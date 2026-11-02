@@ -34,11 +34,17 @@
       "author": "governor-e6b40560",
       "content": "Addition to the switch checklist. Insert it between step 6 (worktreeMode on) and step 8 (relaunch the seats): run `git -C <control checkout> config extensions.worktreeConfig true`, then confirm with `git config --get extensions.worktreeConfig` that it prints `true`.\n\nWhy: bug task-c7ca56e6. With the extension unset, the first sparse-checkout in a fresh worktree writes the common .git/config under a lock. Two seats provisioning at the same moment then race on that lock, and one refuses with MOE_WORKTREE_CREATE_FAILED. Seats relaunching all together right after the switch is exactly that moment. Once the extension is set, it becomes per-worktree config and the race is gone. The row itself depends on this gate and lands after the switch.",
       "timestamp": "2026-11-02T09:10:13.803Z"
+    },
+    {
+      "id": "comment-3e464d79ac964e0ba19b6e72589b8511",
+      "author": "governor-e6b40560",
+      "content": "HUMAN DELEGATION (11-02, about 09:52Z), recorded by the governor. The human replied **\"do all\"** to the governor's note that the next session would ask before the daemon rebuild and walk them through the switch.\n\nThe governor therefore runs every step of this checklist itself, without asking first: the drain, the settings, `git switch -c moe/control`, `git config extensions.worktreeConfig true`, the live daemon rebuild and restart, doctor, the seat relaunch and archiving this gate.\n\nThe preconditions still hold:\n- WT-13 and WT-19b are DONE;\n- the drain is complete;\n- the rescue refs are checked.\n\nA step that auto mode denies is reported and asked for, never worked around.",
+      "timestamp": "2026-11-02T09:52:17.970Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T08:48:44.700Z",
-  "updatedAt": "2026-11-02T09:15:30.944Z",
+  "updatedAt": "2026-11-02T09:52:17.970Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T08:49:58.314Z",

@@ -16,21 +16,35 @@
     {
       "stepId": "step-1",
       "description": "1. Pin the unlanded contract in the existing fixture and twin tests first. Goal: confirmed-unpublished failures safely return to a worker; unknown/published outcomes do not. Architecture: wrapper preserves T and reports unlanded to WT-03; subsequent claim merges the authoritative target into W; completed plan steps stay completed. Tech: Git, Bash/Python, PS5.1 and the existing Node fake proxy. Read the landed WT-03/WT-10 contracts plus task comments and revised design §2.5/2.6; use their actual helper names. Extend only the shared postflight-fake-proxy.js finalizeReply/get_context fixture: accept unlanded only for a worktree finalizing attempt, require landedRevision:null, a reason in conflict|contention|gate|diverged|remote, same-task rescueRef, optional 40-hex/null targetTip, and normalized bounded conflictPaths. Assert failed record_commit precedes it and no pushed:true/landed row for that failure. Return/store fixture landingRetry as WT-03 does; expose it conditionally in context; duplicate finalize must not increment the retry count twice. Keep all old outcomes and strict assertions unchanged. Reuse landed workspace/claim knobs rather than duplicate the proxy. In both harnesses add table-driven failure rows for conflict, contention, gate, diverged, lease timeout -> contention, fetch failure/proven-absent push -> remote; assert exact payload, target unchanged, rescue resolves to T and no landed finalize. Include unknown-push negative row: no finalize of ANY outcome. Do not modify held-out worktree-landing.{sh,ps1} or daemon files.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "I pinned the unlanded contract first.\n\n- **Fake proxy** (`postflight-fake-proxy.js`):\n  - finalize_attempt now accepts 'unlanded' through `unlandedCheck`, which mirrors finalizeAttempt.ts validateUnlanded. It requires a worktree attempt, landedRevision null, one of the five reasons, a rescue ref of this task, a 40-hex or null targetTip, and at most 500 distinct relative paths. Every completion row of the session must be failed, coded and pushed:false.\n  - An unlanded close of a finalizing attempt stores landing-retry.json with count+1. A closed replay leaves the count alone. landed and nothing-to-commit clear it.\n  - get_context serves the stored value as task.landingRetry.\n- **Scope growth:** the new cases live in the shared scripts/tests/postflight-worktree.cjs instead of postflight.sh/.ps1. Both harnesses already run it (postflight.sh:1257, postflight.ps1:1238), so the twin tests have one source. The held-out worktree-landing.{sh,ps1} and the daemon files are untouched.\n- **New cases:**\n  - **'wt-unlanded'** is table-driven:\n    - conflict;\n    - contention via WT_GIT_FAIL '-m', which fails only the landing CAS, plus finalize-loss-once to prove a replayed finalize counts once;\n    - gate;\n    - lease timeout → contention, tip null;\n    - diverged;\n    - fetch failure → remote, tip null. Its resume fetch failing stops with MOE_WORKTREE_RESUME_FAILED and launches no CLI;\n    - [remote rejected] → remote. Its resume merges origin's peer-pushed tip, never the local main.\n\n    Each row is then resumed and checked for its prompt prefix, MERGE_HEAD and an unchanged main. The case also covers resolved-to-T (still [T,B] on T's tree) and an unknown push that finalizes nothing.\n  - **'wt-resume'** is the DoD 2-4 chain: markers + MERGE_HEAD + 'LANDING-CONFLICT: src/a.txt'; a one-parent checkpoint that keeps MERGE_HEAD and the 3 unmerged stages; a completion with markers that prints MOE_WORKTREE_UNRESOLVED_CONFLICT and lands nothing; then the resolved landing, with the L2 commit's second parent = B, MERGE_HEAD gone and the retry cleared.\n  - **'marker-scan'** unit-tests the wrapper's own scanner: each marker shape, CRLF, a path out of W, a resolved deletion and look-alikes.\n  - **wt-replay-remote run 4:** a finalizing journaled attempt is routed unlanded 'remote'.\n- **RED** on the scratch snapshot /tmp/wt11-red: all 4 cases fail for the missing feature, not for harness errors. For example, conflict gets a legacy row with pushed undefined and reason=commit-failed, and marker-scan reports \"no function wt_marker_scan\".\n- Peer sessions' dirty .moe/roles, .moe/skills and .moe/tasks paths and scripts/tests/postflight-fake-proxy.js predate this session's edits on other lines. They are not reverted or staged by me beyond the listed files.",
+      "startedAt": "2026-11-02T09:12:37.079Z",
+      "completedAt": "2026-11-02T09:34:45.112Z"
     },
     {
       "stepId": "step-2",
       "description": "2. Route only proven-unpublished failures through one worktree unlanded result. Map MOE_COMMIT_FAILED_CONFLICT and MOE_WORKTREE_UNRESOLVED_CONFLICT to conflict; MOE_COMMIT_FAILED_REF_CONTENTION/MOE_COMMIT_FAILED_LAND_LEASE to contention; MOE_COMMIT_FAILED_GATE (including gate integrity failures) to gate; MOE_LAND_TARGET_DIVERGED to diverged; MOE_LAND_FETCH_FAILED and a reconciled absent MOE_PUSH_FAILED to remote. Reuse predecessor publication-state tracking: confirmed C or an unknown push must bypass this route even if a later sync/RPC fails. Preserve T by the existing rescue-from-commit primitive at refs/moe/rescue/<taskId>/<timestamp>, with mapped reason, and confirm it resolves to T; marker rejection before L2 must also leave all working bytes untouched. Send failed completion record_commit with the code and pushed:false, then finalize_attempt with `{outcome:'unlanded',landedRevision:null,unlandedReason,conflictPaths,rescueRef,targetTip:B_or_null}` plus pinned identity/runner fields. Extend finalize_attempt_rpc/Send-MoeFinalize and final postflight dispatch so ordinary teardown cannot issue a second legacy finalize. Error handling: rescue creation failure or failed ledger/finalize acknowledgement retains bytes, attempt hold and retry data, stops new-task claiming, and retries the same action rather than reporting successful handback. Reuse existing bounded RPC retries and idempotent finalization; do not edit daemon-owned task state or reopen plan steps. Unknown push remains WT-09's journal/reconciliation-only path.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Unlanded route in both wrappers. sh: unlanded_reason (code->reason map), unlanded_park (rescue ref at T unless L2's own contention ref exists, then record_commit failed/code/pushed:false), take_unlanded_route (signals deferred, land lease released first, MOE_UNLANDED_REASON/TIP=LAND_B, finalize_postflight -> finalize_args emits outcome unlanded {landedRevision:null, unlandedReason, conflictPaths (normalized, deduped, <=500, from merge.z), rescueRef, targetTip B|null}); a failed rescue/row finalizes nothing, memoizes MOE_FINALIZE_RC=1 so the seat stops, bytes stay on the task branch. replay_unlanded: a still-finalizing journal whose landing can never apply (receipt_replay rc 1) is parked unlanded/remote instead of dropped (replaces WT-09's drop per comment c2d608e0); a failed route keeps the journal. LAND_WT_REASON removed. ps1 twins: Get-MoeUnlandedFields, Send-MoeFinalize -Extra, Complete-MoePostflight unlanded outcome, Get-MoeJournalAttempt, Invoke-MoeReplayUnlanded, Get-MoeUnlandedReason, Invoke-MoeUnlandedRoute; Sync-MoeLandTarget sets $L.B in both modes (even diverged). MOE_PUSH_OUTCOME_UNKNOWN and refused outcomes never route. Evidence: sh snapshot MOE_WORKTREE_ONLY=wt-replay-remote ok; wt-unlanded conflict row passes every routed assertion (main unchanged, row failed+code+pushed false, finalize unlanded/conflict/['src/a.txt']/tip/null rescue=T, retry count 1) and stops only at the resume prompt (step-3). ps1 (Windows powershell engine via node.exe) wt-replay-remote ok.",
+      "startedAt": "2026-11-02T09:34:46.811Z",
+      "completedAt": "2026-11-02T09:54:00.758Z"
     },
     {
       "stepId": "step-3",
@@ -92,7 +106,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-4c1da905",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -148,7 +162,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:54:37.672Z",
-  "updatedAt": "2026-10-30T14:19:16.473Z",
+  "updatedAt": "2026-11-02T09:54:00.758Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:04.735Z",
@@ -157,16 +171,21 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:29:07.408Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-eb7de546"
+    "architect-eb7de546",
+    "worker-4c1da905"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:34:06.921Z",
   "planningNotes": {
@@ -188,5 +207,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T13:34:06.946Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T09:12:37.079Z"
 }

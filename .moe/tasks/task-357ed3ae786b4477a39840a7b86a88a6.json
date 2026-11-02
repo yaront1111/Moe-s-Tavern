@@ -1,0 +1,33 @@
+{
+  "id": "task-357ed3ae786b4477a39840a7b86a88a6",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-15] VS Code: account actions in the Accounts view, matching JetBrains",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-14 (task-720f81a6917d4490ab3b5a58c2217ccb: AccountsTreeProvider and the moe.accounts view), and through it on VSC-12's client senders and VSC-13's AccountPresentation port.\n\nObjective: the actions of JetBrains' Accounts tab (moe-jetbrains AccountsPanel.kt, enabled by AccountPresentation.actions): add an account (label checked with isValidLabel; ADD_ACCOUNT, then sign it in), sign in an existing account, remove (after a confirmation), move up and down, rename, and set the switch percent. Sign-in runs the daemon's `accounts login <id>` in a terminal the way JetBrains does (TerminalAgentLauncher.accountsCommandLine and runAccountsCommand, with --accounts-file); in VS Code that is an integrated terminal (vscode.window.createTerminal plus sendText) running the bundled daemon (bundled/daemon/index.js, resolved the way AgentLauncher.ts resolves it). Enablement follows AccountPresentation.actions exactly, through context keys used in `when` clauses.\n\nDeliverable: the commands, view/item/context menu entries and context keys in moe-vscode/package.json; their handlers in moe-vscode/src/providers/AccountsTreeProvider.ts, calling VSC-12's client senders; new moe-vscode/tests/accounts-actions.test.cjs. If the terminal command needs shell quoting, reuse the quoting moe-vscode/src/util/AgentLauncher.ts already has (it may become the fourth file).\n\nNot in scope: VM token actions (AccountPresentation.vmTokenArgs; verified-local stays refused in this project), any moe-jetbrains file, the daemon.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/accounts-actions.test.cjs asserts each action (add, sign in, remove, move up, move down, rename, switch percent) calls the matching client sender exactly once with the expected arguments after its input or confirmation, and zero times when the input is cancelled or isValidLabel rejects it.",
+    "For every rotation row in moe-jetbrains/src/test/resources/client-accounts.json, the context keys the provider sets match AccountPresentation.actions' enabled flags.",
+    "Sign-in opens one integrated terminal whose command runs the bundled daemon's `accounts login <id>` with the --accounts-file argument JetBrains passes, and the test proves an id or path containing spaces or quotes is quoted.",
+    "package.json declares every action command with view/item/context entries scoped to the moe.accounts view, asserted by the test.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-720f81a6917d4490ab3b5a58c2217ccb"
+  ],
+  "priority": "MEDIUM",
+  "order": 16,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:41:56.596Z",
+  "updatedAt": "2026-11-02T09:41:56.596Z"
+}
