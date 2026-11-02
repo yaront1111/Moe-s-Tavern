@@ -43,21 +43,27 @@
     {
       "stepId": "step-3",
       "description": "DOCS. Edit docs/MCP_SERVER.md: ONLY the claim_next_task `fileCollision[]` notes paragraph (about :1525). WT-17 (task-cda65eb0, WORKING) also edits this file, so add no other hunk.\n\nAfter the sentence ending 'a heads-up with only dormant peers mentions nobody.', insert 1-2 sentences saying:\n- In worktree mode no heads-up is posted at all when the claimer's attempt and every live peer's open attempt have workspaceMode 'worktree'. Each task edits its own .worktrees/<taskId>; overlapping hunks meet at landing, and a true conflict parks on a rescue ref and routes the row back.\n- A live peer with no open attempt or a shared one keeps the heads-up as described.\n- `fileCollision` itself is the same in both modes.\nKeep the paragraph's existing sentences byte-identical.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
       ],
-      "startedAt": "2026-11-02T21:54:13.457Z"
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md: one hunk (git diff: 1 file, +1/-1, one @@), the claim_next_task fileCollision[] paragraph only. Inserted the worktree-mode paging rule after 'a heads-up with only dormant peers mentions nobody.'; every existing sentence is byte-identical.",
+      "startedAt": "2026-11-02T21:54:13.457Z",
+      "completedAt": "2026-11-02T21:54:24.356Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY: run the DoD 5 gate once, in a fresh git-archive snapshot of HEAD with only this task's 3 files copied in and cmp-checked. Never run npm in the shared checkout. Run it from the worktree root in WSL bash:\nR=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/governanceFeatures.test.ts docs/MCP_SERVER.md; do cp \"$R/$f\" \"$S/$f\" && cmp \"$R/$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/governanceFeatures.test.ts src/tools/chatSystemFeed.test.ts src/tools/claimNextTask.test.ts && npm test'\n\nExpected: exit 0. The focused files pass, with every new collision row present (none skipped), and the full daemon suite passes. A recent full run had 215 files, about 6249 passed and 20 skipped; the count grows with HEAD. Submit complete_task verification as { command: that exact line, exitCode: 0, outputTail: the focused and full vitest summaries with their pass/fail counts (DoD 5) }, together with the step-1 RED quote.\n\nerror handling:\n- A failure in a file this task did not touch usually comes from a peer's wip checkpoint on HEAD: follow mem:gotcha-snapshot-gate-peer-wip-checkpoint (rm only that peer file after the tar step, submit that exact command, disclose both runs).\n- A failure in governanceFeatures, chatSystemFeed or claimNextTask tests is this task's to fix.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "startedAt": "2026-11-02T21:54:25.381Z"
     },
     {
       "stepId": "step-5",
@@ -84,7 +90,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:58:23.710Z",
-  "updatedAt": "2026-11-02T21:54:13.457Z",
+  "updatedAt": "2026-11-02T21:54:25.381Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T20:58:35.395Z",
@@ -94,7 +100,7 @@
     "firstClaimAt": "2026-11-02T21:41:26.592Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -106,7 +112,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T21:46:32.930Z",

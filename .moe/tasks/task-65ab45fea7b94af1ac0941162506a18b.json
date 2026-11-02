@@ -93,8 +93,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -106,7 +106,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:01.587Z",
-  "updatedAt": "2026-11-02T21:50:46.067Z",
+  "updatedAt": "2026-11-02T21:55:00.506Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:19.438Z",
@@ -116,7 +116,9 @@
     "firstClaimAt": "2026-11-02T21:14:41.584Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T21:54:36.114Z",
+    "wallClockMs": 2394530
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -238,9 +240,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-02T21:43:19Z",
-    "at": "2026-11-02T21:50:19.021Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-02T21:50:29Z",
+    "at": "2026-11-02T21:55:00.506Z"
+  },
+  "completedAt": "2026-11-02T21:54:36.114Z",
+  "reviewCompletedAt": "2026-11-02T21:54:36.114Z",
+  "reviewSummary": "Approved. Reviewed recorded completion 17ff3749 (pushed; contained in moe/control == HEAD, moe/work-2026-10-24, task branch), not the dirty tree. 3 files, +294/-3 (net 291, under the 400 cap): src/index.ts +35/-3, README +2, new src/stdout-drain.test.ts 257. index.test.ts, input-framing.test.ts, vitest.config.ts untouched.\n\nRe-ran in a git-archive snapshot of 17ff3749 outside the repo (no npm in the shared checkout): daemon npm ci, proxy npm ci, build, npx vitest run => exit 0, 9 files / 335 tests, none skipped. RED reproduced: parent index.ts swapped in and rebuilt, stdout-drain.test.ts fails 4/4 (1: expected 182720 to be 2097225; 2: expected 146176 to be 2097225; 3 and 4: expected +0 to be 1). Fix restored: stdout-drain + index + input-framing 40/40 on two runs, no flake.\n\nDoD: (1) 2 MB reply byte-exact, parses, exit 0 on both success exits. (2) Real dist/index.js against a fake daemon; reader paused at spawn, released after socket close + 300 ms (>=200 required); RED shown. (3) Never-drain reader: exit 1 in 1.8-5 s; EPIPE: exit 1 within 1 s; safeStdoutWrite, 'error' handler, expireDeadline and other exit(1) untouched. (4) vitest green. (5) Only moe-proxy files.\n\nCode: unref'd 2 s guard (exit 1), then stdout.write('', cb) with cb exiting err ? 1 : 0, so EPIPE never exits 0; try/catch exits 1; closeWebSocket() first; runs at most once per path. No forbidden patterns.\n\nResidual (documented): a deadline expiring inside the <=2 s flush window still exits 1 via expireDeadline. Not verified: Windows (sync pipes; cases skip on win32). Fleet: nothing changes until moe-proxy/dist is rebuilt and swapped. ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
