@@ -273,6 +273,11 @@ jobs:
         if: runner.os != 'macOS'
         run: node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs scripts/tests/subagent-mirror.test.mjs
 
+      - name: Test PowerShell daemon autostart arguments
+        # Start-Process builds a native Windows command line (PowerShell 5.1 and 7).
+        if: runner.os == 'Windows'
+        run: node --test scripts/tests/daemon-autostart-argv.test.mjs
+
       - name: Test Bash landing and postflight runner
         run: node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/hook-isolation-bash.test.mjs scripts/tests/postflight-safe.test.mjs
 

@@ -701,6 +701,14 @@ $mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -Path $mcpConfigFile -Enco
 $script:GrokPromptFile = $null
 $script:GrokEnvPrev = $null
 
+# Start-Process (PowerShell 5.1 and 7) joins -ArgumentList entries with single
+# spaces and quotes none of them, so a path with a space reached node as several
+# arguments. Quote every entry so the child's argv parser (the C runtime on
+# Windows, .NET on Unix) splits the line back into the same entries.
+function ConvertTo-MoeArgumentLine([string[]]$Arguments) {
+    @($Arguments | ForEach-Object { '"' + ($_ -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' }) -join ' '
+}
+
 # daemon.json is repository content: read at most 64 KiB + 1 byte so a huge or
 # never-ending file cannot stall pre-flight; the callers' catch treats the throw
 # like unparseable JSON. Same cap as moe-agent.sh's daemon_json_field.
@@ -871,9 +879,9 @@ if (-not $NoStartDaemon) {
             exit 1
         }
         Write-Host "Starting Moe daemon for $projectPath..."
-        # Pass arguments as an array so paths containing spaces or quotes survive
-        # Windows command-line escaping (Start-Process re-quotes each element).
-        Start-Process -FilePath $(if ($script:MoeNode) { $script:MoeNode } else { 'node' }) -ArgumentList @("$daemonScript", "start", "--project", "$projectPath") -WindowStyle Hidden
+        # Start-Process quotes nothing, so pass one pre-quoted command line:
+        # paths containing spaces or quotes then reach node as single arguments.
+        Start-Process -FilePath $(if ($script:MoeNode) { $script:MoeNode } else { 'node' }) -ArgumentList (ConvertTo-MoeArgumentLine @("$daemonScript", "start", "--project", "$projectPath")) -WindowStyle Hidden
 
         # Wait for daemon to be ready (poll for up to 10 seconds)
         $maxWait = 10
