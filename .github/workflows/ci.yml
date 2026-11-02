@@ -287,6 +287,8 @@ jobs:
           powershell -NoProfile -File scripts/tests/importee-guard.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell -NoProfile -File scripts/tests/hooked-commit.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell -NoProfile -File scripts/tests/landing-ledger.ps1
 
       - name: Test PowerShell 7 landing guard
         if: runner.os == 'Windows'
@@ -294,6 +296,8 @@ jobs:
           pwsh -NoProfile -File scripts/tests/importee-guard.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File scripts/tests/hooked-commit.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/tests/landing-ledger.ps1
 
       - name: Test Bash wrapper postflight and parity
         if: runner.os == 'Linux'

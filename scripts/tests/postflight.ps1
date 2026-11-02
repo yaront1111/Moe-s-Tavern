@@ -4524,8 +4524,10 @@ try {
 
                 # Scenario AJ -- held paths survive BOTH peel-failure sends
                 # and the rescue row. Twin: postflight.sh (task-dfbda1a8).
-                # Every row is checked: the no-candidate peel adds a second,
-                # finally-block row. AJ2 owns nothing but a TOOL-witnessed
+                # The ledger must hold EXACTLY the expected rows on both
+                # wrappers (AJ2: one failed PEEL row); the finally used to add
+                # a second one (task-4fdc7590), so the whole sequence is
+                # compared, never a tail of it. AJ2 owns nothing but a TOOL-witnessed
                 # held.txt, so its completion refuses NO_OWNED_PATHS and takes
                 # the no-candidate peel.
                 Write-Host '[scenario AJ] peel failures and rescue records retain held contested paths'
@@ -4543,8 +4545,7 @@ const [f,run]=process.argv.slice(2),assert=require("assert");
 const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse);
 const expected=run==="1"?[["committed","peel-failed","rescue"],["failed","MOE_COMMIT_FAILED_PEEL","completion"]]:[["failed","MOE_COMMIT_FAILED_PEEL","completion"]];
 try {
-  assert.ok(rows.length>=expected.length,"missing ledger rows");
-  rows.slice(-expected.length).forEach((r,i)=>assert.deepStrictEqual([r.outcome,r.code,r.kind],expected[i],expected[i].join("/")));
+  assert.deepStrictEqual(rows.map(r=>[r.outcome,r.code,r.kind]),expected,"ledger rows: exactly one failed row per landing");
   rows.forEach(r=>{
     const label=[r.outcome,r.code,r.kind].join("/");
     assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),label+": skipped and contested must be JSON arrays");

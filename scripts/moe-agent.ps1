@@ -5586,6 +5586,10 @@ function Invoke-MoeLanding {
     # twin, which resets LAND_OUTCOME/MOE_LANDING_DONE after preflight_landing.
     if (-not $recovered) { $script:MoeLandingResult=$res }
     $casOk=$false
+    # This landing's ledger row is out, committed or failed. Every explicit failed
+    # send sets it, so the finally's failed-row fallback runs only when none went
+    # out (the catch, an interrupted gate): one failed row per landing, as the sh
+    # twin's run_landing records (task-4fdc7590).
     $recorded=$false
     # Read by the catch/finally sends: set here so a throw before attribution
     # yields empty held lists, never an outer scope's same-named variable.
@@ -5649,6 +5653,7 @@ function Invoke-MoeLanding {
             $res.Outcome = 'failed'
             $res.Code = 'MOE_COMMIT_FAILED_ATTRIBUTION'
             Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_ATTRIBUTION' } | Out-Null
+            $recorded=$true
             return $res
         }
         # MOE_ATTR_ASSERTED_FOREIGN evidence: a recovery lands the crashed
@@ -5745,6 +5750,7 @@ function Invoke-MoeLanding {
                     if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
                     $res.StopLoop = $true
                     Send-MoeRecordCommit (@{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_PEEL'; message = 'branch peel failed' } + (Get-MoeRecordHeldFields $attr @() $Git.Rel)) | Out-Null
+                    $recorded=$true
                     return $res
                 }
                 $res.Branch = $branch
@@ -5773,6 +5779,7 @@ function Invoke-MoeLanding {
             if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
             $res.StopLoop = $true
             Send-MoeRecordCommit (@{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_PEEL'; message = 'branch peel failed' } + (Get-MoeRecordHeldFields $attr @() $Git.Rel)) | Out-Null
+            $recorded=$true
             return $res
         }
         $res.Branch = $branch
@@ -5817,6 +5824,7 @@ function Invoke-MoeLanding {
                 Write-Host "[WARN] temp-index build failed for task $TaskId; nothing committed, baseline kept." -ForegroundColor Yellow
                 $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED_ATTRIBUTION'
                 Send-MoeRecordCommit (@{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_ATTRIBUTION' } + (Get-MoeRecordHeldFields $attr $dropped $Git.Rel)) | Out-Null
+                $recorded=$true
                 return $res
             }
             $dropped = @($built.Dropped)
@@ -5856,6 +5864,7 @@ function Invoke-MoeLanding {
                         Write-Host "[WARN] qualityGate not run: candidate evidence unavailable for task $TaskId ($($script:MoeEvidenceUnavailable)); the completion is parked on $parked." -ForegroundColor Yellow
                         Send-MoeRecordCommit (@{taskId=$TaskId;outcome='failed';kind=$Kind;status=$Status;workerId=$WorkerId;
                             role=$Role;sessionId=$Sid;code=$res.Code;message=$evidenceMsg} + (Get-MoeRecordHeldFields $attr @() $Git.Rel)) | Out-Null
+                        $recorded=$true
                         return $res
                     }
                     $res.StopLoop=$true
@@ -5871,6 +5880,7 @@ function Invoke-MoeLanding {
                     Invoke-MoeRpc -Tool 'add_comment' -Args @{taskId=$TaskId;workerId=$WorkerId;content="$gateMsg`n`n$tail"} | Out-Null
                     Send-MoeRecordCommit (@{taskId=$TaskId;outcome='failed';kind=$Kind;status=$Status;workerId=$WorkerId;
                         role=$Role;sessionId=$Sid;code=$res.Code;message=$gateMsg} + (Get-MoeRecordHeldFields $attr @() $Git.Rel)) | Out-Null
+                    $recorded=$true
                     return $res
                 }
             }
@@ -5906,6 +5916,7 @@ function Invoke-MoeLanding {
                 $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'commit-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
                 if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
                 Send-MoeRecordCommit (@{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED'; message = (($ct.Out | Select-Object -Last 3) -join ' '); ref = $res.Ref } + (Get-MoeRecordHeldFields $attr $dropped $Git.Rel)) | Out-Null
+                $recorded=$true
                 if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId }
                 return $res
             }
@@ -5985,6 +5996,7 @@ function Invoke-MoeLanding {
             $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED_REF_CONTENTION'
             if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
             Send-MoeRecordCommit (@{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_REF_CONTENTION'; ref = $res.Ref } + (Get-MoeRecordHeldFields $attr $dropped $Git.Rel)) | Out-Null
+            $recorded=$true
             return $res
         }
         foreach ($d in $dropped) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow }
@@ -6094,12 +6106,13 @@ function Invoke-MoeLanding {
                     workerId=$WorkerId;role=$Role;sessionId=$Sid;status=$Status} + (Get-MoeRecordHeldFields $attr $dropped $Git.Rel)) | Out-Null
                 $recorded=$true
             }
-            if ($res.Outcome -eq 'failed' -and -not $res.Ref) {
+            if ($res.Outcome -eq 'failed' -and -not $res.Ref -and -not $recorded) {
                 $reason=if ($interrupted) { 'teardown' } else { 'commit-failed' }
                 $rescue=Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason $reason -Title $Title -Status $Status -Sid $Sid -Attr $attr
                 if ($rescue) { $res.Ref=$rescue.Ref; $res.Sha=$rescue.Sha }
                 Send-MoeRecordCommit (@{taskId=$TaskId;outcome='failed';kind=$Kind;workerId=$WorkerId;role=$Role;
                     sessionId=$Sid;status=$Status;code=$res.Code} + (Get-MoeRecordHeldFields $attr $dropped $Git.Rel)) | Out-Null
+                $recorded=$true
             }
             # A `recovered` landing is not this session's, and an Outcome still
             # reading 'pending' means Ctrl+C hit before this one reached any
