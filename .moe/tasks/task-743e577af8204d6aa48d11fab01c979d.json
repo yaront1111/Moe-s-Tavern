@@ -102,7 +102,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -125,16 +125,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:40:45.159Z",
-  "updatedAt": "2026-11-02T11:38:32.266Z",
+  "updatedAt": "2026-11-02T11:40:54.338Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:27:30.493Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T11:40:54.338Z",
+    "wallClockMs": 4403845
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-13a877ad"
+    "worker-13a877ad",
+    "qa-564d8bce"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -213,7 +216,48 @@
     "moe-vscode/tests/settings-policy-corpus.test.cjs",
     "moe-vscode/src/panels/SettingsPanel.ts",
     "moe-vscode/media/settings.js",
+    "moe-vscode/tests/settings-wire.test.cjs",
+    ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json",
+    ".moe/tasks/task-be543ff20bbc4f30ac7ac895ae0b4d13.json"
+  ],
+  "completionSummary": "VSC-10: the VS Code settings panel now edits and sends exactly what JetBrains does, and shows its read-only landing policy.\n\nSettingsPanel.ts (+136/-20, no new import): exports effectivePolicyRows(settings: unknown), SETTINGS_BUNDLE_TEXT (4 MoeBundle.properties keys, html/small stripped) and the type-only PolicyRow. effectivePolicyRows ports MoeSettingsDialog.effectivePolicyRows over the RAW wire settings with the daemon's readers: `!== false` for the 4 default-on booleans, `=== true` for commitHooks, only strings for qualityGate/consolidationBranch (trimmed), '*' glob test, planSize.ts positiveInt for taskSizing with each max lifted to its warn, attribution read only from a plain object. It never throws. HTML: Git section removed; enableAgentTeams checkbox (checked only when === true) with the bundle label and hint; `<section id=\"landingPolicy\">` of div.policy-row/span.policy-label/span.policy-value/div.policy-detail, every text through escapeHtml, no form control; the save handler builds exactly {approvalMode, speedModeDelayMs, agentCommand, enableAgentTeams: message.enableAgentTeams === true}. media/settings.js (+2/-6): legacy fields dropped, enableAgentTeams posted from .checked.\n\nTests: new tests/settings-policy-corpus.test.cjs (131 lines): C1 replays every row of client-settings-policy.json (read unchanged; 10 rows P01-P10 today, no dependence on ids or count) and reports all failing ids at once; C2 checks the rendered section is read-only and escaped for null settings and a hostile fixture; C3 pins the 4 strings to MoeBundle.properties; C4 proves each landing boolean is read on its own key and only by its exact value (closes the cross-wire gap the VSC-5 corpus leaves); C5 never throws on any JSON shape. tests/settings-wire.test.cjs (+58/-11): 4-key FORM_KEYS, S3/S4 updated, S9 enableAgentTeams round trip (true/false/absent/\"true\", plus toggles), S10 no legacy ids/keys and a 4-key page post, S11 panel rebuilds the payload, S6 keeps the 3 legacy keys through SE",
+  "commits": [
+    {
+      "sha": "080f6df190df191ae297f566f19d6e31a396f70e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T11:33:06Z",
+      "paths": [
+        ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json",
+        ".moe/tasks/task-be543ff20bbc4f30ac7ac895ae0b4d13.json",
+        "moe-vscode/media/settings.js",
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/tests/settings-policy-corpus.test.cjs",
+        "moe-vscode/tests/settings-wire.test.cjs"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T11:38:53.752Z",
+      "treeId": "98ea7fd27445527ea4139af84137ea9425dc357c",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/settings-policy-corpus.test.cjs",
+    "moe-vscode/src/panels/SettingsPanel.ts",
+    "moe-vscode/media/settings.js",
     "moe-vscode/tests/settings-wire.test.cjs"
   ],
-  "completionSummary": "VSC-10: the VS Code settings panel now edits and sends exactly what JetBrains does, and shows its read-only landing policy.\n\nSettingsPanel.ts (+136/-20, no new import): exports effectivePolicyRows(settings: unknown), SETTINGS_BUNDLE_TEXT (4 MoeBundle.properties keys, html/small stripped) and the type-only PolicyRow. effectivePolicyRows ports MoeSettingsDialog.effectivePolicyRows over the RAW wire settings with the daemon's readers: `!== false` for the 4 default-on booleans, `=== true` for commitHooks, only strings for qualityGate/consolidationBranch (trimmed), '*' glob test, planSize.ts positiveInt for taskSizing with each max lifted to its warn, attribution read only from a plain object. It never throws. HTML: Git section removed; enableAgentTeams checkbox (checked only when === true) with the bundle label and hint; `<section id=\"landingPolicy\">` of div.policy-row/span.policy-label/span.policy-value/div.policy-detail, every text through escapeHtml, no form control; the save handler builds exactly {approvalMode, speedModeDelayMs, agentCommand, enableAgentTeams: message.enableAgentTeams === true}. media/settings.js (+2/-6): legacy fields dropped, enableAgentTeams posted from .checked.\n\nTests: new tests/settings-policy-corpus.test.cjs (131 lines): C1 replays every row of client-settings-policy.json (read unchanged; 10 rows P01-P10 today, no dependence on ids or count) and reports all failing ids at once; C2 checks the rendered section is read-only and escaped for null settings and a hostile fixture; C3 pins the 4 strings to MoeBundle.properties; C4 proves each landing boolean is read on its own key and only by its exact value (closes the cross-wire gap the VSC-5 corpus leaves); C5 never throws on any JSON shape. tests/settings-wire.test.cjs (+58/-11): 4-key FORM_KEYS, S3/S4 updated, S9 enableAgentTeams round trip (true/false/absent/\"true\", plus toggles), S10 no legacy ids/keys and a 4-key page post, S11 panel rebuilds the payload, S6 keeps the 3 legacy keys through SE"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-13a877ad@2026-11-02T11:33:06Z",
+    "at": "2026-11-02T11:38:53.752Z"
+  },
+  "completedAt": "2026-11-02T11:40:54.338Z",
+  "reviewCompletedAt": "2026-11-02T11:40:54.338Z",
+  "reviewSummary": "VSC-10 approved. Reviewed completion commit 080f6df1 (on moe/work-2026-10-24, pushed) via git show. Re-ran task.verification verbatim in a fresh git-archive HEAD snapshot, 4 task files overlaid, env -i nvm Node 24.21.0: npm ci, lint, compile, npm test all exit 0; 522 tests, 518 pass, 0 fail, 4 skip. DoD1: settings-policy-corpus C1 replays all 10 corpus rows through exported effectivePolicyRows, exact label/value/detail/order, all failing ids in one assertion. DoD2: C2 renders the real panel (null + hostile settings): no input/select/textarea/button in <section id=\"landingPolicy\">, rows equal effectivePolicyRows, raw '<img', '<YYYY-MM-DD>', 'a&b' absent. DoD3: settings-wire FORM_KEYS = 4 keys; S3/S4 pin payload; S9 round-trips enableAgentTeams true/false (+absent/\"true\"); S10/S11 prove legacy keys never sent by page or panel; S6 keeps them through SETTINGS_UPDATED. DoD4: commit touches no moe-jetbrains file nor client-settings-policy.json. DoD5: gate above. Cross-checked the TS port against MoeSettingsDialog.kt string-for-string and SETTINGS_BUNDLE_TEXT against MoeBundle.properties (C3). No new import in SettingsPanel.ts; no forbidden patterns. 3 independent mutants in the snapshot (escapeHtml dropped on policy value => C2; Boolean() in save => S11; commitHooks truthy => C1+C4) each failed by assertion; snapshot deleted. Size 290 net / 364 changed LOC, under 400. Non-blocking, carried over: positiveInt follows the daemon (any integer >0); JetBrains falls back above Int.MAX_VALUE; no corpus row pins it.",
+  "requiredCheckAtDone": null
 }
