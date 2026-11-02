@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,16 +92,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T07:58:38.125Z",
-  "updatedAt": "2026-11-02T08:39:43.752Z",
+  "updatedAt": "2026-11-02T09:02:18.462Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T08:10:49.265Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T09:02:18.462Z",
+    "wallClockMs": 3089197
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-b49a5155"
+    "worker-b49a5155",
+    "qa-564d8bce"
   ],
   "tier": "standard",
   "effort": "high",
@@ -206,7 +209,44 @@
   "filesModified": [
     "docs/roles/worker.md",
     "docs/roles/worker.reference.md",
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    ".moe/tasks/task-692a12df337c43edacb59fd0599ecff2.json"
+  ],
+  "completionSummary": "Worker role docs are mode-aware for the landed worktree path (WT-04..WT-09). worker.md line 13 only: shared mode keeps \"FROM THE PROJECT ROOT\"; worktree mode says the wrapper starts you in .worktrees/<taskId> on moe/task/<taskId> and lands every dirty path there except DENY; other .worktrees/ checkouts are human-directed and never landed. Line 12 is byte-identical to HEAD, with no line added (30 lines). worker.reference.md: the using-git-worktrees row is mode-aware; the shared table and attribution paragraph are labelled and kept; a new Worktree mode block (lead paragraph, 3-row table, attribution paragraph) covers MOE_WORKTREE_PATH/MOE_TASK_BRANCH/MOE_LAND_TARGET, MOE_CHECKPOINT_RECOVERED, squash completion by CAS or non-forced push, the rescue ref at the branch tip, MOE_WORKTREE_STRAY_EDIT, .claude/skills/** in DENY and BRANCH-POLICY-FAIL:; practical bullet 1 is prefixed \"In shared mode,\". No WT-10..WT-14 vocabulary. initFiles.ts was regenerated in a git clone --shared snapshot; the diff held only the two worker entries and their sha lists (no foreign hunks); applied with the Edit tool and cmp-equal to the generator output. All three files were written with the Edit tool.",
+  "commits": [
+    {
+      "sha": "204cacb85223641f1dd58a3d86bd62f75e93cc89",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T08:37:15Z",
+      "paths": [
+        ".moe/tasks/task-692a12df337c43edacb59fd0599ecff2.json",
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T08:40:07.162Z",
+      "treeId": "7fc9e228afa102b65cbae8eab3cf1c74c06ea2dd",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/roles/worker.md",
+    "docs/roles/worker.reference.md",
     "packages/moe-daemon/src/generated/initFiles.ts"
   ],
-  "completionSummary": "Worker role docs are mode-aware for the landed worktree path (WT-04..WT-09). worker.md line 13 only: shared mode keeps \"FROM THE PROJECT ROOT\"; worktree mode says the wrapper starts you in .worktrees/<taskId> on moe/task/<taskId> and lands every dirty path there except DENY; other .worktrees/ checkouts are human-directed and never landed. Line 12 is byte-identical to HEAD, with no line added (30 lines). worker.reference.md: the using-git-worktrees row is mode-aware; the shared table and attribution paragraph are labelled and kept; a new Worktree mode block (lead paragraph, 3-row table, attribution paragraph) covers MOE_WORKTREE_PATH/MOE_TASK_BRANCH/MOE_LAND_TARGET, MOE_CHECKPOINT_RECOVERED, squash completion by CAS or non-forced push, the rescue ref at the branch tip, MOE_WORKTREE_STRAY_EDIT, .claude/skills/** in DENY and BRANCH-POLICY-FAIL:; practical bullet 1 is prefixed \"In shared mode,\". No WT-10..WT-14 vocabulary. initFiles.ts was regenerated in a git clone --shared snapshot; the diff held only the two worker entries and their sha lists (no foreign hunks); applied with the Edit tool and cmp-equal to the generator output. All three files were written with the Edit tool."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-b49a5155@2026-11-02T08:37:15Z",
+    "at": "2026-11-02T08:40:07.162Z"
+  },
+  "completedAt": "2026-11-02T09:02:18.462Z",
+  "reviewCompletedAt": "2026-11-02T09:02:18.462Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 204cacb8 (on moe/work-2026-10-24, pushed): 3 files, ~30 changed doc lines plus generated text.\n\nRe-ran checkRefs[0] && checkRefs[1] verbatim, foreground, exit 0: lint OK (worker.md 30 lines); all greps pass (line 12 equals HEAD's, no task id, no WT-10/11/12 vocabulary); in a git clone --shared snapshot parity-check PASS, generate-init-files output cmp-equals the committed initFiles.ts, 5 vitest files / 44 tests pass.\n\nDoD1: worker.md line 13 only; shared keeps \"FROM THE PROJECT ROOT\", worktree mode names .worktrees/<taskId> on moe/task/<taskId>, other .worktrees/ are human-directed and never landed. No line added.\nDoD2: worker.reference.md changes only the worktrees row, Shared-mode label (shared table and paragraph byte-identical), one Worktree mode block, and the bullet-1 prefix. Matches approvedScope.\nAccuracy: I checked each shipped name against the sh/ps1 wrappers and completeTask.ts (env vars, denied_wt with .claude/skills/** and no BOARD exception, REVIEW/DONE completion exit, feat|fix(task-<id>) squash commit, CAS or non-forced push, rescue ref at the task-branch tip on a failed round, BRANCH-POLICY-FAIL). Safety negatives intact.\nDoD4: initFiles.ts diff holds only the two worker entries plus one new sha each; no foreign hunk.\nDoD5: joined command exit 0 fresh.\n\nNon-blocking: worker.md line 12 stays unchanged by contract. WT-10 has since landed (53b646f8), so WT-18c (task-cfa129252343438d903de1e67ae6073c) should update it. The 24 dirty paths in the shared tree belong to other sessions and were not touched.",
+  "requiredCheckAtDone": null
 }

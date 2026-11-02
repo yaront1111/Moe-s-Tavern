@@ -1,0 +1,30 @@
+{
+  "id": "task-a3e414a3dce848e6939081e5cbf941ce",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-0] Breakdown: audit moe-vscode against JetBrains, decide plugin reuse, slice this epic",
+  "description": "The human said go on 2026-11-02: \"no coder is working..\", then \"go on the vscode epic\". Purpose: give the idle coders parallel work while the wrapper lane stays serial until this project's worktree switch (gate task-6519ed91, later today). The epic's goal, in the human's words: \"Make sure our VSCODE is working and we reuse as much as we can between plugins\".\n\nHow this row works: the architect who claims it runs the moe-epic-breakdown skill and files the slice rows with moe.create_task in this epic, in the same session. Use status PLANNING; the human's go covers promotion. It then submits a short plan for this row's own deliverable, a decision doc that a worker writes.\n\nConstraints for the slices:\n1. **JetBrains first** (CLAUDE.md). VS Code lags, and reuse work must not regress JetBrains. A slice that changes moe-jetbrains needs `./gradlew test` on native Windows under the jetbrains-gradle lease, because WSL has no JDK.\n2. **Files to avoid.** No slice may touch the files the open wrapper-lane and worktree rows plan:\n   - scripts/moe-agent.sh and scripts/moe-agent.ps1;\n   - scripts/tests/postflight* and scripts/tests/worktree-*;\n   - CLAUDE.md, scripts/CLAUDE.md and docs/ARCHITECTURE.md;\n   - docs/roles/**, docs/MCP_SERVER.md, docs/SCHEMA.md, docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md;\n   - packages/moe-daemon/src/generated/initFiles.ts.\n   Check every open row's affectedFiles before cutting.\n3. **Parallel now.** Until the switch the project runs in shared-checkout mode, so the first wave of at least two slices must have pairwise-disjoint files and no unmet dependencies. That lets 2-3 coders claim them at once. After the switch, a shared file is no longer a dependency.\n4. **No in-place builds.** The GLOBAL rail forbids in-place builds and installs. The VS Code gates (npm ci, npm test, npm run compile, npm run package) run in a snapshot, never in the shared checkout.\n5. **Sizing** follows moe-epic-breakdown, plus exactly one final integration-and-hardening row that depends on every other slice.\n\nDeliverable: docs/plans/2026-11-02-vscode-reuse.md (new file), containing:\n- the baseline: does moe-vscode build, test and speak the current daemon wire? Run it in a snapshot and record the sha;\n- the JetBrains → VS Code gap list;\n- the reuse options considered and the ones chosen, with reasons;\n- the slice table, naming every created task id.",
+  "definitionOfDone": [
+    "docs/plans/2026-11-02-vscode-reuse.md exists with four sections: the baseline (snapshot sha, plus the result of moe-vscode `npm ci && npm test && npm run compile`), the JetBrains → VS Code gap list, the reuse decision with reasons, and a slice table naming every created task id.",
+    "The epic holds the slice rows, created with moe.create_task. Each has a mechanically checkable DoD and names its files. The first wave of at least two rows has pairwise-disjoint files and no unmet dependencies.",
+    "No slice row plans any file from the description's list of files to avoid (the wrapper lane, WT docs, role docs and initFiles.ts).",
+    "Exactly one final integration-and-hardening row exists, and it depends on every other slice row.",
+    "This row's own diff changes only docs/plans/2026-11-02-vscode-reuse.md, plus board records."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:00:34.285Z",
+  "updatedAt": "2026-11-02T09:00:34.285Z"
+}

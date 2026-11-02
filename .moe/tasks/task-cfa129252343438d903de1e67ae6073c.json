@@ -11,9 +11,52 @@
     "The verification command exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Spelling inventory from LANDED code. This step edits no file; put the inventory in this step's note.\n\nThis plan was written 2026-11-02 at HEAD 204cacb8. WT-10 was in REVIEW: its wrapper bytes were d3441bf3, and completion 53b646f8 carried board records only. WT-11 (task-dd1ee586b90d4fc785434454b1423e76) was WORKING at 0/7 with nothing landed. Every WT-11 name below comes from WT-11's plan rev 1 and the design doc, not from code. HEAD's final bytes win over any of them.\n\n1. Confirm in get_context.epicSiblings that WT-10, WT-11 and WT-18a are DONE with landed:true, and read each completionSummary and reviewSummary for deviations.\n\n2. Grep HEAD's scripts/moe-agent.sh and moe-agent.ps1.\n\n   WT-11:\n   - the finalize_attempt call with outcome 'unlanded' (unlandedReason, conflictPaths, rescueRef, targetTip);\n   - the code-to-reason map. Expected:\n     - MOE_COMMIT_FAILED_CONFLICT and MOE_WORKTREE_UNRESOLVED_CONFLICT give conflict;\n     - MOE_COMMIT_FAILED_REF_CONTENTION and MOE_COMMIT_FAILED_LAND_LEASE give contention;\n     - MOE_COMMIT_FAILED_GATE gives gate;\n     - MOE_LAND_TARGET_DIVERGED gives diverged;\n     - MOE_LAND_FETCH_FAILED or a push proven absent gives remote;\n   - the rescue ref at the task-branch tip;\n   - the pre-flight `merge --no-commit --no-ff` of the target into W;\n   - the exact prompt prefixes `LANDING-CONFLICT: <paths>` and `LANDING-RETRY: <reason>`, and the instruction text the wrapper injects with them;\n   - the marker scan and MOE_WORKTREE_UNRESOLVED_CONFLICT;\n   - the resolved commit with MERGE_HEAD as its second parent;\n   - a checkpoint during a pending merge;\n   - the unknown-push exception (MOE_PUSH_OUTCOME_UNKNOWN: no finalize, stays finalizing).\n\n   WT-10:\n   - a configured gate runs on every worktree landing whatever qualityGateScope says, on the merged tree (run_frozen_gate worktree);\n   - the git-land-<target> lease (MOE_LAND_LEASE_WAIT_SEC);\n   - MOE_COMMIT_FAILED_GATE, MOE_COMMIT_FAILED_LAND_LEASE;\n   - MOE_DISABLE_QUALITY_GATE=1 refuses the landing instead of skipping the gate.\n\n3. Daemon side, landed (WT-03): docs/MCP_SERVER.md moe.finalize_attempt 'unlanded' and docs/SCHEMA.md `landingRetry`.\n   - REVIEW goes back to WORKING, unassigned, with completed steps and reopenCount kept.\n   - It goes to BLOCKED instead when the reason is 'diverged' or count reaches 3.\n   - The daemon posts one comment authored moe-daemon.\n   - The record is landingRetry {reason, paths, rescueRef, targetTip, count, at}; a landed or nothing-to-commit finalize clears it.\n\nWhere the code differs from this plan, the code wins; list each difference in the completion summary.\n\nError handling: if WT-10 or WT-11 is not DONE, or a behaviour named here is absent from HEAD, report_blocked with blockedOnTaskIds naming that row. Never document behaviour HEAD lacks.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/roles/worker.md: change lines 12 and 18 only, editing in place. Add NO line: lint caps the file at 40 lines, and it sits in every worker turn's stable system prefix. Use the Edit tool only (GLOBAL rail; WT-18 also declares this file, so an unwitnessed edit is held at landing; mem:gotcha-contested-path-needs-edit-tool-to-land).\n\nLine 12 (qualityGate):\n- Keep today's clause verbatim, scoped to shared mode.\n- Add the worktree arm as WT-10 landed it. Suggested text: '- If `settings.qualityGate` is set: in shared mode, post-flight runs it before the completion commit on the epic's FINAL task (default scope) and a failure diverts your work to a rescue ref instead of the branch — on that task, run the gate command yourself before `complete_task`. In worktree mode it gates every completion, whatever `qualityGateScope` says, on the merged tree that would land, and a failure lands nothing on the target — run it yourself before every `complete_task`.'\n- Adjust the wording to the step-1 inventory.\n\nLine 18 (Session discipline): after the RESUME sentence, add one pointer sentence. Suggested text: 'A prompt starting `LANDING-CONFLICT:` or `LANDING-RETRY:` means your last completion did not reach the target: follow the LANDING rule in `worker.reference.md` (edit files only; leave git to the wrapper).'\n\nConstraints:\n- No concrete task id (`task-<32 hex>`) and no 'PREFLIGHT_'.\n- No phrase matching /never (?:runs|executes|touches) git|runs no git|does not run git/i (daemonGitDocs.test.ts scans this file).\n- Keep every sentinel: 'what Moe supplied', 'truncated, omitted or missing', 'a navigation aid, never a reason to skip a read', 'once per session', 'advance `contextEpoch` after every compaction', 'isolated-clone delivery', 'moe.record_commit', 'fresh remote fetch', 'sessionId'.\n- Leave WT-18a's line 13 as it is.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/roles/worker.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/roles/worker.reference.md: Edit tool only. Every spelling comes from the step-1 inventory.\n\n(a) Worktree mode table (WT-18a, 'Commits, checkpoints and rescue refs'): replace its third row, 'A completion that cannot reach the target …', with the unlanded route as HEAD's WT-11 implements it. Suggested columns:\n- Exit: a completion that cannot reach the target, meaning\n  - a conflict;\n  - contention: the target moved under every round, or the land-lease wait ran out;\n  - a failed qualityGate;\n  - a diverged target;\n  - a remote that refused the push or could not be fetched.\n- What lands: nothing on the target. Your bytes stay on `moe/task/<taskId>`, and a rescue ref `refs/moe/rescue/<taskId>/<ts>` points at its tip. The wrapper records the failure and finalizes the attempt `'unlanded'` with that reason.\n- Where: the daemon records `task.landingRetry` (`reason`, `paths`, `rescueRef`, `targetTip`, `count`, `at`), posts a comment, and returns the task to WORKING, unassigned, completed steps kept, so the next session resumes it. A `diverged` reason or a 3rd consecutive failure sends it to BLOCKED for a human instead.\n\nAdd one sentence if HEAD still has it: an unknown push outcome is not unlanded; the attempt stays finalizing until a pre-flight replay settles it, and no ref moves.\n\n(b) Practical rules: add a bullet right after the RESUME bullet, mirroring the wrapper's own LANDING prompt text. It covers a prompt starting `LANDING-CONFLICT: <paths>` or `LANDING-RETRY: <reason>` (worktree mode):\n- your last completion did not reach the target, and the wrapper has already merged the target into your worktree (a pending merge);\n- edit files only: no git command (commit, merge, reset, checkout, abort), no re-plan, no re-opened completed steps;\n- on a conflict, resolve each listed path and remove every marker line (starting `<<<<<<< ` or `>>>>>>> `, or exactly `=======`);\n- on `gate`, run `settings.qualityGate` yourself and fix what it finds; `contention` and `remote` need no fix;\n- then re-run the plan's verification command and call `moe.complete_task`;\n- markers left behind print `MOE_WORKTREE_UNRESOLVED_CONFLICT` and take the unlanded route again, and a checkpoint meanwhile keeps the pending merge.\n\n(c) Change nothing else. The shared-mode text and WT-18a's lead and attribution paragraphs stay as they are.\n\nKeep the sentinels: 'memory-name inventory', 'once per session', 'sessionHandoff', 'END_SESSION', 'fresh wrapper preflight', 'Resource blocks (`resourceId`) keep the seat parked', 'isolated-clone delivery', 'moe.record_commit', 'fresh remote fetch', 'sessionId'. Never write '`nextAction` → `claim_next_task`'.\n\nNo WT-12 to WT-14 behaviour (refs/moe/board, moe/control, worktree removal); the verification bans the first two.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/roles/worker.reference.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Regenerate the daemon's vendored copy with WT-18a's recipe: mem:convention-role-doc-edits-regenerate-initfiles, mem:gotcha-moe-doc-generated-artifacts, mem:gotcha-daemon-linux-snapshot-gate.\n\n1. Build a snapshot with history:\n   `H=$(git rev-parse HEAD); S=$(mktemp -d); git clone -q --shared --no-checkout . \"$S/repo\"; git -C \"$S/repo\" checkout -q --detach \"$H\"`\n   Copy ONLY the two edited docs into `$S/repo/docs/roles/`. Then, in `$S/repo/packages/moe-daemon`, run:\n   `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund --loglevel=error && npm run generate-init-files'`\n   Expect the output line `Generated … (8 role docs + 3 subagents, sha-stamped)`.\n2. Run `diff -u` of the tree's packages/moe-daemon/src/generated/initFiles.ts against the clone's. Expect:\n   - the 'worker.md' and 'worker.reference.md' ROLE_DOCS entries: the marker sha plus the edited lines, inside a template literal (`\\` becomes `\\\\`, a backtick becomes `\\``, `${` becomes `\\${`);\n   - one new sha in each of those two SHIPPED_ROLE_BODY_SHAS lists.\n3. Apply each hunk to the tree's file with the Edit tool.\n   - NEVER cp, mv or redirect the generated file into the tree. WT-18 declares this path, so an unwitnessed write is held at landing.\n   - The Edit tool trims a trailing space in new_string, so end every substring on a non-space character.\n4. `cmp` the tree's file against the clone's output; they must be equal.\n\nIf a hunk for any other doc appears, HEAD's copy went stale. Apply it too and name the doc and commit in the summary.\n\nError handling: if the clone, npm ci or the generator fails, rerun once. If it fails again, report_blocked with the error tail and blockedOnTaskIds [].\n\nNever run npm in the shared checkout's packages (GLOBAL rail 1).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification: run ONCE, fresh, from the repo root, as ONE command: `<checkRefs[0]> && <checkRefs[1]> && <checkRefs[2]>`, each exactly as in the executionContract. Submit the joined command, its exit code and the tail to complete_task.\n\n- checkRefs[0]: npm run lint (40-line cap), then greps for the new content:\n  - LANDING-CONFLICT: and LANDING-RETRY: in both docs;\n  - landingRetry and 'unlanded' in the reference;\n  - 'worktree mode' on worker.md line 12;\n  - no task id;\n  - no refs/moe/board or moe/control.\n- checkRefs[1]: HEAD's sh and ps1 wrappers must both carry the LANDING prefixes, which proves WT-11 is on HEAD. Every MOE_* token in the two docs must exist in BOTH HEAD wrappers.\n- checkRefs[2], WT-18a's snapshot check:\n  - a git clone --shared of HEAD with the three files copied in;\n  - parity-check.sh on HEAD's wrappers (epic rail 2);\n  - npm ci and the generator under env -i with nvm node v24.21.0;\n  - cmp of initFiles.ts;\n  - 5 vitest test files: targetedContextGuidance, qaCommitPolicy, initFiles, blockedSeatGuidance, daemonGitDocs.\n\nWT-18a's baseline for checkRefs[2] was about 15 s, 44 tests.\n\nIf a token check fails, the doc names a code HEAD lacks: fix the doc from the code, never the reverse. A parity failure on wrapper bytes this task never touched is a peer's checkpoint (mem:gotcha-snapshot-gate-peer-wip-checkpoint): comment on that task and report_blocked with its id; never edit a wrapper.\n\nRun in the foreground.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review: one pass over the whole diff, then complete_task.\n\n(a) Accuracy.\n- Every name, prefix, reason, field and routing rule the docs present matches HEAD's wrappers and the daemon contract (step-1 inventory).\n- The LANDING rule says what the wrapper's own LANDING prompt says, with no stronger or weaker instruction.\n- BLOCKED routing names exactly 'diverged' and the 3rd consecutive failure.\n- The unknown push is not called unlanded.\n\n(b) Safety negatives intact:\n- nothing is ever auto-resolved;\n- the target never moves on a failed landing;\n- the push is never forced;\n- replay never re-lands;\n- the worker uses no git command during a LANDING session.\n\n(c) Shared-mode text unchanged:\n- line 12's shared clause is verbatim;\n- worker.md has at most 40 lines, keeps every sentinel and carries no task id;\n- no daemonGitDocs phrase.\n\n(d) `git diff -U0 -- packages/moe-daemon/src/generated/initFiles.ts` touches only the two worker entries and their sha lists.\n\n(e) All three paths were written by the Edit tool and are listed in complete_step.modifiedFiles.\n\nFix anything found, rerun step 5's command fresh, and submit THAT output.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,8 +71,97 @@
   ],
   "priority": "HIGH",
   "order": 25.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-9ccc2f5921c647ad9a2a43b1ef6c9d1a",
+      "author": "architect-0fcb7226",
+      "content": "Planner note from WT-18a (task-692a12df, architect-0fcb7226, planned 2026-11-02 at HEAD e4e122cd). Two things you inherit:\n\n1. worker.md line 12 (the qualityGate rule) is yours. WT-18a leaves it byte-identical, and its verification checks that against HEAD. Reason: HEAD's worktree-mode gate (run_frozen_gate worktree on the merged tree, the git-land-<target> lease, two rounds with a gate, MOE_DISABLE_QUALITY_GATE refusing) comes only from WT-10's WIP checkpoint d3441bf3, and WT-10 is still WORKING. The last landed bytes (WT-08/WT-09/WT-10G, d3441bf3^) refuse every worktree completion while settings.qualityGate is set, whatever the scope: \"settings.qualityGate is set and gated worktree landing is not available yet\". Document whatever WT-10 finally lands, not the WIP.\n\n2. WT-18a adds a separate **Worktree mode** block to worker.reference.md's \"Commits, checkpoints and rescue refs\" section. The block has its own 3-row Exit | What lands | Where table (completion to the target as one squash commit; checkpoint to moe/task/<taskId> only; a completion that cannot reach the target lands nothing there, the bytes stay on moe/task/<taskId>, and a failed round parks a rescue ref at its tip), followed by a worktree attribution paragraph. The shared-mode table stays byte-identical under a \"Shared mode\" label. Your unlanded-route row belongs in the worktree table: extend or replace its third row. Your LANDING-CONFLICT:/LANDING-RETRY: rule goes in Practical rules. WT-18a's verification bans that vocabulary (LANDING-CONFLICT, LANDING-RETRY, landingRetry, unlanded, land lease, LAND_LEASE, git-land-, refs/moe/board), so all of it is yours.\n\nRecipe for initFiles.ts: apply the generator's hunks with the Edit tool and cmp them against a clone's generator output (mem:convention-role-doc-edits-regenerate-initfiles). WT-18 and this row declare the same file, so a cp back would be held as contested.",
+      "timestamp": "2026-11-02T08:32:40.170Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T07:58:49.603Z",
-  "updatedAt": "2026-11-02T07:58:49.603Z"
+  "updatedAt": "2026-11-02T08:43:43.653Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T08:37:46.355Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T08:43:43.629Z",
+  "executionContract": {
+    "intendedBehavior": "A worker in worktree mode learns from its role docs what HEAD's landed WT-10 and WT-11 wrappers do:\n- a set qualityGate gates every worktree completion on the merged tree, whatever the scope;\n- a completion that cannot reach the target takes the unlanded route: a rescue ref, finalize_attempt 'unlanded', task.landingRetry, and the task back to WORKING, or BLOCKED for 'diverged' or a 3rd failure;\n- a session whose prompt starts with LANDING-CONFLICT: or LANDING-RETRY: resolves the pending merge by editing files only, re-runs verification, and calls complete_task.\nShared-mode text stays intact. The daemon's vendored ROLE_DOCS matches.",
+    "acceptanceCriteria": [
+      "DoD 1: worker.reference.md's worktree commits table has an unlanded-route row matching HEAD's WT-11 wrappers. It names finalize_attempt outcome 'unlanded', the rescue ref and task.landingRetry, with codes spelled as on HEAD.",
+      "DoD 2: worker.reference.md's Practical rules state the LANDING-CONFLICT:/LANDING-RETRY: rule as HEAD's WT-11 wrappers implement it. worker.md points to that rule from line 18, and line 12 carries WT-10's worktree gate wording. Nothing beyond HEAD is presented as shipped.",
+      "DoD 3: npm run lint passes; worker.md holds no task-<32 hex> id and keeps every pinned sentinel.",
+      "DoD 4: initFiles.ts cmp-equals the generator output of a git clone --shared snapshot holding the edited docs, and changes only the two worker entries and their sha lists. targetedContextGuidance, qaCommitPolicy, initFiles, blockedSeatGuidance and daemonGitDocs pass there.",
+      "DoD 5: `<checkRefs[0]> && <checkRefs[1]> && <checkRefs[2]>` exits 0, fresh."
+    ],
+    "invariants": [
+      "Every MOE_* token in the two docs exists in both HEAD wrappers. The LANDING prefixes exist in both HEAD wrappers.",
+      "The shared-mode clause of worker.md line 12, WT-18a's line 13 and the shared-mode table and paragraphs are unchanged.",
+      "Safety negatives stay: never auto-resolved, never forced, the target never moves on a failed landing, replay never re-lands, and the LANDING session uses no git command.",
+      "All three files are written with the Edit tool; no npm command runs in the shared checkout's packages."
+    ],
+    "compatibility": [
+      "No code, schema or tool-contract change. CLAUDE.md, scripts/CLAUDE.md and docs/ARCHITECTURE.md belong to WT-18. WT-12 to WT-14 behaviour is out of scope. The .moe/roles copies are synced.",
+      "The ROLE_DOCS keys and the marker scheme are unchanged."
+    ],
+    "approvedScope": [
+      "docs/roles/worker.md: line 12 (worktree gate arm) and line 18 (LANDING pointer) only",
+      "docs/roles/worker.reference.md: the worktree table's third row and one new Practical rules bullet after the RESUME bullet",
+      "packages/moe-daemon/src/generated/initFiles.ts: the worker.md/worker.reference.md ROLE_DOCS values and their SHIPPED_ROLE_BODY_SHAS entries, generator output only"
+    ],
+    "reuse": [
+      "WT-18a's snapshot/generator/Edit-hunk recipe and checkRefs[2]; docs/MCP_SERVER.md moe.finalize_attempt and docs/SCHEMA.md landingRetry for the daemon side; WT-11's own LANDING prompt text for the rule's wording."
+    ],
+    "sourceAssumptions": [
+      "At planning (2026-11-02, HEAD 204cacb8), WT-10's landed wrapper bytes are d3441bf3. In land_worktree_completion, the gate runs on the merged tree, in wt_land_rounds via freeze_candidate B M plus run_frozen_gate worktree. With a gate there are 2 rounds; acquire_land_lease takes git-land-<target>. MOE_DISABLE_QUALITY_GATE=1 gives MOE_COMMIT_FAILED_GATE.",
+      "WT-11 (task-dd1ee586) had not landed; its plan rev 1 names the unlanded mapping, the LANDING-CONFLICT:/LANDING-RETRY: prefixes, MOE_WORKTREE_UNRESOLVED_CONFLICT and the MERGE_HEAD handling. Step 1 re-derives all of this from HEAD.",
+      "Daemon WT-03 (DONE): finalize_attempt 'unlanded' sets landingRetry {reason, paths, rescueRef, targetTip, count, at} and posts a moe-daemon comment. REVIEW goes to WORKING unassigned, with steps and reopenCount kept. 'diverged' or count 3 goes to BLOCKED. A landed or nothing-to-commit finalize clears it.",
+      "WT-18a (204cacb8) added the Worktree mode block, whose 3-row table's third row is 'A completion that cannot reach the target …'. worker.md line 12 is the unchanged qualityGate rule; line 18 holds the RESUME sentence."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && npm run lint && grep -qF 'LANDING-CONFLICT:' docs/roles/worker.md && grep -qF 'LANDING-RETRY:' docs/roles/worker.md && grep -qF 'LANDING-CONFLICT:' docs/roles/worker.reference.md && grep -qF 'LANDING-RETRY:' docs/roles/worker.reference.md && grep -qF 'landingRetry' docs/roles/worker.reference.md && grep -qF \"'unlanded'\" docs/roles/worker.reference.md && sed -n 12p docs/roles/worker.md | grep -qi 'worktree mode' && ! grep -Eq 'task-[0-9a-f]{32}' docs/roles/worker.md && ! grep -Eq 'refs/moe/board|moe/control' docs/roles/worker.md docs/roles/worker.reference.md",
+      "cd \"$(git rev-parse --show-toplevel)\" && T=$(mktemp -d) && git show HEAD:scripts/moe-agent.sh > \"$T/sh\" && git show HEAD:scripts/moe-agent.ps1 > \"$T/ps1\" && for w in sh ps1; do grep -q 'LANDING-CONFLICT:' \"$T/$w\" && grep -q 'LANDING-RETRY:' \"$T/$w\" || { echo \"HEAD $w lacks the LANDING prefixes\"; exit 1; }; done && for c in $(grep -ohE 'MOE_[A-Z0-9_]*[A-Z0-9]' docs/roles/worker.md docs/roles/worker.reference.md | sort -u); do grep -q \"$c\" \"$T/sh\" && grep -q \"$c\" \"$T/ps1\" || { echo \"not in both HEAD wrappers: $c\"; exit 1; }; done",
+      "cd \"$(git rev-parse --show-toplevel)\" && H=$(git rev-parse HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$H\" && for f in docs/roles/worker.md docs/roles/worker.reference.md packages/moe-daemon/src/generated/initFiles.ts; do cp \"$f\" \"$S/repo/$f\" || exit 1; done && (cd \"$S/repo\" && bash scripts/tests/parity-check.sh) && cp packages/moe-daemon/src/generated/initFiles.ts \"$S/initFiles.candidate\" && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 C=\"$S/initFiles.candidate\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund --loglevel=error && npm run generate-init-files && cmp src/generated/initFiles.ts \"$C\" && npx vitest run src/util/targetedContextGuidance.test.ts src/util/qaCommitPolicy.test.ts src/util/initFiles.test.ts src/util/blockedSeatGuidance.test.ts src/util/daemonGitDocs.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Blocking until WT-11 lands: rejected. dependsOn already gates the WORKING claim on WT-10, WT-11 and WT-18a being DONE. Planning now lets a worker start the moment they land, and the flip checklist waits on this row.\n- Hard-coding WT-11's planned codes in the verification: rejected. checkRefs[1] instead checks that every MOE_* token the docs name exists in both HEAD wrappers, and that the LANDING prefixes are on HEAD. It stays correct if WT-11's spellings drift, and fails if WT-11 has not landed.\n- Putting the full LANDING rule in worker.md: rejected. worker.md sits in every turn's system prefix and has a 40-line cap, so it gets a one-sentence pointer on line 18 and the rule lives in the reference.",
+    "codebaseInsights": "- WT-18a (204cacb8) set up the Worktree mode block, whose third table row is the slot for the unlanded route.\n- WT-10's completion 53b646f8 is board-only; its wrapper bytes are d3441bf3.\n- WT-03's daemon routing is landed: landingRetry, BLOCKED for diverged or count 3, and the moe-daemon comment.\n- The wrapper side (WT-11) carries the finalize, the pre-flight merge, the LANDING prompt and the marker scan.",
+    "risks": "- WT-11's final behaviour may differ from its plan rev 1: the prompt text, codes, or which causes give a rescue ref. Step 1's inventory plus the token check make the code win.\n- If WT-10 is reopened, its gate wording can change. Use the final bytes.\n- Edit-tool-only writes: WT-18's stale plan declares all three paths.\n- daemonGitDocs regex: write 'use no git command' or 'leave git to the wrapper', never 'runs no git'.\n- The Edit tool trims trailing spaces in new_string, which breaks cmp.",
+    "keyFiles": [
+      "docs/roles/worker.md",
+      "docs/roles/worker.reference.md",
+      "packages/moe-daemon/src/generated/initFiles.ts",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "docs/MCP_SERVER.md",
+      "docs/SCHEMA.md",
+      "packages/moe-daemon/scripts/generate-init-files.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "204cacb85223641f1dd58a3d86bd62f75e93cc89",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T08:43:43.653Z",
+  "approvedPlanRevision": 1
 }
