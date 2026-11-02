@@ -780,6 +780,26 @@ async function wtCompletion(){
   controlFollowed(p,before);
   assert.equal(probe(p.top,'status','--porcelain','--','src'),'0:','src/ on disk is not HEAD after L13');
 }
+// A project that TRACKS .serena/project.yml: WT-06 rewrites W's copy (project_name <name>@<taskId>) at every
+// launch, so W shows it as ' M'. That copy is tooling's, never task bytes: neither the checkpoint nor the
+// completion may carry the renamed name (task-f977d76e).
+async function wtSerenaYml(){
+  const p=repo('wt-serena-yml',{settings:LANDS}),f='.serena/project.yml',yml='project_name: fixture\nlanguages: [x]\n';
+  write(path.join(p.dir,f),yml);git(p.top,'add','-f','--',f);git(p.top,'commit','-qm','track project.yml');git(p.top,'update-ref','refs/heads/main','HEAD');
+  const main=mainOf(p);
+  let r=await landRun(p,'wt-serena-yml-1',{'src/a.txt':'task a\n'});
+  const head=revOf(p.top,p.branch);
+  assert.ok(r.code===0&&head!==main,`exit code ${r.code}; no checkpoint on the task branch`+tail(r.log));
+  assert.equal(readOr(path.join(p.W,f)),'project_name: "fixture@'+TASK+'"\nlanguages: [x]\n','W lacks the WT-06 copy: the premise of this case');
+  assert.equal(git(p.top,'show',head+':'+f),yml,'the checkpoint carried the WT-06 copy to the task branch');
+  assert.equal(git(p.top,'show',head+':src/a.txt'),'task a\n','the checkpoint lost the task bytes');
+  assert.match(r.log,/MOE_ATTR_EXCLUDED/,'no MOE_ATTR_EXCLUDED line'+tail(r.log));
+  assert.match(git(p.W,'status','--porcelain','--',f),/^ M /,'the WT-06 copy is not W dirt, or was landed and refreshed');
+  r=await landRun(p,'wt-serena-yml-2',{'src/a.txt':'done\n'},REVIEW);
+  const c=mainOf(p);
+  assert.ok(r.code===0&&c!==main,`exit code ${r.code}, or main did not move`+tail(r.log));
+  assert.deepEqual([git(p.top,'show',c+':'+f),git(p.top,'show',c+':src/a.txt')],[yml,'done\n'],'the completion carried the WT-06 copy to the target');
+}
 // commitHooks: the hook runs on the merged tree (peer and task bytes, no .moe); a staged or unstaged
 // hook edit, or a hook that moves HEAD, is refused (failed, T rescued, main unmoved); a no-op hook
 // lands C; no hook worktree is left behind and the control checkout is untouched.
@@ -1437,6 +1457,7 @@ for(const t of ['claude','codex','gemini','grok'])cases['launch-'+t]=()=>launchA
 Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link-partial':linkPartial,'project-yml':projectYml,'serena-outside':serenaOutside,
   'wt-checkpoint':wtCheckpoint,'wt-deny':wtDeny,'wt-recover':wtRecover,'wt-recover-moe':wtRecoverMoe,'wt-control-seats':wtControlSeats,
   'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-replay-remote':wtReplayRemote,'wt-sync':wtSync,'wt-fails':wtFails,
+  'wt-serena-yml':wtSerenaYml,
   'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
   'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
   'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,codes});

@@ -4518,11 +4518,14 @@ if mode == 'carry':
 if mode == 'worktree':
     # A task worktree holds this task's bytes only (design §3.2): no baseline,
     # no tiers. Every dirty path lands except DENY = denied() plus
-    # .claude/skills/** (the link the launch makes), .moe/** with no BOARD
+    # .claude/skills/** (the link the launch makes), .serena/project.yml (WT-06
+    # rewrites W's copy to project_name <name>@<taskId> at every launch, so it is
+    # tooling's, never task bytes, even when the project tracks it and git shows
+    # ' M'; denied() holds .serena/** only while untracked), .moe/** with no BOARD
     # exception. Ps1 twin: Test-MoeDenyPathWorktree.
     def denied_wt(p, xy):
         pk = key(p)
-        return denied(p, xy) or any(pk == pre + '.claude/skills' or pk.startswith(pre + '.claude/skills/') for pre in roots)
+        return denied(p, xy) or any(pk == pre + '.claude/skills' or pk.startswith(pre + '.claude/skills/') or pk == pre + '.serena/project.yml' for pre in roots)
     held = set(pk for pk in S if denied_wt(S[pk][0], S[pk][2]))
     recs = {'candidates': [('WORKTREE', S[pk][1], S[pk][0]) for pk in sorted(S) if pk not in held],
             'skipped': [('MOE_ATTR_EXCLUDED', S[pk][0]) for pk in sorted(held)],
