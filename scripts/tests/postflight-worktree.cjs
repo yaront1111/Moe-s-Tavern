@@ -594,7 +594,7 @@ async function wtCheckpoint(){
   assert.ok(r.code===0&&head!==main,`exit code ${r.code}; no checkpoint on the task branch`+tail(r.log));
   assert.deepEqual(parents(p.top,head),[main],'the checkpoint is not one commit on the previous tip');
   assert.deepEqual(['a','new'].map(f=>git(p.top,'show',`${head}:src/${f}.txt`)),['task a\n','new\n'],'the checkpoint tree');
-  assert.equal(revOf(p.top,'refs/heads/main'),main,'the target moved');
+  assert.deepEqual([revOf(p.top,'refs/heads/main'),revOf(p.top,BOARD)],[main,null],'the target moved, or a checkpoint snapshotted the board');
   controlSame(p,before);
   const rec=ledger(p).pop()||{};
   assert.deepEqual({...rec,paths:rec.paths&&[...rec.paths].sort()},{...rec,outcome:'committed',kind:'checkpoint',ref:p.branch,sha:head,
@@ -639,14 +639,16 @@ async function wtRecoverMoe(){
 async function wtControlSeats(){
   const p=repo('wt-control',{settings:LANDS});
   for(const role of ['architect','qa']){
-    const rel='src/'+role+'.txt',f=path.join(p.top,'src',role+'.txt'),refs=()=>git(p.top,'for-each-ref','--format=%(refname) %(objectname)');
+    // The board ref is WT-12's (wt-board): only the QA seat writes it.
+    const rel='src/'+role+'.txt',f=path.join(p.top,'src',role+'.txt'),refs=()=>git(p.top,'for-each-ref','--format=%(refname) %(objectname)').split('\n').filter(l=>!l.startsWith(BOARD+' '));
     write(path.join(p.dir,'.moe','tasks',TASK+'.json'),JSON.stringify({id:TASK,title:'Worktree smoke',status:'WORKING',declaredFiles:[rel]}));
     const before=refs();
     const r=await landRun(p,'wt-control-'+role,{[f]:role+'\n'},{FAKE_CLAIM_WORKSPACE:null,FAKE_SCOPE_DECLARED_FIELD:'1'},{role});
     assert.ok(r.code===0&&r.log.includes('MOE_COMMIT_NOTHING_TO_COMMIT'),`${role}: exit code ${r.code}, or no MOE_COMMIT_NOTHING_TO_COMMIT line`+tail(r.log));
     const rec=ledger(p);
     assert.deepEqual(rec.map(x=>[x.outcome,x.kind,x.code,x.sha,x.ref]),[['nothing','checkpoint','MOE_COMMIT_NOTHING_TO_COMMIT',undefined,undefined]],`${role}: the record_commit rows`);
-    assert.deepEqual([refs(),probe(p.top,'symbolic-ref','-q','HEAD'),readOr(f)],[before,'0:refs/heads/moe/control\n',role+'\n'],`${role}: a ref moved, HEAD left moe/control, or the write changed`);
+    assert.deepEqual([refs(),probe(p.top,'symbolic-ref','-q','HEAD'),readOr(f),!!revOf(p.top,BOARD)],[before,'0:refs/heads/moe/control\n',role+'\n',role==='qa'],
+      `${role}: a ref moved, HEAD left moe/control, the write changed, or the board ref is wrong`);
     noBaseline(p);
     assert.equal(git(p.top,'log','--all','--format=%H','--',rel),'',`${role}: the declared ${rel} reached a ref`);
   }
@@ -788,8 +790,8 @@ async function wtFails(){
     const p=repo(n,{settings:{...LANDS,...settings}}),main=mainOf(p);
     if(setup)await setup(p);
     const r=await landRun(p,n,setup&&knobs.WT_GIT_FAIL?{}:{'src/a.txt':'done\n'},{...REVIEW,...knobs}),row=done(p);
-    assert.deepEqual([mainOf(p),row.map(x=>[x.outcome,x.code]),why.test(row[0]&&row[0].message),present(journal(p)),leases(p)],
-      [main,[['failed',code]],true,false,[]],`${n}: main moved, the row, a journal stayed, or a lease call`+tail(r.log));
+    assert.deepEqual([mainOf(p),row.map(x=>[x.outcome,x.code]),why.test(row[0]&&row[0].message),present(journal(p)),leases(p),revOf(p.top,BOARD)],
+      [main,[['failed',code]],true,false,[],null],`${n}: main moved, the row, a journal stayed, a lease call, or a board snapshot`+tail(r.log));
   }
 }
 // ONE CAS (design §2.2 L2): a task branch moved between commit-tree and update-ref is
@@ -1047,6 +1049,124 @@ async function wtCrash(){
   }
 }
 
+// WT-12 (design §4): board history on refs/moe/board, never main. The board-* cases run the
+// snapshot program straight from the wrappers under test, which must carry one identical text.
+const BOARD='refs/moe/board',MARK=/^\/\/ moe board snapshot program[^\n]*\n[\s\S]*?^\/\/ end of the moe board snapshot program$/m;
+function boardJs(){
+  const [a,b]=['moe-agent.sh','moe-agent.ps1'].map(f=>(MARK.exec(read(path.join(path.dirname(wrapper),f)))||[''])[0]);
+  assert.ok(a&&a===b,'the wrappers do not carry one identical board snapshot program');
+  const f=path.join(root,'board-snapshot.js');write(f,a+'\n');return f;
+}
+// --require shim: WT_BOARD_SHIM=race1|race3 lands a competing commit on the board ref just before
+// the first (race1) or every (race3) update-ref, logging each to WT_BOARD_LOG; fail-<sub> fails that git call.
+function boardShim(){
+  const f=path.join(root,'board-shim.js');
+  if(!present(f))write(f,`const cp=require('child_process'),fs=require('fs'),real=cp.spawnSync,mode=process.env.WT_BOARD_SHIM||'';let n=0;
+cp.spawnSync=function(cmd,a,o){
+  if(mode==='fail-'+a[2])return {status:1,stdout:'',stderr:'wt shim fails '+a[2],output:[],pid:0,signal:null};
+  if(a[2]==='update-ref'&&(mode==='race3'||(mode==='race1'&&n++<1))){
+    const g=x=>real(cmd,['-C',a[1],...x],{encoding:'utf8'}).stdout.trim(),tip=g(['rev-parse','${BOARD}']),c=g(['commit-tree',tip+'^{tree}','-p',tip,'-m','competitor']);
+    g(['update-ref','${BOARD}',c,tip]);fs.appendFileSync(process.env.WT_BOARD_LOG,c+'\\n');
+  }
+  return real.apply(this,arguments);
+};\n`);
+  return f;
+}
+// One program run; it never changes .moe, the control index, a branch or HEAD (sig).
+function snap(p,status,env={}){
+  const before=sig(p),r=cp.spawnSync(process.execPath,[...(env.WT_BOARD_SHIM?['--require',boardShim()]:[]),boardJs(),p.top,TASK,status],
+    {encoding:'utf8',env:{...inherited,TMPDIR:wrapperTmp,TMP:wrapperTmp,TEMP:wrapperTmp,...env},timeout:LIMIT});
+  assert.equal(r.status,0,`the snapshot program exited ${r.status}: ${r.stderr}${r.stdout}`);
+  assert.equal(sig(p),before,'the snapshot changed .moe, the control index, a branch or HEAD: '+r.stdout);return r.stdout;
+}
+const boardTree=p=>Object.fromEntries(git(p.top,'ls-tree','-r','-z','--full-tree',BOARD).split('\0').filter(Boolean).map(l=>{const m=/^\S+ \S+ (\S+)\t(.*)$/s.exec(l);return [m[2],m[1]];}));
+// The control checkout's board files, hashed byte for byte (no filters).
+function boardFiles(p){
+  const fl=['.moe/project.json'];
+  for(const d of ['tasks','epics'])if(present(path.join(p.dir,'.moe',d)))fl.push(...fs.readdirSync(path.join(p.dir,'.moe',d)).filter(n=>n.endsWith('.json')).map(n=>`.moe/${d}/${n}`));
+  const ids=git(p.top,'hash-object','--no-filters','--',...fl).trim().split('\n');return Object.fromEntries(fl.map((f,i)=>[f,ids[i]]));
+}
+// Every path, mode, size, mtime and byte under .moe, the control index file and the branches: what a snapshot never changes.
+function sig(p){
+  const out=[],walk=d=>{for(const n of fs.readdirSync(d).sort()){const f=path.join(d,n),s=fs.lstatSync(f);
+    out.push([path.relative(p.dir,f),s.mode,s.size,s.mtimeMs,s.isFile()?fs.readFileSync(f).toString('base64'):'']);if(s.isDirectory())walk(f);}};
+  walk(path.join(p.dir,'.moe'));const ix=path.join(git(p.top,'rev-parse','--absolute-git-dir').trim(),'index');
+  return JSON.stringify([out,fs.statSync(ix).mtimeMs,fs.readFileSync(ix).toString('base64'),probe(p.top,'for-each-ref','refs/heads'),probe(p.top,'symbolic-ref','HEAD')]);
+}
+// A full first snapshot (exact CRLF and UTF-8 bytes under autocrlf, nothing else), an unchanged board, then a torn,
+// a new torn, a deleted and an edited file, then a linked directory; read-only throughout.
+async function boardSnapshot(){
+  const p=repo('board-snapshot'),m=f=>path.join(p.dir,'.moe',f);
+  git(p.top,'config','core.autocrlf','true');
+  write(m('epics/epic-a.json'),'{\r\n  "title": "café 日本"\r\n}\r\n');write(m('tasks/task-b.json'),'{"id":"task-b"}');
+  for(const f of ['tasks/notes.txt','tasks/sub/task-c.json','workers/w.json','tasks/task-d.json.1.tmp'])write(m(f),'{}');
+  let out=snap(p,'REVIEW');const c1=revOf(p.top,BOARD),t1=boardTree(p);
+  assert.ok(c1&&out.includes('[OK] board snapshot '+c1),'no first snapshot: '+out);
+  assert.deepEqual([parents(p.top,c1),git(p.top,'log','-1','--format=%B',c1).trim(),t1,Object.keys(t1).length],[[],`board: ${TASK} REVIEW`,boardFiles(p),4],
+    'the first snapshot: parents, message, or a tree that is not exactly the 4 board files');
+  assert.match(out,/MOE_BOARD_UNPUSHED: no origin remote/,'no MOE_BOARD_UNPUSHED line without a remote');
+  out=snap(p,'DONE');
+  assert.ok(revOf(p.top,BOARD)===c1&&out.includes('unchanged'),'an unchanged board wrote a commit: '+out);
+  write(m('tasks/task-b.json'),'{"id":');write(m('tasks/task-new.json'),'{');fs.rmSync(m(`tasks/${TASK}.json`));write(m('epics/epic-a.json'),'{"t":2}');
+  out=snap(p,'DONE');const c2=revOf(p.top,BOARD),want=boardFiles(p);
+  delete want['.moe/tasks/task-new.json'];want['.moe/tasks/task-b.json']=t1['.moe/tasks/task-b.json'];
+  assert.deepEqual([parents(p.top,c2),boardTree(p)],[[c1],want],'torn files keep their parent blob, a deleted one goes, an edit lands');
+  assert.match(out,/\[WARN\] MOE_BOARD_FILE_KEPT: 2 .*"\.moe\/tasks\/task-b\.json".*"\.moe\/tasks\/task-new\.json"/,'the torn files are not named');
+  fs.renameSync(m('epics'),m('epics-real'));fs.symlinkSync(m('epics-real'),m('epics'),winHost?'junction':'dir');
+  try{out=snap(p,'DONE');}finally{unlinkOnly(m('epics'));}
+  assert.ok(revOf(p.top,BOARD)===c2&&/\[WARN\] MOE_BOARD_SNAPSHOT_SKIPPED: \.moe\/epics is not a plain directory/.test(out),'a linked board directory: '+out);
+}
+// One lost CAS retries on the winner; three lost CASes skip and keep every competing commit; a failed
+// write-tree or commit-tree skips.
+async function boardRace(){
+  const p=repo('board-race'),m=f=>path.join(p.dir,'.moe',f),log=path.join(root,'board-race.log'),lost=()=>read(log).trim().split('\n');
+  snap(p,'REVIEW');const c1=revOf(p.top,BOARD);
+  write(m('tasks/task-b.json'),'{"id":"b"}');
+  let out=snap(p,'REVIEW',{WT_BOARD_SHIM:'race1',WT_BOARD_LOG:log});const w=lost(),c2=revOf(p.top,BOARD);
+  assert.deepEqual([w.length,parents(p.top,w[0]),parents(p.top,c2),boardTree(p)],[1,[c1],w,boardFiles(p)],'one lost CAS, then a snapshot on the winner: '+out);
+  fs.rmSync(log);write(m('tasks/task-b.json'),'{"id":"b2"}');
+  out=snap(p,'REVIEW',{WT_BOARD_SHIM:'race3',WT_BOARD_LOG:log});const l=lost();
+  assert.deepEqual([l.length,revOf(p.top,BOARD),l.map(c=>parents(p.top,c)[0])],[3,l[2],[c2,l[0],l[1]]],'three lost CASes: the competing commits');
+  assert.match(out,/\[WARN\] MOE_BOARD_SNAPSHOT_SKIPPED: .*3 /,'no MOE_BOARD_SNAPSHOT_SKIPPED line after three lost CASes');
+  for(const sub of ['write-tree','commit-tree']){
+    out=snap(p,'REVIEW',{WT_BOARD_SHIM:'fail-'+sub});
+    assert.ok(revOf(p.top,BOARD)===l[2]&&out.includes('[WARN] MOE_BOARD_SNAPSHOT_SKIPPED: git '+sub),`a failed ${sub}: `+out);
+  }
+}
+// The push is plain (no force): pushed when it fast-forwards, MOE_BOARD_UNPUSHED and both refs kept when rejected.
+async function boardPush(){
+  const p=repo('board-push'),bare=path.join(root,'board-push.git');
+  git(root,'init','-q','--bare',bare);git(p.top,'remote','add','origin',bare);
+  let out=snap(p,'REVIEW');const c1=revOf(p.top,BOARD);
+  assert.ok(c1&&revOf(bare,BOARD)===c1&&!out.includes('MOE_BOARD_UNPUSHED'),'the first snapshot was not pushed: '+out);
+  const div=git(p.top,'commit-tree',c1+'^{tree}','-m','divergent').trim();git(p.top,'push','-q','--force',bare,`${div}:${BOARD}`);
+  write(path.join(p.dir,'.moe','tasks','task-b.json'),'{}');out=snap(p,'REVIEW');const c2=revOf(p.top,BOARD);
+  assert.deepEqual([parents(p.top,c2),revOf(bare,BOARD),/\[WARN\] MOE_BOARD_UNPUSHED: .*rejected/.test(out)],[[c1],div,true],'a rejected push: '+out);
+  git(p.top,'remote','set-url','origin',path.join(root,'board-missing.git'));write(path.join(p.dir,'.moe','tasks','task-b.json'),'{"u":1}');out=snap(p,'REVIEW');
+  assert.deepEqual([parents(p.top,revOf(p.top,BOARD)),revOf(bare,BOARD),out.includes('[WARN] MOE_BOARD_UNPUSHED: ')],[[c2],div,true],'an unreachable remote: '+out);
+}
+// The wrappers: a worktree completion snapshots after L12 and C changes no .moe path; a QA post-flight in the
+// control checkout snapshots; commitBoardState=false snapshots nothing; a snapshot failure leaves the landing landed.
+async function wtBoard(){
+  const p=repo('wt-board',{settings:LANDS}),m=f=>path.join(p.dir,'.moe',f),main=mainOf(p),set=s=>write(m('project.json'),JSON.stringify({id:'proj-worktree',settings:{...LANDS,...s}}));
+  write(m('epics/epic-a.json'),'{"id":"epic-a"}\r\n');write(m('tasks/task-b.json'),'{"id":"task-b"}');
+  let r=await landRun(p,'wt-board-1',{'src/a.txt':'done\n'},REVIEW);const c=mainOf(p),b1=revOf(p.top,BOARD);
+  assert.ok(c!==main&&b1,'main did not move, or no board snapshot'+tail(r.log));
+  assert.deepEqual([boardTree(p),git(p.top,'diff','--name-only',main,c).split('\n').filter(f=>f.startsWith('.moe')),git(p.top,'log','-1','--format=%B',b1).trim(),done(p).map(x=>x.outcome)],
+    [boardFiles(p),[],`board: ${TASK} REVIEW`,['committed']],'the board tree, a .moe path on main, the message or the completion row'+tail(r.log));
+  write(m(`tasks/${TASK}.json`),JSON.stringify({id:TASK,title:'Worktree smoke',status:'DONE'}));
+  r=await launch(p,'wt-board-qa',{FAKE_CLAIM_WORKSPACE:null,FAKE_TASK_STATUS:'DONE'},{role:'qa'});const b2=revOf(p.top,BOARD);
+  assert.deepEqual([r.code,parents(p.top,b2),git(p.top,'log','-1','--format=%B',b2).trim(),boardTree(p)],[0,[b1],`board: ${TASK} DONE`,boardFiles(p)],'the QA snapshot'+tail(r.log));
+  set({commitBoardState:false});
+  r=await launch(p,'wt-board-off',{FAKE_CLAIM_WORKSPACE:null,FAKE_TASK_STATUS:'DONE'},{role:'qa'});
+  assert.ok(r.code===0&&revOf(p.top,BOARD)===b2&&!/MOE_BOARD_|board snapshot/.test(r.log),'commitBoardState=false still snapshotted'+tail(r.log));
+  set({});const blob=git(p.top,'hash-object','-w','--stdin',{input:'not a commit'}).trim();git(p.top,'update-ref',BOARD,blob);
+  r=await landRun(p,'wt-board-skip',{'src/b.txt':'b\n'},REVIEW);const c2=mainOf(p);
+  assert.deepEqual([r.code,parents(p.top,c2),done(p).map(x=>[x.outcome,x.sha]),finals(p),probe(p.top,'rev-parse',BOARD).trim()],[0,[c],[['committed',c2]],[['landed',c2]],'0:'+blob],
+    'a failed snapshot changed the landing or the board ref'+tail(r.log));
+  assert.match(r.log,/\[WARN\] MOE_BOARD_SNAPSHOT_SKIPPED: /,'no MOE_BOARD_SNAPSHOT_SKIPPED line');
+}
+
 // DoD: both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_/MOE_MIGRATION_ codes.
 function codes(){
   const set=f=>[...new Set(read(path.join(path.dirname(wrapper),f)).match(/MOE_(?:WORKTREE|LAND|CONTROL|BOARD|MIGRATION)_[A-Z0-9_]+/g))].sort();
@@ -1060,7 +1180,8 @@ Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link
   'wt-checkpoint':wtCheckpoint,'wt-deny':wtDeny,'wt-recover':wtRecover,'wt-recover-moe':wtRecoverMoe,'wt-control-seats':wtControlSeats,
   'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-replay-remote':wtReplayRemote,'wt-sync':wtSync,'wt-fails':wtFails,
   'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
-  'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,codes});
+  'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
+  'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,codes});
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{
   let ok=0,failed=0;

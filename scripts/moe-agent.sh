@@ -7407,6 +7407,124 @@ $(printf '%s\n' "$stray" | head -n 20 | sed 's/^/- /')$more"
     return 0
 }
 
+# board_snapshot_node TASK STATUS -- the board snapshot program (WT-12, design
+# §4), the same text in both wrappers. It runs from a function, not inside $( ):
+# macOS /bin/bash 3.2 cannot parse a quoted heredoc inside $( ).
+board_snapshot_node() {
+    "$NODE_CMD" - "$PROJECT" "$1" "$2" <<'MOE_WT_BOARD_JS'
+// moe board snapshot program (WT-12, design section 4): one text in both wrappers.
+// argv: <project> <taskId> <status>. It only reads the board files (.moe/project.json,
+// .moe/tasks/*.json, .moe/epics/*.json); git writes go to the object store, a private
+// index in a temp dir and refs/moe/board, never a branch, HEAD, the real index or .moe.
+// Every outcome is a line on stdout, and the exit code is 0.
+const fs = require('fs'), path = require('path'), os = require('os'), cp = require('child_process'), crypto = require('crypto');
+const [proj, tid, status] = process.argv.slice(-3), REF = 'refs/moe/board', say = l => console.log(l);
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|NAMESPACE|PREFIX)$/i.test(k)));
+Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' });
+// Printable ASCII only: Windows PowerShell 5.1 reads this output in the OEM code page.
+const ascii = s => String(s).replace(/[^\x20-\x7e]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+const esc = s => ascii(JSON.stringify(s)), first = (t, re) => { const ls = String(t).trim().split(/\r?\n/); return (ls.find(l => re.test(l)) || ls[0]).trim(); };
+const git = (args, o = {}) => {
+    const r = cp.spawnSync('git', ['-C', proj, ...args], { encoding: 'utf8', input: o.input, env: o.env || env, timeout: o.ms || 60000, maxBuffer: 1 << 28, windowsHide: true });
+    if (r.status !== 0 && !o.soft) throw Error('git ' + args[0] + ' failed: ' + first(r.stderr || r.error || 'exit ' + r.status, /fatal|error/));
+    return r;
+};
+const BOARD = /^\.moe\/(project\.json|(tasks|epics)\/[^/]+\.json)$/, utf8 = new TextDecoder('utf-8', { fatal: true });
+const DIRS = [['.moe', n => n === 'project.json'], ['.moe/tasks', n => n.endsWith('.json')], ['.moe/epics', n => n.endsWith('.json')]];
+// One attempt on top of tip ('' when unborn): the board tree, or '' when there is no board at all.
+// A file that is not cleanly read as JSON keeps the tip's blob (a new one stays out) and joins kept.
+function build(tip, algo, tmp, kept) {
+    const ent = new Map(), fresh = [];
+    if (tip) for (const e of git(['ls-tree', '-r', '-z', '--full-tree', tip + '^{commit}']).stdout.split('\0')) {
+        const m = /^100644 blob ([0-9a-f]+)\t([\s\S]+)$/.exec(e);
+        if (m && BOARD.test(m[2])) ent.set(m[2], m[1]);   // any other parent entry is dropped
+    }
+    for (const [dir, want] of DIRS) {
+        const abs = path.join(proj, dir); let st;
+        try { st = fs.lstatSync(abs); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }   // absent: its entries stay
+        if (!st.isDirectory()) throw Error(dir + ' is not a plain directory');   // a link or junction is never followed
+        const names = fs.readdirSync(abs).filter(want).sort();   // an unreadable directory skips the snapshot
+        for (const n of names) {
+            const rel = dir + '/' + n, f = path.join(abs, n);
+            try {
+                const a = fs.lstatSync(f);
+                if (!a.isFile()) throw Error('not a regular file');
+                const b = fs.readFileSync(f), z = fs.lstatSync(f);
+                if (z.ino !== a.ino || z.size !== a.size || z.mtimeMs !== a.mtimeMs || b.length !== a.size) throw Error('changed while read');
+                JSON.parse(utf8.decode(b));   // these exact bytes, never a second read, become the blob
+                const id = crypto.createHash(algo).update('blob ' + b.length + '\0').update(b).digest('hex');
+                if (ent.get(rel) !== id) fresh.push([rel, id, b]);
+                ent.set(rel, id);
+            } catch (e) { kept.push(esc(rel) + ' (' + ascii(e.code || (e instanceof SyntaxError ? 'not JSON' : e.message)) + ')'); }
+        }
+        for (const rel of [...ent.keys()]) {   // gone from a directory that was read, and still gone: deleted
+            if (path.posix.dirname(rel) !== dir || names.includes(path.posix.basename(rel))) continue;
+            try { fs.lstatSync(path.join(proj, rel)); } catch (e) { if (e.code === 'ENOENT') ent.delete(rel); }
+        }
+    }
+    if (!tip && !ent.size) return '';
+    if (fresh.length) {   // owned temp copies of the captured bytes, hashed as they are (no filters)
+        const list = fresh.map(([, , b], i) => { const f = path.join(tmp, 'b' + i); fs.writeFileSync(f, b); return f; });
+        const ids = git(['hash-object', '-w', '--no-filters', '--stdin-paths'], { input: list.join('\n') + '\n' }).stdout.trim().split(/\r?\n/);
+        fresh.forEach(([rel, id], i) => { if (ids[i] !== id) throw Error('git hash-object disagrees on ' + esc(rel)); });
+    }
+    const idx = path.join(tmp, 'index'), ienv = { ...env, GIT_INDEX_FILE: idx };
+    fs.rmSync(idx, { force: true });
+    if (ent.size) git(['update-index', '-z', '--index-info'], { env: ienv, input: [...ent].map(([rel, id]) => '100644 ' + id + '\t' + rel + '\0').join('') });
+    return git(['write-tree'], { env: ienv }).stdout.trim();
+}
+let tmp = '';
+try {
+    if (git(['rev-parse', '--show-prefix']).stdout.trim()) throw Error('the project is not at its repository root');
+    const algo = git(['rev-parse', '--show-object-format'], { soft: true }).stdout.trim() === 'sha256' ? 'sha256' : 'sha1';
+    const msg = 'board: ' + [tid, status].map(s => String(s).replace(/[\x00-\x1f\x7f]/g, '?')).join(' ');
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-board-'));
+    let kept = [], done = '', last = '';
+    for (let i = 0; i < 3 && !done; i++) {   // each attempt rebuilds on the tip it reads
+        kept = [];
+        const r = git(['rev-parse', '-q', '--verify', REF], { soft: true }), tip = r.status === 0 ? r.stdout.trim() : '';
+        if (r.status !== 0 && r.status !== 1) throw Error('git rev-parse failed: ' + first(r.stderr || r.error, /fatal|error/));
+        const tree = build(tip, algo, tmp, kept);
+        if (!tree) { done = '[info] no board files; ' + REF + ' stays unborn.'; break; }
+        if (tip && tree === git(['rev-parse', tip + '^{tree}']).stdout.trim()) { done = '[info] board unchanged; ' + REF + ' stays at ' + tip + '.'; break; }
+        const c = git(['commit-tree', tree, ...(tip ? ['-p', tip] : []), '-m', msg]).stdout.trim();
+        const u = git(['update-ref', '-m', msg, REF, c, tip], { soft: true });   // CAS: tip '' means the ref must not exist
+        if (u.status === 0) done = '[OK] board snapshot ' + c + ' on ' + REF + ' (' + ascii(msg) + ')';
+        else last = first(u.stderr || u.error || 'exit ' + u.status, /fatal|error/);
+    }
+    if (kept.length) say('[WARN] MOE_BOARD_FILE_KEPT: ' + kept.length + ' board file(s) not read cleanly as JSON keep their previous snapshot (a new one stays out): ' + kept.slice(0, 10).join(', ') + (kept.length > 10 ? ' +' + (kept.length - 10) + ' more' : ''));
+    if (!done) throw Error(REF + ' did not take the snapshot in 3 attempts (moved by a concurrent snapshot? last: ' + last + ')');
+    say(done);
+    if (!done.includes('stays unborn')) {   // a plain push: never forced; a rejection changes nothing, the next snapshot retries
+        const p = git(['remote', 'get-url', 'origin'], { soft: true }).status === 0 ? git(['push', '--no-verify', 'origin', REF + ':' + REF], { soft: true, ms: 120000 }) : null;
+        say(!p ? '[info] MOE_BOARD_UNPUSHED: no origin remote; ' + REF + ' stays local.' : p.status === 0 ? '[OK] pushed ' + REF + ' to origin.'
+            : '[WARN] MOE_BOARD_UNPUSHED: ' + ascii(first(p.stderr || p.error || 'exit ' + p.status, /rejected|fatal|error/)) + '; ' + REF + ' stays local.');
+    }
+} catch (e) {
+    say('[WARN] MOE_BOARD_SNAPSHOT_SKIPPED: ' + ascii(e.message) + "; the task's landing is unaffected and the next snapshot covers this one.");
+} finally {
+    if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+}
+// end of the moe board snapshot program
+MOE_WT_BOARD_JS
+}
+
+# board_snapshot TASK STATUS -- WT-12 (design §4): after a worktree completion
+# lands (L12) and after a QA seat's post-flight in the worktree-mode control
+# checkout, record the control checkout's board as one commit on refs/moe/board
+# ('board: <task> <status>', CAS, then a plain push), never on main. Off with
+# settings.commitBoardState=false or autoCommit=false. Read-only on .moe/; a
+# failure is one MOE_BOARD_SNAPSHOT_SKIPPED or MOE_BOARD_UNPUSHED line and never
+# changes the landing's outcome. Twin: Invoke-MoeBoardSnapshot.
+board_snapshot() {
+    local out rc=0
+    { [ "$CS_AUTO_COMMIT" = true ] && [ "$CS_COMMIT_BOARD_STATE" = true ]; } || return 0
+    out=$(board_snapshot_node "$1" "${2:-UNKNOWN}") || rc=$?
+    [ -z "$out" ] || printf '%s\n' "$out"
+    [ "$rc" -eq 0 ] || echo -e "${YELLOW}[WARN]${NC} MOE_BOARD_SNAPSHOT_SKIPPED: the board snapshot program failed (exit $rc); the task's landing is unaffected."
+    return 0
+}
+
 # worktree_postflight -- a worktree worker's exit (design §2.4, §3): a
 # checkpoint exit commits W's bytes to the task branch only, a completion lands
 # them on the target (land_worktree_completion), then the stray-edit check.
@@ -7423,6 +7541,8 @@ worktree_postflight() {
         LAND_REOPEN="${FINAL_REOPEN_COUNT:-0}"; LAND_CLI_EXIT="${CLI_EXIT_CODE:-0}"; LAND_RECOVERED=false
         if [ "$completion" = true ]; then
             land_worktree_completion "$MOE_WT_PATH" "$MOE_WT_BRANCH" || true
+            # Only once the landing is settled (L12 done, or nothing left to land).
+            case "$LAND_OUTCOME" in committed|nothing) board_snapshot "$PREFLIGHT_TASK_ID" "$status" ;; esac
         else
             land_worktree_checkpoint "$MOE_WT_PATH" "$MOE_WT_BRANCH" || true
         fi
@@ -7434,7 +7554,8 @@ worktree_postflight() {
 
 # control_seat_postflight -- design §3.6: an architect or QA seat in a
 # worktree-mode control checkout lands nothing (it carries daemon and human
-# bytes only) and records MOE_COMMIT_NOTHING_TO_COMMIT; no ref moves.
+# bytes only) and records MOE_COMMIT_NOTHING_TO_COMMIT; no branch moves. A QA
+# seat then snapshots the board (board_snapshot, WT-12).
 control_seat_postflight() {
     ATTR_DIR="$(create_secure_temp)/ctl-$$"
     rm -rf "$ATTR_DIR" 2>/dev/null || true
@@ -7445,6 +7566,7 @@ control_seat_postflight() {
     record_commit_rpc nothing checkpoint "" "" "$LAND_CODE" "" "" "" "" || true
     LAND_SUMMARY_SHA=none; LAND_SUMMARY_KIND=checkpoint; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0
     LAND_SUMMARY_HELD=""; LAND_SUMMARY_OUTCOME=nothing; LAND_SUMMARY_CODE="$LAND_CODE"
+    [ "$ROLE" != qa ] || board_snapshot "$LAND_TASK_ID" "$LAND_STATUS"
 }
 
 # ---- pre-flight --------------------------------------------------------------
