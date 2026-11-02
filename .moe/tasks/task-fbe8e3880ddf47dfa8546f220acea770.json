@@ -183,7 +183,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:55:52.700Z",
-  "updatedAt": "2026-11-02T18:25:45.093Z",
+  "updatedAt": "2026-11-02T18:27:05.425Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:18.168Z",
@@ -254,7 +254,8 @@
     "scripts/tests/postflight.ps1",
     "scripts/tests/postflight-fake-proxy.js",
     ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
-    ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json"
+    ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+    ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json"
   ],
   "completionSummary": "WT-13 delivered in both wrappers (scripts/moe-agent.sh and scripts/moe-agent.ps1).\n(1) Guard MOE_WRAPPER_IN_WORKTREE: a wrapper under <top>/.worktrees/task-* (registered W, plain dir, or link alias) refuses before any RPC.\n(2) follow_control_checkout / Invoke-MoeControlFollow fast-forwards moe/control, with hooks off, to the target tip sha it checked.\n- Codes: MOE_CONTROL_ADVANCED old..new, DIVERGED, BEHIND (dirt, lock, daemon-owned .moe), NOT_FOLLOWING.\n- Only a worker pre-flight after a worktree claim may switch the checkout onto moe/control.\n- It never resets, stashes, cleans or writes main.\n- Alerts reach #general at most once an hour per code per checkout, through a stamp plus an exclusive lock under <gitdir>/moe.\n(3) Follow sites:\n- L13 after a committed|nothing worktree completion; warning-only, the landing stays landed.\n- Every loop top on moe/control, before the hot-reload hash check.\n- The QA pre-flight: remote sync, then the follow.\nShared mode is untouched.\n(4) QA gate: get_context task.landing.lastCompletion.sha must be 40 lowercase hex, a commit, and an ancestor of the control HEAD. Otherwise MOE_CONTROL_CHECKOUT_BEHIND, one report_blocked and no CLI. On pass the prompt names 'Review commit <C>' and 'git diff <C>^ <C>'.\nTests: postflight-worktree.cjs, run by both harnesses, has new cases wt-guard, wt-follow (15 states), wt-follow-sites, wt-follow-race, wt-qa-gate. QA launches in wt-control-seats, wt-board and wt-qa-remote now pass a recorded completion. Both postflight.sh and postflight.ps1 gain a [hot reload follow] arm. The fake proxy gains the FAKE_CTX_LANDING knob.\nEvidence: the named bash gate ran on the final bytes, env-scrubbed: exit 0, failureClass NONE, worktree-landing 18/18, parity PASS. Windows PS 5.1 runs of postflight-safe powershell (NONE) and worktree-landing.ps1 (18/18) came before the one-line self-review fix (merge $tip, not the ref). After that fix, 8 focused cases passed on both sh and PS 5.1, and the ps1 reload arm passed again.\nH",
   "commits": [
@@ -279,6 +280,22 @@
       "treeId": "e69316362c887f37b96fdf0762e87a3bf840f20b",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "7262e53f5f732ba5181350038ab3b028d13e0789",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T17:20:25Z",
+      "paths": [
+        ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+        ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T18:27:05.425Z",
+      "treeId": "d80f1ed0eca7c5d77ed65f648d31076937f34ea8",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -292,9 +309,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-13a877ad@2026-11-02T14:47:47Z",
-    "at": "2026-11-02T17:20:04.827Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-564d8bce@2026-11-02T17:20:25Z",
+    "at": "2026-11-02T18:27:05.425Z"
   },
   "completedAt": "2026-11-02T18:25:45.093Z",
   "reviewCompletedAt": "2026-11-02T18:25:45.093Z",

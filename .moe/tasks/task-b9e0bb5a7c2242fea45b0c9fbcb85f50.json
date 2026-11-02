@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,7 +92,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:46:08.162Z",
-  "updatedAt": "2026-11-02T18:22:27.198Z",
+  "updatedAt": "2026-11-02T18:32:15.232Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:46:49.242Z",
@@ -102,11 +102,14 @@
     "firstClaimAt": "2026-11-02T17:54:58.747Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T18:32:15.232Z",
+    "wallClockMs": 2236485
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-564d8bce"
   ],
   "tier": "standard",
   "effort": "high",
@@ -227,5 +230,9 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-0fcb7226@2026-11-02T17:54:54Z",
     "at": "2026-11-02T18:22:27.198Z"
-  }
+  },
+  "completedAt": "2026-11-02T18:32:15.232Z",
+  "reviewCompletedAt": "2026-11-02T18:32:15.232Z",
+  "reviewSummary": "Approved. Reviewed recorded completion 1f4078c9 (on moe/work-2026-10-24, pushed) via git show: only the two named moe-jetbrains files plus the task's board JSON (main +3/-2, new test +130, ~135 net LOC, under 400). No daemon/VS Code/ChatPanel.kt/MoeBundle.properties edit.\nDoD1: handle() label is now \"PINS\",\"PINS_UPDATED\" (same branch: payload/channel/pins guards, parsePinEntry map, publishPins); PIN_* branches untouched; warn text uses $type. Test (a) asserts exactly one onPins(\"chan-1\",[msg-1,msg-2]) in order, full PinEntry equality, no other callback, equal to the PINS call for the same payload.\nDoD2: guards return before publish; a non-object entry throws in asJsonObject inside the existing try and is caught. Test (c): 14 malformed frames (no payload, null/[]/string payload, missing/null channel, pins missing/null/{}/string, [valid,42]/[valid,null]/[valid,\"x\"]/[[]]), no try/catch in the test, nothing published.\nDoD3: MoeMessageDispatcherPinsTest uses the AccountsTest Proxy harness, 3 cases. RED checked in /mnt/d/moe-scratch/b9e0bb5a/red.txt: two-pins and empty-list FAILED on the unchanged dispatcher.\nDoD4: re-ran the gate myself under the jetbrains-gradle lease (released). Ran in a git-archive snapshot of exactly 1f4078c9 (D:\\moe-scratch\\b9e0bb5a-qa), not in place, because a peer has moe-jetbrains/build.gradle.kts dirty in the shared tree: cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\b9e0bb5a-qa\\moe-jetbrains && .\\gradlew.bat test --rerun' -> exit 0, BUILD SUCCESSFUL 52s; JUnit XML tests=574 skipped=0 failures=0 errors=0; PinsTest 3/3 passed. Matches the worker's 574/0/0/0.\nDoD5: scope as above.\nNot covered, per DoD: an object-valued channel still throws from safeAsString before the try, same as PINS today. Mutation check by reading: dropping the label, skipping bad entries, early return on empty, reordering, or routing to onPinCreated each fail a test. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
