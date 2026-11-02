@@ -7852,8 +7852,11 @@ wt_remove_refused() { echo -e "${YELLOW}[WARN]${NC} MOE_WORKTREE_REMOVE_REFUSED:
 # unlock, a failed remove keeps the lock), exactly TID.links and
 # TID.control-dirt, and `branch -D` while the branch is still at TIP (default:
 # its tip here). A failed guard prints MOE_WORKTREE_REMOVE_REFUSED and returns
-# 1 with W registered and the branch kept. Callers hold the sweep lock and
-# have proved every byte landed or rescued. Twin: Remove-MoeTaskWorktree.
+# 1 with W registered and the branch kept. Git deregisters W even when its
+# remove fails part-way (refused here, branch kept), and Git for Windows exits
+# 0 with W left on disk when W holds a junction no manifest lists: the next
+# sweep pass names either leftover MOE_WORKTREE_UNREGISTERED. Callers hold the
+# sweep lock and have proved every byte landed or rescued. Twin: Remove-MoeTaskWorktree.
 remove_task_worktree() {
     local top="$1" tid="$2" tip="${3:-}" w="$1/.worktrees/$2" d rel p cur out rc=0
     if ! [[ "$tid" =~ ^task-[A-Za-z0-9_-]{1,128}$ ]]; then wt_remove_refused "$w" "'$tid' is not a task id"; return 1; fi
@@ -11289,12 +11292,12 @@ except Exception:
         # and parks the bytes on a rescue ref, it never aborts the loop.
         LANDING_MODE="none"
         LANDING_STATUS=""
-        MOE_CONTROL_SEAT=false
+        WT_CONTROL_SEAT=false
         # Worktree mode (design §3) never reaches the shared landing below.
         if [ "${MOE_WT_MODE:-}" = worktree ]; then
             worktree_postflight
         elif { [ "$ROLE" = architect ] || [ "$ROLE" = qa ]; } && control_worktree_mode; then
-            MOE_CONTROL_SEAT=true
+            WT_CONTROL_SEAT=true
             control_seat_postflight
         elif [ "$CS_AUTO_COMMIT" != "true" ]; then
             echo -e "${BLUE}[info]${NC} settings.autoCommit=false -- no git activity for task $PREFLIGHT_TASK_ID (no completion, checkpoint or rescue); baseline deleted."
@@ -11444,7 +11447,7 @@ except Exception:
         # WT-14: the approved task's worktree goes now, or waits for the orphan
         # sweep. A control seat only, so shared mode runs nothing new; it never
         # changes the landing outcome, the loop decision or the exit code.
-        if [ "$MOE_CONTROL_SEAT" = true ] && [ "$ROLE" = qa ] && [ "$FINAL_STATUS" = DONE ]; then
+        if [ "$WT_CONTROL_SEAT" = true ] && [ "$ROLE" = qa ] && [ "$FINAL_STATUS" = DONE ]; then
             qa_done_worktree_removal "$PREFLIGHT_TASK_ID" || true
         fi
     elif [ "$AUTO_CLAIM" = true ] && [ "$MOE_SKIP_LAUNCH" = false ] && [ -n "$PYTHON_CMD" ]; then

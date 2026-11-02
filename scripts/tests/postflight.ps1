@@ -5280,6 +5280,334 @@ exit 0
     }
     Write-Host '[worktree reuse] ok'
 
+    # --- [WT-14] Worktree removal at DONE and the orphan sweep (twin: the [WT-14] block
+    # in postflight.sh). New-Wt14Fixture is the one builder: a control checkout on BRANCH
+    # (moe/control, or a shared moe/work-* branch) whose .serena/memories and
+    # .claude/skills hold sentinels, and per task a W made exactly as WT-04 makes it,
+    # linked as WT-06 links it (the manifest line first, then the junction), with one
+    # task commit squash-landed on main. A QA seat claims task-postflight as DONE with its
+    # completion recorded at main's tip. Teardown unlinks every junction it made. ---
+    Write-Host '[WT-14] a QA approval removes a fully landed W; anything else is left in place'
+    $wt14Run = 0
+    $wt14Links = New-Object System.Collections.Generic.List[string]
+    $wt14 = @{ P = ''; Out = ''; Code = 0; Text = '' }
+    function Stop-Wt14([string]$Name, [string]$Why) { Write-Host $wt14.Text; throw "WT-14 FAILED ($Name): $Why" }
+    # Invoke-Wt14Git DIR ARGS -- one fixture git call's output lines; a failed call fails the case.
+    function Invoke-Wt14Git([string]$Dir, [string[]]$GitArgs) {
+        $ErrorActionPreference = 'Continue'
+        $out = @(& git -C $Dir -c 'user.name=Moe Test' -c 'user.email=moe@test.local' -c 'commit.gpgsign=false' -c 'core.autocrlf=false' @GitArgs 2>$null)
+        if ($LASTEXITCODE -ne 0) { throw "WT-14 FAILED: fixture git $GitArgs exited $LASTEXITCODE" }
+        return $out
+    }
+    function Get-Wt14Admin { "$(Invoke-Wt14Git $wt14.P @('rev-parse', '--path-format=absolute', '--git-common-dir'))/moe/worktree" }
+    function Test-Wt14Link([string]$Path) { $i = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue; [bool]($i -and ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) }
+    # New-Wt14Fixture NAME BRANCH [TASKS] -- a fresh control checkout $wt14.P on BRANCH, one landed W per task.
+    function New-Wt14Fixture([string]$Name, [string]$Branch, [string[]]$Tasks = @()) {
+        $p = Join-Path $tempRoot "wt14-$Name"
+        $wt14.P = $p; $wt14.Out = Join-Path $tempRoot "wt14-$Name.out"; $wt14.Text = ''
+        foreach ($d in 'src', '.moe\messages', '.serena\memories', '.claude\skills\s') { New-Item -ItemType Directory -Force -Path (Join-Path $p $d) | Out-Null }
+        [IO.File]::WriteAllText((Join-Path $p '.gitignore'), ".worktrees/`n.mcp.json`nlogs/`n")
+        [IO.File]::WriteAllText((Join-Path $p 'src\seed.txt'), "seed`n")
+        [IO.File]::WriteAllText((Join-Path $p '.moe\project.json'), '{"id":"proj-wt14","name":"postflight-wt14","settings":{"autoCommit":false}}')
+        [IO.File]::WriteAllText((Join-Path $p '.moe\messages\chan-general.jsonl'), '')
+        [IO.File]::WriteAllText((Join-Path $p '.serena\memories\sentinel.md'), "memory sentinel`n")
+        [IO.File]::WriteAllText((Join-Path $p '.claude\skills\s\SKILL.md'), "skill sentinel`n")
+        # The repo's own identity, as the other fixtures set it: the sweep's rescue refs are commit-trees.
+        foreach ($a in @(@('init', '-q'), @('config', 'user.name', 'Moe Test'), @('config', 'user.email', 'moe@test.local'), @('config', 'commit.gpgsign', 'false'),
+                @('config', 'core.autocrlf', 'false'), @('symbolic-ref', 'HEAD', 'refs/heads/main'), @('add', '.gitignore', 'src', '.moe/project.json'),
+                @('commit', '-qm', 'seed'), @('switch', '-q', '-c', $Branch))) { $null = Invoke-Wt14Git $p $a }
+        $man = Get-Wt14Admin
+        New-Item -ItemType Directory -Force -Path $man | Out-Null
+        foreach ($tid in $Tasks) {
+            $w = Join-Path $p ".worktrees\$tid"
+            $null = Invoke-Wt14Git $p @('worktree', 'add', '-q', '--lock', '--reason', "moe $tid", '--no-checkout', '--no-track', '-b', "moe/task/$tid", $w, 'main')
+            $null = Invoke-Wt14Git $w @('sparse-checkout', 'set', '--no-cone', '/*', '!/.moe/')
+            $null = Invoke-Wt14Git $w @('read-tree', '-mu', 'HEAD')
+            New-Item -ItemType Directory -Force -Path (Join-Path $w '.serena'), (Join-Path $w '.claude') | Out-Null
+            foreach ($rel in '.serena\memories', '.claude\skills') {
+                [IO.File]::AppendAllText("$man/$tid.links", $rel.Replace('\', '/') + "`n")
+                $null = New-Item -ItemType Junction -Path (Join-Path $w $rel) -Target (Join-Path $p $rel)
+                $wt14Links.Add((Join-Path $w $rel))
+            }
+            [IO.File]::WriteAllText("$man/$tid.control-dirt", '')
+            [IO.File]::WriteAllText((Join-Path $w "src\$tid.txt"), "$tid work`n")
+            $null = Invoke-Wt14Git $w @('add', "src/$tid.txt")
+            $null = Invoke-Wt14Git $w @('commit', '-qm', "work $tid")
+            $tree = "$(Invoke-Wt14Git $p @('merge-tree', '--write-tree', 'main', "moe/task/$tid"))"
+            $sha = "$(Invoke-Wt14Git $p @('commit-tree', $tree, '-p', 'main', '-m', "land $tid"))"
+            $null = Invoke-Wt14Git $p @('update-ref', 'refs/heads/main', $sha)
+        }
+    }
+    # Invoke-Wt14Seat NAME ROLE KNOBS -- one wrapper run on $wt14.P with KNOBS set (a $null
+    # value unsets one; the sweep interval is unset unless a case passes it); exit 0 expected.
+    function Invoke-Wt14Seat([string]$Name, [string]$Role, [hashtable]$Knobs) {
+        $k = @{ MOE_PROXY_PATH = $fakeProxy; USERPROFILE = $homeDir; MOE_DISABLE_HEARTBEAT = '1'; MOE_WORKTREE_SWEEP_INTERVAL_SEC = $null }
+        foreach ($n in $Knobs.Keys) { $k[$n] = $Knobs[$n] }
+        $saved = @{}
+        foreach ($n in $k.Keys) { $saved[$n] = [Environment]::GetEnvironmentVariable($n); [Environment]::SetEnvironmentVariable($n, $k[$n]) }
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $wt14.Code = Invoke-WrapperProcess @('-Project', $wt14.P, '-WorkerId', "$Role-wt14", '-Role', $Role, '-Team', 'Smoke', '-NoStartDaemon', '-Command', $trueCmd, '-NoLoop', '-PollInterval', '0') $wt14.Out
+        } finally {
+            $ErrorActionPreference = $prev
+            foreach ($n in $saved.Keys) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) }
+        }
+        $wt14.Text = [string](Get-Content -Raw -LiteralPath $wt14.Out -ErrorAction SilentlyContinue)
+        if ($wt14.Code -ne 0) { Stop-Wt14 $Name "exit $($wt14.Code), expected 0" }
+    }
+    # Invoke-Wt14Qa NAME -- one QA seat: task-postflight is DONE, its completion recorded at main's tip.
+    function Invoke-Wt14Qa([string]$Name) {
+        $land = "$(Invoke-Wt14Git $wt14.P @('rev-parse', 'main'))"
+        Invoke-Wt14Seat $Name 'qa' @{ FAKE_TASK_STATUS = 'DONE'
+            FAKE_CTX_LANDING = '{"lastCompletion":{"sha":"' + $land + '","ref":"refs/heads/main","pushed":false,"recordedAt":"2026-11-02T00:00:00.000Z"}}' }
+    }
+    function Test-Wt14Listed([string]$Tid) {
+        @(Invoke-Wt14Git $wt14.P @('worktree', 'list', '--porcelain') | Where-Object { $_ -cmatch ('^worktree .*/\.worktrees/' + [regex]::Escape($Tid) + '\z') }).Count -gt 0
+    }
+    function Test-Wt14Branch([string]$Tid) { @(Invoke-Wt14Git $wt14.P @('for-each-ref', "refs/heads/moe/task/$Tid")).Count -gt 0 }
+    # Assert-Wt14Gone NAME TASK -- W is off disk and unlisted; its branch, manifest and control-dirt are deleted.
+    function Assert-Wt14Gone([string]$Name, [string]$Tid) {
+        $w = Join-Path $wt14.P ".worktrees\$Tid"; $man = "$(Get-Wt14Admin)/$Tid"
+        if ($null -ne (Get-Item -LiteralPath $w -Force -ErrorAction SilentlyContinue)) { Stop-Wt14 $Name "$w is still on disk" }
+        if (Test-Wt14Listed $Tid) { Stop-Wt14 $Name "$w is still registered" }
+        if (Test-Wt14Branch $Tid) { Stop-Wt14 $Name "moe/task/$Tid still exists" }
+        if ((Test-Path -LiteralPath "$man.links") -or (Test-Path -LiteralPath "$man.control-dirt")) { Stop-Wt14 $Name "the manifest or control-dirt of $Tid is still there" }
+    }
+    # Assert-Wt14Kept NAME TASK -- W is on disk and registered, its branch, manifest and both links intact.
+    function Assert-Wt14Kept([string]$Name, [string]$Tid) {
+        $w = Join-Path $wt14.P ".worktrees\$Tid"
+        if (-not (Test-Path -LiteralPath $w -PathType Container) -or -not (Test-Wt14Listed $Tid)) { Stop-Wt14 $Name "$w was removed or unregistered" }
+        if (-not (Test-Wt14Branch $Tid)) { Stop-Wt14 $Name "moe/task/$Tid was deleted" }
+        $man = Get-Item -LiteralPath "$(Get-Wt14Admin)/$Tid.links" -Force -ErrorAction SilentlyContinue
+        if (-not $man -or $man.Length -eq 0 -or -not (Test-Wt14Link (Join-Path $w '.serena\memories')) -or -not (Test-Wt14Link (Join-Path $w '.claude\skills'))) {
+            Stop-Wt14 $Name "the manifest or a link of $Tid is gone"
+        }
+    }
+    # Assert-Wt14Bytes NAME FILE TEXT WHY -- FILE still holds exactly TEXT.
+    function Assert-Wt14Bytes([string]$Name, [string]$File, [string]$Text, [string]$Why) {
+        $b = try { [IO.File]::ReadAllText($File) } catch { $null }
+        if ($b -cne $Text) { Stop-Wt14 $Name $Why }
+    }
+    function Assert-Wt14Sentinels([string]$Name) {
+        Assert-Wt14Bytes $Name (Join-Path $wt14.P '.serena\memories\sentinel.md') "memory sentinel`n" 'a control sentinel changed'
+        Assert-Wt14Bytes $Name (Join-Path $wt14.P '.claude\skills\s\SKILL.md') "skill sentinel`n" 'a control sentinel changed'
+    }
+    # Assert-Wt14Left NAME DETAIL -- W left to the sweep with DETAIL (a regex) in the reason.
+    function Assert-Wt14Left([string]$Name, [string]$Detail) {
+        if ($wt14.Text -cnotmatch "\[worktree\] left .*/\.worktrees/task-postflight to the orphan sweep: .*$Detail") { Stop-Wt14 $Name "no left-to-the-sweep line matching '$Detail'" }
+    }
+    function Get-Wt14W { Join-Path $wt14.P '.worktrees\task-postflight' }
+    # Invoke-Wt14Icacls ARGS -- icacls' exit code; its output and stderr are dropped.
+    function Invoke-Wt14Icacls([string[]]$IcaclsArgs) {
+        $ErrorActionPreference = 'Continue'
+        $null = & icacls @IcaclsArgs 2>&1
+        return $LASTEXITCODE
+    }
+
+    Write-Host '[scenario WT14A] a QA approval of a fully landed task removes W and its branch'
+    New-Wt14Fixture 'a' 'moe/control' @('task-postflight')
+    Invoke-Wt14Qa 'WT14A'
+    if ($wt14.Text -cnotmatch '(?m)^\[worktree\] removed .*/\.worktrees/task-postflight on moe/task/task-postflight\r?$') { Stop-Wt14 'WT14A' 'no [worktree] removed line' }
+    Assert-Wt14Gone 'WT14A' 'task-postflight'
+    Assert-Wt14Sentinels 'WT14A'
+    $wt14Run++
+    Write-Host '[scenario WT14A] ok'
+
+    Write-Host '[scenario WT14B] a fully landed W holding .moe/x keeps W, its branch, its manifest and .moe/x'
+    New-Wt14Fixture 'b' 'moe/control' @('task-postflight')
+    New-Item -ItemType Directory -Force -Path (Join-Path (Get-Wt14W) '.moe') | Out-Null
+    [IO.File]::WriteAllText((Join-Path (Get-Wt14W) '.moe\x'), "x`n")
+    Invoke-Wt14Qa 'WT14B'
+    Assert-Wt14Left 'WT14B' 'MOE_WORKTREE_MOE_PRESENT'
+    Assert-Wt14Kept 'WT14B' 'task-postflight'
+    Assert-Wt14Bytes 'WT14B' (Join-Path (Get-Wt14W) '.moe\x') "x`n" 'W/.moe/x lost its bytes'
+    Assert-Wt14Sentinels 'WT14B'
+    $wt14Run++
+    Write-Host '[scenario WT14B] ok'
+
+    Write-Host '[scenario WT14C] a W with a modified tracked file is left to the orphan sweep'
+    New-Wt14Fixture 'c' 'moe/control' @('task-postflight')
+    [IO.File]::WriteAllText((Join-Path (Get-Wt14W) 'src\task-postflight.txt'), "edited`n")
+    Invoke-Wt14Qa 'WT14C'
+    Assert-Wt14Left 'WT14C' 'non-DENY dirty path'
+    Assert-Wt14Kept 'WT14C' 'task-postflight'
+    Assert-Wt14Bytes 'WT14C' (Join-Path (Get-Wt14W) 'src\task-postflight.txt') "edited`n" 'the edit lost its bytes'
+    Assert-Wt14Sentinels 'WT14C'
+    $wt14Run++
+    Write-Host '[scenario WT14C] ok'
+
+    Write-Host '[scenario WT14U] a W whose branch holds an unlanded commit is left to the orphan sweep'
+    New-Wt14Fixture 'u' 'moe/control' @('task-postflight')
+    [IO.File]::WriteAllText((Join-Path (Get-Wt14W) 'src\unlanded.txt'), "unlanded`n")
+    $null = Invoke-Wt14Git (Get-Wt14W) @('add', 'src/unlanded.txt')
+    $null = Invoke-Wt14Git (Get-Wt14W) @('commit', '-qm', 'unlanded')
+    Invoke-Wt14Qa 'WT14U'
+    Assert-Wt14Left 'WT14U' 'moe/task/task-postflight is not fully landed in main'
+    Assert-Wt14Kept 'WT14U' 'task-postflight'
+    Assert-Wt14Sentinels 'WT14U'
+    $wt14Run++
+    Write-Host '[scenario WT14U] ok'
+
+    # The unlink fails: the current user is denied DELETE on the junction itself (/L) and
+    # DELETE_CHILD on its parent, both removed again before any assertion.
+    Write-Host '[scenario WT14D] an unlink that fails refuses with MOE_WORKTREE_REMOVE_REFUSED and keeps W registered'
+    New-Wt14Fixture 'd' 'moe/control' @('task-postflight')
+    $wt14Sid = '*' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $wt14J = Join-Path (Get-Wt14W) '.serena\memories'
+    $wt14Acl = @(@($wt14J, "${wt14Sid}:(DE)", '/L'), @((Split-Path -Parent $wt14J), "${wt14Sid}:(DC)"))
+    try {
+        foreach ($a in $wt14Acl) {
+            $rc = Invoke-Wt14Icacls (@($a[0], '/deny') + @($a | Select-Object -Skip 1))
+            if ($rc -ne 0) { throw "WT-14 FAILED (WT14D): icacls /deny on $($a[0]) exited $rc" }
+        }
+        Invoke-Wt14Qa 'WT14D'
+    } finally {
+        foreach ($a in $wt14Acl) { $null = Invoke-Wt14Icacls (@($a[0], '/remove:d', $wt14Sid) + @($a | Select-Object -Skip 2)) }
+    }
+    if ($wt14.Text -cnotmatch 'MOE_WORKTREE_REMOVE_REFUSED: .*/\.worktrees/task-postflight: .*\.serena/memories') { Stop-Wt14 'WT14D' 'no REMOVE_REFUSED line naming the link' }
+    if ($wt14.Text.Contains('[worktree] removed')) { Stop-Wt14 'WT14D' 'a refused removal printed a removed line' }
+    Assert-Wt14Kept 'WT14D' 'task-postflight'
+    Assert-Wt14Sentinels 'WT14D'
+    $wt14Run++
+    Write-Host '[scenario WT14D] ok'
+
+    Write-Host '[scenario WT14S] a shared-mode control checkout removes nothing and prints no worktree line'
+    New-Wt14Fixture 's' 'moe/work-wt14' @('task-postflight')
+    Invoke-Wt14Qa 'WT14S'
+    if ($wt14.Text -cmatch 'MOE_WORKTREE_|\[worktree\]') { Stop-Wt14 'WT14S' 'shared mode printed a MOE_WORKTREE_ or [worktree] line' }
+    Assert-Wt14Kept 'WT14S' 'task-postflight'
+    Assert-Wt14Sentinels 'WT14S'
+    $wt14Run++
+    Write-Host '[scenario WT14S] ok'
+
+    # The orphan sweep: one idle seat (no claim, a 5s taskless wait), so the loop top's sweep
+    # is all a run does. The interval is unset unless a case passes it; FAKE_TASK_STATUS_MAP
+    # answers the status reads.
+    function Invoke-Wt14Sweep([string]$Name, [hashtable]$Knobs) { Invoke-Wt14Seat $Name 'worker' (@{ FAKE_CLAIM_MODE = 'idle'; MOE_TASKLESS_WAIT_SEC = '5' } + $Knobs) }
+    function Get-Wt14Rows([string]$Pattern) { @(Get-Content -LiteralPath (Join-Path $wt14.P '.moe\messages\chan-general.jsonl') | Where-Object { $_ -cmatch $Pattern }).Count }
+    function Get-Wt14Rescues([string]$Prefix) { @(Invoke-Wt14Git $wt14.P @('for-each-ref', '--format=%(objectname) %(refname)', $Prefix)) }
+    function Get-Wt14Removed { [regex]::Matches($wt14.Text, '\[worktree\] removed ').Count }
+
+    Write-Host "[scenario WT14E] the sweep parks an unlanded commit and W's dirt on rescue refs, then removes W; an unknown task's W goes too"
+    New-Wt14Fixture 'e' 'moe/control' @('task-e1', 'task-e2')
+    $wt14W = Join-Path $wt14.P '.worktrees\task-e1'
+    [IO.File]::WriteAllText((Join-Path $wt14W 'src\unlanded.txt'), "unlanded`n")
+    $null = Invoke-Wt14Git $wt14W @('add', 'src/unlanded.txt')
+    $null = Invoke-Wt14Git $wt14W @('commit', '-qm', 'unlanded')
+    $wt14T = "$(Invoke-Wt14Git $wt14.P @('rev-parse', 'refs/heads/moe/task/task-e1'))"
+    [IO.File]::WriteAllText((Join-Path $wt14W 'src\task-e1.txt'), "edited`n")
+    [IO.File]::WriteAllText((Join-Path $wt14W 'src\new.txt'), "untracked`n")
+    Invoke-Wt14Sweep 'WT14E' @{ MOE_WORKTREE_SWEEP_INTERVAL_SEC = '0'; FAKE_TASK_STATUS_MAP = 'task-e1=DONE,task-e2=NOT_FOUND' }
+    $wt14Refs = Get-Wt14Rescues 'refs/moe/rescue/task-e1/'
+    if (@($wt14Refs | Where-Object { $_.StartsWith("$wt14T ") }).Count -ne 1) { Stop-Wt14 'WT14E' "no single rescue ref at the unlanded commit ${wt14T}: $wt14Refs" }
+    if ((Get-Wt14Rows "MOE_RESCUE_REF task=task-e1 ref=refs/moe/rescue/task-e1/[^ ]+ sha=$wt14T reason=worktree-orphan") -lt 1) { Stop-Wt14 'WT14E' 'no #general MOE_RESCUE_REF row for the unlanded commit' }
+    $wt14D = @($wt14Refs | Where-Object { -not $_.StartsWith("$wt14T ") } | ForEach-Object { $_.Split(' ')[1] })
+    if ($wt14D.Count -ne 1) { Stop-Wt14 'WT14E' "no single second rescue ref for W's dirt: $wt14Refs" }
+    if ("$(Invoke-Wt14Git $wt14.P @('rev-parse', "$($wt14D[0])^"))" -cne $wt14T -or "$(Invoke-Wt14Git $wt14.P @('show', "$($wt14D[0]):src/task-e1.txt"))" -cne 'edited' -or
+            "$(Invoke-Wt14Git $wt14.P @('show', "$($wt14D[0]):src/new.txt"))" -cne 'untracked') { Stop-Wt14 'WT14E' "the dirt ref $($wt14D[0]) does not hold both dirty files on the unlanded commit" }
+    if ((Get-Wt14Rescues 'refs/moe/rescue/task-e2/').Count -ne 0) { Stop-Wt14 'WT14E' 'a clean, landed W got a rescue ref' }
+    if ((Get-Wt14Removed) -ne 2) { Stop-Wt14 'WT14E' 'not exactly two removed lines' }
+    foreach ($wt14Tid in 'task-e1', 'task-e2') { Assert-Wt14Gone 'WT14E' $wt14Tid }
+    Assert-Wt14Sentinels 'WT14E'
+    $wt14Run++
+    Write-Host '[scenario WT14E] ok'
+
+    Write-Host '[scenario WT14F] at most 5 removals a pass; WORKING, an open attempt and W/.moe are kept; a held lock skips the pass, a 3h-old one is broken'
+    New-Wt14Fixture 'f' 'moe/control' @('task-a1', 'task-d1', 'task-d2', 'task-d3', 'task-d4', 'task-d5', 'task-d6', 'task-m1', 'task-w1')
+    $wt14Att = Join-Path $wt14.P '.moe\attempts'
+    New-Item -ItemType Directory -Force -Path $wt14Att, (Join-Path $wt14.P '.worktrees\task-m1\.moe') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $wt14Att 'attempt-a1.json'), '{"id":"attempt-a1","taskId":"task-a1","workerId":"worker-x","generation":1,"phase":"running"}')
+    [IO.File]::WriteAllText((Join-Path $wt14Att 'attempt-d0.json'), '{"id":"attempt-d0","taskId":"task-d1","workerId":"worker-x","generation":1,"phase":"closed"}')
+    [IO.File]::WriteAllText((Join-Path $wt14.P '.worktrees\task-m1\.moe\x'), "m1`n")
+    $wt14Map = @{ MOE_WORKTREE_SWEEP_INTERVAL_SEC = '0'; FAKE_TASK_STATUS_MAP = 'task-a1=DONE,task-d1=DONE,task-d2=DONE,task-d3=DONE,task-d4=DONE,task-d5=DONE,task-d6=ARCHIVED,task-m1=DONE,task-w1=WORKING' }
+    Invoke-Wt14Sweep 'WT14F' $wt14Map
+    if ((Get-Wt14Removed) -ne 5) { Stop-Wt14 'WT14F' 'not exactly five removed lines in one pass' }
+    foreach ($wt14Tid in 'task-d1', 'task-d2', 'task-d3', 'task-d4', 'task-d5') { Assert-Wt14Gone 'WT14F' $wt14Tid }
+    foreach ($wt14Tid in 'task-d6', 'task-a1', 'task-m1', 'task-w1') { Assert-Wt14Kept 'WT14F' $wt14Tid }
+    $wt14Lock = "$(Get-Wt14Admin)/sweep.lock"
+    New-Item -ItemType Directory -Path $wt14Lock | Out-Null
+    Invoke-Wt14Sweep 'WT14F' $wt14Map
+    if (-not $wt14.Text.Contains('[worktree] sweep skipped: lock held')) { Stop-Wt14 'WT14F' 'a held lock did not skip the pass' }
+    if (-not (Test-Path -LiteralPath $wt14Lock -PathType Container)) { Stop-Wt14 'WT14F' 'a held lock was taken over' }
+    Assert-Wt14Kept 'WT14F' 'task-d6'
+    (Get-Item -LiteralPath $wt14Lock).LastWriteTime = (Get-Date).AddHours(-3)
+    Invoke-Wt14Sweep 'WT14F' $wt14Map
+    if ($wt14.Text.Contains('sweep skipped')) { Stop-Wt14 'WT14F' 'a 3h-old lock was not broken' }
+    if (Test-Path -LiteralPath $wt14Lock) { Stop-Wt14 'WT14F' 'the sweep left its lock behind' }
+    if ($wt14.Text -cnotmatch '\[worktree\] sweep left .*/\.worktrees/task-m1: W/\.moe exists \(MOE_WORKTREE_MOE_PRESENT\)') { Stop-Wt14 'WT14F' 'no sweep-left line for W/.moe' }
+    Assert-Wt14Gone 'WT14F' 'task-d6'
+    foreach ($wt14Tid in 'task-a1', 'task-m1', 'task-w1') { Assert-Wt14Kept 'WT14F' $wt14Tid }
+    Assert-Wt14Bytes 'WT14F' (Join-Path $wt14.P '.worktrees\task-m1\.moe\x') "m1`n" 'W/.moe/x lost its bytes'
+    if ((Get-Wt14Rescues 'refs/moe/rescue/').Count -ne 0) { Stop-Wt14 'WT14F' 'a clean, landed W got a rescue ref' }
+    Assert-Wt14Sentinels 'WT14F'
+    $wt14Run++
+    Write-Host '[scenario WT14F] ok'
+
+    Write-Host '[scenario WT14G] an unregistered .worktrees/task-* directory is named and alerted once a day; .worktrees/stray is not'
+    New-Wt14Fixture 'g' 'moe/control'
+    foreach ($wt14Nm in 'stray', 'task-ghost') {
+        New-Item -ItemType Directory -Force -Path (Join-Path $wt14.P ".worktrees\$wt14Nm") | Out-Null
+        [IO.File]::WriteAllText((Join-Path $wt14.P ".worktrees\$wt14Nm\f.txt"), "$wt14Nm`n")
+    }
+    foreach ($wt14N in 1, 2) {
+        Invoke-Wt14Sweep 'WT14G' @{ MOE_WORKTREE_SWEEP_INTERVAL_SEC = '0' }
+        if ($wt14.Text -cnotmatch 'MOE_WORKTREE_UNREGISTERED: .*/\.worktrees/task-ghost: not a registered worktree; left on disk') { Stop-Wt14 'WT14G' "run ${wt14N}: no MOE_WORKTREE_UNREGISTERED line for task-ghost" }
+        if ($wt14.Text.Contains('stray')) { Stop-Wt14 'WT14G' "run ${wt14N}: a line names .worktrees/stray" }
+    }
+    if ((Get-Wt14Rows 'MOE_WORKTREE_UNREGISTERED: ') -ne 1) { Stop-Wt14 'WT14G' 'not exactly one #general alert across two runs' }
+    if ((Get-Wt14Rows 'stray') -ne 0) { Stop-Wt14 'WT14G' 'an alert names .worktrees/stray' }
+    foreach ($wt14Nm in 'stray', 'task-ghost') { Assert-Wt14Bytes 'WT14G' (Join-Path $wt14.P ".worktrees\$wt14Nm\f.txt") "$wt14Nm`n" 'an unregistered directory lost its bytes' }
+    Assert-Wt14Sentinels 'WT14G'
+    $wt14Run++
+    Write-Host '[scenario WT14G] ok'
+
+    Write-Host '[scenario WT14H] a failed status read aborts the pass; the interval holds a fresh stamp back; a bad interval warns and uses 3600'
+    New-Wt14Fixture 'h' 'moe/control' @('task-h1', 'task-h2')
+    $wt14Done = 'task-h1=DONE,task-h2=DONE'
+    Invoke-Wt14Sweep 'WT14H' @{ MOE_WORKTREE_SWEEP_INTERVAL_SEC = '0'; FAKE_TASK_STATUS_MAP = 'task-h1=FAIL,task-h2=DONE' }
+    if (-not $wt14.Text.Contains('the worktree sweep stopped')) { Stop-Wt14 'WT14H' 'a failed status read did not stop the pass' }
+    foreach ($wt14Tid in 'task-h1', 'task-h2') { Assert-Wt14Kept 'WT14H' $wt14Tid }
+    if ((Get-Wt14Rescues 'refs/moe/rescue/').Count -ne 0) { Stop-Wt14 'WT14H' 'an aborted pass wrote a rescue ref' }
+    $wt14Now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    [IO.File]::WriteAllText("$(Get-Wt14Admin)/sweep.last", "$wt14Now`n")
+    Invoke-Wt14Sweep 'WT14H' @{ FAKE_TASK_STATUS_MAP = $wt14Done }
+    if ($wt14.Text -cmatch 'MOE_WORKTREE_|\[worktree\]') { Stop-Wt14 'WT14H' 'an unset interval swept within the hour' }
+    Invoke-Wt14Sweep 'WT14H' @{ MOE_WORKTREE_SWEEP_INTERVAL_SEC = 'abc'; FAKE_TASK_STATUS_MAP = $wt14Done }
+    if (-not $wt14.Text.Contains("MOE_WORKTREE_SWEEP_INTERVAL_SEC='abc'")) { Stop-Wt14 'WT14H' 'no [WARN] for an invalid interval' }
+    if ($wt14.Text.Contains('[worktree]')) { Stop-Wt14 'WT14H' 'an invalid interval swept within the hour' }
+    foreach ($wt14Tid in 'task-h1', 'task-h2') { Assert-Wt14Kept 'WT14H' $wt14Tid }
+    [IO.File]::WriteAllText("$(Get-Wt14Admin)/sweep.last", "$($wt14Now - 3601)`n")
+    Invoke-Wt14Sweep 'WT14H' @{ MOE_WORKTREE_SWEEP_INTERVAL_SEC = 'abc'; FAKE_TASK_STATUS_MAP = $wt14Done }
+    foreach ($wt14Tid in 'task-h1', 'task-h2') { Assert-Wt14Gone 'WT14H' $wt14Tid }
+    Assert-Wt14Sentinels 'WT14H'
+    $wt14Run++
+    Write-Host '[scenario WT14H] ok'
+
+    Write-Host '[scenario WT14I] registered .worktrees/feature-x and .worktrees/task-z on their own branches and an unregistered .worktrees/scratch are never touched or named'
+    New-Wt14Fixture 'i' 'moe/control'
+    $null = Invoke-Wt14Git $wt14.P @('worktree', 'add', '-q', '-b', 'feature-x', (Join-Path $wt14.P '.worktrees\feature-x'), 'main')
+    $null = Invoke-Wt14Git $wt14.P @('worktree', 'add', '-q', '-b', 'feature-z', (Join-Path $wt14.P '.worktrees\task-z'), 'main')
+    [IO.File]::WriteAllText((Join-Path $wt14.P '.worktrees\feature-x\wip.txt'), "wip`n")
+    New-Item -ItemType Directory -Force -Path (Join-Path $wt14.P '.worktrees\scratch') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $wt14.P '.worktrees\scratch\f.txt'), "scratch`n")
+    Invoke-Wt14Sweep 'WT14I' @{ MOE_WORKTREE_SWEEP_INTERVAL_SEC = '0'; FAKE_TASK_STATUS_MAP = 'feature-x=DONE,task-z=DONE' }
+    if ($wt14.Text -cmatch 'MOE_WORKTREE_|\[worktree\]') { Stop-Wt14 'WT14I' 'the sweep named something outside its candidates' }
+    if ((Get-Wt14Rows 'MOE_WORKTREE_|MOE_RESCUE_REF|feature-|task-z|scratch') -ne 0) { Stop-Wt14 'WT14I' 'the sweep posted to #general' }
+    foreach ($wt14B in @(@('feature-x', 'feature-x'), @('task-z', 'feature-z'))) {
+        if (-not (Test-Wt14Listed $wt14B[0]) -or @(Invoke-Wt14Git $wt14.P @('for-each-ref', "refs/heads/$($wt14B[1])")).Count -ne 1) { Stop-Wt14 'WT14I' "$($wt14B[0]) or its branch $($wt14B[1]) was touched" }
+    }
+    Assert-Wt14Bytes 'WT14I' (Join-Path $wt14.P '.worktrees\feature-x\wip.txt') "wip`n" 'feature-x was touched'
+    Assert-Wt14Bytes 'WT14I' (Join-Path $wt14.P '.worktrees\scratch\f.txt') "scratch`n" 'scratch was touched'
+    if ((Get-Wt14Rescues 'refs/moe/rescue/').Count -ne 0) { Stop-Wt14 'WT14I' 'a rescue ref was written' }
+    Assert-Wt14Sentinels 'WT14I'
+    $wt14Run++
+    Write-Host '[scenario WT14I] ok'
+
+    foreach ($l in $wt14Links) { if (Test-Wt14Link $l) { [IO.Directory]::Delete($l) } }
+    if ($wt14Run -ne 11) { throw "Expected 11 WT-14 scenarios (WT14A, WT14B, WT14C, WT14U, WT14D, WT14S, WT14E, WT14F, WT14G, WT14H, WT14I); ran $wt14Run" }
+    Write-Host "[WT-14] ok: $wt14Run scenarios"
+
     # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the
     # JetBrains launcher sets beside MOE_PROXY_PATH and MOE_DAEMON_PATH) runs
     # exactly those files or refuses before any MCP config, daemon, proxy or
