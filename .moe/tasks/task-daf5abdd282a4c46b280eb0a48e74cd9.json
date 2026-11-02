@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -93,16 +93,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:06.908Z",
-  "updatedAt": "2026-11-02T10:58:16.795Z",
+  "updatedAt": "2026-11-02T11:01:43.621Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:30:39.475Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T11:01:43.621Z",
+    "wallClockMs": 1864146
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -214,5 +217,9 @@
     "kind": "completion",
     "sessionId": "worker-4c1da905@2026-11-02T10:52:18Z",
     "at": "2026-11-02T10:58:16.794Z"
-  }
+  },
+  "completedAt": "2026-11-02T11:01:43.621Z",
+  "reviewCompletedAt": "2026-11-02T11:01:43.621Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit fbc38d15 (on moe/work-2026-10-24, pushed) against JetBrains MoeCommandSender, MoeMessageDispatcher, MoeJson.parseAccountRotation and the two JetBrains account tests. Size: 349 net non-board LOC (client +83/-1, types 47, test 218), under 400. Working-tree files are byte-identical to the commit. Re-ran the gate myself in a fresh git-archive snapshot of fbc38d15 outside the checkout (env -i, nvm Node 24): npm ci 0, eslint 0, tsc 0, npm test 494 tests / 490 pass / 4 skip (Windows) / 0 fail. No existing test file changed; all pass. DoD 1: A1 pins the 8 JetBrains envelopes, A2 pins false and nothing sent while disconnected. DoD 2: B1-B4 and C1-C2 pin ACCOUNTS_UPDATED (stores, fires once, state intact; ignored pre-snapshot; malformed keeps last good), snapshot set/clear, and ACCOUNT_ADDED (non-blank string id only, no state touched). DoD 3: accounts.ts is type-only and the client's only new import is `import type`. src/types/moe.ts, moe-jetbrains and the daemon are untouched. RangeError-before-send mirrors JetBrains require(). My own mutants in the snapshot copy all failed by assertion: percent upper bound loosened, blank ACCOUNT_ADDED id accepted, ACCOUNTS_UPDATED before a snapshot, rename label untrimmed; file restored, 9/9 green. Non-blocking: JetBrains also republishes state on ACCOUNTS_UPDATED while VS Code fires only onAccountsChanged, as the execution contract specifies; the rotation stays stale across a disconnect until the next snapshot, like the cached state. Complexity pass: nothing to delete.",
+  "requiredCheckAtDone": null
 }

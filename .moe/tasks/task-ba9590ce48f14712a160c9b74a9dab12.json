@@ -8,9 +8,52 @@
     "`gradlew.bat test --rerun` in a snapshot passes at least 3 times in a row under the jetbrains-gradle lease, with the JUnit total in the summary."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Bound every WebSocket client close in moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt, with the Edit tool. This is a test-only change in one file.\nVerified facts (Java-WebSocket 1.6.0 jar, from the Gradle cache):\n- WebSocketClient has closeBlocking() with NO timeout overload.\n- close(), isClosed(), getURI(), getReadyState() and closeConnection(int, String) are public.\n- CloseFrame.ABNORMAL_CLOSE exists.\n- closeBlocking() is `close(); closeLatch.await()`. The latch is counted down only in onWebsocketClose.\n- close() does nothing for a client that never started its write thread (never opened). A close handshake the peer never finishes leaves the latch uncounted as well.\n- That is how VSC-5's gate hung for 10+ minutes. jstack: closeBlocking <- ConnectionFixture.close :336 <- withConnection <- `a disconnect or socket error fails pending requests as DISCONNECTED`.\n\nIn the companion object:\n- `private const val CLOSE_TIMEOUT_MS = 3_000L` and `private const val FORCE_TIMEOUT_MS = 1_000L`.\n- `private fun pollUntil(timeoutMs: Long, condition: () -> Boolean): Boolean`: polls every 10 ms, no assertion; returns the final condition.\n- `private fun closeWithin(client: WebSocketClient, timeoutMs: Long = CLOSE_TIMEOUT_MS): Boolean`, with a KDoc stating the facts above:\n  1. try { client.close() } catch (e: Exception) { System.err.println(...) };\n  2. if (pollUntil(timeoutMs) { client.isClosed }) return true;\n  3. try { client.closeConnection(CloseFrame.ABNORMAL_CLOSE, \"test teardown: close timed out\") } catch (e: Exception) { System.err.println(...) }. This drops the connection without the handshake, runs onWebsocketClose and marks the engine CLOSED.\n  4. if (pollUntil(FORCE_TIMEOUT_MS) { client.isClosed }) return true;\n  5. System.err.println(\"MoeProjectConnectionTest: abandoned WebSocket client ${client.uri} in state ${client.readyState} after ${timeoutMs + FORCE_TIMEOUT_MS} ms\") and return false.\n  It polls isClosed() (the engine state) and never waits on closeLatch.\n\nCallers:\n- ConnectionFixture.close() becomes `service.dispose(); clients.forEach { closeWithin(it) }; server.stop(1000)`. Teardown never throws on a stuck close, so it cannot mask the test's own failure.\n- Replace the four in-test calls (client.closeBlocking() in the two `late open ...` tests, oldClient.closeBlocking() in `retired open ...`, client.closeBlocking() in `disconnect wins ...`) with `assertTrue(\"<which> client did not close\", closeWithin(<client>))`. They now fail within seconds instead of hanging, which is equal to or stronger than before, since closeBlocking also closed the client itself.\n- Afterwards `grep -n 'closeBlocking(' MoeProjectConnectionTest.kt` matches only KDoc or comments.\n\nBackstop:\n- Add `@get:Rule val timeout: Timeout = Timeout.seconds(30)` (org.junit.Rule, org.junit.rules.Timeout; JUnit 4.13.2), with a one-line comment: any future unbounded wait here fails with a stack trace instead of holding the shared jetbrains-gradle lease.\n- JUnit runs each test on its own thread under this rule. No test here depends on the runner thread: the fixture's invokeLater runs inline, and the lock checks name disconnectThread explicitly.\n\nNew regression test, `closing a never-connected client is bounded, where closeBlocking would wait forever`:\n- Create `object : WebSocketClient(URI(\"ws://127.0.0.1:9/\"))` with no-op onOpen/onMessage/onClose/onError and never connect it.\n- Time `closeWithin(client, timeoutMs = 300)`.\n- Assert elapsed < 300 + FORCE_TIMEOUT_MS + 2_000 ms. Assert it returned true and client.isClosed, because the forced closeConnection closes even a never-opened engine.\n- If 1.6.0 instead leaves it unclosed, keep the time bound, assert the abandoned result (false), and say so in the summary.\n- Imports: java.net.URI, org.java_websocket.framing.CloseFrame, org.java_websocket.handshake.ServerHandshake.\nError handling: covered above. Exceptions from close or closeConnection are logged and fall through to the next stage. Only InterruptedException (the Timeout rule's interrupt) propagates.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "note": "Added CLOSE_TIMEOUT_MS/FORCE_TIMEOUT_MS/pollUntil/closeWithin, replaced all 5 closeBlocking calls (4 in-test asserts + fixture teardown), Timeout.seconds(30) rule, new regression test. grep: closeBlocking only in test name and KDoc. 29 other dirty paths belong to peers; untouched.",
+      "startedAt": "2026-11-02T10:56:17.635Z",
+      "completedAt": "2026-11-02T10:56:54.011Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Gate on native Windows under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease, mem:gotcha-jetbrains-gate-snapshot). WSL has no JDK, so Gradle runs via cmd.exe in /mnt/d/moe-scratch snapshots.\nLease:\n- Acquire it (moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId, note}) right before the mutant run.\n- Hold it across the mutant and the three checkRef runs, about 5 minutes; the DoD wants three consecutive passes.\n- Release it right after, also on failure.\n- If the lease is queued, moe.report_blocked with resourceId \"jetbrains-gradle\". Never hold it across a block. VSC-7 and others queue on this lease, so do not dawdle.\n1) Mutant proof:\n   - Build /mnt/d/moe-scratch/conn-hang-mutant as the checkRef builds its snapshot.\n   - In that copy only, replace closeWithin's whole body with `client.closeBlocking(); return true`, which is the old teardown. Use an exact-string edit asserted to hit once.\n   - Run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\conn-hang-mutant\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeProjectConnectionTest --rerun'`.\n   - It must FAIL, and it must END: the never-connected test fails with TestTimedOutException after about 30 s. That proves the regression test and the Timeout backstop.\n   - Then rm -rf the mutant directory.\n2) Run the checkRef verbatim from the repo root: three consecutive full `gradlew.bat test --rerun` runs.\n   - After each run, the snippet prints `run N of 3: <suites> suites {tests, failures, errors, skipped}`, and it exits non-zero on any failure or error or a missing result.\n   - Run it with the Bash timeout at its 10-minute maximum, or in the background.\n   - Report all three JUnit totals, labelled Windows, plus the wall time, and confirm that TEST-com.moe.services.MoeProjectConnectionTest.xml includes the new test.\nError handling for a red or stuck run:\n- A failure in a file other than this one (for example a peer's wip checkpoint on HEAD) follows mem:gotcha-snapshot-gate-peer-wip-checkpoint. Never edit another file.\n- If a run hangs in ANOTHER test class, stop only the cmd.exe process your own session started, by its recorded PID. Never pattern-kill (GLOBAL rail). Release the lease, then comment the class and the stack on this task and in #governors so a new row is filed. Do not widen this task's scope.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "note": "Windows (cmd.exe gradlew.bat, jetbrains-gradle lease held ~5 min, released). Mutant (closeWithin body = closeBlocking(); return true): FAILED via TestTimedOutException on the never-connected test, build ended in 1m1s (14 tests, 1 failed). checkRef x3 in /mnt/d/moe-scratch/conn-hang-gate: run1 58s, run2 34s, run3 33s, each 34 suites, 558 tests, 0 failures, 0 errors, 0 skipped. TEST-com.moe.services.MoeProjectConnectionTest.xml contains the new test. Mutant dir removed.",
+      "startedAt": "2026-11-02T10:56:55.023Z",
+      "completedAt": "2026-11-02T11:01:07.525Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this task's diff. This is the only review step.\nWould a test fail if closeWithin:\n- called closeBlocking (the mutant is proven);\n- skipped the forced closeConnection (the never-connected test then returns false or exceeds its bound);\n- polled without a bound?\nOther checks:\n- Is `closeBlocking(` gone from code (grep)?\n- Does teardown still close every tracked client and stop the server, and never throw on a stuck close?\n- Do the four in-test replacements assert closure, rather than silently continuing?\n- Does the Timeout rule change any test's thread assumptions?\n- Are the stderr lines informative, naming the URI, the state and the waited time?\nScope:\n- `git status --porcelain` and `git diff --stat`: only moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt is this task's; no production file changed.\n- Peers own every other dirty path: never revert, stage or commit them.\n- Report the file in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "note": "Self-review: diff is +71/-5 in the one test file; no production file touched (git status for moe-jetbrains shows only it). closeBlocking( appears only in KDoc. Mutant proven red; skipping forced closeConnection makes the never-connected test return false and fail; all polls have deadlines. Teardown catches Exception from close/closeConnection and returns false rather than throwing, so it can't mask a test failure; only Thread.sleep's InterruptedException (Timeout rule) propagates. Four in-test closes now assertTrue(closeWithin). Timeout rule: no test relies on the runner thread (full suite passed under it 3x). stderr lines name URI, state, waited ms.",
+      "startedAt": "2026-11-02T11:01:13.344Z",
+      "completedAt": "2026-11-02T11:01:24.177Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,10 +66,99 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T10:43:48.052Z",
-  "updatedAt": "2026-11-02T10:44:35.565Z",
+  "updatedAt": "2026-11-02T11:01:37.128Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T10:44:34.253Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:47:28.176Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956",
+    "worker-81a7999f"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:55:10.554Z",
+  "executionContract": {
+    "intendedBehavior": "MoeProjectConnectionTest can no longer hang the JetBrains gate. Every WebSocket client close in the test, in teardown and in the test bodies, goes through closeWithin. closeWithin closes normally and polls isClosed for a bounded time, then force-drops the connection, then gives up with a stderr note. It never waits on Java-WebSocket's untimed closeBlocking latch. A class-level JUnit Timeout rule backstops any other unbounded wait. Production code is unchanged.",
+    "acceptanceCriteria": [
+      "A stuck client close (for example a never-connected client, where closeBlocking waits forever) returns within the bound: about 300 ms for the normal stage plus FORCE_TIMEOUT_MS plus slack in the regression test, and about 4 s per client in teardown. Teardown never throws on a stuck close.",
+      "No closeBlocking call remains in code in MoeProjectConnectionTest.kt. The four in-test waits assert closure within the bound.",
+      "A mutant that restores closeBlocking inside closeWithin makes the class FAIL, through TestTimedOutException at about 30 s, and the run ends instead of hanging.",
+      "The checkRef runs `gradlew.bat test --rerun` three consecutive times in a /mnt/d/moe-scratch snapshot under the jetbrains-gradle lease. All three pass with 0 failures and 0 errors, and each prints its JUnit totals."
+    ],
+    "invariants": [
+      "No production file changes: MoeProjectService, Java-WebSocket usage and build.gradle.kts stay untouched.",
+      "Every existing test keeps its assertions. The close waits become bounded asserts, never removals.",
+      "Gradle runs only under the jetbrains-gradle lease in a /mnt/d/moe-scratch snapshot. No pattern-kill of any process."
+    ],
+    "compatibility": [
+      "Test-only change. The test names and assertions of the existing 17 tests in the class are preserved."
+    ],
+    "approvedScope": [
+      "MoeProjectConnectionTest: companion CLOSE_TIMEOUT_MS, FORCE_TIMEOUT_MS, pollUntil and closeWithin; ConnectionFixture.close; the four in-test close waits; a class Timeout rule; one new regression test."
+    ],
+    "reuse": [
+      "Java-WebSocket's own public close(), isClosed() and closeConnection(ABNORMAL_CLOSE); JUnit 4.13.2's Timeout rule. No new dependency or thread helper.",
+      "The VSC-4 snapshot gate form, plus a JUnit-totals summary per run."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/build.gradle.kts: implementation org.java-websocket:Java-WebSocket:1.6.0 and testImplementation junit:junit:4.13.2. The 1.6.0 jar has WebSocketClient.closeBlocking()V only (no timeout overload), plus public close()V, isClosed()Z, closeConnection(ILjava/lang/String;)V, getURI() and getReadyState().",
+      "MoeProjectConnectionTest.kt ConnectionFixture.close() calls service.dispose(), then clients.forEach { it.closeBlocking() }, then server.stop(1000). startConnection adds clients before they open.",
+      "MoeProjectService's onError calls closeQuietly(this), i.e. client.close(). dispose() runs disconnect, which closes wsClient via closeQuietly."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=/mnt/d/moe-scratch/conn-hang-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt $S/ && ( set -e; for i in 1 2 3; do cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\conn-hang-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'; python3 -I -c \"import glob,re,sys;t=dict.fromkeys(('tests','failures','errors','skipped'),0);fs=glob.glob(sys.argv[1]+'/TEST-*.xml');[t.__setitem__(k,t[k]+int(re.search(' '+k+'=\\\"([0-9]+)\\\"',open(f,encoding='utf-8').read(4096)).group(1))) for f in fs for k in t];print('run',sys.argv[2],'of 3:',len(fs),'suites',t);sys.exit(1 if not fs or t['failures'] or t['errors'] else 0)\" \"$S/moe-jetbrains/build/test-results/test\" \"$i\"; done )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Alternatives rejected:\n- closeBlocking on a helper thread joined with a timeout: it leaves a parked thread per stuck client, and still never closes the socket.\n- A @Test(timeout) per method: the class rule covers future tests too.\n- A Gradle-wide test timeout in build.gradle.kts: that touches a shared build file and every module's tests, which is beyond this test-only row.\n- Failing the test on a stuck teardown close: that turns an intermittent hang into an intermittent failure, which still blocks the gate, and it masks the body's own failure from inside finally.\nPolling isClosed() avoids the latch entirely. The forced closeConnection makes even a never-opened client CLOSED.",
+    "codebaseInsights": "closeBlocking hangs forever on a client that never opened, because close() is a no-op without the write thread. startConnection tracks clients before they open, so a failed connect assertion used to turn into an infinite teardown hang. MoeProjectService's onError already closes the client with close(), and scheduleReconnect is guarded by disposed and isManualDisconnect. The jar was inspected via a class-file method listing in the scratchpad: there is no JDK in WSL.",
+    "risks": "- The Timeout rule moves each test onto a fresh thread. Verify the whole class passes under it; none of the tests rely on the runner thread.\n- The mutant run costs about 30 s for its timeout. Keep the total lease hold to about 5 minutes, because VSC-7 and other JetBrains rows queue on jetbrains-gradle.\n- HEAD may carry a peer's red wip checkpoint (mem:gotcha-snapshot-gate-peer-wip-checkpoint).\n- A hang in a different test class is out of scope: file it, don't fix it here.",
+    "keyFiles": [
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/build.gradle.kts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "63e2961d17441624022c5cb96fa6582a1804e894",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:55:10.600Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T10:56:17.635Z",
+  "reviewStartedAt": "2026-11-02T11:01:37.126Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=/mnt/d/moe-scratch/conn-hang-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt $S/ && ( set -e; for i in 1 2 3; do cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\conn-hang-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'; python3 -I -c \"import glob,re,sys;t=dict.fromkeys(('tests','failures','errors','skipped'),0);fs=glob.glob(sys.argv[1]+'/TEST-*.xml');[t.__setitem__(k,t[k]+int(re.search(' '+k+'=\\\"([0-9]+)\\\"',open(f,encoding='utf-8').read(4096)).group(1))) for f in fs for k in t];print('run',sys.argv[2],'of 3:',len(fs),'suites',t);sys.exit(1 if not fs or t['failures'] or t['errors'] else 0)\" \"$S/moe-jetbrains/build/test-results/test\" \"$i\"; done )",
+    "exitCode": 0,
+    "outputTail": "run 1 of 3: 34 suites {'tests': 558, 'failures': 0, 'errors': 0, 'skipped': 0}\nrun 2 of 3: 34 suites {'tests': 558, 'failures': 0, 'errors': 0, 'skipped': 0}\nrun 3 of 3: 34 suites {'tests': 558, 'failures': 0, 'errors': 0, 'skipped': 0}\n(BUILD SUCCESSFUL in 58s / 34s / 33s; EXIT=0)",
+    "reportedAt": "2026-11-02T11:01:37.126Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+  ],
+  "completionSummary": "Test-only fix in MoeProjectConnectionTest.kt: every WebSocket client close now goes through a bounded closeWithin (close(), poll isClosed, forced closeConnection, poll, stderr note), which never waits on Java-WebSocket's untimed closeBlocking latch. Teardown is non-throwing, the four in-test closes assert closure, a class-level 30 s Timeout rule is the backstop, and a new regression test covers a never-connected client. No production changes. Mutant with closeBlocking restored fails via TestTimedOutException and the run ends (1m1s). The checkRef passed 3 times in a row on Windows under the jetbrains-gradle lease (lease released): 34 suites, 558 tests, 0 failures, 0 errors each."
 }

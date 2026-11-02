@@ -11,14 +11,19 @@ import com.moe.model.ReadinessReply
 import com.moe.util.MoeProjectRegistry
 import org.java_websocket.WebSocket
 import org.java_websocket.client.WebSocketClient
+import org.java_websocket.framing.CloseFrame
 import org.java_websocket.handshake.ClientHandshake
+import org.java_websocket.handshake.ServerHandshake
 import org.java_websocket.server.WebSocketServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
 import java.lang.reflect.Proxy
 import java.net.InetSocketAddress
+import java.net.URI
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
@@ -26,11 +31,33 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 
 class MoeProjectConnectionTest {
+    // Backstop: any future unbounded wait here fails with a stack trace instead of holding the shared jetbrains-gradle lease.
+    @get:Rule
+    val timeout: Timeout = Timeout.seconds(30)
+
+    @Test
+    fun `closing a never-connected client is bounded, where closeBlocking would wait forever`() {
+        val client = object : WebSocketClient(URI("ws://127.0.0.1:9/")) {
+            override fun onOpen(handshakedata: ServerHandshake?) {}
+            override fun onMessage(message: String?) {}
+            override fun onClose(code: Int, reason: String?, remote: Boolean) {}
+            override fun onError(ex: Exception?) {}
+        }
+        val started = System.nanoTime()
+
+        val closed = closeWithin(client, timeoutMs = 300)
+
+        val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+        assertTrue("Close took ${elapsedMs} ms", elapsedMs < 300 + FORCE_TIMEOUT_MS + 2_000)
+        assertTrue("The forced closeConnection must close even a never-opened client", closed)
+        assertTrue(client.isClosed)
+    }
+
     @Test
     fun `late open cannot undo manual disconnect`() = withConnection { fixture ->
         val client = fixture.connect(41001)
         fixture.service.disconnect()
-        client.closeBlocking()
+        assertTrue("The retired client did not close", closeWithin(client))
 
         client.onOpen(null)
 
@@ -42,7 +69,7 @@ class MoeProjectConnectionTest {
     fun `late open cannot resurrect a disposed service`() = withConnection { fixture ->
         val client = fixture.connect(41002)
         fixture.service.dispose()
-        client.closeBlocking()
+        assertTrue("The disposed service's client did not close", closeWithin(client))
 
         client.onOpen(null)
 
@@ -54,7 +81,7 @@ class MoeProjectConnectionTest {
     fun `retired open cannot replace the current daemon registration`() = withConnection { fixture ->
         val oldClient = fixture.connect(41003)
         fixture.service.disconnect()
-        oldClient.closeBlocking()
+        assertTrue("The old client did not close", closeWithin(oldClient))
         val currentClient = fixture.connect(41004)
 
         oldClient.onOpen(null)
@@ -113,7 +140,7 @@ class MoeProjectConnectionTest {
                 assertTrue("Disconnect did not reach the connection transition", disconnected.count == 0L || lock.hasQueuedThread(disconnectThread))
                 resumeOpen.countDown()
                 assertTrue("Disconnect did not finish", disconnected.await(5, TimeUnit.SECONDS))
-                client.closeBlocking()
+                assertTrue("The client did not close", closeWithin(client))
 
                 assertFalse(fixture.service.isConnected())
                 assertEquals(false to "Disconnected", statuses.last())
@@ -333,7 +360,8 @@ class MoeProjectConnectionTest {
 
         fun close() {
             service.dispose()
-            clients.forEach { it.closeBlocking() }
+            // Bounded and non-throwing: a stuck close must not hang the gate or mask the test's own failure.
+            clients.forEach { closeWithin(it) }
             server.stop(1000)
         }
     }
@@ -345,6 +373,44 @@ class MoeProjectConnectionTest {
         private val FAILED_DISCONNECTED = ReadinessReply.Failed(ReadinessFailure.DISCONNECTED)
 
         private fun readiness(payload: String) = """{"type":"EXECUTION_READINESS","payload":$payload}"""
+
+        private const val CLOSE_TIMEOUT_MS = 3_000L
+        private const val FORCE_TIMEOUT_MS = 1_000L
+
+        /** Polls [condition] every 10 ms for up to [timeoutMs]; never asserts. Returns the final result. */
+        private fun pollUntil(timeoutMs: Long, condition: () -> Boolean): Boolean {
+            val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+            while (!condition() && System.nanoTime() < deadline) Thread.sleep(10)
+            return condition()
+        }
+
+        /**
+         * Bounded replacement for Java-WebSocket's untimed `closeBlocking()`. That call waits on a latch
+         * that is counted down only in onWebsocketClose, so it hangs forever for a client that never
+         * opened (close() is then a no-op) or whose close handshake the peer never finishes. This polls
+         * the engine state instead: close(), wait up to [timeoutMs] for isClosed, then drop the
+         * connection with closeConnection(ABNORMAL_CLOSE) and wait [FORCE_TIMEOUT_MS] more. Returns
+         * whether the client ended up closed; exceptions from close are logged, never thrown.
+         */
+        private fun closeWithin(client: WebSocketClient, timeoutMs: Long = CLOSE_TIMEOUT_MS): Boolean {
+            try {
+                client.close()
+            } catch (e: Exception) {
+                System.err.println("MoeProjectConnectionTest: close() threw on ${client.uri}: $e")
+            }
+            if (pollUntil(timeoutMs) { client.isClosed }) return true
+            try {
+                client.closeConnection(CloseFrame.ABNORMAL_CLOSE, "test teardown: close timed out")
+            } catch (e: Exception) {
+                System.err.println("MoeProjectConnectionTest: closeConnection() threw on ${client.uri}: $e")
+            }
+            if (pollUntil(FORCE_TIMEOUT_MS) { client.isClosed }) return true
+            System.err.println(
+                "MoeProjectConnectionTest: abandoned WebSocket client ${client.uri} in state ${client.readyState} " +
+                    "after ${timeoutMs + FORCE_TIMEOUT_MS} ms"
+            )
+            return false
+        }
 
         private fun awaitUntil(message: String, condition: () -> Boolean) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
