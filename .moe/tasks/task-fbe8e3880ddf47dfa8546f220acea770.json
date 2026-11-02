@@ -129,7 +129,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -161,11 +161,29 @@
       "author": "governor-e6b40560",
       "content": "GOVERNOR: review overlap, approved by the human (\"yes overlap the review, go faster\").\n\nAs soon as WT-12 (task-06910296f63b4868849dc46cbb38a731) enters REVIEW with its completion landed, the governor removes this row's dependsOn on WT-12 so a coder can start while WT-12 is still in QA.\n- **Build on WT-12's landed bytes,** editing from HEAD.\n- **If QA rejects WT-12 while you're working:** keep going and don't touch WT-12's fix. The governor makes the rework wait until this row lands. If the reject changes a WT-12 seam you consume, say so in your step note.\n- This row gates the worktree switch, which still waits for this row to be **DONE** (QA-approved), not just in review.\n- Nothing in the plan changes.",
       "timestamp": "2026-11-02T09:33:23.256Z"
+    },
+    {
+      "id": "comment-d66d4b0dcea7411382119cea65302b41",
+      "author": "governor-e6b40560",
+      "content": "Governor note for QA (17:23Z). There are two things to know before you review WT-13.\n\n1. Review the snapshot, not the shared checkout. Under the review-overlap protocol (msg-711d3413) I removed WT-13 from 3c4be125's dependsOn and set WT-19b back to WORKING. 3c4be125 will edit scripts/moe-agent.{sh,ps1} and the postflight suites live in the shared checkout while you review. So verify WT-13 only in a `git archive 072dd78c` snapshot: completion 072dd78cf81c87ba529598f90aa21f3a3aae6821, which is on origin. Don't verify against the working tree. If you reject with a change to the bytes, say so plainly, and I will add the edge back and have WT-19b re-run its step 5.\n\n2. Size. The non-board diff is +658/-18, 640 net, which is over the 400 cap. I filed size waiver prop-7447b8ff ahead of time, and it is waiting for the human's approval. Review the substance now:\n   - If the substance passes and the waiver reads APPROVED, approve.\n   - If the substance passes and the waiver is still PENDING, park the row without a verdict, using report_blocked with the reason \"size waiver prop-7447b8ff pending\". I will set it back to REVIEW once it is approved.\n   - If the substance fails, reject as usual.",
+      "timestamp": "2026-11-02T17:21:35.053Z"
+    },
+    {
+      "id": "comment-a87af8c78bc04ab6b488002fedd6c555",
+      "author": "governor-e6b40560",
+      "content": "@qa-564d8bce Governor ruling, re-sent here because my #governors reply (msg-cb97325a) routed to nobody. Please don't qa_reject on size. Use the same park pattern as VSC-7 and VSC-15 today:\n1. Finish the gate run.\n2. If the gate is green and prop-7447b8ff is still PENDING, post your substance result as a task comment: what you checked, the gate's exit code and its tail. No verdict.\n3. Then call `moe.report_blocked { taskId: \"task-fbe8e3880ddf47dfa8546f220acea770\", reason: \"size waiver prop-7447b8ff pending; substance green per comment <id>\" }`. Your report as assignee parks the row unassigned and frees your seat, with no reopen.\n4. I'll set it back to REVIEW the moment the waiver reads APPROVED, and the approving QA re-runs the gate fresh on the same 072dd78c bytes.\nIf the waiver is approved before your gate finishes, just approve.",
+      "timestamp": "2026-11-02T17:27:21.396Z"
+    },
+    {
+      "id": "comment-f029f8e050b2430e9660b230285239c6",
+      "author": "governor-e6b40560",
+      "content": "@qa-564d8bce The size waiver prop-7447b8ff is now APPROVED (the human approved it at about 17:43Z). It is active as an epic rail for this row, so there's no need to park the row. If the substance and the fresh gate are green, approve as usual on the 072dd78c bytes and note the size in the qa_approve summary, as qa.md asks.",
+      "timestamp": "2026-11-02T17:43:17.259Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:55:52.700Z",
-  "updatedAt": "2026-11-02T17:19:26.503Z",
+  "updatedAt": "2026-11-02T18:25:45.093Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:18.168Z",
@@ -175,12 +193,15 @@
     "firstClaimAt": "2026-10-30T13:34:43.888Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-02T18:25:45.093Z",
+    "wallClockMs": 276661205
   },
   "contextFetchedBy": [
     "architect-eb7de546",
     "worker-13a877ad",
-    "architect-0fcb7226"
+    "architect-0fcb7226",
+    "qa-564d8bce"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -231,7 +252,52 @@
     "scripts/tests/postflight-worktree.cjs",
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
+    "scripts/tests/postflight-fake-proxy.js",
+    ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+    ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json"
+  ],
+  "completionSummary": "WT-13 delivered in both wrappers (scripts/moe-agent.sh and scripts/moe-agent.ps1).\n(1) Guard MOE_WRAPPER_IN_WORKTREE: a wrapper under <top>/.worktrees/task-* (registered W, plain dir, or link alias) refuses before any RPC.\n(2) follow_control_checkout / Invoke-MoeControlFollow fast-forwards moe/control, with hooks off, to the target tip sha it checked.\n- Codes: MOE_CONTROL_ADVANCED old..new, DIVERGED, BEHIND (dirt, lock, daemon-owned .moe), NOT_FOLLOWING.\n- Only a worker pre-flight after a worktree claim may switch the checkout onto moe/control.\n- It never resets, stashes, cleans or writes main.\n- Alerts reach #general at most once an hour per code per checkout, through a stamp plus an exclusive lock under <gitdir>/moe.\n(3) Follow sites:\n- L13 after a committed|nothing worktree completion; warning-only, the landing stays landed.\n- Every loop top on moe/control, before the hot-reload hash check.\n- The QA pre-flight: remote sync, then the follow.\nShared mode is untouched.\n(4) QA gate: get_context task.landing.lastCompletion.sha must be 40 lowercase hex, a commit, and an ancestor of the control HEAD. Otherwise MOE_CONTROL_CHECKOUT_BEHIND, one report_blocked and no CLI. On pass the prompt names 'Review commit <C>' and 'git diff <C>^ <C>'.\nTests: postflight-worktree.cjs, run by both harnesses, has new cases wt-guard, wt-follow (15 states), wt-follow-sites, wt-follow-race, wt-qa-gate. QA launches in wt-control-seats, wt-board and wt-qa-remote now pass a recorded completion. Both postflight.sh and postflight.ps1 gain a [hot reload follow] arm. The fake proxy gains the FAKE_CTX_LANDING knob.\nEvidence: the named bash gate ran on the final bytes, env-scrubbed: exit 0, failureClass NONE, worktree-landing 18/18, parity PASS. Windows PS 5.1 runs of postflight-safe powershell (NONE) and worktree-landing.ps1 (18/18) came before the one-line self-review fix (merge $tip, not the ref). After that fix, 8 focused cases passed on both sh and PS 5.1, and the ps1 reload arm passed again.\nH",
+  "commits": [
+    {
+      "sha": "072dd78cf81c87ba529598f90aa21f3a3aae6821",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T14:47:47Z",
+      "paths": [
+        ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+        ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T17:20:04.827Z",
+      "treeId": "e69316362c887f37b96fdf0762e87a3bf840f20b",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
     "scripts/tests/postflight-fake-proxy.js"
   ],
-  "completionSummary": "WT-13 delivered in both wrappers (scripts/moe-agent.sh and scripts/moe-agent.ps1).\n(1) Guard MOE_WRAPPER_IN_WORKTREE: a wrapper under <top>/.worktrees/task-* (registered W, plain dir, or link alias) refuses before any RPC.\n(2) follow_control_checkout / Invoke-MoeControlFollow fast-forwards moe/control, with hooks off, to the target tip sha it checked.\n- Codes: MOE_CONTROL_ADVANCED old..new, DIVERGED, BEHIND (dirt, lock, daemon-owned .moe), NOT_FOLLOWING.\n- Only a worker pre-flight after a worktree claim may switch the checkout onto moe/control.\n- It never resets, stashes, cleans or writes main.\n- Alerts reach #general at most once an hour per code per checkout, through a stamp plus an exclusive lock under <gitdir>/moe.\n(3) Follow sites:\n- L13 after a committed|nothing worktree completion; warning-only, the landing stays landed.\n- Every loop top on moe/control, before the hot-reload hash check.\n- The QA pre-flight: remote sync, then the follow.\nShared mode is untouched.\n(4) QA gate: get_context task.landing.lastCompletion.sha must be 40 lowercase hex, a commit, and an ancestor of the control HEAD. Otherwise MOE_CONTROL_CHECKOUT_BEHIND, one report_blocked and no CLI. On pass the prompt names 'Review commit <C>' and 'git diff <C>^ <C>'.\nTests: postflight-worktree.cjs, run by both harnesses, has new cases wt-guard, wt-follow (15 states), wt-follow-sites, wt-follow-race, wt-qa-gate. QA launches in wt-control-seats, wt-board and wt-qa-remote now pass a recorded completion. Both postflight.sh and postflight.ps1 gain a [hot reload follow] arm. The fake proxy gains the FAKE_CTX_LANDING knob.\nEvidence: the named bash gate ran on the final bytes, env-scrubbed: exit 0, failureClass NONE, worktree-landing 18/18, parity PASS. Windows PS 5.1 runs of postflight-safe powershell (NONE) and worktree-landing.ps1 (18/18) came before the one-line self-review fix (merge $tip, not the ref). After that fix, 8 focused cases passed on both sh and PS 5.1, and the ps1 reload arm passed again.\nH"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-13a877ad@2026-11-02T14:47:47Z",
+    "at": "2026-11-02T17:20:04.827Z"
+  },
+  "completedAt": "2026-11-02T18:25:45.093Z",
+  "reviewCompletedAt": "2026-11-02T18:25:45.093Z",
+  "reviewSummary": "Approved on completion 072dd78c (on moe/work-2026-10-24, pushed). SIZE: 640 net non-board (+658/-18), waived by the epic rail from prop-7447b8ff (APPROVED). GATE, re-run on a git archive 072dd78c snapshot with blob hashes checked: the task's env-scrubbed command gave EXIT=0, postflight-safe failureClass NONE, worktree-landing 18/0/0, parity PASS. An in-place run was discarded because task-3c4be125 edited scripts mid-run. PS 5.1 snapshot, worktree cjs cases (wt-guard, wt-follow, wt-follow-sites, wt-follow-race, wt-qa-gate, wt-completion, wt-hooks, control, codes): 9 ok, 0 failed. Full postflight.ps1 is the worker's evidence. Held-out worktree-landing.{sh,ps1} unchanged vs 8ad04de7. The 31 code tokens are identical in both twins. DoD: (1) L13 controlFollowed, and disk == HEAD after the follow. (2) Hot reload follow arms: the follow runs before the hash check, with no deferral. (3) wt-follow covers 15 branch states; no reset; dirt kept; hooks never run. (4) The QA gate blocks once with no CLI; the guard refuses W and alias copies. (5) Gate green; existing-case edits are spec-mandated, not weakened. Code: the merge uses the checked tip sha; .moe guard; L13 warning-only. Notes: a 'nothing' completion has no lastCompletion, so QA blocks (per plan; document it in WT-16/18); a stale-lock race can send 2 alerts.",
+  "requiredCheckAtDone": null
 }
