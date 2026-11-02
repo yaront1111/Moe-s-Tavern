@@ -50,7 +50,8 @@ const ROW_TOKENS: readonly [string, (a: AccountActions) => boolean][] = [
 // psQuote, shQuote and assertSafeArg are copied from util/AgentLauncher.ts: the provider loads under closed require maps.
 // assertSafeArg is widened from CR, LF and NUL to every C0 control and DEL, because sendText types each character into the
 // shell's line editor, where Ctrl-U or Ctrl-W would erase the quoting typed before it.
-const psQuote = (value: string): string => `'${String(value).replace(/'/g, "''")}'`;
+// psQuote doubles each of ', U+2018, U+2019, U+201A and U+201B (PowerShell's single quotes; EscapeSingleQuotedStringContent).
+const psQuote = (value: string): string => `'${String(value).replace(/['‘’‚‛]/g, '$&$&')}'`;
 const shQuote = (value: string): string => `'${String(value).replace(/'/g, `'\\''`)}'`;
 function assertSafeArg(label: string, value: string): void {
     for (let i = 0; i < value.length; i++) {

@@ -202,9 +202,10 @@ function randomHex8(): string {
     return result;
 }
 
-// Escape for a PowerShell single-quoted string: double any embedded single quote.
+// Escape for a PowerShell single-quoted string: double each of ', U+2018, U+2019, U+201A and U+201B, which
+// PowerShell all reads as single quotes (CodeGeneration.EscapeSingleQuotedStringContent's rule).
 function psQuote(value: string): string {
-    return `'${String(value).replace(/'/g, "''")}'`;
+    return `'${String(value).replace(/['‘’‚‛]/g, '$&$&')}'`;
 }
 
 // Reject every C0 control and DEL, whatever the quoting: sendText types each

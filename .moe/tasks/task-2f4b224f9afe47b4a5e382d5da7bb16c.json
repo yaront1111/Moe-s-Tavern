@@ -14,48 +14,76 @@
     {
       "stepId": "step-1",
       "description": "JetBrains first (epic rail). Covers DoD 1 (Kotlin) and the JetBrains half of DoD 3. Write the tests first, then fix. Add tests to moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt; never edit an existing test.\n\n(a) Private helpers, in this file only (tests share no helper module):\n- psWords(script) reads a script the way PowerShell's tokenizer does. A single-quote character is any of ' ‘ ’ ‚ ‛ (U+0027, U+2018, U+2019, U+201A, U+201B). A quoted word ends at the next single-quote character that is not followed by another one. A doubled pair reads as its SECOND character. A bare word ends at a space or a single-quote character. An unterminated quote fails the test, naming the script.\n- typedPsScript(line) returns what the PowerShell prompt passes to powershell -Command. Require the prefix powershell -NoProfile -ExecutionPolicy Bypass -Command \" and a final \". In the body, a backtick takes the next character literally, and that character must be one powerShellLine escapes (backtick, $, \", U+201C, U+201D or U+201E). Any other character fails, for example n, which PowerShell would turn into a newline. An unescaped $ or double-quote character also fails.\n- typedBashPsScript(line) handles the WSL route the same way. Require the prefix powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \" and a final \". A backslash before a backslash, \", $ or backtick yields that character. A backslash before anything else stays. An unescaped \", $ or backtick fails.\n\n(b) J1 \"every PowerShell single-quote character is doubled so each value stays one word\":\n- Use Q = x'‘’‚‛y, with the curly characters written as \\u escapes in code. Put Q into one carrier at a time.\n- Agent carriers: project path, script path, agent command, team name, and the MOE_DAEMON_PATH value. Build each through the existing agentLine with POWERSHELL, once with wsl=false and once with wsl=true.\n- Accounts carriers: node, script, registry file, and one arg. Build each through accountsLine(POWERSHELL).\n- Assert that psWords(typed script) equals the whole expected list:\n  - agent: [$env:MOE_DAEMON_PATH=, env, ;, &, File(scriptPath).absolutePath, -Role, worker, -Project, path, -WorkerId, worker-0000abcd, -Command, cmd, -Team, team];\n  - accounts: [&, node, script, --accounts-file, file, args...].\n  Comparing whole lists catches a value that spills into a second word.\n\n(c) J3 \"a project path holding a right single quotation mark reaches the wrapper intact on both PowerShell routes\":\n- basePath is D:\\Bob’s work.\n- The -Project word equals it exactly on both routes.\n- The native line contains -Project 'D:\\Bob’’s work'.\n\n(d) Fix psQuote. Append every single-quote character twice, which is the rule of PowerShell's CodeGeneration.EscapeSingleQuotedStringContent. For example, use a private PS_SINGLE_QUOTES holding the five characters, then buildString: append '; for each character, append it, and append it again if it is in the set; append '.\n\nError handling is unchanged: requireSafeArg and requireSafeLaunchArgs stay the first checks in every builder, and the escaping never throws.\n\nNotes:\n- Edit can land a \\u escape as the literal character (mem:gotcha-vscode-sendtext-control-chars). The meaning is the same, but grep -n the lines to check.\n- In Kotlin, write \\$ for a literal dollar.\n- Test names cannot contain a backtick, dot, colon or slash.\n- Gradle needs the jetbrains-gradle lease, so the RED run is batched into step 4.\n- Background: mem:gotcha-powershell-curly-quotes-psquote.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "note": "Tests first: J1 (assertPsCarriersKeep over 5 agent carriers x native/WSL PowerShell routes + 4 accounts words) and J3 (D:\\Bob’s work, -Project word on both routes, native line contains 'D:\\Bob’’s work'), with private helpers psWords, typedPsScript/typedBashPsScript (one shared typedScript) and a PsAgent holder; import org.junit.Assert.fail added. Fix: psQuote doubles each match of PS_SINGLE_QUOTE = Regex(\"['\\u2018\\u2019\\u201A\\u201B]\"). The Edit tool landed the four curly characters as literal UTF-8 in PS_SINGLE_QUOTE (main) and PS_SINGLE_QUOTES (test companion); the comments name the code points. No existing test edited. RED/GREEN Gradle runs are batched into step 4 under the jetbrains-gradle lease, per plan. Dirty paths from other sessions (.moe/roles, .moe/skills, scripts/moe-agent.*, other task json) untouched.",
+      "startedAt": "2026-11-02T14:12:42.175Z",
+      "completedAt": "2026-11-02T14:15:53.315Z"
     },
     {
       "stepId": "step-2",
       "description": "DoD 2, JetBrains outer escaping. Write the test first, then fix.\n\n(a) Add J2 \"a backtick, dollar or double-quote character stays inside its own word on every PowerShell route\" to TerminalAgentLauncherTest.kt. It uses the step 1 helpers and the same routes and carriers as J1. The values are the task's probes:\n- a`b\n- a`nb`$c\n- tail`\n- x`\"; Write-Output PWNED2; #'\n- $(Write-Output PWNED4)$env:USERNAME\n- a“; Write-Output PWNED5; #\n- a”; Write-Output PWNED3; #\n- a„b\nWrite the curly characters as \\u escapes. Each value must come back as exactly one word, equal to the input. On HEAD the test fails on the unescaped backtick, on U+201D, and on the ``\" pair.\n\n(b) Fix powerShellLine in ONE pass. Prefix one backtick to every backtick, $, \", U+201C, U+201D and U+201E, and leave every other character alone. A single pass cannot re-escape the backticks it adds. Chained replace calls would have to escape the backtick first, and escaping \" first reopens PWNED2.\n\n(c) Make bashWrapPowerShell's un-escape the exact inverse: drop each escaping backtick and keep the character after it. For example, use a regex for a backtick followed by any character, replaced by that character. Every backtick powerShellLine emits is an escape. The bash re-escape (\\\\, \\\", \\$, \\`) is unchanged, and bash needs nothing for curly quotes. Update the KDoc to say so.\n\nCompatibility: the only escapes in the pinned lines are the backtick-$ before env, so PINNED_LEGACY, the accounts pins and AccountPresentationTest still match byte for byte. Do not edit them.\n\nError handling: no new failure path. Both functions stay total string transforms behind the unchanged control-character refusal.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "note": "J2 added (the 8 task probes through assertPsCarriersKeep: 5 agent carriers x native/WSL PowerShell routes + 4 accounts words). powerShellLine now escapes in ONE pass: psCommand.replace(PS_DOUBLE_QUOTED_SPECIAL = Regex(\"[`$\\\"“”„]\")) { \"`\" + it.value }. bashWrapPowerShell un-escape is its exact inverse: replace(PS_BACKTICK_ESCAPE = Regex(\"`(.)\", DOT_MATCHES_ALL)) { groupValues[1] }; bash re-escape unchanged; KDoc updated. Pinned lines only ever had `$ escapes, so PINNED_LEGACY/accounts pins/AccountPresentationTest psPrefix are unaffected (not edited). Curly quote characters again landed as literal UTF-8 through both Edit and Serena (U+201C/D/E in the J2 probes and the regex); a comment names the code points. Gradle RED/GREEN batched into step 4.",
+      "startedAt": "2026-11-02T14:16:01.123Z",
+      "completedAt": "2026-11-02T14:17:16.834Z"
     },
     {
       "stepId": "step-3",
       "description": "VS Code half of DoD 1 and DoD 3. Write the tests first, then fix.\n\n(a) Create moe-vscode/tests/powershell-quoting.test.cjs using node:test. Tests share no helper module, so copy what you need:\n- from tests/agent-launcher-controls.test.cjs: the launcher harness (transpile; run in a vm with process.platform overridden to win32 and this realm's Error; Emitter, StubWebSocket, loadClient, tempDir, write, extension);\n- from tests/accounts-actions.test.cjs: the provider loader (load() with its closed require map, a minimal vscode stub, and AccountPresentation loaded with a throwing require).\nAdd a JS psWords with the same rule as step 1.\n\n(b) V1 (AgentLauncher.ts; DoD 1 and DoD 3). Launch an architect on win32 with:\n- a project that is a real temp directory named Bob’s work, with no .moe, so the launch is legacy;\n- an extension directory named ext '‘’‚‛ x, so the script path and both env paths carry all five characters;\n- teamName Bob’s ‘team’ ‚x‛ 'y'.\nCapture the single sendText line, then assert:\n- psWords(whole line) equals [$env:MOE_DAEMON_PATH=, daemon path, ;, $env:MOE_PROXY_PATH=, proxy path, ;, powershell, -NoProfile, -ExecutionPolicy, Bypass, -EncodedCommand, base64];\n- decode the last word (base64, utf16le). Its psWords equals [&, script path, -Role, architect, -Project, project dir, -WorkerId, the onLaunched id, -Command, claude, -Team, team];\n- the decoded script contains -Project '...Bob’’s work'.\n\n(c) V2 (AccountsTreeProvider.ts; DoD 1). Call accountsCommandLine(cli, file, args, true) with all five characters in node, script, the registry file and one arg. Decode the result. Its psWords equals [&, node, script, --accounts-file, file, ...args].\n\nEach test fails on HEAD with only its own file reverted.\n\n(d) Fix both psQuote copies: `'${String(value).replace(/['‘’‚‛]/g, '$&$&')}'`, plus a one-line comment naming the five characters and EscapeSingleQuotedStringContent. AccountsTreeProvider keeps its own copy because its require map is closed.\n\nUnchanged:\n- error handling: assertSafeArg and assertSafeLaunchArgs still run before any quoting;\n- the bash shQuote paths;\n- the -EncodedCommand framing;\n- every existing test file.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/util/AgentLauncher.ts",
         "moe-vscode/src/providers/AccountsTreeProvider.ts"
       ],
       "newFiles": [
         "moe-vscode/tests/powershell-quoting.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/tests/powershell-quoting.test.cjs"
+      ],
+      "note": "New tests/powershell-quoting.test.cjs (harness copied from agent-launcher-controls + accounts-actions closed-require loader; JS psWords). V1: win32 architect launch, project dir 'Bob’s work', extension dir \"ext '‘’‚‛ x\", team \"Bob’s ‘team’ ‚x‛ 'y'\": outer psWords = env words + powershell ... -EncodedCommand, decoded psWords = [&, script, -Role, architect, -Project, dir, -WorkerId, id, -Command, claude, -Team, team], and -Project '...Bob’’s work'. V2: accountsCommandLine with all five quotes in node/script/file/arg. RED in a HEAD git-archive snapshot (/tmp/psq2f4b-red-*, npm ci exit 0) with only the test overlaid: V1 and V2 both fail with values mangled to \"'’‛\" exactly as the tokenizer pairs them. Fix: both psQuote copies use /['‘’‚‛]/g -> '$&$&' (Edit landed literal UTF-8 chars; comments name the code points). GREEN: node --test powershell-quoting + agent-launcher-controls + accounts-actions = 20 pass, 0 fail. AccountsTreeProvider edited at HEAD's VSC-15 bytes with the Edit tool, psQuote's character set only, per governor comment.",
+      "startedAt": "2026-11-02T14:17:17.809Z",
+      "completedAt": "2026-11-02T14:19:45.398Z"
     },
     {
       "stepId": "step-4",
       "description": "Gate, DoD 4. Run everything in snapshots outside the checkout (global rail). Hold one jetbrains-gradle lease for all Gradle runs (mem:convention-jetbrains-gradle-lease), and release it right after, even on failure. Never kill java or gradle processes by name.\n\n(1) RED. Take a git-archive HEAD snapshot and overlay ONLY the two test files.\n- Kotlin: .\\gradlew.bat test --tests com.moe.util.TerminalAgentLauncherTest --rerun must fail J1, J2 and J3, and pass every pre-existing test.\n- VS Code: after npm ci in the snapshot, node --test tests/powershell-quoting.test.cjs must fail V1 and V2.\n\n(2) Mutants. Write them only into snapshot copies (mem:pattern-mutant-sweep-in-gate-snapshot). Each must fail a named test:\n- Kotlin psQuote doubling only the ASCII quote: J1 and J3;\n- the quote set without U+201A: J1;\n- powerShellLine without the backtick: J2;\n- powerShellLine without U+201E: J2;\n- chained replaces that escape \" before the backtick: J2;\n- HEAD's bashWrapPowerShell un-escape: J2, WSL rows;\n- each VS Code psQuote back to ASCII-only, one at a time: V1 alone, then V2 alone;\n- the VS Code quote set without U+201B: V1 and V2.\n\n(3) Run the checkRef verbatim; it must exit 0:\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && F=\"moe-vscode/src/util/AgentLauncher.ts moe-vscode/src/providers/AccountsTreeProvider.ts moe-vscode/tests/powershell-quoting.test.cjs moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt\" && V=$(mktemp -d -t psq2f4b-vsc-XXXXXX) && git archive HEAD | tar -x -C \"$V\" && cp --parents $F \"$V/\" && (cd \"$V/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test') && J=/mnt/d/moe-scratch/psq2f4b-jb-gate && rm -rf \"$J\" && mkdir -p \"$J\" && git archive HEAD | tar -x -C \"$J\" && cp --parents $F \"$J/\" && cd /mnt/d/moe-scratch && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\psq2f4b-jb-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'\n- Confirm \"> Task :test\" ran and was not UP-TO-DATE.\n- Read the TerminalAgentLauncherTest count and the JUnit total from the XML (mem:gotcha-gradle-uptodate-inside-chained-gate).\n\nRecord in complete_task: the RED failures, the mutant kills, the VS Code test pass/fail/skip counts and the JUnit counts.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "All under one jetbrains-gradle lease (14:20:32Z, released after the gate).\n(1) RED: snapshot D:\\moe-scratch\\psq2f4b-jb-red = git archive HEAD + only TerminalAgentLauncherTest.kt: gradlew.bat test --tests com.moe.util.TerminalAgentLauncherTest --rerun -> 43 tests, 3 failed (J1, J2, J3), 40 pre-existing pass. J2 failed on \"would not read `b as a literal\", J1 on mangled 'x''‘’‚‛y', J3 on 'D:\\Bob’s work'. VS Code RED (step 3): V1 and V2 fail.\n(2) Mutants (driver /tmp/psq2f4b-mut/mut.py, snapshot copy only, restore in finally; compileKotlin executed each run; baseline 43/43 before and after): M1 psQuote ASCII-only -> J1+J3; M2 set without U+201A -> J1; M3 powerShellLine without backtick -> J2; M4 without U+201E -> J2; M5 chained replaces escaping \" first -> J2; M6 HEAD bashWrap un-escape -> J2 (wsl=true rows). VS Code (/tmp/psq2f4b-mut/vmut.py): VM1 AgentLauncher ASCII-only -> V1 only; VM2 AccountsTreeProvider ASCII-only -> V2 only; VM3 both without U+201B -> V1+V2. 9/9 killed as predicted.\n(3) checkRef verbatim -> GATE_EXIT=0. VS Code npm ci, lint, compile, test: 556 tests, 552 pass, 0 fail, 4 skip. Gradle: '> Task :test' executed (11 actionable tasks: 11 executed), BUILD SUCCESSFUL in 49s; XML: TerminalAgentLauncherTest 43/0 failures; JUnit total 570 tests, 0 failures, 0 errors, 0 skipped (35 files).",
+      "startedAt": "2026-11-02T14:19:46.594Z",
+      "completedAt": "2026-11-02T14:24:17.704Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review: one pass, at the end, scoped to this row's diff (this is a mid-epic row). Check:\n- the three psQuote copies hold the same five characters (diff them);\n- powerShellLine is a single pass, and bashWrapPowerShell is its exact inverse;\n- git diff --stat names only the 5 planned files;\n- no existing test changed; PINNED_LEGACY, the accounts pins and AccountPresentationTest are byte-identical;\n- requireSafeArg and assertSafeArg still run first;\n- no new export;\n- size stays under the 400-line cap.\n\nIn complete_task, state these residuals as pre-existing and out of scope. Both are filed as task-76d4500abc1047d5b51d63f2a2dc92bc:\n- (a) Windows PowerShell 5.1's native argument passing drops a plain ASCII \" from JetBrains' -Command string. A probe at planning showed the value stays in its own argument, so this is not a break-out.\n- (b) In an interactive bash, ! inside the WSL wrap's double quotes triggers history expansion.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review of this row's diff only. (1) The three psQuote sets are byte-identical: [' e2 80 98 e2 80 99 e2 80 9a e2 80 9b] in all three files (od). (2) powerShellLine is one Regex pass over [`$\"“”„]; bashWrapPowerShell drops exactly one backtick per `(.) match, so it is the exact inverse (M5/M6 mutants prove both). (3) Only the 5 planned files changed: 4 modified, 1 new. (4) No existing test line removed; AccountPresentationTest, agent-launcher-controls and accounts-actions show no diff; PINNED_LEGACY and the accounts pins are green, unedited. (5) requireSafeArg/requireSafeLaunchArgs and assertSafeArg/assertSafeLaunchArgs are unchanged and still run before any quoting. (6) No new export or internal symbol; the Kotlin additions are 3 private Regex vals. (7) Size: +164/-9 tracked + 167 new = 340 changed lines, under 400. Concurrency: pure functions over immutable Pattern objects. Residuals (pre-existing, filed as task-76d4500a): the native 5.1 route drops a plain ASCII \", and ! triggers history expansion in an interactive bash.",
+      "startedAt": "2026-11-02T14:24:18.640Z",
+      "completedAt": "2026-11-02T14:24:33.573Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -64,15 +92,21 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-26a3dacde03c4195bfcd3e01e3c59efd",
-    "task-357ed3ae786b4477a39840a7b86a88a6"
+    "task-26a3dacde03c4195bfcd3e01e3c59efd"
   ],
   "priority": "MEDIUM",
   "order": 23,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-a975e04a544b4db9a6863f9ceacc569e",
+      "author": "governor-e6b40560",
+      "content": "Governor review-overlap ruling, 14:11Z: this row is claimable now. It supersedes planning risk 5.\n\nI removed the dependsOn on VSC-15 (task-357ed3ae). VSC-15's bytes landed in 5e972820 on moe/work-2026-10-24, and QA verified their substance green. The row is parked only for a human click on size waiver prop-8f3527c6, and the fallback for that waiver changes no bytes. 3 coders are idle.\n\n1. **Steps 1-2** are JetBrains only and don't touch VSC-15's files.\n2. **Step 3:** edit moe-vscode/src/providers/AccountsTreeProvider.ts as HEAD has it (VSC-15's 5e972820) with the Edit tool, never Write. The tool witness lets your landing carry the path while VSC-15 is still nonterminal. Keep VSC-15's tests/accounts-actions.test.cjs green, and change only psQuote's character set there. Report the file in modifiedFiles.\n3. **If VSC-15's bytes change before you land,** the governor posts here, and you rebase step 3 onto them.",
+      "timestamp": "2026-11-02T14:10:23.374Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T12:41:22.705Z",
-  "updatedAt": "2026-11-02T14:08:26.829Z",
+  "updatedAt": "2026-11-02T14:25:21.017Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T13:49:39.060Z",
@@ -81,17 +115,25 @@
   "metrics": {
     "firstClaimAt": "2026-11-02T13:49:44.626Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-93e0e956",
-    "architect-0fcb7226"
+    "architect-0fcb7226",
+    "worker-81a7999f"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T14:08:26.795Z",
   "executionContract": {
@@ -159,5 +201,47 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T14:08:26.828Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "66fa1aa385aa99199ffb09bae3e3aad9dcfd7a7e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-93e0e956@2026-11-02T13:49:42Z",
+      "paths": [
+        ".moe/tasks/task-2f4b224f9afe47b4a5e382d5da7bb16c.json",
+        ".moe/tasks/task-cfa129252343438d903de1e67ae6073c.json"
+      ],
+      "recordedBy": "architect-93e0e956",
+      "recordedAt": "2026-11-02T14:09:40.636Z",
+      "treeId": "e1bbd6595dff63438dbff92ee6cbf19246a7f7d5",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    "moe-vscode/src/util/AgentLauncher.ts",
+    "moe-vscode/src/providers/AccountsTreeProvider.ts",
+    "moe-vscode/tests/powershell-quoting.test.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-93e0e956@2026-11-02T13:49:42Z",
+    "at": "2026-11-02T14:09:40.636Z"
+  },
+  "workStartedAt": "2026-11-02T14:12:42.176Z",
+  "reviewStartedAt": "2026-11-02T14:25:21.015Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && F=\"moe-vscode/src/util/AgentLauncher.ts moe-vscode/src/providers/AccountsTreeProvider.ts moe-vscode/tests/powershell-quoting.test.cjs moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt\" && V=$(mktemp -d -t psq2f4b-vsc-XXXXXX) && git archive HEAD | tar -x -C \"$V\" && cp --parents $F \"$V/\" && (cd \"$V/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test') && J=/mnt/d/moe-scratch/psq2f4b-jb-gate && rm -rf \"$J\" && mkdir -p \"$J\" && git archive HEAD | tar -x -C \"$J\" && cp --parents $F \"$J/\" && cd /mnt/d/moe-scratch && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\psq2f4b-jb-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'",
+    "exitCode": 0,
+    "outputTail": "VS Code snapshot: npm ci ok; eslint src --ext ts ok; tsc -p ./ ok; npm test:\n✔ V1 the PowerShell launch line doubles every single-quote character, so a project dir named Bob’s work arrives intact\n✔ V2 accountsCommandLine doubles every PowerShell single-quote character in each word of the encoded script\nℹ tests 556\nℹ pass 552\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\n...\n> Task :compileKotlin\n> Task :compileTestKotlin\n> Task :testClasses\n> Task :instrumentTestCode SKIPPED\n> Task :test\nBUILD SUCCESSFUL in 49s\n11 actionable tasks: 11 executed\nGATE_EXIT=0\nJUnit XML (D:\\moe-scratch\\psq2f4b-jb-gate\\moe-jetbrains\\build\\test-results\\test): 570 tests, 0 failures, 0 errors, 0 skipped across 35 files; TEST-com.moe.util.TerminalAgentLauncherTest.xml tests=43 failures=0 errors=0",
+    "reportedAt": "2026-11-02T14:25:21.015Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "PowerShell quoting now keeps every value inside its own argument in both plugins.\n\nFix:\n- psQuote, in all 3 copies (AgentLauncher.ts, AccountsTreeProvider.ts, TerminalAgentLauncher.kt), doubles each of ', U+2018, U+2019, U+201A and U+201B. That is EscapeSingleQuotedStringContent's rule. The 3 sets are byte-identical (od).\n- JetBrains powerShellLine escapes in ONE pass. It puts a backtick before each backtick, $, \" and U+201C/U+201D/U+201E.\n- bashWrapPowerShell undoes that exactly: Regex(\"`(.)\") becomes group 1, then the bash re-escape runs unchanged.\n- Ordinary values are typed byte-for-byte as before. PINNED_LEGACY, the accounts pins and AccountPresentationTest are unedited and green.\n\nTests:\n- Kotlin J1/J2/J3 in TerminalAgentLauncherTest. A psWords tokenizer model plus typedPsScript/typedBashPsScript checks 5 agent carriers × the native and WSL PowerShell routes, and 4 accounts words.\n- J3 covers D:\\Bob’s work on both routes.\n- New moe-vscode/tests/powershell-quoting.test.cjs:\n  - V1: a win32 launch with project dir Bob’s work and an extension dir holding all 5 single quotes; the outer words and the decoded words are checked;\n  - V2: accountsCommandLine.\n\nRED at HEAD:\n- Kotlin: 43 tests, only J1, J2 and J3 fail.\n- VS Code: V1 and V2 fail.\n\nMutants, all killed as predicted:\n- M1 psQuote ASCII-only: J1 and J3.\n- M2 without U+201A: J1.\n- M3 without the backtick: J2.\n- M4 without U+201E: J2.\n- M5 chained replaces that escape \" first: J2.\n- M6 HEAD's un-escape: J2, wsl=true rows.\n- VM1 AgentLauncher ASCII-only: V1 alone.\n- VM2 AccountsTreeProvider ASCII-only: V2 alone.\n- VM3 without U+201B: V1 and V2.\n- Drivers: /tmp/psq2f4b-mut/{mut,vmut}.py.\n\nGate, exit 0:\n- VS Code: 556 tests, 552 pass, 0 fail, 4 skip.\n- Gradle: :test executed, 570 JUnit tests, 0 failures; TerminalAgentLauncherTest 43.\n\nSize: 340 changed lines across the 5 planned files. No new export. requireSafeArg and assertSafeArg still run first.\n\nThe curly characters are literal UTF-8 in the source; the toolin"
 }

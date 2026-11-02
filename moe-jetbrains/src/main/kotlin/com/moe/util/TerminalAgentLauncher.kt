@@ -593,14 +593,15 @@ object TerminalAgentLauncher {
      * Convert a `powershell -NoProfile ... -Command "..."` line (backtick-escaped
      * for a PowerShell host) into one that survives a bash prompt: interop needs
      * the .exe suffix, and bash double quotes eat `$`, backticks, and `"` unless
-     * backslash-escaped. The PowerShell-level backtick escaping is first undone,
-     * then re-escaped for bash.
+     * backslash-escaped. The PowerShell-level backtick escaping is first undone
+     * (every backtick powerShellLine emits escapes the character after it), then
+     * re-escaped for bash. Curly quotes need nothing in bash.
      */
     internal fun bashWrapPowerShell(psLine: String): String {
         val prefix = "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
         if (!psLine.startsWith(prefix) || !psLine.endsWith("\"")) return psLine
         val inner = psLine.removePrefix(prefix).removeSuffix("\"")
-            .replace("`\"", "\"").replace("`\$", "\$")
+            .replace(PS_BACKTICK_ESCAPE) { it.groupValues[1] }
         val bashEscaped = inner
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
@@ -649,9 +650,16 @@ object TerminalAgentLauncher {
         )
     }
 
-    /** Runs [psCommand] in a fresh `powershell`, escaped for the PowerShell prompt it is typed into. */
+    // Inside "...", PowerShell treats the backtick, $, " and U+201C, U+201D, U+201E as special.
+    private val PS_DOUBLE_QUOTED_SPECIAL = Regex("[`\$\"“”„]")
+    private val PS_BACKTICK_ESCAPE = Regex("`(.)", RegexOption.DOT_MATCHES_ALL)
+
+    /**
+     * Runs [psCommand] in a fresh `powershell`, escaped for the PowerShell prompt it is typed into: ONE pass puts a
+     * backtick before each backtick, $, " and curly double quote, so no escape it adds is escaped again.
+     */
     private fun powerShellLine(psCommand: String): String {
-        val escaped = psCommand.replace("\"", "`\"").replace("\$", "`\$")
+        val escaped = psCommand.replace(PS_DOUBLE_QUOTED_SPECIAL) { "`" + it.value }
         return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
     }
 
@@ -759,8 +767,12 @@ object TerminalAgentLauncher {
         envOverrides.forEach { (key, value) -> requireSafeArg("env $key", value) }
     }
 
+    // PowerShell reads ', U+2018, U+2019, U+201A and U+201B as single quotes, so each is doubled: the rule of
+    // CodeGeneration.EscapeSingleQuotedStringContent. A doubled pair reads back as one copy of itself.
+    private val PS_SINGLE_QUOTE = Regex("['‘’‚‛]")
+
     private fun psQuote(value: String): String {
-        return "'" + value.replace("'", "''") + "'"
+        return "'" + value.replace(PS_SINGLE_QUOTE) { it.value + it.value } + "'"
     }
 
     private fun shQuote(value: String): String {

@@ -13,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -672,6 +673,129 @@ class TerminalAgentLauncherTest {
         }
     }
 
+    @Test
+    fun `every PowerShell single-quote character is doubled so each value stays one word`() {
+        assertPsCarriersKeep("x'\u2018\u2019\u201A\u201By")
+    }
+
+    @Test
+    fun `a backtick, dollar or double-quote character stays inside its own word on every PowerShell route`() {
+        // The last three hold U+201C, U+201D and U+201E, which PowerShell reads as double quotes.
+        val probes = listOf(
+            "a`b",
+            "a`nb`\$c",
+            "tail`",
+            "x`\"; Write-Output PWNED2; #'",
+            "\$(Write-Output PWNED4)\$env:USERNAME",
+            "a“; Write-Output PWNED5; #",
+            "a”; Write-Output PWNED3; #",
+            "a„b"
+        )
+        probes.forEach { assertPsCarriersKeep(it) }
+    }
+
+    @Test
+    fun `a project path holding a right single quotation mark reaches the wrapper intact on both PowerShell routes`() {
+        val path = "D:\\Bob\u2019s work"
+        val native = agentLine(POWERSHELL, false, basePath = path)
+        assertTrue(native, native.contains("-Project 'D:\\Bob\u2019\u2019s work'"))
+        val routes = mapOf(false to typedPsScript(native), true to typedBashPsScript(agentLine(POWERSHELL, true, basePath = path)))
+        for ((wsl, script) in routes) {
+            val words = psWords(script)
+            assertEquals("wsl=$wsl: $script", path, words[words.indexOf("-Project") + 1])
+        }
+    }
+
+    /**
+     * Puts [value] into each typed value of the native and WSL PowerShell agent lines, then into each word of the
+     * PowerShell accounts line, and reads the words back as PowerShell does. Comparing whole lists catches a value that
+     * spills into a second word.
+     */
+    private fun assertPsCarriersKeep(value: String) {
+        val agents = mapOf(
+            "project path" to PsAgent(basePath = "D:/projexts/$value"),
+            "script path" to PsAgent(scriptPath = "D:/moe/$value/moe-agent"),
+            "command" to PsAgent(agentCommand = value),
+            "team name" to PsAgent(teamName = value),
+            "env MOE_DAEMON_PATH" to PsAgent(daemonPath = "C:/moe/$value/index.js")
+        )
+        for (wsl in listOf(false, true)) {
+            for ((label, a) in agents) {
+                val line = agentLine(POWERSHELL, wsl, a.basePath, a.scriptPath, a.agentCommand, a.teamName, env = mapOf("MOE_DAEMON_PATH" to a.daemonPath))
+                val script = if (wsl) typedBashPsScript(line) else typedPsScript(line)
+                assertEquals("wsl=$wsl $label: $line", a.words(), psWords(script))
+            }
+        }
+        val accounts = listOf(
+            listOf("C:/$value/node.exe", "C:/moe/cli.js", "C:/moe/claude-accounts.json", "check"),
+            listOf("C:/node/node.exe", "C:/$value/cli.js", "C:/moe/claude-accounts.json", "check"),
+            listOf("C:/node/node.exe", "C:/moe/cli.js", "C:/$value/claude-accounts.json", "check"),
+            listOf("C:/node/node.exe", "C:/moe/cli.js", "C:/moe/claude-accounts.json", value)
+        )
+        for ((node, script, file, arg) in accounts) {
+            val line = accountsLine(AccountsShell.POWERSHELL, node, script, file, listOf("login", arg))
+            assertEquals("accounts: $line", listOf("&", node, script, "--accounts-file", file, "login", arg), psWords(typedPsScript(line)))
+        }
+    }
+
+    /**
+     * The words PowerShell's tokenizer reads from [script]. Any of PS_SINGLE_QUOTES opens or closes a quoted word, and a
+     * doubled pair inside one reads as its second character. A bare word ends at a space or a single-quote character.
+     */
+    private fun psWords(script: String): List<String> {
+        val words = mutableListOf<String>()
+        var i = 0
+        while (i < script.length) {
+            if (script[i] == ' ') { i++; continue }
+            val word = StringBuilder()
+            if (script[i] in PS_SINGLE_QUOTES) {
+                i++
+                while (true) {
+                    assertTrue("unterminated quote in: $script", i < script.length)
+                    val quote = script[i] in PS_SINGLE_QUOTES
+                    if (quote && script.getOrNull(i + 1)?.let { it in PS_SINGLE_QUOTES } != true) break
+                    word.append(script[if (quote) i + 1 else i])
+                    i += if (quote) 2 else 1
+                }
+                i++
+            } else {
+                while (i < script.length && script[i] != ' ' && script[i] !in PS_SINGLE_QUOTES) word.append(script[i++])
+            }
+            words += word.toString()
+        }
+        return words
+    }
+
+    /** The script the PowerShell prompt passes to `powershell -Command`: a backtick takes the next character, which must be one powerShellLine escapes. */
+    private fun typedPsScript(line: String): String = typedScript(line, "powershell", '`', "`\$\"\u201C\u201D\u201E", strict = true)
+
+    /** The same for the WSL route's bash prompt: a backslash before a backslash, ", $ or backtick yields that character, and stays before any other. */
+    private fun typedBashPsScript(line: String): String = typedScript(line, "powershell.exe", '\\', "\\\"\$`", strict = false)
+
+    /**
+     * Reads the "..." argument of a `<exe> -NoProfile -ExecutionPolicy Bypass -Command "..."` [line] as its shell does.
+     * [escape] before a character of [escaped] yields that character. [strict] fails on [escape] before any other
+     * character, which PowerShell might not keep (it turns `n into a newline). Every other character of [escaped] must
+     * arrive escaped.
+     */
+    private fun typedScript(line: String, exe: String, escape: Char, escaped: String, strict: Boolean): String {
+        val prefix = "$exe -NoProfile -ExecutionPolicy Bypass -Command \""
+        assertTrue("not a $exe -Command line: $line", line.startsWith(prefix) && line.endsWith("\""))
+        val body = line.substring(prefix.length, line.length - 1)
+        val script = StringBuilder()
+        var i = 0
+        while (i < body.length) {
+            val c = body[i]
+            val next = body.getOrNull(i + 1)
+            when {
+                c == escape && next != null && next in escaped -> { script.append(next); i += 2 }
+                c == escape && (strict || next == null) -> fail("$exe would not read $c$next as a literal in: $line")
+                else -> { assertFalse("unescaped $c in: $line", c != escape && c in escaped); script.append(c); i++ }
+            }
+        }
+        return script.toString()
+    }
+
     private fun agentLine(
         kind: ScriptKind,
         wsl: Boolean,
@@ -706,6 +830,21 @@ class TerminalAgentLauncherTest {
 
     private class Row(val role: String, val wsl: Boolean, val kind: ScriptKind, val expected: String)
 
+    /** One PowerShell agent launch through agentLine (role worker, worker id worker-0000abcd) and the words it must type. */
+    private class PsAgent(
+        val basePath: String = "D:/projexts/app",
+        val scriptPath: String = "D:/moe/moe-agent",
+        val agentCommand: String = "claude",
+        val teamName: String = "team",
+        val daemonPath: String = "C:/moe/daemon/index.js"
+    ) {
+        // buildCommand types File.absolutePath for the script, which depends on the OS.
+        fun words() = listOf(
+            "\$env:MOE_DAEMON_PATH=", daemonPath, ";", "&", File(scriptPath).absolutePath, "-Role", "worker", "-Project", basePath,
+            "-WorkerId", "worker-0000abcd", "-Command", agentCommand, "-Team", teamName
+        )
+    }
+
     private companion object {
         val PINNED_SCRIPT: String = File("pinned", "moe-agent").absolutePath
         val PINNED_ENV = linkedMapOf("MOE_DAEMON_PATH" to "C:\\moe\\daemon\\index.js", "MOE_PROXY_PATH" to "C:\\moe\\proxy\\index.js")
@@ -713,6 +852,8 @@ class TerminalAgentLauncherTest {
         val BASH = ScriptKind.BASH
         val CONTROL_CODES = listOf(0x00, 0x01, 0x09, 0x0A, 0x0D, 0x15, 0x17, 0x1B, 0x1F, 0x7F)
         val AGENT_ROUTES = listOf(POWERSHELL to false, BASH to false, BASH to true, POWERSHELL to true)
+        // U+0027, U+2018, U+2019, U+201A and U+201B: PowerShell's tokenizer reads each as a single quote (CharExtensions.IsSingleQuote).
+        const val PS_SINGLE_QUOTES = "'‘’‚‛"
 
         // Captured from today's buildCommand before this change (agentCommand claude, no team, workerId <role>-0000abcd).
         val PINNED_LEGACY = listOf(
