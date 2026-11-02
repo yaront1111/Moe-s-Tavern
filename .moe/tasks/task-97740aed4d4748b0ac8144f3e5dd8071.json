@@ -15,26 +15,39 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (RED). Edit packages/moe-daemon/src/tools/governanceFeatures.test.ts only (Edit tool). Add rows to describe('collision notice marks live peers and pages them'), reusing its setup()/writePeer()/claimAndHear() helpers. Import openAttempt and currentAttempt from '../state/attemptStore.js'.\n\nThe claimer is worker-b claiming WORKING task-B. Its attempt is 'worktree' only when settings.worktreeMode is 'on' (openClaimAttempt), so after setup() call `await state.updateSettings({ worktreeMode: 'on' })`. Give the live peer an attempt with `await openAttempt(state, { taskId: 'task-live', workerId: 'worker-live', runnerId: 'worker-live', workspace: path.join(testDir, '.worktrees', 'task-live'), workspaceMode })`, as completeTask.test.ts does.\n\nRows:\n(h) worktree claimer + worktree live peer: no heads-up at all.\n- Capture every MESSAGE_CREATED whose channel is #workers (state.getChannels().find((c) => c.name === 'workers')) during the claim; expect none. This is stronger than the 'file collision on task-B' filter, because a reworded notice would slip past that filter.\n- result.fileCollision equals row (a)'s array exactly, liveAssignee included (DoD 3).\n- Premise guard: currentAttempt(state, 'task-B')!.workspaceMode is 'worktree'.\n(h2) Worktree claimer with only dormant peers (setup() with no live seat): no #workers message either. This is the vacuous 'every live peer' case, and today it routes to every busy seat. result.fileCollision is unchanged.\n(i) it.each(['shared', 'legacy', 'none']): worktree claimer, but the live peer's attempt is workspaceMode 'shared', or opened without workspaceMode, or absent. It pages exactly as today: one notice, mentions and targets ['worker-live', 'worker-b'], content ending 'Coordinate before either of you lands.'\n(j) worktreeMode left off (claimer shared) with a 'worktree' attempt on task-live: pages exactly as today (same asserts as (i)).\n(k) Post failure: worktreeMode off, `vi.spyOn(state, 'postToRoleChannel').mockRejectedValue(new Error('post down'))`. The claim still returns hasNext true with fileCollision, and task-B is assigned to worker-b (DoD 3; restore the spy).\n\nRED run, in a snapshot only (GLOBAL rule [0]; mem:gotcha-daemon-linux-snapshot-gate), from the worktree in WSL bash:\nR=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$R/packages/moe-daemon/src/tools/governanceFeatures.test.ts\" \"$S/packages/moe-daemon/src/tools/\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx vitest run src/tools/governanceFeatures.test.ts -t \"collision notice\"'\n\nExpected: (h) and (h2) fail, because a notice is posted. (i), (j) and (k) pass: they pin today's behavior. Save the (h)/(h2) failure lines for the complete_task summary. error handling: if a row other than (h)/(h2) fails, the test is wrong; fix the test, not the expectation.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/governanceFeatures.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts"
+      ],
+      "note": "Added rows (h), (h2), (i) x3 (shared / legacy / no attempt), (j), (k) to 'collision notice marks live peers and pages them'. RED in a git-archive snapshot (test file overlaid only): Tests 2 failed | 12 passed | 14 skipped. (h) 'expected [ Array(1) ] to deeply equal []' received \"@worker-live @worker-b ⚠️ file collision on task-B. Live: task-live ... Coordinate before either of you lands.\"; (h2) received \"⚠️ file collision on task-B: task-dead ... | task-gone ... | task-unassigned ...\". Premise guards (claimer attempt workspaceMode 'worktree') pass. Plan's it.each 'none' case is a separate it because it needs no peer attempt.",
+      "startedAt": "2026-11-02T21:52:10.463Z",
+      "completedAt": "2026-11-02T21:53:39.612Z"
     },
     {
       "stepId": "step-2",
       "description": "FIX. Edit packages/moe-daemon/src/tools/claimNextTask.ts only.\n\nNext to collisionNotice(), add:\n`function worktreeOnlyCollision(state: StateManager, claimed: ExecutionAttempt | null, collisions: CollisionEntry[]): boolean { if (claimed?.workspaceMode !== 'worktree') return false; return collisions.every((c) => !c.liveAssignee || currentAttempt(state, c.task)?.workspaceMode === 'worktree'); }`\ncurrentAttempt is already imported from '../state/attemptStore.js'. Its doc comment says why there is no heads-up:\n- each such task edits its own .worktrees/<taskId>;\n- completions land one at a time (merge-tree + CAS), and a true conflict parks on a rescue ref and routes the row back;\n- so 'coordinate before either of you lands' asks for something no seat can do.\nIt also says why the notice is skipped rather than posted without @mentions: chatStore.ts routes a mention-less system line to every busy seat (see chatSystemFeed.test.ts 'keeps routing the file collision banner to busy seats'), so a quiet post would page MORE seats.\nIt also states that a live peer with no open attempt, or an attempt without workspaceMode (legacy), counts as shared and keeps today's paging. The mode is pinned per attempt; the setting only picks a fresh attempt's mode, so read attempts, never the live setting.\n\nAt the post block (around :832), keep one try/catch around both the decision and the post, so a failure in either never fails the claim (DoD 3):\n`try { if (worktreeOnlyCollision(state, claimedAttempt, fileCollision)) { logger.info({ taskId: task.id, peers: fileCollision.map((c) => c.task) }, 'claim_next_task: worktree-mode file collision; no #workers heads-up'); } else { await state.postToRoleChannel('workers', collisionNotice(task.id, fileCollision, params.workerId)); } } catch { /* never block tool */ }`\n\nUpdate the block comment above it ('@mentioning the seats ... so they can coordinate before either lands') to name the worktree exception. Leave collisionNotice(), markLivePeers(), the response's fileCollision and every other path unchanged. Re-run step 1's command with claimNextTask.ts copied into the snapshot too: every collision row passes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "note": "Added worktreeOnlyCollision(state, claimed, collisions) beside collisionNotice() and gated the existing #workers post with it inside the existing try/catch; the skip logs at info. collisionNotice, markLivePeers, computeFileCollisions and the response's fileCollision are unchanged. Snapshot run with claimNextTask.ts + the test file overlaid (cmp-checked): tsc --noEmit clean, governanceFeatures 'collision notice' rows 14 passed | 14 skipped (the others are not selected by -t), including (h) and (h2), which were red before the fix.",
+      "startedAt": "2026-11-02T21:53:41.443Z",
+      "completedAt": "2026-11-02T21:54:12.313Z"
     },
     {
       "stepId": "step-3",
       "description": "DOCS. Edit docs/MCP_SERVER.md: ONLY the claim_next_task `fileCollision[]` notes paragraph (about :1525). WT-17 (task-cda65eb0, WORKING) also edits this file, so add no other hunk.\n\nAfter the sentence ending 'a heads-up with only dormant peers mentions nobody.', insert 1-2 sentences saying:\n- In worktree mode no heads-up is posted at all when the claimer's attempt and every live peer's open attempt have workspaceMode 'worktree'. Each task edits its own .worktrees/<taskId>; overlapping hunks meet at landing, and a true conflict parks on a rescue ref and routes the row back.\n- A live peer with no open attempt or a shared one keeps the heads-up as described.\n- `fileCollision` itself is the same in both modes.\nKeep the paragraph's existing sentences byte-identical.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "startedAt": "2026-11-02T21:54:13.457Z"
     },
     {
       "stepId": "step-4",
@@ -59,7 +72,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-8cf0816c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -71,7 +84,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:58:23.710Z",
-  "updatedAt": "2026-11-02T21:50:01.781Z",
+  "updatedAt": "2026-11-02T21:54:13.457Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T20:58:35.395Z",
@@ -80,16 +93,21 @@
   "metrics": {
     "firstClaimAt": "2026-11-02T21:41:26.592Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-8cf0816c"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T21:46:32.930Z",
   "executionContract": {
@@ -152,5 +170,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T21:46:32.960Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T21:52:10.463Z"
 }

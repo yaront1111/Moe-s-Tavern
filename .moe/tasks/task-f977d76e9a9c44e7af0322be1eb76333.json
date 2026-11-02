@@ -7,10 +7,48 @@
     "A W of a project that tracks .serena/project.yml shows no dirt for the WT-06 copy (or the copy is DENY in denied_wt / Test-MoeDenyPathWorktree), and no landing carries a <name>@<taskId> project_name to the task branch or the target; a postflight case covers both wrappers."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Edit scripts/tests/postflight-worktree.cjs only (Edit tool), the one suite that postflight.sh and postflight.ps1 both run.\n\nAdd `async function wtSerenaYml()` right after wtCompletion, where REVIEW and mainOf are defined. Register it as 'wt-serena-yml':wtSerenaYml next to 'wt-completion':wtCompletion in the Object.assign(cases,{...}) block. Do not touch that block's last line: WT-14 (task-befdddf7, WORKING) edits these same files, so keep the hunks small.\n\nThe case is a project that TRACKS .serena/project.yml:\n- `p=repo('wt-serena-yml',{settings:LANDS})`, `f='.serena/project.yml'`, `yml='project_name: fixture\\nlanguages: [x]\\n'`;\n- `write(path.join(p.dir,f),yml); git(p.top,'add','--',f); git(p.top,'commit','-qm','track project.yml'); git(p.top,'update-ref','refs/heads/main','HEAD')`, so main and moe/control both track it and the control is clean;\n- `main=mainOf(p)`.\n\nRun 1, a checkpoint: `landRun(p,'wt-serena-yml-1',{'src/a.txt':'task a\\n'})`, `head=revOf(p.top,p.branch)`. Assert:\n- r.code 0 and head !== main;\n- the premise: W holds WT-06's copy, `readOr(path.join(p.W,f))==='project_name: \"fixture@'+TASK+'\"\\nlanguages: [x]\\n'` (a plain scalar is re-quoted with JSON.stringify), and `git(p.W,'status','--porcelain','--',f)` matches /^ M /;\n- `git(p.top,'show',head+':'+f)===yml` (message: 'the checkpoint carried the WT-06 copy to the task branch'), and src/a.txt landed;\n- the log matches /MOE_ATTR_EXCLUDED/.\n\nRun 2, a completion: `landRun(p,'wt-serena-yml-2',{'src/a.txt':'done\\n'},REVIEW)`, `c=mainOf(p)`. Assert r.code 0, c !== main, and `[git(p.top,'show',c+':'+f), git(p.top,'show',c+':src/a.txt')]` deep-equals [yml,'done\\n'] (message: 'the completion carried the WT-06 copy to the target').\n\nRED run (sh engine), from the worktree root in WSL bash. The launcher harnesses may run in place, and they run from a task worktree since task-3c4be125 and task-86431c31:\ncd \"$(git rev-parse --show-toplevel)\" && T=$(mktemp -d) && cp scripts/tests/postflight-fake-proxy.js \"$T/\" && env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION MOE_WORKTREE_ONLY=wt-serena-yml node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$T/postflight-fake-proxy.js\" \"$T\" \"$(command -v bash)\"\n\nExpected: `[worktree] wt-serena-yml FAILED: AssertionError ...the checkpoint carried the WT-06 copy to the task branch`, i.e. the renamed name landed, which is the defect observed. Save that line for the complete_task summary.\nerror handling: a TypeError or a failure before that assertion is a harness problem (mem:gotcha-postflight-worktree-mutant-copy), not RED. Fix the case until it fails exactly there.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX both twins in parity (epic rail 2), each with the Edit tool. Shared-mode denied() and Test-MoeDenyPath stay unchanged (epic rail 4).\n\n(a) scripts/moe-agent.sh, resolve_attribution's worktree block (about :4518-4526): extend denied_wt's `any(...)` to `pk == pre + '.claude/skills' or pk.startswith(pre + '.claude/skills/') or pk == pre + '.serena/project.yml'`.\n(b) scripts/moe-agent.ps1, Test-MoeDenyPathWorktree (about :6261-6273): extend the roots-loop test to `$k -ceq \"$dr.claude/skills\" -or $k.StartsWith(\"$dr.claude/skills/\") -or $k -ceq \"$dr.serena/project.yml\"`. Keep the file's UTF-8 BOM; parity-check enforces it.\n\nUpdate both comments to say why. WT-06 (worktree_tooling_node / its twin) rewrites W/.serena/project.yml at every launch with project_name <name>@<taskId>. denied() holds .serena/** only while it is untracked, so a project that tracks the file would land the renamed name on moe/task/<id>, and the completion would carry it to the target. W's copy is tooling-owned, never task bytes: a deliberate project.yml change cannot ride a worktree landing, because the next launch overwrites it anyway.\n\nThe same predicate feeds the control-dirt list, which only drives the diagnostic MOE_WORKTREE_STRAY_EDIT check, so nothing else changes. Re-run step 1's command: `[worktree] wt-serena-yml ok`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY, once. The primary command is the complete_task evidence. From the worktree root in WSL bash:\ncd \"$(git rev-parse --show-toplevel)\" && T=$(mktemp -d) && cp scripts/tests/postflight-fake-proxy.js \"$T/\" && env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$T/postflight-fake-proxy.js\" \"$T\" \"$(command -v bash)\" && bash scripts/tests/parity-check.sh && npm run lint\n\nExpected: exit 0, with every worktree case ok on the sh engine (`[worktree] N ok, 0 failed`, wt-serena-yml among them), parity-check passing (epic rail 2) and the role-doc lint passing (settings.qualityGate). If the suite runs past the 10-minute tool cap, run it with run_in_background to a log ending `echo rc=$?`, then poll that log in the foreground (mem:gotcha-qa-full-postflight-sh-runtime-and-summary-cap).\n\nBoth wrappers (DoD): also run the ps1 engine on Windows PS 5.1 for `wt-serena-yml,wt-deny,wt-checkpoint,wt-completion,tooling,project-yml`, using the native-Windows recipe in mem:gotcha-postflight-worktree-mutant-copy:\n- a CRLF run.cmd under C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-f977 with `set \"MOE_WORKTREE_ONLY=<list>\"`;\n- `cd /d <wslpath -w of the worktree>`;\n- `\"C:\\Program Files\\nodejs\\node.exe\" scripts\\tests\\postflight-worktree.cjs ps1 <W>\\scripts\\moe-agent.ps1 <dir>\\fake-proxy.js <dir> powershell`;\n- launch it via `cd /mnt/c && cmd.exe /d /c '<win path>\\run.cmd'`, unsetting the seat's MOE_* identity vars.\nExpected: `[worktree] 6 ok, 0 failed`. Quote it in the summary.\n\nSubmit complete_task verification as { command: the primary line, exitCode: 0, outputTail: the suite summary plus the parity and lint tails }, with the ps1 line and the step-1 RED quote in the summary. DoD: `git status --porcelain` lists only the 3 files outside .moe/.\n\nerror handling:\n- A failing case this task did not touch: re-run it alone with MOE_WORKTREE_ONLY. Tie it to a peer's checkpoint with `git log -- <file>` and disclose it; never edit a peer's file.\n- Wrapper timeouts on a busy box: set MOE_POSTFLIGHT_TIMEOUT_SEC=180.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff of the 3 files as an attacker. Check:\n- Only the exact path .serena/project.yml is new DENY, never .serena/** tracked.\n- Shared-mode denied() and Test-MoeDenyPath are byte-identical.\n- Case folding: key() and Get-MoePathKey lowercase on case-insensitive hosts, and the literal is lowercase.\n- The nested-project roots loop covers both the rel and the bare root.\n- Both comments say why. The ps1 BOM is intact, and parity-check passes.\n- The new case: its premise asserts would catch a WT-06 that stopped copying; the checkpoint and completion asserts would catch the renamed name on the task branch or the target; and it would not pass on the old wrappers (the step-1 RED).\n- The hunks are small next to WT-14's edits to the same files.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 3's primary command if anything changed, then call complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -22,16 +60,83 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:13:15.876Z",
-  "updatedAt": "2026-11-02T21:46:51.272Z",
+  "updatedAt": "2026-11-02T21:51:59.126Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:02:44.261Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-02T21:46:48.237Z"
+    "firstClaimAt": "2026-11-02T21:46:48.237Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T21:51:59.093Z",
+  "executionContract": {
+    "intendedBehavior": "In worktree mode, the wrapper never lands W/.serena/project.yml. That is the copy WT-06 rewrites with project_name <name>@<taskId>, and it is held even when the project tracks the file (git status ' M'). Neither a checkpoint (moe/task/<id>) nor a completion (the target) carries the renamed name. Shared mode is unchanged.",
+    "acceptanceCriteria": [
+      "postflight-worktree.cjs gains a 'wt-serena-yml' case for a project that tracks .serena/project.yml. A checkpoint run and then a completion run each leave the file's committed bytes equal to the tracked original, while W holds the renamed copy as ' M'.",
+      "RED: on the unchanged wrappers, the case fails on its checkpoint assertion (the renamed name landed). The completion summary quotes it.",
+      "The sh worktree suite (all cases), parity-check.sh and npm run lint exit 0. The ps1 engine passes wt-serena-yml, wt-deny, wt-checkpoint, wt-completion, tooling and project-yml."
+    ],
+    "invariants": [
+      "Shared-mode denied() and Test-MoeDenyPath are unchanged (epic rail 4).",
+      "The sh and ps1 twins stay in parity, and moe-agent.ps1 keeps its UTF-8 BOM.",
+      "WT-06's copy itself (worktree_tooling_node and its ps1 twin) is unchanged.",
+      "Tracked files are written only with Edit/Write."
+    ],
+    "compatibility": [
+      "Projects that ignore .serena/ (like this repo) see no change, because untracked .serena/** was already DENY.",
+      "The control-dirt list, which feeds only the diagnostic stray-edit check, now also ignores a control .serena/project.yml edit."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh resolve_attribution worktree-mode denied_wt: adds the exact key '.serena/project.yml' under each root.",
+      "scripts/moe-agent.ps1 Test-MoeDenyPathWorktree: adds the same exact key.",
+      "scripts/tests/postflight-worktree.cjs: new wtSerenaYml case and its registry entry."
+    ],
+    "reuse": [
+      "The existing worktree DENY predicates and the postflight-worktree.cjs fixture helpers (repo, landRun, REVIEW); no new mechanism."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh worktree_tooling_node (about :3328-3389) writes W/.serena/project.yml with project_name <name>@<taskId> on every launch when the control has one.",
+      "scripts/moe-agent.sh denied() (about :4459) holds .serena/** only for xy '??'; denied_wt (about :4523) adds .claude/skills/**; the ps1 twins are Test-MoeDenyPath (about :4112) and Test-MoeDenyPathWorktree (about :6263).",
+      "scripts/tests/postflight-worktree.cjs: repo(), landRun(), REVIEW, mainOf, revOf and the wtDeny/wtCompletion cases (about :687-780)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && T=$(mktemp -d) && cp scripts/tests/postflight-fake-proxy.js \"$T/\" && env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$T/postflight-fake-proxy.js\" \"$T\" \"$(command -v bash)\" && bash scripts/tests/parity-check.sh && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) DENY the exact path in the worktree predicates. Chosen: the governor's suggested route, two lines, and shared mode stays untouched. (b) Hiding the copy from git via skip-worktree or assume-unchanged: rejected. Index flags already caused gate-integrity bugs (task-954ec3f9), and they interact with the sparse checkout and the landing's temp index. (c) Not renaming project_name: rejected. Serena needs a distinct project name per worktree, which is why WT-06 renames it.",
+    "codebaseInsights": "- W is provisioned sparse (/* !/.moe/) from the target. A tracked .serena/project.yml is checked out, and WT-06 overwrites it on every launch.\n- denied() treats .serena/** as DENY only for untracked entries. This repo ignores .serena/, so it never hit the bug.\n- The control-dirt list (worktree_control_dirt / Get-MoeWorktreeControlDirt) reuses the worktree predicate, but only for MOE_WORKTREE_STRAY_EDIT diagnostics.\n- WT-14 (task-befdddf7) is WORKING, and HEAD has no W-removal code, so no WT-14 test and no dependsOn (governor 21:02Z).",
+    "risks": "- WT-14 (WORKING) edits the same three files. Keep the hunks tiny, and do not edit the cases block's last line; a true conflict routes the row back (LANDING-CONFLICT resume).\n- docs/roles/worker.reference.md:88 and the design doc list the worktree DENY extras (.claude/skills/**). WT-18 (task-1b2e6fe3, WORKING) owns the worker doc, so this row does not touch docs.\n- When WT-14 lands, its W-clean check should use the worktree predicate, or a tracked-project.yml W will still look dirty.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-worktree.cjs",
+      "docs/plans/2026-10-30-per-task-worktrees.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "17ff37493f7eba9d9a66278328601c5ab1ba063b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T21:51:59.125Z",
+  "approvedPlanRevision": 1
 }
