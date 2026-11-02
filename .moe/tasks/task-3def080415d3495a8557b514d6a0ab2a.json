@@ -61,30 +61,44 @@
     {
       "stepId": "step-4",
       "description": "Concentrated gate, fresh in an isolated snapshot with both proxy/daemon dists built from that snapshot and native lockfile-matched dependencies (never build globally-linked shared dist): `bash -n scripts/moe-agent.sh && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh`. Use exact command/exitCode/outputTail for completion. Run the same suite using native Windows Node and Git Bash with both PowerShell5.1 and7 key/identity rows executing, not skipped; its existing parser test must pass and separately assert moe-agent.ps1 starts with EF BB BF. No WSL-share todo remains. New WSL hard assertions must fail with the branch removed from either launcher; existing identity/foreign/cap tests remain unchanged and passing. No full unrelated daemon regression: executable JS unchanged, task25ba449a owns its transport/lifecycle gate.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/daemon-json-cap.test.mjs",
         "packages/moe-proxy/src/utils.ts"
       ],
-      "startedAt": "2026-11-02T19:29:05.185Z"
+      "modifiedFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "note": "Exact named gate passed in byte-matched isolated snapshots, with npm ci --prefer-offline + builds in each package/native OS: Linux 23 pass/58 unavailable-PS skips; native Windows Node+GitBash 78 pass/3 existing WSL-only branch skips. PS5.1/PS7 keys, real identities, and parser tests all ran. Both: 0 fail/0 todo, parity PASS. Explicit EFBBBF asserts passed on source and snapshots. Removing Bash WSL branch yields 1 assertion failure; removing PS branch yields 2 (both engines). Windows full gate exposed two fixture issues, fixed within this test file: Python key stdin now binary UTF8 JSON (native redirected stdin was cp1252), and Unicode identity uses WSL UNC as own path because GitBash cygpath must native-resolve own POSIX paths. Strengthened metadata immutability to compare exact PID-substituted fixture bytes. Existing cap/identity assertions unchanged. Linux qualityGate parity+lint also passed.",
+      "startedAt": "2026-11-02T19:29:05.185Z",
+      "completedAt": "2026-11-02T19:34:29.199Z"
     },
     {
       "stepId": "step-5",
       "description": "Final adversarial self-review: test near-host lookalikes, empty distro vs share root, mixed/duplicate separators, '..' at POSIX root, U+00AD/case-distinct tail, /mnt mapping and generic UNC non-regression. Confirm host matching does not case-fold tail or accept Unicode lookalikes, same project no longer refuses but genuinely foreign project still does, original bounded HTTP/error handling and ordinal equality are intact, and no persisted key/lifecycle policy changed. Stay within400 task-owned net lines; fix findings and rerun the named gate before complete_task/QA.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/daemon-json-cap.test.mjs",
         "packages/moe-proxy/src/utils.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/daemon-json-cap.test.mjs",
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "note": "Adversarial self-review complete on scoped diff, +68/-12 (56 net). Pure local normalization adds no shared state/TOCTOU/IO or new cleanup paths. Hard keys cover ASCII mixed hosts, U+017F lookalikes, missing distro vs share root, mixed/duplicate separators, root parents, U+00AD/dotlike tails, POSIX case, /mnt and /MNT; real probes assert one GET and exact unchanged metadata including fixture PID. Ordinal equality, .Equals segments, bounded HTTP/error paths, persisted keys/lifecycle and loop/reload fences remain intact. Final fresh named gate on byte-identical snapshots: Linux 23 pass/58 legitimate unavailable-PS skips; native Windows 78 pass/3 existing WSL-only skips; both 0 fail/0 todo and parity PASS. Both PS parsers executed, EFBBBF preserved, branch-removal mutants killed on Bash and both PS engines. qualityGate parity+lint passed on Linux and Windows. No further findings/source changes.",
+      "startedAt": "2026-11-02T19:34:29.230Z",
+      "completedAt": "2026-11-02T19:36:45.439Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -114,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:16:46.649Z",
-  "updatedAt": "2026-11-02T19:29:05.185Z",
+  "updatedAt": "2026-11-02T19:36:58.433Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:18:25.856Z",
@@ -124,7 +138,7 @@
     "firstClaimAt": "2026-10-30T13:58:37.998Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-eb7de546",
@@ -138,7 +152,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:01:04.508Z",
@@ -161,5 +177,20 @@
   },
   "planApprovedAt": "2026-10-30T14:01:04.532Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T19:26:02.197Z"
+  "workStartedAt": "2026-11-02T19:26:02.197Z",
+  "reviewStartedAt": "2026-11-02T19:36:58.431Z",
+  "verification": {
+    "command": "bash -n scripts/moe-agent.sh && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "Fresh byte-identical isolated snapshots; proxy+daemon built with native lockfile-matched npm ci --prefer-offline dependencies.\nLinux: tests 81; pass 23; fail 0; cancelled 0; skipped 58 (PowerShell unavailable); todo 0; duration_ms 2629.129254; PASS parity-check.sh.\nNative Windows Node + Git Bash: tests 81; pass 78; fail 0; cancelled 0; skipped 3 (existing WSL-only branch); todo 0; duration_ms 42665.5661; PASS parity-check.sh. PowerShell 5.1 and 7 parser/key/identity cases executed, not skipped.\nExplicit UTF8 BOM EFBBBF assertions passed. Separate qualityGate bash scripts/tests/parity-check.sh && npm run lint exited 0 on both OSes. git diff --check clean. Branch-removal mutants caused expected assertions: Bash 1 failure; native PS5.1+PS7 2 failures.",
+    "reportedAt": "2026-11-02T19:36:58.431Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/daemon-json-cap.test.mjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "packages/moe-proxy/src/utils.ts"
+  ],
+  "completionSummary": "Implemented WSL-share identity normalization in both launchers: ASCII-insensitive WSL$/WSL.localhost hosts and ignored nonempty distro map to POSIX remainder, preserving case/Unicode before existing /mnt mapping. Generic paths, bounded HTTP/error handling, ordinal comparisons, lifecycle and persisted keys unchanged. Removed obsolete proxy comment only. Added hard contract/negative keys and six real identities per engine with exact metadata preservation and request-count checks. Four files, +68/-12 (56 net). Fresh isolated Linux/native Windows installs and builds; named gate passed: Linux 23 pass/58 legitimate unavailable-PS skips; native Windows 78 pass/3 existing WSL-only skips, including all PS5.1+PS7 parsers/keys/identity cases. Zero failures/todos. BOM and parity preserved; both native qualityGate runs passed. Branch-removal mutants fail on Bash and both PS engines. Out-of-scope malformed-UNC deviation filed as task-fc31d45081474b03a633bfa1407a4ab1. Handoff and native encoding gotcha saved in Serena. Wrapper owns landing."
 }

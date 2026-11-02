@@ -18,14 +18,15 @@
     {
       "stepId": "step-1",
       "description": "Bind the landed producers, then write the migration cases first (red). DoD 1-5.\n\nRead before editing:\n- WT-S §2.2 (L4-L10), §2.3, §2.6 and §7.3 as landed (6285adf7 or later).\n- This row's comments comment-0e698959 and comment-0fceebde: the migration takes NO lease and sends NO RPC. Also the TASK rail from proposal prop-46a25cec once approved; it pins DoD 3 to that reading.\n- The landed WT-08/WT-09/WT-10/WT-10G code, which is everything the migration reuses:\n  - sync_land_target / Sync-MoeLandTarget (L4) and mirror_land_target / Update-MoeLandTargetMirror (L10).\n  - WT-08's merge-tree call with its NUL-safe output parsing (L5).\n  - The L9 publication: local update-ref CAS, remote `push --porcelain`, and reconcile_push / Resolve-MoePushOutcome.\n  - freeze_candidate / New-MoeFrozenCandidate, and the .moe-free gate `run_frozen_gate worktree` / `Invoke-MoeFrozenGate ... -WorktreeMode` (L6).\n  - The target-checked-out guard, and the raw configured-qualityGate reader.\nIf one of them is missing, or cannot be called without copying its git logic, call moe.request_replan naming the gap. Never write a second landing engine or emulate a prerequisite.\n\nNew scripts/tests/postflight-migration.cjs:\n- One case list for both wrappers, modeled on scripts/tests/postflight-owner-guard.cjs: `node postflight-migration.cjs <sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>`. The fake-proxy argument is unused.\n- A `gate` mode serves as the cases' settings.qualityGate.\n\nEach case's fixture:\n- A fresh repo under a temp dir whose name contains a space, with a bare `origin`.\n- `main` with tracked a.txt, b.txt and .moe/project.json. Settings carry qualityGate = the gate mode and qualityGateScope 'epicFinal', which proves scope is ignored.\n- A source branch `moe/work-mig` with 2 commits, checked out, so main is not checked out.\n- A peer commit on origin's main after the branch point, so B is not the branch base.\n- A fake .moe/daemon.json, as owner-guard writes, so any RPC path reaches the proxy.\n- MOE_PROXY_PATH points at a tripwire proxy the suite writes into its temp dir at runtime. The tripwire appends every request to a log and answers with an error.\n- Runs use --no-start-daemon / -NoStartDaemon, --worker-id worker-mig, MOE_LAND_NET_BACKOFF_SEC=0 and the harness timeout (MOE_POSTFLIGHT_TIMEOUT_SEC).\n\nThe gate mode:\n- Appends `<git rev-parse HEAD^{tree}> <whether ./.moe exists>` to MIG_LOG.\n- MIG_GATE=fail exits 1.\n- MIG_GATE=peer first lands a peer commit on the bare remote's main with plumbing (commit-tree on main's tree, then update-ref with the old value). peer-once does that only on its first run.\n- MIG_GATE=offline renames the bare remote away, so both the push and the reconcile fetch fail.\n\nCases (exact SHAs and parent lists):\n1. clean: exit 0 and MOE_MIGRATION_LANDED naming C.\n   - origin main and local main are both C.\n   - C^{tree} equals the suite's own `git merge-tree --write-tree <B> <tip>`, with B = origin main read just before the run.\n   - `git rev-list --parents -n1 C` is exactly `C B tip`.\n   - The subject is `chore(migration): land moe/work-mig on main`, and the tip is an ancestor of origin main.\n   - Exactly one gate line, whose tree is C^{tree} and with no .moe.\n   - Then a rerun exits 0 with MOE_COMMIT_NOTHING_TO_COMMIT: origin main is still C and no gate line is added.\n   - A local-mode variant (no origin) lands C on local main through the CAS.\n2. no-gate: qualityGate unset gives MOE_MIGRATION_NO_GATE and exit 1. So does a set gate with MOE_DISABLE_QUALITY_GATE=1. In both, refs/remotes/origin/main is unchanged although origin moved, which proves no fetch, and there is no gate line.\n3. bad-args: an unknown branch, and `main`, each give MOE_MIGRATION_BAD_ARGS and exit 2, with no fetch.\n4. conflict: both sides edit the same line of a.txt. MOE_COMMIT_FAILED_CONFLICT naming a.txt, exit 1, zero gate lines.\n5. gate-fail: MOE_COMMIT_FAILED_GATE, exit 1.\n6. contention:\n   - MIG_GATE=peer gives MOE_COMMIT_FAILED_REF_CONTENTION and exit 1 after exactly 2 gate lines, and origin main is the second peer commit.\n   - peer-once gives 2 gate lines, the second on the new tree, then MOE_MIGRATION_LANDED with C's parents [first peer commit, tip].\n7. unknown: MIG_GATE=offline gives MOE_PUSH_OUTCOME_UNKNOWN and exit 1, with no MOE_MIGRATION_LANDED. Local main and refs/remotes/origin/main equal B. After the suite restores the remote, a rerun lands C.\n\nIn every failure case, origin main holds no migration commit, and no main ref contains the tip: local, remote-tracking or origin.\n\nEvery run also asserts:\n- The tripwire log is absent: no lease, claim, join, get_context, evidence, ledger, finalize, chat or deregister RPC.\n- The source branch ref is unchanged.\n- No refs/moe/rescue/* ref and no <gitdir>/moe/receipt journal exist.\n\nWire the suite into scripts/tests/postflight.sh next to the owner-guard invocation, and into scripts/tests/postflight.ps1 next to its owner-guard call, with the same exit-code check. Each harness runs its own engine. Run it now and keep the red baseline: every case fails because the flag does not exist yet.\n\nError handling in this step:\n- The suite removes its temp dirs in finally; MOE_KEEP_MIGRATION_FIXTURE=1 keeps them.\n- A fixture git failure throws with git's stderr.\n- A wrapper run that times out or returns an unexpected exit code fails with that run's output tail, never the full output.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
       ],
       "newFiles": [
         "scripts/tests/postflight-migration.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-02T19:36:54.559Z"
     },
     {
       "stepId": "step-2",
@@ -118,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:35:19.557Z",
-  "updatedAt": "2026-11-02T19:16:17.025Z",
+  "updatedAt": "2026-11-02T19:36:54.559Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:41:12.579Z",
@@ -188,5 +189,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T14:11:57.166Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T19:36:54.559Z"
 }

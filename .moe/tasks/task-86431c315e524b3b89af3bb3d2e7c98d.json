@@ -128,8 +128,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -154,7 +154,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:46:26.699Z",
-  "updatedAt": "2026-11-02T19:30:45.639Z",
+  "updatedAt": "2026-11-02T19:37:22.085Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:59:31.329Z",
@@ -164,7 +164,9 @@
     "firstClaimAt": "2026-11-02T16:01:37.819Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 9,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T19:36:18.385Z",
+    "wallClockMs": 12880566
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
@@ -300,9 +302,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-02T19:13:48Z",
-    "at": "2026-11-02T19:30:06.292Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-02T19:30:10Z",
+    "at": "2026-11-02T19:37:22.085Z"
+  },
+  "completedAt": "2026-11-02T19:36:18.385Z",
+  "reviewCompletedAt": "2026-11-02T19:36:18.385Z",
+  "reviewSummary": "Reviewed completion edb48d05 (moe/work-2026-10-24, pushed; tree 824bff0c = candidate treeSha). Diff +12/-0 over exactly the 9 declared files. Every added line names the env, no existing line changed. Wrappers, postflight*, worktree-landing* and agent-runtime.test.mjs are untouched.\n\nAll 4 checkRefs re-run fresh, byte for byte from the task record (checkRefs[0] = task.verification.command):\n- C2, verification, from an ext4 snapshot of edb48d05: EXIT=0. node --test of the 3 suites: 62 tests, 48 pass, 0 fail, 14 skipped (pwsh legs). mention-provenance.sh PASSED. worktree-e2e 2 ok, 0 failed. wt-guard ok. parity PASS.\n- C3, RED: EXIT=0, \"RED ok: all 4 suites refused without the seam\".\n- C4, PS leg: EXIT=0. mention-provenance.ps1 PASSED with the powershell and the pwsh child. wave1-pilot 27 links. \"PS leg ok: green passed, red refused\". Junctions unlinked; control node_modules intact (65 and 36 entries).\n- C1, from the D: control checkout: EXIT=0. git grep scope OK; parity-check.sh and parity-check.ps1 both PASS. An earlier attempt from an ext4 cwd failed only because powershell.exe cannot open a UNC path (environment, not code).\n\nDoD:\n1. The seam is on the wrapper env only. wave1-pilot gives it to runWrapper alone. I confirmed agent-runtime's fixture PATH has no git, so the guard fails open. The source-only suites only read, slice or ParseFile the wrapper.\n2. and 3. are met: C2 green, C3/C4 red, and the refusal cases live only in the untouched postflight-worktree.cjs.\n4. and 5. are met.\n\nRails: the wrappers and shared mode are unchanged, and the gate passes. Mid-epic, 12 LOC. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
