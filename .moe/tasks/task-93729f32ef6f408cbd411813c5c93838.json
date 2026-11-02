@@ -16,91 +16,57 @@
     {
       "stepId": "step-1",
       "description": "Create moe-jetbrains/src/test/resources/client-accounts.json with the Write tool (global rail: tracked files only through Edit/Write). It must be byte-identical to the architect's oracle output, /mnt/d/moe-scratch/vsc7-architect/client-accounts.json: sha256 e08b58c803980b2474bad79bd427069ebed688fdbf18f90ba6a3ac5c6c1295fc, 36335 bytes, LF, ASCII only with \\u escapes.\n- The oracle is gen.py in the same folder, an independent Python mirror of MoeJson.parseAccountRotation and AccountPresentation.kt at HEAD; fmt.py gives the compact layout.\n- If the folder is gone, regenerate with `cd /mnt/d/moe-scratch/vsc7-architect && python3 -I gen.py raw.json && python3 -I fmt.py raw.json client-accounts.json`. It is deterministic and gives the same sha256.\n- Read the file before writing it, and confirm `sha256sum` of the tracked copy.\nShape: `{ version: 1, now: \"2026-10-20T12:00:00.000Z\", zone: \"UTC\", rows: [...], labels: [...] }`.\n- rows: `{ id C01..C15, note, rotation, selectedId, connected, expectRows, expectChips, expectActions }`. rotation is the daemon's AccountRotationView wire JSON (packages/moe-daemon/src/state/accountStore.ts accountRotationView) or null. expectRows entries are `{ id, position, label, signIn, fiveHour, weekly, status, vmToken }`; expectChips is a list of texts; expectActions holds the 12 AccountActions booleans.\n- labels: `{ id L01..L14, input, valid }`.\n- Every text is `{ \"key\", \"args\" }`, with args JSON strings or integers.\nRow coverage:\n- null rotation C01; empty list C02; unusable file (error chip, no actions) C03;\n- one account C04, C13; several accounts C05, C12, C14;\n- sign-in states subscription, signed_out and other: C05, C15;\n- windows with and without a reset time: C05, C12, C14; the busiest seven_day* window: C05; a window without a percent: C13;\n- the account in use: active C04, active with seats C05, in use C14;\n- switch percent: C14 (switchAtPercent 75; spent comes from the daemon's blockedUntil), plus the switchAt flag in every row;\n- vmToken set, not set and absent: C06, C07, C08 (rows and actions);\n- disconnected C09;\n- selection at the top, middle and bottom: C06, C07, C08; a missing selection C10;\n- no cli C11;\n- more than four subscription chips, a shortened label, floored percents and an other-day time: C12;\n- non-ISO reset text shown as sent: C13;\n- no subscription account: C15.\nLabel coverage: L01-L08 are valid ('', blanks, plain text, 64 chars, 64 chars padded, outer tab/newline trimmed, non-ASCII letters, an interior U+0085). L09-L14 are invalid (65 chars, an interior tab, newline, U+0000, U+001F, U+007F).\nL08 is deliberate. The daemon's rule (packages/moe-daemon/src/accounts/registry.ts CONTROL_CHARS_RE = /[\\u0000-\\u001f\\u007f]/) accepts C1 controls, but JetBrains' isISOControl refuses them. So L08 exposes the JetBrains bug that step 3 fixes.\nDeliberately left out:\n- leading or trailing U+001C..U+001F or U+FEFF, where Kotlin trim and JS trim disagree (mem:decision-client-corpus-conventions);\n- the 32-account add limit, which AccountPresentationTest pins;\n- wrong-kind wire values.\nIf you prove an oracle row wrong against AccountPresentation.kt, fix only that row and say why in the summary.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/test/resources/client-accounts.json"
-      ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/test/resources/client-accounts.json"
-      ],
-      "note": "Wrote client-accounts.json with Write/Edit. cmp-identical to the architect oracle: sha256 e08b58c803980b2474bad79bd427069ebed688fdbf18f90ba6a3ac5c6c1295fc, 36335 bytes, 15 rotation rows (C01..C15), 14 labels (L01..L14). Gotcha: the Write/Edit parameter layer turns a bare é / ü (printable) into raw UTF-8 (control-range \\u0085/\\u0000/\\u001f/\\u007f stay literal), so L07 first landed with raw bytes (8 bytes short, sha a084617c...). Fixed by writing a placeholder `\\ZZZ` then Edit replace_all `\\ZZZ` -> `\\u`, then re-verified with cmp. Peers own the other 28 dirty paths; untouched.",
-      "startedAt": "2026-11-02T10:30:07.616Z",
-      "completedAt": "2026-11-02T10:32:17.948Z"
+      ]
     },
     {
       "stepId": "step-2",
       "description": "Write moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt with the Write tool (package com.moe.toolwindow; JUnit 4 + Gson). Model it on DeliveryCorpusTest.kt: loadCorpus, and per-row failure collection.\nHeader KDoc:\n- one client-neutral corpus; VS Code's VSC-13 (task-065e4812, tests/accounts-corpus.test.cjs) replays the same bytes through moe-vscode/src/util/AccountPresentation.ts, and VSC-15 checks its context keys against expectActions;\n- the CQ-I06b rule: a disagreement is fixed or filed, never given a client-specific expectation.\nIts error handling: a missing or unparseable resource throws an AssertionError naming it. A malformed or throwing row fails that row with a message. Each test ends in one assert that lists every failing id.\nUse now = Instant.parse(corpus.now) and zone = ZoneId.of(corpus.zone).\nTests:\n1. `the corpus is well formed`:\n   - version 1; now and zone parse;\n   - at least 12 rows with unique C[0-9]{2} ids, and at least 8 labels with unique L[0-9]{2} ids;\n   - each row has a non-empty note, rotation null or an object, selectedId a string or null, and connected a boolean;\n   - expectRows is an array of objects with exactly id, position, label, signIn, fiveHour, weekly, status and vmToken;\n   - every text has exactly {key: string, args: array of JSON strings or integral numbers};\n   - expectChips is an array of texts;\n   - expectActions has exactly the 12 AccountActions member names (add, rename, moveUp, moveDown, removeOnly, signIn, signOut, signOutAndRemove, check, switchAt, setVmToken, removeVmToken), each a JSON boolean;\n   - each label row has exactly id, input (string) and valid (boolean).\n2. `every rotation row renders its rows, chips and actions`:\n   - a non-null rotation goes through MoeJson.parseAccountRotation (the ACCOUNTS_UPDATED path in MoeMessageDispatcher) AND through MoeJson.parseState({\"project\":{\"id\":\"proj-corpus\",\"name\":\"corpus\"},\"accountRotation\": rotation}).accountRotation (STATE_SNAPSHOT). Both must be non-null and equal, or the row fails;\n   - compare AccountPresentation.rows(rotation, now, zone), chips(rotation, now, zone) and actions(rotation, selectedId, connected) with the expectations, built as AccountRow/AccountText/AccountActions data classes. A JSON integer arg becomes an Int via BigDecimal(asString).intValueExact(), and a JSON string becomes a String, so 92 and \"92\" never compare equal;\n   - collect `<id>: <which> expected <e>, got <a>` and finish with one assertEquals.\n3. `every label case follows the daemon rule`: AccountPresentation.isValidLabel(input) == valid for every label row, with one assertEquals over the failing ids.\n4. `corpus text keys are exactly the bundle's account presentation keys`:\n   - load messages/MoeBundle.properties through the classloader;\n   - every key the corpus uses has a non-empty value;\n   - the key set equals the bundle's moe.accounts.(signIn|usage|status|chip|vmTokenState).* keys (23 today);\n   - each text's args count equals the number of distinct {n} placeholders in its value;\n   - name missing or unknown keys and bad counts in the message.\nDo not edit AccountPresentationTest.kt, AccountsPanel.kt or any other corpus.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt"
-      ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt"
-      ],
-      "note": "Wrote AccountsCorpusTest.kt (~278 lines, 4 JUnit4 tests: well formed; rows/chips/actions via parseAccountRotation AND parseState which must agree, args compared as Int vs String; labels; bundle key set == 23 account presentation keys with args count == distinct placeholders). Failures are collected per id and asserted once per test. Compilation is verified in step 4's gradle runs (WSL has no JDK).",
-      "startedAt": "2026-11-02T10:33:13.745Z",
-      "completedAt": "2026-11-02T10:34:10.802Z"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "Fix the JetBrains label bug that L08 exposes, in moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt isValidLabel.\n- Replace `label.none { it.isISOControl() }` with `label.none { it < ' ' || it == '\\u007F' }`, the daemon's CONTROL_CHARS_RE /[\\u0000-\\u001f\\u007f]/. The rename and add dialogs then stop refusing a C1 control (U+0080..U+009F) that the daemon accepts.\n- Update its KDoc: it mirrors registry.ts normalizeLabel (trim, at most 64 UTF-16 chars, no U+0000..U+001F or U+007F). Kotlin's trim also strips U+001C..U+001F at the ends, where the daemon's JS trim does not; that is a known, unpinned divergence.\n- Change nothing else. AccountPresentationTest's `labels follow the daemon rule` cases keep their verdicts.\nError handling: isValidLabel stays total and throws for no input.\nName the fix in the summary: \"JetBrains bug fixed: isValidLabel refused C1 control characters the daemon accepts (corpus L08)\".",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
-      ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
-      ],
-      "note": "isValidLabel: `label.none { it.isISOControl() }` -> `label.none { it < ' ' || it == '\\u007F' }` (daemon CONTROL_CHARS_RE), KDoc updated (normalizeLabel mirror, C1 accepted, known trim divergence). git diff shows only that hunk. JetBrains bug fixed: isValidLabel refused C1 control characters the daemon accepts (corpus L08).",
-      "startedAt": "2026-11-02T10:34:11.675Z",
-      "completedAt": "2026-11-02T10:34:22.729Z"
+      ]
     },
     {
       "stepId": "step-4",
       "description": "Gate under the jetbrains-gradle lease in snapshots, never in the shared tree (mem:convention-jetbrains-gradle-lease, mem:gotcha-jetbrains-snapshot-gradle-test, mem:gotcha-jetbrains-gradle-from-wsl: from bash, single-quote the whole cmd string and pass --tests unquoted).\n- Lease: moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId, note}. If it is busy, call moe.report_blocked {resourceId:\"jetbrains-gradle\"}. Hold it only around the gradle runs, and release it even on failure.\n- Run everything from the repo root.\n1) Red: build the snapshot as the checkRef does, but copy only the two new files and keep HEAD's AccountPresentation.kt. Run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc7-gate\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.AccountsCorpusTest --rerun'`. It must FAIL in the labels test, naming exactly L08, while the other three tests pass.\n2) Green: copy the fixed AccountPresentation.kt into that snapshot and rerun. All 4 tests pass.\n3) Mutant, in that snapshot copy only: `sed -i 's/selected && index > 0,/selected \\&\\& index >= 0,/' /mnt/d/moe-scratch/vsc7-gate/moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt`. The architect dry-ran it: one replacement; confirm with diff. The focused run must FAIL, naming C04, C06, C11 and C13 and no other row.\n4) Run the checkRef verbatim (a clean snapshot with the fixed file, full suite). Confirm BUILD SUCCESSFUL and that :test executed. Then cmp the three copied files with the shared tree, and sum the JUnit totals from TEST-*.xml for the summary.\nError handling for a red run:\n- A red row other than L08 before the fix means the oracle and the code disagree: re-derive it from AccountPresentation.kt.\n- Change AccountPresentation.kt beyond step 3 only for another genuine bug, named in the summary.\n- \"Could not receive a message from the daemon\" is mem:gotcha-jetbrains-gradle-client-oom: rerun.\n- A failure tied to a peer's wip checkpoint follows mem:gotcha-snapshot-gate-peer-wip-checkpoint.\n- Never stop Gradle daemons or kill processes by name.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "moe-jetbrains/src/test/resources/client-accounts.json",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
-      ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/test/resources/client-accounts.json",
-        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
-        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
-      ],
-      "note": "Gate in /mnt/d/moe-scratch/vsc7-gate under the jetbrains-gradle lease (released). Red (HEAD~ AccountPresentation, 2 new files): AccountsCorpusTest 4 run, 1 failed = labels, message names exactly L08 (isValidLabel(\"a\\u0085b\") expected true, got false); other 3 pass. Green (fixed file): 4/4 pass. Mutant (sed selected && index > 0 -> index >= 0 in the snapshot copy only, diff confirmed one line, line 205): fails exactly C04, C06, C11, C13. checkRef verbatim (clean snapshot, 3 files, gradlew.bat test --rerun): BUILD SUCCESSFUL in 45s, :test executed; 34 suites, 557 tests, 0 failures, 0 errors, 0 skipped; AccountsCorpusTest 4/4, AccountPresentationTest 19/19. cmp: the 3 files are byte-identical to the shared tree. The files were already in checkpoint 7df999be, so git archive HEAD carried them; red used `git show 7df999be^:` for the pre-fix AccountPresentation.kt. No process killed, no gradle in the shared checkout.",
-      "startedAt": "2026-11-02T10:34:23.865Z",
-      "completedAt": "2026-11-02T10:47:54.361Z"
+      ]
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff, the only review step.\n- Would the test still pass if:\n  - the weekly column took the first seven_day window instead of the busiest (C05);\n  - percents were rounded instead of floored (C12's 89.6);\n  - chips counted non-subscription accounts (C05, C12, C15);\n  - +N more counted all accounts (C12);\n  - spent did not win over active (C13);\n  - times ignored the zone or the day (C12, C13);\n  - check did not need the cli (C11);\n  - the VM token actions treated an absent flag as false (C08)?\n- Does the args type check really separate an Int from a String?\n- Is every DoD case mapped to a named row (step 1's coverage list)?\n- Is the corpus plain JSON with \\u escapes, so VSC-13 replays it unchanged?\n- Does the step 3 fix leave AccountPresentationTest green, and is it named in the summary?\n- Run `git status --porcelain -- moe-jetbrains` and confirm the task touched only the two new files and AccountPresentation.kt.\n- Peers own every other dirty path: never revert, stage or commit them.\n- Report all three files in complete_step.modifiedFiles. Deleting /mnt/d/moe-scratch/vsc7-gate afterwards is fine; leave vsc7-architect for QA's audit.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "moe-jetbrains/src/test/resources/client-accounts.json",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
-      ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/test/resources/client-accounts.json",
-        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
-        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
-      ],
-      "note": "Adversarial self-review. Ran the plan's mutants against the gate snapshot's AccountPresentation.kt (lease re-held, restored after, snapshot since deleted): all KILLED, each by the row the plan named. M1 weekly=first seven_day: C05. M2 round not floor: C05,C12. M3 chips count non-subscription: C05,C12,C15. M4 +N more counts all accounts: C05,C12. M5a/M5b active beats spent (status/chip): C13. M6a time always HH:mm: C12,C13. M6b always MM-dd HH:mm: C05,C14. M6c ignore passed zone (hard-coded Tokyo): C05,C12,C13,C14. M7 check without cli: C11. M8 absent vmToken as false: C08. Plus the step-4 move-up mutant: C04,C06,C11,C13, and HEAD's isValidLabel: L08 only. Args type check: arg() maps a JSON string to String and an integer to Int, the data-class List equals is element-wise, so 92 vs \"92\" fails (M2 shows percents are asserted as Int). Corpus is ASCII only (0 non-ASCII bytes), \\u escapes, sha256 e08b58c8...95fc; rows C01..C15, labels L01..L14, version 1, now 2026-10-20T12:00:00.000Z, zone UTC. Known limits, left as is on purpose: zone is only UTC in the corpus, so a mutant hard-coding UTC is equivalent by contract; edge whitespace (U+001C..U+001F, U+FEFF trim divergence Kotlin vs JS) and the 32-account limit stay unpinned (AccountPresentationTest pins the limit). Concurrency/IO: the test is pure and read-only; the only prod change is a pure predicate. Scope: the task touched exactly the 2 new files + AccountPresentation.kt (git status shows none of the three dirty; they are in checkpoint 7df999be, byte-identical to the gate snapshot per cmp). Peers own all other dirty paths; untouched.",
-      "startedAt": "2026-11-02T10:47:56.151Z",
-      "completedAt": "2026-11-02T10:49:53.662Z"
+      ]
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Rejected for size only; substance is sound. Landed bytes net +682/-2 over 3 files, above the 400-line QA cap, and no rail waives size for this row (epic's only exception is VSC-6).\n\nnumstat 7df999be^..7df999be, moe-jetbrains/, board json excluded: client-accounts.json +397; AccountsCorpusTest.kt +278; AccountPresentation.kt +7/-2.\n\nVerified green: checkRef re-run in a fresh git-archive snapshot at HEAD e71520cd under jetbrains-gradle (released): BUILD SUCCESSFUL 53s, 34 suites, 557 tests, 0 failures/errors/skips, AccountsCorpusTest 4/4, AccountPresentationTest 19/19. The 3 files are cmp-identical; corpus sha256 e08b58c8...95fc equals the oracle. Test logic (per-id failure collection, both MoeJson paths, Int-vs-String args, bundle key set) and the isValidLabel fix (daemon CONTROL_CHARS_RE) are correct; scope matches the plan.\n\nTo approve, change no byte of the substance. Pick one:\n(a) Preferred (VSC-6 precedent): file an EPIC ADD_RAIL waiver, under 1000 chars, naming 7df999be (checkpoint with the 3 files) and completion d13c97f5, the 3 files with the numstat above, the cap, and \"waives size only; grow only by QA-required fixes\". Ping #governors with the proposal id. Then a no-byte round: report only the board json per step, fresh evidence plus the plan's mutants on snapshot copies, and re-read the proposal file just before complete_task. I approve once it is APPROVED, after one more fresh gate.\n(b) If the human rejects the waiver, split review scope, not bytes: slice 1 = client-accounts.json alone (397 net); slice 2 = AccountsCorpusTest.kt plus the AccountPresentation.kt hunk (283 net). Make VSC-13 (task-065e4812) and VSC-15 (task-357ed3ae) depend on both. Do not re-land or revert.\n\nTrimming the corpus in place to 400 total would break the plan's coverage (15 rows and 14 labels vs the DoD floor of 12 and 8); not recommended.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -108,28 +74,23 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:54.745Z",
-  "updatedAt": "2026-11-02T10:51:22.523Z",
+  "updatedAt": "2026-11-02T10:55:35.217Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:20:12.809Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-93e0e956",
-    "worker-13a877ad"
+    "qa-564d8bce"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
-  "model": "claude-sonnet-5-5",
-  "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [
-    "step-1",
-    "step-2",
-    "step-3",
-    "step-4",
-    "step-5"
-  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T10:28:12.892Z",
   "executionContract": {
@@ -218,12 +179,32 @@
       "treeId": "19c29334eb6410a35971715950fbea10e56ed5e7",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "d13c97f58deb95cd2beaca796d1cd25bff2e6aab",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T10:45:03Z",
+      "paths": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T10:51:42.808Z",
+      "treeId": "85bdbc70bea262a5627f82ba6f098aab41e378d0",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "moe-jetbrains/src/test/resources/client-accounts.json",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt",
+    ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+    ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
   ],
   "touchedFiles": [
     "moe-jetbrains/src/test/resources/client-accounts.json",
@@ -233,9 +214,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-13a877ad@2026-11-02T10:29:37Z",
-    "at": "2026-11-02T10:35:32.625Z"
+    "kind": "completion",
+    "sessionId": "worker-13a877ad@2026-11-02T10:45:03Z",
+    "at": "2026-11-02T10:51:42.808Z"
   },
   "blockedOnTaskIds": null,
   "reviewStartedAt": "2026-11-02T10:51:22.521Z",
@@ -246,5 +227,29 @@
     "reportedAt": "2026-11-02T10:51:22.521Z",
     "source": "agent-reported"
   },
-  "completionSummary": "VSC-7 delivered. New moe-jetbrains/src/test/resources/client-accounts.json (sha256 e08b58c8...95fc, 36335 bytes, byte-identical to the architect oracle; version 1, now 2026-10-20T12:00:00.000Z, zone UTC, 15 rotation rows C01..C15, 14 label rows L01..L14, ASCII with \\u escapes) and new AccountsCorpusTest.kt (4 JUnit4 tests: corpus well formed; rows/chips/actions through MoeJson.parseAccountRotation AND parseState which must agree, args compared as Int vs String, all failing ids reported at once; labels; corpus key set == the 23 MoeBundle account presentation keys with arg counts == placeholders). JetBrains bug fixed: isValidLabel refused C1 control characters the daemon accepts (corpus L08); AccountPresentation.isValidLabel now `label.none { it < ' ' || it == '\\u007F' }` (daemon CONTROL_CHARS_RE) with KDoc updated; nothing else changed in that file. Evidence (Windows gradlew.bat in a git-archive snapshot under the jetbrains-gradle lease, released each time): red with the pre-fix AccountPresentation fails exactly L08 (other 3 tests pass); green 4/4; move-up mutant (index > 0 -> >= 0 in the snapshot copy) fails exactly C04, C06, C11, C13; 11 self-review mutants (weekly first window, round vs floor, chips count non-subscription, +N more counts all, active beats spent in status and chip, time always HH:mm / always MM-dd, ignore zone, check without cli, absent vmToken as false) all killed by the rows the plan named. Full suite, checkRef verbatim, fresh at HEAD 96e0d7c2: BUILD SUCCESSFUL in 44s, 34 suites, 557 tests, 0 failures, 0 errors, 0 skipped; AccountsCorpusTest 4/4, AccountPresentationTest 19/19. The 3 files are cmp-identical to the shared tree; diff is only the two new files + AccountPresentation.kt. Known unpinned by design: zone is UTC only; U+001C..U+001F/U+FEFF edge trim divergence Kotlin vs JS; 32-account limit (AccountPresentationTest). Consumers VSC-13/VSC-15 replay the same bytes."
+  "completionSummary": "VSC-7 delivered. New moe-jetbrains/src/test/resources/client-accounts.json (sha256 e08b58c8...95fc, 36335 bytes, byte-identical to the architect oracle; version 1, now 2026-10-20T12:00:00.000Z, zone UTC, 15 rotation rows C01..C15, 14 label rows L01..L14, ASCII with \\u escapes) and new AccountsCorpusTest.kt (4 JUnit4 tests: corpus well formed; rows/chips/actions through MoeJson.parseAccountRotation AND parseState which must agree, args compared as Int vs String, all failing ids reported at once; labels; corpus key set == the 23 MoeBundle account presentation keys with arg counts == placeholders). JetBrains bug fixed: isValidLabel refused C1 control characters the daemon accepts (corpus L08); AccountPresentation.isValidLabel now `label.none { it < ' ' || it == '\\u007F' }` (daemon CONTROL_CHARS_RE) with KDoc updated; nothing else changed in that file. Evidence (Windows gradlew.bat in a git-archive snapshot under the jetbrains-gradle lease, released each time): red with the pre-fix AccountPresentation fails exactly L08 (other 3 tests pass); green 4/4; move-up mutant (index > 0 -> >= 0 in the snapshot copy) fails exactly C04, C06, C11, C13; 11 self-review mutants (weekly first window, round vs floor, chips count non-subscription, +N more counts all, active beats spent in status and chip, time always HH:mm / always MM-dd, ignore zone, check without cli, absent vmToken as false) all killed by the rows the plan named. Full suite, checkRef verbatim, fresh at HEAD 96e0d7c2: BUILD SUCCESSFUL in 44s, 34 suites, 557 tests, 0 failures, 0 errors, 0 skipped; AccountsCorpusTest 4/4, AccountPresentationTest 19/19. The 3 files are cmp-identical to the shared tree; diff is only the two new files + AccountPresentation.kt. Known unpinned by design: zone is UTC only; U+001C..U+001F/U+FEFF edge trim divergence Kotlin vs JS; 32-account limit (AccountPresentationTest). Consumers VSC-13/VSC-15 replay the same bytes.",
+  "reviewCompletedAt": "2026-11-02T10:55:05.355Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "description": "Oversized diff: 682 net added lines (client-accounts.json +397, AccountsCorpusTest.kt +278, AccountPresentation.kt net 5) exceeds the 400-line QA cap; no epic/project rail waives size for this row (only VSC-6). Route: EPIC ADD_RAIL waiver naming 7df999be/d13c97f5 and the 3 files with numstat, then a no-byte round; fallback: split review scope into corpus json (397) and test+fix (283). No behaviour or test defect found.",
+        "file": "moe-jetbrains/src/test/resources/client-accounts.json"
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Rejected for size only; substance is sound. Landed bytes net +682/-2 over 3 files, above the 400-line QA cap, and no rail waives size for this row (epic's only exception is VSC-6).\n\nnumstat 7df999be^..7df999be, moe-jetbrains/, board json excluded: client-accounts.json +397; AccountsCorpusTest.kt +278; AccountPresentation.kt +7/-2.\n\nVerified green: checkRef re-run in a fresh git-archive snapshot at HEAD e71520cd under jetbrains-gradle (released): BUILD SUCCESSFUL 53s, 34 suites, 557 tests, 0 failures/errors/skips, AccountsCorpusTest 4/4, AccountPresentationTest 19/19. The 3 files are cmp-identical; corpus sha256 e08b58c8...95fc equals the oracle. Test logic (per-id failure collection, both MoeJson paths, Int-vs-String args, bundle key set) and the isValidLabel fix (daemon CONTROL_CHARS_RE) are correct; scope matches the plan.\n\nTo approve, change no byte of the substance. Pick one:\n(a) Preferred (VSC-6 precedent): file an EPIC ADD_RAIL waiver, under 1000 chars, naming 7df999be (checkpoint with the 3 files) and completion d13c97f5, the 3 files with the numstat above, the cap, and \"waives size only; grow only by QA-required fixes\". Ping #governors with the proposal id. Then a no-byte round: report only the board json per step, fresh evidence plus the plan's mutants on snapshot copies, and re-read the proposal file just before complete_task. I approve once it is APPROVED, after one more fresh gate.\n(b) If the human rejects the waiver, split review scope, not bytes: slice 1 = client-accounts.json alone (397 net); slice 2 = AccountsCorpusTest.kt plus the AccountPresentation.kt hunk (283 net). Make VSC-13 (task-065e4812) and VSC-15 (task-357ed3ae) depend on both. Do not re-land or revert.\n\nTrimming the corpus in place to 400 total would break the plan's coverage (15 rows and 14 labels vs the DoD floor of 12 and 8); not recommended.",
+      "rejectedAt": "2026-11-02T10:55:05.355Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "description": "Oversized diff: 682 net added lines (client-accounts.json +397, AccountsCorpusTest.kt +278, AccountPresentation.kt net 5) exceeds the 400-line QA cap; no epic/project rail waives size for this row (only VSC-6). Route: EPIC ADD_RAIL waiver naming 7df999be/d13c97f5 and the 3 files with numstat, then a no-byte round; fallback: split review scope into corpus json (397) and test+fix (283). No behaviour or test defect found.",
+          "file": "moe-jetbrains/src/test/resources/client-accounts.json"
+        }
+      ]
+    }
+  ]
 }
