@@ -92,9 +92,19 @@
     {
       "stepId": "step-7",
       "description": "Adversarial self-review: one pass over the whole diff, before complete_task.\n(a) Can any path load bytes that were not verified? Grep every exec/`&` hand-over; the copy must be written and verified before parse, sidecar stop and deregister.\n(b) Thrash: launch hash == hash of the loaded bytes. A clean checkout never re-reloads, and Phase A shows exactly one restart.\n(c) Deletion safety: only moe-wrapper-pin.* folders the wrapper created. The sh self-delete is rm -f + rmdir. A stale exported MOE_WRAPPER_SOURCE with a normal launch path is ignored and unset. A relative launch path still yields an absolute MOE_WRAPPER_PATH.\n(d) No new failure ends or deregisters a seat (set -e, PS try/catch). Messages and parity literals are unchanged; parity-check stays green without list edits.\n(e) Compat: a pre-fix ps1 supervisor gets no copy and no leak, and marker-less bytes reload from the checkout. Grep moe-agent.ps1 for $PSScriptRoot: only the MoeScriptRoot fallback may remain. Grep moe-agent.sh for BASH_SOURCE: only the top hand-over and the loaded-hash/self-delete may remain.\n(f) Concurrency: two seats reloading at once get distinct mktemp/GUID folders. A write landing during cp is caught by the blob check.\n(g) Windows: BOM preserved, TEMP with spaces or 8.3 names, WriteAllBytes leaves no Zone.Identifier.\nFix anything found, rerun the step-6 command, then complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-02T22:21:58.361Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/CLAUDE.md"
+      ],
+      "note": "I reviewed the whole diff (0d8422ce..HEAD on the 6 paths) against checklist (a)-(g). I found no defects and changed no code in this step. The 6 files are byte-identical (cmp) to the step-6 gate snapshot /mnt/d/moe-scratch/v-69c02444.x2uOsC, so gate-69c02444.205923 (exit 0) still applies and was not rerun.\n\n(a) Both hand-overs load only verified bytes. The sh `exec \"$BASH\" <pin>` and the ps1 `& $global:MoeWrapperReloadPin` run only after three things: the copy is written, `git hash-object --path=<leaf>` equals `rev-parse HEAD:./<leaf>`, and bash -n / ParseFile accepts the copy. All of this happens before the sidecar stops and before deregister. A mismatch refuses with the unchanged message and drops the pin.\n(b) The launch hash is taken from BASH_SOURCE / $PSCommandPath, which is the loaded bytes. Phase A shows one restart (crcccrcccrccc).\n(c) Only moe-wrapper-pin.* folders this wrapper made are deleted, non-recursively (sh: rm -f, then rmdir). A stale MOE_WRAPPER_SOURCE with a normal launch path is ignored and unset. A relative launch path still gives an absolute MOE_WRAPPER_PATH.\n(d) No new exit or deregister path. parity-check is green and messages are unchanged.\n(e) A pre-fix ps1 supervisor gets no copy. Bytes without the marker reload from the checkout. On the merged tree, $PSScriptRoot appears only at the MoeScriptRoot fallback (line 120), and BASH_SOURCE only at line 20 and lines 8832-8838.\n(f) Each seat gets its own mktemp/GUID folder. A write that lands during the copy is caught by the blob check.\n(g) The BOM is kept. Probe /mnt/d/moe-scratch/p69-probe.GFakm7 ran on PS 5.1 and pwsh 7 with TEMP set to 't ëmp' and to 'tmp [x]'. Pin rc=0, `&` ran the copy (exit 7 propagated), and Remove cleared the folder and ReloadPin. WriteAllBytes leaves only the :$DATA stream (Zone.Identifier count 0).\n\nTheoretical risks, not fixed:\n- AppLocker/SRP, or a pin deleted from outside, stops the seat with 'relaunch it by hand'; falling back to the checkout path would break the invariant.\n- The refused-hash key is the loop-top hash, which is harmless.\n- The grep marker could survive an edit that drops the hand-over.\n- First passes without a pin still hash the checkout after the parse (this predates the task).\n- A relative TMPDIR would be pathological.\n- drvfs/MSYS unlink is best-effort; a failure leaks one copy.\n- Native bash 3.2 was not run.\n\nThe target moved to 863629c8. git merge-tree onto it exits 0 (tree 4cff99f5), and the merged sh passes bash -n.",
+      "startedAt": "2026-11-02T22:21:58.361Z",
+      "completedAt": "2026-11-02T22:32:29.082Z"
     }
   ],
   "planRevision": 1,
@@ -143,7 +153,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T22:21:58.361Z",
+  "updatedAt": "2026-11-02T22:32:29.082Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",
@@ -153,7 +163,7 @@
     "firstClaimAt": "2026-10-30T13:39:36.046Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 7
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -172,7 +182,8 @@
     "step-3",
     "step-4",
     "step-5",
-    "step-6"
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:05:08.343Z",
