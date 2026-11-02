@@ -1,8 +1,7 @@
 'use strict';
 
-// VSC-21a: SeatSurvival remembers each launched seat's shell pid so a window reload or an extension restart never
-// deregisters a seat whose terminal is still alive. It stays pure (every dependency is a parameter): any require from
-// it throws here. Every stub records its call before it acts, so an assertion on the log can never be vacuous.
+// VSC-21a: SeatSurvival remembers each seat's shell pid so a reload or extension restart never deregisters a live seat.
+// It stays pure, so any require from it throws here. Every stub records its call before it acts (no vacuous log check).
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -65,15 +64,11 @@ test('S2a: isProcessAlive probes a positive safe-integer pid with signal 0 and r
         ['a thrown undefined', throwing(undefined), false],
         ['a thrown number', throwing(1), false],
     ]) {
-        const stub = killStub(behavior);
-        assert.equal(S.isProcessAlive(4242, stub.kill), expected, label);
-        assert.deepEqual(stub.calls, [[4242, 0]], label);
-    }
-
-    for (const edge of [1, Number.MAX_SAFE_INTEGER]) {
-        const stub = killStub();
-        assert.equal(S.isProcessAlive(edge, stub.kill), true);
-        assert.deepEqual(stub.calls, [[edge, 0]]);
+        for (const pid of [4242, 1, Number.MAX_SAFE_INTEGER]) {
+            const stub = killStub(behavior);
+            assert.equal(S.isProcessAlive(pid, stub.kill), expected, `${label}, pid ${pid}`);
+            assert.deepEqual(stub.calls, [[pid, 0]], `${label}, pid ${pid}`);
+        }
     }
 });
 
@@ -93,11 +88,10 @@ test('S2c: the default probe is a real signal 0: alive for this process, dead fo
     assert.equal(exited.status, 0);
     assert.equal(Number.isSafeInteger(exited.pid) && exited.pid > 0, true);
     assert.equal(S.isProcessAlive(exited.pid), false, 'ESRCH from the real kill');
-    // Passed straight into surviving, which hands it the pid alone.
     const run = seats();
     run.pids.record('live', process.pid);
     run.pids.record('gone', exited.pid);
-    assert.deepEqual(run.pids.surviving(['gone', 'live'], S.isProcessAlive), ['live']);
+    assert.deepEqual(run.pids.surviving(['gone', 'live'], S.isProcessAlive), ['live'], 'passed straight in, it gets the pid alone');
 });
 
 test('S3a: SeatPids loads nothing from anything but a plain object, and construction never saves', () => {
@@ -130,8 +124,7 @@ test('S3c: load applies one worker per pid, so a pid stored twice belongs to the
 });
 
 test('S3d: prototype-named worker ids are plain data', () => {
-    const stored = JSON.parse('{"constructor": 21, "hasOwnProperty": 22}');
-    const run = seats(stored);
+    const run = seats(JSON.parse('{"constructor": 21, "hasOwnProperty": 22}'));
     assert.equal(run.pids.seatOf(21), 'constructor');
     assert.equal(run.pids.seatOf(22), 'hasOwnProperty');
     // An object keyed by worker id would answer these from its prototype.
@@ -160,10 +153,7 @@ test('S4a: record saves the whole map once, and the same pair again saves nothin
     assert.equal(run.saves.length, 1, 'an unchanged pair saved again');
     run.pids.record('w2', 12);
     assert.deepEqual(run.saves, [{ w1: 11 }, { w1: 11, w2: 12 }]);
-    assert.equal(run.pids.seatOf(11), 'w1');
-    assert.equal(run.pids.seatOf(12), 'w2');
-    assert.equal(run.pids.seatOf(undefined), undefined);
-    assert.equal(run.pids.seatOf(13), undefined);
+    for (const [pid, seat] of [[11, 'w1'], [12, 'w2'], [undefined, undefined], [13, undefined]]) assert.equal(run.pids.seatOf(pid), seat, `pid ${pid}`);
 });
 
 test('S4b: an invalid pid or worker id records nothing, saves nothing and displaces nothing', () => {
@@ -208,9 +198,7 @@ test('S4d: every save is a fresh object that SeatPids never reads back', () => {
     run.saves[1].w1 = 999;
     run.saves[1].w9 = 9;
     delete run.saves[1].w2;
-    assert.equal(run.pids.seatOf(11), 'w1');
-    assert.equal(run.pids.seatOf(12), 'w2');
-    assert.equal(run.pids.seatOf(999), undefined);
+    for (const [pid, seat] of [[11, 'w1'], [12, 'w2'], [999, undefined]]) assert.equal(run.pids.seatOf(pid), seat, `pid ${pid}`);
     run.pids.record('w3', 13);
     assert.deepEqual(run.saves[2], { w1: 11, w2: 12, w3: 13 });
     const stored = { w1: 11 };
@@ -229,9 +217,7 @@ test('S5a: keep drops every worker not listed, with exactly one save, and saves 
     run.pids.keep(['w1']);
     assert.equal(run.saves.length, 4, 'exactly one save');
     assert.deepEqual(run.saves[3], { w1: 11 });
-    assert.equal(run.pids.seatOf(12), undefined);
-    assert.equal(run.pids.seatOf(13), undefined);
-    assert.equal(run.pids.seatOf(11), 'w1');
+    for (const [pid, seat] of [[12, undefined], [13, undefined], [11, 'w1']]) assert.equal(run.pids.seatOf(pid), seat, `pid ${pid}`);
 
     run.pids.keep(['w1']);
     run.pids.keep(['w1', 'w2', 'constructor']);
@@ -265,8 +251,7 @@ test('S6a: surviving returns the confirmed ids in the order given and once each,
     const run = seats({ w1: 11, w2: 12 });
     const probe = aliveTable({ 11: true, 12: false });
     assert.deepEqual(run.pids.surviving(['w2', 'w1', 'w3', 'w1'], probe.isAlive), ['w1']);
-    // w3 has no pid and the second w1 is a duplicate: neither reaches isAlive. One argument each, so a
-    // function passed straight in never receives a second one.
+    // Neither w3 (no pid) nor the second w1 (a duplicate) is probed, and each probe gets the pid alone.
     assert.deepEqual(probe.calls, [[12], [11]]);
     assert.deepEqual(run.saves, [], 'surviving is read-only');
 });

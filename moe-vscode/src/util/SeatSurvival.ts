@@ -1,20 +1,11 @@
 /**
- * Which launched worker seats still have a live shell, so a restart of this window never deregisters a seat that is
- * still working (VSC-21a). Pure: no import and no runtime dependency except the process global behind isProcessAlive's
- * default probe, so a test loads it with a module loader that throws on every name.
- *
- * Why it exists: the editor's terminals outlive the extension session that launched them. A window reload keeps
- * persistent terminal sessions running, and "Restart Extensions" after an update restarts only the extension host.
- * AgentSeatTracker counts every saved seat as gone at startup and deregisters it at the first connect, which is right
- * where tabs die with the IDE and wrong here: the daemon would release tasks their agents are still working on.
- * So each seat's shell pid (the editor's Terminal.processId) is remembered, and at activation, before the first
- * connect, every saved seat whose shell is still alive is marked launched() again.
- *
- * Note for the wiring: a recycled pid can make a dead seat look alive. That only delays its deregistration, which is
- * the safe direction.
- *
- * Errors from load and save propagate unchanged: the callbacks the extension injects own their catching. Nothing else
- * here throws.
+ * Which launched seats still have a live shell (VSC-21a). The editor's terminals outlive the extension session that
+ * launched them: a window reload keeps persistent terminal sessions, and "Restart Extensions" restarts only the
+ * extension host. AgentSeatTracker deregisters every saved seat at the first connect, so the daemon would release
+ * tasks their agents still work on. So each seat's shell pid (the editor's Terminal.processId) is remembered, and
+ * at activation, before the first connect, every saved seat whose shell is still alive is marked launched() again.
+ * Note for the wiring: a recycled pid can make a dead seat look alive, which only delays its deregistration (safe).
+ * Pure, no import. Errors from the injected load, save and isAlive propagate unchanged: their owners catch them.
  */
 
 /** A real pid: a positive safe integer. Anything else is never probed, because kill(0) and kill(-n) address process groups. */
@@ -22,12 +13,7 @@ function isPid(value: unknown): value is number {
     return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
-/**
- * Probes a pid with signal 0 (it delivers nothing, it only checks that the process exists).
- * - Alive when the probe returns, or throws EPERM: the process exists but belongs to another user.
- * - Dead on ESRCH, on any other throw (whatever was thrown), and for any pid that is not a positive safe integer,
- *   which is never probed.
- */
+/** Signal-0 probe (delivers nothing): alive when it returns or throws EPERM (another user's process), else dead. */
 export function isProcessAlive(
     pid: unknown,
     kill: (pid: number, signal: number) => unknown = (p, s) => process.kill(p, s)
@@ -41,11 +27,7 @@ export function isProcessAlive(
     }
 }
 
-/**
- * The shell pid of each launched seat, persisted through the injected load and save. One worker holds a pid and one
- * pid belongs to a worker, after every operation and after load. A Map keeps worker ids plain data: an object keyed
- * by worker id would answer 'constructor' or 'toString' from its prototype.
- */
+/** Each launched seat's shell pid, one per worker and one worker per pid; a Map keeps ids like 'constructor' plain. */
 export class SeatPids {
     private readonly pids = new Map<string, number>();
 
@@ -75,11 +57,7 @@ export class SeatPids {
         this.save(Object.fromEntries(this.pids));
     }
 
-    /**
-     * Remembers the shell pid of a launched seat; a terminal's processId resolves to undefined until its shell starts.
-     * A blank or non-string worker id and an invalid pid record nothing. A pid another worker held moves to this one, and
-     * the worker's own previous pid is replaced. Saves only when the map changed.
-     */
+    /** Remembers a seat's shell pid (processId is undefined until the shell starts). Bad input is ignored; saves on change. */
     record(workerId: string, pid: number | undefined): void {
         if (this.assign(workerId, pid)) this.persist();
     }
@@ -105,9 +83,8 @@ export class SeatPids {
     }
 
     /**
-     * The given worker ids whose recorded pid `isAlive` confirms with true, in the order given and once each.
-     * A non-array gives []. A non-string id and an id without a recorded pid are skipped without probing, and a
-     * duplicate is probed once. isAlive receives the pid alone, so isProcessAlive can be passed as it is.
+     * The given ids whose recorded pid isAlive confirms with true, in order and once each; a non-array gives [].
+     * Unrecorded ids are never probed, and isAlive gets the pid alone, so isProcessAlive can be passed as it is.
      */
     surviving(workerIds: unknown, isAlive: (pid: number) => boolean): string[] {
         if (!Array.isArray(workerIds)) return [];
