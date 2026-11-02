@@ -57,12 +57,18 @@
     {
       "stepId": "step-4",
       "description": "Final adversarial self-review, one pass, scoped to this task's own diff. The epic is a standing bug bucket, so there is no whole-epic sweep.\n\nRuntime diff:\n- `git diff -- scripts/moe-agent.ps1` shows only the one token plus the comment.\n- 76ae5c47's encoding try/finally is intact.\n- The BOM is intact (first bytes ef bb bf), and line endings are still LF.\n\nTwin check (parity-check does not cover it):\n- Write a small node script in a scratch dir outside the checkout.\n- Cut the text between `    $program = @'\\n` and `\\n'@\\n` in moe-agent.ps1.\n- Cut the text between `<<'MOE_GIT_GUARD_JS'\\n` and `\\nMOE_GIT_GUARD_JS\\n` in `git show HEAD:scripts/moe-agent.sh`.\n- Each anchor must occur exactly once, and the two strings must be equal. The planner measured 4453 equal chars on HEAD.\n\nOther invariants:\n- This task changed no byte of scripts/moe-agent.sh: it is not in modifiedFiles, and `git diff HEAD -- scripts/moe-agent.sh` shows only the peer hunks that were there at start.\n- `grep -cF` each of the three codexDescriptor.ts PowerShell literals (L29, L31, L462) in moe-agent.ps1: each must still count 1.\n\nQuestions to answer:\n- Can '.' ever name a different directory? Only if GetTempPath() lacked its trailing separator, which .NET guarantees. A drive root and a UNC path stay absolute (measured).\n- Does the new case fail without the fix, with both strings in the RED message (step 1)? Does it pass on Linux with a spaced TMPDIR?\n- Are every other case's assertions, stubs and drivers byte-identical?\n- Can TMP/TEMP keys collide by case?\n- Is net growth well under 400 LOC?\n\nRestate this row's audit finding in the completion summary: the trailing-backslash -Project issue, reported and not fixed.\n\nFix any finding and re-run the step 3 gate before complete_task. Hand off to QA; never approve your own work.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/agent-git-guard.test.mjs"
       ],
-      "startedAt": "2026-11-02T23:09:10.924Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/agent-git-guard.test.mjs"
+      ],
+      "note": "Self-review only, no new edits (worktree clean at d94827b4; the step-3 gate ran on exactly these bytes). Diff 28df02f7..HEAD, non-board: 2 files, +11/-8 (ps1 +3/-1, test +8/-7). Checked: (1) ps1 diff = the one token `GetTempPath() + '.'` plus a 2-line ASCII comment; 76ae5c47's OutputEncoding try/finally, the rc throw and env.json read intact; BOM ef bb bf intact, 0 CR bytes. (2) Twin check from `git show HEAD:` of both wrappers: start anchor x1, sh heredoc anchors x1 each, programs equal at 4724 chars. (3) `git diff 28df02f7 HEAD -- scripts/moe-agent.sh` empty; the three codexDescriptor.ts PS launch literals each count 1 in moe-agent.ps1. (4) '.' cannot name another directory: .NET guarantees GetTempPath() ends in a separator; a drive root ('C:\\' + '.' -> 'C:\\moe-git-guard-') and a UNC path stay absolute; PS 7.3+ passes the arg intact too. (5) A space-free temp is unaffected ('C:\\t\\.' normalizes in path.join). (6) Test: temp dir keyed by mode, CP850 pins and .codepage assertions stay on non-ascii-temp only; TMP/TEMP keys deleted case-insensitively before set on Windows, TMPDIR on Linux; everything lives under the fixture root that t.after removes, f.env is per fixture so nothing leaks. (7) Concurrency/error paths unchanged: mkdtemp stays unique per seat, a node failure still throws MOE_AGENT_GIT_GUARD_FAILED and never launches unguarded. Net growth 11/8 LOC, far under 400. Audit finding restated (reported, NOT fixed, per plan): a trailing-backslash -Project path survives Resolve-Path (L373) and breaks the native calls that pass $projectPath (Get-MoeGitTop's git -C, the guard's node call, the codex -C lines); JetBrains passes basePath without a trailing separator, so candidate follow-up row for the governor.",
+      "startedAt": "2026-11-02T23:09:10.924Z",
+      "completedAt": "2026-11-02T23:09:39.547Z"
     }
   ],
   "planRevision": 1,
@@ -96,12 +102,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:06:05.143Z",
-  "updatedAt": "2026-11-02T23:09:10.924Z",
+  "updatedAt": "2026-11-02T23:09:39.547Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T19:06:13.181Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -115,7 +121,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T19:19:32.324Z",

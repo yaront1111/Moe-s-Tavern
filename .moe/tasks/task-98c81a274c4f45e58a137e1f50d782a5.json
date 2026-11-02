@@ -60,11 +60,12 @@
     {
       "stepId": "step-4",
       "description": "Verification, run once (DoD 3). Run ONE command fresh from the task worktree that runs both legs; its output tail is the complete_task evidence.\n\n- Linux leg: R=$(git rev-parse --show-toplevel); S=$(mktemp -d); git -C \"$R\" archive HEAD | tar -x -C \"$S\". Overlay exactly moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/extension.ts and moe-vscode/tests/protected-profile-pin.test.cjs, `cp` then `cmp` each. Then `cd \"$S/moe-vscode\" || exit 1` and run `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile'`.\n- Windows leg: the same archive plus overlay into a fresh dir under /mnt/d/moe-scratch/. Then `cmd.exe /d /c \"cd /d D:\\\\moe-scratch\\\\<dir>\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\"`. On Windows the POSIX-mode cases skip, and the link, size and parse cases still run.\n\nBoth legs must exit 0. Report each leg's tests / pass / fail / skipped. The base is 583 tests (579 pass, 4 skipped) at the latest VS Code landing, plus the new cases. Never run npm in the shared control checkout.\n\nAlso run `npm run lint` in the Linux snapshot. The diff must touch only these three files; declare them as modifiedFiles. Size: the size-only waiver for this row is filed (approved or pending).",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/src/extension.ts"
-      ]
+      ],
+      "startedAt": "2026-11-02T23:10:57.874Z"
     },
     {
       "stepId": "step-5",
@@ -90,7 +91,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:10.352Z",
-  "updatedAt": "2026-11-02T23:07:54.640Z",
+  "updatedAt": "2026-11-02T23:10:57.874Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:15.663Z",

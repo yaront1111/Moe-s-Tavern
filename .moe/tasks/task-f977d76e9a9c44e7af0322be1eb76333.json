@@ -74,8 +74,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -87,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:13:15.876Z",
-  "updatedAt": "2026-11-02T22:37:50.535Z",
+  "updatedAt": "2026-11-02T23:11:53.545Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:02:44.261Z",
@@ -97,7 +97,9 @@
     "firstClaimAt": "2026-11-02T21:46:48.237Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T23:11:28.542Z",
+    "wallClockMs": 5080305
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -217,10 +219,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-02T22:16:06Z",
-    "at": "2026-11-02T22:28:53.703Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-02T22:37:36Z",
+    "at": "2026-11-02T23:11:53.544Z"
   },
   "reviewStartedAt": "2026-11-02T22:27:55.598Z",
   "verification": {
@@ -230,5 +233,9 @@
     "reportedAt": "2026-11-02T22:27:55.598Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Worktree mode now never lands W/.serena/project.yml, the copy WT-06 rewrites with project_name <name>@<taskId>, even when the project tracks the file (git ' M'). denied_wt (scripts/moe-agent.sh) and Test-MoeDenyPathWorktree (scripts/moe-agent.ps1) each add the exact key .serena/project.yml under each root, so the checkpoint and the completion hold it (MOE_ATTR_EXCLUDED). Shared-mode denied()/Test-MoeDenyPath, WT-06's copy and the ps1 BOM are unchanged. New case 'wt-serena-yml' in scripts/tests/postflight-worktree.cjs: a project tracking .serena/project.yml; a checkpoint run and a completion run each leave the committed file equal to the tracked original while W holds the renamed copy as ' M'. RED on the unchanged sh wrapper: \"[worktree] wt-serena-yml FAILED: AssertionError: the checkpoint carried the WT-06 copy to the task branch\" (actual 'project_name: \"fixture@task-postflight\"\\nlanguages: [x]\\n'). GREEN now: sh suite \"[worktree] 61 ok, 0 failed\" (wt-serena-yml ok), \"PASS parity-check.sh\", role-doc lint OK, rc=0, run fresh on the final bytes (HEAD e0ad39bc, tree clean). ps1 engine on Windows PS 5.1 (wt-serena-yml, wt-deny, wt-checkpoint, wt-completion, tooling, project-yml): \"[worktree] 6 ok, 0 failed\" on the same bytes. The fixture uses `git add -f` because this Windows host's global gitignore covers .serena. Self-review: no defects found; only 3 small hunks, so little conflict surface against WT-14's edits to the same files. Note for WT-14: its W-clean check should use the worktree predicate, or a tracked-project.yml W still looks dirty."
+  "completionSummary": "Worktree mode now never lands W/.serena/project.yml, the copy WT-06 rewrites with project_name <name>@<taskId>, even when the project tracks the file (git ' M'). denied_wt (scripts/moe-agent.sh) and Test-MoeDenyPathWorktree (scripts/moe-agent.ps1) each add the exact key .serena/project.yml under each root, so the checkpoint and the completion hold it (MOE_ATTR_EXCLUDED). Shared-mode denied()/Test-MoeDenyPath, WT-06's copy and the ps1 BOM are unchanged. New case 'wt-serena-yml' in scripts/tests/postflight-worktree.cjs: a project tracking .serena/project.yml; a checkpoint run and a completion run each leave the committed file equal to the tracked original while W holds the renamed copy as ' M'. RED on the unchanged sh wrapper: \"[worktree] wt-serena-yml FAILED: AssertionError: the checkpoint carried the WT-06 copy to the task branch\" (actual 'project_name: \"fixture@task-postflight\"\\nlanguages: [x]\\n'). GREEN now: sh suite \"[worktree] 61 ok, 0 failed\" (wt-serena-yml ok), \"PASS parity-check.sh\", role-doc lint OK, rc=0, run fresh on the final bytes (HEAD e0ad39bc, tree clean). ps1 engine on Windows PS 5.1 (wt-serena-yml, wt-deny, wt-checkpoint, wt-completion, tooling, project-yml): \"[worktree] 6 ok, 0 failed\" on the same bytes. The fixture uses `git add -f` because this Windows host's global gitignore covers .serena. Self-review: no defects found; only 3 small hunks, so little conflict surface against WT-14's edits to the same files. Note for WT-14: its W-clean check should use the worktree predicate, or a tracked-project.yml W still looks dirty.",
+  "completedAt": "2026-11-02T23:11:28.542Z",
+  "reviewCompletedAt": "2026-11-02T23:11:28.542Z",
+  "reviewSummary": "Reviewed completion 863629c8 (tree bf2a35c0 = candidate tree; in moe/control HEAD and moe/work-2026-10-24), +31/-4 over 3 files. sh denied_wt and ps1 Test-MoeDenyPathWorktree add the exact lowercase key .serena/project.yml under each root. Shared-mode denied()/Test-MoeDenyPath, WT-06's copy and the ps1 BOM are untouched. New case wt-serena-yml (tracked project.yml; checkpoint run, then completion run) asserts the premise (W holds the renamed copy as ' M') and that the task branch and the target keep the original bytes. No tests weakened.\n\nVerified on a git-archive snapshot of 863629c8 (/mnt/d/moe-scratch/qa-f977), not the shared tree:\n- Full sh worktree suite (worker's command): 65 ok, 1 failed. wt-serena-yml, wt-deny, wt-checkpoint and wt-completion ok. The failure is marker-scan, mkfifo unsupported on drvfs (known harness limit, fixed separately by task-93bcb459, unrelated to this diff). Re-run alone with the fixture dir on /tmp: marker-scan ok.\n- parity-check.sh PASS; npm run lint OK rc=0; bash -n ok.\n- ps1 engine on Windows PS 5.1 (wt-serena-yml, wt-deny, wt-checkpoint, wt-completion, tooling, project-yml): 6 ok, 0 failed.\n- Mutants: reverting only the sh hunk fails with \"wt-serena-yml FAILED: AssertionError: the checkpoint carried the WT-06 copy to the task branch\" (actual 'project_name: \"fixture@task-postflight\"'). Reverting only the ps1 hunk fails the same way on PS 5.1. The case kills each twin independently.\n\nDoD met for both wrappers. Diff is far under 400 net LOC. Note for WT-14: its W-clean check should use the worktree predicate, or a tracked-project.yml W still looks dirty.",
+  "requiredCheckAtDone": null
 }
