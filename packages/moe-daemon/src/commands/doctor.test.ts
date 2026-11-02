@@ -354,6 +354,12 @@ describe('runDoctor — worktree readiness probes', () => {
     expect(result.output.join('\n')).not.toContain('SHOULD-NOT-RUN');
   });
 
+  it('names the configured target, not main, in the control branch fix', async () => {
+    writeSettings({ ...ON, consolidationBranch: 'moe/work-2026-10-24' });
+    const result = await doctor(stubGit({ head: 'refs/heads/moe/work-2026-10-24\n' }));
+    expect(line(result.output, 'worktree control branch:')).toMatch(/^\[FAIL\] .*\(git switch -c moe\/control "moe\/work-2026-10-24"\)$/);
+  });
+
   it.each([
     ['DONE for 25h', 'stale', { id: ID, status: 'DONE', updatedAt: ago(25 * HOUR) }],
     ['ARCHIVED for 25h', 'stale', { id: ID, status: 'ARCHIVED', updatedAt: ago(25 * HOUR) }],
@@ -419,7 +425,7 @@ describe('runDoctor — worktree probes against a real repository', () => {
 
   // The fixture's own Git commands must not inherit a seat's repository, index or config.
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.toUpperCase().startsWith('GIT_'))),
-    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null' };
   const git = (cwd: string, ...args: string[]) => execFileSync('git',
     ['-c', 'user.name=Moe Test', '-c', 'user.email=moe@test.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, env, encoding: 'utf-8' });
   const snapshot = (project: string) => [

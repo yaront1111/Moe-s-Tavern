@@ -91,16 +91,15 @@ async function probeProjectRoot(git: Git, root: string, hard: boolean): Promise<
   return verdict(hard, false, `repository top level is ${shown(top)}, not the project; nested projects cannot use worktree mode`);
 }
 
-async function probeControlBranch(git: Git, hard: boolean): Promise<ProbeResult> {
+async function probeControlBranch(git: Git, target: string, hard: boolean): Promise<ProbeResult> {
   const read = await git(['symbolic-ref', '-q', 'HEAD']);
   if (!read.ok) return verdict(hard, false, `HEAD is detached or unreadable (${read.why}); need ${CONTROL_REF}`);
   const head = read.out.trim();
   if (head === CONTROL_REF) return verdict(hard, true, `control checkout is on ${CONTROL_REF}`);
-  return verdict(hard, false, `control checkout HEAD is ${shown(head)}, not ${CONTROL_REF} (git switch -c moe/control main)`);
+  return verdict(hard, false, `control checkout HEAD is ${shown(head)}, not ${CONTROL_REF} (git switch -c moe/control ${shown(target)})`);
 }
 
-async function probeTarget(git: Git, settings: Settings | undefined, listed: WorktreeRecord[] | string, hard: boolean): Promise<ProbeResult> {
-  const target = resolveWorktreeTarget(settings);
+async function probeTarget(git: Git, target: string, listed: WorktreeRecord[] | string, hard: boolean): Promise<ProbeResult> {
   // cachedPlanRef is the daemon's literal-branch-name rule; it rejects revision syntax such as main~1.
   if (!cachedPlanRef(target)) return verdict(hard, false, `target ${shown(target)} is not a literal branch name`);
   const ref = `refs/heads/${target}`;
@@ -177,7 +176,8 @@ export async function probeWorktreeReadiness(
   };
   const version = await probeGitVersion(git, hard);
   const projectRoot = await probeProjectRoot(git, root, hard);
-  const control = await probeControlBranch(git, hard);
+  const target = resolveWorktreeTarget(settings);
+  const control = await probeControlBranch(git, target, hard);
   const list = await git(['worktree', 'list', '--porcelain', '-z']);
   const listed = list.ok ? (parseWorktreeList(list.out) ?? 'malformed listing') : list.why;
   return [
@@ -185,7 +185,7 @@ export async function probeWorktreeReadiness(
     ['worktree git version', version],
     ['worktree project root', projectRoot],
     ['worktree control branch', control],
-    ['worktree target', await probeTarget(git, settings, listed, hard)],
+    ['worktree target', await probeTarget(git, target, listed, hard)],
     ['worktree quality gate', probeQualityGate(settings, hard)],
     ['worktree stale task worktrees', probeStaleWorktrees(listed, root, moePath, options.now ?? Date.now(), hard)],
   ];
