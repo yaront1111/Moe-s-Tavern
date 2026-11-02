@@ -1,0 +1,30 @@
+{
+  "id": "task-0cadb4f66d3545debd72b8991368d526",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code declares and documents two settings it never reads (moe.agentCommand, moe.chat.notifications.soundEnabled), so changing either does nothing",
+  "description": "Files: moe-vscode/package.json (contributes.configuration), moe-vscode/README.md (settings table, :42 and :45), and one node:test under moe-vscode/tests (a new file, or a row in an existing one). No open row declares any of them. I checked all 37 open rows at 2026-11-02 17:51Z. task-550847ba edits other moe-vscode files, so there is no shared file.\n\nDefect, read at HEAD 2bb683f8:\n- package.json declares 8 moe.* settings. moe-vscode/src reads 6 of them through getConfiguration: moe.autoConnect (extension.ts:487), moe.daemon.host, .port and .autoStart (MoeDaemonClient.ts:1219, :1283, :1455, :1864), and moe.chat.notifications.enabled and .mutedChannels (ChatViewProvider.ts:224).\n- moe.agentCommand is never read. A launch takes its CLI from the Moe: Start Agent quick pick (extension.ts:314-351, which remembers the last pick in workspaceState moe.lastProvider), and AgentLauncher.launchAgent runs that provider (AgentLauncher.ts:370-379). The agentCommand Moe does use lives in the project settings (.moe/project.json settings.agentCommand). That is what Moe: Open Settings edits (SettingsPanel.ts:183) and what JetBrains reads (TerminalAgentLauncher.kt:314).\n- moe.chat.notifications.soundEnabled is never read, and no code plays a sound. ChatViewProvider.ts:236-237 says sound comes from the OS notification, and webview audio does not play while the panel is hidden.\n- README.md:42 and :45 document both settings as working.\nRepro: set \"moe.agentCommand\": \"codex\" and \"moe.chat.notifications.soundEnabled\": false in VS Code settings. Moe: Start Agent still preselects the last CLI used, and notifications behave exactly as before. No getConfiguration reader names either key.\n\nFix: remove both declarations from contributes.configuration, and remove their two rows from the README table. Don't wire them in. The project-level agentCommand is the one source of truth that JetBrains and the wrappers already use, and an IDE-level copy would disagree with it. Whether the quick pick should default to the project's agentCommand, as JetBrains' agentCommandFor does, is a separate parity question and out of scope.\nTest: add a node:test that reads package.json and the src tree, and fails, naming the key, when a declared moe.* key has no reader. A key counts as read when one src file calls getConfiguration('<section>') and .get('<leaf>') such that section + '.' + leaf equals the key. That catches the next dead setting before it ships.\nError handling: if package.json can't be read, or declares no configuration properties, the test fails with that reason. It never passes on an empty set.",
+  "definitionOfDone": [
+    "moe-vscode/package.json contributes.configuration no longer declares moe.agentCommand or moe.chat.notifications.soundEnabled. The other six settings keep the same keys, types, defaults and descriptions.",
+    "The settings table in moe-vscode/README.md drops both rows and lists exactly the six remaining keys.",
+    "A node:test under moe-vscode/tests fails, naming the key, when a moe.* key declared in package.json has no getConfiguration reader in moe-vscode/src, using the rule in the description. RED first: on HEAD it fails naming exactly moe.agentCommand and moe.chat.notifications.soundEnabled, and the completion evidence quotes that output. It passes after the change. An unreadable package.json, or one with no configuration properties, fails the test.",
+    "No moe-vscode/src change. The project-level agentCommand flow in Moe: Open Settings is untouched.",
+    "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0, and no existing test is weakened. Never run npm in the shared checkout (GLOBAL rule 0)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 332.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T17:50:00.342Z",
+  "updatedAt": "2026-11-02T17:50:00.342Z"
+}

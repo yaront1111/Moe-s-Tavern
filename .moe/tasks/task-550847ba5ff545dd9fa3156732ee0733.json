@@ -1,0 +1,35 @@
+{
+  "id": "task-550847ba5ff545dd9fa3156732ee0733",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code drops the daemon's PINS_UPDATED broadcast, so pins an agent adds or removes (moe.chat_pin / chat_unpin) never reach the chat view until the channel is switched",
+  "description": "Files: moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/types/moe.ts, moe-vscode/tests/wire-parity.test.cjs. No open row declares any moe-vscode file. I checked all 35 open rows at 2026-11-02 17:45Z. The JetBrains half is task-b9e0bb5a. The two rows touch disjoint files and neither depends on the other.\n\nOrigin: the same unfiled follow-up as task-b9e0bb5a. VSC-0 (task-a3e414a3) records it in docs/plans/2026-11-02-vscode-reuse.md:40 and row D7 (:73), and VSC-6 (task-9f6a725f) left it out of scope.\n\nDefect, read at HEAD 2bb683f8:\n- On every pin, unpin and toggle, the daemon broadcasts {type:'PINS_UPDATED', payload:{channel, pins}} with the channel's full pin list (chatStore.ts :513, :530, :547). moe.chat_pin and moe.chat_unpin produce only that broadcast. PIN_CREATED, PIN_REMOVED and PIN_TOGGLED go only to the socket that made the request (WebSocketServer.ts:1128, :1142, :1156).\n- MoeDaemonClient.handleMessage (:1497) has cases for PINS (:1718), PIN_CREATED, PIN_REMOVED and PIN_TOGGLED, but none for PINS_UPDATED, so that frame falls through the switch.\n- ChatViewProvider.ts requests pins again only when the page sends 'selectChannel' (:171-175). media/chat.js keeps a pinCache per channel and replaces it only on 'loadPins' (:571-574).\nResult: a pin a governor or agent adds with moe.chat_pin stays invisible in the VS Code chat view until the user switches channel and back. An unpin, or a toggle made in another window, behaves the same way.\n\nRepro (this is the failing test): in the section-B harness of wire-parity.test.cjs (the production MoeDaemonClient and ChatViewProvider plus the raw media/chat.js page), deliver {type:'PINS_UPDATED', payload:{channel:<the selected channel>, pins:[one pin]}}. Today no 'loadPins' is posted and the page's pinned section stays empty.\n\nFix: handle 'PINS_UPDATED' the same way as 'PINS', by firing onPinsReceived with {channel, pins}. The provider already turns that into 'loadPins', which replaces the channel's pinCache and re-renders when that channel is selected. Also add PINS_UPDATED to the DaemonInboundMessage union and to DAEMON_MESSAGE_TYPES in types/moe.ts, so the wire list stays complete.\nError handling: a malformed frame fires nothing and never throws out of handleMessage. Malformed means no payload object, a channel that is not a non-empty string, or pins that is not an array. PINS keeps its current behavior.\n\nOut of scope:\n- JetBrains: task-b9e0bb5a.\n- RESOURCE_UPDATED: no client has a view for it, so handling it would be a feature.\n- ChatViewProvider.ts and media/chat.js: both are already correct.\n- Any daemon change.",
+  "definitionOfDone": [
+    "MoeDaemonClient.handleMessage handles a PINS_UPDATED frame the same way as PINS. onPinsReceived fires once with {channel, pins}, carrying the full list in payload order. The chat view gets one 'loadPins', and media/chat.js shows the new list when that channel is selected. PINS, PIN_CREATED, PIN_REMOVED and PIN_TOGGLED behave exactly as before.",
+    "A malformed PINS_UPDATED frame fires nothing, posts nothing to the chat view, and never throws out of handleMessage. Malformed means no payload object, a channel that is not a non-empty string, or pins that is not an array.",
+    "types/moe.ts lists PINS_UPDATED in the DaemonInboundMessage union, with payload {channel: string; pins: PinEntry[]}, and in DAEMON_MESSAGE_TYPES.",
+    "moe-vscode/tests/wire-parity.test.cjs gains test rows that run through the real client, the real provider and the raw chat.js page. One pin delivered for the selected channel renders in the pinned section. An empty pins array clears that section. A frame for another channel updates that channel's cache and leaves the selected channel's pinned section unchanged. Each malformed case posts nothing. RED first: the first two rows fail on the unchanged client, and the completion evidence quotes the failing output.",
+    "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0, and no existing test is weakened. Never run npm in the shared checkout (GLOBAL rule 0)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote: fleet-filed, off-lane work for idle workers (the VS Code twin of b9e0bb5a; disjoint files, no edge). Overlap check at 17:47Z: no open row mentions MoeDaemonClient, types/moe.ts or wire-parity. The gate runs in a snapshot.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 331.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T17:47:03.844Z",
+  "updatedAt": "2026-11-02T17:47:34.974Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T17:47:34.974Z",
+    "seq": 1
+  }
+}

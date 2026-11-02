@@ -1,0 +1,35 @@
+{
+  "id": "task-b9e0bb5a7c2242fea45b0c9fbcb85f50",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains drops the daemon's PINS_UPDATED broadcast, so pins an agent adds or removes (moe.chat_pin / chat_unpin) never reach the chat panel until the channel is switched",
+  "description": "Files: moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt, and new moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt. No open row declares any moe-jetbrains file. I checked the plan files and text of all 35 open rows at 2026-11-02 17:45Z, so this row is off the wrapper lane.\n\nOrigin: DONE rows promised this follow-up and nobody filed it. VSC-0 (task-a3e414a3), docs/plans/2026-11-02-vscode-reuse.md:40 and row D7 (:73), says: \"Neither client handles PINS_UPDATED ... a JetBrains-first follow-up\". VSC-6 (task-9f6a725f) left it out of scope for the same reason. The VS Code half is a separate row.\n\nDefect, read at HEAD 2bb683f8:\n- Every pin write broadcasts the channel's full pin list to every /ws client. In packages/moe-daemon/src/state/chatStore.ts, pinMessage, unpinMessage and togglePinDone each emit {type:'PINS_UPDATED', payload:{channel, pins}} (:513, :530, :547). WebSocketServer.broadcast (:379) sends every StateChangeEvent to all plugin clients.\n- PIN_CREATED, PIN_REMOVED and PIN_TOGGLED (WebSocketServer.ts:1128, :1142, :1156) are replies sent only to the socket that made the request. moe.chat_pin and moe.chat_unpin (tools/chatPin.ts, tools/chatUnpin.ts) produce only the broadcast.\n- MoeMessageDispatcher.handle (:84) has cases for PINS (:415), PIN_CREATED, PIN_REMOVED and PIN_TOGGLED, but none for PINS_UPDATED, so that frame is dropped.\n- ChatPanel.kt caches pinsByChannel and sends GET_PINS only when the selected channel changes (:141, :322). The daemon's pin-file write is a self-write that the FileWatcher skips (chatStore.ts:448), and STATE_SNAPSHOT carries no pins. Nothing else refreshes the panel.\nResult: a pin a governor or agent adds with moe.chat_pin stays invisible in the JetBrains chat panel until the user switches channel and back. That includes the pinned #general lists this board uses to put questions to the human. An unpin, or a toggle made in another IDE window, behaves the same way.\n\nRepro (this is the failing test): use the injected-lambda harness of MoeMessageDispatcherAccountsTest.kt and call dispatcher.handle with {\"type\":\"PINS_UPDATED\",\"payload\":{\"channel\":\"chan-1\",\"pins\":[{\"messageId\":\"msg-1\",\"pinnedBy\":\"governor-x\",\"pinnedAt\":\"2026-11-02T17:00:00.000Z\",\"done\":false,\"doneAt\":null}]}}. Today onPins is never called.\n\nFix: send \"PINS_UPDATED\" through the same branch as \"PINS\". The payload has the same {channel, pins} shape, and the branch replaces the whole list through publishPins and onPins. ChatPanel.kt:237 already applies that list and redraws the selected channel.\nError handling: a malformed frame publishes nothing and never throws out of handle, the same as PINS today. Malformed means no payload object, no channel, pins that is not an array, or a pins entry that is not an object (parsePinEntry defaults missing fields, so `asJsonObject` is what throws, and the existing catch logs a warning).\n\nOut of scope:\n- VS Code: separate row.\n- RESOURCE_UPDATED: neither client has a resource view, so handling it would be a feature, not this defect.\n- SETTINGS_UPDATED: JetBrains doesn't handle it either, but there's no defect. updateProjectSettings writes project.json without a self-write skip, so the FileWatcher's STATE_SNAPSHOT follows each save and refreshes the settings.\n- Any daemon or ChatPanel.kt change.",
+  "definitionOfDone": [
+    "MoeMessageDispatcher.handle applies a PINS_UPDATED frame exactly as it applies PINS: listeners get one onPins(channel, pins) carrying the full list in payload order, and ChatPanel's existing onPins replaces that channel's pins. PINS, PIN_CREATED, PIN_REMOVED and PIN_TOGGLED behave exactly as before.",
+    "A malformed PINS_UPDATED frame publishes nothing and never throws out of handle. Malformed means no payload object, no channel, pins that is not an array, or a pins entry that is not an object.",
+    "New moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt uses the MoeMessageDispatcherAccountsTest harness and covers three cases. Two pins give one onPins call with both entries in order. An empty pins array gives onPins with an empty list, so unpinning the last pin clears the panel. Each malformed case from item 2 publishes nothing. RED first: the first two cases fail against the unchanged dispatcher, and the completion evidence quotes the failing output.",
+    "`cd moe-jetbrains && ./gradlew test` exits 0. Run it under the jetbrains-gradle lease (moe.acquire_resource, then release), either in place or in a snapshot of the exact commit. Its output is the complete_task evidence.",
+    "Only the two files named in the description change. No daemon, VS Code, ChatPanel.kt or MoeBundle.properties edit."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote: fleet-filed, off-lane work for idle workers (JetBrains half of the 17:12Z hunt). Overlap check at 17:46Z: no open row mentions MoeMessageDispatcher. Three rows mention \"moe-jetbrains/\" only in text (a CLAUDE.md row edit, exclusion lists) and declare no plugin file. The gate is gradle under the jetbrains-gradle lease.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 330.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T17:46:08.162Z",
+  "updatedAt": "2026-11-02T17:46:49.242Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T17:46:49.242Z",
+    "seq": 1
+  }
+}

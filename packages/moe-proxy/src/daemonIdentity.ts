@@ -13,9 +13,14 @@
 // The caller treats it exactly like 'same', so the reconnect path (a daemon
 // mid-restart answers nothing) and older daemons keep working. Only a positive
 // answer naming another project is 'foreign'.
+//
+// A configured host name is resolved here and the address is dialed: the daemon's
+// /health Host rule (server/healthHost.ts) admits only IP literals and localhost,
+// so a name sent as Host read 403 and came back 'unknown' (task-86d66093).
 
+import dns from 'dns';
 import http from 'http';
-import { isIPv6 } from 'net';
+import { isIP, isIPv6 } from 'net';
 import { comparableProjectPath } from './utils.js';
 
 export type DaemonIdentity =
@@ -33,6 +38,11 @@ const DEFAULT_PROBE_TIMEOUT_MS = 1500;
 const HEALTH_STATUS_CODES = new Set([200, 503]);
 
 const UNKNOWN: DaemonIdentity = { kind: 'unknown' };
+
+/** Resolves a host name to the IP literal the probe dials. */
+export type HostLookup = (hostname: string) => Promise<string>;
+
+const lookupAddress: HostLookup = async (hostname) => (await dns.promises.lookup(hostname)).address;
 
 /**
  * A drive-letter, UNC or POSIX absolute path, whatever OS we run on:
@@ -80,9 +90,10 @@ export function probeDaemonIdentity(
   host: string,
   port: number,
   projectPath: string,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; lookup?: HostLookup } = {},
 ): Promise<DaemonIdentity> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const lookup = options.lookup ?? lookupAddress;
   return new Promise((resolve) => {
     let done = false;
     let req: http.ClientRequest | null = null;
@@ -105,7 +116,25 @@ export function probeDaemonIdentity(
       // into an Authorization header and carry its path along.
       const url = new URL(`ws://${isIPv6(host) ? `[${host}]` : host}:${port}/mcp`);
       const hostname = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
-      req = http.request({ hostname, port: url.port || 80, path: '/health', method: 'GET', timeout: timeoutMs }, (res) => {
+      const urlPort = url.port || 80;
+      // localhost stays a name: Node dials it on both address families, and one
+      // lookup that answers ::1 first would miss a daemon bound to 127.0.0.1.
+      if (isIP(hostname) !== 0 || hostname === 'localhost') {
+        request(hostname, urlPort);
+        return;
+      }
+      // The one timer above bounds the lookup and the request together, and the
+      // done guard in request() keeps a late answer from opening a socket.
+      Promise.resolve().then(() => lookup(hostname)).then((address) => request(address, urlPort)).catch(() => finish(UNKNOWN));
+    } catch {
+      // new URL() throws on a host ws cannot parse either (no socket opens there),
+      // and http.request throws synchronously on an invalid port.
+      finish(UNKNOWN);
+    }
+
+    function request(hostname: string, urlPort: string | number): void {
+      if (done) return;
+      req = http.request({ hostname, port: urlPort, path: '/health', method: 'GET', timeout: timeoutMs }, (res) => {
         const chunks: Buffer[] = [];
         let total = 0;
         res.on('data', (chunk: Buffer) => {
@@ -123,10 +152,6 @@ export function probeDaemonIdentity(
       req.on('timeout', () => finish(UNKNOWN));
       req.on('error', () => finish(UNKNOWN));
       req.end();
-    } catch {
-      // new URL() throws on a host ws cannot parse either (no socket opens there),
-      // and http.request throws synchronously on an invalid port.
-      finish(UNKNOWN);
     }
   });
 }
