@@ -1256,6 +1256,8 @@ FROZENJS
 if printenv MOE_FROZEN_TEST_ONLY >/dev/null; then exit 0; fi
 # Owner guard cases (one suite shared with postflight.ps1).
 "$NODE_FOR_TEST" "$ROOT_DIR/scripts/tests/postflight-owner-guard.cjs" sh "$WRAPPER" "$FAKE_PROXY" "$TMP_DIR" "$(command -v bash)"
+# Migration landing cases (one suite shared with postflight.ps1).
+"$NODE_FOR_TEST" "$ROOT_DIR/scripts/tests/postflight-migration.cjs" sh "$WRAPPER" "$FAKE_PROXY" "$TMP_DIR" "$(command -v bash)"
 # Worktree provisioning cases (one suite shared with postflight.ps1).
 "$NODE_FOR_TEST" "$ROOT_DIR/scripts/tests/postflight-worktree.cjs" sh "$WRAPPER" "$FAKE_PROXY" "$TMP_DIR" "$(command -v bash)"
 
