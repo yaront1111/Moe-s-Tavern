@@ -57,30 +57,41 @@
     {
       "stepId": "step-4",
       "description": "Verification gate. Run it once, fresh, after steps 1-3; its output is the complete_task evidence.\n\nSnapshot: never run it in the shared tree, because its scripts/moe-agent.sh holds a peer's uncommitted bytes and the guard suite executes that file. Make a whole-repo `git archive HEAD` snapshot, overlay exactly the four owned files, and `cmp` each one against the worktree before citing the run.\n\nLinux, from the snapshot root, run exactly:\n`unset ${!MOE_@} ${!CLAUDE_@} ${!FAKE_@}; node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh && npm run docs:lint`\nSubmit its command, exitCode and outputTail.\n\nNative Windows is also required, and no PowerShell skip counts as a pass.\n- Make a second snapshot on /mnt/d, outside the repo, with the same overlay (a UNC cwd breaks node --test). Delete it afterwards.\n- Check that WSLENV forwards no MOE_*, CLAUDE_* or FAKE_* variable.\n- Run `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs`. It must show 0 failed and 0 skipped. agent-git-guard.test.mjs is not in CI, so this run is the only PS 5.1 proof.\n- Then, alone and not in parallel with that run, run `\"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell`. It must show failureClass NONE and lastScenario Z. It took about 26 min under load, against a 30-min cap.\n\nIn complete_task's summary, put both Windows results, their wall-clock times and the step 1 RED line. Report platform availability honestly, and never substitute Linux pwsh for Windows PS 5.1.\n\nError handling: if any run is red, fix it and re-run the whole gate; never cite a partial run. A failure outside the guard, such as another wrapper temp consumer mangling a non-ASCII TEMP, gets reported on the task with its output; do not widen the task to fix it.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/agent-git-guard.test.mjs",
         "scripts/moe-agent.ps1",
         "docs/TROUBLESHOOTING.md",
         "docs/CONFIGURATION.md"
       ],
-      "startedAt": "2026-11-02T19:52:14.582Z"
+      "note": "Whole-repo HEAD archive snapshots, exactly four owned files overlaid and cmp-verified. Exact Linux gate exit0 in1597.37s: guard27/27 (parent25), launcher38 passes +2 PS-only skips; total65 pass/0 fail/2 skips. postflight-safe bash exit0 failureClass NONE lastScenario Z; parity PASS; docs:lint PASS. Additional configured qualityGate parity && npm run lint exit0. Native Windows node suite exit0 in202.02s: guard28/28 (parent26 incl PS7), launcher126/126 unchanged; total154 pass/0 fail/0 skipped. Sequential native Windows postflight-safe powershell exit0 in2587.02s: failureClass NONE, lastScenario Z. WSLENV had no MOE/CLAUDE/FAKE forwarding. Logs outside checkout; all subprocesses polled to completion.",
+      "startedAt": "2026-11-02T19:52:14.582Z",
+      "completedAt": "2026-11-02T20:39:17.956Z"
     },
     {
       "stepId": "step-5",
       "description": "Final adversarial self-review of this task's diff: one pass, scoped to this diff only.\n- Is [Console]::OutputEncoding restored on every exit path, including a node failure, a throw, Ctrl+C and the in-process hot reload?\n- Can a seat now launch unguarded when node fails?\n- Did any byte change in the embedded program, the launcher-harness cut span, a launch line, the BOM or moe-agent.sh? Use git diff on the owned paths, and `grep -c` each of the three codexDescriptor PowerShell literals in moe-agent.ps1: each must still count 1.\n- Does the new case fail without the fix? Show the step 1 RED output.\n- Do the other drivers stay byte-identical?\n- Can the TMP/TEMP keys collide by case?\n- Can the console pin leak into later cases?\n- Do the docs claims match the measurements: Git 2.31, codex 0.166, gemini 0.64, grok unverified?\n- Does any docs line match the NEVER_RUNS_GIT regex?\n- Is the task-owned net growth well under 400 LOC?\n- Are peers' hunks in docs/CONFIGURATION.md and scripts/moe-agent.sh untouched?\nFix any finding and re-run the step 4 gate before complete_task. Hand off to QA; never approve your own work.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/agent-git-guard.test.mjs",
         "docs/TROUBLESHOOTING.md",
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/agent-git-guard.test.mjs",
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Adversarial review completed once on scoped diff: encoding saved locally/restored in finally before env.json read/any CLI, node rc captured and nonzero fail-closed preserved; no new shared-state races or input surface. Console test pin restored in nested finally even if recording fails; all TMP/TEMP variants deleted before assignment. Other driver output byte-identical when pin=false. Byte comparisons prove all ps1 bytes outside the approved node-call span unchanged (including embedded program, launch lines, harness spans), BOM intact, bash twin unchanged; all three Codex PowerShell grep counts=1. Gate snapshots still match all four owned paths byte-for-byte. Docs match supplied versioned measurements, existing anchors/rows retained, negative regex clean. +38/-8 = net30 LOC. Both native parent RED cases show CLI did not run / ReadAllText DirectoryNotFoundException; no review findings or edits after fresh green gates.",
+      "startedAt": "2026-11-02T20:39:17.982Z",
+      "completedAt": "2026-11-02T20:40:14.845Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -123,7 +134,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T18:19:53.148Z",
-  "updatedAt": "2026-11-02T19:52:14.582Z",
+  "updatedAt": "2026-11-02T20:41:39.544Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T18:25:23.864Z",
@@ -133,7 +144,7 @@
     "firstClaimAt": "2026-10-30T18:26:46.141Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-6fc3dd5c",
@@ -148,7 +159,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T18:42:51.506Z",
@@ -233,17 +246,46 @@
       "treeId": "fe5998ae91524065304a6266769a985b8ed24283",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "bbf2f857f84d17aee1518e878cdd0ddb04ea0acd",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-02T19:47:22Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/agent-git-guard.test.mjs"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-02T20:41:39.544Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json"
+    "scripts/tests/agent-git-guard.test.mjs",
+    "scripts/moe-agent.ps1",
+    "docs/TROUBLESHOOTING.md",
+    "docs/CONFIGURATION.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-6fc3dd5c@2026-10-30T18:26:47Z",
-    "at": "2026-10-30T18:43:56.945Z"
+    "kind": "completion",
+    "sessionId": "worker-26483323@2026-11-02T19:47:22Z",
+    "at": "2026-11-02T20:41:39.544Z"
   },
-  "workStartedAt": "2026-11-02T19:50:15.211Z"
+  "workStartedAt": "2026-11-02T19:50:15.211Z",
+  "reviewStartedAt": "2026-11-02T20:40:38.428Z",
+  "verification": {
+    "command": "unset ${!MOE_@} ${!CLAUDE_@} ${!FAKE_@}; node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh && npm run docs:lint",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 67\nℹ pass 65\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ duration_ms 84132.868118\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS parity-check.sh\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nreal 1597.37\nuser 865.72\nsys 484.57",
+    "reportedAt": "2026-11-02T20:40:38.428Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Fixed PS guard root UTF8 decoding with save/restore finally; added Gemini/Grok non-ASCII-temp CP850 regressions and requested Git2.31/KEY-policy/human-only override docs. Native Windows parent7beed0bc RED for both: `CLI did not run: exit=0; codes=null`, raw ReadAllText DirectoryNotFoundException (11.79s); fixed narrow2/2 GREEN (19.99s). Full Linux exact gate exit0 (1597.37s): guard27/27 vs parent25, unchanged launcher38pass +2 PS-only skips; total65pass/0fail/2skip. Bash postflight NONE/Z; parity/docs lint PASS. Configured qualityGate parity && npm run lint PASS. Native Windows node suite154/154,0fail/0skip (202.02s): guard28/28 vs parent26 including PS7, launcher126/126 unchanged. Sequential native powershell postflight exit0,NONE/Z (2587.02s). Whole-repo archive snapshots with four owned overlays cmp-verified, removed after checks. Adversarial review clean: all out-of-scope ps1 bytes unchanged, BOM intact, embedded twins and bash unchanged, all3 pinned PS launch literals count1. Net30LOC. Handoff memory recorded; wrapper owns landing; spaced TEMP remains task408a0ac1."
 }

@@ -31,28 +31,42 @@
     {
       "stepId": "step-2",
       "description": "FIX scripts/moe-agent.ps1 with the Edit tool (keep the UTF-8 BOM and LF endings; the path may be CONTESTED with task-3ad573a7 at landing, and only a TOOL witness lands it).\n(a) Insert this block after `$script:GrokEnvPrev = $null` and its blank line, before the `# daemon.json is repository content:` comment, i.e. outside daemon-json-cap.test.mjs's helper segment, which starts at `function Read-MoeDaemonJsonText(`:\n# Start-Process (PowerShell 5.1 and 7) joins -ArgumentList entries with single\n# spaces and quotes none of them, so a path with a space reached node as several\n# arguments. Quote every entry so the child's argv parser (the C runtime on\n# Windows, .NET on Unix) splits the line back into the same entries.\nfunction ConvertTo-MoeArgumentLine([string[]]$Arguments) {\n    @($Arguments | ForEach-Object { '\"' + ($_ -replace '(\\\\*)\"', '$1$1\\\"' -replace '(\\\\+)$', '$1$1') + '\"' }) -join ' '\n}\nBackslashes before a quote or at the end are doubled and a quote becomes backslash-quote. This exact body round-tripped, on 5.1.26100 and 7.6.9, the literal fixture name, an empty string, a \"b\" c\\, x\\\\, a tab, q\\\"r and C:\\. It calls no other wrapper function (row A defines only the functions the Start-Process statement itself calls).\n(b) At the daemon autostart, replace the two comment lines `# Pass arguments as an array so paths containing spaces or quotes survive` and `# Windows command-line escaping (Start-Process re-quotes each element).` with own-line comments (no trailing comments: task-3ad573a7's scanner masks only full-line ones) saying Start-Process quotes nothing, so the launcher passes one pre-quoted command line, and change only the -ArgumentList argument:\n        Start-Process -FilePath \"node\" -ArgumentList (ConvertTo-MoeArgumentLine @(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\")) -WindowStyle Hidden\nKeep '--project' literally inside the statement (row A finds the call by it).\nError handling: the daemon start's error handling stays exactly as it is. A missing daemon script still ends with Write-Error 'Moe daemon script not found' and exit 1; a daemon that writes no live daemon.json within 10 s still ends with Write-Error 'Daemon failed to start within 10s' and exit 1; a Start-Process failure still terminates under $ErrorActionPreference = 'Stop'. Leave everything else as it is too: -FilePath \"node\", -WindowStyle Hidden, no -WorkingDirectory (task-3ad573a7 adds the escaped current FileSystem location on top of this change), and the MOE_DAEMON_PATH and global-install fallback with its Test-Path checks. moe-agent.sh already passes an argv array (DAEMON_ARGS), so there is no bash twin and no parity string to add.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-02T20:38:31.555Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Edited scripts/moe-agent.ps1 with the Edit tool. (a) Added ConvertTo-MoeArgumentLine, plus its 4-line comment, after `$script:GrokEnvPrev = $null` and above `function Read-MoeDaemonJsonText(`, so the daemon-json-cap segments are unchanged. The body is exactly as planned. (b) Replaced the wrong 're-quotes each element' comment with two full-line comments. Changed only the -ArgumentList argument: `(ConvertTo-MoeArgumentLine @(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\"))`. -FilePath \"node\", -WindowStyle Hidden and the error handling are unchanged, and no -WorkingDirectory was added. `git diff -U0` shows the two hunks only. The BOM ef bb bf is intact and the file has 0 CRs.",
+      "startedAt": "2026-11-02T20:38:31.555Z",
+      "completedAt": "2026-11-02T20:39:10.446Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY once, from the worktree root:\nnode.exe --test scripts/tests/daemon-autostart-argv.test.mjs && bash scripts/tests/parity-check.sh && npm run lint\nExpect node:test pass 4, fail 0, skipped 0 (a skipped pwsh row is not green: fix the engine detection), then parity-check (it also enforces moe-agent.ps1's BOM) and lint passing. This fresh output is the complete_task verification evidence. Run no npm build, install or test anywhere (global rails).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran from the worktree root: `node.exe --test scripts/tests/daemon-autostart-argv.test.mjs && bash scripts/tests/parity-check.sh && npm run lint` → exit 0. node:test: tests 4, pass 4, fail 0, skipped 0 (rows A and B pass on both PowerShell 5.1 and 7). Then 'PASS parity-check.sh' and role-doc lint OK (architect 39, worker 30, qa 36 lines). This step needed no npm build, install or package test, and none was run.",
+      "startedAt": "2026-11-02T20:39:14.255Z",
+      "completedAt": "2026-11-02T20:39:32.832Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW of your own diff, then handoff.\n(1) `git diff -U0 -- scripts/moe-agent.ps1` shows only the helper and its comment, the replaced comment lines and the -ArgumentList expression, so the error handling around the start is byte-identical; `head -c3 scripts/moe-agent.ps1 | od -An -tx1` prints ef bb bf and `grep -c $'\\r' scripts/moe-agent.ps1` prints 0.\n(2) Mutation, in a scratch copy only: cp -r scripts into a new dir under /mnt/d/moe-scratch, swap the helper body there (sed on the copy) for the naive '\"' + $_ + '\"', and run node.exe --test on the copy's test file: row A case 2 (trailing backslash) must fail on both engines. Then remove only that scratch dir.\n(3) WSL `node --test scripts/tests/daemon-autostart-argv.test.mjs` skips every row with its reason and does not crash.\n(4) Walk the edges: two seats autostarting at once (independent Start-Process calls; daemon.json stays the daemon's); $projectPath is a PathInfo from Resolve-Path and \"$projectPath\" stringifies it exactly as before; a drive-root project keeps its trailing backslash; a provider-qualified UNC project path is unchanged by this task; no process outlives the test (the fake daemon exits at once; taskkill reaches only the spawned child's tree).\n(5) Serena write_memory 'task-task-8c875cc811d847f7861125a41b31019d-handoff', and edit mem:gotcha-powershell-wildcard-paths-brackets so its Start-Process -ArgumentList bullet names ConvertTo-MoeArgumentLine as the fix. Then complete_task with step 3's output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Self-review complete. No source changes were made in this step. scripts/moe-agent.ps1 is listed again because its step-2 bytes are still the only dirty path.\n(1) `git diff -U0` shows only the helper with its comment, the two replaced comment lines and the -ArgumentList expression. The BOM is ef bb bf and the file has 0 CRs.\n(2) Mutation in a scratch copy under /mnt/d/moe-scratch, helper body set to naive '\"' + $_ + '\"': row A failed on both 5.1 and 7 (case 2 arrived as `a b c\" ` and `a b c\"`). Row B passed, as expected, since its paths have no trailing backslash or quote. The scratch dir was removed.\n(3) WSL `node --test` skips all 4 rows with the reason and exits 0.\n(4) Edges: the helper is pure, so two concurrent seats each make an independent Start-Process. \"$projectPath\" stringifies the PathInfo exactly as before. A drive-root C:\\ keeps its backslash (case 2 covers the trailing backslash). A provider-qualified UNC string is unchanged, only wrapped in quotes. Afterwards there were 0 moe-autostart-* fixture dirs in %TEMP% and 0 node processes running fake-daemon.cjs. Theoretical only: the helper's '(\\\\+)$' would also match before a final LF, and Windows paths cannot contain LF.\n(5) Wrote Serena memory task-task-8c875cc8…-handoff. Edited gotcha-powershell-wildcard-paths-brackets so its Start-Process -ArgumentList bullet names ConvertTo-MoeArgumentLine as the fix.",
+      "startedAt": "2026-11-02T20:39:35.562Z",
+      "completedAt": "2026-11-02T20:40:43.399Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -64,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T19:51:59.705Z",
-  "updatedAt": "2026-11-02T20:38:31.555Z",
+  "updatedAt": "2026-11-02T20:41:17.535Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T19:55:37.599Z",
@@ -74,7 +88,7 @@
     "firstClaimAt": "2026-11-02T19:56:27.367Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -85,7 +99,10 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T20:19:23.238Z",
@@ -179,8 +196,18 @@
     }
   ],
   "filesModified": [
+    "scripts/tests/daemon-autostart-argv.test.mjs",
     ".github/workflows/ci.yml",
-    "scripts/tests/daemon-autostart-argv.test.mjs"
+    "scripts/moe-agent.ps1"
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "reviewStartedAt": "2026-11-02T20:41:17.533Z",
+  "verification": {
+    "command": "node.exe --test scripts/tests/daemon-autostart-argv.test.mjs && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "✔ PowerShell 5.1: the daemon-autostart Start-Process passes literal-name paths as whole arguments (1128.3709ms)\n✔ PowerShell 5.1: the launcher autostarts the daemon under spaced project and daemon-script paths (2832.0512ms)\n✔ PowerShell 7: the daemon-autostart Start-Process passes literal-name paths as whole arguments (971.3654ms)\n✔ PowerShell 7: the launcher autostarts the daemon under spaced project and daemon-script paths (2857.1092ms)\nℹ tests 4\nℹ suites 0\nℹ pass 4\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 7889.7207\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)",
+    "reportedAt": "2026-11-02T20:41:17.533Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Fix: PowerShell's Start-Process joins -ArgumentList entries with single spaces and quotes none of them, so the daemon autostart in scripts/moe-agent.ps1 split a spaced project or daemon-script path into several node arguments.\n- moe-agent.ps1: new `ConvertTo-MoeArgumentLine` quotes each entry the way the C runtime parses it back: backslashes before a quote or at the end are doubled, and a quote becomes \\\". The autostart now passes `-ArgumentList (ConvertTo-MoeArgumentLine @(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\"))`. The wrong \"re-quotes each element\" comment is replaced. The helper sits above `function Read-MoeDaemonJsonText(`, so daemon-json-cap.test.mjs's segments are unchanged.\n- Unchanged: -FilePath \"node\", -WindowStyle Hidden, no -WorkingDirectory (task-3ad573a7 adds it on top), the MOE_DAEMON_PATH and global-install fallback, both Write-Error exits and the 10 s wait loop. The UTF-8 BOM and LF endings are kept.\n- New scripts/tests/daemon-autostart-argv.test.mjs (Windows node only) runs on PS 5.1 and 7:\n  - Row A lifts the one Start-Process passing --project out of moe-agent.ps1 through the PowerShell AST. It runs it on the literal name \"control é [x] $;'\" in both the script and project paths, and on a project containing spaces, double quotes and a trailing backslash.\n  - Row B runs the real launcher with a spaced project and a spaced MOE_DAEMON_PATH and expects \"Daemon started (waited\".\n  - Each fake daemon records the exact argv node received.\n- .github/workflows/ci.yml: a Windows-only step \"Test PowerShell daemon autostart arguments\", placed after the daemon.json-cap step.\n\nEvidence:\n- RED on the pre-fix launcher: 4 of 4 failed. Row A had case 1 missing and case 2 split into `a`, `b`, `c\\`; row B ended \"Daemon failed to start within 10s\".\n- GREEN: 4 pass, 0 skipped.\n- Mutation in a scratch copy, helper body set to naive '\"'+$_+'\"': row A failed on both engines.\n- WSL node skips all rows with the stated reason.\n- No fixture dirs and no fake-daem"
 }
