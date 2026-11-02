@@ -14,12 +14,13 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (RED). Create two new files with the Write tool (global rule [2]). Match BoardApproval.kt's LF line endings.\n\n(a) moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt: `object DoneColumnClear { fun archiveCount(allTasks: List<Task>, selectedEpicId: String?, visibleDone: List<Task>): Int? }` (import com.moe.model.Task; no Swing, no Project). For now its body is TODAY's shipped rule, so the RED run measures shipped behavior: `visibleDone.size.takeIf { it > 0 }`. That is the panel's `columnTasks.size`, plus TaskColumn's empty-column hiding. Step 2 replaces the body.\n\n(b) moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DoneColumnClearTest.kt: JUnit 4, shaped like BoardApprovalTest. A task(id, epicId, status) helper fills Task's required fields (id, epicId, title, description, status, order, definitionOfDone, implementationPlan, prLink, reopenReason, assignedWorkerId).\nFixture:\n- epic-1: d1, d2, d3 DONE, plus one each of WORKING, AWAITING_APPROVAL and BLOCKED;\n- epic-2: d4, d5 DONE, plus one REVIEW and one ARCHIVED.\nOnly status DONE counts, exactly as the daemon's ARCHIVE_DONE_TASKS does.\nTests:\n1. `no search quotes the visible Done column`: visible = every DONE task in scope gives 3 for epic-1 and 5 for null (All epics).\n2. `a search subset with an epic selected quotes every DONE task in that epic`: epic-1 with visible [d2] gives 3.\n3. `a search subset with All epics quotes every DONE task on the board`: null with visible [d1, d4] gives 5.\n4. `an empty Done column offers no clear`: visible [] gives null, for epic-1 and for null, although the search hides DONE tasks.\n5. A source guard (mem:gotcha-jetbrains-dialog-order-untestable). Read src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt, trying File(relative) and then File(\"moe-jetbrains/$relative\"); throw IllegalStateException when neither is a file. Slice it with substringAfter(\"onClearColumn = if (isDone)\").substringBefore(\"onNext =\") and check the slice is not blank. Assert the slice contains \"DoneColumnClear.archiveCount(\" and does not contain \"columnTasks.size\". Also assert the positive half, so deleting the dialog cannot pass: it still contains \"moe.message.archiveDone\" and \"service.archiveDoneTasks(\".\n\nRED run (DoD 2), under the lease (mem:convention-jetbrains-gradle-lease):\n- Call moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId, note: \"DoneColumnClearTest RED\" }. If it is queued, report_blocked with that resourceId; the grant unblocks the row.\n- From the worktree in WSL bash (mem:gotcha-jetbrains-gradle-from-wsl):\nW=$(wslpath -w \"$(git rev-parse --show-toplevel)\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.DoneColumnClearTest --rerun\"\n- Release the lease right after, whatever the result.\nExpected: exit 1. Tests 2, 3 and 5 fail (expected:<3> but was:<1>, expected:<5> but was:<2>, and the guard); 1 and 4 pass. Any other split means a test is wrong. Save the failure lines for the complete_task summary.\nerror handling: 'Could not receive a message from the daemon' is the gradlew client OOM (mem:gotcha-jetbrains-gradle-client-oom), not a test result. Re-run it.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DoneColumnClearTest.kt"
-      ]
+      ],
+      "startedAt": "2026-11-02T21:49:33.946Z"
     },
     {
       "stepId": "step-2",
@@ -59,7 +60,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-2dc72348",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -71,7 +72,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:12.436Z",
-  "updatedAt": "2026-11-02T21:41:11.158Z",
+  "updatedAt": "2026-11-02T21:49:33.946Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:21.040Z",
@@ -83,7 +84,8 @@
     "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-2dc72348"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -150,5 +152,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T21:41:11.158Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T21:49:33.946Z"
 }

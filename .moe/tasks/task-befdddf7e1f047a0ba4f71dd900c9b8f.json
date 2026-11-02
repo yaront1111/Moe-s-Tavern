@@ -66,18 +66,26 @@
     {
       "stepId": "step-4",
       "description": "ps1 twin of step 2 (scripts/moe-agent.ps1, scripts/tests/postflight.ps1).\n\nInvoke-MoeWorktreeSweep, called at the loop top in the same position as sh: after WT-13's follow and the reload check, before pre-flight. It runs the same gate, interval parse, stamp, lock, enumeration, unregistered alert, candidate checks and 5-cap.\n- Porcelain: read `worktree list --porcelain -z` and split on \"`0\", reusing WT-04's ps1 parser.\n- Attempt records: Get-ChildItem -LiteralPath on the control .moe/attempts. Parse each one with ConvertFrom-Json in try/catch. An unparsable record aborts the pass.\n- Daemon status: Invoke-MoeRpcUnserved get_context @{taskId; view='status'}.\n  - Unknown means $script:MoeRpcFailure -eq 'daemon refusal' AND $script:MoeRpcCodeName -ceq 'TASK_NOT_FOUND'.\n  - Anything else non-null without a matching task.id, or a null reply, aborts the pass.\n- Rescues: Invoke-MoeRescueRef with a W -Git hashtable built as WT-07's Invoke-MoeWorktreeCheckpoint builds it.\n  - Dirt: -Reason worktree-orphan with -Attr @{Candidates=<non-DENY paths from Test-MoeDenyPathWorktree>}.\n  - Tip: -Sha <tip> -Reason worktree-orphan.\n  - Verify each ref resolves to the commit just written before the engine runs.\n- Alerts: WT-13's ps1 throttle helper keyed by a path hash, with a 24h window.\n- The stamp is written with a temp file plus Move-Item -Force.\n- try/finally around the lock.\n\nTests in postflight.ps1: WT14E, WT14F, WT14G and WT14H, mirroring step 2 with the same FAKE_TASK_STATUS_MAP knob.\n- Stale-lock aging: (Get-Item -LiteralPath $lock).LastWriteTime = (Get-Date).AddHours(-3).\n- Keep the cases table-driven and compact. Bump the counters.\nError handling: as in step 2. No catch block may fall through to a deletion; every catch maps to REFUSED, leave-to-sweep, or abort-pass.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.ps1"
       ],
-      "startedAt": "2026-11-02T21:17:35.806Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "ps1 orphan sweep, the twin of the sh step-2 sweep, called at the loop top in sh's position: after WT-13's follow and the reload check, before pre-flight, inside try/catch.\n\nFunctions added:\n- Get-MoeOpenAttemptTaskIds: ordinal HashSet; an unreadable or non-object record returns $null, which aborts the pass.\n- Get-MoeWorktreeTaskStatus: Invoke-MoeRpcUnserved get_context view 'status'. UNKNOWN only for a 'daemon refusal' with codeName TASK_NOT_FOUND; anything else returns '', which stops the pass. I checked the real daemon: getContext throws notFound('Task') (-32001, data.codeName TASK_NOT_FOUND) before the status branch, and the status view returns {task:{id,status}}.\n- Test-MoeSweepDue.\n- Invoke-MoeWorktreeSweep: gate, interval parse (an invalid value warns once per value and uses 3600), due check, sweep.lock, due check again, stamp via temp + Move-Item -Force, lazy #general lookup into a local that the alerts and rescue rows read by dynamic scope, try/finally around the unlock.\n- Invoke-MoeWorktreeSweepPass: records + directory listing; unregistered task-* dirs alert via Send-MoeControlAlert with key sha1(comparable)[:16] and window 86400; ordinal SortedSet of candidates; 5-cap.\n- Invoke-MoeWorktreeSweepRemove: a dirt rescue (PathCount == N, ref resolves to the commit just written) and a tip rescue (-Sha, ref^{commit} == tip). $script:MoeFrozen is stashed and restored around them. Attempts are re-read before Remove-MoeTaskWorktree.\n- Get-MoeRevSha; Get-MoeTaskBranchTip is now a one-liner over it.\n\nOther changes:\n- Send-MoeControlAlert gained -Key/-Window (defaults: the code and 3600), mirroring sh control_alert's 3rd/4th args.\n- A TASK_NOT_FOUND or FAIL status read prints the existing helper's [moe_rpc error…] line; that is the existing behavior.\n\nTests (postflight.ps1):\n- WT14E (dirt + unlanded rescue, NOT_FOUND), WT14F (5-cap, open attempt, W/.moe, held then stale lock), WT14G (unregistered: named every pass, 1 #general row, bytes kept), WT14H (FAIL stops the pass, interval stamp, invalid interval) and WT14I (non-task worktrees untouched).\n- Counter is now 11. Full ps1 WT-14 block: 11 scenarios PASS in 137 s.\n- RED: 8 mutants on a reduced E–I harness (/mnt/d/moe-scratch/red-s4.summary). The base passes and every mutant fails for its intended reason: M1 cap→50 (WT14F five removed), M2 attempt checks off (WT14F task-d5 kept), M3 dirt rescue off (WT14E), M4 UNKNOWN off (WT14E), M5 window 0 (WT14G), M6 bad interval→0 (WT14H), M7 status failure ignored (WT14H), M8 lock ignored (WT14F).\n\nScope note: moe-agent.sh was touched for two things only.\n- The uncommitted rename MOE_CONTROL_SEAT→WT_CONTROL_SEAT, which keeps the MOE_CONTROL_ token sets equal.\n- A comment-only fix in both engine headers from the adversarial review. git deregisters W even when its remove fails part-way, and Git for Windows exits 0 leaving W on disk when W holds an unlisted junction; the next pass names either leftover MOE_WORKTREE_UNREGISTERED.\n\nAfter the edit: bash -n OK, ParseFile 0 errors, BOM kept, token sets equal, parity-check PASS.",
+      "startedAt": "2026-11-02T21:17:35.806Z",
+      "completedAt": "2026-11-02T21:43:44.359Z"
     },
     {
       "stepId": "step-5",
       "description": "Size check, then the verification, run once, fresh. Its output tail is the complete_task evidence (DoD 5, and DoD 1-4 through both harnesses).\n\n1. Size. Run `git diff --numstat` over the five files and compute net non-board LOC. If it is over 400, file ONE EPIC ADD_RAIL size exception with moe.propose_rail, in prop-d975cf4e's format:\n   - name WT-14 (task-befdddf7e1f047a0ba4f71dd900c9b8f), the five files, the measured +/- and the cap you request;\n   - state that it waives size only: every DoD item, the epic rails, substantive QA and fresh verification still apply.\n   Do it NOW, before the long harness runs, so the governor (standing delegation, msg-aac7c9c0) can approve it while they run.\n\n2. Verification. From the repo root in WSL, exactly:\nS=$(mktemp -d /mnt/d/moe-scratch/v-befdddf7.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') bash scripts/tests/worktree-landing.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell\n\nNotes on the command:\n- The snapshot keeps peers' unlanded bytes out of the run.\n- MOE_* and CLAUDE* are scrubbed so this seat's identity never reaches the wrappers under test.\n- The ps1 harness runs through Windows node from a /mnt/d path (Serena gotcha-qa-ps1-postflight-from-wsl). On a native Windows seat, run the same chain from Git Bash with `node` for node.exe.\n- Each harness run takes tens of minutes. Run it in the foreground, or poll a background run to the end.\n\nWhen a run fails:\n- Fix it only inside steps 1-4's files, and never weaken an assertion.\n- A failure that also reproduces on a clean HEAD snapshot is pre-existing: report it with that evidence.\n- Name every SKIP (WT14D as root) in the summary.\n- If any byte changes after this run, re-run the whole command and submit the last output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-02T21:43:47.378Z"
     },
     {
       "stepId": "step-6",
@@ -135,7 +143,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-11-02T21:17:35.806Z",
+  "updatedAt": "2026-11-02T21:43:47.378Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",
@@ -145,7 +153,7 @@
     "firstClaimAt": "2026-10-30T13:50:04.185Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-899a90d6",
@@ -158,7 +166,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:05:31.742Z",

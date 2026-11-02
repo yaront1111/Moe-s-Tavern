@@ -61,9 +61,11 @@
     {
       "stepId": "step-4",
       "description": "Verification gate. Run the ONE verification command below exactly once, after the last edit, with run_in_background. Its fresh output is the complete_task evidence, and QA re-runs it verbatim. It takes about 40 minutes: postflight.sh, then postflight.ps1 on PS 5.1 and on pwsh 7.\n\nWhat the command does:\n- snapshots HEAD's scripts/ into /mnt/d/moe-scratch/t4fdc-XXXX and copies the 4 changed scripts over, cmp-verified;\n- unsets leaked MOE_/CLAUDE/FAKE_ env and checks that ci.yml parses;\n- runs bash -n;\n- on both engines: ParseFile of moe-agent.ps1 and landing-ledger.ps1, then landing-ledger.ps1 itself;\n- runs parity-check.sh and parity-check.ps1 (PS 5.1);\n- runs the three postflight test runs with MOE_POSTFLIGHT_TIMEOUT_SEC=180;\n- writes <dir>.log, ending in GATE_EXIT=<n>.\n\nPoll with `until grep -q '^GATE_EXIT=' \"$(cat /tmp/t4fdc-dir).log\"; do sleep 20; done`. The foreground cap is 600 s, so re-poll.\n\nPass means all of:\n- GATE_EXIT=0;\n- '[landing-ledger powershell.exe] ok' and '[landing-ledger pwsh.exe] ok';\n- '[scenario AJ1] ok' and '[scenario AJ2] ok' in all three postflight runs;\n- the same scope counts as before: sh 42, ps1 41, or one fewer or one more as symlink support differs.\n\nDo not edit any file while the gate runs. If a ps1 failure looks environmental, rerun the parent revision's scripts the same way before blaming the change (Serena gotcha-qa-ps1-postflight-from-wsl).\n\nFull postflight regression is warranted on this mid-epic task because the change touches every ps1 landing's ledger path.\n\nCOMMAND:\ncd /mnt/d/projexts/moes && W=$(mktemp -d /mnt/d/moe-scratch/t4fdc-XXXX) && echo \"$W\" > /tmp/t4fdc-dir && ( for v in $(compgen -e | grep -E '^(MOE_|CLAUDE|FAKE_)'); do unset \"$v\"; done; git rev-parse HEAD && python3 -I -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))' && echo \"[ci.yml] ok\" && git archive HEAD scripts | tar -x -C \"$W\" && for f in scripts/moe-agent.ps1 scripts/tests/landing-ledger.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$W/$f\" && cmp \"$f\" \"$W/$f\" || exit 1; done && cd \"$W\" && bash -n scripts/moe-agent.sh && echo \"[bash -n] ok\" && for eng in powershell.exe pwsh.exe; do for s in scripts/moe-agent.ps1 scripts/tests/landing-ledger.ps1; do P=\"$(wslpath -w \"$W/$s\")\"; $eng -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$P',[ref]\\$null,[ref]\\$e); exit \\$e.Count\" && echo \"[ParseFile $eng $s] ok\" || exit 1; done; $eng -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/landing-ledger.ps1\")\" && echo \"[landing-ledger $eng] ok\" || exit 1; done && bash scripts/tests/parity-check.sh && echo \"[parity-check.sh] ok\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/parity-check.ps1\")\" && echo \"[parity-check.ps1 PS5.1] ok\" && echo \"=== Linux bash postflight.sh ===\" && MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && echo \"=== Windows PowerShell 5.1 postflight.ps1 ===\" && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/postflight.ps1\")\" && echo \"=== pwsh 7 postflight.ps1 ===\" && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/postflight.ps1\")\" ) > \"$W.log\" 2>&1; echo \"GATE_EXIT=$?\" >> \"$W.log\"; echo \"$W\"",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-02T19:40:04.465Z"
+      "note": "Gate ran once, after the last edit, detached with SIGINT reset (python Popen + setsid), on /tmp/t4fdc-gate.sh = the plan's command verbatim except the first cd (the worktree, where the 4 changed files live). Snapshot /mnt/d/moe-scratch/t4fdc-nwNK, log <dir>.log, HEAD edb48d05. Result GATE_EXIT=0: [ci.yml] ok, [bash -n] ok, ParseFile ok on both engines for moe-agent.ps1 and landing-ledger.ps1, [landing-ledger powershell.exe] ok and [landing-ledger pwsh.exe] ok (5/5 each), parity-check.sh and parity-check.ps1 PASS, postflight.sh PASS (frozen 106, owner 16, commit-scope scenarios 45, AJ1 and AJ2 ok), PS 5.1 postflight.ps1 PASS (scope 44, AJ1 and AJ2 ok), pwsh 7 postflight.ps1 PASS (scope 44, AJ1 and AJ2 ok). No file edited during the run; worktree bytes equal the snapshot (cmp).",
+      "startedAt": "2026-11-02T19:40:04.465Z",
+      "completedAt": "2026-11-02T21:47:05.733Z"
     },
     {
       "stepId": "step-5",
@@ -74,7 +76,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -90,7 +92,7 @@
     "task-fbe8e3880ddf47dfa8546f220acea770",
     "task-92307adc30884fc4861348ed3c8ead4a"
   ],
-  "priority": "LOW",
+  "priority": "MEDIUM",
   "order": 1,
   "comments": [
     {
@@ -114,7 +116,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:04:11.016Z",
-  "updatedAt": "2026-11-02T19:40:04.465Z",
+  "updatedAt": "2026-11-02T21:50:01.719Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:40.801Z",
@@ -124,7 +126,7 @@
     "firstClaimAt": "2026-10-30T09:55:16.013Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
@@ -137,7 +139,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T10:16:48.897Z",
@@ -222,18 +225,42 @@
       "treeId": "de2ea1d1f1ea2d97dcca48dd2293cef5b4f31ac7",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "7d89b79c8545ffec7e8708794d5e10cceb97691f",
+      "ref": "refs/heads/moe/task/task-4fdc7590cd054a45a379c477ffe45ac7",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-02T19:31:06Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/landing-ledger.ps1",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-02T21:47:54.394Z",
+      "treeId": "12681e36c58bfaf5b48ed2e648e8508ea41116e6",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
     ".moe/tasks/task-6fc0096b9fff4c45904cfbce7833ad2d.json",
-    ".moe/tasks/task-9eaa4c4e4ef74d43ab2538e0010b098e.json"
+    ".moe/tasks/task-9eaa4c4e4ef74d43ab2538e0010b098e.json",
+    ".github/workflows/ci.yml",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/landing-ledger.ps1",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/postflight.sh"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "architect-e4b7eee0@2026-10-30T09:55:16Z",
-    "at": "2026-10-30T10:22:18.631Z"
+    "sessionId": "worker-2dc72348@2026-11-02T19:31:06Z",
+    "at": "2026-11-02T21:47:54.394Z"
   },
   "workStartedAt": "2026-11-02T19:33:44.999Z"
 }
