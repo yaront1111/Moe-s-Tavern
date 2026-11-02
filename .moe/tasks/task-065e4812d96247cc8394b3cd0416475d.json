@@ -15,50 +15,81 @@
     {
       "stepId": "step-1",
       "description": "Write moe-vscode/tests/accounts-corpus.test.cjs FIRST, with the Write tool; it is red until steps 2-3 land.\n- Load moe-vscode/src/util/AccountPresentation.ts the way tests/managed-vm.test.cjs loads ManagedVm.ts: ts.transpileModule (CommonJS, ES2020), then `vm.runInThisContext('(function (exports, module, require) {' + code + '\\n})')` with a require that throws on EVERY name (DoD 3). Objects then live in the test realm, so deepStrictEqual works.\n- Assert that the TS source has no match for `/\\bvscode\\b/`.\n- The corpus is `path.join(__dirname, '../../moe-jetbrains/src/test/resources/client-accounts.json')`, landed by VSC-7 (task-93729f32, plan revision 1): `{ version: 1, now: \"2026-10-20T12:00:00.000Z\", zone: \"UTC\", rows: [ { id C01..C15, note, rotation (daemon AccountRotationView wire JSON or null), selectedId, connected, expectRows: [ { id, position, label, signIn, fiveHour, weekly, status, vmToken } ], expectChips: [ text ], expectActions: { the 12 booleans } } ], labels: [ { id L01..L14, input, valid } ] }`, where a text is `{ key, args }` and args are JSON strings or integers.\n- Never edit the corpus or any moe-jetbrains file.\nIts error handling: an unreadable corpus or bundle fails naming the path; per-row checks collect `<id>: ...` and end in one assert, so all failing ids show at once.\nTests:\n1. `every rotation row renders through the port`: now = Date.parse(corpus.now), zone = corpus.zone.\n   - rotation = AP.parseAccountRotation(row.rotation); a non-null corpus rotation must parse to non-null;\n   - deepStrictEqual AP.rows(rotation, now, zone) with expectRows, AP.chips(rotation, now, zone) with expectChips, and AP.actions(rotation, row.selectedId, row.connected) with expectActions;\n   - require version 1 and at least 12 rows.\n2. `every label case follows the daemon rule`: AP.isValidLabel(input) === valid for every label row (at least 8).\n3. `the resolver speaks MoeBundle English`: parse moe-jetbrains/src/main/resources/messages/MoeBundle.properties as UTF-8 with `/^(moe\\.accounts\\.[A-Za-z.]+)=(.*?)\\r?$/gm`.\n   - (a) For every text in the corpus (row texts and chips), AP.resolveAccountText(text) equals the bundle value with each {n} replaced by String(args[n]).\n   - (b) Every key in AP.ACCOUNT_TEXT equals the bundle's raw value, so keys that VSC-14 and VSC-15 add later stay pinned.\n   - (c) No such value contains a single quote, so a plain substitution equals Java MessageFormat.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/accounts-corpus.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/accounts-corpus.test.cjs"
+      ],
+      "note": "Wrote the corpus test first with the Write tool; it is red until AccountPresentation.ts exists (verified in step 4). Shared checkout has 23 other dirty paths from peers; untouched.",
+      "startedAt": "2026-11-02T11:54:38.130Z",
+      "completedAt": "2026-11-02T11:55:01.770Z"
     },
     {
       "stepId": "step-2",
       "description": "Create moe-vscode/src/util/AccountPresentation.ts with the Write tool. It is pure: NO import statement at all (not even `import type`; it defines its own types), no vscode, and no mention of the extension's folder name in comments, because the test greps for the bare word. Port moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt and MoeJson.parseAccountRotation (moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt).\nThis step adds:\n- Exported types:\n  - AccountText {key: string; args: (string | number)[]};\n  - PresentedAccount {id, label, signIn, signInCheckedAt, windows: Map<string, {percent: number | null; resetsAt: string | null}>, peakPercent, blockedUntil, active, seats: string[], vmToken: boolean | null};\n  - PresentedRotation {registryFile, switchAtPercent, error, cli: {node, script} | null, accounts}.\n- Exported constants: MAX_ACCOUNTS = 32 and MAX_LABEL_LENGTH = 64.\n- `parseAccountRotation(payload: unknown): PresentedRotation | null`, with MoeJson's rules exactly:\n  - anything but a plain object, or no non-blank string registryFile, gives null;\n  - switchAtPercent: a finite whole number in 1..100, else 90;\n  - cli: an object with non-blank string node and script, else null;\n  - error: a non-blank string, else null;\n  - accounts: an array; non-objects and accounts without a non-blank string id are dropped; the first of a duplicate id wins;\n  - per account:\n    - label: a non-blank string, else the id;\n    - signIn: 'subscription', 'signed_out' or 'other', else 'signed_out';\n    - signInCheckedAt and blockedUntil: non-blank strings, else null;\n    - peakPercent: a finite number, else null;\n    - active === true;\n    - seats: the string members of an array, else [];\n    - vmToken: a real boolean, else null;\n    - windows: the object entries whose value is an object, as {percent: finite number or null, resetsAt: non-blank string or null}, in JSON order. Build them in a Map: never assign arbitrary JSON keys onto a plain {}, because a crafted key could replace the prototype.\n- Private helpers:\n  - percent(v) = Math.floor(Math.max(v, 0));\n  - shorten(label, max) = label.length > max ? label.slice(0, max - 3) + '...' : label;\n  - time(iso, nowMs, zone): only text matching `/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,9})?)?(Z|[+-]\\d{2}:\\d{2})$/` with a non-NaN Date.parse counts as an instant; anything else is returned as sent. Format through Intl.DateTimeFormat('en-US', {timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}).formatToParts. Same local date as nowMs in that zone gives 'HH:mm'; otherwise 'MM-dd HH:mm'.\n- Error handling: Intl throws RangeError for an unknown zone; catch it and fall back to 'UTC'. Nothing here throws for any input.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/src/util/AccountPresentation.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AccountPresentation.ts"
+      ],
+      "note": "Wrote AccountPresentation.ts with the Write tool (types, MAX_*, parseAccountRotation with a Map for windows, percent/shorten/time with Intl h23 and UTC fallback). Whole module written in one pass, so step 3's functions are already in the file; they get their own check in step 4. Exported also AccountRow, AccountActions and PresentedWindow because declaration emit needs the return types nameable.",
+      "startedAt": "2026-11-02T11:55:02.526Z",
+      "completedAt": "2026-11-02T11:56:08.142Z"
     },
     {
       "stepId": "step-3",
       "description": "Finish moe-vscode/src/util/AccountPresentation.ts with the four presentation functions and the resolver. Port them line for line from AccountPresentation.kt. Every text key is the full bundle key (moe.accounts....), and every output object has exactly the corpus member names, so deepStrictEqual holds.\n- `rows(rotation, nowMs, zone)`: one row per account in order, `{id, position: i + 1, label, signIn, fiveHour, weekly, status, vmToken}`.\n  - signIn: 'subscription' gives signIn.subscription, 'other' gives signIn.other, anything else signIn.signedOut;\n  - fiveHour = usage(windows.get('five_hour'));\n  - weekly = usage of the window, among names starting with 'seven_day', with the largest percent. A null percent counts as -1, and the FIRST one wins a tie (Kotlin maxByOrNull);\n  - usage: no window or a null percent gives usage.none; no resetsAt gives usage.percent [p]; else usage.resets [p, time];\n  - status order: not subscription gives signInNeeded; blockedUntil gives spentUntil [time]; active with seats gives activeSeats [n]; active gives active; seats gives inUse [n]; otherwise ready;\n  - vmToken: true gives present, false gives absent, null gives unknown.\n- `chips(rotation, nowMs, zone)`:\n  - null gives []; an error gives [chip.error]; no accounts gives [];\n  - no subscription account gives [chip.noneSignedIn];\n  - otherwise the first 4 subscription accounts as chips, plus chip.more [hidden] when more remain;\n  - a chip: label = shorten(label, 20) and peak = percent(peakPercent) or null; blockedUntil gives spent [label, time]; active with a peak gives active [label, peak]; active gives activeNoData [label]; a peak gives usage [label, peak]; otherwise noData [label].\n- `actions(rotation, selectedId, connected)`: the 12 booleans exactly as Kotlin computes them (usable, index, selected, edit, cli, vmToken).\n- `isValidLabel(input)`: `const label = input.trim(); return label.length <= MAX_LABEL_LENGTH && !/[\\u0000-\\u001f\\u007f]/.test(label);`. This is the daemon's registry.ts rule and JetBrains' rule after VSC-7's fix (corpus L08 accepts U+0085).\n- `ACCOUNT_TEXT: Readonly<Record<string, string>>`: the 23 presentation keys (moe.accounts.signIn/usage/status/chip/vmTokenState.*) with their English templates copied exactly from MoeBundle.properties lines 294-318.\n- `resolveAccountText(text)`: the template, or the key itself when unknown, with ONE pass of `/\\{(\\d+)\\}/g` replaced by String(args[n]), keeping the placeholder when that arg is missing.\nError handling: every function is total; no input throws.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/util/AccountPresentation.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AccountPresentation.ts"
+      ],
+      "note": "rows, chips, actions, isValidLabel, ACCOUNT_TEXT (23 keys) and resolveAccountText were written in the same Write as step 2 (279 lines, no import, zero matches for the bare word the test greps). Verified by the snapshot gate in step 4.",
+      "startedAt": "2026-11-02T11:56:08.912Z",
+      "completedAt": "2026-11-02T11:56:16.257Z"
     },
     {
       "stepId": "step-4",
       "description": "Gate in fresh Linux-native snapshots. Never run npm or node tests in the shared checkout (GLOBAL rail; mem:gotcha-vscode-gate-from-wsl). Use the checkRef's env -i PATH for every node and npm call.\n1) Red/green: build a snapshot as the checkRef does, but overlay only tests/accounts-corpus.test.cjs. Run `npm ci --no-audit --no-fund`, then `node --test tests/accounts-corpus.test.cjs`. It must FAIL: the module is missing at HEAD. Then overlay AccountPresentation.ts and rerun: it passes.\n2) Mutant, in that snapshot copy only: change actions' moveUp condition from `index > 0` to `index >= 0`, with an exact-string replace asserted to hit once. The focused test must fail naming C04, C06, C11 and C13, the same rows as VSC-7's JetBrains mutant. Then discard the snapshot.\n3) Run the checkRef verbatim (a new snapshot). Confirm exit 0 and 0 failures, and report the test count.\nError handling for a red run:\n- A row the port cannot meet means either a port slip (re-read the Kotlin first) or JetBrains being wrong.\n- Never edit the corpus and never bend the port to it. For a genuine JetBrains bug, comment on task-93729f32 with moe.add_comment, naming the row, and stop.\n- A failure tied to a peer's wip checkpoint follows mem:gotcha-snapshot-gate-peer-wip-checkpoint.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/accounts-corpus.test.cjs",
         "moe-vscode/src/util/AccountPresentation.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AccountPresentation.ts"
+      ],
+      "note": "Snapshots under /tmp, env -i, nvm Node 24.21.0. (1) RED: test alone overlaid on HEAD, 3 of 4 tests fail with ENOENT for AccountPresentation.ts (the vscode-grep test also needs the file). GREEN after overlaying the module: 4/4. (2) Mutant moveUp index>0 -> index>=0 (exact-string replace asserted to hit once): fails exactly C04, C06, C11, C13; restored byte-identical. (3) The first checkRef run FAILED lint: no-control-regex on my /[\\u0000-\\u001f\\u007f]/ in AccountPresentation.ts:58; fixed with an isControl charCode check (the lint rule also refuses the RegExp-constructor form). checkRef rerun verbatim: EXIT=0, lint 0, compile 0, npm test 526 tests / 522 pass / 4 skip (Windows) / 0 fail.",
+      "startedAt": "2026-11-02T11:56:17.009Z",
+      "completedAt": "2026-11-02T11:57:30.578Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff, the only review step.\n- Would the corpus test still fail if:\n  - weekly took the last tie or the first window (C05);\n  - percents were rounded (C12);\n  - time() ignored the zone or the day (C12, C13), or parsed 'soon' as a date (C13);\n  - chips counted non-subscription accounts (C15);\n  - +N more counted every account (C12);\n  - check ignored the cli (C11);\n  - an absent vmToken read as false (C08)?\n- Does the parse ever put a JSON key onto a plain object? Does any function throw on garbage (numbers, arrays, null members)?\n- Is the module free of every import and of the bare word the test greps for?\n- Confirm with `git status --porcelain` that the task touched only moe-vscode/src/util/AccountPresentation.ts and moe-vscode/tests/accounts-corpus.test.cjs. Confirm `git diff --exit-code HEAD -- moe-jetbrains/src/test/resources/client-accounts.json moe-jetbrains/src/main/resources/messages/MoeBundle.properties` exits 0.\n- Peers own every other dirty path: never revert, stage or commit them.\n- Report both files in complete_step.modifiedFiles.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/accounts-corpus.test.cjs",
         "moe-vscode/src/util/AccountPresentation.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AccountPresentation.ts",
+        "moe-vscode/tests/accounts-corpus.test.cjs"
+      ],
+      "note": "Self-review done. 36-mutant sweep in a /tmp snapshot copy (scratch driver /tmp/vsc13-scratch/mutate.cjs, outside the checkout; each replace asserted to hit once; file restored byte-identical). First sweep survivors that the corpus alone cannot pin: last-of-equal weekly, null percent ranking, percent not clamped at 0, day-only date compare, spent-before-sign-in status, 32-account limit, duplicate-id last wins, fractional/0 switchAtPercent, unknown signIn kept, blank label fallback. I added ONE test (parseAccountRotation and the formatters take any payload without throwing) that kills all of them; the final sweep leaves no survivor (the corpus kills the other mutants by C04..C15/L04..L14/ACCOUNT_TEXT). Covered by design but still not pinned: zone is UTC-only in the corpus, and the Kotlin-strips-U+001C..U+001F vs JS-strips-U+FEFF edge trim, as documented by VSC-7. Garbage probe: parse/rows/chips/actions/time/resolve/isValidLabel accept undefined, numbers, arrays, null members, a __proto__ window key (lands in the Map, not a prototype), a bad zone and a NaN now without throwing. Module has no import and no match for the vscode grep. Size 396 net lines (module 258 + test 138), under QA's 400 cap, so I compressed comments and merged constants. git status: only the two new files; client-accounts.json (sha e08b58c8...) and MoeBundle.properties unchanged (git diff --exit-code 0). Peers' 23 dirty paths untouched. Lint note: no-control-regex refuses a control-char regex, so isValidLabel uses a charCode check.",
+      "startedAt": "2026-11-02T11:57:31.355Z",
+      "completedAt": "2026-11-02T12:00:58.020Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -67,28 +98,42 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-93729f32ef6f408cbd411813c5c93838",
     "task-daf5abdd282a4c46b280eb0a48e74cd9"
   ],
   "priority": "MEDIUM",
   "order": 14,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-573a9c33f5e149f59511ce2be3712d9c",
+      "author": "governor-e6b40560",
+      "content": "Governor review-overlap ruling, 11:53Z (the human said \"go faster\" and \"keep the board moving\"; 3 coders are idle). I am dropping this row's dependsOn edge on VSC-7 (task-93729f32) so it can be claimed now.\n\n**Why it is safe:**\n- VSC-7's bytes are landed on moe/work-2026-10-24: checkpoint 7df999be, completion d13c97f5, then 00c1ac96 (board json only).\n- QA round 2 re-verified them green at 11:27Z.\n- VSC-7 is parked BLOCKED only on size waiver prop-30f48e34, which waits for a human click.\n- If that waiver is rejected, QA's fallback is a review-scope split with no byte change.\n\n**What this means for the claimer:**\n- The corpus you must pass unchanged is moe-jetbrains/src/test/resources/client-accounts.json as it stands at HEAD. QA recorded its sha256 as e08b58c8...95fc.\n- DoD 4 (client-accounts.json and every moe-jetbrains file unchanged by this task's diff) is untouched.\n- **If VSC-7's corpus bytes change before this row lands**, the governor re-adds the edge and posts here. Re-run your corpus test against the new HEAD before complete_task.\n- VSC-15 now depends directly on VSC-7, so that consumer keeps its gate.",
+      "timestamp": "2026-11-02T11:53:35.276Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:33.390Z",
-  "updatedAt": "2026-11-02T10:34:10.281Z",
+  "updatedAt": "2026-11-02T12:01:12.230Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:31:41.158Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-93e0e956"
+    "architect-93e0e956",
+    "worker-81a7999f"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T10:34:10.260Z",
   "executionContract": {
@@ -151,5 +196,19 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T10:34:10.281Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T11:54:38.130Z",
+  "reviewStartedAt": "2026-11-02T12:01:12.228Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc13-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/util/AccountPresentation.ts moe-vscode/tests/accounts-corpus.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "npm run lint (eslint src --ext ts) exit 0; npm run compile (tsc -p ./) exit 0; npm test: ℹ tests 527 | ℹ suites 0 | ℹ pass 523 | ℹ fail 0 | ℹ cancelled 0 | ℹ skipped 4 | ℹ todo 0 | ℹ duration_ms 1911.756007; accounts-corpus: 5/5 pass (port is pure, every rotation row, every label case, resolver speaks MoeBundle English, parseAccountRotation takes any payload)",
+    "reportedAt": "2026-11-02T12:01:12.228Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/accounts-corpus.test.cjs",
+    "moe-vscode/src/util/AccountPresentation.ts"
+  ],
+  "completionSummary": "VS Code now has a pure TypeScript port of JetBrains' Accounts presentation, and it passes the shared accounts corpus unchanged. NEW moe-vscode/src/util/AccountPresentation.ts (258 lines, no import, no vscode word): parseAccountRotation(unknown) with MoeJson's rules (windows in a Map; first duplicate id wins; switchAtPercent whole 1..100 else 90; unknown signIn reads signed_out; vmToken only a real boolean), rows, chips, actions, isValidLabel (daemon rule: trim, <=64, no U+0000..1F/7F; C1 controls pass), ACCOUNT_TEXT (23 keys equal to MoeBundle.properties) and resolveAccountText (single-pass {n}, unknown key shown as the key). Time/zone are parameters (Intl h23, unknown zone reads UTC, non-ISO text shown as sent). NEW moe-vscode/tests/accounts-corpus.test.cjs (138 lines, 5 tests): loads the module under node:vm with a require that throws on every name, replays all 15 rotation rows (failing ids reported together) and 14 label cases, checks the resolver and every ACCOUNT_TEXT template against the bundle, and one extra test pins parse rules and never-throws behaviour the corpus does not pin. Net 396 lines under the 400 cap. Evidence: RED at HEAD (module missing, ENOENT), GREEN after overlay; DoD mutant moveUp index>=0 fails exactly C04, C06, C11, C13; 36-mutant sweep, no survivor after the extra test; checkRef verbatim in a fresh git-archive snapshot EXIT=0, lint 0, compile 0, npm test 527 tests / 523 pass / 4 skip (Windows) / 0 fail. The first checkRef run failed lint (no-control-regex on the label pattern); fixed with a charCode check. client-accounts.json (sha256 e08b58c8...95fc), MoeBundle.properties and every moe-jetbrains file are untouched (git diff --exit-code 0). Also exported types AccountRow, AccountActions and PresentedWindow (declaration emit needs them nameable). Not pinned by the corpus: zone is UTC-only, and Kotlin strips U+001C..U+001F at the edges while JS strips U+FEFF."
 }

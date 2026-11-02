@@ -98,7 +98,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -136,16 +136,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:40:05.382Z",
-  "updatedAt": "2026-11-02T11:41:20.053Z",
+  "updatedAt": "2026-11-02T12:01:25.531Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:37:49.892Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-02T12:01:25.531Z",
+    "wallClockMs": 5015639
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-81a7999f"
+    "worker-81a7999f",
+    "qa-564d8bce"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -253,7 +256,50 @@
     "moe-jetbrains/build.gradle.kts",
     "moe-vscode/scripts/bundle-assets.mjs",
     "scripts/tests/local-runner-bundle.test.mjs",
+    "docs/DEVELOPMENT.md",
+    ".moe/tasks/task-6fbd08111de142508fb0402d06f24e3f.json",
+    ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json"
+  ],
+  "completionSummary": "VSC-16: one bundle manifest for both IDE plugin builds.\n- New scripts/bundle-manifest.json has 5 copies: the 12 scripts files; scripts/local-runner (5 required, 6 Ant excludes); scripts/mods; docs/roles; docs/skills.\n- moe-jetbrains/build.gradle.kts (JsonSlurper, lazy bundleCopies) and moe-vscode/scripts/bundle-assets.mjs (readManifest + Ant matcher) both read and validate the manifest. Each checks every source before copying, refuses a malformed manifest or an absolute/.. path with a message naming the manifest or the missing path, and LF-normalises .sh. No duplicated list is left in either file.\n- Deviation from step 1: I dropped the planned docs/agent-context.md entry. f5b00437 deleted that file and neither bundle shipped it, so the listings are unchanged (comment 3afc12e5).\nEvidence (BASE 2ab627c2, snapshots /mnt/d/moe-scratch/vsc16-base and vsc16-new):\n- The zip listing is identical (4553 entries; every non-lib CRC is equal too).\n- The vsix gains only the 5 docs/roles files the zip already ships (architect.reference, governor, governor.reference, qa.reference, worker.reference) and loses nothing.\n- onboarding passes on both bundles.\n- `gradlew.bat test buildPlugin --rerun`: BUILD SUCCESSFUL, 558 JUnit tests, 0 failures.\n- `npm run package` exits 0.\n- The bundle tests go from 13 to 15, all passing. That count includes the planned refusal table, the role-doc parity check and the dot-dir exclude rows, plus an LF/exec-bit check I added after a mutant survived.\nGradle negative runs (missing vm-control.mjs, `..` into, empty copies, CRLF .sh) behave as expected.\nSize: +251/-138 (net +113). docs/DEVELOPMENT.md is updated, and so is Serena gotcha-packaged-bundle-test-artifacts.",
+  "commits": [
+    {
+      "sha": "8453630857c45010f1e1d476c069753d41d0c940",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T11:11:27Z",
+      "paths": [
+        ".moe/tasks/task-6fbd08111de142508fb0402d06f24e3f.json",
+        ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json",
+        "docs/DEVELOPMENT.md",
+        "moe-jetbrains/build.gradle.kts",
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "scripts/bundle-manifest.json",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T11:41:51.278Z",
+      "treeId": "055eac4e4eea84bd20c50c900b462abad0f2a9f1",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/bundle-manifest.json",
+    "moe-jetbrains/build.gradle.kts",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    "moe-vscode/scripts/bundle-assets.mjs",
     "docs/DEVELOPMENT.md"
   ],
-  "completionSummary": "VSC-16: one bundle manifest for both IDE plugin builds.\n- New scripts/bundle-manifest.json has 5 copies: the 12 scripts files; scripts/local-runner (5 required, 6 Ant excludes); scripts/mods; docs/roles; docs/skills.\n- moe-jetbrains/build.gradle.kts (JsonSlurper, lazy bundleCopies) and moe-vscode/scripts/bundle-assets.mjs (readManifest + Ant matcher) both read and validate the manifest. Each checks every source before copying, refuses a malformed manifest or an absolute/.. path with a message naming the manifest or the missing path, and LF-normalises .sh. No duplicated list is left in either file.\n- Deviation from step 1: I dropped the planned docs/agent-context.md entry. f5b00437 deleted that file and neither bundle shipped it, so the listings are unchanged (comment 3afc12e5).\nEvidence (BASE 2ab627c2, snapshots /mnt/d/moe-scratch/vsc16-base and vsc16-new):\n- The zip listing is identical (4553 entries; every non-lib CRC is equal too).\n- The vsix gains only the 5 docs/roles files the zip already ships (architect.reference, governor, governor.reference, qa.reference, worker.reference) and loses nothing.\n- onboarding passes on both bundles.\n- `gradlew.bat test buildPlugin --rerun`: BUILD SUCCESSFUL, 558 JUnit tests, 0 failures.\n- `npm run package` exits 0.\n- The bundle tests go from 13 to 15, all passing. That count includes the planned refusal table, the role-doc parity check and the dot-dir exclude rows, plus an LF/exec-bit check I added after a mutant survived.\nGradle negative runs (missing vm-control.mjs, `..` into, empty copies, CRLF .sh) behave as expected.\nSize: +251/-138 (net +113). docs/DEVELOPMENT.md is updated, and so is Serena gotcha-packaged-bundle-test-artifacts."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-81a7999f@2026-11-02T11:11:27Z",
+    "at": "2026-11-02T11:41:51.278Z"
+  },
+  "completedAt": "2026-11-02T12:01:25.531Z",
+  "reviewCompletedAt": "2026-11-02T12:01:25.531Z",
+  "reviewSummary": "VSC-16 QA, completion 84536308 (pushed, on moe/work-2026-10-24).\n- Snapshot: the vsc16-new task files match the commit blobs by sha256, and tar -d against archive 2ab627c2 shows only those files plus the generated initFiles. No bundle input changed between 2ab627c2 and 84536308^.\n- Fresh runs, under the jetbrains-gradle lease:\n  - `gradlew.bat test --rerun prepareSandbox --rerun buildPlugin --rerun`: BUILD SUCCESSFUL, :test executed, JUnit XML 558 tests/0 fail. The literal `test buildPlugin --rerun` left :test and :prepareSandbox UP-TO-DATE.\n  - `npm run package`: exit 0, 4095 files.\n- Gate vsc16-gate.sh exits 0 on the rebuilt zip and vsix:\n  - zip listing identical, 4553 entries;\n  - the vsix gained only the 5 docs/roles files and lost nothing;\n  - onboarding PASS on both bundles;\n  - bundle tests 15/15, and 15/15 again in place.\n- Probes:\n  - CRC+mode: the zip's scripts/ and docs/ and the vsix's scripts/ and skills/ match base; the vsix role docs match the zip byte for byte; .sh files are LF.\n  - antPattern: 19 Ant rows, 0 mismatches.\n  - Gradle negatives: docs/skills missing gives \"Bundled docs/skills not found\"; exclude \"x\" gives \"malformed: copies[1].exclude\". The Node bundler refuses with the same key.\n- DoD 1-5 met. No epic-avoid file touched. Size: +251/-138, net 113.\n- Note: the VS Code mods types exclude is now depth-1, matching Gradle. Nothing is lost, since the vsix CRCs match base.",
+  "requiredCheckAtDone": null
 }
