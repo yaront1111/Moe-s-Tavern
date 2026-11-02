@@ -21,6 +21,7 @@ import { ensureRunnerKey } from './server/runnerChannel.js';
 import { productionReadinessInputs, startReadinessEvaluation } from './delivery/readinessHolder.js';
 import { WSL_BIND_HOST, resolveBindHosts, listenOnHosts } from './server/bindHosts.js';
 import { isAllowedHealthHost } from './server/healthHost.js';
+import { healthProofFields, parseHealthRequest, takeSpawnProofKey } from './server/spawnProof.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
 import { reconcileRunningAttempts } from './state/attemptStore.js';
 import { runDoctor } from './commands/doctor.js';
@@ -639,6 +640,8 @@ async function existingDaemonBlocksStart(projectPath: string): Promise<boolean> 
 }
 
 async function startDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
+  const { key: spawnProofKey, problem } = takeSpawnProofKey(process.env);
+  if (problem) logger.warn({ problem }, 'Ignoring invalid spawn proof key');
   const host = bindHost || DEFAULT_BIND_HOST;
   let hosts = [host];
   if (host === WSL_BIND_HOST) {
@@ -707,7 +710,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
 
   // Create HTTP server for health endpoint
   const handler: http.RequestListener = (req, res) => {
-    if (req.method === 'GET' && req.url === '/health') {
+    const route = req.method === 'GET' ? parseHealthRequest(req.url) : { health: false } as const;
+    if (route.health) {
       // DNS-rebinding guard, before any check or stats work: see server/healthHost.ts.
       if (!isAllowedHealthHost(req.headers.host, req.socket.localAddress)) {
         res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -746,7 +750,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
         stats,
         checks,
         // The configured token, never server.address(): the local runner admits a daemon only on this field.
-        bindHost: host
+        bindHost: host,
+        ...healthProofFields(route, spawnProofKey)
       };
 
       const statusCode = isHealthy ? 200 : 503;
@@ -966,6 +971,7 @@ async function superviseDaemon(projectPath: string, preferredPort?: number, bind
   let shuttingDown = false;
 
   function spawnChild(): void {
+    // Preserve the IDE spawn key for every _run, including crash restarts; only _run consumes it.
     child = spawn(process.execPath, [scriptPath, ...childArgs], {
       stdio: 'inherit',
       env: process.env,

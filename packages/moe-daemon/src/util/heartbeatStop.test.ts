@@ -67,6 +67,7 @@ MOE_WRAPPER_LAUNCH_HASH=old; MOE_WRAPPER_PATH='${wrapper.replaceAll("'", "'\\''"
 MOE_WRAPPER_ARGV=(); WORKER_ID=''; PROJECT=''; SECURE_TEMP_DIR=''
 sha256sum() { echo 'new unused'; }
 wrapper_reload_deferred() { return 1; }
+wrapper_pin_drop() { MOE_WRAPPER_PIN=''; }
 stop_heartbeat_sidecar() { :; }
 exec() { echo BAD_REEXEC; }
 for once in 1; do
@@ -91,6 +92,7 @@ $script:MoeWrapperPath = '${wrapper.replaceAll("'", "''")}'
 $script:CurrentHeartbeatJob = [pscustomobject]@{ State = 'Running' }
 function Get-MoeSha256Hex { 'new' }
 function Test-MoeWrapperReloadDeferred { param($Hash) $false }
+function Remove-MoeWrapperPin { $global:MoeWrapperReloadPin = $null }
 function Stop-HeartbeatSidecar {}
 function Invoke-MoeDeregister { throw 'BAD_RELOAD' }
 for ($once=0; $once -lt 1; $once++) {

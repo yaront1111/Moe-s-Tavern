@@ -6,7 +6,7 @@ import { ChatViewProvider } from './providers/ChatViewProvider';
 import { MetricsViewProvider } from './providers/MetricsViewProvider';
 import { ManagedVmTreeProvider } from './providers/ManagedVmTreeProvider';
 import { AccountsTreeProvider } from './providers/AccountsTreeProvider';
-import { MoeDaemonClient, readDaemonJsonText } from './services/MoeDaemonClient';
+import { MoeDaemonClient, readDaemonJsonText, useProtectedStateRoot } from './services/MoeDaemonClient';
 import type { ReadinessReply } from './services/MoeDaemonClient';
 import { ConnectionStatusBar } from './statusbar/ConnectionStatusBar';
 import { EpicDetailPanel } from './panels/EpicDetailPanel';
@@ -28,6 +28,8 @@ const readiness = (): Promise<ReadinessReply> =>
     daemonClient ? daemonClient.requestExecutionReadiness() : Promise.resolve({ failed: 'NOT_CONNECTED' });
 
 export function activate(context: vscode.ExtensionContext) {
+    // Before anything reads runtimeProfile: the persisted protected pin lives per user, outside every workspace.
+    useProtectedStateRoot(path.join(context.globalStorageUri.fsPath, 'protected-state'));
     const outputChannel = vscode.window.createOutputChannel('Moe');
     outputChannel.appendLine('Moe extension is activating...');
 

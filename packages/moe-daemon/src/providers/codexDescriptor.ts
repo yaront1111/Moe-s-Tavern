@@ -360,11 +360,11 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
     proxyCommand: {
       agreement: 'divergent',
       bash: 'command = the resolved node path or the proxy binary; the args line is OMITTED entirely when the proxy is a direct executable',
-      powershell: 'command = "node" is hardcoded and args is always emitted',
+      powershell: 'command = "$nodeForToml": the node pinned under MOE_RUNTIME_PROTECTED ($script:MoeNode, forward slashes), else bare node; args is always emitted',
       onlyInBash: ['TOML_PROXY_CMD', "'command = ' + json.dumps(proxy_cmd),", "moe_block_lines.append('args = ' + json.dumps([proxy_args]))"],
-      onlyInPowershell: ['command = "node"', 'args = ["$proxyScriptForToml"]'],
+      onlyInPowershell: ['command = "$nodeForToml"', 'args = ["$proxyScriptForToml"]'],
       divergenceReason:
-        'The bash writer resolves the proxy command; the PowerShell writer hardcodes node. The two wrappers can emit structurally different [mcp_servers.moe] blocks for the same project.',
+        'The bash writer resolves the proxy command (node plus the script, or a direct proxy binary with no args line); the PowerShell writer always runs node -- the MOE_RUNTIME_PROTECTED pin, else bare node -- with the proxy script as args. The two wrappers can emit structurally different [mcp_servers.moe] blocks for the same project.',
     },
     daemonHostUpsert: {
       agreement: 'divergent',

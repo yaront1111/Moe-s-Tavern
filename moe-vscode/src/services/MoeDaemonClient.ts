@@ -233,21 +233,21 @@ export function removeDaemonJsonIfUnchanged(file: string, expected: Pick<DaemonE
 
 function readCappedText(filePath: string, cap: number, tooLarge: string): string {
     const fd = fs.openSync(filePath, 'r');
-    try {
-        const buf = Buffer.alloc(cap + 1);
-        let total = 0;
-        while (total < buf.length) {
-            const n = fs.readSync(fd, buf, total, buf.length - total, null);
-            if (n === 0) { break; }
-            total += n;
-        }
-        if (total > cap) {
-            throw new Error(tooLarge);
-        }
-        return buf.toString('utf8', 0, total);
-    } finally {
-        fs.closeSync(fd);
+    try { return readCappedFd(fd, cap, tooLarge); } finally { fs.closeSync(fd); }
+}
+
+function readCappedFd(fd: number, cap: number, tooLarge: string): string {
+    const buf = Buffer.alloc(cap + 1);
+    let total = 0;
+    while (total < buf.length) {
+        const n = fs.readSync(fd, buf, total, buf.length - total, null);
+        if (n === 0) { break; }
+        total += n;
     }
+    if (total > cap) {
+        throw new Error(tooLarge);
+    }
+    return buf.toString('utf8', 0, total);
 }
 
 // ---- Protected runtime selection: a mirror of JetBrains RuntimeSelectionPolicy (CQ-R01) ----
@@ -293,18 +293,166 @@ export function installedRoot(extensionPath: string): string {
     return path.join(extensionPath, 'bundled');
 }
 
-/** Never throws: an unreadable or untrusted `.moe/project.json` answers 'protected'. */
+// ---- Owner-only protected state: a mirror of JetBrains ProtectedStateStore (task-98c81a27, reused by task-648a5916) ----
+// A read trusts nothing this extension would not have written: on POSIX exactly 0700 / 0600 and owned by this user.
+// Node has no ACL API, so on Windows the per-user globalStorage is the owner-only boundary; link, kind, size and name checks still apply.
+
+const MAX_STATE_BYTES = 64 * 1024;
+const STATE_NAME = /^[0-9a-f]{16}\.json$/;
+const POSIX_MODES = process.platform !== 'win32';
+let stateRoot: string | undefined;
+let tempSerial = 0;
+
+/** extension.ts sets globalStorage/protected-state first in activate(); with no root nothing is read or persisted. */
+export function useProtectedStateRoot(dir: string | undefined): void {
+    stateRoot = dir;
+}
+
+/** The key the session pin uses and every record carries: the project's real path in comparable form. */
+export function projectStateKey(basePath: string): string {
+    return comparablePath(realPathOrNull(basePath) ?? path.resolve(basePath), defaultFoldCase);
+}
+
+/** FNV-1a 64 of `kind:projectKey`, so no input names a file. Not cryptographic (no new top-level import): a collision reads as another project's record, so protected. */
+export function protectedStateName(kind: string, projectKey: string): string {
+    let hash = 0xcbf29ce484222325n;
+    for (const byte of Buffer.from(`${kind}:${projectKey}`, 'utf8')) {
+        hash = ((hash ^ BigInt(byte)) * 0x100000001b3n) & 0xffffffffffffffffn;
+    }
+    return `${hash.toString(16).padStart(16, '0')}.json`;
+}
+
+function stateFile(root: string, name: string): string {
+    if (!STATE_NAME.test(name)) { throw new Error('a protected state name must be 16 lowercase hex digits and .json'); }
+    return path.join(root, name);
+}
+
+function lstatOrAbsent(p: string): fs.Stats | undefined {
+    try { return fs.lstatSync(p); } catch (err) { if (errorCode(err) === 'ENOENT') { return undefined; } throw err; }
+}
+
+/** Stats taken without following links: a link is neither a plain directory nor a regular file. */
+function requireOwnerOnly(stats: fs.Stats, directory: boolean): void {
+    if (directory ? !stats.isDirectory() : !stats.isFile()) {
+        throw new Error(directory ? 'the protected state root is not a plain directory' : 'a protected state file is not a regular file');
+    }
+    if (POSIX_MODES && ((stats.mode & 0o777) !== (directory ? 0o700 : 0o600) || stats.uid !== process.getuid?.())) {
+        throw new Error('protected state is accessible to more than its owner');
+    }
+}
+
+/** undefined with no root, root directory or file. Throws for state this extension would not have written, naming the rule, never the contents. */
+export function readProtectedState(name: string): string | undefined {
+    if (stateRoot === undefined) { return undefined; }
+    const file = stateFile(stateRoot, name);
+    const root = lstatOrAbsent(stateRoot);
+    if (root === undefined) { return undefined; }
+    requireOwnerOnly(root, true);
+    const stats = lstatOrAbsent(file);
+    if (stats === undefined) { return undefined; }
+    requireOwnerOnly(stats, false);
+    // Checked before open (a FIFO would block), then opened without following links where the host can, and re-checked.
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    try {
+        requireOwnerOnly(fs.fstatSync(fd), false);
+        return readCappedFd(fd, MAX_STATE_BYTES, 'a protected state file is larger than 64 KiB');
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+/** Atomic (owner-only temp file, then rename), only in a root provably outside the project. Never throws: otherwise false, logged, no temp file left. */
+export function writeProtectedState(name: string, text: string, basePath: string): boolean {
+    const root = stateRoot;
+    if (root === undefined) { return false; }
+    let temp: string | undefined;
+    try {
+        const file = stateFile(root, name);
+        if (!isOutsideProject(root, basePath)) { throw new Error('the protected state root is not provably outside the project'); }
+        if (Buffer.byteLength(text, 'utf8') > MAX_STATE_BYTES) { throw new Error('protected state is larger than 64 KiB'); }
+        fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+        if (POSIX_MODES && fs.lstatSync(root).isDirectory()) { fs.chmodSync(root, 0o700); }
+        requireOwnerOnly(fs.lstatSync(root), true);
+        const candidate = path.join(root, `.${name}.${process.pid}.${++tempSerial}.tmp`);
+        const fd = fs.openSync(candidate, 'wx', 0o600);
+        temp = candidate;
+        try { if (POSIX_MODES) { fs.fchmodSync(fd, 0o600); } fs.writeFileSync(fd, text, 'utf8'); } finally { fs.closeSync(fd); }
+        fs.renameSync(temp, file);
+        return true;
+    } catch (err) {
+        log(`Moe could not persist protected state: ${errorText(err)}`);
+        if (temp !== undefined) { try { fs.rmSync(temp, { force: true }); } catch (cleanup) { log(`Moe left a protected state temp file: ${errorText(cleanup)}`); } }
+        return false;
+    }
+}
+
+/** Never throws: an unreadable or untrusted `.moe/project.json` answers 'protected'. A confirmed protected project stays so across restarts (RF02). */
 export function runtimeProfile(basePath: string): RuntimeProfile {
     try {
         if (basePath.trim() === '') { return 'legacy'; }
-        const key = comparablePath(realPathOrNull(basePath) ?? path.resolve(basePath), defaultFoldCase);
+        const key = projectStateKey(basePath);
         if (pinnedProjects.has(key)) { return 'protected'; }
-        if (!declaresVerifiedLocal(path.join(basePath, '.moe', 'project.json'))) { return 'legacy'; }
+        const verifiedLocal = declaresVerifiedLocal(path.join(basePath, '.moe', 'project.json'));
+        const stored = storedProfile(key);
+        if (verifiedLocal) {
+            pinnedProjects.add(key);
+            if (stored !== 'protected') { persistProfile(basePath, key, 'protected'); }
+            return 'protected';
+        }
+        if (stored === 'absent' || stored === 'legacy') { return 'legacy'; }
         pinnedProjects.add(key);
+        askDowngrade(basePath, key);
         return 'protected';
     } catch (err) {
         log(`Moe runtime selection fails closed to the protected profile: ${errorText(err)}`);
         return 'protected';
+    }
+}
+
+type StoredProfile = 'absent' | 'legacy' | 'protected' | 'untrusted';
+
+/** The persisted pin; 'absent' with no root or no record. Any read failure, or a record not exactly ours for this key, is 'untrusted'. */
+function storedProfile(key: string): StoredProfile {
+    if (stateRoot === undefined) { return 'absent'; }
+    try {
+        const text = readProtectedState(protectedStateName('profile', key));
+        if (text === undefined) { return 'absent'; }
+        let record: unknown;
+        // JSON.parse quotes the input in its message; the log names the rule only.
+        try { record = JSON.parse(text); } catch { throw new Error('the profile record is not JSON'); }
+        if (!isPlainObject(record) || Object.keys(record).sort().join() !== 'profile,project,version') {
+            throw new Error('the profile record does not hold exactly version, project and profile');
+        }
+        if (record.version !== 1) { throw new Error('the profile record is not version 1'); }
+        if (record.project !== key) { throw new Error('the profile record is for another project'); }
+        if (record.profile !== 'protected' && record.profile !== 'legacy') { throw new Error('the profile record is neither protected nor legacy'); }
+        return record.profile;
+    } catch (err) {
+        log(`Moe runtime selection distrusts the persisted profile: ${errorText(err)}`);
+        return 'untrusted';
+    }
+}
+
+function persistProfile(basePath: string, key: string, profile: RuntimeProfile): boolean {
+    if (stateRoot === undefined) { return false; }
+    return writeProtectedState(protectedStateName('profile', key), JSON.stringify({ version: 1, project: key, profile }), basePath);
+}
+
+/** JetBrains ProfileDowngradeDialog: modal, never awaited, safe default. The session pin keeps this session protected either way. */
+function askDowngrade(basePath: string, key: string): void {
+    const keep = (why: string): void => log(`Moe keeps the protected profile: ${why}`);
+    const message = `${path.basename(path.resolve(basePath))} now declares the legacy execution profile, but it was confirmed protected. ` +
+        'Moe keeps it protected until you allow the downgrade. An allowed downgrade takes effect after you restart VS Code.';
+    try {
+        void Promise.resolve(vscode.window.showWarningMessage(message, { modal: true }, 'Keep Protected', 'Allow Downgrade')).then(choice => {
+            if (choice !== 'Allow Downgrade') {
+                keep(choice === undefined ? 'the downgrade prompt was dismissed' : 'the downgrade was declined');
+            } else if (persistProfile(basePath, key, 'legacy')) {
+                log('Moe recorded the allowed downgrade; it takes effect after VS Code restarts');
+            }
+        }).catch(err => keep(`the downgrade prompt failed (${errorText(err)})`));
+    } catch (err) {
+        keep(`the downgrade prompt failed (${errorText(err)})`);
     }
 }
 

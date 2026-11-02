@@ -14,6 +14,7 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_DEFAULT_PORT` | WebSocket/HTTP server port (auto-scans upward if taken) | `9876` | `9900` |
 | `MOE_PORT_RANGE` | How many ports to scan past the default | `50` | `100` |
 | `MOE_BIND_HOST` | Bind address or `wsl`: loopback plus the non-internal IPv4 addresses of each `vEthernet (WSL...)` adapter, on one port. Recorded as `bindHost` in daemon.json for values other than `127.0.0.1`, including the literal `wsl`. | `127.0.0.1` | `wsl` |
+| `MOE_SPAWN_PROOF_KEY` | Set by the IDE (VS Code) for a protected-profile spawn, never by hand; exactly 64 hex characters. `_run` keeps the key in memory and removes it from its own environment; `/health?challenge=<64 lowercase hex>` answers with `spawnProof`, its HMAC-SHA256 over the ASCII challenge, never the key. | unset | — |
 | `MOE_SHUTDOWN_TIMEOUT_MS` | Grace period for clean shutdown | `10000` | `5000` |
 | `LOG_LEVEL` | Logging verbosity | `info` | `debug`, `warn`, `error` |
 | `LOG_MAX_SIZE_MB` | Max activity.log size before rotation | `10` | `5` |
@@ -484,6 +485,13 @@ The **host certification store** also lives outside every project, at `<OS accou
 - On a failure, certify writes one `{"code":...}` line to stderr (`CERTIFY_STORE_UNSAFE`, `CERTIFY_STORE_WRITE_FAILED` or `CERTIFY_REPORT_INVALID`) and changes nothing else. The work-directory report is already written by then.
 
 The daemon reads only this store, and only a report for its own platform and arch (`packages/moe-daemon/src/delivery/certificationEvidence.ts`). Without one, its readiness evaluation lists `isolated-agent-and-qa-vms` and `isolated-check-vm` as missing. A filed report never enables `verified-local` by itself. Recorded reports are in [CERTIFICATION.md](CERTIFICATION.md).
+
+The **JetBrains protected state store** also lives outside every project, at `<IDE system directory>/moe/protected-state` (`PathManager.getSystemPath()`, so each IDE product and profile has its own). The plugin writes it only under the protected execution profile (`util/ProtectedStateStore.kt`):
+- The directory must be owner-only (rwx------, or on Windows an ACL whose every entry allows the owner). Each file must be owner-only (rw-------), a regular file reached without a link, and at most 64 KiB. Its name is a sha-256 plus `.json`, so no name comes from a path.
+- Per project there are at most two files. One holds the **daemon provenance**: `version`, `project` (the project's real path as the IDE compares it), and `records`, each with the `pid`, `start`, `supervisor` flag and installed `daemon` path of a process this IDE started. The other holds the **profile pin**: `version`, `project` and `profile` (`protected` or `legacy`).
+- A record that fails any rule reads as untrusted, and the plugin falls back to the refusal or to the protected profile. A store root inside the project (a `runIde` sandbox) is never written.
+
+These files are not settings: never edit them by hand. [TROUBLESHOOTING.md](TROUBLESHOOTING.md#protected-profile-project-stays-protected-after-a-legacy-declaration) describes the one last-resort deletion. VS Code keeps no such store: its protected pin lives in memory for one window session.
 
 ---
 

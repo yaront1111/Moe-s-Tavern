@@ -7,13 +7,20 @@ Common issues and solutions for Moe's Tavern.
 ## Table of Contents
 
 1. [Daemon Issues](#daemon-issues)
-2. [Plugin Issues](#plugin-issues)
+2. [Plugin Issues](#plugin-issues). The protected execution profile has its own entries:
+   - [Protected profile: daemon was not started by this IDE](#protected-profile-daemon-was-not-started-by-this-ide)
+   - [Protected profile: project stays protected after a legacy declaration](#protected-profile-project-stays-protected-after-a-legacy-declaration)
+   - [Restart Daemon refuses or starts nothing](#restart-daemon-refuses-or-starts-nothing)
+   - [Protected profile: path is not a plain local Windows path](#protected-profile-path-is-not-a-plain-local-windows-path)
+   - [Protected profile in VS Code](#protected-profile-in-vs-code)
+   - Wrapper refusal codes (`MOE_RUNTIME_PROTECTED_PATH_MISSING`, `MOE_PROTECTED_*`) are in the [Local Runner Issues](#local-runner-issues) table.
 3. [MCP/Proxy Issues](#mcpproxy-issues)
 4. [Task Sync Issues](#task-sync-issues)
 5. [Claude Account Rotation Issues](#claude-account-rotation-issues)
 6. [Local Runner Issues](#local-runner-issues)
 7. [Performance Issues](#performance-issues)
-8. [Diagnostic Commands](#diagnostic-commands)
+8. [Worktree Mode](#worktree-mode)
+9. [Diagnostic Commands](#diagnostic-commands)
 
 ---
 
@@ -198,6 +205,67 @@ cat .moe/daemon.json
 1. Check IDE logs: Help > Show Log in Explorer/Finder
 2. Search for "Moe" errors
 3. Try reinstalling the plugin
+
+---
+
+### Protected profile: daemon was not started by this IDE
+
+**Symptom (JetBrains):** The plugin stays disconnected and shows "Protected execution profile: the running Moe daemon (pid N) was not started by this IDE from the installed Moe runtime. Stop it, then use Restart Daemon." Or it asks first, in the **Moe: Unverified Daemon** dialog.
+
+**Cause:** The project declares `executionProfile` `verified-local`, so the plugin runs it under the protected profile. Under that profile it attaches only to a daemon that it started itself from the installed plugin runtime and recorded by pid and start time. The record comes from this IDE session or, after an IDE restart, from the IDE's protected state store (see `docs/CONFIGURATION.md`, **File Structure**), and it must name the daemon installed now. Any other daemon is refused: one started from a terminal, by an agent wrapper, by VS Code, by another IDE product or by an earlier plugin install, and also any daemon whose store record cannot be read. The reasons are in the [protected-profile threat model](design/protected-profile-threat-model.md), which assumes a single-user host.
+
+**Solution:**
+- After an IDE restart, the daemon this IDE started before is recognized, and there is nothing to do.
+- Otherwise the plugin asks when it connects. **Keep It** (the default) leaves that daemon running and the plugin disconnected, because VS Code or a terminal agent may be using it. **Stop and Replace** runs the installed CLI's `stop`, waits up to 15 s until the process, its parent and `.moe/daemon.json` have cleared, and then starts the installed daemon. If the stop fails or a process outlives the wait, nothing new starts until those captured processes have exited.
+- When no dialog appears, stop that process yourself, then use **Restart Daemon**. Restart Daemon never signals a daemon it cannot verify (see [Restart Daemon refuses or starts nothing](#restart-daemon-refuses-or-starts-nothing)).
+
+---
+
+### Protected profile: project stays protected after a legacy declaration
+
+**Symptom (JetBrains):** `.moe/project.json` no longer declares `verified-local`, yet the plugin keeps the protected profile and asks once per IDE session, in **Moe: Execution Profile Downgrade**: "<project> now declares the legacy execution profile, but it was confirmed protected. Moe keeps it protected until you allow the downgrade. An allowed downgrade takes effect after you restart the IDE."
+
+**Cause:** The plugin pinned the project as protected when it read `verified-local`. A repository change (a pull or a branch switch) must never turn the profile off silently.
+
+**Solution:**
+- If the downgrade is intended, choose **Allow Downgrade**, then restart the IDE. **Keep Protected** (the default) changes nothing, and the question comes back next session.
+- The question also comes back after every restart when the IDE cannot write its store: a store that is not owner-only, or a project or store root it cannot place (a share, a mapped or subst drive it cannot resolve, or a device path). There an allowed downgrade lasts one session.
+- A pin record the IDE would not have written (edited, a link, not owner-only, over 64 KiB, or for another project) also reads as protected. As a last resort a human may delete that one record: the `<sha-256>.json` file in the store whose `"project"` field names this project and which has a `"profile"` field. Never edit it.
+
+---
+
+### Restart Daemon refuses or starts nothing
+
+**Symptom (JetBrains):** **Restart Daemon** leaves the plugin disconnected with one of these:
+- "Restart Daemon is already stopping the old Moe daemon. Wait for it to finish." (Windows)
+- "Restart Daemon did not start a new Moe daemon: pid N is still running after the stop, and it could restart the old one. Check what that process is and stop it yourself, then use Restart Daemon." (Windows)
+- "Restart Daemon did not start a new Moe daemon: it could not confirm that the old one stopped. Use Restart Daemon again." (Windows)
+- "Protected execution profile: Restart Daemon did not stop pid N, which .moe/daemon.json names: this IDE did not start it from the installed Moe runtime." (or "the stop request failed"), followed by "Check what that process is and stop it yourself if it is a Moe daemon, then use Restart Daemon."
+- "Restart Daemon did not stop pid N, which .moe/daemon.json names on the other side of the Windows/WSL boundary: …"
+
+**Cause:** On Windows, ending a process is `TerminateProcess`, which the old supervisor takes for a crash of its `_run` child and restarts. So Restart Daemon first runs the installed CLI's `stop`. It then ends the old process tree within one 15 s wait, the roots before their children: the supervisor this IDE spawned and, under the protected profile, the daemon's verified parent. It starts nothing while one of those processes still runs, or while an earlier attempt left a tree unresolved, and the plugin's automatic start waits too. On any host the protected profile never signals a `.moe/daemon.json` pid it cannot verify. A pid that is absent, dead or 0 is never signalled, so a stale `.moe/daemon.json` alone does not block a restart. The IDE cannot see processes on the other side of the WSL boundary.
+
+**Solution:** Wait for a running stop to finish. Otherwise look up the pid (Task Manager's Details tab, or `tasklist /fi "PID eq N"`), end it if it is a Moe `node` process, then use Restart Daemon again. For the WSL case, stop the process on that side.
+
+---
+
+### Protected profile: path is not a plain local Windows path
+
+**Symptom:** Under the protected profile on Windows nothing starts, and the IDE shows "Protected execution profile: the project directory is not a plain local Windows path. Project and PATH copies of the Moe daemon are not used." An agent launch gives the same reason and ends "Agents only use the wrapper, daemon and proxy installed with the Moe plugin." (in VS Code, "…with the Moe extension."). Other forms name `installed daemon/index.js` or `node executable` instead of the project directory.
+
+**Cause:** The protected profile accepts only paths it can prove are outside the project: drive-qualified (`X:\`, optionally behind `\\?\`), on a drive that maps to a local volume, with no segment ending in `.` or a space. It refuses a share (`\\localhost\C$` included), `\\wsl$` and `\\wsl.localhost`, a device or volume path, a mapped network drive and a subst drive it cannot resolve. JetBrains also refuses an unknown device family (VeraCrypt, ImDisk, WinFsp). PATH entries of these kinds are skipped, so a node reachable only through one is not found. `docs/ARCHITECTURE.md` (**Security Notes**) lists these accepted costs.
+
+**Solution:** Clone the project to a local drive that is not mapped, and install the IDE plugin and node on a local drive. For a WSL project, run the IDE inside the distro. Otherwise stay on the legacy profile.
+
+---
+
+### Protected profile in VS Code
+
+**Symptom:** Under the protected profile, VS Code shows "Protected execution profile: <reason>. Project and PATH copies of the Moe daemon are not used." when it would start the daemon. When it would launch an agent, it shows "Protected execution profile: <reason>. Agents only use the wrapper, daemon and proxy installed with the Moe extension." and opens no terminal.
+
+**Cause:** VS Code takes the wrapper, daemon and proxy only from `<extensionPath>/bundled`. It takes node only as a regular file outside the project: `MOE_NODE_COMMAND`, the managed runtime, an absolute PATH entry outside the project, or a standard install location. Two JetBrains protections are missing: VS Code attaches to any daemon that serves this project (task-648a5916), and its `verified-local` pin lasts one window session and has no downgrade dialog (task-98c81a27).
+
+**Solution:** Reinstall the extension if a bundled file is missing, and install node outside the project. For a Windows path reason, see [Protected profile: path is not a plain local Windows path](#protected-profile-path-is-not-a-plain-local-windows-path).
 
 ---
 
@@ -1048,6 +1116,9 @@ reports `infra-failure` with the code as its `failure`, unless its row says othe
 | `DEPENDENCY_SOURCE_UNSUPPORTED`, `DEPENDENCY_INTEGRITY_INVALID` (a check's dependency phase) | A lockfile entry the guest must install lacks the canonical registry.npmjs.org tarball `resolved` URL or one canonical `sha512-` `integrity`: for example an entry with neither field, a link, or a git or `file:` source. The runner installs admitted registry tarballs only. | Regenerate the lockfile against registry.npmjs.org so every installed entry has both fields, then re-run the check. |
 | `MOE_DEPENDENCY_CANDIDATE_INVALID` (a check's output tail: a `code-failure`, exit code 82) | The guest refused the candidate's own package files before any install: a lockfile directory's `package.json` is missing, linked, malformed or oversized, its install metadata differs from the lockfile's root entry, it sets `overrides`, bundled dependencies or `workspaces`, or an `npm-shrinkwrap.json` or `.npmrc` sits beside it. | Remove the `npm-shrinkwrap.json` or `.npmrc` and any overrides, bundling or workspaces, regenerate `package-lock.json` from that `package.json`, then re-run the check. |
 | `MOE_RUNTIME_PROTECTED_PATH_MISSING` (`moe-agent.{sh,ps1}`, `moe-call.sh`) | `MOE_RUNTIME_PROTECTED=1`, which the JetBrains launcher sets for a protected seat, and the named variable (`MOE_PROXY_PATH` or `MOE_DAEMON_PATH`) is not an absolute path to an existing file. The scripts never fall back to another copy. | Reinstall or update the plugin so its bundled daemon and proxy exist, then relaunch the seat. A legacy seat refuses too when it inherits `MOE_RUNTIME_PROTECTED=1` from the IDE's or the shell's own environment: unset it there. |
+| `MOE_PROTECTED_AGENT_COMMAND_REFUSED` (`moe-agent.{sh,ps1}`) | `MOE_RUNTIME_PROTECTED=1`, and the agent command is not exactly `claude`, `codex`, `gemini` or `grok` with no arguments. The protected runtime starts only these CLIs, by name. The line quotes the refused value (control characters as `?`, at most 200 characters). The JetBrains launcher refuses the same value earlier, in a dialog. | Set `agentCommand` (or the seat's command) to one of the four names, or run the seat under the legacy profile. |
+| `MOE_PROTECTED_AGENT_CLI_NOT_FOUND` (`moe-agent.{sh,ps1}`) | `MOE_RUNTIME_PROTECTED=1`, and the named CLI is on no absolute PATH entry outside the project. A relative, `.` or in-project PATH entry never counts. | Install the CLI outside the project, put its directory on PATH as an absolute entry, then relaunch the seat. |
+| `MOE_PROTECTED_INTERPRETER_NOT_FOUND` (`moe-agent.{sh,ps1}`) | `MOE_RUNTIME_PROTECTED=1`, and no trusted `node` (sh: also `python3`) is on an absolute PATH entry outside the project. sh also accepts an absolute `MOE_NODE_COMMAND`, or the managed runtime `~/.local/share/moe/node/current/bin/node`, when the file is named `node` and lies outside the project. | Install node (sh: and python3) outside the project and put it on PATH. With sh you can instead set `MOE_NODE_COMMAND` to node's absolute path. |
 
 ---
 
@@ -1094,6 +1165,82 @@ export LOG_RETENTION_COUNT=3
 1. Check network stability
 2. Increase reconnection delay in plugin settings
 3. Restart both daemon and plugin
+
+---
+
+## Worktree Mode
+
+### Worktree mode: flip on / roll back
+
+With `settings.worktreeMode: 'on'`, every WORKING claim runs in its own `.worktrees/task-<id>` on branch
+`moe/task/<id>`, and the wrapper lands it on the **target**: the literal `consolidationBranch`, else `main`. Both
+switches below are stop-the-world and human-run (design: `docs/plans/2026-10-30-per-task-worktrees.md` §7.3, §7.4).
+No Moe seat ever merges a `moe/work-*` branch into `main`: the only `main` move is the human-run migration landing.
+Change settings through the daemon (the plugin's `UPDATE_SETTINGS`), never by editing `.moe/project.json` by hand.
+
+**Readiness.** `node packages/moe-daemon/dist/index.js doctor --project <path>` is offline and read-only: it never
+fetches, prunes, removes or writes Git or `.moe/` state. While `worktreeMode` resolves to `'on'` its `worktree …`
+lines are hard checks (`[OK]`/`[FAIL]`, exit 1 on any fail). While it is `'off'` they are `[INFO]` and never change
+the exit code.
+
+| Line | Ready when |
+|---|---|
+| `worktree mode` | `project.json` is readable and `worktreeMode` is `'off'` or `'on'`. An unreadable file or another value is `[FAIL]` in either mode, never a silent `'off'`. |
+| `worktree git version` | git is 2.38 or newer (`merge-tree --write-tree`). |
+| `worktree project root` | The project is its repository's top level. |
+| `worktree control branch` | The control checkout's HEAD is exactly `refs/heads/moe/control`. |
+| `worktree target` | The target is an existing local branch that no worktree has checked out, the control checkout included. |
+| `worktree quality gate` | `settings.qualityGate` is non-blank: every worktree landing runs it, whatever `qualityGateScope` says. Doctor never runs it. |
+| `worktree stale task worktrees` | Soft `[WARN]` only: a registered `.worktrees/task-<id>` whose task is DONE or ARCHIVED and was last updated over 24 h ago (the cleanup is falling behind). Doctor removes nothing. |
+
+**Flip on.**
+
+1. **Drain.** Stop every seat once no task is WORKING or REVIEW with an open attempt. Let each REVIEW land and finalize first.
+2. **Rescue refs.** `git for-each-ref refs/moe/rescue` must show no rescue ref of a live task still waiting for shared-mode recovery ([Recovering from `refs/moe/rescue/*`](#recovering-from-refsmoerescue)). Land or archive those tasks first.
+3. **Settings.** Set a `qualityGate` if none is set, fast enough to run on every landing. Declare the land lease:
+   `resources: { "git-land-main": { "capacity": 1, "maxLeaseMs": 7200000, "releaseOnDeregister": true } }`.
+   The id is `git-land-<target>` with every character outside `[A-Za-z0-9._-]` made `-` (target `moe/work-2026-10-24` → `git-land-moe-work-2026-10-24`).
+4. **Migration landing (the human-only merge step).** First `git merge-base --is-ancestor origin/main moe/work-2026-10-24` must hold (`main` instead of `origin/main` when there is no remote). If it does not, merge `main` **into the branch** (never into `main`) and check again. Then a human runs, from the control checkout:
+   ```bash
+   scripts/moe-agent.sh --project <path> --land-branch moe/work-2026-10-24
+   ```
+   ```powershell
+   .\scripts\moe-agent.ps1 -Project <path> -LandBranch moe/work-2026-10-24
+   ```
+   It merges the branch onto the fetched `main` in an isolated tree, runs the `qualityGate` on exactly that tree in a `.moe`-free gate worktree, and publishes one two-parent merge commit by compare-and-swap (a non-forced push when there is a remote). It owns no task, so it takes no lease (the drain leaves no other lander), starts no daemon and records no ledger row. Exit 0 with `MOE_MIGRATION_LANDED` or `MOE_COMMIT_NOTHING_TO_COMMIT` means `main` contains the branch. Any other result stops the flip, with `main` untouched:
+
+   | Code | Cause | Then |
+   |---|---|---|
+   | `MOE_MIGRATION_BAD_ARGS` (exit 2) | The branch is missing, is `main`, or is not a local branch. | Fix the argument. |
+   | `MOE_MIGRATION_NO_GATE` | `qualityGate` is blank, or `MOE_DISABLE_QUALITY_GATE=1`. | Step 3, then re-run. |
+   | `MOE_LAND_TARGET_CHECKED_OUT` | Some worktree has `main` checked out. | Switch it off `main`, then re-run. |
+   | `MOE_LAND_FETCH_FAILED` | `git fetch origin main` failed 3 times. | Fix the network, then re-run. |
+   | `MOE_LAND_TARGET_DIVERGED` | Local `main` holds commits `origin/main` lacks. | Find out where they came from. Never force-push or reset `main`. |
+   | `MOE_COMMIT_FAILED_CONFLICT` | The merge conflicts in the listed paths. | Merge `main` into the branch, then re-run. |
+   | `MOE_COMMIT_FAILED_GATE` | The merged tree failed the gate. | Fix it on the branch, then re-run. |
+   | `MOE_PUSH_FAILED` | The remote refused the push, for example a review ruleset on `main`. | Fix the remote side, or use a branch target (below). |
+   | `MOE_PUSH_OUTCOME_UNKNOWN` | The push outcome is unsettled; no local ref moved. | Re-run: it settles, ending in `MOE_COMMIT_NOTHING_TO_COMMIT` once `main` holds the branch. |
+   | `MOE_COMMIT_FAILED_REF_CONTENTION` | `main` moved under both rounds. | Finish the drain, then re-run. |
+   | `MOE_COMMIT_FAILED` | Not a git repository, or a git plumbing step failed. | Read the message. |
+5. In the control checkout: `git switch -c moe/control main`. `main`'s tree is now the branch tip's, so the switch changes no file and the daemon's dirty `.moe/` files stay as they are.
+6. **Settings:** `worktreeMode: 'on'` and `consolidationBranch: 'main'`. Optionally run `git config extensions.worktreeConfig true` in the control checkout, so the first seats do not race to set it. Run doctor; it must exit 0. Then relaunch the seats.
+
+**A branch target instead of `main`.** When `main` stays PR-only and `consolidationBranch` names a branch that
+already holds the work, skip step 4. Name the step 3 lease after that branch. In step 5, run
+`git switch -c moe/control <branch>`. In step 6, keep `consolidationBranch: '<branch>'`. This project switched this
+way on 2026-11-02, with `moe/work-2026-10-24`. The human keeps merging that branch into `main` by pull request.
+
+**Roll back.**
+
+1. Drain as above. Land every `moe/task/<id>` the target does not fully contain (preferred), or have a human merge it into the shared branch, never into `main`.
+2. Set `worktreeMode: 'off'` and **unset** `consolidationBranch`. Left at `main`, it is `ensure_safe_branch`'s main-direct opt-in, and shared seats would commit on `main`.
+3. In the control checkout, run `git switch -c moe/work-<date> main` with a branch name that does not exist yet. The peel reuses any non-default branch it finds, `moe/control` included. For a branch target, run `git switch <branch>` instead.
+4. Run doctor, then relaunch the seats. A task still pinned to worktree mode stops with `MOE_WORKTREE_MODE_MISMATCH` and blocks for a human instead of losing bytes.
+
+Keep the `.worktrees/task-*` checkouts (the wrapper creates them locked) and the `refs/moe/rescue/*` refs until every
+task is recovered. The wrappers' worktree removal at DONE and its orphan sweep (WT-14) handle terminal tasks only
+where your wrappers include them. Doctor's stale line lists the leftovers. Never remove the worktree of a task that is
+not DONE or ARCHIVED, or one whose `moe/task/<id>` the target does not contain. Rollback never moves `main`.
 
 ---
 
