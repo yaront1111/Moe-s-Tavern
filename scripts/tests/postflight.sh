@@ -1952,6 +1952,56 @@ for reload_mode in deferred unverifiable; do
   echo "[hot reload $reload_mode] ok: $reload_edits deferrals, $reload_restarts restarts"
 done
 
+# --- Hot reload follow (WT-13 §6.2; twin in postflight.ps1). The project is the
+# wrapper's own checkout, on moe/control. A wrapper change committed to main only
+# (plumbing: neither HEAD nor the file moves) is followed at the next loop top,
+# BEFORE the hash check, so the file on disk is HEAD's blob and the seat restarts
+# once, with no MOE_WRAPPER_RELOAD_DEFERRED line.
+echo "[hot reload follow] a wrapper change landed on main is followed, then reloaded"
+RELOAD_DIR="$TMP_DIR/reload-follow"
+RELOAD_PROJECT="$RELOAD_DIR"
+RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+mkdir -p "$RELOAD_DIR/.moe/messages"
+cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+chmod +x "$RELOAD_WRAPPER"
+printf '.moe/\n.mcp.json\nlogs/\n.claude/\n' > "$RELOAD_DIR/.gitignore"
+printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_DIR/.moe/project.json"
+: > "$RELOAD_DIR/.moe/messages/chan-general.jsonl"
+printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_DIR" > "$RELOAD_DIR/.moe/daemon.json"
+follow_git() {
+  git -C "$RELOAD_DIR" -c user.name='Moe Test' -c user.email=moe@test.local -c commit.gpgsign=false -c core.autocrlf=false "$@"
+}
+{ follow_git init -q && follow_git symbolic-ref HEAD refs/heads/main && follow_git add -A && follow_git commit -qm base \
+    && follow_git switch -q -c moe/control; } || { echo 'HOT RELOAD FAILED: could not initialize the follow repo' >&2; exit 1; }
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \
+  "$RELOAD_WRAPPER" --project "$RELOAD_DIR" --worker-id worker-reload-follow --role worker --no-start-daemon \
+  --command /bin/true --loop --poll-interval 1 >"$TMP_DIR/wrapper-reload.out" 2>&1 &
+reload_pid=$!
+reload_live_before="$LIVE_PIDS"
+LIVE_PIDS="$LIVE_PIDS $reload_pid"
+reload_wait 0 '^c'
+reload_fmode="$(follow_git ls-files -s scripts/moe-agent.sh | cut -d' ' -f1)"
+reload_idx="$TMP_DIR/reload-follow.index"
+reload_blob="$({ cat "$RELOAD_WRAPPER"; printf '# landed on main\n'; } | follow_git hash-object -w --stdin)" \
+  && GIT_INDEX_FILE="$reload_idx" follow_git read-tree HEAD \
+  && GIT_INDEX_FILE="$reload_idx" follow_git update-index --cacheinfo "$reload_fmode,$reload_blob,scripts/moe-agent.sh" \
+  && reload_tree="$(GIT_INDEX_FILE="$reload_idx" follow_git write-tree)" \
+  && reload_main="$(follow_git commit-tree "$reload_tree" -p HEAD -m 'land a wrapper change on main')" \
+  && follow_git update-ref refs/heads/main "$reload_main" \
+  || reload_fail 'could not land the wrapper change on main'
+reload_wait 1 '^c+rc'
+reload_final="$(reload_seq)"
+kill -KILL "$reload_pid" 2>/dev/null || true
+wait "$reload_pid" 2>/dev/null || true
+LIVE_PIDS="$reload_live_before"
+grep -Eq "MOE_CONTROL_ADVANCED [0-9a-f]{40}\.\.$reload_main\$" "$TMP_DIR/wrapper-reload.out" \
+  || reload_fail 'no MOE_CONTROL_ADVANCED line naming the landed commit'
+if grep -q 'MOE_WRAPPER_RELOAD_DEFERRED' "$TMP_DIR/wrapper-reload.out"; then reload_fail 'the followed bytes were deferred'; fi
+[ "$(grep -c 'restarting to load it' "$TMP_DIR/wrapper-reload.out" || true)" = 1 ] || reload_fail 'expected one restart announcement'
+[ "$(follow_git rev-parse HEAD)" = "$reload_main" ] && [ "$(follow_git symbolic-ref HEAD)" = refs/heads/moe/control ] \
+  && follow_git diff --quiet HEAD -- scripts/moe-agent.sh || reload_fail 'the control checkout is not on moe/control at main with the wrapper equal to HEAD'
+echo "[hot reload follow] ok: followed $reload_main, restarted once, no deferral (sequence $reload_final)"
+
 # --- Stale offset: bash parses incrementally, so the loop and its own tail
 # must be one group. No ps1 twin: PowerShell parses the whole file up front.
 echo "[stale offset] a single-shot seat keeps its own tail after an in-place edit"

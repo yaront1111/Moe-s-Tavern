@@ -525,6 +525,14 @@ switch (tool) {
       if (!Array.isArray(ctxCommits)) throw new Error('FAKE_CTX_COMMITS must be a JSON array');
       ctxPayload.task.commits = ctxCommits;
     }
+    // FAKE_CTX_LANDING: task.landing as getContext.ts buildLanding serves it (a JSON
+    // object: {lastCompletion?: {sha, ref, pushed, recordedAt}, lastCheckpoint?: {sha,
+    // recordedAt}}), which a worktree-mode QA pre-flight reads (WT-13). Unset: no field.
+    const ctxLanding = jsonKnob('FAKE_CTX_LANDING');
+    if (ctxLanding !== undefined) {
+      if (!ctxLanding || typeof ctxLanding !== 'object' || Array.isArray(ctxLanding)) throw new Error('FAKE_CTX_LANDING must be a JSON object');
+      ctxPayload.task.landing = ctxLanding;
+    }
     // task.landingRetry (WT-03): present only while the finalize_attempt store above holds one.
     const retryFile = path.join(moe, 'landing-retry.json');
     if (fs.existsSync(retryFile)) ctxPayload.task.landingRetry = JSON.parse(fs.readFileSync(retryFile, 'utf8'));

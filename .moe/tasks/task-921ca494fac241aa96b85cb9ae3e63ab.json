@@ -111,7 +111,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:11:46.174Z",
-  "updatedAt": "2026-11-02T16:11:53.155Z",
+  "updatedAt": "2026-11-02T17:07:02.884Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:16:25.568Z",
@@ -230,7 +230,8 @@
     "moe-vscode/media/taskDetail.js",
     "moe-vscode/tests/blocker-corpus.test.cjs",
     ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json",
-    ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json"
+    ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+    ".moe/tasks/task-86431c315e524b3b89af3bb3d2e7c98d.json"
   ],
   "completionSummary": "VSC-23 delivered. With a task detail panel open, every state update now refreshes the Delivery section and the Release Agent button. TaskDetailPanel.ts: new exported deliveryDisplay(delivery) (one label lookup behind both renderers), module-private releaseAgentLabel(task), debouncedUpdate posts {type:'updateTask', task, delivery, releaseAgentLabel}, renderDelivery is built on deliveryDisplay with byte-identical markup, no new import (+30/-10). media/taskDetail.js: removeNode (parentNode-guarded), renderDelivery(delivery), renderReleaseAgent(label), postReleaseAgent as top-level declarations, called last in the updateTask branch; text goes in only through textContent/title (+65/-7). New tests/task-detail-live.test.cjs (256 lines): L0 harness self-check, L1 replays every client-delivery.json row (live equals initial), L2 placement right after #blockerSection/rebuild/removal for delivery:null and absent, L3 hostile text lands as text, L4 button follows assignedWorkerId and stays one node with one listener. The DOM fake throws on any write outside className/id/title/textContent/value/scrollTop. blocker-corpus.test.cjs: C3 appended (+37/-0) pins all 15 moe.blocker.* keys to MoeBundle.properties on TaskDetailPanel.ts, board.js and taskDetail.js. Evidence at HEAD fb0b5ab9 in a git-archive snapshot: npm ci, lint 0, compile 0, npm test 564 tests / 560 pass / 4 skip / 0 fail, gate exit 0. checkref 2 and checkref 3: mutants killed: 1, exit 0. RED proof against HEAD sources: L0 ok, L1-L4 not ok. Size: net 371 (panel +20, js +58, C3 +37, new test 256). delivery-corpus, task-blocker-visibility, task-release and approval-paths tests untouched and passing. README Known issues and MANUAL_TESTS step 6 still describe the old limit; VSC-18 owns them, so a docs follow-up should drop them.",
   "commits": [
@@ -253,6 +254,22 @@
       "treeId": "242ff1e994c11715e3827363271a188cc0703616",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "51ba4f6a110e2b16278aff3c114ff0b317da5180",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-d54b05fd@2026-11-02T15:36:45Z",
+      "paths": [
+        ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json",
+        ".moe/tasks/task-86431c315e524b3b89af3bb3d2e7c98d.json"
+      ],
+      "recordedBy": "architect-d54b05fd",
+      "recordedAt": "2026-11-02T17:07:02.884Z",
+      "treeId": "c85707587743ed3a097bc5c4395a3bcc27474b97",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -263,11 +280,10 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
+    "outcome": "committed",
     "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-564d8bce@2026-11-02T16:08:51Z",
-    "at": "2026-11-02T16:11:53.155Z"
+    "sessionId": "architect-d54b05fd@2026-11-02T15:36:45Z",
+    "at": "2026-11-02T17:07:02.884Z"
   },
   "completedAt": "2026-11-02T16:10:52.127Z",
   "reviewCompletedAt": "2026-11-02T16:10:52.127Z",

@@ -109,6 +109,35 @@ if ($Loop -and $NoLoop) {
     exit 2
 }
 
+# WT-13 (design §6.1), twin of moe_wrapper_in_worktree in moe-agent.sh: a copy in
+# <repo>/.worktrees/task-*/ refuses before any daemon, config or claim side effect.
+# git answers with physical paths (a link alias is caught); a failed git call, as
+# for a non-Git bundled copy, launches as before. Local 'Continue': PS 5.1 turns a
+# native stderr line into a terminating error under 'Stop'.
+$moeInWorktree = & {
+    $ErrorActionPreference = 'Continue'
+    if (-not $PSCommandPath) { return $false }
+    try {
+        $dir = Split-Path -Parent $PSCommandPath
+        $top = [string](@(& git -C $dir rev-parse --show-toplevel 2>$null) | Select-Object -First 1)
+        if ($LASTEXITCODE -ne 0 -or -not $top) { return $false }
+        $pre = [string](@(& git -C $dir rev-parse --show-prefix 2>$null) | Select-Object -First 1)
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $first = [string](@(& git -C $dir worktree list --porcelain 2>$null) | Select-Object -First 1)
+        $main = if ($first.StartsWith('worktree ', [StringComparison]::Ordinal)) { $first.Substring(9) } else { '' }
+        $cmp = if ($PSVersionTable.PSEdition -ne 'Core' -or $IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+        if ($pre.StartsWith('.worktrees/task-', $cmp)) { return $true }
+        $prefix = "$main/.worktrees/"
+        if (-not $main -or -not $top.StartsWith($prefix, $cmp)) { return $false }
+        $rest = $top.Substring($prefix.Length)
+        return ($rest.StartsWith('task-', $cmp) -and $rest.IndexOf('/') -lt 0)
+    } catch { return $false }
+}
+if ($moeInWorktree) {
+    [Console]::Error.WriteLine("[ERROR] MOE_WRAPPER_IN_WORKTREE: $PSCommandPath is inside a task worktree; launch the control checkout's scripts/moe-agent.ps1")
+    exit 1
+}
+
 # Architect and governor default to interactive TUI: planning is a conversation,
 # and governance is an interactive oversight task where the operator wants to
 # steer escalation decisions in real time. Worker and QA stay opt-in. Explicit
@@ -2926,6 +2955,8 @@ function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {
             Stop-MoeWorktreeSeat 'MOE_WORKTREE_PROJECT_NOT_TOP' "$projectPath is not the top level of a git work tree; worktree mode needs the project at the repository root"
         }
         $top = $git.Top; $target = $ws.Target
+        # WT-13 (§6.5): the one caller that may switch the control checkout onto moe/control.
+        Invoke-MoeControlFollow -Switch
         $h = Invoke-MoeGit -Top $top -GitArgs @('symbolic-ref', '-q', 'HEAD')
         $head = if ($h.Rc -eq 0) { "$(@($h.Out) | Select-Object -First 1)".Trim() } else { '' }
         if ($head -cne 'refs/heads/moe/control') {
@@ -5975,6 +6006,139 @@ function Test-MoeControlWorktreeMode {
     return ($h.Rc -eq 0 -and ($h.Out -join '').Trim() -ceq 'refs/heads/moe/control')
 }
 
+# A [WARN] line on every call, plus a #general alert at most once an hour per
+# code for the whole checkout (every seat of it): the stamp
+# <gitdir>/moe/control-alert-<code> holds the last alert's UTC epoch (one that is
+# unreadable or in the future counts as old), read and updated only under the
+# exclusive-create lock file control-alert.lock. A held lock is skipped, never
+# waited on; one older than 10 minutes was left by a killed seat and is removed.
+# No failure here stops a follow or a landing. Twin: control_alert.
+function Send-MoeControlAlert([string]$Code, [string]$Detail, [hashtable]$Git) {
+    Write-Host "[WARN] ${Code}: $Detail" -ForegroundColor Yellow
+    if (-not $generalChannelId -or -not $Git) { return }
+    $dir = Join-Path $Git.GitDir 'moe'; $lock = Join-Path $dir 'control-alert.lock'; $stamp = Join-Path $dir "control-alert-$Code"; $won = $false
+    try {
+        [void][IO.Directory]::CreateDirectory($dir)
+        $held = Get-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+        if ($held -and $held.LastWriteTimeUtc -lt [DateTime]::UtcNow.AddMinutes(-10)) { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
+        [IO.File]::Open($lock, [IO.FileMode]::CreateNew).Dispose()   # throws while another seat holds it
+        try {
+            $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            $last = if (Test-Path -LiteralPath $stamp) { ([IO.File]::ReadAllText($stamp)).Trim() } else { '' }
+            if (-not ($last -match '^[0-9]{1,12}$' -and [long]$last -le $now -and $now - [long]$last -lt 3600)) {
+                [IO.File]::WriteAllText($stamp, "$now`n"); $won = $true
+            }
+        } finally { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
+    } catch { return }
+    if ($won) { Send-MoeGeneralChat "${Code}: $Detail (control checkout $($Git.Top))" }
+}
+
+# Design §6.2/§6.5: fast-forward moe/control to refs/heads/<target> (literal
+# consolidationBranch, else main) with hooks off. `merge --ff-only` moves HEAD
+# and the files together, so the wrapper on disk is always committed bytes. Off
+# moe/control nothing runs, except with -Switch (a worker pre-flight after a
+# worktree claim): HEAD on the target, or detached, at the target's commit
+# switches to moe/control, made there or reused only at that same commit; any
+# other HEAD is MOE_CONTROL_NOT_FOLLOWING. Never a reset, stash, force or clean:
+# a refusal is an alert, nothing moves, and the caller goes on.
+# Twin: follow_control_checkout.
+function Invoke-MoeControlFollow([switch]$Switch) {
+    $cb = [string](Read-MoeCommitSettings).consolidationBranch
+    $target = if ($cb -and $cb -notmatch '[?\[]') { $cb } else { 'main' }
+    $git = Get-MoeGitTop
+    if (-not $git) { return }
+    $top = $git.Top
+    $one = { param($r) if ($r.Rc -eq 0) { "$(@($r.Out) | Select-Object -First 1)".Trim() } else { '' } }
+    $head = & $one (Invoke-MoeGit -Top $top -GitArgs @('symbolic-ref', '-q', 'HEAD'))
+    if ($head -cne 'refs/heads/moe/control' -and -not $Switch) { return }
+    # HEAD before the target: a peer's follow in between leaves old an ancestor of tip.
+    $old = & $one (Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD^{commit}'))
+    $tip = & $one (Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '-q', '--verify', "refs/heads/$target^{commit}"))
+    if (-not $old -or -not $tip) {
+        Send-MoeControlAlert 'MOE_CONTROL_NOT_FOLLOWING' "HEAD or refs/heads/$target does not resolve in $top; nothing followed" $git; return
+    }
+    $hooks = Join-Path ([IO.Path]::GetTempPath()) ('moe-wt-no-hooks-' + [guid]::NewGuid().ToString('N'))
+    try {
+        [void][IO.Directory]::CreateDirectory($hooks)
+        if ($head -cne 'refs/heads/moe/control') {
+            $mc = & $one (Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '-q', '--verify', 'refs/heads/moe/control^{commit}'))
+            $sw = if ($mc) { '--no-guess' } else { '-c' }
+            $shown = if ($head) { $head } else { 'a detached HEAD' }
+            if (($head -ceq "refs/heads/$target" -or -not $head) -and $old -ceq $tip -and (-not $mc -or $mc -ceq $old) -and
+                (Invoke-MoeGit -Top $top -GitArgs @('-c', "core.hooksPath=$hooks", 'switch', '-q', $sw, 'moe/control')).Rc -eq 0) {
+                Write-Host "[OK] control checkout switched from $shown to moe/control at $old" -ForegroundColor Green
+                return
+            }
+            Send-MoeControlAlert 'MOE_CONTROL_NOT_FOLLOWING' "the control checkout is on $shown at $old, not moe/control or $target's commit $tip; nothing followed" $git
+            return
+        }
+        if ($old -ceq $tip) { return }
+        $rc = (Invoke-MoeGit -Top $top -GitArgs @('merge-base', '--is-ancestor', $old, $tip)).Rc
+        if ($rc -eq 1) {
+            Send-MoeControlAlert 'MOE_CONTROL_CHECKOUT_DIVERGED' "moe/control at $old is not an ancestor of $target at $tip; nothing was reset, reconcile it by hand" $git; return
+        }
+        if ($rc -ne 0) { Send-MoeControlAlert 'MOE_CONTROL_CHECKOUT_BEHIND' "git merge-base --is-ancestor exited $rc; moe/control stays at $old" $git; return }
+        if ((Invoke-MoeGit -Top $top -GitArgs @('diff', '--quiet', $old, $tip, '--', "$($git.Rel).moe")).Rc -ne 0) {
+            Send-MoeControlAlert 'MOE_CONTROL_CHECKOUT_BEHIND' "$old..$tip changes daemon-owned $($git.Rel).moe paths (or the diff failed); moe/control stays at $old" $git; return
+        }
+        # The checked tip, not the ref: a target that moved since carries unchecked .moe paths.
+        $m = Invoke-MoeGit -Top $top -GitArgs @('-c', "core.hooksPath=$hooks", 'merge', '-q', '--ff-only', '--no-autostash', $tip) -MergeStderr
+        $new = & $one (Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD^{commit}'))
+        if ($m.Rc -ne 0) {
+            # A peer's follow that held the index lock may already have moved HEAD to the tip.
+            if ($new -and (Invoke-MoeGit -Top $top -GitArgs @('merge-base', '--is-ancestor', $tip, $new)).Rc -eq 0) { return }
+            $err = $m.Out -join "`n"; if ($err.Length -gt 1500) { $err = $err.Substring(0, 1500) }
+            Send-MoeControlAlert 'MOE_CONTROL_CHECKOUT_BEHIND' "moe/control stays at $old, behind $target at ${tip}: $err" $git; return
+        }
+        if ($new -cne $old) { Write-Host "[OK] MOE_CONTROL_ADVANCED $old..$new" -ForegroundColor Green }
+    } finally { Remove-Item -LiteralPath $hooks -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# Design §6.4, a QA seat in a worktree-mode control checkout, after its claim:
+# in remote mode L4's fetch and mirror first (Sync-MoeLandTarget), so a commit
+# landed from another clone counts; then the follow. A failed sync warns and the
+# follow uses the local target. Twin: qa_control_preflight.
+function Invoke-MoeQaControlPreflight {
+    $cb = [string](Read-MoeCommitSettings).consolidationBranch
+    $target = if ($cb -and $cb -notmatch '[?\[]') { $cb } else { 'main' }
+    $git = Get-MoeGitTop
+    if ($git -and -not (Test-MoeNoRemote $git.Top)) {
+        $res = @{ Code = '' }; $L = @{ Remote = $true; B = ''; Msg = '' }
+        if (-not (Sync-MoeLandTarget $git.Top $target $res $L)) {
+            $code = if ($res.Code) { $res.Code } else { 'MOE_LAND_FETCH_FAILED' }
+            $why = if ($L.Msg) { $L.Msg } else { 'no detail' }
+            Write-Host "[WARN] ${code}: the QA pre-flight could not sync origin's $target ($why); the follow uses the local $target." -ForegroundColor Yellow
+        }
+    }
+    Invoke-MoeControlFollow
+}
+
+# Design §6.4, after Invoke-MoeQaControlPreflight: QA reviews only landed bytes.
+# The task's recorded completion C (get_context task.landing.lastCompletion.sha;
+# never a checkpoint, rescue ref or task-branch tip) must be a commit and an
+# ancestor of the control HEAD, which may be later. Anything else, a git
+# failure included, stops the seat before any CLI with
+# MOE_CONTROL_CHECKOUT_BEHIND and one report_blocked (Stop-MoeWorktreeSeat).
+# Returns the dynamic-context line naming C's own diff. Twin: qa_landed_gate.
+function Assert-MoeQaLandedCommit($Context, [string]$TaskId) {
+    $sha = Get-MoeProp (Get-MoeProp (Get-MoeProp (Get-MoeProp $Context 'task') 'landing') 'lastCompletion') 'sha'
+    if (-not ($sha -is [string] -and $sha -cmatch '^[0-9a-f]{40}$')) {
+        Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' "task ${TaskId}: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only"
+    }
+    $git = Get-MoeGitTop
+    $r = if ($git) { Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD^{commit}') } else { $null }
+    $head = if ($r -and $r.Rc -eq 0) { "$(@($r.Out) | Select-Object -First 1)".Trim() } else { '' }
+    if (-not $head) { Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' "task ${TaskId}: cannot read the control HEAD to review completion $sha" }
+    if ((Invoke-MoeGit -Top $git.Top -GitArgs @('cat-file', '-e', "$sha^{commit}")).Rc -ne 0) {
+        Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' "task ${TaskId}: completion $sha is not a commit in $($git.Top)"
+    }
+    $rc = (Invoke-MoeGit -Top $git.Top -GitArgs @('merge-base', '--is-ancestor', $sha, $head)).Rc
+    if ($rc -ne 0) {
+        Stop-MoeWorktreeSeat 'MOE_CONTROL_CHECKOUT_BEHIND' "task ${TaskId}: completion $sha is not in the control HEAD $head (git merge-base --is-ancestor exited $rc); QA reviews landed bytes only"
+    }
+    return "`n`nReview commit ${sha}: the landed completion of task $TaskId, contained in this checkout's HEAD $head. Its diff is 'git diff $sha^ $sha'; HEAD may be later, so never read 'git diff HEAD~1' or the working tree as this task's change."
+}
+
 # Test-MoeDenyPath plus .claude/skills/** (the wrapper's skill mirror), with no
 # BOARD exception: a task worktree never lands .moe (design §2.2). Twin: denied_wt.
 function Test-MoeDenyPathWorktree([string]$TopPath, [string]$XY, [string]$Rel, [hashtable]$Settings) {
@@ -7026,8 +7190,12 @@ function Invoke-MoeWorktreePostflight([hashtable]$Settings, [string]$Status, [in
         Write-Host "[info] settings.autoCommit=false -- no git activity for task $preflightTaskId; its bytes stay in $($script:MoeWtPath)." -ForegroundColor Cyan
     } elseif ($completion) {
         $res = Invoke-MoeWorktreeCompletion $Settings @{ Title = $preflightTaskTitle; Status = $Status; ReopenCount = $ReopenCount; CliExit = $CliExit; Sid = $Sid }
-        # Only once the landing is settled (L12 done, or nothing left to land).
-        if ($res -and @('committed', 'nothing') -contains $res.Outcome) { $null = Invoke-MoeBoardSnapshot $Settings $preflightTaskId $Status }
+        # Only once the landing is settled (L12 done, or nothing left to land). L13 (WT-13
+        # §6.2): the control checkout follows the target; a refusal is a warning only.
+        if ($res -and @('committed', 'nothing') -contains $res.Outcome) {
+            $null = Invoke-MoeBoardSnapshot $Settings $preflightTaskId $Status
+            try { Invoke-MoeControlFollow } catch { Write-Host "[WARN] MOE_CONTROL_CHECKOUT_BEHIND: the follow failed: $_" -ForegroundColor Yellow }
+        }
     } elseif ($Settings.checkpointCommits) {
         $git = Get-MoeGitTop
         $rel = if ($git) { $git.Rel } else { '' }
@@ -8051,6 +8219,13 @@ do {
     # `continue`s straight back here).
     $script:AccountRelaunch = $false
 
+    # WT-13 (§6.2): a worktree-mode control checkout (HEAD on moe/control) follows
+    # the target BEFORE the hash check, so a landed wrapper change reaches the
+    # disk as committed bytes and reloads. Any other HEAD is shared mode: nothing.
+    if (Test-MoeControlWorktreeMode) {
+        try { Invoke-MoeControlFollow } catch { Write-Host "[WARN] MOE_CONTROL_CHECKOUT_BEHIND: the follow failed: $_" -ForegroundColor Yellow }
+    }
+
     # Top of the iteration, AFTER the poll sleep and BEFORE any task dispatch, so
     # a restart can never interleave with a half-done completion.
     if ($script:MoeWrapperLaunchHash) {
@@ -8725,6 +8900,11 @@ If moe.wait_for_task returns hasChatMessage:true, call moe.chat_read on chatMess
     # Before the pre-flight baseline, so a refusal leaves no fresh baseline; not
     # gated on autoCommit. Provisions W or stops the seat (Initialize-MoeWorktree).
     if ($AutoClaim -and $preflightOk -and $preflightTaskId -and $Role -eq 'worker') { Initialize-MoeWorktree $preflightTaskId $claim $preflightContext }
+    # WT-13 (§6.4): a QA claim in a worktree-mode control checkout reviews what landed.
+    if ($AutoClaim -and $preflightOk -and $preflightTaskId -and $Role -eq 'qa' -and (Test-MoeControlWorktreeMode)) {
+        Invoke-MoeQaControlPreflight
+        $dynamicContext += Assert-MoeQaLandedCommit $preflightContext $preflightTaskId
+    }
 
     # -------- Pre-flight baseline (land-on-every-exit) --------
     # The task is known and nothing has run yet: this is the single point

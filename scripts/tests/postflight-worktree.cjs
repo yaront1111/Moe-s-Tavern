@@ -83,6 +83,10 @@ const entry=p=>wt(p.top).find(e=>e.path===norm(p.W));
 const control=top=>({head:probe(top,'symbolic-ref','-q','HEAD'),sha:probe(top,'rev-parse','HEAD'),index:probe(top,'ls-files','-s','-t'),
   status:probe(top,'status','--porcelain=v1','-uall','--','.',':(exclude,glob)**/.moe/**')});
 const controlSame=(p,before)=>assert.deepEqual(control(p.top),before,"the control checkout's HEAD, index or status changed");
+// WT-13: after a landing (L13) the control checkout follows main: HEAD stays on its branch, holds main's
+// tip, and the status is what it was.
+const controlFollowed=(p,before)=>{const now=control(p.top);
+  assert.deepEqual([now.head,revOf(p.top,'HEAD'),now.status],[before.head,revOf(p.top,'refs/heads/main'),before.status],'the control checkout did not follow main, or its status changed');};
 const tail=log=>'\n'+log.split(/\r?\n/).slice(-25).join('\n');
 
 // The fixture: main holds the seed, the control checkout follows moe/control, .moe
@@ -102,14 +106,14 @@ function repo(name,{task=TASK,sub='',settings={}}={}){
     ws:(o={})=>JSON.stringify({mode:'worktree',path:W,branch:'moe/task/'+task,target:'main',...o})};
 }
 // A commit made with plumbing (HEAD's tree plus files), so the control checkout never moves.
-function commitOn(p,ref,files){
+function commitOn(p,ref,files,base='HEAD'){
   const env={GIT_INDEX_FILE:path.join(root,p.name+'.index')};
-  git(p.top,'read-tree','HEAD',{env});
+  git(p.top,'read-tree',base,{env});
   for(const [f,b] of Object.entries(files)){
     const blob=git(p.top,'hash-object','-w','--stdin',{input:b}).trim();
     git(p.top,'update-index','--add','--cacheinfo',`100644,${blob},${f}`,{env});
   }
-  const c=git(p.top,'commit-tree',git(p.top,'write-tree',{env}).trim(),'-p','HEAD','-m','fixture '+ref).trim();
+  const c=git(p.top,'commit-tree',git(p.top,'write-tree',{env}).trim(),'-p',base,'-m','fixture '+ref).trim();
   git(p.top,'update-ref',ref,c);return c;
 }
 
@@ -220,7 +224,7 @@ exit $rc
 }
 // One worker-seat run. A null knob is unset; WT_GIT_* knobs put the stub first on PATH.
 // opts.type launches typeShim(type) instead of the default CLI; opts.args extend the wrapper argv;
-// opts.role replaces the worker role; opts.signal SIGTERMs the wrapper once the fake logs that tool, or once
+// opts.role replaces the worker role; opts.wrapper runs that wrapper copy; opts.signal SIGTERMs the wrapper once the fake logs that tool, or once
 // that function answers true (sh); opts.keep keeps .moe/attempts (the same seat restarting).
 // opts.ready interrupts the wrapper once that barrier file appears, then writes <ready>.sent: a SIGTERM (sh, which
 // must then leave no process in its group), or a real Ctrl+C on its own console (ps1, consoleSupervisor);
@@ -229,9 +233,9 @@ async function launch(p,run,knobs={},opts={}){
   const moe=f=>path.join(p.dir,'.moe',f),role=opts.role||'worker';
   for(const f of ['wt-cli.log','evidence-rpcs.jsonl','record_commit.jsonl','context-count'])fs.rmSync(moe(f),{force:true});
   if(!opts.keep)fs.rmSync(moe('attempts'),{recursive:true,force:true});
-  const cli=opts.type?typeShim(opts.type):cliShim();
-  const args=win?['-NoProfile','-ExecutionPolicy','Bypass','-File',wrapper,'-Project',p.dir,'-WorkerId',WID,'-Role',role,'-Team','Smoke','-NoStartDaemon','-Command',cli,'-NoLoop','-PollInterval','0']
-    :[wrapper,'--project',p.dir,'--worker-id',WID,'--role',role,'--team','Smoke','--no-start-daemon','--command',cli,'--no-loop','--poll-interval','0'];
+  const cli=opts.type?typeShim(opts.type):cliShim(),w=opts.wrapper||wrapper;
+  const args=win?['-NoProfile','-ExecutionPolicy','Bypass','-File',w,'-Project',p.dir,'-WorkerId',WID,'-Role',role,'-Team','Smoke','-NoStartDaemon','-Command',cli,'-NoLoop','-PollInterval','0']
+    :[w,'--project',p.dir,'--worker-id',WID,'--role',role,'--team','Smoke','--no-start-daemon','--command',cli,'--no-loop','--poll-interval','0'];
   args.push(...(opts.args||[]));
   const env={...inherited,MOE_PROXY_PATH:proxy,MOE_NODE_COMMAND:process.execPath,MOE_DISABLE_HEARTBEAT:'1',
     HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),TMPDIR:wrapperTmp,TMP:wrapperTmp,TEMP:wrapperTmp,
@@ -335,7 +339,8 @@ const refusals=[
     ()=>(p,r)=>assert.match(r.log,/\[ERROR\] MOE_WORKTREE_UNSUPPORTED_GIT:[^\n]*2\.37\.9/,'the refusal does not name git 2.37.9')],
   ['not-top','MOE_WORKTREE_PROJECT_NOT_TOP',()=>({}),
     ()=>p=>assert.ok(!present(path.join(p.dir,'.worktrees')),'a worktree under the project'),{sub:'proj'}],
-  ['control','MOE_CONTROL_NOT_FOLLOWING',()=>({}),p=>{git(p.top,'switch','-q','main');}],
+  // A feature branch: since WT-13, main at the target's commit switches to moe/control (wt-follow).
+  ['control','MOE_CONTROL_NOT_FOLLOWING',()=>({}),p=>{git(p.top,'switch','-q','-c','feature');}],
   ['target-missing','MOE_WORKTREE_CREATE_FAILED',p=>({FAKE_CLAIM_WORKSPACE:p.ws({target:'nosuch'})}),
     ()=>p=>assert.equal(revOf(p.top,p.branch),null,'a task branch was created')],
   ['mismatch','MOE_WORKTREE_MODE_MISMATCH',
@@ -643,7 +648,7 @@ async function wtControlSeats(){
     const rel='src/'+role+'.txt',f=path.join(p.top,'src',role+'.txt'),refs=()=>git(p.top,'for-each-ref','--format=%(refname) %(objectname)').split('\n').filter(l=>!l.startsWith(BOARD+' '));
     write(path.join(p.dir,'.moe','tasks',TASK+'.json'),JSON.stringify({id:TASK,title:'Worktree smoke',status:'WORKING',declaredFiles:[rel]}));
     const before=refs();
-    const r=await landRun(p,'wt-control-'+role,{[f]:role+'\n'},{FAKE_CLAIM_WORKSPACE:null,FAKE_SCOPE_DECLARED_FIELD:'1'},{role});
+    const r=await landRun(p,'wt-control-'+role,{[f]:role+'\n'},{FAKE_CLAIM_WORKSPACE:null,FAKE_SCOPE_DECLARED_FIELD:'1',...landed(revOf(p.top,'HEAD'))},{role});
     assert.ok(r.code===0&&r.log.includes('MOE_COMMIT_NOTHING_TO_COMMIT'),`${role}: exit code ${r.code}, or no MOE_COMMIT_NOTHING_TO_COMMIT line`+tail(r.log));
     const rec=ledger(p);
     assert.deepEqual(rec.map(x=>[x.outcome,x.kind,x.code,x.sha,x.ref]),[['nothing','checkpoint','MOE_COMMIT_NOTHING_TO_COMMIT',undefined,undefined]],`${role}: the record_commit rows`);
@@ -694,7 +699,9 @@ async function wtCompletion(){
   assert.deepEqual(done(p).map(x=>[x.outcome,x.sha,x.ref,x.pushed,x.paths,x.inferredPaths]),[['committed',c,'refs/heads/main',false,['src/a.txt'],[]]],'the completion row');
   assert.deepEqual([finals(p),probe(p.top,'merge-base','--is-ancestor',c,p.branch),present(journal(p)),leases(p)],[[['landed',c]],'0:',false,[]],
     'finalize, the task branch lacks C, the journal stayed, or a lease call with no qualityGate'+tail(r.log));
-  controlSame(p,before);
+  assert.match(r.log,new RegExp(`^\\[OK\\] MOE_CONTROL_ADVANCED ${main}\\.\\.${c}\\r?$`,'m'),'no L13 MOE_CONTROL_ADVANCED line'+tail(r.log));
+  controlFollowed(p,before);
+  assert.equal(probe(p.top,'status','--porcelain','--','src'),'0:','src/ on disk is not HEAD after L13');
 }
 // commitHooks: the hook runs on the merged tree (peer and task bytes, no .moe); a staged or unstaged
 // hook edit, or a hook that moves HEAD, is refused (failed, T rescued, main unmoved); a no-op hook
@@ -714,7 +721,7 @@ async function wtHooks(){
       ['task\npeer\n',mode?[peer,t,['failed']]:[[peer],'task\n']],`hook ${mode||'no-op'}: its view, main, the rescue or the row`+tail(r.log));
   }
   assert.equal(git(p.top,'worktree','list','--porcelain').match(/^worktree /gm).length,2,'a hook worktree was left behind');
-  controlSame(p,before);
+  controlFollowed(p,before);
 }
 // A finalize_attempt refusal keeps the journal; the next pre-flight re-sends its exact row, closes the
 // still-finalizing attempt landed and drops the journal, with no second CAS.
@@ -1155,16 +1162,179 @@ async function wtBoard(){
   assert.deepEqual([boardTree(p),git(p.top,'diff','--name-only',main,c).split('\n').filter(f=>f.startsWith('.moe')),git(p.top,'log','-1','--format=%B',b1).trim(),done(p).map(x=>x.outcome)],
     [boardFiles(p),[],`board: ${TASK} REVIEW`,['committed']],'the board tree, a .moe path on main, the message or the completion row'+tail(r.log));
   write(m(`tasks/${TASK}.json`),JSON.stringify({id:TASK,title:'Worktree smoke',status:'DONE'}));
-  r=await launch(p,'wt-board-qa',{FAKE_CLAIM_WORKSPACE:null,FAKE_TASK_STATUS:'DONE'},{role:'qa'});const b2=revOf(p.top,BOARD);
+  r=await launch(p,'wt-board-qa',{FAKE_CLAIM_WORKSPACE:null,FAKE_TASK_STATUS:'DONE',...landed(c)},{role:'qa'});const b2=revOf(p.top,BOARD);
   assert.deepEqual([r.code,parents(p.top,b2),git(p.top,'log','-1','--format=%B',b2).trim(),boardTree(p)],[0,[b1],`board: ${TASK} DONE`,boardFiles(p)],'the QA snapshot'+tail(r.log));
   set({commitBoardState:false});
-  r=await launch(p,'wt-board-off',{FAKE_CLAIM_WORKSPACE:null,FAKE_TASK_STATUS:'DONE'},{role:'qa'});
+  r=await launch(p,'wt-board-off',{FAKE_CLAIM_WORKSPACE:null,FAKE_TASK_STATUS:'DONE',...landed(c)},{role:'qa'});
   assert.ok(r.code===0&&revOf(p.top,BOARD)===b2&&!/MOE_BOARD_|board snapshot/.test(r.log),'commitBoardState=false still snapshotted'+tail(r.log));
   set({});const blob=git(p.top,'hash-object','-w','--stdin',{input:'not a commit'}).trim();git(p.top,'update-ref',BOARD,blob);
   r=await landRun(p,'wt-board-skip',{'src/b.txt':'b\n'},REVIEW);const c2=mainOf(p);
   assert.deepEqual([r.code,parents(p.top,c2),done(p).map(x=>[x.outcome,x.sha]),finals(p),probe(p.top,'rev-parse',BOARD).trim()],[0,[c],[['committed',c2]],[['landed',c2]],'0:'+blob],
     'a failed snapshot changed the landing or the board ref'+tail(r.log));
   assert.match(r.log,/\[WARN\] MOE_BOARD_SNAPSHOT_SKIPPED: /,'no MOE_BOARD_SNAPSHOT_SKIPPED line');
+}
+
+// WT-13 §6.1: a wrapper copy in a registered task worktree, or reached through a link to one, refuses with
+// MOE_WRAPPER_IN_WORKTREE before any RPC or CLI, though --project names the control checkout and the cwd is
+// outside W. A copy under .worktrees-other/task-* and a non-Git (bundled) copy launch. The root holds a space.
+async function wtGuard(){
+  const p=repo('wt-guard'),g=p.top+'/.worktrees/task-guard',src=path.dirname(wrapper),alias=path.join(root,'wt-guard alias');
+  const copy=d=>{
+    fs.mkdirSync(d,{recursive:true});
+    for(const f of fs.readdirSync(src,{withFileTypes:true}))if(f.isFile())fs.copyFileSync(path.join(src,f.name),path.join(d,f.name));
+    return path.join(d,path.basename(wrapper));
+  };
+  git(p.top,'worktree','add','-q','--detach',g);copy(g+'/scripts');fs.symlinkSync(g,alias,'junction');
+  for(const [run,w] of [['wt-guard-in',g+'/scripts/'+path.basename(wrapper)],['wt-guard-alias',path.join(alias,'scripts',path.basename(wrapper))]]){
+    const r=await launch(p,run,{FAKE_CLAIM_WORKSPACE:null},{wrapper:w});
+    assert.ok(r.code===1&&r.log.includes('[ERROR] MOE_WRAPPER_IN_WORKTREE:'),`${run}: exit ${r.code}, no MOE_WRAPPER_IN_WORKTREE refusal`+tail(r.log));
+    assert.ok(!r.cliRan&&!present(path.join(p.dir,'.moe','evidence-rpcs.jsonl')),`${run}: an RPC or the CLI ran`+tail(r.log));
+  }
+  for(const [run,d] of [['wt-guard-other',p.top+'/.worktrees-other/task-guard/scripts'],['wt-guard-bundled',path.join(root,'wt-guard bundled','scripts')]]){
+    const r=await launch(p,run,{FAKE_CLAIM_WORKSPACE:null},{wrapper:copy(d)});
+    assert.ok(r.code===0&&r.cliRan&&!r.log.includes('MOE_WRAPPER_IN_WORKTREE'),`${run}: exit ${r.code}, or the copy did not launch`+tail(r.log));
+  }
+}
+
+// WT-13 §6.2/§6.5: the branch states at a worker pre-flight's follow (the one caller that may switch). Each
+// setup returns {code, head, sha, switched, refused, detail, check}: code is the one MOE_CONTROL_ code the run
+// prints (none: no such line), head/sha the control HEAD after. main never moves; refused is WT-04's stop.
+const MC='refs/heads/moe/control';
+// The fake proxy's get_context task.landing, a recorded completion at sha (FAKE_CTX_LANDING).
+const landed=sha=>({FAKE_CTX_LANDING:JSON.stringify({lastCompletion:{sha,ref:'refs/heads/main',pushed:false,recordedAt:'2026-11-02T00:00:00.000Z'}})});
+const commitHere=(p,f,b)=>{write(path.join(p.top,f),b);git(p.top,'add','--',f);git(p.top,'commit','-qm','local '+f);return revOf(p.top,'HEAD');};
+const advanced=(p,files,extra={})=>{const old=mainOf(p),c=commitOn(p,'refs/heads/main',files);return {code:'MOE_CONTROL_ADVANCED',line:`${old}..${c}`,head:MC,sha:c,...extra};};
+const behind=(p,files,extra={})=>{const old=mainOf(p);commitOn(p,'refs/heads/main',files);return {code:'MOE_CONTROL_CHECKOUT_BEHIND',head:MC,sha:old,...extra};};
+const follows=[
+  ['switch-new',p=>{git(p.top,'switch','-q','main');git(p.top,'branch','-q','-D','moe/control');return {head:MC,sha:mainOf(p),switched:true};}],
+  ['switch-same',p=>{git(p.top,'switch','-q','main');return {head:MC,sha:mainOf(p),switched:true};}],
+  ['detached',p=>{git(p.top,'switch','-q','--detach','main');return {head:MC,sha:mainOf(p),switched:true};}],
+  ['current',p=>({head:MC,sha:mainOf(p)})],
+  ['advance',p=>advanced(p,{'scripts/tool.sh':'echo landed\n'},{check:()=>assert.deepEqual(
+    [readOr(path.join(p.top,'scripts','tool.sh')),probe(p.top,'status','--porcelain','--','scripts')],['echo landed\n','0:'],'scripts/ on disk is not HEAD')})],
+  ['moe-dirt',p=>{const t=path.join(p.dir,'.moe','tasks',TASK+'.json'),s=path.join(p.dir,'.moe','sentinel.json');write(t,'{"dirty":1}');write(s,'keep');
+    return advanced(p,{'src/b.txt':'b\n'},{check:()=>assert.deepEqual([read(t),read(s)],['{"dirty":1}','keep'],'the .moe dirt changed')});}],
+  ['feature',p=>{git(p.top,'switch','-q','-c','feature');return {code:'MOE_CONTROL_NOT_FOLLOWING',head:'refs/heads/feature',sha:mainOf(p),refused:true};}],
+  ['mc-elsewhere',p=>{git(p.top,'switch','-q','main');const m=commitOn(p,MC,{'src/m.txt':'m\n'});
+    return {code:'MOE_CONTROL_NOT_FOLLOWING',head:'refs/heads/main',sha:mainOf(p),refused:true,check:()=>assert.equal(revOf(p.top,MC),m,'moe/control moved')};}],
+  ['ahead',p=>({code:'MOE_CONTROL_CHECKOUT_DIVERGED',head:MC,sha:commitHere(p,'src/l.txt','local\n')})],
+  ['diverged',p=>{commitOn(p,'refs/heads/main',{'src/m.txt':'m\n'});return {code:'MOE_CONTROL_CHECKOUT_DIVERGED',head:MC,sha:commitHere(p,'src/l.txt','local\n')};}],
+  ['edit',p=>{const f=path.join(p.top,'src','a.txt');write(f,'human edit\n');
+    return behind(p,{'src/a.txt':'landed\n'},{detail:/src\/a\.txt/,check:()=>assert.equal(read(f),'human edit\n','the local edit was lost')});}],
+  ['untracked',p=>{const f=path.join(p.top,'src','u.txt');write(f,'mine\n');
+    return behind(p,{'src/u.txt':'landed\n'},{detail:/src\/u\.txt/,check:()=>assert.equal(read(f),'mine\n','the untracked file was lost')});}],
+  ['lock',p=>{const l=path.join(git(p.top,'rev-parse','--absolute-git-dir').trim(),'index.lock');write(l,'');
+    return behind(p,{'src/b.txt':'b\n'},{check:()=>{assert.ok(present(l),'the index.lock was deleted');fs.rmSync(l);}});}],
+  ['moe-landed',p=>behind(p,{'.moe/project.json':'{}'},{detail:/daemon-owned/})],
+];
+follows.push(['shared-work',p=>{git(p.top,'switch','-q','-c','moe/work-2026-11-02');const old=mainOf(p);commitOn(p,'refs/heads/main',{'src/b.txt':'b\n'});
+  return {head:'refs/heads/moe/work-2026-11-02',sha:old,knobs:{FAKE_CLAIM_WORKSPACE:null}};}]);
+// Hooks never run during a switch or a fast-forward (core.hooksPath is an empty directory).
+async function wtFollow(){
+  for(const [name,setup] of follows){
+    const p=repo('wt-follow-'+name),x=setup(p),main=mainOf(p),hooked=path.join(root,`wt-follow-${name}.hooks`);
+    for(const h of ['post-checkout','post-merge']){
+      const f=path.join(p.top,'.git','hooks',h);write(f,`#!/bin/sh\necho ${h} >> "${hooked.replace(/\\/g,'/')}"\n`);fs.chmodSync(f,0o755);
+    }
+    const r=await launch(p,'wt-follow-'+name,x.knobs||{});
+    const codes=[...new Set(r.log.match(/MOE_CONTROL_[A-Z_]+/g)||[])];
+    try{
+      assert.equal(readOr(hooked),null,'a hook ran');
+      assert.deepEqual(codes,x.code?[x.code]:[],'the MOE_CONTROL_ codes');
+      if(x.line)assert.match(r.log,new RegExp(`^\\[OK\\] MOE_CONTROL_ADVANCED ${x.line}\\r?$`,'m'),'no ADVANCED old..new line');
+      else if(x.code)assert.match(r.log,new RegExp(`^\\[WARN\\] ${x.code}: [\\s\\S]*${x.detail?x.detail.source:''}`,'m'),`no [WARN] ${x.code} line`);
+      assert.equal(/control checkout switched from /.test(r.log),!!x.switched,'the switch line');
+      assert.deepEqual([probe(p.top,'symbolic-ref','-q','HEAD').trim(),revOf(p.top,'HEAD'),mainOf(p)],[(x.head===null?'1:':'0:'+x.head),x.sha,main],'HEAD, its commit, or main');
+      if(x.refused)refused(r,'MOE_CONTROL_NOT_FOLLOWING');
+      else assert.ok(r.code===0&&r.cliRan,`exit ${r.code}; the CLI ran: ${r.cliRan}`);
+      if(x.check)x.check();
+    }catch(e){e.message=`${name}: ${e.message}`+tail(r.log);throw e;}
+  }
+}
+// WT-13 §6.2-§6.4: an L13 refusal (a human edit on the landed file) leaves C landed and the control as it
+// was; an alert reaches #general once an hour per code for every seat (a stamp backdated past the hour lets
+// the next through; a held lock is skipped, a 10-minute-old one is removed); a QA claim in remote mode syncs
+// origin's main (landed from another clone) before its follow.
+async function wtFollowSites(){
+  let p=repo('wt-l13',{settings:LANDS});const old=mainOf(p),f=path.join(p.top,'src','a.txt');write(f,'human edit\n');
+  let r=await landRun(p,'wt-l13',{'src/a.txt':'done\n'},REVIEW);const c=mainOf(p);
+  assert.ok(c!==old&&/^\[WARN\] MOE_CONTROL_CHECKOUT_BEHIND: [\s\S]*src\/a\.txt/m.test(r.log),'no landing, or no L13 refusal'+tail(r.log));
+  assert.deepEqual([done(p).map(x=>[x.outcome,x.sha]),finals(p),revOf(p.top,'HEAD'),read(f)],[[['committed',c]],[['landed',c]],old,'human edit\n'],
+    'L13 changed the landed outcome, the control HEAD or the human edit'+tail(r.log));
+  p=repo('wt-alert');commitHere(p,'src/l.txt','local\n');
+  const dir=path.join(git(p.top,'rev-parse','--absolute-git-dir').trim(),'moe'),stamp=path.join(dir,'control-alert-MOE_CONTROL_CHECKOUT_DIVERGED'),lock=path.join(dir,'control-alert.lock');
+  const alerts=()=>rows(path.join(p.dir,'.moe','messages','chan-general.jsonl')).filter(m=>String(m.content).startsWith('MOE_CONTROL_CHECKOUT_DIVERGED: ')).length;
+  const old1=()=>write(stamp,Math.floor(Date.now()/1000)-3601+'\n'),seen=[];
+  for(const [run,before] of [['1',()=>{}],['2',()=>{}],['3',old1],['held',()=>{old1();write(lock,'');}],['stale',()=>{const t=new Date(Date.now()-11*60000);fs.utimesSync(lock,t,t);}]]){
+    before();r=await launch(p,'wt-alert-'+run);
+    seen.push([run,(r.log.match(/^\[WARN\] MOE_CONTROL_CHECKOUT_DIVERGED: /gm)||[]).length,alerts()]);
+  }
+  assert.deepEqual(seen,[['1',2,1],['2',2,1],['3',2,2],['held',2,2],['stale',2,3]],'[WARN] lines per run (loop top, pre-flight) and #general alerts so far');
+  p=repo('wt-qa-remote');const bare=path.join(root,'wt-qa-remote.git'),seed=mainOf(p);
+  git(root,'init','-q','--bare',bare);git(p.top,'remote','add','origin',bare);
+  const o=commitOn(p,'refs/heads/wt-qa-other',{'src/o.txt':'another clone\n'});git(p.top,'push','-q','origin','wt-qa-other:main');git(p.top,'update-ref','-d','refs/heads/wt-qa-other');
+  r=await launch(p,'wt-qa-remote',{FAKE_CLAIM_WORKSPACE:null,FAKE_TASK_STATUS:'REVIEW',MOE_LAND_NET_BACKOFF_SEC:'0',...landed(o)},{role:'qa'});
+  assert.deepEqual([r.code,mainOf(p),revOf(p.top,'HEAD'),probe(p.top,'symbolic-ref','-q','HEAD'),read(path.join(p.top,'src','o.txt'))],[0,o,o,'0:'+MC+'\n','another clone\n'],
+    'the QA pre-flight did not sync origin, mirror main and follow it'+tail(r.log));
+  assert.match(r.log,new RegExp(`^\\[OK\\] MOE_CONTROL_ADVANCED ${seed}\\.\\.${o}\\r?$`,'m'),'no ADVANCED line'+tail(r.log));
+}
+// The follow merges the tip it checked, never a target that moved since: a .moe path landed while the loop
+// top's merge waits (the git stub holds the first --ff-only) stays out of the control HEAD, and the
+// pre-flight's follow then refuses it as daemon-owned.
+async function wtFollowRace(){
+  const p=repo('wt-follow-race'),old=mainOf(p),tip=commitOn(p,'refs/heads/main',{'src/b.txt':'b\n'}),held=path.join(root,'wt-follow-race.held');
+  let later=null;
+  const land=()=>{if(!later&&present(held)){later=commitOn(p,'refs/heads/main',{'.moe/landed.json':'{}'},tip);write(held+'.sent','sent');}return false;};
+  const r=await launch(p,'wt-follow-race',{WT_GIT_HOLD:'--ff-only',WT_GIT_HOLD_FILE:held},{signal:land});
+  assert.ok(later,'the follow never reached its merge'+tail(r.log));
+  assert.match(r.log,new RegExp(`^\\[OK\\] MOE_CONTROL_ADVANCED ${old}\\.\\.${tip}\\r?$`,'m'),'no ADVANCED old..tip line'+tail(r.log));
+  assert.match(r.log,/^\[WARN\] MOE_CONTROL_CHECKOUT_BEHIND: [\s\S]*daemon-owned/m,'the next follow did not refuse the .moe path'+tail(r.log));
+  assert.deepEqual([revOf(p.top,'HEAD'),present(path.join(p.top,'.moe','landed.json')),mainOf(p)],[tip,false,later],
+    'the control HEAD went past the checked tip'+tail(r.log));
+}
+// WT-13 §6.4: a QA claim in the control checkout launches only once the task's recorded completion C
+// (get_context task.landing.lastCompletion, never its checkpoint) is in the control HEAD after the follow;
+// otherwise MOE_CONTROL_CHECKOUT_BEHIND, one report_blocked and no CLI. The prompt names C's own diff, since
+// HEAD may be later. A QA seat off moe/control (shared mode) has no gate.
+async function wtQaGate(){
+  const run=async(p,name,knobs)=>{
+    const rec=path.join(root,name+'.cli.jsonl');
+    const r=await launch(p,name,{FAKE_CLAIM_WORKSPACE:null,FAKE_TASK_STATUS:'REVIEW',WT_CLI_RECORD:rec,...knobs},{role:'qa',type:'claude'});
+    return {...r,prompt:(rows(rec).pop()||{}).context||''};
+  };
+  const reviewed=(r,c,head)=>{
+    assert.ok(r.code===0&&r.cliRan&&r.blocked.length===0,`exit ${r.code}; the CLI ran: ${r.cliRan}; report_blocked calls: ${r.blocked.length}`+tail(r.log));
+    assert.equal(r.prompt.split(`Review commit ${c}: `).length,2,'the prompt does not name the review commit once'+tail(r.log));
+    assert.ok(r.prompt.includes(`git diff ${c}^ ${c}`),"the prompt does not name the review commit's diff");
+    assert.equal(revOf(r.top,'HEAD'),head,'the control HEAD');
+  };
+  const why=(r,re)=>{refused(r,'MOE_CONTROL_CHECKOUT_BEHIND');assert.match(r.blocked[0].args.reason,re,'the report_blocked reason');};
+  // The follow is refused (a human edit to the landed file), so C stays out of the control HEAD.
+  let p=repo('wt-qa-behind');write(path.join(p.top,'src','a.txt'),'human edit\n');
+  const old=mainOf(p),cb=commitOn(p,'refs/heads/main',{'src/a.txt':'landed\n'});
+  let r=await run(p,'wt-qa-behind',landed(cb));
+  why(r,new RegExp(`^MOE_CONTROL_CHECKOUT_BEHIND: task ${TASK}: completion ${cb} is not in the control HEAD ${old} `));
+  assert.equal(revOf(p.top,'HEAD'),old,'the control HEAD moved');
+  // The follow fast-forwards onto C, then onto a later D: both launch, both prompts name C.
+  p=repo('wt-qa-ff');const c=commitOn(p,'refs/heads/main',{'src/b.txt':'b\n'});
+  r=await run(p,'wt-qa-ff',landed(c));reviewed({...r,top:p.top},c,c);
+  const d=commitOn(p,'refs/heads/main',{'src/d.txt':'d\n'});
+  r=await run(p,'wt-qa-later',landed(c));reviewed({...r,top:p.top},c,d);
+  // No usable completion: none recorded, a checkpoint at HEAD only, a malformed sha, a sha no object has, and a
+  // failing ancestry check (the git stub fails every --is-ancestor; HEAD is already at C, so the follow skips it).
+  const head=revOf(p.top,'HEAD'),none=/no recorded completion commit/;
+  for(const [name,knobs,re] of [['wt-qa-none',{},none],
+    ['wt-qa-checkpoint',{FAKE_CTX_LANDING:JSON.stringify({lastCheckpoint:{sha:head,recordedAt:'2026-11-02T00:00:00.000Z'}})},none],
+    ['wt-qa-malformed',landed(head.slice(0,12)),none],['wt-qa-upper',landed(head.toUpperCase()),none],
+    ['wt-qa-unknown',landed('0123456789abcdef0123456789abcdef01234567'),/completion 0123456789abcdef0123456789abcdef01234567 is not a commit/],
+    ['wt-qa-git-fail',{...landed(head),WT_GIT_FAIL:'--is-ancestor'},new RegExp(`completion ${head} is not in the control HEAD ${head} `)]]){
+    r=await run(p,name,knobs);
+    try{why(r,re);}catch(e){e.message=`${name}: ${e.message}`;throw e;}
+  }
+  // Shared mode: no follow, no gate, no review line.
+  git(p.top,'switch','-q','-c','moe/work-2026-11-02');
+  r=await run(p,'wt-qa-shared',{});
+  assert.ok(r.code===0&&r.cliRan&&!/MOE_CONTROL_/.test(r.log)&&!r.prompt.includes('Review commit '),'shared mode QA changed'+tail(r.log));
 }
 
 // DoD: both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_/MOE_MIGRATION_ codes.
@@ -1181,7 +1351,7 @@ Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link
   'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-replay-remote':wtReplayRemote,'wt-sync':wtSync,'wt-fails':wtFails,
   'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
   'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
-  'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,codes});
+  'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,codes});
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{
   let ok=0,failed=0;

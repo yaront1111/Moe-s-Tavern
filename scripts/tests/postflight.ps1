@@ -1779,6 +1779,82 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
             Write-Host "[hot reload $reloadMode] ok: $reloadEdits deferrals, $restarts restarts, 1 wrapper process"
         }
 
+        # --- Hot reload follow (WT-13 §6.2; twin in postflight.sh). The project
+        # is the wrapper's own checkout, on moe/control. A wrapper change
+        # committed to main only (plumbing: neither HEAD nor the file moves) is
+        # followed at the next loop top, BEFORE the hash check, so the file on
+        # disk is HEAD's blob and the seat restarts once, with no
+        # MOE_WRAPPER_RELOAD_DEFERRED line. ---
+        Write-Host '[hot reload follow] a wrapper change landed on main is followed, then reloaded'
+        $reloadRoot = Join-Path $tempRoot 'reload-follow'
+        $reloadProject = $reloadRoot
+        $reloadWrapper = Join-Path $reloadRoot 'scripts\moe-agent.ps1'
+        New-Item -ItemType Directory -Force -Path @((Split-Path $reloadWrapper), (Join-Path $reloadRoot '.moe\messages')) | Out-Null
+        Copy-Item -LiteralPath $wrapper -Destination $reloadWrapper
+        Get-ChildItem -LiteralPath (Split-Path $wrapper) -Filter '*.mjs' | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Split-Path $reloadWrapper)
+        }
+        [IO.File]::WriteAllText((Join-Path $reloadRoot '.gitignore'), ".moe/`n.mcp.json`nlogs/`n.claude/`n")
+        Set-Content -Path (Join-Path $reloadRoot '.moe\project.json') -Value '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}' -Encoding UTF8
+        Set-Content -Path (Join-Path $reloadRoot '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+        $reloadRpcLog = Join-Path $reloadRoot '.moe\evidence-rpcs.jsonl'
+        $reloadOut = Join-Path $tempRoot 'wrapper-reload-follow.out'
+        function Invoke-FollowGit {
+            $ErrorActionPreference = 'Continue'
+            $out = & git -C $reloadRoot -c 'user.name=Moe Test' -c 'user.email=moe@test.local' -c 'commit.gpgsign=false' -c 'core.autocrlf=false' @args 2>$null
+            if ($LASTEXITCODE -ne 0) { throw "HOT RELOAD FOLLOW FAILED: git $args exited $LASTEXITCODE" }
+            if ($null -ne $out) { ([string]($out | Select-Object -First 1)).Trim() }
+        }
+        foreach ($gitArgs in @(@('init', '-q'), @('symbolic-ref', 'HEAD', 'refs/heads/main'), @('add', '-A'),
+            @('commit', '-qm', 'base'), @('switch', '-q', '-c', 'moe/control'))) { Invoke-FollowGit @gitArgs | Out-Null }
+        $reloadProc = $null
+        $reloadMain = ''
+        $env:FAKE_CLAIM_MODE = 'idle'
+        $env:MOE_DISABLE_HEARTBEAT = '1'
+        try {
+            $reloadArgs = @('-NoProfile', '-File', $reloadWrapper, '-Project', $reloadProject, '-WorkerId', 'worker-reload-follow', '-Role', 'worker', '-NoStartDaemon', '-Command', $trueCmd, '-Loop', '-PollInterval', '1') |
+                ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+            $reloadProc = Start-Process -FilePath $psExe -ArgumentList $reloadArgs -RedirectStandardOutput $reloadOut -RedirectStandardError "$reloadOut.err" -PassThru -NoNewWindow
+            $null = $reloadProc.Handle
+            Wait-ReloadSequence '^c' 'first claim'
+            # The landed bytes go through a file outside the repo: piping text to
+            # a native command re-encodes it, and the BOM must survive.
+            $reloadFileMode = (Invoke-FollowGit ls-files -s scripts/moe-agent.ps1) -replace ' .*$', ''
+            $reloadBlobFile = Join-Path $tempRoot 'reload-follow.blob'
+            Copy-Item -LiteralPath $reloadWrapper -Destination $reloadBlobFile
+            [IO.File]::AppendAllText($reloadBlobFile, "# landed on main`n", (New-Object System.Text.UTF8Encoding($false)))
+            $reloadBlob = Invoke-FollowGit hash-object -w --no-filters $reloadBlobFile
+            $env:GIT_INDEX_FILE = Join-Path $tempRoot 'reload-follow.index'
+            try {
+                Invoke-FollowGit read-tree HEAD | Out-Null
+                Invoke-FollowGit update-index --cacheinfo "$reloadFileMode,$reloadBlob,scripts/moe-agent.ps1" | Out-Null
+                $reloadTree = Invoke-FollowGit write-tree
+            } finally { Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue }
+            $reloadMain = Invoke-FollowGit commit-tree $reloadTree -p HEAD -m 'land a wrapper change on main'
+            Invoke-FollowGit update-ref refs/heads/main $reloadMain | Out-Null
+            Wait-ReloadSequence '^c+rc' 'claim after the followed reload'
+        } finally {
+            Remove-Item Env:FAKE_CLAIM_MODE, Env:MOE_DISABLE_HEARTBEAT -ErrorAction SilentlyContinue
+            if ($reloadProc -and -not $reloadProc.HasExited) { & taskkill /T /F /PID $reloadProc.Id 2>&1 | Out-Null; $reloadProc.WaitForExit(5000) | Out-Null }
+            foreach ($reloadPid in @(Get-ReloadWrapperPids)) { Stop-Process -Id $reloadPid -Force -ErrorAction SilentlyContinue }
+        }
+        $reloadSeq = Get-ReloadSequence
+        $reloadLog = [string](Get-Content -Raw -LiteralPath $reloadOut -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$reloadOut.err" -ErrorAction SilentlyContinue)
+        $reloadFlat = $reloadLog -replace '\r?\n', ''
+        $reloadProblems = @()
+        if ($reloadFlat -notmatch "MOE_CONTROL_ADVANCED [0-9a-f]{40}\.\.$reloadMain") { $reloadProblems += 'no MOE_CONTROL_ADVANCED line naming the landed commit' }
+        if ($reloadFlat -match 'MOE_WRAPPER_RELOAD_DEFERRED') { $reloadProblems += 'the followed bytes were deferred' }
+        $restarts = [regex]::Matches($reloadFlat, 'restarting to load it').Count
+        if ($restarts -ne 1) { $reloadProblems += "expected one restart announcement, got $restarts" }
+        $followHead = Invoke-FollowGit rev-parse HEAD
+        $followRef = Invoke-FollowGit symbolic-ref HEAD
+        & git -C $reloadRoot diff --quiet HEAD -- scripts/moe-agent.ps1 2>$null
+        if ($followHead -cne $reloadMain -or $followRef -cne 'refs/heads/moe/control' -or $LASTEXITCODE -ne 0) {
+            $reloadProblems += "the control checkout is not on moe/control at main with the wrapper equal to HEAD (HEAD $followHead on $followRef)"
+        }
+        if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD FOLLOW FAILED: ' + ($reloadProblems -join ' | ')) }
+        Write-Host "[hot reload follow] ok: followed $reloadMain, restarted once, no deferral (sequence $reloadSeq)"
+
         # --- Quality gate (settings.qualityGate): the post-flight runs the
         # configured command before a COMPLETION commit. Failing gate => no
         # branch commit (the edits go to a rescue ref), PUSH-BLOCKED chat

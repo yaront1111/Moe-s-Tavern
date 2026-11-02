@@ -15,6 +15,24 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# WT-13 (design §6.1): a seat runs only the control checkout's wrapper. A copy in a
+# task worktree, <repo>/.worktrees/task-*/ (a registered W, or a plain directory
+# there), refuses before any daemon, config or claim side effect. git answers with
+# physical paths, so a symlink alias is caught too; a non-Git (bundled) copy and
+# any other checkout launch as before.
+moe_wrapper_in_worktree() {
+    local top pre main rest
+    top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) && pre=$(git -C "$1" rev-parse --show-prefix 2>/dev/null) || return 1
+    main=$(git -C "$1" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p') || main=""
+    case "${OSTYPE:-}" in msys*|cygwin*) top=${top,,}; pre=${pre,,}; main=${main,,} ;; esac
+    [[ $pre == .worktrees/task-* ]] && return 0
+    rest=${top#"$main/.worktrees/"}
+    [ -n "$main" ] && [ "$rest" != "$top" ] && [[ $rest == task-* && $rest != */* ]]
+}
+if moe_wrapper_in_worktree "$SCRIPT_DIR"; then
+    echo -e "${RED}[ERROR] MOE_WRAPPER_IN_WORKTREE: ${BASH_SOURCE[0]} is inside a task worktree; launch the control checkout's scripts/moe-agent.sh${NC}" >&2
+    exit 1
+fi
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 PROXY_PATH_OVERRIDE="${MOE_PROXY_PATH:-}"
 DAEMON_PATH_OVERRIDE="${MOE_DAEMON_PATH:-}"
@@ -3055,6 +3073,8 @@ sys.stdout.write(("worktree" if ws.get("mode") == "worktree" else "shared") + "\
     if ! git_top || [ -n "$MOE_REL" ]; then
         worktree_stop MOE_WORKTREE_PROJECT_NOT_TOP "$PROJECT is not the top level of a git work tree; worktree mode needs the project at the repository root"
     fi
+    # WT-13 (§6.5): the one caller that may switch the control checkout onto moe/control.
+    follow_control_checkout switch
     head=$(git -C "$MOE_TOP" symbolic-ref -q HEAD 2>/dev/null) || head=""
     if [ "$head" != refs/heads/moe/control ]; then
         worktree_stop MOE_CONTROL_NOT_FOLLOWING "the control checkout is on ${head:-a detached HEAD}, not refs/heads/moe/control; switch it to moe/control first"
@@ -6613,6 +6633,131 @@ control_worktree_mode() {
     [ "$head" = refs/heads/moe/control ]
 }
 
+# control_alert CODE DETAIL -- a [WARN] line on every call, plus a #general alert
+# at most once an hour per code for the whole checkout (every seat of it): the
+# stamp <gitdir>/moe/control-alert-CODE holds the last alert's UTC epoch (one
+# that is unreadable or in the future counts as old), read and updated only
+# under the exclusive-create lock file control-alert.lock. A held lock is
+# skipped, never waited on; one older than 10 minutes was left by a killed seat
+# and is removed. No failure here stops a follow or a landing.
+# Twin: Send-MoeControlAlert.
+control_alert() {
+    local dir lock stamp now last args won=false
+    echo -e "${YELLOW}[WARN]${NC} $1: $2"
+    [ -n "${GENERAL_CHANNEL_ID:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    dir="$MOE_GITDIR/moe"; lock="$dir/control-alert.lock"; stamp="$dir/control-alert-$1"; now=$(date +%s)
+    mkdir -p "$dir" 2>/dev/null || return 0
+    find "$lock" -maxdepth 0 -type f -mmin +10 -exec rm -f {} + 2>/dev/null || true
+    ( set -C; : > "$lock" ) 2>/dev/null || return 0
+    last=$(cat "$stamp" 2>/dev/null) || last=""
+    if ! [[ "$last" =~ ^[0-9]{1,12}$ ]] || [ "$last" -gt "$now" ] || [ $((now - last)) -ge 3600 ]; then
+        printf '%s\n' "$now" > "$stamp" 2>/dev/null && won=true
+    fi
+    rm -f "$lock" 2>/dev/null || true
+    [ "$won" = true ] || return 0
+    args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$1: $2 (control checkout $MOE_TOP)" 2>/dev/null) \
+        && moe_rpc chat_send "$args" >/dev/null 2>&1 || true
+}
+
+# follow_control_checkout [switch] -- design §6.2/§6.5: fast-forward moe/control
+# to refs/heads/<target> (literal consolidationBranch, else main) with hooks off.
+# `merge --ff-only` moves HEAD and the files together, so the wrapper on disk is
+# always committed bytes. Off moe/control nothing runs, except with `switch` (a
+# worker pre-flight after a worktree claim): HEAD on the target, or detached, at
+# the target's commit switches to moe/control, made there or reused only at that
+# same commit; any other HEAD is MOE_CONTROL_NOT_FOLLOWING. Never a reset, stash,
+# force or clean: a refusal is an alert, nothing moves, and the caller goes on.
+# Twin: Invoke-MoeControlFollow.
+follow_control_checkout() {
+    local target="${CS_CONSOLIDATION_BRANCH:-main}" head old tip mc sw hooks err new rc=0
+    case "$target" in *'?'*|*'['*) target=main ;; esac
+    [ -n "${MOE_TOP:-}" ] || git_top || return 0
+    head=$(git -C "$MOE_TOP" symbolic-ref -q HEAD 2>/dev/null) || head=""
+    [ "$head" = refs/heads/moe/control ] || [ "${1:-}" = switch ] || return 0
+    # HEAD before the target: a peer's follow in between leaves old an ancestor of tip.
+    old=$(git -C "$MOE_TOP" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || old=""
+    tip=$(git -C "$MOE_TOP" rev-parse -q --verify "refs/heads/$target^{commit}" 2>/dev/null) || tip=""
+    if [ -z "$old" ] || [ -z "$tip" ]; then
+        control_alert MOE_CONTROL_NOT_FOLLOWING "HEAD or refs/heads/$target does not resolve in $MOE_TOP; nothing followed"; return 0
+    fi
+    hooks="$(create_secure_temp)/wt-no-hooks"; mkdir -p "$hooks" 2>/dev/null || true
+    if [ "$head" != refs/heads/moe/control ]; then
+        mc=$(git -C "$MOE_TOP" rev-parse -q --verify 'refs/heads/moe/control^{commit}' 2>/dev/null) || mc=""
+        if [ -z "$mc" ]; then sw=-c; else sw=--no-guess; fi
+        if { [ "$head" = "refs/heads/$target" ] || [ -z "$head" ]; } && [ "$old" = "$tip" ] && { [ -z "$mc" ] || [ "$mc" = "$old" ]; } \
+            && git -C "$MOE_TOP" -c core.hooksPath="$hooks" switch -q "$sw" moe/control >/dev/null 2>&1; then
+            echo -e "${GREEN}[OK]${NC} control checkout switched from ${head:-a detached HEAD} to moe/control at $old"
+            return 0
+        fi
+        control_alert MOE_CONTROL_NOT_FOLLOWING "the control checkout is on ${head:-a detached HEAD} at $old, not moe/control or $target's commit $tip; nothing followed"
+        return 0
+    fi
+    [ "$old" != "$tip" ] || return 0
+    git -C "$MOE_TOP" merge-base --is-ancestor "$old" "$tip" 2>/dev/null || rc=$?
+    if [ "$rc" -eq 1 ]; then
+        control_alert MOE_CONTROL_CHECKOUT_DIVERGED "moe/control at $old is not an ancestor of $target at $tip; nothing was reset, reconcile it by hand"; return 0
+    elif [ "$rc" -ne 0 ]; then
+        control_alert MOE_CONTROL_CHECKOUT_BEHIND "git merge-base --is-ancestor exited $rc; moe/control stays at $old"; return 0
+    fi
+    if ! git -C "$MOE_TOP" diff --quiet "$old" "$tip" -- "${MOE_REL}.moe" 2>/dev/null; then
+        control_alert MOE_CONTROL_CHECKOUT_BEHIND "$old..$tip changes daemon-owned ${MOE_REL}.moe paths (or the diff failed); moe/control stays at $old"; return 0
+    fi
+    # The checked tip, not the ref: a target that moved since carries unchecked .moe paths.
+    err=$(git -C "$MOE_TOP" -c core.hooksPath="$hooks" merge -q --ff-only --no-autostash "$tip" 2>&1 >/dev/null) || rc=$?
+    new=$(git -C "$MOE_TOP" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || new=""
+    if [ "$rc" -ne 0 ]; then
+        # A peer's follow that held the index lock may already have moved HEAD to the tip.
+        [ -n "$new" ] && git -C "$MOE_TOP" merge-base --is-ancestor "$tip" "$new" 2>/dev/null && return 0
+        control_alert MOE_CONTROL_CHECKOUT_BEHIND "moe/control stays at $old, behind $target at $tip: ${err:0:1500}"; return 0
+    fi
+    [ "$new" = "$old" ] || echo -e "${GREEN}[OK]${NC} MOE_CONTROL_ADVANCED $old..$new"
+}
+
+# qa_control_preflight -- design §6.4, a QA seat in a worktree-mode control
+# checkout, after its claim: in remote mode L4's fetch and mirror first
+# (sync_land_target, on local copies of its globals), so a commit landed from
+# another clone counts; then the follow. A failed sync warns and the follow uses
+# the local target. Twin: Invoke-MoeQaControlPreflight.
+qa_control_preflight() {
+    local target="${CS_CONSOLIDATION_BRANCH:-main}" LAND_WT_PUB=remote LAND_B="" LAND_CODE="" LAND_MESSAGE="" LAND_FETCH_ERR=""
+    case "$target" in *'?'*|*'['*) target=main ;; esac
+    no_git_remote && LAND_WT_PUB=local
+    if [ "$LAND_WT_PUB" = remote ] && ! sync_land_target "$target"; then
+        echo -e "${YELLOW}[WARN]${NC} ${LAND_CODE:-MOE_LAND_FETCH_FAILED}: the QA pre-flight could not sync origin's $target (${LAND_MESSAGE:-no detail}); the follow uses the local $target."
+    fi
+    follow_control_checkout
+}
+
+# qa_landed_gate -- design §6.4, after qa_control_preflight: QA reviews only
+# landed bytes. The task's recorded completion C (get_context
+# task.landing.lastCompletion.sha; never a checkpoint, rescue ref or task-branch
+# tip) must be a commit and an ancestor of the control HEAD, which may be later.
+# Anything else, a git failure included, stops the seat before any CLI with
+# MOE_CONTROL_CHECKOUT_BEHIND and one report_blocked (worktree_stop). Passing
+# names C's own diff in the dynamic context. Main shell only (worktree_stop
+# exits). Twin: Assert-MoeQaLandedCommit.
+qa_landed_gate() {
+    local tid="$PREFLIGHT_TASK_ID" sha head rc=0
+    sha=$(printf '%s' "${PREFLIGHT_CONTEXT:-}" | $PYTHON_CMD -c '
+import json, re, sys
+try:
+    s = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))["task"]["landing"]["lastCompletion"]["sha"]
+except Exception:
+    s = ""
+print(s if isinstance(s, str) and re.fullmatch(r"[0-9a-f]{40}", s) else "")
+' 2>/dev/null) || sha=""
+    [ -n "$sha" ] || worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "task $tid: no recorded completion commit (get_context task.landing.lastCompletion.sha is missing or not 40 lowercase hex); QA reviews landed bytes only"
+    { [ -n "${MOE_TOP:-}" ] || git_top; } && head=$(git -C "$MOE_TOP" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) \
+        || worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "task $tid: cannot read the control HEAD to review completion $sha"
+    git -C "$MOE_TOP" cat-file -e "$sha^{commit}" 2>/dev/null \
+        || worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "task $tid: completion $sha is not a commit in $MOE_TOP"
+    git -C "$MOE_TOP" merge-base --is-ancestor "$sha" "$head" 2>/dev/null || rc=$?
+    [ "$rc" -eq 0 ] || worktree_stop MOE_CONTROL_CHECKOUT_BEHIND "task $tid: completion $sha is not in the control HEAD $head (git merge-base --is-ancestor exited $rc); QA reviews landed bytes only"
+    DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
+
+Review commit $sha: the landed completion of task $tid, contained in this checkout's HEAD $head. Its diff is 'git diff $sha^ $sha'; HEAD may be later, so never read 'git diff HEAD~1' or the working tree as this task's change."
+}
+
 # push_task_branch W BRANCH -- push refs/heads/BRANCH to the same name on
 # origin: no force, no upstream, no rebase (design §2.4). 0 = pushed. A missing
 # remote is said once; a rejected or unreachable push is CHECKPOINT-UNPUSHED
@@ -7541,8 +7686,9 @@ worktree_postflight() {
         LAND_REOPEN="${FINAL_REOPEN_COUNT:-0}"; LAND_CLI_EXIT="${CLI_EXIT_CODE:-0}"; LAND_RECOVERED=false
         if [ "$completion" = true ]; then
             land_worktree_completion "$MOE_WT_PATH" "$MOE_WT_BRANCH" || true
-            # Only once the landing is settled (L12 done, or nothing left to land).
-            case "$LAND_OUTCOME" in committed|nothing) board_snapshot "$PREFLIGHT_TASK_ID" "$status" ;; esac
+            # Only once the landing is settled (L12 done, or nothing left to land). L13 (WT-13
+            # §6.2): the control checkout follows the target; a refusal is a warning only.
+            case "$LAND_OUTCOME" in committed|nothing) board_snapshot "$PREFLIGHT_TASK_ID" "$status"; follow_control_checkout ;; esac
         else
             land_worktree_checkpoint "$MOE_WT_PATH" "$MOE_WT_BRANCH" || true
         fi
@@ -8431,6 +8577,11 @@ while [ "$LOOP_RUNNING" = true ]; do
     # account relaunch must not skip it again (the reload deferral below
     # `continue`s straight back here).
     ACCOUNT_RELAUNCH=false
+
+    # WT-13 (§6.2): a worktree-mode control checkout (HEAD on moe/control) follows
+    # the target BEFORE the hash check, so a landed wrapper change reaches the
+    # disk as committed bytes and reloads. Any other HEAD is shared mode: nothing.
+    if control_worktree_mode; then read_commit_settings; follow_control_checkout; fi
 
     # Top of the iteration, AFTER the poll sleep and BEFORE any task dispatch, so
     # a restart can never interleave with a half-done completion.
@@ -9551,6 +9702,11 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     # Before the pre-flight landing, so a refusal leaves no fresh baseline; not
     # gated on autoCommit. Provisions W or stops the seat (provision_worktree).
     if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ] && [ "$ROLE" = worker ]; then provision_worktree; fi
+    # WT-13 (§6.4): a QA claim in a worktree-mode control checkout reviews what landed.
+    if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ] && [ "$ROLE" = qa ] && control_worktree_mode; then
+        qa_control_preflight
+        qa_landed_gate
+    fi
     if [ "${MOE_WT_MODE:-}" = worktree ]; then worktree_preflight "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" "${RESUME_TASK_STATUS:-}"; fi
 
     # -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------
