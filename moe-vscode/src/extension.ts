@@ -15,6 +15,7 @@ import { SettingsPanel } from './panels/SettingsPanel';
 import { TaskDetailPanel } from './panels/TaskDetailPanel';
 import { launchAgent, launchAllAgents, AgentProvider, AgentRole } from './util/AgentLauncher';
 import { isAntigravity, registerMcpServer } from './util/AntigravityIntegration';
+import { registerTaskNotifier } from './util/TaskNotifier';
 
 let daemonClient: MoeDaemonClient | undefined;
 let statusBar: ConnectionStatusBar | undefined;
@@ -34,6 +35,9 @@ export function activate(context: vscode.ExtensionContext) {
     // Initialize status bar
     statusBar = new ConnectionStatusBar(daemonClient);
     context.subscriptions.push(statusBar);
+
+    // Task status notices, matching JetBrains MoeMessageDispatcher (VSC-1). Registered once per activation.
+    context.subscriptions.push(registerTaskNotifier(daemonClient, vscode.window, vscode.commands));
 
     // Initialize board view provider
     const boardProvider = new BoardViewProvider(context.extensionUri, daemonClient);
