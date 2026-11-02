@@ -485,6 +485,7 @@ switch (tool) {
     // answered with a different task.
     // 'empty'    => daemon answered but carried no task.
     // 'mismatch' => the pre-fix fallback: some OTHER task comes back.
+    // 'error'    => the read fails (a JSON-RPC error), as moe-proxy answers a daemon that is down.
     // get_context with NO taskId is the post-flight adoption probe
     // (getContext.ts falls back to the caller's currentTaskId). Every other
     // caller passes a taskId, so this cannot disturb the other scenarios.
@@ -494,6 +495,10 @@ switch (tool) {
       break;
     }
     if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }
+    if (process.env.FAKE_GET_CONTEXT_FAIL === 'error') {
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id||1,error:{code:-32603,message:'fixture: get_context failed'}}) + '\n');
+      break;
+    }
     const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
       ? 'task-someone-elses'
       : (args.taskId || 'task-postflight');

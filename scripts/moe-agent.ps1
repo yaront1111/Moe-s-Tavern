@@ -2966,13 +2966,25 @@ function Stop-MoeWorktreeSeat([string]$Code, [string]$Detail) {
     exit 1
 }
 
-# The seat's workspace from the fresh claim (WT-01), else get_context (WT-02):
-# @{ Mode = worktree|shared; Target; Foreign }. Foreign lists the task's
-# checkpoint/completion commits recorded on any ref but its own branch and the
-# target, the ref reduced to [A-Za-z0-9._/@-] for the refusal line. Twin: the
-# python parse in provision_worktree, whose strip() also drops \x1c-\x1f.
+# The seat's workspace from the fresh claim (WT-01), else get_context (WT-02),
+# read only from a context that answered for this task (its task.id is the
+# claimed id): @{ Mode = worktree|shared|unknown; Read; Target; Foreign }. On
+# such a context no workspace is shared; with neither the mode is unknown.
+# Foreign lists the task's checkpoint/completion commits recorded on any ref but
+# its own branch and the target, the ref reduced to [A-Za-z0-9._/@-] for the
+# refusal line. Twin: the python parse in provision_worktree, whose strip() also
+# drops \x1c-\x1f.
 function Get-MoeWorkspaceClaim($Claim, $Context, [string]$TaskId) {
-    $ws = Get-MoeProp $Claim 'workspace'
+    # Read: get_context answered for THIS task. An error, {} or another task proves nothing.
+    # Properties, not Get-MoeProp, whose return unrolls a one-element array to its item; and a
+    # [string] id only, as -ceq against an array filters instead of comparing.
+    $task = if ($Context -is [System.Management.Automation.PSCustomObject]) { $Context.PSObject.Properties['task'] } else { $null }
+    $task = if ($null -ne $task -and $task.Value -is [System.Management.Automation.PSCustomObject]) { $task.Value } else { $null }
+    $id = if ($null -ne $task) { $task.PSObject.Properties['id'] } else { $null }
+    $read = $null -ne $id -and $id.Value -is [string] -and $id.Value -ceq $TaskId
+    if (-not $read) { $Context = $null; $task = $null }
+    $cws = Get-MoeProp $Claim 'workspace'
+    $ws = $cws
     if ($ws -isnot [System.Management.Automation.PSCustomObject]) { $ws = Get-MoeProp $Context 'workspace' }
     if ($ws -isnot [System.Management.Automation.PSCustomObject]) { $ws = $null }
     $mode = Get-MoeProp $ws 'mode'
@@ -2981,7 +2993,6 @@ function Get-MoeWorkspaceClaim($Claim, $Context, [string]$TaskId) {
     if ($target -match '[\x00-\x1f\x7f]') { $target = '?' }
     $own = @("moe/task/$TaskId", "refs/heads/moe/task/$TaskId", $target, "refs/heads/$target")
     $foreign = @()
-    $task = Get-MoeProp $Context 'task'
     $commits = if ($task -is [System.Management.Automation.PSCustomObject]) { $task.PSObject.Properties['commits'] } else { $null }
     if ($commits -and $commits.Value -is [array]) {
         foreach ($r in $commits.Value) {
@@ -2996,12 +3007,16 @@ function Get-MoeWorkspaceClaim($Claim, $Context, [string]$TaskId) {
         }
     }
     $isWorktree = $mode -is [string] -and $mode -ceq 'worktree'
-    return @{ Mode = $(if ($isWorktree) { 'worktree' } else { 'shared' }); Target = $target; Foreign = $foreign }
+    $mode = if ($isWorktree) { 'worktree' } elseif ($cws -is [System.Management.Automation.PSCustomObject] -or $read) { 'shared' } else { 'unknown' }
+    return @{ Mode = $mode; Read = $read; Target = $target; Foreign = $foreign }
 }
 
-# Worker pre-flight, design §1.1-§1.6. Shared mode refuses only an unlanded
-# moe/task/<id> branch and touches nothing else (epic rail 4). Worktree mode
-# runs the guards in order, then Install-MoeTaskWorktree; there is no fallback
+# Worker pre-flight, design §1.1-§1.6. An unknown mode is shared, unless the
+# control checkout is on moe/control, where it refuses MOE_WORKTREE_CONTEXT_FAILED
+# (task-31187ec1). Worktree mode refuses the same without a context for this
+# task, whose task.commits its ledger guard reads. Shared mode refuses only an
+# unlanded moe/task/<id> branch and touches nothing else (epic rail 4).
+# Worktree mode runs the guards in order, then Install-MoeTaskWorktree; there is no fallback
 # to the shared checkout. Any PowerShell error in worktree mode refuses too, so
 # a throw never reaches the CLI launch. Twin: provision_worktree.
 function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {
@@ -3009,6 +3024,9 @@ function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {
     if ($ws.Mode -cne 'worktree') {
         $git = Get-MoeGitTop
         if (-not $git) { return }
+        if ($ws.Mode -ceq 'unknown' -and (Test-MoeControlWorktreeMode)) {
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_CONTEXT_FAILED' "get_context gave no context for $TaskId and the claim names no workspace, while the control checkout is on moe/control; unblock the task once get_context answers"
+        }
         $task = Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '--verify', '--quiet', "refs/heads/moe/task/$TaskId")
         if ($task.Rc -eq 0 -and -not (Test-MoeTaskBranchLanded $git.Top 'HEAD' $TaskId)) {
             Stop-MoeWorktreeSeat 'MOE_WORKTREE_MODE_MISMATCH' "shared-mode claim, but moe/task/$TaskId holds worktree bytes HEAD lacks; land or rescue that branch first"
@@ -3036,6 +3054,9 @@ function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {
         if (-not $target -or "$(@((Invoke-MoeGit -Top $top -GitArgs @('check-ref-format', '--branch', $target)).Out) | Select-Object -First 1)" -cne $target -or
             (Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '--verify', '--quiet', "refs/heads/$target^{commit}")).Rc -ne 0) {
             Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "the claim's target '$target' is not a local branch"
+        }
+        if (-not $ws.Read) {
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_CONTEXT_FAILED' "get_context gave no context for $TaskId, so its commits cannot be checked against $target; unblock the task once get_context answers"
         }
         foreach ($f in $ws.Foreign) {
             if ((Invoke-MoeGit -Top $top -GitArgs @('merge-base', '--is-ancestor', $f.Sha, "refs/heads/$target")).Rc -ne 0) {

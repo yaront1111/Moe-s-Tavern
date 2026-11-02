@@ -386,6 +386,9 @@ const refusals=[
   ['shared-unlanded','MOE_WORKTREE_MODE_MISMATCH',()=>({FAKE_CLAIM_WORKSPACE:null}),p=>{
     const c=commitOn(p,p.branch,{'src/b.txt':'unlanded\n'});
     return ()=>assert.equal(revOf(p.top,p.branch),c,'the unlanded task branch moved');}],
+  // task-31187ec1: a worktree claim whose get_context fails cannot run the §7.2 ledger guard.
+  ['ctx-unread','MOE_WORKTREE_CONTEXT_FAILED',()=>({FAKE_GET_CONTEXT_FAIL:'error'}),
+    ()=>p=>assert.equal(revOf(p.top,p.branch),null,'a task branch was created')],
 ];
 async function refusal(name,code,knobs,setup=()=>{},opts){
   const p=repo(name,opts),extra=setup(p),before=control(p.top);
@@ -407,6 +410,48 @@ async function sharedLanded(){
   const rec=rows(record).pop();
   assert.ok(rec&&rec.context.includes('memory_total=')&&!rec.context.includes(DEPS_LINE),'shared mode got the worktree dependency line, or no session context'+tail(r.log));
   assert.ok(same(serenaOf(win?rec.mcpConfig.replace(/^﻿/,''):cfgText(path.join(p.dir,'.mcp.json'))),p.dir),'shared mode no longer roots Serena at the project');
+  controlSame(p,before);
+  assert.equal(r.code,0,`exit code ${r.code}`+tail(r.log));
+}
+// task-31187ec1, shape 1: a resume (no workspace on the claim) whose get_context read fails, answers {}
+// or answers for another task, on moe/control, refuses: no W, no task branch, the control untouched.
+async function resumeUnread(){
+  const p=repo('resume-unread',{task:'task-resume'}),before=control(p.top);
+  for(const fail of ['error','empty','mismatch']){
+    try{
+      refused(await launch(p,'resume-unread-'+fail,{FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null,FAKE_GET_CONTEXT_FAIL:fail}),
+        'MOE_WORKTREE_CONTEXT_FAILED','task-resume');
+      controlSame(p,before);
+      assert.ok(!entry(p)&&!present(p.W),'W is registered or exists');
+      assert.equal(revOf(p.top,p.branch),null,'a task branch was created');
+    }catch(e){e.message=`${fail}: ${e.message}`;throw e;}
+  }
+}
+// task-31187ec1, shape 2: moe/task/<id> holds nothing HEAD lacks (so it reads as landed) and W is
+// dirty. A resume whose get_context fails refuses; W stays registered, locked and dirty; the branch stays.
+async function resumeDirty(){
+  const p=repo('resume-dirty',{task:'task-resume'}),before=control(p.top),main=revOf(p.top,'refs/heads/main');
+  const knobs={FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null};
+  provisioned(p,await launch(p,'resume-dirty-add',{...knobs,FAKE_CTX_WORKSPACE:p.ws()}),'created',before,main);
+  write(path.join(p.W,'dirt.txt'),'dirt\n');write(path.join(p.W,'src','a.txt'),'task edit\n');
+  if(git(p.top,'rev-list','--count','HEAD..'+p.branch).trim()!=='0')throw new Error('fixture: the task branch holds commits HEAD lacks');
+  refused(await launch(p,'resume-dirty-unread',{...knobs,FAKE_GET_CONTEXT_FAIL:'error'}),'MOE_WORKTREE_CONTEXT_FAILED','task-resume');
+  const e=entry(p);
+  assert.ok(e,'W was unregistered');
+  assert.deepEqual([e.branch,e.locked],[p.branch,'moe task-resume'],`W's worktree record ${JSON.stringify(e)}`);
+  assert.deepEqual([readOr(path.join(p.W,'dirt.txt')),readOr(path.join(p.W,'src','a.txt'))],['dirt\n','task edit\n'],"W's dirt changed");
+  assert.equal(revOf(p.top,p.branch),main,'the task branch moved');
+  controlSame(p,before);
+}
+// task-31187ec1, epic rail 4: the same failed resume read off moe/control is today's shared run.
+async function resumeSharedUnread(){
+  const p=repo('resume-shared-unread',{task:'task-resume'});git(p.top,'switch','-q','-c','moe/work-2026-10-24');
+  const before=control(p.top);
+  const r=await launch(p,'resume-shared-unread',{FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null,FAKE_GET_CONTEXT_FAIL:'error'});
+  assert.ok(r.cliRan,'the CLI did not run'+tail(r.log));
+  assert.equal(r.blocked.length,0,'report_blocked was called'+tail(r.log));
+  assert.ok(!r.log.includes('MOE_WORKTREE_'),'a MOE_WORKTREE_ line in a shared-mode run'+tail(r.log));
+  assert.ok(!present(p.W),'shared mode made a worktree');
   controlSame(p,before);
   assert.equal(r.code,0,`exit code ${r.code}`+tail(r.log));
 }
@@ -1433,6 +1478,7 @@ function codes(){
 const cases={lifecycle,resume,'half-made':halfMade,
   ...Object.fromEntries(refusals.map(c=>[c[0],()=>refusal(...c)])),'shared-landed':sharedLanded,
   'wt-config-lock':wtConfigLock,'wt-config-lock-exhausted':wtConfigLockExhausted,'wt-config-other':wtConfigOther,'wt-config-preset':wtConfigPreset};
+Object.assign(cases,{'resume-unread':resumeUnread,'resume-dirty':resumeDirty,'resume-shared-unread':resumeSharedUnread});
 for(const t of ['claude','codex','gemini','grok'])cases['launch-'+t]=()=>launchAs(t);
 Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link-partial':linkPartial,'project-yml':projectYml,'serena-outside':serenaOutside,
   'wt-checkpoint':wtCheckpoint,'wt-deny':wtDeny,'wt-recover':wtRecover,'wt-recover-moe':wtRecoverMoe,'wt-control-seats':wtControlSeats,
