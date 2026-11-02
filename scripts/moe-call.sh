@@ -103,13 +103,18 @@ find_python() {
     echo ""
     return 1
 }
-PYTHON_CMD=$(find_python)
-if [ -z "$PYTHON_CMD" ]; then
-    echo "Error: python3 (or py -3) not found on PATH" >&2
-    exit 1
+if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then
+    PYTHON_CMD="" # Only the legacy install-path fallback needs Python.
+else
+    PYTHON_CMD=$(find_python)
+    if [ -z "$PYTHON_CMD" ]; then
+        echo "Error: python3 (or py -3) not found on PATH" >&2
+        exit 1
+    fi
 fi
 
-# Find node
+# The protected wrapper prepends its pinned node directory. Standalone calls
+# still find node by PATH lookup.
 find_node() {
     if command -v node &> /dev/null; then
         echo "node"

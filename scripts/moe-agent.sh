@@ -43,9 +43,13 @@ DAEMON_PATH_OVERRIDE="${MOE_DAEMON_PATH:-}"
 # CQ-R13c2: the JetBrains launcher sets MOE_RUNTIME_PROTECTED=1 beside both paths.
 # Only exactly '1' protects: run exactly those files or refuse, never a fallback.
 if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then RUNTIME_PROTECTED=1; else RUNTIME_PROTECTED=0; fi
+PROTECTED_INTERPRETERS_PINNED=0
 # moe-call.sh resolves its own proxy and falls back past a missing MOE_PROXY_PATH,
-# so a protected seat calls it only while that exact file exists.
-moe_call_allowed() { [ "$RUNTIME_PROTECTED" != 1 ] || [ -f "$PROXY_PATH_OVERRIDE" ]; }
+# so a protected seat calls it only while that exact file exists and node is
+# pinned. Early exits (--help, invalid options) must not deregister before pinning.
+moe_call_allowed() {
+    [ "$RUNTIME_PROTECTED" != 1 ] || { [ "$PROTECTED_INTERPRETERS_PINNED" = 1 ] && [ -f "$PROXY_PATH_OVERRIDE" ]; }
+}
 
 # GUI terminals may not source the profile installed by the dependency helper.
 # Add its agent CLIs without changing the caller's existing command priority.
@@ -110,18 +114,25 @@ find_node() {
     return 1
 }
 
-NODE_CMD=$(find_node)
-# Agent CLI shebangs and their children must use the same selected Node.
-NODE_EXECUTABLE=$(command -v "$NODE_CMD" 2>/dev/null || true)
-if [ -n "$NODE_EXECUTABLE" ] && [ -f "$NODE_EXECUTABLE" ]; then
-    export PATH="$(dirname "$NODE_EXECUTABLE"):$PATH"
+use_node() {
+    # Agent CLI shebangs and their children must use the same selected Node.
+    NODE_EXECUTABLE=$(command -v "$NODE_CMD" 2>/dev/null || true)
+    if [ -n "$NODE_EXECUTABLE" ] && [ -f "$NODE_EXECUTABLE" ]; then
+        export PATH="$(dirname "$NODE_EXECUTABLE"):$PATH"
+    fi
+    NODE_VERSION=$("$NODE_CMD" --version 2>/dev/null || echo "unknown")
+    if [ "$NODE_VERSION" = "unknown" ]; then
+        echo -e "${RED}[ERROR]${NC} Could not find node. Set MOE_NODE_COMMAND=/path/to/node"
+        WORKER_ID=""
+        exit 1
+    fi
+    echo -e "${GREEN}[OK]${NC} Using node: $NODE_CMD ($NODE_VERSION)"
+}
+# Protected resolution must wait until --project is known.
+if [ "$RUNTIME_PROTECTED" != 1 ]; then
+    NODE_CMD=$(find_node)
+    use_node
 fi
-NODE_VERSION=$("$NODE_CMD" --version 2>/dev/null || echo "unknown")
-if [ "$NODE_VERSION" = "unknown" ]; then
-    echo -e "${RED}[ERROR]${NC} Could not find node. Set MOE_NODE_COMMAND=/path/to/node"
-    exit 1
-fi
-echo -e "${GREEN}[OK]${NC} Using node: $NODE_CMD ($NODE_VERSION)"
 
 # Secure temp directory creation (for any operations needing temp storage)
 # Uses mktemp with restricted permissions to prevent access on shared systems
@@ -418,6 +429,12 @@ COMMAND_BIN=""
 COMMAND_ARGV=()
 parse_command_into_argv() {
     local line="$1"
+    # The protected gate admits only a bare known CLI; do not run shlex yet.
+    if [ "${RUNTIME_PROTECTED:-0}" = 1 ]; then
+        COMMAND_BIN="$line"
+        COMMAND_ARGV=()
+        return 0
+    fi
     # A string that names an existing path is one binary, spaces and all
     # ("/opt/my tools/claude"). Same rule as the ps1 twin's
     # Resolve-CommandParts, which splits -Command only when the whole string
@@ -476,6 +493,62 @@ refuse_protected_agent() { # $1 = the line
     printf '%s\n' "$1" >&2
     WORKER_ID=""
     exit 1
+}
+# Trust directories, not PATH lookup results: links/case cannot hide the project.
+protected_trusted_dir() { # $1 = directory, $2 = project's real path
+    local real up
+    case "$1" in /*) ;; *) return 1 ;; esac
+    real=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
+    up="$real"
+    while :; do
+        [ "$up" -ef "$2" ] && return 1
+        [ "$up" != / ] || break
+        up="${up%/*}"; [ -n "$up" ] || up=/
+    done
+    printf '%s\n' "$real"
+}
+protected_path_lookup() { # $1 = name, $2 = project directory, $3 = msys/cygwin extensions (default .exe .cmd)
+    local entries entry real ext exts="" project_real
+    [ -n "$2" ] || return 1
+    project_real=$(cd -- "$2" 2>/dev/null && pwd -P) || return 1
+    case "$OSTYPE" in msys*|cygwin*) exts="${3-.exe .cmd}" ;; esac
+    IFS=: read -r -a entries <<< "$PATH"
+    for entry in "${entries[@]}"; do
+        real=$(protected_trusted_dir "$entry" "$project_real") || continue
+        for ext in "" $exts; do
+            if [ -f "$real/$1$ext" ] && [ -x "$real/$1$ext" ]; then
+                printf '%s\n' "$real/$1$ext"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+protected_pin_interpreters() {
+    local project project_real="" candidate real exe=""
+    case "$OSTYPE" in msys*|cygwin*) exe=".exe" ;; esac
+    project=$(normalize_path "$PROJECT")
+    if [ -n "$project" ]; then
+        project_real=$(cd -- "$project" 2>/dev/null && pwd -P) || project_real=""
+    fi
+    NODE_CMD=""
+    # use_node puts only the pinned file's dir first on PATH, while moe-call.sh and
+    # env shebangs look up the NAME node: pin only a file that name resolves to.
+    for candidate in "${MOE_NODE_COMMAND:-}" "$HOME/.local/share/moe/node/current/bin/node"; do
+        [ -n "$project_real" ] || break
+        case "$candidate" in /*) ;; *) continue ;; esac
+        case "${candidate##*/}" in node|"node$exe") ;; *) continue ;; esac
+        [ -f "$candidate" ] && [ -x "$candidate" ] || continue
+        real=$(protected_trusted_dir "${candidate%/*}/" "$project_real") || continue
+        NODE_CMD="$real/${candidate##*/}"
+        break
+    done
+    if [ -z "$NODE_CMD" ]; then
+        NODE_CMD=$(protected_path_lookup node "$project" "$exe") || refuse_protected_agent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start."
+    fi
+    use_node
+    PYTHON_CMD=$(protected_path_lookup python3 "$project") || refuse_protected_agent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: python3 was not found on an absolute PATH entry outside the project; refusing to start."
+    PROTECTED_INTERPRETERS_PINNED=1
 }
 if [ "$RUNTIME_PROTECTED" = 1 ]; then
     case "$COMMAND" in
@@ -605,7 +678,11 @@ find_python() {
     return 1
 }
 
-PYTHON_CMD=$(find_python)
+if [ "$RUNTIME_PROTECTED" = 1 ]; then
+    protected_pin_interpreters
+else
+    PYTHON_CMD=$(find_python)
+fi
 if [ -z "$PYTHON_CMD" ]; then
     echo -e "${RED}Error: python3 is required but not found${NC}"
     echo "Install Python 3: brew install python3"
@@ -795,30 +872,9 @@ require_protected_runtime_file() { # $1 = the variable name, $2 = its value
 # the project or under it (-ef compares inodes, so links and case cannot hide
 # it). A manual scan: bash's hash table, aliases and functions never answer.
 protected_resolve_cli() { # $1 = the CLI name; sets COMMAND_BIN to its absolute path
-    local entries entry real up ext exts="" project_real
-    project_real=$(cd -- "$PROJECT" 2>/dev/null && pwd -P) || project_real=""
-    case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) exts=".exe .cmd" ;; esac
-    IFS=: read -r -a entries <<< "$PATH"
-    for entry in "${entries[@]}"; do
-        [ -n "$project_real" ] || break
-        case "$entry" in /*) ;; *) continue ;; esac
-        real=$(cd -- "$entry" 2>/dev/null && pwd -P) || continue
-        up="$real"
-        while :; do
-            [ "$up" -ef "$project_real" ] && continue 2
-            [ "$up" != / ] || break
-            up="${up%/*}"; [ -n "$up" ] || up=/
-        done
-        for ext in "" $exts; do
-            if [ -f "$real/$1$ext" ] && [ -x "$real/$1$ext" ]; then
-                COMMAND_BIN="$real/$1$ext"
-                COMMAND_ARGV=()
-                printf '%s\n' "[INFO] MOE_PROTECTED_AGENT_CLI: $1 -> $COMMAND_BIN"
-                return 0
-            fi
-        done
-    done
-    refuse_protected_agent "[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: $1 was not found on an absolute PATH entry outside the project; refusing to start."
+    COMMAND_BIN=$(protected_path_lookup "$1" "$PROJECT") || refuse_protected_agent "[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: $1 was not found on an absolute PATH entry outside the project; refusing to start."
+    COMMAND_ARGV=()
+    printf '%s\n' "[INFO] MOE_PROTECTED_AGENT_CLI: $1 -> $COMMAND_BIN"
 }
 if [ "$RUNTIME_PROTECTED" = 1 ]; then
     require_protected_runtime_file MOE_PROXY_PATH "$PROXY_PATH_OVERRIDE"
@@ -1590,12 +1646,14 @@ if [ "$CLI_TYPE" = "grok" ]; then write_grok_config "$PROJECT" "$SERENA_PROJECT"
 # with ntpath/posixpath, never os.path, so Windows python agrees. WSL shares
 # strip host/distro, preserving POSIX tail case before /mnt mapping. Bounded:
 # 3 s total (the watchdog also covers a trickled reply) and 64 KiB of body.
+# Resolve a name once and dial its first address: the /health guard refuses
+# a DNS-name Host. IP literals and localhost keep their original request.
 probe_daemon_health() {
     local host="$1"
     local port="$2"
     local project="${3:-}"
     $PYTHON_CMD -c '
-import json, ntpath, os, posixpath, re, sys, threading, urllib.error, urllib.request
+import ipaddress, json, ntpath, os, posixpath, re, socket, sys, threading, urllib.error, urllib.request
 watchdog = threading.Timer(3, os._exit, (1,))
 watchdog.daemon = True
 watchdog.start()
@@ -1614,9 +1672,16 @@ def comparable(p):
     m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
     return (m.group(1) + ":" + ("/" + m.group(2) if m.group(2) else "")).lower() if m else p
 try:
+    host = sys.argv[1]
+    try:
+        ipaddress.ip_address(host[1:-1] if host[:1] == "[" and host[-1:] == "]" else host)
+    except ValueError:
+        if host.lower() != "localhost":
+            address = socket.getaddrinfo(host, None, 0, socket.SOCK_STREAM)[0][4][0]
+            host = "[%s]" % address if ":" in address else address
     try:
         r = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
-            "http://%s:%s/health" % (sys.argv[1], sys.argv[2]), timeout=3)
+            "http://%s:%s/health" % (host, sys.argv[2]), timeout=3)
     except urllib.error.HTTPError as e:
         if e.code != 503:
             sys.exit(1)
@@ -3039,6 +3104,44 @@ worktree_stop() {
     exit 1
 }
 
+# enable_worktree_config -- before W's first sparse-checkout, make sure the common
+# config has extensions.worktreeConfig=true (task-c7ca56e6). Otherwise git's
+# sparse-checkout sets it itself under the shared .git/config.lock, and of two seats
+# provisioning at once one fails with `could not lock config file`. Once it is set,
+# sparse-checkout writes only W's own config.worktree. No write when it is already
+# true. A common config with core.worktree or core.bare=true keeps git's own upgrade
+# (init_worktree_config moves those two into config.worktree; a plain write would
+# not). Only a lock collision is retried, 5 attempts, and another seat's write counts
+# as success. Any other failure returns 1 with MOE_WT_CONFIG_ERR set. The gate arm's
+# and the hooked scratch's sparse-checkouts need no call: this worker pre-flight runs
+# first in the same repository. Call it from the main shell. Twin: Enable-MoeWorktreeConfig.
+enable_worktree_config() {
+    local n=1 out
+    MOE_WT_CONFIG_ERR=""
+    if git -C "$MOE_TOP" config --local --get core.worktree > /dev/null 2>&1 \
+        || [ "$(git -C "$MOE_TOP" config --local --get --type=bool core.bare 2>/dev/null)" = true ]; then
+        return 0
+    fi
+    while :; do
+        [ "$(git -C "$MOE_TOP" config --local --get --type=bool extensions.worktreeConfig 2>/dev/null)" = true ] && return 0
+        [ "$n" -le 5 ] || break
+        # LC_ALL=C: git's message stays matchable under any locale (its exit code, 255, is generic).
+        out=$(LC_ALL=C git -C "$MOE_TOP" config --local extensions.worktreeConfig true 2>&1) && return 0
+        case "$out" in
+            # Only EEXIST is a collision; any other errno (EACCES, ...) refuses at once.
+            *'could not lock config file'*': File exists'*) ;;
+            *) MOE_WT_CONFIG_ERR="git config extensions.worktreeConfig true failed: ${out##*$'\n'}"; return 1 ;;
+        esac
+        if [ "$n" -lt 5 ]; then
+            echo -e "${BLUE}[info]${NC} MOE_WORKTREE_CONFIG_RETRY attempt=$n/5: .git/config is locked by another git process"
+            sleep "0.$(( RANDOM % 5 + 2 ))"
+        fi
+        n=$((n + 1))
+    done
+    MOE_WT_CONFIG_ERR="git config extensions.worktreeConfig true failed 5 times: .git/config stayed locked by another git process"
+    return 1
+}
+
 # provision_worktree -- worker pre-flight, design §1.1-§1.6. The fresh claim's
 # workspace (WT-01), else get_context's (WT-02), names the mode; none is shared.
 # Shared mode refuses only an unlanded moe/task/<id> branch and touches nothing
@@ -3048,7 +3151,7 @@ worktree_stop() {
 # the shared checkout. It never deletes a branch, W/.moe, or a W it did not add
 # in this session. Sets MOE_WT_MODE/PATH/BRANCH/TARGET. Twin: Initialize-MoeWorktree.
 provision_worktree() {
-    local tid="$PREFLIGHT_TASK_ID" parsed mode target foreign ver head w branch base found raw ref out verb longest sha fref
+    local tid="$PREFLIGHT_TASK_ID" parsed mode target foreign ver head w branch base found raw ref out verb longest sha fref fail
     local added=false finish=false
     local -a rows=()
     # The claim and context travel on stdin: one env string is capped at 128 KiB.
@@ -3177,13 +3280,19 @@ sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
             || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree add failed: ${out##*$'\n'}"
     fi
     if [ "$added" = true ] || [ "$finish" = true ]; then
+        fail=""
+        if ! enable_worktree_config; then
+            fail="$MOE_WT_CONFIG_ERR"
         # MSYS would rewrite '/*' into a Windows path under Git Bash.
-        if ! out=$(MSYS2_ARG_CONV_EXCL='*' git -C "$w" sparse-checkout set --no-cone '/*' '!/.moe/' 2>&1) \
+        elif ! out=$(MSYS2_ARG_CONV_EXCL='*' git -C "$w" sparse-checkout set --no-cone '/*' '!/.moe/' 2>&1) \
             || ! out=$(git -C "$w" read-tree -mu HEAD 2>&1); then
+            fail="git sparse-checkout or read-tree failed in $w: ${out##*$'\n'}"
+        fi
+        if [ -n "$fail" ]; then
             if [ "$added" = true ] && [ "$(git -C "$MOE_TOP" rev-list --count "$base..refs/heads/$branch" 2>/dev/null)" = 0 ]; then
                 git -C "$MOE_TOP" worktree remove --force --force "$w" > /dev/null 2>&1 || true
             fi
-            worktree_stop MOE_WORKTREE_CREATE_FAILED "git sparse-checkout or read-tree failed in $w: ${out##*$'\n'}"
+            worktree_stop MOE_WORKTREE_CREATE_FAILED "$fail"
         fi
     fi
     if [ -e "$w/.moe" ] || [ -L "$w/.moe" ]; then
@@ -10427,10 +10536,13 @@ def to_top_rel(raw):
         t = top.lower() if CI else top
         if not a.startswith(t + '/'):
             return None
-        return p[len(top) + 1:]
+        # A control character (a line break) would append a second, forged witness line;
+        # prompt-cache-witness.mjs refuses the same set.
+        rest = p[len(top) + 1:]
+        return None if re.search(r'[\x00-\x1f]', rest) else rest
     while p.startswith('./'):
         p = p[2:]
-    if not p or any(seg == '..' for seg in p.split('/')):
+    if not p or re.search(r'[\x00-\x1f]', p) or any(seg == '..' for seg in p.split('/')):
         return None
     return rel + p
 def result_text(block):

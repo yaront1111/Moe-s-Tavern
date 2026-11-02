@@ -63,6 +63,7 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_HEARTBEAT_MAX_DURATION_SEC` | Heartbeat sidecar hard stop (a truly-hung CLI still goes stale) | `7200` | `3600` |
 | `MOE_DISABLE_QUALITY_GATE` | Skip `settings.qualityGate` for this run | Unset | `1` |
 | `MOE_DISABLE_CHECKPOINT` | Skip `wip(task-<id>)` checkpoint commits for this run (completion commits and rescue refs still land) | Unset | `1` |
+| `MOE_ALLOW_AGENT_GIT_WRITES` | **Human-only:** `1` lets one deliberately reviewed `git commit` or `git push` from a shell inheriting a seat's agent Git-write guard run the original hook instead of refusing with `MOE_AGENT_GIT_REFUSED`. Set for that command only and restore afterwards; never persist in a profile, hand to an agent, or use as a landing repair. A human outside the agent session needs no override. See [Agent Git-write refusal](TROUBLESHOOTING.md#agent-git-write-refusal) | Unset | `1` |
 | `MOE_ATTRIBUTION` | `declared` forces `settings.attribution.undeclared` to `never` for this run — declared-only landing, no MEASURED paths | Unset | `declared` |
 | `GIT_TERMINAL_PROMPT` | **Set by the wrapper** (not read) to `0` for its whole lifetime, so a credential or host-key prompt can never hang a push or a `pull --rebase` retry | `0` (wrapper-set) | — |
 | `MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF` | Test seam only: a command the landing runs between `commit-tree` and `update-ref` (the harness uses it to force CAS contention with a peer commit) | Unset | `bash peer-commit.sh` |

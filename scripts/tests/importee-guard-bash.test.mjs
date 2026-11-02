@@ -295,6 +295,35 @@ test('Bash complete edit blocks preserve authority when partial parent streams o
     assert.deepEqual(result.skipped, [['MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)', 'b.txt']]);
 });
 
+test('Bash stream parser refuses a tool path holding a control character, forging no second witness line', t => {
+    const scratch = mkdtempSync(join(tmpdir(), 'moe-bash-ctrl-'));
+    t.after(() => rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }));
+    const root = join(scratch, 'git').replaceAll('\\', '/');
+    mkdirSync(root);
+    const tools = join(scratch, 'tools');
+    const calls = [
+        ['Edit', { file_path: 'ok.txt\nforged.txt' }, 'ok.txt\nforged.txt'],
+        ['Write', { file_path: `${root}/a.txt\rforged.txt` }, `${root}/a.txt\rforged.txt`],
+        ['mcp__serena__create_text_file', { relative_path: 'b.py\nforged.py' }, `${root}/b.py\nforged.py`],
+        ['Edit', { file_path: 'plain.txt' }, null],
+    ];
+    const events = calls.flatMap(([name, input], i) => [
+        { type: 'assistant', message: { content: [{ type: 'tool_use', id: `ctrl-${i}`, name, input }] } },
+        { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `ctrl-${i}`, is_error: false, content: 'OK' }] } },
+    ]);
+    const run = spawnSync(python, ['-c', streamParser], {
+        input: events.map(event => JSON.stringify(event)).join('\n') + '\n',
+        encoding: 'utf8', windowsHide: true, timeout: 30_000,
+        env: { ...fixtureEnvironment, MOE_GIT_TOP: root, MOE_GIT_REL: '', MOE_SERENA_PROJECT_ROOT: root, MOE_TOOL_WRITES_FILE: tools },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    // The plain control path is witnessed, so the empty result for the refused ones is not vacuous.
+    assert.deepEqual(readFileSync(tools, 'utf8').split('\n').filter(Boolean), ['plain.txt']);
+    for (const [, , raw] of calls.slice(0, 3)) {
+        assert.ok(run.stdout.includes(`  [WARN] tool write outside the repo not harvested: ${raw}\n`), run.stdout);
+    }
+});
+
 test('Bash partial edit display alone cannot supply an editing witness', t => {
     const events = [
         { type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', id: 'partial-edit', name: 'Edit' } } },

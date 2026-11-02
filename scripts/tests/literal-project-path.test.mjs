@@ -91,7 +91,7 @@ function fakeCli() {
   if (argv.includes('--help') || argv.includes('--version')) return;
   const fixture = JSON.parse(process.env.LITERAL_FIXTURE), joined = argv.join(' ');
   const promptIndex = argv.indexOf('--append-system-prompt-file');
-  const contextPaths = [...joined.matchAll(/session context file at (.+?session-context\.md)\./g)];
+  const contextPaths = [...joined.matchAll(/session context file at (.+?\.md)\. /g)];
   write(fixture.result, JSON.stringify({ cwd: process.cwd(), projectEnv: process.env.MOE_PROJECT_PATH, argv,
     systemPrompt: promptIndex < 0 ? '' : read(argv[promptIndex + 1]),
     context: joined + contextPaths.map(match => read(match[1])).join('\n') }));
@@ -160,7 +160,8 @@ function assertCli(f, cli, result, output) {
   const slashProject = result.projectEnv.replaceAll('\\', '/');
   if (cli === 'claude') {
     assert.equal(result.argv[result.argv.indexOf('--model') + 1], 'claude-literal-sentinel');
-    assert.match(result.systemPrompt, /ROLE-DOC-SENTINEL/); assert.match(result.systemPrompt, /KNOWN-ISSUES-SENTINEL/);
+    // Known issues ride the per-iteration session context, not the cached system prompt.
+    assert.match(result.systemPrompt, /ROLE-DOC-SENTINEL/); assert.match(result.context, /KNOWN-ISSUES-SENTINEL/);
     assert.match(result.context, /literal-memory/); assert.match(output, /Daemon started/);
     assert.equal(JSON.parse(read(path.join(f.root, 'daemon-argv.json'))).project, result.projectEnv);
   } else if (cli === 'codex') {

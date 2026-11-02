@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { lookup } from 'node:dns/promises';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -38,7 +39,7 @@ const SEGMENTS = {
   },
   ps1: {
     helper: () => optional(ps, '\nfunction Read-MoeDaemonJsonText(', '\nif (-not $NoStartDaemon) {'),
-    check: () => between(ps, '\n    if (Test-Path $daemonInfoPath) {', '\n    if (-not $running) {'),
+    check: () => between(ps, '\n    if (Test-Path -LiteralPath $daemonInfoPath) {', '\n    if (-not $running) {'),
   },
 };
 const windows = process.platform === 'win32';
@@ -117,9 +118,9 @@ const ENV = { ...process.env };
 delete ENV.MOE_DAEMON_HOST;
 // spawn, not spawnSync: the identity rows answer /health from this process, and
 // a blocked event loop would leave every probe to time out as 'unknown'.
-function spawnAsync(exe, args) {
+function spawnAsync(exe, args, env = ENV) {
   return new Promise((resolve, reject) => {
-    const child = spawn(exe, args, { env: ENV, windowsHide: true });
+    const child = spawn(exe, args, { env, windowsHide: true });
     let out = '';
     child.stdout.on('data', (chunk) => { out += chunk; });
     child.stderr.on('data', (chunk) => { out += chunk; });
@@ -130,7 +131,7 @@ function spawnAsync(exe, args) {
 }
 
 // Runs one engine's real block against a daemon.json holding `content`.
-async function runCheck(engine, content, { qualified = false, project = PROJECT[engine.ext] } = {}) {
+async function runCheck(engine, content, { qualified = false, project = PROJECT[engine.ext], daemonHost } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'moe-cap-'));
   try {
     const file = path.join(dir, 'daemon.json');
@@ -143,7 +144,7 @@ async function runCheck(engine, content, { qualified = false, project = PROJECT[
     const args = engine.ext === 'sh'
       ? ['--noprofile', '--norc', fwd(script)]
       : ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script];
-    const r = await spawnAsync(engine.exe, args);
+    const r = await spawnAsync(engine.exe, args, daemonHost === undefined ? ENV : { ...ENV, MOE_DAEMON_HOST: daemonHost });
     const out = r.out.replaceAll('\r\n', '\n').replace(ANSI, '');
     // The sh fixture fills in $$ before probing; compare those exact bytes too.
     const before = content.replace(SHELL_PID, /@@ fixture-pid=(\d+)/.exec(out)?.[1] ?? 'missing-fixture-pid');
@@ -154,10 +155,27 @@ async function runCheck(engine, content, { qualified = false, project = PROJECT[
   }
 }
 
-const listen = (server) => new Promise((resolve, reject) => {
+const listen = (server, address = '127.0.0.1') => new Promise((resolve, reject) => {
   server.once('error', reject);
-  server.listen(0, '127.0.0.1', resolve);
+  server.listen(0, address, resolve);
 });
+// No resolver hook: bind the fake to the OS's first address, just as the
+// launchers must. localhost. exercises DNS and IPv6 without a machine alias.
+async function localName(name) {
+  if (net.isIP(name) || name.toLowerCase() === 'localhost') return { name, skip: 'not a DNS name' };
+  const server = net.createServer();
+  try {
+    const [{ address, family }] = await lookup(name, { all: true });
+    if (family === 6 && /^fe[89ab][0-9a-f]:/i.test(address)) return { name, skip: `scoped link-local first address: ${address}` };
+    await listen(server, address);
+    return { name, address, literal: family === 6 ? `[${address}]` : address };
+  } catch (error) {
+    return { name, skip: `first address unavailable: ${error.message}` };
+  } finally {
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  }
+}
+const NAMES = await Promise.all(['localhost.', hostname()].map(localName));
 // A port that answers nothing: reserved, then released.
 async function closedPort() {
   const server = net.createServer();
@@ -168,14 +186,22 @@ async function closedPort() {
 }
 // A fake daemon /health answering `statusCode` + `body`, recording each request
 // so a row proves the launcher asked (and asked nothing else).
-async function withHealth(statusCode, body, fn) {
+async function withHealth(statusCode, body, fn, { address = '127.0.0.1', guard = false } = {}) {
+  let isAllowedHealthHost;
+  if (guard) {
+    const url = new URL('../../packages/moe-daemon/dist/server/healthHost.js', import.meta.url);
+    assert.ok(existsSync(url), 'packages/moe-daemon/dist/server/healthHost.js is missing: build packages/moe-daemon first');
+    ({ isAllowedHealthHost } = await import(url.href));
+  }
   const requests = [];
   const server = http.createServer((req, res) => {
-    requests.push(`${req.method} ${req.url}`);
-    res.writeHead(statusCode, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(body));
+    const allowed = !guard || isAllowedHealthHost(req.headers.host, req.socket.localAddress);
+    const code = allowed ? statusCode : 403;
+    requests.push(`${req.method} ${req.url}${guard ? ` ${req.headers.host} ${code}` : ''}`);
+    res.writeHead(code, { 'content-type': allowed ? 'application/json' : 'text/plain' });
+    res.end(allowed ? JSON.stringify(body) : 'Forbidden');
   });
-  await listen(server);
+  await listen(server, address);
   try {
     return await fn(server.address().port, requests);
   } finally {
@@ -194,16 +220,16 @@ const REFUSAL_FIXED = [
   '); it takes the next free port.',
   "Refusing to register, claim or bridge to another project's daemon.",
 ];
-function refusal(port, served, project, infoPath) {
+function refusal(port, served, project, infoPath, host = '127.0.0.1') {
   return [
-    `[ERROR] ${REFUSAL_FIXED[0]}127.0.0.1:${port} serves ${served}${REFUSAL_FIXED[1]}${project}).`,
+    `[ERROR] ${REFUSAL_FIXED[0]}${host}:${port} serves ${served}${REFUSAL_FIXED[1]}${project}).`,
     `${infoPath}${REFUSAL_FIXED[2]}${project}${REFUSAL_FIXED[3]}`,
     REFUSAL_FIXED[4],
   ];
 }
-function assertRefused(r, port, served, project) {
+function assertRefused(r, port, served, project, host = '127.0.0.1') {
   assert.equal(r.status, 1, r.out);
-  const expected = refusal(port, served, project, r.infoPath);
+  const expected = refusal(port, served, project, r.infoPath, host);
   assert.deepEqual(r.lines.filter((l) => l.includes('MOE_DAEMON_FOREIGN_PROJECT')), [expected[0]], r.out);
   const at = r.lines.indexOf(expected[0]);
   assert.deepEqual(r.lines.slice(at, at + 3), expected, r.out);
@@ -311,6 +337,37 @@ for (const engine of ENGINES) {
     // The PID branch: kill -0 proves a process, not which project it serves.
     const pidInfo = (port) => `{"pid":${SHELL_PID},"port":${port},"startedAt":"x","projectPath":"/mnt/c/moe-id/proj"}`;
     const running = (port) => `@@ port=[${port}] project=[/mnt/c/moe-id/proj] running=true`;
+    for (const { name, address, literal, skip } of NAMES) {
+      for (const same of [false, true]) {
+        t(`identity: named host ${name}, live pid, ${same ? 'same adopted' : 'foreign refused'}`, () =>
+          withHealth(200, healthy(same ? 'C:/moe-id/proj' : OTHER), async (port, requests) => {
+            const r = await runCheck(engine, pidInfo(port), { daemonHost: name });
+            assert.deepEqual(requests, [`GET /health ${literal}:${port} 200`], r.out);
+            if (same) {
+              assert.equal(r.status, 0, r.out);
+              assert.ok(r.lines.includes(running(port)), r.out);
+            } else assertRefused(r, port, OTHER, PROJECT.sh, name);
+            assert.equal(r.after, r.before);
+          }, { address, guard: true }), engine.skip || skip);
+        t(`identity: named host ${name}, Windows-owned candidate, ${same ? 'same adopted' : 'foreign refused'}`, () =>
+          withHealth(200, healthy(same ? 'd:/projexts/px4swarm/' : OTHER), async (port, requests) => {
+            const r = await runCheck(engine, px4Info(port), { project: PX4, daemonHost: name });
+            assert.deepEqual(requests, [`GET /health ${literal}:${port} 200`], r.out);
+            if (same) {
+              assert.equal(r.status, 0, r.out);
+              assert.ok(r.out.includes('running=true'), r.out);
+            } else assertRefused(r, port, OTHER, PX4, name);
+            assert.ok(r.lines.includes(`@@ exit host=[${name}]`), r.out);
+            assert.equal(r.after, r.before);
+          }, { address, guard: true }), foreignSkip || skip);
+      }
+    }
+    t('identity: non-resolving named host is adopted as today', async () => {
+      const port = await closedPort();
+      const r = await runCheck(engine, pidInfo(port), { daemonHost: 'moe-daemon.invalid' });
+      assert.equal(r.status, 0, r.out);
+      assert.ok(r.lines.includes(running(port)), r.out);
+    });
     t('identity: a live pid whose daemon serves another project is refused', () =>
       withHealth(200, healthy(OTHER), async (port, requests) => {
         const r = await runCheck(engine, pidInfo(port));
@@ -370,6 +427,29 @@ for (const engine of ENGINES) {
   });
 
   const psInfo = (port) => JSON.stringify({ pid: process.pid, port, startedAt: 'x', projectPath: PROJECT.ps1 });
+  for (const { name, address, literal, skip } of NAMES) {
+    for (const same of [false, true]) {
+      t(`identity: named host ${name}, live pid, ${same ? 'same adopted' : 'foreign refused'}`, () =>
+        withHealth(200, healthy(same ? PROJECT.ps1 : OTHER), async (port, requests) => {
+          const r = await runCheck(engine, psInfo(port), { daemonHost: name });
+          assert.deepEqual(requests, [`GET /health ${literal}:${port} 200`], r.out);
+          if (same) {
+            assert.equal(r.status, 0, r.out);
+            assert.ok(r.lines.includes(`@@ running=True port=${port} err=`), r.out);
+          } else {
+            assertRefused(r, port, OTHER, PROJECT.ps1, name);
+            assert.ok(!r.out.includes('@@ running='), r.out);
+          }
+          assert.equal(r.after, r.before);
+        }, { address, guard: true }), engine.skip || skip);
+    }
+  }
+  t('identity: non-resolving named host is adopted as today', async () => {
+    const port = await closedPort();
+    const r = await runCheck(engine, psInfo(port), { daemonHost: 'moe-daemon.invalid' });
+    assert.equal(r.status, 0, r.out);
+    assert.ok(r.lines.includes(`@@ running=True port=${port} err=`), r.out);
+  });
   for (const [name, project, served] of [
     ['Unicode normalization', 'D:/qa/caf\u00e9', 'D:/qa/cafe\u0301'],
     ['POSIX case', '/home/qa/OtherProject', '/home/qa/otherproject'],
@@ -513,7 +593,7 @@ function powershellKeys(engine, rows) {
     const script = path.join(dir, 'keys.ps1');
     writeFileSync(script, `\ufeff$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-${between(ps, '\nfunction Get-MoeComparableProjectPath(', '\n# Which project the daemon on 127.0.0.1')}
+${between(ps, '\nfunction Get-MoeComparableProjectPath(', '\n# Which project the daemon ')}
 foreach ($p in @(${rows.map(([p]) => psq(p)).join(', ')})) { Get-MoeComparableProjectPath $p }
 `);
     return childKeys(engine.exe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], rows,

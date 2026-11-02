@@ -489,15 +489,13 @@ function Get-MoeRealPath([string]$Path) {
     }
     throw "symlink loop at $Path"
 }
-# A protected CLI name resolves only from an absolute PATH entry outside the
+# A protected file resolves only from an absolute PATH entry outside the
 # project's real path (empty, '.', relative and in-project entries skipped) by
-# this manual scan, never Get-Command. Windows tries .ps1 first, then PATHEXT,
-# PowerShell's own order. ponytail: 8.3 short-name aliases of the project and a
+# this manual scan, never Get-Command. ponytail: 8.3 short-name aliases of the project and a
 # file-level link inside a trusted dir are not followed; resolve them if needed.
-function Resolve-MoeProtectedCli([string]$Name) {
+function Find-MoeProtectedFile([string]$Name, [string[]]$Extensions) {
     $onWindows = $PSVersionTable.PSEdition -ne 'Core' -or $IsWindows
     $cmp = if ($onWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
-    $exts = if ($onWindows) { @('.ps1') + @("$env:PATHEXT".Split(';') | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }) } else { @('') }
     $sep = [IO.Path]::DirectorySeparatorChar
     try { $project = (Get-MoeRealPath $projectPath.ProviderPath).TrimEnd('\', '/') } catch { $project = $null }
     foreach ($entry in "$env:PATH".Split([IO.Path]::PathSeparator)) {
@@ -509,17 +507,31 @@ function Resolve-MoeProtectedCli([string]$Name) {
             $realFull = Get-MoeRealPath $entry
             $real = $realFull.TrimEnd('\', '/')
             if ($real.Equals($project, $cmp) -or "$real$sep".StartsWith("$project$sep", $cmp)) { continue }
-            foreach ($ext in $exts) {
+            foreach ($ext in $Extensions) {
                 # The untrimmed path: a root entry trimmed to 'C:' or '' would join drive- or cwd-relative.
                 $file = [IO.Path]::Combine($realFull, "$Name$ext")
-                if (Test-Path -LiteralPath $file -PathType Leaf) {
-                    Write-Host "[INFO] MOE_PROTECTED_AGENT_CLI: $Name -> $file"
-                    return $file
-                }
+                if (Test-Path -LiteralPath $file -PathType Leaf) { return $file }
             }
         } catch { continue }
     }
-    Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: $Name was not found on an absolute PATH entry outside the project; refusing to start."
+    return $null
+}
+function Resolve-MoeProtectedCli([string]$Name) {
+    # PowerShell's own order: .ps1 first, then PATHEXT on Windows.
+    $onWindows = $PSVersionTable.PSEdition -ne 'Core' -or $IsWindows
+    $exts = if ($onWindows) { @('.ps1') + @("$env:PATHEXT".Split(';') | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }) } else { @('') }
+    $file = Find-MoeProtectedFile $Name $exts
+    if (-not $file) { Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: $Name was not found on an absolute PATH entry outside the project; refusing to start." }
+    Write-Host "[INFO] MOE_PROTECTED_AGENT_CLI: $Name -> $file"
+    return $file
+}
+$script:MoeNode = $null
+if ($script:MoeRuntimeProtected) {
+    $nodeExtensions = if ($PSVersionTable.PSEdition -ne 'Core' -or $IsWindows) { @('.exe') } else { @('') }
+    $script:MoeNode = Find-MoeProtectedFile 'node' $nodeExtensions
+    if (-not $script:MoeNode) { Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start." }
+    Set-Alias -Name node -Value $script:MoeNode -Scope Script
+    Write-Host "[OK] Using node: $script:MoeNode"
 }
 $script:MoeProtectedCli = $null
 if ($script:MoeRuntimeProtected) {
@@ -605,7 +617,7 @@ if (-not (Test-Path -LiteralPath $proxyScript)) {
 $mcpConfigObj = @{
     mcpServers = @{
         moe = @{
-            command = "node"
+            command = $(if ($script:MoeNode) { $script:MoeNode } else { 'node' })
             args = @($proxyScript)
             env = @{
                 MOE_PROJECT_PATH = $projectPath.ToString()
@@ -690,6 +702,14 @@ $mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $mcpConfigFil
 $script:GrokPromptFile = $null
 $script:GrokEnvPrev = $null
 
+# Start-Process (PowerShell 5.1 and 7) joins -ArgumentList entries with single
+# spaces and quotes none of them, so a path with a space reached node as several
+# arguments. Quote every entry so the child's argv parser (the C runtime on
+# Windows, .NET on Unix) splits the line back into the same entries.
+function ConvertTo-MoeArgumentLine([string[]]$Arguments) {
+    @($Arguments | ForEach-Object { '"' + ($_ -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' }) -join ' '
+}
+
 # daemon.json is repository content: read at most 64 KiB + 1 byte so a huge or
 # never-ending file cannot stall pre-flight; the callers' catch treats the throw
 # like unparseable JSON. Same cap as moe-agent.sh's daemon_json_field.
@@ -740,7 +760,8 @@ function Get-MoeComparableProjectPath([string]$Path) {
     return "/$joined"
 }
 
-# Which project the daemon on 127.0.0.1:$Port serves, by its /health
+# Which project the daemon at $ProbeHost:$Port serves, by its /health
+# reply. Resolve a name once and dial its first IP (the guard refuses names).
 # projectPath: 'same', 'foreign <served>' or 'unknown'. Once this project's
 # daemon dies, another project's daemon can take its port (task-e7f4026a).
 # Only a 200 or 503 reply naming another ABSOLUTE project is foreign; every
@@ -748,19 +769,36 @@ function Get-MoeComparableProjectPath([string]$Path) {
 # the JetBrains probe: one 3 s deadline covers connect, headers and body (a
 # per-read timeout restarts on every trickled byte), no proxy, no redirect, and
 # at most 64 KiB of body. Twin: probe_daemon_health in moe-agent.sh.
-function Get-MoeDaemonIdentity($Port, [string]$ProjectPath) {
+function Get-MoeDaemonIdentity($Port, [string]$ProjectPath, [string]$ProbeHost = '127.0.0.1') {
     $client = $null
     try {
         $deadline = [DateTime]::UtcNow.AddMilliseconds(3000)
-        $client = New-Object Net.Sockets.TcpClient
+        [Net.IPAddress]$address = $null
+        $literal = $ProbeHost
+        if ($literal.StartsWith('[') -and $literal.EndsWith(']')) { $literal = $literal.Substring(1, $literal.Length - 2) }
+        if ($ProbeHost.ToLowerInvariant().Equals('localhost')) {
+            $address = [Net.IPAddress]::Loopback
+        } elseif (-not [Net.IPAddress]::TryParse($literal, [ref]$address)) {
+            $lookup = [Net.Dns]::GetHostAddressesAsync($ProbeHost)
+            $left = [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds
+            if ($left -le 0) { return 'unknown' }
+            $resolved = [Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($lookup), $left) -ge 0
+            if (-not $resolved -or $lookup.Status -ne 'RanToCompletion') { return 'unknown' }
+            if ($lookup.Result.Length -lt 1) { return 'unknown' }
+            $address = $lookup.Result[0]
+        }
+        $client = New-Object Net.Sockets.TcpClient($address.AddressFamily)
         $client.SendTimeout = 3000
-        $connect = $client.ConnectAsync('127.0.0.1', [int]$Port)
+        $connect = $client.ConnectAsync($address, [int]$Port)
         # WaitAny, not Wait: a refused connect (the usual stale port) is an
         # answer, not an exception to log.
-        $connected = [Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($connect), 3000) -ge 0
+        $left = [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds
+        if ($left -le 0) { return 'unknown' }
+        $connected = [Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($connect), $left) -ge 0
         if (-not $connected -or $connect.Status -ne 'RanToCompletion') { return 'unknown' }
         $stream = $client.GetStream()
-        $request = [Text.Encoding]::ASCII.GetBytes("GET /health HTTP/1.0`r`nHost: 127.0.0.1:$([int]$Port)`r`nConnection: close`r`n`r`n")
+        $hostText = if ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) { "[$address]" } else { $address.ToString() }
+        $request = [Text.Encoding]::ASCII.GetBytes("GET /health HTTP/1.0`r`nHost: ${hostText}:$([int]$Port)`r`nConnection: close`r`n`r`n")
         $stream.Write($request, 0, $request.Length)
         # 64 KiB of body plus 8 KiB of status line and headers; one byte more is oversize.
         $buffer = New-Object byte[] 73729
@@ -806,9 +844,10 @@ if (-not $NoStartDaemon) {
             if ($proc) {
                 # A live PID proves a process, not which project it serves.
                 # exit, not throw: the catch below would start a daemon instead.
-                $identity = Get-MoeDaemonIdentity $info.port $projectPath
+                $probeHost = if ($env:MOE_DAEMON_HOST) { $env:MOE_DAEMON_HOST } else { '127.0.0.1' }
+                $identity = Get-MoeDaemonIdentity $info.port $projectPath $probeHost
                 if ($identity.StartsWith('foreign ')) {
-                    Write-Host "[ERROR] MOE_DAEMON_FOREIGN_PROJECT: the daemon at 127.0.0.1:$($info.port) serves $($identity.Substring(8)), not this project ($projectPath)." -ForegroundColor Red
+                    Write-Host "[ERROR] MOE_DAEMON_FOREIGN_PROJECT: the daemon at ${probeHost}:$($info.port) serves $($identity.Substring(8)), not this project ($projectPath)." -ForegroundColor Red
                     Write-Host "$daemonInfoPath is stale: this project's daemon is not running. Start it (the IDE's Restart Daemon, or moe-daemon start --project $projectPath); it takes the next free port."
                     Write-Host "Refusing to register, claim or bridge to another project's daemon."
                     exit 1
@@ -841,10 +880,10 @@ if (-not $NoStartDaemon) {
             exit 1
         }
         Write-Host "Starting Moe daemon for $projectPath..."
-        # Pass arguments as an array so paths containing spaces or quotes survive
-        # Windows command-line escaping (Start-Process re-quotes each element).
+        # Start-Process quotes nothing, so pass one pre-quoted command line:
+        # paths containing spaces or quotes then reach node as single arguments.
         # PS 5.1 resolves the inherited current location as a wildcard.
-        Start-Process -FilePath "node" -ArgumentList @("$daemonScript", "start", "--project", "$projectPath") -WindowStyle Hidden -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))
+        Start-Process -FilePath $(if ($script:MoeNode) { $script:MoeNode } else { 'node' }) -ArgumentList (ConvertTo-MoeArgumentLine @("$daemonScript", "start", "--project", "$projectPath")) -WindowStyle Hidden -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))
 
         # Wait for daemon to be ready (poll for up to 10 seconds)
         $maxWait = 10
@@ -1130,6 +1169,7 @@ function Write-MoeCodexConfig {
 
         # Build top-level config (role instructions + model instructions)
         $proxyScriptForToml = $proxyScript.ToString().Replace('\', '/')
+        $nodeForToml = if ($script:MoeNode) { $script:MoeNode.Replace('\', '/') } else { 'node' }
         $projectPathForToml = $projectPath.ToString().Replace('\', '/')
         $codexReasoningEffort = if ($env:MOE_CODEX_REASONING_EFFORT) { $env:MOE_CODEX_REASONING_EFFORT } else { "xhigh" }
         $topLevelConfig = @"
@@ -1159,7 +1199,7 @@ developer_instructions = """`nYou are an agent in the Moe AI Workforce system. Y
         $moeTomlBlock = @"
 
 [mcp_servers.moe]
-command = "node"
+command = "$nodeForToml"
 args = ["$proxyScriptForToml"]
 startup_timeout_sec = $codexMcpStartupTimeout
 default_tools_approval_mode = "approve"
@@ -1312,7 +1352,7 @@ function Write-MoeGeminiConfig {
 
         # Build the moe MCP server entry
         $moeEntry = @{
-            command = "node"
+            command = $(if ($script:MoeNode) { $script:MoeNode } else { 'node' })
             args = @($proxyScript)
             env = @{
                 MOE_PROJECT_PATH = $projectPath.ToString()
@@ -1403,6 +1443,7 @@ function Write-MoeGrokConfig {
 
         # Forward slashes: TOML basic strings treat backslashes as escapes.
         $proxyScriptForToml = $proxyScript.ToString().Replace('\', '/')
+        $nodeForToml = if ($script:MoeNode) { $script:MoeNode.Replace('\', '/') } else { 'node' }
         $projectPathForToml = $projectPath.ToString().Replace('\', '/')
         # Same startup_timeout_sec key and the same reason as codex: the proxy
         # waits out a supervised daemon restart, which outlasts a 30s default.
@@ -1451,7 +1492,7 @@ function Write-MoeGrokConfig {
         $grokMoeTomlBlock = (@(
             "",
             "[mcp_servers.moe]",
-            "command = `"node`"",
+            "command = `"$nodeForToml`"",
             "args = [`"$proxyScriptForToml`"]",
             "startup_timeout_sec = $grokMcpStartupTimeout",
             "tool_timeout_sec = $grokMcpToolTimeout",
@@ -2487,10 +2528,11 @@ function Start-HeartbeatSidecar {
     # This runner's identity, for the reattach below: the job is a separate
     # process and sees none of this script's variables.
     $pin = @{ RunnerId = [string]$script:MoeRunnerId; ProcessStartedAt = [string]$script:MoeProcessStartedAt; Host = [string]$script:MoeHost
-        AccountId = [string]$script:AccountLeasedId; AccountSampleFile = [string]$script:AccountSampleFile }
+        AccountId = [string]$script:AccountLeasedId; AccountSampleFile = [string]$script:AccountSampleFile; Node = [string]$script:MoeNode }
     try {
         $script:CurrentHeartbeatJob = Start-Job -Name "moe-heartbeat-$WorkerId" -ScriptBlock {
             param($ProxyScript, $ProjectPath, $WorkerId, $IntervalSec, $MaxDurationSec, $WrapperPid, $Pin)
+            if ($Pin.Node) { Set-Alias -Name node -Value $Pin.Node }
             $env:MOE_PROJECT_PATH = $ProjectPath
             # One tools/call through a fresh proxy: @{ Value = <parsed reply> }, or
             # @{ Refused = <codeName> } for a daemon refusal, or $null.
@@ -3010,6 +3052,49 @@ function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {
     }
 }
 
+# Before W's first sparse-checkout, make sure the common config has
+# extensions.worktreeConfig=true (task-c7ca56e6). Otherwise git's sparse-checkout
+# sets it itself under the shared .git/config.lock, and of two seats provisioning at
+# once one fails with `could not lock config file`. Once it is set, sparse-checkout
+# writes only W's own config.worktree. No write when it is already true. A common
+# config with core.worktree or core.bare=true keeps git's own upgrade
+# (init_worktree_config moves those two into config.worktree; a plain write would
+# not). Only a lock collision is retried, 5 attempts, and another seat's write counts
+# as success. Returns '' on success, else the refusal detail. The gate arm's and the
+# hooked scratch's sparse-checkouts need no call: this worker pre-flight runs first
+# in the same repository. Twin: enable_worktree_config.
+function Enable-MoeWorktreeConfig([string]$Top) {
+    $first = { param($r) "$(@($r.Out) | Select-Object -First 1)".Trim() }
+    if ((Invoke-MoeGit -Top $Top -GitArgs @('config', '--local', '--get', 'core.worktree')).Rc -eq 0 -or
+        (& $first (Invoke-MoeGit -Top $Top -GitArgs @('config', '--local', '--get', '--type=bool', 'core.bare'))) -ceq 'true') {
+        return ''
+    }
+    $n = 1
+    while ($true) {
+        if ((& $first (Invoke-MoeGit -Top $Top -GitArgs @('config', '--local', '--get', '--type=bool', 'extensions.worktreeConfig'))) -ceq 'true') { return '' }
+        if ($n -gt 5) { break }
+        # LC_ALL=C: git's message stays matchable under any locale (its exit code, 255, is generic).
+        $lc = $env:LC_ALL
+        try {
+            $env:LC_ALL = 'C'
+            $r = Invoke-MoeGit -Top $Top -GitArgs @('config', '--local', 'extensions.worktreeConfig', 'true') -MergeStderr
+        } finally {
+            if ($null -ne $lc) { $env:LC_ALL = $lc } else { Remove-Item Env:\LC_ALL -ErrorAction SilentlyContinue }
+        }
+        if ($r.Rc -eq 0) { return '' }
+        # Only EEXIST is a collision; any other errno (EACCES, ...) refuses at once.
+        if (($r.Out -join "`n") -cnotmatch 'could not lock config file.*: File exists') {
+            return "git config extensions.worktreeConfig true failed: $(@($r.Out) | Select-Object -Last 1)"
+        }
+        if ($n -lt 5) {
+            Write-Host "[info] MOE_WORKTREE_CONFIG_RETRY attempt=$n/5: .git/config is locked by another git process" -ForegroundColor Cyan
+            Start-Sleep -Milliseconds (Get-Random -Minimum 200 -Maximum 601)
+        }
+        $n++
+    }
+    return 'git config extensions.worktreeConfig true failed 5 times: .git/config stayed locked by another git process'
+}
+
 # Reuse, re-add or create the locked sparse worktree $W on $Branch, cut from the
 # target (origin's in remote mode), then refuse a W holding .moe. It never deletes
 # a branch, W/.moe, or a W it did not add in this session. Sets
@@ -3071,14 +3156,18 @@ function Install-MoeTaskWorktree([string]$Top, [string]$W, [string]$Branch, [str
         if ($r.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git worktree add failed: $(& $last $r)" }
     }
     if ($added -or $finish) {
-        $r = Invoke-MoeGit -Top $W -GitArgs @('sparse-checkout', 'set', '--no-cone', '/*', '!/.moe/') -MergeStderr
-        if ($r.Rc -eq 0) { $r = Invoke-MoeGit -Top $W -GitArgs @('read-tree', '-mu', 'HEAD') -MergeStderr }
-        if ($r.Rc -ne 0) {
+        $fail = Enable-MoeWorktreeConfig $Top
+        if (-not $fail) {
+            $r = Invoke-MoeGit -Top $W -GitArgs @('sparse-checkout', 'set', '--no-cone', '/*', '!/.moe/') -MergeStderr
+            if ($r.Rc -eq 0) { $r = Invoke-MoeGit -Top $W -GitArgs @('read-tree', '-mu', 'HEAD') -MergeStderr }
+            if ($r.Rc -ne 0) { $fail = "git sparse-checkout or read-tree failed in ${W}: $(& $last $r)" }
+        }
+        if ($fail) {
             if ($added) {
                 $ahead = Invoke-MoeGit -Top $Top -GitArgs @('rev-list', '--count', "$base..refs/heads/$Branch")
                 if ($ahead.Rc -eq 0 -and "$(@($ahead.Out) | Select-Object -First 1)".Trim() -ceq '0') { $null = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'remove', '--force', '--force', $W) }
             }
-            Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git sparse-checkout or read-tree failed in ${W}: $(& $last $r)"
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' $fail
         }
     }
     $dotMoe = Join-Path $W '.moe'
@@ -7620,7 +7709,8 @@ function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput, $Result = $null)
         } elseif ($kind -eq 'serena') {
             $tp = ConvertTo-MoeTopPathFromAbsolute (Join-Path $serenaProject $p) $moeGit.Top
         }
-        if (-not $tp) {
+        # A control character (a line break) would forge a second witness; the sh parser and prompt-cache-witness.mjs refuse the same set.
+        if (-not $tp -or $tp -match '[\x00-\x1f]') {
             Write-Host "  [attribution] tool path outside the repo dropped: $p" -ForegroundColor DarkYellow
             continue
         }
@@ -8089,8 +8179,16 @@ try {
     process.stderr.write('MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI\n'); process.exit(1);
 }
 '@
-    $script:AgentGitGuardRoot = $program | & node - $projectPath ([IO.Path]::GetTempPath())
-    if ($LASTEXITCODE -ne 0) { throw 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI' }
+    $encoding = [Console]::OutputEncoding
+    try {
+        # Node writes UTF-8 even when gemini/grok seats keep the OEM code page.
+        [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+        $script:AgentGitGuardRoot = $program | & node - $projectPath ([IO.Path]::GetTempPath())
+        $rc = $LASTEXITCODE
+    } finally {
+        [Console]::OutputEncoding = $encoding
+    }
+    if ($rc -ne 0) { throw 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI' }
     $script:AgentGitGuard = if ($script:AgentGitGuardRoot) {
         [IO.File]::ReadAllText((Join-Path $script:AgentGitGuardRoot "env.json")) | ConvertFrom-Json
     } else { $null }
@@ -9366,6 +9464,7 @@ $mentionsJson
                     # PS 5.1 holds a native-to-native pipe until the producer exits, so
                     # feed the helper line by line; its stdout stays the console.
                     $psi = [System.Diagnostics.ProcessStartInfo]::new('node', "`"$promptCacheHelper`" codex-stream")
+                    if ($script:MoeNode) { $psi.FileName = $script:MoeNode }
                     $psi.UseShellExecute = $false
                     $psi.RedirectStandardInput = $true
                     # The helper alone gets the TOOL-witness env (prompt-cache-witness.mjs):
