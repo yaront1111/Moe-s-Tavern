@@ -235,7 +235,18 @@ export const ACCOUNT_TEXT: Readonly<Record<string, string>> = Object.freeze({
     'moe.accounts.chip.activeNoData': '{0} (active)',
     'moe.accounts.chip.usage': '{0} {1}%',
     'moe.accounts.chip.noData': '{0}',
-    'moe.accounts.chip.more': '+{0} more'
+    'moe.accounts.chip.more': '+{0} more',
+    'moe.accounts.error': 'Moe cannot use the account file, so agents start without account rotation: {0}',
+    'moe.accounts.noCli': 'The daemon did not say how to run its accounts command, so sign-in is not available here.',
+    'moe.accounts.empty': 'Add an account, then sign in with your Claude subscription in the terminal tab that opens.',
+    'moe.accounts.notConnected': 'Not connected to the Moe daemon.',
+    'moe.accounts.unsupported': 'This Moe daemon does not report Claude accounts. Restart it after updating Moe.',
+    'moe.accounts.header': 'Claude: {0}',
+    'moe.accounts.column.signIn': 'Sign-in',
+    'moe.accounts.column.fiveHour': '5-hour',
+    'moe.accounts.column.weekly': 'Weekly',
+    'moe.accounts.column.status': 'Status',
+    'moe.accounts.column.vmToken': 'VM token'
 });
 
 /** The English for a text: its template (the key itself when unknown) with each {n} replaced once by its argument. */

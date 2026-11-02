@@ -5,6 +5,7 @@ import { BoardViewProvider } from './providers/BoardViewProvider';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { MetricsViewProvider } from './providers/MetricsViewProvider';
 import { ManagedVmTreeProvider } from './providers/ManagedVmTreeProvider';
+import { AccountsTreeProvider } from './providers/AccountsTreeProvider';
 import { MoeDaemonClient, readDaemonJsonText } from './services/MoeDaemonClient';
 import type { ReadinessReply } from './services/MoeDaemonClient';
 import { ConnectionStatusBar } from './statusbar/ConnectionStatusBar';
@@ -119,6 +120,11 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('moe.managedVms.reconcile', () => managedVms.reconcile()),
         vscode.commands.registerCommand('moe.managedVms.cleanup', () => managedVms.cleanup())
     );
+    // Claude accounts: the read-only rotation view (VSC-14); a TreeView, because the chips line and the note go in its description and message
+    const accountsProvider = new AccountsTreeProvider(daemonClient);
+    const accountsView = vscode.window.createTreeView('moe.accounts', { treeDataProvider: accountsProvider });
+    accountsProvider.attach(accountsView);
+    context.subscriptions.push(accountsProvider, accountsView, vscode.commands.registerCommand('moe.accounts.refresh', () => accountsProvider.refresh()));
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('moe.connect', async () => {

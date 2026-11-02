@@ -15,61 +15,97 @@
     {
       "stepId": "step-1",
       "description": "Add the view's English to the shared table: edit moe-vscode/src/util/AccountPresentation.ts with the Edit tool.\nThe file is created by VSC-13 (task-065e4812, a dependsOn of this row). It is listed under newFiles only because it does not exist at plan time.\nVSC-13's plan made ACCOUNT_TEXT the one English table for the account UI, and its tests/accounts-corpus.test.cjs check (b) pins every key in it against MoeBundle.properties: 'keys that VSC-14 and VSC-15 add later stay pinned'.\nAdd these 11 keys to ACCOUNT_TEXT, with the values copied exactly from moe-jetbrains/src/main/resources/messages/MoeBundle.properties lines 280-292:\n- moe.accounts.error ({0});\n- moe.accounts.noCli;\n- moe.accounts.empty;\n- moe.accounts.notConnected;\n- moe.accounts.unsupported;\n- moe.accounts.header ({0}), from line 309;\n- moe.accounts.column.signIn, column.fiveHour, column.weekly, column.status and column.vmToken.\nNone of these values contains a single quote, so VSC-13's check (c) still holds.\nChange nothing else in the file. It stays import-free and free of the bare editor-name word that VSC-13's purity test greps for.\nError handling: resolveAccountText already returns the key itself for an unknown key, so a key mistyped in the provider shows up as a raw key in step 5's assertions, never as a crash.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/src/util/AccountPresentation.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AccountPresentation.ts"
+      ],
+      "note": "Added the 11 ACCOUNT_TEXT keys (error, noCli, empty, notConnected, unsupported, header, column.signIn/fiveHour/weekly/status/vmToken) with the Edit tool, values copied from MoeBundle.properties. Built on HEAD b863458a (VSC-13 landed). tests/accounts-corpus.test.cjs (plain node --test) 5/5 green, so check (b) pins the new keys to the bundle. 24 dirty peer paths untouched.",
+      "startedAt": "2026-11-02T12:03:35.008Z",
+      "completedAt": "2026-11-02T12:03:56.772Z"
     },
     {
       "stepId": "step-2",
       "description": "Create moe-vscode/src/providers/AccountsTreeProvider.ts with the Write tool, modelled on ManagedVmTreeProvider.ts.\nImports:\n- `import * as vscode from 'vscode'`;\n- `import type { MoeDaemonClient } from '../services/MoeDaemonClient'`. It MUST be type-only, so the test's require map stays at vscode plus AccountPresentation;\n- a value import of chips, parseAccountRotation, resolveAccountText and rows from '../util/AccountPresentation'.\nDeclarations:\n- `type AccountsClient = Pick<MoeDaemonClient, 'connectionState' | 'isStateReady' | 'accountRotation' | 'onAccountsChanged' | 'onConnectionChanged' | 'onStateChanged'>`. accountRotation and onAccountsChanged come from VSC-12, task-daf5abdd, whose DoD names them.\n- `const SEPARATOR = '  ·  '` (JetBrains AccountPresentation.SEPARATOR).\n- `const text = (key, ...args) => resolveAccountText({ key, args })`.\n- Exported class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode> and vscode.Disposable, where AccountNode = { label; description?; tooltip?; id?; contextValue? }.\nConstructor `(client: AccountsClient, clock = { now: () => Date.now(), zone: () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' })`:\n- it subscribes client.onAccountsChanged, client.onConnectionChanged and client.onStateChanged, each calling refresh();\n- onStateChanged matters because a STATE_SNAPSHOT flips isStateReady and may carry the first rotation.\nparts(): { items: AccountNode[]; description?: string; message?: string }, mirroring JetBrains AccountsPanel.render:\n1. connectionState !== 'connected' gives [{ label: text('moe.accounts.notConnected') }].\n2. rotation = parseAccountRotation(client.accountRotation). When it is null: [{ label: text(client.isStateReady ? 'moe.accounts.unsupported' : 'moe.accounts.notConnected') }].\n3. Otherwise, with now = clock.now() and zone = clock.zone():\n   - description = the chips(rotation, now, zone) list resolved and joined with SEPARATOR inside text('moe.accounts.header', joined), or undefined when there are no chips;\n   - message = rotation.error ? text('moe.accounts.error', rotation.error) : rotation.cli ? undefined : text('moe.accounts.noCli');\n   - items = rows(rotation, now, zone) mapped to { id: row.id, contextValue: 'moe.account', label: `${row.position}. ${row.label}`, description, tooltip }:\n     - description = `${resolve(status)} · ${text('moe.accounts.column.fiveHour')}: ${resolve(fiveHour)} · ${text('moe.accounts.column.weekly')}: ${resolve(weekly)}`;\n     - tooltip = one `${column}: ${value}` line each for signIn, fiveHour, weekly, status and vmToken, joined with '\\n';\n   - when there are no rows: [] if rotation.error (the message carries it, as JetBrains leaves the table blank), else [{ label: text('moe.accounts.empty') }].\nMethods:\n- getChildren(node) returns node ? [] : parts().items.\n- getTreeItem(node) returns a vscode.TreeItem(node.label, None) with id, description, tooltip and contextValue copied.\n- attach(view: { description?: string; message?: string }) stores the TreeView, then applies parts().description and .message to it.\n- refresh() is a no-op once disposed; otherwise it re-applies the view parts and fires onDidChangeTreeData. It also re-renders relative reset times.\n- dispose() disposes the three subscriptions and the emitter, and drops the view.\nError handling:\n- every input is total, because parseAccountRotation, rows and chips (VSC-13) never throw;\n- a missing or malformed rotation renders a state item;\n- an unknown local zone falls back to 'UTC' (VSC-13's time() also catches RangeError);\n- refresh after dispose touches nothing.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/src/providers/AccountsTreeProvider.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts"
+      ],
+      "note": "Created AccountsTreeProvider.ts (Write tool) per plan: type-only client import, constructor(client, clock?), parts(), getChildren, getTreeItem, attach(view), refresh(), dispose(). attach takes Pick<vscode.TreeView, 'description'|'message'> so a real TreeView (message: string|MarkdownString) type-checks. Compile verified in the step 6 snapshot gate.",
+      "startedAt": "2026-11-02T12:03:59.447Z",
+      "completedAt": "2026-11-02T12:04:34.843Z"
     },
     {
       "stepId": "step-3",
       "description": "Edit moe-vscode/package.json with the Edit tool, changing contributes only, so `npm ci` and the lockfile are unaffected:\n- views.moe: append `{ \"id\": \"moe.accounts\", \"name\": \"Claude accounts\" }` after moe.managedVms. The name is MoeBundle moe.accounts.title, by the shared-strings rule.\n- commands: append `{ \"command\": \"moe.accounts.refresh\", \"title\": \"Moe: Refresh Claude Accounts\", \"icon\": \"$(refresh)\" }`.\n- menus view/title: append `{ \"command\": \"moe.accounts.refresh\", \"when\": \"view == moe.accounts\", \"group\": \"navigation@1\" }`.\nKeep every existing entry and the configurationDefaults block byte-identical; tests/worktree-exclusion.test.cjs asserts them.\nError handling: the file must stay valid JSON. Step 5 parses it, and a parse failure fails that test with the path.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/package.json"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "note": "package.json contributes only: views.moe gains moe.accounts (\"Claude accounts\" = MoeBundle moe.accounts.title), commands gains moe.accounts.refresh ($(refresh)), menus view/title gains the navigation@1 entry for view == moe.accounts. Three existing lines gained a trailing comma (the 3 '-' lines in the diff); configurationDefaults untouched. Parses as JSON.",
+      "startedAt": "2026-11-02T12:04:35.685Z",
+      "completedAt": "2026-11-02T12:04:50.077Z"
     },
     {
       "stepId": "step-4",
       "description": "Edit moe-vscode/src/extension.ts with the Edit tool.\n- Add the import `import { AccountsTreeProvider } from './providers/AccountsTreeProvider';`.\n- Right after the managedVms block, add:\n  `const accountsProvider = new AccountsTreeProvider(daemonClient);`\n  `const accountsView = vscode.window.createTreeView('moe.accounts', { treeDataProvider: accountsProvider });`\n  `accountsProvider.attach(accountsView);`\n  `context.subscriptions.push(accountsProvider, accountsView, vscode.commands.registerCommand('moe.accounts.refresh', () => accountsProvider.refresh()));`\n- createTreeView is needed because the chips line goes in the view's description and the error/no-CLI note in its message; registerTreeDataProvider gives no TreeView.\n- VSC-21's seat block, which this row follows through dependsOn, stays untouched.\nError handling: refresh() is total, so the command cannot throw. Nothing here awaits the daemon.\nKeep every other line, including the readDaemonJsonText import, because tests/daemon-json-cap.test.cjs regex-checks this file.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/extension.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/extension.ts"
+      ],
+      "note": "extension.ts: import AccountsTreeProvider; after the managedVms block, new AccountsTreeProvider(daemonClient), createTreeView('moe.accounts'), attach, and one context.subscriptions.push of provider, view and the moe.accounts.refresh command. VSC-21's seat block and every other line untouched. Type check happens in the step 6 snapshot gate.",
+      "startedAt": "2026-11-02T12:04:51.079Z",
+      "completedAt": "2026-11-02T12:05:12.222Z"
     },
     {
       "stepId": "step-5",
       "description": "Create moe-vscode/tests/accounts-view.test.cjs with the Write tool. Use 'use strict', node:test, node:assert/strict, node:vm, fs, path and typescript.\nLoading:\n- AccountPresentation.ts: as tests/managed-vm.test.cjs loads a pure module, via transpile then vm.runInThisContext of the (exports, module, require) wrapper, with a require that throws.\n- AccountsTreeProvider.ts: the same way, but with require mapping 'vscode' to a fake and '../util/AccountPresentation' to that module. Any other name throws, which proves the client import is type-only.\n- Fake vscode:\n  - an EventEmitter whose event(listener) adds to a Set and returns { dispose } that deletes it, with fire() and dispose();\n  - a TreeItem class storing label and collapsibleState;\n  - TreeItemCollapsibleState { None: 0 }.\n- Fake client: { connectionState, isStateReady, accountRotation, onAccountsChanged, onConnectionChanged, onStateChanged }, each event from its own fake emitter, so listener counts can be read.\n- en(text): parse moe-jetbrains/src/main/resources/messages/MoeBundle.properties with /^(moe\\.[A-Za-z.]+)=(.*?)\\r?$/gm, take the key's value (fail if it is missing) and substitute each {n} with String(args[n]).\n- Corpus: moe-jetbrains/src/test/resources/client-accounts.json (VSC-7, unchanged). Construct the provider with { now: () => Date.parse(corpus.now), zone: () => corpus.zone }.\nTests:\n- P1 (DoD 1): package.json has views.moe { id 'moe.accounts', name equal to the bundle's moe.accounts.title }, the moe.accounts.refresh command with icon $(refresh), and a view/title entry { command 'moe.accounts.refresh', when 'view == moe.accounts', group 'navigation@1' }.\n- V1 (DoD 2):\n  - Take row C05, asserting it exists with at least 2 accounts. Set rotation = { ...C05.rotation, accounts: first two } and expected = C05.expectRows.slice(0, 2).\n  - getChildren() returns exactly 2 nodes, in order.\n  - getTreeItem gives label `${e.position}. ${e.label}`, id e.id and contextValue 'moe.account'.\n  - description is `${en(e.status)} · ${en(column.fiveHour)}: ${en(e.fiveHour)} · ${en(column.weekly)}: ${en(e.weekly)}`.\n  - tooltip is the five `${en(column.X)}: ${en(e.X)}` lines.\n  - With the full C05 rotation, attach(view) sets view.description to en(header, [C05.expectChips.map(en).join('  ·  ')]).\n- V2 (DoD 3):\n  - firing each of the three client events fires onDidChangeTreeData exactly once;\n  - disconnected gives exactly [notConnected];\n  - connected with isStateReady and a null rotation gives exactly [unsupported]; connected without state ready gives [notConnected];\n  - C02 gives exactly [empty];\n  - C03 gives [] and view.message = en(error, [C03.rotation.error]);\n  - C11 has rows, and view.message = en(noCli);\n  - after dispose(), every client emitter has 0 listeners, and a later client event fires nothing.\n- X1 (DoD 4): read src/extension.ts as text and match the four lines from step 4, each inside context.subscriptions.push or attach.\nError handling: an unreadable bundle, corpus or source fails with its path. Compare vm values field by field or through JSON.\nIterate with `cd moe-vscode && node --test tests/accounts-view.test.cjs`, using plain node; never run npm in the shared checkout.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/accounts-view.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/accounts-view.test.cjs"
+      ],
+      "note": "Created tests/accounts-view.test.cjs (Write tool): 9 tests (P1 package.json, V1/V1b C05 rows + chips description, V2 three events re-render, V3 state items, V4 error/noCli, V5 never throws, V6 dispose, X1 extension.ts wiring). Provider loads under node:vm with a closed require map (vscode + AccountPresentation). Plain `node --test tests/accounts-view.test.cjs`: 9/9 pass.",
+      "startedAt": "2026-11-02T12:05:13.146Z",
+      "completedAt": "2026-11-02T12:06:23.589Z"
     },
     {
       "stepId": "step-6",
       "description": "Verification, run once from the checkout root. Run both executionContract checkRefs exactly as written.\n(1) checkRef 1, the gate (DoD 5): a git-archive snapshot of HEAD with this task's five files overlaid, then npm ci, lint, compile and the full suite under env -i with the nvm Node 24.21 PATH (mem:gotcha-vscode-gate-from-wsl).\n- Expect clean lint and compile and 0 failed tests; 4 Windows-only skips are normal.\n- VSC-13's tests/accounts-corpus.test.cjs must stay green with the 11 added ACCOUNT_TEXT keys, which proves they equal the bundle.\n- The gate's fresh command, exit code and output tail are the moe.complete_task verification evidence.\n(2) checkRef 2: no commit carrying this task's Moe-Task trailer touches a moe-jetbrains path or another row's test file.\nError handling for a red run:\n- A MODULE_NOT_FOUND for '../util/AccountPresentation' or a missing accountRotation means a prerequisite (VSC-13 or VSC-12) has not landed in HEAD. That is a dependency wait, not a product failure: report it with a task comment.\n- A type error on client.accountRotation or onAccountsChanged means VSC-12 named them differently than its DoD. Align with VSC-12's landed names and say so in the step note.\n- Never edit the corpus, the bundle or another row's test.\nNever run npm in the shared checkout. A subagent that runs the gate is told to kill only PIDs it started, never by name or pattern.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef 1 verbatim, fresh git-archive snapshot /tmp/vsc14-gate-siHD8p (env -i, node 24.21.0): npm ci, lint (clean), compile (clean), npm test EXIT=0, 536 tests / 532 pass / 4 skip / 0 fail; accounts-corpus.test.cjs and the 9 new accounts-view tests green. checkRef 2 (no moe-jetbrains / other-row test path in any Moe-Task commit) exit 0. No npm in the shared checkout.",
+      "startedAt": "2026-11-02T12:06:24.463Z",
+      "completedAt": "2026-11-02T12:06:56.664Z"
     },
     {
       "stepId": "step-7",
       "description": "Final step: load adversarial-self-review and read this task's diff as an attacker.\n(1) Scratch mutants, in a copy outside the checkout (mem:convention-vscode-port-mutant-checkref). Each must fail an accounts-view row by assertion:\n- drop the onStateChanged subscription;\n- show unsupported before isStateReady;\n- leave a listener undisposed;\n- swap the 5-hour and weekly columns;\n- render a row for an error rotation with no accounts;\n- join the chips with ' · '.\n(2) The provider never throws for a malformed rotation, a missing cli, an error or an unknown zone.\n(3) refresh after dispose fires nothing.\n(4) TreeItem ids are the account ids, which are unique because the parse keeps the first duplicate.\n(5) The client import is type-only, and package.json and extension.ts changes stay inside contributes and activate().\n(6) The diff is exactly the five planned files.\nIf anything changed, re-run checkRef 1 and record the findings in the step note.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review done; no code changed after the green gate, so checkRef 1 was not re-run. (1) Scratch sweep of 24 mutants in the throwaway gate snapshot (driver /tmp/vsc14-mutants/mutate.cjs): the 6 planned (drop onStateChanged, unsupported before isStateReady, listener left undisposed, swapped 5-hour/weekly, row for an error rotation, chips joined with ' · ') plus 18 more (dropped connection/accounts subscriptions, unguarded refresh/attach after dispose, wrong contextValue, children for a child node, 'connecting' as connected, blank description, refresh skipping apply, tooltip join, inverted noCli, emitter not disposed, id/position dropped, error text dropped, empty-state removed) — 23 KILLED by accounts-view assertions; 1 ALIVE = 'dispose twice allowed', an equivalent mutant (every disposer and emitter.dispose is idempotent, so a second dispose is unobservable). (2) V5 pins no-throw for hostile rotation, missing cli, error rotation, unknown zone, local clock. (3) V6: refresh/attach after dispose fire and touch nothing (late-fire counter on the disposed emitter). (4) ids = account ids, unique because parseAccountRotation keeps the first duplicate. (5) client import is type-only (closed vm require map); package.json diff is contributes only, extension.ts diff is activate() plus one import. (6) Diff = exactly the five planned files (~350 net changed lines, under the 400 cap). Considered, theoretical: onStateChanged fires on every board delta, so refresh re-sets view.description/message each time (same churn as ManagedVmTreeProvider's onStateChanged fire; 32 accounts max); a throwing client event registration in the constructor would leak the earlier subscriptions (the client always has all three events). Known deviation from JetBrains, as the DoD asks: disconnected shows the state item, not stale rows.",
+      "startedAt": "2026-11-02T12:06:57.474Z",
+      "completedAt": "2026-11-02T12:08:16.770Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,28 +114,44 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-065e4812d96247cc8394b3cd0416475d",
     "task-7e7bd0ec91ca488da2858f70cff32f65"
   ],
   "priority": "MEDIUM",
   "order": 15,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-4832fe8438fb48bf89ab56396e5e3f71",
+      "author": "governor-e6b40560",
+      "content": "Governor review-overlap ruling, 12:03Z: this row is claimable now. I removed its dependsOn on VSC-13 (task-065e4812) while VSC-13 is in REVIEW. Its completion b863458a is on moe/work-2026-10-24: AccountPresentation.ts plus tests/accounts-corpus.test.cjs.\n\n1. **Step 1 builds on b863458a.** Edit moe-vscode/src/util/AccountPresentation.ts as HEAD has it, with the Edit tool (never Write, so the tool witness lands the contested path). Keep VSC-13's corpus check (b) green.\n2. **If QA rejects VSC-13,** its rework waits for this row to land (the governor adds that edge) and then rebases onto your keys, so you are not interrupted.\n3. **VSC-15 now depends directly on VSC-13 and VSC-7** as well as on this row, so dropping this edge leaves those gates in place.",
+      "timestamp": "2026-11-02T12:02:50.517Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:43.527Z",
-  "updatedAt": "2026-11-02T10:40:50.062Z",
+  "updatedAt": "2026-11-02T12:08:31.570Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:33:10.585Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 7
   },
   "contextFetchedBy": [
-    "architect-d54b05fd"
+    "architect-d54b05fd",
+    "worker-13a877ad"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T10:40:50.039Z",
   "executionContract": {
@@ -169,5 +221,22 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T10:40:50.062Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T12:03:35.008Z",
+  "reviewStartedAt": "2026-11-02T12:08:31.567Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d -t vsc14-gate-XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && (cd \"$R\" && cp --parents moe-vscode/package.json moe-vscode/src/extension.ts moe-vscode/src/util/AccountPresentation.ts moe-vscode/src/providers/AccountsTreeProvider.ts moe-vscode/tests/accounts-view.test.cjs \"$S\"/) && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "✔ files.watcherExclude keeps per-task worktrees out of the file watcher (1.051157ms)\n✔ search.exclude keeps per-task worktrees out of search and quick open (0.135341ms)\n✔ files.exclude is not contributed, so the Explorer still lists .worktrees (0.772909ms)\nℹ tests 536\nℹ suites 0\nℹ pass 532\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 1889.966336\nEXIT=0 (npm ci 215 packages, eslint src clean, tsc -p ./ clean)",
+    "reportedAt": "2026-11-02T12:08:31.567Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/src/util/AccountPresentation.ts",
+    "moe-vscode/src/providers/AccountsTreeProvider.ts",
+    "moe-vscode/package.json",
+    "moe-vscode/src/extension.ts",
+    "moe-vscode/tests/accounts-view.test.cjs"
+  ],
+  "completionSummary": "VS Code gains a read-only 'Claude accounts' tree view (moe.accounts) mirroring the JetBrains Accounts tab. New src/providers/AccountsTreeProvider.ts (96 lines): constructor(client, clock?) subscribes onAccountsChanged, onConnectionChanged and onStateChanged; parts() gives one item per AccountPresentation row (label '<position>. <label>', description = status · 5-hour · weekly, tooltip = the five columns, id = account id, contextValue 'moe.account' for VSC-15), the chips line as the view description ('Claude: ...'), the account-file error or missing-CLI note as the view message, and a single state item (notConnected / unsupported / empty) when disconnected, no rotation, or no accounts (an error rotation gives no items and the message). getChildren, getTreeItem, attach(view), refresh() (no-op after dispose), dispose() (removes all 3 listeners + emitter, idempotent). AccountPresentation.ts: ACCOUNT_TEXT +11 keys copied from MoeBundle.properties (VSC-13's corpus check (b) pins them). package.json: moe.accounts view ('Claude accounts' = moe.accounts.title), moe.accounts.refresh command, view/title entry (contributes only). extension.ts: import, provider, createTreeView('moe.accounts'), attach, refresh command, one context.subscriptions.push of all three. New tests/accounts-view.test.cjs: 9 tests (package.json, C05 two-account rows/tooltips/description, chips description, 3 events re-render, state items, error/noCli, never-throws incl. unknown zone and local clock, dispose, extension.ts wiring) under node:vm with a closed require map (proves the client import is type-only). Evidence: checkRef 1 verbatim in a fresh git-archive snapshot, EXIT=0 (npm ci, eslint clean, tsc clean, node --test 536 tests / 532 pass / 4 skip / 0 fail); checkRef 2 exit 0; the five gated files are byte-identical to the checkout. 24 scratch mutants: 23 killed by accounts-view assertions, 1 equivalent (second dispose is unobservable). MoeDaemonClient.ts, the corpus, MoeBundle.properties and every moe"
 }
