@@ -1,0 +1,27 @@
+{
+  "id": "task-8c40a8fe30184652b29549f07fede53f",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: providerDescriptor.contract.test.ts fails on HEAD: codexDescriptor.proxyCommand still pins ps1 `command = \"node\"`, which 0863b6c6 replaced with `command = \"$nodeForToml\"`",
+  "description": "Found by task-97740aed's full daemon snapshot gate. A pure `git archive 17ff3749` (no overlay) fails src/providers/providerDescriptor.contract.test.ts \"each side-specific literal is at its own construction site...\": `config.proxyCommand: \"command = \\\"node\\\"\" missing from the codex branches + config writer of scripts/moe-agent.ps1`.\nCause: 0863b6c6 (task-64809b19, MOE_RUNTIME_PROTECTED node pin) changed moe-agent.ps1's codex config writer (:1210, :1503) to `command = \"$nodeForToml\"`, but codexDescriptor.ts proxyCommand.onlyInPowershell (and its `powershell:` prose, ~:362-366) still names the hardcoded `command = \"node\"`.\nFix: update the descriptor fact (and the bash/ps1 divergence wording) to match the pinned-interpreter form; daemon-only, no wrapper edit. Every snapshot full-suite gate is red until it lands.",
+  "definitionOfDone": [
+    "codexDescriptor.ts proxyCommand.onlyInPowershell/powershell describe the `command = \"$nodeForToml\"` form the ps1 codex writer now emits (parity with moe-agent.sh stays explained).",
+    "providerDescriptor.contract.test.ts passes on a git-archive snapshot of the landed tree, with the full daemon suite counts in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 44,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T21:56:23.239Z",
+  "updatedAt": "2026-11-02T21:56:23.239Z"
+}

@@ -83,7 +83,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -96,7 +96,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:12.436Z",
-  "updatedAt": "2026-11-02T21:54:17.632Z",
+  "updatedAt": "2026-11-02T21:58:02.919Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:21.040Z",
@@ -106,11 +106,14 @@
     "firstClaimAt": "2026-11-02T21:35:54.368Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T21:57:41.235Z",
+    "wallClockMs": 1306867
   },
   "contextFetchedBy": [
     "architect-24611a0a",
-    "worker-2dc72348"
+    "worker-2dc72348",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -218,9 +221,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-2dc72348@2026-11-02T21:48:32Z",
-    "at": "2026-11-02T21:54:17.632Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-02T21:55:43Z",
+    "at": "2026-11-02T21:58:02.919Z"
+  },
+  "completedAt": "2026-11-02T21:57:41.235Z",
+  "reviewCompletedAt": "2026-11-02T21:57:41.235Z",
+  "reviewSummary": "Reviewed completion 76ca84ba (on moe/work-2026-10-24, contained in control HEAD; 115+/9- across 3 files, well under the size cap). Diff: new pure DoneColumnClear.archiveCount(allTasks, selectedEpicId, visibleDone): Int? (null when visible Done column empty; else count of status==\"DONE\" in the epic, all epics when epicId null/empty) — matches daemon ARCHIVE_DONE_TASKS filter (WebSocketServer.ts:907-926, `t.status==='DONE' && (!epicFilter || t.epicId===epicFilter)`). MoeToolWindowPanel Done onClearColumn now reads selectedEpicId once into local epicId, counts at click time from lastState?.tasks ?: allTasks, shows no dialog on null, archives with the same epicId; moe.message.archiveDone/Title keys+args unchanged. Verified the Done column's columnTasks are exactly DONE tasks (displayStatus maps only AWAITING_APPROVAL/BLOCKED), so no-search count equals prior behavior. MoeCommandSender/TaskColumn/daemon/VS Code/MoeBundle untouched (git show --name-only lists only the 3 task files). DoD1-4 mapped to code+tests. Tests: DoneColumnClearTest 5 JUnit4 cases (no search; subset+epic -> 3; subset+All epics -> 5; empty -> null for epic and all; source guard with positive halves) with decoy statuses WORKING/AWAITING_APPROVAL/BLOCKED/REVIEW/ARCHIVED; the guard throws on a missing source. Worker's RED quote (3 of 5 fail vs visibleDone.size) is consistent with the test shapes. Re-ran myself under the jetbrains-gradle lease (acquired, released), Windows: W=$(wslpath -w $(git rev-parse --show-toplevel)) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> exit 0, BUILD SUCCESSFUL in 41s; XML sums tests/skipped/failures/errors = 579/0/0/0; TEST-com.moe.toolwindow.DoneColumnClearTest.xml tests=5 failures=0 errors=0; git status --porcelain for moe-jetbrains clean (run tested the committed bytes). Ponytail pass: nothing to cut. Theoretical only: client state can lag the daemon, which the dialog cannot fix.",
+  "requiredCheckAtDone": null
 }

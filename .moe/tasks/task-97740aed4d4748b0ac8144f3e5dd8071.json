@@ -57,23 +57,26 @@
     {
       "stepId": "step-4",
       "description": "VERIFY: run the DoD 5 gate once, in a fresh git-archive snapshot of HEAD with only this task's 3 files copied in and cmp-checked. Never run npm in the shared checkout. Run it from the worktree root in WSL bash:\nR=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/governanceFeatures.test.ts docs/MCP_SERVER.md; do cp \"$R/$f\" \"$S/$f\" && cmp \"$R/$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/governanceFeatures.test.ts src/tools/chatSystemFeed.test.ts src/tools/claimNextTask.test.ts && npm test'\n\nExpected: exit 0. The focused files pass, with every new collision row present (none skipped), and the full daemon suite passes. A recent full run had 215 files, about 6249 passed and 20 skipped; the count grows with HEAD. Submit complete_task verification as { command: that exact line, exitCode: 0, outputTail: the focused and full vitest summaries with their pass/fail counts (DoD 5) }, together with the step-1 RED quote.\n\nerror handling:\n- A failure in a file this task did not touch usually comes from a peer's wip checkpoint on HEAD: follow mem:gotcha-snapshot-gate-peer-wip-checkpoint (rm only that peer file after the tar step, submit that exact command, disclose both runs).\n- A failure in governanceFeatures, chatSystemFeed or claimNextTask tests is this task's to fix.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Gate in a fresh git-archive snapshot (3 owned files overlaid and cmp-checked). Run 1 (the plan's verbatim command): exit 1, focused 3 files / 125 passed, full 1 failed | 6875 passed | 20 skipped (228 files); the one failure is src/providers/providerDescriptor.contract.test.ts, reproduced on a PURE `git archive HEAD` (17ff3749) with no overlay, caused by landed 0863b6c6 (task-64809b19) changing moe-agent.ps1's codex writer to `command = \"$nodeForToml\"` while codexDescriptor.ts still pins `command = \"node\"`. Filed as task-8c40a8fe (bug:, same epic). Run 2: same command with only that one test file rm'd after the tar step: exit 0, focused 3 files / 125 passed (governanceFeatures + chatSystemFeed + claimNextTask), full 227 files, 6852 passed | 20 skipped.",
+      "startedAt": "2026-11-02T21:54:25.381Z",
+      "completedAt": "2026-11-02T21:57:36.757Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff of the 3 files as an attacker. Check:\n- A shared claimer (every REVIEW/QA claim and every shared WORKING claim) still pages exactly as today.\n- A live peer with no open attempt, a legacy one or a shared one still pages.\n- A claim with no workerId (claimedAttempt null) still pages.\n- Dormant-only collisions in worktree mode post nothing, and the claim response is unchanged.\n- The decision runs inside the try, so a throw never fails the claim.\n- No test reads the live setting where an attempt's pinned mode is what matters.\n- MESSAGE_CREATED capture: the new rows would catch a reworded or mention-less notice.\n- The docs hunk is that one paragraph only, its old sentences unchanged.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 4's exact command if code changed, then call complete_task.",
       "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
         "docs/MCP_SERVER.md"
       ],
-      "startedAt": "2026-11-02T21:54:25.381Z"
-    },
-    {
-      "stepId": "step-5",
-      "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff of the 3 files as an attacker. Check:\n- A shared claimer (every REVIEW/QA claim and every shared WORKING claim) still pages exactly as today.\n- A live peer with no open attempt, a legacy one or a shared one still pages.\n- A claim with no workerId (claimedAttempt null) still pages.\n- Dormant-only collisions in worktree mode post nothing, and the claim response is unchanged.\n- The decision runs inside the try, so a throw never fails the claim.\n- No test reads the live setting where an attempt's pinned mode is what matters.\n- MESSAGE_CREATED capture: the new rows would catch a reworded or mention-less notice.\n- The docs hunk is that one paragraph only, its old sentences unchanged.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 4's exact command if code changed, then call complete_task.",
-      "status": "PENDING",
-      "affectedFiles": [
-        "packages/moe-daemon/src/tools/claimNextTask.ts",
-        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
-        "docs/MCP_SERVER.md"
-      ]
+      "startedAt": "2026-11-02T21:57:37.826Z"
     }
   ],
   "planRevision": 1,
@@ -90,7 +93,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:58:23.710Z",
-  "updatedAt": "2026-11-02T21:54:25.381Z",
+  "updatedAt": "2026-11-02T21:57:37.826Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T20:58:35.395Z",
@@ -100,7 +103,7 @@
     "firstClaimAt": "2026-11-02T21:41:26.592Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -113,7 +116,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T21:46:32.930Z",

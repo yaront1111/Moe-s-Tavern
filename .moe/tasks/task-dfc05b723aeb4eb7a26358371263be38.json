@@ -11,10 +11,45 @@
     "Only massDeletionHeal.ts and massDeletionHeal.test.ts change."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Edit packages/moe-daemon/src/state/massDeletionHeal.test.ts only. Keep the existing describe and its 3 cases byte-identical (DoD 2). Add a second describe with its own beforeEach fixture: a board-tracking project's store.\n\nFixture:\n- 50 tasks + 1 epic written as files, as the existing beforeEach does (reuse its JSON shapes); then `await state.load()`.\n- Then through the real APIs:\n  - 4 workers: state.createWorker({ id, type: 'CLAUDE', projectId: 'proj-heal', epicId: 'epic-heal', currentTaskId: null, status: 'IDLE' }), as governanceFeatures.test.ts does;\n  - 1 team: state.createTeam({ name: 'team-heal', role: 'worker' });\n  - 3 PENDING proposals via state.createProposal, shaped like StateManager.test.ts's createTestProposal. They must be PENDING, because load() runs purgeResolvedProposals;\n  - one resource with a granted lease: acquireResource(state, { resourceId: 'box-heal', taskId: <task 0>, workerId: <worker 0> }) from './resourceStore.js', asserting granted;\n  - one open attempt: openAttempt(state, { taskId: <task 1>, workerId: <worker 1>, runnerId: <worker 1>, workspace: testDir }) from './attemptStore.js'.\n- Snapshot each map as `JSON.parse(JSON.stringify([...state.<map>.entries()]))`: workers, teams, proposals, resources, attempts.\n\nCases:\n(w) Wipe: rmSync({ recursive: true, force: true }) the workers/, teams/, proposals/, resources/ and attempts/ dirs.\n- expect(await healMassDeletion(state)).toBe(10), i.e. 4 + 1 + 3 + 1 + 1.\n- Then `await state.load()`, the FileWatcher order (DoD 1). Each of the 5 maps deep-equals its snapshot, and every entity's `<dir>/<id>.json` exists.\n- Also: state.tasks.size is 50, and resources.get('box-heal').holders has the lease.\n(x) One worker file deleted: heal returns 0. After load(), workers is the other 3 exactly and the deleted id is absent (DoD 2).\n(y) Two proposal files deleted: heal returns 0. After load(), proposals holds exactly the third one (DoD 2).\n\nThe combined rule cannot fire here: 8 missing of 59 combined-kind entities is under 20%. That is what makes (w) RED today.\n\nRED run in a snapshot only (GLOBAL rule [0]; mem:gotcha-daemon-linux-snapshot-gate), from the worktree in WSL bash:\nR=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$R/packages/moe-daemon/src/state/massDeletionHeal.test.ts\" \"$S/packages/moe-daemon/src/state/\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx vitest run src/state/massDeletionHeal.test.ts'\n\nExpected: only (w) fails (expected 0 to be 10); (x), (y) and the 3 old cases pass. Quote the failure in the completion summary (DoD 3).\nerror handling: if a fixture API refuses (a team or proposal shape), fix the fixture, never the expectation.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX. Edit packages/moe-daemon/src/state/massDeletionHeal.ts only (DoD 5). Keep MASS_DELETION_MIN = 3 and MASS_DELETION_FRACTION = 0.2.\n\n1. Replace KINDS with a STORES table: one [dir, (s: StateManager) => Map<string, unknown>] row for every map load() replaces (StateManager.ts about :1063-1119). The rows are tasks, epics, workers, teams, proposals, channels, decisions, resources, attempts, candidates, reviews, ['checks', s => s.checkRuns] and receipts. Use accessors, not string indexing, so `tsc --noEmit` checks every field.\n2. One pass over STORES. For each store with entries:\n   - dirGone = !fs.existsSync(join(moePath, dir));\n   - an entity is missing when dirGone or its `<dir>/<id>.json` is absent (loadEntities keys by the entity's id field).\n3. Keep the combined rule exactly as today: only over tasks, epics, teams, workers and proposals, missing >= MIN and >= FRACTION x their total.\n4. Add the per-kind rule for every store EXCEPT tasks and epics: dirGone, or that kind's missing >= MIN and >= FRACTION x its own size.\n   - tasks and epics are the board kinds the wrappers commit under settings.commitBoardState, so a git checkout or pull changes them on purpose.\n5. On either rule, rewrite EVERY missing entity of EVERY store with state.writeEntity(dir, id, entity), then log the restored count per kind and which rule fired. Rewriting only some kinds would let the next load() empty the rest.\n6. Otherwise return 0, so the caller reloads as before.\n\nUpdate the header comment. It names the board-commit case (git clean -fdx / git stash --all delete only the ignored runtime dirs), states the two rules, and names the gaps:\n- messages/ and pins/ are not in memory and cannot be restored;\n- checks/dispatches and checks/observations load lazily (checkObservationStore) and are not replaced by load().\n\nRe-run step 1's command with massDeletionHeal.ts copied in as well: every case passes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY: run the DoD 4 gate once, in a fresh git-archive snapshot of HEAD with only the 2 files copied in and cmp-checked. Never run npm in the shared checkout. From the worktree root in WSL bash:\nR=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/massDeletionHeal.ts packages/moe-daemon/src/state/massDeletionHeal.test.ts; do cp \"$R/$f\" \"$S/$f\" && cmp \"$R/$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/state/massDeletionHeal.test.ts src/state/StateManager.test.ts'\n\nExpected: exit 0. massDeletionHeal.test.ts has 6 cases (3 old + 3 new), and StateManager.test.ts passes unchanged.\n- Submit complete_task verification as { command: that exact line, exitCode: 0, outputTail: the vitest summary }, with the step-1 RED quote.\n- DoD 5: `git status --porcelain` lists only the 2 files outside .moe/.\n\nerror handling:\n- A failure in StateManager.test.ts that also fails on an unmodified snapshot belongs to a peer's checkpoint: follow mem:gotcha-snapshot-gate-peer-wip-checkpoint and disclose it.\n- Any other failure is this task's to fix.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.ts",
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff as an attacker. Check:\n- 1-2 deleted files of any kind still reload (DoD 2), and a single-entity kind whose FILE is deleted (dir kept) still reloads.\n- A deleted board file (tasks or epics) never trips the per-kind rule, and the combined rule is byte-for-byte the old arithmetic.\n- An empty in-memory kind with a missing dir is no wipe.\n- The rewrite covers every map load() replaces: any kind left out empties on the next reload.\n- The heal runs under state.mutex, and writeEntity's ignorePath keeps it from re-triggering the watcher.\n- Counting stays O(entities) with one existsSync per entity.\n- The fixture's PENDING proposals survive purgeResolvedProposals, and the tests deep-compare whole entities, not just counts.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 3's command if code changed, then call complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.ts",
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -26,16 +61,83 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:26.244Z",
-  "updatedAt": "2026-11-02T21:52:16.875Z",
+  "updatedAt": "2026-11-02T21:55:36.400Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:22.389Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-02T21:52:13.611Z"
+    "firstClaimAt": "2026-11-02T21:52:13.611Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
     "architect-24611a0a"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T21:55:36.363Z",
+  "executionContract": {
+    "intendedBehavior": "healMassDeletion also treats a per-kind runtime wipe as a wipe, and on any wipe rewrites every entity map load() replaces. A per-kind wipe is a non-board kind whose directory vanished while memory still holds entries, or that lost at least 3 and at least 20% of its own entries. So the `git clean -fdx` / `git stash --all` that removes only the ignored runtime dirs of a board-tracking project no longer lets the FileWatcher's reload empty workers, teams, proposals, leases or attempts. A deletion of one or two files still reloads as before.",
+    "acceptanceCriteria": [
+      "(w) In a store with 50 tasks, 1 epic, 4 workers, 1 team, 3 PENDING proposals, a leased resource and an open attempt, deleting workers/, teams/, proposals/, resources/ and attempts/ makes the heal return 10. A following load() restores all 5 maps deep-equal to before, with their files on disk.",
+      "(x) One worker file deleted, and (y) two proposal files deleted: the heal returns 0 and load() drops exactly those entities. The 3 existing cases pass unchanged.",
+      "RED: (w) fails against the unchanged heal, and the completion summary quotes it."
+    ],
+    "invariants": [
+      "MASS_DELETION_MIN and MASS_DELETION_FRACTION keep their values and exports; the combined rule's kinds and arithmetic are unchanged.",
+      "tasks and epics never trip the per-kind rule.",
+      "Only massDeletionHeal.ts and its test change (DoD 5); index.ts's caller is untouched.",
+      "No npm in the shared checkout."
+    ],
+    "compatibility": [
+      "Existing .moe state is read and written in the same per-entity JSON shape (writeEntity). No schema or MCP change."
+    ],
+    "approvedScope": [
+      "massDeletionHeal.ts: a STORES table (dir plus map accessor for all 13 maps load() replaces), the unchanged combined rule over tasks/epics/teams/workers/proposals, a new per-kind rule over every non-board store, and a rewrite of every missing entity of every store.",
+      "massDeletionHeal.test.ts: a new describe with the board-tracking fixture and cases (w), (x), (y)."
+    ],
+    "reuse": [
+      "writeEntity, the existing thresholds, and the fixture APIs createWorker, createTeam, createProposal, acquireResource and openAttempt."
+    ],
+    "sourceAssumptions": [
+      "StateManager.load() (state/StateManager.ts about :1063-1119) replaces epics, tasks, workers, teams, channels, decisions, proposals, resources, attempts, candidates, reviews, checkRuns (dir checks) and receipts; all are public Map fields (about :382-399).",
+      "state/persistence.ts loadEntities keys each map by the entity's id and tolerates a missing dir; writeEntity(kind, id, entity) writes <moePath>/<kind>/<id>.json and mkdirs.",
+      "packages/moe-daemon/src/index.ts FileWatcher callback: `if ((await healMassDeletion(state)) > 0) return; await state.load();`.",
+      "This repo commits .moe/tasks, epics and channels, and ignores workers/, proposals/ (.moe/.gitignore) and teams/, resources/, attempts/, candidates/, checks/, reviews/, receipts/ (root .gitignore)."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/massDeletionHeal.ts packages/moe-daemon/src/state/massDeletionHeal.test.ts; do cp \"$R/$f\" \"$S/$f\" && cmp \"$R/$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/state/massDeletionHeal.test.ts src/state/StateManager.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Running the per-kind rule over tasks and epics too was rejected. They are committed under commitBoardState, so a branch switch that drops 20% of task files would be resurrected instead of reloaded, a behavior change for git-tracked boards. Widening the combined denominator to all 13 kinds was rejected: it would make the existing combined rule less sensitive. Healing in index.ts was rejected too, because DoD 5 limits the change to the two files.",
+    "codebaseInsights": "- load() backfills (worker.teamId null and task priority/comments), so fixture entities created through the APIs round-trip deep-equal.\n- ensureChatInfrastructure recreates canonical channels with NEW ids when channels/ is missing. Healing channels keeps message files keyed to the old channel ids.\n- In this repo channels/ is committed, but other projects may ignore it.",
+    "risks": "- messages/ (chat history) and pins/ are deleted by the same git clean, but they are not in memory, so they are out of scope.\n- checks/dispatches and observations are lazy WeakMap stores not replaced by load(); their files stay lost until the next write. Note it in the header comment.\n- A deliberate bulk hand-deletion of at least 20% (at least 3) of a runtime kind is now undone. That is acceptable: .moe/ is never edited by hand.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/massDeletionHeal.ts",
+      "packages/moe-daemon/src/state/massDeletionHeal.test.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/state/persistence.ts",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "76ca84ba20366049a2f713ed4e519acd65988bd2",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T21:55:36.400Z",
+  "approvedPlanRevision": 1
 }

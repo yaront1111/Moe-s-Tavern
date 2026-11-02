@@ -70,12 +70,15 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of the diff, using the adversarial-self-review skill. The diff covers moe-agent.ps1, landing-ledger.ps1, ci.yml, postflight.sh and postflight.ps1.\n\n(a) Every explicit failed send inside Invoke-MoeLanding's try body is followed by $recorded=$true, and no catch or interrupt path sets it. Compare the `outcome = 'failed'` / `outcome='failed'` hits inside the function with the $recorded=$true lines.\n(b) Twice or concurrently: $recorded is function-local, so --loop landings and recovered landings never share it.\n(c) Ctrl+C mid-gate still parks and records once: the postflight frozen-candidate interrupt-int mode plus drill case D.\n(d) Known pre-existing edge, out of scope: a throw between an explicit rescue that parked a ref and its send still records no row, because the finally keeps -not $res.Ref. Name it in the completion summary; do not fix it here.\n(e) No record_commit payload shape, MCP contract or daemon change, and git diff shows moe-agent.sh untouched.\n(f) The BOM bytes ef bb bf still lead moe-agent.ps1 and postflight.ps1, landing-ledger.ps1 is ASCII, and LF line endings hold throughout.\n\nIf the review changes any byte, re-run the step-4 command and submit only the fresh run.\n\nFinally, update the Serena memory gotcha-ps1-landing-no-candidate-peel. Its duplicate-row paragraph becomes: fixed by task-4fdc7590; scenario AJ now asserts the exact row sequence; scripts/tests/landing-ledger.ps1 pins one failed row per landing.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review done; no byte changed, so the step-4 gate run stays the evidence (worktree == gate snapshot, cmp on all 4 changed scripts). (a) 8 explicit failed sends in Invoke-MoeLanding (lines 5540, 5637, 5666, 5711, 5750, 5766, 5803, 5883), each followed by $recorded=$true; the catch (5960s) and the $interrupted branch never set it; the finally sets it only after its own fallback send. (b) $recorded is function-local (init at 5478); the only other $recorded uses are in a different function (6364+) with its own local. (c) Ctrl+C mid-gate: drill D (teardown rescue + exactly 1 check run + 1 row) and the postflight frozen-candidate interrupt modes (106 passed on all three runs). (d) Pre-existing edge, out of scope and not fixed: a throw between an explicit rescue that parked a ref and its send still records no row, since the finally keeps -not $res.Ref. A throwing Send-MoeRecordCommit leaves $recorded unset, so the finally's fallback still retries. (e) Diff only adds $recorded=$true lines and the finally condition; no record_commit payload, MCP or daemon change; git diff of moe-agent.sh is empty. (f) BOM ef bb bf leads moe-agent.ps1 and postflight.ps1; landing-ledger.ps1 has 0 non-ASCII and no BOM; 0 CRs in all 5 files; added lines are ASCII. Serena gotcha-ps1-landing-no-candidate-peel updated (fixed by task-4fdc7590, exact-row AJ, landing-ledger.ps1 pin); handoff note written.",
+      "startedAt": "2026-11-02T21:56:14.139Z",
+      "completedAt": "2026-11-02T21:57:15.354Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -116,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:04:11.016Z",
-  "updatedAt": "2026-11-02T21:50:01.719Z",
+  "updatedAt": "2026-11-02T21:57:51.462Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:40.801Z",
@@ -126,7 +129,7 @@
     "firstClaimAt": "2026-10-30T09:55:16.013Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
@@ -140,7 +143,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T10:16:48.897Z",
@@ -247,13 +251,11 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-6fc0096b9fff4c45904cfbce7833ad2d.json",
-    ".moe/tasks/task-9eaa4c4e4ef74d43ab2538e0010b098e.json",
+    "scripts/tests/landing-ledger.ps1",
     ".github/workflows/ci.yml",
     "scripts/moe-agent.ps1",
-    "scripts/tests/landing-ledger.ps1",
-    "scripts/tests/postflight.ps1",
-    "scripts/tests/postflight.sh"
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -262,5 +264,14 @@
     "sessionId": "worker-2dc72348@2026-11-02T19:31:06Z",
     "at": "2026-11-02T21:47:54.394Z"
   },
-  "workStartedAt": "2026-11-02T19:33:44.999Z"
+  "workStartedAt": "2026-11-02T19:33:44.999Z",
+  "reviewStartedAt": "2026-11-02T21:57:51.460Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-4fdc7590cd054a45a379c477ffe45ac7 && W=$(mktemp -d /mnt/d/moe-scratch/t4fdc-XXXX) && echo \"$W\" > /tmp/t4fdc-dir && ( for v in $(compgen -e | grep -E '^(MOE_|CLAUDE|FAKE_)'); do unset \"$v\"; done; git rev-parse HEAD && python3 -I -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))' && echo \"[ci.yml] ok\" && git archive HEAD scripts | tar -x -C \"$W\" && for f in scripts/moe-agent.ps1 scripts/tests/landing-ledger.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$W/$f\" && cmp \"$f\" \"$W/$f\" || exit 1; done && cd \"$W\" && bash -n scripts/moe-agent.sh && echo \"[bash -n] ok\" && for eng in powershell.exe pwsh.exe; do for s in scripts/moe-agent.ps1 scripts/tests/landing-ledger.ps1; do P=\"$(wslpath -w \"$W/$s\")\"; $eng -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$P',[ref]\\$null,[ref]\\$e); exit \\$e.Count\" && echo \"[ParseFile $eng $s] ok\" || exit 1; done; $eng -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/landing-ledger.ps1\")\" && echo \"[landing-ledger $eng] ok\" || exit 1; done && bash scripts/tests/parity-check.sh && echo \"[parity-check.sh] ok\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/parity-check.ps1\")\" && echo \"[parity-check.ps1 PS5.1] ok\" && echo \"=== Linux bash postflight.sh ===\" && MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && echo \"=== Windows PowerShell 5.1 postflight.ps1 ===\" && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/postflight.ps1\")\" && echo \"=== pwsh 7 postflight.ps1 ===\" && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/postflight.ps1\")\" ) > \"$W.log\" 2>&1; echo \"GATE_EXIT=$?\" >> \"$W.log\"; echo \"$W\"",
+    "exitCode": 0,
+    "outputTail": "[scenario AJ] peel failures and rescue records retain held contested paths\n[scenario AJ1] ok\n[scenario AJ2] ok\n[scenario AJ] ok\n[scenario AK] ok\n[scenario AL] ok\n[scenario AM] ok\ncommit-scope scenarios run: 44\n[team join] ok\n[team heal] ok\n[worktree reuse] ok\n[protected runtime] ok\nPASS postflight.ps1\nGATE_EXIT=0\n\nLog /mnt/d/moe-scratch/t4fdc-nwNK.log (HEAD edb48d05; run finished 21:46Z, no byte edited since: cmp of the 4 changed scripts vs the snapshot is identical): [ci.yml] ok; [bash -n] ok; ParseFile ok on powershell.exe and pwsh.exe for moe-agent.ps1 and landing-ledger.ps1; [landing-ledger powershell.exe] ok and [landing-ledger pwsh.exe] ok (5 passed, 0 failed each); [parity-check.sh] ok; [parity-check.ps1 PS5.1] ok; PASS postflight.sh (commit-scope scenarios 45); PASS postflight.ps1 on PS 5.1 (scope 44) and pwsh 7 (scope 44); [scenario AJ1] ok and [scenario AJ2] ok in all three runs. Fresh re-run this turn on the final bytes: landing-ledger.ps1 5 passed, 0 failed on powershell.exe and pwsh.exe; bash -n ok; parity-check.sh PASS.",
+    "reportedAt": "2026-11-02T21:57:51.460Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "ps1 Invoke-MoeLanding now records exactly one failed ledger row per landing, as sh does. Fix (scripts/moe-agent.ps1): the function-local $recorded is set after each of the 8 explicit failed Send-MoeRecordCommit sends (git status, no-candidate peel, candidates peel, temp-index, evidence unavailable, gate failed, commit creation failed, ref contention), and the finally's failed-row fallback now needs -not $recorded. The catch and the interrupted-gate path never set it, so a real exception after attribution (DoD 2) and Ctrl+C mid-gate still park and record their one row from the finally. Tests: new scripts/tests/landing-ledger.ps1 (AST-loaded drill, cases no-candidate peel, candidates peel, throw after attribution, mid-gate exception, git-status failure; exact row and rescue-reason equality), wired into both Windows landing-guard steps in ci.yml; postflight.sh/.ps1 scenario AJ now assert the exact [outcome,code,kind] row sequence (deepStrictEqual) instead of a tail slice (DoD 3). RED on HEAD's wrapper: drill A, B, E fail with 2 rows, AJ2 fails on ps1 and passes on sh (parity pin). Mutants on scratch copies: dropping -not $recorded fails A, B, E; setting $recorded in the catch fails C and D. Gate: GATE_EXIT=0 (landing-ledger 5/5 on PS 5.1 and pwsh 7, parity sh+ps1, postflight.sh scope 45, PS 5.1 and pwsh 7 postflight.ps1 scope 44, AJ1 and AJ2 ok in all three). pwsh 7 postflight.ps1 passed in this setup. The verification command is the plan's command verbatim except that the first cd points at this task's worktree (the changed files live there). Behaviour change: the git-status and temp-index failure paths no longer get a second rescue attempt from the finally; sh's run_landing parks nothing there either (baseline kept, next pre-flight recovers). Known pre-existing edge, not fixed (out of scope): a throw between an explicit rescue that parked a ref and its send still records no row, because the finally keeps -not $res.Ref. No record_commit payload, MCP contract or daemon"
 }
