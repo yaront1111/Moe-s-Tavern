@@ -74,7 +74,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -87,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:19:58.910Z",
-  "updatedAt": "2026-11-02T17:35:34.987Z",
+  "updatedAt": "2026-11-02T17:39:08.852Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:22:34.327Z",
@@ -97,11 +97,14 @@
     "firstClaimAt": "2026-11-02T17:24:54.800Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T17:39:08.852Z",
+    "wallClockMs": 854052
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-81a7999f"
+    "worker-81a7999f",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "high",
@@ -188,7 +191,44 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/state/teamStore.presence.test.ts",
+    "packages/moe-daemon/src/state/teamStore.ts",
+    ".moe/tasks/task-75bd491034914137b043b9648dd574ec.json",
+    ".moe/tasks/task-e856c24678e94ff4b38ef79c99069e24.json"
+  ],
+  "completionSummary": "removeTeamMember and deleteTeam now pass the worker's own lastActivityAt to updateWorker (4-line diff; C2 prints DIFF-OK), so un-pointing a team no longer counts as presence. New teamStore.presence.test.ts (5 cases). RED against unchanged teamStore.ts (snapshot /tmp/75bd4910-gate.AB5Z92): 4 failed, 164 passed — failing: 'removeTeamMember keeps each record lastActivityAt and status', 'the moe.leave_team handler keeps them as well', 'deleteTeam keeps them as well', 'a leave does not postpone the DEAD record stale prune'; AssertionError: expected { id: 'w-dead', ... } to be null. GREEN (snapshot /tmp/75bd4910-gate.9mQxLb): 4 files, 168 tests passed, exit 0.",
+  "commits": [
+    {
+      "sha": "754dfb35057e07bf2ff42d917e992d9e3c0e9bbb",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T17:33:12Z",
+      "paths": [
+        ".moe/tasks/task-75bd491034914137b043b9648dd574ec.json",
+        ".moe/tasks/task-e856c24678e94ff4b38ef79c99069e24.json",
+        "packages/moe-daemon/src/state/teamStore.presence.test.ts",
+        "packages/moe-daemon/src/state/teamStore.ts"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T17:36:18.651Z",
+      "treeId": "beeffb4f8dcf32dd169cfbab8cde64c9ae695e50",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/teamStore.presence.test.ts",
     "packages/moe-daemon/src/state/teamStore.ts"
   ],
-  "completionSummary": "removeTeamMember and deleteTeam now pass the worker's own lastActivityAt to updateWorker (4-line diff; C2 prints DIFF-OK), so un-pointing a team no longer counts as presence. New teamStore.presence.test.ts (5 cases). RED against unchanged teamStore.ts (snapshot /tmp/75bd4910-gate.AB5Z92): 4 failed, 164 passed — failing: 'removeTeamMember keeps each record lastActivityAt and status', 'the moe.leave_team handler keeps them as well', 'deleteTeam keeps them as well', 'a leave does not postpone the DEAD record stale prune'; AssertionError: expected { id: 'w-dead', ... } to be null. GREEN (snapshot /tmp/75bd4910-gate.9mQxLb): 4 files, 168 tests passed, exit 0."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-81a7999f@2026-11-02T17:33:12Z",
+    "at": "2026-11-02T17:36:18.651Z"
+  },
+  "completedAt": "2026-11-02T17:39:08.852Z",
+  "reviewCompletedAt": "2026-11-02T17:39:08.852Z",
+  "reviewSummary": "Reviewed completion commit 754dfb35 (on moe/work-2026-10-24, pushed). Code diff in packages/moe-daemon/src/state/teamStore.ts is 2 lines (+2/-2): deleteTeam's member loop (l.102) and removeTeamMember's teamId repair (l.238) now pass `lastActivityAt: worker.lastActivityAt` to updateWorker, same idiom as evictDeadMembers (l.157). addTeamMember (l.219) is untouched as scoped. Re-ran C2 (diff vs pinned base 771f7441): exactly 4 changed lines, prints DIFF-OK. Re-ran C1 myself in a fresh git-archive snapshot of HEAD (/tmp/75bd4910-gate.JlmlSH, npm ci rc 0, nothing built or tested in the shared checkout): `npx vitest run` on teamStore.presence.test.ts, StateManager.test.ts, joinTeam.deadMembers.test.ts, teamMembershipHeal.test.ts -> 4 files passed, 168 tests passed, exit 0. Independently confirmed RED: swapped base teamStore.ts into the snapshot and ran the presence test -> 4 failed / 1 passed (removeTeamMember, leave_team handler, deleteTeam, stale-prune cases fail; fixture-guard case passes), AssertionErrors match the worker's quoted evidence. DoD 1-5 all map to evidence. Test spot-check: new teamStore.presence.test.ts (81 lines, 5 cases) uses exact-value assertions (toMatchObject with fixed lastActivityAt + status + teamId null), covers DEAD and IDLE workers through direct removeTeamMember, the leave_team handler and deleteTeam, and the prune boundary (kept at FIXED+stale-1s, deleted at FIXED+stale+1s via runBlockedTimeoutSweep); fakes only Date and restores timers in afterEach. No existing tests deleted or weakened. Net non-board size ~83 LOC, well under 400. Board files in the commit (.moe/tasks/*.json) are intentional daemon records. Workspace state dir clean (git status on packages/moe-daemon/src/state empty). Non-blocking note: none; ponytail pass found nothing to cut. Handoff memory retired after approval.",
+  "requiredCheckAtDone": null
 }
