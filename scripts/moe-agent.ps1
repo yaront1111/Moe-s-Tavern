@@ -71,9 +71,12 @@
 # One process and one console per seat, however many reloads. The first
 # invocation in a process runs every pass of this file with `&` and loops while
 # a pass asks for a reload (the restart check in the main loop, then the
-# hand-over at the bottom of this file). `&` re-reads the file, so each pass
-# runs the bytes on disk now, and the previous pass has fully returned (its
-# finally ran, its seat deregistered) before the next one starts. df42861
+# hand-over at the bottom of this file). A reload pass runs the private copy of
+# the committed bytes its check verified ($global:MoeWrapperReloadPin, deleted
+# once loaded or once the pass returns; task-69c02444), never the shared path,
+# and the previous pass has fully returned (its finally ran, its seat
+# deregistered) before the next one starts. Passes resolve helpers beside
+# $global:MoeWrapperSourcePath. df42861
 # relaunched through `& <exe> <args>` instead: the seat kept its console, but
 # the old wrapper stayed blocked on its child for the child's whole life, one
 # more process per seat per edit -- 45 wrappers / 6.2 GB after one night of
@@ -82,13 +85,22 @@
 # exits with it; Ctrl+C stops the whole pipeline, so it never reloads.
 if (-not $global:MoeWrapperSupervised -and $PSCommandPath) {
     $global:MoeWrapperSupervised = $true
+    $global:MoeWrapperSourcePath = $PSCommandPath
+    # Delete a copy, then its emptied moe-wrapper-pin.* folder; never the launched file.
+    $moeDropPin = { param([string]$p) try {
+        $d = Split-Path -Parent $p
+        if ($p -ne $global:MoeWrapperSourcePath -and (Split-Path -Leaf $d) -like 'moe-wrapper-pin.*') { [IO.File]::Delete($p); [IO.Directory]::Delete($d) }
+    } catch {} }
+    $moePass = $PSCommandPath
     $moeReloaded = $false
     try {
         do {
-            $global:MoeWrapperReload = $false; $global:LASTEXITCODE = 0
-            & $PSCommandPath @PSBoundParameters
+            $global:MoeWrapperReload = $false; $global:MoeWrapperReloadPin = $null; $global:LASTEXITCODE = 0
+            & $moePass @PSBoundParameters
             $moeRc = $LASTEXITCODE
             $moeReloaded = $global:MoeWrapperReload
+            & $moeDropPin $moePass
+            $moePass = if ($moeReloaded -and $global:MoeWrapperReloadPin) { $global:MoeWrapperReloadPin } else { $PSCommandPath }
         } while ($moeReloaded)
     } catch {
         # The restart check refuses changed bytes that fail to parse, so a parse
@@ -97,9 +109,15 @@ if (-not $global:MoeWrapperSupervised -and $PSCommandPath) {
         # stops the seat, as a failed child relaunch did before.
         if ($moeReloaded) { Write-Host "wrapper relaunch failed; the seat is stopped, relaunch it by hand: $_" -ForegroundColor Yellow }
         throw
-    } finally { $global:MoeWrapperSupervised = $false }
+    } finally {
+        & $moeDropPin $moePass; & $moeDropPin $global:MoeWrapperReloadPin
+        $global:MoeWrapperSupervised = $false; $global:MoeWrapperSourcePath = $null; $global:MoeWrapperReloadPin = $null
+    }
     exit $moeRc
 }
+# The checkout's wrapper and folder, also in a pass that runs a hot-reload copy.
+$script:MoeWrapperPath = if ($global:MoeWrapperSourcePath) { $global:MoeWrapperSourcePath } else { $PSCommandPath }
+$script:MoeScriptRoot = if ($script:MoeWrapperPath) { Split-Path -Parent $script:MoeWrapperPath } else { $PSScriptRoot }
 
 # Fail fast on unhandled cmdlet errors. Per-call `-ErrorAction SilentlyContinue`
 # overrides this for spots that intentionally rely on non-terminating errors
@@ -126,9 +144,9 @@ if ($moeMigration) {
 # native stderr line into a terminating error under 'Stop'.
 $moeInWorktree = & {
     $ErrorActionPreference = 'Continue'
-    if (-not $PSCommandPath) { return $false }
+    if (-not $script:MoeWrapperPath) { return $false }
     try {
-        $dir = Split-Path -Parent $PSCommandPath
+        $dir = Split-Path -Parent $script:MoeWrapperPath
         $top = [string](@(& git -C $dir rev-parse --show-toplevel 2>$null) | Select-Object -First 1)
         if ($LASTEXITCODE -ne 0 -or -not $top) { return $false }
         $pre = [string](@(& git -C $dir rev-parse --show-prefix 2>$null) | Select-Object -First 1)
@@ -148,7 +166,7 @@ $moeInWorktree = & {
 # from its own task worktree. Exactly '1' (-cne: case-sensitive) skips this one refusal and nothing
 # else reads it; no launch path (IDE plugins, moe-team, operators, runbooks) sets it.
 if ($moeInWorktree -and $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER -cne '1') {
-    [Console]::Error.WriteLine("[ERROR] MOE_WRAPPER_IN_WORKTREE: $PSCommandPath is inside a task worktree; launch the control checkout's scripts/moe-agent.ps1")
+    [Console]::Error.WriteLine("[ERROR] MOE_WRAPPER_IN_WORKTREE: $($script:MoeWrapperPath) is inside a task worktree; launch the control checkout's scripts/moe-agent.ps1")
     exit 1
 }
 
@@ -606,7 +624,7 @@ $proxyScript = $env:MOE_PROXY_PATH
 if ($proxyScript) { $proxyScript = $proxyScript.Trim('"') }
 if (-not $proxyScript) {
     if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_PROXY_PATH' }
-    $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+    $root = Resolve-Path (Join-Path $script:MoeScriptRoot "..")
     $proxyScript = Join-Path $root "packages\\moe-proxy\\dist\\index.js"
 }
 if (-not (Test-Path $proxyScript)) {
@@ -873,7 +891,7 @@ if (-not $NoStartDaemon) {
         if ($daemonScript) { $daemonScript = $daemonScript.Trim('"') }
         if (-not $daemonScript) {
             if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_DAEMON_PATH' }
-            $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+            $root = Resolve-Path (Join-Path $script:MoeScriptRoot "..")
             $daemonScript = Join-Path $root "packages\\moe-daemon\\dist\\index.js"
         }
         if (-not (Test-Path $daemonScript)) {
@@ -943,7 +961,7 @@ Write-Host ("moe.claim_next_task " + $claimJson)
 Write-Host ""
 
 # Plugin/install root is always the parent of the scripts/ folder
-$pluginRoot = Resolve-Path (Join-Path $PSScriptRoot "..") -ErrorAction SilentlyContinue
+$pluginRoot = Resolve-Path (Join-Path $script:MoeScriptRoot "..") -ErrorAction SilentlyContinue
 
 # Load role-specific instructions (.moe/roles/ with fallback to plugin docs/roles/).
 # Re-resolved and re-read every loop iteration: the daemon upgrades .moe/roles/
@@ -1096,7 +1114,7 @@ elseif ($cmdBase -eq "grok") { $cliType = "grok" }
 $env:MOE_WORKER_TYPE = $cliType.ToUpperInvariant()
 
 # Shared policy applies to every project, before a task is claimed or a model is called.
-$promptCacheHelper = Join-Path $PSScriptRoot 'prompt-cache.mjs'
+$promptCacheHelper = Join-Path $script:MoeScriptRoot 'prompt-cache.mjs'
 function Start-MoeUsageReceipt([string]$Provider, [string]$LaunchMode) {
     $env:MOE_USAGE_RECEIPT_FILE = $null
     $env:MOE_USAGE_CONTEXT_JSON = $null
@@ -8132,7 +8150,7 @@ function Invoke-MoeLaunchOutagePostflight {
 # dialog, a TUI on a never-trusted account would park at it. Every other
 # failure mode launches unrotated; "every signed-in account is spent" and "the
 # account could not be trusted" wait, holding the task.
-$accountHelper = Join-Path $PSScriptRoot 'moe-account-lease.mjs'
+$accountHelper = Join-Path $script:MoeScriptRoot 'moe-account-lease.mjs'
 $script:AccountSampleFile = Join-Path $env:TEMP "moe-account-sample-$Role-$myPid.json"
 $script:AccountSettingsFile = Join-Path $env:TEMP "moe-account-settings-$Role-$myPid.json"
 $script:AccountLeasedId = ''
@@ -8385,18 +8403,58 @@ function Send-MoeAccountSample {
 # were produced by wrappers launched BEFORE the pathspec fix landed at 06:26:51,
 # while every copy on disk already carried the fix.
 #
-# The hash is captured ONCE, here, so one on-disk change triggers exactly one
-# restart: the reloaded pass captures the new hash and cannot thrash if the
-# file is touched again mid-flight.
+# The hash is captured ONCE, here, from the bytes this pass loaded, so one
+# on-disk change triggers exactly one restart: the reloaded pass captures the
+# new hash and cannot thrash if the file is touched again mid-flight.
 # Only load committed bytes: on 2026-10-30 three seats re-exec'd onto
-# task-e7f4026a's uncommitted, unreviewed +79/-8 wrapper edit.
-$script:MoeWrapperPath = $PSCommandPath
+# task-e7f4026a's uncommitted, unreviewed +79/-8 wrapper edit. And load them
+# from a private copy: a write landing after the check is not loaded.
 $script:MoeWrapperLaunchHash = $null
 $script:MoeWrapperRefusedHash = $null
 $script:MoeWrapperDeferredHash = $null
-# Twin: wrapper_reload_deferred. Return true to defer, false to reload.
+# Drop the private copy $global:MoeWrapperReloadPin names: the file, then its
+# emptied folder, only in a moe-wrapper-pin.* folder.
+function Remove-MoeWrapperPin {
+    $pin = $global:MoeWrapperReloadPin
+    $global:MoeWrapperReloadPin = $null
+    if (-not $pin) { return }
+    try {
+        $dir = Split-Path -Parent $pin
+        if ((Split-Path -Leaf $dir) -like 'moe-wrapper-pin.*') { [IO.File]::Delete($pin); [IO.Directory]::Delete($dir) }
+    } catch {}
+}
+# Copy the wrapper into a new moe-wrapper-pin.* folder and check the copy's blob
+# is HEAD's. Return 0 ($global:MoeWrapperReloadPin is the copy, or empty for
+# bytes without the hand-over), 1 when the bytes moved after the diff, or 2 on a
+# failure that $script:MoeWrapperPinError names.
+function New-MoeWrapperPin([string]$Top, [string]$Leaf) {
+    $script:MoeWrapperPinError = 'private copy failed'
+    try {
+        $bytes = [IO.File]::ReadAllBytes($script:MoeWrapperPath)
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('moe-wrapper-pin.' + [guid]::NewGuid().ToString('N'))
+        $null = [IO.Directory]::CreateDirectory($dir)
+        $global:MoeWrapperReloadPin = Join-Path $dir $Leaf
+        [IO.File]::WriteAllBytes($global:MoeWrapperReloadPin, $bytes)
+    } catch {
+        $script:MoeWrapperPinError = "private copy failed: $($_.Exception.Message)"
+        return 2
+    }
+    $want = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--verify', '-q', "HEAD:./$Leaf")
+    $script:MoeWrapperPinError = "git rev-parse exited $($want.Rc)"
+    if ($want.Rc -ne 0) { return 2 }
+    $got = Invoke-MoeGit -Top $Top -GitArgs @('hash-object', "--path=$Leaf", '--', $global:MoeWrapperReloadPin)
+    $script:MoeWrapperPinError = "git hash-object exited $($got.Rc)"
+    if ($got.Rc -ne 0) { return 2 }
+    if ("$($want.Out)" -cne "$($got.Out)") { return 1 }
+    # Bytes without the hand-over (a revert) would resolve helpers beside the copy.
+    if (-not [Text.Encoding]::UTF8.GetString($bytes).Contains('MoeWrapperSourcePath')) { Remove-MoeWrapperPin }
+    return 0
+}
+# Twin: wrapper_reload_deferred. Return true to defer, false to reload: from the
+# $global:MoeWrapperReloadPin copy, or from the checkout path when that is empty.
 function Test-MoeWrapperReloadDeferred([string]$Hash) {
     $reason = ''
+    Remove-MoeWrapperPin
     try {
         $top = Split-Path -Parent $script:MoeWrapperPath
         if (-not $top) { throw 'wrapper directory is empty' }
@@ -8406,10 +8464,18 @@ function Test-MoeWrapperReloadDeferred([string]$Hash) {
         if ($result.Rc -eq 0) {
             $gitCmd = 'diff'
             $result = Invoke-MoeGit -Top $top -GitArgs @('diff', '--quiet', 'HEAD', '--', $leaf)
-            if ($result.Rc -eq 0) { return $false }
         }
-        if ($result.Rc -ne 1) { $reason = "git $gitCmd exited $($result.Rc)" }
+        if ($result.Rc -ne 0 -and $result.Rc -ne 1) { $reason = "git $gitCmd exited $($result.Rc)" }
+        if ($result.Rc -eq 0) {
+            # A pre-fix supervisor runs the checkout path whatever this pass stages.
+            if (-not $global:MoeWrapperSourcePath) { return $false }
+            $pinRc = New-MoeWrapperPin $top $leaf
+            if ($pinRc -eq 0) { return $false }
+            Remove-MoeWrapperPin
+            if ($pinRc -eq 2) { $reason = $script:MoeWrapperPinError }
+        }
     } catch {
+        Remove-MoeWrapperPin
         $reason = "git check failed: $($_.Exception.Message)"
     }
     if ($Hash -ne $script:MoeWrapperDeferredHash) {
@@ -8426,14 +8492,17 @@ function Test-MoeWrapperReloadDeferred([string]$Hash) {
 # hand-over at the very bottom of this file.
 $script:MoeWrapperRelaunchRequested = $false
 try {
-    if ($script:MoeWrapperPath -and (Test-Path -LiteralPath $script:MoeWrapperPath)) {
-        $script:MoeWrapperLaunchHash = Get-MoeSha256Hex ([IO.File]::ReadAllBytes($script:MoeWrapperPath))
+    if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+        $script:MoeWrapperLaunchHash = Get-MoeSha256Hex ([IO.File]::ReadAllBytes($PSCommandPath))
     }
 } catch {
     # FAIL-OPEN. A wrapper that dies because it could not stat itself is a fleet
     # outage; a stale wrapper is merely the status quo this guard improves on.
     $script:MoeWrapperLaunchHash = $null
 }
+# A pinned pass runs its copy from memory: the copy can go now, so a killed seat
+# leaves none behind (the supervisor's drop after the pass is the fallback).
+if ($PSCommandPath -ne $script:MoeWrapperPath) { $global:MoeWrapperReloadPin = $PSCommandPath; Remove-MoeWrapperPin }
 
 # PowerShell parses this whole file before running it: an in-place save cannot
 # shift a running seat onto a stale offset, so no grouping is needed here.
@@ -8492,12 +8561,14 @@ do {
             $moeParseReason = ''
             try {
                 $moeParseErrors = $null
-                $null = [System.Management.Automation.Language.Parser]::ParseFile($script:MoeWrapperPath, [ref]$null, [ref]$moeParseErrors)
+                $moeParsePath = if ($global:MoeWrapperReloadPin) { $global:MoeWrapperReloadPin } else { $script:MoeWrapperPath }
+                $null = [System.Management.Automation.Language.Parser]::ParseFile($moeParsePath, [ref]$null, [ref]$moeParseErrors)
                 if ($moeParseErrors.Count -gt 0) { $moeParseReason = "line $($moeParseErrors[0].Extent.StartLineNumber): $($moeParseErrors[0].Message)" }
             } catch {
                 $moeParseReason = "ParseFile failed: $($_.Exception.Message)"
             }
             if ($moeParseReason) {
+                Remove-MoeWrapperPin
                 $script:MoeWrapperRefusedHash = $moeCurrentHash
                 Write-Host "[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: $moeParseReason" -ForegroundColor Yellow
             } else {
@@ -8517,6 +8588,7 @@ do {
                 # above has already landed this session's work.
                 Stop-HeartbeatSidecar
                 if ($script:CurrentHeartbeatJob) {
+                    Remove-MoeWrapperPin
                     Write-Host '[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle.' -ForegroundColor Yellow
                     continue
                 }
@@ -10009,14 +10081,14 @@ $mentionsJson
                 $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = $moeCompactWindow
                 $env:MOE_COMPACT_WINDOW_DEFAULT = $moeCompactWindow
             }
-            $moeKeeperDir = Join-Path $PSScriptRoot 'mods\moe-compaction-keeper'
+            $moeKeeperDir = Join-Path $script:MoeScriptRoot 'mods\moe-compaction-keeper'
             if (-not $env:MOE_DISABLE_COMPACTION_KEEPER -and (Test-Path -LiteralPath $moeKeeperDir -PathType Container)) {
                 $moePluginDirs = @("$env:CLAUDE_CODE_PLUGIN_DIRS" -split [regex]::Escape([IO.Path]::PathSeparator) | Where-Object { $_ })
                 if ($moePluginDirs -notcontains $moeKeeperDir) {
                     $env:CLAUDE_CODE_PLUGIN_DIRS = (@($moePluginDirs) + $moeKeeperDir) -join [IO.Path]::PathSeparator
                 }
             }
-            $moeSwitchDir = Join-Path $PSScriptRoot 'mods\moe-account-switch'
+            $moeSwitchDir = Join-Path $script:MoeScriptRoot 'mods\moe-account-switch'
             $env:MOE_SESSION_ENDS_WHEN_IDLE = $null
             if ($claudeInteractive -and $loopEnabled -and -not $env:MOE_DISABLE_ACCOUNT_SWITCH_MOD -and (Test-Path -LiteralPath $moeSwitchDir -PathType Container)) {
                 $moePluginDirs = @("$env:CLAUDE_CODE_PLUGIN_DIRS" -split [regex]::Escape([IO.Path]::PathSeparator) | Where-Object { $_ })
