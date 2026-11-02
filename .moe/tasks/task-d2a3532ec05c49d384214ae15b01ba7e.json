@@ -103,7 +103,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -116,7 +116,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:11:52.276Z",
-  "updatedAt": "2026-11-02T16:10:43.073Z",
+  "updatedAt": "2026-11-02T16:13:58.071Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:16:27.251Z",
@@ -126,11 +126,14 @@
     "firstClaimAt": "2026-11-02T15:44:32.210Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-02T16:13:58.071Z",
+    "wallClockMs": 1765861
   },
   "contextFetchedBy": [
     "architect-93e0e956",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -220,7 +223,54 @@
     "moe-vscode/media/chat.js",
     "moe-vscode/src/services/MoeDaemonClient.ts",
     "moe-vscode/MANUAL_TESTS.md",
+    "moe-vscode/CHANGELOG.md",
+    ".moe/tasks/task-3c4850819cad458d9edb59809d00e400.json",
+    ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json",
+    ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+    ".moe/tasks/task-d2a3532ec05c49d384214ae15b01ba7e.json"
+  ],
+  "completionSummary": "VS Code chat now matches JetBrains. (1) media/chat.js: new autoSelectChannel() selects the first general-type channel in list order, else the first listed channel, else nothing; a still-listed selection is kept and posts no selectChannel. It replaces the old channels[0] block in updateChannels (VSC-6's drop-unlisted deselect branch untouched) and also runs after channelCreated. channelCreated replaces by id (filter then push, latest payload wins and moves last), ignores a payload without a string id, and never deselects. (2) MoeDaemonClient CHANNEL_CREATED: string-id guard, cache written first (filter by id, then push), then onChannelCreated fires once per valid frame; no onStateChanged/onChannelsReceived, so ChatViewProvider still posts exactly one channelCreated. CHANNEL_DELETED untouched. (3) tests/wire-parity.test.cjs append-only (0 removed lines): D1-D5 run the raw chat.js in node:vm over ChatChannelSelectionTest cases b-f; E1, E1b, E2, E3, E4 cover the client cache through the real provider, cache-before-event, the page list, auto-select on create, and malformed payloads in both layers. MANUAL_TESTS.md wording and one CHANGELOG Fixed bullet updated. Evidence: RED proof 22 tests / 8 fail (D1 D3 D5 E1 E1b E2 E3 E4, ERR_ASSERTION) against old code; mutant sweep M1-M12 12/12 killed (driver kept at /mnt/d/moe-scratch/vsc24-worker/mutants.cjs); checkRef in a fresh git-archive snapshot exit 0: eslint clean, tsc clean, 574 tests, 570 pass, 0 fail, 4 skip (plan estimated 566; peer commits VSC-25 fb0b5ab9 and VSC-23 17ebbe81 landed after the 78642f85 baseline and added 8, this task adds exactly 10). Snapshots deleted. moe-jetbrains untouched by this task (its dirty paths are pre-existing peer work).",
+  "commits": [
+    {
+      "sha": "8122d0b9a22841d233fbf6ec9fd52b204e2fd31f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T16:04:49Z",
+      "paths": [
+        ".moe/tasks/task-3c4850819cad458d9edb59809d00e400.json",
+        ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json",
+        ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+        ".moe/tasks/task-d2a3532ec05c49d384214ae15b01ba7e.json",
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/MANUAL_TESTS.md",
+        "moe-vscode/media/chat.js",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/wire-parity.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T16:11:20.796Z",
+      "treeId": "d0943626d1feff9496543a88de087d73d9d25913",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/wire-parity.test.cjs",
+    "moe-vscode/media/chat.js",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/MANUAL_TESTS.md",
     "moe-vscode/CHANGELOG.md"
   ],
-  "completionSummary": "VS Code chat now matches JetBrains. (1) media/chat.js: new autoSelectChannel() selects the first general-type channel in list order, else the first listed channel, else nothing; a still-listed selection is kept and posts no selectChannel. It replaces the old channels[0] block in updateChannels (VSC-6's drop-unlisted deselect branch untouched) and also runs after channelCreated. channelCreated replaces by id (filter then push, latest payload wins and moves last), ignores a payload without a string id, and never deselects. (2) MoeDaemonClient CHANNEL_CREATED: string-id guard, cache written first (filter by id, then push), then onChannelCreated fires once per valid frame; no onStateChanged/onChannelsReceived, so ChatViewProvider still posts exactly one channelCreated. CHANNEL_DELETED untouched. (3) tests/wire-parity.test.cjs append-only (0 removed lines): D1-D5 run the raw chat.js in node:vm over ChatChannelSelectionTest cases b-f; E1, E1b, E2, E3, E4 cover the client cache through the real provider, cache-before-event, the page list, auto-select on create, and malformed payloads in both layers. MANUAL_TESTS.md wording and one CHANGELOG Fixed bullet updated. Evidence: RED proof 22 tests / 8 fail (D1 D3 D5 E1 E1b E2 E3 E4, ERR_ASSERTION) against old code; mutant sweep M1-M12 12/12 killed (driver kept at /mnt/d/moe-scratch/vsc24-worker/mutants.cjs); checkRef in a fresh git-archive snapshot exit 0: eslint clean, tsc clean, 574 tests, 570 pass, 0 fail, 4 skip (plan estimated 566; peer commits VSC-25 fb0b5ab9 and VSC-23 17ebbe81 landed after the 78642f85 baseline and added 8, this task adds exactly 10). Snapshots deleted. moe-jetbrains untouched by this task (its dirty paths are pre-existing peer work)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T16:04:49Z",
+    "at": "2026-11-02T16:11:20.796Z"
+  },
+  "completedAt": "2026-11-02T16:13:58.071Z",
+  "reviewCompletedAt": "2026-11-02T16:13:58.071Z",
+  "reviewSummary": "Approved. Reviewed completion 8122d0b9 (on moe/work-2026-10-24, pushed): moe-vscode only, about 179 added/15 removed lines (chat.js +19/-9, MoeDaemonClient.ts +11/-5, wire-parity.test.cjs +148/-0, CHANGELOG +1, MANUAL_TESTS +1/-1), far under 400. moe-jetbrains not in the commit.\n\nRe-ran task.verification verbatim in a fresh git-archive snapshot (env -i, node v24.21.0): npm ci, eslint clean, tsc clean, node:test 574 tests, 570 pass, 0 fail, 4 skip. D1-D5, E1, E1b, E2, E3, E4 and VSC-6's A1-C4 pass.\n\nDoD 1: autoSelectChannel() is a no-op with a selection or an empty list, else picks the first type==='general' in array order, else channels[0]. It replaces only the old channels[0] block; VSC-6's deselect branch is untouched. D1-D5 run raw chat.js in vm and map 1:1 to ChatChannelSelectionTest b-f (read the Kotlin test).\nDoD 2: client CHANNEL_CREATED has a string-id guard, writes the cache first (filter by id, push; latest wins, moves last), then fires once, with no onStateChanged/onChannelsReceived, so ChatViewProvider still posts exactly one channelCreated (read provider; E1 pins posts). chat.js channelCreated replaces by id, ignores a non-string id, never deselects.\nDoD 3: checkRef exit 0.\n\nMutants: ran the worker's driver in my snapshot: 12/12 killed (ERR_ASSERTION), files restored identical. Test diff has 0 removed lines (VSC-6 bytes intact); CHANNEL_DELETED unchanged; no forbidden pattern in added lines. Snapshot deleted.\n\nResidual, non-blocking (worker noted it): JetBrains drops a payload failing ChatChannel parsing, VS Code accepts any object with a string id; the daemon always sends a full ChatChannel. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
