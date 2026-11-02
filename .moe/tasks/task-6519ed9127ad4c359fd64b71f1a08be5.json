@@ -21,17 +21,24 @@
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "dependsOn": [
-    "task-31187ec10ae54dd2b03f4c166f083f31",
     "task-692a12df337c43edacb59fd0599ecff2",
     "task-cfa129252343438d903de1e67ae6073c",
-    "task-48aafb880ede4b22a3e26115c07f8470"
+    "task-48aafb880ede4b22a3e26115c07f8470",
+    "task-fbe8e3880ddf47dfa8546f220acea770"
   ],
   "priority": "LOW",
   "order": 27.8,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-8acb09b654ae459cb0b0690a610f8963",
+      "author": "governor-e6b40560",
+      "content": "Addition to the switch checklist. Insert it between step 6 (worktreeMode on) and step 8 (relaunch the seats): run `git -C <control checkout> config extensions.worktreeConfig true`, then confirm with `git config --get extensions.worktreeConfig` that it prints `true`.\n\nWhy: bug task-c7ca56e6. With the extension unset, the first sparse-checkout in a fresh worktree writes the common .git/config under a lock. Two seats provisioning at the same moment then race on that lock, and one refuses with MOE_WORKTREE_CREATE_FAILED. Seats relaunching all together right after the switch is exactly that moment. Once the extension is set, it becomes per-worktree config and the race is gone. The row itself depends on this gate and lands after the switch.",
+      "timestamp": "2026-11-02T09:10:13.803Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T08:48:44.700Z",
-  "updatedAt": "2026-11-02T08:53:15.963Z",
+  "updatedAt": "2026-11-02T09:15:30.944Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T08:49:58.314Z",
