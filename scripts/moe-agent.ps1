@@ -152,9 +152,9 @@ if ($Role -in @("architect", "governor") -and -not $PSBoundParameters.ContainsKe
 
 function Load-Registry {
     $path = Join-Path $env:USERPROFILE ".moe\\projects.json"
-    if (-not (Test-Path $path)) { return @() }
+    if (-not (Test-Path -LiteralPath $path)) { return @() }
     try {
-        return Get-Content -Raw -Path $path | ConvertFrom-Json
+        return Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
     } catch {
         return @()
     }
@@ -265,7 +265,7 @@ function Grant-GrokFolderTrust {
 # native argv, which PS < 7.3 would mangle. Falls back to the dotted form.
 function Get-CodexMoeServerOverride([string]$ConfigPath, [string]$WorkerId) {
     $fallback = "mcp_servers.moe.env.MOE_WORKER_ID=$WorkerId"
-    if (-not (Test-Path $ConfigPath)) { return $fallback }
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { return $fallback }
     $server = @(); $envPairs = @(); $section = ''
     foreach ($line in [System.IO.File]::ReadAllLines($ConfigPath)) {
         $s = $line.Trim().TrimStart([char]0xFEFF)
@@ -293,13 +293,13 @@ function Get-CodexMoeServerOverride([string]$ConfigPath, [string]$WorkerId) {
 
 function Get-MoeInstallPath {
     $configPath = Join-Path $env:USERPROFILE ".moe\\config.json"
-    if (-not (Test-Path $configPath)) { return $null }
+    if (-not (Test-Path -LiteralPath $configPath)) { return $null }
     try {
-        $config = Get-Content -Raw -Path $configPath | ConvertFrom-Json
+        $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
         $installPath = $config.installPath
         if (-not $installPath) { return $null }
         $canary = Join-Path $installPath "packages\\moe-daemon\\dist\\index.js"
-        if (-not (Test-Path $canary)) { return $null }
+        if (-not (Test-Path -LiteralPath $canary)) { return $null }
         return $installPath
     } catch {
         return $null
@@ -360,7 +360,7 @@ function Resolve-CommandParts {
     $hasArgs = $CmdArgs -and $CmdArgs.Count -gt 0
     if (-not $hasArgs -and $Cmd -match '\s') {
         # Only split if the full string isn't an existing path (e.g., "C:\Program Files\...").
-        if (-not (Test-Path $Cmd)) {
+        if (-not (Test-Path -LiteralPath $Cmd)) {
             $split = Split-CommandLine $Cmd
             if ($split.Count -gt 0) {
                 $resolvedCmd = $split[0]
@@ -403,7 +403,8 @@ if (-not $Project) {
     }
 }
 
-$projectPath = Resolve-Path -Path $Project -ErrorAction SilentlyContinue
+# A project directory may contain [ ], which -Path reads as a wildcard.
+$projectPath = Resolve-Path -LiteralPath $Project -ErrorAction SilentlyContinue
 if (-not $projectPath) {
     Write-Error "Project path not found: $Project"
     exit 1
@@ -418,7 +419,7 @@ if ($PSBoundParameters.ContainsKey('Team') -and [string]::IsNullOrWhiteSpace($Te
 }
 
 $moeDir = Join-Path $projectPath ".moe"
-if (-not (Test-Path $moeDir)) {
+if (-not (Test-Path -LiteralPath $moeDir)) {
     Write-Error "Project is not initialized for Moe: $projectPath"
     exit 1
 }
@@ -584,10 +585,10 @@ $proxyScript = $env:MOE_PROXY_PATH
 if ($proxyScript) { $proxyScript = $proxyScript.Trim('"') }
 if (-not $proxyScript) {
     if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_PROXY_PATH' }
-    $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+    $root = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")
     $proxyScript = Join-Path $root "packages\\moe-proxy\\dist\\index.js"
 }
-if (-not (Test-Path $proxyScript)) {
+if (-not (Test-Path -LiteralPath $proxyScript)) {
     if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_PROXY_PATH' }
     # Fall back to global install config
     $globalInstall = Get-MoeInstallPath
@@ -595,7 +596,7 @@ if (-not (Test-Path $proxyScript)) {
         $proxyScript = Join-Path $globalInstall "packages\\moe-proxy\\dist\\index.js"
     }
 }
-if (-not (Test-Path $proxyScript)) {
+if (-not (Test-Path -LiteralPath $proxyScript)) {
     Write-Error "Moe proxy script not found: $proxyScript. Run: cd packages/moe-proxy && npm run build"
     exit 1
 }
@@ -621,7 +622,7 @@ $mcpConfigObj = @{
 $serenaPath = $env:MOE_SERENA_PATH
 if (-not $serenaPath) {
     $serenaCandidate = Join-Path $env:USERPROFILE ".local\bin\serena.exe"
-    if (Test-Path $serenaCandidate) {
+    if (Test-Path -LiteralPath $serenaCandidate) {
         $serenaPath = $serenaCandidate
     } elseif (Get-Command serena -ErrorAction SilentlyContinue) {
         $serenaPath = (Get-Command serena).Source
@@ -638,9 +639,9 @@ $serenaProject = $projectPath.ToString()
 $serenaProjectSource = "project root"
 $serenaProjectCandidate = $null
 $moeAgentConfig = Join-Path $projectPath ".moe-agent.json"
-if (Test-Path $moeAgentConfig) {
+if (Test-Path -LiteralPath $moeAgentConfig) {
     try {
-        $cfg = Get-Content -Raw -Path $moeAgentConfig | ConvertFrom-Json
+        $cfg = Get-Content -Raw -LiteralPath $moeAgentConfig | ConvertFrom-Json
         if ($cfg.serenaProject) {
             $serenaProjectCandidate = $cfg.serenaProject
             $serenaProjectSource = ".moe-agent.json"
@@ -654,7 +655,7 @@ if ((-not $serenaProjectCandidate) -and $env:MOE_SERENA_PROJECT) {
     $serenaProjectSource = "MOE_SERENA_PROJECT"
 }
 if ($serenaProjectCandidate) {
-    $serenaProjectResolved = Resolve-Path -Path $serenaProjectCandidate -ErrorAction SilentlyContinue
+    $serenaProjectResolved = Resolve-Path -LiteralPath $serenaProjectCandidate -ErrorAction SilentlyContinue
     if ($serenaProjectResolved) {
         $serenaProject = $serenaProjectResolved.ToString()
     } else {
@@ -663,7 +664,7 @@ if ($serenaProjectCandidate) {
     }
 }
 
-if ($serenaPath -and (Test-Path $serenaPath)) {
+if ($serenaPath -and (Test-Path -LiteralPath $serenaPath)) {
     $mcpConfigObj.mcpServers.serena = @{
         command = $serenaPath
         args = @(
@@ -682,7 +683,7 @@ if ($serenaPath -and (Test-Path $serenaPath)) {
 # $PID is only available in PowerShell 7+; fall back for Windows PowerShell 5.1
 $myPid = if ($PID) { $PID } else { [System.Diagnostics.Process]::GetCurrentProcess().Id }
 $mcpConfigFile = Join-Path $env:TEMP "moe-mcp-config-$Role-$myPid.json"
-$mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -Path $mcpConfigFile -Encoding UTF8
+$mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $mcpConfigFile -Encoding UTF8
 # Grok's per-iteration prompt file (set in the grok launch branch, removed in
 # the outer finally on every exit path) and the pre-launch values of the GROK_*
 # env the branch overrides (restored in the same finally).
@@ -798,7 +799,7 @@ function Get-MoeDaemonIdentity($Port, [string]$ProjectPath) {
 if (-not $NoStartDaemon) {
     $daemonInfoPath = Join-Path $moeDir "daemon.json"
     $running = $false
-    if (Test-Path $daemonInfoPath) {
+    if (Test-Path -LiteralPath $daemonInfoPath) {
         try {
             $info = Read-MoeDaemonJsonText $daemonInfoPath | ConvertFrom-Json
             $proc = Get-Process -Id $info.pid -ErrorAction SilentlyContinue
@@ -824,10 +825,10 @@ if (-not $NoStartDaemon) {
         if ($daemonScript) { $daemonScript = $daemonScript.Trim('"') }
         if (-not $daemonScript) {
             if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_DAEMON_PATH' }
-            $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+            $root = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")
             $daemonScript = Join-Path $root "packages\\moe-daemon\\dist\\index.js"
         }
-        if (-not (Test-Path $daemonScript)) {
+        if (-not (Test-Path -LiteralPath $daemonScript)) {
             if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_DAEMON_PATH' }
             # Fall back to global install config
             $globalInstall = Get-MoeInstallPath
@@ -835,14 +836,15 @@ if (-not $NoStartDaemon) {
                 $daemonScript = Join-Path $globalInstall "packages\\moe-daemon\\dist\\index.js"
             }
         }
-        if (-not (Test-Path $daemonScript)) {
+        if (-not (Test-Path -LiteralPath $daemonScript)) {
             Write-Error "Moe daemon script not found: $daemonScript"
             exit 1
         }
         Write-Host "Starting Moe daemon for $projectPath..."
         # Pass arguments as an array so paths containing spaces or quotes survive
         # Windows command-line escaping (Start-Process re-quotes each element).
-        Start-Process -FilePath "node" -ArgumentList @("$daemonScript", "start", "--project", "$projectPath") -WindowStyle Hidden
+        # PS 5.1 resolves the inherited current location as a wildcard.
+        Start-Process -FilePath "node" -ArgumentList @("$daemonScript", "start", "--project", "$projectPath") -WindowStyle Hidden -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))
 
         # Wait for daemon to be ready (poll for up to 10 seconds)
         $maxWait = 10
@@ -851,7 +853,7 @@ if (-not $NoStartDaemon) {
             Start-Sleep -Seconds 1
             $waited++
 
-            if (Test-Path $daemonInfoPath) {
+            if (Test-Path -LiteralPath $daemonInfoPath) {
                 try {
                     $newInfo = Read-MoeDaemonJsonText $daemonInfoPath | ConvertFrom-Json
                     $proc = Get-Process -Id $newInfo.pid -ErrorAction SilentlyContinue
@@ -894,7 +896,7 @@ Write-Host ("moe.claim_next_task " + $claimJson)
 Write-Host ""
 
 # Plugin/install root is always the parent of the scripts/ folder
-$pluginRoot = Resolve-Path (Join-Path $PSScriptRoot "..") -ErrorAction SilentlyContinue
+$pluginRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..") -ErrorAction SilentlyContinue
 
 # Load role-specific instructions (.moe/roles/ with fallback to plugin docs/roles/).
 # Re-resolved and re-read every loop iteration: the daemon upgrades .moe/roles/
@@ -903,11 +905,11 @@ $pluginRoot = Resolve-Path (Join-Path $PSScriptRoot "..") -ErrorAction SilentlyC
 # the prompt-cache prefix stays stable.
 function Get-RoleDoc {
     $p = Join-Path $moeDir "roles\$Role.md"
-    if (-not (Test-Path $p) -and $pluginRoot) {
+    if (-not (Test-Path -LiteralPath $p) -and $pluginRoot) {
         $p = Join-Path $pluginRoot "docs\roles\$Role.md"
     }
     # The daemon writes role docs as BOM-less UTF-8; Windows PowerShell 5.1 decodes a BOM-less file as ANSI unless told. -Encoding UTF8 is right on 5.1 and 7, BOM or not.
-    if (Test-Path $p) { return Get-Content -Raw -Encoding UTF8 -Path $p }
+    if (Test-Path -LiteralPath $p) { return Get-Content -Raw -Encoding UTF8 -LiteralPath $p }
     return ""
 }
 $roleDoc = Get-RoleDoc
@@ -924,9 +926,9 @@ if ($roleDoc) {
 $approvalMode = ""
 $projConfig = $null
 $projectJsonPath = Join-Path $moeDir "project.json"
-if (Test-Path $projectJsonPath) {
+if (Test-Path -LiteralPath $projectJsonPath) {
     try {
-        $projConfig = Get-Content -Raw -Path $projectJsonPath | ConvertFrom-Json
+        $projConfig = Get-Content -Raw -LiteralPath $projectJsonPath | ConvertFrom-Json
         if ($projConfig.settings.approvalMode) {
             $approvalMode = $projConfig.settings.approvalMode
             Write-Host "Approval mode: $approvalMode"
@@ -977,8 +979,8 @@ if ($resolvedModel) {
 # Load known issues if present
 $knownIssues = ""
 $knownIssuesPath = Join-Path $moeDir "KNOWN_ISSUES.md"
-if (Test-Path $knownIssuesPath) {
-    $knownIssues = Get-Content -Raw -Path $knownIssuesPath
+if (Test-Path -LiteralPath $knownIssuesPath) {
+    $knownIssues = Get-Content -Raw -LiteralPath $knownIssuesPath
     Write-Host "Loaded known issues from $knownIssuesPath"
 }
 
@@ -992,17 +994,17 @@ if (Test-Path $knownIssuesPath) {
 # Skip entirely when agent teams are disabled.
 if ($enableAgentTeams) {
     $moeAgentsDir = Join-Path $moeDir "agents"
-    if (Test-Path $moeAgentsDir) {
+    if (Test-Path -LiteralPath $moeAgentsDir) {
         $claudeAgentsDir = Join-Path $projectPath ".claude\agents"
-        if (-not (Test-Path $claudeAgentsDir)) {
+        if (-not (Test-Path -LiteralPath $claudeAgentsDir)) {
             New-Item -ItemType Directory -Force -Path $claudeAgentsDir | Out-Null
         }
         $mirrored = 0
         $skipped  = 0
-        Get-ChildItem -Path $moeAgentsDir -File -Filter "*.md" -ErrorAction SilentlyContinue | ForEach-Object {
+        Get-ChildItem -LiteralPath $moeAgentsDir -File -Filter "*.md" -ErrorAction SilentlyContinue | ForEach-Object {
             $src  = $_.FullName
             $dest = Join-Path $claudeAgentsDir $_.Name
-            if (Test-Path $dest) {
+            if (Test-Path -LiteralPath $dest) {
                 # Preserve user customizations; only overwrite if dest is a stale Moe-mirrored copy
                 # (best-effort heuristic: same first 4KB → assumed Moe-mirrored). Skip for now.
                 $skipped++
@@ -1122,7 +1124,7 @@ function Write-MoeCodexConfig {
     $codexConfigDir = Join-Path $Root ".codex"
     $codexConfigFile = Join-Path $codexConfigDir "config.toml"
     try {
-        if (-not (Test-Path $codexConfigDir)) {
+        if (-not (Test-Path -LiteralPath $codexConfigDir)) {
             New-Item -ItemType Directory -Force -Path $codexConfigDir | Out-Null
         }
 
@@ -1171,7 +1173,7 @@ MOE_PROJECT_PATH = "$projectPathForToml"$moeDaemonHostLine
         # pinned to this project). Empty when Serena isn't installed. Path is
         # forward-slashed so TOML doesn't treat Windows backslashes as escapes.
         $serenaTomlBlock = ""
-        if ($serenaPath -and (Test-Path $serenaPath)) {
+        if ($serenaPath -and (Test-Path -LiteralPath $serenaPath)) {
             $serenaPathForToml = $serenaPath.ToString().Replace('\', '/')
             $serenaProjectForToml = $serenaProject.Replace('\', '/')
             $serenaTomlBlock = @"
@@ -1183,9 +1185,9 @@ default_tools_approval_mode = "approve"
 "@
         }
 
-        if (Test-Path $codexConfigFile) {
+        if (Test-Path -LiteralPath $codexConfigFile) {
             # Merge: remove existing moe MCP sections and moe-managed top-level keys
-            $rawContent = Get-Content -Path $codexConfigFile -Raw
+            $rawContent = Get-Content -LiteralPath $codexConfigFile -Raw
 
             # Remove old model_instructions_file / model_reasoning_effort lines
             $rawContent = $rawContent -replace '(?m)^model_instructions_file\s*=.*\r?\n?', ''
@@ -1241,13 +1243,13 @@ default_tools_approval_mode = "approve"
             if ($firstSectionLineIdx -gt 0) {
                 $beforeSections = ($splitLines[0..($firstSectionLineIdx - 1)] -join "`n").TrimEnd()
                 $afterSections = ($splitLines[$firstSectionLineIdx..($splitLines.Count - 1)] -join "`n").TrimEnd()
-                ($beforeSections + "`n" + $topLevelConfig + "`n`n" + $afterSections + $moeTomlBlock + $serenaTomlBlock + "`n") | Set-Content -Path $codexConfigFile -Encoding UTF8 -NoNewline
+                ($beforeSections + "`n" + $topLevelConfig + "`n`n" + $afterSections + $moeTomlBlock + $serenaTomlBlock + "`n") | Set-Content -LiteralPath $codexConfigFile -Encoding UTF8 -NoNewline
             } elseif ($firstSectionLineIdx -eq 0) {
                 # Section header is the very first line - prepend top-level config
-                ($topLevelConfig + "`n`n" + $cleanedText.TrimEnd() + $moeTomlBlock + $serenaTomlBlock + "`n") | Set-Content -Path $codexConfigFile -Encoding UTF8 -NoNewline
+                ($topLevelConfig + "`n`n" + $cleanedText.TrimEnd() + $moeTomlBlock + $serenaTomlBlock + "`n") | Set-Content -LiteralPath $codexConfigFile -Encoding UTF8 -NoNewline
             } else {
                 # No section headers at all - just append
-                ($cleanedText + "`n" + $topLevelConfig + $moeTomlBlock + $serenaTomlBlock + "`n") | Set-Content -Path $codexConfigFile -Encoding UTF8 -NoNewline
+                ($cleanedText + "`n" + $topLevelConfig + $moeTomlBlock + $serenaTomlBlock + "`n") | Set-Content -LiteralPath $codexConfigFile -Encoding UTF8 -NoNewline
             }
         } else {
             # Create new config with project_doc_fallback_filenames
@@ -1258,7 +1260,7 @@ $topLevelConfig
 $moeTomlBlock
 $serenaTomlBlock
 "@
-            $newContent | Set-Content -Path $codexConfigFile -Encoding UTF8
+            $newContent | Set-Content -LiteralPath $codexConfigFile -Encoding UTF8
         }
         Write-Host "Codex MCP config written to: $codexConfigFile"
     } catch {
@@ -1304,7 +1306,7 @@ function Write-MoeGeminiConfig {
         return $InputObject
     }
     try {
-        if (-not (Test-Path $geminiConfigDir)) {
+        if (-not (Test-Path -LiteralPath $geminiConfigDir)) {
             New-Item -ItemType Directory -Force -Path $geminiConfigDir | Out-Null
         }
 
@@ -1325,8 +1327,8 @@ function Write-MoeGeminiConfig {
         # merge instead.
         $geminiConfig = @{}
         $geminiParseFailed = $false
-        if (Test-Path $geminiConfigFile) {
-            $geminiRaw = Get-Content -Raw -Path $geminiConfigFile
+        if (Test-Path -LiteralPath $geminiConfigFile) {
+            $geminiRaw = Get-Content -Raw -LiteralPath $geminiConfigFile
             if (-not [string]::IsNullOrWhiteSpace($geminiRaw)) {
                 try {
                     if ($PSVersionTable.PSVersion.Major -ge 6) {
@@ -1355,7 +1357,7 @@ function Write-MoeGeminiConfig {
             # Serena MCP (LSP code intelligence + memory), pinned to this project.
             # Set/refresh when installed; drop a stale entry when it isn't. The JSON
             # serializer escapes the native Windows path, so no manual escaping here.
-            if ($serenaPath -and (Test-Path $serenaPath)) {
+            if ($serenaPath -and (Test-Path -LiteralPath $serenaPath)) {
                 $geminiConfig['mcpServers']['serena'] = @{
                     command = $serenaPath
                     args = @(
@@ -1395,7 +1397,7 @@ function Write-MoeGrokConfig {
     $grokConfigDir = Join-Path $Root ".grok"
     $grokConfigFile = Join-Path $grokConfigDir "config.toml"
     try {
-        if (-not (Test-Path $grokConfigDir)) {
+        if (-not (Test-Path -LiteralPath $grokConfigDir)) {
             New-Item -ItemType Directory -Force -Path $grokConfigDir | Out-Null
         }
 
@@ -1470,7 +1472,7 @@ function Write-MoeGrokConfig {
         # Serena block (LSP code intelligence + memory, pinned to this project):
         # present only while Serena is installed, stripped otherwise.
         $grokSerenaTomlBlock = ""
-        if ($serenaPath -and (Test-Path $serenaPath)) {
+        if ($serenaPath -and (Test-Path -LiteralPath $serenaPath)) {
             $serenaPathForToml = $serenaPath.ToString().Replace('\', '/')
             $serenaProjectForToml = $serenaProject.Replace('\', '/')
             $grokSerenaTomlBlock = (@(
@@ -1490,8 +1492,8 @@ function Write-MoeGrokConfig {
         # the file byte-identical.
         $grokHeader = "# Grok project config (auto-generated by moe-agent)"
         $grokCleanedText = $grokHeader
-        if (Test-Path $grokConfigFile) {
-            $rawContent = Get-Content -Path $grokConfigFile -Raw
+        if (Test-Path -LiteralPath $grokConfigFile) {
+            $rawContent = Get-Content -LiteralPath $grokConfigFile -Raw
             $serenaInstalled = -not [string]::IsNullOrEmpty($grokSerenaTomlBlock)
             $lines = @("$rawContent" -split '\r?\n')
             $cleaned = @()
@@ -5813,7 +5815,7 @@ function Invoke-MoeLanding {
             if ($attempt -eq 1 -and $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF) {
                 # Test seam: lets the harness move the branch tip between
                 # commit-tree and update-ref to prove the CAS retry.
-                Push-Location $Git.Top
+                Push-Location -LiteralPath $Git.Top
                 try { & $env:ComSpec /d /s /c $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF 2>&1 | Out-Null } catch {} finally { Pop-Location }
             }
             $oldArg = if ($old) { $old } else { '0000000000000000000000000000000000000000' }
@@ -6316,7 +6318,7 @@ function Invoke-MoeWorktreeCommit([hashtable]$Wt, [string]$Ref, [hashtable]$Attr
         if ($env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF) {
             # Test seam: lets the harness move the task branch between
             # commit-tree and update-ref to prove the single CAS.
-            Push-Location $Wt.Top
+            Push-Location -LiteralPath $Wt.Top
             try { & $env:ComSpec /d /s /c $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF 2>&1 | Out-Null } catch {} finally { Pop-Location }
         }
         $ur = Invoke-MoeGit -Top $Wt.Top -GitArgs @('update-ref', $Ref, $new, $old) -MergeStderr
@@ -6716,7 +6718,7 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
         }
         if ($env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF) {
             $hook = $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF; $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF = $null
-            Push-Location $top
+            Push-Location -LiteralPath $top
             try { & $env:ComSpec /d /s /c $hook 2>&1 | Out-Null } catch {} finally { Pop-Location }
         }
         Set-MoeCtrlCDeferred $true
@@ -8830,8 +8832,8 @@ do {
         $memTotal = 0
         $memTaskNames = @()
         $memRecentNames = @()
-        if (Test-Path $memoriesDir) {
-            $memFiles = @(Get-ChildItem -Path $memoriesDir -Filter *.md -File -ErrorAction SilentlyContinue)
+        if (Test-Path -LiteralPath $memoriesDir) {
+            $memFiles = @(Get-ChildItem -LiteralPath $memoriesDir -Filter *.md -File -ErrorAction SilentlyContinue)
             $memTotal = $memFiles.Count
             if ($memTotal -gt 0) {
                 if ($preflightTaskId) {
@@ -9013,7 +9015,7 @@ $mentionsJson
         # separate: task text must never enter model_instructions_file.
         $agentInstructionsPath = Join-Path (Join-Path $script:cliRoot ".codex") "agent-instructions.md"
         $codexDir = Split-Path $agentInstructionsPath -Parent
-        if (-not (Test-Path $codexDir)) { New-Item -ItemType Directory -Force -Path $codexDir | Out-Null }
+        if (-not (Test-Path -LiteralPath $codexDir)) { New-Item -ItemType Directory -Force -Path $codexDir | Out-Null }
         [System.IO.File]::WriteAllText($agentInstructionsPath, 'Moe role instructions are supplied by the launcher. Follow the user message for this session context.', [System.Text.UTF8Encoding]::new($false))
         $script:CodexSeatInstructionsFile = Join-Path $env:TEMP "moe-codex-instructions-$Role-$PID.md"
         $fileBody = $systemAppend
@@ -9026,7 +9028,7 @@ $mentionsJson
         Write-Host "Agent instructions written to: $($script:CodexSeatInstructionsFile) (shared role doc: $agentInstructionsPath)"
     } elseif ($cliType -eq "gemini") {
         $geminiInstructionsDir = Join-Path $script:cliRoot ".gemini"
-        if (-not (Test-Path $geminiInstructionsDir)) {
+        if (-not (Test-Path -LiteralPath $geminiInstructionsDir)) {
             New-Item -ItemType Directory -Force -Path $geminiInstructionsDir | Out-Null
         }
         $geminiInstructionsPath = Join-Path $geminiInstructionsDir "GEMINI.md"
@@ -9037,7 +9039,7 @@ $mentionsJson
         } else {
             $geminiUsesFileContext = $false
         }
-        $geminiFileBody | Set-Content -Path $geminiInstructionsPath -Encoding UTF8
+        $geminiFileBody | Set-Content -LiteralPath $geminiInstructionsPath -Encoding UTF8
         Write-Host "Agent instructions written to: $geminiInstructionsPath"
     }
 
@@ -9467,7 +9469,7 @@ $mentionsJson
                 # Non-interactive headless mode
                 Write-Host "Command: $Command --print `"<prompt>`" --dangerously-skip-permissions"
                 try {
-                    Push-Location $script:cliRoot
+                    Push-Location -LiteralPath $script:cliRoot
                     Invoke-MoeGuardedCommand @CommandArgs --print "$shortPrompt" --dangerously-skip-permissions
                     $script:CliExitCode = $LASTEXITCODE
                 } finally { Pop-Location }
@@ -9475,7 +9477,7 @@ $mentionsJson
                 # Interactive mode
                 Write-Host "Command: $Command --prompt-interactive `"<prompt>`""
                 try {
-                    Push-Location $script:cliRoot
+                    Push-Location -LiteralPath $script:cliRoot
                     Invoke-MoeGuardedCommand @CommandArgs --prompt-interactive "$shortPrompt"
                     $script:CliExitCode = $LASTEXITCODE
                 } finally { Pop-Location }
@@ -9495,7 +9497,7 @@ $mentionsJson
         # authenticate - warn, don't refuse: an interactive operator may be
         # about to log in from the TUI, and the message names the fix.
         $grokAuthFile = Join-Path $env:USERPROFILE ".grok\auth.json"
-        if ([string]::IsNullOrEmpty($env:XAI_API_KEY) -and -not (Test-Path $grokAuthFile)) {
+        if ([string]::IsNullOrEmpty($env:XAI_API_KEY) -and -not (Test-Path -LiteralPath $grokAuthFile)) {
             Write-Host "[WARN] XAI_API_KEY is not set and ~/.grok/auth.json is missing - grok will fail to authenticate." -ForegroundColor Yellow
         }
 
@@ -9591,7 +9593,7 @@ $mentionsJson
                     $grokPointerPrompt = "Session context (routed mentions, pre-flight data) is in $($script:GrokPromptFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
                     Write-Host "Command: $Command --cwd `"$script:cliRoot`" $($grokModelArgs -join ' ') `"<prompt>`""
                     try {
-                        Push-Location $script:cliRoot
+                        Push-Location -LiteralPath $script:cliRoot
                         Invoke-MoeGuardedCommand @CommandArgs --cwd "$script:cliRoot" @grokModelArgs "$grokPointerPrompt"
                         $script:CliExitCode = $LASTEXITCODE
                     } finally { Pop-Location }
@@ -9602,7 +9604,7 @@ $mentionsJson
                     # transcript greppable. The prompt body is never echoed.
                     Write-Host "Command: $Command --prompt-file `"$($script:GrokPromptFile)`" --yolo --cwd `"$script:cliRoot`" --no-auto-update --output-format plain $($grokModelArgs -join ' ') $($grokEffortArgs -join ' ')"
                     try {
-                        Push-Location $script:cliRoot
+                        Push-Location -LiteralPath $script:cliRoot
                         Invoke-MoeGuardedCommand @CommandArgs --prompt-file "$($script:GrokPromptFile)" --yolo --cwd "$script:cliRoot" --no-auto-update --output-format plain @grokModelArgs @grokEffortArgs
                         $script:CliExitCode = $LASTEXITCODE
                     } finally { Pop-Location }
@@ -10367,14 +10369,14 @@ $mentionsJson
     # stays assigned until daemon restart, deregister, or an explicit release.
     Invoke-MoeDeregister
     # Clean up temp files
-    if ($mcpConfigFile -and (Test-Path $mcpConfigFile)) {
-        Remove-Item -Path $mcpConfigFile -Force -ErrorAction SilentlyContinue
+    if ($mcpConfigFile -and (Test-Path -LiteralPath $mcpConfigFile)) {
+        Remove-Item -LiteralPath $mcpConfigFile -Force -ErrorAction SilentlyContinue
     }
-    if ($systemPromptFile -and (Test-Path $systemPromptFile)) {
-        Remove-Item -Path $systemPromptFile -Force -ErrorAction SilentlyContinue
+    if ($systemPromptFile -and (Test-Path -LiteralPath $systemPromptFile)) {
+        Remove-Item -LiteralPath $systemPromptFile -Force -ErrorAction SilentlyContinue
     }
-    if ($script:GrokPromptFile -and (Test-Path $script:GrokPromptFile)) {
-        Remove-Item -Path $script:GrokPromptFile -Force -ErrorAction SilentlyContinue
+    if ($script:GrokPromptFile -and (Test-Path -LiteralPath $script:GrokPromptFile)) {
+        Remove-Item -LiteralPath $script:GrokPromptFile -Force -ErrorAction SilentlyContinue
     }
     foreach ($moeAccountFile in @($script:AccountSampleFile, $script:AccountSettingsFile)) {
         if ($moeAccountFile) { Remove-Item -LiteralPath $moeAccountFile -Force -ErrorAction SilentlyContinue }

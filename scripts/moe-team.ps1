@@ -19,16 +19,16 @@ param(
 $scriptDir = $PSScriptRoot
 $agentScript = Join-Path $scriptDir "moe-agent.ps1"
 
-if (-not (Test-Path $agentScript)) {
+if (-not (Test-Path -LiteralPath $agentScript)) {
     Write-Error "moe-agent.ps1 not found at $agentScript"
     exit 1
 }
 
 function Load-Registry {
     $path = Join-Path $env:USERPROFILE ".moe\\projects.json"
-    if (-not (Test-Path $path)) { return @() }
+    if (-not (Test-Path -LiteralPath $path)) { return @() }
     try {
-        return Get-Content -Raw -Path $path | ConvertFrom-Json
+        return Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
     } catch {
         return @()
     }
@@ -67,7 +67,7 @@ if ($CommandArgs -and $CommandArgs.Count -gt 0) {
 if (-not $Team) {
     $teamPath = $null
     if ($Project) {
-        $teamPath = Resolve-Path -Path $Project -ErrorAction SilentlyContinue
+        $teamPath = Resolve-Path -LiteralPath $Project -ErrorAction SilentlyContinue
     } elseif ($ProjectName) {
         $projects = Load-Registry
         $match = $projects | Where-Object { $_.name -eq $ProjectName } | Select-Object -First 1
@@ -97,7 +97,7 @@ $launched = 0
 if (-not $NoWorker) {
     Write-Host "Starting WORKER agent..." -ForegroundColor Green
     $workerCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role worker $projectArg $commandArg $teamArg"
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $workerCmd
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", $workerCmd -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))
     $launched++
 
     if ((-not $NoQa) -or (-not $NoArchitect)) {
@@ -110,7 +110,7 @@ if (-not $NoWorker) {
 if (-not $NoQa) {
     Write-Host "Starting QA agent..." -ForegroundColor Yellow
     $qaCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role qa $projectArg $commandArg $teamArg"
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $qaCmd
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", $qaCmd -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))
     $launched++
 
     if (-not $NoArchitect) {
@@ -123,7 +123,7 @@ if (-not $NoQa) {
 if (-not $NoArchitect) {
     Write-Host "Starting ARCHITECT agent..." -ForegroundColor Magenta
     $archCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role architect $projectArg $commandArg $teamArg"
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $archCmd
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", $archCmd -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))
     $launched++
 }
 
