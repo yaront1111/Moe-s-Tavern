@@ -88,7 +88,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -112,16 +112,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T07:58:49.603Z",
-  "updatedAt": "2026-11-02T13:53:04.001Z",
+  "updatedAt": "2026-11-02T13:56:04.713Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T08:37:46.355Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-02T13:56:04.713Z",
+    "wallClockMs": 19098358
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-13a877ad"
+    "worker-13a877ad",
+    "qa-564d8bce"
   ],
   "tier": "standard",
   "effort": "high",
@@ -216,7 +219,44 @@
   "filesModified": [
     "docs/roles/worker.md",
     "docs/roles/worker.reference.md",
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    ".moe/tasks/task-cfa129252343438d903de1e67ae6073c.json"
+  ],
+  "completionSummary": "WT-18c: worker role docs now cover HEAD's WT-10/WT-11 wrappers. worker.md line 12 adds the worktree gate arm (gates every completion on the merged tree, whatever qualityGateScope says; shared clause verbatim). Line 18 adds a pointer to the LANDING rule. worker.reference.md: the worktree table's third row is now the unlanded route (finalize_attempt 'unlanded', reasons conflict/contention/gate/diverged/remote, rescue ref refs/moe/rescue/<taskId>/<ts>, task.landingRetry fields, WORKING unassigned, BLOCKED for diverged or the 3rd failure), plus an unknown-push sentence (MOE_PUSH_OUTCOME_UNKNOWN is not unlanded). A new Practical rules bullet gives the LANDING-CONFLICT:/LANDING-RETRY: rule, mirroring worktree_resume's prompt. initFiles.ts was regenerated in a git clone --shared snapshot; it changes only the two worker entries and their sha lists and is cmp-equal to the generator output. Differences from the plan: none. All three files were written with the Edit tool.",
+  "commits": [
+    {
+      "sha": "8ec9e415bcd3aaa0ea96adbfb2bff48a7bf0a96e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T13:49:28Z",
+      "paths": [
+        ".moe/tasks/task-cfa129252343438d903de1e67ae6073c.json",
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T13:53:29.211Z",
+      "treeId": "a341631b64e701b83fca620e9d6c5da6d4bf4922",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/roles/worker.md",
+    "docs/roles/worker.reference.md",
     "packages/moe-daemon/src/generated/initFiles.ts"
   ],
-  "completionSummary": "WT-18c: worker role docs now cover HEAD's WT-10/WT-11 wrappers. worker.md line 12 adds the worktree gate arm (gates every completion on the merged tree, whatever qualityGateScope says; shared clause verbatim). Line 18 adds a pointer to the LANDING rule. worker.reference.md: the worktree table's third row is now the unlanded route (finalize_attempt 'unlanded', reasons conflict/contention/gate/diverged/remote, rescue ref refs/moe/rescue/<taskId>/<ts>, task.landingRetry fields, WORKING unassigned, BLOCKED for diverged or the 3rd failure), plus an unknown-push sentence (MOE_PUSH_OUTCOME_UNKNOWN is not unlanded). A new Practical rules bullet gives the LANDING-CONFLICT:/LANDING-RETRY: rule, mirroring worktree_resume's prompt. initFiles.ts was regenerated in a git clone --shared snapshot; it changes only the two worker entries and their sha lists and is cmp-equal to the generator output. Differences from the plan: none. All three files were written with the Edit tool."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-13a877ad@2026-11-02T13:49:28Z",
+    "at": "2026-11-02T13:53:29.211Z"
+  },
+  "completedAt": "2026-11-02T13:56:04.713Z",
+  "reviewCompletedAt": "2026-11-02T13:56:04.713Z",
+  "reviewSummary": "APPROVED. Reviewed completion 8ec9e415 (on moe/work-2026-10-24, kind=completion, pushed) via git show. Non-board diff: 3 files, net +6 LOC.\n\nRe-ran joined checkRefs[0]&&[1]&&[2] fresh, foreground (script built from executionContract, equal to worker's verify.sh): exit 0. Lint OK (worker.md 30 lines); greps for LANDING-CONFLICT:/LANDING-RETRY:/landingRetry/'unlanded' pass; line 12 has 'worktree mode'; no task id or refs/moe/board|moe/control. All MOE_* tokens exist in both HEAD wrappers; both carry the LANDING prefixes. Clone --shared snapshot: parity-check PASS, generate-init-files, cmp equal, 5 vitest files / 44 tests pass.\n\nDoD 1: table row 3 names finalize_attempt 'unlanded', reasons conflict/contention/gate/diverged/remote, refs/moe/rescue/<taskId>/<ts>, landingRetry fields, WORKING-unassigned vs BLOCKED (diverged or 3rd failure); matches unlanded_reason() (sh:7166) and MCP_SERVER.md routing. Unknown-push sentence matches sh:6946.\nDoD 2: LANDING bullet after RESUME matches worktree_resume prompt (sh:7326/7329, ps1:6813/6815) and wt_marker_scan marker rule; unresolved markers re-take the unlanded route; checkpoint keeps the pending merge. Line 18 points to it; line 12 gate arm matches the wrapper (worktree path ignores qualityGateScope, gates the merged tree).\nDoD 3: lint, sentinels, no task id. DoD 4: initFiles.ts changes only the two worker entries and their sha lists; cmp-equal. DoD 5: exit 0.\nInvariants hold: line 12 shared clause verbatim, line 13 unchanged, safety negatives present, no code change.\n\nNon-blocking: bullet adds 'do not reopen completed steps' and 'on gate run qualityGate yourself', absent from the wrapper prompt; approved plan step 3 specified both and the daemon agrees.",
+  "requiredCheckAtDone": null
 }
