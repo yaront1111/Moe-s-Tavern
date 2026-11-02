@@ -13,13 +13,14 @@
     {
       "stepId": "step-1",
       "description": "TDD RED: create scripts/tests/landing-ledger.ps1, an AST-loaded test drill in the style of scripts/tests/hooked-commit.ps1. It takes param([string]$Case=''), parses $PSScriptRoot/../moe-agent.ps1 with ParseFile, dot-sources every top-level FunctionDefinitionAst, and sets $script:MoeCaseFoldPaths and $script:myPid=$PID.\n\nAFTER that load loop, redefine these collaborators as stubs. PowerShell rejects unknown named parameters, so each stub declares every name its call sites pass:\n- Get-MoeOwnerGuard -> @{Code='';Detail='';Scope=@{Title='Ledger drill'}}\n- Get-MoeDirtySnapshot -> @{}, or $null in case E\n- Resolve-MoeAttribution(param $Git,$S,$B,$U,$Tool,$Scope,$Settings,$TaskId,$Mode,$PolicyOverride,$Evidence,$PreflightDirty) -> the case's canned attr\n- Ensure-MoeSafeBranch -> '' (the peel fails); throws in case C; in case D it first sets $script:MoeGate=@{Started=$true;Finished=$false;Process=$null;Recorded=$false}, then throws\n- Invoke-MoeRescueRef(param $Git,$TaskId,$Reason,$Title,$Status,$Sid,$Attr,$Sha,$Scope) records $Reason and returns $null (nothing to park)\n- Send-MoeRecordCommit([hashtable]$Record) appends to a List[hashtable] and returns @{success=$true}\n- Push-MoeBranch -> $false; Write-MoeBaseline -> $true\n- Send-MoeCheckRun counts its calls and returns $true\n- Remove-MoeGateWorkspace sets $script:MoeGate=$null and returns $true\n\nKeep these REAL: Invoke-MoeLanding, Get-MoeRecordHeldFields, Get-MoeHeldList, ConvertTo-MoeRootRelative, ConvertTo-MoeRecordPaths, Read-MoeBaseline, Get-MoeBaselinePath, Get-MoeBaselineLandedFlag, Stop-MoeGateChild. No stub may write to the pipeline: List[T].Add returns void; never use ArrayList.\n\nCanned attr:\n- Skipped=@(@{Path='held.txt';Code='MOE_ATTR_CONTESTED'})\n- Contested=@(@{Path='held.txt';TaskId='task-peer'})\n- Unattributed=@(), Missing=@(), Own=@{}\n- every count 0, except AssertedCount = the candidate count\n- Candidates=@() in case A, else @(@{Path='owned.txt';Reason='ASSERTED';Inferred=$false})\n\n$Git=@{Top=<fresh temp dir>; GitDir=<that dir>\\.git; Rel=''}. A finally removes the temp dir; no stub runs git.\n\nEach case resets the rows, the rescues, the check-run count, $script:MoeGate and $script:MoeFrozen. It then calls Invoke-MoeLanding -Kind completion -TaskId task-drill -Git $Git -Settings @{} -Status REVIEW -Sid sess-drill 6>$null. It asserts the result is a [hashtable] and asserts EXACT equality (no >=, no tail slice) of the outcome/code/kind sequence and of the rescue reasons:\n- A no-candidate-peel: [failed/MOE_COMMIT_FAILED_PEEL/completion]; rescues [peel-failed]; Code PEEL; StopLoop true.\n- B candidates-peel: the same.\n- C throw-after-attribution (DoD 2): [failed/MOE_COMMIT_FAILED/completion], sent from the finally; rescues [commit-failed]; StopLoop true. That row's skipped holds {path held.txt, code MOE_ATTR_CONTESTED} and its contested holds {path held.txt, taskId task-peer}.\n- D mid-gate-exception: [failed/MOE_COMMIT_FAILED_GATE/completion]; rescues [teardown]; exactly 1 Send-MoeCheckRun.\n- E status-failure: [failed/MOE_COMMIT_FAILED_ATTRIBUTION/completion]; no rescue. sh's run_landing parks nothing there either.\n\nerror handling: each case runs in its own try/catch, so one failure is reported and the rest still run. Print 'PASS|FAIL landing-ledger: <case> <detail>' and then 'landing-ledger.ps1: N passed, M failed'. Exit 1 on any failure, or when Invoke-MoeLanding did not load. The file is ASCII only, with LF line endings.\n\nRED proof: run the drill with powershell.exe from a scratch copy of the current scripts/ under /mnt/d/moe-scratch (it loads ../moe-agent.ps1). A, B and E must FAIL with two rows; C and D must PASS. The architect's probe showed exactly this on PS 5.1 and on pwsh 7.\n\nCI wiring in .github/workflows/ci.yml, in both 'Test Windows PowerShell landing guard' and 'Test PowerShell 7 landing guard', after the hooked-commit.ps1 line: add `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`, then `powershell -NoProfile -File scripts/tests/landing-ledger.ps1` (pwsh in the second step). A pwsh run block fails only on its last command's exit code, hence the guard line.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         ".github/workflows/ci.yml"
       ],
       "newFiles": [
         "scripts/tests/landing-ledger.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-02T19:33:44.999Z"
     },
     {
       "stepId": "step-2",
@@ -53,7 +54,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-2dc72348",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -93,7 +94,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:04:11.016Z",
-  "updatedAt": "2026-11-02T19:15:39.507Z",
+  "updatedAt": "2026-11-02T19:33:44.999Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:40.801Z",
@@ -105,7 +106,8 @@
     "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-2dc72348"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -207,5 +209,6 @@
     "kind": "checkpoint",
     "sessionId": "architect-e4b7eee0@2026-10-30T09:55:16Z",
     "at": "2026-10-30T10:22:18.631Z"
-  }
+  },
+  "workStartedAt": "2026-11-02T19:33:44.999Z"
 }
