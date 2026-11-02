@@ -11,9 +11,55 @@
     "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Client half, in moe-vscode/src/services/MoeDaemonClient.ts, edited with the Edit tool (rail: no shell writes to tracked files). Add no import: twelve test files transpile this file, several under closed require maps (mem:gotcha-vscode-vm-test-harness).\n(a) Next to the other emitters (for example after _onMetrics), add `private readonly _onWorkerDeregistered = new vscode.EventEmitter<string>();` and `public readonly onWorkerDeregistered = this._onWorkerDeregistered.event;`. Add `this._onWorkerDeregistered.dispose();` in dispose(), beside the other emitter disposals.\n(b) Right after releaseTask (VSC-6), add `deregisterWorker(workerId: string, reason: string): boolean { return this.sendMessage('DEREGISTER_WORKER', { workerId, reason }); }`. Its JSDoc says:\n- it mirrors JetBrains MoeCommandSender.deregisterWorker and is sent for a seat whose terminal this window lost;\n- it is quiet when not connected: sendMessage returns false before any send, with no log and no onError, because AgentSeatTracker re-sends at the next connect until the daemon acks;\n- the daemon (packages/moe-daemon/src/server/WebSocketServer.ts, case 'DEREGISTER_WORKER') runs moe.deregister_worker and answers WORKER_DEREGISTERED { workerId, alreadyDead, releasedTaskIds }.\n(c) In handleMessage, add a braced `case 'WORKER_DEREGISTERED'` right after case 'WORKER_DELETED': `const workerId = payload?.workerId; if (typeof workerId === 'string' && workerId.length > 0) { this._onWorkerDeregistered.fire(workerId); } break;`. Today that frame falls to default and logs 'Unknown message type'. The case changes no cached state; the daemon's own worker broadcasts do that, as in JetBrains MoeMessageDispatcher.\nError handling:\n- A WORKER_DEREGISTERED frame with no payload, a non-object payload, or a missing, non-string or empty workerId fires nothing and never throws.\n- An unparsable frame stays with handleMessage's outer try/catch.\n- A send that throws while connected keeps sendMessage's existing path (log, onError, reconnect), and deregisterWorker returns false.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Launcher half, in moe-vscode/src/util/AgentLauncher.ts, edited with the Edit tool. Add no value import: tests/verified-local-launch.test.cjs and tests/protected-runtime.test.cjs load this file under node:vm with a require map. vscode.Terminal is a type from the existing vscode import.\n- Extend `type LaunchOptions` with `onLaunched?: (workerId: string, terminal: vscode.Terminal) => void`. Its doc: called once per terminal a launch creates, right after createTerminal and before the command is sent, so a terminal that closes at once is still tracked (VSC-21, AgentSeatTracker).\n- In launchRole, between `const terminal = vscode.window.createTerminal({...})` and `terminal.sendText(...)`: when options?.onLaunched is set, call it with (workerId, terminal) inside its own try/catch.\nError handling: a throwing onLaunched never stops the launch. The command is still sent and the terminal shown. Exactly one `vscode.window.showWarningMessage(`Moe started the ${role} agent, but could not track its terminal: ${message}`)` reports it, with message = err instanceof Error ? err.message : String(err).\nNothing else changes:\n- createTerminal options, terminal names and commands stay byte-identical, because existing suites assert them;\n- a refused seat creates no terminal, so it never calls onLaunched;\n- launchAllAgents already passes the same options to every role, so each staggered role reports its own seat.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wiring, in moe-vscode/src/extension.ts, edited with the Edit tool.\nAdd two imports:\n- `import { AgentSeatTracker, wireAgentSeats } from './util/AgentSeatTracker';` (VSC-20, landed);\n- `import { SeatPids, isProcessAlive } from './util/SeatSurvival';` (VSC-21a, task-486f6f3223d74ac2bde345bf126299a7, a dependsOn of this row). Its API, per its DoD: SeatPids(load, save) with record(workerId, pid), keep(workerIds), seatOf(pid) and surviving(workerIds, isAlive); isProcessAlive(pid).\nInsert one block right after the registerTaskNotifier line, so all of it is wired before the autoConnect connect() at the end of activate():\n1. `const persist = (key: string, value: unknown): void => { context.workspaceState.update(key, value).then(undefined, err => outputChannel.appendLine(`Moe could not save ${key}: ${err instanceof Error ? err.message : String(err)}`)); };`\n2. `const seatPids = new SeatPids(() => context.workspaceState.get('moe.agentSeatPids'), pids => persist('moe.agentSeatPids', pids));`\n3. `const seatTracker = new AgentSeatTracker(() => context.workspaceState.get<string[]>('moe.agentSeats', []), ids => { persist('moe.agentSeats', ids); seatPids.keep(ids); }, workerId => { daemonClient?.deregisterWorker(workerId, 'terminal_closed'); });`\n4. A comment, then `for (const workerId of seatPids.surviving(context.workspaceState.get<string[]>('moe.agentSeats', []), isProcessAlive)) { seatTracker.launched(workerId); }`. The comment says: unlike a JetBrains restart, a window reload (persistent terminal sessions) or Restart Extensions leaves seat terminals running. A saved seat whose shell is still alive is open in this session too, so the first connect must not deregister it.\n5. `const seatTerminals = new WeakMap<vscode.Terminal, string>();` and `const mapSurvivor = (terminal: vscode.Terminal): void => { terminal.processId.then(pid => { const workerId = seatPids.seatOf(pid); if (workerId && !seatTerminals.has(terminal)) { seatTerminals.set(terminal, workerId); } }, () => undefined); };`. Then `vscode.window.terminals.forEach(mapSurvivor);` and `context.subscriptions.push(vscode.window.onDidOpenTerminal(mapSurvivor));`, because a persistent terminal can reconnect after activation.\n6. `context.subscriptions.push(wireAgentSeats({ tracker: seatTracker, onDidCloseTerminal: vscode.window.onDidCloseTerminal, workerIdOf: terminal => seatTerminals.get(terminal), onConnected: daemonClient.onConnectionChanged, onAcked: daemonClient.onWorkerDeregistered }));`. onConnected takes the connection-state event unchanged; wireAgentSeats keeps only 'connected'.\n7. `const onLaunched = (workerId: string, terminal: vscode.Terminal): void => { seatTerminals.set(terminal, workerId); seatTracker.launched(workerId); terminal.processId.then(pid => seatPids.record(workerId, pid), () => undefined); };`\nThen add `onLaunched,` to all three launch option objects: moe.startAgent's start-all branch, its single-role branch, and moe.startAllAgents.\nError handling:\n- Every workspaceState.update rejection is caught and logged to the Moe output channel, never left unhandled.\n- A rejected or undefined processId records and maps nothing, so that seat counts as gone at the next activation (today's JetBrains behaviour).\n- deregister uses daemonClient?. inside its closure and is quiet when disconnected, so resendGone retries at the next connect.\n- The readDaemonJsonText import and every other existing line stay as they are, because tests/daemon-json-cap.test.cjs asserts on this file's text.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/extension.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Test, in a new file moe-vscode/tests/agent-seats.test.cjs created with the Write tool. Use 'use strict', node:test, node:assert/strict, node:vm, fs, os, path and typescript only.\nCopy these from tests/verified-local-launch.test.cjs (tests share no helper module): transpile(), run(), the Emitter class, StubWebSocket, the client vscode stub whose getConfiguration() returns { get: () => false } (so no reconnect timer is armed), clientHarness(), tempDir(), write(), project(), declare(), extension(), the after() cleanup, decode(), and loadLauncher() with its recorded setTimeout. In clientHarness, the fake socket's send records JSON.parse(frame) first; connect() sets client['ws'] and client['_connectionState']; deliver() feeds handleMessage. Add a recorded showWarningMessage to the launcher's window stub. Compare vm-realm values through JSON or primitives (mem:gotcha-vscode-vm-test-harness).\nClient (DoD 1):\n- D1 connected: deregisterWorker('worker-1', 'terminal_closed') returns true, and `sent` equals exactly [{ type: 'DEREGISTER_WORKER', payload: { workerId: 'worker-1', reason: 'terminal_closed' } }].\n- D2 not connected: it returns false, sends nothing and fires no onError.\n- D3: a WORKER_DEREGISTERED frame { workerId: 'worker-1', alreadyDead: false, releasedTaskIds: ['task-1'] } fires onWorkerDeregistered exactly once, with 'worker-1'. Frames with no payload, payload null, workerId 7 or workerId '' fire nothing and throw nothing. After client.dispose(), a delivered WORKER_DEREGISTERED reaches no listener; the stub Emitter's dispose clears its listeners, so this pins the new dispose() line.\nLauncher (DoD 2), in a legacy project (project() with no project.json) with extension():\n- L1: launchAgent('worker', 'claude', ext, { onLaunched }) calls onLaunched exactly once. Its terminal argument is the very object createTerminal returned (===). Its workerId matches /^worker-[0-9a-f]{8}$/ and equals the id in that terminal's sent command (decode -EncodedCommand on win32 first). At the moment of the call, the terminal had no text sent yet.\n- L2: launchAllAgents('claude', ext, { onLaunched }) makes 1 call (architect) before the staggers, and the timers are [1500, 3000, 4500]. After firing each stagger and awaiting setImmediate, there are exactly 4 calls, in role order architect, worker, qa, governor, each with its own terminal and the id in that terminal's command.\n- L3: in a verified-local project whose readiness answers not ready, launchAgent('worker', ...) creates no terminal and never calls onLaunched.\n- L4: when onLaunched throws, the command is still sent once and the terminal is shown. showWarningMessage is called once, with text naming the worker role and the thrown message, and showErrorMessage is not called.\nExtension source (DoD 3), read with fs.readFileSync from src/extension.ts:\n- X1: both imports exist. `new AgentSeatTracker(` is built over the key 'moe.agentSeats' (in load and save) and deregisters with deregisterWorker(workerId, 'terminal_closed'). SeatPids is built over 'moe.agentSeatPids'.\n- X2: the wireAgentSeats({ ... }) call is the argument of context.subscriptions.push and names onDidCloseTerminal: vscode.window.onDidCloseTerminal, onConnected: daemonClient.onConnectionChanged and onAcked: daemonClient.onWorkerDeregistered.\n- X3: every launchAgent( and launchAllAgents( call passes onLaunched in its option object. The import line does not count, and there are exactly 3 calls.\n- X4: the surviving() loop and wireAgentSeats( both come before the autoConnect block (`config.get<boolean>('autoConnect'`).\n- X5: vscode.window.terminals.forEach(mapSurvivor) and context.subscriptions.push(vscode.window.onDidOpenTerminal(mapSurvivor)) exist, and the persist helper handles a rejection with .then(undefined, ...).\nIterate with `cd moe-vscode && node --test tests/agent-seats.test.cjs`, using plain node; never run npm in the shared checkout.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/agent-seats.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, run once from the checkout root. Run both executionContract checkRefs exactly as written.\n(1) checkRef 1, the gate. It makes a git-archive snapshot of HEAD, overlays this task's four files, then runs npm ci, lint, compile and the full node:test suite under env -i with the nvm Node 24.21 PATH (mem:gotcha-vscode-gate-from-wsl).\n- Expect clean lint and compile and 0 failed tests; 4 Windows-only skips are normal.\n- Every existing suite that loads AgentLauncher.ts or MoeDaemonClient.ts must pass with its file unchanged: approval-paths, daemon-identity, daemon-json-cap, daemon-start, managed-vm-runtime, plan-approval-client, protected-daemon-spawn, protected-runtime, settings-wire, task-notifier, verified-local-launch and wire-parity.\n- The gate's fresh command, exit code and output tail are the moe.complete_task verification evidence.\n(2) checkRef 2. No commit carrying this task's Moe-Task trailer may touch an existing moe-vscode/tests file. It passes vacuously before the landing commit and is QA's audit after it. Before complete_task, also confirm that `git status --porcelain -- moe-vscode/tests` shows only agent-seats.test.cjs as this task's file.\nError handling for a red run:\n- Read the first failing assertion.\n- A MODULE_NOT_FOUND or ENOENT before any assertion is a snapshot mistake, not a product failure: a wrong cwd, a missing overlay, or SeatSurvival.ts not yet in HEAD because VSC-21a has not landed.\n- Fix product code only in this task's three source files, and never edit an existing test to make it pass (DoD 4).\n- Re-run the gate after any fix.\nNever run npm in the shared checkout. A subagent that runs the gate is told the rail: kill only PIDs it started, never by name or pattern.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final step: load adversarial-self-review and read this task's diff as an attacker.\n(1) Mutation check in a scratch copy, never in the checkout. Copy only the files the test reads and run with NODE_PATH=<checkout>/moe-vscode/node_modules (mem:convention-vscode-port-mutant-checkref). Each of these mutants must fail an agent-seats row by assertion, not by a harness error:\n- drop the onLaunched call;\n- call it after sendText;\n- let a throwing onLaunched abort the launch;\n- drop the WORKER_DEREGISTERED case;\n- drop the workerId type guard;\n- skip _onWorkerDeregistered.dispose();\n- send reason 'closed';\n- remove onLaunched from one launch site;\n- move wireAgentSeats below the autoConnect block.\n(2) Activation order: survivors are marked launched before wireAgentSeats subscribes and before connect, so the first resendGone never deregisters a live seat.\n(3) A seat launched and closed before its processId resolves: closed() still deregisters it, because it was mapped synchronously. Its pid is recorded afterwards and pruned by the save after the ack.\n(4) A reconnected terminal that mapSurvivor mapped and that then closes is deregistered exactly once.\n(5) With VS Code's persistent sessions off, a reload kills the shells, so isProcessAlive is false and the old seats are resent, as in JetBrains.\n(6) No new import in MoeDaemonClient.ts or AgentLauncher.ts; no existing test file changed; createTerminal options, terminal names and commands are byte-identical.\nFix real defects inside the three source files or the new test. If anything changed, re-run checkRef 1. Record the findings in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,12 +70,100 @@
   "dependsOn": [
     "task-7fa27666bdb94325b62c205e3599b165",
     "task-9f6a725ff14c4c08b4acb203884e7ae5",
-    "task-2ef8e36c29f4490884dff27c9f3ed9fb"
+    "task-2ef8e36c29f4490884dff27c9f3ed9fb",
+    "task-486f6f3223d74ac2bde345bf126299a7"
   ],
   "priority": "HIGH",
   "order": 12.5,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:45:34.901Z",
-  "updatedAt": "2026-11-02T09:45:34.901Z"
+  "updatedAt": "2026-11-02T10:26:32.696Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:12:26.317Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-d54b05fd"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:26:32.670Z",
+  "executionContract": {
+    "intendedBehavior": "A VS Code agent seat whose terminal closes is deregistered, as JetBrains does. Every seat a launch creates is reported through LaunchOptions.onLaunched and tracked by one AgentSeatTracker persisted in workspaceState key moe.agentSeats. A closed seat terminal sends DEREGISTER_WORKER { workerId, reason: 'terminal_closed' }. Every connect re-sends the seats that are known but gone until the daemon's WORKER_DEREGISTERED ack removes them. Unlike JetBrains, VS Code terminals survive a window reload with persistent sessions, and they survive Restart Extensions. So a saved seat whose shell pid (VSC-21a SeatPids, key moe.agentSeatPids) is still alive is marked open at activation, before the first connect, and is never deregistered while it runs.",
+    "acceptanceCriteria": [
+      "MoeDaemonClient.deregisterWorker(workerId, reason) sends exactly one DEREGISTER_WORKER { workerId, reason } frame and returns true when connected. When disconnected it returns false, sends nothing and fires no onError.",
+      "A WORKER_DEREGISTERED frame with a non-empty string workerId fires onWorkerDeregistered once with that id. A malformed one fires nothing and never throws. dispose() disposes the new emitter.",
+      "launchAgent and every staggered role of launchAllAgents call onLaunched once per created terminal, with the generated worker id and that terminal, before the command is sent. A refused seat never calls it. A throwing onLaunched still sends the command and shows one warning.",
+      "extension.ts builds the tracker over moe.agentSeats with deregisterWorker(workerId, 'terminal_closed'). Before the autoConnect connect(), it marks surviving seats launched and pushes the wireAgentSeats Disposable fed by vscode.window.onDidCloseTerminal, daemonClient.onConnectionChanged and daemonClient.onWorkerDeregistered into context.subscriptions. It passes onLaunched to all three launch calls.",
+      "No existing test file changes, and every suite that loads AgentLauncher.ts or MoeDaemonClient.ts passes (checkRef 2 and checkRef 1).",
+      "The snapshot gate (checkRef 1) exits 0 with 0 failed tests."
+    ],
+    "invariants": [
+      "No live seat is deregistered at activation: survivors are marked launched before wireAgentSeats subscribes and before the first connect().",
+      "Only a terminal launched by this window, or a surviving one mapped by its recorded pid, ever reaches closed().",
+      "A tracking failure never stops a launch.",
+      "Every workspaceState.update rejection is handled."
+    ],
+    "compatibility": [
+      "The daemon wire is unchanged: DEREGISTER_WORKER { workerId, reason? } and WORKER_DEREGISTERED { workerId, alreadyDead, releasedTaskIds } already exist in WebSocketServer.ts and are what JetBrains sends and handles.",
+      "Existing suites pass with their files unchanged: createTerminal options, terminal names and command text stay byte-identical, and neither MoeDaemonClient.ts nor AgentLauncher.ts gains an import.",
+      "AgentSeatTracker.ts, SeatSurvival.ts, the shared corpus and every moe-jetbrains file are untouched.",
+      "Workspace state gains two keys: moe.agentSeats (string[]) and moe.agentSeatPids ({ [workerId]: pid })."
+    ],
+    "approvedScope": [
+      "MoeDaemonClient: deregisterWorker(workerId: string, reason: string): boolean; onWorkerDeregistered: vscode.Event<string>; handleMessage case 'WORKER_DEREGISTERED'; one dispose() line.",
+      "AgentLauncher: LaunchOptions.onLaunched?: (workerId: string, terminal: vscode.Terminal) => void, called in launchRole right after createTerminal.",
+      "extension.ts activate(): imports of AgentSeatTracker/wireAgentSeats and SeatPids/isProcessAlive; the persist helper; seatPids; seatTracker; the surviving() loop; the seatTerminals WeakMap and mapSurvivor; the wireAgentSeats subscription; onLaunched passed to the three launch calls.",
+      "New moe-vscode/tests/agent-seats.test.cjs."
+    ],
+    "reuse": [
+      "AgentSeatTracker and wireAgentSeats from VSC-20 (moe-vscode/src/util/AgentSeatTracker.ts, landed in 161c058c).",
+      "SeatPids and isProcessAlive from VSC-21a (moe-vscode/src/util/SeatSurvival.ts, task-486f6f32, a dependsOn).",
+      "MoeDaemonClient.sendMessage, which is quiet false when disconnected.",
+      "The tests/verified-local-launch.test.cjs harness (client and launcher under node:vm, recorded setTimeout, decode, fixtures), copied into the new test."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/util/AgentLauncher.ts: type LaunchOptions = { customCommand?, teamName?, readiness? } (line 10, not exported); launchRole builds workerId `${role}-${randomHex8()}`, then calls vscode.window.createTerminal({ name, cwd }), then sendText and show; launchAllAgents fires worker/qa/governor at 1500/3000/4500 ms with the same options.",
+      "moe-vscode/src/services/MoeDaemonClient.ts: sendMessage(type, payload): boolean returns false silently when not connected; handleMessage destructures { type, payload } and logs unknown types in default; dispose() disposes each emitter explicitly; releaseTask (VSC-6) is right after reopenTask.",
+      "moe-vscode/src/extension.ts: activate() creates daemonClient, statusBar and registerTaskNotifier first, runs three launch calls (moe.startAgent start-all and single role, moe.startAllAgents) with { customCommand, teamName, readiness }, and runs the autoConnect connect() last; outputChannel is in scope.",
+      "packages/moe-daemon/src/server/WebSocketServer.ts case 'DEREGISTER_WORKER' validates workerId, defaults reason to terminal_closed, runs deregisterWorkerTool and answers WORKER_DEREGISTERED to the sender.",
+      "moe-vscode/src/util/AgentSeatTracker.ts (landed) exports AgentSeatTracker(load, save, deregister) and wireAgentSeats({ tracker, onDidCloseTerminal, workerIdOf, onConnected, onAcked }): SeatDisposable; onConnected takes the connection-state event as-is."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d -t vsc21-gate-XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && (cd \"$R\" && cp --parents moe-vscode/src/util/AgentLauncher.ts moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/extension.ts moe-vscode/tests/agent-seats.test.cjs \"$S\"/) && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+      "! git log --format= --name-only --grep 'Moe-Task: task-7e7bd0ec91ca488da2858f70cff32f65' HEAD | grep '^moe-vscode/tests/' | grep -vx 'moe-vscode/tests/agent-seats.test.cjs'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Wiring the tracker exactly as sliced was rejected. VS Code keeps terminals running across a window reload (persistent sessions, on by default for extension terminals unless isTransient) and across Restart Extensions after an extension update, so the first connect would deregister live seats and release their tasks.\nisTransient: true was rejected. Agents would die on every reload, and an extension-host restart would still keep the terminals.\nTerminal names carrying the worker id were rejected. Existing launcher suites pin the names, and reconnected terminals may appear after the first connect.\nChosen: a pid-liveness check (VSC-21a, a new prerequisite row) that runs synchronously at activation, plus mapping a terminal back to its seat by pid via vscode.window.terminals and onDidOpenTerminal.",
+    "codebaseInsights": "- tests/daemon-json-cap.test.cjs regex-checks extension.ts: no readFileSync(...daemon, and the readDaemonJsonText import must stay.\n- verified-local-launch and protected-runtime assert terminal names, cwd and decoded command text but not the full createTerminal options.\n- Twelve suites transpile MoeDaemonClient.ts (approval-paths, daemon-identity, daemon-json-cap, daemon-start, managed-vm-runtime, plan-approval-client, protected-daemon-spawn, protected-runtime, settings-wire, task-notifier, verified-local-launch, wire-parity).\n- Narrowing of the module-level daemonClient holds in activate's body but not in closures, so use daemonClient?. there.\n- vscode.Event<ConnectionState> is assignable to SeatEvent<string>.",
+    "risks": "- Dependencies: VSC-21a must land first (SeatSurvival.ts), and VSC-6 is in REVIEW (MoeDaemonClient.ts).\n- PID reuse: a recycled pid keeps a dead seat open for one session. This is fail-safe; it is re-checked at the next activation.\n- A seat whose pid was not yet recorded when the extension host restarted (a window of milliseconds) counts as gone.\n- The source-text assertions in X1-X5 are brittle by design (DoD 3 asks for them). Write extension.ts in the exact shapes the steps give.\n- On Windows, decode -EncodedCommand before reading the worker id from the command.",
+    "keyFiles": [
+      "moe-vscode/src/extension.ts",
+      "moe-vscode/src/util/AgentLauncher.ts",
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/util/AgentSeatTracker.ts",
+      "moe-vscode/tests/verified-local-launch.test.cjs",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4ad2f0577474f02be9e000de8041a7fcf2b85bc8",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:26:32.696Z",
+  "approvedPlanRevision": 1
 }

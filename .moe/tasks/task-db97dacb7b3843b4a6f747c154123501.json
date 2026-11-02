@@ -76,7 +76,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,16 +89,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:17.846Z",
-  "updatedAt": "2026-11-02T10:23:18.372Z",
+  "updatedAt": "2026-11-02T10:26:32.114Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:16:32.716Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T10:26:32.114Z",
+    "wallClockMs": 599398
   },
   "contextFetchedBy": [
     "architect-93e0e956",
-    "worker-81a7999f"
+    "worker-81a7999f",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "high",
@@ -183,7 +186,46 @@
   },
   "filesModified": [
     "moe-jetbrains/src/test/resources/client-blocker.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt",
+    ".moe/tasks/task-185f728fd79c4658a86b8a0b40a66595.json",
+    ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+    ".moe/tasks/task-db97dacb7b3843b4a6f747c154123501.json"
+  ],
+  "completionSummary": "Added client-neutral corpus client-blocker.json (B01..B17, version 1) and BlockerCorpusTest.kt (well-formed + replay through MoeJson.parseTask and parseState, which must agree; asserts cause name, prerequisiteIds in order, needsHumanReview; reports all diverging ids at once). No JetBrains bug exposed; TaskBlockerPresentation.kt unchanged. Mutant removing the status gate (snapshot only) fails exactly B04, B05, B06, B17. Full suite in clean snapshot under jetbrains-gradle lease: BUILD SUCCESSFUL, 551 tests, 0 failures/errors/skipped.",
+  "commits": [
+    {
+      "sha": "4ad2f0577474f02be9e000de8041a7fcf2b85bc8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T10:19:50Z",
+      "paths": [
+        ".moe/tasks/task-185f728fd79c4658a86b8a0b40a66595.json",
+        ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+        ".moe/tasks/task-db97dacb7b3843b4a6f747c154123501.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt",
+        "moe-jetbrains/src/test/resources/client-blocker.json"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T10:23:47.714Z",
+      "treeId": "6b3e1bdaa6ac9193e714b94ea2771ac269c4890b",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/resources/client-blocker.json",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt"
   ],
-  "completionSummary": "Added client-neutral corpus client-blocker.json (B01..B17, version 1) and BlockerCorpusTest.kt (well-formed + replay through MoeJson.parseTask and parseState, which must agree; asserts cause name, prerequisiteIds in order, needsHumanReview; reports all diverging ids at once). No JetBrains bug exposed; TaskBlockerPresentation.kt unchanged. Mutant removing the status gate (snapshot only) fails exactly B04, B05, B06, B17. Full suite in clean snapshot under jetbrains-gradle lease: BUILD SUCCESSFUL, 551 tests, 0 failures/errors/skipped."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-81a7999f@2026-11-02T10:19:50Z",
+    "at": "2026-11-02T10:23:47.714Z"
+  },
+  "completedAt": "2026-11-02T10:26:32.114Z",
+  "reviewCompletedAt": "2026-11-02T10:26:32.114Z",
+  "reviewSummary": "Reviewed completion commit 4ad2f057 (on moe/work-2026-10-24, pushed). moe-jetbrains diff is only the 2 new files (corpus 257 lines, test 121); the other 3 paths are wrapper-staged board JSONs. TaskBlockerPresentation.kt, TaskBlockerPresentationTest.kt, MoeJson.kt unchanged.\n\nRe-ran task.verification verbatim in a fresh git-archive snapshot under the jetbrains-gradle lease (Windows gradlew.bat test --rerun): BUILD SUCCESSFUL in 44s. JUnit total from TEST-*.xml: 551 tests, 0 skipped, 0 failures, 0 errors; BlockerCorpusTest 2/2 pass. cmp: overlaid files match the shared tree.\n\nMutant, run by me in the snapshot copy only: deleted the `task.status != BLOCKED_STATUS` gate line in cause(); focused BlockerCorpusTest FAILED naming exactly B04, B05, B06, B17. Mutant and snapshot discarded, lease released.\n\nDoD: (1) corpus is version 1 with 17 rows B01..B17 covering every listed case (causes B01-03, stale fields B04/B17, blockedOnTaskIds B02, reason ids with/without list B08/B09, duplicate/blank ids B10/B11, resource+ids B12/B13, needsHumanReview B06/B07/B17, missing optionals B14-16); I checked each expectation against the presentation source. (2) BlockerCorpusTest replays via MoeJson.parseTask and parseState (must agree), asserts cause, prerequisiteIds in order and the flag, and reports all diverging ids at once. (3) mutant fails as above. (4) full suite green as above. (5) scope as above; no JetBrains bug exposed.\n\nRails OK: no Gradle in the shared checkout, lease held only around runs. Mid-epic task, so no end-to-end ask. Complexity pass: nothing to flag.",
+  "requiredCheckAtDone": null
 }
