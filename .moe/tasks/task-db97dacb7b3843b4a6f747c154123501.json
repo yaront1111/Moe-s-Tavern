@@ -11,9 +11,72 @@
     "The diff touches only the two new files, plus TaskBlockerPresentation.kt if a row exposed a JetBrains bug (named in the summary)."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the held-out corpus moe-jetbrains/src/test/resources/client-blocker.json with the Write tool (global rail: tracked files only through Edit/Write).\nShape: `{ \"version\": 1, \"rows\": [ { \"id\", \"note\", \"task\", \"cause\", \"prerequisiteIds\", \"needsHumanReview\" } ] }`, 2-space pretty-printed like client-delivery.json, LF, trailing newline.\n- `id` is B01..B17; `note` is one line naming the case.\n- `task` is a daemon task wire object. It always holds \"id\": \"task-bNN\" (the row id lowercased) and \"epicId\": \"epic-corpus\", because MoeJson.parseState drops a task without epicId. Its other members come only from status, needsHumanReview, blockedReason, blockedOnTaskIds, blockedResourceId, blockedFromStatus and blockedAt.\n- `cause` is \"RESOURCE_WAIT\", \"DEPENDENCY_WAIT\", \"EXTERNAL_BLOCK\" or JSON null. `prerequisiteIds` is an array of strings. `needsHumanReview` is a JSON boolean.\nEvery expectation below was computed from TaskBlockerPresentation.kt at HEAD and cross-checked by a simulation: write them literally. Note the facts it encodes:\n- prerequisiteIds(task) is the raw recorded list. It ignores status (only cause is status-gated), keeps order and duplicates, keeps each id verbatim (never trimmed) and drops blank ids.\n- Nothing is ever parsed out of blockedReason.\nIds: A = task-0123456789abcdef0123456789abcdef, B = task-fedcba9876543210fedcba9876543210, C = task-1111aaaa2222bbbb3333cccc4444dddd. Notation: `task members -> cause, prerequisiteIds, needsHumanReview` (id/epicId omitted below).\nB01 status BLOCKED, blockedResourceId \"jetbrains-gradle\", blockedFromStatus \"WORKING\", blockedReason \"Waiting on the gradle lease.\", blockedAt \"2026-11-02T10:00:00.000Z\" -> RESOURCE_WAIT, [], false.\nB02 BLOCKED, blockedOnTaskIds [A, B], blockedFromStatus \"PLANNING\", blockedReason \"Waiting on two prerequisites.\" -> DEPENDENCY_WAIT, [A, B], false.\nB03 BLOCKED, blockedFromStatus \"REVIEW\", blockedReason \"A human has to decide.\" -> EXTERNAL_BLOCK, [], false.\nB04 status WORKING with stale blockedResourceId \"jetbrains-gradle\", blockedOnTaskIds [A], blockedReason \"Old block.\", blockedFromStatus \"WORKING\" -> null, [A], false.\nB05 status BACKLOG, no blocker fields -> null, [], false.\nB06 status REVIEW, needsHumanReview true -> null, [], true.\nB07 BLOCKED, blockedReason \"Needs a decision.\", needsHumanReview true -> EXTERNAL_BLOCK, [], true.\nB08 BLOCKED, blockedReason \"Waiting on \" + A + \" to land.\", no blockedOnTaskIds -> EXTERNAL_BLOCK, [], false (the reason is never parsed).\nB09 BLOCKED, blockedOnTaskIds [C], blockedReason \"Waiting on \" + A + \" as well.\" -> DEPENDENCY_WAIT, [C], false.\nB10 BLOCKED, blockedOnTaskIds [A, \"\", B, \"   \", A, \"\\t\", \" \" + C + \" \"] -> DEPENDENCY_WAIT, [A, B, A, \" \" + C + \" \"], false (duplicates kept, blanks dropped, padding kept).\nB11 BLOCKED, blockedOnTaskIds [\"\", \" \", \"\\n\"] -> EXTERNAL_BLOCK, [], false (only blanks fall through).\nB12 BLOCKED, blockedResourceId \"bench-box-1\", blockedOnTaskIds [A] -> RESOURCE_WAIT, [A], false (the resource wins; the ids are still reported).\nB13 BLOCKED, blockedResourceId \"   \", blockedOnTaskIds [A] -> DEPENDENCY_WAIT, [A], false (a blank resource falls through).\nB14 BLOCKED and nothing else -> EXTERNAL_BLOCK, [], false (every optional field missing; needsHumanReview absent reads false).\nB15 BLOCKED with blockedResourceId, blockedOnTaskIds, blockedReason, blockedFromStatus and blockedAt all JSON null -> EXTERNAL_BLOCK, [], false.\nB16 BLOCKED, blockedOnTaskIds [] -> EXTERNAL_BLOCK, [], false.\nB17 status REVIEW with stale blockedOnTaskIds [A], blockedReason \"Old block.\", blockedFromStatus \"WORKING\" and needsHumanReview true -> null, [A], true.\nDoD coverage map:\n- each cause: B01, B02, B03;\n- a non-BLOCKED status with stale fields: B04, B17;\n- BLOCKED with blockedOnTaskIds: B02;\n- a reason naming task ids, without and with blockedOnTaskIds: B08, B09;\n- duplicate and blank ids: B10, B11;\n- a resource id together with task ids: B12 (blank resource: B13);\n- needsHumanReview true on REVIEW and on BLOCKED, independent of cause: B06, B17, B07;\n- missing optional fields: B14, B15, B16.\nLeave out wrong-kind values (numbers or booleans where strings belong): MoeJsonTest already pins that strictness. Leave out Unicode-only blank ids too: Kotlin isBlank and JS trim disagree on U+FEFF and U+001C..U+001F, an exotic edge the daemon never serves, recorded in planningNotes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/test/resources/client-blocker.json"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-blocker.json"
+      ],
+      "note": "Wrote corpus B01..B17 per plan; JSON parses (17 rows). Dirty paths of peers left untouched.",
+      "startedAt": "2026-11-02T10:20:49.286Z",
+      "completedAt": "2026-11-02T10:20:52.289Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Write moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt with the Write tool (package com.moe.toolwindow; JUnit 4 + Gson). Model it on DeliveryCorpusTest.kt (landed by VSC-3) and ClientVerdictCorpusTest.kt: loadCorpus, and per-row failure collection.\nHeader KDoc:\n- one client-neutral corpus, three consumers: JetBrains TaskBlockerPresentation here, and VS Code's TaskDetailPanel.ts and media/board.js in VSC-9 (task-06dda5c1, tests/blocker-corpus.test.cjs);\n- the CQ-I06b rule: a disagreement is fixed or filed, never given a client-specific expectation;\n- only cause, prerequisiteIds and the attention flag are shared; wording differs by client on purpose.\nIts error handling: a missing or unparseable /client-blocker.json throws an AssertionError naming the resource. A malformed or throwing row fails THAT row with a message (catch per row, record \"threw $e\"), so one bad row never hides another.\nTwo tests:\n1. `the corpus is well formed`:\n   - version 1, at least 14 rows, ids unique and matching B[0-9]{2};\n   - each row has a non-empty string note and a `task` JSON object;\n   - the task holds string id and epicId, and uses only the member names step 1 lists (this catches a typo such as blockedOnTaskId);\n   - `cause` is one of the three BlockCause names or JSON null; `prerequisiteIds` is an array of JSON strings; `needsHumanReview` is a JSON boolean.\n   Collect `\"<id>: <problem>\"` and finish with one assertEquals(\"malformed rows\", emptyList<String>(), problems).\n2. `every row reaches its cause, prerequisites and attention flag`:\n   - parse the row's task with MoeJson.parseTask (TASK_CREATED/TASK_UPDATED), as the DoD requires, AND with MoeJson.parseState on {\"project\":{\"id\":\"proj-corpus\",\"name\":\"corpus\"},\"epics\":[],\"tasks\":[task]} (STATE_SNAPSHOT). Both paths read the blocker fields separately (mem:convention-jetbrains-exact-number-parsing). A row whose two parses disagree on any observed value fails, naming both;\n   - observed values: TaskBlockerPresentation.cause(task)?.name, TaskBlockerPresentation.prerequisiteIds(task) (list equality, order included) and TaskBlockerPresentation.badges(task).needsHumanReview;\n   - collect `\"<id>: expected (<cause>, <ids>, <flag>), got (...)\"` for every mismatch and finish with one assertEquals(\"blocker rows that diverge\", emptyList<String>(), failures).\nDo not edit TaskBlockerPresentationTest.kt, ClientVerdictCorpusTest.kt, DeliveryCorpusTest.kt or any corpus but this one.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt"
+      ],
+      "note": "Wrote BlockerCorpusTest.kt with two tests; gate next.",
+      "startedAt": "2026-11-02T10:20:54.131Z",
+      "completedAt": "2026-11-02T10:21:09.289Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Gate and mutation proof in a snapshot under the jetbrains-gradle lease, never in the shared tree (mem:convention-jetbrains-gradle-lease, mem:gotcha-jetbrains-snapshot-gradle-test, mem:gotcha-jetbrains-gradle-from-wsl: WSL has no JDK; from bash, single-quote the whole cmd string and pass --tests unquoted).\n- Take the lease with moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId, note}. If it is busy, park with moe.report_blocked {resourceId:\"jetbrains-gradle\"} (seat kept).\n- Hold the lease only around the gradle runs, and release it with moe.release_resource even on failure.\n- Run every command from the repo root /mnt/d/projexts/moes.\n1) Focused run: build the snapshot exactly as the checkRef does (its part before `&& cmd.exe`), then run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc4-gate\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.BlockerCorpusTest --rerun'`. It passes with 2 tests (check TEST-com.moe.toolwindow.BlockerCorpusTest.xml).\n2) Mutant, in the SNAPSHOT copy only (scratch outside the checkout, so a shell edit is allowed there): `sed -i '/if (task.status != BLOCKED_STATUS) return null/d' /mnt/d/moe-scratch/vsc4-gate/moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt`. Confirm with diff that exactly one line went: the architect dry-ran it, and the file is UTF-8 with LF endings. Re-run the focused command. It must FAIL, naming B04, B05, B06 and B17 (the non-BLOCKED rows now get a cause) and no other planned row. Record the ids for the summary.\n3) Run the checkRef verbatim. It rebuilds a clean snapshot, which discards the mutant, and runs the full suite. Confirm BUILD SUCCESSFUL and that :test executed. Then `cmp` the three copied files against the shared tree, and sum tests, failures, errors and skipped over the snapshot's build/test-results/test/TEST-*.xml for the JUnit total.\nError handling for a red run:\n- A red row before the mutant is most likely a corpus typo: re-derive it from TaskBlockerPresentation.kt first.\n- Change TaskBlockerPresentation.kt only for a genuine JetBrains bug. Name the fix in the summary and list the file in complete_step.modifiedFiles; the checkRef already copies it.\n- \"Could not receive a message from the daemon\" is a gradlew client OOM (mem:gotcha-jetbrains-gradle-client-oom): rerun, never count it as a result.\n- A failure in an untouched file that ties to a peer's wip checkpoint follows mem:gotcha-snapshot-gate-peer-wip-checkpoint.\n- Never stop Gradle daemons or kill processes by name.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/resources/client-blocker.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-blocker.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt"
+      ],
+      "note": "Focused: 2 tests pass. Mutant (status gate removed, snapshot only) fails exactly B04,B05,B06,B17. Full suite in clean snapshot: BUILD SUCCESSFUL, 551 tests, 0 failures/errors/skipped. Lease released. No JetBrains bug found.",
+      "startedAt": "2026-11-02T10:21:10.240Z",
+      "completedAt": "2026-11-02T10:23:08.886Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff, the only review step.\n- Would the test still pass if:\n  - the status gate were dropped (B04, B05, B06, B17 must fail);\n  - the dependency check ran before the resource check (B12);\n  - a blank resource counted (B13);\n  - prerequisiteIds trimmed or deduplicated ids (B10);\n  - blank ids counted as a dependency (B11);\n  - ids were parsed out of the reason (B08);\n  - or attention were tied to BLOCKED (B06, B17)?\n- Does every DoD case map to a named row (step 1's coverage map)?\n- Is the corpus plain JSON (strings, booleans, arrays, null; no Kotlin names), so VSC-9's TaskDetailPanel.ts and board.js replays read the same bytes unchanged? The VS Code functions already mirror JetBrains: the same guards, order kept, duplicates kept.\n- Run `git status --porcelain -- moe-jetbrains` and confirm the task touched only the two new files (plus TaskBlockerPresentation.kt, only for a named bug).\n- Peers own every other dirty path: never revert, stage or commit them.\n- Report both new files in complete_step.modifiedFiles. Deleting /mnt/d/moe-scratch/vsc4-gate afterwards is fine.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/resources/client-blocker.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-blocker.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt"
+      ],
+      "note": "Self-review: B12 (precedence), B13 (blank resource), B10 (no trim/dedupe), B11 (blanks), B08 (reason not parsed), B06/B17 (attention independent), B04/B05/B06/B17 (status gate, mutant-proven) each pin a named mutation. Every DoD case maps to a row. Corpus is plain JSON. git status -- moe-jetbrains shows only the two new files.",
+      "startedAt": "2026-11-02T10:23:09.712Z",
+      "completedAt": "2026-11-02T10:23:14.224Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,5 +89,101 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:17.846Z",
-  "updatedAt": "2026-11-02T09:39:17.846Z"
+  "updatedAt": "2026-11-02T10:23:18.372Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:16:32.716Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956",
+    "worker-81a7999f"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:19:45.207Z",
+  "executionContract": {
+    "intendedBehavior": "JetBrains' block-cause rule (TaskBlockerPresentation.cause, prerequisiteIds and the badges' attention flag over a task parsed by MoeJson) is pinned by a client-neutral corpus, moe-jetbrains/src/test/resources/client-blocker.json. BlockerCorpusTest replays it through both MoeJson task paths. VS Code's VSC-9 (task-06dda5c1) replays the same bytes through TaskDetailPanel.ts and media/board.js. JetBrains runtime behaviour does not change unless a row exposes a real bug.",
+    "acceptanceCriteria": [
+      "client-blocker.json has version 1 and the 17 planned rows B01..B17 (at least 14), covering every DoD case.",
+      "BlockerCorpusTest parses every row's task with MoeJson.parseTask (and MoeJson.parseState, which must agree) and asserts cause name, prerequisiteIds in order and the needs-human-review flag, reporting all diverging ids in one assertion.",
+      "The status-gate-removed mutant fails B04, B05, B06 and B17; the clean snapshot passes.",
+      "The full JetBrains suite passes in the vsc4-gate snapshot under the jetbrains-gradle lease: BUILD SUCCESSFUL, with the JUnit total in the summary."
+    ],
+    "invariants": [
+      "TaskBlockerPresentation.kt changes only for a real JetBrains bug a row exposes, named in the summary; every planned expectation was computed from it at HEAD.",
+      "TaskBlockerPresentationTest.kt, MoeJson.kt, every other corpus, moe-vscode and the daemon are unchanged.",
+      "No Gradle run in the shared checkout: every run is in /mnt/d/moe-scratch/vsc4-gate under the jetbrains-gradle lease."
+    ],
+    "compatibility": [
+      "Corpus tasks are daemon task wire JSON, never Kotlin types, so moe-vscode reads the same bytes (VSC-9 resolves path.join(__dirname, '../../moe-jetbrains/src/test/resources/client-blocker.json'))."
+    ],
+    "approvedScope": [
+      "New resource client-blocker.json: { version: 1, rows: [ { id, note, task, cause, prerequisiteIds, needsHumanReview } ] }.",
+      "New JUnit 4 class com.moe.toolwindow.BlockerCorpusTest with two tests: well formed, every row reaches its values.",
+      "TaskBlockerPresentation is read only, unless a row exposes a named bug."
+    ],
+    "reuse": [
+      "DeliveryCorpusTest.kt and ClientVerdictCorpusTest.kt: loadCorpus, the two-path parse and per-row failure collection.",
+      "MoeJsonTest.kt snapshotTasks: the minimal STATE_SNAPSHOT payload shape."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt: cause() returns null unless status is BLOCKED, then RESOURCE_WAIT for a non-blank blockedResourceId, DEPENDENCY_WAIT for non-empty prerequisiteIds, else EXTERNAL_BLOCK; prerequisiteIds() = blockedOnTaskIds.orEmpty().filter { it.isNotBlank() } with no status gate; badges().needsHumanReview = task.needsHumanReview.",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt: blocker strings use getStrictStringOrNull, blockedOnTaskIds uses getStrictStringListOrNull (string members only), needsHumanReview uses getStrictBooleanOrDefault(false); parseTasks drops a task without id or epicId.",
+      "moe-vscode/src/panels/TaskDetailPanel.ts blockCause/blockedPrerequisiteIds and media/board.js mirror the same rule with nonBlankString guards."
+    ],
+    "checkRefs": [
+      "S=/mnt/d/moe-scratch/vsc4-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents moe-jetbrains/src/test/resources/client-blocker.json moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt $S/ && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc4-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rows pin only the client-neutral outputs (cause name, raw prerequisiteIds, attention flag), never wording. The test parses through both parseTask (the DoD's path) and parseState, because the two build blocker fields separately. Blank, duplicate and padded ids are not daemon-servable today (report_blocked dedupes and drops unknown ids), but the slice description asks for them as legacy-data rows, and all three implementations already agree on them. Rejected: wrong-kind rows (MoeJsonTest covers parser strictness). Rejected: Unicode-only blank ids. Kotlin isBlank treats U+001C..U+001F as blank, and JS trim treats U+FEFF as blank, so pinning either would force VS Code to port Java's whitespace table. It is a known exotic divergence; leave it unpinned.",
+    "codebaseInsights": "VS Code already mirrors the rule twice: TaskDetailPanel.ts exports blockCause/blockedPrerequisiteIds, and media/board.js has its own copy. Both have the same guards (non-blank strings, arrays only, order and duplicates kept, no status gate on the id list), so VSC-9 should pass unchanged. The status gate and resource-over-dependency precedence are documented in the KDoc of TaskBlockerPresentation.cause.",
+    "risks": "A corpus typo is the likeliest red row: re-derive it before touching TaskBlockerPresentation.kt. Escape tabs and newlines in JSON strings (\\t, \\n). B10's padded id keeps its spaces. Apply the mutant only to the snapshot copy. git archive HEAD carries peers' wip checkpoints (mem:gotcha-snapshot-gate-peer-wip-checkpoint).",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskBlockerPresentationTest.kt",
+      "moe-vscode/src/panels/TaskDetailPanel.ts",
+      "moe-vscode/media/board.js"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "1f9885eb8627099dce28fde1051affb119f02149",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:19:45.237Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T10:20:49.286Z",
+  "reviewStartedAt": "2026-11-02T10:23:18.370Z",
+  "verification": {
+    "command": "S=/mnt/d/moe-scratch/vsc4-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents moe-jetbrains/src/test/resources/client-blocker.json moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt $S/ && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc4-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'",
+    "exitCode": 0,
+    "outputTail": "> Task :test\nBUILD SUCCESSFUL in 45s\n11 actionable tasks: 11 executed\nJUnit total (summed TEST-*.xml): tests=551 skipped=0 failures=0 errors=0",
+    "reportedAt": "2026-11-02T10:23:18.370Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/resources/client-blocker.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt"
+  ],
+  "completionSummary": "Added client-neutral corpus client-blocker.json (B01..B17, version 1) and BlockerCorpusTest.kt (well-formed + replay through MoeJson.parseTask and parseState, which must agree; asserts cause name, prerequisiteIds in order, needsHumanReview; reports all diverging ids at once). No JetBrains bug exposed; TaskBlockerPresentation.kt unchanged. Mutant removing the status gate (snapshot only) fails exactly B04, B05, B06, B17. Full suite in clean snapshot under jetbrains-gradle lease: BUILD SUCCESSFUL, 551 tests, 0 failures/errors/skipped."
 }

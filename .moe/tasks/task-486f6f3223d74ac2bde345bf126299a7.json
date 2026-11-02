@@ -1,0 +1,31 @@
+{
+  "id": "task-486f6f3223d74ac2bde345bf126299a7",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-21a] VS Code: remember seat shell pids so a reload or extension restart never deregisters a live seat",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse). Carved out of VSC-21 (task-7e7bd0ec91ca488da2858f70cff32f65) by its architect on 2026-11-02 as a prerequisite. VSC-21 dependsOn this row and wires it into extension.ts. Nothing else depends on it.\n\nWhy: VS Code terminals can outlive the extension session that launched their seats.\n- A window reload keeps persistent terminal sessions running. terminal.integrated.enablePersistentSessions is on by default, and extension-created terminals persist unless they are created with isTransient.\n- \"Restart Extensions\" after an extension update restarts only the extension host, and every terminal keeps running.\nJetBrains tabs die with the IDE. That is why AgentSeatTracker (VSC-20, moe-vscode/src/util/AgentSeatTracker.ts) counts every saved seat as gone at startup and deregisters it at the first connect. Wired in as-is, VSC-21 would therefore deregister live seats after every reload or Moe update, and the daemon would release tasks that their agents are still working on.\nThe fix: remember each seat's shell pid (vscode Terminal.processId). At activation, before the first connect, mark launched() every saved seat whose shell is still alive.\n\nDeliverable 1: new moe-vscode/src/util/SeatSurvival.ts. It is pure like AgentSeatTracker.ts: no import, no 'vscode' text and no 'require(' text; every dependency is a parameter.\n- `isProcessAlive(pid: number, kill = (p, s) => process.kill(p, s)): boolean` probes with signal 0. A positive safe-integer pid is alive when the probe succeeds or throws EPERM, and dead on ESRCH or any other throw. Any other pid is never probed and counts as dead, because process.kill(0 or a negative pid) addresses process groups.\n- `class SeatPids(load: () => unknown, save: (pids: Record<string, number>) => void)`, with these methods:\n  - `record(workerId, pid: number | undefined)`;\n  - `keep(workerIds)`;\n  - `seatOf(pid): string | undefined`;\n  - `surviving(workerIds, isAlive): string[]`.\n  Pids live in a Map, never in an object keyed by worker id. load() is untyped workspace JSON.\nVSC-21 consumes it as follows: it persists the map under context.workspaceState key moe.agentSeatPids, calls keep() with every list the tracker saves, calls record() when a launched terminal's processId resolves, calls surviving() at activation, and uses seatOf() to map a surviving or reconnected terminal back to its worker.\n\nDeliverable 2: new moe-vscode/tests/seat-survival.test.cjs. It loads the source under node:vm with a require map that throws on every name, as tests/agent-seat-tracker.test.cjs does.\n\nNot in scope:\n- extension.ts, AgentLauncher.ts and MoeDaemonClient.ts (all VSC-21).\n- AgentSeatTracker.ts and moe-jetbrains/src/test/resources/client-seat-tracker.json. They stay unchanged: survival is a VS Code adaptation outside the tracker, and the tracker still matches JetBrains on every corpus row.\n- Any moe-jetbrains file. JetBrains' analogue, a dynamic plugin reload that keeps tabs alive, is a note for VSC-18, not a fix here.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout and overlay this task's files. Then, in <snapshot>/moe-vscode, run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "New moe-vscode/src/util/SeatSurvival.ts exports isProcessAlive(pid, kill?) and class SeatPids(load, save) with record(workerId, pid), keep(workerIds), seatOf(pid) and surviving(workerIds, isAlive). The file has no import and no 'require(' or 'vscode' text, and it loads under a require map that throws on every module name.",
+    "isProcessAlive probes a positive safe-integer pid with signal 0. It returns true when the probe succeeds or throws EPERM, and false on ESRCH or any other throw. For 0, negative, fractional, NaN, non-number or undefined pids it returns false without probing. This is proven with a recording kill stub, plus one real probe of process.pid that returns true.",
+    "SeatPids loads only positive safe-integer pids under non-blank worker ids from a plain object; an array, string, number, null or undefined loads nothing. record keeps one worker per pid, so a reused pid moves to the new worker, and an invalid pid records nothing. keep drops every worker not in the list, and a non-array list keeps none. save runs only when the map changed and receives a fresh object each time.",
+    "surviving returns exactly the given worker ids whose recorded pid isAlive confirms, in the order given and once each. It never calls isAlive for an id without a recorded pid, and it returns [] for a non-array.",
+    "New moe-vscode/tests/seat-survival.test.cjs proves items 1-4 with exact-value assertions. A scratch-copy mutant in which surviving ignores isAlive makes it fail; the mutant is discarded afterwards.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 12.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T10:23:08.353Z",
+  "updatedAt": "2026-11-02T10:23:08.353Z"
+}
