@@ -1,0 +1,28 @@
+{
+  "id": "task-ecf786876bdc49b3b4e9fafee067631b",
+  "epicId": "epic-be924fb8",
+  "title": "bug: both wrappers route a seat's own role-group/all-tagged chat message back to it as a routed mention, waking it into a notification-only session to answer itself",
+  "description": "Repro 2026-11-02: worker-33f67e5b's ack msg-0dd03b70 (chan-b6d8273b) quoted the worker role-group tag. The next pre-flight surfaced it as that seat's only routed mention (sender = the seat itself) and spent a fresh notification-only CLI session on a self-reply (msg-33f0eaef). Cause: the mention filters match `worker_id | \"all\" | role_group` with no `sender == worker_id` skip. Sites: scripts/moe-agent.sh pre-wait probe (~9133-9143) and routed-mention build (~9645-9659); scripts/moe-agent.ps1 :8764 and :9053-9056. The daemon already skips the sender for unread counts (packages/moe-daemon/src/state/chatStore.ts:236). Fix: skip messages whose sender is this seat's worker id in all four filters, keep sh/ps1 parity, and add a postflight arm.",
+  "definitionOfDone": [
+    "A message whose sender is the seat's own worker id is neither counted as an unread mention (pre-wait probe) nor listed in <routed_mentions>, in both moe-agent.sh and moe-agent.ps1",
+    "Messages from other senders that tag the seat, @all, or its role group still route exactly as before",
+    "postflight.{sh,ps1} cover the self-sent case, and parity-check.sh passes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 346.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T23:23:35.850Z",
+  "updatedAt": "2026-11-02T23:23:35.850Z"
+}
