@@ -59,17 +59,23 @@
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff as an attacker. Check:\n- 1-2 deleted files of any kind still reload (DoD 2), and a single-entity kind whose FILE is deleted (dir kept) still reloads.\n- A deleted board file (tasks or epics) never trips the per-kind rule, and the combined rule is byte-for-byte the old arithmetic.\n- An empty in-memory kind with a missing dir is no wipe.\n- The rewrite covers every map load() replaces: any kind left out empties on the next reload.\n- The heal runs under state.mutex, and writeEntity's ignorePath keeps it from re-triggering the watcher.\n- Counting stays O(entities) with one existsSync per entity.\n- The fixture's PENDING proposals survive purgeResolvedProposals, and the tests deep-compare whole entities, not just counts.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 3's command if code changed, then call complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/massDeletionHeal.ts",
         "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
       ],
-      "startedAt": "2026-11-02T22:03:28.271Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/massDeletionHeal.ts",
+        "packages/moe-daemon/src/state/massDeletionHeal.test.ts"
+      ],
+      "note": "Adversarial review of my diff. No code defect found; one test gap closed. Checked: (1) 1-2 deleted files of any kind still reload (cases x, y); a lone team/resource whose FILE is deleted with the dir kept returns 0 (new test: isWipe(1,1) is false and dirGone is false). (2) tasks/epics never trip the per-kind rule (BOARD_KINDS; 11-of-50 task case returns 0, where an unexcluded rule would have healed at 22%); the combined arithmetic is the old check inverted, over the same 5 kinds. (3) An empty in-memory kind with a missing dir is skipped (size===0 continue), covered by the original 'does nothing' case where teams/ is absent. (4) The rewrite covers all 13 maps load() replaces, via the STORES table. (5) The heal runs under state.mutex; the scan is a single synchronous pass, and the daemon's own bulk deleters (purgeResolvedProposals, deleteTeam, deleteWorker) unlink and delete from the map without an await between, so the scan cannot see a half-done delete. writeEntity ignorePath keeps rewrites from re-triggering the watcher. (6) One existsSync per entity plus one per dir. (7) PENDING proposals survive purgeResolvedProposals; the tests deep-compare whole entities (memory snapshot vs file content vs post-load map). (8) No forbidden patterns (grep clean). Accepted residual risks, unchanged in kind from before: a wipe racing a partly finished `git clean` can re-delete rewritten files, and the next watcher event heals again; messages/ and pins/ are not in memory and checks/dispatches|observations are lazy, so those stay lost (documented in the header). Final gate re-run after the added test: EXIT=0, 2 files, 151 tests (massDeletionHeal 8 = 3 old + 5 new, StateManager 143).",
+      "startedAt": "2026-11-02T22:03:28.271Z",
+      "completedAt": "2026-11-02T22:04:43.094Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2dc72348",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -81,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:26.244Z",
-  "updatedAt": "2026-11-02T22:03:28.271Z",
+  "updatedAt": "2026-11-02T22:05:07.574Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:22.389Z",
@@ -91,7 +97,7 @@
     "firstClaimAt": "2026-11-02T21:52:13.611Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -104,7 +110,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T21:55:36.363Z",
@@ -166,5 +173,18 @@
   },
   "planApprovedAt": "2026-11-02T21:55:36.400Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T22:00:54.040Z"
+  "workStartedAt": "2026-11-02T22:00:54.040Z",
+  "reviewStartedAt": "2026-11-02T22:05:07.572Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/massDeletionHeal.ts packages/moe-daemon/src/state/massDeletionHeal.test.ts; do cp \"$R/$f\" \"$S/$f\" && cmp \"$R/$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/state/massDeletionHeal.test.ts src/state/StateManager.test.ts'",
+    "exitCode": 0,
+    "outputTail": "snapshot /tmp/tmp.MTt3eJuyLY\n ✓ src/state/massDeletionHeal.test.ts (8 tests) 619ms\n ✓ src/state/StateManager.test.ts (143 tests) 4331ms\n\n Test Files  2 passed (2)\n      Tests  151 passed (151)\nEXIT=0",
+    "reportedAt": "2026-11-02T22:05:07.572Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/massDeletionHeal.test.ts",
+    "packages/moe-daemon/src/state/massDeletionHeal.ts"
+  ],
+  "completionSummary": "healMassDeletion now also treats a per-kind runtime wipe as a wipe and, on any wipe, rewrites every entity map load() replaces. massDeletionHeal.ts: a STORES table (dir + accessor) for all 13 maps (tasks, epics, workers, teams, proposals, channels, decisions, resources, attempts, candidates, reviews, checks→checkRuns, receipts); the combined rule over tasks/epics/teams/workers/proposals is unchanged (MASS_DELETION_MIN=3 / FRACTION=0.2 and exports untouched); a new per-kind rule for every store except tasks/epics (dir gone while memory holds entries, or >=3 and >=20% of the kind's own entries lost); on either rule every missing entity of every store is written back via writeEntity and the log names restoredByKind, the rule and the wiped kinds. So `git clean -fdx` / `git stash --all` on a board-tracking project no longer lets the FileWatcher reload empty workers, teams, proposals, leases or attempts. massDeletionHeal.test.ts: a new describe (50 tasks, 1 epic, 4 workers, 1 team, 3 PENDING proposals, a leased resource, an open attempt) with (w) five runtime dirs wiped -> heal returns 10, files equal the memory snapshot, then load() leaves all 5 maps deep-equal; (x) one worker file -> 0 and the reload drops exactly it; (y) two proposal files -> 0; plus two invariant cases (a lone team/resource file deleted with dirs kept -> 0; 11 of 50 task files -> 0, the board kinds never trip the per-kind rule). The 3 original cases are untouched (3 import lines added). RED, quoted from the unchanged heal in a git-archive snapshot: `AssertionError: expected +0 to be 10` at massDeletionHeal.test.ts:151 (case w), the other cases passing. Final gate EXIT=0: tsc --noEmit clean, 2 files, 151 tests (massDeletionHeal 8 = 3 old + 5 new, StateManager 143 unchanged). Only the 2 files changed (git status --porcelain). Known gaps documented in the header: messages/ and pins/ are not in memory; checks/dispatches|observations are lazy and not replaced by load()."
 }

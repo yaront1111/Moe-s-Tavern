@@ -85,8 +85,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -140,7 +140,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:51:26.149Z",
-  "updatedAt": "2026-11-02T21:31:06.786Z",
+  "updatedAt": "2026-11-02T22:05:06.132Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T19:53:26.719Z",
@@ -222,6 +222,23 @@
       "status": "REVIEW",
       "pushed": false,
       "message": "MOE_RESCUE_REF task=task-31187ec10ae54dd2b03f4c166f083f31 ref=refs/moe/rescue/task-31187ec10ae54dd2b03f4c166f083f31/20261102T213024Z sha=5fb9cfce88d39b52db9c254bc977ef52f2249681 reason=conflict"
+    },
+    {
+      "sha": "ebb06b856736d4831c37bf11c4a9c3d1ebe61cb0",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-02T21:31:04Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-02T22:05:05.503Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -232,11 +249,10 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "failed",
+    "outcome": "committed",
     "kind": "completion",
-    "code": "MOE_COMMIT_FAILED_CONFLICT",
-    "sessionId": "worker-c9368191@2026-11-02T20:56:29Z",
-    "at": "2026-11-02T21:30:25.914Z"
+    "sessionId": "worker-c9368191@2026-11-02T21:31:04Z",
+    "at": "2026-11-02T22:05:05.503Z"
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -324,24 +340,14 @@
   "planApprovedAt": "2026-10-30T20:52:50.195Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-02T19:27:07.869Z",
-  "reviewStartedAt": "2026-11-02T21:29:31.311Z",
+  "reviewStartedAt": "2026-11-02T22:03:56.728Z",
   "verification": {
-    "command": "( for v in $(compgen -e | grep -E '^(MOE_|CLAUDE)'); do unset \"$v\"; done; mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-31187ec1.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-worktree.cjs scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && g='MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' && diff <(grep -oE \"$g\" scripts/moe-agent.sh | sort -u) <(grep -oE \"$g\" scripts/moe-agent.ps1 | sort -u) && grep -q MOE_WORKTREE_CONTEXT_FAILED scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && T=\"$S/scripts/tests\" && P=$(mktemp -d /tmp/wt-31187ec1.XXXXXX) && node \"$T/postflight-worktree.cjs\" sh \"$S/scripts/moe-agent.sh\" \"$T/postflight-fake-proxy.js\" \"$P\" \"$(command -v bash)\" && node.exe \"$(wslpath -w \"$T/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$S/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$T/postflight-fake-proxy.js\")\" \"$(wslpath -w \"$S\")\" powershell )",
+    "command": "( for v in $(compgen -e | grep -E '^(MOE_|CLAUDE)'); do unset \"$v\"; done; mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-31187ec1.XXXXXX) && git ls-files -z scripts | tar --null -T - -cf - | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-worktree.cjs scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && g='MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' && diff <(grep -oE \"$g\" scripts/moe-agent.sh | sort -u) <(grep -oE \"$g\" scripts/moe-agent.ps1 | sort -u) && grep -q MOE_WORKTREE_CONTEXT_FAILED scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && T=\"$S/scripts/tests\" && P=$(mktemp -d /tmp/wt-31187ec1.XXXXXX) && node \"$T/postflight-worktree.cjs\" sh \"$S/scripts/moe-agent.sh\" \"$T/postflight-fake-proxy.js\" \"$P\" \"$(command -v bash)\" && node.exe \"$(wslpath -w \"$T/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$S/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$T/postflight-fake-proxy.js\")\" \"$(wslpath -w \"$S\")\" powershell )",
     "exitCode": 0,
-    "outputTail": "START=20:59:25Z (run from the task worktree; log /mnt/d/moe-scratch/run-31187ec1.KEEfZI/verify3.log)\nsnapshot /mnt/d/moe-scratch/v-31187ec1.u0LT3S\nPASS parity-check.sh\n--- sh (Linux bash) ---\n[worktree] path-long n/a off win32\n[worktree] ctx-unread ok\n[worktree] resume-unread ok\n[worktree] resume-dirty ok\n[worktree] resume-shared-unread ok\n[worktree] codes ok\n[worktree] 60 ok, 0 failed\n--- ps1 (node.exe, Windows PowerShell 5.1) ---\n[worktree] path-long ok\n[worktree] ctx-unread ok\n[worktree] resume-unread ok\n[worktree] resume-dirty ok\n[worktree] resume-shared-unread ok\n[worktree] codes ok\n[worktree] 60 ok, 0 failed\nEXIT=0\nEND=21:27:11Z\n(selected lines; the codes diff printed nothing; every other case printed ok, or n/a for wt-lease-signal on ps1)",
-    "reportedAt": "2026-11-02T21:29:31.311Z",
+    "outputTail": "START=21:34:47Z (run from the task worktree on the merged tree; log /mnt/d/moe-scratch/run-31187ec1.OIjGLs/verify.log)\nsnapshot /mnt/d/moe-scratch/v-31187ec1.B5NOeL\nPASS parity-check.sh\n--- sh (Linux bash) ---\n[worktree] path-long n/a off win32\n[worktree] ctx-unread ok\n[worktree] wt-config-lock ok\n[worktree] wt-config-lock-exhausted ok\n[worktree] wt-config-other ok\n[worktree] wt-config-preset ok\n[worktree] resume-unread ok\n[worktree] resume-dirty ok\n[worktree] resume-shared-unread ok\n[worktree] codes ok\n[worktree] 64 ok, 0 failed\n--- ps1 (node.exe, Windows PowerShell 5.1) ---\n[worktree] ctx-unread ok\n[worktree] wt-config-lock ok\n[worktree] wt-config-lock-exhausted ok\n[worktree] wt-config-other ok\n[worktree] wt-config-preset ok\n[worktree] resume-unread ok\n[worktree] resume-dirty ok\n[worktree] resume-shared-unread ok\n[worktree] wt-lease-signal n/a for ps1 (no signal to send on Windows)\n[worktree] codes ok\n[worktree] 64 ok, 0 failed\nEXIT=0\nEND=22:02:36Z\n(selected lines; the codes diff printed nothing; all 128 other case lines printed ok)",
+    "reportedAt": "2026-11-02T22:03:56.728Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Wrapper-only fail-closed fix, keyed on moe/control. No daemon, wire, schema or docs change: alreadyAssigned still carries no workspace.\n\nContract: the mode is known only from the fresh claim's workspace, or from a get_context whose task.id is the claimed id. On such a context an absent workspace still means shared (the older-daemon rule, §7). Anything else is unknown: an error, a transport failure, {}, another task's context, an unparseable reply, or a failed parse.\n\nBoth twins:\n- sh: the provision_worktree python parse emits mode worktree|shared|unknown plus a ctxread field.\n- ps1: Get-MoeWorkspaceClaim returns Mode unknown and a Read flag; Initialize-MoeWorktree carries the refusals.\n- An unknown mode on a control checkout whose HEAD is exactly refs/heads/moe/control (WT-07's control_worktree_mode / Test-MoeControlWorktreeMode, reused) refuses with MOE_WORKTREE_CONTEXT_FAILED through worktree_stop / Stop-MoeWorktreeSeat: one report_blocked, no CLI, nothing touched, exit 1.\n- An unknown mode anywhere else is today's shared path, with no new output (rail 4).\n- In worktree mode an unread context refuses with the same code after the target check, because the §7.2 ledger guard needs task.commits.\n- ps1 reads task and id via PSObject.Properties and requires a [string] id. Get-MoeProp would unroll a one-element array, and the twins would disagree.\n\nTests, add-only:\n- The fake proxy gains FAKE_GET_CONTEXT_FAIL='error' (a JSON-RPC error).\n- postflight-worktree.cjs gains resume-unread (error/empty/mismatch), resume-dirty (W registered, locked, dirt byte-identical, branch unmoved), resume-shared-unread (off moe/control: the CLI runs, 0 blocks, no MOE_WORKTREE_ line) and a ctx-unread refusals row.\n- RED at HEAD 0d8422ce: 3 of the 4 failed, and resume-shared-unread passed.\n\nEvidence: fresh run 3 on the final bytes, EXIT=0. The codes diff is empty, parity PASS, sh 60 ok / 0 failed, PS 5.1 60 ok / 0 failed, and the 4 new cases are ok in both.\n\nVerification deviation (setup only)",
-  "landingRetry": {
-    "reason": "conflict",
-    "rescueRef": "refs/moe/rescue/task-31187ec10ae54dd2b03f4c166f083f31/20261102T213024Z",
-    "targetTip": "96c4ee1962fb64f5939668b1e60e69eec202ee50",
-    "paths": [
-      "scripts/moe-agent.sh",
-      "scripts/tests/postflight-worktree.cjs"
-    ],
-    "count": 1,
-    "at": "2026-11-02T21:30:26.531Z"
-  }
+  "completionSummary": "LANDING-CONFLICT resolution. No new behaviour; the scope is the same 4 files.\n\nThe first completion (21:30Z) was refused with MOE_COMMIT_FAILED_CONFLICT. Rescue ref: refs/moe/rescue/task-31187ec1…/20261102T213024Z. The wrapper merged origin/moe/work-2026-10-24 (96c4ee19) into the task worktree. That left 2 conflict hunks, both resolved by keeping both sides:\n- scripts/moe-agent.sh, provision_worktree `local` line: this row's `ctxread` plus the target's `fail` (WT config-lock retry).\n- scripts/tests/postflight-worktree.cjs, `cases` map: the target's wt-config-lock/-lock-exhausted/-other/-preset entries plus this row's resume-unread/resume-dirty/resume-shared-unread Object.assign line.\nNo conflict markers remain.\n\nChecked: the merged tree differs from MERGE_HEAD only in this row's 4 files (moe-agent.sh, moe-agent.ps1, postflight-fake-proxy.js, postflight-worktree.cjs; +106/-17). Its -U0 change lines are identical to the task's own diff 0d8422ce..5fb9cfce, except that one resolved `local` line.\n\nContract (unchanged from the first completion):\n- The mode is known only from the fresh claim's workspace, or from a get_context whose task.id is the claimed id.\n- An unknown mode on a control checkout on refs/heads/moe/control refuses with MOE_WORKTREE_CONTEXT_FAILED: one report_blocked, no CLI, nothing touched, exit 1.\n- An unknown mode elsewhere is today's shared path, with no new output.\n- Worktree mode with an unread context refuses with the same code.\n\nEvidence, fresh run on the merged bytes: EXIT=0. Codes diff empty, parity PASS, sh 64 ok / 0 failed, PS 5.1 64 ok / 0 failed. The 4 new cases and the target's 4 wt-config-* cases are ok in both engines; path-long is n/a off win32, and wt-lease-signal is n/a for ps1. `npm run lint` is ok.\n\nVerification deviation (setup only): the snapshot is built from the merged working tree's tracked scripts/ (git ls-files | tar) instead of `git archive HEAD scripts`. HEAD is pre-merge, so the plan's form would pair the old parity-check.sh",
+  "landingRetry": null
 }
