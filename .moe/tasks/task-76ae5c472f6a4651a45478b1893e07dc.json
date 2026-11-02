@@ -90,8 +90,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -134,7 +134,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T18:19:53.148Z",
-  "updatedAt": "2026-11-02T20:42:09.192Z",
+  "updatedAt": "2026-11-02T22:00:13.874Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T18:25:23.864Z",
@@ -144,7 +144,9 @@
     "firstClaimAt": "2026-10-30T18:26:46.141Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T21:59:47.541Z",
+    "wallClockMs": 271981400
   },
   "contextFetchedBy": [
     "architect-6fc3dd5c",
@@ -274,10 +276,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-02T19:47:22Z",
-    "at": "2026-11-02T20:41:39.544Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-02T20:41:52Z",
+    "at": "2026-11-02T22:00:13.874Z"
   },
   "workStartedAt": "2026-11-02T19:50:15.211Z",
   "reviewStartedAt": "2026-11-02T20:40:38.428Z",
@@ -288,5 +291,9 @@
     "reportedAt": "2026-11-02T20:40:38.428Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Fixed PS guard root UTF8 decoding with save/restore finally; added Gemini/Grok non-ASCII-temp CP850 regressions and requested Git2.31/KEY-policy/human-only override docs. Native Windows parent7beed0bc RED for both: `CLI did not run: exit=0; codes=null`, raw ReadAllText DirectoryNotFoundException (11.79s); fixed narrow2/2 GREEN (19.99s). Full Linux exact gate exit0 (1597.37s): guard27/27 vs parent25, unchanged launcher38pass +2 PS-only skips; total65pass/0fail/2skip. Bash postflight NONE/Z; parity/docs lint PASS. Configured qualityGate parity && npm run lint PASS. Native Windows node suite154/154,0fail/0skip (202.02s): guard28/28 vs parent26 including PS7, launcher126/126 unchanged. Sequential native powershell postflight exit0,NONE/Z (2587.02s). Whole-repo archive snapshots with four owned overlays cmp-verified, removed after checks. Adversarial review clean: all out-of-scope ps1 bytes unchanged, BOM intact, embedded twins and bash unchanged, all3 pinned PS launch literals count1. Net30LOC. Handoff memory recorded; wrapper owns landing; spaced TEMP remains task408a0ac1."
+  "completionSummary": "Fixed PS guard root UTF8 decoding with save/restore finally; added Gemini/Grok non-ASCII-temp CP850 regressions and requested Git2.31/KEY-policy/human-only override docs. Native Windows parent7beed0bc RED for both: `CLI did not run: exit=0; codes=null`, raw ReadAllText DirectoryNotFoundException (11.79s); fixed narrow2/2 GREEN (19.99s). Full Linux exact gate exit0 (1597.37s): guard27/27 vs parent25, unchanged launcher38pass +2 PS-only skips; total65pass/0fail/2skip. Bash postflight NONE/Z; parity/docs lint PASS. Configured qualityGate parity && npm run lint PASS. Native Windows node suite154/154,0fail/0skip (202.02s): guard28/28 vs parent26 including PS7, launcher126/126 unchanged. Sequential native powershell postflight exit0,NONE/Z (2587.02s). Whole-repo archive snapshots with four owned overlays cmp-verified, removed after checks. Adversarial review clean: all out-of-scope ps1 bytes unchanged, BOM intact, embedded twins and bash unchanged, all3 pinned PS launch literals count1. Net30LOC. Handoff memory recorded; wrapper owns landing; spaced TEMP remains task408a0ac1.",
+  "completedAt": "2026-11-02T21:59:47.541Z",
+  "reviewCompletedAt": "2026-11-02T21:59:47.541Z",
+  "reviewSummary": "APPROVE. Completion bbf2f857 (on moe/work-2026-10-24): 4 files, +38/-8 = net 30 LOC. Verified from git-archive snapshots of that exact commit outside the repo; shared tree untouched; WSLENV forwards no MOE_/CLAUDE_/FAKE_.\n\nDoD1: independent native-Windows RED (parent moe-agent.ps1 + new tests): 2/2 fail, \"CLI did not run: exit=0; codes=null\" + raw ReadAllText DirectoryNotFoundException. With the fix, PS5.1 gemini and grok non-ASCII-temp cases pass (bash twins too), asserting hooks under 'témp', no moe-git-guard-* left, and CP850 in the stub and at driver exit. The fix saves, sets UTF-8 and restores OutputEncoding in finally around the unchanged node call; a nonzero rc still throws MOE_AGENT_GIT_GUARD_FAILED. Embedded program, launch lines, harness span, moe-agent.sh and the BOM are unchanged.\nDoD2: TROUBLESHOOTING names Git 2.31, the KEY-stripping exit-128 failure and the Codex ignore_default_excludes fix; anchor unchanged; no NEVER_RUNS_GIT match.\nDoD3: CONFIGURATION has the human-only MOE_ALLOW_AGENT_GIT_WRITES row.\n\nRe-ran:\n- task.verification on Linux: exit 0, 1623s; 65 pass, 0 fail, 2 PS-only skips; postflight bash NONE/Z; parity PASS; docs:lint OK.\n- Native Windows guard + 2 launcher files: 154/154, 0 skipped, 200s.\n- Native Windows postflight-safe powershell: exit 0, NONE/Z, 2661s.\n\nTiming/contention (20:44Z-21:59Z): 13 live seats. No gradle or jetbrains-gradle holders. The git-land lease was free at start, held by worker-8cf0816c at end (unrelated). tasklist proxy start: node 16, powershell 9, pwsh 1, bash 4, java 2; end: node 17, powershell 12, pwsh 1, java 2.\n\nPonytail: nothing to cut. Spaced TEMP stays with task-408a0ac1.",
+  "requiredCheckAtDone": null
 }
