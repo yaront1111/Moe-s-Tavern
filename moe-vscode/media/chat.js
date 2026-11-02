@@ -86,6 +86,21 @@
         saveState();
     }
 
+    // The selected channel vanished from the list (deleted): back to the no-channel state
+    // the page starts in. Markup is built with DOM calls only.
+    function deselectChannel() {
+        currentChannel = null;
+        chatInput.disabled = true;
+        sendBtn.disabled = true;
+        messagesEl.textContent = '';
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = 'Select a channel to start chatting';
+        messagesEl.appendChild(empty);
+        renderPins();
+        saveState();
+    }
+
     // =====================================================================
     // Message rendering
     // =====================================================================
@@ -499,6 +514,10 @@
         switch (data.type) {
             case 'updateChannels':
                 channels = data.channels || [];
+                // Drop a selection that is no longer listed; the branch below then falls back
+                if (currentChannel && !channels.some(function(ch) { return ch.id === currentChannel; })) {
+                    deselectChannel();
+                }
                 renderChannels();
                 // Auto-select first channel if none selected
                 if (!currentChannel && channels.length > 0) {

@@ -977,6 +977,21 @@ export class MoeDaemonClient implements vscode.Disposable {
         return this.sendMessage('REOPEN_TASK', { taskId, reason });
     }
 
+    /**
+     * Release a task from its worker (JetBrains MoeCommandSender.releaseTask parity).
+     * The daemon (WebSocketServer.ts case 'RELEASE_TASK') routes it through
+     * moe.release_task and substitutes 'Released from board' for a missing reason.
+     * A blank reason is left off the frame; a non-blank one goes verbatim, because
+     * the daemon does the trimming. `force` is never sent.
+     */
+    releaseTask(taskId: string, reason?: string): boolean {
+        const payload: { taskId: string; reason?: string } = { taskId };
+        if (typeof reason === 'string' && reason.trim().length > 0) {
+            payload.reason = reason;
+        }
+        return this.sendMessage('RELEASE_TASK', payload);
+    }
+
     addTaskComment(taskId: string, content: string): void {
         this.sendMessage('ADD_TASK_COMMENT', { taskId, content });
     }
@@ -1568,6 +1583,20 @@ export class MoeDaemonClient implements vscode.Disposable {
                 case 'CHANNELS':
                     this._onChannelsReceived.fire(payload.channels);
                     break;
+
+                case 'CHANNEL_DELETED': {
+                    // JetBrains MoeMessageDispatcher parity. Cache first, then tell the chat
+                    // view through the CHANNELS path (ChatViewProvider posts updateChannels).
+                    // An unknown id, a malformed payload or no snapshot is a silent no-op.
+                    const state = this.state;
+                    const id = payload?.id;
+                    if (!state?.channels || typeof id !== 'string') { break; }
+                    const remaining = state.channels.filter(c => c.id !== id);
+                    if (remaining.length === state.channels.length) { break; }
+                    state.channels = remaining;
+                    this._onChannelsReceived.fire(remaining);
+                    break;
+                }
 
                 case 'MESSAGES':
                     this._onMessagesReceived.fire({ channel: payload.channel, messages: payload.messages });
