@@ -26,13 +26,47 @@ val bundledProxyDir = repoRoot.resolve("packages/moe-proxy/dist")
 val bundledProxyMain = bundledProxyDir.resolve("index.js")
 val bundledProxyModules = repoRoot.resolve("packages/moe-proxy/node_modules")
 val bundledProxyMarker = bundledProxyModules.resolve("ws")
-val bundledAgentScript = repoRoot.resolve("scripts/moe-agent.ps1")
-val bundledAgentScriptSh = repoRoot.resolve("scripts/moe-agent.sh")
-val bundledCallScriptSh = repoRoot.resolve("scripts/moe-call.sh")
-val bundledRoleDocs = repoRoot.resolve("docs/roles")
-val bundledAgentContext = repoRoot.resolve("docs/agent-context.md")
-val bundledSkillsDir = repoRoot.resolve("docs/skills")
-val bundledLocalRunnerDir = repoRoot.resolve("scripts/local-runner")
+
+// The scripts and docs to bundle come from one manifest, which moe-vscode/scripts/bundle-assets.mjs reads too;
+// its comment member states the copy rules. The daemon and proxy copies stay below, beside their checks.
+val bundleManifest = repoRoot.resolve("scripts/bundle-manifest.json")
+
+data class BundleCopy(val from: String, val into: String, val files: List<String>, val required: List<String>, val exclude: List<String>)
+
+fun malformedManifest(what: String): Nothing = throw GradleException("Bundle manifest $bundleManifest is malformed: $what")
+
+fun manifestString(key: String, value: Any?, isPath: Boolean): String {
+    if (value !is String || value.isEmpty()) malformedManifest("$key must be a non-empty string")
+    if (isPath && (value.startsWith("/") || value.startsWith("\\") || File(value).isAbsolute || value.split('/', '\\').contains(".."))) {
+        malformedManifest("$key ($value) must be a relative path with no .. segment")
+    }
+    return value
+}
+
+fun manifestList(key: String, value: Any?, arePaths: Boolean): List<String> = when (value) {
+    null -> emptyList()
+    is List<*> -> value.mapIndexed { i, item -> manifestString("$key[$i]", item, arePaths) }
+    else -> malformedManifest("$key must be an array of non-empty strings")
+}
+
+val bundleCopies: List<BundleCopy> by lazy {
+    val text = try { bundleManifest.readText() } catch (e: java.io.IOException) {
+        throw GradleException("Bundle manifest $bundleManifest is unreadable: ${e.message}")
+    }
+    val parsed = try { groovy.json.JsonSlurper().parseText(text) } catch (e: Exception) { malformedManifest("${e.message}") }
+    val copies = (parsed as? Map<*, *>)?.get("copies")
+    if (copies !is List<*> || copies.isEmpty()) malformedManifest("copies must be a non-empty array")
+    copies.mapIndexed { i, entry ->
+        if (entry !is Map<*, *>) malformedManifest("copies[$i] must be an object")
+        BundleCopy(
+            from = manifestString("copies[$i].from", entry["from"], isPath = true),
+            into = manifestString("copies[$i].into", entry["into"], isPath = true),
+            files = manifestList("copies[$i].files", entry["files"], arePaths = true),
+            required = manifestList("copies[$i].required", entry["required"], arePaths = true),
+            exclude = manifestList("copies[$i].exclude", entry["exclude"], arePaths = false),
+        )
+    }
+}
 
 // Newest mtime of any non-test source file under src. Guards against bundling
 // a dist that predates the sources — an old dist ships silently and resurrects
@@ -71,18 +105,12 @@ fun requireBundledAssets() {
         "Bundled moe-proxy dependencies not found at ${bundledProxyModules}. " +
             "Install them first (cd packages/moe-proxy && npm install)."
     }
-    check(bundledAgentScript.exists()) {
-        "Bundled moe-agent.ps1 not found at ${bundledAgentScript}."
-    }
-    check(bundledAgentScriptSh.exists()) {
-        "Bundled moe-agent.sh not found at ${bundledAgentScriptSh}."
-    }
-    check(bundledCallScriptSh.exists()) {
-        "Bundled moe-call.sh not found at ${bundledCallScriptSh}."
-    }
-    listOf("certified-provider.json", "multipass.mjs", "doctor.mjs", "cli.mjs", "vm-control.mjs").forEach { name ->
-        check(bundledLocalRunnerDir.resolve(name).isFile) {
-            "Bundled local-runner/$name not found at $bundledLocalRunnerDir."
+    // Every manifest source is checked before anything is copied.
+    bundleCopies.forEach { copy ->
+        val dir = repoRoot.resolve(copy.from)
+        check(dir.isDirectory) { "Bundled ${copy.from} not found at $dir." }
+        (copy.files + copy.required).forEach { name ->
+            check(dir.resolve(name).isFile) { "Bundled ${copy.from}/$name not found at $dir." }
         }
     }
 }
@@ -180,40 +208,22 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
     from(repoRoot.resolve("packages/moe-proxy/package.json")) {
         into("$pluginContentRoot/proxy")
     }
-    from(bundledAgentScript) {
-        into("$pluginContentRoot/scripts")
-    }
-    from(repoRoot.resolve("scripts")) {
-        include("prompt-cache*.mjs")
-        include("usage-receipt.mjs", "usage-session.mjs", "usage-report.mjs", "analyze-usage.mjs")
-        // Claude account rotation: the wrappers lease an account through it before every claude launch.
-        include("moe-account-lease.mjs")
-        // Provider prerequisite assets only; shipping them does not enable isolated execution.
-        include("local-runner/**")
-        exclude("local-runner/**/*.test.*", "local-runner/**/*.spec.*")
-        exclude("local-runner/**/tests/**", "local-runner/**/__tests__/**")
-        exclude("local-runner/**/fixtures/**", "local-runner/**/__fixtures__/**")
-        // Claude Code mods the wrappers load into claude seats (CLAUDE_CODE_PLUGIN_DIRS).
-        include("mods/**")
-        exclude("mods/**/*.test.ts", "mods/*/.claude-plugin/types/**")
-        into("$pluginContentRoot/scripts")
-    }
-    from(listOf(bundledAgentScriptSh, bundledCallScriptSh)) {
-        into("$pluginContentRoot/scripts")
-        // A CRLF working-tree checkout (core.autocrlf) would ship a script WSL bash can't parse.
-        filter(
-            mapOf("eol" to org.apache.tools.ant.filters.FixCrLfFilter.CrLf.newInstance("lf")),
-            org.apache.tools.ant.filters.FixCrLfFilter::class.java,
-        )
-    }
-    from(bundledRoleDocs) {
-        into("$pluginContentRoot/docs/roles")
-    }
-    from(bundledAgentContext) {
-        into("$pluginContentRoot/docs")
-    }
-    from(bundledSkillsDir) {
-        into("$pluginContentRoot/docs/skills")
+    bundleCopies.forEach { copy ->
+        from(repoRoot.resolve(copy.from)) {
+            into("$pluginContentRoot/${copy.into}")
+            if (copy.files.isEmpty()) {
+                exclude(copy.exclude)
+            } else {
+                include(copy.files)
+                // A CRLF working-tree checkout (core.autocrlf) would ship a script WSL bash can't parse.
+                filesMatching("**/*.sh") {
+                    filter(
+                        mapOf("eol" to org.apache.tools.ant.filters.FixCrLfFilter.CrLf.newInstance("lf")),
+                        org.apache.tools.ant.filters.FixCrLfFilter::class.java,
+                    )
+                }
+            }
+        }
     }
 }
 

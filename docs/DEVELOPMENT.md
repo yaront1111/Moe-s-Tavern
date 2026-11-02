@@ -243,7 +243,7 @@ The script loads role-specific documentation from `.moe/roles/<role>.md` (projec
 
 ## Plugin Bundling
 
-Both IDE plugins bundle everything needed to run agents. The JetBrains zip ships a `moe-jetbrains/` directory (the installed plugin directory). The VS Code extension ships `moe-vscode/bundled/`, which becomes `extension/bundled/` in the `.vsix`. Both have the same layout below `<root>`, except `lib/` and `docs/roles/`:
+Both IDE plugins bundle everything needed to run agents. The JetBrains zip ships a `moe-jetbrains/` directory (the installed plugin directory). The VS Code extension ships `moe-vscode/bundled/`, which becomes `extension/bundled/` in the `.vsix`. Both have the same layout below `<root>`, except `lib/`:
 
 ```
 <root>/                 (JetBrains: moe-jetbrains/ · VS Code: bundled/)
@@ -258,12 +258,11 @@ Both IDE plugins bundle everything needed to run agents. The JetBrains zip ships
 │   │                   # (includes certified-provider.json, multipass.mjs, doctor.mjs, cli.mjs, vm-control.mjs)
 │   └── mods/           # everything except *.test.ts and .claude-plugin/types/
 └── docs/
-    ├── roles/          # JetBrains: the whole docs/roles/ dir · VS Code: architect.md, qa.md, worker.md only
-    ├── agent-context.md
+    ├── roles/          # the whole docs/roles/ dir
     └── skills/
 ```
 
-JetBrains copies these from the repo in `build.gradle.kts` (`prepareSandbox`, also run by `buildPlugin`); VS Code copies them in `moe-vscode/scripts/bundle-assets.mjs`, which `vscode:prepublish` runs. When building from source, ensure daemon and proxy are built first:
+JetBrains copies these from the repo in `build.gradle.kts` (`prepareSandbox`, also run by `buildPlugin`); VS Code copies them in `moe-vscode/scripts/bundle-assets.mjs`, which `vscode:prepublish` runs. Both builds read the `scripts/` and `docs/` lists from `scripts/bundle-manifest.json` (its `comment` member states the copy rules); the daemon and proxy copies stay in each build. When building from source, ensure daemon and proxy are built first:
 
 ```bash
 cd packages/moe-daemon && npm install && npm run build
@@ -275,9 +274,9 @@ cd ../../moe-jetbrains && ./gradlew buildPlugin
 
 Three guards keep a bundle complete and test-free:
 
-1. **Required-asset lists that fail the build.** JetBrains `requireBundledAssets()` (run in `prepareSandbox`'s `doFirst`) and the checks in `bundle-assets.mjs` fail on a missing or stale (older than its `src/`) daemon or proxy `dist`, on missing `node_modules`, and on a missing `local-runner/` `certified-provider.json`, `multipass.mjs`, `doctor.mjs`, `cli.mjs` or `vm-control.mjs`. Only JetBrains also requires `moe-agent.ps1`, `moe-agent.sh` and `moe-call.sh`; the VS Code bundler copies the other scripts only when they are present.
+1. **Required-asset lists that fail the build.** JetBrains `requireBundledAssets()` (run in `prepareSandbox`'s `doFirst`) and the checks in `bundle-assets.mjs` fail on a missing or stale (older than its `src/`) daemon or proxy `dist`, on missing `node_modules`, and on a missing `local-runner/` `certified-provider.json`, `multipass.mjs`, `doctor.mjs`, `cli.mjs` or `vm-control.mjs`. Both builds also fail, before copying anything, on any file or directory the manifest names that is missing (its required `local-runner/` files included), and on a malformed manifest.
 2. **Packaged checks in `node scripts/tests/onboarding.mjs <extracted bundle>`.** They require the helper files above. They run the bundled `vm-control.mjs` with no arguments and expect exit 2 with `{"code":"VM_CONTROL_INPUT_INVALID"}`, which proves its whole import closure loads from the bundle. They also fail on any test artifact under `daemon/`, `proxy/` or `scripts/` (`node_modules` is skipped). The full onboarding flow then runs on the bundled daemon and proxy. CI runs it on the extracted JetBrains zip (`build-plugin`, 'Verify packaged JetBrains onboarding'); `release.yml` ('Verify packaged onboarding') also runs it on the extracted `.vsix`.
-3. **`scripts/tests/local-runner-bundle.test.mjs`** runs the real VS Code bundler on a fixture and replays onboarding's packaged checks on its output. It also statically checks `build.gradle.kts` and `ci.yml`. CI runs it on ubuntu, windows and macos ('Test local runner prerequisite bundles').
+3. **`scripts/tests/local-runner-bundle.test.mjs`** runs the real VS Code bundler on a fixture and replays onboarding's packaged checks on its output. It also checks the manifest's lists, that neither build file re-lists them, and `ci.yml`. CI runs it on ubuntu, windows and macos ('Test local runner prerequisite bundles').
 
 ### Client verification record (CQ-I)
 

@@ -65,9 +65,67 @@ async function copyDir(src, dest, { excludeBin, excludeTests } = {}) {
   });
 }
 
+// The scripts and docs to bundle come from one manifest, which moe-jetbrains/build.gradle.kts reads too;
+// its comment member states the copy rules. The daemon and proxy copies stay here, beside their checks.
+const manifestPath = path.join(repoRoot, 'scripts/bundle-manifest.json');
+
+async function readManifest() {
+  const text = await readFile(manifestPath, 'utf8').catch((err) => {
+    throw new Error(`Bundle manifest ${manifestPath} is unreadable: ${err.message}`);
+  });
+  const malformed = (what) => new Error(`Bundle manifest ${manifestPath} is malformed: ${what}`);
+  const str = (key, value, isPath) => {
+    if (typeof value !== 'string' || value === '') throw malformed(`${key} must be a non-empty string`);
+    if (isPath && (/^[\\/]/.test(value) || path.isAbsolute(value) || value.split(/[\\/]/).includes('..'))) {
+      throw malformed(`${key} (${value}) must be a relative path with no .. segment`);
+    }
+    return value;
+  };
+  const list = (key, value, arePaths) => {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value)) throw malformed(`${key} must be an array of non-empty strings`);
+    return value.map((item, i) => str(`${key}[${i}]`, item, arePaths));
+  };
+  let parsed;
+  try { parsed = JSON.parse(text); } catch (err) { throw malformed(err.message); }
+  const copies = parsed?.copies;
+  if (!Array.isArray(copies) || copies.length === 0) throw malformed('copies must be a non-empty array');
+  return copies.map((entry, i) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw malformed(`copies[${i}] must be an object`);
+    return {
+      from: str(`copies[${i}].from`, entry.from, true),
+      into: str(`copies[${i}].into`, entry.into, true),
+      files: list(`copies[${i}].files`, entry.files, true),
+      required: list(`copies[${i}].required`, entry.required, true),
+      exclude: list(`copies[${i}].exclude`, entry.exclude, false),
+    };
+  });
+}
+
+// Every manifest source is checked before anything is copied.
+async function requireManifestSources(copies) {
+  for (const copy of copies) {
+    const dir = path.join(repoRoot, copy.from);
+    if (!(await exists(dir)) || !(await stat(dir)).isDirectory()) throw new Error(`Bundled ${copy.from} not found at ${dir}.`);
+    for (const name of [...copy.files, ...copy.required]) {
+      const file = path.join(dir, name);
+      if (!(await exists(file)) || !(await stat(file)).isFile()) {
+        throw new Error(`Required ${copy.from}/${name} asset not found at ${dir}.`);
+      }
+    }
+  }
+}
+
+// An exclude pattern as Gradle (Ant) reads it. Not path.matchesGlob: on Node 24.21 it returns false for
+// ('a/.claude-plugin/x.test.ts', '**/*.test.ts') and for ('tests', '**/tests/**'), and Gradle excludes both.
+const antPattern = (glob) => new RegExp('^' + glob.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+  .replace(/\*\*\/|\/\*\*$|\*\*|\*|\?/g, (t) => ({ '**/': '(?:[^/]+/)*', '/**': '(?:/.*)?', '**': '.*', '*': '[^/]*', '?': '[^/]' })[t]) + '$');
+
 async function main() {
   await rm(outputRoot, { recursive: true, force: true });
   await mkdir(outputRoot, { recursive: true });
+  const copies = await readManifest();
+  await requireManifestSources(copies);
 
   for (const asset of assets) {
     if (!(await exists(asset.dist))) {
@@ -98,71 +156,31 @@ async function main() {
     await cp(path.join(path.dirname(asset.dist), 'package.json'), path.join(distOut, 'package.json'));
   }
 
-  // Copy agent scripts
-  const scriptsOut = path.join(outputRoot, 'scripts');
-  await mkdir(scriptsOut, { recursive: true });
-  const agentScripts = ['moe-agent.ps1', 'moe-agent.sh', 'moe-call.sh', 'prompt-cache.mjs', 'prompt-cache-policy.mjs', 'prompt-cache-usage.mjs',
-    'prompt-cache-witness.mjs', 'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs', 'moe-account-lease.mjs'];
-  for (const script of agentScripts) {
-    const src = path.join(repoRoot, 'scripts', script);
-    if (await exists(src)) {
-      const dest = path.join(scriptsOut, script);
-      if (script.endsWith('.sh')) {
-        // A CRLF working-tree checkout (core.autocrlf) would ship a script WSL bash can't parse.
-        const text = await readFile(src, 'utf8');
-        await writeFile(dest, text.replace(/\r\n/g, '\n'));
-        // writeFile creates the dest with default 0644; keep the source's exec
-        // bit (moe-agent.sh's EXIT trap executes moe-call.sh directly).
-        await chmod(dest, (await stat(src)).mode);
-      } else {
-        await cp(src, dest);
+  for (const copy of copies) {
+    const src = path.join(repoRoot, copy.from);
+    const dest = path.join(outputRoot, copy.into);
+    if (copy.files.length === 0) {
+      const excludes = copy.exclude.map(antPattern);
+      await cp(src, dest, {
+        recursive: true,
+        filter: (p) => !excludes.some((re) => re.test(path.relative(src, p).replaceAll('\\', '/'))),
+      });
+      continue;
+    }
+    for (const name of copy.files) {
+      const from = path.join(src, name);
+      const to = path.join(dest, name);
+      await mkdir(path.dirname(to), { recursive: true });
+      if (!name.endsWith('.sh')) {
+        await cp(from, to);
+        continue;
       }
+      // A CRLF working-tree checkout (core.autocrlf) would ship a script WSL bash can't parse.
+      await writeFile(to, (await readFile(from, 'utf8')).replace(/\r\n/g, '\n'));
+      // writeFile creates the dest with default 0644; keep the source's exec
+      // bit (the wrappers execute bundled shell scripts directly).
+      await chmod(to, (await stat(from)).mode);
     }
-  }
-  // Ship prerequisite modules/manifest without activating a runner or copying test fixtures.
-  const localRunnerSource = path.join(repoRoot, 'scripts', 'local-runner');
-  for (const name of ['certified-provider.json', 'multipass.mjs', 'doctor.mjs', 'cli.mjs', 'vm-control.mjs']) {
-    const asset = path.join(localRunnerSource, name);
-    if (!(await exists(asset)) || !(await stat(asset)).isFile()) {
-      throw new Error(`Required local-runner/${name} asset not found at ${localRunnerSource}.`);
-    }
-  }
-  await cp(localRunnerSource, path.join(scriptsOut, 'local-runner'), {
-    recursive: true,
-    filter: src => {
-      const relative = path.relative(localRunnerSource, src).replaceAll('\\', '/');
-      return !relative.split('/').some(part => ['tests', '__tests__', 'fixtures', '__fixtures__'].includes(part)) &&
-        !/\.(test|spec)\.[^/]+$/.test(relative);
-    },
-  });
-  // Claude Code mods the wrappers load into claude seats (CLAUDE_CODE_PLUGIN_DIRS).
-  await cp(path.join(repoRoot, 'scripts', 'mods'), path.join(scriptsOut, 'mods'), {
-    recursive: true,
-    filter: src => !src.endsWith('.test.ts') && !src.replaceAll('\\', '/').includes('/.claude-plugin/types'),
-  });
-
-  // Copy role docs and agent-context (fallback for uninitialised projects)
-  const rolesOut = path.join(outputRoot, 'docs', 'roles');
-  await mkdir(rolesOut, { recursive: true });
-  const roleDocs = ['architect.md', 'qa.md', 'worker.md'];
-  for (const doc of roleDocs) {
-    const src = path.join(repoRoot, 'docs', 'roles', doc);
-    if (await exists(src)) {
-      await cp(src, path.join(rolesOut, doc));
-    }
-  }
-  const agentContextSrc = path.join(repoRoot, 'docs', 'agent-context.md');
-  if (await exists(agentContextSrc)) {
-    await cp(agentContextSrc, path.join(outputRoot, 'docs', 'agent-context.md'));
-  }
-
-  // Copy the curated skill pack (manifest + per-skill SKILL.md/SOURCE.md).
-  // The daemon embeds these in skillFiles.ts at build time, so .moe/skills/
-  // gets scaffolded from the bundled daemon. The bundled copy here is only
-  // for users who want to inspect or hand-edit them outside .moe/.
-  const skillsSrc = path.join(repoRoot, 'docs', 'skills');
-  if (await exists(skillsSrc)) {
-    await cp(skillsSrc, path.join(outputRoot, 'docs', 'skills'), { recursive: true });
   }
 }
 
