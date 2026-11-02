@@ -154,7 +154,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:46:26.699Z",
-  "updatedAt": "2026-11-02T19:28:00.585Z",
+  "updatedAt": "2026-11-02T19:30:06.292Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:59:31.329Z",
@@ -272,5 +272,36 @@
     "scripts/tests/parity-check.ps1",
     "docs/CONFIGURATION.md"
   ],
-  "completionSummary": "The seam MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER='1' is now set on the launched wrapper env of 6 suites: agent-git-guard.test.mjs, protected-agent-command.test.mjs, worktree-e2e.cjs, wave1-pilot.mjs, mention-provenance.sh and mention-provenance.ps1 (ps1 saves, sets and restores it in finally). The name is registered in parity-check.sh and parity-check.ps1, plus one docs/CONFIGURATION.md row. Diff +12/-0 over 9 files; every added line names the env, and no line was edited.\n\nUnchanged:\n- agent-runtime.test.mjs: its PATH has no git, so the guard fails open (C2 shows 10/10).\n- Source-only (they slice, parse or ParseFile the wrapper and never run its top level): usage-attribution, moe-account-lease, daemon-json-cap, prompt-cache-launcher, seat-registration, taskless-*, push-failure-message, resume-progress, usage-launcher, importee-guard*, hook-isolation-bash, hooked-commit.ps1. local-runner* only list paths; moe-call is a comment.\n- acceptance.test.ts: outside scripts/tests (DoD 5) and never run under .worktrees.\n\nThe guard's refusal cases are in postflight-worktree.cjs, unchanged; C2 shows wt-guard ok.\n\nRED from W before the change:\n- agent-git-guard: 25 tests, 22 fail, 11 codes=MOE_WRAPPER_IN_WORKTREE.\n- mention-provenance.sh FAILED with [ERROR] MOE_WRAPPER_IN_WORKTREE:.\n\nC1 through C4 are the checkRefs, run verbatim from W:\n- C1 = checkRefs[3]: EXIT 0. git grep (:!.moe) finds the name only in docs/CONFIGURATION.md, scripts/moe-agent.{sh,ps1} and scripts/tests/*. PASS parity-check.sh, PASS parity-check.ps1.\n- C3 = checkRefs[1]: EXIT 0, \"RED ok: all 4 suites refused without the seam\".\n- C4 = checkRefs[2]: EXIT 0.\n  - mention-provenance.ps1 PASSED with the 5.1.26100.9711 child and with the pwsh 7.6.9 child.\n  - \"PASS: Wave 1 pilot success path, 27 links\".\n  - The RED copies refused with \"[ERROR] MOE_WRAPPER_IN_WORKTREE: D:\\moe-scratch\\...\\r\\.worktrees\\task-x\\scripts\\moe-agent.ps1 is inside a task worktree\".\n  - \"PS leg ok: green passed, red refused\".\n  - The 4 juncti"
+  "completionSummary": "The seam MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER='1' is now set on the launched wrapper env of 6 suites: agent-git-guard.test.mjs, protected-agent-command.test.mjs, worktree-e2e.cjs, wave1-pilot.mjs, mention-provenance.sh and mention-provenance.ps1 (ps1 saves, sets and restores it in finally). The name is registered in parity-check.sh and parity-check.ps1, plus one docs/CONFIGURATION.md row. Diff +12/-0 over 9 files; every added line names the env, and no line was edited.\n\nUnchanged:\n- agent-runtime.test.mjs: its PATH has no git, so the guard fails open (C2 shows 10/10).\n- Source-only (they slice, parse or ParseFile the wrapper and never run its top level): usage-attribution, moe-account-lease, daemon-json-cap, prompt-cache-launcher, seat-registration, taskless-*, push-failure-message, resume-progress, usage-launcher, importee-guard*, hook-isolation-bash, hooked-commit.ps1. local-runner* only list paths; moe-call is a comment.\n- acceptance.test.ts: outside scripts/tests (DoD 5) and never run under .worktrees.\n\nThe guard's refusal cases are in postflight-worktree.cjs, unchanged; C2 shows wt-guard ok.\n\nRED from W before the change:\n- agent-git-guard: 25 tests, 22 fail, 11 codes=MOE_WRAPPER_IN_WORKTREE.\n- mention-provenance.sh FAILED with [ERROR] MOE_WRAPPER_IN_WORKTREE:.\n\nC1 through C4 are the checkRefs, run verbatim from W:\n- C1 = checkRefs[3]: EXIT 0. git grep (:!.moe) finds the name only in docs/CONFIGURATION.md, scripts/moe-agent.{sh,ps1} and scripts/tests/*. PASS parity-check.sh, PASS parity-check.ps1.\n- C3 = checkRefs[1]: EXIT 0, \"RED ok: all 4 suites refused without the seam\".\n- C4 = checkRefs[2]: EXIT 0.\n  - mention-provenance.ps1 PASSED with the 5.1.26100.9711 child and with the pwsh 7.6.9 child.\n  - \"PASS: Wave 1 pilot success path, 27 links\".\n  - The RED copies refused with \"[ERROR] MOE_WRAPPER_IN_WORKTREE: D:\\moe-scratch\\...\\r\\.worktrees\\task-x\\scripts\\moe-agent.ps1 is inside a task worktree\".\n  - \"PS leg ok: green passed, red refused\".\n  - The 4 juncti",
+  "commits": [
+    {
+      "sha": "edb48d05c8c42e2e3d1215e92199123215e4ab6f",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-02T19:13:48Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "scripts/tests/agent-git-guard.test.mjs",
+        "scripts/tests/mention-provenance.ps1",
+        "scripts/tests/mention-provenance.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/tests/wave1-pilot.mjs",
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-02T19:30:06.292Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-02T19:13:48Z",
+    "at": "2026-11-02T19:30:06.292Z"
+  }
 }

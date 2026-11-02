@@ -45,22 +45,28 @@
     {
       "stepId": "step-3",
       "description": "FIX the scripts/moe-agent.ps1 twin — epic parity rail, DoD 2. Edit the block under the same first comment (~line 949, before '# Normalize Command + CommandArgs').\n\nWhy: Copy-Item -Force overwrites rather than O_EXCL-creating, but an overlapping overwrite can still throw: a Windows CopyFile sharing violation, or .NET's exclusive file lock under pwsh on Unix. The script-wide $ErrorActionPreference = 'Stop' then ends the seat.\n\nReplace\n            Copy-Item -Path $src -Destination $dest -Force\n            $mirrored++\nwith\n            try {\n                Copy-Item -LiteralPath $src -Destination $dest -Force\n            } catch {\n                if (-not (Test-Path -LiteralPath $dest)) { throw }\n                $skipped++\n                return\n            }\n            $mirrored++\nAdd an ASCII comment naming moe-agent.sh as the twin and stating the rule: a failed copy whose destination now exists lost to another seat; any other failure rethrows, so error handling for a real failure is unchanged. `return` inside the ForEach-Object block moves to the next file.\n\nUse -LiteralPath only on the lines this step writes. task-3ad573a7 converts the block's other -Path sites; leave them to it. Keep the UTF-8 BOM (parity-check fails without it), LF endings, the first comment line, the banner and the end anchor.\n\nThen run the Windows-node command from step 1: rows A, B and D pass on PowerShell 5.1 and PowerShell 7.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-02T19:28:33.464Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Added the approved try/catch in the pre-flight mirror only: Copy-Item -LiteralPath failures count as kept only when Test-Path -LiteralPath sees the destination, otherwise rethrow. Fresh Windows-node suite exited 0: all 10 tests pass, no skips (Git Bash A-D, PowerShell 5.1 A/B/D, PowerShell 7 A/B/D). This proves the ForEach-Object return continues to the second file with mirrored=1/kept=1. PS1 BOM and LF endings retained; other -Path sites and prepare_worktree_launch untouched.",
+      "startedAt": "2026-11-02T19:28:33.464Z",
+      "completedAt": "2026-11-02T19:29:37.082Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY + ADVERSARIAL SELF-REVIEW, once, at the end (DoD 1-3). From the checkout root the CLI runs in (the task worktree in worktree mode), run this ONE command. Its fresh output is complete_task's verification evidence:\nnode --test scripts/tests/subagent-mirror.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w scripts/tests/subagent-mirror.test.mjs)\" && bash scripts/tests/parity-check.sh\nExpect:\n- WSL node: bash rows A-D pass, and the PowerShell rows skip (5.1 is Windows-only; WSL has no pwsh).\n- Windows node: the Git Bash, PowerShell 5.1 and PowerShell 7 rows all pass, none skipped. If pwsh.exe is unavailable, say so in the note.\n- Then 'PASS parity-check.sh'.\n\nSelf-review of this task's diff:\n(1) N seats: the rule holds for any count, because every loser's destination exists. A seat whose check sees a half-written file counts it kept; the writer finishes it long before any CLI launches.\n(2) A real failure still stops the pre-flight: no `|| true`, and no ps1 catch swallows it. A dangling-symlink destination fails as before (-e is false).\n(3) prepare_worktree_launch is untouched; no new operator strings; moe-agent.ps1 keeps its BOM and LF; row D passes on every engine.\n(4) Mutation proof in a scratch copy, never in the tree: `S=$(mktemp -d /mnt/d/moe-scratch/b6a3-mut-XXXX) && cp -r scripts \"$S/\"`. Apply one mutant at a time to \"$S/scripts\" and re-run the test there (the Windows run via wslpath -w \"$S/…\"):\n- (a) restore the bare `cp \"$src\" \"$dest\"`: bash A and C fail;\n- (b) count every sh copy failure as kept, with no -e check: bash B fails;\n- (c) drop the ps1 `if (-not (Test-Path -LiteralPath $dest)) { throw }`: PowerShell B fails.\nRecord the failing rows, then rm -rf \"$S\".\n(5) The test kills nothing by pattern and removes every temp dir in finally.\n(6) Leave scripts/tests/worktree-e2e.cjs alone: WT-19b owns it, and its .claude/agents pre-seed models the live checkout.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/subagent-mirror.test.mjs",
         ".github/workflows/ci.yml"
-      ]
+      ],
+      "startedAt": "2026-11-02T19:29:37.115Z"
     }
   ],
   "planRevision": 1,
@@ -77,7 +83,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:34:04.961Z",
-  "updatedAt": "2026-11-02T19:28:33.464Z",
+  "updatedAt": "2026-11-02T19:29:37.115Z",
   "dependsOn": [
     "task-6519ed9127ad4c359fd64b71f1a08be5"
   ],
@@ -90,7 +96,7 @@
     "firstClaimAt": "2026-11-02T10:56:44.081Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-93e0e956",
@@ -102,7 +108,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T11:19:51.831Z",
