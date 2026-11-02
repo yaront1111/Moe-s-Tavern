@@ -742,13 +742,19 @@ describe('moe.get_commit_scope', () => {
       expect(result.peerDeclared[0]?.taskIds).toEqual(['task-b', 'task-unassigned']);
     });
 
-    it('keeps the waits-on-this rule: a dependent contributes no entry for a path only its plan names', async () => {
+    it('counts a dependent of a non-terminal task whose assignee is active, with its editing marks', async () => {
+      // task-1 is WORKING, so the waits-on-this exclusion is on; the dependent's
+      // live assignee is what lifts it (task-44a07f00). No attempt on purpose:
+      // this pins the assignee arm alone.
       setupLanding();
       stepPeer('task-dep', 'IN_PROGRESS', ['src/only-plan.ts'], { assignedWorkerId: 'worker-live', dependsOn: ['task-1'] });
       await h.state.load();
 
       const result = await checked({ workerId: 'worker-1', since: sinceIso() });
-      expect(result.peerDeclared).toEqual([]);
+      expect(result.peerDeclared).toEqual([{
+        path: 'src/only-plan.ts', taskId: 'task-dep', peerActive: true,
+        taskIds: ['task-dep'], activeTaskIds: ['task-dep'], editingTaskIds: ['task-dep'],
+      }]);
     });
 
     it('does not throw on junk step data and adds no entry for it', async () => {
@@ -784,6 +790,132 @@ describe('moe.get_commit_scope', () => {
       const result = await checked({ workerId: 'worker-1', since: sinceIso() });
       expect(result.peerDeclared.map((e) => [e.path, e.taskIds])).toEqual([
         ['ok/peer.ts', ['task-junk-lists']],
+      ]);
+    });
+  });
+
+  describe('waits-on-this exclusion (task-44a07f00)', () => {
+    // The baa704f5 repro: WT-08 went DONE, its dependent fa7fece5 was claimed at
+    // once and was mid-step on scripts/moe-agent.sh when WT-08's QA exit landing
+    // ran. The dependent's plan paths were excluded as "cannot have run yet", so
+    // the landing committed its half-done edit under WT-08's id. The exclusion now
+    // holds only while the scoped task is not DONE/ARCHIVED and the waiting peer
+    // has no active assignee and no open attempt.
+    afterEach(() => { vi.useRealTimers(); });
+
+    const sinceIso = () => new Date(Date.now() - 5 * 60_000).toISOString();
+    type DepStep = { status: 'PENDING' | 'IN_PROGRESS'; files: string[] };
+
+    function dep(id: string, steps: DepStep[], overrides: Record<string, unknown> = {}): void {
+      h.createTask({
+        id,
+        status: 'WORKING',
+        dependsOn: ['task-1'],
+        implementationPlan: steps.map((s, i) => ({ stepId: `s${i + 1}`, description: id, status: s.status, affectedFiles: s.files })),
+        ...overrides,
+      } as Parameters<typeof h.createTask>[0]);
+    }
+
+    const openFor = (taskId: string, workerId: string) =>
+      openAttempt(h.state, { taskId, workerId, runnerId: workerId, workspace: h.testDir });
+
+    it('T-A: with this task DONE or ARCHIVED, a dependent is an ordinary peer: planned and IN_PROGRESS paths count and the live one is editing', async () => {
+      for (const status of ['DONE', 'ARCHIVED'] as const) {
+        h.cleanup();
+        h.init();
+        h.setupMoeFolder();
+        h.createEpic();
+        h.createTask({ id: 'task-1', status, implementationPlan: [
+          { stepId: 's1', description: 'a', status: 'COMPLETED', modifiedFiles: ['scripts/moe-agent.sh'] },
+        ] });
+        h.createWorker({ id: 'worker-live', status: 'CODING', lastActivityAt: new Date().toISOString() });
+        dep('task-dep-live', [
+          { status: 'IN_PROGRESS', files: ['scripts/moe-agent.sh'] },
+          { status: 'PENDING', files: ['scripts/later.sh'] },
+        ], { assignedWorkerId: 'worker-live' });
+        dep('task-dep-idle', [{ status: 'PENDING', files: ['scripts/idle-plan.sh'] }]);
+        await h.state.load();
+        await openFor('task-dep-live', 'worker-live');
+
+        const result = await checked({ workerId: 'worker-1', since: sinceIso() });
+        expect(result.peerDeclared, status).toEqual([
+          // The idle dependent is counted too (inactive): only the terminal check
+          // can put it here, the running check alone already counts the live one.
+          {
+            path: 'scripts/idle-plan.sh', taskId: 'task-dep-idle', peerActive: false,
+            taskIds: ['task-dep-idle'], activeTaskIds: [], editingTaskIds: [],
+          },
+          {
+            path: 'scripts/moe-agent.sh', taskId: 'task-dep-live', peerActive: true,
+            taskIds: ['task-dep-live'], activeTaskIds: ['task-dep-live'], editingTaskIds: ['task-dep-live'],
+          },
+          {
+            path: 'scripts/later.sh', taskId: 'task-dep-live', peerActive: true,
+            taskIds: ['task-dep-live'], activeTaskIds: ['task-dep-live'], editingTaskIds: [],
+          },
+        ]);
+      }
+    });
+
+    it('T-B: with this task not terminal, a dependent with no active assignee and no open attempt contributes only its asserted paths', async () => {
+      const now = Date.now();
+      const hourAgo = new Date(now - 60 * 60_000).toISOString();
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'REVIEW', implementationPlan: [
+        { stepId: 's1', description: 'a', status: 'COMPLETED', modifiedFiles: ['src/shared.ts'] },
+      ] });
+      h.createWorker({ id: 'worker-dead', status: 'DEAD', lastActivityAt: new Date(now).toISOString() });
+      h.createWorker({ id: 'worker-stale', status: 'IDLE', lastActivityAt: hourAgo, startedAt: hourAgo });
+      const plan = (x: string): DepStep[] => [{ status: 'PENDING', files: ['src/shared.ts', `src/${x}-plan.ts`] }];
+      dep('task-dep-unassigned', plan('unassigned'), { declaredFiles: ['src/dep-asserted.ts'] });
+      dep('task-dep-dead', plan('dead'), { assignedWorkerId: 'worker-dead' });
+      dep('task-dep-missing', plan('missing'), { assignedWorkerId: 'worker-missing' });
+      dep('task-dep-stale', plan('stale'), { assignedWorkerId: 'worker-stale' });
+      // An architect planned it inside the landing window: its attempt closed just now.
+      dep('task-dep-planned', plan('planned'));
+      await h.state.load();
+      await setAttemptPhase(h.state, (await openFor('task-dep-planned', 'worker-architect')).id, 'closed');
+
+      // Without since the running check must not fail closed either: an idle link
+      // has not started, and counting it would bring back task-435683c2.
+      for (const args of [{ since: sinceIso() }, {}]) {
+        const result = await checked(args);
+        expect(result.peerDeclared.map((e) => [e.path, e.taskIds]), JSON.stringify(args)).toEqual([
+          ['src/dep-asserted.ts', ['task-dep-unassigned']],
+        ]);
+      }
+    });
+
+    it('T-C: with this task not terminal, a dependent with an open attempt is counted even without an active assignee', async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'WORKING' });
+      dep('task-dep-open', [{ status: 'PENDING', files: ['src/open.ts'] }]);
+      await h.state.load();
+      await openFor('task-dep-open', 'worker-gone');
+
+      const result = await checked({ since: sinceIso() });
+      expect(result.peerDeclared).toEqual([{
+        path: 'src/open.ts', taskId: 'task-dep-open', peerActive: true,
+        taskIds: ['task-dep-open'], activeTaskIds: ['task-dep-open'], editingTaskIds: [],
+      }]);
+    });
+
+    it('T-D: malformed assignee or attempt data on a dependent fails closed: the peer is counted and nothing throws', async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'WORKING' });
+      dep('task-dep-num', [{ status: 'PENDING', files: ['src/num.ts'] }], { assignedWorkerId: 42 });
+      dep('task-dep-phase', [{ status: 'PENDING', files: ['src/phase.ts'] }]);
+      await h.state.load();
+      const attempt = await openFor('task-dep-phase', 'worker-gone');
+      h.state.attempts.set(attempt.id, { ...attempt, phase: 'garbage' as unknown as typeof attempt.phase });
+
+      const result = await checked({ since: sinceIso() });
+      expect(result.peerDeclared.map((e) => [e.path, e.taskIds, e.peerActive])).toEqual([
+        ['src/num.ts', ['task-dep-num'], false],
+        ['src/phase.ts', ['task-dep-phase'], true],
       ]);
     });
   });

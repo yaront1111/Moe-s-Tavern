@@ -5,22 +5,26 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
-import { constants, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { constants, homedir, tmpdir } from 'node:os';
+import { dirname, join, win32 } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import {
-  AGENT_JOBS, MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, bridgeArgv, createFrameDecoder, encodeFrame, jobFrame as hostJobFrame, parseGuestFrame,
+  AGENT_JOBS, MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, createFrameDecoder, encodeFrame, jobFrame as hostJobFrame, parseGuestFrame,
   scopeRequest, TOOLS,
 } from '../local-runner/guest-bridge.mjs';
 import { GUEST_LAYOUT, JOB_IDENTITIES } from '../local-runner/guest-bootstrap.mjs';
 import {
   MAX_ARGUMENT_DEPTH, MAX_DAEMON_INFO_BYTES, MAX_PENDING_REQUESTS, MAX_RESPONSE_BYTES, endAgentJobs, runGuestSession,
 } from '../local-runner/guest-session.mjs';
-import { ownedInstanceName, QUERY_TIMEOUT_MS } from '../local-runner/lifecycle.mjs';
+import { isOwnedInstanceName, ownedInstanceName, QUERY_TIMEOUT_MS } from '../local-runner/lifecycle.mjs';
 import { AGENT_CLIS } from '../local-runner/agent-cache.mjs';
+import {
+  AUTHORIZED_COMMAND, SUPERVISOR_MODES, authorizedKeyLine, createTransportKeys, defaultKeyDir, guestAddress, knownHostsLine, sshExecutable,
+  sshStreamArgv, transportError, transportFiles,
+} from '../local-runner/guest-ssh.mjs';
 
 // The H section's project and daemon: a fake /health reporting its loopback bind for PROJECT (::1 best-effort; 0 where it
 // cannot bind). It is awaited before any test is registered: awaited after them, rows that all finish meanwhile (every
@@ -221,17 +225,6 @@ test('B14 a malformed binding is BRIDGE_INPUT_INVALID and a non-request frame is
   }
 });
 
-test('B15 bridgeArgv is the one fixed supervisor command for an owned instance name only', () => {
-  const name = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
-  const argv = bridgeArgv(name);
-  assert.deepEqual(argv, ['exec', '--no-map-working-directory', name, '--', 'sudo', '-n', '/opt/moe/bin/moe-supervisor', 'bridge']);
-  assert.ok(Object.isFrozen(argv));
-  for (const bad of ['primary', 'moe-vm-', `moe-vm-${'A'.repeat(20)}`, `moe-vm-${'a'.repeat(21)}`, `moe-vm-${'a'.repeat(19)} `,
-    'moe-vm- aaaaaaaaaaaaaaaaaaa', '', undefined, 7]) {
-    refuses(() => bridgeArgv(bad), 'BRIDGE_INPUT_INVALID', String(bad));
-  }
-});
-
 // CQ-R08b: the real guest supervisor under the host's python3, decoded with the R08a decoder and parseGuestFrame.
 const NO_GUEST = process.platform === 'win32' && 'the guest supervisor runs only in the Linux guest (POSIX python3)';
 const SUPERVISOR = fileURLToPath(new URL('../local-runner/guest-supervisor.py', import.meta.url));
@@ -248,12 +241,14 @@ const RELAY = "r, w = os.pipe()\nsys.exit(m.relay(['python3', '-I', '-c', *sys.a
 const relay = (child, ...args) => harness(RELAY, child, ...args);
 const b64 = bytes => Buffer.from(bytes).toString('base64');
 const WRITE = 'import base64, os, sys\nos.write(1, base64.b64decode(sys.argv[1]))\nos.write(2, base64.b64decode(sys.argv[2]))\n';
-// A root runner's GUARD unshares a PID namespace, in which a job's os.getpid() and fork() give namespace-local numbers.
-// The job keeps the guest's procfs (it has no mount namespace), and procfs gives the global ones, so every pid the host
-// checks or signals is read there. Off Linux there is no procfs and no PID namespace.
-const GLOBAL_PIDS = process.platform !== 'linux' ? 'import os\ngpid, gfork = os.getpid, os.fork\n' : `import os
+// A root runner's GUARD unshares a PID namespace, in which a job's os.getpid(), os.getsid() and fork() give
+// namespace-local numbers. The job keeps the guest's procfs (it has no mount namespace), and procfs gives the global
+// ones, so every pid the host checks or signals is read there. Off Linux there is no procfs and no PID namespace.
+const GLOBAL_PIDS = process.platform !== 'linux' ? 'import os\ngpid, gsid, gfork = os.getpid, lambda: os.getsid(0), os.fork\n' : `import os
 def gpid():
     return int(os.readlink('/proc/self'))
+def gsid():  # /proc/self/stat after the comm field: [0] state, [1] ppid, [2] pgrp, [3] session
+    return int(open('/proc/self/stat').read().rsplit(')', 1)[1].split()[3])
 def gfork():  # the child hands its parent its global pid
     r, w = os.pipe()
     pid = os.fork()
@@ -369,13 +364,13 @@ test('S5 a child that cannot start gives EX_OSERR after hello alone, and a dead 
 });
 
 test('S6 a host that vanishes mid-stream gets EX_IOERR and the whole child process group is killed', { skip: NO_GUEST, timeout: 30_000 }, async () => {
-  const child = `import os, signal, time
+  const child = `${GLOBAL_PIDS}import signal, time
 signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-grandchild = os.fork()
+grandchild = gfork()
 if grandchild == 0:
     time.sleep(60)
     os._exit(0)
-os.write(1, b'%d %d\\n' % (os.getpid(), grandchild))
+os.write(1, b'%d %d\\n' % (gpid(), grandchild))
 while True:
     try:
         os.write(1, bytes(65536))
@@ -441,7 +436,7 @@ test('S8 bridge mode refuses a non-root euid without writing a frame',
 // CQ-R08c: Node is the host on the supervisor's stdio and every agent on its socket. Linux checks the real
 // SO_PEERCRED; macOS has none, so there the peer uid is injected.
 const PEER = process.platform === 'linux' ? '' : ', peer_uid=lambda sock: os.getuid()';
-const AGENT_CHILD = 'import os, time\nos.write(1, b"%d" % os.getpid())\ntime.sleep(600)\n';
+const AGENT_CHILD = `${GLOBAL_PIDS}import time\nos.write(1, b"%d" % gpid())\ntime.sleep(600)\n`;
 async function until(check, label) {
   for (const end = Date.now() + 10_000; !check(); await sleep(10)) assert.ok(Date.now() < end, `timed out: ${label}`);
 }
@@ -637,7 +632,19 @@ print(sorted({n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and
 // the supervisor, exits 74 on host EOF unless it is hung.
 const NAME = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
 const SESSION_ID = 'worker-1@2026-10-26T00:00:00.000Z';
-const SPAWNED = ['multipass', bridgeArgv(NAME), { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
+// CQ-R14d2: the session opens its bridge over the SSH route (guest-stream.mjs). Its one info read gets this fake answer;
+// the ssh client and the key directory are strings only, so no row runs a real ssh or multipass.
+const BRIDGE_SSH = join(tmpdir(), 'moe-stream', 'ssh');
+const BRIDGE_KEYS = join(tmpdir(), 'moe-stream', 'keys');
+const INFO = { state: 'Running', image_hash: 'a'.repeat(64), image_release: '24.04 LTS', cpu_count: '2', memory: {}, disks: { sda1: {} }, mounts: {},
+  ipv4: ['10.0.0.2'] };
+const infoRun = async (executable, args) => {
+  if (JSON.stringify(args) !== JSON.stringify(['info', NAME, '--format', 'json'])) throw new Error('unexpected provider call');
+  return { stdout: JSON.stringify({ errors: [], info: { [NAME]: INFO } }), stderr: '' };
+};
+const SSH_ROUTE = Object.freeze({ run: infoRun, ssh: BRIDGE_SSH, keyDir: BRIDGE_KEYS });
+const SPAWNED = [BRIDGE_SSH, sshStreamArgv({ ...transportFiles(NAME, BRIDGE_KEYS), name: NAME, address: '10.0.0.2', mode: 'bridge' }),
+  { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
 const daemonFile = (name, info = {}) => {
   writeFileSync(join(DAEMON_DIR, name), typeof info === 'string' ? info : JSON.stringify({ port: HEALTH_PORT, pid: 1, projectPath: '/p', ...info }));
   return join(DAEMON_DIR, name);
@@ -671,7 +678,7 @@ function fakeProvider({ hung = false, first = (chunk, done) => done(), write = (
 function openSession(provider, { answer = tool => ({ content: [{ type: 'text', text: tool }] }), ...options } = {}) {
   const run = { outputs: [], observations: [], forwarded: [], signals: [] };
   run.promise = runGuestSession({
-    name: NAME, binding: BINDING, job: HOST_JOB, sessionId: SESSION_ID, daemonInfoPath: DAEMON, provider: { spawn: provider.spawn }, timeoutMs: 1_000,
+    name: NAME, binding: BINDING, job: HOST_JOB, sessionId: SESSION_ID, daemonInfoPath: DAEMON, provider: { ...SSH_ROUTE, spawn: provider.spawn }, timeoutMs: 1_000, // CQ-R14d2
     forward: (tool, args, { signal }) => { run.forwarded.push([tool, args]); run.signals.push(signal); return answer(tool, args, { signal }); },
     onOutput: (stream, data) => run.outputs.push([stream, data]), onObservation: frame => run.observations.push(frame), ...options,
   });
@@ -768,7 +775,7 @@ test('H2 the stream must be hello, then requests and output, then one observatio
 test('H3 each role tool is forwarded with only the host-bound identity, and refused requests never reach forward', { timeout: 30_000 }, async () => {
   const execution = { attemptId: BINDING.attemptId, generation: BINDING.generation, sessionId: SESSION_ID };
   const stamps = { 'moe.get_context': { sessionId: SESSION_ID }, 'moe.start_step': execution, 'moe.complete_step': execution,
-    'moe.complete_task': execution };
+    'moe.complete_task': execution, 'moe.qa_approve': execution, 'moe.qa_reject': execution };
   for (const binding of [BINDING, QA]) {
     const tools = Object.keys(TOOLS[binding.role]);
     const caller = { ...binding };
@@ -792,9 +799,18 @@ test('H3 each role tool is forwarded with only the host-bound identity, and refu
   await exchange(proc, run, denied.map(([, tool, args], index) => ({ kind: 'request', id: index + 1, tool, args })), denied.length);
   assert.deepEqual(run.forwarded, []);
   assert.deepEqual(proc.replies(), denied.map(([code], index) => refused(index + 1, code)));
+  // Under the QA binding a guest still presents none of the three identity fields on either decision tool.
+  const qaDenied = [...['moe.qa_approve', 'moe.qa_reject'].flatMap(tool => [
+    ['BRIDGE_IDENTITY_MISMATCH', tool, { attemptId: QA.attemptId }], ['BRIDGE_IDENTITY_MISMATCH', tool, { generation: QA.generation }],
+    ['BRIDGE_IDENTITY_MISMATCH', tool, { attemptId: 'attempt-9' }], ['BRIDGE_ARGUMENT_DENIED', tool, { sessionId: SESSION_ID }]])];
+  const qaProc = fakeProvider();
+  const qaRun = openSession(qaProc, { binding: QA });
+  await exchange(qaProc, qaRun, qaDenied.map(([, tool, args], index) => ({ kind: 'request', id: index + 1, tool, args })), qaDenied.length);
+  assert.deepEqual(qaRun.forwarded, []);
+  assert.deepEqual(qaProc.replies(), qaDenied.map(([code], index) => refused(index + 1, code)));
 });
 
-test('H4 replies, bounds and failures each answer once or end the session with a fixed code', { timeout: 30_000 }, async () => {
+test('H4replies, bounds and failures each answer once or end the session with a fixed code', { timeout: 30_000 }, async () => {
   assert.deepEqual([MAX_DAEMON_INFO_BYTES, MAX_PENDING_REQUESTS, MAX_ARGUMENT_DEPTH, MAX_RESPONSE_BYTES], [16_384, 64, 64, 1_048_576]);
   // Guest argument depth is checked iteratively before forward, even at 100k levels.
   const comment = (id, content) => ({ kind: 'request', id, tool: 'moe.add_comment', args: { content } });
@@ -860,7 +876,7 @@ test('H4 replies, bounds and failures each answer once or end the session with a
     await spawned(proc);
     proc.emit('error', Object.assign(new Error('secret'), { code: 'ENOENT' }));
   });
-  for (const spawn of [() => { throw new Error('secret'); }, () => ({})]) await ends('SESSION_SPAWN_FAILED', { provider: { spawn } });
+  for (const spawn of [() => { throw new Error('secret'); }, () => ({})]) await ends('SESSION_SPAWN_FAILED', { provider: { ...SSH_ROUTE, spawn } }); // CQ-R14d2
   let outputs = 0;
   await ends('SESSION_CALLBACK_FAILED', { onOutput: () => { outputs += 1; throw new Error('secret'); } }, proc => proc.send(HELLO, OUTPUT, OUTPUT));
   assert.equal(outputs, 1);
@@ -1115,13 +1131,13 @@ test('H5 end to end, the real supervisor and agent get scoped answers, forged by
 
 // CQ-R10a: SIGTERM, SIGHUP and SIGINT take relay()'s teardown; the guard empties the session of a SIGKILLed supervisor.
 const EX_TERMINATED = 75;
-const GROUP_JOB = `import os, signal, time
-grandchild = os.fork()
+const GROUP_JOB = `${GLOBAL_PIDS}import signal, time
+grandchild = gfork()
 if grandchild == 0:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     time.sleep(600)
     os._exit(0)
-os.write(1, b'%d %d %d' % (os.getpid(), grandchild, os.getsid(0)))
+os.write(1, b'%d %d %d' % (gpid(), grandchild, gsid()))
 time.sleep(600)
 `;
 // Linux /proc/<pid>/stat after the comm field: [0] state, [3] session id.
@@ -1201,16 +1217,25 @@ if how.startswith('SIG'):
     os.kill(os.getpid(), getattr(signal, how))
 sys.exit(int(how))
 `;
+// What proc(5) shows of a process that can run no more: State Z (zombie) or X (its reaper is releasing it), SIGKILL
+// pending in ShdPnd, or PF_EXITING (0x4) in /proc/<pid>/stat's flags, which is set as do_exit begins and never
+// cleared. The pending sets read empty once the reaper releases a task, and status is no atomic snapshot, so status
+// alone can read a dead process as live (task-b712ce09: 'X (dead)' with ShdPnd 0x0 on Linux 6.18).
+const CANNOT_RUN = `import signal
+def cannot_run(state, shdpnd, flags):
+    return state[0] in 'ZX' or bool(int(shdpnd, 16) & (1 << signal.SIGKILL - 1)) or bool(flags & 0x4)
+`;
 // The harness runs relay() on stdout. As the observation is written it records, for each pid the job reported, whether
-// that process can run no more: reaped, a zombie, or SIGKILL pending in proc(5)'s ShdPnd (Linux only; null elsewhere).
-const OBSERVE = `import base64, signal, time
+// that process can run no more: reaped, or CANNOT_RUN (Linux only; null elsewhere).
+const OBSERVE = `${CANNOT_RUN}import base64, time
 reported, dead = bytearray(), None
 def done(pid):
     try:
         status = dict(line.split(':\\t', 1) for line in open('/proc/%d/status' % pid) if ':\\t' in line)
-    except FileNotFoundError:
+        flags = int(open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[6])  # [6] after comm: flags
+    except (FileNotFoundError, ProcessLookupError):  # reaped before the open, or between the open and the read (ESRCH)
         return True
-    return status['State'][0] == 'Z' or bool(int(status['ShdPnd'], 16) & (1 << signal.SIGKILL - 1))
+    return cannot_run(status['State'], status['ShdPnd'], flags)
 write = m.write_frame
 def write_frame(fd, value):
     global dead
@@ -1255,9 +1280,48 @@ for (const [how, ending, observation] of ENDINGS) {
   }
 }
 
+// The probe's own classification, pinned without a process: a view of a live process, PF_FORKNOEXEC (0x40) and a pending
+// SIGTERM never count as unable to run, while a zombie, a releasing 'X (dead)', SIGKILL pending and PF_EXITING do.
+test('S11 probe: CANNOT_RUN counts exactly the views of a process that can run no more', { skip: NO_GUEST }, () => {
+  const views = [
+    ['Z (zombie)', '0000000000000000', 0],
+    ['X (dead)', '0000000000000000', 0],
+    ['R (running)', '0000000000000100', 0],
+    ['R (running)', '0000000000000000', 4],
+    ['S (sleeping)', '0000000000000000', 0],
+    ['R (running)', '0000000000000000', 64],
+    ['S (sleeping)', '0000000000004000', 0],
+  ];
+  const run = spawnSync('python3', ['-I', '-c', `${CANNOT_RUN}import json, sys\nprint(json.dumps([cannot_run(*v) for v in json.loads(sys.argv[1])]))`, JSON.stringify(views)], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout), [true, true, true, true, false, false, false]);
+});
+
+// S12 and S16 signal the harness from the harness: a root runner's job, inside GUARD's PID namespace, cannot see it.
+// The thread reads relay()'s frames from out_fd's pipe; once the job's start byte has arrived, and `settle` seconds
+// more, it signals this process, by then waiting in relay(). At EOF it sends nothing, so a failed start never hangs.
+const SIGNAL_ON_START = `import threading, time
+def signal_on_start(number, settle=0):
+    r, w = os.pipe()
+    def fire():
+        seen, frames, data = bytearray(), [], b'+'
+        while len(frames) < 2 and data:  # hello, then the job's start byte
+            data = os.read(r, 65536)
+            frames.extend(m.take_frames(seen, data, m.MAX_GUEST_FRAME_BYTES))
+        if data:
+            time.sleep(settle)
+            os.kill(os.getpid(), number)
+        while data:
+            data = os.read(r, 65536)
+        os.close(r)
+    thread = threading.Thread(target=fire)
+    thread.start()
+    return w, thread
+`;
+
 test('S12 on every exit path relay() restores SIGTERM, SIGHUP, SIGINT and the wakeup fd, leaks no fd and leaves SIGCHLD at SIG_DFL; its guard is stdlib-only', { skip: NO_GUEST, timeout: 30_000 }, () => {
   // killSignal: this harness keeps a no-op SIGTERM handler, so a default SIGTERM timeout kill would not end it.
-  const run = spawnSync('python3', ['-I', '-B', '-c', `${LOAD}import ast, signal
+  const run = spawnSync('python3', ['-I', '-B', '-c', `${LOAD}${SIGNAL_ON_START}import ast, signal
 roots = {alias.name.split('.')[0] for node in ast.walk(ast.parse(m.GUARD)) if isinstance(node, ast.Import) for alias in node.names}
 assert 'subprocess' in roots and roots <= set(sys.stdlib_module_names), roots
 mark = lambda number, frame: None
@@ -1290,7 +1354,10 @@ r, w = host()
 os.close(w)
 call(sleeper, in_fd=r)
 call(sleeper, in_fd=host(bytes([0, 0, 0, 1]) + b'x')[0])
-call(['python3', '-I', '-c', 'import os, signal, sys, time; os.kill(int(sys.argv[1]), signal.SIGTERM); time.sleep(30)', str(os.getpid())])
+w, thread = signal_on_start(signal.SIGTERM)
+call(['python3', '-I', '-c', 'import os, time; os.write(1, b"+"); time.sleep(30)'], out_fd=w)
+os.close(w)
+thread.join()
 print(json.dumps(results))
 `, SUPERVISOR], { timeout: 30_000, killSignal: 'SIGKILL' });
   assert.equal(run.status, 0, String(run.error ?? run.stderr));
@@ -1335,7 +1402,7 @@ print(json.dumps([code, [frame['kind'] for frame in frames], int(base64.b64decod
 `;
 
 test('S15 a termination signal that interrupts no syscall still ends a blocked wait with 75, whether or not the job has closed its output', { skip: NO_GUEST, timeout: 30_000 }, async () => {
-  const started = 'import os, time\nos.write(1, b"%d" % os.getpid())\n';
+  const started = `${GLOBAL_PIDS}import time\nos.write(1, b"%d" % gpid())\n`;
   const closed = 'null = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\n'; // pump waits on the start pipe
   for (const job of [`${started}time.sleep(600)\n`, `${started}${closed}time.sleep(600)\n`]) {
     // SIGKILL: a timeout's SIGTERM would itself wake the hung wait and let the run pass.
@@ -1353,17 +1420,20 @@ test('S15 a termination signal that interrupts no syscall still ends a blocked w
 });
 
 test('S16 a signal relay() does not handle still reaches the caller handler and never makes its wait spin, whether or not the job has closed its output', { skip: NO_GUEST, timeout: 30_000 }, () => {
-  const run = harness(`import resource, signal
+  const run = harness(`${SIGNAL_ON_START}import resource, signal
 calls = []
 signal.signal(signal.SIGUSR1, lambda number, frame: calls.append(number))
 cpu = lambda: sum(resource.getrusage(resource.RUSAGE_SELF)[:2])
-send = 'import os, signal, sys, time\\nos.kill(int(sys.argv[1]), signal.SIGUSR1)\\ntime.sleep(1)'
-quiet = 'import os, time\\nnull = os.open(os.devnull, os.O_RDWR)\\nos.dup2(null, 1)\\nos.dup2(null, 2)\\ntime.sleep(0.3)\\n'  # the output closes first
+start = 'import os, time\\nos.write(1, b"+")\\n'
+quiet = 'null = os.open(os.devnull, os.O_RDWR)\\nos.dup2(null, 1)\\nos.dup2(null, 2)\\n'  # the output closes before the signal
 results = []
-for job in (send, quiet + send):
+for job, settle in ((start + 'time.sleep(1)', 0), (start + quiet + 'time.sleep(1.3)', 0.3)):
     before, calls[:] = cpu(), []
-    code = m.relay(['python3', '-I', '-c', job, str(os.getpid())], out_fd=os.open(os.devnull, os.O_WRONLY), in_fd=os.pipe()[0])
-    results.append([code, list(calls), cpu() - before < 0.5])  # an undrained wakeup byte would spin for the job's whole second
+    w, thread = signal_on_start(signal.SIGUSR1, settle)
+    code = m.relay(['python3', '-I', '-c', job], out_fd=w, in_fd=os.pipe()[0])
+    os.close(w)
+    thread.join()
+    results.append([code, list(calls), cpu() - before < 0.5])  # an undrained wakeup byte would spin for the job's last second
 print(json.dumps(results))
 `);
   assert.equal(run.status, 0, String(run.stderr));
@@ -1374,7 +1444,7 @@ print(json.dumps(results))
 // and its connection stays queued until the bridge closes; S9's agent can race into the same queue between its connect
 // and the signal.
 test('S17 a connection the listener still queues when relay() ends reads EOF, never a reset', { skip: NO_GUEST, timeout: 30_000 }, async () => {
-  const host = await guarded('import os, time\nos.write(1, b"%d" % os.getpid())\nnull = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\ntime.sleep(600)\n');
+  const host = await guarded(`${GLOBAL_PIDS}import time\nos.write(1, b"%d" % gpid())\nnull = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\ntime.sleep(600)\n`);
   try {
     host.proc.kill('SIGSTOP'); // the supervisor this test started
     await until(() => process.platform !== 'linux' || procState(host.proc.pid)?.[0] === 'T', 'supervisor stopped');
@@ -1454,6 +1524,53 @@ ${RELAY}`, 'import time\ntime.sleep(600)\n');
   assert.deepEqual([run.status, decoder.push(run.stdout).map(parseGuestFrame)], [74, [HELLO]], String(run.error ?? run.stderr));
   decoder.end();
 });
+
+// S20's job enlarges one output pipe (F_SETPIPE_SZ, Linux only), writes 512 KiB to it without blocking and exits 3. The
+// harness holds back the first output frame until the guard has exited (waitid WNOWAIT leaves it for relay() to reap),
+// so the start pipe's EOF arrives with all but one read of that output unrelayed. The other pipe stays empty, so each
+// row pins its own stream's drain to EOF.
+const FILL = `import fcntl, os, sys
+fd = int(sys.argv[1])
+fcntl.fcntl(fd, fcntl.F_SETPIPE_SZ, 1 << 20)
+view = memoryview(bytes(range(256)) * 2048)
+while view:
+    view = view[os.write(fd, view):]
+sys.exit(3)
+`;
+const FILLED = Buffer.from(Uint8Array.from({ length: 512 * 1024 }, (_, index) => index % 256));
+const HOLD = `import subprocess, time
+popen, guards, held = subprocess.Popen, [], []
+def spawn(*args, **kwargs):  # relay() starts only the guard
+    guards.append(popen(*args, **kwargs))
+    return guards[-1]
+subprocess.Popen = spawn
+write = m.write_frame
+def write_frame(fd, value):
+    if value['kind'] == 'output' and not held:
+        deadline = time.monotonic() + 10
+        while not (exited := os.waitid(os.P_PID, guards[0].pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        held.append(exited is not None)
+    write(fd, value)
+m.write_frame = write_frame
+code = m.relay(['python3', '-I', '-c', *sys.argv[2:]], in_fd=os.pipe()[0])
+print(json.dumps(held), file=sys.stderr)
+sys.exit(code)
+`;
+
+for (const [fd, stream, other] of [[1, 'stdout', 'stderr'], [2, 'stderr', 'stdout']]) {
+  test(`S20 ${stream} the job left unread when its guard exited is relayed whole and in order before the one observation, which keeps the job's status`,
+    { skip: NO_GUEST || (process.platform !== 'linux' && 'only Linux F_SETPIPE_SZ lets a job exit with more than one read unrelayed'), timeout: 30_000 }, () => {
+      // SIGKILL: relay() would turn a timeout's SIGTERM into a 75 and kill the group itself.
+      const run = spawnSync('python3', ['-I', '-B', '-c', LOAD + HOLD, SUPERVISOR, FILL, String(fd)], { maxBuffer: 64 << 20, timeout: 20_000, killSignal: 'SIGKILL' });
+      const relayed = session(run);
+      assert.deepEqual(JSON.parse(String(run.stderr).trim().split('\n').at(-1)), [true], 'the guard had not exited while the first output frame was held');
+      assert.equal(relayed[stream].length, FILLED.length, `relayed ${stream} bytes`);
+      assert.ok(relayed[stream].equals(FILLED), `the relayed ${stream} is not the job's output`);
+      assert.equal(String(relayed[other]), '');
+      assert.deepEqual(relayed.exit, { ...EXIT, code: 3 });
+    });
+}
 
 // CQ-R10b: a root bridge reads one job frame from stdin before hello, then runs that agent CLI as the agent identity.
 // Paths, the identity and the job table reach main() only as Python keywords, through the harness's own argv. A non-root
@@ -1577,11 +1694,12 @@ def parent(pid):
     return int(open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[1])
 def cmdline(pid):
     return open('/proc/%d/cmdline' % pid, 'rb').read().decode('latin1')
+me = int(os.readlink('/proc/self'))  # global: under a root runner os.getpid() and os.getppid() are namespace-local
 environ = open('/proc/self/environ', 'rb').read().decode().split('\\0')
 status = open('/proc/self/status').read().splitlines()
 print(json.dumps({'env': dict(entry.split('=', 1) for entry in environ if entry), 'cwd': os.getcwd(), 'umask': os.umask(0),
                   'nnp': [line for line in status if line.startswith('NoNewPrivs:')],
-                  'cmdlines': [cmdline(pid) for pid in (os.getpid(), os.getppid(), parent(os.getppid()), parent(parent(os.getppid())))]}))
+                  'cmdlines': [cmdline(pid) for pid in (me, parent(me), parent(parent(me)), parent(parent(parent(me))))]}))
 `;
 const HELD = groups => `data = b''.join(iter(lambda: os.read(0, 65536), b''))
 r, w = os.pipe()
@@ -2107,3 +2225,313 @@ test('AE2 a CLI binary that misses its pinned sha256 is never installed, so its 
     await rejectsWith(session.promise, 'SESSION_PROVIDER_FAILED');
     assert.deepEqual([session.forwarded, session.observations, session.outputs, host.proc.exitCode], [[], [], [], 71]);
   });
+
+// CQ-R14a: guest SSH transport primitives (guest-ssh.mjs), the fixed pieces of the OpenSSH stream channel.
+const GS_SOURCE = fileURLToPath(new URL('../local-runner/guest-ssh.mjs', import.meta.url));
+const GS_NAME = 'moe-vm-0123456789abcdef0123';
+// The task description's argv, word for word.
+const GS_ARGV = ('-F none -T -e none -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="<kh>" -o GlobalKnownHostsFile="<kh>" '
+  + '-o HostKeyAlias=<name> -o HostKeyAlgorithms=ssh-ed25519 -o CheckHostIP=no -o IdentitiesOnly=yes -o IdentityAgent=none -i <key> '
+  + '-o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=no -o ForwardX11=no -o ClearAllForwardings=yes '
+  + '-o PermitLocalCommand=no -o ProxyCommand=none -o ControlMaster=no -o ControlPath=none -o UpdateHostKeys=no -o ConnectTimeout=15 '
+  + '-o ServerAliveInterval=15 -o ServerAliveCountMax=4 -l ubuntu <address> <mode>').split(' ');
+const gsArgv = fill => GS_ARGV.map(word => word.replace(/<(\w+)>/, (_, field) => fill[field]));
+const GS_POSIX = { name: GS_NAME, address: '10.0.0.2', identityFile: `/home/u/.moe/guest-ssh/${GS_NAME}.key`,
+  knownHostsFile: `/home/u/.moe/guest-ssh/${GS_NAME}.known_hosts`, mode: 'materialize' };
+// Every refusal carries the one fixed message, so no path, key, address or caller value reaches it.
+const gsRefuses = (fn, label) => assert.throws(fn,
+  error => error?.code === 'TRANSPORT_INPUT_INVALID' && error.message === 'Guest transport input was invalid.', label);
+const GS_KEYGEN = process.platform === 'win32' ? win32.join(win32.dirname(sshExecutable('win32')), 'ssh-keygen.exe') : '/usr/bin/ssh-keygen';
+
+test('GS1 guest-ssh.mjs is a leaf exporting exactly the transport primitives, and its restated supervisor facts match the originals', async () => {
+  assert.deepEqual(Object.keys(await import('../local-runner/guest-ssh.mjs')).sort(), ['AUTHORIZED_COMMAND', 'SUPERVISOR_MODES', 'authorizedKeyLine',
+    'createTransportKeys', 'defaultKeyDir', 'guestAddress', 'knownHostsLine', 'sshExecutable', 'sshStreamArgv', 'transportError', 'transportFiles']);
+  const source = readFileSync(GS_SOURCE, 'utf8');
+  assert.deepEqual([...source.matchAll(/^import .* from '([^']*)';$/gm)].map(match => match[1]), ['node:crypto', 'node:os', 'node:path']);
+  assert.deepEqual(['child_process', 'writeFile', 'invoker', 'spawn', 'import(', 'from "', "from './", "from '../"].filter(word => source.includes(word)), []);
+  const modeLines = readFileSync(SUPERVISOR, 'utf8').split('\n').filter(line => line.includes('if argv not in ('));
+  assert.equal(modeLines.length, 1);
+  assert.deepEqual([...SUPERVISOR_MODES], [...modeLines[0].matchAll(/\['([a-z]+)'\]/g)].map(match => match[1]));
+  assert.ok(Object.isFrozen(SUPERVISOR_MODES));
+  assert.equal(AUTHORIZED_COMMAND, `exec /usr/bin/sudo -n ${GUEST_LAYOUT.supervisor} "$SSH_ORIGINAL_COMMAND"`);
+});
+
+test('GS2 each fresh pair is an openssh-key-v1 private key that the in-box ssh-keygen turns back into its publicKey',
+  { skip: !existsSync(GS_KEYGEN) && `no in-box ssh-keygen at ${GS_KEYGEN}` }, () => {
+    const keys = createTransportKeys();
+    const again = createTransportKeys();
+    assert.deepEqual([keys, keys.client, keys.host].map(Object.keys), [['client', 'host'], ['privateKey', 'publicKey'], ['privateKey', 'publicKey']]);
+    assert.ok([keys, keys.client, keys.host].every(Object.isFrozen));
+    assert.equal(new Set([keys, again].flatMap(pairs => [pairs.client.publicKey, pairs.host.publicKey])).size, 4);
+    const dir = mkdtempSync(join(tmpdir(), 'moe-r14a-'));
+    try {
+      for (const [role, pair] of Object.entries(keys)) {
+        const lines = pair.privateKey.split('\n');
+        assert.deepEqual([lines[0], lines.at(-2), lines.at(-1)], ['-----BEGIN OPENSSH PRIVATE KEY-----', '-----END OPENSSH PRIVATE KEY-----', ''], role);
+        const body = lines.slice(1, -2);
+        assert.ok(body.length > 1 && body.slice(0, -1).every(line => line.length === 70) && body.at(-1).length <= 70, role);
+        // The public line is the 51-byte ssh-ed25519 blob alone: no comment and no private byte.
+        assert.match(pair.publicKey, /^ssh-ed25519 [A-Za-z0-9+/]+=*$/, role);
+        assert.equal(Buffer.from(pair.publicKey.slice('ssh-ed25519 '.length), 'base64').length, 51, role);
+        const file = join(dir, role);
+        writeFileSync(file, pair.privateKey, { mode: 0o600 });
+        const derived = spawnSync(GS_KEYGEN, ['-y', '-f', file], { encoding: 'utf8' });
+        assert.deepEqual([derived.status, derived.stdout.trim()], [0, pair.publicKey], `${role} ${derived.stderr}`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+test('GS3 sshStreamArgv returns the exact frozen argv, with drive paths in /, and refuses every unsafe input', () => {
+  const posix = sshStreamArgv(GS_POSIX);
+  assert.ok(Object.isFrozen(posix));
+  assert.deepEqual([...posix], gsArgv({ ...GS_POSIX, key: GS_POSIX.identityFile, kh: GS_POSIX.knownHostsFile }));
+  const drive = `C:\\Users\\me x\\.moe\\guest-ssh\\${GS_NAME}`;
+  const slashed = `C:/Users/me x/.moe/guest-ssh/${GS_NAME}`;
+  const windows = sshStreamArgv({ ...GS_POSIX, identityFile: `${drive}.key`, knownHostsFile: `${drive}.known_hosts`, mode: 'bridge' });
+  assert.deepEqual([...windows], gsArgv({ ...GS_POSIX, key: `${slashed}.key`, kh: `${slashed}.known_hosts`, mode: 'bridge' }));
+  // A drive path already in / is accepted as is (R14a QA: a backslash-only drive rule survived without this).
+  assert.deepEqual([...sshStreamArgv({ ...GS_POSIX, identityFile: `${slashed}.key`, knownHostsFile: `${slashed}.known_hosts`, mode: 'bridge' })],
+    [...windows]);
+  for (const argv of [posix, windows]) assert.equal(argv[argv.indexOf('CheckHostIP=no') - 1], '-o');
+  for (const mode of SUPERVISOR_MODES) assert.equal(sshStreamArgv({ ...GS_POSIX, mode }).at(-1), mode);
+  const paths = ['rel/key', 'C:rel', '-oProxyCommand=x', '/a%b', '/a$b', '/a"b', "/a'b", '/a`b', '/a\nb', '/a\x7fb', '/a\\b', '\\\\srv\\share\\k', '//srv/share/k', 42];
+  const bad = { name: ['vm', '', `${GS_NAME}0`, 42], address: ['::1', '10.0.0.02', '10.0.0.2 -oX=y', null], identityFile: paths,
+    knownHostsFile: paths, mode: ['shell', '', 'bridge ', 'BRIDGE', undefined] };
+  for (const [field, values] of Object.entries(bad)) {
+    for (const value of values) gsRefuses(() => sshStreamArgv({ ...GS_POSIX, [field]: value }), `${field} ${String(value)}`);
+  }
+  for (const input of [null, [], 'x', undefined]) gsRefuses(() => sshStreamArgv(input), String(input));
+  // The restated owned-name rule agrees with lifecycle.mjs isOwnedInstanceName.
+  for (const name of [GS_NAME, ownedInstanceName(), 'vm', '', `${GS_NAME}0`, `moe-vm-${'G'.repeat(20)}`, `moe-vm-${'g'.repeat(20)}`, 42]) {
+    let threw = false;
+    try { transportFiles(name, '/k'); } catch { threw = true; }
+    assert.equal(threw, !isOwnedInstanceName(name), String(name));
+  }
+});
+
+test('GS4 sshd un-escapes the forced command to AUTHORIZED_COMMAND, and bash hands SSH_ORIGINAL_COMMAND on as exactly one argument',
+  { skip: NO_GUEST }, () => {
+    const key = createTransportKeys().client.publicKey;
+    const line = authorizedKeyLine(key);
+    // sshd's opt_dequote: read up to the first unescaped ", turning only \" into ".
+    const prefix = 'restrict,command="';
+    assert.ok(line.startsWith(prefix), line);
+    let at = prefix.length;
+    let command = '';
+    while (at < line.length && line[at] !== '"') {
+      if (line[at] === '\\' && line[at + 1] === '"') at += 1;
+      command += line[at];
+      at += 1;
+    }
+    assert.deepEqual([command, line.slice(at)], [AUTHORIZED_COMMAND, `" ${key} moe-transport`]);
+    const stub = `'${process.execPath}' -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))'`;
+    const cmd = command.replace('/usr/bin/sudo -n /opt/moe/bin/moe-supervisor', stub);
+    assert.deepEqual([cmd.startsWith(`exec ${stub} `), cmd.split('"$SSH_ORIGINAL_COMMAND"').length], [true, 2]);
+    for (const value of [...SUPERVISOR_MODES, '', 'materialize; id', '$(id)', '`id`', 'a b', 'x\ny', undefined]) {
+      const env = { PATH: '/usr/bin:/bin', ...(value === undefined ? {} : { SSH_ORIGINAL_COMMAND: value }) };
+      const result = spawnSync('/bin/bash', ['-c', cmd], { encoding: 'utf8', env });
+      assert.equal(result.status, 0, String(result.stderr));
+      assert.deepEqual(JSON.parse(result.stdout), [value ?? ''], JSON.stringify(value));
+    }
+  });
+
+test('GS5 guestAddress accepts only a strict dotted-quad IPv4 string', () => {
+  for (const good of ['10.0.0.2', '255.255.255.255', '0.0.0.0']) assert.equal(guestAddress(good), good);
+  for (const value of ['', ' 10.0.0.2', '10.0.0.2\n', '10.0.0.02', '256.1.1.1', '1.2.3', '1.2.3.4.5', '::1', '10.0.0.2 -oProxyCommand=x', 42, null]) {
+    assert.equal(guestAddress(value), null, String(value));
+  }
+});
+
+test('GS6 the pinned client, key files, known_hosts line, authorized line refusals and fixed errors', t => {
+  assert.deepEqual(['linux', 'darwin', 'sunos', undefined].map(id => sshExecutable(id)), ['/usr/bin/ssh', '/usr/bin/ssh', null, null]);
+  const saved = process.env.SystemRoot;
+  t.after(() => { if (saved === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = saved; });
+  const fallback = 'C:\\Windows\\System32\\OpenSSH\\ssh.exe';
+  for (const [root, expected] of [['D:\\Win', 'D:\\Win\\System32\\OpenSSH\\ssh.exe'], ['relative', fallback], ['\\\\srv\\share', fallback],
+    ['D:/Win', fallback], [undefined, fallback]]) {
+    if (root === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = root;
+    assert.equal(sshExecutable('win32'), expected, String(root));
+  }
+  const dir = defaultKeyDir();
+  assert.equal(dir, join(homedir(), '.moe', 'guest-ssh'));
+  const files = transportFiles(GS_NAME, dir);
+  assert.ok(Object.isFrozen(files));
+  assert.deepEqual({ ...files }, { identityFile: join(dir, `${GS_NAME}.key`), knownHostsFile: join(dir, `${GS_NAME}.known_hosts`) });
+  for (const value of ['rel', '', `${dir}\n`, `${dir}\x7f`, 42, undefined]) gsRefuses(() => transportFiles(GS_NAME, value), String(value));
+  const key = createTransportKeys().host.publicKey;
+  assert.equal(knownHostsLine(GS_NAME, key), `${GS_NAME} ${key}`);
+  for (const [name, value] of [['vm', key], [GS_NAME, 'ssh-rsa AAAA'], [GS_NAME, `${key}\n${GS_NAME} ${key}`], [GS_NAME, `${key} x`]]) {
+    gsRefuses(() => knownHostsLine(name, value), `${name} ${value}`);
+  }
+  for (const value of ['', 'ssh-ed25519 a b', 42, `${key}\nssh-ed25519 AAAA`, `${key} `]) gsRefuses(() => authorizedKeyLine(value), String(value));
+  const invalid = ['TRANSPORT_INPUT_INVALID', 'Guest transport input was invalid.'];
+  assert.deepEqual(['NOPE', 'constructor', 42, 'TRANSPORT_ADDRESS_UNKNOWN'].map(code => [transportError(code).code, transportError(code).message]),
+    [invalid, invalid, invalid, ['TRANSPORT_ADDRESS_UNKNOWN', 'The guest transport address could not be established.']]);
+});
+
+// CQ-R14d2 bridge over the SSH route. runGuestSession's one spawn is openGuestStream's ssh client, after one info read
+// through provider.run. Each carrier failure measured on Multipass 1.17.0 `exec` stdio (DESIGN comment-350cb4d0 on
+// task-fd196d13) ends in a fixed SESSION_* code and delivers no observation.
+test('BS1 the session spawns only the pinned ssh client with sshStreamArgv, after one info read, never `multipass exec`', { timeout: 30_000 }, async () => {
+  for (const pinned of [false, true]) {
+    const proc = fakeProvider();
+    const log = [];
+    const provider = { run: async (executable, args) => { log.push([executable, ...args]); return infoRun(executable, args); }, keyDir: BRIDGE_KEYS,
+      spawn: (...args) => { log.push(['spawn']); return proc.spawn(...args); }, ...(pinned ? {} : { ssh: BRIDGE_SSH }) };
+    const run = openSession(proc, { provider });
+    assert.deepEqual(await exchange(proc, run, [REQUEST], 1), { observation: EXIT, executionReady: false });
+    // Without provider.ssh the client is the platform's pinned in-box OpenSSH.
+    assert.deepEqual(proc.calls, [[pinned ? sshExecutable(process.platform) : BRIDGE_SSH, SPAWNED[1], SPAWNED[2]]]);
+    assert.equal(Object.hasOwn(proc.calls[0][2], 'env'), false);
+    assert.deepEqual(log, [['multipass', 'info', NAME, '--format', 'json'], ['spawn']]);
+    assert.equal([...proc.calls[0][1], ...log.flat()].includes('exec'), false);
+    assert.equal(JSON.stringify([proc.calls, log]).includes(KEY), false);
+  }
+});
+
+// rejectsWith also proves that the error carries no path and no credential (KEY holds 'secret').
+test('BS2 a transport refusal is SESSION_SPAWN_FAILED with nothing spawned', { timeout: 30_000 }, async () => {
+  const noAddress = async () => ({ stdout: JSON.stringify({ errors: [], info: { [NAME]: { ...INFO, ipv4: [] } } }), stderr: '' });
+  const refusals = [['run rejects', { run: async () => { throw new Error(KEY); } }], ['no ipv4', { run: noAddress }],
+    ['relative keyDir', { keyDir: 'keys' }], ['empty ssh', { ssh: '' }]];
+  for (const [label, route] of refusals) {
+    const proc = fakeProvider();
+    const run = openSession(proc, { provider: { ...SSH_ROUTE, ...route, spawn: proc.spawn } });
+    await rejectsWith(run.promise, 'SESSION_SPAWN_FAILED', label);
+    assert.deepEqual([proc.calls, proc.job, run.observations], [[], null, []], label);
+  }
+});
+
+test('BS3 an abort during the info read is SESSION_ABORTED and the job frame never reaches the stream', { timeout: 30_000 }, async () => {
+  const proc = fakeProvider();
+  const writes = []; // every stdin.write call, even one a destroyed stream would refuse
+  const write = proc.stdin.write.bind(proc.stdin);
+  proc.stdin.write = (chunk, ...rest) => { writes.push(chunk); return write(chunk, ...rest); };
+  let release;
+  const reading = new Promise(resolve => { release = resolve; });
+  let asked = false;
+  const controller = new AbortController();
+  const run = openSession(proc, { signal: controller.signal, provider: { ...SSH_ROUTE, spawn: proc.spawn,
+    run: async (executable, args) => { asked = true; await reading; return infoRun(executable, args); } } });
+  await until(() => asked, 'info read');
+  controller.abort();
+  release();
+  await rejectsWith(run.promise, 'SESSION_ABORTED');
+  assert.deepEqual([proc.calls, writes, proc.job, proc.kills, run.observations, getEventListeners(controller.signal, 'abort').length],
+    [[SPAWNED], [], null, [], [], 0]);
+});
+
+// The Linux carrier fault (#5478): this carrier forwards only the first half of the job frame to the real bridge mode
+// (bridgeMain) and then ends its stdin. The supervisor refuses before hello with its EOF code, 74, which reaches the
+// session only as the provider's nonzero exit.
+function cutCarrier(host) {
+  const carrier = {};
+  carrier.spawn = (...args) => {
+    const real = host.spawn(...args);
+    const child = Object.assign(new EventEmitter(), { stdout: real.stdout, stderr: real.stderr, kill: signal => real.kill(signal) });
+    child.stdin = new Writable({ write(chunk, encoding, done) {
+      if (!real.stdin.writableEnded) real.stdin.end(chunk.subarray(0, chunk.length >> 1));
+      done();
+    } });
+    real.stdin.on('error', () => {}); // a supervisor that already exited is the row's subject, not a test failure
+    real.on('error', error => child.emit('error', error));
+    real.on('close', (...status) => child.emit('close', ...status));
+    return child;
+  };
+  return carrier;
+}
+
+test('BS4 a job frame cut short reaches the real supervisor, which refuses, and the session is SESSION_PROVIDER_FAILED',
+  { skip: NO_GUEST, timeout: 30_000 }, async () => {
+    const host = bridgeMain();
+    const run = openSession(cutCarrier(host), { timeoutMs: 10_000 });
+    await rejectsWith(run.promise, 'SESSION_PROVIDER_FAILED');
+    assert.deepEqual([host.launches, host.proc.exitCode, run.outputs, run.observations, run.forwarded], [[SPAWNED], 74, [], [], []]);
+  });
+
+// The Windows carrier faults (#3749): nothing reaches the guest's stdin, so no write callback ever fires, and the guest
+// never sees EOF, so only the local kill ends the client.
+test('BS5 a dead stdin with no hello is SESSION_TIMEOUT and the client is killed locally', { timeout: 30_000 }, async () => {
+  const proc = fakeProvider({ hung: true, first: () => {} });
+  const run = openSession(proc, { timeoutMs: 100 });
+  await rejectsWith(run.promise, 'SESSION_TIMEOUT');
+  assert.deepEqual([proc.calls, proc.kills, proc.written, run.outputs, run.observations, run.forwarded], [[SPAWNED], ['SIGKILL'], [], [], [], []]);
+});
+
+// After hello only forwards and stdin writes are bounded. A stall with nothing owed is bounded by the caller's signal,
+// never by the session (unchanged contract); this one owes a reply, so the reply write's own bound ends it.
+test('BS6 a stdout stall partway through an output frame, with the reply write stuck, is SESSION_TIMEOUT and delivers no byte',
+  { timeout: 30_000 }, async () => {
+    const proc = fakeProvider({ hung: true, write: () => {} });
+    const run = openSession(proc, { timeoutMs: 100 });
+    const partial = encodeFrame(OUTPUT);
+    proc.send(HELLO, REQUEST, partial.subarray(0, partial.length >> 1));
+    await rejectsWith(run.promise, 'SESSION_TIMEOUT');
+    assert.deepEqual([proc.kills, run.forwarded.length, proc.written.length, run.outputs, run.observations], [['SIGKILL'], 1, 1, [], []]);
+  });
+
+// ssh's own 255 (a connection or authentication failure) is the provider's failure before or after hello, even after a
+// whole observation: no supervisor code is ever derived from it.
+test('BS7 ssh exit 255 before and after hello is SESSION_PROVIDER_FAILED', { timeout: 30_000 }, async () => {
+  for (const frames of [[], [HELLO], [HELLO, OUTPUT, EXIT]]) {
+    const proc = fakeProvider();
+    const run = openSession(proc);
+    proc.send(...frames);
+    proc.exit(255);
+    await rejectsWith(run.promise, 'SESSION_PROVIDER_FAILED', JSON.stringify(frames));
+    assert.deepEqual([proc.calls, proc.kills, run.observations], [[SPAWNED], [], []], JSON.stringify(frames));
+  }
+});
+
+// Cancel is unchanged: ending stdin is the signal, and the supervisor's 74 comes back as ssh's own exit status.
+test('BS8 an abort after hello ends stdin, the 74 exit beats the kill timer and the session is SESSION_ABORTED', { timeout: 30_000 }, async () => {
+  const proc = fakeProvider();
+  const statuses = [];
+  proc.on('close', code => statuses.push(code));
+  const controller = new AbortController();
+  const run = openSession(proc, { signal: controller.signal });
+  proc.send(HELLO, OUTPUT);
+  await until(() => run.outputs.length === 1, 'hello received'); // output is accepted only after hello
+  controller.abort();
+  await rejectsWith(run.promise, 'SESSION_ABORTED');
+  assert.deepEqual([statuses, proc.kills, proc.stdin.destroyed, run.observations], [[74], [], true, []]);
+});
+
+// Governor Linux Gate 0 (comment-888759e9 on task-fd196d13): the Windows hcs and the WSL qemu Multipass installs both
+// number zone1 10.97.0.0/24, so one guest IP can exist on both hosts at once, and an IP can be recycled. Each session
+// reads the address fresh, and the host key is checked under HostKeyAlias=<owned name> against that VM's own
+// known_hosts, so another guest answering at the address is ssh's own 255: a fixed code, never a session with it.
+test('B-XWIRE a reused or cross-wired guest IP fails closed under the HostKeyAlias pin', { timeout: 30_000 }, async () => {
+  const addresses = ['10.97.0.41', '10.97.0.42'];
+  const reads = [];
+  const run = async (executable, args) => {
+    await infoRun(executable, args); // refuses anything but the exact info read
+    reads.push(addresses[reads.length]);
+    return { stdout: JSON.stringify({ errors: [], info: { [NAME]: { ...INFO, ipv4: [reads.at(-1)] } } }), stderr: '' };
+  };
+  const first = fakeProvider();
+  const done = openSession(first, { provider: { ...SSH_ROUTE, run, spawn: first.spawn } });
+  assert.deepEqual(await exchange(first, done, [REQUEST], 1), { observation: EXIT, executionReady: false });
+  // The address moved, and the guest now answering there holds another host key.
+  const second = fakeProvider();
+  const crossed = openSession(second, { provider: { ...SSH_ROUTE, run, spawn: second.spawn } });
+  await until(() => second.calls.length === 1, 'second spawn');
+  second.stderr.write('@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.\n');
+  second.exit(255);
+  await assert.rejects(crossed.promise, error => error?.code === 'SESSION_PROVIDER_FAILED' && Object.keys(error).join() === 'code'
+    && !error.message.includes(addresses[1]) && !/IDENTIFICATION|verification|[\\/]/.test(error.message));
+  assert.deepEqual([second.kills, crossed.outputs, crossed.observations, crossed.forwarded], [[], [], [], []]);
+  assert.deepEqual(reads, addresses); // one fresh read per session, nothing cached
+  const argvs = [first, second].map(proc => proc.calls[0][1]);
+  const files = transportFiles(NAME, BRIDGE_KEYS);
+  assert.deepEqual(argvs, addresses.map(address => sshStreamArgv({ ...files, name: NAME, address, mode: 'bridge' })));
+  // Whatever the IP, the pin is the owned name and that VM's own files: the two argvs differ only in the address.
+  assert.deepEqual(argvs[0].filter((arg, i) => arg !== argvs[1][i]), [addresses[0]]);
+  for (const argv of argvs) {
+    assert.ok(argv.includes(`HostKeyAlias=${NAME}`));
+    assert.ok(argv.find(arg => arg.startsWith('UserKnownHostsFile=')).endsWith(`/${NAME}.known_hosts"`));
+    assert.ok(argv[argv.indexOf('-i') + 1].endsWith(`/${NAME}.key`));
+  }
+});

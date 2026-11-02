@@ -1,0 +1,189 @@
+{
+  "id": "task-1a8f1d0e199046a289e94a5453d758b8",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07] Turn on verified-local: starting a worker or QA agent runs it in a Moe VM",
+  "description": "Added by the human on 2026-10-31 as the rollout's last task: the activation step that every CQ row scoped out.\n\nWhy it is needed. The pieces are built but nothing switches them on:\n- CQ-R built the VM agent path: scripts/local-runner/agent-lifecycle.mjs (host side of one agent job), guest-session/guest-bridge, the guest-supervisor bridge mode and the R10d4 headless launch spec. Nothing calls agent-lifecycle.mjs except its tests and certify.\n- The JetBrains Agents menu and scripts/moe-agent.{sh,ps1} always run the agent CLI on the host. The only VM UI is the Managed VM panel (status/reconcile/cleanup).\n- assertExecutionProfileReady (packages/moe-daemon/src/delivery/executionProfile.ts:108) refuses verified-local unconditionally.\n- CQ-M06a records non-promotion. Without this row, the rollout ends with everything built and certified but still switched off.\n\nObjective. A project sets executionProfile verified-local, and readiness is proven from evidence. From then on, starting a worker or QA agent runs its CLI inside an owned Moe VM through agent-lifecycle.mjs:\n- source goes in by the snapshot transfer;\n- changes come back only through export and host admission;\n- the host wrapper stays the only Git writer and lander;\n- required checks run in their own check VMs (CQ-V, CQ-R11).\nArchitect and governor seats stay on the host unless the approved design says otherwise. JetBrains first; VS Code parity before the docs call it supported.\n\nSize. This is larger than one task. Split it with moe-epic-breakdown into the daemon readiness gate, the JetBrains launch route, the wrapper route and VS Code parity, and keep this row as the final integration task.\n\nOpen decisions go to the human before submit_plan:\n- one VM per job or per seat;\n- a concurrency cap, since each VM is 2 CPUs, 4 GB RAM and 20 GB disk;\n- what WSL agent mode does under verified-local;\n- how the daemon trusts a certification report.",
+  "definitionOfDone": [
+    "With executionProfile absent, legacy or observe, launching agents behaves exactly as today; regression tests cover the JetBrains launcher and both wrappers.",
+    "With verified-local and readiness met, JetBrains Start Agent for a worker or QA seat runs the CLI inside an owned VM via agent-lifecycle.mjs, and the host never runs that seat's agent CLI. Tested.",
+    "With verified-local and readiness not met, Start Agent refuses with a dialog naming each missing capability. No terminal, no VM and no host fallback. Tested.",
+    "assertExecutionProfileReady derives readiness from evidence: a passing certify report for this host's platform that matches the current provider version, image pin and supervisor pin, plus the other listed capabilities. Tests prove that no env var, setting, persisted label, caller argument, or report file inside the project or .moe/ satisfies it.",
+    "An agent job's changes reach the branch only through export and host admission, then the wrapper's landing. The job's VM is deleted on every exit path, through the owned ledger. Tested.",
+    "VS Code reaches parity with the JetBrains launch route and refusal.",
+    "Docs are updated: the executionProfile row in CONFIGURATION.md, 'Nothing here is active yet' in ARCHITECTURE.md Local Runner Isolation, and 'Certification is not activation' in CERTIFICATION.md.",
+    "One end-to-end task runs on a real VM on Windows and on Linux, run by the human or the governor (not a seat), with the outcome recorded as a task comment.",
+    "Daemon npm test, ./gradlew test and node --test scripts/tests/local-runner.test.mjs pass, run in a git-archive snapshot and not in place in the shared checkout."
+  ],
+  "taskRails": [
+    "Never let an env var, setting, persisted label, caller argument or project-supplied file grant verified-local.",
+    "Never fall back to running the agent CLI on the host when the VM path fails; refuse instead.",
+    "Legacy, the default, stays byte-for-byte unchanged in behavior.",
+    "No seat runs Multipass. Real-VM runs belong to the human or the governor.",
+    "Do not loosen guest readiness, the certified-provider.json pins or guest-supervisor.py's guarantees.",
+    "The open design decisions (VM per job or per seat, the concurrency cap, WSL agent mode, report trust) go to the human before submit_plan."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ced857485a1c4d75b57cc25dcc9b4d82",
+    "task-f4811a729f9e436ba129a65c12d348c1",
+    "task-f3f364a6c6864054901ec27f342a87f6",
+    "task-b1ca54f2716442be889a14623eb59983",
+    "task-4679ec688bb14233b3b5454e32a9b52d",
+    "task-47d21b835b5e4f28bb08b17f83d22256",
+    "task-77b0637fbe0043da988ea8206e5aaadb",
+    "task-81bb2dddbf944a4297c2a87734f3bb44",
+    "task-fd196d137c44497188d2639f149e259b",
+    "task-62ec51f179494706a39045154d07e544",
+    "task-7a0dadf992014449a4c9aaf8426cfd24",
+    "task-d56fb46eb0a941808a7ba7e0588f2fd5",
+    "task-5c4b5fab53ce41e294af5c70de1af51d",
+    "task-41d0c5a9855143ceb3ab81e61aaf9fa9",
+    "task-5464e7259cfd479793d93f9651fb3eba",
+    "task-7aa6be67bcfb47bb8dca4ec6d6de35df",
+    "task-435e8989c4d0425aa6eecf523353e5bc",
+    "task-4e2f2b45926c47bb846a635077094106",
+    "task-cd2977e10648489fa3d63b0a376ca6fa",
+    "task-8dbc76d7678b416bbfdbbbe9f58a33f8"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.5,
+  "comments": [
+    {
+      "id": "comment-8bf3a7e488d14fada6b1c5363b3e6933",
+      "author": "governor-693b7073",
+      "content": "@architect-b742aab1 Scope extension from the human (2026-10-31, \"make sure that our board in the end will have complete system\"). This row is now the board's final whole-system acceptance, not only the activation.\n\nDependencies. dependsOn now covers every open row on the board, transitively:\n- M06 (ced85748), which covers I06, V12 and M06a;\n- R13 (f4811a72);\n- CQ-RF07 (f3f364a6);\n- WT-19 (b1ca54f2), which covers the worktree epic and the Stability bugs;\n- the three certify fixes that R13's 20-id cap could not hold: 4679ec68, 47d21b83, 77b0637f.\nAny new row filed from here on should be wired under one of these, or under this row directly.\n\nOn the create_task warning: it flagged this row as a second hardening row next to M06. Keep both. M06 is integration before activation and records non-promotion. This row comes after activation and is the last acceptance.\n\nExtra DoD items for this row, on top of its description:\n1. After activation and with worktreeMode on (WT-19), the full regression passes, run in a git-archive snapshot, never in place:\n   - daemon, proxy and claude-plugin npm test;\n   - JetBrains ./gradlew test and buildPlugin;\n   - VS Code npm test and npm run compile;\n   - bash scripts/tests/postflight.sh (plus the .ps1 sibling), scripts/tests/parity-check.sh, and npm run lint.\n2. A short end-to-end on the real board in both legacy and verified-local, run by the human or the governor: architect plan → worker → QA → landed DONE. The outcome is recorded as a comment here.\n3. The plugin built from that tree is installed, and the CQ-M06a record is updated with the promotion decision and the per-platform status. macOS stays \"not certified\" until the human has a Mac.\n\nAsk the human the open decisions (VM per job or per seat, the concurrency cap, WSL agent mode, report trust) before submit_plan. Split the slices with moe-epic-breakdown and keep this row last.",
+      "timestamp": "2026-10-31T21:18:59.946Z"
+    },
+    {
+      "id": "comment-6af90ea84efa42368d9735875b020f18",
+      "author": "architect-30d804be",
+      "content": "DESIGN DECISIONS (human, 2026-11-01, architect REPL). Full text: mem:decision-cq-m07-verified-local-activation.\n1. VM per SEAT, not per job. Each worker/QA seat gets one owned VM, reused for every job. Between jobs: verified sweep, a NEW root-only supervisor `reset` (materialize refuses an existing workspace), then a fresh materialize. The human accepted /tmp residue across one seat's tasks. The VM is deleted through the owned ledger when the seat exits; cleanup reclaims a crashed seat's VM once the seat is proven gone.\n2. Cap derived from host size, host-wide: max(1, min(floor(CPUs/2), floor((RAM-8 GiB)/4 GiB))) agent VMs. Check VMs keep their own dispatch. A seat over the cap waits before claiming, never falls back to the host.\n3. WSL mode: under verified-local, worker/QA seats launch natively on Windows (PowerShell + Windows Multipass) whatever the WSL toggle; architect/governor keep WSL; moe-agent.sh refuses verified-local inside WSL.\n4. Report trust: host store, live match. Certify files certified reports in <OS account home>/.moe/certification/ (no env override, symlinks refused, nothing inside the project or .moe/). The daemon accepts only native + certified + this host's platform/arch + the LIVE Multipass version + the shipped image and supervisor pins.\n5. VM credentials: per-account tokens minted by the accounts CLI into an owner-only store; rotation stays on. codex uses OPENAI_API_KEY/CODEX_API_KEY. gemini/grok are refused under verified-local.\nAccepted consequence: the reset mode moves R13's supervisor pin (3a19f3bf), so it is sequenced right after task-fd196d13 and ONE operator re-certify covers both.\n\nSLICES (CQ-M07a..q). This row stays the integration row; its dependsOn now names the chain tails n, p, l and e.\nPLANNING now:\n- a 5a635bc9: certification reader\n- b cf952313: readiness evaluator (after a)\n- c 9ae89d5e: assertExecutionProfileReady wiring (after b)\n- d b0485bb1: moe.get_execution_readiness + /ws GET_EXECUTION_READINESS (after c)\n- q bb1502b1: strict WORKING/REVIEW claims need executionRoute 'vm'\n- k 324d4f53: per-account VM tokens\n- o 8dbc76d7: JetBrains route (after d)\n- l d56fb46e: Accounts tab token action (after k, o)\n- p 7a0dadf9: VS Code parity (after o)\nBACKLOG, gated on fd196d13's design ruling:\n- e 5c4b5fab: certify files reports in the store\n- f d6bc12ff: supervisor reset mode\n- g 9076afab: seat-owned ledger + cleanup proof\n- h eb783f59: host cap (after g)\n- i 18809c69: seat start/stop (after g, h)\n- j 1dc49ae2: seat job run (after i, f)\n- m 828e7d21: moe-agent.sh VM route (after d, q, j, k, WT-19, CQ-V04c)\n- n 62ec51f1: moe-agent.ps1 parity (after m)\nThis row will be BLOCKED on n, p, l and e, and planned once they land: integration e2e, docs sweep (CONFIGURATION, ARCHITECTURE, CERTIFICATION, MCP_SERVER, TROUBLESHOOTING), full regression with worktreeMode on, and the human/governor real-VM runs.",
+      "timestamp": "2026-11-01T08:11:36.341Z"
+    },
+    {
+      "id": "comment-6384835840064c0a82abe3c3f0797230",
+      "author": "governor-f668f954",
+      "content": "@architect-30d804be The fd196d13 transport design is ruled **APPROVED** (comment-d954b3df), and **Gate 0 passed on both real hosts** (comment-2566639b Windows, comment-888759e9 Linux). Your BACKLOG slices gated on that ruling (e, f, g, h, i, j, m, n) are clear to promote and plan at your pace. What the ruling means for them:\n1. **Transport.** Every stdin or bulk stream goes over OpenSSH through guest-ssh.mjs (R14a `sshStreamArgv`) and R14d1/d2/d3's stream runners: materialize, export, verify, the install modes, bridge and check sessions. `multipass exec` stays only for stdin-less queries capped at 64 KiB.\n   - M07f's `reset` and M07j's seat job run (materialize, bridge session, export) must reuse that route. Never exec stdio.\n   - Your reset is a new supervisor mode, so add it to R14a's frozen `SUPERVISOR_MODES` in the same slice that adds it to guest-supervisor.py main(). The forced command passes any one word, and main()'s allowlist is the gate.\n2. **Key custody.** Per-VM SSH keys live in `~/.moe/guest-ssh/<name>.{key,known_hosts}`, not runner-keys (R14a comment-f4d90818). M07g's seat-ledger cleanup must unlink both files when it deletes the VM, the same way R14c's purgeOwned does, and only once the VM is verified absent.\n3. **Your stores stay separate.** The certification store (`<home>/.moe/certification/`) and M07k's per-account VM token store must each be their own owner-only directory. Not runner-keys, not guest-ssh, nothing under the project or .moe/.\n4. **Pin and certify order.** Per the human's decision, M07f moves the 3a19f3bf pin and one re-certify covers fd196d13 plus M07f. I'll also run an **unrecorded early-signal certify** right after fd196d13 lands, so transport problems surface before M07f. Only the post-M07f run is recorded on R13.\n5. **File order.** M07j (and any slice that edits snapshot-transfer.mjs, guest-session.mjs or guest-ssh.mjs) is already behind fd196d13, which depends on every R14 slice. Keep it that way. M07f's guest-supervisor.py edit is free of R14, since no R14 slice touches the supervisor.",
+      "timestamp": "2026-11-01T08:13:07.729Z"
+    },
+    {
+      "id": "comment-66f37d9b673c4aecb426d34ed6f854cf",
+      "author": "qa-97c4310b",
+      "content": "ADVISORY from the CQ-M07a QA (qa-97c4310b, approved 2026-11-01). Non-blocking; fold it in only if this row touches certificationEvidence.test.ts anyway.\n- The drift table in certificationEvidence.test.ts catches every clause-level mutant of the checkCertificationReport port: 95 of 112 QA mutants killed, plus 15 of 15 reader mutants.\n- 6 strict-to-loose equality swaps (=== to ==) still survive: report.kind, version, transport, provider.name, executionReady and the check-row id. certify.mjs mirrors 3 of them.\n- The shipped port is correct: it refuses these inputs exactly as certify.mjs does. The gap is only that a future == regression would go unseen.\n- To kill them, add refused VARIANTS rows with JSON type-confusion values:\n  - version '1' or true;\n  - kind ['isolation-certification'];\n  - transport ['injected'] with certified false;\n  - provider name ['multipass'];\n  - executionReady 0;\n  - one check id as ['provision'].\n- The file sits at the 400-line cap for its slice: fold the rows 2-3 per line.",
+      "timestamp": "2026-11-01T12:04:01.423Z"
+    },
+    {
+      "id": "comment-fa0f600012ed40708cf1fb2400ea0461",
+      "author": "worker-cef53f62",
+      "content": "SUPERVISOR PIN MOVE (CQ-M07f, task-d6bc12fff910484d92368fa6825f523c). After the reset mode, the sha256 of guest-supervisor.py is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. It supersedes 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190 for the operator's single re-certify.\n\nCommit-to-be: the M07f completion commit `feat(task-d6bc12fff910484d92368fa6825f523c): …` on moe/work-2026-10-24, after 69f2d710. That task's `commits` will carry the SHA.\n\nThe same diff sets certificationEvidence.ts CERTIFICATION_PINS.supervisorSha256 to 616463b7…. I verified that in a snapshot: npm ci, then vitest on certificationEvidence and 6 sibling test files, 437 tests passed. With the old pin, the drift test fails.\n\nNo other pin moved. Certify after this commit lands, or the report fails CERTIFICATION_REPORT_SUPERVISOR.",
+      "timestamp": "2026-11-01T12:25:58.327Z"
+    },
+    {
+      "id": "comment-b825be98fd554c1ab0d4936c5a6422fd",
+      "author": "worker-0e1ab990",
+      "content": "CQ-V close-out hand-forward (task-b621ddc9, worker-0e1ab990, 2026-11-01). The CQ-V epic is reviewed end to end. These pieces are built but switched off, and activation must own them:\n\n1. Nothing invokes the trusted runner's check client (scripts/local-runner/check-dispatch.mjs, V04b) per strong candidate. Required checks are only ever recorded by tests.\n2. Trusted-install provisioning of `moe-daemon check-architecture` is unbuilt. Only that installed form counts: anything else reports required-check-untrusted-checker:<id> (efbf1742). The --rules config files need protection too.\n3. check-architecture judges a committed --tree against its first parent, so the candidate must be materialized as a single commit on baseRevision (comment-5381881a on V10).\n4. Protection covers only the entries the approver names. A protected wrapper that runs unprotected candidate code (a dist built from candidate sources, a helper or a package script) is outside it (comment-bde17873, V01).\n5. NEW: task-5464e725 (MEDIUM). Guest-session STAMPED never stamps attemptId/generation/sessionId onto qa_approve/qa_reject, so a VM QA seat is always refused STEP_ENTRY_IDENTITY_REQUIRED under verified-local. Suggest adding it to this row's dependsOn: it fails closed, but it blocks the QA VM route. M07j1's design assumes the parity.\n6. Display note for the readiness/clients slices: a strong task that owes no check shows requiredCheckSatisfied absent (documented \"no check owed\"), while qa_approve refuses with required-checks-undeclared.\n\ndocs/ARCHITECTURE.md \"### The verified-local path\" now documents all of the above as landed.",
+      "timestamp": "2026-11-01T13:36:26.562Z"
+    },
+    {
+      "id": "comment-7d618d925dee494daa3d5c52500dc349",
+      "author": "architect-1a34a669",
+      "content": "Planner finding from CQ-M07m2 (task-91ee455a), for this activation row. The VM route runs in worktree mode only.\n\nBefore M07m2, the worktree completion arm (land_worktree_completion, then wt_land_rounds) had no CQ-V07 strong-profile intent rule. Under verified-local, an ungated completion would move the target with no candidate.\n\nM07m2 adds wt_strong_intent. Under verified-local, it refuses with MOE_COMMIT_REFUSED_INTENT_INCOMPLETE unless WT-10's L6 froze and gated exactly the merged tree M on B. So verified-local in worktree mode now needs settings.qualityGate.\n\nStill open, and not in M07m2:\n(1) The worktree arm never sends record_delivery_receipt. WT-08's journal variant has no candidate, and WT-10 adds the candidate only when gated. So a strict DONE has no verified delivery to read.\n(2) Its gate is the host frozen gate, not the check-VM dispatch (check-dispatch.mjs).\n\nDetails: mem:decision-worktree-strong-intent.",
+      "timestamp": "2026-11-01T18:51:26.732Z"
+    },
+    {
+      "id": "comment-1834b0bb28584aa98ffbc6a0ff4404f7",
+      "author": "qa-1b5727b1",
+      "content": "QA follow-up from CQ-M07g (task-9076afab, approved, completion 493ea8a4). This is a test gap, not a defect. No row pins the production default of the seat runner probe in scripts/local-runner/vm-control.mjs. Every VC-C3/VC-R2 row injects runnerAlive, so three mutants pass all tests:\n- cleanupReport `runnerAlive = runnerProbe` changed to `() => false`;\n- the same change in reconcileReport;\n- runVmControl `deps.runnerAlive ?? (() => false)`.\nAny of them would purge a seat VM whose runner is still alive on this host.\n\nSuggested row for whichever slice next edits local-runner-vm-control.test.mjs (or the M07 integration):\n- one seat record with runner `${process.pid}@x`, host localRunnerHost() and platform process.platform;\n- the fake daemon says gone, and the lease is free;\n- call cleanupReport and reconcileReport (or runVmControl with deps.call only), passing NO runnerAlive;\n- expect preserved/held reason 'runner-alive' and zero provider delete calls.\n\nThe QA harness for the check: /tmp/qa-m07g-mut/run.mjs (mutants M28-M30).",
+      "timestamp": "2026-11-01T20:07:43.555Z"
+    },
+    {
+      "id": "comment-c16cb64bec724f188aeee224e331aaf8",
+      "author": "governor-978922c1",
+      "content": "Governor, relaying two advisory doc points from CQ-M06's QA approval (task-ced85748, 22:41Z), for when this row rewrites the verified-local text in docs/MCP_SERVER.md:\n1. In get_context's Execution policy context paragraph, \"an open attempt whose own snapshot is verified-local shows ... under a non-strict effectiveProfile\" holds only when the TASK snapshot is not verified-local. A stored verified-local task snapshot floors effectiveProfile.\n2. In the Strict completion (CQ-F08) bullet, \"completes as legacy after the rollback\" also covers a rollback to observe.\nNeither blocked M06.",
+      "timestamp": "2026-11-01T22:42:23.021Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T21:17:20.276Z",
+  "updatedAt": "2026-11-01T22:42:23.021Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T21:17:38.753Z"
+  },
+  "contextFetchedBy": [
+    "architect-b742aab1",
+    "architect-30d804be"
+  ],
+  "commits": [
+    {
+      "sha": "abb8af3a30e86ad5ef49889e49d481a0bb459fc0",
+      "ref": "refs/moe/rescue/task-1a8f1d0e199046a289e94a5453d758b8/20261101T003018Z",
+      "kind": "rescue",
+      "role": "architect",
+      "sessionId": "architect-b742aab1@2026-10-31T21:17:41Z",
+      "paths": [
+        ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+        ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+        ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+        ".moe/tasks/task-81bb2dddbf944a4297c2a87734f3bb44.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+      ],
+      "recordedBy": "architect-b742aab1",
+      "recordedAt": "2026-11-01T00:30:13.383Z",
+      "status": "UNKNOWN",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-1a8f1d0e199046a289e94a5453d758b8 ref=refs/moe/rescue/task-1a8f1d0e199046a289e94a5453d758b8/20261101T003018Z sha=abb8af3a30e86ad5ef49889e49d481a0bb459fc0 reason=teardown"
+    },
+    {
+      "sha": "d861c5345747a3dbaa13045e47acad68b720f11d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-30d804be@2026-11-01T07:33:39Z",
+      "paths": [
+        ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+        ".moe/tasks/task-81bb2dddbf944a4297c2a87734f3bb44.json"
+      ],
+      "recordedBy": "architect-30d804be",
+      "recordedAt": "2026-11-01T07:34:08.579Z",
+      "treeId": "f8cde410ff5e372173242cf5170b5116880ea66b",
+      "status": "PLANNING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+    ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+    ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+    ".moe/tasks/task-81bb2dddbf944a4297c2a87734f3bb44.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-30d804be@2026-11-01T07:33:39Z",
+    "at": "2026-11-01T14:14:38.068Z"
+  },
+  "blockedReason": "Split per the row's own instruction (moe-epic-breakdown) after the human settled the open decisions in the architect REPL on 2026-11-01: VM per seat with a supervisor reset mode, a host-size cap, native Windows worker/QA under WSL mode, a host-store certify report with live match, and per-account VM tokens. Recorded in comment-6af90ea8 and mem:decision-cq-m07-verified-local-activation. This row is now the integration row of 17 slices (CQ-M07a..q). Its plan depends on code the slices create: the readiness projection, the seat runner CLI and the wrapper VM route. So it waits on the chain tails CQ-M07n (task-62ec51f1), CQ-M07p (task-7a0dadf9), CQ-M07l (task-d56fb46e) and CQ-M07e (task-5c4b5fab), which transitively cover every slice. It auto-returns to PLANNING when they are DONE. Handoff: mem:task-task-1a8f1d0e199046a289e94a5453d758b8-handoff.",
+  "blockedOnTaskIds": [
+    "task-62ec51f179494706a39045154d07e544",
+    "task-7a0dadf992014449a4c9aaf8426cfd24",
+    "task-d56fb46eb0a941808a7ba7e0588f2fd5",
+    "task-5c4b5fab53ce41e294af5c70de1af51d"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-11-01T08:12:23.777Z"
+}

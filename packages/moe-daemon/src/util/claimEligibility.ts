@@ -8,7 +8,7 @@ import {
   resolveTaskExecutionProfile
 } from '../delivery/executionProfile.js';
 import { ATTEMPT_FINALIZING } from './claimGuards.js';
-import { MoeError, MoeErrorCode } from './errors.js';
+import { MoeError, MoeErrorCode, invalidInput } from './errors.js';
 
 /**
  * One definition of "this worker is encumbered", shared by claim_next_task and
@@ -60,26 +60,73 @@ export function isClaimGatedByDependsOn(state: StateManager, task: Task): boolea
  * successor claim records a fresh identity (CQ-M01d).
  *
  * It grants nothing: null is not approval, readiness or trust. No environment
- * flag or caller label is read; the leaf's assertExecutionProfileReady stays
- * the only readiness authority.
+ * flag is read; the leaf's assertExecutionProfileReady stays the only readiness
+ * authority. The one caller field read is `executionRoute`, and it can only
+ * REFUSE: a verified-local WORKING or REVIEW row is refused to any claim that
+ * does not carry 'vm' (EXECUTION_ROUTE_REQUIRED), checked AFTER readiness, so the
+ * marker never satisfies or skips readiness or any other claim check. It is a
+ * guard against an accidental host run (an older wrapper, a hand-run CLI), not
+ * authentication: CQ-M07m/n's wrapper VM route is what sends it. PLANNING rows
+ * (architects stay on the host) and legacy/observe rows are never asked for it.
  *
- * Error handling: returns the refusal — EXECUTION_PROFILE_NOT_READY, or
- * INVALID_INPUT naming the malformed snapshot or setting (fail closed). Only a
- * non-MoeError propagates. Never writes.
+ * Error handling: returns the refusal — EXECUTION_PROFILE_NOT_READY,
+ * EXECUTION_ROUTE_REQUIRED, or INVALID_INPUT naming the malformed snapshot or
+ * setting (fail closed). Only a non-MoeError propagates. Never writes.
  */
-export function executionAdmissionRefusal(state: StateManager, task: Task, workerId?: string): MoeError | null {
+export function executionAdmissionRefusal(
+  state: StateManager,
+  task: Task,
+  workerId?: string,
+  executionRoute?: ExecutionRoute
+): MoeError | null {
   try {
-    assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot));
+    const profile = resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot);
+    assertExecutionProfileReady(profile);
+    let strict = profile === 'verified-local';
     if (workerId && task.assignedWorkerId === workerId) {
       const own = currentAttempt(state, task.id);
       const recorded = own?.workerId === workerId ? readExecutionPolicySnapshot(own.executionPolicySnapshot) : undefined;
-      if (recorded) assertExecutionProfileReady(recorded.profile);
+      if (recorded) {
+        assertExecutionProfileReady(recorded.profile);
+        strict = strict || recorded.profile === 'verified-local';
+      }
+    }
+    if (strict && (task.status === 'WORKING' || task.status === 'REVIEW') && executionRoute !== 'vm') {
+      return routeRequiredRefusal(task);
     }
     return null;
   } catch (err: unknown) {
     if (err instanceof MoeError) return err;
     throw err;
   }
+}
+
+/** The only value `executionRoute` may carry: the wrapper's Moe VM route (CQ-M07m/n). */
+export type ExecutionRoute = 'vm';
+
+/** Codename of the refusal a strict WORKING/REVIEW claim gets without the VM-route marker. */
+export const EXECUTION_ROUTE_REQUIRED = 'EXECUTION_ROUTE_REQUIRED';
+
+/**
+ * Parse the optional `executionRoute` claim/wait argument: absent stays
+ * undefined, exactly 'vm' passes, anything else (including null, '' and 'VM') is
+ * INVALID_INPUT. Call it at the top of a handler, before any read-modify-write,
+ * so a malformed value writes nothing.
+ */
+export function parseExecutionRoute(value: unknown): ExecutionRoute | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'vm') return 'vm';
+  throw invalidInput('executionRoute', "must be 'vm' when present");
+}
+
+function routeRequiredRefusal(task: Task): MoeError {
+  return new MoeError(
+    MoeErrorCode.NOT_ALLOWED,
+    `Task ${task.id} runs under verified-local: only a VM-route seat may claim it in ${task.status} ` +
+      '(claim_next_task executionRoute "vm"). A seat that runs its agent CLI on the host must not claim it.',
+    { taskId: task.id, status: task.status, executionProfile: 'verified-local', requiredRoute: 'vm' },
+    EXECUTION_ROUTE_REQUIRED
+  );
 }
 
 /**

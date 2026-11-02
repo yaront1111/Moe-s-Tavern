@@ -5,6 +5,7 @@ import { invalidInput, missingRequired, notAllowed, notFound } from '../util/err
 import { MAX_TASK_DEPENDENCY_IDS } from '../state/taskStore.js';
 import { findDependencyPath, formatDependencyCycle, unmetDependsOn } from '../state/dependencyUnblock.js';
 import { workerHasRole } from '../util/workerRole.js';
+import { isVerifiedLocal } from '../delivery/policy.js';
 
 /**
  * moe.set_task_dependencies — the architect/governor escape hatch for
@@ -27,7 +28,7 @@ import { workerHasRole } from '../util/workerRole.js';
 export function setTaskDependenciesTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.set_task_dependencies',
-    description: 'Architect/governor-only: edit a task\'s dependsOn. Pass dependsOn to REPLACE the array ([] clears), or addDependsOn/removeDependsOn to edit the list in force when the call runs, so seats registering on the same row never drop each other\'s ids. dependsOn gates WORKING-status claims until every listed task is DONE/ARCHIVED — this tool is the escape hatch for a mis-declared dependency. Added ids must exist on the board; capped at 20; an id that would close a dependency cycle (through dependsOn or blockedOnTaskIds) is rejected with the path.',
+    description: 'Architect/governor-only: edit a task\'s dependsOn. Pass dependsOn to REPLACE the array ([] clears), or addDependsOn/removeDependsOn to edit the list in force when the call runs, so seats registering on the same row never drop each other\'s ids. dependsOn gates WORKING-status claims until every listed task is DONE/ARCHIVED (a verified-local task needs each one\'s retained verified delivery instead, and a missing id never satisfies it) — this tool is the escape hatch for a mis-declared dependency. Added ids must exist on the board; capped at 20; an id that would close a dependency cycle (through dependsOn or blockedOnTaskIds) is rejected with the path.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -118,6 +119,8 @@ export function setTaskDependenciesTool(_state: StateManager): ToolDefinition {
       }
 
       const unmet = unmetDependsOn(state, updated);
+      // Wording only; a profile that cannot be resolved counts as strict, as the predicate fails closed.
+      const strict = (() => { try { return isVerifiedLocal(state, updated); } catch { return true; } })();
       const who = params.workerId || 'human';
       const verb = replacing ? 'replaced' : 'edited';
       try {
@@ -138,8 +141,12 @@ export function setTaskDependenciesTool(_state: StateManager): ToolDefinition {
         message: dependsOn.length === 0
           ? `Dependencies cleared on ${task.id}; it is claim-gated by nothing.`
           : unmet.length === 0
-            ? `Dependencies ${verb} on ${task.id}; all ${dependsOn.length} are already DONE/ARCHIVED — the task is claimable now.`
-            : `Dependencies ${verb} on ${task.id}; ${unmet.length} unmet (${unmet.join(', ')}) — WORKING claims stay gated until they are DONE/ARCHIVED.`
+            ? `Dependencies ${verb} on ${task.id}; all ${dependsOn.length} ` +
+              (strict ? 'already have retained verified delivery' : 'are already DONE/ARCHIVED') + ' — the task is claimable now.'
+            : `Dependencies ${verb} on ${task.id}; ${unmet.length} unmet (${unmet.join(', ')}) — WORKING claims stay gated until ` +
+              (strict
+                ? 'each has retained verified delivery (a missing prerequisite never satisfies a verified-local task).'
+                : 'they are DONE/ARCHIVED.')
       };
     }
   };

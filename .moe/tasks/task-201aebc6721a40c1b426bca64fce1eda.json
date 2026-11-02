@@ -1,0 +1,235 @@
+{
+  "id": "task-201aebc6721a40c1b426bca64fce1eda",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R14b] Guest user-data pins the SSH host key and the restricted transport key",
+  "description": "Second slice of task-fd196d137c44497188d2639f149e259b (DESIGN comment-350cb4d0, governor ruling comment-d954b3df). It depends on R14a (task-4c295c56), whose guest-ssh.mjs supplies authorizedKeyLine.\n\n**Objective.** An owned guest boots with exactly one SSH host key, the pinned one. Only the default user `ubuntu` gets the restricted transport key. Readiness becomes stricter by one DENIED probe (ruling condition 3) and is never loosened.\n\n**Deliverable.**\n- `buildUserData` in scripts/local-runner/guest-bootstrap.mjs accepts an optional `transport`: exactly `{hostPrivateKey, hostPublicKey, clientPublicKey}`.\n  - hostPrivateKey must be an openssh-key-v1 PEM.\n  - Both public keys must be `ssh-ed25519 <base64>`.\n  - Anything else is BOOTSTRAP_INPUT_INVALID.\n- With a transport, it appends two keys to the cloud-config:\n  - `ssh_keys:` with `ed25519_private: |` (the PEM as a literal block) and `ed25519_public: '<hostPublicKey>'`;\n  - `ssh_authorized_keys:` with the single YAML single-quoted entry `- '<authorizedKeyLine(clientPublicKey)>'`.\n- Without a transport, the bytes are identical to today's. certify-containment's digest-only call keeps working.\n- Facts read in the cloud-init 26.1 source, which the tests must prove:\n  - cc_ssh deletes the image's host keys (ssh_deletekeys defaults to true) and generates nothing when ssh_keys is present;\n  - setup_user_keys keeps a key line's own options.\n- scripts/local-runner/guest-readiness.mjs DENIED gains `['readHostKey', '-r', '/etc/ssh/ssh_host_ed25519_key', 'CREDENTIAL_EXPOSED']`, so each job identity gets a `readHostKey:<id>` deny probe. Test fakes' healthy answers deny it with exit 1. The existing DENIED rows already cover the cloud-init copies of user-data.\n- Tests go in scripts/tests/local-runner.test.mjs, next to UD1 and UD2. See `mem:decision-guest-cloud-config-no-ssh-fingerprints` for the 26.1 schema and handle-stub pattern.\n\n**Not in scope:** generating keys or passing a transport from provisioning (R14c), streams, guest-supervisor.py, the R02 pin, and any other readiness evaluator.\n\n**Verification**, in a snapshot and never in place:\n`S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`",
+  "definitionOfDone": [
+    "buildUserData with a valid transport emits the ssh_keys block and the single-quoted restricted ssh_authorized_keys entry. A 26.1-gated row runs `cloud-init schema -c` on that user-data and gets stdout exactly `Valid schema`.",
+    "A 26.1-gated `python3 -I -B` row uses cloud-init's own code:\n- ssh_util.AuthKeyLineParser keeps the line's restrict and command options and its key;\n- yaml.safe_load of the user-data returns the three transport strings byte-exact.",
+    "Without a transport, buildUserData's output is byte-identical to the pre-change output. A refusal table shows each malformed transport (extra key, missing key, a non-PEM private key, a non-ed25519 public key, a control character) rejected with BOOTSTRAP_INPUT_INVALID.",
+    "DENIED has the readHostKey row for /etc/ssh/ssh_host_ed25519_key. One row pins the full DENIED list: ids, flags, paths and failure codes, for both job identities. A fake guest that lets a job identity read the host key gives CREDENTIAL_EXPOSED and bootstrapReady false.",
+    "Every existing UD, readiness, provisioning and certify row stays green, with only shared fake defaults extended to answer the new probe. The description's verification command exits 0 in the snapshot, under env -i with Node 24.21.0."
+  ],
+  "taskRails": [
+    "No seat runs Multipass. guest-supervisor.py (its sha256 3a19f3bf… is R13's commit-under-test pin) and the R02 image pin stay untouched. The only readiness change is the one stricter DENIED row; never loosen an evaluator.",
+    "Write tracked files only with the Edit/Write tools. Shell writes go only into scratch snapshots outside the checkout."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Runtime: the user-data transport block and one stricter DENIED row. R14a (task-4c295c56, a dependsOn) has landed scripts/local-runner/guest-ssh.mjs, a LEAF module exporting authorizedKeyLine; import only that from it. Read `mem:decision-guest-ssh-transport` and `mem:decision-guest-cloud-config-no-ssh-fingerprints`. Write files with Edit only.\n\n**1. scripts/local-runner/guest-bootstrap.mjs `buildUserData({supervisor, credential, transport})`.**\n- `transport === undefined` means none, and the output must be byte-identical to today's.\n- Any other value must be a plain object whose own keys are exactly `clientPublicKey,hostPrivateKey,hostPublicKey` (sorted). Otherwise it is error handling as usual: `bootstrapError('BOOTSTRAP_INPUT_INVALID')` with a fixed message, never the value. Validation:\n  - hostPrivateKey must match `/^-----BEGIN OPENSSH PRIVATE KEY-----\\n(?:[A-Za-z0-9+/=]{1,70}\\n)+-----END OPENSSH PRIVATE KEY-----\\n$/`;\n  - both public keys must match `/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/`;\n  - wrap authorizedKeyLine(clientPublicKey) in try/catch, so its TRANSPORT_INPUT_INVALID also becomes BOOTSTRAP_INPUT_INVALID.\n- With a transport, APPEND these lines after every existing line (after write_files), so the existing bytes stay a prefix:\n  - `ssh_keys:`\n  - `  ed25519_private: |`\n  - each PEM line as `    <line>` (YAML literal block; clip chomping keeps the PEM's single trailing newline)\n  - `  ed25519_public: '<hostPublicKey>'`\n  - `ssh_authorized_keys:`\n  - `  - '<authorizedKeyLine(clientPublicKey)>'`. It is YAML single-quoted: backslash and \" are literal there, and the line has no '.\n- Extend buildUserData's doc comment with the cloud-init 26.1 facts read in source:\n  - cc_ssh deletes the image's host keys (ssh_deletekeys, default true) and generates nothing when ssh_keys is present, so the guest's only host key is the pinned ed25519;\n  - setup_user_keys keeps a key line's own options, so only the default user gets `restrict,command=...`. disable_root also copies the key to root under cloud-init's 'login as ubuntu' command, which grants nothing.\n- The returned {userData, supervisorSha256, shimSha256, shimToolsSha256} keeps its shape.\n\n**2. scripts/local-runner/guest-readiness.mjs DENIED.** Insert `['readHostKey', '-r', '/etc/ssh/ssh_host_ed25519_key', 'CREDENTIAL_EXPOSED']` right after the readSeed row, so each job identity gains a `readHostKey:<id>` deny probe (governor ruling condition 3). Extend the comment above DENIED: '... then the pinned SSH host key (CQ-R14b), then the supervisor'. Change nothing else in readiness: no evaluator, CHECKS order or probe shape.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "note": "buildUserData takes an optional exact transport {hostPrivateKey, hostPublicKey, clientPublicKey} (new transportLines helper, own-key check via Reflect.ownKeys, strict PEM/ed25519 regexes, authorizedKeyLine wrapped in try/catch) and appends ssh_keys + ssh_authorized_keys after write_files; undefined transport leaves bytes unchanged. guest-readiness DENIED gains readHostKey after readSeed and its comment is extended. guest-ssh.mjs stays a leaf (only imported). Dirty peer paths in the checkout (.moe/*, scripts/moe-agent.*, postflight-worktree.cjs) were left alone.",
+      "startedAt": "2026-11-01T08:39:41.809Z",
+      "completedAt": "2026-11-01T08:41:55.049Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Tests in scripts/tests/local-runner.test.mjs. Read `mem:gotcha-local-runner-tests` and `mem:decision-guest-cloud-config-no-ssh-fingerprints` first. Import createTransportKeys and authorizedKeyLine from '../local-runner/guest-ssh.mjs', and build `const TRANSPORT_KEYS = createTransportKeys()` plus `TRANSPORT = {hostPrivateKey: TRANSPORT_KEYS.host.privateKey, hostPublicKey: TRANSPORT_KEYS.host.publicKey, clientPublicKey: TRANSPORT_KEYS.client.publicKey}` and `BOOTSTRAP_SSH = buildUserData({supervisor: SUPERVISOR, credential: CREDENTIAL, transport: TRANSPORT})` next to BOOTSTRAP (about line 928).\n\n**Shared fixtures (not new rows).**\n- Add `['readHostKey', '-r', '/etc/ssh/ssh_host_ed25519_key', 'CREDENTIAL_EXPOSED']` to the test's DENIALS right after readSeed. healthy() then denies it, EXPECTED_PROBES gains it, and the existing per-DENIALS loop (about line 1440) proves a readable host key gives CREDENTIAL_EXPOSED.\n- In the GUEST_PROBES pin row (about lines 1281-1284), change the count `7 + 15 * IDENTITIES.length` to `7 + 16 * IDENTITIES.length`. This is the 'pins the full DENIED list' row. Edit nothing else there.\n\n**New rows**, each next to UD1/UD2 and each 26.1-gated with the same version check and skip message as UD1:\n- **UD3.** `cloud-init schema -c` on BOOTSTRAP_SSH.userData gives status 0 and stdout exactly `Valid schema <file>\\n`.\n- **UD4.** One `/usr/bin/python3 -I -B -c <stub>` run with BOOTSTRAP_SSH.userData on stdin, env {PATH: '/usr/bin:/bin'}. The stub:\n  - loads the cfg with util.load_yaml and prints JSON of cfg['ssh_keys'] and cfg['ssh_authorized_keys'];\n  - prints AuthKeyLineParser().parse(line) as {options, keytype, base64, comment, str}, using ssh_util.AuthKeyLineParser;\n  - runs cc_ssh.handle('ssh', cfg, Cloud(), []) with mock.patch on:\n    - cc_ssh.glob.glob, returning two fake image key paths;\n    - util.del_file and util.write_file, which record (path, content, mode);\n    - util.ensure_dir;\n    - os.path.exists, which returns False;\n    - subp.subp, which records the cmd;\n    - cc_ssh.get_public_host_keys, which returns [];\n    - ssh_util.setup_user_keys, which records (sorted keys, user, options).\n    The stub Cloud has distro.get_default_user() -> {'name':'ubuntu'}, distro.osfamily 'debian', get_public_ssh_keys() -> [] and a no-op datasource.publish_host_keys.\n  Assert:\n  - the YAML values equal the three TRANSPORT strings byte-exact, and ssh_authorized_keys is exactly [authorizedKeyLine(clientPublicKey)];\n  - the parsed options are exactly `restrict,command=\"exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor \\\\\"$SSH_ORIGINAL_COMMAND\\\\\"\"`, the keytype is ssh-ed25519, the comment is moe-transport, and str() round-trips the line;\n  - handle deleted both globbed keys and wrote exactly [['/etc/ssh/ssh_host_ed25519_key', hostPrivateKey, 384], ['/etc/ssh/ssh_host_ed25519_key.pub', hostPublicKey, 420]], ran no command (no ssh-keygen), and applied the transport line to 'ubuntu' with options None.\n  - Positive control in the same row, BOOTSTRAP without transport: handle writes no key and runs ssh-keygen once per default type. This proves the stub is not vacuous.\n- **UD5.**\n  - BOOTSTRAP.userData contains neither 'ssh_keys' nor 'ssh_authorized_keys'.\n  - BOOTSTRAP_SSH.userData === BOOTSTRAP.userData + the exact expected block, built in the test from TRANSPORT and authorizedKeyLine.\n  - The digests equal BOOTSTRAP's.\n  - A refusal table, each assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID'): null; []; an extra key; a missing key; hostPrivateKey 'x', or a PEM with a 71-char line; public keys 'ssh-rsa AAAA' and 'ssh-ed25519 a b'; a clientPublicKey with '\\n'; a hostPublicKey with a control character.\n\nKeep every existing UD, readiness, provisioning and certify row unedited, except the two shared-fixture changes above.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Added the guest-ssh import, TRANSPORT_KEYS/TRANSPORT/BOOTSTRAP_SSH fixtures, the readHostKey DENIALS row and the 7+16 count, plus UD3 (schema Valid), UD4 (python3 -I -B stub running cc_ssh.handle with recorded effects plus AuthKeyLineParser, with a no-transport positive control that runs ssh-keygen per type) and UD5 (prefix, digests, 23-row refusal table). No existing row edited.",
+      "startedAt": "2026-11-01T08:41:55.945Z",
+      "completedAt": "2026-11-01T08:43:28.219Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, in a snapshot and never in place. Run exactly this test command; its command, exit code and output tail are complete_task's verification evidence:\n\n`S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`\n\nIt must exit 0 with 0 fail, and UD3, UD4 and UD5 must RUN, not skip. This WSL box has cloud-init 26.1-0ubuntu1~24.04.1 and /usr/bin/python3. Read the 'fail' summary line.\n\nThen run a one-off byte-identity check against HEAD and quote its output in the step note:\n`P=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$P\" && node --input-type=module -e \"const [a,b]=await Promise.all([import('$P/scripts/local-runner/guest-bootstrap.mjs'),import('$S/scripts/local-runner/guest-bootstrap.mjs')]); const i={supervisor:Buffer.from('s'),credential:Buffer.from('c')}; console.log(a.buildUserData(i).userData===b.buildUserData(i).userData)\"`. It must print true.\n\nAlso `git diff --check` must be clean on the three files.\n\nError handling: if a pre-existing row fails, rerun it on a pristine `git archive HEAD` to tell HEAD-red from your change. Fix your code, never weaken a row. Delete only your own $S and $P. The size target is about 150 changed lines; it must stay under 400.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Plan verification command, fresh in a git-archive snapshot under env -i + Node 24.21.0: rc=0; 'ℹ tests 359 / pass 358 / fail 0 / skipped 1' (the one skip is the pre-existing macOS native smoke). UD1-UD5 all ran, none skipped. Byte-identity check vs git archive HEAD printed: true. `git diff --check` clean on the three files. Size: numstat guest-bootstrap +29/-1, guest-readiness +2/-1, local-runner.test +122/-1 = 156 changed lines (<400).",
+      "startedAt": "2026-11-01T08:43:29.134Z",
+      "completedAt": "2026-11-01T08:43:33.339Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review and read the three-file diff as an attacker.\n- **YAML.** Can any transport value break out of its YAML scalar: a newline, a ' in the single-quoted line, a PEM line that dedents the literal block or starts with '#', or a trailing-newline change from chomping? The validators must make each impossible.\n- **Cycles.** Does guest-bootstrap.mjs now form an import cycle? guest-ssh.mjs must stay a leaf.\n- **Prefix.** Is the no-transport output still a byte prefix of the transport output (UD5), and does certify-containment's digest-only buildUserData call still work?\n- **DENIED.** Is the new row in the same position in readiness and in the test's DENIALS, so the probe order pin holds? Does it deny for both identities, and does a readable key fail closed (CREDENTIAL_EXPOSED, never ready)?\n- **Stub.** Does UD4 really exercise cloud-init's code, or would it pass with the module patched out? The positive control must be able to fail.\n- **Secrets.** Does no error message, log or result field include a key or credential?\n\nFix gaps, then re-run the step-3 command if anything changed.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review, no code change needed, so the step-3 run stands. YAML: every PEM line is [A-Za-z0-9+/=]{1,70}, so none can dedent, start '#' or end the literal block; the public keys and the authorized line carry no single quote; JS `$` with no m flag refuses a trailing newline; clip chomping keeps exactly the PEM's one newline (UD4 reads the value back byte-exact). Cycles: guest-ssh.mjs imports only node built-ins; guest-bootstrap only imports it. Prefix: UD5 asserts BOOTSTRAP_SSH === BOOTSTRAP + the exact block, and the transport===undefined path is the old path; certify-containment (digest-only) and provision (no transport) callers are untouched and green. DENIED: the new row sits right after readSeed in readiness and in the test's DENIALS; both identities get readHostKey:<id>; the DENIALS loop proves a readable key gives CREDENTIAL_EXPOSED. Secrets: errors are the fixed BOOTSTRAP_INPUT_INVALID message (UD5 checks the message); the host key does live in the root-only cloud-init copies of user-data, which the existing DENIED rows already deny. Mutation sweep in scratch copies of the snapshot, 13 probes, 13 killed: drop ssh_keys, drop ssh_authorized_keys, double-quote the authorized line (also fails UD3's schema row), |- chomping, drop the DENIED row, wrong DENIED path, wrong DENIED code, accept any PEM, PEM line cap 200, allow an extra key, accept any host public key, rethrow the authorizedKeyLine error, treat null as no transport. Scratch dirs removed (only my own).",
+      "startedAt": "2026-11-01T08:43:34.274Z",
+      "completedAt": "2026-11-01T08:44:52.391Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-4c295c56a0db475998ae9d947a1d1de6"
+  ],
+  "priority": "HIGH",
+  "order": 254.432,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:04:26.729Z",
+  "updatedAt": "2026-11-01T08:50:54.316Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T08:17:42.871Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T08:50:26.088Z",
+    "wallClockMs": 1963217
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "worker-cef53f62",
+    "qa-1e84238e"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T08:20:09.674Z",
+  "executionContract": {
+    "intendedBehavior": "buildUserData accepts an optional exact transport. With it, the cloud-config gains a pinned ed25519 host key (ssh_keys) and the restricted transport key for the default user only (ssh_authorized_keys). Without it, the bytes are unchanged. Readiness denies both job identities read access to /etc/ssh/ssh_host_ed25519_key.",
+    "acceptanceCriteria": [
+      "UD3: `cloud-init schema -c` says 'Valid schema'.",
+      "UD4: cloud-init 26.1's own parser and cc_ssh.handle write exactly the pinned host key pair, run no ssh-keygen, and keep the transport line's options.",
+      "UD5: the no-transport output is a byte prefix, and every malformed transport is BOOTSTRAP_INPUT_INVALID.",
+      "DENIED and the GUEST_PROBES pin gain readHostKey for both identities."
+    ],
+    "invariants": [
+      "No readiness evaluator is loosened; only one deny probe is added.",
+      "guest-supervisor.py and the R02 pin are untouched.",
+      "No key or credential appears in an error."
+    ],
+    "sourceAssumptions": [
+      "guest-readiness.mjs DENIED holds 10 rows at fdb5330a, with readSeed the 8th.",
+      "The test's GUEST_PROBES pin counts 7 + 15 per identity (line 1283).",
+      "cloud-init 26.1 cc_ssh: KEY_FILE_TPL is /etc/ssh/ssh_host_%s_key, PUBLISH_HOST_KEYS is True, and the ssh_keys branch generates nothing."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- **A runcmd or write_files for the host key** instead of `ssh_keys`. Rejected: cc_ssh's own ssh_keys path deletes the image keys and generates nothing else (26.1 source, lines 97-160), and Gate 0 Windows saw exactly one host key with this exact block.\n- **A forced-command wrapper file** in write_files. Rejected: the inline command plus the supervisor's main() allowlist is enough, and it adds no new readiness hash.\n- **Pinning a sha256 of the whole no-transport user-data.** Rejected as brittle: it embeds the shim bytes. Instead UD5 proves the old output is an exact prefix, and step 3 checks byte identity against HEAD once.",
+    "codebaseInsights": "The test file keeps its own DENIALS copy (line 929), which feeds EXPECTED_PROBES (line 955) and healthy() (line 1003).\n- The GUEST_PROBES pin row (lines 1281-1284) asserts deepEqual and the count `7 + 15 * identities`.\n- The DENIALS loop (about line 1440) already turns each row into CREDENTIAL_EXPOSED refusal cases.\n- UD1 and UD2 (lines 1159-1222) show the 26.1 gating, the CLOUD_INIT constant and the python3 -I -B stub pattern.\n- cc_ssh writes the private key with mode 0o600 and the .pub with 0o644 (CONFIG_KEY_TO_FILE). PUBLISH_HOST_KEYS is True, so get_public_host_keys must be patched.\n- apply_credentials also copies the keys to root with disable_root_opts.",
+    "risks": "- **mock.patch on os.path.exists is process-global** inside the stub. Keep it inside the `with`, and let load_yaml run before it.\n- **The CQ-R07 rail** requires retaining every CQ-R07 test. Only the shared DENIALS list and the count change.\n- **Other suites with their own probe copies.** local-runner-check or pinned-client tests may have their own healthy-probe copies. Grep for 'readSeed' across scripts/tests and extend any shared default the same way; never weaken one.\n- **Size** is about 150 lines.",
+    "keyFiles": [
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/guest-ssh.mjs",
+      "/usr/lib/python3/dist-packages/cloudinit/config/cc_ssh.py",
+      "/usr/lib/python3/dist-packages/cloudinit/ssh_util.py"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "fdb5330ad41c4dbe4036d3ff97e4f9e642126c52",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T08:20:09.701Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T08:39:41.809Z",
+  "reviewStartedAt": "2026-11-01T08:46:31.372Z",
+  "verification": {
+    "command": "S=$(mktemp -d) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ UD1 … ✔ UD2 … ✔ UD3 the user-data with a transport passes cloud-init 26.1 schema validation ✔ UD4 cloud-init 26.1 cc_ssh writes exactly the pinned host key pair … ✔ UD5 no transport leaves the user-data bytes as they were …\n✔ RX6 runCheckJob pins every provider call to the platform's own Multipass client, unless the caller names one (3.221947ms)\nℹ tests 359\nℹ suites 0\nℹ pass 358\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 79951.670217",
+    "reportedAt": "2026-11-01T08:46:31.372Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/guest-bootstrap.mjs",
+    "scripts/local-runner/guest-readiness.mjs",
+    "scripts/tests/local-runner.test.mjs",
+    ".moe/tasks/task-201aebc6721a40c1b426bca64fce1eda.json",
+    ".moe/tasks/task-4c295c56a0db475998ae9d947a1d1de6.json",
+    ".moe/tasks/task-7c2922313102436bb732e36bd8f1c69d.json"
+  ],
+  "completionSummary": "CQ-R14b delivered (156 changed lines: guest-bootstrap +29/-1, guest-readiness +2/-1, local-runner.test +122/-1).\n\n**buildUserData** takes an optional exact `transport` {hostPrivateKey, hostPublicKey, clientPublicKey}.\n- Validation: own keys exactly those three (Reflect.ownKeys, so an extra, missing or symbol key is refused); hostPrivateKey must be an openssh-key-v1 PEM with lines of at most 70 base64 characters; both public keys must be `ssh-ed25519 <base64>`; authorizedKeyLine's own refusal is mapped to BOOTSTRAP_INPUT_INVALID. Every refusal is the fixed message, never a value.\n- With a transport it APPENDS `ssh_keys:` (ed25519_private as a literal block, ed25519_public single-quoted) and `ssh_authorized_keys:` with the single-quoted restricted line, after write_files. `transport === undefined` leaves the bytes untouched. Null is NOT treated as none.\n- The doc comment records the 26.1 facts from source: cc_ssh deletes the image keys and generates none when ssh_keys is present, and setup_user_keys keeps the line's own options.\n- guest-ssh.mjs stays a leaf (only imported); certify-containment's digest-only call and provision's no-transport call are unchanged.\n\n**guest-readiness DENIED** gains `readHostKey` (`-r /etc/ssh/ssh_host_ed25519_key`, CREDENTIAL_EXPOSED) right after readSeed, so each job identity gets `readHostKey:<id>`. No evaluator, CHECKS order or probe shape changed.\n\n**Tests** (scripts/tests/local-runner.test.mjs): shared fixtures TRANSPORT_KEYS/TRANSPORT/BOOTSTRAP_SSH, the DENIALS row, and the GUEST_PROBES count 7+15 -> 7+16 per identity. No other existing row edited.\n- UD3: `cloud-init schema -c` gives exactly `Valid schema <file>`.\n- UD4: a `python3 -I -B` stub runs cc_ssh.handle with its effects recorded, plus cloud-init's AuthKeyLineParser. It proves handle deletes the image keys, writes exactly the host pair (0600/0644), runs no ssh-keygen, and applies the transport line to ubuntu with options None. The parser keeps `restrict,command=...` and round",
+  "commits": [
+    {
+      "sha": "39e46380c131bfe9a6d80c72ef1147c4f15471ac",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cef53f62@2026-11-01T08:39:18Z",
+      "paths": [
+        ".moe/tasks/task-201aebc6721a40c1b426bca64fce1eda.json",
+        ".moe/tasks/task-4c295c56a0db475998ae9d947a1d1de6.json",
+        ".moe/tasks/task-7c2922313102436bb732e36bd8f1c69d.json",
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-cef53f62",
+      "recordedAt": "2026-11-01T08:47:08.458Z",
+      "treeId": "db6a0bf351728d40ad8de0b724a968dbf0a2ef32",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "cf4833176af9ae1ebda861d26a536fd21a738c09",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1e84238e@2026-11-01T08:47:40Z",
+      "paths": [
+        ".moe/tasks/task-201aebc6721a40c1b426bca64fce1eda.json"
+      ],
+      "recordedBy": "qa-1e84238e",
+      "recordedAt": "2026-11-01T08:50:54.316Z",
+      "treeId": "a93ef8be3dc9f64df3e041674b025a8928757bec",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/guest-bootstrap.mjs",
+    "scripts/local-runner/guest-readiness.mjs",
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1e84238e@2026-11-01T08:47:40Z",
+    "at": "2026-11-01T08:50:54.316Z"
+  },
+  "completedAt": "2026-11-01T08:50:26.088Z",
+  "reviewCompletedAt": "2026-11-01T08:50:26.088Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 39e46380 (on moe/work-2026-10-24, pushed) via git show; working-tree bytes of the 3 files equal HEAD; git diff --check clean. Size 156 changed lines (bootstrap +29/-1, readiness +2/-1, test +122/-1). guest-supervisor.py and the R02 pin untouched.\n\nRe-ran task.verification (git archive snapshot, env -i, Node 24.21.0): rc=0, 359 tests, 358 pass, 0 fail, 1 skip (pre-existing macOS smoke). UD1-UD5 all RAN.\n\nDoD: (1) UD3 `cloud-init schema -c` gives exactly `Valid schema <file>`. (2) UD4 python3 -I -B stub runs cc_ssh.handle + AuthKeyLineParser: YAML strings byte-exact, options kept, image keys deleted, pinned pair written 0600/0644, no ssh-keygen; the no-transport positive control runs ssh-keygen per type, so the stub is not vacuous. (3) I checked byte-identity independently against `git archive 39e46380~1`: userData and digests identical. UD5 has a 23-row refusal table, each the fixed BOOTSTRAP_INPUT_INVALID message, no value leaked. (4) readHostKey row follows readSeed in readiness and DENIALS; GUEST_PROBES pin 7+16 per identity; the DENIALS loop proves a readable key gives CREDENTIAL_EXPOSED. No evaluator loosened. (5) Existing rows green; only shared fixtures extended.\n\nMy own mutation probes in scratch copies, 5 of 5 killed: drop the DENIED row, wrong DENIED path, treat null as no transport, double-quote the authorized line, drop the ssh_keys header. Adversarial read: PEM lines are [A-Za-z0-9+/=]{1,70} and the public keys are base64, so no YAML breakout; guest-ssh.mjs is a leaf, no import cycle; certify-containment's digest-only call and provision's no-transport call are unchanged. Nothing to cut in the complexity pass. Note for R14c: the host private key now sits in the root-only cloud-init copies of user-data, which the existing DENIED rows cover. My scratch dirs were removed.",
+  "requiredCheckAtDone": null
+}

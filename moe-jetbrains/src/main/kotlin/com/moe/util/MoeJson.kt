@@ -440,7 +440,9 @@ object MoeJson {
             latestCheckRun = delivery.deliveryObject("latestCheckRun")?.let {
                 DeliveryCheckRun(
                     it.getStrictStringOrNull("command"), it.deliveryExitCode(),
-                    it.getStrictStringOrNull("source")?.takeIf { source -> source == "runner-observed" || source == "agent-reported" }
+                    it.getStrictStringOrNull("source")?.takeIf { source -> source == "runner-observed" || source == "agent-reported" },
+                    // Verbatim, never whitelisted: the presentation fails closed on anything but "passed".
+                    outcome = it.getStrictStringOrNull("outcome")
                 )
             },
             deliveryReceipt = delivery.deliveryObject("deliveryReceipt")?.let {
@@ -721,7 +723,10 @@ object MoeJson {
             peakPercent = obj.getStrictFiniteDoubleOrNull("peakPercent"),
             blockedUntil = obj.getStrictStringOrNull("blockedUntil")?.takeIf { it.isNotBlank() },
             active = getStrictBooleanOrDefault(obj, "active", false),
-            seats = obj.getStrictStringListOrNull("seats") ?: emptyList()
+            seats = obj.getStrictStringListOrNull("seats") ?: emptyList(),
+            // A real JSON boolean only; anything else (a string, a number, null) is
+            // unknown. Not getStrictBooleanOrDefault: absent must stay distinct from false.
+            vmToken = obj.get("vmToken")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
         )
     }
 

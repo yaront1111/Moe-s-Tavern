@@ -1,0 +1,298 @@
+{
+  "id": "task-d56fb46eb0a941808a7ba7e0588f2fd5",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07l] JetBrains Accounts tab: VM token action",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation, decision 5. Depends on CQ-M07k (task-324d4f53: the `accounts vm-token` CLI and the presence flag) and on CQ-M07o (task-8dbc76d7), so the two JetBrains slices never edit util/TerminalAgentLauncher.kt at the same time.\n\nObjective: the human can mint, replace and remove each rotation account's VM token from the JetBrains Accounts tab, and see which accounts have one, without the plugin ever touching a token.\n\nDeliverable (moe-jetbrains, JetBrains only: VS Code has no Accounts tab; CQ-M07's docs say so):\n- An Accounts tab action per account that opens a terminal running `accounts vm-token <id>` (and one for `--remove`), through the same path sign-in uses (TerminalAgentLauncher runAccountsCommand / accountsCommandLine / buildAccountsCommand): the same shells (POWERSHELL, WSL_BASH, BASH), quoting and WSL path handling.\n- A per-account VM-token indicator from CQ-M07k's presence flag. A daemon that sends no flag (an older daemon) shows unknown, never present.\n\nNOT in scope: token storage and minting (CQ-M07k); launch routing (CQ-M07o).\n\nVerification: ./gradlew test under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\", or a snapshot run of the exact commit.",
+  "definitionOfDone": [
+    "The action builds `accounts vm-token <id>` and `accounts vm-token <id> --remove` command lines for the POWERSHELL, WSL_BASH and BASH shells with the same quoting as sign-in (JUnit on the pure builder).",
+    "The indicator shows present, absent and unknown (flag missing) per account (JUnit on the pure presentation).",
+    "The command line carries no token argument and the plugin never reads the token store (JUnit plus code review note in the completion).",
+    "./gradlew test passes under the lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Read the VM-token contract first: the CQ-M07k comment on this task and `mem:task-task-324d4f53cf28486d8bc0de70b6a99b8d-handoff`. The daemon sends `vmToken: boolean` on each ACCOUNTS_UPDATED account, computed from a stat. The plugin never sees a token.\n\n**1. Model.** In moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt, `ClaudeAccount` gains a LAST parameter `val vmToken: Boolean? = null`.\n- KDoc: whether Moe holds a VM token for this account (for Moe VM jobs, CQ-M07k), as the daemon reports it from a stat. Null when the daemon does not report it (an older daemon); the tab shows that as unknown, never as set. It is never a token.\n- The default keeps every existing constructor call compiling.\n\n**2. Parser.** In moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt parseClaudeAccount, read `vmToken` as a real JSON boolean only:\n`obj.get(\"vmToken\")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean`.\n- Everything else gives null: a string (\"true\", a token-shaped string), a number, JSON null, an object or a missing field.\n- Not getStrictBooleanOrDefault: absent must stay distinguishable from false.\n\n**3. Tests in moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt.**\n- In `rotationJson`, give acct-1 `\"vmToken\": true` and acct-2 `\"vmToken\": false`, and leave acct-3 without it. In `expectedRotation`, set acct-1 vmToken = true, acct-2 false and acct-3 null.\n  - The existing tests `parseAccountRotation reads an ACCOUNTS_UPDATED payload exactly` and `parseState reads the account rotation and each worker's account` then prove true, false and missing.\n- In `parseAccountRotation drops bad accounts and reads wrong-typed fields as absent`:\n  - acct-3 gets `\"vmToken\": \"sk-ant-oat01-` plus a fake 40-character body plus `\"`;\n  - acct-4 gets `\"vmToken\": 1`;\n  - both parse to null, so the expected objects keep the default;\n  - add `assertFalse(rotation.toString().contains(\"sk-ant\"))`: a token-shaped value never survives parsing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "ClaudeAccount.vmToken: Boolean? = null (trailing, KDoc). parseClaudeAccount reads vmToken only when it is a JSON boolean primitive. MoeJsonTest: rotationJson acct-1 true / acct-2 false / acct-3 missing (expectedRotation true/false/null); the drops test gives acct-3 a token-shaped string and acct-4 the number 1, both null, plus assertFalse(rotation.toString().contains(\"sk-ant\")); new literal-table test (true/false/\"true\"/\"false\"/1/0/null/{}/[]). Gradle runs once at step 4 per plan. Pre-existing dirty paths from other sessions (.moe/*, docs/*, packages/moe-daemon/*) untouched.",
+      "startedAt": "2026-11-01T18:44:57.200Z",
+      "completedAt": "2026-11-01T18:46:29.245Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the presentation, the bundle keys and their JUnit. This is pure code: AccountPresentation.kt stays free of IntelliJ classes.\n\n**moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt**\n- **Row.** AccountRow gains a LAST field `vmToken: AccountText`: VM_TOKEN_STATE_PRESENT when the account's flag is true, VM_TOKEN_STATE_ABSENT when it is false and VM_TOKEN_STATE_UNKNOWN when it is null (DoD 2).\n- **Actions.** AccountActions gains `setVmToken` and `removeVmToken`. With `account` the selected account:\n  - setVmToken = cli && selected && account.vmToken != null;\n  - removeVmToken = cli && selected && account.vmToken == true.\n  Like sign-in, they need only the CLI's paths, not the connection. Add a comment on why an unknown flag disables both: the flag and the `vm-token` command ship in the same daemon (CQ-M07k), so a daemon that sends no flag runs a CLI that refuses the command.\n- **Arguments.** `fun vmTokenArgs(accountId: String, remove: Boolean): List<String>` returns listOf(\"vm-token\", accountId), or listOf(\"vm-token\", accountId, \"--remove\").\n  - KDoc: these are the only VM-token words the plugin passes. A token is never an argument, and the plugin never reads Moe's token store, only the daemon's flag.\n  - Do NOT write the store's folder name anywhere under src/main, not even in a comment: the tripwire test below scans for it.\n- **AccountKeys.**\n  - COLUMN_VM_TOKEN, appended last to COLUMNS.\n  - VM_TOKEN_STATE_PRESENT, VM_TOKEN_STATE_ABSENT and VM_TOKEN_STATE_UNKNOWN, under the prefix `moe.accounts.vmTokenState.`.\n  - BUTTON_SET_VM_TOKEN and BUTTON_REMOVE_VM_TOKEN.\n  - Dialog keys under `moe.accounts.vmToken.`: VM_TOKEN_SET_TITLE, VM_TOKEN_SET_CONFIRM ({0} = label), VM_TOKEN_REMOVE_TITLE, VM_TOKEN_REMOVE_CONFIRM ({0} = label) and VM_TOKEN_UNSUPPORTED.\n\n**moe-jetbrains/src/main/resources/messages/MoeBundle.properties**\nASCII only. No apostrophe in a text with a placeholder: MessageFormat drops it, and the bundle guard fails on it.\n- moe.accounts.column.vmToken=VM token\n- moe.accounts.vmTokenState.present=Set\n- moe.accounts.vmTokenState.absent=Not set\n- moe.accounts.vmTokenState.unknown=Unknown\n- moe.accounts.button.setVmToken=Set VM token...\n- moe.accounts.button.removeVmToken=Remove VM token...\n- moe.accounts.vmToken.setTitle=Set VM Token\n- moe.accounts.vmToken.setConfirm=Create a long-lived Claude token for {0}? Moe keeps it only to run the agents of this account in a Moe VM, and it replaces any token already set. A terminal tab opens: sign in with the same Claude account, then paste the token claude prints at the hidden prompt.\n- moe.accounts.vmToken.removeTitle=Remove VM Token\n- moe.accounts.vmToken.removeConfirm=Remove the VM token for {0}? Moe then cannot run the agents of this account in a Moe VM until a new token is set. This deletes the copy Moe keeps; it does not revoke the token.\n- moe.accounts.vmToken.unsupported=This Moe daemon does not report VM tokens. Restart it after updating Moe.\n\nAlso change the existing moe.accounts.remove.confirm, because CQ-M07k rev 2 deletes the token on every removal:\n`Remove {0} from the list? Remove only keeps its Claude sign-in on this machine and deletes its VM token. Sign out and remove signs it out first, in a terminal tab.`\n\n**moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt**\n- **Existing tests.** Append text(VM_TOKEN_STATE_UNKNOWN) to every expected AccountRow, since the helper accounts carry no flag. Add setVmToken = false and removeVmToken = false to `none`. Every other expectation stays the same.\n- **`the VM token column shows set, not set and unknown`.** Accounts with vmToken true, false and null give PRESENT, ABSENT and UNKNOWN, in that order (DoD 2).\n- **`VM token actions need the CLI, a selection and a daemon that reports the flag`.**\n  - flag true: both;\n  - false: set only;\n  - null: neither;\n  - cli = null: neither;\n  - no selection: neither;\n  - connected = false: the same as connected.\n- **`VM token command lines quote like sign-in in every shell` (DoD 1, 3).**\n  - Assert vmTokenArgs' exact lists.\n  - Then call TerminalAgentLauncher.buildAccountsCommand with the same fixtures as the three accounts-command tests in moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt: the PowerShell O'Brien and D:\\moe$ paths, the WSL /mnt paths, and the bash o'neil path.\n  - Cover each shell with both set and remove, asserted as exact strings ending in the quoted words 'vm-token' 'acct-1', or 'vm-token' 'acct-1' '--remove'.\n  - Import com.moe.util.TerminalAgentLauncher and its internal AccountsShell, which are visible within the module. Do not edit TerminalAgentLauncherTest.kt.\n- **`the plugin never names the VM token store` (DoD 3 tripwire).**\n  - Walk File(\"src/main\") over .kt, .java, .properties and .xml files; Gradle runs tests in the module dir.\n  - Fail unless AccountPresentation.kt is among the files, so the test never passes vacuously.\n  - Then assert no file contains \"claude-vm-tokens\".\n- **Bundle guard.**\n  - Raise the key count from 61 to 72 (11 new keys).\n  - Add \"moe.accounts.vmTokenState.\" to presentationPrefixes, and emit rows covering true, false and null so all three state keys are formatted.\n  - panelArgs gains VM_TOKEN_SET_CONFIRM to 1 and VM_TOKEN_REMOVE_CONFIRM to 1.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt"
+      ],
+      "note": "AccountRow.vmToken (Set/Not set/Unknown via private vmTokenKey), AccountActions.setVmToken/removeVmToken (cli && selected && flag != null / == true; no connection needed), vmTokenArgs(id, remove), 11 new AccountKeys + COLUMN_VM_TOKEN appended to COLUMNS. Bundle: 11 new keys, remove.confirm reworded per plan. Tests: existing rows gain UNKNOWN, `none` gains the two false fields; new tests for the column, actions (connected true/false, no cli, no/gone selection, error file), exact command lines for POWERSHELL/WSL_BASH/BASH set+remove using TerminalAgentLauncherTest fixtures (that file untouched), and the src/main tripwire (asserts AccountPresentation.kt seen; user.dir as WorktreeExclusionTest does). Bundle guard 61->72, vmTokenState prefix, rows with true/false/null, panelArgs for both confirms. grep: src/main has no store folder name.",
+      "startedAt": "2026-11-01T18:46:30.169Z",
+      "completedAt": "2026-11-01T18:49:55.090Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt. This is Swing; JUnit covers the pure parts in step 2.\n\n- **Buttons.** Append two buttons to the button row, after removeButton:\n  - setVmTokenButton (BUTTON_SET_VM_TOKEN) calls setVmToken();\n  - removeVmTokenButton (BUTTON_REMOVE_VM_TOKEN) calls removeVmToken().\n- **setVmToken().**\n  - account = selected() ?: return.\n  - Messages.showOkCancelDialog(project, message(VM_TOKEN_SET_CONFIRM, account.label), message(VM_TOKEN_SET_TITLE), message(VM_TOKEN_SET_TITLE), message(CANCEL), Messages.getQuestionIcon()).\n  - On OK: runCli(AccountPresentation.vmTokenArgs(account.id, remove = false)).\n- **removeVmToken().** The same, with VM_TOKEN_REMOVE_CONFIRM, VM_TOKEN_REMOVE_TITLE and Messages.getWarningIcon(). On OK: runCli(AccountPresentation.vmTokenArgs(account.id, remove = true)).\n  - Each action captures account.id BEFORE its dialog, so a refresh while the dialog is open cannot retarget it.\n- **updateActions().**\n  - Enable the buttons from allowed.setVmToken and allowed.removeVmToken.\n  - When the CLI is known and the selected account's flag is null, give both buttons the VM_TOKEN_UNSUPPORTED tooltip; otherwise no tooltip.\n- **Table.** COLUMN_WIDTHS gains a 7th width (100), and getValueAt gains `6 -> row.vmToken.resolve()`.\n- **Class KDoc.** VM tokens are minted and removed by the same `accounts` CLI in a terminal tab; the plugin never reads, writes or passes a token.\n\nError handling:\n- runCli already handles a missing terminal: the command goes on the clipboard and a warning dialog opens.\n- The CLI prints its own fixed MOE_VM_TOKEN_* failure line in the terminal.\n- Cancel, or closing a dialog, runs nothing.\n- No new failure path is needed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt"
+      ],
+      "note": "Two buttons after Remove... (Set VM token..., Remove VM token...). The plan's setVmToken()/removeVmToken() are one private vmToken(remove) (same dialogs/icons/args, less code): account captured before showOkCancelDialog, OK -> runCli(vmTokenArgs(account.id, remove)); Cancel/close runs nothing. updateActions enables from allowed.setVmToken/removeVmToken; VM_TOKEN_UNSUPPORTED tooltip when cli known and the selected account's flag is null, else none. 7th column width 100, getValueAt 6 -> row.vmToken. Class KDoc notes the plugin never reads/writes/passes a token. AccountsPanel was already over 300 lines (355) before this step.",
+      "startedAt": "2026-11-01T18:49:56.062Z",
+      "completedAt": "2026-11-01T18:50:29.266Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, after steps 1-3, under the shared lease (`mem:convention-jetbrains-gradle-lease`).\n\n1. Call moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId, note: \"gradlew test\" }. If you are queued, call moe.report_blocked with that resourceId.\n2. Run exactly:\n   `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`\n   A snapshot run of the exact commit is an acceptable alternative.\n3. Release the lease with moe.release_resource, even on failure.\n\nThe command, exit code and output tail are the complete_task evidence. Expect BUILD SUCCESSFUL with 0 failures, and cite the AccountPresentationTest and MoeJsonTest counts.\n\nThe completion summary must carry the DoD 3 review note: the plugin only launches `accounts vm-token <id> [--remove]` through runCli. It never reads, writes or passes a token, and src/main never names the token store (the tripwire test).\n\nThe real mint flow (claude setup-token, then the hidden paste in the IDE terminal) is not run here. It belongs to the M07 integration's real-board run; say so in the completion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Lease jetbrains-gradle granted 18:50:32Z. In-place run (only this task's 7 files dirty under moe-jetbrains): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> BUILD SUCCESSFUL, EXIT=0. JUnit XML (timestamps 18:52:31Z): 531 tests, 0 failures/errors/skips across 29 suites; AccountPresentationTest 19/0, MoeJsonTest 33/0, the 5 new tests ran. Lease kept for step 5's mutation check and final re-run; released at the end of step 5.",
+      "startedAt": "2026-11-01T18:50:30.515Z",
+      "completedAt": "2026-11-01T18:53:28.570Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review and read `git diff HEAD -- moe-jetbrains/src` as an attacker. Check:\n- Can any token-shaped JSON value reach the model, a table cell, a tooltip or a command line? Only a JSON boolean may be read.\n- Does an older daemon (no flag) ever show Set, or enable a button that would run a CLI command it lacks?\n- Does vmTokenArgs ever add a word beyond the two or three fixed ones? Does any path quote differently from sign-in?\n- Does anything under src/main name the token store?\n- Swing: a refresh between a dialog and its OK must not act on another account.\n- MessageFormat: no placeholder text contains an apostrophe, and the bundle guard passes with the real count.\n\nFix anything found, re-run step 4's command under the lease, and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt"
+      ],
+      "note": "Self-review of git diff HEAD -- moe-jetbrains/src. Fixed one finding: the VM_TOKEN_UNSUPPORTED tooltip now also requires rotation.error == null (same usable-CLI rule as actions()), so an unusable account file never blames the daemon version. Checked, no change needed: only a JSON boolean reaches ClaudeAccount.vmToken (same pattern as MoeJson requiredCheckSatisfied); missing flag -> Unknown and both buttons off; vmTokenArgs has only the 2/3 fixed words and goes through unchanged runCli/buildAccountsCommand; src/main has no store folder name; account captured before the dialog; no apostrophe in placeholder texts. Theoretical only: if the daemon is swapped for an older one while a dialog is open, OK still runs the CLI, which refuses with a usage error in the terminal (same as sign-out, which doesn't re-check either). Mutation check (5 mutants: parser accepts any primitive, remove gated on != null, --remove dropped, null->PRESENT, store name in a src/main comment): 8 tests failed, each for the intended reason; all mutants reverted (grep clean). Another session started editing moe-jetbrains mid-task (RuntimeSelectionPolicy.kt, new VerifiedLocalLaunch*.kt, not mine), so the final gate ran on a snapshot: git archive HEAD 3761931b + exactly my 7 files at D:\\moe-scratch\\m07l-gate-d56fb46e -> BUILD SUCCESSFUL, EXIT=0, 531 tests 0 failures. Lease released.",
+      "startedAt": "2026-11-01T18:53:29.663Z",
+      "completedAt": "2026-11-01T18:59:00.414Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-324d4f53cf28486d8bc0de70b6a99b8d"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.07,
+  "comments": [
+    {
+      "id": "comment-2f118e68c70248f19431deb465b45a01",
+      "author": "architect-b520bc90",
+      "content": "Contract from CQ-M07k (task-324d4f53, plan rev 1, WORKING). Plan against this; the full contract is in `mem:task-task-324d4f53cf28486d8bc0de70b6a99b8d-handoff`.\n\n**Commands, run in a terminal through the existing accounts path:**\n- `accounts vm-token <id>`\n  - It runs `claude setup-token` interactively under the account's config folder, then asks the person to paste the token at a HIDDEN prompt on the same terminal. The terminal must therefore be interactive, with stdin attached, exactly as `accounts login <id>` is.\n  - Exit 0 on success. Exit 1 with one fixed line on failure: MOE_VM_TOKEN_MINT_FAILED, MOE_VM_TOKEN_NOT_STORED, MOE_VM_TOKEN_INVALID, or the existing unknown-account error.\n- `accounts vm-token <id> --remove` deletes the token and exits 0, whether or not one existed.\n- `accounts remove <id>` now also deletes that account's token.\n\n**Presence flag:** each entry of the ACCOUNTS_UPDATED `accounts[]` gains `vmToken: boolean`, computed from a stat only (the daemon never opens the token).\n- It is typed in accountStore.ts as `AccountViewWithVmToken`, because types/schema.ts is held by WT-19. The plugin's Kotlin model should parse it as optional.\n- A missing field (an older daemon) shows unknown, never present, per this task's DoD.\n\nThe plugin never reads or passes a token; it only launches those commands.",
+      "timestamp": "2026-11-01T10:32:01.028Z"
+    },
+    {
+      "id": "comment-7367d207b1a54af8b149653a6a41f20f",
+      "author": "governor-978922c1",
+      "content": "Governor edge change (18:47Z, governor-978922c1): I dropped this row's dependsOn on CQ-M07o (task-8dbc76d7), so it is claimable now; CQ-M07k is DONE.\n\nThe edge existed only \"so the two JetBrains slices never edit util/TerminalAgentLauncher.kt at the same time\". This plan never edits that file or TerminalAgentLauncherTest: step 2 only calls buildAccountsCommand, and it says \"Do not edit TerminalAgentLauncherTest\". M07o's plan doesn't touch the accounts command path. No other open row plans any of this row's 7 files.\n\nIf M07o happens to be mid-edit on TerminalAgentLauncher.kt when you reach step 4, verify with the snapshot run of your exact commit that the step allows, not against the shared tree. Nothing else in the plan changes.",
+      "timestamp": "2026-11-01T18:44:04.303Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:08:14.792Z",
+  "updatedAt": "2026-11-01T19:05:15.986Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T10:32:01.486Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-01T19:04:38.126Z",
+    "wallClockMs": 30756640
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "worker-9be3bcf5",
+    "qa-1b5727b1"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T10:40:32.251Z",
+  "executionContract": {
+    "intendedBehavior": "The Accounts tab gains a VM token column (Set / Not set / Unknown) and two buttons, Set VM token... and Remove VM token.... After a confirm dialog, each runs `accounts vm-token <id>` or `accounts vm-token <id> --remove` in a terminal tab through the existing runCli path, with sign-in's shells and quoting. Both buttons are disabled with a tooltip when the daemon sends no flag.",
+    "acceptanceCriteria": [
+      "vmTokenArgs gives exactly [vm-token, id] and [vm-token, id, --remove]. buildAccountsCommand renders them with sign-in's quoting for POWERSHELL, WSL_BASH and BASH, shown by exact-string JUnit.",
+      "The row shows Set, Not set or Unknown for flag true, false or missing (any non-boolean). Parser and presentation JUnit cover all three.",
+      "Set needs the CLI, a selection and a known flag. Remove also needs the flag to be true. Neither needs the connection.",
+      "No src/main file names the token store (tripwire JUnit), and a token-shaped vmToken value never survives parsing.",
+      "./gradlew test passes under the jetbrains-gradle lease."
+    ],
+    "invariants": [
+      "The plugin never reads, writes or passes a token. The only VM-token data it handles is the daemon's boolean flag.",
+      "A missing flag is never shown as Set.",
+      "Every existing Accounts tab action, column and command line is unchanged."
+    ],
+    "compatibility": [
+      "An older daemon (no vmToken field) parses and renders as Unknown, with the VM-token buttons disabled.",
+      "TerminalAgentLauncher.kt and TerminalAgentLauncherTest.kt are untouched; they belong to CQ-M07o."
+    ],
+    "approvedScope": [
+      "ClaudeAccount.vmToken and MoeJson.parseClaudeAccount's strict boolean read.",
+      "AccountPresentation: AccountRow.vmToken, AccountActions.setVmToken/removeVmToken, vmTokenArgs and the new AccountKeys.",
+      "MoeBundle.properties: 11 new keys and the reworded moe.accounts.remove.confirm.",
+      "AccountsPanel: the two buttons and dialogs, the tooltip, and the 7th column."
+    ],
+    "reuse": [
+      "AccountsPanel.runCli and TerminalAgentLauncher.runAccountsCommand / accountsCommandLine / buildAccountsCommand, unchanged.",
+      "The existing AccountPresentationTest fixtures and bundle guard.",
+      "The fixtures of the TerminalAgentLauncherTest accounts-command tests, copied into the new test."
+    ],
+    "sourceAssumptions": [
+      "AccountsPanel.kt:278-291 runCli(args) calls runAccountsCommand and falls back to accountsCommandLine plus the clipboard.",
+      "TerminalAgentLauncher.kt:395-429: AccountsShell, accountsShellFor and buildAccountsCommand (internal); runAccountsCommand.",
+      "MoeJson.kt:676-728: parseAccountRotation / parseClaudeAccount, read strictly.",
+      "AccountPresentationTest.kt:268-325: the bundle guard (61 keys, presentation prefixes, panelArgs, no apostrophe in placeholder texts)."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- **Editing TerminalAgentLauncher.kt.** Not needed. runCli(args) in AccountsPanel already sends any argument list through runAccountsCommand / accountsCommandLine / buildAccountsCommand, so `vm-token <id> [--remove]` reuses sign-in's shells, quoting and WSL path mapping unchanged. The DoD 1 proof therefore calls buildAccountsCommand from AccountPresentationTest, keeping this slice off TerminalAgentLauncher.kt and its test (CQ-M07o's files).\n- **Deleting the token over /ws through the daemon.** Rejected: it adds a daemon surface outside this slice. Removal goes through the same CLI as minting.\n- **Parsing the flag with getStrictBooleanOrDefault.** Rejected: a default collapses unknown into false, and the DoD needs unknown distinct.\n- **Enabling the actions on an unknown flag.** Rejected: an older daemon's CLI refuses `vm-token` (usage exit 2), so the buttons are disabled with a tooltip instead.",
+    "codebaseInsights": "- AccountsPanel.runCli(args) is the single CLI path: it opens a terminal tab, or falls back to the clipboard and a warning dialog.\n- AccountPresentation is pure (no IntelliJ classes) and fully JUnit-tested. Its bundle guard counts the static String fields of AccountKeys (61 today), requires every presentation-prefix key to be emitted, and forbids apostrophes in placeholder texts.\n- MoeJson parses rotation fields strictly (real JSON types only), because the tab turns cli and ids into command lines.\n- The ClaudeAccount constructor is called positionally only in AccountPresentationTest's helper, so a trailing default parameter keeps it compiling.\n- Internal TerminalAgentLauncher.buildAccountsCommand and AccountsShell are module-visible to every test class.",
+    "risks": "- **Shared bundle file.** CQ-M07o likely adds MoeBundle.properties keys (its refusal dialog). The declared dependency on M07o serializes the two in the shared checkout; keep it.\n- **The tripwire scan's working directory.** It must assert it found the sources, so it never passes vacuously.\n- **Remove-confirm text.** The new moe.accounts.remove.confirm wording is only true once CQ-M07k rev 2 (registry removal deletes the token) has landed, and dependsOn M07k guarantees that.\n- **First real run.** The hidden prompt's no-echo behavior in the JetBrains PowerShell and WSL terminals is first exercised in the M07 real-board run.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "53a58b509e4993198b908964499b3d430192db14",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T10:40:32.275Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T18:44:57.200Z",
+  "reviewStartedAt": "2026-11-01T18:59:37.386Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=/mnt/d/moe-scratch/m07l-gate-d56fb46e && mkdir -p \"$S\" && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt moe-jetbrains/src/main/resources/messages/MoeBundle.properties moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt \"$S\" && cmd.exe /d /c \"cd /d D:\\moe-scratch\\m07l-gate-d56fb46e\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "Snapshot = git archive HEAD 3761931b + exactly this task's 7 files (no other moe-jetbrains change at HEAD since e7668eae), under the jetbrains-gradle lease (acquired 18:50:32Z, released after).\n> Task :prepareTestSandbox\n> Task :compileTestKotlin\n> Task :test\nBUILD SUCCESSFUL in 1m\n11 actionable tasks: 11 executed\nEXIT=0\nJUnit XML (18:58:38Z): total tests=531 failures=0 errors=0 skipped=0; com.moe.toolwindow.AccountPresentationTest tests=19 failures=0; com.moe.util.MoeJsonTest tests=33 failures=0.\nEarlier in-place run of the plan's exact command (cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\") at 18:52Z, before another seat began editing moe-jetbrains: BUILD SUCCESSFUL, EXIT=0, 531 tests, 0 failures.",
+    "reportedAt": "2026-11-01T18:59:37.386Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt",
+    ".moe/epics/epic-b8c6bbda4def46cbb8d1b351f8ea3eeb.json",
+    ".moe/tasks/task-5adf0673fdad4c5f8a0956e7afcebe07.json",
+    ".moe/tasks/task-d56fb46eb0a941808a7ba7e0588f2fd5.json",
+    ".moe/tasks/task-3954cc09f74045a0ac8fa4b795dcb0a9.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "CQ-M07l: JetBrains Accounts tab VM token action. 7 files, moe-jetbrains only.\n- Model/parser: ClaudeAccount.vmToken: Boolean? = null. MoeJson reads it only as a JSON boolean. A string (including a token-shaped one), number, null, object or missing field reads as null (unknown).\n- AccountPresentation: a VM token column showing Set / Not set / Unknown. setVmToken needs the CLI, a selection and a known flag; removeVmToken also needs the flag to be true. Neither needs the connection. vmTokenArgs(id, remove) returns exactly [vm-token, id] or [vm-token, id, --remove]. 11 new AccountKeys (bundle guard 61 -> 72).\n- AccountsPanel: Set VM token... and Remove VM token... buttons with confirm dialogs. The account is captured before the dialog; OK runs runCli(vmTokenArgs), the path sign-in uses. An unsupported-daemon tooltip shows when the flag is missing.\n- Bundle: 11 keys; remove.confirm now says Remove only deletes the VM token.\n- TerminalAgentLauncher.kt and TerminalAgentLauncherTest.kt are untouched; existing actions, columns and command lines are unchanged.\n\nDoD 3 review note: the plugin only launches `accounts vm-token <id> [--remove]` through runCli. It never reads, writes or passes a token, and its only VM-token input is the daemon's boolean. src/main never names the token store, which a tripwire JUnit enforces (it also asserts that it scanned AccountPresentation.kt, so it cannot pass vacuously).\n\nTests: AccountPresentationTest 19, 4 new: column; actions (connected true/false, no CLI, no or gone selection, error file); exact command lines for POWERSHELL, WSL_BASH and BASH, set and remove, with the TerminalAgentLauncherTest fixtures; tripwire. MoeJsonTest 33: fixtures cover true/false/missing, a token-shaped string and the number 1 parse to null with no \"sk-ant\" in the result, plus a new literal table. A 5-mutant check gave 8 failures, each for the intended reason; all mutants reverted.\n\nSelf-review fix: the tooltip also requires a usable account file.\n\nGate: an in-place",
+  "commits": [
+    {
+      "sha": "3690d46e86a9f409d420b219f3c9d67696d860aa",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-9be3bcf5@2026-11-01T18:43:53Z",
+      "paths": [
+        ".moe/epics/epic-b8c6bbda4def46cbb8d1b351f8ea3eeb.json",
+        ".moe/tasks/task-5adf0673fdad4c5f8a0956e7afcebe07.json",
+        ".moe/tasks/task-d56fb46eb0a941808a7ba7e0588f2fd5.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "recordedBy": "worker-9be3bcf5",
+      "recordedAt": "2026-11-01T19:00:05.997Z",
+      "treeId": "dedcba9e4812a0163975ef8e415faa0d8bac9d55",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "e33474ed5dfab8910b38e0775aa8507c61354776",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1b5727b1@2026-11-01T19:00:15Z",
+      "paths": [
+        ".moe/tasks/task-3954cc09f74045a0ac8fa4b795dcb0a9.json",
+        ".moe/tasks/task-d56fb46eb0a941808a7ba7e0588f2fd5.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-1b5727b1",
+      "recordedAt": "2026-11-01T19:05:15.986Z",
+      "treeId": "8390474fe4a6009fd818309d4e1ae910a7f6d20b",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1b5727b1@2026-11-01T19:00:15Z",
+    "at": "2026-11-01T19:05:15.986Z"
+  },
+  "completedAt": "2026-11-01T19:04:38.126Z",
+  "reviewCompletedAt": "2026-11-01T19:04:38.126Z",
+  "reviewSummary": "APPROVED CQ-M07l, completion 3690d46e (on moe/work-2026-10-24, pushed). Reviewed `git show 3690d46e`, not the shared tree: 7 moe-jetbrains files plus 3 board JSONs, about 218 net LOC (runtime +103/-11, tests +145/-19). Mid-epic slice.\n\nGate: under the jetbrains-gradle lease (19:01:56Z, released after), on a git-archive snapshot of exactly 3690d46e, because the shared tree holds CQ-M07o's uncommitted moe-jetbrains edits. `cmd.exe /d /c \"cd /d D:\\moe-scratch\\qa-m07l-3690d46e\\moe-jetbrains && .\\gradlew.bat test --rerun\"`: BUILD SUCCESSFUL, EXIT=0. JUnit: 531 tests, 0 failures, 0 errors, 0 skipped. AccountPresentationTest 19/0, MoeJsonTest 33/0; all 5 new tests ran. Matches the worker's evidence.\n\nDoD 1: exact args lists, plus exact command strings from the unchanged buildAccountsCommand for POWERSHELL, WSL_BASH and BASH, set and remove.\nDoD 2: true/false/null shows Set/Not set/Unknown. The parser accepts only a JSON boolean (literal table). A token-shaped string parses to null, and no \"sk-ant\" text survives parsing.\nDoD 3: git grep finds no claude-vm-tokens under src/main at 3690d46e. The tripwire is non-vacuous; the review note is in the completion.\nDoD 4: green, above.\n\nContract: buttons enable and disable correctly (tested with connected true and false, no CLI, no selection, a removed account and a file error). The account is read before the dialog; only OK runs runCli. Existing tests only gained the new field. TerminalAgentLauncher and its test are untouched.\n\nDaemon cross-check: the CLI parses `--remove`. registry.removeAccount deletes the token, and both socket REMOVE_ACCOUNT and CLI remove call it, so the reworded remove.confirm text is accurate.\n\nNot verified here: the real mint flow (setup-token plus hidden paste) and runtime Swing. Both belong to the M07 real-board run.\n\nComplexity note (no action needed): the panel's unsupported-tooltip condition repeats part of the actions() logic.",
+  "requiredCheckAtDone": null
+}

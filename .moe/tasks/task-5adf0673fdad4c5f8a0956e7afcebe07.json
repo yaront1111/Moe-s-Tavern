@@ -1,0 +1,224 @@
+{
+  "id": "task-5adf0673fdad4c5f8a0956e7afcebe07",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07m1] Verified-local route gate in moe-agent.sh",
+  "description": "SPIDR split out of CQ-M07m (task-828e7d21602e4cf2a0f242e024db7dea) by architect-b520bc90 on 2026-11-01. It is a path split: the route decision and its refusals land first. Read mem:task-task-828e7d21602e4cf2a0f242e024db7dea-handoff for the whole M07m chain (m1 gate, m2 landing helper, m3 happy path, M07m error paths).\n\nDesign: mem:decision-cq-m07-verified-local-activation. On 2026-11-01 the human chose WORKTREE MODE ONLY for the VM route: under verified-local, worker and QA seats refuse in shared mode before any VM or CLI.\n\nDepends on:\n- CQ-M07d (task-b0485bb1), which provides moe.get_execution_readiness;\n- task-64809b19, the tail of every open row that edits scripts/moe-agent.sh.\n\n**Objective.** Before any claim, a worker or QA iteration of moe-agent.sh decides its route from moe.get_execution_readiness ({profile, ready, missingCapabilities, evaluatedAt}). Today's path stays byte for byte unless the daemon answers verified-local.\n\n**Deliverable.** Edits to scripts/moe-agent.sh. The rows go in a NEW scripts/tests/postflight-vm-route.sh, which postflight.sh runs with one line and which also runs alone. The answers go in scripts/tests/postflight-fake-proxy.js.\n- **When the check runs.** The worker/QA iteration pre-flight reads the tool once per iteration, before the claim.\n- **Today's path, untouched.** Any of these keeps today's path: profile legacy, observe or unreadable; a refusal; an unknown tool (an older daemon); a malformed reply. This fails safe because CQ-M07q's marker check keeps verified-local WORKING/REVIEW rows away from any claim without the marker.\n- **Roles.** Architect and governor seats never call the tool.\n- **verified-local refusals.** Checked in this order. Each prints `[ERROR] <CODE>: <detail>` and exits 1, with no claim_next_task, no VM and no CLI.\n  1. Inside WSL: MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED. This follows the human decision that worker/QA seats run natively on Windows.\n  2. A CLI other than claude or codex: MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED.\n  3. Shared mode: MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED.\n     - Before the claim, read settings.worktreeMode from .moe/project.json and resolve it exactly as packages/moe-daemon/src/state/validators.ts resolveWorktreeMode does at planning time. WT-19 decides the unset default; cite the line you mirror.\n     - CQ-M07m3 adds the post-claim backstop on the claim's workspace mode.\n  4. ready false: MOE_VERIFIED_LOCAL_NOT_READY, naming every missingCapabilities id in the daemon's order.\n  5. ready true: MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE. This is a fail-closed placeholder that CQ-M07m3 replaces with the seat route. It never runs the host CLI.\n- **Test seams.**\n  - **WSL check.** The harness must choose WSL or native for the VM-route WSL check on any host, this WSL box included. The other is_wsl callers keep reading /proc/version. The seam is ignored when MOE_RUNTIME_PROTECTED=1.\n  - **Fake readiness.** The fake proxy answers get_execution_readiness from FAKE_READINESS:\n    - a JSON payload;\n    - `unknown`, for an unknown-tool error;\n    - `fail`, for a transport failure.\n  - **Call log.** The fake proxy logs every tool call, so rows can prove that no claim happened.\n- **Codes.** New codes use the MOE_VERIFIED_LOCAL_ prefix, which parity-check.sh does not compare. CQ-M07n adds the ps1 twin and the parity family.\n- **Cost.** The readiness tool may take about 11 s when its snapshot refreshes, once per iteration.\n\n**NOT in scope:**\n- seat VMs, claims, jobs and landing (CQ-M07m2, CQ-M07m3, CQ-M07m);\n- moe-agent.ps1 (CQ-M07n);\n- the daemon.\n\n**Verification.** `bash scripts/tests/postflight.sh`, run in place per the global rail. MOE_POSTFLIGHT_TIMEOUT_SEC widens a slow box. Launch it with job control (mem:gotcha-qa-session-env-and-signals-leak-into-harness).",
+  "definitionOfDone": [
+    "Profile legacy, observe or unreadable, or a refused, unknown-tool or malformed readiness reply: every existing postflight.sh row passes unchanged, and a new row proves the worker's host CLI launch (the fake CLI's argv, cwd and env other than per-run ids) is identical across those answers.",
+    "verified-local inside WSL, with gemini or grok, or in shared mode: MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED, MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED or MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED, exit 1, with no claim_next_task call and no CLI (rows).",
+    "verified-local and not ready: MOE_VERIFIED_LOCAL_NOT_READY naming each missing id in the daemon's order, exit 1, with no claim and no CLI (row).",
+    "verified-local and ready: MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE, exit 1, with no claim and no host CLI (row).",
+    "Architect and governor seats never call moe.get_execution_readiness, and the WSL test seam is ignored under MOE_RUNTIME_PROTECTED=1 (rows).",
+    "bash scripts/tests/postflight.sh passes, and bash scripts/tests/postflight-vm-route.sh passes alone."
+  ],
+  "taskRails": [
+    "Never fall back to running the agent CLI on the host under verified-local.",
+    "Legacy stays byte-for-byte unchanged in behavior.",
+    "Edit the wrapper only with the main session's editing tools (global rail), and read mem:gotcha-bash-hot-reload-incremental-parse before changing launch code above the main loop."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fake proxy knobs for the VM-route rows (fixtures for DoD 1-5). In scripts/tests/postflight-fake-proxy.js add two OPT-IN knobs. With neither set, every existing answer stays byte-identical: postflight.sh, postflight.ps1, worktree-landing.sh, postflight-worktree.cjs and agent-git-guard.test.mjs all share this file.\n(a) FAKE_CALL_LOG=<file>: immediately after `const moe = path.join(project, '.moe');`, before holdForInterrupt(), holdLedgerForCrash() and every early process.exit, append JSON.stringify({tool, args}) + '\\n' for EVERY call. Never log the new tool through appendRpc(): the order of evidence-rpcs.jsonl is asserted by [hot reload] reload_seq and scenario AH.\n(b) moe.get_execution_readiness, answered before the `switch` (CQ-M07d's payload {profile, ready, missingCapabilities, evaluatedAt}), from FAKE_READINESS:\n- unset: fall through to `default: ok({ success: true })`. That is a malformed reply, so every existing worker/QA row stays on today's path.\n- `unknown`: {jsonrpc:'2.0', id, error:{code:-32601, message:'Tool not found: moe.get_execution_readiness'}}, as McpAdapter.ts:294 answers for an older daemon.\n- `refuse`: {error:{code:-32000, message:'fixture readiness refused', data:{tool:'moe.get_execution_readiness', codeName:'FIXTURE_REFUSED'}}}, the MoeError shape of McpAdapter.ts:316-323. This is a fourth value beyond the description's three; it covers DoD 1's 'refused' reply.\n- `fail`: write nothing, then process.exit(1) (a transport failure).\n- anything else: ok(JSON.parse(value)), so any JSON (an object, a string or an array) is served as the tool text. Error handling: unparseable JSON throws, so the fixture fails loudly (like jsonKnob) instead of serving a half-built reply.\nDocument both knobs in the header comment. Keep the request-parsing line `const tool = String(req.params?.name || '').replace(/^moe\\./, '');` byte-identical: it is parity-check.sh's PROXY_MARKER. Edit only with the Edit tool (global rail).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Route gate in scripts/moe-agent.sh (the behavior behind DoD 1-5). First read mem:gotcha-bash-hot-reload-incremental-parse (task rail).\n- Edit ONLY with the Edit tool. It renames the file, so running seats keep their inode, and it leaves the TOOL witness this contested path needs to land.\n- Keep the main loop's `{ ... exit }` group intact.\n- Afterwards run `bash -n scripts/moe-agent.sh` and `bash scripts/tests/parity-check.sh` (about 3 s; mem:gotcha-parity-check-literals). Parity must stay PASS: no compared family or literal is touched, because CQ-M07n adds the families (mem:decision-wrapper-twin-parity-families-last).\n- Keep the new code bash-3.2-safe: no ${x^^}, mapfile or declare -A.\n\nDefine four functions in one block in the helper region just before the main loop, e.g. directly above wrapper_reload_deferred(). Do NOT put them inside the segment seat-registration.test.mjs slices, from '# moe_rpc TOOL ARGS_JSON' to '# Candidate evidence is pinned outside the CLI'.\n\n1. vm_route_is_wsl. Unless RUNTIME_PROTECTED=1, the test seam MOE_POSTFLIGHT_WSL decides: exactly `1` means WSL, exactly `0` means native. Any other value, unset, or a protected launch falls back to `is_wsl`. is_wsl() and its two callers stay untouched, so they keep reading /proc/version. The seam's name deliberately stays out of the MOE_VERIFIED_LOCAL_, MOE_SEAT_ and MOE_VM_ families that CQ-M07n will compare; it is sh-only, since ps1 has no WSL check.\n\n2. vm_route_worktree_mode. One $PYTHON_CMD read of \"$MOE_DIR/project.json\". It prints `on` only when settings.worktreeMode resolves to 'on', mirroring packages/moe-daemon/src/state/validators.ts resolveWorktreeMode AS LANDED when you start.\n- WT-19 (task-b1ca54f2) is in this row's dependency closure through 64809b19 and flips the unset default. At planning time, :293-296 resolve an absent key to 'off' and refuse every other value, null included. An absent key means JS `settings?.worktreeMode === undefined`: no settings, non-object settings, or no key.\n- Put a comment citing the validators.ts line you mirror.\n- Otherwise it prints the clause:\n  - `is unset, which resolves to 'off'` (only while the landed default is 'off');\n  - `is 'off'`;\n  - `is invalid (<json.dumps(value), control chars as ?, cut to 60 chars>)`;\n  - `cannot be read (.moe/project.json is missing or not a JSON object)`.\n- It never fails (set -e).\n\n3. verified_local_refuse CODE DETAIL: `printf '[ERROR] %s: %s\\n' \"$1\" \"$2\" >&2; exit 1`. Plain text with no colour codes, so `[ERROR] <CODE>:` greps exactly and CQ-M07n1 ports it byte for byte. Keep WORKER_ID: the seat registered before the loop, so the EXIT trap's deregister_worker (reason terminal_closed) must run.\n\n4. verified_local_gate.\n- `reply=$(moe_rpc get_execution_readiness '{}' 2>/dev/null) || return 0`. An error frame (a refusal, or -32601 for an unknown tool), an isError result, a transport failure or an empty reply all keep today's path.\n- A $PYTHON_CMD parse then accepts only a JSON object whose profile is one of legacy|observe|verified-local|unreadable, whose ready is a JSON boolean (1 and \"true\" are malformed) and whose missingCapabilities is a list of strings; evaluatedAt is ignored. It prints the profile, ready, and the ids joined by ', ' in the daemon's order, separated by \\x1f, with control chars replaced by '?'. Any other reply: `|| return 0`.\n- `[ \"$profile\" = verified-local ] || return 0`.\n- Then, using if-forms only, refuse in this order:\n  a. vm_route_is_wsl: MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED, detail 'this project runs verified-local, whose worker and QA seats run natively on Windows (moe-agent.ps1), never inside WSL; refusing to start this seat.'\n  b. CLI_TYPE is not claude or codex: MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED, detail 'this project runs verified-local, whose worker and QA seats run only claude or codex; this seat runs <CLI_TYPE>; refusing to start this seat.' moe-agent.sh:465-476 counts every custom command as claude, so only gemini and grok refuse.\n  c. vm_route_worktree_mode is not `on`: MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED, detail 'this project runs verified-local, whose worker and QA seats run only in worktree mode; settings.worktreeMode <clause>; refusing to start this seat.' CQ-M07m3 adds the post-claim backstop.\n  d. ready is false: MOE_VERIFIED_LOCAL_NOT_READY, detail 'this project runs verified-local, which is not ready; missing: <ids, or (none named)>; refusing to start this seat.'\n  e. otherwise: MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE, detail 'this project runs verified-local and is ready, but this wrapper has no VM route yet and never runs the agent CLI on the host; refusing to start this seat.' This is the fail-closed placeholder that CQ-M07m3 replaces.\n- Error handling: today's path prints nothing and sets nothing the CLI inherits. Every RPC, parse and file read on it is guarded, and the function returns 0 explicitly; it never ends on a bare `a && b`. So set -e can never end a legacy seat here, while every failure under a well-formed verified-local reply fails closed (exit 1, never the host CLI).\n\nCall site: inside the main loop, after the per-iteration `read_commit_settings` and before `if [ \"$AUTO_CLAIM\" = true ]; then` (whose body opens with the 'Pre-flight: joining chat, claiming task, loading context...' echo), add `case \"$ROLE\" in worker|qa) verified_local_gate ;; esac` with a one-line CQ-M07m1 comment.\n- That position comes before every pre-flight RPC, so a refused seat claims nothing and consumes no unread mention.\n- It also covers --no-auto-claim worker/QA sessions, which would otherwise launch the host CLI under verified-local (task rail).\n- Architect and governor seats never reach the call.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create scripts/tests/postflight-vm-route.sh with the Write tool (global rail). It is run as `bash <file>`, so mode 100644, like its siblings. Scaffold it on postflight.sh's [team join] and [protected runtime] fixtures.\n\nSetup:\n- `set -euo pipefail`; ROOT_DIR and WRAPPER as in postflight.sh.\n- POSTFLIGHT_TIMEOUT_SEC from MOE_POSTFLIGHT_TIMEOUT_SEC (same parse, default 60).\n- NODE from MOE_NODE_COMMAND, else `command -v node`, read BEFORE the scrub.\n- Then unset every inherited MOE_*, FAKE_* and CLAUDE* variable, because a seat's MOE_WORKER_ID, MOE_SESSION_ID and the rest leak into nested wrappers (mem:gotcha-qa-session-env-and-signals-leak-into-harness). Export MOE_ACCOUNT_ROTATION=off.\n- A mktemp dir with EXIT-trap cleanup, and a node shim as in postflight.sh.\n- Standalone guards print `SKIP postflight-vm-route.sh: <why>` and exit 0; postflight.sh skips first, so they never fire inside it. Print no other line starting with SKIP: CI's postflight-safe.mjs fails on one.\n- `cp \"$ROOT_DIR/scripts/tests/postflight-fake-proxy.js\" \"$FAKE_PROXY\"`. Use the one shared fixture, never an embedded body (parity-check PROXY_MARKER).\n- Fake CLIs $BIN/claude, codex, gemini and grok. Each writes {cli, argv, cwd, env} as JSON to ONE fixed file whose path is baked into the script text (not passed by env), then exits 0.\n- `vmr_run ROW ROLE CLI READINESS WTMODE SEAM [env...]`:\n  - Rebuild the project at ONE fixed path for each run: project.json {\"id\":\"proj-vmr\",\"name\":\"postflight-vm-route\",\"settings\":{\"autoCommit\":false}} plus worktreeMode per WTMODE (on, off, unset, or a raw JSON value), an empty messages/chan-general.jsonl, and a daemon.json as in [team join].\n  - Give it a fresh HOME and a fixed TMPDIR that it empties, and delete the CLI record and the call log.\n  - Run `timeout \"${POSTFLIGHT_TIMEOUT_SEC}s\" \"$WRAPPER\" --project <p> --worker-id <ROLE>-vmr --role ROLE --team Smoke --no-start-daemon --command \"$BIN/<CLI>\" --no-loop --poll-interval 0` with PATH=\"$BIN:<shim dir>:$PATH\", MOE_PROXY_PATH=\"$FAKE_PROXY\", FAKE_CALL_LOG, FAKE_READINESS and MOE_POSTFLIGHT_WSL (each unset for '-'), MOE_DISABLE_HEARTBEAT=1 and MOE_TASKLESS_WAIT_SEC=5.\n  - Keep the output and the exit code.\n- `vmr_fail ROW WHY` prints the output, then `VM ROUTE FAILED (<row>): <why>`, and exits 1.\n- Use table-driven helpers. The whole file should stay near 250-280 lines (step 6 checks the size).\n\nRow T (DoD 1): a worker with claude, no worktreeMode key and no seam, run once per answer:\n- the well-formed legacy, observe and unreadable payloads;\n- `refuse`, `unknown` and `fail`;\n- two malformed replies: {\"profile\":\"verified-local\",\"ready\":\"true\",\"missingCapabilities\":[]} and the JSON string \"not an object\".\nEach run must exit 0, print no MOE_VERIFIED_LOCAL_ text, leave a CLI record, and leave a call log with get_execution_readiness BEFORE claim_next_task (the read really ran first).\n\nThen compare the records. Normalize them with node, masking per-run values only:\n- drop FAKE_READINESS (the varied input itself);\n- replace the run's MOE_SESSION_ID, ISO-8601 stamps, the wrapper's mktemp names under the fixed TMPDIR, uuid/hex runner ids and PIDs with fixed tokens, by value or by pattern. Never drop an entry, and keep the mask list explicit and commented.\nRun legacy twice first and require the two to match, which shows the mask is sufficient. Sanity-check that the record is real: argv names task-postflight and env has MOE_WORKER_ID=worker-vmr. Then require every other answer's normalized record to equal legacy's.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Refusal rows in scripts/tests/postflight-vm-route.sh, extending the file from step 3 (DoD 2, 3 and 4).\n\nHelper `vmr_refused ROW CODE DETAIL` checks:\n- exit 1;\n- exactly one line starting `[ERROR] <CODE>: ` and containing DETAIL;\n- no other MOE_VERIFIED_LOCAL_ code in the output;\n- the call log holds get_execution_readiness, and every later line is deregister_worker, so no claim_next_task, chat_read or get_pending_questions ran;\n- no CLI record.\n\nEach row also meets every LATER refusal's trigger, which pins the order:\n- W1: worker, gemini, worktreeMode off, seam 1, verified-local with ready false. Expect MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED.\n- C1 (gemini) and C2 (grok): seam 0, worktreeMode off, ready false. Expect MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED naming 'this seat runs gemini' or 'this seat runs grok'.\n- S1 ('off'), S2 (invalid, \"ON\") and S3 (unset): claude, seam 0, ready false. Expect MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED with the matching clause.\n  - S3 follows the LANDED default, and this is the drift guard that keeps the wrapper mirror exact. Extract the default from packages/moe-daemon/src/state/validators.ts resolveWorktreeMode (today the `mode === undefined ? 'off'` literal; adapt the pattern to WT-19's landed shape), and FAIL LOUDLY when nothing is extracted. Expect SHARED_MODE when the default is off, NOT_READY when it is on.\n- N1: codex, worktreeMode on, seam 0, ready false, missingCapabilities [\"revision-bound-local-delivery\",\"isolated-check-vm\",\"authenticated-runner-evidence\"], deliberately unsorted. Expect MOE_VERIFIED_LOCAL_NOT_READY with 'missing: revision-bound-local-delivery, isolated-check-vm, authenticated-runner-evidence', in the daemon's order. It also proves codex passes the CLI check.\n- N2: claude, ready false with []. Expect 'missing: (none named)'.\n- R1 (claude, worker) and R2 (codex, --role qa, because QA seats are gated too): worktreeMode on, seam 0, ready true. Expect MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE and no host CLI.\n\nIf a landed WT row makes the pre-loop refuse a non-git project under worktreeMode on, initialize the fixture project as a git repo (git init plus one commit, with -c user.name and user.email) instead of touching the wrapper.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Remaining rows (DoD 5) and the hookup (DoD 6), in scripts/tests/postflight-vm-route.sh and scripts/tests/postflight.sh.\n- A1 (--role architect) and G1 (--role governor): claude, worktreeMode off, seam 1, and a verified-local ready-false payload, one that would refuse any worker. Expect exit 0, the fake CLI ran, no MOE_VERIFIED_LOCAL_ text, and no get_execution_readiness in the call log.\n- P1, the protected seam: MOE_RUNTIME_PROTECTED=1, using the [protected runtime] fixture as landed by 64809b19 and run the way P9 runs: absolute MOE_PROXY_PATH and MOE_DAEMON_PATH files, `--command claude` resolved by bare name from a trusted PATH dir outside the project, its pinned node and python3, a live daemon.json and --no-start-daemon. Verified-local with ready true, worktreeMode on.\n  - Set the seam to the OPPOSITE of the host. When `grep -qEi '(microsoft|wsl)' /proc/version` holds, use seam 0 and expect MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED; otherwise use seam 1 and expect MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE.\n  - This is a host-independent proof that the seam is ignored under protection. The unprotected W1 and R1 already prove it is honored otherwise.\n- Static row: MOE_POSTFLIGHT_WSL appears in scripts/moe-agent.sh only inside vm_route_is_wsl(), and is_wsl()'s body does not mention it. So the other is_wsl callers keep reading /proc/version.\n- Print one '[vm route] ok ...' line per group, and end with `echo \"PASS postflight-vm-route.sh\"`.\n- scripts/tests/postflight.sh: add ONE line, `bash \"$ROOT_DIR/scripts/tests/postflight-vm-route.sh\"`, directly before `echo \"PASS postflight.sh\"`. set -euo pipefail propagates a failure. Change no other byte, so every existing row runs unchanged.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification (DoD 1 and 6). Run it ONCE, on the final bytes, in place in the shared checkout: the global rail allows that for scripts/tests launcher harnesses. No npm anywhere.\n\nThe command, from /mnt/d/projexts/moes:\nenv -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight-vm-route.sh && bash scripts/tests/postflight.sh'\n\nLaunch it with job control so SIGINT is not ignored (scenario W; mem:gotcha-qa-session-env-and-signals-leak-into-harness):\n`( set -m; nohup <command>; echo EXIT=$? ) > <scratch log> 2>&1 &`, with the whole subshell in the background. Poll with a foreground `timeout 590 bash -c 'until grep -q ^EXIT= <log>; do sleep 15; done'`, repeated as needed. The whole run takes about 15-20 minutes.\n\nIt passes when all of these hold:\n- EXIT=0;\n- the log shows 'PASS parity-check.sh', 'PASS postflight-vm-route.sh' twice (alone and inside postflight.sh) and 'PASS postflight.sh';\n- `grep -E '^SKIP' <log>` finds nothing (CI's postflight-safe.mjs fails on a SKIP line).\n\ncomplete_task verification: command = the env -i string above, exitCode 0, outputTail = the log's last lines.\n\nIf a pre-existing row fails, A/B it against HEAD before blaming this change. Never edit an existing row or its timeout.\n\nSize: measure `git diff --numstat -- scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh` plus `wc -l scripts/tests/postflight-vm-route.sh`. If the net is over 400 changed lines, file the EPIC ADD_RAIL waiver with moe.propose_rail BEFORE complete_task, using the CQ-M07k rail template with the exact per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap). Never trim rows to fit.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this task's own diff (load adversarial-self-review), then mutants.\n\nChecklist:\n1. set -e: can ANY command on today's path end a legacy seat? Try an empty PYTHON_CMD, a reply containing \\x1f or newlines, a 1 MB reply and a non-UTF-8 reply.\n2. Can a well-formed verified-local reply ever reach claim_next_task, chat_read or the host CLI? Check --no-auto-claim, the launch-outage probe, the resume path and --loop.\n3. Is anything printed or exported on today's path?\n4. Do an id or a worktreeMode value with control characters break the one-line output?\n5. Is the seam honored only when unprotected, and is is_wsl() untouched?\n6. With FAKE_READINESS and FAKE_CALL_LOG unset, does the fake proxy answer every existing knob as before?\n7. Is the wrapper code valid bash 3.2?\n\nMutants, never in the shared checkout:\n- Copy scripts/ and packages/moe-daemon/src/state/validators.ts into a scratch tree outside the checkout. Shell writes are allowed only there.\n- Apply each mutant there with sed, then run that copy's postflight-vm-route.sh (about 2 min each).\n- Each mutant must make it FAIL:\n  a. drop the worker|qa role guard (A1/G1);\n  b. swap the WSL and CLI checks (W1);\n  c. accept ready \"true\" (the malformed T run);\n  d. honor the seam under protection (P1);\n  e. move the gate after the chat reads (the call-log assertions);\n  f. sort the missing ids (N1);\n  g. accept any truthy worktreeMode (S2).\n- Report which were killed and which survived in complete_step.\n\nIf you change any byte, re-run the step-6 command fresh: the complete_task evidence must come from the final bytes.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b0485bb1cacf4d3b84979e9256078737",
+    "task-64809b196c4042f18c7665e1e8a14b18"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.152,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T14:21:49.720Z",
+  "updatedAt": "2026-11-01T18:59:07.591Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T14:27:03.726Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "architect-548034a1"
+  ],
+  "commits": [
+    {
+      "sha": "aca69b526ff65db7c09c98c5fe74c9f7513cf56d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-548034a1@2026-11-01T18:23:42Z",
+      "paths": [
+        ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+        ".moe/tasks/task-23c803d2ec834496a730b00524f44e0b.json",
+        ".moe/tasks/task-5adf0673fdad4c5f8a0956e7afcebe07.json",
+        ".moe/tasks/task-62ec51f179494706a39045154d07e544.json",
+        ".moe/tasks/task-91ee455a601b411f97d5d951cc5f241c.json",
+        ".moe/tasks/task-9ae89d5e362c4bf3afb692de17ae8c5b.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-cd2977e10648489fa3d63b0a376ca6fa.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
+      ],
+      "recordedBy": "architect-548034a1",
+      "recordedAt": "2026-11-01T18:24:08.197Z",
+      "treeId": "ab3c8fec8dd6478ea1b059aa404b43ac55c249d1",
+      "status": "PLANNING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+    ".moe/tasks/task-23c803d2ec834496a730b00524f44e0b.json",
+    ".moe/tasks/task-5adf0673fdad4c5f8a0956e7afcebe07.json",
+    ".moe/tasks/task-62ec51f179494706a39045154d07e544.json",
+    ".moe/tasks/task-91ee455a601b411f97d5d951cc5f241c.json",
+    ".moe/tasks/task-9ae89d5e362c4bf3afb692de17ae8c5b.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+    ".moe/tasks/task-cd2977e10648489fa3d63b0a376ca6fa.json",
+    ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-548034a1@2026-11-01T18:23:42Z",
+    "at": "2026-11-01T18:59:07.591Z"
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T18:48:31.668Z",
+  "executionContract": {
+    "intendedBehavior": "Before any claim or chat read, each worker or QA iteration of scripts/moe-agent.sh reads moe.get_execution_readiness once. Only a well-formed reply whose profile is 'verified-local' changes anything. The seat then refuses, in this order: inside WSL, with a CLI other than claude/codex, outside worktree mode, when not ready, and (until CQ-M07m3) when ready. Each refusal prints exactly one `[ERROR] <CODE>: <detail>` line and exits 1, with no claim_next_task, no chat read and no CLI. Every other answer (legacy, observe, unreadable, a refusal, an unknown tool, a transport failure, a malformed reply) keeps today's path silently and byte-identically. Architect and governor seats never call the tool.",
+    "acceptanceCriteria": [
+      "Row T: the fake CLI's normalized argv, cwd and env are identical across the legacy, observe, unreadable, refuse, unknown, fail and two malformed answers.",
+      "Rows W1, C1, C2, S1-S3, N1, N2, R1 and R2 each print exactly one expected MOE_VERIFIED_LOCAL_ code and exit 1. In the call log, nothing follows get_execution_readiness except deregister_worker, and the CLI never runs.",
+      "Rows A1 and G1: architect and governor never call get_execution_readiness. Row P1: MOE_POSTFLIGHT_WSL is ignored under MOE_RUNTIME_PROTECTED=1 on any host.",
+      "bash scripts/tests/postflight.sh passes with exactly one added line, and bash scripts/tests/postflight-vm-route.sh passes alone."
+    ],
+    "invariants": [
+      "No host CLI launch follows a well-formed verified-local reply.",
+      "Today's path prints nothing new and exports nothing new, and set -e can never end a seat inside the gate.",
+      "is_wsl() and its existing callers keep reading /proc/version.",
+      "The shared-mode check mirrors validators.ts resolveWorktreeMode exactly as landed."
+    ],
+    "compatibility": [
+      "An older daemon without the tool (-32601) keeps today's path.",
+      "The shared fake proxy's existing answers are unchanged: FAKE_READINESS and FAKE_CALL_LOG are inert unless set, so postflight.ps1, worktree-landing.sh, postflight-worktree.cjs and agent-git-guard.test.mjs are unaffected.",
+      "No parity-check family or literal changes; CQ-M07n adds them."
+    ],
+    "approvedScope": [
+      "New sh functions vm_route_is_wsl, vm_route_worktree_mode, verified_local_refuse and verified_local_gate, plus one call site in the main loop.",
+      "Fake proxy knobs FAKE_READINESS (JSON | unknown | refuse | fail) and FAKE_CALL_LOG.",
+      "A new harness, scripts/tests/postflight-vm-route.sh, and one line in postflight.sh."
+    ],
+    "reuse": [
+      "moe_rpc, is_wsl, CLI_TYPE, MOE_DIR and RUNTIME_PROTECTED in moe-agent.sh.",
+      "The shared scripts/tests/postflight-fake-proxy.js.",
+      "postflight.sh's [team join] and [protected runtime] fixture patterns."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh moe_rpc fails on error frames, isError results and empty replies.",
+      "packages/moe-daemon/src/server/McpAdapter.ts:294 answers an unknown tool with -32601 'Tool not found: <name>'.",
+      "packages/moe-daemon/src/state/validators.ts:293-296 resolveWorktreeMode defaults an absent key to 'off' until WT-19 (task-b1ca54f2) lands.",
+      "scripts/moe-agent.sh:465-476 CLI_TYPE maps every custom command to claude."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight-vm-route.sh && bash scripts/tests/postflight.sh'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Gate placement.\n  - Rejected: right before claim_next_task inside the pre-flight. Its chat_read would consume the unread mentions of a seat about to exit 1, and --no-auto-claim worker/QA sessions (which skip the pre-flight) would still launch the host CLI under verified-local, against the task rail.\n  - Chosen: one call at the iteration top, after read_commit_settings and before the AUTO_CLAIM pre-flight.\n- A malformed reply that says verified-local, treated as fail-closed: rejected. The description makes every malformed reply today's path, and CQ-M07q's executionRoute marker keeps strict WORKING/REVIEW rows away from unmarked claims.\n- Folding worktreeMode into read_commit_settings: rejected. That runs on every legacy iteration; a separate reader that runs only under verified-local keeps legacy untouched.\n- An always-on call log under .moe: rejected. It would add a dirty file to every existing row's project; FAKE_CALL_LOG is opt-in.\n- Naming the seam MOE_VM_* or MOE_VERIFIED_LOCAL_*: rejected. CQ-M07n adds those families to parity-check, and ps1 has no WSL check, so the seam is MOE_POSTFLIGHT_WSL.",
+    "codebaseInsights": "- moe_rpc (moe-agent.sh ~2192) returns non-zero on any JSON-RPC error frame, an isError result, or an empty reply, and otherwise prints the text content.\n- McpAdapter.ts:294 answers an unknown tool with -32601 'Tool not found: <name>'. A MoeError becomes {code, message, data:{tool, codeName}} (:316-323).\n- CLI_TYPE (moe-agent.sh:465-476) maps every custom --command to claude.\n- The main loop and its tail are ONE `{ ... exit }` group (task-f31d415d). The per-iteration resets end with read_commit_settings, then `if [ \"$AUTO_CLAIM\" = true ]` opens the pre-flight (join, chat_channels, chat_read, get_pending_questions, then the claim at ~8164).\n- The EXIT trap cleanup_temp deregisters (reason terminal_closed) whenever WORKER_ID and PROJECT are set.\n- resolveWorktreeMode is at validators.ts:293-296, with an 'off' default until WT-19 lands. openClaimAttempt (claimNextTask.ts:156-157) pins worktree mode ONLY for WORKING claims, so a REVIEW (QA) claim's workspace is always shared. That matters for CQ-M07m3's post-claim backstop, not here.\n- The shared fake proxy answers unhandled tools with ok({success:true}).\n- parity-check.sh compares only fixed families and literals, and its fake-proxy rule checks postflight.sh and postflight.ps1 by name.\n- CI runs postflight.sh on Linux only, through postflight-safe.mjs, which fails on any output line starting with SKIP.",
+    "risks": "- set -e is the big one. One unguarded failing command in the gate would end every legacy seat. The fail, unknown and refuse rows prove it cannot happen.\n- Today's path must stay silent and export nothing; row T compares the CLI's argv, cwd and env.\n- The readiness call must never be written to evidence-rpcs.jsonl, whose order the [hot reload] and AH rows assert.\n- seat-registration.test.mjs slices the wrapper between fixed markers. Keep the helpers outside its function segment and the call outside its chat segment.\n- 64809b19 and WT-19 land first and change the protected fixture and possibly the worktreeMode default. Mirror the LANDED bytes and cite the line.\n- Every worker/QA iteration now spawns one extra RPC. The real tool can take about 11 s when its snapshot refreshes.\n- Size: a ~75-line wrapper slice plus a ~250-line harness is near QA's 400 cap. Step 6 files the waiver if needed.\n- FAKE_READINESS gains a fourth value, `refuse`, beyond the description's three.\n- Docs for the five codes and the seam are deferred to the CQ-M07 final row's docs sweep; this row stays mid-epic and lean.\n- CQ-M07n1 ports the LANDED refusal lines byte for byte. Change them only together.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight-fake-proxy.js",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "scripts/tests/seat-registration.test.mjs",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/postflight-safe.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "c9f241d7a64bd8b52a07e82ce232e9335f34a86c",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T18:48:31.693Z",
+  "approvedPlanRevision": 1
+}

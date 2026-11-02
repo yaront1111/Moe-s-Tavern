@@ -91,7 +91,7 @@ done
 # Baseline / temp-index plumbing (identical file formats and git invocations).
 for lit in '#moe-baseline v1' 'moe/baseline' ':(literal)' \
   '--porcelain=v1 -z --untracked-files=all --no-renames' 'hash-object --stdin-paths' \
-  'update-index --no-assume-unchanged --no-skip-worktree -z --stdin'; do
+  'update-index --no-skip-worktree -z --stdin' 'update-index --no-assume-unchanged -z --stdin'; do
   require_both "baseline/index" "$lit"
 done
 

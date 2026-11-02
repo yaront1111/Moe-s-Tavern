@@ -206,6 +206,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Parse the Bash launcher with the stock macOS bash
+        # macOS /bin/bash is 3.2, and JetBrains launches Mac seats through it. Linux and Windows run bash 5,
+        # which parses constructs 3.2 rejects (a quoted heredoc inside $( ) is the known one).
+        if: runner.os == 'macOS'
+        run: |
+          /bin/bash --version
+          /bin/bash -n scripts/moe-agent.sh
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -233,7 +241,24 @@ jobs:
         run: node --test scripts/tests/installers.test.mjs scripts/tests/install-dependencies-windows.test.mjs scripts/tests/dependencies.test.mjs scripts/tests/runtime-requirements.test.mjs
 
       - name: Test local runner prerequisite bundles
-        run: node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-pinned-client.test.mjs
+        run: node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-pinned-client.test.mjs scripts/tests/local-runner-guard.test.mjs scripts/tests/local-runner-seat-capacity.test.mjs scripts/tests/local-runner-seat.test.mjs
+
+      - name: Require every GUARD containment row on Linux
+        # local-runner-guard.test.mjs runs G1-G6, G8 and G9 as root of a user namespace it creates, and skips them
+        # on a host that refuses one. Ubuntu 24.04's AppArmor denies capabilities inside one unless
+        # kernel.apparmor_restrict_unprivileged_userns is 0, so lift that on this throwaway runner. A skipped or
+        # missing row fails here. GUARD containment is Linux-only: on macOS and Windows the step above skips
+        # all nine rows by the file's own reasons.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          tap="$RUNNER_TEMP/local-runner-guard.tap"
+          node --test --test-reporter=tap scripts/tests/local-runner-guard.test.mjs | tee "$tap"
+          grep -x '# pass 9' "$tap"
+          grep -x '# skipped 0' "$tap"
 
       - name: Test Moe CLI response transport
         run: node --test scripts/tests/moe-call.test.mjs
@@ -268,16 +293,22 @@ jobs:
       - name: Test Bash wrapper postflight and parity
         if: runner.os == 'Linux'
         run: |
+          bash scripts/tests/worktree-landing.sh
           node scripts/tests/postflight-safe.mjs bash
           bash scripts/tests/parity-check.sh
 
       - name: Test Windows PowerShell wrapper postflight
         if: runner.os == 'Windows'
-        run: node scripts/tests/postflight-safe.mjs powershell
+        run: |
+          powershell -NoProfile -File scripts/tests/worktree-landing.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/tests/postflight-safe.mjs powershell
 
       - name: Test PowerShell 7 wrapper postflight and parity
         if: runner.os == 'Windows'
         run: |
+          pwsh -NoProfile -File scripts/tests/worktree-landing.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/tests/postflight-safe.mjs pwsh
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File scripts/tests/parity-check.ps1

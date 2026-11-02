@@ -53,6 +53,17 @@ import {
   type AccountUsage,
   type ParsedWindow,
 } from '../accounts/usageWindows.js';
+import { hasVmToken } from '../accounts/vmTokens.js';
+
+/**
+ * An account view plus whether the account has a VM token (an lstat: the
+ * daemon never opens the token file). Always a boolean, since a missing flag
+ * means an older daemon. The M07 integration folds vmToken into AccountView
+ * once WT-19's types/schema.ts change lands.
+ */
+export interface AccountViewWithVmToken extends AccountView {
+  vmToken: boolean;
+}
 
 /** The `accounts` CLI next to this build (dist/accounts/cli.js); the IDE runs sign-in through it. */
 const CLI_SCRIPT = fileURLToPath(new URL('../accounts/cli.js', import.meta.url));
@@ -190,7 +201,7 @@ function choose(fleet: Fleet, file: string, registry: Registry, nowMs: number): 
   return registry.accounts.find(eligible)?.id ?? null;
 }
 
-export function accountRotationView(state: StateManager, nowMs: number = Date.now()): AccountRotationView {
+export function accountRotationView(state: StateManager, nowMs: number = Date.now()): AccountRotationView & { accounts: AccountViewWithVmToken[] } {
   const fleet = fleetOf(state);
   const file = registryFilePath();
   const { registry, error } = loadRegistry(fleet, file);
@@ -206,7 +217,7 @@ export function accountRotationView(state: StateManager, nowMs: number = Date.no
     switchAtPercent: threshold,
     error,
     cli: { node: process.execPath, script: CLI_SCRIPT },
-    accounts: (registry?.accounts ?? []).map((account): AccountView => {
+    accounts: (registry?.accounts ?? []).map((account): AccountViewWithVmToken => {
       const usage = loadUsage(fleet, file, account.id);
       const until = usage ? blockedUntilMs(usage, threshold, nowMs) : null;
       return {
@@ -219,6 +230,7 @@ export function accountRotationView(state: StateManager, nowMs: number = Date.no
         blockedUntil: until === null ? null : iso(until),
         active: account.id === next,
         seats: (seats.get(account.id) ?? []).sort(),
+        vmToken: hasVmToken(file, account.id),
       };
     }),
   };

@@ -8,6 +8,7 @@ import com.moe.util.TerminalAgentLauncher.AccountsShell
 import com.moe.util.TerminalAgentLauncher.AgentCommandChoice
 import com.moe.util.TerminalAgentLauncher.AgentCommandChoice.Refused
 import com.moe.util.TerminalAgentLauncher.AgentCommandChoice.Run
+import com.moe.util.TerminalAgentLauncher.ScriptKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -543,6 +544,115 @@ class TerminalAgentLauncherTest {
         } finally {
             RuntimeSelectionPolicy.resetForTest()
         }
+    }
+
+    @Test
+    fun `legacy launch commands stay byte-for-byte as pinned for every role, shell and WSL toggle`() {
+        for (row in PINNED_LEGACY) {
+            val label = "${row.role} wsl=${row.wsl} ${row.kind}"
+            assertFalse(label, VerifiedLocalLaunch.isVmSeat(row.role, DeclaredProfile.LEGACY_LIKE))
+            val expected = row.expected.replace("@S@", scriptAsTyped(row.wsl, row.kind))
+            assertEquals(label, expected, pinnedCommand(row.role, row.kind, row.wsl))
+        }
+        assertEquals(16, PINNED_LEGACY.map { Triple(it.role, it.wsl, it.kind) }.toSet().size)
+    }
+
+    @Test
+    fun `a VM seat with the WSL toggle on types the native PowerShell wrapper into the WSL prompt`() {
+        val native = pinnedCommand("worker", ScriptKind.POWERSHELL, wsl = false)
+        val underWsl = pinnedCommand("worker", ScriptKind.POWERSHELL, wsl = true)
+        assertEquals(TerminalAgentLauncher.bashWrapPowerShell(native), underWsl)
+        assertTrue(underWsl, underWsl.startsWith("powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \""))
+        assertTrue(underWsl, underWsl.contains("& '${scriptAsTyped(true, ScriptKind.POWERSHELL)}' -Role worker -Project "))
+        assertTrue(native, native.contains("& '$PINNED_SCRIPT' -Role worker -Project 'D:\\projexts\\app'"))
+        // Architect and governor keep today's commands: the pinned table above covers them under both toggles.
+    }
+
+    class FakeTerminalManager {
+        val calls = mutableListOf<Pair<String, String>>()
+
+        fun createLocalShellWidget(basePath: String, tabName: String): Any? {
+            calls += basePath to tabName
+            return "widget"
+        }
+    }
+
+    @Test
+    fun `a refused seat never touches the terminal manager`() {
+        val manager = FakeTerminalManager()
+        val refusals = mutableListOf<String>()
+        val widget = TerminalAgentLauncher.openSeat(VerifiedLocalLaunch.Decision.Refused("x"), manager, "D:\\p", "Moe Coder") { refusals += it }
+        assertEquals(null, widget)
+        assertEquals(listOf("x"), refusals)
+        assertEquals(emptyList<Pair<String, String>>(), manager.calls)
+    }
+
+    @Test
+    fun `a launched seat opens exactly one terminal through the reflective manager call`() {
+        val manager = FakeTerminalManager()
+        val refusals = mutableListOf<String>()
+        val widget = TerminalAgentLauncher.openSeat(VerifiedLocalLaunch.Decision.Launch, manager, "D:\\p", "Moe Coder") { refusals += it }
+        assertEquals("widget", widget)
+        assertEquals(listOf("D:\\p" to "Moe Coder"), manager.calls)
+        assertEquals(emptyList<String>(), refusals)
+    }
+
+    @Test
+    fun `a VM seat refuses every agent CLI but claude and codex and names it`() {
+        listOf("gemini", "grok", "my-cli").forEach { command ->
+            val explicit = refusedMessage(TerminalAgentLauncher.agentCommandFor(PROTECTED, command, null, vmSeat = true))
+            assertTrue(explicit, explicit.contains("'$command' cannot run there"))
+            val setting = refusedMessage(TerminalAgentLauncher.agentCommandFor(PROTECTED, null, command, vmSeat = true))
+            assertTrue(setting, setting.contains("'$command' cannot run there"))
+        }
+        assertEquals(Run("claude"), TerminalAgentLauncher.agentCommandFor(PROTECTED, "claude", null, vmSeat = true))
+        assertEquals(Run("codex"), TerminalAgentLauncher.agentCommandFor(PROTECTED, " codex ", "gemini", vmSeat = true))
+        assertEquals(Run("claude"), TerminalAgentLauncher.agentCommandFor(PROTECTED, null, null, vmSeat = true))
+        // Host seats keep today's choice.
+        assertEquals(Run("gemini"), TerminalAgentLauncher.agentCommandFor(PROTECTED, "gemini", null))
+        assertEquals(Run("gemini"), TerminalAgentLauncher.agentCommandFor(LEGACY, "gemini", null))
+    }
+
+    private fun pinnedCommand(role: String, kind: ScriptKind, wsl: Boolean): String =
+        TerminalAgentLauncher.buildCommandForTest(
+            "D:\\projexts\\app", role, PINNED_SCRIPT, kind, PINNED_ENV, "claude", null, wsl, "$role-0000abcd"
+        )
+
+    // The script path is the only OS-dependent input (buildCommand types File.absolutePath), so it is substituted
+    // in the form each shell receives it; every other byte is literal.
+    private fun scriptAsTyped(wsl: Boolean, kind: ScriptKind): String = when {
+        !wsl -> PINNED_SCRIPT
+        kind == ScriptKind.BASH -> TerminalAgentLauncher.toWslPath(PINNED_SCRIPT)
+        else -> PINNED_SCRIPT.replace("\\", "\\\\")
+    }
+
+    private class Row(val role: String, val wsl: Boolean, val kind: ScriptKind, val expected: String)
+
+    private companion object {
+        val PINNED_SCRIPT: String = File("pinned", "moe-agent").absolutePath
+        val PINNED_ENV = linkedMapOf("MOE_DAEMON_PATH" to "C:\\moe\\daemon\\index.js", "MOE_PROXY_PATH" to "C:\\moe\\proxy\\index.js")
+        val POWERSHELL = ScriptKind.POWERSHELL
+        val BASH = ScriptKind.BASH
+
+        // Captured from today's buildCommand before this change (agentCommand claude, no team, workerId <role>-0000abcd).
+        val PINNED_LEGACY = listOf(
+            Row("architect", false, POWERSHELL, "powershell -NoProfile -ExecutionPolicy Bypass -Command \"`\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; `\$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role architect -Project 'D:\\projexts\\app' -WorkerId 'architect-0000abcd' -Command 'claude' -Interactive\""),
+            Row("architect", false, BASH, "MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js' MOE_PROXY_PATH='C:\\moe\\proxy\\index.js' bash '@S@' --role architect --project 'D:\\projexts\\app' --worker-id 'architect-0000abcd' --command 'claude' --interactive"),
+            Row("architect", true, POWERSHELL, "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"\\\$env:MOE_DAEMON_PATH='C:\\\\moe\\\\daemon\\\\index.js'; \\\$env:MOE_PROXY_PATH='C:\\\\moe\\\\proxy\\\\index.js'; & '@S@' -Role architect -Project 'D:\\\\projexts\\\\app' -WorkerId 'architect-0000abcd' -Command 'claude' -Interactive\""),
+            Row("architect", true, BASH, "MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js' MOE_PROXY_PATH='/mnt/c/moe/proxy/index.js' bash '@S@' --role architect --project '/mnt/d/projexts/app' --worker-id 'architect-0000abcd' --command 'claude' --interactive"),
+            Row("worker", false, POWERSHELL, "powershell -NoProfile -ExecutionPolicy Bypass -Command \"`\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; `\$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role worker -Project 'D:\\projexts\\app' -WorkerId 'worker-0000abcd' -Command 'claude'\""),
+            Row("worker", false, BASH, "MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js' MOE_PROXY_PATH='C:\\moe\\proxy\\index.js' bash '@S@' --role worker --project 'D:\\projexts\\app' --worker-id 'worker-0000abcd' --command 'claude'"),
+            Row("worker", true, POWERSHELL, "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"\\\$env:MOE_DAEMON_PATH='C:\\\\moe\\\\daemon\\\\index.js'; \\\$env:MOE_PROXY_PATH='C:\\\\moe\\\\proxy\\\\index.js'; & '@S@' -Role worker -Project 'D:\\\\projexts\\\\app' -WorkerId 'worker-0000abcd' -Command 'claude'\""),
+            Row("worker", true, BASH, "MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js' MOE_PROXY_PATH='/mnt/c/moe/proxy/index.js' bash '@S@' --role worker --project '/mnt/d/projexts/app' --worker-id 'worker-0000abcd' --command 'claude'"),
+            Row("qa", false, POWERSHELL, "powershell -NoProfile -ExecutionPolicy Bypass -Command \"`\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; `\$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role qa -Project 'D:\\projexts\\app' -WorkerId 'qa-0000abcd' -Command 'claude'\""),
+            Row("qa", false, BASH, "MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js' MOE_PROXY_PATH='C:\\moe\\proxy\\index.js' bash '@S@' --role qa --project 'D:\\projexts\\app' --worker-id 'qa-0000abcd' --command 'claude'"),
+            Row("qa", true, POWERSHELL, "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"\\\$env:MOE_DAEMON_PATH='C:\\\\moe\\\\daemon\\\\index.js'; \\\$env:MOE_PROXY_PATH='C:\\\\moe\\\\proxy\\\\index.js'; & '@S@' -Role qa -Project 'D:\\\\projexts\\\\app' -WorkerId 'qa-0000abcd' -Command 'claude'\""),
+            Row("qa", true, BASH, "MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js' MOE_PROXY_PATH='/mnt/c/moe/proxy/index.js' bash '@S@' --role qa --project '/mnt/d/projexts/app' --worker-id 'qa-0000abcd' --command 'claude'"),
+            Row("governor", false, POWERSHELL, "powershell -NoProfile -ExecutionPolicy Bypass -Command \"`\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; `\$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role governor -Project 'D:\\projexts\\app' -WorkerId 'governor-0000abcd' -Command 'claude' -Interactive\""),
+            Row("governor", false, BASH, "MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js' MOE_PROXY_PATH='C:\\moe\\proxy\\index.js' bash '@S@' --role governor --project 'D:\\projexts\\app' --worker-id 'governor-0000abcd' --command 'claude' --interactive"),
+            Row("governor", true, POWERSHELL, "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"\\\$env:MOE_DAEMON_PATH='C:\\\\moe\\\\daemon\\\\index.js'; \\\$env:MOE_PROXY_PATH='C:\\\\moe\\\\proxy\\\\index.js'; & '@S@' -Role governor -Project 'D:\\\\projexts\\\\app' -WorkerId 'governor-0000abcd' -Command 'claude' -Interactive\""),
+            Row("governor", true, BASH, "MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js' MOE_PROXY_PATH='/mnt/c/moe/proxy/index.js' bash '@S@' --role governor --project '/mnt/d/projexts/app' --worker-id 'governor-0000abcd' --command 'claude' --interactive")
+        )
     }
 
     private fun commandFor(profile: RuntimeProfile, explicit: String?, setting: String?): AgentCommandChoice =

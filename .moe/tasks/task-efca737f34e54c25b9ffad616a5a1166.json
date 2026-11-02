@@ -1,0 +1,234 @@
+{
+  "id": "task-efca737f34e54c25b9ffad616a5a1166",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: profileRollout S1 pins the retained-id sort only through filesystem readdir order",
+  "description": "strictRetention's `list.sort()` (state/profileRollout.ts:112) is pinned only by S1 (profileRollout.test.ts:260-286). S1 loads its tasks through an unsorted readdirSync (state/persistence.ts:42). On NTFS that order already equals the sorted order (task-S- before task-s00), so deleting `.sort()` survives there; on ext4 it depends on hash order. Add a test that feeds ids in a known non-sorted order, independent of the filesystem, and asserts the sorted, capped lists (QA comment-8e9714d3 on task-ced85748, found in the CQ-M06 epic review).",
+  "definitionOfDone": [
+    "A test fails when `.sort()` is removed from strictRetention's ids() regardless of directory listing order, and passes with it",
+    "No production code change; cd packages/moe-daemon && npx vitest run src/state/profileRollout.test.ts exits 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add test S3 at the end of the 'rollback retention' describe in profileRollout.test.ts (after S2), and add `strictRetention` to the existing import from './profileRollout.js' (line 18). Edit with the Edit tool only (global rail: TOOL witness). Test-only change: packages/moe-daemon/src/state/profileRollout.ts must stay byte-identical (DoD 2).\n\nDesign (independent of the filesystem by construction):\n1. Ids, ascending by construction: `const r = (i: number) => String(i).padStart(2, '0'); const TASKS = Array.from({ length: 12 }, (_v, i) => `task-r${r(i)}`); const ATTEMPTS = TASKS.map((id) => id.replace('task-', 'attempt-'));`. The zero padding keeps code-unit order equal to numeric order.\n2. `await seed(TASKS.map((id) => ({ id, status: 'WORKING', planRevision: 3, executionPolicySnapshot: STRICT })));` Default settings are enough, because strictRetention never reads settings.\n3. Open one strict attempt per task, with an explicit id, awaiting each call in turn: `await openAttempt(h.state, { id: ATTEMPTS[i], taskId: TASKS[i], workerId: 'worker-r', runnerId: 'runner-r', workspace: h.testDir, executionPolicySnapshot: STRICT } as never)`. Explicit attempt ids already appear in delivery/requiredChecks.test.ts:236 and state/attemptStore.test.ts:100. openAttempt refuses only a second open attempt on the SAME task.\n4. Put the loaded tasks back into the SAME Map in descending id order, whatever readdirSync returned at load: `const descending = [...h.state.tasks].sort(([a], [b]) => (a < b ? 1 : -1)); h.state.tasks.clear(); for (const [id, task] of descending) h.state.tasks.set(id, task);`. Never assign a new Map to h.state.tasks. Then assert the precondition `expect([...h.state.tasks.keys()]).toEqual([...TASKS].reverse());`. This assertion is what makes the test independent of directory listing order. Above this block, add one short comment on why: loadEntities inserts in readdirSync order, and NTFS already returns S1's ids sorted.\n5. `expect(strictRetention(h.state)).toEqual({ retainedStrictTasks: 12, retainedStrictTaskIds: TASKS.slice(0, 10), retainedStrictAttempts: 12, retainedStrictAttemptIds: ATTEMPTS.slice(0, 10), unreadableSnapshots: 0 });`. The expected lists are the literal ascending ids. NEVER build them by re-sorting the actual output: that oracle would pass the mutant.\n\nWhy this kills the mutants: the Map iterates r11..r00. Without .sort(), both lists come out r11..r02. If the sort runs after the cap, they come out r02..r11. Only sort-then-cap gives r00..r09. Twelve ids, more than MAX_RECORDED_IDS (10), also pin the attempt-list cap, which S1 (one strict attempt) does not.\n\nError handling: the test adds no try/catch. A task that fails to load, or a throw that strictRetention swallows, shows up as a visible diff (a count other than 12, or unreadableSnapshots other than 0), never as a silent pass. Leave S1, S2 and every other test unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/profileRollout.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/profileRollout.test.ts"
+      ],
+      "note": "Added S3 and the strictRetention import via Edit. profileRollout.ts untouched.",
+      "startedAt": "2026-11-01T22:53:50.286Z",
+      "completedAt": "2026-11-01T22:54:08.799Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The one verification gate. Run it in a Linux-native snapshot, never in the shared checkout (global rail; mem:gotcha-daemon-linux-snapshot-gate).\n\nSetup:\n- `SHA=$(git -C /mnt/d/projexts/moes rev-parse HEAD)`.\n- `S=$(mktemp -d)` under your session scratchpad or /tmp, outside the checkout.\n- `git -C /mnt/d/projexts/moes archive $SHA | tar -x -C $S` (the whole repo).\n- Copy ONLY packages/moe-daemon/src/state/profileRollout.test.ts from the tree into $S. Never overlay `git diff --name-only`: peers' bytes come along with it.\n- In $S/packages/moe-daemon run `npm ci --no-audit --no-fund` under `env -i HOME=$HOME PATH=<nvm node v24 bin>:/usr/local/bin:/usr/bin:/bin`.\n\nRun the named command `cd packages/moe-daemon && npx vitest run src/state/profileRollout.test.ts` under the same env -i, adding NO_COLOR=1. It must exit 0 with S3 passing.\n\nThen prove DoD 1 on the SNAPSHOT copy of profileRollout.ts only:\n- Mutant A replaces `list.sort().slice(0, MAX_RECORDED_IDS)` with `list.slice(0, MAX_RECORDED_IDS)`.\n- Mutant B replaces it with `list.slice(0, MAX_RECORDED_IDS).sort()`.\n- For each mutant, grep that the edit applied, then run the file. Count a mutant killed only when S3 fails on an assertion diff: the Tests line shows a failed test, not 'no tests' and not a transform error.\n- Record S1's result under mutant A for the summary. It may pass on ext4 too, which is the gap this task closes.\n\nRestore profileRollout.ts from `git -C /mnt/d/projexts/moes show $SHA:packages/moe-daemon/src/state/profileRollout.ts`, not from a per-mutant backup. Then `cmp` both snapshot files against the tree, and re-run the command green. That fresh run is the complete_task verification evidence: command, exitCode 0, and an outputTail with the Tests line. Put the mutant outcomes in the completion summary. Write nothing in the checkout except the test file, and kill no process by name.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/profileRollout.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/profileRollout.test.ts"
+      ],
+      "note": "Snapshot of 87ffc957 + only the test file. Green 37/37. Mutant A (no sort) and B (sort after cap) each fail only S3; S1 stayed green under both. Restored from SHA, cmp OK, final run 37/37.",
+      "startedAt": "2026-11-01T22:54:09.374Z",
+      "completedAt": "2026-11-01T22:54:31.766Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this task's own diff (one test file). Check each of these:\n- (a) The task's changes touch only profileRollout.test.ts: `git -C /mnt/d/projexts/moes status --short -- packages/moe-daemon/src/state/` lists only that file, and profileRollout.ts has no diff (DoD 2).\n- (b) The iteration-order precondition assertion is present, so the result cannot depend on readdirSync order.\n- (c) The Map was cleared and refilled, not replaced, so no other holder of h.state.tasks sees a stale object.\n- (d) The expected lists are literal ascending ids, not the actual output sorted again.\n- (e) The ids are zero-padded, so 'task-r10' cannot sort before 'task-r2'.\n- (f) The test adds no timers, env stubs or fs mocks. h.cleanup still removes the temp .moe folder, attempts/ included.\n- (g) The test asserts real values, so it would fail if strictRetention returned empty lists.\nFix any finding in the test file, then re-run step 2's command in the snapshot before moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/profileRollout.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/profileRollout.test.ts"
+      ],
+      "note": "Self-review a-g checked. (a) git status in state/ lists only the test file, profileRollout.ts has no diff. (b) the keys precondition assert is present. (c) tasks.clear() then set, never replaced. (d) expected lists are literal TASKS/ATTEMPTS slices. (e) ids zero-padded. (f) no timers/env/fs mocks added. (g) 12/12 counts and 10 literal ids asserted. No findings, no changes after the green run.",
+      "startedAt": "2026-11-01T22:54:35.176Z",
+      "completedAt": "2026-11-01T22:54:36.816Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion. The human told the governor \"make sure board moving\" twice on 2026-11-01. This row runs outside the wrapper lane: no open row plans profileRollout.test.ts. Every coder is idle while the serial lane holds the rest of the board.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 235.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T20:37:34.826Z",
+  "updatedAt": "2026-11-01T23:09:45.963Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-01T22:46:13.327Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-01T22:46:48.530Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-01T22:56:15.248Z",
+    "wallClockMs": 566718
+  },
+  "contextFetchedBy": [
+    "architect-98c94b4c",
+    "worker-83c3fcad",
+    "qa-1b5727b1"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T22:53:18.036Z",
+  "executionContract": {
+    "intendedBehavior": "profileRollout.test.ts gains test S3. It iterates strictRetention's input in a known descending order that does not depend on fs.readdirSync, and pins that retainedStrictTaskIds and retainedStrictAttemptIds are sorted ascending before the 10-id cap. Test-only: no production code changes.",
+    "acceptanceCriteria": [
+      "S3 passes against the unchanged profileRollout.ts",
+      "S3 fails with an assertion diff when .sort() is removed from strictRetention's ids() (profileRollout.ts:112)",
+      "S3 fails when the sort runs after the cap (list.slice(0, MAX_RECORDED_IDS).sort())",
+      "S3 asserts its own iteration-order precondition, so its result does not depend on directory listing order",
+      "cd packages/moe-daemon && npx vitest run src/state/profileRollout.test.ts exits 0"
+    ],
+    "invariants": [
+      "packages/moe-daemon/src/state/profileRollout.ts stays byte-identical",
+      "Existing tests in profileRollout.test.ts (T1, G1-G5, R1-R6, S1, S2) stay unchanged",
+      "h.state.tasks is reordered in place (clear + set), never replaced"
+    ],
+    "approvedScope": [
+      "New test S3 in the 'rollback retention' describe of packages/moe-daemon/src/state/profileRollout.test.ts",
+      "strictRetention added to that file's existing import from ./profileRollout.js"
+    ],
+    "reuse": [
+      "seed(), STRICT, h.testDir and the ToolTestHarness already in profileRollout.test.ts; openAttempt is already imported from ./attemptStore.js"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/profileRollout.ts:112 strictRetention: const ids = (list) => list.sort().slice(0, MAX_RECORDED_IDS); MAX_RECORDED_IDS = 10 at :30; it iterates state.tasks in insertion order",
+      "packages/moe-daemon/src/state/StateManager.ts:383 tasks = new Map<string, Task>() is a public mutable field",
+      "packages/moe-daemon/src/state/persistence.ts:42 loadEntities inserts entities in unsorted fs.readdirSync order",
+      "packages/moe-daemon/src/state/attemptStore.ts:154 currentAttempt scans state.attempts by taskId, independent of the task Map order",
+      "packages/moe-daemon/src/state/attemptStore.ts:268 openAttempt accepts an explicit id (validateEntityId: ^[a-zA-Z0-9_-]+$), needs no existing or assigned task, and refuses only a second open attempt on the same task"
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npx vitest run src/state/profileRollout.test.ts (in a git-archive snapshot outside the checkout, per the global rail)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Stubbing fs.readdirSync during load was rejected: one readdirSync serves every entity directory, so a stub is fragile and the test would still be shaped by the filesystem. (2) A fake StateManager object passed to strictRetention was rejected: it couples the test to which state fields strictRetention and currentAttempt read, and a missing field turns into a swallowed throw counted as unreadable. (3) The hand-off in comment 8e9714d3 on task-ced85748 suggested random attempt ids plus 'a few attempts'. That was replaced with explicit ids, because openAttempt accepts an id, which makes the order fully deterministic instead of probabilistic. (4) Driving it through update({executionProfile:'legacy'}) and reading the activity record is not needed: the record spreads strictRetention(state) verbatim, and S1 already pins that path. The direct call isolates the ordering contract.",
+    "codebaseInsights": "strictRetention (profileRollout.ts:94-120) pushes task ids, and each task's open-attempt id, in state.tasks insertion order. That order is loadEntities' readdirSync order (persistence.ts:38-55), so on NTFS S1's ids already arrive sorted and dropping .sort() survives. currentAttempt (attemptStore.ts:154) filters state.attempts by taskId, so the attempt push order follows the task iteration order. Explicit attempt ids have test precedent in delivery/requiredChecks.test.ts:236 and state/attemptStore.test.ts:100. The S1 const at the top of the test file is a session id, not a test; name the new test 'S3 ...' in its title only.",
+    "risks": "Replacing h.state.tasks with a new Map, instead of clear+set, could desync any holder of the old reference. Dropping the precondition assertion would make the test silently depend on load order again. An expected list computed as [...actual].sort() would pass the mutant, so use literal ascending ids. Without zero-padding, code-unit order differs from numeric order. Mutants run only on the snapshot copy: restore from the pinned SHA, never a per-mutant backup. A transform error is a false kill. In-tree vitest fails under WSL (Windows-native node_modules), and the global rail forbids it anyway: gate in a snapshot only.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/profileRollout.test.ts",
+      "packages/moe-daemon/src/state/profileRollout.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/state/persistence.ts",
+      "packages/moe-daemon/src/state/StateManager.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "87ffc9579a787cf72a9e0114441173c9aaeccae8",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T22:53:18.057Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T22:53:50.286Z",
+  "reviewStartedAt": "2026-11-01T22:54:41.138Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx vitest run src/state/profileRollout.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  1 passed (1)\n      Tests  37 passed (37)\n(run in a git-archive snapshot of 87ffc957 + the owned test file, under env -i with node v24.21.0)",
+    "reportedAt": "2026-11-01T22:54:41.138Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/profileRollout.test.ts",
+    ".moe/tasks/task-efca737f34e54c25b9ffad616a5a1166.json",
+    ".moe/tasks/task-7d7d608264164f98a46a69910284f98c.json"
+  ],
+  "completionSummary": "Added test S3 to the 'rollback retention' describe in profileRollout.test.ts, plus strictRetention in the existing import. profileRollout.ts is untouched. S3 seeds 12 strict tasks (task-r00..r11) with one strict attempt each under explicit ids (attempt-r00..r11). It clears and refills the same h.state.tasks Map in descending order, asserts that order as a precondition, then expects strictRetention to return counts 12/12 and the literal ascending first-10 id lists. Snapshot of 87ffc957 plus only the test file: 37/37 pass. Mutant A (sort removed) and mutant B (sort after cap) each fail only S3 on an assertion diff; S1 stays green under both, which is the gap this closes. profileRollout.ts was restored from the pinned SHA and cmp'd against the tree; the final run is green.",
+  "commits": [
+    {
+      "sha": "11dcc872228697e52c1c45932fdd8cd5336ab068",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-83c3fcad@2026-11-01T22:53:24Z",
+      "paths": [
+        ".moe/tasks/task-efca737f34e54c25b9ffad616a5a1166.json",
+        "packages/moe-daemon/src/state/profileRollout.test.ts"
+      ],
+      "recordedBy": "worker-83c3fcad",
+      "recordedAt": "2026-11-01T22:54:59.949Z",
+      "treeId": "5481c6662f6d8a295fb10894882b6e557705dbc9",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "4874b2cde340c4c1bfdf08c89874f149673775b4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1b5727b1@2026-11-01T22:55:11Z",
+      "paths": [
+        ".moe/tasks/task-efca737f34e54c25b9ffad616a5a1166.json"
+      ],
+      "recordedBy": "qa-1b5727b1",
+      "recordedAt": "2026-11-01T22:56:39.139Z",
+      "treeId": "b468465c827733b0431d2a6e22dcd9e1845c058f",
+      "status": "DONE",
+      "pushed": true
+    },
+    {
+      "sha": "07cbae64c36e586977d8fcc3ebd659c6824d78ef",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-98c94b4c@2026-11-01T22:46:46Z",
+      "paths": [
+        ".moe/tasks/task-7d7d608264164f98a46a69910284f98c.json"
+      ],
+      "recordedBy": "architect-98c94b4c",
+      "recordedAt": "2026-11-01T23:09:45.963Z",
+      "treeId": "1b06636d8e732afc9500a241be3945a7f493f2c4",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/profileRollout.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-98c94b4c@2026-11-01T22:46:46Z",
+    "at": "2026-11-01T23:09:45.963Z"
+  },
+  "completedAt": "2026-11-01T22:56:15.248Z",
+  "reviewCompletedAt": "2026-11-01T22:56:15.248Z",
+  "reviewSummary": "Reviewed completion 11dcc872 (on moe/work-2026-10-24; kind=completion recorded). Diff: +28/-1 in profileRollout.test.ts plus the task's own .moe json; profileRollout.ts byte-identical (git diff empty across the commit and vs tree). Re-ran `npx vitest run src/state/profileRollout.test.ts` in a fresh git-archive snapshot of 11dcc872 outside the checkout, native npm ci, env -i node v24.21.0: 1 file, 37/37 pass. Mutants on the snapshot copy of profileRollout.ts:112: (A) .sort() removed -> 1 failed/36 passed, only S3, AssertionError on toEqual diff; (B) slice(0,10).sort() -> same, only S3. S1 stays green under both, confirming the gap S3 closes. Restored from git show, cmp ok, final run 37/37. DoD1: S3 fails without the sort regardless of readdir order. It reorders the same Map in place (clear+set), asserts the descending key-order precondition, and expects literal ascending ids (TASKS.slice(0,10)), with 12 ids > cap 10 so the cap order is pinned too. DoD2: no production change, command exits 0. S1/S2 and other tests untouched. No complexity findings. Size far under 400.",
+  "requiredCheckAtDone": null
+}

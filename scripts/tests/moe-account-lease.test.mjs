@@ -636,10 +636,6 @@ function between(source, start, end) {
 const LEASE_ENGINES = process.platform === 'win32'
   ? [['ps1', 'powershell.exe'], ['ps1', 'pwsh.exe'], ['sh', 'C:/Program Files/Git/bin/bash.exe']]
   : [['sh', '/bin/bash']];
-// macOS's /bin/bash is 3.2. Its $( ) scanner reads a here-document body as shell, so the JavaScript quotes in this
-// cut's MOE_GIT_GUARD_JS leave it unparseable ("unexpected EOF while looking for matching `''"). moe-agent.sh claims
-// bash 3.2, so this is a known launcher bug: remove the skip below once it is fixed.
-const bashVersion = (engine) => spawnSync(engine, ['-c', 'echo "$BASH_VERSION"'], { encoding: 'utf8' }).stdout?.trim() ?? '';
 const shQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const fwd = (file) => file.replaceAll('\\', '/');
@@ -742,10 +738,7 @@ const untrustedLine = (id, project, reason) => `[account] MOE_ACCOUNT_UNTRUSTED 
   + "not launching into Claude's folder-trust dialog; retry in 3s, the held task stays held. (Ctrl+C to stop)";
 
 for (const [ext, engine] of LEASE_ENGINES) {
-  const version = ext === 'sh' ? bashVersion(engine) : '';
-  const skip = ext === 'sh' && ((!PYTHON && 'no python 3')
-    || (parseInt(version, 10) < 4 && `${engine} is bash ${version}: moe-agent.sh's quoted heredocs inside $( ) do not parse `
-      + 'before bash 4 (known launcher bug; remove this skip once it is fixed)'));
+  const skip = ext === 'sh' && !PYTHON && 'no python 3';
 
   test(`${engine}: an interactive seat on an untrusted account is granted trust, then launches`, { skip }, (t) => {
     const run = runLeaseLoop(t, ext, engine, { accounts: ['acct-1'], configs: { 'acct-1': untrustedFor } });
@@ -830,3 +823,36 @@ for (const [ext, engine] of LEASE_ENGINES) {
     });
   }
 }
+
+test('vm-credential: exactly the stored token on stdout, else nothing and exit 3', (t) => {
+  const dir = tempDir(t);
+  const token = `sk-ant-oat01-${'Q7x_Lm2-Zp9K'.repeat(4)}`;
+  const store = path.join(dir, 'claude-vm-tokens');
+  const put = (id, content) => fs.writeFileSync(path.join(store, `${id}.token`), content);
+  fs.mkdirSync(store);
+  put('acct-1', token);
+  put('big', 'a'.repeat(1101));
+  put('api', `sk-ant-api03-${'b'.repeat(40)}`);
+  put('newline', `${token}\n`);
+  fs.mkdirSync(path.join(store, 'folder.token'));
+  fs.writeFileSync(path.join(dir, 'acct-1.token'), token); // where '../acct-1' would land
+  const ids = ['missing', 'big', 'api', 'newline', 'folder', '../acct-1'];
+  const linked = path.join(dir, 'linked');
+  fs.mkdirSync(linked);
+  try {
+    fs.symlinkSync(path.join(store, 'acct-1.token'), path.join(store, 'link.token'));
+    fs.symlinkSync(store, path.join(linked, 'claude-vm-tokens'), 'dir');
+    ids.push('link');
+  } catch (error) {
+    if (error.code !== 'EPERM') throw error;
+  }
+  const run = (args, accountsDir = dir) => {
+    const { status, stdout, stderr } = helper(args, { env: cleanEnv({ MOE_ACCOUNTS_FILE: path.join(accountsDir, 'claude-accounts.json') }) });
+    return { status, stdout, stderr };
+  };
+  assert.deepEqual(run(['vm-credential', 'acct-1']), { status: 0, stdout: token, stderr: '' });
+  const unavailable = { status: 3, stdout: '', stderr: 'MOE_VM_TOKEN_UNAVAILABLE\n' };
+  for (const id of ids) assert.deepEqual(run(['vm-credential', id]), unavailable, id);
+  if (ids.includes('link')) assert.deepEqual(run(['vm-credential', 'acct-1'], linked), unavailable, 'symlinked store');
+  assert.deepEqual([run(['vm-credential']).status, run(['vm-credential']).stdout], [2, '']);
+});

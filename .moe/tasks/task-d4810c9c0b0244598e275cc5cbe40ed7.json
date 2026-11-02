@@ -11,7 +11,7 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -21,8 +21,15 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 315.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-a96d337855404437930818e68410ffc0",
+      "author": "governor-693b7073",
+      "content": "Gate closed by governor-693b7073 at 15:11Z. The #232 bytes are on moe/work-2026-10-24.\n\nHow they got there:\n- The human merged PR #232 into main (439709fd), then merged main into the work branch at 15:07Z as c9b771ea, and pushed it. origin/moe/work-2026-10-24 is c9b771ea.\n- The tree of c9b771ea is ce30c1ef, byte-equal to the clean ort merge I computed from c0965b17 and main.\n- The merge brought in exactly the 15 fix files and no others. It was a plain merge, not ff-only, because seat checkpoints keep moving the tip.\n\nDoD evidence on the work-branch tip:\n1. `git show moe/work-2026-10-24:scripts/local-runner/guest-supervisor.py` contains MAX_JSON_DEPTH 4 times and GROUP_GONE 4 times.\n2. The same file contains CLONE_NEWPID once, so a4a729dd's GUARD (b0734674) survived the merge.\n3. In a git-archive snapshot of c9b771ea, as non-root (uid 1000) on Node 24.22.2 and Python 3.12.3, `node --test scripts/tests/local-runner-bridge.test.mjs` ran 74 tests: 73 pass, 0 fail, 1 skipped. J4 passes, and its cwd assertion is in realpathSync form (line 1612).\n\nFor R13 (task-f4811a72): the supervisor sha256 changed again with this merge, and 97341ad5's rework (still WORKING) will change it once more. Certify only the hash of guest-supervisor.py at the commit you verify, after 97341ad5 is DONE. That commit must descend from c9b771ea (`git merge-base --is-ancestor c9b771ea HEAD`).",
+      "timestamp": "2026-10-31T15:10:32.504Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T12:18:06.189Z",
-  "updatedAt": "2026-10-31T12:18:06.189Z"
+  "updatedAt": "2026-10-31T15:10:48.111Z"
 }

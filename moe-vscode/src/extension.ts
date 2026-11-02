@@ -6,6 +6,7 @@ import { ChatViewProvider } from './providers/ChatViewProvider';
 import { MetricsViewProvider } from './providers/MetricsViewProvider';
 import { ManagedVmTreeProvider } from './providers/ManagedVmTreeProvider';
 import { MoeDaemonClient, readDaemonJsonText } from './services/MoeDaemonClient';
+import type { ReadinessReply } from './services/MoeDaemonClient';
 import { ConnectionStatusBar } from './statusbar/ConnectionStatusBar';
 import { EpicDetailPanel } from './panels/EpicDetailPanel';
 import { PlanReviewPanel } from './panels/PlanReviewPanel';
@@ -17,6 +18,10 @@ import { isAntigravity, registerMcpServer } from './util/AntigravityIntegration'
 
 let daemonClient: MoeDaemonClient | undefined;
 let statusBar: ConnectionStatusBar | undefined;
+
+/** The launcher's readiness source for verified-local worker and QA seats; no client refuses. */
+const readiness = (): Promise<ReadinessReply> =>
+    daemonClient ? daemonClient.requestExecutionReadiness() : Promise.resolve({ failed: 'NOT_CONNECTED' });
 
 export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('Moe');
@@ -334,12 +339,14 @@ export function activate(context: vscode.ExtensionContext) {
                     launchAllAgents(providerChoice.provider, context.extensionPath, {
                         customCommand: providerChoice.customCommand,
                         teamName,
+                        readiness,
                     });
                     vscode.window.showInformationMessage('Starting all agents...');
                 } else if (selected.role) {
-                    launchAgent(selected.role, providerChoice.provider, context.extensionPath, {
+                    void launchAgent(selected.role, providerChoice.provider, context.extensionPath, {
                         customCommand: providerChoice.customCommand,
                         teamName,
+                        readiness,
                     });
                 }
             } catch (err) {
@@ -359,6 +366,7 @@ export function activate(context: vscode.ExtensionContext) {
                 launchAllAgents(providerChoice.provider, context.extensionPath, {
                     customCommand: providerChoice.customCommand,
                     teamName,
+                    readiness,
                 });
                 vscode.window.showInformationMessage('Starting all agents (architect, worker, qa, governor)...');
             } catch (err) {

@@ -219,7 +219,10 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       if (strict) assertCompletionEvidenceEligible(task, strict, 'moe.complete_task');
       // The store's WORKING->REVIEW backstop runs this same check, but only
       // after the attempt is finalizing: refuse here so a retry gets the same answer.
-      assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot));
+      // CQ-M05: `strict` also covers the open attempt's own verified-local snapshot,
+      // so a project rollback never downgrades an active strict attempt.
+      assertExecutionProfileReady(strict ? 'verified-local'
+        : resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot));
       // Runs with the other assertions, BEFORE updateTask: a rejection must
       // leave the task untouched in WORKING rather than half-completed.
       const branchPolicy = await checkBranchPolicy(state, task.id, params.currentBranch);

@@ -17,11 +17,12 @@ import {
   foreignFinalizingRefusal,
   executionAdmissionRefusal,
   heldTaskRefusal,
-  isClaimGatedByDependsOn
+  isClaimGatedByDependsOn,
+  parseExecutionRoute
 } from '../util/claimEligibility.js';
 import { resolveLaunch } from '../util/routing.js';
 import { dependencyShortfall, describeUnmetDependency, unmetDependsOn } from '../state/dependencyUnblock.js';
-import { describeMissingEvidence } from '../delivery/policy.js';
+import { describeMissingEvidence, isVerifiedLocal } from '../delivery/policy.js';
 import {
   assertNoLiveLease,
   claimLostRace,
@@ -247,17 +248,25 @@ function assertNotHeldByReconciliation(state: StateManager, task: Task, workerId
  * the delivery evidence it lacks (DEPENDENCY_EVIDENCE_MISSING). Evidence that
  * cannot be judged at all, an unrecognised deliveryPolicy, throws out of
  * dependencyShortfall as that INVALID_INPUT, ahead of both. The caller throws
- * the result before any write, like every other claim refusal.
+ * the result before any write, like every other claim refusal. For a
+ * verified-local consumer both refusals keep their code but state that rule
+ * instead: retained verified delivery, and a missing prerequisite never satisfies.
  */
 function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
   const unmet = unmetDependsOn(state, task).map((id) => ({ id, ...dependencyShortfall(state, id, task) }));
   const onEvidence = unmet.find((dep) => state.getTask(dep.id)?.status === 'DONE' && dep.missingEvidence.length > 0);
   const onStatus = unmet.filter((dep) => state.getTask(dep.id)?.status !== 'DONE' || dep.missingEvidence.length === 0)
     .map((dep) => dep.missingEvidence.length > 0 ? describeUnmetDependency(state, dep.id, task) : dep.id);
+  // Wording only; a profile that cannot be resolved counts as strict, as the predicate fails closed.
+  const strict = (() => { try { return isVerifiedLocal(state, task); } catch { return true; } })();
   if (onStatus.length > 0 || !onEvidence) {
+    const rule = strict
+      ? "a verified-local task's dependsOn gates WORKING claims until each prerequisite has retained verified delivery, " +
+        'not merely DONE/ARCHIVED, and a missing prerequisite never satisfies it'
+      : 'dependsOn gates WORKING claims until they are DONE/ARCHIVED';
     return notAllowed(
       'claim',
-      `Task ${task.id} has unmet dependencies: ${onStatus.join(', ')} (dependsOn gates WORKING claims until they are DONE/ARCHIVED). ` +
+      `Task ${task.id} has unmet dependencies: ${onStatus.join(', ')} (${rule}). ` +
       `An architect/governor can edit them with moe.set_task_dependencies.`
     );
   }
@@ -265,6 +274,7 @@ function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
     taskId: task.id,
     prerequisiteTaskId: onEvidence.id,
     missing: onEvidence.missingEvidence.map((token) => ({ token, reason: describeMissingEvidence(token) })),
+    verifiedLocal: strict,
   });
 }
 
@@ -322,7 +332,7 @@ function collisionNotice(taskId: string, collisions: CollisionEntry[], claimerId
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.claim_next_task',
-    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided. Agents claim only PLANNING (architect), WORKING (worker), or REVIEW (qa) — other columns are human-gated. WORKING claims are withheld until every dependsOn task is DONE/ARCHIVED. When nothing is claimable it returns hasNext:false with a nextAction (moe.wait_for_task; moe.enter_governance for governors); a worker that already holds a task gets hasNext:false with alreadyAssigned naming it instead of a new claim.',
+    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided. Agents claim only PLANNING (architect), WORKING (worker), or REVIEW (qa) — other columns are human-gated. WORKING claims are withheld until every dependsOn task is DONE/ARCHIVED (a verified-local task needs each one\'s retained verified delivery instead, and a missing id never satisfies it). When nothing is claimable it returns hasNext:false with a nextAction (moe.wait_for_task; moe.enter_governance for governors); a worker that already holds a task gets hasNext:false with alreadyAssigned naming it instead of a new claim.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -341,6 +351,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         host: {
           type: 'string',
           description: 'Optional; send together with processStartedAt or not at all. The host the runner process runs on: supplied by the runner, never derived by the daemon. Recorded on the attempt this claim opens and compared by moe.reattach_attempt as an exact string. Non-blank, no control characters, at most 255 chars.'
+        },
+        executionRoute: {
+          type: 'string',
+          enum: ['vm'],
+          description: 'Set only by a wrapper that runs the claimed WORKING/REVIEW session in a Moe VM (CQ-M07m/n). A verified-local WORKING or REVIEW task is refused (explicit taskId) or skipped (ranked pool) without it. It can only refuse: it never grants readiness or skips another check.'
         },
         replaceExisting: { type: 'boolean', description: 'Replace existing worker assignment if another worker is active' },
         taskId: { type: 'string', description: 'Claim this specific task (must be in one of the requested statuses). Skips priority/order ranking.' },
@@ -371,6 +386,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           processStartedAt?: unknown;
           host?: unknown;
           workerType?: unknown;
+          executionRoute?: unknown;
         };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
@@ -379,6 +395,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // Refused here, before any other check or write, so a claim with a
         // malformed identity assigns nobody (see readProcessIdentity).
         const identity = readProcessIdentity(params.processStartedAt, params.host);
+        // Same rule for the VM-route marker: INVALID_INPUT before any write. It is
+        // read only by executionAdmissionRefusal and can only add a refusal.
+        const executionRoute = parseExecutionRoute(params.executionRoute);
+        // The no-match wait hints echo the marker so a hint-following VM seat waits marked.
+        const routeArg = executionRoute ? { executionRoute } : {};
 
         if (!state.project) {
           throw invalidState('StateManager', 'unloaded', 'loaded');
@@ -516,7 +537,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // open or close and worker registration. Not inside a workerId block,
           // and no exemption for an own-seat resume: the predicate itself reads
           // the caller's own open attempt (util/claimEligibility.ts).
-          const admission = executionAdmissionRefusal(state, requested, params.workerId);
+          const admission = executionAdmissionRefusal(state, requested, params.workerId, executionRoute);
           if (admission) throw admission;
           // Re-claiming a task you already own is a resume, not a takeover.
           const ownedBySelf = Boolean(params.workerId) && requested.assignedWorkerId === params.workerId;
@@ -574,7 +595,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // matcher, and SKIPPED, never refused, for the finalizing hold's
             // reason: a thrown refusal here reads to the sh wrapper as a dead
             // daemon. Only an explicit-taskId claim names why.
-            .filter((t) => !executionAdmissionRefusal(state, t, params.workerId))
+            .filter((t) => !executionAdmissionRefusal(state, t, params.workerId, executionRoute))
             // Approved-plan reuse (CQ-C07): a PLANNING row whose current approved
             // plan awaits its source assessment is withheld from planners, and
             // evaluating it starts that assessment outside the lock
@@ -612,7 +633,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           hasNext: false,
           nextAction: {
             tool: 'moe.wait_for_task',
-            args: { statuses, workerId: params.workerId, epicId: params.epicId },
+            args: { statuses, workerId: params.workerId, epicId: params.epicId, ...routeArg },
             reason: 'No claimable task right now; block until one appears.'
           }
         };
@@ -776,7 +797,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           hasNext: false,
           nextAction: {
             tool: 'moe.wait_for_task',
-            args: { statuses, workerId: params.workerId, epicId: params.epicId },
+            args: { statuses, workerId: params.workerId, epicId: params.epicId, ...routeArg },
             reason: 'All candidate tasks were taken by concurrent workers; wait and retry.'
           }
         };

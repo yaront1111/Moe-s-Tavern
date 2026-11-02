@@ -9,7 +9,7 @@
 // (chat_send), heartbeat.log, record_commit.jsonl, deregister.log,
 // evidence-rpcs.jsonl, account-rpcs.jsonl, served-context.json
 // (FAKE_CTX_PAD_BYTES) and the attempts/, candidates/,
-// checks/ and receipts/ records.
+// checks/, receipts/ and resources/ records.
 const fs = require('fs');
 const path = require('path');
 const raw = fs.readFileSync(0, 'utf8').trim();
@@ -117,6 +117,13 @@ function checkReply() {
   assert.ok(typeof args.command === 'string' && args.command.trim() && args.command.length <= 500);
   assert.ok(typeof args.outputTail === 'string' && Buffer.byteLength(args.outputTail,'utf8') <= 16384);
   assert.ok(!args.outputTail.includes('\ufffd'));
+  // The daemon's CQ-V02 rule (state/checkRunStore.ts): a declared outcome is one of
+  // six values, 'passed' needs exit 0 and 'code-failure' a nonzero exit.
+  if (args.outcome !== undefined) {
+    assert.ok(['passed','code-failure','infra-failure','timeout','skipped','inconclusive'].includes(args.outcome),'unknown outcome '+args.outcome);
+    if (args.outcome === 'passed') assert.equal(args.exitCode,0,'passed requires exitCode 0');
+    if (args.outcome === 'code-failure') assert.notEqual(args.exitCode,0,'code-failure requires a nonzero exitCode');
+  }
   const {workerId,...checkRun} = args;
   payload = {success:true,checkRun:{...checkRun,createdAt:new Date().toISOString()},duplicate:false};
   ensureDir(path.join(moe,'checks'));
@@ -242,6 +249,65 @@ holdForInterrupt();
 holdLedgerForCrash();
 if (['record_candidate','record_check_run','record_delivery_receipt','finalize_attempt','record_commit','deregister_worker','add_comment','reattach_attempt'].includes(tool)) {
   if (evidenceRpc()) process.exit(0);
+}
+// The land lease (WT-10, design §2.2 L3 and L14) in miniature: acquire_resource,
+// wait_for_resource and release_resource are logged in order with the RPCs above,
+// each with the MOE_PROXY_ONESHOT_DEADLINE_MS it carried (null: none). The caller
+// must be the claimed attempt's task and worker and the resource exactly
+// FAKE_LEASE_RESOURCE (default git-land-main); a wait's timeoutMs is 1000..600000;
+// a release never forces, and one pinned by ifAcquiredAt must name the held grant.
+// A grant persists in .moe/resources/<id>.json until released. FAKE_LEASE_MODE
+// (unset: acquire grants at once):
+//   queued    acquire queues; the first wait grants after 2.5s (past the old
+//             proxy's 2s drain)
+//   timeout   acquire queues; every wait answers timedOut after its timeoutMs
+//   late      acquire queues; the wait grants 1.5s after its timeoutMs
+//   withheld  acquire queues; the wait never answers: the proxy's deadline error
+//             at MOE_PROXY_ONESHOT_DEADLINE_MS, then exit 1
+//   refuse    acquire is refused; malformed: acquire answers granted:"true"
+//   release-fail-once  the first release is refused (counted in the RPC log)
+function leaseRpc() {
+  const deadline = process.env.MOE_PROXY_ONESHOT_DEADLINE_MS || null, mode = process.env.FAKE_LEASE_MODE || '';
+  fs.appendFileSync(rpcLog, JSON.stringify({tool, args, deadline}) + '\n');
+  const rid = process.env.FAKE_LEASE_RESOURCE || 'git-land-main', file = path.join(moe, 'resources', rid + '.json');
+  const held = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).holders : [];
+  const hold = holders => { ensureDir(path.dirname(file)); fs.writeFileSync(file, JSON.stringify({id: rid, holders})); };
+  const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, ms));
+  const a = JSON.parse(fs.readFileSync(path.join(moe, 'attempts', 'attempt-postflight.json'), 'utf8'));
+  assert.deepEqual([args.taskId, args.workerId, args.resourceId], [a.taskId, a.workerId, rid], 'the lease caller');
+  if (tool === 'release_resource') {
+    assert.equal(args.force, undefined, 'a forced release');
+    if (args.ifAcquiredAt !== undefined) assert.ok(held.some(h => h.acquiredAt === args.ifAcquiredAt), 'ifAcquiredAt names no held grant');
+    if (mode === 'release-fail-once' && readRows(rpcLog).filter(r => r.tool === tool).length === 1) throw new Error('fixture release refused');
+    hold(held.filter(h => h.taskId !== args.taskId));
+    return {success: true, resourceId: rid, released: held.filter(h => h.taskId === args.taskId).map(h => h.taskId), removedFromQueue: [], grantedTo: []};
+  }
+  const grant = () => {
+    const lease = {taskId: args.taskId, workerId: args.workerId, acquiredAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 7200000).toISOString()};
+    hold([lease]);
+    return {granted: true, resourceId: rid, lease};
+  };
+  if (tool === 'acquire_resource') {
+    if (mode === 'refuse') throw new Error('fixture acquire refused');
+    if (mode === 'malformed') return {success: true, granted: 'true', resourceId: rid};
+    return mode && mode !== 'release-fail-once' ? {success: true, granted: false, resourceId: rid, position: 1, queueLength: 1, holders: []} : {success: true, ...grant()};
+  }
+  assert.ok(Number.isSafeInteger(args.timeoutMs) && args.timeoutMs >= 1000 && args.timeoutMs <= 600000, 'timeoutMs ' + args.timeoutMs);
+  if (mode === 'withheld') {
+    assert.match(String(deadline), /^[0-9]+$/, 'a withheld wait with no proxy deadline');
+    sleep(Number(deadline) - Date.now());
+    process.stdout.write(JSON.stringify({jsonrpc: '2.0', id: req.id, error: {code: -32000, message: 'Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)'}}) + '\n');
+    process.exit(1);
+  }
+  if (mode === 'timeout') { sleep(args.timeoutMs); return {granted: false, timedOut: true, resourceId: rid, position: 1}; }
+  sleep(mode === 'late' ? args.timeoutMs + 1500 : mode === 'queued' ? 2500 : 0);
+  return grant();
+}
+if (['acquire_resource', 'wait_for_resource', 'release_resource'].includes(tool)) {
+  try { ok(leaseRpc()); } catch (e) {
+    process.stdout.write(JSON.stringify({jsonrpc: '2.0', id: req.id, error: {code: -32002, message: e.message, data: {codeName: 'FIXTURE_REFUSED'}}}) + '\n');
+  }
+  process.exit(0);
 }
 // claimNextTask.ts readProcessIdentity in miniature: the runner's pair is
 // both-or-neither, non-blank, bounded (200 / 255) and free of control

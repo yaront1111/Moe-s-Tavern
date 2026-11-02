@@ -20,7 +20,7 @@ import org.junit.Test
 class MoeJsonTest {
     private val deliveryJson = """{
         "currentCandidate":{"id":" Candidate-X ","treeSha":"AbCdEf0123456789AbCdEf0123456789AbCdEf01","shortSha":"AbCdEf01","baseRevision":" Base-X "},
-        "latestCheckRun":{"command":" npm.cmd test -- --run \n","exitCode":-9,"source":"runner-observed"},
+        "latestCheckRun":{"command":" npm.cmd test -- --run \n","exitCode":-9,"source":"runner-observed","outcome":"code-failure"},
         "deliveryReceipt":{"target":" refs/heads/Pilot ","landedRevision":" LanDed-X "},
         "attemptPhase":"finalizing",
         "requiredCheckSatisfied":false
@@ -53,12 +53,12 @@ class MoeJsonTest {
     fun `delivery rejects numeric ids string exit codes and wrong shaped nested records`() {
         val fields = """"delivery":{
             "currentCandidate":{"id":42,"treeSha":true,"shortSha":[],"baseRevision":{}},
-            "latestCheckRun":{"command":17,"exitCode":"0","source":["runner-observed"]},
+            "latestCheckRun":{"command":17,"exitCode":"0","source":["runner-observed"],"outcome":["timeout"]},
             "deliveryReceipt":[],"attemptPhase":1,"requiredCheckSatisfied":"false"
         }"""
         val expected = JsonParser.parseString("""{
             "currentCandidate":{"id":null,"treeSha":null,"shortSha":null,"baseRevision":null},
-            "latestCheckRun":{"command":null,"exitCode":null,"source":null},"deliveryReceipt":null,"attemptPhase":null,
+            "latestCheckRun":{"command":null,"exitCode":null,"source":null,"outcome":null},"deliveryReceipt":null,"attemptPhase":null,
             "requiredCheckSatisfied":null
         }""")
         for ((path, task) in bothPaths(blockerTaskJson(fields))) {
@@ -88,6 +88,39 @@ class MoeJsonTest {
             for ((path, task) in bothPaths(blockerTaskJson("\"delivery\":{$verdict}"))) {
                 assertEquals("$path verdict $literal", expected, task.delivery?.requiredCheckSatisfied)
             }
+        }
+    }
+
+    @Test
+    fun `delivery keeps a JSON string check outcome verbatim and nulls absent or wrong kinds`() {
+        val outcomes = listOf("passed", "code-failure", "infra-failure", "timeout", "skipped", "inconclusive")
+            .map { "\"$it\"" to JsonPrimitive(it) } + listOf(
+            "" to JsonNull.INSTANCE, "\"cancelled\"" to JsonPrimitive("cancelled"),
+            "\" timeout \"" to JsonPrimitive(" timeout "), "\"\"" to JsonPrimitive(""),
+            "42" to JsonNull.INSTANCE, "true" to JsonNull.INSTANCE, "null" to JsonNull.INSTANCE,
+            "[\"timeout\"]" to JsonNull.INSTANCE, "{}" to JsonNull.INSTANCE
+        )
+        for ((literal, expected) in outcomes) {
+            val outcome = if (literal.isEmpty()) "" else ",\"outcome\":$literal"
+            val members = "\"delivery\":{\"latestCheckRun\":{\"exitCode\":0$outcome}}"
+            for ((path, task) in bothPaths(blockerTaskJson(members))) {
+                val run = serializedDelivery(task).asJsonObject.getAsJsonObject("latestCheckRun")
+                assertTrue("$path outcome $literal: parsed run dropped outcome", run.has("outcome"))
+                assertEquals("$path outcome $literal", expected, run.get("outcome"))
+                assertEquals("$path outcome $literal exitCode", JsonPrimitive(0), run.get("exitCode"))
+            }
+        }
+    }
+
+    @Test
+    fun `delivery check run from a daemon without outcome keeps command exit code and source`() {
+        val members = "\"delivery\":{\"latestCheckRun\":{\"command\":\"node gate.cjs\",\"exitCode\":0,\"source\":\"runner-observed\"}}"
+        val expected = JsonParser.parseString(
+            """{"command":"node gate.cjs","exitCode":0,"source":"runner-observed","outcome":null}"""
+        )
+        for ((path, task) in bothPaths(blockerTaskJson(members))) {
+            assertCompanions(path, task)
+            assertEquals(path, expected, serializedDelivery(task).asJsonObject.get("latestCheckRun"))
         }
     }
 
@@ -872,11 +905,12 @@ class MoeJsonTest {
                 "five_hour": { "percent": 92.5, "resetsAt": "2026-10-20T14:05:00.000Z" },
                 "seven_day": { "percent": 40, "resetsAt": null }
               },
-              "peakPercent": 92.5, "blockedUntil": "2026-10-20T14:05:00.000Z", "active": false, "seats": ["worker-a"]
+              "peakPercent": 92.5, "blockedUntil": "2026-10-20T14:05:00.000Z", "active": false, "seats": ["worker-a"],
+              "vmToken": true
             },
             {
               "id": "acct-2", "label": "Personal", "signIn": "signed_out", "signInCheckedAt": null,
-              "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": []
+              "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": [], "vmToken": false
             },
             {
               "id": "acct-3", "label": "acct-3", "signIn": "subscription", "signInCheckedAt": "2026-10-20T09:00:00.000Z",
@@ -905,7 +939,8 @@ class MoeJsonTest {
                 peakPercent = 92.5,
                 blockedUntil = "2026-10-20T14:05:00.000Z",
                 active = false,
-                seats = listOf("worker-a")
+                seats = listOf("worker-a"),
+                vmToken = true
             ),
             ClaudeAccount(
                 id = "acct-2",
@@ -916,7 +951,8 @@ class MoeJsonTest {
                 peakPercent = null,
                 blockedUntil = null,
                 active = false,
-                seats = emptyList()
+                seats = emptyList(),
+                vmToken = false
             ),
             ClaudeAccount(
                 id = "acct-3",
@@ -927,7 +963,9 @@ class MoeJsonTest {
                 peakPercent = 12.0,
                 blockedUntil = null,
                 active = true,
-                seats = listOf("worker-b", "qa-c")
+                seats = listOf("worker-b", "qa-c"),
+                // An older daemon sends no flag: unknown, never set.
+                vmToken = null
             )
         )
     )
@@ -1008,12 +1046,13 @@ class MoeJsonTest {
                 {
                   "id": "acct-3", "label": "", "signIn": "bogus", "signInCheckedAt": 5,
                   "windows": { "five_hour": 5, "seven_day": { "percent": "40", "resetsAt": 7 } },
-                  "peakPercent": "NaN", "blockedUntil": {}, "active": "true", "seats": ["worker-a", 2]
+                  "peakPercent": "NaN", "blockedUntil": {}, "active": "true", "seats": ["worker-a", 2],
+                  "vmToken": "sk-ant-oat01-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCd"
                 },
                 { "id": "acct-3", "label": "a second acct-3" },
                 {
                   "id": "acct-4", "signIn": "other", "signInCheckedAt": " ",
-                  "windows": { "five_hour": { "percent": 5, "resetsAt": "" } }, "blockedUntil": ""
+                  "windows": { "five_hour": { "percent": 5, "resetsAt": "" } }, "blockedUntil": "", "vmToken": 1
                 }
               ]
             }
@@ -1054,6 +1093,22 @@ class MoeJsonTest {
             ),
             rotation
         )
+        // A token-shaped vmToken value never survives parsing.
+        assertFalse(rotation.toString().contains("sk-ant"))
+    }
+
+    @Test
+    fun `parseAccountRotation reads vmToken as a real JSON boolean only`() {
+        val cases = listOf(
+            "true" to true, "false" to false,
+            "\"true\"" to null, "\"false\"" to null, "1" to null, "0" to null, "null" to null, "{}" to null, "[]" to null
+        )
+        for ((literal, expected) in cases) {
+            val rotation = parseRotation(
+                """{ "registryFile": "/home/dev/.moe/claude-accounts.json", "accounts": [ { "id": "acct-1", "vmToken": $literal } ] }"""
+            )
+            assertEquals("vmToken $literal", expected, rotation?.accounts?.single()?.vmToken)
+        }
     }
 
     @Test

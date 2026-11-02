@@ -218,7 +218,6 @@ import {
   validateIntegerValue,
   validateMemberIds,
   validatePatternSetting,
-  validateSettingsUpdate,
   validateStringArrayValue,
   validateStringValue,
   validateTeamMaxSize,
@@ -228,6 +227,7 @@ import {
 } from './validators.js';
 import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
 import { accountRotationView } from './accountStore.js';
+import { updateProjectSettings } from './profileRollout.js';
 
 // Configurable timeout for state load operations (default 30 seconds)
 const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
@@ -1296,26 +1296,9 @@ export class StateManager {
     return updated;
   }
 
+  /** Validate, write, record the executionProfile transition (CQ-M05), emit: see state/profileRollout.ts. */
   async updateSettings(settings: Partial<ProjectSettings>): Promise<Project> {
-    if (!this.project) {
-      throw new Error('Project not loaded');
-    }
-
-    const updatedSettings = validateSettingsUpdate(this.project, settings);
-
-    const updatedProject: Project = {
-      ...this.project,
-      settings: updatedSettings,
-      updatedAt: new Date().toISOString()
-    };
-
-    await atomicWriteJsonAsync(
-      path.join(this.moePath, 'project.json'),
-      updatedProject
-    );
-    this.project = updatedProject;
-    this.emit({ type: 'SETTINGS_UPDATED', payload: updatedProject });
-    return updatedProject;
+    return updateProjectSettings(this, settings);
   }
 
   async deleteEpic(epicId: string): Promise<Epic> {

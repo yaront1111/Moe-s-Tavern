@@ -81,6 +81,12 @@ export function accountUsageFile(registryFile: string, id: string): string {
   return path.join(path.dirname(registryFile), 'claude-usage', `${id}.json`);
 }
 
+/** The account's long-lived token for Moe VM jobs (accounts/vmTokens.ts): beside the registry, outside every Claude config folder. */
+export function vmTokenFile(registryFile: string, id: string): string {
+  if (!ACCOUNT_ID_RE.test(id)) throw new RegistryError('MOE_ACCOUNT_UNKNOWN', 'not a valid account id');
+  return path.join(path.dirname(registryFile), 'claude-vm-tokens', `${id}.token`);
+}
+
 export function emptyRegistry(): Registry {
   return { version: 1, switchAtPercent: DEFAULT_SWITCH_AT_PERCENT, accounts: [] };
 }
@@ -159,14 +165,21 @@ function sleepSync(ms: number): void {
 }
 
 /**
- * Write JSON through a temp file and a rename, so a reader never sees half a
- * file. Windows refuses the rename for a moment while another process has the
- * target open (EPERM/EBUSY/EACCES); retry briefly before giving up.
+ * Write text through a temp file and a rename, so a reader never sees half a
+ * file. The temp is created exclusively, so a path already there (even a
+ * planted symlink) fails instead of being followed. Windows refuses the rename
+ * for a moment while another process has the target open (EPERM/EBUSY/EACCES);
+ * retry briefly before giving up.
  */
-export function writeJsonAtomic(file: string, value: unknown): void {
+export function writeTextAtomic(file: string, text: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, escapeJsonForFile(JSON.stringify(value, null, 2)) + '\n', { mode: 0o600 });
+  try {
+    fs.writeFileSync(tmp, text, { mode: 0o600, flag: 'wx' });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') fs.rmSync(tmp, { force: true });
+    throw error;
+  }
   for (let attempt = 1; ; attempt++) {
     try {
       fs.renameSync(tmp, file);
@@ -180,6 +193,11 @@ export function writeJsonAtomic(file: string, value: unknown): void {
       sleepSync(25 * attempt);
     }
   }
+}
+
+/** Pretty JSON, escaped for the file, with a trailing newline (writeTextAtomic). */
+export function writeJsonAtomic(file: string, value: unknown): void {
+  writeTextAtomic(file, escapeJsonForFile(JSON.stringify(value, null, 2)) + '\n');
 }
 
 /** Read fresh, apply one change, write back. `change` returns false to skip the write (nothing changed). */
@@ -228,12 +246,13 @@ export function addAccount(file: string, label?: unknown): RegistryAccount {
     const id = `acct-${n}`;
     added = { id, label: normalizeLabel(label, id), signIn: 'signed_out', signInCheckedAt: null };
     fs.rmSync(accountUsageFile(file, id), { force: true });
+    fs.rmSync(vmTokenFile(file, id), { force: true });
     registry.accounts.push(added);
   });
   return added!;
 }
 
-/** Unregister an account. Its config directory, and the login inside it, stay where they are. */
+/** Unregister an account and delete its usage file and VM token. Its config directory, and the login inside it, stay where they are. */
 export function removeAccount(file: string, id: string): RegistryAccount {
   let removed: RegistryAccount | null = null;
   updateRegistry(file, (registry) => {
@@ -241,6 +260,7 @@ export function removeAccount(file: string, id: string): RegistryAccount {
     registry.accounts = registry.accounts.filter((account) => account.id !== id);
   });
   fs.rmSync(accountUsageFile(file, id), { force: true });
+  fs.rmSync(vmTokenFile(file, id), { force: true });
   return removed!;
 }
 

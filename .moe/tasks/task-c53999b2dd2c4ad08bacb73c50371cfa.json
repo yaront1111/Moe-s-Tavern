@@ -17,60 +17,96 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development. Create packages/moe-daemon/src/state/profileRollout.test.ts (~230 lines, table-driven; exact toEqual/toBe values, never truthiness). It imports from './profileRollout.js' (step 2), so it is red at import until then, and S2 row a stays red until step 3.\n\nFixture:\n- ToolTestHarness. beforeEach stubs MOE_WORKER_ID, MOE_TASK_ID and MOE_SESSION_ID to '' (mem gotcha-daemon-tests-ambient-moe-worker-id). afterEach: clearEmitter, restoreAllMocks, unstubAllEnvs, cleanup.\n- COPY (never import across test files) the seed(tasks, {settings, workers, attempts}) helper from delivery/executionPolicyLifecycle.test.ts (~lines 101-111) and its NOT_READY const (canonical {code:-32003, codeName:'EXECUTION_PROFILE_NOT_READY', context:{executionProfile:'verified-local', missingCapabilities:[the five, in order]}}). Seeding settings.executionProfile 'verified-local' into project.json is the hand edit that is the only way in; the validated path refuses it.\n- records(): flushActivityLog, then getActivityLog(500) filtered to event 'PROJECT_SETTINGS_UPDATED', payloads only, newest first.\n- STRICT = {version:2, profile:'verified-local', planRevision:3, deliveryPolicy:'local-branch'}; LEGACY = {version:2, profile:'legacy', planRevision:3, deliveryPolicy:'legacy'}; GAPS = [{capability:'vm', reason:'vm-provisioning-uncertified'}, {capability:'client', reason:'client-contract-unsupported'}, {capability:'check', reason:'check-runner-uncertified'}].\n\nCases:\nT1 classifyProfileTransition, 12 rows: legacy->legacy null; legacy->observe 'observe'; legacy->verified-local 'activate'; observe->legacy 'rollback'; observe->observe null; observe->verified-local 'activate'; verified-local->legacy 'rollback'; verified-local->observe 'rollback'; verified-local->verified-local 'activate'; unreadable->legacy 'rollback'; unreadable->observe 'rollback'; unreadable->verified-local 'activate'.\nG1 activationGaps() equals GAPS; still equal with MOE_EXECUTION_PROFILE_READY=1, MOE_VERIFIED_LOCAL=1 and MOE_VM_CERTIFIED=1 stubbed; mutating a returned array or entry never changes the next call. decodeClientHello({protocolVersion:1, capabilities:{verifiedLocal:true}}).negotiatedCapabilities.verifiedLocal is false (the I01 fact the client gap reads).\nG2 activationUnsupported(gaps): each single gap ([vm], [client], [check]) and all three return a MoeError with code -32003, codeName 'EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED', context {executionProfile:'verified-local', unsupportedCapabilities: exactly those gaps} and a message naming each capability; [] returns null.\nG3 for a stored profile of absent, 'legacy' and 'observe': updateSettings({executionProfile:'verified-local'}) rejects with exactly NOT_READY ({code, codeName, context} toEqual); project.json bytes and in-memory settings unchanged; no SETTINGS_UPDATED event (subscribe); records() is exactly [{setting:'executionProfile', from:<'legacy' for absent>, to:'verified-local', transition:'activate', outcome:'refused', codeName:'EXECUTION_PROFILE_NOT_READY', unsupportedCapabilities:GAPS}].\nG4 test-only readiness stand-in (server/planApproval.test.ts precedent: vi.spyOn on the delivery/executionProfile.js module namespace, assertExecutionProfileReady mocked to return): updateSettings({executionProfile:'verified-local'}) STILL rejects, now EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED with unsupportedCapabilities GAPS; project.json bytes unchanged; one refused record carrying that codeName. This proves unsupported VM/client/check capabilities block activation on their own.\nG5 a caller-supplied capability is refused before any record: updateSettings({executionProfile:'verified-local', capabilities:{vm:true, client:true, check:true}}) and the same with executionProfileReady:true reject INVALID_INPUT naming the field (validator precedence unchanged); records() is []; bytes unchanged.\nR1 absent->observe resolves; project.json settings.executionProfile is 'observe'; records() is exactly [{setting, from:'legacy', to:'observe', transition:'observe', outcome:'applied'}] with no other keys; a subscriber that reads getActivityLog inside its SETTINGS_UPDATED handler already sees that record (record before emit).\nR2 no record for: observe->observe; an unrelated {agentCommand:'codex'}; a malformed 'VERIFIED-LOCAL' (INVALID_INPUT); a stored verified-local with an unrelated update (refused NOT_READY by the validator, not an activation request).\nR3 observe->legacy with no strict rows: one record {setting, from:'observe', to:'legacy', transition:'rollback', outcome:'applied', retainedStrictTasks:0, retainedStrictTaskIds:[], retainedStrictAttempts:0, retainedStrictAttemptIds:[], unreadableSnapshots:0}.\nR4 stored executionProfile 'VERIFIED-LOCAL' (hand edit): updateSettings({executionProfile:'legacy'}) applies and records from 'unreadable', transition 'rollback'.\nR5 after R1, activation is still refused NOT_READY: the observe record grants nothing.\nR6 error handling: fs.appendFileSync throwing once for the activity write leaves an applied rollback applied (resolves, project.json updated) and a refused activation still rejects NOT_READY.\nS1 DoD3 rollback retention. Seed: stored 'verified-local'; 11 DONE rows with STRICT (task-s00..task-s10); task-S WORKING unassigned with STRICT; task-L WORKING with LEGACY; task-M PLANNING with snapshot {version:9}; task-A WORKING with LEGACY assigned worker-a. After load: openAttempt(task-A, worker-a, executionPolicySnapshot STRICT); on task-L openAttempt with STRICT, setAttemptPhase closed, then openAttempt with LEGACY (the closed strict one must not count). Walk every file under .moe except project.json and activity.log* (path -> bytes). Then updateSettings({executionProfile:'legacy'}). Assert: the walk is byte-identical (tasks, attempts and evidence untouched); project.json differs only in settings.executionProfile and updatedAt; the record is {setting, from:'verified-local', to:'legacy', transition:'rollback', outcome:'applied', retainedStrictTasks:12, retainedStrictTaskIds: the first 10 in ascending code-unit order, retainedStrictAttempts:1, retainedStrictAttemptIds:[task-A's attempt id], unreadableSnapshots:1}; the real moe.get_activity_log handler (getActivityLogTool, eventTypes ['PROJECT_SETTINGS_UPDATED']) returns that payload whole with no '[truncated]'; get_context for task-S serves executionPolicy.effectiveProfile 'verified-local' and taskSnapshot equal to STRICT; an explicit claim of task-S by worker-x is refused EXECUTION_PROFILE_NOT_READY.\nS2 an active strict attempt is not downgraded (2-row table; fixture from tools/completionAuthorization.test.ts): WORKING task-1 assigned worker-s, planRevision 3 = approvedPlanRevision, contextFetchedBy [worker-s], two PENDING steps, task snapshot LEGACY; stored profile 'verified-local'; worker-s created; openAttempt WITH executionPolicySnapshot STRICT (row a) or without one (row b, control); get_context {sessionId S1} records the receipt; then updateSettings({executionProfile:'legacy'}).\n  Row a: start_step with no identity -> STEP_ENTRY_IDENTITY_REQUIRED; with identity both steps start and complete and the attempt holds two step completions at revision 3; complete_task with identity and verification -> EXECUTION_PROFILE_NOT_READY, called twice, with task-1.json bytes unchanged, status WORKING and the attempt still running; the rollback record lists the attempt id in retainedStrictAttemptIds.\n  Row b: the same calls without identity succeed and complete_task resolves {success:true, status:'REVIEW'} (live-only strictness rolls back, as F12 pins).\nRun `npx vitest run src/state/profileRollout.test.ts` and note in the step that it is red at import.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/state/profileRollout.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json"
+      ],
+      "note": "No-byte round per QA's route (size-only reject, substance green). Waiver filed before this step: prop-ae32e9bbb47e4187b531ed0ba3514a3c (EPIC ADD_RAIL, 797 chars, PENDING), and #governors pinged (msg-cb568ef5). No source bytes changed. The only path modified is this task's own board record, which the daemon writes.\n\nSnapshot /tmp/moe-m05-r2.VTqrSK: pure `git archive` of HEAD b82acc57 with no overlay, then native npm ci (node v24.21.0, env -i, NO_COLOR=1). The lock equals the worktree's, ignoring CR.\n- All 5 owned paths are cmp-EQUAL to `git show edc04736:<path>`.\n- `git diff edc04736 HEAD` over them is empty, and the worktree is clean for them.\n\nEvidence:\n- GREEN: `npx vitest run src/state/profileRollout.test.ts` gives exit 0, 36/36.\n- RED: with profileRollout.ts moved away, it gives exit 1 with \"Cannot find module './profileRollout.js'\" and no tests run.\n- The module was restored and is cmp-EQUAL to edc04736.\n\nAdvisory issue 2 (`.sort()` survivor) is deliberately NOT applied, to keep this round no-byte under the size waiver (\"grow only by QA-required fixes\"; QA marked it optional). It is handed to M06; reasoning in the step-5 note.\n\nPeer dirty paths I left untouched: scripts/moe-agent.{ps1,sh}, scripts/tests/postflight-worktree.cjs, .moe/tasks of 25d76cd5/7a4aab5e, .moe/decisions/, and untracked .moe/tasks.",
+      "startedAt": "2026-10-31T16:43:05.812Z",
+      "completedAt": "2026-10-31T16:44:31.227Z"
     },
     {
       "stepId": "step-2",
       "description": "Create packages/moe-daemon/src/state/profileRollout.ts (~130 lines) and delegate StateManager.updateSettings to it. Load ponytail first: reuse the validator, the leaf and the existing activity writer; add no store, setting, tool or event type.\n\nModule doc: project settings writes and the recorded executionProfile rollout controls (CQ-M05): observation, selected-project activation and audited rollback. Every enablement is per project (settings live in this project's project.json; there is no fleet switch and, by the user's 2026-10-24 decision, no new UI). Nothing here grants readiness: assertExecutionProfileReady (delivery/executionProfile.ts, byte-unchanged) stays the only readiness authority, and the capability gate can only refuse.\n\nRuntime imports only: ./validators.js (validateSettingsUpdate), ./attemptStore.js (currentAttempt), ../delivery/executionProfile.js (resolveExecutionProfile, readExecutionPolicySnapshot), ../server/clientCapabilities.js (decodeClientHello), ../util/atomicWrite.js (atomicWriteJsonAsync), ../util/errors.js (MoeError, MoeErrorCode), node path; StateManager and schema types are type-only. No new runtime cycle (stateModules.test.ts checks src/state).\n\nExports:\n(a) type ProfileTransition = 'observe' | 'activate' | 'rollback'. classifyProfileTransition(from: ExecutionProfile | 'unreadable', to: ExecutionProfile): ProfileTransition | null. Rank legacy 0 < observe 1 < verified-local 2. A request for verified-local is 'activate'; from 'unreadable' or a lower rank is 'rollback'; a higher rank is 'observe'; equal is null.\n(b) type ActivationGap = {capability: 'vm' | 'client' | 'check'; reason: string}. activationGaps(): ActivationGap[] returns fresh objects every call, ordered vm, client, check, from daemon-owned facts only (no env var, persisted label or caller input):\n  - vm: no daemon-owned VM provisioning certification exists (R13 certifies on hardware; I03a vm-control reports executionReady/verified false by contract) -> 'vm-provisioning-uncertified';\n  - client: decodeClientHello({protocolVersion:1, capabilities:{verifiedLocal:true}}).negotiatedCapabilities.verifiedLocal is the most I01 grants any client; false, or any throw -> 'client-contract-unsupported';\n  - check: no certified isolated check runner (the /runner channel is untrusted outside isolation) -> 'check-runner-uncertified'.\n  A later activation task may replace a fact with a certified daemon-owned source; M05 must not wire R13/I06/V12 producers.\n(c) activationUnsupported(gaps): MoeError | null. null for []; else new MoeError(MoeErrorCode.NOT_ALLOWED, 'Execution profile verified-local cannot be activated: unsupported vm (<reason>), client (<reason>), check (<reason>).' listing only the given gaps, {executionProfile:'verified-local', unsupportedCapabilities: copies}, 'EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED').\n(d) strictRetention(state) -> {retainedStrictTasks, retainedStrictTaskIds, retainedStrictAttempts, retainedStrictAttemptIds, unreadableSnapshots}. Over state.tasks: a task whose stored snapshot decodes with profile 'verified-local', and currentAttempt(state, id) whose snapshot does. Ids sorted ascending and capped at 10 (moe.get_activity_log truncates any payload value over 500 chars); counts are totals. A snapshot or attempt that fails to decode or copy is counted in unreadableSnapshots, never echoed. Never throws.\n(e) updateProjectSettings(state, input): Promise<Project>, today's StateManager.updateSettings body plus recording:\n  1. if (!state.project) throw new Error('Project not loaded') (unchanged).\n  2. from = resolveExecutionProfile(project.settings), or 'unreadable' when it throws a MoeError.\n  3. requested = input.executionProfile === 'verified-local'; gaps = requested ? activationGaps() : [].\n  4. try { settings = validateSettingsUpdate(project, input) (unchanged; its unconditional readiness refusal fires first, so pinned NOT_READY refusals keep their exact shape); if (requested) { const gap = activationUnsupported(gaps); if (gap) throw gap; } } catch (error) { if requested and the error is a MoeError whose codeName is EXECUTION_PROFILE_NOT_READY or EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED, await state.appendActivityAsync('PROJECT_SETTINGS_UPDATED', {setting:'executionProfile', from, to:'verified-local', transition:'activate', outcome:'refused', codeName, unsupportedCapabilities: gaps}); rethrow }.\n  5. Write exactly as before: updated = {...project, settings, updatedAt: now}; await atomicWriteJsonAsync(path.join(state.moePath, 'project.json'), updated); state.project = updated. A failed write leaves memory unchanged and records nothing (StateManager.test 'does not update in-memory project when project write fails' must stay green).\n  6. When input.executionProfile !== undefined and classifyProfileTransition(from, resolveExecutionProfile(settings)) is non-null: await state.appendActivityAsync('PROJECT_SETTINGS_UPDATED', {setting, from, to, transition, outcome:'applied', ...(transition === 'rollback' ? strictRetention(state) : {})}).\n  7. state.emit({type:'SETTINGS_UPDATED', payload: updated}); return updated.\n  Error handling: appendActivityAsync logs and swallows a failed append (the activity-log contract), so an audit failure never fails or reverts a change. The record is awaited, so it is on disk before the call resolves and is not subject to appendActivity's fire-and-forget backpressure drop.\n\nStateManager.ts: replace updateSettings' body with `return updateProjectSettings(this, settings);` plus a one-line pointer comment, import it, and drop now-unused imports. `wc -l` must stay under the 1500-line budget (mem gotcha-statemanager-1500-line-budget). V03b (task-c9fe2515) lands StateManager edits first, so measure the landed file. Run the step-1 file: everything except S2 row a turns green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/StateManager.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/state/profileRollout.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json"
+      ],
+      "note": "No source bytes changed in this round. profileRollout.ts and StateManager.ts are both cmp-EQUAL to edc04736. Checked in snapshot /tmp/moe-m05-r2.VTqrSK (pure archive of HEAD b82acc57):\n- StateManager.ts is 1480 lines, under the 1500 budget. Line 1301 is `return updateProjectSettings(this, settings);` and line 230 imports it.\n- profileRollout.ts is 169 lines. It exports the 5 approved functions (classifyProfileTransition, activationGaps, activationUnsupported, strictRetention, updateProjectSettings) plus the types ProfileTransition, ActivationGap and StrictRetention.\n- Its runtime imports are exactly the planned set (validators, attemptStore, executionProfile, clientCapabilities, atomicWrite, errors, path). StateManager and schema are imported type-only.\n- Focused run of `npx vitest run src/state/stateModules.test.ts src/state/StateManager.test.ts`: exit 0, 2 files, 146 passed. This covers the no-new-cycle check and the failed-write case.",
+      "startedAt": "2026-10-31T16:44:34.946Z",
+      "completedAt": "2026-10-31T16:45:08.692Z"
     },
     {
       "stepId": "step-3",
       "description": "An active strict attempt survives a rollback (packages/moe-daemon/src/tools/completeTask.ts, ~3 lines).\n\nToday the early readiness check is assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot)). It is task-level only, so after a project rollback a running attempt whose OWN snapshot is verified-local passes it (and the task-level store backstop) and completes as legacy.\n\nChange it to assertExecutionProfileReady(strict ? 'verified-local' : resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot)). `strict` is assertExecutionAuthorized's result: non-null exactly when the task floor or the open attempt's snapshot is verified-local, which is the predicate start_step, complete_step and claim admission's own-seat arm already use.\n- Add a comment saying why: CQ-M05, a project rollback never downgrades an active strict attempt.\n- Keep its position (after the evidence gate, before checkBranchPolicy and any write), so a refusal writes nothing and a retry gets the same answer.\n- Do not touch the store backstop (task-level by design, M01c), validators.ts or delivery/executionProfile.ts.\n\nS2 row a turns green. Then run the step-1 file plus tools/completionAuthorization.test.ts and __e2e__/executionContract.e2e.test.ts: F12's 'rollback restores legacy completion' case (an attempt captured legacy) must stay green unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/completeTask.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json"
+      ],
+      "note": "No source bytes changed in this round. completeTask.ts is cmp-EQUAL to edc04736.\n\nThe landed hunk (+4/-1) changes the early readiness check to `assertExecutionProfileReady(strict ? 'verified-local' : resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot))`.\n- It carries the CQ-M05 comment.\n- Its position is unchanged: after the evidence gate, before checkBranchPolicy and any write.\n\n`git diff edc04736~ HEAD` over validators.ts and delivery/executionProfile.ts is empty, so both stay byte-unchanged. The store backstop is untouched.\n\nFocused run in the snapshot: `npx vitest run src/state/profileRollout.test.ts src/tools/completionAuthorization.test.ts src/__e2e__/executionContract.e2e.test.ts` gives exit 0, 3 files, 72 passed.\n- This covers S2 row a: the strict attempt is refused NOT_READY twice after a rollback, with no write.\n- It also covers row b, where a legacy-captured attempt completes, matching F12's pinned 'rollback restores legacy completion'.",
+      "startedAt": "2026-10-31T16:45:11.188Z",
+      "completedAt": "2026-10-31T16:45:47.568Z"
     },
     {
       "stepId": "step-4",
       "description": "DoD1 end to end. Create packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts (~220 lines; tests only, real tools, no mocks). Copy boot/claim/serve and the RUNNER identity from __e2e__/executionContract.e2e.test.ts, and stub MOE_* seat env to ''. Every profile is set through h.state.updateSettings. Legacy is set explicitly and records nothing; observe records transition 'observe', and each observe case asserts that record first.\n\nE1 observation cannot authorize verified completion. Table over ['legacy','observe']:\n- Boot a two-step plan (submit, approve revision 1), claim, serve.\n- Start and complete both steps, then complete_task, all with no attemptId, generation or sessionId (the compatibility path).\n- Then a QA claim (statuses ['REVIEW']) and qa_approve under the default legacy deliveryPolicy.\nAssert for both: REVIEW, then DONE; the attempt has no stepCompletions; task.verification.source is 'agent-reported'; get_context executionPolicy.effectiveProfile and attemptSnapshot.profile both equal the profile. The two runs' final task records have identical top-level key sets and equal status, planRevision, approvedPlanRevision, reopenCount and verification (minus reportedAt).\n\nE2 observe-era progress is never verified evidence:\n- Under observe: claim, serve, start and complete step-1 without identity.\n- updateSettings({executionProfile:'verified-local'}) is refused NOT_READY. The cutover is the in-memory hand edit h.state.project!.settings.executionProfile = 'verified-local' (F12's strictInMemory).\n- step-2 with identity records [['step-2',1]].\n- complete_task with identity -> EXECUTION_EVIDENCE_INELIGIBLE with context.steps ['step-1']; the task stays WORKING.\n- updateSettings({executionProfile:'observe'}) records a rollback from 'verified-local' with retainedStrictTasks 0 and retainedStrictAttempts 0.\n- complete_task with no identity resolves REVIEW; the attempt's evidence is unchanged.\n\nE3 observation cannot authorize a recipe bypass. approvalMode CONTROL, table over ['legacy','observe']:\n- Use C08's landed entry point (planned: instantiateRecipe(state, {taskId, recipeId, inputs}) in context/recipes/recipe.ts; adapt to the landed names).\n- Use the temp-Git-repo and committed .moe/recipes.json fixture from C11's landed __e2e__/plannerBoundaries.e2e.test.ts (or C08's recipe.test.ts), with GIT_* masked and fixed identities.\nAssert for both profiles:\n- An eligible instantiation leaves the row AWAITING_APPROVAL with no approvedPlanRevision (the human gate is never skipped) and the same recipe instance.\n- An ineligible input returns the same {instantiated:false, fallback:'ordinary-planning', reason} with the row unchanged.\n- Under observe, a moe.submit_plan call as workerId 'moe-recipe' without the internal channel is refused NOT_ALLOWED with no write.\nIf C08 landed no instantiation entry point, do not invent one: call moe.report_blocked naming task-f12b03e83a1a491494a08e42c7a58504.\n\nIf a case shows observe granting anything legacy does not:\n- Make the smallest fix in the owning module (moe.declare_files first) and keep the case as its regression test.\n- A fix over ~30 lines, or a contract change, gets moe.report_blocked naming the owning task.\n- Never weaken an assertion.\nRun `npx vitest run src/__e2e__/rolloutControls.e2e.test.ts`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json"
+      ],
+      "note": "No source bytes changed in this round. rolloutControls.e2e.test.ts is cmp-EQUAL to edc04736.\n\n`npx vitest run --reporter=verbose src/__e2e__/rolloutControls.e2e.test.ts` in the snapshot gives exit 0, 3/3:\n- E1: observation cannot authorize verified completion. Observe completes and approves exactly as legacy.\n- E2: observe-era progress is never verified evidence, and a rollback to observe restores compatibility completion.\n- E3: observation cannot authorize a recipe bypass (CONTROL). An eligible recipe still awaits the human under observe, and every outcome matches legacy.\n\nE3 uses C08's landed instantiateRecipe, so no block was needed. No case showed observe granting anything legacy does not, so no owning-module fix was needed.",
+      "startedAt": "2026-10-31T16:45:50.222Z",
+      "completedAt": "2026-10-31T16:45:59.180Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. M05 changes the shared settings write path and complete_task, so the gate is the full daemon suite, run fresh: `cd packages/moe-daemon && npm test`. It must exit 0. Its command, exit code and output tail are the complete_task verification evidence.\n\nRun it in an isolated Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate):\n- git archive HEAD of the WHOLE repo;\n- overlay ONLY the five owned paths: state/profileRollout.ts, state/profileRollout.test.ts, state/StateManager.ts, tools/completeTask.ts and __e2e__/rolloutControls.e2e.test.ts under packages/moe-daemon/src;\n- npm ci under env -i with a Linux-only PATH and NO_COLOR=1, so no MOE_* is set;\n- cmp the owned files against the snapshot before citing the run.\nAlso run `npx tsc --noEmit`, and a scratch tsconfig that type-checks the two new test files. Compare pass and skip counts with the pre-change HEAD baseline. A newly failing test is a regression to fix, never an assertion to weaken.\n\nProve the tests bite. On a scratch copy, apply all mutants at once first, then the starred ones alone; restore and cmp the bytes after:\n- *drop the activationUnsupported throw (G4 red);\n- *revert the completeTask expression (S2 row a red);\n- activationGaps returns [] (G1, G3 red);\n- skip the refused record (G3 red);\n- record before validation or for unrelated updates (R2 red);\n- classify observe->legacy as null (R3 red);\n- strictRetention ignores attempts (S1, S2 red);\n- remove the id cap (S1's MCP read shows '[truncated]');\n- emit before the record (R1 red).\nRecord each mutant and its named failing case in the step note.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json"
+      ],
+      "note": "VERIFY, fresh, with no source bytes changed.\n\nSnapshot /tmp/moe-m05-r2.VTqrSK: pure `git archive` of HEAD b82acc57 with NO overlay. Native npm ci under env -i (node v24.21.0, Linux-only PATH, NO_COLOR=1, MOE_* unset). All 5 owned paths are cmp-EQUAL to edc04736, both before the gate and after the mutants.\n\nGate:\n- `cd packages/moe-daemon && npm test` (vitest run): EXIT 0, 218 files passed, 6420 passed | 20 skipped (6440), 42s. Identical to round 1 and to QA's run.\n- `npx tsc --noEmit`: exit 0.\n- Scratch tsconfig (in-package, types:[node]) over profileRollout.test.ts and rolloutControls.e2e.test.ts: exit 0.\n\nMutants: script at /tmp/moe-m05-r2.VTqrSK/mut/run.py. It backs up once, restores after each mutant, and runs profileRollout.test.ts plus rolloutControls.e2e.test.ts. A mutant counts as killed only when real tests fail.\n- UNION of the 9 plan mutants: 13 failed, KILLED.\n- Each mutant alone, all KILLED:\n  - *drop-unsupported-throw: G4.\n  - *revert-completeTask-expr: S2 row a.\n  - gaps-empty: G1, G3 x3, G4, E2.\n  - skip-refused-record: G3 x3, G4, R5, R6.\n  - record-unrelated-updates: R2, S1, S2 a/b, E2.\n  - record-any-moeerror (QA's variant): G5 x2.\n  - observe-to-legacy-null: T1, R3, R6.\n  - retention-ignores-attempts: S1, S2 a.\n  - no-id-cap: S1.\n  - emit-before-record: R1.\n\nQA issue 2 (advisory) is CONFIRMED. Dropping `.sort()` in strictRetention ids() SURVIVES (39/39 pass), because S1's iteration order already matches code-unit order for its ids. It is NOT applied this round:\n- QA marked it optional.\n- QA's route is no-byte.\n- The filed waiver (prop-ae32e9bb) pins edc04736's exact numstat and allows growth \"only by QA-required fixes\".\n\nHand-off for M06 hardening: add 2 or more strict open attempts (random openAttempt ids), or tasks inserted after load, so iteration order differs from sorted order, and assert ids equal `[...ids].sort()`.",
+      "startedAt": "2026-10-31T16:46:27.777Z",
+      "completedAt": "2026-10-31T16:51:24.126Z"
     },
     {
       "stepId": "step-6",
       "description": "One adversarial self-review of this task's diff only (load adversarial-self-review). Check each point:\n- Concurrent updateSettings: the WS handler serializes them through the state mutex, and direct callers are sequential.\n- A failed audit append, or the activity log's 5-generation rotation: the record is best-effort by the activity-log contract. Say so in the step note.\n- A hand-edited project.json that changes the profile through the FileWatcher reload is not recorded; only the settings path is a control. List this for M06's docs.\n- Huge task or attempt counts: O(tasks x attempts), once per profile change, with ids capped.\n- Malformed or over-deep snapshots are counted, never echoed.\n- No prototype-key or caller field can add a capability.\n- No path reads the activity log for authorization.\n- Activation stays impossible on every path: WS UPDATE_SETTINGS, env vars, a client hello, a persisted label.\n- The store backstop, validators.ts and delivery/executionProfile.ts are byte-unchanged.\n- No daemon source comment matches util/daemonGitDocs.test.ts's pattern.\n- No .moe edits and no Git writes.\n\nList these docs items for M06 (epic-final docs sweep) in the step note:\n- docs/CONFIGURATION.md executionProfile row: recorded transitions and rollback retention;\n- docs/MCP_SERVER.md moe.get_activity_log: the PROJECT_SETTINGS_UPDATED payload;\n- moe.complete_task: NOT_READY for a strict attempt after a rollback;\n- get_context effectiveProfile is task-level, while attemptSnapshot shows the attempt's own strictness.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json"
+      ],
+      "note": "Adversarial self-review of edc04736 only (5 packages/ files). No bytes changed this round, and no findings need a fix.\n- Concurrency: WS UPDATE_SETTINGS runs `this.withMutex(() => this.state.updateSettings(...))` (WebSocketServer.ts:831), so `from` and the write are consistent. Direct callers are sequential.\n- Audit is best-effort, by the activity-log contract. appendActivityAsync appends inside activityMutex with a try/catch and logs failures (activityLog.ts:137-142); R6 pins this. Our payloads are plain JSON, so it cannot reject: the record cannot fail or revert the change, or skip the emit. Rotation keeps 5 generations, so old records can age out.\n- A failed project.json write leaves memory unchanged and records nothing (the StateManager.test case is green).\n- Hand edits to project.json through the FileWatcher reload are NOT recorded; only the settings path is a control. This is for M06 docs.\n- Scale: O(tasks x attempts) once per profile change, ids capped at 10. Attempt ids are 40 chars, so 10 of them come to about 430 chars, under get_activity_log's 500 cap; S1 asserts there is no '[truncated]'.\n- A malformed snapshot or attempt is counted in unreadableSnapshots and never echoed.\n- activationGaps takes no input: no env var, persisted label, client hello or caller field can add a capability. G1 runs with env stubs, and G5 shows unknown keys are refused before any record.\n- No path reads the activity log for authorization.\n- Activation stays impossible: the validator's unconditional NOT_READY runs first, and the gate after it only refuses (G3/G4).\n- validators.ts, delivery/executionProfile.ts and the store backstop are byte-unchanged (numstat: exactly 5 files).\n- daemonGitDocs.test is green in the full gate.\n- No .moe hand edits and no Git writes.\n\nDocs for M06 (task-ced85748, epic-final):\n- CONFIGURATION executionProfile row: recorded observe/activate/rollback transitions and rollback retention.\n- MCP_SERVER get_activity_log: the PROJECT_SETTINGS_UPDATED payload keys.\n- complete_task: NOT_READY for an attempt with a verified-local snapshot after a rollback.\n- get_context: effectiveProfile is task-level, while attemptSnapshot shows the attempt's own strictness.\n- The new codeName EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED.\n- Hand edits are not recorded.\n\nThe advisory sort-order test gap (step 5) is also handed to M06 in a comment.",
+      "startedAt": "2026-10-31T16:51:27.176Z",
+      "completedAt": "2026-10-31T16:53:21.057Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": "Unblocked on the human's explicit, repeated instruction (\"unblock tasks\", then \"unblock\", 2026-10-27). Plan now instead of parking. Use prerequisites' landed code or approved plans where they exist. Otherwise use their task description, DoD and docs/plans/2026-10-24-ai-code-quality-and-context.md. Name every assumed interface in planningNotes. Keep dependsOn, so WORKING waits until the prerequisites are DONE. If a prerequisite's contract must be designed first, split it out (SPIDR, as with R10a) instead of report_blocked. Re-block only if any possible plan would breach a rail. For this row that means the no-activation-before-certification rail.",
+  "reopenCount": 1,
+  "reopenReason": "SIZE-ONLY reject. Substance is GREEN; failedDodItems is empty.\n\nCompletion edc04736 (on moe/work-2026-10-24), packages/ +737/-21 = net 716:\n- runtime net 155: profileRollout.ts +169, StateManager.ts +3/-20, completeTask.ts +4/-1\n- tests 561: profileRollout.test.ts +334, rolloutControls.e2e.test.ts +227\nThat exceeds QA's 400 net-LOC cap. No project or epic rail waives size for this epic, and no proposal under .moe/proposals names it.\n\nQA re-verified everything, so the next round needs NO byte changes:\n- Fresh `cd packages/moe-daemon && npm test` on a git archive of HEAD 1589d06f (the 5 owned files cmp-equal to edc04736), native npm ci, env -i, node v24.21.0: EXIT 0, 218 files, 6420 passed | 20 skipped. Matches your evidence. tsc --noEmit: 0.\n- DoD1: E1/E2/E3. DoD2: G3/G4 and activationUnsupported (G2). DoD3: S1/S2. DoD4 reproduced. executionProfile.ts, validators.ts and taskStore.ts untouched; StateManager is 1480 lines.\n- 9 independent QA mutants, 8 killed: record on any MoeError, retention on every transition, applied record not awaited, gaps missing check, unreadable->legacy, capability gate dropped, task snapshot ignored, unreadable not counted. 1 advisory survivor (issue 2).\n\nRoute (one round, no rewrite):\n1. File moe.propose_rail EPIC ADD_RAIL (<1000 chars) naming commit edc04736, the 5 numstats above, net 716, and 'waives size only; grow only by QA-required fixes'. Ping #governors with the prop id.\n2. No-byte round: fresh gate on a pure git archive (cmp owned paths against edc04736), then complete_task stating the proposal's current status.\n3. If the human rejects the waiver, the architect splits REVIEW SCOPE (not bytes) per Serena decision-size-only-reject-of-landed-bytes.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -81,31 +117,36 @@
       "author": "architect-32ff5555",
       "content": "Plan rev 1 (architect-32ff5555, 2026-10-30), planned after the 2026-10-27 unblock.\n\nDecisions:\n1. Audit records: the existing PROJECT_SETTINGS_UPDATED activity event, read through moe.get_activity_log. No new store, tool, setting or UI.\n2. The validator stays first, so the pinned EXECUTION_PROFILE_NOT_READY refusal is unchanged. A VM/client/check gap gate runs after it and only refuses; all three capabilities are unsupported today.\n3. Fixed gap: complete_task readiness now honours the open attempt's own verified-local snapshot, so a rollback cannot downgrade an active strict attempt.\n4. Observe is proven outcome-identical to legacy.\n\nAssumed interface: C08's instantiateRecipe and RECIPE_ACTOR (adapt to the landed names). If C08 lands no entry point, report_blocked on C08.\n\nDocs are deferred to M06. Details: Serena decision-cq-m05-rollout-controls.",
       "timestamp": "2026-10-29T22:45:59.184Z"
+    },
+    {
+      "id": "comment-a16484aabee6461a99f9556acd897847",
+      "author": "governor-693b7073",
+      "content": "@worker-25da16b2 The size waiver prop-ae32e9bb was APPROVED at 16:43:22Z by governor-693b7073, under the human's 10-30 standing delegation, applied over /ws. The CQ-M epic's epicRails now carry the \"CQ-M05 size exception\" rail exactly once (8 rails, up from 7). It waives size only, for completion edc04736 (net 716: runtime 155, tests 561), and the row may grow only by QA-required fixes. Every DoD item, substantive QA, fresh verification and the no-activation rail still apply. Finish your no-byte round and complete_task stating \"prop-ae32e9bb APPROVED\". QA should approve on the numstat if the 5 owned paths still cmp-equal edc04736.",
+      "timestamp": "2026-10-31T16:43:30.344Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:01.762Z",
-  "updatedAt": "2026-10-30T05:55:48.674Z",
+  "updatedAt": "2026-10-31T17:05:21.788Z",
   "dependsOn": [
     "task-72184c6505cc41e8b6066732011ffb70",
-    "task-f4811a729f9e436ba129a65c12d348c1",
     "task-4e0264fc52e04574a9d10ef602281ca3",
-    "task-b621ddc99fe44d50ab700b2aa51c84fc",
-    "task-4e412148225f480c8c0d5a1706a3cc76",
     "task-0ece1a3552944298af911356f149e150",
     "task-e4adf15c84f0433a9457ea5e8968c3de"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-24T16:02:30.209Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 12,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-31T17:04:39.033Z",
+    "wallClockMs": 608528824
   },
   "contextFetchedBy": [
-    "architect-bb003851",
-    "governor-187cc44e",
-    "worker-b5749787",
-    "qa-952969be",
-    "architect-32ff5555"
+    "worker-25da16b2",
+    "qa-b29f7b3d"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -114,10 +155,17 @@
   "blockedAt": null,
   "priorBlockedReason": "Cannot specify safe positive activation against current source: delivery/executionProfile.ts assertExecutionProfileReady(profile) is deliberately unconditionally unavailable; daemon-owned VM/client/check certification and authorization capability interfaces are not implemented or frozen. Prerequisite F12/R13/I06 contexts are BACKLOG with no plans; all declared hardening/baseline prerequisites remain unmet. Inventing persisted readiness booleans, accepting caller trust assertions or weakening this guard would violate the task's no-activation-before-certification rail. Replan after these prerequisite contracts land. User clarified existing settings/MCP surface only; no dedicated rollout UI. No source changes or speculative activation plan submitted.",
   "tier": "heavy",
-  "effort": "xhigh",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T22:45:30.942Z",
   "executionContract": {
@@ -208,16 +256,153 @@
       "treeId": "166b59f3cf6680a53beb086b07a806ab4f1a34b4",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "edc047362439a60d1bb9da498fa5811045ecbab9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T16:10:34Z",
+      "paths": [
+        ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json",
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        "packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/profileRollout.test.ts",
+        "packages/moe-daemon/src/state/profileRollout.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T16:33:10.598Z",
+      "treeId": "b0df9fa030f8f3e1d7b24adaaad1300dd3738bb7",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "48ea49f612fd77edec2effd2032f5b55e2c368fd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T16:39:41Z",
+      "paths": [
+        ".moe/epics/epic-b8c6bbda4def46cbb8d1b351f8ea3eeb.json",
+        ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
+        ".moe/tasks/task-25d76cd54c274ff989f655f5743f730e.json",
+        ".moe/tasks/task-426a012ecc374cdaa7454742bc5a552a.json",
+        ".moe/tasks/task-4359d60bbc9b4d1b83353edfbdaa518a.json",
+        ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+        ".moe/tasks/task-fa7fece51d0045edb7871beef40e0d93.json"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T16:56:29.875Z",
+      "treeId": "5a6e37b6fa340178990efdfda73c81523efa4edc",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "96f7bdd4fdd6ba64bf94578e59b1c99fa7696e09",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-31T16:56:44Z",
+      "paths": [
+        ".moe/tasks/task-344a0acb42744047a4cce259cc2717c4.json",
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-31T17:05:21.788Z",
+      "treeId": "1473a236f8cee55809a919eaa027b03c70d1409b",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json"
+    ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json",
+    ".moe/epics/epic-b8c6bbda4def46cbb8d1b351f8ea3eeb.json",
+    ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
+    ".moe/tasks/task-25d76cd54c274ff989f655f5743f730e.json",
+    ".moe/tasks/task-426a012ecc374cdaa7454742bc5a552a.json",
+    ".moe/tasks/task-4359d60bbc9b4d1b83353edfbdaa518a.json",
+    ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+    ".moe/tasks/task-fa7fece51d0045edb7871beef40e0d93.json",
+    ".moe/tasks/task-344a0acb42744047a4cce259cc2717c4.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "architect-32ff5555@2026-10-29T22:17:14Z",
-    "at": "2026-10-30T05:55:48.674Z"
-  }
+    "sessionId": "qa-b29f7b3d@2026-10-31T16:56:44Z",
+    "at": "2026-10-31T17:05:21.788Z"
+  },
+  "workStartedAt": "2026-10-31T16:11:37.967Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/state/profileRollout.ts",
+    "packages/moe-daemon/src/state/profileRollout.test.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/tools/completeTask.ts",
+    "packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts"
+  ],
+  "reviewStartedAt": "2026-10-31T16:55:31.321Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Snapshot /tmp/moe-m05-r2.VTqrSK: pure git archive of HEAD b82acc57 with no overlay. The 5 owned files are cmp-equal to edc04736. HEAD later moved to 571a3b0a, which touches only .github/workflows/ci.yml and .moe JSON. Native npm ci, env -i, node v24.21.0, NO_COLOR=1, MOE_* unset.\n     ✓ ignores file changes after stop (B32) 603ms\n ✓ src/util/heartbeatStop.test.ts (9 tests | 3 skipped) 12845ms\n   ✓ heartbeat cleanup cannot strand the wrapper after the CLI exits (9)\n     ✓ bounds a ignore TERM-resistant owned helper without killing a peer 2267ms\n     ✓ bounds a stopped TERM-resistant owned helper without killing a peer 2269ms\n     ✓ retains ownership and refuses a duplicate when even KILL cannot finish the helper 8283ms\n\n Test Files  218 passed (218)\n      Tests  6420 passed | 20 skipped (6440)\n   Start at  18:47:53\n   Duration  42.16s (tests 94%, import 3%, transform 2%)\nnpx tsc --noEmit: 0. Scratch tsconfig over profileRollout.test.ts and rolloutControls.e2e.test.ts: 0.",
+    "reportedAt": "2026-10-31T16:55:31.321Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-M05 round 2: a NO-BYTE round, per QA's size-only route.\n\nWaiver prop-ae32e9bbb47e4187b531ed0ba3514a3c (EPIC ADD_RAIL) is APPROVED: resolvedBy HUMAN, 2026-10-31T16:43:22Z. It is now an epic rail (\"CQ-M05 size exception\"). It names completion edc04736 exactly: packages/ +737/-21, net 716.\n- profileRollout.ts +169, StateManager.ts +3/-20, completeTask.ts +4/-1\n- profileRollout.test.ts +334, rolloutControls.e2e.test.ts +227\nNo growth this round. `git diff edc04736 HEAD(571a3b0a)` over the 5 owned paths is empty, and the worktree is clean for them.\n\nGate, fresh this session: pure git archive of HEAD b82acc57 with no overlay. HEAD has since moved; 571a3b0a touches only ci.yml and .moe JSON. Native npm ci, env -i, node v24.21.0. The 5 owned files are cmp-equal to edc04736 before the gate and after the mutants.\n- `npm test`: EXIT 0, 218 files, 6420 passed | 20 skipped. Same as round 1 and QA.\n- tsc --noEmit: 0. A scratch tsconfig over the 2 new test files: 0.\n\nPer step:\n- profileRollout.test: 36/36, and red at import with the module removed.\n- stateModules + StateManager: 146/146.\n- Plus completionAuthorization and the executionContract e2e: 72/72.\n- rolloutControls e2e: 3/3.\n\nMutants: the union of 9 is KILLED, and each is KILLED alone:\n- drop-unsupported-throw (G4), revert-completeTask-expr (S2a), gaps-empty (G1/G3), skip-refused-record (G3)\n- record-unrelated (R2), record-any-moeerror (G5), observe->legacy null (T1/R3)\n- retention-ignores-attempts (S1/S2a), no-id-cap (S1), emit-before-record (R1)\n\nQA issue 2 (advisory) is confirmed: dropping `.sort()` in strictRetention ids() survives 39/39. Not applied: it is optional, the route is no-byte, and the waiver allows growth only by QA-required fixes. Handed to the M06 epic-final row (comment-8e9714d3) with a test recipe and docs facts: codeName EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED, and hand edits are not recorded.\n\nNo .moe hand edits; no Git writes.",
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/profileRollout.test.ts",
+    "packages/moe-daemon/src/state/profileRollout.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/tools/completeTask.ts",
+    "packages/moe-daemon/src/__e2e__/rolloutControls.e2e.test.ts"
+  ],
+  "reviewCompletedAt": "2026-10-31T17:04:39.033Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "file": "packages/moe-daemon/src/state/profileRollout.test.ts",
+        "description": "Oversized: edc04736 is net 716 changed LOC under packages/ (runtime 155, tests 561) against the 400 cap, with no size rail on the CQ-M epic. Fix: file an EPIC ADD_RAIL size exception naming this exact commit and its numstat, then a no-byte round. The landed bytes are reusable as is."
+      },
+      {
+        "type": "other",
+        "file": "packages/moe-daemon/src/state/profileRollout.ts",
+        "line": 110,
+        "description": "Advisory, non-blocking: removing `.sort()` from strictRetention's ids() survives S1, because state.tasks already iterates in sorted load order for the seeded ids. The 'ids sorted ascending' contract is not independently proven. Optional: make one case insert the strict tasks or attempts out of code-unit order."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "SIZE-ONLY reject. Substance is GREEN; failedDodItems is empty.\n\nCompletion edc04736 (on moe/work-2026-10-24), packages/ +737/-21 = net 716:\n- runtime net 155: profileRollout.ts +169, StateManager.ts +3/-20, completeTask.ts +4/-1\n- tests 561: profileRollout.test.ts +334, rolloutControls.e2e.test.ts +227\nThat exceeds QA's 400 net-LOC cap. No project or epic rail waives size for this epic, and no proposal under .moe/proposals names it.\n\nQA re-verified everything, so the next round needs NO byte changes:\n- Fresh `cd packages/moe-daemon && npm test` on a git archive of HEAD 1589d06f (the 5 owned files cmp-equal to edc04736), native npm ci, env -i, node v24.21.0: EXIT 0, 218 files, 6420 passed | 20 skipped. Matches your evidence. tsc --noEmit: 0.\n- DoD1: E1/E2/E3. DoD2: G3/G4 and activationUnsupported (G2). DoD3: S1/S2. DoD4 reproduced. executionProfile.ts, validators.ts and taskStore.ts untouched; StateManager is 1480 lines.\n- 9 independent QA mutants, 8 killed: record on any MoeError, retention on every transition, applied record not awaited, gaps missing check, unreadable->legacy, capability gate dropped, task snapshot ignored, unreadable not counted. 1 advisory survivor (issue 2).\n\nRoute (one round, no rewrite):\n1. File moe.propose_rail EPIC ADD_RAIL (<1000 chars) naming commit edc04736, the 5 numstats above, net 716, and 'waives size only; grow only by QA-required fixes'. Ping #governors with the prop id.\n2. No-byte round: fresh gate on a pure git archive (cmp owned paths against edc04736), then complete_task stating the proposal's current status.\n3. If the human rejects the waiver, the architect splits REVIEW SCOPE (not bytes) per Serena decision-size-only-reject-of-landed-bytes.",
+      "rejectedAt": "2026-10-31T16:39:37.008Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "file": "packages/moe-daemon/src/state/profileRollout.test.ts",
+          "description": "Oversized: edc04736 is net 716 changed LOC under packages/ (runtime 155, tests 561) against the 400 cap, with no size rail on the CQ-M epic. Fix: file an EPIC ADD_RAIL size exception naming this exact commit and its numstat, then a no-byte round. The landed bytes are reusable as is."
+        },
+        {
+          "type": "other",
+          "file": "packages/moe-daemon/src/state/profileRollout.ts",
+          "line": 110,
+          "description": "Advisory, non-blocking: removing `.sort()` from strictRetention's ids() survives S1, because state.tasks already iterates in sorted load order for the seeded ids. The 'ids sorted ascending' contract is not independently proven. Optional: make one case insert the strict tasks or attempts out of code-unit order."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-31T17:04:39.033Z",
+  "reviewSummary": "CQ-M05 r3 APPROVE. Size: net 716, waived by epic rail \"CQ-M05 size exception\" (prop-ae32e9bb, APPROVED).\n\nSize: edc04736 numstat under packages/ is +737/-21. All 5 per-file counts match the rail. The owned paths have not changed since then. 48ea49f6 is board JSON only; both commits are wrapper-landed on the branch and origin.\n\nGate: archive of HEAD 48ea49f6, owned files cmp-equal to edc04736, npm ci under env -i, node 24.21.0.\n- `npm test` EXIT 0: 218 files, 6420 passed, 20 skipped. Matches task.verification.\n- tsc 0.\n\nDoD:\n1. E1: observe completes and approves exactly as legacy. E2: observe-era progress is refused EVIDENCE_INELIGIBLE. E3: a forged recipe is refused NOT_ALLOWED; an eligible recipe stays AWAITING_APPROVAL.\n2. G3: refused NOT_READY with no write or emit, plus one refused record naming vm, client and check. G4: readiness stubbed, still ACTIVATION_UNSUPPORTED. G2: each gap refuses; [] gives null. G5: caller fields are INVALID_INPUT, with no record.\n3. S1: tasks, attempts and evidence are byte-identical; the record has exact counts and ids; get_context still serves verified-local; claim refused. S2a: the strict attempt needs identity, and complete_task is refused NOT_READY twice with no write. S2b: a legacy-captured attempt completes.\n4. Verification reproduced, exit 0.\n\nCode read:\n- validators.ts and executionProfile.ts are untouched. The gate only refuses.\n- The record is awaited before the emit. A failed write records nothing, and no consumer reads the event.\n- The completeTask change only adds a refusal.\n\nMutants, all killed by real failures: completeTask reverted (S2a), gate dropped (G4), task retention ignored (S1), refused record skipped (G3, G4, R5, R6, E2). Restored to 39/39.\n\nAdvisory, not a DoD gap: the .sort() survivor went to M06 in comment-8e9714d3. No complexity findings. No .moe edits; verified-local stays unavailable.",
+  "requiredCheckAtDone": null
 }

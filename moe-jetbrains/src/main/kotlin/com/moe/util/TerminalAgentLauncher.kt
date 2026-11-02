@@ -1,6 +1,8 @@
 package com.moe.util
 
 import com.moe.model.AccountCli
+import com.moe.model.ReadinessFailure
+import com.moe.model.ReadinessReply
 import com.moe.services.MoeProjectService
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.Disposable
@@ -14,6 +16,10 @@ import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import javax.swing.SwingUtilities
 
 object TerminalAgentLauncher {
@@ -163,12 +169,18 @@ object TerminalAgentLauncher {
     // The protected profile runs these agent CLIs by exact name only; the wrappers accept the same set (task-aa85ff13).
     private val PROTECTED_AGENT_COMMANDS = AgentProvider.entries.filter { it != AgentProvider.CUSTOM }.map { it.command }
     private const val MAX_SHOWN_AGENT_COMMAND = 200
+    private const val VM_SEAT_NOT_PROTECTED = "Moe did not start the agent: .moe/project.json no longer asks for " +
+        "verified-local, so this worker or QA seat has no protected wrapper to run. Nothing was started; try again."
+    // The service's own bound plus margin; its future completes TIMEOUT by itself at 20 s.
+    private const val VM_READINESS_WAIT_MS = MoeProjectService.READINESS_TIMEOUT_MS + 5_000L
 
     /**
      * Under PROTECTED, repository content (.moe/project.json settings.agentCommand) and custom commands never choose
      * the binary a seat runs: only an exact known CLI name passes. LEGACY keeps explicit, then the setting, then claude.
      */
-    internal fun agentCommandFor(profile: RuntimeProfile, explicit: String?, projectSetting: String?): AgentCommandChoice {
+    internal fun agentCommandFor(profile: RuntimeProfile, explicit: String?, projectSetting: String?, vmSeat: Boolean = false): AgentCommandChoice {
+        // A VM seat runs only a CLI the guest has, whatever the profile allows on the host.
+        if (vmSeat) VerifiedLocalLaunch.agentRefusal(explicit ?: projectSetting ?: "claude")?.let { return AgentCommandChoice.Refused(it) }
         if (profile == RuntimeProfile.LEGACY) return AgentCommandChoice.Run(explicit ?: projectSetting ?: "claude")
         val candidate = (explicit ?: projectSetting)?.trim() ?: "claude"
         if (candidate in PROTECTED_AGENT_COMMANDS) return AgentCommandChoice.Run(candidate)
@@ -246,20 +258,27 @@ object TerminalAgentLauncher {
         }
     }
 
-    private fun resolveContext(project: Project, agentCommand: String? = null): AgentContext? {
+    /** [vmSeat]: a worker or QA seat on the verified-local VM route, which runs only the installed wrapper. */
+    private fun resolveContext(project: Project, agentCommand: String? = null, vmSeat: Boolean = false): AgentContext? {
         val basePath = project.basePath ?: run {
             Messages.showErrorDialog(project, "Project path not available.", "Moe")
             return null
         }
 
         val wslAgents = isWslAgentsEnabled(project)
-        val selected = when (val runtime = protectedAgentRuntime(basePath, wslAgents)) {
+        val selected = when (val runtime = protectedAgentRuntime(basePath, VerifiedLocalLaunch.preferBash(vmSeat, wslAgents))) {
             is ProtectedAgentRuntime.Refused -> {
                 Messages.showErrorDialog(project, runtime.message, "Moe")
                 return null
             }
             is ProtectedAgentRuntime.Selected -> runtime
-            null -> null
+            // Only a setting changed since the profile was read gets here; a VM seat never takes the legacy script.
+            null -> if (vmSeat) {
+                Messages.showErrorDialog(project, VM_SEAT_NOT_PROTECTED, "Moe")
+                return null
+            } else {
+                null
+            }
         }
         val script = selected?.script ?: resolveAgentScript(basePath, preferBash = wslAgents) ?: run {
             Messages.showErrorDialog(
@@ -292,7 +311,7 @@ object TerminalAgentLauncher {
         // `selected` is non-null exactly under PROTECTED, so project.json is not read a second time.
         val profile = if (selected != null) RuntimeProfile.PROTECTED else RuntimeProfile.LEGACY
         val projectSetting = MoeProjectService.getInstance(project).getState()?.project?.settings?.agentCommand
-        val resolvedCommand = when (val choice = agentCommandFor(profile, agentCommand, projectSetting)) {
+        val resolvedCommand = when (val choice = agentCommandFor(profile, agentCommand, projectSetting, vmSeat)) {
             is AgentCommandChoice.Run -> choice.command
             is AgentCommandChoice.Refused -> {
                 Messages.showErrorDialog(project, choice.message, "Moe")
@@ -303,15 +322,27 @@ object TerminalAgentLauncher {
         return AgentContext(basePath, script, manager, envOverrides, resolvedCommand, wslAgents)
     }
 
-    private fun launchRole(project: Project, ctx: AgentContext, role: String, codexExec: Boolean = false) {
+    /**
+     * The only way a seat reaches the terminal manager: a [VerifiedLocalLaunch.Decision.Refused] reports through
+     * [refuse] and never touches [manager].
+     */
+    internal fun openSeat(decision: VerifiedLocalLaunch.Decision, manager: Any, basePath: String, tabName: String, refuse: (String) -> Unit): Any? =
+        when (decision) {
+            is VerifiedLocalLaunch.Decision.Refused -> null.also { refuse(decision.message) }
+            VerifiedLocalLaunch.Decision.Launch -> createTerminalWidget(manager, basePath, tabName)
+        }
+
+    private fun launchRole(project: Project, ctx: AgentContext, role: String, codexExec: Boolean = false, decision: VerifiedLocalLaunch.Decision = VerifiedLocalLaunch.Decision.Launch) {
         val tabName = roleTabNames[role] ?: "Moe $role"
-        val defaultTeamName = project.name.takeIf { it.isNotBlank() } ?: "Moe Team"
-        val teamName = if (isTeamModeEnabled(project)) defaultTeamName else null
-        val workerId = newWorkerId(role)
-        val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName, codexExec, ctx.wslAgents, workerId)
         try {
-            val widget = createTerminalWidget(ctx.manager, ctx.basePath, tabName)
+            val widget = openSeat(decision, ctx.manager, ctx.basePath, tabName) { Messages.showErrorDialog(project, it, "Moe") }
+            // A refusal has shown its one dialog: no command is built and no terminal exists.
+            if (decision is VerifiedLocalLaunch.Decision.Refused) return
             if (widget != null) {
+                val defaultTeamName = project.name.takeIf { it.isNotBlank() } ?: "Moe Team"
+                val teamName = if (isTeamModeEnabled(project)) defaultTeamName else null
+                val workerId = newWorkerId(role)
+                val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName, codexExec, ctx.wslAgents, workerId)
                 if (sendCommand(widget, command)) trackSeat(project, widget, workerId)
             } else {
                 LOG.warn("Failed to create terminal widget for tab \"$tabName\"")
@@ -352,14 +383,37 @@ object TerminalAgentLauncher {
         }
     }
 
+    /** Worker and QA under verified-local: their VM-route context and the one readiness answer that decides both. */
+    private class VmSeats(val ctx: AgentContext, val readiness: CompletableFuture<ReadinessReply>) {
+        // Touched only by the launching pooled thread.
+        var decision: VerifiedLocalLaunch.Decision? = null
+    }
+
     fun startAgents(project: Project, agentCommand: String? = null) {
         val ctx = resolveContext(project, agentCommand) ?: return
+        val declared = RuntimeSelectionPolicy.declaredProfile(ctx.basePath)
+        val vm = if (VerifiedLocalLaunch.isVmSeat("worker", declared)) {
+            val vmCtx = resolveContext(project, agentCommand, vmSeat = true) ?: return
+            VmSeats(vmCtx, MoeProjectService.getInstance(project).requestExecutionReadiness())
+        } else {
+            null
+        }
         val roles = listOf("architect", "worker", "qa", "governor")
         ApplicationManager.getApplication().executeOnPooledThread {
             for ((index, role) in roles.withIndex()) {
+                val seats = vm?.takeIf { VerifiedLocalLaunch.isVmSeat(role, declared) }
+                // A refusal showed its one dialog at the first VM seat; the other opens nothing.
+                if (seats?.decision is VerifiedLocalLaunch.Decision.Refused) continue
+                val (seatCtx, decision) = if (seats == null) {
+                    ctx to VerifiedLocalLaunch.Decision.Launch
+                } else {
+                    val vmDecision = seats.decision ?: awaitVmDecision(project, seats.readiness) ?: return@executeOnPooledThread
+                    seats.decision = vmDecision
+                    seats.ctx to vmDecision
+                }
                 try {
                     SwingUtilities.invokeAndWait {
-                        launchRole(project, ctx, role)
+                        launchRole(project, seatCtx, role, decision = decision)
                     }
                 } catch (ex: InvocationTargetException) {
                     LOG.warn("Failed to launch agent terminal for role $role", ex.targetException ?: ex)
@@ -382,9 +436,38 @@ object TerminalAgentLauncher {
         }
     }
 
+    /** Bounded and never on the EDT. Null when interrupted or the project closed meanwhile. */
+    private fun awaitVmDecision(project: Project, readiness: CompletableFuture<ReadinessReply>): VerifiedLocalLaunch.Decision? {
+        val reply = try {
+            readiness.get(VM_READINESS_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (ex: InterruptedException) {
+            Thread.currentThread().interrupt()
+            LOG.warn("Interrupted while waiting for the daemon's execution readiness", ex)
+            return null
+        } catch (_: TimeoutException) {
+            ReadinessReply.Failed(ReadinessFailure.TIMEOUT)
+        } catch (_: ExecutionException) {
+            ReadinessReply.Failed(ReadinessFailure.TIMEOUT)
+        }
+        return if (project.isDisposed) null else VerifiedLocalLaunch.decide("worker and QA", reply)
+    }
+
     fun startAgent(project: Project, role: String, agentCommand: String? = null) {
-        val ctx = resolveContext(project, agentCommand) ?: return
-        launchRole(project, ctx, role)
+        val basePath = project.basePath
+        if (basePath == null || !VerifiedLocalLaunch.isVmSeat(role, RuntimeSelectionPolicy.declaredProfile(basePath))) {
+            val ctx = resolveContext(project, agentCommand) ?: return
+            launchRole(project, ctx, role)
+            return
+        }
+        val ctx = resolveContext(project, agentCommand, vmSeat = true) ?: return
+        val seat = if (role == "qa") "QA" else role
+        // The answer arrives off the EDT; the launch, or its one refusal dialog, runs on the EDT unless the project closed.
+        MoeProjectService.getInstance(project).requestExecutionReadiness().thenAccept { reply ->
+            ApplicationManager.getApplication().invokeLater(
+                { launchRole(project, ctx, role, decision = VerifiedLocalLaunch.decide(seat, reply)) },
+                project.disposed
+            )
+        }
     }
 
     /** The shell an Accounts tab command is typed into: the one agents run in. */
@@ -478,6 +561,14 @@ object TerminalAgentLauncher {
         teamName,
         codexExec,
         workerId
+    )
+
+    internal fun buildCommandForTest(
+        basePath: String, role: String, scriptPath: String, kind: ScriptKind, envOverrides: Map<String, String>,
+        agentCommand: String, teamName: String?, wslAgents: Boolean, workerId: String
+    ): String = buildCommand(
+        basePath, role, ResolvedScript(File(scriptPath), ScriptSource.BUNDLED, kind), envOverrides, agentCommand, teamName,
+        wslAgents = wslAgents, workerId = workerId
     )
 
     internal fun buildWslBashCommandForTest(

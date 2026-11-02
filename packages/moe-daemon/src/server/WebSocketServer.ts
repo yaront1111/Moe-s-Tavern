@@ -16,6 +16,7 @@ import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
 import { activeResourceWaiters } from '../tools/waitForResource.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
+import { readExecutionReadiness, type ExecutionReadinessPayload } from '../tools/getExecutionReadiness.js';
 import { releaseTaskTool } from '../tools/releaseTask.js';
 import { deregisterWorkerTool } from '../tools/deregisterWorker.js';
 import {
@@ -169,6 +170,7 @@ export type PluginMessage =
   | { type: 'ADD_TASK_COMMENT'; payload: { taskId: string; content: string; author?: string } }
   | { type: 'GET_CHANNELS' }
   | { type: 'GET_METRICS'; payload?: { epicId?: string; sinceIso?: string } }
+  | { type: 'GET_EXECUTION_READINESS'; payload?: { refresh?: boolean } }
   | {
       type: 'AGENT_TOOL_EVENT';
       payload: {
@@ -991,6 +993,24 @@ export class MoeWebSocketServer {
           const filtered = filterTasksForMetrics(this.state.tasks.values(), { epicId, sinceIso });
           const aggregate = computeDashboardAggregate(filtered, (id) => this.state.getEpic(id)?.title);
           this.safeSend(ws, JSON.stringify({ type: 'METRICS', payload: aggregate }));
+          return;
+        }
+        case 'GET_EXECUTION_READINESS': {
+          // Read-only like GET_METRICS: no withMutex (a refresh awaits a bounded evaluation), no state or activity write.
+          const refresh = (message.payload as { refresh?: unknown } | undefined | null)?.refresh;
+          if (refresh !== undefined && typeof refresh !== 'boolean') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'GET_EXECUTION_READINESS refresh must be a boolean' }));
+            return;
+          }
+          let payload: ExecutionReadinessPayload;
+          try {
+            payload = await readExecutionReadiness(this.state, { refresh });
+          } catch {
+            // No error detail, path or stack crosses /ws.
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'GET_EXECUTION_READINESS failed' }));
+            return;
+          }
+          this.safeSend(ws, JSON.stringify({ type: 'EXECUTION_READINESS', payload }));
           return;
         }
         case 'AGENT_TOOL_EVENT': {

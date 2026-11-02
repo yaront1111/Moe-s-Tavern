@@ -11,7 +11,8 @@
   ],
   "taskRails": [
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
-    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
+    "DoD readings for QA (governor darwin ruling 2026-10-31 under the human's delegation; no macOS host exists): DoD 1 - a support claim exists only for a platform/arch with a passing native `cli.mjs certify` report recorded in docs/CERTIFICATION.md; win32 x64 and linux x64 must each be certified by such a report, while darwin x64 and arm64 ship as 'unsupported: no report' with no support claim, which is not a DoD 1 failure. DoD 3 - darwin, and any arch without a recorded report, keeps refusing certification-dependent use (verified-local unavailable) with no silent fallback; QA checks that refusal instead of a darwin report."
   ],
   "implementationPlan": [
     {
@@ -80,18 +81,41 @@
     {
       "stepId": "step-5",
       "description": "OPERATOR CERTIFICATION (DoD 1), on the code verified in step 4. This step changes no code; only docs/CERTIFICATION.md changes.\n\n1. Post in #general with moe.chat_send:\n   - the exact per-OS commands from docs/CERTIFICATION.md;\n   - the commit under test;\n   - a request for the three report files that `cli.mjs certify --work-dir <abs>` writes on Windows, Linux and macOS hardware, attached as task comments or placed at a path the operator names.\n2. Call moe.report_blocked naming what is awaited. No agent here can run Multipass, so this block is legitimate.\n3. When the reports arrive, check each one:\n   - validateCertificationReport accepts it;\n   - certified === true and transport === 'native';\n   - supervisorSha256 equals the sha256 of guest-supervisor.py at the verified commit;\n   - together, the reports cover win32, linux and darwin.\n4. A failing or stale report is never recorded. Block again with its failing check ids and codes so a fix row is filed. After that fix lands, re-run step 4 and then this step.\n5. Record each passing report in docs/CERTIFICATION.md:\n   - one table row: platform, arch, Multipass version, image sha256, supervisor sha256, finishedAt, and the sha256 of the report bytes;\n   - the report verbatim, in a fenced json block.\n   An arch with no report, such as the other macOS arch, stays listed as unsupported.\n6. Call moe.complete_task. The evidence is step 4's DoD command, and the summary lists the report validation.\n\nError handling: never edit, synthesize or accept an injected or out-of-schema report, and never enable verified-local.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-31T06:17:19.236Z"
+      "modifiedFiles": [
+        "docs/CERTIFICATION.md",
+        "docs/design/protected-profile-threat-model.md"
+      ],
+      "note": "Step 5 (OPERATOR CERTIFICATION, amend-2): done. Checked at HEAD 3761931b, in a git-archive snapshot under env -i with Node v24.21.0.\nVALIDATIONS (both PASS):\n- linux x64: comment-5cee94b1, certification-linux-x64-20261101T142954Z-2a9fc9.json, sha256 e793c7c6b4468fe2f33ab7c41f299800af382334e09f7c48d22cc70cc0181b12.\n- win32 x64: comment-d2f5081c, certification-win32-x64-20261101T144956Z-5dc2a2.json, sha256 48dd267538e707af6d9b830b6dd855049229879d5dbbf2da8adf8c8a05beb9a0.\nFor each report:\n- validateCertificationReport accepts it (the docs one-liner exits 0); certified is true, transport is native, executionReady is false.\n- supervisorSha256 is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. This equals sha256 of HEAD's guest-supervisor.py and CERTIFICATION_PINS.supervisorSha256.\n- The image matches the x64 pin 04e8f246…6c94 in both certified-provider.json and the daemon pins. The provider is 1.17.0 (linux) and 1.17.0+win (win32).\n- All 13 check ids are present in order and passed with code null.\n- The file bytes equal JSON.stringify(report)+LF, and the comment's verbatim line equals the file bytes.\nBoth runs are of commit 106284b0, an ancestor of HEAD; scripts/local-runner has no diff since then. The reports cover win32 x64 and linux x64. darwin x64/arm64 ship as 'unsupported: no report' under the approved TASK rail prop-29ce59fa.\nDOCS:\n- docs/CERTIFICATION.md: added both durations, the recording rule plus where the pin lives, the darwin-rail paragraph, two table rows, and both reports verbatim in json blocks. Each block plus LF is byte-identical to its report file and hashes to the row's sha256.\n- docs/design/protected-profile-threat-model.md: scope growth. comment-6063dace routed this stale guest-loopback bullet here; it had been stale since fd196d13. It now cites the SSH transport (sshStreamArgv with ClearAllForwardings, the restrict + forced-command key), zero mounts, and the guest-network check that passed in both reports. All five line references re-checked at HEAD.\nHEAD MOVED during the step: e7668eae → c9f241d7 → 3761931b → 402bc840. Code changed only in the daemon (CQ-M07g0, CQ-M07c); 402bc840 touches .moe/tasks only. CQ-M07c makes assertExecutionProfileReady depend on the daemon's held readiness evaluation. The docs stay accurate: a host with no accepted report for its own platform and arch always lacks isolated-agent-and-qa-vms and isolated-check-vm, so verified-local stays refused for it.\nDoc gap routed to CQ-M06 (task-ced85748) as comment-5450daac: certify files certified reports in <OS account home>/.moe/certification, and the daemon reads them from there.\nPeers' dirty paths left untouched: moe-jetbrains *.kt/properties, packages/moe-daemon/src/tools/claimNextTask*, scripts/local-runner/{lifecycle,vm-control}.mjs, scripts/tests/local-runner-vm-control.test.mjs, .moe/*.",
+      "startedAt": "2026-10-31T06:17:19.236Z",
+      "completedAt": "2026-11-01T18:58:45.294Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "OPERATOR CERTIFICATION (DoD 1), on the code verified in step 4. This step changes no code; only docs/CERTIFICATION.md changes.\n\n1. The request is already posted (#general msg-99ba2572). Since the human's 17:31Z instruction, the GOVERNOR runs `cli.mjs certify --work-dir <abs>` itself: Linux after 62a909c1 lands, Windows after 4679ec68 lands, one host at a time (comment-28648a97). The governor attaches each report, as a file path plus sha256 or verbatim, in a row comment, then restores this row.\n2. While reports are awaited, the row stays BLOCKED (moe.report_blocked naming what is awaited). No agent seat runs Multipass.\n3. When reports arrive, check each one:\n   - validateCertificationReport accepts it;\n   - certified === true and transport === 'native';\n   - supervisorSha256 equals the sha256 of guest-supervisor.py at the verified commit (3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190 unless step 4 re-verifies another);\n   - together, the reports cover win32 x64 and linux x64.\n   DARWIN: by governor ruling under the human's delegation (comment-d39c93082f724e0ebd385bb1921ae8a1), no macOS host exists. darwin x64 and arm64 ship as 'unsupported: no report', with no support claim. That is not a DoD 1 failure; DoD 3 is met by darwin still refusing certification-dependent use (verified-local unavailable) with no silent fallback. The same reading is proposed as TASK rail prop-29ce59fa9fbd4d79804781d20ad8d779; cite its status at completion.\n4. A failing or stale report is never recorded. Block again with its failing check ids and codes so a fix row is filed. After that fix lands, re-run step 4 and then this step.\n5. Record each passing report in docs/CERTIFICATION.md:\n   - one table row: platform, arch, Multipass version, image sha256, supervisor sha256, finishedAt, and the sha256 of the report bytes;\n   - the report verbatim, in a fenced json block.\n   Both darwin rows, and any other arch with no report, stay listed as 'unsupported: no report'.\n6. Call moe.complete_task. The evidence is step 4's DoD command. The summary lists the report validation, the darwin ruling (comment-d39c9308) and the status of rail prop-29ce59fa.\n\nError handling: never edit, synthesize or accept an injected or out-of-schema report, and never enable verified-local.",
+          "reason": "Darwin scope ruling under the human's 2026-10-31 delegation (comment-d39c9308): there is no macOS host, so darwin ships as \"unsupported: no report\". Since the human's 17:31Z instruction the governor runs certify itself (comment-28648a97). The QA reading is proposed as TASK rail prop-29ce59fa, which is pending the human's approval.",
+          "amendedBy": "governor-ce2f28b9",
+          "amendedAt": "2026-10-31T20:32:21.668Z"
+        },
+        {
+          "amendmentId": "amend-2",
+          "description": "OPERATOR CERTIFICATION (DoD 1), on the code verified in step 4. This step changes no code; only docs/CERTIFICATION.md changes.\n\n1. Both reports are attached. Since the human's 2026-10-31 17:31Z instruction, the GOVERNOR runs `cli.mjs certify --work-dir <abs>` itself, one host at a time. The RECORDED runs used commit 106284b0, which carries fd196d13, CQ-M07f (3afbdc59) and CQ-M07e (69f2d710).\n   - linux x64: comment-5cee94b1, report sha256 e793c7c6b4468fe2f33ab7c41f299800af382334e09f7c48d22cc70cc0181b12.\n   - win32 x64: comment-d2f5081c, report sha256 48dd267538e707af6d9b830b6dd855049229879d5dbbf2da8adf8c8a05beb9a0.\n   Byte-identical files for both are in D:\\moe-scratch\\r13-reports\\ (/mnt/d/moe-scratch/r13-reports/ from WSL). Use those files, or each comment's verbatim JSON line plus a trailing LF. Either must hash to the sha256 above.\n2. No agent seat runs Multipass. If a report is missing or fails a check below, block again with moe.report_blocked and name what is awaited.\n3. Check each report:\n   - validateCertificationReport accepts it (the docs/CERTIFICATION.md:122 one-liner).\n   - certified === true and transport === 'native'.\n   - supervisorSha256 equals 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. That is guest-supervisor.py's sha256 at 106284b0 (CQ-M07f) and CERTIFICATION_PINS.supervisorSha256 in packages/moe-daemon/src/delivery/certificationEvidence.ts. It supersedes the 3a19f3bf pin from 24a8b95c (comment-d606dfb5 (b)). Confirm that scripts/local-runner/guest-supervisor.py at the current HEAD still hashes to 616463b7. If it does not, the reports are stale: block again.\n   - Together, the reports cover win32 x64 and linux x64.\n   DARWIN: this row's TASK rail governs it. That rail is the governor ruling in comment-d39c9308, made under the human's delegation and approved by the human as prop-29ce59fa at 2026-10-31 23:46Z. darwin x64 and arm64 ship as 'unsupported: no report', with no support claim, and that is not a DoD 1 failure. DoD 3 is met because darwin still refuses certification-dependent use (verified-local unavailable), with no silent fallback.\n4. A failing or stale report is never recorded. Block again with its failing check ids and codes, so a fix row is filed.\n5. Record each passing report in docs/CERTIFICATION.md:\n   - one table row: platform, arch, Multipass version, image sha256, supervisor sha256, finishedAt, and the sha256 of the report bytes;\n   - the report verbatim, in a fenced json block.\n   Both darwin rows, and any other arch with no report, stay listed as 'unsupported: no report'.\n6. Call moe.complete_task. The evidence is step 4's DoD command, `node --test scripts/tests/local-runner.test.mjs`, re-run fresh at the current HEAD. Run it in a git-archive snapshot under env -i with nvm Node 24, as step 4 did. The commit under test moved from 24a8b95c to 106284b0, so step 4's earlier test results do not cover these reports. The summary lists both report validations, the 616463b7 pin and the darwin TASK rail (prop-29ce59fa, approved).\n\nError handling: never edit, synthesize or accept an injected or out-of-schema report, and never enable verified-local. A failing test or check is fixed or blocked, never weakened.",
+          "reason": "Both required reports are now attached: linux x64 in comment-5cee94b1 and win32 x64 in comment-d2f5081c. Both came from the RECORDED runs on 106284b0, which carries CQ-M07f's supervisor reset mode, so the pin moves from 3a19f3bf (24a8b95c) to 616463b7, as comment-d606dfb5 (b) planned. The darwin rail prop-29ce59fa has since been approved by the human.",
+          "amendedBy": "governor-978922c1",
+          "amendedAt": "2026-11-01T18:32:15.554Z"
+        }
+      ],
+      "activeAmendmentId": "amend-2"
     }
   ],
-  "planRevision": 1,
-  "status": "BLOCKED",
+  "planRevision": 3,
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Both required certification reports are attached and validated: linux x64 in comment-5cee94b1 and win32 x64 in comment-d2f5081c, both certified=true, transport native, supervisor 616463b7, commit 106284b0. darwin follows the approved TASK rail (prop-29ce59fa). Resume at step 5 as amended (amend-2).",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -276,11 +300,179 @@
       "author": "worker-c0a1ac70",
       "content": "Supervisor hash handoff from task-97341ad5be744d19ac869972299a2714, which is going to REVIEW now. It changes the relay completion: the guard stands down at once, pump watches the start pipe, and the job group is killed before the observation.\n- guest-supervisor.py sha256 at HEAD b6cfcc4e: 8a631957d0475cd2c12029a4f5e18be076adee59110124eb1331aacb06d25d4b\n- after 97341ad5's change: 27b4a266a42fe4510671d624e7bcd8c59c5cfc2ed59a9f0405a37e65dde38d71\nAny certification of an older hash is stale. If QA reopens 97341ad5 and the bytes change, the landed hash will differ, so take the sha256 of guest-supervisor.py at the commit you verify, as your step 5 already says. This WSL gate imported the supervisor as a non-root fixture plus userns-root rows and certifies nothing; native re-certification stays yours and the operator's.",
       "timestamp": "2026-10-31T14:10:16.944Z"
+    },
+    {
+      "id": "comment-494b6ad661ce4b2796e06a68df6e96e4",
+      "author": "worker-88af1437",
+      "content": "supervisorSha256 handoff from task-97341ad5 (reopen-1 fix, worker-88af1437). This supersedes comment-873e7ccb.\n- scripts/local-runner/guest-supervisor.py is now sha256 24e6746d1da930fa672207840ac217f8066be4bac78b46a6ecc386101e4d6b2c. Earlier hashes: 27b4a266a42fe4510671d624e7bcd8c59c5cfc2ed59a9f0405a37e65dde38d71 (b245f476, superseded), and 8a631957... before this task.\n- Since 27b4a266 only the exit-code header comment changed; the runtime code is byte-identical to b245f476. The header now names materialize's no-account 71 again. It also claims the child-group kill only where a group exists: a no-child 71 comes from the bridge setup or the guard Popen.\n- Native certification must be re-run against these bytes. No certification or verified-local claim is made; verified-local stays unavailable.\n- Gate on these bytes: a full archive of HEAD d8681900 plus the 2 owned overlays, npm ci/build in the snapshot only, env -i Node 24.21.0, Python 3.12.3, WSL2 6.18.33.1, uid 1000. node --test local-runner*: 647 tests, 644 pass, 0 fail, 3 skips (LA5, K9, macOS smoke). Daemon vitest: 215 files, 6341 passed. GATE_EXIT=0.",
+      "timestamp": "2026-10-31T15:03:46.927Z"
+    },
+    {
+      "id": "comment-b187a175bd4147628e24e310973f7a9f",
+      "author": "worker-88af1437",
+      "content": "supervisorSha256 correction from task-97341ad5 (worker-88af1437). This supersedes comment-494b6ad6.\n\nThe 24e6746d... hash in that comment is stale. At 15:07Z the branch merged main (c9b771ea, containing PR #232 merge 439709fd), and the IDE re-applied my uncommitted change on top of the merged file.\n- scripts/local-runner/guest-supervisor.py as this task lands it: sha256 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190. That is HEAD e8df3882's supervisor (be208fae2db17d0a3cd370814d6b44c91f0daaa5aef049d1a6ad9c43b9433fd1) plus this task's comment-only exit-code header change; the change lines are byte-identical to the version I gated before the merge.\n- Superseded: 24e6746d... (pre-merge base), 27b4a266... (b245f476), 8a631957... (before this task).\n- Your sequencing precondition is now met on the branch: origin/fix/ci-pr230's tip e7860e7f, a58a50af (MAX_JSON_DEPTH) and a4c8204d (GROUP_GONE) are all ancestors of HEAD.\n- Take the sha256 at the commit you verify. Any further landing that touches this file moves it again.\n- Gate on these bytes: a full archive of HEAD e8df3882 plus the 2 overlays, npm ci/build in the snapshot only, env -i Node 24.21.0, Python 3.12.3, WSL2 6.18.33.1, uid 1000.\n  - node --test local-runner*: 648 tests, 645 pass, 0 fail, 3 skips (LA5, K9, macOS smoke).\n  - Daemon vitest: 215 files, 6341 passed.\n  - GATE_EXIT=0, finished 15:22:36Z.\n- No certification or verified-local claim is made. Native certification against these bytes is still R13's.",
+      "timestamp": "2026-10-31T15:24:06.156Z"
+    },
+    {
+      "id": "comment-45d958a73a4c4fb19a432edb0c6192b2",
+      "author": "governor-693b7073",
+      "content": "@worker-88af1437 Governor update to comment-8725771e (15:42Z), before you run its ancestry check. Do NOT test the moving fix/ci-pr230 tip.\n\n- That branch has since gained aabfce0a (#233). It is test-only (packages/moe-daemon reviewBinding.test.ts and heartbeatStop.test.ts) with no supervisor bytes, and it is not on the work branch yet. Testing the branch tip would fail and re-block you for nothing.\n- The supervisor bytes landed with the #232 merge c9b771ea. The gate row d4810c9c verified them there, then I closed it (see its comment-a96d3378).\n- The check to run is: `git merge-base --is-ancestor c9b771ea HEAD` (equivalently, both a58a50af and a4c8204d are ancestors).\n- Hash guest-supervisor.py at the commit you verify. That commit now also carries 97341ad5's rework (c96c587b, DONE), so neither comment-873e7ccb's hash nor any earlier report is current.\n- If the human's merge of main (#233 plus the dependabot gson bump in moe-jetbrains/build.gradle.kts) lands while you work, it changes no file this row certifies.",
+      "timestamp": "2026-10-31T15:41:43.177Z"
+    },
+    {
+      "id": "comment-28648a97c0524e1786f2b93c1f607a85",
+      "author": "governor-693b7073",
+      "content": "Certification state, governor-693b7073, 2026-10-31 20:16Z. The human told the governor to run `cli.mjs certify` itself (17:31Z). Neither report can be recorded. A failing report is never recorded, and none was edited.\n\n- **linux x64** (Multipass 1.17.0 snap, qemu; ~/moe-certify, Node 24.21.0, env -i): readiness failed with BOOTSTRAP_FAILED. Root cause is Moe's own user-data: `mounts: []` fails cloud-init 26.1's schema check, so the guest ends \"degraded done\" with exit 2. This confirms the R07 carry-forward in comment-be66dae1: a clean boot does not reach done/done today. Fix row: task-62a909c1.\n- **win32 x64** (Multipass 1.17.0+win, hcs; C:\\moe-certify): provision failed with LIFECYCLE_RETRY_EXHAUSTED. Multipass 1.17.0 on Windows cannot launch a local `file://` image. The client sends `file://C:/…`, which the daemon reads as host `c` and refuses, and a UNC workaround then hits a sparse in-place VHDX that virtdisk refuses. The pinned https manifest URL does boot clean, but Multipass then reports a different image hash, so the integrity design is open. Fix row: task-4679ec68, which needs a scope call after planning.\n- **darwin:** no Mac has been confirmed. The human hasn't answered, so darwin stays \"unsupported: no report\" unless that changes. That needs a governor scope ruling and a TASK rail at completion time.\n\nThis row now dependsOn 62a909c1 and 4679ec68. Re-run certify Linux-first, once 62a909c1 lands:\n- Linux: ~/moe-certify-src refreshed to a commit with the fix and the same supervisor sha 3a19f3bf…; work dir ~/moe-certify.\n- Windows: D:\\moe-scratch\\certify-src; work dir C:\\moe-certify.\n- Run the hosts one at a time, never together.\n\nHost notes:\n- The `qgc` WireGuard adapter is disabled (Multipass 1.17.0 can't start with a /32 adapter up, canonical/multipass#5486). Re-enable it after certification with `Enable-NetAdapter -Name \"qgc\"` in an admin PowerShell.\n- Never `snap refresh --hold` the Linux snap (task-47d21b83).",
+      "timestamp": "2026-10-31T20:15:39.418Z"
+    },
+    {
+      "id": "comment-cf19e0334965415ca3172f464fe9939d",
+      "author": "governor-ce2f28b9",
+      "content": "Correction to comment-28648a97 (governor-ce2f28b9, 20:17Z): this row does NOT depend on 62a909c1 or 4679ec68 in the daemon. Adding those edges was refused because dependsOn is at its 20-id cap. I've deliberately not attached them as blockedOnTaskIds either, because that would auto-unblock this row to WORKING with no reports attached.\n\nThe governor enforces the order instead: 62a909c1 → 4679ec68, and 4679ec68 already dependsOn 62a909c1. The governor re-runs certify only after the fixes land, Linux first, then Windows, never together. The row stays human/governor-blocked until passing reports are attached. Any seat that finds this row WORKING without 3 passing reports re-blocks it, as the blockedReason says. I own this row from 20:16Z.",
+      "timestamp": "2026-10-31T20:17:04.230Z"
+    },
+    {
+      "id": "comment-d39c93082f724e0ebd385bb1921ae8a1",
+      "author": "governor-ce2f28b9",
+      "content": "DARWIN SCOPE RULING. Governor-ce2f28b9, 2026-10-31 ~20:33Z, under the human's explicit delegation.\n\n**The question and the answer.** In the governor's session the human was asked open item 1: \"darwin certification: do you have a Mac for it? If not, darwin stays 'unsupported: no report', and I'll record that scope ruling when R13 completes.\" They answered \"2 yes 3 ok rest decide\" (item 1 falls under \"rest decide\"), then \"go\".\n\n**Ruling: there is no macOS host, so darwin x64 and arm64 ship as \"unsupported: no report\".**\n- R13 completes on two passing native reports, win32 x64 and linux x64.\n- The governor produces both with `cli.mjs certify`, per the human's 17:31Z instruction (comment-28648a97), after 62a909c1 (Linux) and 4679ec68 (Windows) land: Linux first, then Windows, never together.\n- docs/CERTIFICATION.md keeps both darwin rows as \"unsupported: no report\", and verified-local stays refused there (DoD 3, no silent fallback).\n- A Mac report later is a follow-up row, not a blocker here.\n- QA's DoD 1 and DoD 3 readings are pinned by a TASK rail, and step 5 is amended to match. The ids follow in the next comment.\n\n**Other answers in the same exchange.**\n- (2) \"yes\": the governor files the two upstream Multipass issues (the Windows `file://` host check, and the sparse in-place VHDX) and links them on 4679ec68.\n- (3) \"ok\": re-enable the `qgc` adapter after the last certify run. The governor does it if it has the rights, otherwise asks the human.",
+      "timestamp": "2026-10-31T20:31:33.307Z"
+    },
+    {
+      "id": "comment-eaef823e143a4cb6b656c193340fcd8a",
+      "author": "governor-ce2f28b9",
+      "content": "The ids for comment-d39c9308:\n- **TASK rail prop-29ce59fa9fbd4d79804781d20ad8d779** (DoD 1 and DoD 3 readings for darwin) is PENDING. The auto-mode guard stopped the governor approving its own proposal over /ws, so it waits for the human's approval in the IDE.\n- **Step 5 amend-1** already carries the same reading:\n  - win32 x64 and linux x64 need passing native reports;\n  - darwin ships as \"unsupported: no report\", with the refusal checked under DoD 3;\n  - the governor produces the reports.\nAt completion, cite the rail's status, whatever it is. If the human rejects the rail, the darwin ruling is void: block again and ask in #governors.",
+      "timestamp": "2026-10-31T20:32:29.856Z"
+    },
+    {
+      "id": "comment-bd56192c30a943e28bb291b6c05236f4",
+      "author": "governor-ce2f28b9",
+      "content": "LINUX CERTIFY RE-RUN #2, governor-ce2f28b9, 20:46:37-20:48:24Z. **FAILED. NOT RECORDED.**\n\n**Run.** Code was a `git archive` of df98de8e, which contains 62a909c1's fbece197. Supervisor sha256 3a19f3bf…8190. Work dir ~/moe-certify, under env -i with Node 24.21.0. Host: Multipass 1.17.0 snap, qemu, not held. prerequisites: ready:true.\n\n**Report.** certification-linux-x64-20261031T204637Z-c53779.json:\n- provision: passed (providerImageHash = pin);\n- readiness: failed with **IDENTITY_LOGIN_ENABLED**;\n- teardown: passed;\n- 10 checks not run; certified:false.\n\n**Progress.** The BOOTSTRAP_FAILED from run #1 is fixed. On a hand-launched guest with the certify-identical user-data, cloud-init now ends `done`/`done` with no errors.\n\n**Diagnosis, from guest moe-diag-440a07, since deleted by exact name.**\n- `/home/{moe-agent,moe-check}/.ssh/authorized_keys` EXIST, but are **0 bytes**. No key grants login.\n- cloud-init 26.1's `cc_ssh_authkey_fingerprints` creates them. It runs in modules-final, at 20:52:03, and calls `extract_authorized_keys(user)` for every user, which creates an empty file.\n- The readiness probe `keys:<id>` is `sudo -n test -e …`, so the empty file counts as login enabled on every clean boot.\n- I ran every other readiness probe by hand on that guest, and all pass: layout, all three digests, locked status, groups, all 10 DENIED reads and writes, sudo denied.\n- `keys:` is the only readiness blocker.\n\n**Fix direction, which I'm verifying now on a second guest.** Add `no_ssh_fingerprints: true` to buildUserData. The module returns before touching any key file (cc_ssh_authkey_fingerprints.py:107), the cloud-init 26.1 schema check says \"Valid schema\", and readiness stays strict at `test -e`. A fix row follows.",
+      "timestamp": "2026-10-31T20:53:53.988Z"
+    },
+    {
+      "id": "comment-7674c1e6e6e1495eba770dc5e6767421",
+      "author": "governor-ce2f28b9",
+      "content": "The fix row for comment-bd56192c is **task-77b0637fbe0043da988ea8206e5aaadb**, HIGH, PLANNING, dependsOn 4679ec68.\n\nProven on a second real guest (moe-diag-8bddcc, since deleted by exact name). With `no_ssh_fingerprints: true`:\n- cloud-init ends `done`/`done`, errors [];\n- neither job identity has an authorized_keys file;\n- every readiness probe passes, including keys:* at rc=1.\n\n**Re-certify order:** after 4679ec68 and 77b0637f are both DONE, Linux, then Windows, one host at a time. Darwin is unchanged: comment-d39c9308.",
+      "timestamp": "2026-10-31T20:56:57.544Z"
+    },
+    {
+      "id": "comment-91af6c0f53f44e2a8c0bcf03b06ff90a",
+      "author": "qa-1f1f912c",
+      "content": "QA note from task-4679ec68 (approved 2026-10-31), an optional one-row hardening for this epic-final row, since it already declares scripts/tests/local-runner.test.mjs. This is not a defect.\n\nprovisionGuest's win32 identity proof compares the full 64-hex `image_hash` with the pin (`!==`, after readGuestInfo's 64-hex parse). One QA mutant compares only the first 12 characters, and it survives the whole suite: no row gives a full-length id that shares the pin's 12-char prefix but differs after it.\n\nFix: add one row to the 'a Windows guest whose full image id is not exactly the pin…' table. Its info override is `guestDetail({ image_hash: PINS.x64.sha256.slice(0, 12) + '0'.repeat(52) })` (check that it differs from the pin), and it expects IMAGE_PROVIDER_HASH_MISMATCH with the same record and command assertions as the other rows. This pins the governor ruling comment-cfa4d81f, \"require the full 64-hex pin\", at the comparison and not only at the parser.",
+      "timestamp": "2026-10-31T21:49:50.486Z"
+    },
+    {
+      "id": "comment-6724c462bd184c7b86a556fcc1ae05b0",
+      "author": "governor-ce2f28b9",
+      "content": "QA's optional hardening note comment-91af6c0f (mutant M03, the 12-char-prefix compare) now has its own row: **task-81bb2ddd**, LOW, test-only, dependsOn 77b0637f, under M07. This row's step 5 stays docs-only, so this row's session does NOT add that test row.",
+      "timestamp": "2026-10-31T21:50:33.155Z"
+    },
+    {
+      "id": "comment-ddf73884cab04cf4af3127fa407ab3e2",
+      "author": "governor-ce2f28b9",
+      "content": "LINUX CERTIFY RE-RUN #3, governor-ce2f28b9, 21:57:43-21:59:31Z. **FAILED. NOT RECORDED.**\n\n**Run.** Code was a `git archive` of HEAD 992acfc8, which includes 62a909c1, 4679ec68 and 77b0637f. Supervisor sha256 3a19f3bf…8190. Work dir ~/moe-certify, under env -i with Node 24.21.0. prerequisites: ready:true.\n\n**Report.** certification-linux-x64-20261031T215743Z-9a204e.json, certified:false:\n- provision passed;\n- readiness passed (77b0637f works);\n- no-mounts passed;\n- **bridge-framing failed with TRANSFER_EXIT_FAILED**;\n- 8 checks not run; teardown passed; `multipass list` is empty.\n\n**What it means.** bridge-framing's first step is `materializeSnapshot(certifySnapshot())`, the host-to-guest transfer. It streams frames into `multipass exec --no-map-working-directory <vm> -- sudo -n /opt/moe/bin/moe-supervisor materialize`, and that process exited non-zero or stopped reading its input. The supervisor's stderr is drained unread (snapshot-transfer.mjs supervise), so the report can't say why. I'm reproducing it now on an owned-name guest with stderr captured, and a fix row follows.",
+      "timestamp": "2026-10-31T22:01:17.406Z"
+    },
+    {
+      "id": "comment-85b1be266fac4f26be2ab183435ecd64",
+      "author": "governor-ce2f28b9",
+      "content": "LINUX bridge-framing DIAGNOSIS (governor-ce2f28b9, 22:01-22:12Z). Guest moe-vm-271b167631054c802875 was hand-launched with the HEAD 992acfc8 user-data and has been deleted by exact name.\n\n**Root cause: the host-to-guest stream loses data inside `multipass exec`'s stdin forwarding** (Multipass 1.17.0 snap, Linux). The guest supervisor itself is correct.\n- Fed fast, `multipass exec <vm> -- sh -c 'cat > f'` loses the end of large input. Host bytes against bytes received:\n  - the 2,796,635-byte materialize stream: 2,162,688 / 2,228,224 / 2,490,368 over three runs, always on 64 KiB boundaries. When piped from Node, the client then closes its stdin (EPIPE).\n  - 10 MiB from a file: 2,162,688.\n  - 1 MiB: complete.\n  - 10 MiB written at a paced 64 KiB per 50 ms: **complete**.\n- So stdin overflows when it's fed faster than the guest consumes. Guest-to-host stdout is fine: 2 MiB and 50 MiB both arrived intact.\n- With the COMPLETE stream delivered by `multipass transfer` and fed to `sudo -n /opt/moe/bin/moe-supervisor materialize < file`, the supervisor gives **exit 0** and a `materialized` frame, and the workspace is owned by moe-agent with the right payload. In certify, the truncated stream gets 65 (EX_DATAERR, digest or frame refusal), which surfaces as TRANSFER_EXIT_FAILED. **Fail-closed worked:** no corrupted workspace was ever accepted.\n\n**Upstream context.** canonical/multipass **#5478** (open) reports a 1.17.0 regression: the libssh 64 KiB chunk-size workaround from #927 (the fix for #772) was lost in the vcpkg move (#4614), so `exec` stalls and loses stdout. The fix, **PR #5485** \"[3rd-party] Enlarge connector buffer to 65536\" on release/1.17, is still OPEN, and there's no 1.17.1 GitHub release. #5478 reports that 1.16.4 doesn't have the problem. This stdin loss is probably the same regression in the other direction, but that isn't proven. Separately, **#3749** (open, needs-info) says exec stdin isn't redirected on Windows at all; the Windows certify run now in progress will show whether that still holds on 1.17.\n\n**Next.** The Windows certify result first. Then a fix row with the transport options (wait for and re-pin a fixed Multipass, a flow-controlled or chunked transfer in Moe, or staging through `multipass transfer`) and a governor scope ruling. Any option that changes guest-supervisor.py also moves the 3a19f3bf pin.",
+      "timestamp": "2026-10-31T22:07:02.670Z"
+    },
+    {
+      "id": "comment-da75f6a9ac744ef08048846158bf43f0",
+      "author": "governor-ce2f28b9",
+      "content": "WINDOWS CERTIFY + TRANSPORT DIAGNOSIS (governor-ce2f28b9, 22:06-22:35Z). **FAILED. NOT RECORDED.**\n\n**Report.** certification-win32-x64-20261031T220650Z-8aa57e.json on HEAD 992acfc8 (Multipass 1.17.0+win, hcs; C:\\moe-certify; source D:\\moe-scratch\\certify-src):\n- provision passed: the `release:<pin>` route works, and providerImageHash = pin, so 4679ec68 is proven on real hcs;\n- readiness passed; no-mounts passed;\n- **bridge-framing failed with TRANSFER_TIMEOUT**;\n- teardown passed; no instances left.\n\n**Measured on throwaway VM moe-diag-w90ccee, since deleted by exact name.**\n- Windows `multipass.exe exec` with piped stdin (Node spawn, as certify does) delivers **0 bytes at 1 KiB, 64 KiB, 1 MiB and 2.8 MB alike**; the command hangs until killed. This is upstream **#3749**, still open (needs-info), so exec stdin is unusable on Windows.\n- A 2 MiB **stdout** over Windows `exec` **hung, and lost its tail**: 2,064,384 of 2,097,152 bytes arrived before the kill. That fits **#5478**, the 1.17.0 libssh regression; its fix, PR #5485, is still OPEN.\n- `multipass transfer` (SFTP) of the 2,796,635-byte frame stream works: rc 0, byte-exact, sha 27abec6c.\n\n**Both hosts together.** The guest supervisor and frame protocol are correct (exit 0 on the intact stream). The provider transport is what breaks:\n- Linux exec stdin truncates when fed fast;\n- Windows exec stdin is dead;\n- Windows exec stdout is unreliable at MB sizes;\n- `transfer` works on both.\n\nThe CQ-R bridge sends job frames and transfers over exec stdio, so this is an architecture-level gap on Multipass 1.17.0, not a one-line fix.\n\n**Next (governor, next session).**\n1. File the transport row or rows with this evidence. Directions to weigh: host-to-guest bulk data via `multipass transfer` into a root-staged path, then a supervisor mode that reads the staged file (this changes guest-supervisor.py, so the 3a19f3bf pin moves and step 4 re-runs); a control channel that doesn't use exec stdin on Windows; paced stdin on Linux only as a stopgap; or re-pin a Multipass release that has #5485 once it ships.\n2. Make the scope call: whether win32, like darwin, ships \"unsupported: provider transport (#3749/#5478)\" until that lands.\n3. Ask the human before any upstream post (adding the stdin-direction evidence to #5478/#3749).",
+      "timestamp": "2026-10-31T22:28:01.803Z"
+    },
+    {
+      "id": "comment-80041aa05c8c477bbe94b07918a4fad8",
+      "author": "governor-ce2f28b9",
+      "content": "Upstream transport evidence posted on the human's explicit \"yes post them\":\n- **#5478**, https://github.com/canonical/multipass/issues/5478#issuecomment-6551061416: Linux exec stdin truncates when fed fast, paced input arrives complete; Windows 2 MiB stdout stalls and loses its tail. Flagged as possibly the same root cause that PR #5485 fixes.\n- **#3749**, https://github.com/canonical/multipass/issues/3749#issuecomment-6551061646: on 1.17.0+win, piped stdin through exec delivers 0 bytes at every size from 1 KiB to 2.8 MB; `multipass transfer` works.\n\nThis doesn't change the next step: file the transport row(s) and make the win32 scope call (comment-da75f6a9).",
+      "timestamp": "2026-11-01T00:17:37.063Z"
+    },
+    {
+      "id": "comment-fb61f7a7e42a425691f6209487ab44c3",
+      "author": "governor-ce2f28b9",
+      "content": "Two updates, governor-ce2f28b9, 00:20Z on 11-01:\n1. **TASK rail prop-29ce59fa is APPROVED by the human** (23:46:43Z) and is live in this row's rails. It carries the darwin \"unsupported: no report\" reading for DoD 1 and DoD 3. Cite it as APPROVED at completion, as step 5 amend-1 says.\n2. **The transport fix row is task-fd196d137c44497188d2639f149e259b** (HIGH, design-first, under M07). It moves every host↔guest stream off `multipass exec` stdio. Until it lands, no certify gets past bridge-framing on either host. If it changes guest-supervisor.py, the 3a19f3bf commit-under-test pin moves, and step 4 re-runs before certify.",
+      "timestamp": "2026-11-01T00:20:26.502Z"
+    },
+    {
+      "id": "comment-532a16667fdf41ebb92b060dfb179efe",
+      "author": "governor-693b7073",
+      "content": "Governor-693b7073, 00:21Z, at the human's \"make sure we r moving\". I filed the bulk-transport fix as task-a6a78f21 (HIGH, PLANNING, CQ-R order 254.46). It moves the materialize, dependencies, agents, toolchain and export streams off exec stdio onto `multipass transfer` staging, and the evidence is this row's comments ddf73884, 85b1be26 and da75f6a9. This row's dependsOn is at its 20-id cap, so the order is: a6a78f21 lands, then the supervisor pin moves, then step 4 certify re-runs. a6a78f21 is wired under M07 (task-1a8f1d0e). The bridge and check control channel on Windows (#3749), and the win32 scope call, stay with governor-ce2f28b9.",
+      "timestamp": "2026-11-01T00:21:29.106Z"
+    },
+    {
+      "id": "comment-0194f45e62f24d209ae40b9de9b1ea6c",
+      "author": "governor-693b7073",
+      "content": "Correction to comment-532a1666: task-a6a78f21 was a duplicate and is deleted. The transport fix row is governor-ce2f28b9's **task-fd196d13**, which architect-125fd305 is planning and which is wired under M07.",
+      "timestamp": "2026-11-01T00:22:08.804Z"
+    },
+    {
+      "id": "comment-acd2989882e74e9c8976033c368959c8",
+      "author": "governor-f668f954",
+      "content": "Governor note, 2026-11-01 07:45Z: 47d21b83 (snap refresh-hold prerequisite) no longer dependsOn this row. I dropped the file-order edge, so an idle worker runs it now. This row is at the 20-id dependsOn cap and can't take the reverse edge, so the order is enforced by hand:\n- Set this row to WORKING only after certify passes on a commit that includes 47d21b83's landing and the transport fix task-fd196d13. Both edit files this row's step 5 also touches: local-runner.test.mjs and docs/CERTIFICATION.md.\n- Re-certify order stays as in comment-28648a97: Linux first, then Windows.",
+      "timestamp": "2026-11-01T07:41:09.337Z"
+    },
+    {
+      "id": "comment-af1028a5bb0340949bc92685ae135421",
+      "author": "architect-30d804be",
+      "content": "@governor-f668f954 Re-certify sequencing, human decision 2026-11-01 (CQ-M07 REPL; mem:decision-cq-m07-verified-local-activation). The human chose one VM per seat. That needs a new root-only guest-supervisor `reset` mode: CQ-M07f (task-d6bc12ff, HIGH, BACKLOG, depends on fd196d13). It moves this row's commit-under-test supervisor pin (3a19f3bf) again, after task-fd196d13 moves it.\nThe human chose to hold the operator re-certify on Windows and Linux until BOTH have landed, so one run covers both. Ideally CQ-M07e (task-5c4b5fab, HIGH) lands first too: it makes a certified run file its report in the host store the daemon's readiness reads.\nPlease:\n(a) move CQ-M07e, f and g to PLANNING once fd196d13's design is ruled;\n(b) hold the re-certify request until CQ-M07f (and ideally e) are DONE.\nR13's 20-id dependsOn is full, so this ordering lives here and on CQ-M07 rather than in dependsOn.\nThe rest of the M07 slice map is the latest comment on task-1a8f1d0e.",
+      "timestamp": "2026-11-01T08:11:47.661Z"
+    },
+    {
+      "id": "comment-d606dfb5b50a4d3cbcd835669d83b21b",
+      "author": "governor-f668f954",
+      "content": "@architect-30d804be Re comment-af1028a5, re-certify sequencing (governor-f668f954):\n- **(a) Done.** CQ-M07e (task-5c4b5fab), CQ-M07f (task-d6bc12ff) and CQ-M07g (task-9076afab) are now PLANNING. fd196d13's design is ruled (comment-d954b3df) and Gate 0 passed on both hosts. Their dependsOn fd196d13 still gates WORKING.\n- **(b) Agreed, per the human's decision.** The RECORDED re-certify of this row, Linux then Windows, runs only once fd196d13 AND CQ-M07f are DONE, and ideally CQ-M07e too, so the certified reports go into the host store. Its commit under test carries M07f's new supervisor sha256, and this row's step 5 records that pin.\n- **Early signal.** Right after fd196d13 lands, I run one UNRECORDED certify per host, so a transport or bridge-framing failure shows up before M07f rather than after. Its result goes here as a comment marked \"not recorded\", and no report from it is ever attached.\n- **Ordering still owed before this row returns to WORKING:** 47d21b83 is DONE (comment-acd29898), fd196d13 lands, then M07f (and ideally M07e), then the recorded runs.",
+      "timestamp": "2026-11-01T08:16:17.909Z"
+    },
+    {
+      "id": "comment-239c6bbb94b24bde879708aac28f88c9",
+      "author": "worker-0e1ab990",
+      "content": "@governor-f668f954 R14 transport handoff from task-fd196d13, the R14 integration row (worker-0e1ab990, 11:53Z).\n\n**The transport changed.** Every host-guest supervisor stream now runs over the guest SSH route: the pinned in-box OpenSSH client, a per-VM ed25519 key, and the host key pinned under HostKeyAlias=<owned name>. It no longer uses `multipass exec` stdio. `multipass exec` now carries only stdin-less queries capped at 64 KiB.\n\nThese are the completion commits on moe/work-2026-10-24, from `git log --grep 'Moe-Task: <id>'`:\n- R14a task-4c295c56: dd28ab17\n- R14b task-201aebc6: 39e46380\n- R14c task-7c292231: 4e479ba2\n- R14d1 task-b8734a78: 79693e95\n- R14d2 task-5e2dcd2c: 8acf93c3 (checkpoint e84d121f before it)\n- R14d3 task-08062ce8: 6ac51c42\n- task-fd196d13 (this integration row): it has no completion commit yet, only planning checkpoints 242d8119 and 0943b34c. It lands when the row reaches REVIEW. That landing removes the dead exec argv builders (bridgeArgv and checkArgv), adds the B-XWIRE test row, and updates the ARCHITECTURE and CERTIFICATION docs.\n\n**The supervisor pin did not move.** Fresh output:\n`3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190  scripts/local-runner/guest-supervisor.py`\nNo R14 row touched the file, so R13's commit-under-test pin is unchanged.\n\n**What a certify report proves.** It proves the new transport only if it ran at a commit that contains this row's landing, the commit carrying the trailer `Moe-Task: task-fd196d137c44497188d2639f149e259b`.\n\n**New host prerequisite.** Certify hosts need the in-box OpenSSH client at its pinned path: `/usr/bin/ssh` on Linux, `%SystemRoot%\\System32\\OpenSSH\\ssh.exe` on Windows. Without it, provisioning refuses with PROVISION_TRANSPORT_UNAVAILABLE. Per-VM keys go under `<home>/.moe/guest-ssh` and are removed when each VM is purged.\n\n**Real-host proof.** The real-host proof for task-fd196d13 DoD 5 is your R13 certify re-run on Linux and Windows getting past bridge-framing. No seat runs Multipass.",
+      "timestamp": "2026-11-01T11:53:15.554Z"
+    },
+    {
+      "id": "comment-6063dacef58b47cc866bfabf2e87ce2b",
+      "author": "worker-0e1ab990",
+      "content": "@governor-f668f954 There is one stale-doc finding from task-fd196d13's adversarial review of the whole R14 diff (worker-0e1ab990). It is outside that row's files, so I am routing it here as its plan asks.\n\ndocs/design/protected-profile-threat-model.md:65-67 says \"The host drives the guest through `multipass exec` argvs built from constants, over their stdio; the daemon bridge's is `scripts/local-runner/guest-bridge.mjs:204` (bridgeArgv)\". Both parts are now wrong:\n- Every supervisor stream runs over the guest SSH route, through openGuestStream and sshStreamArgv in guest-stream.mjs and guest-ssh.mjs.\n- task-fd196d13 removes bridgeArgv and checkArgv.\n\nThe point that paragraph makes still holds: nothing in scripts/local-runner sets up a port forward, and the forced command plus `restrict` blocks forwarding. Only the transport sentence and the code citation need updating. I'm leaving the file untouched because no R14 row declares it. It needs a doc fix by whichever row owns the threat model.\n\nThe rest of the cross-slice review is clean:\n- keyDir and ssh overrides: provision, purge and openGuestStream all use `provider.keyDir ?? defaultKeyDir()` and `provider.ssh ?? sshExecutable(...)`.\n- Provider copies: every rebuild keeps run, ssh and keyDir.\n- Purge path: every VM deletion goes through purgeOwned, and reconcile's 'absent' records are purged by cleanup.\n- ssh 255: it maps to TRANSFER_EXIT_FAILED, SESSION_PROVIDER_FAILED or infra-failure.\n- Leakage: no report carries the address, and ssh stderr is drained unread.",
+      "timestamp": "2026-11-01T11:57:04.455Z"
+    },
+    {
+      "id": "comment-a7f0756a76fc48859deb93a421220221",
+      "author": "worker-cef53f62",
+      "content": "SUPERVISOR PIN MOVE (CQ-M07f, task-d6bc12fff910484d92368fa6825f523c). The 'reset' mode changes scripts/local-runner/guest-supervisor.py. Its new sha256 is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. It supersedes 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190 for the operator's single re-certify.\n\nCommit-to-be: the wrapper's completion commit `feat(task-d6bc12fff910484d92368fa6825f523c): [CQ-M07f] …` on moe/work-2026-10-24, after 69f2d710. Its SHA will be in that task's `commits` once it lands. The same diff moves packages/moe-daemon/src/delivery/certificationEvidence.ts CERTIFICATION_PINS.supervisorSha256 to 616463b7… (architect comment-c3fe4480). No other pin changes: images, versions and check ids are untouched.\n\nWhat changes for the guest:\n- SUPERVISOR_MODES gains 'reset', last.\n- Reset exits with code 69 while a moe-agent or moe-check process is alive.\n- No existing mode changes.\n\nA report certified against 3a19f3bf… will fail CERTIFICATION_REPORT_SUPERVISOR once this lands, so certify after this commit.",
+      "timestamp": "2026-11-01T12:25:53.544Z"
+    },
+    {
+      "id": "comment-5721979a0819433d8acf2ecab50d6b2e",
+      "author": "governor-f668f954",
+      "content": "RECORDED re-certify, Linux x64: starting 14:29Z (governor-f668f954, under the human's \"do it yourself\", per comment-d606dfb5 (b)).\n- Commit under test: 106284b0 on moe/work-2026-10-24. It contains fd196d13 (375db7be), CQ-M07f (3afbdc59) and CQ-M07e (69f2d710).\n- scripts/local-runner/guest-supervisor.py sha256 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. This equals certificationEvidence.ts CERTIFICATION_PINS.supervisorSha256 at that commit.\n- Snapshot: a full `git archive 106284b0` at ~/moe-certify-src-106284b0. It runs under env -i with nvm Node 24.21.0 and Multipass snap 1.17.0 (qemu).\n- Work dir: a fresh ~/moe-certify, with only the pinned image cache (04e8f246…) copied in. The 10-31 dir is set aside at ~/moe-certify-prev-20261101T1428Z, and its failing reports are never recorded.\n- `cli.mjs prerequisites`: ready=true, exit 0.\n\nWindows runs only after this Linux run finishes, never at the same time. The reports will be attached here unedited, and I set this row to WORKING only once both pass.",
+      "timestamp": "2026-11-01T14:29:47.042Z"
+    },
+    {
+      "id": "comment-5cee94b1970241458299571feeb3d0ca",
+      "author": "governor-f668f954",
+      "content": "RECORDED R13 certification report: linux x64, PASS. This comment holds the report verbatim and unedited. Run by governor-f668f954 under the human's \"do it yourself\"; the start is noted in comment-5721979a.\n\nRun:\n- Commit under test: 106284b0. It is a full `git archive` at ~/moe-certify-src-106284b0, and its guest-supervisor.py sha256 is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e.\n- Environment: env -i, Node 24.21.0, Multipass snap 1.17.0 (qemu), fresh work dir ~/moe-certify.\n- `cli.mjs certify` exited 0. It ran from 14:29:54Z to 14:45:57Z, and all 13 checks passed. `multipass list` afterwards shows no instances.\n\nValidation:\n- The CERTIFICATION.md validator, run from the snapshot, exits 0 and prints `linux x64 native true 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e`.\n- Report sha256: e793c7c6b4468fe2f33ab7c41f299800af382334e09f7c48d22cc70cc0181b12. The file is 1227 bytes: one JSON line plus a trailing LF.\n\nReport locations (byte-identical copies, all with that sha256):\n- ~/moe-certify/certification-linux-x64-20261101T142954Z-2a9fc9.json (WSL; mode 0600).\n- The CQ-M07e host-store copy at ~/.moe/certification/certification-linux-x64-20261101T142954Z-2a9fc9.json. Store dir 0700, file 0600; `cmp` reports it identical.\n- Shared copy for any seat: D:\\moe-scratch\\r13-reports\\certification-linux-x64-20261101T142954Z-2a9fc9.json.\n\nReport:\n{\"kind\":\"isolation-certification\",\"version\":1,\"platform\":\"linux\",\"arch\":\"x64\",\"transport\":\"native\",\"provider\":{\"name\":\"multipass\",\"version\":\"1.17.0\"},\"image\":{\"sourceSha256\":\"04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94\",\"providerImageHash\":\"04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94\"},\"supervisorSha256\":\"616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e\",\"startedAt\":\"2026-11-01T14:29:54.550Z\",\"finishedAt\":\"2026-11-01T14:45:57.726Z\",\"checks\":[{\"id\":\"provision\",\"result\":\"passed\",\"code\":null},{\"id\":\"readiness\",\"result\":\"passed\",\"code\":null},{\"id\":\"no-mounts\",\"result\":\"passed\",\"code\":null},{\"id\":\"bridge-framing\",\"result\":\"passed\",\"code\":null},{\"id\":\"bridge-eof\",\"result\":\"passed\",\"code\":null},{\"id\":\"guest-network\",\"result\":\"passed\",\"code\":null},{\"id\":\"writer-containment\",\"result\":\"passed\",\"code\":null},{\"id\":\"check-containment\",\"result\":\"passed\",\"code\":null},{\"id\":\"controller-replacement\",\"result\":\"passed\",\"code\":null},{\"id\":\"cancellation\",\"result\":\"passed\",\"code\":null},{\"id\":\"recovery\",\"result\":\"passed\",\"code\":null},{\"id\":\"canary-check\",\"result\":\"passed\",\"code\":null},{\"id\":\"teardown\",\"result\":\"passed\",\"code\":null}],\"certified\":true,\"executionReady\":false}\n\nNext: the Windows x64 run, on the same commit. darwin still has no report; the R13 scope ruling for it stands as already recorded on this row.",
+      "timestamp": "2026-11-01T14:48:24.729Z"
+    },
+    {
+      "id": "comment-d73eaa5f34c841fa92f2b905666e723e",
+      "author": "governor-f668f954",
+      "content": "RECORDED re-certify, win32 x64: started 14:50Z by governor-f668f954. It runs after the Linux run finished at 14:45:57Z, never at the same time.\n- Commit under test: 106284b0, the same as Linux. It is a full `git archive` at D:\\moe-scratch\\certify-src-106284b0, and its guest-supervisor.py sha256 is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e.\n- Host: Windows node.exe v24.16.0 and Multipass 1.17.0+win (hcs). The `qgc` /32 adapter is still Disabled for multipass#5486 and gets re-enabled after this run.\n- Work dir: a fresh C:\\moe-certify-106284b0, with only the pinned image cache (04e8f246…) copied in. The old C:\\moe-certify could not be renamed (\"Access is denied\"; a handle is probably held), so it was left untouched. Its 10-31 failing reports are never recorded.\n- `cli.mjs prerequisites`: ready=true, exit 0.",
+      "timestamp": "2026-11-01T14:50:09.558Z"
+    },
+    {
+      "id": "comment-d2f5081cac504be89aadd7fd351cc073",
+      "author": "governor-978922c1",
+      "content": "RECORDED R13 certification report: win32 x64, PASS. This comment holds the report verbatim and unedited. governor-f668f954 started the run at 14:50Z under the human's \"do it yourself\" (comment-d73eaa5f). That session stopped during the board outage (about 14:55Z to 18:23Z) before it recorded the result. governor-978922c1 recorded it at 18:31Z from the report file the run wrote.\n\nRun:\n- Commit under test: 106284b0, a full `git archive` at D:\\moe-scratch\\certify-src-106284b0. scripts/local-runner/guest-supervisor.py sha256 is 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. That is also its hash at HEAD 1feb9c0b, and it equals CERTIFICATION_PINS.supervisorSha256 at HEAD. Nothing under scripts/local-runner/, and not certificationEvidence.ts, changed between 106284b0 and HEAD (`git diff --stat 106284b0 HEAD` is empty for both).\n- Host: Windows node.exe v24.16.0, Multipass 1.17.0+win (hcs), fresh work dir C:\\moe-certify-106284b0.\n- The run went from 14:49:56Z to 14:55:29Z, and all 13 checks passed. The CLI's exit code was lost with the session. What remains is the report plus the instance ledger: all 10 entries in C:\\moe-certify-106284b0\\ledger are phase deleted (9) or absent (1), and `multipass list` showed \"No instances found\" at 18:27Z.\n\nValidation:\n- The docs/CERTIFICATION.md:122 validator, run from the 106284b0 snapshot (~/moe-certify-src-106284b0) under env -i with Node 24.21.0, exits 0 and prints `win32 x64 native true 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e`.\n- Report sha256: 48dd267538e707af6d9b830b6dd855049229879d5dbbf2da8adf8c8a05beb9a0. The file is 1231 bytes: one JSON line plus a trailing LF.\n\nReport locations (byte-identical copies, all with that sha256):\n- C:\\moe-certify-106284b0\\certification-win32-x64-20261101T144956Z-5dc2a2.json\n- The CQ-M07e host-store copy at C:\\Users\\Yaron\\.moe\\certification\\certification-win32-x64-20261101T144956Z-5dc2a2.json; `cmp` reports it identical.\n- Shared copy for any seat: D:\\moe-scratch\\r13-reports\\certification-win32-x64-20261101T144956Z-5dc2a2.json, next to the linux one.\n\nReport:\n{\"kind\":\"isolation-certification\",\"version\":1,\"platform\":\"win32\",\"arch\":\"x64\",\"transport\":\"native\",\"provider\":{\"name\":\"multipass\",\"version\":\"1.17.0+win\"},\"image\":{\"sourceSha256\":\"04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94\",\"providerImageHash\":\"04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94\"},\"supervisorSha256\":\"616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e\",\"startedAt\":\"2026-11-01T14:49:56.153Z\",\"finishedAt\":\"2026-11-01T14:55:29.922Z\",\"checks\":[{\"id\":\"provision\",\"result\":\"passed\",\"code\":null},{\"id\":\"readiness\",\"result\":\"passed\",\"code\":null},{\"id\":\"no-mounts\",\"result\":\"passed\",\"code\":null},{\"id\":\"bridge-framing\",\"result\":\"passed\",\"code\":null},{\"id\":\"bridge-eof\",\"result\":\"passed\",\"code\":null},{\"id\":\"guest-network\",\"result\":\"passed\",\"code\":null},{\"id\":\"writer-containment\",\"result\":\"passed\",\"code\":null},{\"id\":\"check-containment\",\"result\":\"passed\",\"code\":null},{\"id\":\"controller-replacement\",\"result\":\"passed\",\"code\":null},{\"id\":\"cancellation\",\"result\":\"passed\",\"code\":null},{\"id\":\"recovery\",\"result\":\"passed\",\"code\":null},{\"id\":\"canary-check\",\"result\":\"passed\",\"code\":null},{\"id\":\"teardown\",\"result\":\"passed\",\"code\":null}],\"certified\":true,\"executionReady\":false}\n\nStatus: together with linux x64 (comment-5cee94b1, report sha256 e793c7c6…), both reports the TASK rail requires are now attached. darwin x64 and arm64 ship as \"unsupported: no report\" under that rail (prop-29ce59fa, approved by the human at 2026-10-31 23:46Z). Step 5 is amended to the 616463b7 pin, and the row returns to WORKING.",
+      "timestamp": "2026-11-01T18:31:33.279Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T14:10:16.945Z",
+  "updatedAt": "2026-11-01T19:23:12.111Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",
@@ -311,13 +503,18 @@
     "worker-25da16b2",
     "governor-693b7073",
     "worker-c75a6f39",
-    "governor-4764040b"
+    "governor-4764040b",
+    "worker-88af1437",
+    "worker-c7cdb959",
+    "qa-1b5727b1"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-29T23:06:03.532Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 5,
+    "doneAt": "2026-11-01T19:21:22.096Z",
+    "wallClockMs": 245718564
   },
   "tier": "heavy",
   "effort": "max",
@@ -328,7 +525,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T06:09:27.178Z",
@@ -360,8 +558,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-25da16b2@2026-10-31T03:42:18Z",
-    "at": "2026-10-31T06:20:02.778Z"
+    "sessionId": "qa-1b5727b1@2026-11-01T19:05:46Z",
+    "at": "2026-11-01T19:23:12.111Z"
   },
   "priorHandoffs": [
     {
@@ -379,17 +577,11 @@
       "reason": "seat launch outage"
     }
   ],
-  "blockedReason": "Waiting on operator certification (DoD 1). No agent here can run Multipass, so certify needs real Windows x64, Linux x64 and macOS hardware. The #general request (msg-63e7fb95) has the per-OS commands. Steps 1-4 are COMPLETED, and the step-4 note holds the fresh evidence (DoD local-runner.test.mjs exit 0: 349 pass, 0 fail, 1 skipped).\nCertification is sequenced after task-5ed445ca50f24cafbe6e42fbcba686fb, task-42e9990c286a43fcab7edd716290a515 and task-97341ad5be744d19ac869972299a2714. All three change scripts/local-runner/guest-supervisor.py, and a report certifies only the supervisor sha256 it ran. Certifying before they land would mean re-running all three OSes.\nWhen all blockers are DONE this row auto-unblocks. The next session then:\n1. re-runs step 4 fresh;\n2. posts the exact commit and the expected supervisorSha256 in #general;\n3. blocks again with no task ids, waiting on the 3 report files.\nIf the reports arrive sooner, a human can set this row to WORKING to validate them. This row's Serena handoff memory holds the full recipe.\nOther rows filed during this task are not blockers: 92307adc (HIGH), 12e89395 and 4e8a274a (MEDIUM). Bug 4aa5440b, the daemon providerDescriptor contract regression from WT-05, is already DONE.\nGovernor addendum, 07:28Z: certification is also sequenced after task-adbab50d16f048bd9e55fa43d8870927 (HIGH, filed 07:23Z). A candidate-edited package-lock.json still sends the check's offline npm ci to candidate bytes. That fix changes the dependency install certification exercises, so certify after it lands.\nGovernor addendum, 12:18Z: certification is also sequenced after gate row task-d4810c9c0b0244598e275cc5cbe40ed7. The CI fix for PR #230 (branch fix/ci-pr230, PR #232) changes guest-supervisor.py: an explicit MAX_JSON_DEPTH check and darwin's GROUP_GONE. The gate closes once moe/work-2026-10-24 carries those bytes (the human's ff-only merge), so certify only after it is DONE.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-31T06:19:30.054Z",
-  "blockedOnTaskIds": [
-    "task-5ed445ca50f24cafbe6e42fbcba686fb",
-    "task-42e9990c286a43fcab7edd716290a515",
-    "task-97341ad5be744d19ac869972299a2714",
-    "task-adbab50d16f048bd9e55fa43d8870927",
-    "task-d4810c9c0b0244598e275cc5cbe40ed7"
-  ],
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedOnTaskIds": null,
   "workStartedAt": "2026-10-31T03:50:54.662Z",
   "declaredFiles": [
     "scripts/local-runner/check-lifecycle.mjs",
@@ -399,7 +591,10 @@
     "scripts/tests/local-runner-check.test.mjs",
     "docs/CERTIFICATION.md",
     "docs/ARCHITECTURE.md",
-    "scripts/tests/local-runner.test.mjs"
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/check-session.mjs",
+    "docs/TROUBLESHOOTING.md",
+    "docs/design/protected-profile-threat-model.md"
   ],
   "commits": [
     {
@@ -463,27 +658,113 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "e53ec31bda576574e635acfbdd393be1e2391ffe",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-88af1437@2026-10-31T15:41:18Z",
+      "paths": [
+        ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "docs/ARCHITECTURE.md",
+        "docs/CERTIFICATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/local-runner/check-session.mjs"
+      ],
+      "recordedBy": "worker-88af1437",
+      "recordedAt": "2026-10-31T16:14:37.881Z",
+      "treeId": "c98fc4346984662f60aa9c658853c5b0161a0300",
+      "status": "BLOCKED",
+      "contested": [
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-1b2e6fe3ba1343c8ab02271510131155"
+        },
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-b621ddc99fe44d50ab700b2aa51c84fc"
+        },
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-f3f364a6c6864054901ec27f342a87f6"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-2359daf0dc5241c3a160be293bbd5877"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-48f0b3aaa82c4b938d3a15f3710a66e5"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-76ae5c472f6a4651a45478b1893e07dc"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-f3f364a6c6864054901ec27f342a87f6"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "dccdec14e955b6f356adcbf4d3fa26a9915363d7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c7cdb959@2026-11-01T18:32:17Z",
+      "paths": [
+        ".moe/tasks/task-23c803d2ec834496a730b00524f44e0b.json",
+        ".moe/tasks/task-5464e7259cfd479793d93f9651fb3eba.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "docs/CERTIFICATION.md",
+        "docs/design/protected-profile-threat-model.md"
+      ],
+      "recordedBy": "worker-c7cdb959",
+      "recordedAt": "2026-11-01T19:03:23.352Z",
+      "treeId": "a0c65688b02f59673d5fb1f8fa922a717cae71bb",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "7df10f5cb30584fcbb8917a6d1ed25596b462f75",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1b5727b1@2026-11-01T19:05:46Z",
+      "paths": [
+        ".moe/tasks/task-426a012ecc374cdaa7454742bc5a552a.json",
+        ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-1b5727b1",
+      "recordedAt": "2026-11-01T19:23:12.111Z",
+      "treeId": "b38fd9cb25142a57441548f4907e3b3e9307c298",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-12e89395b0dd4b34a2e0c50dd7dfa776.json",
-    ".moe/tasks/task-28dfaeff2d5146958a8529d9d281e9e4.json",
-    ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json",
-    ".moe/tasks/task-4aa5440b5d8f4eda846be5a430c34cb2.json",
-    ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
-    ".moe/tasks/task-a80f46db9a624295a3bdbe28dfa6b311.json",
-    ".moe/tasks/task-ad5be1cf18e6405bb562b172714debbc.json",
-    ".moe/tasks/task-befdddf7e1f047a0ba4f71dd900c9b8f.json",
-    ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
-    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
-    ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
-    "docs/ARCHITECTURE.md",
+    "scripts/tests/local-runner.test.mjs",
     "docs/CERTIFICATION.md",
+    "docs/ARCHITECTURE.md",
+    "docs/TROUBLESHOOTING.md",
     "docs/MCP_SERVER.md",
-    "scripts/local-runner/certify-lifecycle.mjs",
+    "scripts/tests/local-runner-check.test.mjs",
     "scripts/local-runner/check-lifecycle.mjs",
+    "scripts/local-runner/certify-lifecycle.mjs",
+    "scripts/local-runner/guest-supervisor.py",
     "scripts/local-runner/dependency-cache.mjs",
-    "scripts/tests/local-runner.test.mjs"
+    "docs/design/protected-profile-threat-model.md",
+    ".moe/tasks/task-23c803d2ec834496a730b00524f44e0b.json",
+    ".moe/tasks/task-5464e7259cfd479793d93f9651fb3eba.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-426a012ecc374cdaa7454742bc5a552a.json",
+    ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json"
   ],
   "touchedFiles": [
     "scripts/tests/local-runner.test.mjs",
@@ -491,6 +772,23 @@
     "docs/ARCHITECTURE.md",
     "docs/MCP_SERVER.md",
     "scripts/local-runner/check-lifecycle.mjs",
-    "scripts/local-runner/certify-lifecycle.mjs"
-  ]
+    "scripts/local-runner/certify-lifecycle.mjs",
+    "docs/TROUBLESHOOTING.md",
+    "scripts/local-runner/check-session.mjs",
+    "docs/design/protected-profile-threat-model.md"
+  ],
+  "priorBlockedReason": "Step 5 (operator certification) is waiting on the human operator's native `cli.mjs certify` reports, one each for win32 x64, linux x64 and darwin (x64 or arm64), as requested in #general msg-99ba2572. No agent seat can run Multipass. A report is never synthesized or edited, and verified-local stays unavailable.\n\nCommit under test: 24a8b95c, or any later commit whose scripts/local-runner/guest-supervisor.py sha256 is 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190. Per governor comment-45d958a7, c9b771ea, a58a50af, a4c8204d and c96c587b are all ancestors of HEAD.\n\nStep 4 re-verified fresh, 15:47-16:13Z, in git-archive snapshots under env -i with Node 24.21.0:\n- `node --test scripts/tests/local-runner.test.mjs`: exit 0; 351 tests, 350 pass, 0 fail, 1 skip (opt-in macOS smoke).\n- ci.yml local-runner line plus guard on HEAD: 648 tests, 645 pass, 0 fail, 3 skips. Guard: 9/9.\n- Daemon: 6381 passed, 20 skipped. Proxy: 314/314.\n- postflight.sh: PASS (97 ok, 0 FAIL). Parity: PASS.\n- Windows gradlew.bat test --rerun: 505 tests, 0 failures.\n- Lint: exit 0.\n\nThis session's edits are declared and land with the checkpoint:\n- ARCHITECTURE.md: exit 82, GUARD PID namespace.\n- CERTIFICATION.md: pinned Multipass client paths.\n- TROUBLESHOOTING.md: PROVIDER_NOT_FOUND and MOE_DEPENDENCY_CANDIDATE_INVALID rows.\n- check-session.mjs: stale 81/82 comment.\nThe Certified platforms table still says \"unsupported: no report\" on all 4 rows.\n\nFiled 25d76cd5 (CI guard coverage); it does not block this row.\n\nTo unblock: attach the 3 reports, as files or as verbatim comments each with its file sha256, then set this row to WORKING. The next session checks each report:\n- validateCertificationReport accepts it;\n- certified is true and transport native;\n- its supervisor sha256 is the one above;\n- together they cover win32, linux and darwin.\nIt then records the passing reports in docs/CERTIFICATION.md and completes. A failing or stale report re-blocks.",
+  "reviewStartedAt": "2026-11-01T19:02:59.686Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "Run from /tmp/r13-final-uMl9nm = git archive c4510b7350e30593e37c97bd91649aea4753f004 + overlays docs/CERTIFICATION.md, docs/design/protected-profile-threat-model.md (cmp-identical to the working tree); node v24.21.0; sha256(scripts/local-runner/guest-supervisor.py) = 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. HEAD moved to 52c139c4 during the run: changed only moe-jetbrains sources, packages/moe-daemon/src/delivery/executionReadiness.test.ts and .moe/tasks; nothing the gate reads.\n...\n﹣ opt-in native provider smoke on real macOS hardware establishes support (0.06076ms) # native provider smoke not run: macOS support is NOT established by this run\n...\n✔ RX1..RX6 (7 rows) pass\n...\n✔ SS8 a transport refusal inside a transfer is TRANSFER_SPAWN_FAILED and spawns nothing (0.920867ms)\n✔ SS9 all seven transfer modes spawn only the ssh client with exactly streamCall, never the Multipass executable or exec (21.044645ms)\nℹ tests 387\nℹ suites 0\nℹ pass 386\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 102077.835665\nEXIT=0",
+    "reportedAt": "2026-11-01T19:02:59.686Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Step 5 (amend-2) done; steps 1-4 done earlier.\nVALIDATIONS (both PASS; HEAD snapshot, Node 24):\n- linux x64: comment-5cee94b1, sha256 e793c7c6b4468fe2f33ab7c41f299800af382334e09f7c48d22cc70cc0181b12.\n- win32 x64: comment-d2f5081c, sha256 48dd267538e707af6d9b830b6dd855049229879d5dbbf2da8adf8c8a05beb9a0.\nEach: validateCertificationReport accepts it; certified true, transport native, executionReady false; all 13 checks passed (code null); bytes = JSON.stringify(report)+LF = the comment's line.\nPIN: supervisorSha256 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e. It equals sha256(guest-supervisor.py) at HEAD c4510b73 and CERTIFICATION_PINS.supervisorSha256. Image 04e8f246…6c94 = the x64 pin; Multipass 1.17.0 / 1.17.0+win. Both runs certified 106284b0, an ancestor of HEAD; scripts/local-runner is unchanged since.\nDARWIN: x64 and arm64 ship as 'unsupported: no report' under the approved TASK rail prop-29ce59fa. Refusal at HEAD: readCertificationStore accepts only the host's own platform+arch report, so a darwin host lacks isolated-agent-and-qa-vms and isolated-check-vm in the daemon readiness evaluation. assertExecutionProfileReady (CQ-M07c) therefore refuses verified-local with EXECUTION_PROFILE_NOT_READY. Nothing enables verified-local.\nDOCS: docs/CERTIFICATION.md gets two table rows (platform, arch, Multipass, image, supervisor, finishedAt, report sha256), both reports verbatim in json blocks (block+LF hashes to the row), the recording rule, the darwin paragraph and measured durations (16 min / 6 min). docs/design/protected-profile-threat-model.md: the guest-loopback bullet now describes the SSH transport (scope growth routed by comment-6063dace).\nDoD fresh: node --test scripts/tests/local-runner.test.mjs -> exit 0, 387 tests, 386 pass, 0 fail, 1 skip (macOS native smoke). HEAD then moved to 52c139c4 (JetBrains + daemon test + board only; nothing the gate reads).\nRouted: CQ-M06 comment-5450daac (host certification store undocumented).",
+  "completedAt": "2026-11-01T19:21:22.096Z",
+  "reviewCompletedAt": "2026-11-01T19:21:22.096Z",
+  "reviewSummary": "APPROVE CQ-R13 (epic-final). Reviewed completion dccdec14 (on branch and origin), checkpoints 80038a06/e53ec31b, and the step-2/3 hunks swept into peer commits 7b818c9a/92d96620. All task paths clean at HEAD.\nDoD4: re-ran `node --test scripts/tests/local-runner.test.mjs` (env -i, Node 24.21.0, git archive of HEAD e02eca26): exit 0, 387 tests, 386 pass, 0 fail, 1 skip (macOS smoke). CI local-runner line (12 files, daemon dist built in snapshot): exit 0, 706/703/0 fail/3 skips (LA5, K9, macOS). 4 daemon certification/readiness vitest files: 297/297. Lint OK; show --check clean.\nDoD1: validated both report files myself. linux x64 e793c7c6…, win32 x64 48dd2675…: validateCertificationReport accepts; native, certified, executionReady false; 13 checks passed in CERTIFY_CHECKS order. Supervisor 616463b7 = HEAD guest-supervisor.py = CERTIFICATION_PINS; image 04e8f246 = x64 pin; 1.17.0/1.17.0+win fit the daemon pins. bytes = JSON.stringify+LF = docs block+LF = comment line; table rows match. 106284b0 is an ancestor; local-runner changed since only in guest-session.mjs (e182c645, host side), pin unchanged. darwin x64/arm64 'unsupported: no report' per approved rail prop-29ce59fa; no doc claims darwin support.\nDoD2: RX1-RX4 read. Credential never leaks; forged ledger owner/name refused with 0 provider calls; non-loopback daemon.json refused pre-spawn and per forward; pinned export immune to ref move + replace object; supervisor hash mismatch refused. controller-replacement passed in both real reports; ssh host key pinned (GS rows).\nDoD3: RX5. The daemon store accepts only the host's own platform/arch, and a refusal leaves both isolation capabilities missing -> EXECUTION_PROFILE_NOT_READY.\nQA mutants: 5/5 killed (RX6, LC2, DC4, KI3, KI1).\nSize: own scripts +154/-8 (net 146), docs +226/-20, approved scope (docs-vs-code precedent).\nAdvisory: ARCHITECTURE.md:428 \"launched as a local file\" is stale for Windows since 97286b6f; routed to CQ-M06 comment-39558fd2.",
+  "requiredCheckAtDone": null
 }

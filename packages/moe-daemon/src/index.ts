@@ -18,6 +18,7 @@ import { healMassDeletion } from './state/massDeletionHeal.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { ensureRunnerKey } from './server/runnerChannel.js';
+import { productionReadinessInputs, startReadinessEvaluation } from './delivery/readinessHolder.js';
 import { WSL_BIND_HOST, resolveBindHosts, listenOnHosts } from './server/bindHosts.js';
 import { isAllowedHealthHost } from './server/healthHost.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
@@ -766,6 +767,15 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
     logger.warn({ error: error instanceof Error ? error.message : String(error) },
       'Runner channel key unavailable; /runner refuses every connection');
   }
+  // verified-local readiness: evaluated now and every READINESS_INTERVAL_MS from
+  // daemon-owned facts, never awaited here. A failed evaluation leaves it refused.
+  const readiness = startReadinessEvaluation({
+    inputs: () => productionReadinessInputs(projectPath, state.project?.settings),
+    onChange: (held) => logger.info({ ready: held.ready, missingCapabilities: held.missingCapabilities },
+      'verified-local readiness evaluated'),
+  });
+  readiness.first.catch((error: unknown) => logger.warn({ error: error instanceof Error ? error.message : String(error) },
+    'verified-local readiness evaluation failed'));
   const wsServer = new MoeWebSocketServer(httpServer, state, mcpAdapter);
 
   // Wait for server to actually start listening
@@ -773,6 +783,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   try {
     servers = await listenOnHosts(httpServer, hosts, port, handler);
   } catch (error) {
+    readiness.stop();
     releaseLock(projectPath);
     await wsServer.close();
     throw error;
@@ -861,6 +872,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
       }
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
+
+    readiness.stop();
 
     try {
       await watcher.stop();

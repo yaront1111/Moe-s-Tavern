@@ -760,11 +760,12 @@ step start (`task.workStartedAt`), else `task.reviewStartedAt` (`completionCommi
 3. The fleet still runs an older installed wrapper that never calls `record_commit` (rebuild +
    reinstall, note below).
 
-Policy for QA: an empty `task.commits` at REVIEW is a bounded wait, then a self-land — the full rule is
-in `docs/roles/qa.md` and `docs/roles/qa.reference.md` ("Empty `task.commits` at REVIEW"). A warning
-that fires after QA landed the row itself and called `moe.record_commit` is this race, not a defect;
-it is grounds to reject only when the bytes cannot be attributed to the row at all. A DONE task with
-no completion commit from anyone is still a merge with no reviewed diff.
+Policy for QA: an empty `task.commits` at REVIEW (no completion entry for the round) is a bounded
+wait, then a `moe.qa_reject` citing the landing evidence (`task.lastCommitOutcome`), never a QA
+commit: the agent Git-write guard refuses one ([Agent Git-write refusal](#agent-git-write-refusal)),
+and the reopened row's worker session lands it through its wrapper. The full rule is in
+`docs/roles/qa.md` and `docs/roles/qa.reference.md` ("Empty `task.commits` at REVIEW"). A DONE task
+with no completion commit from anyone is still a merge with no reviewed diff.
 
 ---
 
@@ -1026,16 +1027,22 @@ task with the wrapper's output.
 
 `node scripts/local-runner/cli.mjs certify` ([CERTIFICATION.md](CERTIFICATION.md)) and the check runner fail closed with
 one fixed code. A certify report names the failing check and its code, and every later check is `not-run`. A check run
-reports `infra-failure` with the code as its `failure`.
+reports `infra-failure` with the code as its `failure`, unless its row says otherwise.
 
 | Code (where) | Cause | Fix |
 |---|---|---|
+| `PROVIDER_NOT_FOUND` (`prerequisites`, `doctor`) | Moe runs only the pinned Multipass client, never one on `PATH`: `%ProgramFiles%\Multipass\bin\multipass.exe`, `/snap/bin/multipass` or `/usr/local/bin/multipass`. It is not there, for example after a Windows install into another folder. | Reinstall Multipass 1.17.0 at the installer's default location, then re-run `prerequisites`. |
 | `CERTIFY_PROVISION_UNAVAILABLE` (`provision`) | A host prerequisite is unmet. On Linux that includes the image cache, `<work-dir>/images`: the strictly confined Multipass snap reads only paths under your home directory with no hidden segment. | Run `node scripts/local-runner/cli.mjs prerequisites --cache-dir <work-dir>/images` and do each unmet item's `action` until it exits 0. On Linux, use a work dir under your home directory with no segment starting with `.`. |
+| `IMAGE_PROVIDER_HASH_MISMATCH` (`provision`) | Windows only. After the launch of `release:<pin sha256>`, `multipass info` did not report the pin as the guest's `image_hash`, so Moe refused the guest before readiness. | Re-run certify: its teardown has already deleted the refused VM. Never launch `moe-vm-*` instances by hand, and never edit the pin. If it repeats, attach the report to the CQ-R13 row. |
+| `PROVISION_TRANSPORT_UNAVAILABLE` (`provision`) | Moe opens every guest stream with the in-box OpenSSH client at a pinned path, never one on `PATH`: `%SystemRoot%\System32\OpenSSH\ssh.exe` on Windows, `/usr/bin/ssh` on Linux and macOS. That client is missing (or is not a regular file), so nothing was downloaded, reserved or launched. Check runs report this code as their failure too. | On Windows, add the optional feature "OpenSSH Client" (Settings > System > Optional features). On Linux, install the distro's `openssh-client` package. Then re-run. |
+| `PROVISION_TRANSPORT_FAILED` (`provision`) | Moe could not write the new VM's client key or its pinned host-key line under `~/.moe/guest-ssh` (`%USERPROFILE%\.moe\guest-ssh`). It never writes through or over an existing file or link there. The VM stays owned until cleanup deletes it together with its two files; certify's teardown already has. Check runs report this code as their failure too. | Make sure that directory belongs to you and is writable, and that nothing outside Moe creates `moe-vm-*` entries in it. Then re-run. |
+| `LIFECYCLE_RETRY_EXHAUSTED` (`provision`), on Windows | All three launches of `release:<pin sha256>` failed: there is no HTTPS route to cloud-images.ubuntu.com, the pin is no longer in the Ubuntu release stream, or the first 621 MB download is slower than the 15-minute launch window. | Check that cloud-images.ubuntu.com is reachable over HTTPS, then re-run once: Multipass keeps a finished download. Never fall back to a `file://` or URL launch. |
 | `BOOTSTRAP_FAILED` (`readiness`) | cloud-init did not end in a clean `done`/`done`: an error, a `degraded` status (even one with only recoverable warnings), or a guest that stopped. Readiness accepts no degraded boot. | Re-run certify once. If a healthy host repeats it, the pinned user-data boots degraded on the pinned image: attach the report to the CQ-R13 row. Never loosen readiness locally. |
 | `BOOTSTRAP_TIMEOUT` (`readiness`) | cloud-init was still running after 15 minutes. | Free host CPU and memory, then re-run. |
 | `MOUNTS_PRESENT` (`readiness`), `TRANSFER_MOUNTS_PRESENT` (`no-mounts`) | The run's VM had a host-sharing mount (a Multipass mount, 9p, virtiofs, fuse, NFS or SMB). Moe never mounts. | Stop whatever runs `multipass mount` against `moe-vm-*` instances, then re-run. `MOUNTS_UNKNOWN` means the mount table was unreadable: re-run. |
 | `CERTIFY_GUEST_NETWORK_REACHABLE` (`guest-network`) | A guest identity connected to the VM gateway, at the default daemon port 9876 or at certify's own loopback listener. The usual cause is a Moe daemon bound beyond loopback: `--host 0.0.0.0`, `MOE_BIND_HOST`, or WSL agent mode (`--host wsl`). | Stop that daemon, restart it on the default loopback bind (turn off "Run Agents in WSL" for the run), and re-run. If no daemon listens on 9876, a loopback-only listener was reachable from the guest: attach the report to the CQ-R13 row. |
 | `DEPENDENCY_SOURCE_UNSUPPORTED`, `DEPENDENCY_INTEGRITY_INVALID` (a check's dependency phase) | A lockfile entry the guest must install lacks the canonical registry.npmjs.org tarball `resolved` URL or one canonical `sha512-` `integrity`: for example an entry with neither field, a link, or a git or `file:` source. The runner installs admitted registry tarballs only. | Regenerate the lockfile against registry.npmjs.org so every installed entry has both fields, then re-run the check. |
+| `MOE_DEPENDENCY_CANDIDATE_INVALID` (a check's output tail: a `code-failure`, exit code 82) | The guest refused the candidate's own package files before any install: a lockfile directory's `package.json` is missing, linked, malformed or oversized, its install metadata differs from the lockfile's root entry, it sets `overrides`, bundled dependencies or `workspaces`, or an `npm-shrinkwrap.json` or `.npmrc` sits beside it. | Remove the `npm-shrinkwrap.json` or `.npmrc` and any overrides, bundling or workspaces, regenerate `package-lock.json` from that `package.json`, then re-run the check. |
 | `MOE_RUNTIME_PROTECTED_PATH_MISSING` (`moe-agent.{sh,ps1}`, `moe-call.sh`) | `MOE_RUNTIME_PROTECTED=1`, which the JetBrains launcher sets for a protected seat, and the named variable (`MOE_PROXY_PATH` or `MOE_DAEMON_PATH`) is not an absolute path to an existing file. The scripts never fall back to another copy. | Reinstall or update the plugin so its bundled daemon and proxy exist, then relaunch the seat. A legacy seat refuses too when it inherits `MOE_RUNTIME_PROTECTED=1` from the IDE's or the shell's own environment: unset it there. |
 
 ---

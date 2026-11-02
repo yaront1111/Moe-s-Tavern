@@ -43,8 +43,45 @@ test('V1: readiness keeps provider, execution and verification apart; only a lit
     assert.deepEqual(M.readiness(run('status', status({ executionReady: true, verified: true }))),
         [READY, 'Execution: the runner reports it ready.', 'Verification: the runner reports it verified.']);
     assert.equal(M.readiness(run('status', status({ provider: { ready: 'true', code: 'PROVIDER_NOT_FOUND' } })))[0],
-        'VM provider: not ready. Multipass was not found. Install Multipass and make sure it is on PATH.');
+        'VM provider: not ready. Multipass was not found at its default install location. Install it to the default location (the official installer, or snap on Linux); a copy elsewhere, even on PATH, is not used.');
     assert.equal(M.readiness(run('status', status({ provider: { ready: false } })))[0], 'VM provider: not ready. No reason was given; run the local-runner doctor.');
+});
+
+// Closed world: the codes vm-control can emit (producer tables + cited literals) must equal the JetBrains
+// bundle codes and the VS Code CODE_TEXT keys, with identical text. Excluded, because no client renders them:
+// VM_CONTROL_INPUT_INVALID (exit 2, so the client shows unreadable 'failed'); VM_CONTROL_STATE_DIR_INVALID and
+// DAEMON_* (caught inside vm-control); CLI_INPUT_INVALID, NATIVE_SMOKE_* and CERTIFY_* (cli.mjs commands vm-control never runs).
+test('the producer codes, the JetBrains bundle codes and the VS Code codes are the same set with the same text', () => {
+    const runner = name => fs.readFileSync(path.join(__dirname, '../../scripts/local-runner', name), 'utf8');
+    const reachable = new Set();
+    for (const file of ['doctor.mjs', 'multipass.mjs', 'lifecycle.mjs']) {
+        const table = /^const MESSAGES = \{\r?\n([\s\S]*?)\r?\n\};/m.exec(runner(file));
+        const keys = table ? [...table[1].matchAll(/^ {2}([A-Z][A-Z0-9_]*):/gm)].map(m => m[1]) : [];
+        assert.ok(keys.length > 0, `no MESSAGES keys found in ${file}`);
+        keys.forEach(k => reachable.add(k));
+    }
+    const literals = { 'cli.mjs': ['PLATFORM_UNSUPPORTED'], 'doctor.mjs': ['PROVIDER_PREREQUISITES_READY'],
+        'vm-control.mjs': ['PREREQUISITES_UNAVAILABLE', 'VM_CONTROL_FAILED', 'VM_CONTROL_REPORT_TOO_LARGE', 'LEDGER_UNREADABLE'] };
+    for (const [file, codes] of Object.entries(literals)) {
+        for (const code of codes) { assert.ok(runner(file).includes(`'${code}'`), `${code} not found in ${file}`); reachable.add(code); }
+    }
+    const want = [...reachable].sort();
+    const bundle = fs.readFileSync(path.join(__dirname, '../../moe-jetbrains/src/main/resources/messages/MoeBundle.properties'), 'utf8');
+    const codes = [...bundle.matchAll(/^moe\.managedVm\.code\.([A-Z][A-Z0-9_]*)=(.*)$/gm)];
+    assert.deepEqual(codes.map(c => c[1]).sort(), want);
+    assert.deepEqual([...M.CODE_TEXT.keys()].filter(k => /^[A-Z]/.test(k)).sort(), want);
+    for (const [, code, text] of codes) {
+        assert.equal(M.readiness(run('status', status({ provider: { ready: false, code } })))[0], `VM provider: not ready. ${text.trimEnd()}`, code);
+    }
+});
+
+test('V5: VERSION_MISMATCH and cleanup lifecycle and ledger codes render their own text, not the unknown fallback', () => {
+    const VERSION_MISMATCH = 'The Multipass client and daemon versions differ; restart Multipass, or reinstall it, so both run the same approved version.';
+    const NOT_OWNER = 'This VM record belongs to another task attempt, so Moe left it untouched; reconcile, then refresh.';
+    const WRITE_FAILED = 'Its ledger record could not be written; the VM may already be gone. Check free space and permissions under ~/.moe/runner-state (or MOE_RUNNER_STATE_DIR), then clean up again.';
+    assert.equal(M.readiness(run('status', status({ provider: { ready: false, code: 'VERSION_MISMATCH' } })))[0], `VM provider: not ready. ${VERSION_MISMATCH}`);
+    assert.deepEqual(M.notes(run('cleanup', cleanup({ errors: [{ instance: D, code: 'LIFECYCLE_NOT_OWNER' }, { instance: E, code: 'LEDGER_WRITE_FAILED' }] }))),
+        [`${D}: not deleted. ${NOT_OWNER}`, `${E}: not deleted. ${WRITE_FAILED}`]);
 });
 
 test('V1: rows are the owned instances in report order, never collision or deleted', () => {

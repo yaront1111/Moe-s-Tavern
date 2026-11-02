@@ -130,13 +130,17 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','sha256-repo','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
 'loop-land-twice',
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
-'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
+'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation','skip-worktree-mutation','index-mutation','head-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
 'receipt-ledger-replay','receipt-rebase-replay','receipt-push-rejected','receipt-foreign-replay',
 'intent-strong','intent-strong-cas','intent-strong-unwritable','intent-strong-nocandidate','intent-legacy-unwritable',
+'reconcile-strong-receipt-lost','reconcile-strong-unreconciled','reconcile-strong-target-moved','reconcile-strong-rewrite','reconcile-strong-rewrite-same-tree','reconcile-strong-no-rebase',
+'reconcile-strong-finalize-lost','strong-checkpoint-held','strong-checkpoint-held-env','strong-checkpoint-held-forged','strong-checkpoint-held-journal',
+'strong-recovery-held','strong-recovery-held-gate',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none','reattach-session',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
-'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running','teardown-protected'];
+'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running','teardown-protected',
+'wt-pass','wt-default','wt-moe-dir','wt-moe-file','wt-moe-link','wt-moe-link-out','wt-before','wt-tracked','wt-hidden','wt-assume','wt-nested'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
 // supervisor stops the wrapper as soon as that claim is seen. freed-* is a
 // seat-freeing report_blocked (the task exits BLOCKED): whatever became of the
@@ -186,6 +190,129 @@ child.on('exit',(code,signal)=>{clearInterval(poll);clearTimeout(deadline);
 // box -- so the Windows cancellation bound tracks MOE_POSTFLIGHT_TIMEOUT_SEC
 // rather than a fixed 30 s. The outer spawnSync timeout is still the real cap.
 const CANCEL_MS=Math.max(30000,(Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-30)*1000);
+// WT-10G: the worktree-mode frozen gate (sh run_frozen_gate worktree, ps1
+// Invoke-MoeFrozenGate -WorktreeMode; WT-S 2.2 L6) is not wired into landing
+// until WT-10, so the wt-* modes drive the wrapper's real gate functions
+// directly: sh slices them out by name, ps1 imports every function through the
+// AST. Only the check-run recorder is stubbed. TMPDIR/TMP/TEMP point at a
+// per-mode dir this suite owns, so every gate root is owned scratch. The drivers
+// read the stored index bits: git otherwise hides S on files a .moe link makes present.
+const WT_GATE=`
+const fs=require('fs'),path=require('path'),cp=require('child_process');
+const get=(...a)=>cp.execFileSync('git',a,{encoding:'utf8'}).trim(),real=p=>fs.realpathSync.native(p);
+let moe=true;try{fs.lstatSync('.moe');}catch(e){moe=false;}
+fs.writeFileSync(process.env.WTG_OBS,JSON.stringify({dirs:[process.cwd(),process.env.MOE_PROJECT_PATH,get('rev-parse','--show-toplevel')].map(real),
+ parent:real('..'),head:get('rev-parse','HEAD'),tree:get('write-tree'),moe,flags:get('ls-files','-t','--','.moe')}));
+const mode=process.env.WTG_MODE,link=t=>fs.symlinkSync(t,'.moe',process.platform==='win32'?'junction':'dir');
+if(mode==='wt-moe-dir'){fs.mkdirSync('.moe');fs.writeFileSync(path.join('.moe','x'),'gate\\n');}
+if(mode==='wt-moe-file')fs.writeFileSync('.moe','gate\\n');
+if(mode==='wt-moe-link')link(path.resolve('..','missing-target'));
+if(mode==='wt-moe-link-out')link(process.env.WTG_CONTROL_MOE);
+if(mode==='wt-tracked')fs.writeFileSync('src.txt','gate changed\\n');
+if(mode==='wt-hidden'){get('update-index','--skip-worktree','src.txt');fs.unlinkSync('src.txt');}
+if(mode==='wt-assume'){get('update-index','--assume-unchanged','src.txt');fs.writeFileSync('src.txt','hidden gate change\\n');}
+`;
+const WT_SH_FUNCS=['gate_git','gate_integrity','gate_integrity_wt','stop_gate_child','remove_gate_root','cleanup_gate_workspace','freeze_candidate','run_frozen_gate'];
+function shFunctions(){const s=read(wrapper);return WT_SH_FUNCS.map(name=>{const i=s.indexOf('\n'+name+'() {');
+  assert.ok(i>=0,'moe-agent.sh has no '+name);return s.slice(i+1,s.indexOf('\n}\n',i)+3);}).join('');}
+const WT_SH=`set -e
+record_candidate_rpc() { return 0; }
+record_check_run_rpc() { printf '%s\\t%s\\n' "$GATE_RC" "$GATE_OUTCOME" >> "$WTG_CHECKS"; }
+GREEN= BLUE= NC= YELLOW= GATE_PENDING_ROOTS= GATE_OUTCOME= GATE_WORKSPACE= flags=
+PYTHON_CMD=$(command -v python3 || command -v python)
+MOE_TOP=$WTG_REPO MOE_REL=$WTG_REL QUALITY_GATE='node gate.cjs'
+freeze_candidate "$WTG_BASE" "$WTG_TREE"
+if run_frozen_gate $WTG_ARM; then rc=0; else rc=1; fi
+if [ -n "$GATE_WORKSPACE" ] && [ -d "$GATE_WORKSPACE" ]; then flags=$(git -C "$GATE_WORKSPACE" -c sparse.expectFilesOutsideOfPatterns=true ls-files -t -- .moe src.txt); fi
+if cleanup_gate_workspace; then clean=0; else clean=1; fi
+printf 'rc=%s\\nclean=%s\\ncommit=%s\\nflags=%s\\n' "$rc" "$clean" "$FROZEN_COMMIT" "$flags" > "$WTG_RESULT"
+`;
+// ASCII only: Windows PowerShell 5.1 reads a BOM-less script as ANSI.
+const WT_PS1=`$ErrorActionPreference='Stop'
+$errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($env:WTG_WRAPPER,[ref]$null,[ref]$errors)
+if ($errors.Count) { throw ('moe-agent.ps1 parse errors: '+($errors -join '; ')) }
+foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] },$false)) { . ([ScriptBlock]::Create($fn.Extent.Text)) }
+foreach ($st in $ast.EndBlock.Statements) {
+  if ($st -is [System.Management.Automation.Language.AssignmentStatementAst] -and $st.Left.Extent.Text -like '$script:MoeGate*') { . ([ScriptBlock]::Create($st.Extent.Text)) }
+}
+function Send-MoeCheckRun([hashtable]$Frozen,[hashtable]$Gate) {
+  [IO.File]::AppendAllText($env:WTG_CHECKS,[string]$Gate.ExitCode+[char]9+[string]$Gate.Outcome+[char]10)
+  return $true
+}
+$git=@{ Top=$env:WTG_REPO; Rel=$env:WTG_REL }
+$frozen=New-MoeFrozenCandidate $git $env:WTG_TREE $env:WTG_BASE
+if ($env:WTG_ARM) { $ok=@(Invoke-MoeFrozenGate $git $frozen 'node gate.cjs' -WorktreeMode)[-1] }
+else { $ok=@(Invoke-MoeFrozenGate $git $frozen 'node gate.cjs')[-1] }
+$flags=''
+if ($script:MoeGate -and (Test-Path -LiteralPath $script:MoeGate.Workspace)) {
+  $flags=(Invoke-MoeGit -Top $script:MoeGate.Workspace -GitArgs @('-c','sparse.expectFilesOutsideOfPatterns=true','ls-files','-t','--','.moe','src.txt')).Out -join [char]10
+}
+$clean=Remove-MoeGateWorkspace
+$rc=if ($ok -eq $true) { '0' } else { '1' }
+$cl=if ($clean) { '0' } else { '1' }
+[IO.File]::WriteAllText($env:WTG_RESULT,(@(('rc='+$rc),('clean='+$cl),('commit='+$frozen.Commit),('flags='+$flags)) -join [char]10)+[char]10)
+`;
+function wtGate(mode){
+  const repo=path.join(root,mode),tmp=path.join(root,mode+'-tmp'),home=path.join(root,mode+'-home'),moeDir=path.join(repo,'.moe');
+  const obsFile=path.join(root,mode+'-obs.json'),checksFile=path.join(root,mode+'-checks.txt'),resultFile=path.join(root,mode+'-result.txt');
+  for(const d of [repo,tmp,home])fs.mkdirSync(d,{recursive:true});
+  git(repo,'init','-q');
+  for(const [key,value] of [['core.autocrlf','false'],['user.name','Moe Test'],['user.email','moe@test.local']])git(repo,'config',key,value);
+  // '!/.moe/' excludes only a directory: a tracked FILE named .moe materializes,
+  // and the before-command check must refuse it.
+  if(mode==='wt-before')write(moeDir,'tracked file\n');
+  else{write(path.join(moeDir,'tasks','task-a.json'),'{"id":"task-a"}\n');write(path.join(moeDir,'project.json'),'{"id":"proj-wt"}\n');}
+  write(path.join(repo,'src.txt'),'source\n');write(path.join(repo,'gate.cjs'),WT_GATE);
+  // A nested tracked path outside .moe: the sparse patterns must materialize it.
+  write(path.join(repo,'lib','keep.txt'),'nested\n');
+  git(repo,'add','--','.');git(repo,'commit','-qm','seed');
+  if(mode!=='wt-before')write(path.join(moeDir,'daemon.json'),'{"sentinel":"control runtime"}\n');
+  const map=p=>{let st;try{st=fs.lstatSync(p);}catch(e){return null;}
+    if(st.isSymbolicLink())return 'link:'+fs.readlinkSync(p);
+    if(!st.isDirectory())return read(p);
+    const o={};for(const n of fs.readdirSync(p).sort())o[n]=map(path.join(p,n));return o;};
+  const snap=()=>[git(repo,'rev-parse','HEAD'),git(repo,'ls-files','-s'),git(repo,'--no-optional-locks','status','--porcelain','-uall'),
+    cp.spawnSync('git',['-C',repo,'config','--get','core.sparseCheckout']).status,map(moeDir)];
+  const pre=snap(),env={};
+  for(const [key,value] of Object.entries(process.env))if(!/^GIT_|^(HOME|USERPROFILE|TMPDIR|TMP|TEMP)$/i.test(key))env[key]=value;
+  Object.assign(env,{HOME:home,USERPROFILE:home,TMPDIR:tmp,TMP:tmp,TEMP:tmp,WTG_WRAPPER:wrapper,WTG_REPO:repo,WTG_MODE:mode,
+    WTG_BASE:git(repo,'rev-parse','HEAD'),WTG_TREE:git(repo,'rev-parse','HEAD^{tree}'),WTG_OBS:obsFile,WTG_CHECKS:checksFile,WTG_RESULT:resultFile,WTG_CONTROL_MOE:moeDir});
+  if(mode!=='wt-default')env.WTG_ARM='worktree';
+  if(mode==='wt-nested')env.WTG_REL='sub';
+  const driver=path.join(root,win?'wt-driver.ps1':'wt-driver.sh');
+  if(!fs.existsSync(driver))write(driver,win?WT_PS1:shFunctions()+WT_SH);
+  const r=cp.spawnSync(engine,win?['-NoProfile','-File',driver]:[driver],{env,encoding:'utf8',timeout:120000,windowsHide:true});
+  const log=String(r.stdout||'')+String(r.stderr||'')+(r.error?'\n'+r.error:'');
+  assert.equal(r.status,0,mode+': driver failed\n'+log);
+  const res=read(resultFile),field=key=>(res.match(new RegExp('^'+key+'=(.*)$','m'))||[])[1];
+  const flags=res.slice(res.indexOf('flags=')+6).trim(),checks=fs.existsSync(checksFile)?read(checksFile).split('\n').filter(Boolean):[];
+  const obs=fs.existsSync(obsFile)?JSON.parse(read(obsFile)):null,integrity=log.includes('MOE_WORKTREE_GATE_INTEGRITY');
+  const moeFlags='S .moe/project.json\nS .moe/tasks/task-a.json';
+  assert.equal(field('clean'),'0',mode+': owned cleanup\n'+log);
+  assert.deepEqual(fs.readdirSync(tmp),[],mode+': owned gate scratch must be emptied\n'+log);
+  assert.equal(git(repo,'worktree','list','--porcelain').split('\n').filter(l=>l.startsWith('worktree ')).length,1,mode+'\n'+log);
+  assert.deepEqual(snap(),pre,mode+': the control checkout, its index and its .moe stay unchanged\n'+log);
+  if(obs){
+    assert.deepEqual(obs.dirs.map(d=>[path.basename(d),path.dirname(d)]),Array(3).fill(['tree',obs.parent]),mode+': cwd, MOE_PROJECT_PATH and toplevel are the gate checkout\n'+log);
+    assert.equal(path.dirname(obs.parent),fs.realpathSync.native(tmp),mode+': the gate root is owned scratch\n'+log);
+    assert.equal(fs.existsSync(obs.parent),false,mode+': the gate root is removed\n'+log);
+    assert.deepEqual([obs.head,obs.tree],[field('commit'),git(repo,'rev-parse','HEAD^{tree}')],mode+': the gate saw the frozen commit and tree\n'+log);
+  }
+  if(mode==='wt-pass'||mode==='wt-default'){
+    assert.equal(field('rc'),'0',log);assert.deepEqual(checks,['0\tpassed'],log);assert.equal(integrity,false,log);
+    assert.equal(obs.moe,mode==='wt-default',mode+': .moe in the gate checkout\n'+log);
+    assert.equal(obs.flags,mode==='wt-default'?moeFlags.replace(/^S/gm,'H'):moeFlags,mode+': .moe index entries\n'+log);
+  }else if(mode==='wt-before'||mode==='wt-nested'){
+    assert.equal(field('rc'),'1',log);assert.deepEqual(checks,[],log);assert.equal(obs,null,log);
+    assert.equal(integrity,mode==='wt-before',log);
+    if(mode==='wt-nested')assert.ok(log.includes('MOE_WORKTREE_PROJECT_NOT_TOP'),log);
+  }else{
+    assert.equal(field('rc'),'1',log);assert.deepEqual(checks,['0\tinconclusive'],log);
+    assert.equal(integrity,mode.startsWith('wt-moe-'),log);assert.equal(obs.moe,false,log);
+    assert.equal(flags,moeFlags+'\nH src.txt',mode+': index flags after the refusal\n'+log);
+  }
+}
 let count=0;
 try {
 if(!win){const source=read(wrapper),stop=source.slice(source.indexOf('stop_gate_child() {'),source.indexOf('cleanup_gate_workspace() {'));
@@ -197,6 +324,7 @@ for(const mode of modes.filter(m=>!process.env.MOE_FROZEN_TEST_ONLY||process.env
     assert.ok(probe.length>0&&probe.includes('--stdin')&&!/foreach/i.test(probe),'ps1 integrity probe must batch ls-files into one update-index --stdin, not spawn git per tracked file');
     count++;continue;
   }
+  if(mode.startsWith('wt-')){wtGate(mode);count++;continue;}
   const repo=path.join(root,mode),nested=path.join(repo,'nested project é'),owned=path.join(nested,'owned.txt');
   fs.mkdirSync(nested,{recursive:true});
   const gateSource=`
@@ -215,9 +343,15 @@ fs.writeFileSync('scratch.txt','generated only\\n');
 if(mode==='tracked-mutation')fs.writeFileSync('owned.txt','gate changed tracked\\n');
 if(mode==='hidden-mutation'){get('update-index','--skip-worktree','owned.txt');get('update-index','--assume-unchanged','gate.cjs');
  fs.writeFileSync('owned.txt','hidden gate change\\n');fs.appendFileSync('gate.cjs','\\n// hidden gate change\\n');}
+// Skip-worktree only, no assume-unchanged: an edit and a deletion hidden behind S bits.
+if(mode==='skip-worktree-mutation'){get('update-index','--skip-worktree','owned.txt');fs.writeFileSync('owned.txt','hidden gate change\\n');
+ get('update-index','--skip-worktree','../seed.txt');fs.unlinkSync('../seed.txt');}
+if(mode==='index-mutation'){fs.writeFileSync('staged.txt','gate staged\\n');get('add','staged.txt');}
+if(mode==='head-mutation')get('-c','user.name=t','-c','user.email=t@t.test','commit','--allow-empty','-qm','gate moved HEAD');
 if(mode==='cleanup-retry')get('worktree','lock','--reason','moe frozen cleanup retry',get('rev-parse','--show-toplevel'));
 if(mode==='dirty-helper'&&!fs.existsSync('helper.txt'))process.exit(19);
 if(mode==='race-fail'&&fs.existsSync('../break-gate.txt'))process.exit(23);
+if(mode==='strong-recovery-held-gate')process.exit(29);
 if(mode.startsWith('interrupt-')){fs.writeFileSync(path.join(dir,'owned.txt'),'late shared\\n');fs.writeFileSync(path.join(dir,'.moe','gate-ready'),'ready');setInterval(()=>{},1000);}
 if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');process.stderr.write('END');process.exit(37);}
 `;
@@ -233,7 +367,7 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   write(path.join(nested,'.moe','project.json'),JSON.stringify({id:'proj-frozen',name:'Frozen',settings}));
   write(path.join(nested,'.moe','tasks','task-postflight.json'),JSON.stringify({id:'task-postflight',title:'Frozen',
     status:'WORKING',filesModified:ownedPaths,implementationPlan:[{stepId:'s1',status:'COMPLETED',modifiedFiles:ownedPaths}]}));
-  const noGit=mode==='no-git'||mode==='teardown-no-git',sha256=mode==='sha256-repo'||mode==='teardown-sha256';
+  const noGit=mode==='no-git'||mode==='teardown-no-git',sha256=mode==='sha256-repo'||mode==='teardown-sha256';let seeded='';
   if(!noGit){
     // A sha256 repository: both wrappers refuse it at their git probe, because
     // Moe's delivery records hold SHA-1 ids only. Creating one needs git 2.29+.
@@ -258,7 +392,7 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
     // (MOE_PUSH_REBASE=1), which rewrites the landed commit before the re-push;
     // receipt-push-rejected keeps the default, which announces the rejection and
     // leaves the checkout exactly as it was.
-    if(mode==='receipt-rebase-replay'||mode==='receipt-push-rejected'){const remote=path.join(root,mode+'-remote.git'),peer=path.join(root,mode+'-peer');
+    if(mode==='receipt-rebase-replay'||mode==='receipt-push-rejected'||mode==='reconcile-strong-no-rebase'){const remote=path.join(root,mode+'-remote.git'),peer=path.join(root,mode+'-peer');
       git(root,'init','-q','--bare',mode+'-remote.git');git(repo,'remote','add','origin',remote);git(repo,'push','-q','origin','moe/frozen');
       git(root,'clone','-q','-b','moe/frozen',remote,peer);
       for(const [key,value] of [['user.name','Moe Peer'],['user.email','peer@test.local'],['core.autocrlf','false']])git(peer,'config',key,value);
@@ -269,20 +403,33 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
     if(mode==='receipt-cached-check'){const hook=path.join(repo,'.git','hooks','reference-transaction');
       write(hook,'#!/bin/sh\n[ "$1" = prepared ] || exit 0\ngrep -q " refs/heads/moe/frozen$" || exit 0\n'+
         'm="$(git rev-parse --git-dir)/moe-cas-refused"\n[ -e "$m" ] && exit 0\n: > "$m"\nexit 1\n');fs.chmodSync(hook,0o755);}
+    // CQ-V08: an earlier strong landing of this task is on the branch, and its
+    // receipt journal is still unsettled.
+    if(mode==='reconcile-strong-unreconciled'){const base=git(repo,'rev-parse','HEAD');
+      git(repo,'commit','--allow-empty','-qm','feat(task-postflight): earlier','-m','Moe-Session: worker-old@seed','-m','Moe-Kind: completion');
+      const t=git(repo,'rev-parse','HEAD');
+      seeded=JSON.stringify({taskId:'task-postflight',workerId:'worker-old',attemptId:'attempt-old',generation:1,candidateId:'cand-old',
+        target:'refs/heads/moe/frozen',targetBefore:base,targetAfter:t,landedRevision:t,pushResult:null,
+        treeSha:git(repo,'rev-parse',t+'^{tree}'),baseRevision:base,planRevision:3,profile:'verified-local'});
+      write(path.join(repo,'.git','moe','receipt','task-postflight.json'),seeded);}
     // CQ-V07: the claim's attempt is pinned on a strong (verified-local) or a legacy
     // execution policy. The hook logs every prepared ref update -- old is the
     // expected-old git was handed, so the CAS -- with the receipt journal as it
     // stood at that instant. A regular file where the journal dir goes makes the
-    // journal unwritable.
-    if(mode.startsWith('intent-')){const stamp=new Date().toISOString(),hook=path.join(repo,'.git','hooks','reference-transaction');
+    // journal unwritable. CQ-V08b: strong-checkpoint-held-journal pins a legacy
+    // attempt, and only the task's receipt journal says verified-local -- one the
+    // pre-flight replay keeps (it cannot parse it), as it keeps an unsettled one.
+    if(/^(intent|reconcile|strong)-/.test(mode)){const stamp=new Date().toISOString(),hook=path.join(repo,'.git','hooks','reference-transaction');
       write(path.join(nested,'.moe','attempts','attempt-postflight.json'),JSON.stringify({id:'attempt-postflight',generation:7,taskId:'task-postflight',
         workerId:'worker-frozen',runnerId:'worker-frozen',phase:'running',workspace:nested,startedAt:stamp,lastPhaseAt:stamp,
-        executionPolicySnapshot:{version:2,profile:mode.startsWith('intent-strong')?'verified-local':'legacy',planRevision:3,deliveryPolicy:'local-branch'}}));
+        executionPolicySnapshot:{version:2,profile:/^((intent|reconcile)-)?strong/.test(mode)&&mode!=='strong-checkpoint-held-journal'?'verified-local':'legacy',
+          planRevision:3,deliveryPolicy:'local-branch'}}));
+      if(mode==='strong-checkpoint-held-journal')write(path.join(repo,'.git','moe','receipt','task-postflight.json'),'{"profile":"verified-local"}\n');
       write(hook,['#!/bin/sh','[ "$1" = prepared ] || exit 0','d="$(git rev-parse --git-common-dir)"; j="$d/moe/receipt/task-postflight.json"',
         'while read -r old new ref; do','  if [ -f "$j" ]; then c="$(tr -d \'\\r\\n\' < "$j")"; else c=null; fi',
         '  printf \'{"ref":"%s","old":"%s","new":"%s","journal":%s}\\n\' "$ref" "$old" "$new" "$c" >> "$d/moe-intent-events.jsonl"','done',''].join('\n'));
       fs.chmodSync(hook,0o755);
-      if(mode.endsWith('-unwritable'))write(path.join(repo,'.git','moe','receipt'),'not a directory\n');}
+      if(mode.endsWith('-unwritable')||mode==='strong-recovery-held')write(path.join(repo,'.git','moe','receipt'),'not a directory\n');}
   }
   write(path.join(nested,'helper.txt'),'dirty helper\n');write(path.join(nested,'peer.txt'),'peer bytes\n');
   write(path.join(nested,'.codex','dirty.txt'),'denied bytes\n');
@@ -298,7 +445,7 @@ if(mode==='loop-land-twice'){const n=Number(fs.readFileSync(path.join(dir,'.moe'
  fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned '+(n===2?1:n)+'\\n');}
 else if(mode!=='no-change'&&mode!=='teardown-nothing')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
 const file=path.join(dir,'.moe','attempts','attempt-postflight.json');
-const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed)-/.test(mode)||/^teardown-(running|protected)$/.test(mode);
+const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed|strong-checkpoint)-/.test(mode)||/^teardown-(running|protected)$/.test(mode)||process.env.FROZEN_RUN==='2';
 // reattach-sidecar/-refused: a daemon restart parks the attempt while this
 // session runs, and the session goes on once the wrapper reattached it (or once
 // the wait runs out, as under a restart nobody reattached). reattach-preflight
@@ -334,9 +481,14 @@ if(mode==='closed-attempt'||mode==='freed-closed'||qaClaimed)a.phase='closed';if
 const stamp=new Date().toISOString();
 if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json'),JSON.stringify({id:'attempt-qa',generation:8,taskId:'task-postflight',
  workerId:'qa-frozen',runnerId:'qa-frozen',phase:'running',workspace:dir,startedAt:stamp,lastPhaseAt:stamp}));
+// strong-checkpoint-held-forged: the CLI writes a newer, legacy attempt record of
+// its task; the profile its wrapper pinned at pre-flight still holds the exit.
+if(mode==='strong-checkpoint-held-forged')fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-forged.json'),JSON.stringify({id:'attempt-forged',generation:8,
+ taskId:'task-postflight',workerId:'worker-forged',runnerId:'worker-forged',phase:'closed',workspace:dir,startedAt:stamp,lastPhaseAt:stamp,
+ executionPolicySnapshot:{version:2,profile:'legacy',planRevision:3,deliveryPolicy:'local-branch'}}));
 if(mode.endsWith('-unpinned')||mode==='freed-corrupt-sibling')fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
 if(mode==='teardown-no-baseline')fs.rmSync(${JSON.stringify(baselineFile)},{force:true});
-if(mode==='teardown-protected')fs.copyFileSync(${JSON.stringify(baselineFile)},path.join(dir,'.moe','baseline-at-cli'));
+if(mode==='teardown-protected'||mode.startsWith('strong-checkpoint-'))fs.copyFileSync(${JSON.stringify(baselineFile)},path.join(dir,'.moe','baseline-at-cli'));
 if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|protected)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
  const until=Date.now()+120000,wait=setInterval(()=>{if(fs.existsSync(ready+'.sent')||Date.now()>until)clearInterval(wait);},100);}
 `);
@@ -353,18 +505,26 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|pro
     FAKE_TASK_STATUS:'REVIEW',FAKE_SCOPE_PEERS_ACTIVE:'1',FAKE_SCOPE_PEER_DECLARED:'peer.txt:task-peer',
     FROZEN_FIXTURE:nested,FROZEN_MODE:mode,HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),
     FAKE_EVIDENCE_MODE:mode,FAKE_CTX_IS_EPIC_FINAL:mode==='deferred'?'false':'true'};
-  if(mode.startsWith('race-'))env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';
+  // CQ-V08 arms reuse the fake daemon's receipt knobs: a refused receipt, or a crash at the held ledger row.
+  env.FAKE_EVIDENCE_MODE={'reconcile-strong-receipt-lost':'receipt-refused','reconcile-strong-unreconciled':'receipt-refused',
+    'reconcile-strong-rewrite':'receipt-ledger-replay','reconcile-strong-rewrite-same-tree':'receipt-ledger-replay',
+    'reconcile-strong-finalize-lost':'finalize_attempt-null'}[mode]||mode;
+  if(mode.startsWith('race-')||mode==='reconcile-strong-target-moved')env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';
   // A peer lands an EMPTY commit before the CAS: new base, identical rebuilt tree.
   if(mode==='receipt-same-tree-race'||mode==='intent-strong-cas'){write(race,"require('child_process').execFileSync('git',['commit','--allow-empty','-qm','peer-empty']);");
     env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';}
-  // The pull --rebase retry is opt-in; only receipt-rebase-replay exercises it.
-  if(mode==='receipt-rebase-replay')env.MOE_PUSH_REBASE='1';
+  // The pull --rebase retry is opt-in; receipt-rebase-replay exercises it, and
+  // reconcile-strong-no-rebase shows a strong landing ignores it.
+  if(mode==='receipt-rebase-replay'||mode==='reconcile-strong-no-rebase')env.MOE_PUSH_REBASE='1';
   const args=win?['-NoProfile','-File',wrapper,'-Project',nested,'-WorkerId','worker-frozen','-Role','worker',
     '-Team','Smoke','-NoStartDaemon','-Command',cli,'-NoLoop','-PollInterval','0']:
     [wrapper,'--project',nested,'--worker-id','worker-frozen','--role','worker','--team','Smoke','--no-start-daemon',
     '--command',cli,'--no-loop','--poll-interval','0'];
 
-  if(/^(checkpoint|manual)-/.test(mode)||/^teardown-(running|protected)$/.test(mode))env.FAKE_TASK_STATUS='WORKING';
+  if(/^(checkpoint|manual|strong-checkpoint)-/.test(mode)||/^teardown-(running|protected)$/.test(mode))env.FAKE_TASK_STATUS='WORKING';
+  // A CLI-visible variable that claims the legacy profile changes nothing: the
+  // wrapper reads the profile only from wrapper- and daemon-written records.
+  if(mode==='strong-checkpoint-held-env'){env.MOE_EXECUTION_PROFILE='legacy';env.PINNED_ATTEMPT_PROFILE='legacy';}
   if(mode==='teardown-protected')env.FAKE_SCOPE_ASSIGNEE='worker-live';
   if(mode.startsWith('freed-'))env.FAKE_TASK_STATUS='BLOCKED';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
@@ -400,12 +560,12 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|pro
   // The crash-window arms die the same way: at the held ledger row (window 1) or
   // at the held receipt (windows 2 and 3).
   const ledgerHeld=path.join(nested,'.moe','ledger-held');
-  if(['receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay'].includes(mode)){
+  if(['receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay'].includes(env.FAKE_EVIDENCE_MODE)){
     env.TMPDIR=env.TMP=env.TEMP=wrapperTmp;
     const supervisor=path.join(root,'receipt-supervisor.cjs');
     write(supervisor,KILL_ON_MARKER);
     runEngine=process.execPath;
-    runArgs=[supervisor,mode==='receipt-ledger-replay'?ledgerHeld:receiptHeld,String((Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-15)*1000),engine,...args];
+    runArgs=[supervisor,env.FAKE_EVIDENCE_MODE==='receipt-ledger-replay'?ledgerHeld:receiptHeld,String((Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-15)*1000),engine,...args];
   }
   if(/^(interrupt|teardown)-/.test(mode)){
     const supervisor=path.join(root,mode+(win?'-supervisor.ps1':'-supervisor.sh'));
@@ -472,7 +632,7 @@ exit "$rc"
     checks=rpc.filter(r=>r.tool==='record_check_run'),finals=rpc.filter(r=>r.tool==='finalize_attempt'),
     seen=rows(path.join(nested,'.moe','gate-observations.jsonl'));
   const failed=['dirty-helper','race-fail','tracked-mutation','exit-tail','missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt','workspace-failure','interrupt-int','interrupt-term',
-    'gate-qa-claimed','hidden-mutation'].includes(mode)||mode.startsWith('record_');
+    'gate-qa-claimed','hidden-mutation','skip-worktree-mutation','index-mutation','head-mutation'].includes(mode)||mode.startsWith('record_');
   const after=noGit?'':git(repo,'rev-parse','HEAD');
   const lastCommit=rpc.filter(r=>r.tool==='record_commit').at(-1);
   const pushBlocked=rows(path.join(nested,'.moe','messages','chan-general.jsonl')).some(m=>String(m.content).includes('PUSH-BLOCKED'))||
@@ -624,6 +784,123 @@ exit "$rc"
     const {workerId:w0,...r0}=receipts[0].args,{workerId:w1,...r1}=receipts[1].args;
     assert.deepEqual([w0,w1,r1],['worker-frozen','worker-other',r0],'the other seat re-sends the journaled report\n'+log2);
     replayed(rpc2,log2,reflog);
+    count++;continue;
+  }
+  if(mode.startsWith('reconcile-strong-')){
+    // CQ-V08, strong profile only: no double land, no early finalize, and a proof
+    // never moves to a tree other than the verified candidate's.
+    const moved=rows(path.join(repo,'.git','moe-intent-events.jsonl')).filter(e=>e.ref==='refs/heads/moe/frozen'),
+      receipts=rpc.filter(r=>r.tool==='record_delivery_receipt'),[c1={},c2={}]=candidates.map(r=>r.args),
+      completions=()=>git(repo,'log','--format=%H','--fixed-strings','--grep=Moe-Kind: completion',before+'..moe/frozen').split('\n').filter(Boolean);
+    if(mode==='reconcile-strong-receipt-lost'){
+      // DoD1: a lost receipt holds the finalize; the replay records it, THEN finalizes, and never lands again.
+      assert.deepEqual({deferred:said('MOE_FINALIZE_DEFERRED_RECEIPT: task task-postflight --'),finals:finals.length,journal:fs.existsSync(journal),landed:after!==before},
+        {deferred:1,finals:0,journal:true,landed:true},log);
+      const reflog=reflogOf();env.FAKE_EVIDENCE_MODE=mode;
+      const {log2,rpc2}=replay(args),r2=replayed(rpc2,log2,reflog);
+      assert.equal(r2.length,2,log2);assert.deepEqual(r2[1].args,r2[0].args,'the replay re-sends the journaled report\n'+log2);
+      assert.deepEqual(completions(),[after],'no double land\n'+log2);
+    }else if(mode==='reconcile-strong-unreconciled'){
+      // DoD1: a journal the replay could not settle refuses the next landing before any effect.
+      assert.deepEqual({warned:said('MOE_COMMIT_REFUSED_UNRECONCILED_INTENT: task task-postflight --'),moved,head:after,journal:read(journal),
+        commits:rpc.filter(r=>r.tool==='record_commit').map(r=>[r.args.outcome,r.args.kind,r.args.code]),receipts:receipts.map(r=>r.args.targetAfter),
+        rescue:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/'),owned:read(owned),baseline:fs.existsSync(baselineFile),
+        evidence:candidates.length+checks.length,finals:finals.map(f=>f.args.outcome)},
+        {warned:1,moved:[],head:before,journal:seeded,commits:[['refused','completion','MOE_COMMIT_REFUSED_UNRECONCILED_INTENT']],receipts:[before],
+        rescue:'',owned:'frozen owned\n',baseline:true,evidence:0,finals:['failed']},log);
+    }else if(mode==='reconcile-strong-target-moved'){
+      // DoD2: a moved target re-freezes and rechecks; only the second candidate is journaled, received and landed, on the peer's commit.
+      assert.deepEqual({ids:c1.id!==c2.id,trees:c1.treeSha!==c2.treeSha,checks:checks.map(r=>[r.args.candidateId,r.args.exitCode]),
+        intent:moved.at(-1)?.journal?.candidateId,receipts:receipts.map(r=>r.args.candidateId),journal:fs.existsSync(journal),completions:completions(),
+        parent:[git(repo,'rev-parse',after+'~1'),git(repo,'log','-1','--format=%s',after+'~1')],finals:finals.map(f=>[f.args.outcome,f.args.landedRevision])},
+        {ids:true,trees:true,checks:[[c1.id,0],[c2.id,0]],intent:c2.id,receipts:[c2.id],journal:false,completions:[after],
+        parent:[c2.baseRevision,'peer-race'],finals:[['landed',after]]},log);
+    }else if(mode==='reconcile-strong-no-rebase'){
+      // DoD3: a rejected strong push is never rebased; the branch keeps the verified commit.
+      const r=receipts[0]?.args||{};
+      assert.deepEqual({rebased:log.includes('trying git pull --rebase'),exact:said('strong delivery is exact'),tree:git(repo,'rev-parse',after+'^{tree}'),
+        state:['rebase-merge','rebase-apply'].some(d=>fs.existsSync(path.join(repo,'.git',d))),receipt:[r.targetAfter,/^push failed: /.test(String(r.pushResult))],
+        finals:finals.map(f=>[f.args.outcome,f.args.landedRevision])},
+        {rebased:false,exact:1,tree:c1.treeSha,state:false,receipt:[after,true],finals:[['landed',after]]},log);
+    }else if(mode==='reconcile-strong-finalize-lost'){
+      // CQ-V08b: the receipt is accepted, then every finalize is lost. The strong journal
+      // stays; the replay re-sends that receipt, THEN finalizes that landing once, and never lands again.
+      const phase=()=>JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json'))).phase;
+      assert.deepEqual({finals:finals.map(f=>[f.args.outcome,f.args.landedRevision]),receipts:receipts.map(r=>r.args.targetAfter),
+        journal:fs.existsSync(journal)&&JSON.parse(read(journal)).targetAfter,phase:phase(),exhausted:said('finalize_attempt acknowledgement exhausted'),
+        deferred:said('MOE_FINALIZE_DEFERRED_RECEIPT'),completions:completions(),rows:ledgerRows().length},
+        {finals:Array(3).fill(['landed',after]),receipts:[after],journal:after,phase:'finalizing',exhausted:1,deferred:0,completions:[after],rows:1},log);
+      const n=rpc.length,reflog=reflogOf();env.FAKE_EVIDENCE_MODE=mode;
+      const {log2,rpc2}=replay(args),tail=rpc2.slice(n).filter(r=>['record_commit','record_delivery_receipt','finalize_attempt'].includes(r.tool)),f=tail[1]?.args||{};
+      assert.deepEqual({tail:tail.map(r=>r.tool),resent:tail[0]?.args,final:[f.attemptId,f.generation,f.workerId,f.outcome,f.landedRevision],
+        head:git(repo,'rev-parse','moe/frozen'),reflog:reflogOf(),journal:fs.existsSync(journal),phase:phase(),completions:completions(),rows:ledgerRows().length,
+        evidence:rpc2.filter(r=>r.tool==='record_candidate'||r.tool==='record_check_run').length},
+        {tail:['record_delivery_receipt','finalize_attempt'],resent:receipts[0].args,final:['attempt-postflight',7,'worker-frozen','landed',after],
+        head:after,reflog,journal:false,phase:'closed',completions:[after],rows:1,evidence:candidates.length+checks.length},log2);
+    }else{
+      // DoD3: run 1 died at its ledger row; the branch then carries the landing's
+      // trailers on a copy. A copy of another tree gets nothing; the same tree is that landing.
+      assert.ok(fs.existsSync(ledgerHeld),'run 1 must reach its ledger row\n'+log);
+      const j1=read(journal),same=mode.endsWith('-same-tree'),msg=path.join(root,mode+'-msg.txt');
+      write(msg,git(repo,'log','-1','--format=%B',after)+'\n');
+      const parent=same?git(repo,'commit-tree',before+'^{tree}','-p',before,'-m','peer-empty'):before;
+      const copy=git(repo,'commit-tree',(same?after:before)+'^{tree}','-p',parent,'-F',msg);
+      git(repo,'update-ref','refs/heads/moe/frozen',copy,after);
+      const n=rpc.length,{log2,rpc2}=replay(args),run2=log2.slice(log.length).split('MOE_DELIVERY_PROOF_NOT_TRANSFERRED: task task-postflight --').length-1;
+      const tail=rpc2.slice(n).filter(r=>['record_commit','record_delivery_receipt','finalize_attempt'].includes(r.tool))
+        .map(r=>[r.tool,r.tool==='record_commit'?r.args.sha:r.tool==='finalize_attempt'?r.args.outcome+' '+r.args.landedRevision:r.args.targetAfter]);
+      assert.deepEqual({warned:run2,tail,head:git(repo,'rev-parse','moe/frozen'),journal:fs.existsSync(journal)?read(journal):null},
+        same?{warned:0,tail:[['record_commit',copy],['record_delivery_receipt',after],['finalize_attempt','landed '+copy]],head:copy,journal:null}
+          :{warned:1,tail:[],head:copy,journal:j1},log2);
+    }
+    count++;continue;
+  }
+  if(mode.startsWith('strong-')){
+    // CQ-V08b: under the strong profile only a verified completion moves the target.
+    // A checkpoint -- this session's exit, or a later pre-flight's recovery -- is
+    // refused before any effect: no ref, rescue ref, index or baseline write.
+    const code='MOE_COMMIT_REFUSED_STRONG_CHECKPOINT',warned=s=>s.split(code+': task task-postflight --').length-1,
+      moved=()=>rows(path.join(repo,'.git','moe-intent-events.jsonl')).filter(e=>e.ref==='refs/heads/moe/frozen'||e.ref.startsWith('refs/moe/rescue/')),
+      rescues=()=>git(repo,'for-each-ref','--format=%(refname) %(objectname)','refs/moe/rescue/'),
+      commits=r=>r.filter(x=>x.tool==='record_commit').map(x=>[x.args.outcome,x.args.kind,x.args.code]);
+    // The exit is held by: -held the pin and the record; -env the same, its
+    // environment forged; -forged the pin alone, against a newer forged legacy
+    // record; -journal the receipt journal alone, under a legacy pin and record.
+    if(mode.startsWith('strong-checkpoint-')){
+      const line=rows(path.join(nested,'.moe','messages','chan-general.jsonl')).map(m=>String(m.content))
+        .filter(s=>s.includes('worker session ended: task=task-postflight')).pop()||'';
+      assert.deepEqual({warned:warned(log),commits:commits(rpc),line:line.includes(' outcome=refused code='+code),head:after,reflog:reflogOf(),moved:moved(),
+        rescue:rescues(),owned:read(owned),index:fs.readFileSync(index).equals(beforeIndex),
+        baseline:fs.readFileSync(baselineFile).equals(fs.readFileSync(path.join(nested,'.moe','baseline-at-cli'))),
+        evidence:candidates.length+checks.length+seen.length+finals.length},
+        {warned:1,commits:[['refused','checkpoint',code]],line:true,head:before,reflog:before,moved:[],
+        rescue:'',owned:'frozen owned\n',index:true,baseline:true,evidence:0},log);
+    }else{
+      // Run 1 ends a strong completion unlanded: its journal unwritable, or its gate
+      // failed and parked the bytes on a rescue ref. Run 2 (journal writable again)
+      // lands nothing, and the rescue ref stays unmoved.
+      const gate=mode.endsWith('-gate'),refs1=rescues(),moved1=moved().length,reflog=reflogOf(),
+        phase=()=>JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json'))).phase;
+      assert.deepEqual({code:rpc.filter(r=>r.tool==='record_commit').at(-1)?.args.code,finals:finals.map(f=>f.args.outcome),phase:phase(),head:after,
+        rescue:refs1.split('\n').filter(Boolean).length,baseline:fs.existsSync(baselineFile)},
+        {code:gate?'MOE_COMMIT_FAILED_GATE':'MOE_COMMIT_REFUSED_INTENT_UNWRITABLE',finals:[gate?'rescued':'failed'],phase:'closed',head:before,
+        rescue:gate?1:0,baseline:true},log);
+      if(!gate)fs.rmSync(path.join(repo,'.git','moe','receipt'));
+      const n=rpc.length,second=cp.spawnSync(engine,args,{env:{...env,FAKE_TASK_STATUS:'WORKING',FROZEN_RUN:'2'},encoding:'utf8',
+        timeout:Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)*1000,maxBuffer:4*1024*1024});
+      const log2=(second.stdout||'')+(second.stderr||'');write(path.join(root,mode+'.log'),log+log2);
+      assert.equal(second.signal,null,log2);assert.ok(second.status!==null,log2);
+      // The gate failure leaves its baseline lingering, so run 2 refuses twice: the
+      // pre-flight recovery of those bytes, then its own exit. A V07 refusal settles
+      // its baseline instead (landed=1, the bytes carried as the task's own), so run 2
+      // has nothing to recover and refuses only its exit checkpoint of those bytes.
+      const recovering=log2.indexOf(win?'a previous session of task task-postflight ended without landing':'lingering baseline for task-postflight');
+      assert.deepEqual({recovering:recovering>=0&&recovering<log2.indexOf(code),warned:warned(log2),recovered:log2.includes('MOE_CHECKPOINT_RECOVERED'),
+        commits:commits(rows(path.join(nested,'.moe','evidence-rpcs.jsonl')).slice(n)),head:git(repo,'rev-parse','moe/frozen'),reflog:reflogOf(),
+        rescue:rescues(),moved:moved().length,owned:read(owned)},
+        {recovering:gate,warned:gate?2:1,recovered:false,commits:Array(gate?2:1).fill(['refused','checkpoint',code]),head:before,reflog,
+        rescue:refs1,moved:moved1,owned:'frozen owned\n'},log2);
+    }
     count++;continue;
   }
   if(mode.startsWith('teardown-')){
@@ -778,7 +1055,7 @@ exit "$rc"
         assert.equal(git(repo,'rev-parse',after+'~1'),c.baseRevision,log);}
     }
   }
-  if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','record_candidate-refuse'].includes(mode))
+  if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','skip-worktree-mutation','index-mutation','head-mutation','record_candidate-refuse'].includes(mode))
     assert.equal(pushBlocked,true,'a real gate or evidence persistence failure stays PUSH-BLOCKED\n'+log);
   if(mode==='dirty-helper'){
     assert.equal(after,before,'dirty helper must not authorize a branch commit\n'+log);
@@ -828,6 +1105,14 @@ exit "$rc"
     assert.ok(ci>=0&&ci<rpc.indexOf(check));assert.equal(check.args.treeSha,rpc[ci].args.treeSha);
     assert.equal(check.args.source,'runner-observed');assert.equal(check.args.command,'node gate.cjs');
     assert.ok(Buffer.byteLength(check.args.outputTail)<=16384);
+    // The run carries its honest outcome: 'passed' only for exit 0 with the checkout
+    // intact, 'inconclusive' for exit 0 after a tracked tree/index/HEAD mutation,
+    // 'code-failure' for a nonzero exit, 'infra-failure' for an interrupted gate.
+    // The wrapper can only know the mutation if it checked integrity BEFORE recording.
+    const wantOutcome=mode.startsWith('interrupt-')?'infra-failure':
+      ['tracked-mutation','hidden-mutation','skip-worktree-mutation','index-mutation','head-mutation'].includes(mode)?'inconclusive':
+      check.args.exitCode!==0?'code-failure':'passed';
+    assert.equal(check.args.outcome,wantOutcome,'CheckRun outcome for '+mode+' (exit '+check.args.exitCode+')\n'+log);
   }
   for(const o of seen){
     assert.notEqual(path.resolve(o.cwd),path.resolve(nested));assert.equal(path.basename(o.cwd),'nested project é');
@@ -858,7 +1143,10 @@ exit "$rc"
     assert.equal(git(repo,'rev-list','--parents','-n','1','HEAD'),after,'unborn landing is a parentless root commit');
     assert.equal(checks.length,1,log);assert.equal(checks[0].args.exitCode,0);
   }
-  if(mode==='hidden-mutation'){assert.equal(checks.length,1,log);assert.equal(checks[0].args.exitCode,0,'integrity refusal keeps the actual exit code');}
+  if(['tracked-mutation','hidden-mutation','skip-worktree-mutation','index-mutation','head-mutation'].includes(mode)){
+    assert.equal(checks.length,1,log);assert.equal(checks[0].args.exitCode,0,'integrity refusal keeps the actual exit code');
+    assert.equal(checks[0].args.outcome,'inconclusive','an exit-0 gate that mutated its checkout is never a passing run\n'+log);}
+  if(mode==='pass')assert.deepEqual(checks.map(r=>[r.args.exitCode,r.args.outcome]),[[0,'passed']],log);
   if(mode==='receipt-cached-check'){
     assert.ok(fs.existsSync(path.join(repo,'.git','moe-cas-refused')),'git refused the first CAS\n'+log);
     assert.equal(candidates.length,1,log);assert.equal(checks.length,1,log);
@@ -5320,7 +5608,7 @@ wtr_run() {
   : > "$CLI_ARGS_FILE"; rm -rf "$WTR_DIR/.moe/evidence-rpcs.jsonl" "$WTR_DIR/.moe/attempts"
   set +e
   env PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 FAKE_TASK_STATUS=WORKING \
-    FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
+    FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' MOE_LAND_NET_BACKOFF_SEC=0 "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
     "$WRAPPER" --project "$WTR_DIR" --worker-id worker-wtr --role worker --team Smoke --no-start-daemon \
     --command "$FAKE_CLI" --no-loop --poll-interval 0 >"$TMP_DIR/wrapper-wtr-$name.out" 2>&1
   wtr_code=$?
@@ -5389,6 +5677,24 @@ grep -q '\[ERROR\].* MOE_WORKTREE_CREATE_FAILED: .* has no index file but holds 
 printf 'agent edit\n' | cmp -s - "$WTR_W/src/a.txt" && printf 'agent new\n' | cmp -s - "$WTR_W/src/new.txt" \
   || wtr_fail index-deleted "the edited or the untracked file lost its bytes"
 [ ! -e "$wtr_index" ] || wtr_fail index-deleted "the refusal wrote W's index"
+# (e) WT-09: with a remote, W is cut from refs/remotes/origin/main, fetched first (origin is
+# one commit ahead of the local main); with no such ref the seat refuses with CREATE_FAILED.
+wtr_git worktree remove --force --force "$WTR_W"; wtr_git branch -q -D moe/task/task-postflight
+wtr_git remote add origin "$TMP_DIR/wtr-origin.git"
+wtr_run remote-no-base
+[ "$wtr_code" -eq 1 ] && grep -q 'MOE_LAND_FETCH_FAILED' "$TMP_DIR/wrapper-wtr-remote-no-base.out" \
+  && grep -q '\[ERROR\].* MOE_WORKTREE_CREATE_FAILED: refs/remotes/origin/main does not exist' "$TMP_DIR/wrapper-wtr-remote-no-base.out" \
+  || wtr_fail remote-no-base "not exit 1 with FETCH_FAILED, then CREATE_FAILED for the missing origin base"
+[ "$(wtr_blocks)" = 1 ] && [ ! -s "$CLI_ARGS_FILE" ] && [ "$(wtr_git worktree list --porcelain | grep -c '^worktree ')" = 1 ] \
+  || wtr_fail remote-no-base "not one report_blocked, the CLI ran, or W was registered"
+git init -q --bare "$TMP_DIR/wtr-origin.git"; wtr_git push -q origin main
+wtr_o1=$(git -C "$TMP_DIR/wtr-origin.git" -c user.name='Moe Test' -c user.email=moe@test.local commit-tree 'main^{tree}' -p main -m 'origin ahead')
+git -C "$TMP_DIR/wtr-origin.git" update-ref refs/heads/main "$wtr_o1"
+wtr_run remote-base
+[ "$wtr_code" -eq 0 ] && grep -Eq '^\[worktree\] created .+ on moe/task/task-postflight$' "$TMP_DIR/wrapper-wtr-remote-base.out" \
+  || wtr_fail remote-base "exit $wtr_code, or no [worktree] created line"
+[ "$(wtr_git rev-parse moe/task/task-postflight)" = "$wtr_o1" ] && [ "$(wtr_git rev-parse main)" != "$wtr_o1" ] \
+  || wtr_fail remote-base "W's branch does not start at origin's main tip"
 echo "[worktree reuse] ok"
 
 # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the JetBrains
@@ -5414,7 +5720,9 @@ printf '%s\n' "${PR_MARK}'protected-daemon '+process.argv.slice(2).join(' ')+'\\
   > "$PR/fake-daemon.js"
 printf '#!/usr/bin/env bash\necho decoy-proxy >> %q\nexec %q %q "$@"\n' "$PR/marks" "$NODE_FOR_TEST" "$FAKE_PROXY" > "$PR/bin/moe-proxy"
 printf '#!/usr/bin/env bash\necho decoy-daemon >> %q\nexit 1\n' "$PR/marks" > "$PR/bin/moe-daemon"
-chmod +x "$PR/bin/moe-proxy" "$PR/bin/moe-daemon"
+# A protected launch runs only a known CLI by name, from PATH outside the project.
+printf '#!/bin/sh\nexit 0\n' > "$PR/bin/claude"
+chmod +x "$PR/bin/moe-proxy" "$PR/bin/moe-daemon" "$PR/bin/claude"
 for pr_pkg in moe-daemon moe-proxy; do
   mkdir -p "$PR/install/packages/$pr_pkg/dist"
   printf '%s\n' "require('fs').appendFileSync(require('path').join(__dirname,'..','..','..','..','marks'),'decoy-install-$pr_pkg\\n');process.exit(1);" \
@@ -5434,7 +5742,7 @@ pr_run() {
     if [ "$marker" = - ]; then unset MOE_RUNTIME_PROTECTED; else export MOE_RUNTIME_PROTECTED="$marker"; fi
     PATH="$PR/bin:$TMP_DIR:$PATH" HOME="$PR/home" MOE_PROXY_PATH="$proxy" MOE_DAEMON_PATH="$daemon" \
       FAKE_CLAIM_MODE=idle MOE_TASKLESS_WAIT_SEC=5 MOE_DISABLE_HEARTBEAT=1 timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
-      "$WRAPPER" --project "$PRJ" --worker-id worker-protected --role worker --command /bin/true --no-loop "$@"
+      "$WRAPPER" --project "$PRJ" --worker-id worker-protected --role worker --command claude --no-loop "$@"
   ) >"$PR/$row.out" 2>&1
   pr_code=$?
   set -e

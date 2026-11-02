@@ -171,8 +171,9 @@ The daemon is the only writer; all clients send actions to the daemon.
 ## Delivery Path
 
 Every task carries a plan revision, and a claim that assigns a named worker opens
-an ExecutionAttempt (a resume adopts the worker's own). The other four records
-exist only for a completion that runs `settings.qualityGate`. The gate is unset
+an ExecutionAttempt (a resume adopts the worker's own). The other records
+exist only for a completion that runs `settings.qualityGate`, or for a check a
+trusted runner dispatches (see **The verified-local path** below). The gate is unset
 by default, and the wrapper runs it only on a worker's completion landing in a
 git repository, when the command is non-blank, `autoCommit` is on,
 `qualityGateScope` is `everyTask` or the task is epic-final, and
@@ -202,7 +203,9 @@ git repository, when the command is non-blank, `autoCommit` is on,
 | Plan revision | `task.planRevision` in `tasks/<id>.json` | daemon, on every plan or DoD change (`taskStore.updateTask`) | every task |
 | ExecutionAttempt | `attempts/<id>.json` | daemon: opened by `claim_next_task`, moved by `complete_task`, a restart, `reattach_attempt` and `finalize_attempt` | every claim that assigns a named worker |
 | Candidate | `candidates/<id>.json` | wrapper, through `record_candidate`, before the gate runs | gated completions only |
-| CheckRun | `checks/<id>.json` | wrapper, through `record_check_run`, for each gate command it started | gated completions only |
+| CheckRun | `checks/<id>.json` | wrapper, through `record_check_run`, for each gate command it started; or the daemon, from a trusted runner's `record_check_observation` | gated completions, and dispatched checks |
+| CheckDispatch | `checks/dispatches/<id>.json` | trusted runner, through `record_check_dispatch` over `/runner`, before it runs a check | dispatched checks only (no runner dispatches yet) |
+| CheckObservation | `checks/observations/<dispatchId>.json` | daemon, from `record_check_observation` over `/runner`: the marker naming the dispatch's one CheckRun | dispatched checks only |
 | Review | `reviews/<id>.json` | daemon, from `qa_approve` / `qa_reject`, bound to the task's current candidate | tasks with a candidate only |
 | DeliveryReceipt | `receipts/<id>.json` | wrapper, through `record_delivery_receipt`, after it moved the target ref | gated landings only |
 
@@ -218,7 +221,10 @@ End to end:
    instead of refusing it.
 3. When a gate will run, after the CLI exits the wrapper records the attributed
    tree as a Candidate, runs the gate in a disposable clean checkout of it and
-   records the CheckRun.
+   records the CheckRun with its outcome: `passed` only at exit 0 with the
+   checkout intact, `code-failure` at a nonzero exit, `inconclusive` when that
+   integrity check fails or throws, and `infra-failure` for a gate interrupted
+   at teardown.
 4. A passing gate lands the tree with a CAS `update-ref`, then the wrapper records
    the commit, the DeliveryReceipt and `finalize_attempt { outcome: 'landed' }`.
    A failing gate never moves the branch: the bytes go to
@@ -235,7 +241,9 @@ End to end:
    `wait_for_task` skip a WORKING task that names it in `dependsOn`, only an
    explicit `claim_next_task` of that task is refused
    `DEPENDENCY_EVIDENCE_MISSING`, and a `blockedOnTaskIds` wait on it is not
-   auto-unblocked. `dependsOn` never gates a PLANNING or REVIEW claim.
+   auto-unblocked. `dependsOn` never gates a PLANNING or REVIEW claim. That is
+   the rule for a legacy or observe consumer; a verified-local consumer needs
+   more (see **The verified-local path** below).
 
 With no gate to run (the default), no Candidate, CheckRun, DeliveryReceipt or
 Review is written. The wrapper lands the completion commit directly and reports
@@ -268,11 +276,130 @@ clone that wrote it:
   frozen bytes themselves live in git.
 - `checks/`: gate output from a disposable local checkout; the verdict reaches
   the tracked task as the landed commit or the `MOE_COMMIT_FAILED_GATE` entry.
+  Its `dispatches/` and `observations/` hold a trusted runner's records, bound
+  to this daemon's candidates and runner key.
 - `reviews/`: an append-only `candidateId` binding for this daemon;
   `qa_approve` already persists `reviewSummary` on the tracked task.
 - `receipts/`: crash recovery for this clone's ref move, paired with
   `<gitdir>/moe/receipt/<taskId>.json`, which never leaves the clone; the
   landing itself travels as the commit.
+
+### The verified-local path
+
+`verified-local` is unconditionally unavailable today: `assertExecutionProfileReady`
+(`delivery/executionProfile.ts`) refuses it with `EXECUTION_PROFILE_NOT_READY`
+until protected local isolation, trusted runner evidence and revision-bound
+delivery are certified, and nothing below enables it. Legacy and observe tasks
+keep the path above unchanged. The pieces below exist so that a strong task,
+once allowed, reaches DONE only on evidence its writer cannot mint.
+
+- **Runner channel** (`server/runnerChannel.ts`). `/runner` accepts only a
+  loopback connection that presents exactly one `x-moe-runner-key` header equal
+  to the project's host key. The key lives at `<MOE_RUNNER_KEY_DIR, else
+  ~/.moe/runner-keys>/<first 32 hex of sha256(projectPath)>.key`: 0600 in a 0700
+  directory, outside the project tree, provisioned at daemon start (a failure
+  leaves `/runner` refusing every connection) and re-read on every upgrade, so a
+  rotation takes effect. The `runnerId` is derived from the key; no tool
+  argument carries it. Limit: under legacy and observe a host agent runs as the
+  same user and can read the key, so no trust is claimed there. Only
+  verified-local, whose agents run in guest VMs behind the guest bridge
+  (`scripts/local-runner/guest-bridge.mjs` forwards no check, dispatch,
+  observation or receipt tool), may treat the channel as trusted.
+- **Dispatch, observation, authentication** (`state/checkObservationStore.ts`).
+  Before it runs a check, the runner records a CheckDispatch with
+  `moe.record_check_dispatch`, and the daemon pins the task's current candidate,
+  that candidate's tree and the current approved plan revision. For a
+  verified-local task it admits only a check the task owes (`owedChecks`: the
+  approved definitions plus the owed gate; else `CHECK_DEFINITION_NOT_APPROVED`)
+  in an environment `settings.checkEnvironments` lists (else
+  `CHECK_ENVIRONMENT_NOT_APPROVED`). The result arrives as
+  `moe.record_check_observation`: the daemon writes the CheckRun from the
+  dispatch's binding (candidate, tree, command, revision, environment, runner)
+  plus the reported exit code, outcome and tail, and a marker naming it as the
+  dispatch's one answer. `isAuthenticatedCheckRun` accepts only such a stored
+  run; a `moe.record_check_run` report has no marker and stays diagnostic. Both
+  tools refuse `/mcp` with `RUNNER_CHANNEL_REQUIRED` and are hidden from agent
+  roles. The host's runner client is `scripts/local-runner/check-dispatch.mjs`
+  (see **Local Runner Isolation**); nothing invokes it per candidate yet.
+- **One pass rule** (`delivery/policy.ts`). `passedOn` (legacy and observe) and
+  `trustedPassedOn` (verified-local) are the only pass matches, chosen in the
+  same two places (the owed gate and the protected definitions). `qa_approve`,
+  the dependency gates and the delivery projection all read them through
+  `evaluateDeliveryEvidence`. For a verified-local task a required check counts
+  only as an authenticated run on the current candidate's tree, with outcome
+  `passed` at exit 0, at the current approved plan revision, in an environment
+  still listed, bound to a dispatch naming that check. That holds under every
+  `deliveryPolicy`, `legacy` included. A strong task that owes no check reports
+  `required-checks-undeclared`. An architecture check that is not in the
+  installed form `moe-daemon check-architecture …` reports
+  `required-check-untrusted-checker:<id>`, or `(qualityGate)` in place of the
+  id for the gate. Protection covers only the entries the approver names: a
+  protected wrapper that runs unprotected candidate code (a dist built from
+  candidate sources, an unprotected helper or package script) is outside it.
+- **Bounded repair** (`delivery/repairPolicy.ts`, `delivery/repairActivation.ts`).
+  Each authenticated observation of a verified-local task is judged by
+  `decideRepair` under `settings.repairPolicy` and acted on once, never on a
+  duplicate, through existing transitions only. A code failure returns an
+  unparked REVIEW task to WORKING under the same approved revision. An
+  infrastructure failure or timeout goes back to the runner to re-dispatch. An
+  exhausted budget or an unchanged failure escalates (a task comment and a
+  `#governors` alert), and an unapproved plan revision routes the task to
+  PLANNING.
+- **Revision- and candidate-bound QA** (`delivery/reviewBinding.ts`). Under
+  verified-local, `qa_approve` and `qa_reject` need the reviewer's own running
+  attempt, generation and served-context session (the fence `complete_task`
+  uses) and the current candidate named explicitly. An approval also needs that
+  candidate produced under the current approved revision; a rejection never
+  delivers, so a stale-revision candidate can still be rejected. moe-proxy
+  stamps the identity onto both tools.
+- **Dependency readiness** (`state/dependencyUnblock.ts`). One predicate
+  (`dependencyShortfall`, `isDependencySatisfied`, `unmetDependsOn`) takes the
+  consumer. A legacy or observe consumer keeps the rule above, where a missing
+  or ARCHIVED prerequisite satisfies. A verified-local consumer needs retained
+  verified delivery: the prerequisite must exist (`prerequisite-missing`; drop a
+  deleted id with `set_task_dependencies`), carry a verified-local snapshot
+  (`verified-local-snapshot`), hold an approved review of its current candidate
+  (`approved-review`), keep its delivery receipt when ARCHIVED
+  (`delivery-receipt`) and satisfy its own evidence. The claim gate,
+  `wait_for_task`, the auto-unblock, the stale-block alert, `report_blocked` and
+  every `dependsOnUnmet` (`get_context`, `list_tasks`, `search_tasks`,
+  `set_task_dependencies`) read it.
+- **Strong local delivery** (the wrappers). A wrapper pins the attempt's profile
+  and plan revision from its verified attempt record, never from the
+  environment. Under verified-local the receipt journal
+  `<gitdir>/moe/receipt/<taskId>.json` becomes the landing's durable intent
+  (tree, base, plan revision, profile), fsynced and renamed into place before
+  `update-ref`, or the landing is refused (`MOE_COMMIT_REFUSED_INTENT_INCOMPLETE`,
+  `MOE_COMMIT_REFUSED_INTENT_UNWRITABLE`). An unreconciled journal refuses the
+  task's next completion (`MOE_COMMIT_REFUSED_UNRECONCILED_INTENT`). The attempt
+  stays `finalizing` until the receipt is recorded
+  (`MOE_FINALIZE_DEFERRED_RECEIPT`), which holds `qa_approve` and every claim of
+  the task, so nothing reaches DONE and no dependent is released first. A copy
+  of the landing on another tree (a rebase) is never adopted as its proof
+  (`MOE_DELIVERY_PROOF_NOT_TRANSFERRED`; `MOE_PUSH_REBASE` is ignored). Every
+  checkpoint landing, recoveries included, is refused
+  (`MOE_COMMIT_REFUSED_STRONG_CHECKPOINT`), so only a verified completion moves
+  the target. The pre-flight replay settles a crash between the ref move, the
+  receipt and `finalize_attempt`, and drops a strong journal only once its
+  attempt is closed. Codes: `scripts/CLAUDE.md`, **Land on every exit**.
+- **Architecture rules** (`commands/checkArchitecture.ts` over
+  `delivery/architectureRules.ts`). `moe-daemon check-architecture --rules
+  <repo path> [--base <rev>] [--tree <rev>]`, run from the repository root,
+  judges the committed `--tree` (default `HEAD`) against `--base` (default its
+  first parent) through bounded read-only Git and committed bytes only. It
+  prints one JSON report and exits 0 passed, 1 failed, 2 inconclusive or
+  unavailable. It is meant to run as a protected required check. Before
+  verified-local can rely on it, the check guest must resolve `moe-daemon` only
+  to a trusted install built at the base revision, the `--rules` file needs
+  protection, and a multi-commit candidate must be materialized as one commit
+  on its `baseRevision`, because a dispatch cannot add a per-candidate `--base`.
+- **Acceptance fixtures** (`packages/moe-daemon/src/__acceptance__/`). These
+  suites reach tools only through `McpAdapter` (`mcpCall.ts`), as an agent
+  does: producer-consumer behaviour, the delivery bypass fixtures (forged,
+  stale, missing-check, target-race and receipt-crash) and dependency
+  projection agreement. A strict task whose required check is the daemon suite
+  should list that directory among its `executionContract.requiredChecks`
+  `assertionRoots`, so a candidate cannot weaken the fixtures unnoticed.
 
 Record shapes: `docs/SCHEMA.md`. Tool contracts: `docs/MCP_SERVER.md`. Settings
 and the wrapper side (gate, rescue refs, receipts): `docs/CONFIGURATION.md`.
@@ -302,18 +429,42 @@ and `verified-local` stays refused until certification and the client gates pass
   stdin and installs the root-owned supervisor, the MCP shim and the locked job identities `moe-agent` and `moe-check`.
   Readiness needs a clean cloud-init `done`, then zero mounts, the installed hashes, the credential denied to both
   identities, locked unprivileged identities and bounded resources.
-- **Supervisor modes** (`guest-supervisor.py`, run as root through `multipass exec`; its header defines every code).
+- **Supervisor modes** (`guest-supervisor.py`, run as root over the guest SSH route; its header defines every code).
   `bridge` runs one agent job, `check` one approved check, `materialize` copies a snapshot into the workspace, `export`
   streams the workspace's changes back, `verify` compares the workspace with its manifest, and `agents`, `toolchain` and
   `dependencies` install pinned bytes. Exit codes: 0 done, 64 usage, 65 malformed input, 66 no workspace, 71 the job
   could not start, 73 already exists, 74 I/O failure or host EOF, 75 signal, 76 protocol violation, 77 not root. `check`
-  adds 79 (a protected path lacks its approved blob), 80 (the job changed one) and 81 (the dependency install failed).
+  adds 79 (a protected path lacks its approved blob), 80 (the job changed one), 81 (the dependency install failed) and
+  82 (the candidate's own package files were refused). In the guest a guard starts each job as its locked identity with
+  no new privileges and in a fresh PID namespace (a check job also in its own loopback-only network namespace, under
+  its rlimits), so no descendant, `setsid` or not, outlives the job.
+- **Host-guest transport** (`guest-ssh.mjs`, `guest-stream.mjs`). All eight supervisor modes stream over the in-box
+  OpenSSH client at a pinned path, never a PATH lookup: `/usr/bin/ssh` on Linux and macOS,
+  `%SystemRoot%\System32\OpenSSH\ssh.exe` on Windows.
+  - The argv is fixed: `-F none`, ed25519 only, and no agent, forwarding, PTY or ProxyCommand. The guest's host key is
+    pinned through cloud-init `ssh_keys` and checked under `HostKeyAlias=<owned name>`.
+  - The address is `multipass info` `ipv4[0]`, read fresh for every stream. A Windows `hcs` install and a WSL `qemu`
+    install can both number zone1 `10.97.0.0/24`, so one guest IP can exist on both hosts at once, or be recycled. The
+    fresh read plus the HostKeyAlias pin turn either case into ssh exit 255 and a fixed code, never a session with the
+    wrong guest.
+  - Provisioning writes a fresh per-VM client key to `<home>/.moe/guest-ssh/<name>.key` and the pinned host key line to
+    `<name>.known_hosts` (both 0600, never overwritten). Purging the VM removes both. The guest accepts the key only
+    for the default user, as `restrict,command="exec /usr/bin/sudo -n /opt/moe/bin/moe-supervisor \"$SSH_ORIGINAL_COMMAND\""`,
+    so it starts only supervisor modes. Readiness also checks that neither job identity can read the guest host key
+    (`readHostKey`).
+  - `multipass exec` now carries only stdin-less queries capped at 64 KiB (`MAX_PROBE_BUFFER`).
+  - Why: Multipass 1.17.0 `exec` truncates stdin on Linux, delivers none on Windows (#3749) and stalls Windows stdout
+    near 2 MiB (#5478).
+  - Error handling: there is no fallback to `exec` stdio or to the host. An unusable route fails closed with a fixed
+    code.
 - **Check lifecycle** (`check-lifecycle.mjs`, `check-session.mjs`, `check-dispatch.mjs`). Each run gets a fresh VM:
   provisioning and readiness; the pinned Node toolchain and an offline dependency tree, built on the host from the
   approved definition's lockfiles (`toolchain-cache.mjs`, `dependency-cache.mjs`); a copy-only materialization; an
-  `npm ci --offline --ignore-scripts --workspaces=false` in the guest, refused (81) in a lockfile directory without a
-  `package.json` or with an `npm-shrinkwrap.json` or `.npmrc`; the check once, as `moe-check`; `verify` of a passed run's
-  workspace; then the VM deleted on every path. The outcome is `passed`, `code-failure`, `infra-failure`, `timeout`,
+  `npm ci --offline --ignore-scripts --workspaces=false` in the guest, refused before any install when a lockfile
+  directory's own `package.json` is missing or linked, differs from the lockfile's root entry or sets overrides, bundling
+  or workspaces, or sits beside an `npm-shrinkwrap.json` or `.npmrc` (82, a `code-failure`; a lockfile, cache or install
+  fault is 81, an `infra-failure`); the check once, as `moe-check`; `verify` of a passed run's workspace; then the VM
+  deleted on every path. The outcome is `passed`, `code-failure`, `infra-failure`, `timeout`,
   `skipped` or `inconclusive`, and it reaches the daemon only over the authenticated `/runner` channel.
 - **Environment identity and evidence freshness** (`check-evidence.mjs`). `checkEnvironment` hashes the declared
   `CHECK_BOUNDARIES` with the observed image, supervisor, VM size, toolchain and dependency tree, so changing any of

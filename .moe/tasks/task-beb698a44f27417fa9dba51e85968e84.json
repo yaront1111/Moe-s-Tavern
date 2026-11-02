@@ -19,36 +19,60 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development. Create packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts (~130 lines), a doc-contract guard following mem pattern-doc-contract-guard-test.\n\nFixture:\n- REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..'), copied from src/benchmarks/non-routineWorkloads.test.ts. No absolute paths.\n- readDoc(rel) throws a NAMED error when the file is missing or empty. Split lines with /\\r?\\n/ and keep 1-indexed line numbers in failure messages, e.g. `README.md:12: <line>`.\n- report = JSON.parse(docs/baselines/cq-m04/report.json); readme = docs/baselines/cq-m06/README.md.\n- fmt(x) = Number.isInteger(x) ? String(x) : x.toFixed(2), except observedTokensPerAcceptedChange, which is quoted as String(value) exactly as report.json stores it.\n\nCases. Each must fail for the named mutation:\nG1 Decision. Exactly one line matches /^Decision: (promotion|non-promotion)$/. While assertExecutionProfileReady('verified-local') (delivery/executionProfile.js) throws codeName EXECUTION_PROFILE_NOT_READY, that line must be 'Decision: non-promotion'. Mutation: write 'Decision: promotion' -> red.\nG2 Figures recomputed from report.json. The README must contain each of these as a whole token:\n- summary.workloads;\n- summary.acceptance accepted, rejected and notAssessed;\n- fmt(mean planning.plannerSessions) over the rows with a number, and that observed count;\n- the count of rows whose retrieval.sourceRetrievals is null;\n- summary.efficiency.observedTokens, and String(observedTokensPerAcceptedChange);\n- 'incomplete' when efficiency.complete is false;\n- the median latency.endToEndMs over observed rows (middle value; for an even count, Math.round of the mean of the two middle values);\n- the count of rows whose latency.firstCodeChangeMs is null;\n- every inputs.moeCommits sha and every inputs.corpusVersions value.\nMutation: change one digit of any quoted figure -> red.\nG3 Gates are tied to live authorities. A '## Gates' table has a row for 'readiness' whose status is 'unmet' while readiness refuses. For each entry of CQ-M05's activationGaps() (state/profileRollout.js; adapt to the landed name), a row names its capability and its exact reason with status 'unsupported'. Rows for 'matched pilot' and 'retrieval baseline' have status 'unmet'. Mutation: delete a gap row, or change its reason -> red.\nG4 Honesty statements present verbatim: 'Skipped real-VM tests do not certify support.', 'Claimed savings: none.' and 'Tokens are not monetary cost.'. Each target row reads 'unmeasured' in its pilot column. Mutation: delete any one -> red.\nG5 Percentages. Every token matching /\\d+(?:\\.\\d+)?%/ is '50%' or '30%' and sits on a line containing 'target' (case-insensitive). Mutation: add 'planner sessions fell 40%' -> red.\nG6 Platform support. A '## Platform support' table exists with at least one row, and every status cell is in {certified, not certified, unsupported, not run}. Mutation: a status 'supported (tests skipped)' -> red.\n\nRun `npx vitest run src/benchmarks/rolloutDecision.test.ts`: it is red with the named missing-README error.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts"
+      ],
+      "note": "Guard written (G1-G6 plus 5 helper self-tests). RED proven in a Linux snapshot of HEAD 746d88c4 (git archive, npm ci under env -i, node v24.21.0): 20 guard cases fail with ROLLOUT_DECISION_INPUT_MISSING for docs/baselines/cq-m06/README.md; the 5 helper tests pass. Probed live authorities in the snapshot: assertExecutionProfileReady('verified-local') throws EXECUTION_PROFILE_NOT_READY (never-evaluated default); activationGaps() returns only vm (vm-provisioning-uncertified) and check (check-runner-uncertified). The client gap is gone at HEAD because peer wip 746d88c4 (CQ-M07d2) advertises verifiedLocal wire support, so the README must not claim an unsupported client row; G3 binds rows to the live gaps in both directions. Report figures: 20 workloads, planner mean 1 over 20 rows, sourceRetrievals and firstCodeChangeMs null in 20 of 20, median end-to-end 669869 ms over 20 (even count, Math.round of the middle pair), observedTokens 38926322 incomplete, 1946316.1 per accepted change. Pre-existing dirty paths of other sessions (.moe/*, ci.yml, scripts/local-runner/seat-capacity.mjs and its test, local-runner-bundle.test.mjs) were left untouched.",
+      "startedAt": "2026-11-01T19:30:24.810Z",
+      "completedAt": "2026-11-01T19:33:03.657Z"
     },
     {
       "stepId": "step-2",
       "description": "Write docs/baselines/cq-m06/README.md: the decision record (~110 lines), from existing evidence only. No agent runs, no pilot (task rail).\n\nCompute every figure first, with a throwaway `node -e` over docs/baselines/cq-m04/report.json that uses the guard's fmt and median rules. Paste the values verbatim and never round by hand.\n\nSections:\n1. Title 'CQ rollout promotion decision', then a one-paragraph scope. It decides promotion of the strong profile (verified-local) from the CQ-M04c baseline (n=1, 20 workloads, legacy workflow, moe commit and corpus version as in report.json), and is not a savings or quality-improvement claim. Then the line 'Decision: non-promotion'.\n2. '## Gates' table (Gate | Status | Evidence):\n   - readiness: unmet. assertExecutionProfileReady refuses verified-local with EXECUTION_PROFILE_NOT_READY.\n   - One row per CQ-M05 activationGaps() entry (vm, client, check), each with its exact reason: unsupported. The evidence column cites CQ-M05's PROJECT_SETTINGS_UPDATED refused-activation record.\n   - matched pilot: unmet. Not run, because it needs a separately approved paid batch.\n   - retrieval baseline: unmet. sourceRetrievals is unknown in all baseline rows.\n3. '## Targets' table (Target | Baseline (CQ-M04c) | Pilot | Outcome):\n   - '50% fewer planner invocations (target)': baseline is the mean planner sessions per workload and its observed count; pilot 'unmeasured'; outcome 'unmeasured'. Single-run workloads never re-enter PLANNING, and recipe activation is deferred, so a pilot of today's workflow could not show planner reuse.\n   - '30% less repeated source retrieval (target)': baseline unknown in N of N rows; pilot 'unmeasured'; outcome 'unmeasurable against this baseline'.\n4. '## Accepted-change cost, time and quality (baseline only)':\n   - quality: accepted/rejected/notAssessed by the held-out assessment;\n   - cost: observed tokens and tokens per accepted change, marked incomplete, with the reasoning tokens unknown;\n   - 'Tokens are not monetary cost.';\n   - time: the median end-to-end ms over the observed rows; first-code-change unknown in N rows;\n   - 'Pilot: unmeasured.' and 'Claimed savings: none.'\n5. '## Platform support' table (Platform | Status | Evidence). Take the rows from what R13 (task-f4811a72) and I06 (task-4e412148) LANDED (their completion summaries and Serena handoffs) and from probes on this host: `uname -a`, `command -v multipass`, `java -version`. Cover at least: WSL2 Linux (this host), Linux VM provisioning, Windows host, macOS and the IDE clients. Use only the statuses certified, not certified, unsupported and not run; certified only where landed real-hardware evidence says so. Then the line 'Skipped real-VM tests do not certify support.'\n6. '## What a promotion needs': certified readiness, VM/client/check capabilities and hardware; a matched pilot on the same corpus digest, caps and role models, with retrieval counters in both arms (which means a re-run baseline); recipe activation; and quality no worse than the baseline. Each item is a separately approved task.\n7. Links to docs/baselines/cq-m04/README.md and report.md.\n\nPercent signs appear only in the two target rows. Error handling: if a figure cannot be derived (a field missing in report.json), write 'unknown' and make the guard expect it; never estimate.\nRun the guard: it turns green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "docs/baselines/cq-m06/README.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/baselines/cq-m06/README.md"
+      ],
+      "note": "Wrote docs/baselines/cq-m06/README.md (decision record, 'Decision: non-promotion'). Figures derived by a throwaway node -e over docs/baselines/cq-m04/report.json with the guard's fmt/median rules: 20 workloads, repetitions 1, moe commit 6eb56809..., corpus 1, accepted 20/0/0, planner mean 1 over 20 rows, sourceRetrievals and firstCodeChangeMs unknown in 20 of 20, median end-to-end 669869 ms over 20 (even count, Math.round of the middle pair), observed tokens 38926322 incomplete, 1946316.1 per accepted change, reasoning tokens unknown (60 unknown records). Live authorities re-read in source: assertExecutionProfileReady refuses verified-local (EXECUTION_PROFILE_NOT_READY, never-evaluated default); activationGaps() derives vm/check from held readiness and client from the I01 decodeClientHello gate. Gates table: readiness unmet, vm and check unsupported with their exact reasons, 'client residuals' unmet (the client gap is no longer listed because verifiedLocal wire support is advertised; the open client items are I06's unowned residuals), matched pilot and retrieval baseline unmet. Platform rows from docs/CERTIFICATION.md (R13: linux x64 and win32 x64 certified, report sha prefixes e793c7c6 and 48dd2675, both certified 106284b0 not HEAD, executionReady false; darwin x64/arm64 unsupported: no report) and I06's completion summary (JetBrains Windows Gradle run 29 suites/544 tests/0 failures; VS Code 388 tests, 384 pass, 4 Windows-only skips; I06 was in REVIEW, not DONE, at writing, so the README says so) plus host probes (uname -a: WSL2 6.18.33.1 x86_64; /snap/bin/multipass present; java not on PATH). Guard run in the existing Linux snapshot /tmp/moe-m06a.lIylRa/repo (HEAD 746d88c4 archive, native npm ci) with the current test file and the README overlaid: 25/25 pass. This was a quick iteration run, not the step-3 gate; step 3 rebuilds a fresh snapshot at current HEAD. Pre-existing dirty paths of other sessions (.moe/*, readinessHolder.test.ts, WebSocketServer.test.ts, .moe/decisions/) left untouched.",
+      "startedAt": "2026-11-01T19:34:46.289Z",
+      "completedAt": "2026-11-01T19:36:40.255Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY ONCE. Run the gate fresh: `cd packages/moe-daemon && npm test`. It must exit 0; its command, exit code and output tail are the complete_task evidence.\n\nRun it in an isolated Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate):\n- `git archive HEAD` of the WHOLE repo; docs/ is required;\n- overlay ONLY packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts and docs/baselines/cq-m06/README.md;\n- npm ci under env -i with a Linux-only PATH and NO_COLOR=1, so no MOE_* variable is set;\n- cmp both files against the snapshot before citing the run.\nAlso type-check the test file with a scratch tsconfig ({extends: ./tsconfig.json, include: [the test], exclude: []}).\n\nMutation proof for DoD4. In the snapshot copy, never in the shared tree:\n- change one digit of a quoted figure;\n- write 'Decision: promotion';\n- delete 'Skipped real-VM tests do not certify support.';\n- add a line containing '40%'.\nFor each one: run `npx vitest run src/benchmarks/rolloutDecision.test.ts`, confirm the named case turns red, then restore and cmp the bytes. Record each mutant, its red case and the restore in the step note.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/baselines/cq-m06/README.md"
+      ],
+      "note": "Gate fresh, in a Linux-native snapshot (git archive of the WHOLE repo at HEAD d67c23d1, native npm ci under env -i, node v24.21.0, NO_COLOR=1, no MOE_* set), with ONLY rolloutDecision.test.ts and docs/baselines/cq-m06/README.md overlaid and cmp-equal to the shared tree before and after: `cd packages/moe-daemon && npm test` -> EXIT 0, Test Files 227 passed (227), Tests 6859 passed | 20 skipped (6879); rolloutDecision.test.ts 25/25. Scratch tsconfig typecheck of the test file (extends ./tsconfig.json, types node, include only the test, exclude []): tsc exit 0. EARLIER RUN (not cited as the gate, reported for honesty): at HEAD b0ca24d8 the same overlay gave exit 1 with 13 failures in readinessHolder.test.ts (7) and WebSocketServer.test.ts (6), none in my files. Cause: peer task-41d0c5a9 (CQ-M07d2) had landed its source in wip 746d88c4 (verifiedLocal wire support, so the client gap left activationGaps) while its matching test edits were still uncommitted in the shared tree. A diagnostic overlay of those two dirty test files gave exit 0 (227/227, 6859 passed); I then waited and M07d2 landed as d67c23d1 with those test fixes, and the cited run is at that HEAD. MUTANTS (scratch README copy in the snapshot, each run with `npx vitest run src/benchmarks/rolloutDecision.test.ts`, each restored from the shared-tree README and cmp OK): M1 median 669869->669868 -> 1 failed, G2 'quotes endToEnd exactly as report.json derives it'; M2 'Decision: non-promotion' -> 'Decision: promotion' -> 1 failed, G1; M3 deleted 'Skipped real-VM tests do not certify support.' -> 1 failed, G4; M4 added a line with '40%' -> 1 failed, G5. Extras: M5 vm gate reason vm-provisioning-uncertified->vm-provisioning-done -> 1 failed, G3; M6 platform status 'supported (tests skipped)' -> 1 failed, G6. Unmutated README in the snapshot: 25/25. In every mutant run 24 of 25 passed and only the named case failed. No edit in the shared tree beyond the README; no .moe edits, no Git writes. Scratch: /tmp/moe-m06a-gate2.w8Agvd (log /tmp/moe-m06a-gate2.log).",
+      "startedAt": "2026-11-01T19:36:43.071Z",
+      "completedAt": "2026-11-01T19:40:43.070Z"
     },
     {
       "stepId": "step-4",
       "description": "One adversarial self-review of this task's diff only (load adversarial-self-review). Read the README as a skeptical reviewer looking for an unmeasured claim:\n- Every number traces to a report.json field or a guard computation.\n- No sentence implies savings, improvement, readiness, isolation or support beyond the cited evidence.\n- Unknown counters say unknown, never 0.\n- Platform rows cite landed R13/I06 evidence or a probe run on this host; skipped tests are never evidence.\n- The pilot is described as not run, with what it would need.\n\nCheck the guard for brittleness: CRLF line endings, a README that is missing or empty, a report.json whose field is null, and an even-count median.\n\nError handling: the guard throws named errors and never passes on missing input.\n\nConfirm there are no .moe edits, no Git writes and no changes to scripts/baseline-*.mjs or docs/baselines/cq-m04.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/baselines/cq-m06/README.md"
+      ],
+      "note": "Adversarial self-review of this task's diff (README + guard) found and FIXED five unsupported or imprecise claims in the README: (1) the vm gate row said the refusal code is EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED, but updateProjectSettings validates readiness first, so today's refusal is EXECUTION_PROFILE_NOT_READY and the PROJECT_SETTINGS_UPDATED record lists the gap in unsupportedCapabilities; reworded. (2) 'Workflow: legacy (no execution profile enabled)' was an inference; now 'Workflow: legacy.' (3) 'recipe activation is deferred' and 'single-run workloads never re-enter planning' could not be verified in source or docs; replaced by the report-derived fact that every baseline row has exactly one planner session, and the promotion-needs item now says a pilot arm able to reuse planning is needed. (4) 'java -version' was actually `command -v java`; corrected. (5) 'no Extension Host / sandbox IDE session' narrowed to I06's recorded 'headless only, no IDE session'. Checked: every % sign sits on a target line (lines 38, 39 only); all baseline figures re-derived from report.json by node and recomputed by the guard; unknown counters say unknown, never 0; skipped real-VM tests are not evidence for any row. Guard brittleness: CRLF handled (/\\r?\\n/ split, helper-tested), missing and empty README throw ROLLOUT_DECISION_INPUT_MISSING and ROLLOUT_DECISION_INPUT_EMPTY (red run in step 1), a null report field is dropped by numbers() and counted by unknownCount, an even-count median is helper-tested (and the real report has 20 rows), a missing section, table or column throws a named error, report.json is parsed at import so a missing report fails the whole file closed. Known coupling, accepted and by design: G1/G3 read the live readiness and activationGaps(), so a later task that changes readiness or the gaps must update this README in the same change; the failure message names the README line. After the edits I re-ran the full gate on the final README: snapshot of HEAD d67c23d1, only the test file and README overlaid and cmp-equal: `cd packages/moe-daemon && npm test` EXIT 0, 227 files, 6859 passed, 20 skipped; the four DoD mutants (digit drift -> G2, 'Decision: promotion' -> G1, deleted statement -> G4, '40%' line -> G5) are each red with 24 of 25 passing, each restored and cmp OK. Confirmed: no .moe edits, no Git writes, no diff under scripts/ or docs/baselines/cq-m04, and the test file has no diff against HEAD (it landed in checkpoint b0ca24d8). Dirty paths of other sessions (.moe/*, .moe/decisions/) left untouched.",
+      "startedAt": "2026-11-01T19:40:46.346Z",
+      "completedAt": "2026-11-01T19:42:36.330Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -57,28 +81,58 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-c53999b2dd2c4ad08bacb73c50371cfa"
+    "task-c53999b2dd2c4ad08bacb73c50371cfa",
+    "task-f4811a729f9e436ba129a65c12d348c1"
   ],
   "priority": "HIGH",
   "order": 230.1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ef5813cce85b4b3492ef036f0f260668",
+      "author": "architect-b58e1112",
+      "content": "@governor-693b7073 Edge fix from architect-b58e1112, re-sent here because the chat copy (msg-8a87df81 in chan-18116c9a) was loop-guarded with no routing targets.\n\nDropping R13 (f4811a72), I06 (4e412148) and V12 (b621ddc9) from CQ-M05 removed the only thing holding back this row and M06. worker-c0a1ac70 has already claimed M05, so this row becomes claimable the moment M05 lands, before R13's operator reports and before I06 lands. M05 itself needs none of the three, so keep that drop and move the edges down a row:\n- This row (M06a beb698a4): addDependsOn f4811a72 and 4e412148. Its step 2 builds the '## Platform support' table from what R13 and I06 LANDED.\n- M06 (ced85748): addDependsOn f4811a72, 4e412148 and b621ddc9. It checks M06a's platform lines against R13 and I06. Its docs sweep also shares CONFIGURATION.md, SCHEMA.md, MCP_SERVER.md and CLAUDE.md with V12's plan, and its planningNotes rely on V12 being upstream; that held only through M05 → V12.\n- M06b (4359d60b): no edge needed. It is a daemon-only e2e and consumes none of the three.\n\nThere is no cycle risk. Apply the edges before M05 reaches DONE. Undo is removeDependsOn of the same ids.",
+      "timestamp": "2026-10-31T16:12:34.290Z"
+    },
+    {
+      "id": "comment-de2c66b70a734d3ba16fd9068448409b",
+      "author": "governor-978922c1",
+      "content": "Governor edge change (governor-978922c1): early start. I dropped the dependsOn on CQ-I06 (task-4e412148), so this row is claimable now; CQ-M05 and CQ-R13 are DONE. I06 is in REVIEW, and its completion 9335606c landed. It is an evidence-only row, so what you consume is its completion summary, its step-1 comment and its Serena handoff. Read them with get_context {taskId:'task-4e412148225f480c8c0d5a1706a3cc76', view:'full'}. R13's certified rows are in docs/CERTIFICATION.md at HEAD (win32 x64 and linux x64 certified; darwin unsupported: no report).\n\nCQ-M06 still depends on I06 directly. If a QA reject on I06 changes its evidence, re-sync step 2's platform rows before you complete.",
+      "timestamp": "2026-11-01T19:29:40.154Z"
+    },
+    {
+      "id": "comment-c0a5c13cbb234d4c817f65a7314f06f4",
+      "author": "worker-83c3fcad",
+      "content": "Heads-up from CQ-M07d2 (task-41d0c5a9): SERVER_CAPABILITIES.verifiedLocal flips to true, so once it lands activationGaps() returns [vm, check] under the default held readiness: the 'client' gap (client-contract-unsupported) is gone. Your benchmarks/rolloutDecision.test.ts G3 binds docs/baselines/cq-m06/README.md's Gates table to the live gaps, so that table must list only vm and check as unsupported, with no client row. Readiness still refuses (EXECUTION_PROFILE_NOT_READY), so non-promotion stands. I did not touch your files.",
+      "timestamp": "2026-11-01T19:34:43.799Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:50:58.592Z",
-  "updatedAt": "2026-10-29T22:55:16.536Z",
+  "updatedAt": "2026-11-01T19:46:44.043Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:53:46.332Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T19:46:04.772Z",
+    "wallClockMs": 247938440
   },
   "contextFetchedBy": [
-    "architect-32ff5555"
+    "architect-32ff5555",
+    "worker-9be3bcf5",
+    "qa-1b5727b1"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T22:55:16.436Z",
   "executionContract": {
@@ -120,5 +174,90 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T22:55:16.536Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T19:30:24.810Z",
+  "commits": [
+    {
+      "sha": "b0ca24d80fb98c5ec52216e46067ea55db2f231e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-9be3bcf5@2026-11-01T19:29:38Z",
+      "paths": [
+        ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json",
+        "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts"
+      ],
+      "recordedBy": "worker-9be3bcf5",
+      "recordedAt": "2026-11-01T19:33:47.053Z",
+      "treeId": "07f34b77174f312f493347fb2cec1252a512a2f3",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "4468588dccdd658d1bdfef9e409af885b8700100",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-9be3bcf5@2026-11-01T19:34:17Z",
+      "paths": [
+        ".moe/tasks/task-5464e7259cfd479793d93f9651fb3eba.json",
+        ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
+        ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json",
+        "docs/baselines/cq-m06/README.md"
+      ],
+      "recordedBy": "worker-9be3bcf5",
+      "recordedAt": "2026-11-01T19:43:24.664Z",
+      "treeId": "c6f4b3c34af2b2c13938039e702dc1f5ff73769b",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "65ba4a72e8e718011af34f571c2bd6c8369ccf92",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1b5727b1@2026-11-01T19:43:51Z",
+      "paths": [
+        ".moe/tasks/task-435e8989c4d0425aa6eecf523353e5bc.json",
+        ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json"
+      ],
+      "recordedBy": "qa-1b5727b1",
+      "recordedAt": "2026-11-01T19:46:44.043Z",
+      "treeId": "5c8e9a62c3d120e12fbbf76d839de74d0a683b8e",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts",
+    "docs/baselines/cq-m06/README.md",
+    ".moe/tasks/task-5464e7259cfd479793d93f9651fb3eba.json",
+    ".moe/tasks/task-7a0dadf992014449a4c9aaf8426cfd24.json",
+    ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json",
+    ".moe/tasks/task-435e8989c4d0425aa6eecf523353e5bc.json"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts",
+    "docs/baselines/cq-m06/README.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1b5727b1@2026-11-01T19:43:51Z",
+    "at": "2026-11-01T19:46:44.043Z"
+  },
+  "reviewStartedAt": "2026-11-01T19:43:05.164Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test  # run in a Linux-native snapshot (git archive of HEAD d67c23d1, native npm ci, env -i, node v24.21.0, NO_COLOR=1) with ONLY src/benchmarks/rolloutDecision.test.ts and docs/baselines/cq-m06/README.md overlaid, cmp-equal to the shared tree",
+    "exitCode": 0,
+    "outputTail": "Test Files  227 passed (227)\n      Tests  6859 passed | 20 skipped (6879)\n   Start at  21:41:50\n   Duration  33.37s (tests 95%, import 3%, transform 1%)\nsrc/benchmarks/rolloutDecision.test.ts (25 tests) passed; NPM_TEST_EXIT=0",
+    "reportedAt": "2026-11-01T19:43:05.164Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-M06a: records non-promotion from existing evidence only (no agent run, no pilot, no profile change, no .moe edit, no Git write).\n\nDelivered:\n- docs/baselines/cq-m06/README.md: 'Decision: non-promotion'. Gates table: readiness unmet (EXECUTION_PROFILE_NOT_READY); vm and check unsupported with the live activationGaps() reasons (vm-provisioning-uncertified, check-runner-uncertified); client residuals unmet (the client gap left activationGaps when CQ-M07d2 landed, d67c23d1; open client items are I06's unowned residuals); matched pilot and retrieval baseline unmet. Targets: 50% planner and 30% retrieval, baseline mean planner sessions 1 (20 of 20), sourceRetrievals unknown 20 of 20, pilot and outcome unmeasured. Baseline only: accepted 20, rejected 0, not assessed 0; 38926322 observed tokens (incomplete), 1946316.1 per accepted change; median end-to-end 669869 ms; firstCodeChangeMs unknown 20 of 20. 'Claimed savings: none.', 'Tokens are not monetary cost.', 'Skipped real-VM tests do not certify support.' Platform rows from R13 (linux x64 and win32 x64 certified, darwin unsupported: no report) and I06 (I06 was in REVIEW at writing; the README says so).\n- packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts (landed in checkpoint b0ca24d8): G1-G6 plus helper tests, 25 tests.\n\nGate: npm test in a snapshot of HEAD d67c23d1 with only the two owned files overlaid and cmp-equal: exit 0, 227 files, 6859 passed, 20 skipped. Scratch tsconfig typecheck of the test: exit 0.\n\nDoD mutants (scratch README copy, restored and cmp OK each time, only the named case red, 24 of 25 pass): digit drift -> G2; 'Decision: promotion' -> G1; deleted skipped-tests statement -> G4; added '40%' line -> G5. Extras: vm reason changed -> G3; platform status 'supported (tests skipped)' -> G6.\n\nHonesty note: an earlier run at HEAD b0ca24d8 failed 13 tests in readinessHolder.test.ts and WebSocketServer.test.ts, none in my files: peer CQ-M07d2 had landed its source in wip 746d88c4 while its test upda",
+  "completedAt": "2026-11-01T19:46:04.772Z",
+  "reviewCompletedAt": "2026-11-01T19:46:04.772Z",
+  "reviewSummary": "APPROVED CQ-M06a (mid-epic slice, legacy policy). Reviewed recorded commits: completion 4468588d (README +92) and checkpoint b0ca24d8 (rolloutDecision.test.ts +241), both on moe/work-2026-10-24; owned files equal HEAD; ~333 net LOC; nothing under scripts/ or docs/baselines/cq-m04 changed.\n\nRE-RAN `cd packages/moe-daemon && npm test` in a fresh Linux-native snapshot (git archive of HEAD 4468588d, native npm ci, env -i, node v24.21.0, NO_COLOR=1; README+test cmp-equal): exit 0, 227 files, 6859 passed | 20 skipped, rolloutDecision.test.ts 25/25.\n\nDoD mutants re-proven by me (scratch README copy, cmp-restored, only the named case red, 24/25 pass): digit drift -> G2; 'Decision: promotion' -> G1; deleted skipped-VM statement -> G4; added '40%' line -> G5.\n\nDoD items: non-promotion plus every unmet gate (readiness; vm/check unsupported with live activationGaps reasons, checked in profileRollout.ts:58-63; client residuals; matched pilot; retrieval baseline). Baseline figures re-derived by my own node script from report.json and match (20 workloads, accepted 20/0/0, planner 1 in 20/20, sourceRetrievals and firstCodeChangeMs null 20/20, median e2e 669869 ms, 38926322 tokens incomplete, 1946316.1 per accepted change). Pilot/outcome cells all unmeasured; savings/cost/skipped-VM statements present; % only on the two target lines. Platform rows match docs/CERTIFICATION.md.\n\nNon-blocking: README says HEAD b0ca24d8 though the gate ran at d67c23d1. CQ-I06 is still in REVIEW (README says so); CQ-M06 final should re-sync the IDE rows if its evidence changes. G1/G3 couple to live readiness/activationGaps, so the M07 certification landing must edit this README in the same change.",
+  "requiredCheckAtDone": null
 }

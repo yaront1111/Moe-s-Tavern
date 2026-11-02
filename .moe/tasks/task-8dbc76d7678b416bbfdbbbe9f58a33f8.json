@@ -1,0 +1,272 @@
+{
+  "id": "task-8dbc76d7678b416bbfdbbbe9f58a33f8",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07o] JetBrains Start Agent routes worker/QA seats to a Moe VM under verified-local",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8); M07 DoD 1-3 on the JetBrains side. Design: mem:decision-cq-m07-verified-local-activation. JetBrains is the primary IDE and goes first; VS Code follows in CQ-M07p. Depends on CQ-M07d (task-b0485bb1) for GET_EXECUTION_READINESS.\n\nObjective: under verified-local, Start Agent and Start Agents for a worker or QA seat either launch that seat's wrapper on the VM route or refuse before any terminal opens. Architect and governor seats stay on the host, unchanged.\n\nDeliverable, in moe-jetbrains (util/TerminalAgentLauncher.kt resolveContext, launchRole, startAgent and startAgents, plus a pure decision helper and its JUnit tests):\n- Profile absent, legacy or observe (read as util/RuntimeSelectionPolicy.kt does today): byte-for-byte today's commands for all four roles, WSL toggle on or off, Windows or not.\n- verified-local, worker or QA: send GET_EXECUTION_READINESS { refresh: true } over /ws and wait a bounded time for EXECUTION_READINESS.\n  - Not ready, daemon not connected, or no reply in time: a dialog naming each missing capability (or the connection failure). No terminal, no VM, no host fallback.\n  - Ready: launch the protected wrapper. On Windows, ALWAYS the native PowerShell wrapper, even with \"Run Agents in WSL\" on (human decision: the pinned Multipass client runs on Windows). Architect and governor keep honoring the WSL toggle.\n  - An agent CLI other than claude or codex (the guest JOBS table: gemini, grok, a custom command) is refused with a dialog naming it.\n- The plugin never runs Multipass, never provisions and never starts the agent CLI itself: the wrapper's VM route (CQ-M07m/n) does that.\n- CLIENT_HELLO declares capabilities.verifiedLocal true.\n\nNOT in scope: the wrapper's VM route; VS Code (CQ-M07p); the Accounts tab (CQ-M07l); docs (CQ-M07 sweep).\n\nVerification: ./gradlew test under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease), from WSL: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\", or a snapshot run of the exact commit (mem:gotcha-jetbrains-gate-snapshot).",
+  "definitionOfDone": [
+    "Profile absent, legacy or observe: the launch command for every role equals today's output, WSL toggle on and off (JUnit table pinned to current output).",
+    "verified-local and ready: worker and QA launch the native PowerShell wrapper on Windows even with the WSL toggle on, while architect and governor commands are unchanged (JUnit on the pure decision).",
+    "verified-local and not ready, no daemon, or no reply in time: the decision is a refusal carrying the missing capability list, and no terminal widget is created (JUnit on the decision plus the launcher with a fake terminal manager).",
+    "verified-local with agentCommand gemini, grok or a custom command: refused, naming the CLI (JUnit).",
+    "CLIENT_HELLO carries verifiedLocal true (JUnit on the hello payload).",
+    "./gradlew test passes under the lease."
+  ],
+  "taskRails": [
+    "Never fall back to a host or WSL launch of a worker/QA agent CLI under verified-local; refuse instead.",
+    "Legacy launches stay byte-for-byte unchanged."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the declared-profile read and the pure verified-local decision, with their JUnit. Read `mem:decision-cq-m07-verified-local-activation` first.\n\n**Split.** This row was split on 2026-11-01. The plugin's /ws client half (CLIENT_HELLO plus the readiness request) is CQ-M07o1 (task-83eef22e42c34b5ca764480fd4f2b68b), and this row dependsOn it and CQ-M07d. Build against M07o1's LANDED code, which provides:\n- in com.moe.model: `ExecutionReadiness(profile, ready, missingCapabilities, evaluatedAt)`, `sealed interface ReadinessReply { Answered(readiness); Failed(reason) }` and `enum class ReadinessFailure { NOT_CONNECTED, DISCONNECTED, TIMEOUT, DAEMON_ERROR, MALFORMED }`;\n- `MoeProjectService.requestExecutionReadiness(timeoutMs = 20_000): CompletableFuture<ReadinessReply>`, which never completes exceptionally and completes Failed(TIMEOUT) by itself.\nIf the landed names differ, use the landed ones and say so in the step note.\n\n**Size budget for the whole task: at most 400 net changed lines** (runtime ~120, tests ~150). Use JUnit tables; add no matrix beyond the rows named here.\n\n**1. moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt.**\n- Add a top-level `enum class DeclaredProfile { LEGACY_LIKE, VERIFIED_LOCAL, UNTRUSTED }` next to RuntimeProfile.\n- Add `fun declaredProfile(basePath: String): DeclaredProfile` to the object. It never throws:\n  - a blank basePath is LEGACY_LIKE;\n  - otherwise it calls the existing private declaresVerifiedLocal on <basePath>/.moe/project.json: true is VERIFIED_LOCAL and false is LEGACY_LIKE;\n  - any exception is UNTRUSTED, logged with log.warn as profile() does.\n- It is a pure read. It never touches `pinned`, the persisted profile store or the downgrade dialog, so profile() keeps today's behavior byte-for-byte.\n\n**2. New moe-jetbrains/src/main/kotlin/com/moe/util/VerifiedLocalLaunch.kt**, an `internal object` with no IntelliJ calls.\n- `VM_AGENT_COMMANDS = setOf(\"claude\", \"codex\")`, with a comment: the guest JOBS table in scripts/local-runner/guest-bridge.mjs.\n- `isVmSeat(role, declared)` = role is \"worker\" or \"qa\" and declared != LEGACY_LIKE.\n  - UNTRUSTED counts on purpose. RuntimeSelectionPolicy fails closed on a setting it cannot read strictly, and a project that might be verified-local must never get a host fallback (task rail).\n  - Architect and governor are never VM seats.\n- `preferBash(vmSeat, wslAgents)` = !vmSeat && wslAgents. A VM seat always selects the native PowerShell wrapper on Windows, even with \"Run Agents in WSL\" on (human decision 2026-11-01).\n- `agentRefusal(command: String): String?`: null for claude or codex. Otherwise: \"Verified-local runs worker and QA agents only in a Moe VM, which has claude and codex. '<shown>' cannot run there, so no agent was started. Pick Claude or Codex in the Agents menu.\" `<shown>` is the command, trimmed, capped at 200 characters, with control characters replaced by '?' (as agentCommandFor does).\n- `sealed interface Decision { object Launch; data class Refused(val message: String) }`.\n- `decide(seats: String, reply: ReadinessReply): Decision`, where seats is \"worker\", \"QA\" or \"worker and QA\":\n  - **Answered, profile verified-local, ready:** Launch.\n  - **Answered, verified-local, not ready:** Refused. The message is \"Moe did not start the <seats> agent: verified-local is not ready on this machine.\", then one line per missing capability, then \"Nothing was started, and Moe never runs these agents on this machine instead.\"\n  - **Answered, any other profile:** Refused, naming the profile the daemon reports, and saying .moe/project.json asks for verified-local or could not be read strictly.\n  - **Failed:** Refused, with a fixed sentence per reason:\n    - NOT_CONNECTED: the daemon is not connected;\n    - DISCONNECTED: the connection closed before an answer;\n    - TIMEOUT: no answer within 20 seconds;\n    - DAEMON_ERROR: the daemon could not report readiness;\n    - MALFORMED: its answer could not be read.\n    Every Failed message ends with the same \"Nothing was started\" sentence.\n- Displayed ids and the profile keep only [A-Za-z0-9._-], with anything else replaced by '?'. Each is capped at 64 characters, and at most 32 ids are shown (then \"…and N more\"). Daemon text can never inject markup or control characters into a dialog.\n\n**3. Tests: new moe-jetbrains/src/test/kotlin/com/moe/util/VerifiedLocalLaunchTest.kt.**\n- isVmSeat over all 4 roles × the 3 declared values: true only for worker and qa with VERIFIED_LOCAL or UNTRUSTED.\n- preferBash: false whenever vmSeat; otherwise it equals wslAgents.\n- selectProtectedAgentRuntime over a TemporaryFolder root holding both installed wrappers plus daemon/index.js and proxy/index.js, with windows = true: preferBash(true, true) selects ScriptKind.POWERSHELL, and preferBash(false, true) selects BASH as today (DoD 2).\n- agentRefusal: null for claude, codex and ' codex '; a message naming gemini, grok and a custom 'my-cli --x' (DoD 4).\n- decide:\n  - ready gives Launch;\n  - not ready gives Refused, containing each missing id;\n  - profile 'unreadable' gives Refused naming it;\n  - each ReadinessFailure gives Refused, never Launch;\n  - an id with '<b>' or a control character is shown sanitized (DoD 3).\n- declaredProfile over a TemporaryFolder project: no .moe/project.json, executionProfile absent, legacy and observe each give LEGACY_LIKE; verified-local gives VERIFIED_LOCAL; 'bogus' and malformed JSON give UNTRUSTED.\n\nError handling: declaredProfile and decide never throw, and every failure maps to a refusal message, never to Launch.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/VerifiedLocalLaunch.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/VerifiedLocalLaunchTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/VerifiedLocalLaunch.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/VerifiedLocalLaunchTest.kt"
+      ],
+      "note": "Added DeclaredProfile + RuntimeSelectionPolicy.declaredProfile (pure read through the private declaresVerifiedLocal; never pins, persists or asks; exceptions -> UNTRUSTED with log.warn). New VerifiedLocalLaunch (VM_AGENT_COMMANDS claude/codex per AGENT_JOBS in scripts/local-runner/guest-bridge.mjs, isVmSeat, preferBash, agentRefusal, Decision, decide; ready also requires an empty missing list; ids/profile sanitized to [A-Za-z0-9._-], 64 chars, 32 ids). Built against M07o1's landed names (ExecutionReadiness, ReadinessReply.Answered/Failed, ReadinessFailure) unchanged. VerifiedLocalLaunchTest covers every step-1 row; the Gradle run is step 3. Peer dirt in moe-jetbrains (M07l: Models.kt, AccountPresentation*, AccountsPanel, MoeJson*, MoeBundle) untouched.",
+      "startedAt": "2026-11-01T18:50:36.192Z",
+      "completedAt": "2026-11-01T18:55:37.820Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Wire the decision into moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt, and add its rows to TerminalAgentLauncherTest.kt. Legacy launches stay byte-for-byte unchanged (task rail).\n\nDo NOT edit buildCommand, buildPowerShellCommand, buildBashCommand, buildWslBashCommand, bashWrapPowerShell, powerShellLine or the quoting helpers. The legacy and VM routes both reuse them as they are.\n\n**1. resolveContext(project, agentCommand, vmSeat: Boolean = false).** With the default, it is unchanged. With vmSeat = true:\n- protectedAgentRuntime gets preferBash = VerifiedLocalLaunch.preferBash(true, wslAgents), so the .ps1 is selected on Windows. The AgentContext keeps wslAgents = the toggle, so with the toggle on, buildCommand's existing WSL + POWERSHELL branch (bashWrapPowerShell) types it into the WSL prompt, and it still runs natively on Windows.\n- If `selected` is null (the profile was not PROTECTED, which can only be a race with a setting change): error dialog, return null. A VM seat never falls back to the legacy script.\n- agentCommandFor gains `vmSeat: Boolean = false`. For a VM seat, the candidate (explicit ?: setting ?: claude, as today) must pass VerifiedLocalLaunch.agentRefusal before the PROTECTED check. Otherwise it returns Refused(that message), so gemini, grok and custom commands are refused naming the CLI (DoD 4).\n\n**2. The seat-opening seam.** Add `internal fun openSeat(decision: VerifiedLocalLaunch.Decision, manager: Any, basePath: String, tabName: String, refuse: (String) -> Unit): Any?`:\n- Refused: call refuse(message) and return null without touching manager;\n- Launch: return createTerminalWidget(manager, basePath, tabName).\n- launchRole gains `decision: VerifiedLocalLaunch.Decision = VerifiedLocalLaunch.Decision.Launch`, and gets its widget from openSeat, with refuse showing Messages.showErrorDialog(project, message, \"Moe\").\n  - On a refusal it returns before building a command or showing the \"Failed to create terminal\" warning.\n  - Legacy calls pass the default, so the behavior is identical.\n\n**3. startAgent(project, role, agentCommand).**\n- declared = RuntimeSelectionPolicy.declaredProfile(basePath). If !isVmSeat(role, declared), keep today's two lines.\n- Otherwise:\n  - ctx = resolveContext(project, agentCommand, vmSeat = true) ?: return;\n  - MoeProjectService.getInstance(project).requestExecutionReadiness().thenAccept { reply -> application invokeLater, expiring with the project's disposed condition, { launchRole(project, ctx, role, VerifiedLocalLaunch.decide(<worker|QA>, reply)) } }.\n- The EDT never blocks.\n\n**4. startAgents(project, agentCommand).** The today context and loop stay as they are for architect and governor. When isVmSeat(\"worker\", declared):\n- before the pooled thread: vmCtx = resolveContext(project, agentCommand, vmSeat = true), and the readiness future. If vmCtx is null (its dialog was already shown), return, as today's all-or-nothing does.\n- in the pooled thread, at the first of worker or qa:\n  - decision = decide(\"worker and QA\", future.get(20_000 + 5_000 ms)). A TimeoutException or ExecutionException becomes Failed(TIMEOUT); an InterruptedException re-interrupts and returns.\n  - Launch: worker and qa go through launchRole(project, vmCtx, role, Launch).\n  - Refused: show ONE error dialog (invokeAndWait) and skip both, so no terminal opens for them (DoD 3).\n\n**5. Test seam.** Add `internal fun buildCommandForTest(basePath, role, scriptPath: String, kind: ScriptKind, envOverrides, agentCommand, teamName: String?, wslAgents: Boolean, workerId: String)` that calls buildCommand with ResolvedScript(File(scriptPath), ScriptSource.BUNDLED, kind).\n\n**Tests: moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt.** Add rows only; change no existing test.\n- **DoD 1, pinned legacy table.** Cover the 4 roles × wslAgents false/true × ScriptKind POWERSHELL/BASH, with agentCommand claude, teamName null, workerId \"<role>-0000abcd\", and fixed basePath, script and env.\n  - The expected values are literal strings captured from buildCommandForTest BEFORE any edit to this file. Substitute only the script path and the env paths with the exact strings passed in, so the table is OS-stable. CI runs it on Windows, Linux and macOS.\n  - Also assert that isVmSeat(role, LEGACY_LIKE) is false for every role, so these commands are the ones a legacy launch types.\n- **DoD 2.** A worker with POWERSHELL kind and wslAgents true gives exactly bashWrapPowerShell(buildPowerShellCommandForTest(...)) of the same inputs, which names the .ps1 and -Role worker. With wslAgents false, it equals buildPowerShellCommandForTest(...). Architect and governor rows equal the pinned table.\n- **DoD 3, fake terminal manager.** Use a test class with `fun createLocalShellWidget(basePath: String, tabName: String): Any?` that records each call.\n  - openSeat(Refused(\"x\"), fake, ...) records 0 calls and refuse got exactly \"x\".\n  - openSeat(Launch, fake, \"D:\\\\p\", \"Moe Coder\") records exactly one call with (\"D:\\\\p\", \"Moe Coder\"). This runs the real reflective createTerminalWidget.\n- **DoD 4.** agentCommandFor(PROTECTED, \"gemini\", null, vmSeat = true) and the same for \"grok\" and \"my-cli\" give Refused naming the command. claude and codex give Run. With vmSeat false, gemini still gives Run under PROTECTED, as today.\n\nError handling: every refusal shows one dialog and opens no terminal; a dead project skips the continuation; the readiness wait is bounded and never on the EDT.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "note": "TerminalAgentLauncher: resolveContext(vmSeat) selects via VerifiedLocalLaunch.preferBash and refuses a null protected selection for a VM seat; agentCommandFor(vmSeat) runs agentRefusal first; openSeat seam (Refused -> refuse(), manager untouched); launchRole(decision) opens the seat before building the command, so a refusal builds nothing; startAgent sends readiness and launches via invokeLater(.., project.disposed); startAgents builds a VM context + one readiness future, decides once on the pooled thread (25 s bounded get; Timeout/Execution -> Failed(TIMEOUT); interrupt -> stop), shows one refusal dialog at the worker seat and skips QA; a VM seat only ever gets seats.ctx. buildCommand and the builders are unedited. buildCommandForTest added. Tests: pinned 16-row legacy table (literals generated by a scratch mirror of today's builders, /mnt/d/moe-scratch/m07o/gen.py, and confirmed against the unedited buildCommand by the green run), VM-seat bashWrap relation, fake manager openSeat rows, vmSeat CLI refusal. Pre-step gate under lease 19:00Z: EXIT 0, 544 tests 0 failures. Mutation run (preferBash, ready+missing, openSeat refusal, vmSeat CLI check): 5 failures as expected, then reverted.",
+      "startedAt": "2026-11-01T18:55:40.937Z",
+      "completedAt": "2026-11-01T19:02:03.110Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, after steps 1-2.\n\nAcquire the `jetbrains-gradle` lease (`mem:convention-jetbrains-gradle-lease`): moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId }. Then run exactly this. Its command, exit code and output tail are the complete_task evidence:\n`cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`\nRelease the lease right after, even on failure (`mem:lease-release-before-block` style).\n\n- There is no JDK in WSL, so this is the accepted Windows gate.\n- If a peer's dirty JetBrains file makes the shared tree red (`mem:gotcha-jetbrains-shared-tree-gate-peer-red`), run the same Gradle command on a snapshot of the exact paths instead (`mem:gotcha-jetbrains-gate-snapshot`), and say so.\n- Expect BUILD SUCCESSFUL with 0 failures. Cite the counts for VerifiedLocalLaunchTest, TerminalAgentLauncherTest and RuntimeSelectionPolicyTest.\n\n**DoD 5** (CLIENT_HELLO carries verifiedLocal true) is delivered by CQ-M07o1 (task-83eef22e42c34b5ca764480fd4f2b68b). Name its passing hello-payload JUnit from this same run in the completion summary.\n\nAlso state in the completion summary that the real Start Agent flow against a live, ready daemon is first exercised in the CQ-M07 real-board run. These tests use the pure decision and a fake terminal manager.\n\nError handling: if Gradle fails, fix the cause and re-run the whole command fresh under the lease; never cite a partial or stale run.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification only, no bytes changed in this step. Under the jetbrains-gradle lease (acquired 19:03:53Z, released after): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> EXIT 0, BUILD SUCCESSFUL in 30s (19:03:59-19:04:29Z). TEST-*.xml: 29 suites, 544 tests, 0 failures/errors/skips, all stamped inside the run. VerifiedLocalLaunchTest 8/8, TerminalAgentLauncherTest 37/37, RuntimeSelectionPolicyTest 73/73, MoeProjectConnectionTest 13/13 (CQ-M07o1's 'every open sends the client hello as the first frame, before GET_STATE', whose HELLO constant is {\"protocolVersion\":1,\"capabilities\":{\"planRevisions\":true,\"verifiedLocal\":true}} = DoD 5). The shared tree had no peer moe-jetbrains dirt at run time, so no snapshot was needed.",
+      "startedAt": "2026-11-01T19:03:07.010Z",
+      "completedAt": "2026-11-01T19:04:43.972Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read `git diff HEAD -- moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt`, plus the two new files, as an attacker would.\n\n- **No host fallback.** Every worker/QA path under VERIFIED_LOCAL or UNTRUSTED reaches a terminal only through openSeat after a Launch decision, and only with the protected runtime. A null selection, a refusal, a failure or a late reply opens nothing. Check that startAgents cannot launch worker/QA with the legacy ctx.\n- **Legacy unchanged.** `git diff -U0 HEAD -- moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt` shows no hunk inside buildCommand or the command builders. profile() is untouched, and the pinned table was captured before any edit.\n- **Threads.** No blocking get on the EDT. The continuation checks project disposal. A second click while a request is pending still gets one decision per click.\n- **Messages.** Daemon-supplied ids and profile are sanitized and capped. No secret or env value appears in a dialog.\n- **CLIs.** Only claude and codex can become VM seats. Architect and governor keep today's agent choice and the WSL toggle.\n- **Scope.** No Multipass, no provisioning, no agent CLI started by the plugin. MoeProjectService, MoeCommandSender, MoeMessageDispatcher and Models.kt are untouched (CQ-M07o1 and CQ-M07l own them).\n- **Size.** At most 400 net changed lines across the 5 files, measured with `git diff --numstat HEAD` plus `wc -l` of the new files. If it is over, file an EPIC ADD_RAIL size exception (moe.propose_rail) with the exact numstat before complete_task, and cite it.\n\nFix anything found, re-run step 3's gate under the lease, and submit its fresh output. Error handling and every test row must still hold after any fix.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review, no fixes needed (no bytes changed, so the step-3 gate at 19:04Z stays the fresh evidence). No host fallback: startAgent's VM branch uses only resolveContext(vmSeat=true) (a null protected selection refuses); startAgents gives a VM seat only seats.ctx via the (seatCtx, decision) pair, never the host ctx; a refusal returns from launchRole after openSeat's refuse, before any command; awaitVmDecision returns null (stop) on interrupt or disposed project. Legacy: git diff -U0 hunks avoid buildCommand/builders (last insertion is between buildWslBashCommand and its ForTest seam); profile() untouched; preferBash(false,w)=w and agentCommandFor(vmSeat=false) is the old path; launchRole now opens the widget before building the same command bytes (pinned 16-row table green). Threads: bounded 25 s get only on the pooled thread; startAgent uses thenAccept -> invokeLater(.., project.disposed); each click gets its own future. Messages: daemon ids/profile reduced to [A-Za-z0-9._-], 64 chars, 32 ids; no env values in dialogs. CLIs: only claude/codex pass for VM seats; architect/governor keep today's choice and WSL toggle. Scope: no Multipass/provisioning/agent start; MoeProjectService, MoeCommandSender, MoeMessageDispatcher, Models.kt untouched. Theoretical, noted: (a) a declaration flipped legacy->verified-local between declaredProfile and resolveContext gives a host protected launch; the wrapper's own VM route and CQ-M07q's executionRoute claim refusal back it; (b) a tampered install missing the .ps1 falls back to the installed .sh (existing selectProtectedAgentRuntime fallback, still the protected wrapper). Size: 458 net (runtime 188, tests 270) > 400, EPIC waiver prop-e747f6a18b6a4577affa1245490492f7 filed with exact per-file numstat.",
+      "startedAt": "2026-11-01T19:04:46.479Z",
+      "completedAt": "2026-11-01T19:05:12.938Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-83eef22e42c34b5ca764480fd4f2b68b"
+  ],
+  "priority": "MEDIUM",
+  "order": 231.08,
+  "comments": [
+    {
+      "id": "comment-eff67ddd72034eaa979684ce2cf9b831",
+      "author": "governor-978922c1",
+      "content": "Governor edge change (governor-978922c1): I dropped the dependsOn on CQ-M07d (task-b0485bb1), so this row is claimable now; CQ-M07o1 is DONE. Your plan consumes only M07o1's LANDED /ws client: step 1 says \"Build against M07o1's LANDED code\". The JUnit tests drive the pure decision helper and the launcher through that client, with no live daemon. M07d is the daemon's GET_EXECUTION_READINESS handler, and it has not landed yet; it waits on M07c.\n\nSo a live daemon answer is not available in this session. Say so in the completion summary, as CQ-M07p's plan does. The end-to-end run belongs to CQ-M07's integration. If M07d lands a reply shape that differs from what M07o1's client parses, that belongs to M07d, not this row.\n\nNo open row plans any of your 5 files. CQ-M07l (worker-9be3bcf5) also runs Gradle, so take the jetbrains-gradle lease as the plan says.",
+      "timestamp": "2026-11-01T18:49:53.748Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:08:02.990Z",
+  "updatedAt": "2026-11-01T19:14:24.988Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T11:01:53.876Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-01T19:13:26.376Z",
+    "wallClockMs": 29492500
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "worker-24f14750",
+    "qa-174e8876"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T11:15:52.808Z",
+  "executionContract": {
+    "intendedBehavior": "Under a declared verified-local (or strictly unreadable) profile, JetBrains Start Agent and Start Agents launch a worker or QA seat only after the daemon answers GET_EXECUTION_READINESS with profile verified-local and ready. They then use the Moe-installed wrapper, which on Windows is always the native PowerShell wrapper, even with the WSL toggle on. Any other answer, no connection, or no reply within 20 s refuses with one dialog naming the missing capabilities or the failure, and opens no terminal. gemini, grok and custom commands are refused for VM seats. Architect and governor seats, and every role under absent, legacy or observe, launch exactly as today.",
+    "acceptanceCriteria": [
+      "Absent, legacy or observe: every role's command equals the pinned table captured before the change, with the WSL toggle on and off.",
+      "verified-local and ready: worker and QA select the native PowerShell wrapper on Windows, even with WSL on; architect and governor are unchanged.",
+      "verified-local and not ready, not connected, disconnected, timed out, daemon error, malformed, or another profile: a Refused decision carrying the reason or missing ids, and openSeat never touches the terminal manager.",
+      "verified-local with gemini, grok or a custom command: refused, naming the CLI.",
+      "CLIENT_HELLO verifiedLocal true is proven by CQ-M07o1's JUnit in the same Gradle run.",
+      "./gradlew test passes under the jetbrains-gradle lease."
+    ],
+    "invariants": [
+      "No worker/QA agent CLI is ever launched on the host or in WSL under verified-local: a refusal opens no terminal.",
+      "Legacy launches are byte-for-byte unchanged; buildCommand and the command builders are not edited.",
+      "The plugin never runs Multipass, never provisions and never starts an agent CLI itself; the wrapper's VM route does.",
+      "No blocking wait on the EDT; the readiness wait is bounded.",
+      "Daemon-supplied text is sanitized before display."
+    ],
+    "compatibility": [
+      "RuntimeSelectionPolicy.profile() and the downgrade flow are unchanged.",
+      "agentCommandFor and resolveContext keep their behavior for existing callers (new parameters default to false).",
+      "MoeProjectService, MoeCommandSender, MoeMessageDispatcher, MoeJson.kt, Models.kt and MoeBundle.properties are untouched (owned by CQ-M07o1 and CQ-M07l).",
+      "VS Code is untouched (CQ-M07p)."
+    ],
+    "approvedScope": [
+      "RuntimeSelectionPolicy: DeclaredProfile and declaredProfile(basePath).",
+      "VerifiedLocalLaunch: VM_AGENT_COMMANDS, isVmSeat, preferBash, agentRefusal, Decision and decide.",
+      "TerminalAgentLauncher: resolveContext(vmSeat), agentCommandFor(vmSeat), openSeat, launchRole(decision), the startAgent and startAgents VM branches, and buildCommandForTest."
+    ],
+    "reuse": [
+      "RuntimeSelectionPolicy.declaresVerifiedLocal (strict read) and selectProtectedAgentRuntime / protectedAgentRuntime.",
+      "buildCommand's existing WSL + POWERSHELL branch (bashWrapPowerShell) for the native wrapper under the WSL toggle.",
+      "CQ-M07o1's MoeProjectService.requestExecutionReadiness and ReadinessReply."
+    ],
+    "sourceAssumptions": [
+      "TerminalAgentLauncher.kt: selectProtectedAgentRuntime at :91, protectedAgentRuntime at :117, agentCommandFor at :171, resolveContext at :249, launchRole at :306, startAgents at :355, startAgent at :385, buildCommand at :431 (the WSL branch with POWERSHELL kind calls bashWrapPowerShell), createTerminalWidget at :662 (reflective createLocalShellWidget).",
+      "RuntimeSelectionPolicy.kt: RuntimeProfile at :38, profile() at :125 (PROTECTED for verified-local and for an unreadable setting), private declaresVerifiedLocal at :169.",
+      "TerminalAgentLauncherTest.kt asserts with contains, since File.absolutePath differs by OS; CI runs ./gradlew test on 3 OSes.",
+      "CQ-M07o1 (task-83eef22e) lands com.moe.model ExecutionReadiness, ReadinessReply, ReadinessFailure and MoeProjectService.requestExecutionReadiness(timeoutMs = 20_000).",
+      "The wrappers' VM route (CQ-M07m/n) queries readiness itself, so the plugin passes no new flag or env."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- **One task with the /ws client included.** Rejected: about 540 lines over 10-11 files. Split on the layer seam: CQ-M07o1 owns CLIENT_HELLO and the readiness request, and this row keeps the launch decision.\n- **A side WebSocket opened by the launcher for the readiness call.** Rejected: it would bypass the service's project-identity checks (foreign daemon, path mismatch), so the answer might not come from this project's daemon.\n- **Letting the wrapper refuse instead of the plugin.** Rejected: DoD 3 requires that no terminal opens.\n- **Treating an unreadable setting as legacy.** Rejected: RuntimeSelectionPolicy fails closed on it, and a project that might be verified-local must never get a host fallback. The daemon's answer then decides.\n- **Opening a PowerShell terminal profile explicitly when WSL is on.** Rejected as version-fragile reflection. The existing bashWrapPowerShell branch already runs the native .ps1 from a WSL prompt.\n- **Bundle keys for the new dialogs.** Rejected for now: the launcher's dialogs are literal English today, and MoeBundle.properties is CQ-M07l's file.",
+    "codebaseInsights": "- **RuntimeSelectionPolicy.profile()** collapses verified-local, an unreadable setting and a pending downgrade into PROTECTED. Only the declared value distinguishes them, hence declaredProfile.\n- **After any CLIENT_HELLO,** the daemon refuses approvals unless planRevisions was negotiated (WebSocketServer.ts:331-338). That is why CQ-M07o1 declares planRevisions.\n- **The daemon replies to GET_EXECUTION_READINESS unicast,** with no correlation id (CQ-M07d plan). Errors come as ERROR with that operation or that name in the message.\n- **The test task has no platform fixture** (build.gradle.kts strips it): no DialogWrapper, no PropertiesComponent. Hence the openSeat seam with a fake manager object, which the real reflective createTerminalWidget accepts.\n- **The evaluator's provider probe** has a 10 s timeout and an 11 s guard. 20 s covers it, and refresh is single-flight once per 30 s.",
+    "risks": "- **Pinned literals vs OS paths.** Substitute the exact script and env path strings passed in. Anything taken from File.absolutePath differs between Windows and the Linux/macOS CI.\n- **Start Agents timing.** The pooled thread blocks up to 25 s at the worker seat while readiness refreshes, which delays the governor launch. That is acceptable, and it is never on the EDT.\n- **A setting changed between declaredProfile and resolveContext.** A VM seat with a null protected selection refuses rather than taking the legacy script.\n- **M07l dependency.** CQ-M07l depends on this row only to keep TerminalAgentLauncher.kt serialized, but its plan doesn't edit that file. A governor may drop that edge.\n- **No live run yet.** A live ready daemon is first exercised in the CQ-M07 real-board run.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "56fb4b4506b9e5d33509d5e9a8ffda53df062de6",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T11:15:52.832Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T18:50:36.192Z",
+  "reviewStartedAt": "2026-11-01T19:05:53.722Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :compileKotlin\n> Task :compileTestKotlin\n> Task :test\n\nBUILD SUCCESSFUL in 30s\n11 actionable tasks: 6 executed, 5 up-to-date\n(run 19:03:59-19:04:29Z under the jetbrains-gradle lease; TEST-*.xml: 29 suites, 544 tests, 0 failures, 0 errors, 0 skipped; VerifiedLocalLaunchTest 8/8, TerminalAgentLauncherTest 37/37, RuntimeSelectionPolicyTest 73/73, MoeProjectConnectionTest 13/13)",
+    "reportedAt": "2026-11-01T19:05:53.722Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/VerifiedLocalLaunch.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/VerifiedLocalLaunchTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    ".moe/tasks/task-8dbc76d7678b416bbfdbbbe9f58a33f8.json",
+    ".moe/tasks/task-d56fb46eb0a941808a7ba7e0588f2fd5.json",
+    ".moe/tasks/task-7aa6be67bcfb47bb8dca4ec6d6de35df.json",
+    ".moe/tasks/task-b0485bb1cacf4d3b84979e9256078737.json"
+  ],
+  "completionSummary": "CQ-M07o in moe-jetbrains, 5 files. (1) RuntimeSelectionPolicy: DeclaredProfile {LEGACY_LIKE, VERIFIED_LOCAL, UNTRUSTED} and declaredProfile(basePath), a pure strict read that never pins, persists or asks; profile() is unchanged. (2) New VerifiedLocalLaunch: VM_AGENT_COMMANDS claude/codex (guest AGENT_JOBS), isVmSeat (worker/qa and not LEGACY_LIKE), preferBash(vm,wsl)=!vm&&wsl, agentRefusal, and decide. decide launches only when the profile is verified-local, ready is true and nothing is missing; every other answer and each ReadinessFailure is Refused. Shown ids and profile keep only [A-Za-z0-9._-], max 64 chars and 32 ids. (3) TerminalAgentLauncher: resolveContext/agentCommandFor gain vmSeat (default false); a VM seat whose protected selection is null is refused. openSeat seam: a refusal never touches the manager. launchRole(decision) opens the widget before building the command, so a refusal builds nothing. startAgent: thenAccept -> invokeLater(.., project.disposed). startAgents: one VM context and one readiness future; a decision on the pooled thread (25 s bounded); one refusal dialog skips worker and QA; a VM seat only ever gets the VM context. buildCommand and the builders are unedited; buildCommandForTest added. Tests: 16-row pinned legacy table (DoD1); the VM-seat .ps1 selection with WSL on plus the bashWrap relation (DoD2); fake-manager openSeat rows plus the decide/failure/sanitize rows (DoD3); vmSeat CLI refusal (DoD4). DoD5 is M07o1's MoeProjectConnectionTest 'every open sends the client hello as the first frame, before GET_STATE' (HELLO has verifiedLocal:true), green in this run. Gate: EXIT 0, 544/0 fail. A 4-mutant run gave 5 failures, then was reverted. SIZE 458 net (runtime 188, tests 270) > 400: EPIC waiver prop-e747f6a18b6a4577affa1245490492f7 PENDING with the exact numstat. Not exercised: a live ready daemon (CQ-M07d not landed); the real Start Agent flow is first run in the CQ-M07 real-board run. These tests use the pure decision and a fake termina",
+  "commits": [
+    {
+      "sha": "e02eca26fca76fe10b1a0602b58a3652638a4658",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-24f14750@2026-11-01T18:50:03Z",
+      "paths": [
+        ".moe/tasks/task-8dbc76d7678b416bbfdbbbe9f58a33f8.json",
+        ".moe/tasks/task-d56fb46eb0a941808a7ba7e0588f2fd5.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/VerifiedLocalLaunch.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/VerifiedLocalLaunchTest.kt"
+      ],
+      "recordedBy": "worker-24f14750",
+      "recordedAt": "2026-11-01T19:06:18.786Z",
+      "treeId": "28c9a9e535252ca54a3e23cbaa020164c130c76c",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "5b13129b10c6a279cbdeb728eb202711af0ffa2c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-174e8876@2026-11-01T19:09:38Z",
+      "paths": [
+        ".moe/tasks/task-7aa6be67bcfb47bb8dca4ec6d6de35df.json",
+        ".moe/tasks/task-8dbc76d7678b416bbfdbbbe9f58a33f8.json",
+        ".moe/tasks/task-b0485bb1cacf4d3b84979e9256078737.json"
+      ],
+      "recordedBy": "qa-174e8876",
+      "recordedAt": "2026-11-01T19:14:24.988Z",
+      "treeId": "2704766198412c5a621352c7baee0d692154f499",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/VerifiedLocalLaunch.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/VerifiedLocalLaunchTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-174e8876@2026-11-01T19:09:38Z",
+    "at": "2026-11-01T19:14:24.988Z"
+  },
+  "completedAt": "2026-11-01T19:13:26.376Z",
+  "reviewCompletedAt": "2026-11-01T19:13:26.376Z",
+  "reviewSummary": "QA qa-174e8876 reviewed completion e02eca26 (on moe/work-2026-10-24; shared-tree moe-jetbrains == commit). Gate re-run under jetbrains-gradle lease (released after): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\", EXIT 0, BUILD SUCCESSFUL 19:11:13-19:11:40Z; 29 suites, 544 tests, 0 fail/err/skip. VerifiedLocalLaunchTest 8/8, TerminalAgentLauncherTest 37/37, RuntimeSelectionPolicyTest 73/73, MoeProjectConnectionTest 13/13.\n\nSize: +472/-14, net 458; matches the epic rail CQ-M07o size exception exactly. Reviewed on substance.\n\nDoD:\n1. No diff hunk touches buildCommand or the builders. The 16-row pinned table passes. Legacy paths are unchanged.\n2. preferBash = !vm && wsl. On Windows a VM seat selects the PS wrapper even with WSL on. Under WSL the worker command = bashWrapPowerShell(native). Architect and governor keep the host ctx.\n3. decide returns Launch only for verified-local + ready + no missing ids. openSeat's fake manager records 0 calls on Refused. launchRole returns before building the command. startAgents shows one dialog and skips QA.\n4. vmSeat refuses gemini, grok and my-cli by name.\n5. The HELLO verifiedLocal row is green.\n6. The gate is green.\n\nRails: no host fallback (a null protected selection refuses; VM seats get only vmCtx); no EDT block (thenAccept -> invokeLater(project.disposed), and a bounded 25s get on the pooled thread); daemon text is sanitized; no Multipass; the services and Models.kt are untouched.\n\nNon-blocking notes:\n- awaitVmDecision maps ExecutionException to TIMEOUT and does not catch CancellationException. thenAccept has no exceptional branch. Both are safe only while requestExecutionReadiness never fails or cancels.\n- A non-claude/codex CLI aborts the whole Start Agents (all-or-nothing, as planned).\n- The live ready-daemon flow is unexercised until the CQ-M07 run (M07d not landed).",
+  "requiredCheckAtDone": null
+}

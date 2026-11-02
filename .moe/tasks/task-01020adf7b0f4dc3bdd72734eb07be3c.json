@@ -1,0 +1,269 @@
+{
+  "id": "task-01020adf7b0f4dc3bdd72734eb07be3c",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "bug: both Managed VM clients have no text for reachable vm-control codes (VERSION_MISMATCH, PROVIDER_OUTPUT_INVALID, cleanup LIFECYCLE_*/LEDGER_* errors), so they render the unknown-code fallback",
+  "description": "Found in the CQ-I06f whole-epic review at 96f7bdd4. The status provider.code comes from cli.mjs prerequisites/doctor, which can emit VERSION_MISMATCH (platform-linux.mjs:27, platform-windows.mjs:27, platform-macos.mjs:17), PROVIDER_OUTPUT_INVALID, MANIFEST_INVALID and DOCTOR_INPUT_INVALID (doctor.mjs:12-20). Cleanup errors[].code takes lifecycle.mjs REPORTABLE (:54): LIFECYCLE_*, LEDGER_*, IMAGE_IDENTITY_CHANGED, PROVIDER_OUTPUT_LIMIT, PROVIDER_INPUT_INVALID.\nJetBrains MoeBundle.properties (moe.managedVm.code.*) and VS Code ManagedVm.ts CODE_TEXT (:43-56) both know only 13 codes. Everything else renders 'Refusal code X; no description' (JetBrains, MoeBundle:347) or 'Unknown code X: ...' (VS Code, ManagedVm.ts:62).\nFix: add identical text for the reachable codes in both clients, with a test per client. client-verdicts.json pins only codes, so it does not change.",
+  "definitionOfDone": [
+    "Every code that vm-control status/cleanup can emit has identical actionable text in MoeBundle.properties and ManagedVm.ts CODE_TEXT.",
+    "JetBrains ManagedVmPresentationTest and VS Code managed-vm.test.cjs assert at least VERSION_MISMATCH and one cleanup LIFECYCLE_* code render their text, not the unknown fallback.",
+    "cd moe-jetbrains && ./gradlew test (or the labelled Windows equivalent) and cd moe-vscode && npm test pass in a snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Five-file task; do not touch scripts/local-runner, client-verdicts.json or any other path, and leave the pre-existing dirty .moe/* and scripts/tests/postflight-worktree.cjs alone.\n(a) moe-vscode/src/util/ManagedVm.ts: change ONLY the declaration `const CODE_TEXT = new Map(Object.entries({` to `export const CODE_TEXT: ReadonlyMap<string, string> = new Map(Object.entries({` (no text change yet), so the test can enumerate the client's codes. Keep the doc comment above it.\n(b) moe-vscode/tests/managed-vm.test.cjs: REPLACE the one-directional test 'every JetBrains managed VM code text is the VS Code text, word for word' with a closed-world guard. reachable = the union of (1) the keys of the module-private `const MESSAGES = {...}` tables in ../../scripts/local-runner/doctor.mjs, multipass.mjs and lifecycle.mjs, parsed with /^const MESSAGES = \\{\\r?\\n([\\s\\S]*?)\\r?\\n\\};/m then /^ {2}([A-Z][A-Z0-9_]*):/gm, asserting each file yields at least one key (fail loudly, never vacuously), and (2) six literal codes, each asserted to occur as the quoted string 'CODE' in its file: PLATFORM_UNSUPPORTED cli.mjs (:45), PREREQUISITES_UNAVAILABLE vm-control.mjs (:47), PROVIDER_PREREQUISITES_READY doctor.mjs (:75), VM_CONTROL_FAILED, VM_CONTROL_REPORT_TOO_LARGE and LEDGER_UNREADABLE vm-control.mjs (:24/:167/:58). Add a 2-3 line comment naming the excluded codes and why: VM_CONTROL_INPUT_INVALID exits 2 so the client shows unreadable 'failed'; VM_CONTROL_STATE_DIR_INVALID and DAEMON_* are caught inside vm-control (VM_CONTROL_FAILED, or a preserve reason); CLI_INPUT_INVALID, NATIVE_SMOKE_* and CERTIFY_* belong to cli.mjs commands vm-control never runs. Assert: the sorted JetBrains bundle codes (/^moe\\.managedVm\\.code\\.([A-Z][A-Z0-9_]*)=(.*)$/gm, text trimEnd) deepEqual sorted reachable; the sorted uppercase keys of M.CODE_TEXT deepEqual sorted reachable; and for every reachable code M.readiness(run('status', status({ provider: { ready: false, code } })))[0] === `VM provider: not ready. ${bundleText}` (message = code).\n(c) Add test 'V5: VERSION_MISMATCH and cleanup lifecycle and ledger codes render their own text, not the unknown fallback' with EXACT strings from step 2: readiness for provider { ready: false, code: 'VERSION_MISMATCH' } -> 'VM provider: not ready. ' + VERSION_MISMATCH text; M.notes(run('cleanup', cleanup({ errors: [{ instance: D, code: 'LIFECYCLE_NOT_OWNER' }, { instance: E, code: 'LEDGER_WRITE_FAILED' }] }))) deepEqual [`${D}: not deleted. ` + LIFECYCLE_NOT_OWNER text, `${E}: not deleted. ` + LEDGER_WRITE_FAILED text].\n(d) moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt: add `P6 producer codes render their own text and the bundle codes are exactly KNOWN_CODES`: load MoeBundle.properties with Properties exactly as the existing bundle test does; assertEquals(ManagedVmPresentation.KNOWN_CODES, the set of bundle keys matching moe.managedVm.code.[A-Z][A-Z0-9_]* with the prefix stripped); assertEquals(text(K.PROVIDER_NOT_READY, code(\"VERSION_MISMATCH\")), readiness(status(provider = \"\"\"{\"ready\":false,\"code\":\"VERSION_MISMATCH\"}\"\"\"))[0]); assertEquals(listOf(text(K.CLEANUP_ERROR, d, code(\"LIFECYCLE_NOT_OWNER\")), text(K.CLEANUP_ERROR, e, code(\"LEDGER_WRITE_FAILED\"))), notes(decode(CLEANUP, <cleanup line with those two errors>))); then render those three with a local resolver (MessageFormat(bundle.getProperty(key), Locale.ROOT).format(args, nested ManagedVmText resolved first, like resolve() at ManagedVmPanel.kt:30; build the array with arrayOf<Any>/toTypedArray<Any>, the Kotlin intersection-type gotcha) and assertEquals the same exact full strings as V5. Do not call MoeBundle.message in the unit test.\nRun `cd /mnt/d/projexts/moes/moe-vscode && node --test tests/managed-vm.test.cjs` in place (allowed: it builds and installs nothing) and record the RED in the step note: 17 codes missing from both clients and V5 rendering 'Unknown code VERSION_MISMATCH: ...'. A JetBrains RED run is optional (it needs the lease).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/managed-vm.test.cjs",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
+        "moe-vscode/src/util/ManagedVm.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/managed-vm.test.cjs",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
+        "moe-vscode/src/util/ManagedVm.ts"
+      ],
+      "note": "RED: node --test tests/managed-vm.test.cjs fails. The closed-world guard shows 13 client codes against 30 reachable. V5 renders 'Unknown code VERSION_MISMATCH: ...'. JetBrains P6 added; its run needs the lease (step 3). CODE_TEXT is now exported as ReadonlyMap. Pre-existing dirty .moe/* and scripts/tests files left alone.",
+      "startedAt": "2026-10-31T18:36:07.803Z",
+      "completedAt": "2026-10-31T18:36:47.489Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Minimum implementation (GREEN). Add the same 17 texts, byte-identical, in the same order, in three places:\n- moe-vscode/src/util/ManagedVm.ts CODE_TEXT: after LIFECYCLE_STATE_UNKNOWN, before the four lowercase reasons.\n- moe-jetbrains/src/main/resources/messages/MoeBundle.properties: one line moe.managedVm.code.<CODE>=<text> each, right after moe.managedVm.code.LIFECYCLE_STATE_UNKNOWN (:385).\n- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt KNOWN_CODES (:89-93). This is required: refusal() (:159) gates on KNOWN_CODES, so bundle text alone would stay unused.\nError handling stays as it is and fails closed: an unknown or malformed code still renders the fixed unknown-code fallback (refusal() / codeText()), a malformed report stays unreadable, and producer text, paths or stderr never reach the UI. This step only widens the known-code tables.\nTexts (ASCII only; no apostrophe, <, >, braces, & or backtick, so the existing bundle test and MessageFormat stay safe; no trailing spaces; already validated):\nMANIFEST_INVALID=The bundled Multipass provider manifest is missing or invalid; reinstall Moe.\nVERSION_MISMATCH=The Multipass client and daemon versions differ; restart Multipass, or reinstall it, so both run the same approved version.\nPROVIDER_OUTPUT_INVALID=Multipass returned output Moe could not read; install an approved Multipass version, then refresh.\nDOCTOR_INPUT_INVALID=Moe called the prerequisite check with invalid options; update or reinstall Moe.\nPROVIDER_COMMAND_FAILED=A Multipass command failed; check that the Multipass service is running, then refresh.\nPROVIDER_OUTPUT_LIMIT=Multipass output was larger than Moe accepts; check the Multipass installation, then refresh.\nPROVIDER_INPUT_INVALID=The Multipass executable path was empty or invalid, so Multipass was not run; update or reinstall Moe.\nLIFECYCLE_INPUT_INVALID=Moe passed invalid input to the VM lifecycle, so nothing was changed; update or reinstall Moe.\nLIFECYCLE_NAME_COLLISION=A VM that Moe did not launch already held this reserved name, so Moe leaves it untouched; remove it in Multipass only if it is yours.\nLIFECYCLE_RETRY_EXHAUSTED=Every allowed launch try for this VM failed; reconcile, then clean up.\nLIFECYCLE_NOT_OWNER=This VM record belongs to another task attempt, so Moe left it untouched; reconcile, then refresh.\nLIFECYCLE_PHASE_INVALID=The VM record is in a phase that does not allow this action; reconcile, then try again.\nLEDGER_INPUT_INVALID=Its ledger update was invalid and was not written; the VM may already be gone. Reconcile, then clean up again.\nLEDGER_RECORD_INVALID=Its ledger record is missing or unreadable; the VM may already be gone. Reconcile, then clean up again.\nLEDGER_CONFLICT=Its ledger record changed during the update; the VM may already be gone. Reconcile, then clean up again.\nLEDGER_WRITE_FAILED=Its ledger record could not be written; the VM may already be gone. Check free space and permissions under ~/.moe/runner-state (or MOE_RUNNER_STATE_DIR), then clean up again.\nIMAGE_IDENTITY_CHANGED=The VM image no longer matches its recorded identity; Moe never overwrites it, so new image evidence is required.\nThe LEDGER_* wording is deliberate: a per-record LEDGER_* cleanup error only comes from ledger.update after purgeOwned has verified the VM absent (lifecycle.mjs:361-369), so the 'not deleted' row must not imply the VM is still there. Change a text only to fix a provable inaccuracy, and then identically in both clients and in V5/P6. The existing 13 code texts and the 4 reason texts stay byte-for-byte. Re-run `cd /mnt/d/projexts/moes/moe-vscode && node --test tests/managed-vm.test.cjs` and record GREEN.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/util/ManagedVm.ts",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/ManagedVm.ts",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt"
+      ],
+      "note": "GREEN: node --test tests/managed-vm.test.cjs shows 11 pass and 0 fail. I added the 17 identical texts to ManagedVm.ts, MoeBundle.properties and KNOWN_CODES. The diff for the 5 files is +97/-4, additions only apart from the export line and the KNOWN_CODES trailing comma. The new lines contain no non-ASCII, ampersand or apostrophe.",
+      "startedAt": "2026-10-31T18:36:50.188Z",
+      "completedAt": "2026-10-31T18:37:12.985Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate (DoD 3): run ONCE, fresh. First moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, note: \"01020adf snapshot gate\" } (if queued, report_blocked with that resourceId). Run the command below verbatim from any cwd, then moe.release_resource the lease, even on failure. It snapshots HEAD (moe-jetbrains only to /mnt/d/moe-scratch for Windows Gradle; the whole repo to /tmp, because the VS Code tests read moe-jetbrains and scripts/local-runner), overlays and cmp-verifies this task's files, runs moe-vscode npm ci, lint, compile and test under env -i with Linux node 24.21, then the Windows equivalent of `cd moe-jetbrains && ./gradlew test` (WSL has no JDK). Pass means: exit 0; VSCODE_EXIT=0 and GRADLE_EXIT=0; the vscode summary shows fail 0; no TEST-*.xml listed as failing; ManagedVmPresentationTest and ClientVerdictCorpusTest show failures=\"0\" errors=\"0\", and ManagedVmPresentationTest has one more test than the 7 at baseline. Its fresh output is the moe.complete_task verification evidence; label the Gradle half as the Windows equivalent. Delete the J= and V= snapshot dirs it prints once results are recorded. Never run npm ci/install/build in the shared checkout.\nCommand:\nset -o pipefail; R=/mnt/d/projexts/moes; JF=\"moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt moe-jetbrains/src/main/resources/messages/MoeBundle.properties moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt\"; VF=\"moe-vscode/src/util/ManagedVm.ts moe-vscode/tests/managed-vm.test.cjs\"; mkdir -p /mnt/d/moe-scratch && J=$(mktemp -d /mnt/d/moe-scratch/01020adf-jb-XXXXXX) && V=$(mktemp -d /tmp/01020adf-vsc-XXXXXX) && git -C $R archive HEAD moe-jetbrains | tar -x -C $J && git -C $R archive HEAD | tar -x -C $V || exit 9; for f in $JF; do cp $R/$f $J/$f && cmp $R/$f $J/$f || exit 9; done; for f in $JF $VF; do cp $R/$f $V/$f && cmp $R/$f $V/$f || exit 9; done; (cd $V/moe-vscode && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin bash -c 'umask 022 && npm ci --no-audit --no-fund >/dev/null && npm run lint && npm run compile && npm test' 2>&1 | tail -n 12); VE=$?; (cd $J/moe-jetbrains && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& .\\gradlew.bat test --rerun' 2>&1 | tail -n 8); GE=$?; T=$J/moe-jetbrains/build/test-results/test; echo VSCODE_EXIT=$VE GRADLE_EXIT=$GE J=$J V=$V; ls $T/TEST-*.xml | wc -l; grep -lE '(failures|errors)=\"[1-9]' $T/TEST-*.xml; grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $T/TEST-com.moe.toolwindow.ManagedVmPresentationTest.xml $T/TEST-com.moe.toolwindow.ClientVerdictCorpusTest.xml; [ $VE -eq 0 ] && [ $GE -eq 0 ]",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate passed with VSCODE_EXIT=0 and GRADLE_EXIT=0 (the Gradle half is the Windows equivalent). The VS Code run shows 352 tests, 348 pass, 0 fail, 4 skipped. Gradle ran 28 suites. ManagedVmPresentationTest has 8 tests (7 plus P6) with 0 failures and 0 errors. ClientVerdictCorpusTest has 3 tests with 0 failures and 0 errors. No suite is listed as failing. The lease is released and the snapshot dirs are deleted.",
+      "startedAt": "2026-10-31T18:37:14.050Z",
+      "completedAt": "2026-10-31T18:38:24.707Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff (final step; load adversarial-self-review). Check: (1) each of the 17 texts is true of the producer path that emits it (doctor.mjs:12-20 and :71-73, multipass.mjs:9-31, lifecycle.mjs:41-54, :91-94, :361-369, :406) and gives the user an action; (2) KNOWN_CODES, the bundle moe.managedVm.code.* keys and the uppercase CODE_TEXT keys are the same 30 codes with byte-identical text (the guard proves it; also grep the new lines for an apostrophe, & or non-ASCII); (3) unknown tokens still fall back: the NEW_CODE, SOMETHING_NEW, new-reason and constructor rows in P5/V4 pass unchanged, and client-verdicts.json is untouched; (4) the source-parse guard cannot pass vacuously: each MESSAGES table must yield keys and each literal must be found; optionally prove it by renaming one producer key in a SCRATCH copy, never in the shared tree; (5) the diff touches only the 5 planned files, and the 13 existing code texts and the 4 reason texts are byte-identical (git diff shows only added lines in the bundle and the maps, plus the one `export` line). Report every touched path in complete_step.modifiedFiles. If anything changes here, re-run the step-3 command fresh before moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/src/util/ManagedVm.ts",
+        "moe-vscode/tests/managed-vm.test.cjs",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt"
+      ],
+      "note": "Self-review found nothing to change. The diff removes only the KNOWN_CODES last line (it gains a trailing comma) and the CODE_TEXT declaration line (it gains the export). No existing text changed. The new lines contain no non-ASCII, ampersand, backtick or apostrophe. scripts/local-runner and client-verdicts.json are untouched. The guard fails loudly: it asserts that each MESSAGES table yields keys and that each cited literal is found in its file. Unknown tokens still fall back, because the NEW_CODE, SOMETHING_NEW, new-reason and constructor rows pass unchanged. The step-3 gate ran on the final bytes, so no re-run is needed.",
+      "startedAt": "2026-10-31T18:38:25.735Z",
+      "completedAt": "2026-10-31T18:38:33.083Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's standing delegation. This is an I06f review follow-up (LOW, off-lane), and its only dep, I06f 426a012e, is DONE. Idle architects and coders get work from it. Planner: d4c4a758 also edits moe-vscode/src/util/ManagedVm.ts and will be ordered after this row.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-426a012ecc374cdaa7454742bc5a552a"
+  ],
+  "priority": "LOW",
+  "order": 264.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T17:35:11.968Z",
+  "updatedAt": "2026-10-31T18:41:37.677Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T18:16:34.535Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T18:16:37.407Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T18:41:17.173Z",
+    "wallClockMs": 1479766
+  },
+  "contextFetchedBy": [
+    "architect-8419009e",
+    "worker-c0a1ac70",
+    "qa-4398294e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T18:35:19.455Z",
+  "executionContract": {
+    "intendedBehavior": "Both Managed VM clients show one fixed, actionable text, identical in JetBrains and VS Code, for every code a vm-control status, reconcile or cleanup report can carry: status provider.code, a top-level refusal code, and cleanup errors[].code. The unknown-code fallback remains only for tokens the producer cannot emit. A test-enforced closed world keeps the producer code tables, the JetBrains bundle, JetBrains KNOWN_CODES and VS Code CODE_TEXT equal from now on.",
+    "acceptanceCriteria": [
+      "Status provider code VERSION_MISMATCH renders 'VM provider: not ready. ' plus its own text in both clients, never the unknown fallback.",
+      "Cleanup errors LIFECYCLE_NOT_OWNER and LEDGER_WRITE_FAILED render '<instance>: not deleted. ' plus their own text in both clients.",
+      "The VS Code guard derives 30 reachable codes from doctor.mjs, multipass.mjs and lifecycle.mjs MESSAGES plus 6 cited literals. The JetBrains bundle code keys and the VS Code CODE_TEXT uppercase keys each equal that set, with identical text.",
+      "The JetBrains test proves KNOWN_CODES equals the bundle's moe.managedVm.code.<UPPER> keys.",
+      "The step-3 gate command (in the plan) exits 0."
+    ],
+    "invariants": [
+      "No producer text, path or stderr ever reaches rendered text; texts are fixed client constants.",
+      "Unknown tokens (NEW_CODE, SOMETHING_NEW, new-reason, constructor) still render the unknown fallback.",
+      "Nothing under scripts/local-runner and no client-verdicts.json row changes.",
+      "Texts are ASCII, with no apostrophe, angle bracket, brace, & or backtick (MessageFormat and the existing bundle test)."
+    ],
+    "compatibility": [
+      "The 13 existing code texts and the 4 preserve-reason texts stay byte-for-byte.",
+      "Corpus verdicts pin codes, not text, so ClientVerdictCorpusTest and managed-vm-verdicts.test.cjs pass unchanged.",
+      "CODE_TEXT becomes a read-only export; there is no other API change."
+    ],
+    "approvedScope": [
+      "ManagedVmPresentation.KNOWN_CODES (JetBrains)",
+      "MoeBundle.properties moe.managedVm.code.* keys",
+      "ManagedVm.ts CODE_TEXT (exported as ReadonlyMap) and its 17 new entries",
+      "ManagedVmPresentationTest P6; managed-vm.test.cjs closed-world guard (replaces the one-directional parity test) and V5"
+    ],
+    "reuse": [
+      "The existing refusal() and codeText() lookups and the existing cleanup/readiness templates; no new rendering path.",
+      "The existing parity guard's bundle regex, extended to equality."
+    ],
+    "sourceAssumptions": [
+      "vm-control.mjs:46-47 providerReadiness passes report.code ?? report.providerCode (doctor code via platform-*.mjs), else PREREQUISITES_UNAVAILABLE.",
+      "doctor.mjs:12-20 MESSAGES and :95 runDoctor fall back to multipass.mjs providerError (MESSAGES :9-17, default PROVIDER_COMMAND_FAILED).",
+      "lifecycle.mjs:54 REPORTABLE = its MESSAGES plus SURFACED plus PROVIDER_INPUT_INVALID; cleanupOwned :406 reports only those, else LIFECYCLE_STATE_UNKNOWN.",
+      "vm-control.mjs top-level codes: VM_CONTROL_FAILED :168, VM_CONTROL_REPORT_TOO_LARGE :167, LEDGER_UNREADABLE :58; VM_CONTROL_INPUT_INVALID exits 2 (:154-155).",
+      "JetBrains refusal() (ManagedVmPresentation.kt:159) uses the KNOWN_CODES set (:89-93); VS Code codeText (ManagedVm.ts:62) uses CODE_TEXT."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) Only add the 17 texts. Rejected on its own: the root cause is client code lists drifting from the producer. A closed-world guard is about 15 test lines and turns the next producer code into a red test, not a silent fallback. (b) Export the code tables from scripts/local-runner. Rejected: it widens scope into the bundled producer, which other owners edit. The test parses the module-private MESSAGES tables instead, and fails loudly if a table moves. (c) Put the producer guard in the Kotlin test too. Rejected: the JetBrains snapshot archives only moe-jetbrains. Transitivity covers it: KNOWN_CODES == bundle (P6) and bundle == producer set == CODE_TEXT (VS Code guard). (d) Per-client wording ('reinstall the plugin' vs 'the extension'). Rejected: code texts must be identical, so 'reinstall Moe'.",
+    "codebaseInsights": "Reachable set (30) = doctor MESSAGES (7) + multipass MESSAGES (7, one overlap: PROVIDER_OUTPUT_INVALID) + lifecycle MESSAGES (11) + PLATFORM_UNSUPPORTED, PREREQUISITES_UNAVAILABLE, PROVIDER_PREREQUISITES_READY, VM_CONTROL_FAILED, VM_CONTROL_REPORT_TOO_LARGE, LEDGER_UNREADABLE. Both clients know 13 today; 17 are missing, prototyped in a scratch copy at baseline baa704f5. JetBrains renders through KNOWN_CODES plus bundle keys. VS Code CODE_TEXT is a Map holding both the codes and the 4 lowercase preserve reasons, so filter /^[A-Z]/ when enumerating. The VS Code test loads ManagedVm.ts via ts.transpileModule plus vm.runInThisContext, so an exported Map is a real Map (instanceof checked in the prototype). Both MoeBundle.properties and the .mjs files are eol=lf; the regexes still accept CRLF.",
+    "risks": "- MessageFormat: an apostrophe in a bundle value is eaten and fails the existing bundle test; IntelliJ treats & as a mnemonic. The texts avoid both.\n- MoeBundle.properties is shared: check `git diff` shows only your added lines before the gate; the gate overlays the working-tree file.\n- The gate needs the jetbrains-gradle lease. Release it on failure too.\n- npm ci in the /tmp snapshot needs the registry.\n- Never run npm ci/install/build in the shared checkout; in-place `node --test tests/managed-vm.test.cjs` is fine.\n- d4c4a758 (VS Code vm env) also edits ManagedVm.ts and already depends on this row. The epic-final I06 (task-4e412148) now depends on it too, so I06's gate covers this change.\n- A future local-runner change that adds a MESSAGES code will now fail moe-vscode tests until both clients get its text. That is intended; it is recorded as a Serena gotcha.",
+    "keyFiles": [
+      "moe-vscode/src/util/ManagedVm.ts",
+      "moe-vscode/tests/managed-vm.test.cjs",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
+      "scripts/local-runner/vm-control.mjs",
+      "scripts/local-runner/doctor.mjs",
+      "scripts/local-runner/multipass.mjs",
+      "scripts/local-runner/lifecycle.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d40c284779cf3fb832718de9ba6de55e2a53d810",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T18:35:19.485Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T18:36:07.803Z",
+  "reviewStartedAt": "2026-10-31T18:38:41.646Z",
+  "verification": {
+    "command": "Step-3 snapshot gate (HEAD snapshots, overlay of the 5 task files, cmp-verified): moe-vscode npm ci && lint && compile && test under env -i with Linux node 24.21; then Gradle test --rerun via gradlew.bat in a /mnt/d/moe-scratch snapshot (the Windows equivalent of `cd moe-jetbrains && ./gradlew test`, under the jetbrains-gradle lease)",
+    "exitCode": 0,
+    "outputTail": "VS Code: tests 352, pass 348, fail 0, skipped 4. Gradle: BUILD SUCCESSFUL in 46s; 28 test-result XMLs, none listed as failing. ManagedVmPresentationTest tests=8 skipped=0 failures=0 errors=0; ClientVerdictCorpusTest tests=3 skipped=0 failures=0 errors=0. VSCODE_EXIT=0 GRADLE_EXIT=0 FINAL=0",
+    "reportedAt": "2026-10-31T18:38:41.646Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/managed-vm.test.cjs",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
+    "moe-vscode/src/util/ManagedVm.ts",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+    ".moe/tasks/task-01020adf7b0f4dc3bdd72734eb07be3c.json",
+    ".moe/tasks/task-47d21b835b5e4f28bb08b17f83d22256.json",
+    ".moe/tasks/task-5c8c22d77fbf46008229d092ad84e1c4.json",
+    ".moe/tasks/task-d4c4a758ad304ec3a6d294d9307b06f1.json"
+  ],
+  "completionSummary": "Both Managed VM clients now render fixed, identical text for all 17 previously missing vm-control codes. These are VERSION_MISMATCH, PROVIDER_*, MANIFEST_INVALID, DOCTOR_INPUT_INVALID, LIFECYCLE_*, LEDGER_* and IMAGE_IDENTITY_CHANGED.\n\nThe text is in MoeBundle.properties, ManagedVmPresentation.KNOWN_CODES and ManagedVm.ts CODE_TEXT. CODE_TEXT is now an exported ReadonlyMap.\n\nThe tests are:\n- a VS Code closed-world guard that derives 30 reachable codes from the doctor, multipass and lifecycle MESSAGES tables plus 6 cited literals, and requires the JetBrains bundle keys and the CODE_TEXT keys to equal that set with identical text;\n- V5, covering VERSION_MISMATCH, LIFECYCLE_NOT_OWNER and LEDGER_WRITE_FAILED;\n- JetBrains P6, which checks KNOWN_CODES equals the bundle keys and renders the same three codes.\n\nThe VS Code run and the Gradle run each exited 0. Unknown tokens still fall back to the unknown-code text. scripts/local-runner and client-verdicts.json are untouched.",
+  "commits": [
+    {
+      "sha": "7baced9b1a3ce3f06d85f2f3176c8ce2a914cb00",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T18:35:40Z",
+      "paths": [
+        ".moe/tasks/task-01020adf7b0f4dc3bdd72734eb07be3c.json",
+        ".moe/tasks/task-47d21b835b5e4f28bb08b17f83d22256.json",
+        ".moe/tasks/task-5c8c22d77fbf46008229d092ad84e1c4.json",
+        ".moe/tasks/task-d4c4a758ad304ec3a6d294d9307b06f1.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
+        "moe-vscode/src/util/ManagedVm.ts",
+        "moe-vscode/tests/managed-vm.test.cjs"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T18:39:00.555Z",
+      "treeId": "2f40cec314095fff4b5e6034591781a7e837df98",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "0f31d0bd083072ccb63335329011b653664fb673",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-4398294e@2026-10-31T18:39:09Z",
+      "paths": [
+        ".moe/tasks/task-01020adf7b0f4dc3bdd72734eb07be3c.json"
+      ],
+      "recordedBy": "qa-4398294e",
+      "recordedAt": "2026-10-31T18:41:37.676Z",
+      "treeId": "35e70b8daafb7f8ea4ff9140c80cb696c47e43ed",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/src/util/ManagedVm.ts",
+    "moe-vscode/tests/managed-vm.test.cjs",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-4398294e@2026-10-31T18:39:09Z",
+    "at": "2026-10-31T18:41:37.676Z"
+  },
+  "completedAt": "2026-10-31T18:41:17.173Z",
+  "reviewCompletedAt": "2026-10-31T18:41:17.173Z",
+  "reviewSummary": "Approved. Reviewed completion commit 7baced9b (on moe/work-2026-10-24, pushed) via git show: the 5 owned files are +97/-4 net; the rest is board JSON. scripts/local-runner and client-verdicts.json untouched.\n\nRe-ran the step-3 gate myself on a fresh git archive of 7baced9b, with no overlay:\n- VS Code under env -i with Linux node 24.21: npm ci, lint, compile, test gave VSCODE_EXIT=0. 352 tests, 348 pass, 0 fail, 4 skipped.\n- Gradle test --rerun via gradlew.bat in /mnt/d/moe-scratch (Windows equivalent of ./gradlew test, under the jetbrains-gradle lease) gave BUILD SUCCESSFUL, GRADLE_EXIT=0. 28 suites. ManagedVmPresentationTest 8/0/0 (7 plus P6), ClientVerdictCorpusTest 3/0/0, none failing. Lease released, my snapshots deleted.\n\nIndependent checks:\n- 24 producer codes derived from the doctor, multipass and lifecycle MESSAGES tables, plus 6 cited literals, gives 30. The bundle has 30 code keys, KNOWN_CODES has 30 and CODE_TEXT has 30 uppercase keys. Text is byte-identical bundle to TS for all 30; KNOWN_CODES equals the bundle keys.\n- The new lines have no non-ASCII, apostrophe, angle bracket, brace, ampersand or backtick. The 13 existing texts and 4 reasons are unchanged; the diff only adds lines apart from the export line and the KNOWN_CODES trailing comma.\n- Mutants in my scratch copy: adding a code to the producer MESSAGES makes the closed-world guard fail; dropping VERSION_MISMATCH from CODE_TEXT makes the guard and V5 fail. The guard is not vacuous.\n- Texts checked against producers: LEDGER_* says the VM may already be gone, true because ledger.update runs after purgeOwned. SURFACED plus PROVIDER_INPUT_INVALID are covered.\n\nDoD: 1 yes (30 identical texts). 2 yes (V5 and P6 assert VERSION_MISMATCH, LIFECYCLE_NOT_OWNER and LEDGER_WRITE_FAILED render their text). 3 yes (both gates exit 0). Unknown-token rows (NEW_CODE and others) pass unchanged. Not run: the JetBrains runtime UI; the unit tests render via MessageFormat.",
+  "requiredCheckAtDone": null
+}

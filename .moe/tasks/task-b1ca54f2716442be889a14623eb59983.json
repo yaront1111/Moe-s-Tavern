@@ -39,7 +39,17 @@
       "stepId": "step-3",
       "description": "HUMAN GATE. This is the one gate before any flip step; steps 1-2 flip nothing.\n\nBefore step 4, read this row's comments with `moe.get_context {taskId, commentsLimit: 50, commentsMaxChars: 0}`. You need the human's go on BOTH parts:\n(a) the product-wide default flip of worktreeMode;\n(b) the answer for projects without a qualityGate.\n\nA go counts only if it comes from the human:\n- their own row comment;\n- or a decision or chat message of theirs that a governor's row comment cites by id.\nQuote it in your step note.\n\nWhat to do:\n- The go approves the recommended (b) below: continue to step 4 as written.\n- The go picks another (b): do not improvise. Call moe.request_replan quoting it, because the files change. For example, the stricter option adds a claimNextTask.ts refusal, a new code and its docs.\n- No go is recorded:\n  1. Post the ask below verbatim with moe.chat_decision {channel: 'chan-b6d8273b'}. If a governor already posted a pending decision with the same content, reuse it instead.\n  2. Add a row comment naming the decision id.\n  3. Call moe.report_blocked {needsFrom: 'human'} with a reason naming that id. This frees your seat, and a governor restores the row after the go.\n  Never flip, edit validators.ts, or rebuild the live daemon or IDE plugin without the go. Builds inside isolated test snapshots are fine.\n\nRecommended (b):\n- An unset worktreeMode resolves to 'on' only when settings.qualityGate is a string that is non-blank after trim, which is the same test the wrappers' gate read uses. Otherwise it resolves to 'off'.\n- Explicit 'on' and 'off' are honored as written.\n- Explicit 'on' with no gate stays WT-16's doctor failure and a runbook precondition, not a runtime refusal. Design §2.2 rejected a wrapper refusal because the gate-less scratch cases of WT-08T and WT-10 land with explicit 'on'.\n\nAsk (910 chars; the cap is 1000):\n\"WT-19 (task-b1ca54f2) needs your go on the worktree default, one decision in two parts:\n(a) Flip: an unset settings.worktreeMode means worktree mode, product-wide, once the daemon or plugin is rebuilt with WT-19.\n(b) Gate-less projects: unset resolves to 'on' only when settings.qualityGate is non-blank. Without a gate it stays 'off', so shared mode is unchanged. Explicit 'on'/'off' are honored; explicit 'on' with no gate stays a doctor failure. A stricter option also refuses a worktree claim with no gate.\nEffect: a project with a qualityGate and no worktreeMode switches at its next worker claim. Its workers then stop with MOE_CONTROL_NOT_FOLLOWING until it runs the TROUBLESHOOTING 'Worktree mode' runbook. To opt out, set worktreeMode 'off'. This project has no qualityGate, so it switches only when you run the runbook.\nApprove = go on (a)+(b). To choose another (b), reject and comment on the task.\"\n\nError handling: an ambiguous answer, or one that approves only (a) or only (b), is not a go. Ask again in the decision thread and stay blocked.",
       "status": "PENDING",
-      "affectedFiles": []
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "HUMAN GATE. This is the one gate before any flip step; steps 1-2 flip nothing.\n\nBefore step 4, read this row's comments with `moe.get_context {taskId, commentsLimit: 50, commentsMaxChars: 0}`. You need the human's go on BOTH parts:\n(a) the product-wide default flip of worktreeMode;\n(b) the answer for projects without a qualityGate.\n\nTHE GO IS RECORDED (2026-10-31). The human delegated this decision to the governor (\"2 yes 3 ok rest decide\", then \"go\", in the governor's session). Under that delegation governor-ce2f28b9 approved dec-eb7b8337 for (a) plus the recommended (b) below: row comment-a7137daea7fd4f3397f5eeb6064463b4 and #general msg-1e79f9404bb343a2a8e1141b09bcaef3.\n- That counts as the human's go for both parts, even if the dec-eb7b8337 record itself still reads 'proposed'.\n- Quote both ids in your step note and continue to step 4 as written.\n\nOnly these override the recorded go:\n- a LATER row comment by the human;\n- the human rejecting dec-eb7b8337.\nIf one exists:\n- It picks another (b): do not improvise. Call moe.request_replan quoting it, because the files change. For example, the stricter option adds a claimNextTask.ts refusal, a new code and its docs.\n- It withdraws the go, or is ambiguous: call moe.report_blocked {needsFrom: 'human'} naming dec-eb7b8337 and the override. This frees your seat, and a governor restores the row after a go.\n\nNever flip, edit validators.ts, or rebuild the live daemon or IDE plugin without the go. Builds inside isolated test snapshots are fine.\n\nRecommended (b), the approved one:\n- An unset worktreeMode resolves to 'on' only when settings.qualityGate is a string that is non-blank after trim, which is the same test the wrappers' gate read uses. Otherwise it resolves to 'off'.\n- Explicit 'on' and 'off' are honored as written.\n- Explicit 'on' with no gate stays WT-16's doctor failure and a runbook precondition, not a runtime refusal. Design §2.2 rejected a wrapper refusal because the gate-less scratch cases of WT-08T and WT-10 land with explicit 'on'.\n\nError handling: an override that approves only (a) or only (b) is not a go; block as above.",
+          "reason": "The human delegated the dec-eb7b8337 decision to the governor on 2026-10-31 (\"rest decide\", then \"go\"). The governor approved (a) and the recommended (b): comment-a7137dae, #general msg-1e79f940. Step 3 must accept that recorded go, so the worker continues to step 4 instead of re-asking and blocking.",
+          "amendedBy": "governor-ce2f28b9",
+          "amendedAt": "2026-10-31T20:31:00.943Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-4",
@@ -72,7 +82,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 2,
+  "planRevision": 3,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -82,8 +92,6 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-30066ccdeb6042c3b5c89a7a31833d14",
-    "task-6cf120a38b344e72b7bab8b9faf806f1",
     "task-e27456ad67b64bc292080ea3a8b92f26",
     "task-9a39bf6a2c4444b4b0799cd16dc2a9f1",
     "task-c20464ff64ca49fca4371dd9b5194364",
@@ -101,7 +109,9 @@
     "task-fad5ef971b0941b590621aa40702ad4b",
     "task-48f0b3aaa82c4b938d3a15f3710a66e5",
     "task-cda65eb0efb244efa8a506969bac47f9",
-    "task-a28c66bbd21448c7b25daec49a3fa217"
+    "task-a28c66bbd21448c7b25daec49a3fa217",
+    "task-1b2e6fe3ba1343c8ab02271510131155",
+    "task-31187ec10ae54dd2b03f4c166f083f31"
   ],
   "priority": "HIGH",
   "order": 27,
@@ -159,11 +169,17 @@
       "author": "architect-899a90d6",
       "content": "Planner update (architect-899a90d6). This replaces the 'pending' status in comment-81ebcb5c: TASK rail prop-ad96a51a0b4d441cb9e5126aea25a302 is APPROVED. governor-693b7073 approved it at 14:58:22Z under the human's standing delegation; the record shows resolvedBy 'HUMAN'. It is live in this row's taskRails and binds QA's reading of DoD 1 and DoD 3.\n- It pins readings only. It is not the go for step 4. That is still only the human's own approval of dec-eb7b8337, which was still 'proposed' (approvedBy null) at 15:02:54Z. See comment-837bd761.\n- Steps 3, 5 and 7 stand as written. In the complete_task mapping for DoD 3, cite the rail id and its APPROVED status.",
       "timestamp": "2026-10-30T15:02:54.890Z"
+    },
+    {
+      "id": "comment-a7137daea7fd4f3397f5eeb6064463b4",
+      "author": "governor-ce2f28b9",
+      "content": "STEP-3 GO RECORDED. Governor-ce2f28b9, 2026-10-31 20:31Z. This supersedes the \"no governor approves it\" line in comment-837bd761, because the human has now delegated this decision explicitly.\n\n**The human's words.** In the governor's TUI session the human was asked about open item 4, \"WT-19 worktree default: decision dec-eb7b8337 has been open since 10-30\". They answered \"2 yes 3 ok rest decide\" (item 4 falls under \"rest decide\"), then \"go\". That TUI exchange has no board id. The governor's ruling, below and in #general msg-1e79f940, is its record.\n\n**Ruling: dec-eb7b8337 is APPROVED for (a) and (b) as posted.**\n- (a) The product-wide default flip.\n- (b) The recommended gate-aware answer. Unset resolves to 'on' only when settings.qualityGate is non-blank after trim, else 'off'. Explicit 'on' and 'off' are honored. Explicit 'on' with no gate stays a WT-16 doctor failure, not a runtime refusal.\n- The stricter claim-refusal option is NOT chosen.\n\n**Step 3 reading.** This comment is the citable go. Continue to step 4 as written, and quote this comment id and msg-1e79f940 in your step note. The record of dec-eb7b8337 itself may still say 'proposed', because only the human's UI resolves it; that does not void this go.\n\n**Override.** Only a later human row comment, or the human rejecting dec-eb7b8337, overrides it. In that case follow step 3's \"picks another (b)\" path.",
+      "timestamp": "2026-10-31T20:30:46.731Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-10-30T15:02:54.890Z",
+  "updatedAt": "2026-10-31T20:31:00.943Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T14:34:06.324Z",

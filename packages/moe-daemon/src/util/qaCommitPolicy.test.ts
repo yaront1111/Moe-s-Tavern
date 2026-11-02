@@ -3,9 +3,14 @@
 // docs/roles/qa.md and docs/skills/moe-qa-loop/SKILL.md used to contradict each
 // other ('Do NOT wait' vs 'wait for it before reviewing'), so QA behaviour was
 // whichever text the agent read last. Both now state one rule: a bounded wait,
-// then self-land the row's own paths. These assertions fail if either document
-// drifts back, AND if the vendored copies in src/generated/ go stale — an IDE
-// user only ever sees the generated copy.
+// then, with no completion entry for the round and no isolated-clone delivery,
+// a moe.qa_reject citing the landing evidence — in either mode (shared, or
+// worktree mode where the control checkout's HEAD is refs/heads/moe/control).
+// QA never commits in the control checkout: the agent Git-write guard refuses
+// it (MOE_AGENT_GIT_REFUSED) and the wrapper is the only Git-write actor.
+// These assertions fail if any document drifts back, AND if the vendored
+// copies in src/generated/ go stale — an IDE user only ever sees the
+// generated copy.
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
@@ -14,7 +19,30 @@ import { ROLE_DOCS } from '../generated/initFiles.js';
 import { SKILL_FILES } from '../generated/skillFiles.js';
 
 const FORBIDDEN = ['Do NOT wait', 'wait for it before reviewing'];
-const SENTINELS = ['bounded wait, not a blocker', 'up to ~2 minutes', 'land it yourself', 'record_commit'];
+const SENTINELS = ['bounded wait, not a blocker', 'up to ~2 minutes', 'record_commit'];
+// The empty-ledger route, identical in both modes: reject, never a QA commit.
+const ROUTE_SENTINELS = [
+  'refs/heads/moe/control',
+  'commit in the control checkout',
+  'in either mode',
+  'MOE_AGENT_GIT_REFUSED',
+  'lastCommitOutcome',
+  'counts toward the reopen cap',
+  'Landing gap:',
+  '#governors',
+];
+// 'shared mode only' pinned the shared-mode self-landing that the agent
+// Git-write guard made impossible, so it retires with that self-landing.
+const RETIRED = [
+  'land it yourself',
+  'you self-landed',
+  'shared mode only',
+  'path recipe',
+  'Bash(git add:',
+  'Bash(git commit:',
+  'MOE_ALLOW_AGENT_GIT_WRITES',
+  '--no-verify',
+];
 
 const QA_ROLE_KEY = 'qa.md';
 const QA_REFERENCE_KEY = 'qa.reference.md';
@@ -94,18 +122,49 @@ describe('QA empty-task.commits policy — the two documents agree', () => {
     expect(reference).toContain('one completion in three');
   });
 
-  it('records isolated-clone delivery before considering shared-tree fallback', () => {
-    for (const [label, text] of [
-      ...generatedSubjects(),
-      [QA_REFERENCE_KEY, lf(ROLE_DOCS[QA_REFERENCE_KEY])],
-      ...(hasDocs ? [...diskSubjects(), ['docs/roles/qa.reference.md', readDoc('roles', 'qa.reference.md')]] : []),
-    ]) {
+  const allQaSubjects = (): Array<[string, string]> => [
+    ...generatedSubjects(),
+    [QA_REFERENCE_KEY, lf(ROLE_DOCS[QA_REFERENCE_KEY])],
+    ...(hasDocs
+      ? [...diskSubjects(), ['docs/roles/qa.reference.md', readDoc('roles', 'qa.reference.md')] as [string, string]]
+      : []),
+  ];
+
+  it('records isolated-clone delivery before the empty-ledger reject', () => {
+    for (const [label, text] of allQaSubjects()) {
       expect(text, label).toContain('isolated-clone delivery');
       expect(text, label).toContain('fresh remote fetch');
       expect(text, label).toContain('record_commit');
       expect(text, label).toContain('Never self-land clone-delivered bytes');
       expect(text, label).toContain('rails permit');
     }
+  });
+
+  // The agent Git-write guard refuses a QA commit in the control checkout in
+  // both modes, so every QA document, source and vendored, must route an empty
+  // ledger to moe.qa_reject and must not teach a QA commit or a guard bypass.
+  it('rejects an empty ledger in either mode and never teaches a QA commit', () => {
+    for (const [label, text] of allQaSubjects()) {
+      for (const phrase of ROUTE_SENTINELS) {
+        expect(text, `${label} is missing the route phrase "${phrase}"`).toContain(phrase);
+      }
+      for (const phrase of RETIRED) {
+        expect(text, `${label} still carries the retired phrase "${phrase}"`).not.toContain(phrase);
+      }
+    }
+  });
+
+  it.skipIf(!hasDocs)('troubleshooting sends QA to the reject, not a self-land', () => {
+    const doc = readDoc('TROUBLESHOOTING.md');
+    const heading = '### `qa_approve` returned `NO-COMPLETION-COMMIT`';
+    const start = doc.indexOf(heading);
+    expect(start, `TROUBLESHOOTING.md is missing the heading ${heading}`).toBeGreaterThanOrEqual(0);
+    const end = doc.indexOf('\n### ', start + heading.length);
+    const section = doc.slice(start, end === -1 ? undefined : end);
+    expect(section).toContain('moe.qa_reject');
+    expect(section).toContain('#agent-git-write-refusal');
+    expect(doc).not.toContain('then a self-land');
+    expect(doc).not.toContain('landed the row itself');
   });
 
   it('workers explicitly own the isolated-clone ledger exception', () => {

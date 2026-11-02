@@ -1,0 +1,204 @@
+{
+  "id": "task-5bebd9d3a57049b2878a5068ac1f905e",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: daemon repairPolicy.test.ts H1-H3 fail since CQ-R14d3 moved the check session onto the SSH route",
+  "description": "Found by QA (qa-c5835a34) on 2026-11-01 while re-running a full daemon gate at HEAD 67453739 for another row.\n\nSymptom: packages/moe-daemon/src/delivery/repairPolicy.test.ts, \"decideRepair over real host check sessions\", rows H1, H2 and H3 fail. The full suite gives 222 files: 3 failed, 6698 passed, 20 skipped (git-archive snapshot, env -i, Node 24.21.0, npm ci, tsc --noEmit clean, npm test). H1 expects outcome code-failure with exitCode 82, but gets infra-failure with exitCode null.\n\nCause: 6ac51c42 (CQ-R14d3, task-08062ce85dc94dcd80c62053e30f561f, DONE) changed runCheckSession in scripts/local-runner/check-session.mjs to open its stream through openGuestStream (guest-stream.mjs).\n- openGuestStream first reads the guest address through provider.run, which defaults to execFile of a REAL `multipass info <name> --format json`. It also needs ssh and keyDir.\n- R14d3 updated scripts/tests/local-runner-check.test.mjs (CHECK_ROUTE: a fake run via infoOf, plus string ssh and keyDir).\n- It did not update this daemon test, which imports check-session.mjs directly. The test's exitingProvider(code) supplies only spawn, so the address read fails and every H session settles infra-failure.\n\nProof, an A/B in one snapshot: repairPolicy.test.ts passes 46/46 with check-session.mjs from 41680ea5 (before R14d3) and fails 3 of 46 with HEAD's.\n\nImpact:\n- Every full daemon-suite gate at HEAD shows these 3 failures: workers' and QA's snapshot gates, and CI's daemon test:coverage job.\n- On a host with multipass on PATH, the H rows would exec a real `multipass info`.\n\nExpected fix (the architect confirms): test-side. Give the H rows' fake provider the SSH-route shape the scripts test uses: a fake run that answers only `info <owned name> --format json` with an ipv4 address, plus ssh and keyDir strings. Allow for the spawn now following an async info read; see the R14d3 section of the gotcha-local-runner-tests memory. The runtime check-session.mjs looks intended and stays unchanged unless the architect finds a runtime defect.",
+  "definitionOfDone": [
+    "repairPolicy.test.ts H1-H3 pass again against scripts/local-runner/check-session.mjs as landed in 6ac51c42, and every existing H1-H3 expectation is kept: none is weakened or deleted.",
+    "The H rows' fake provider never runs a real multipass or ssh binary: its run answers the info read, and ssh and keyDir are strings only.",
+    "The full daemon vitest suite passes in a git-archive snapshot (env -i, Node 24, npm ci, tsc --noEmit, npm test), and the completion cites the counts."
+  ],
+  "taskRails": [
+    "Fix the test fixture in packages/moe-daemon/src/delivery/repairPolicy.test.ts. Change scripts/local-runner/check-session.mjs only if the plan names a runtime defect."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test-fixture fix in packages/moe-daemon/src/delivery/repairPolicy.test.ts. check-session.mjs stays unchanged: R14d3's runtime is intended, and no runtime defect is named.\n(a) exitingProvider(code, name) keeps its child script byte for byte and gains the SSH-route shape of scripts/tests/local-runner-check.test.mjs CHECK_ROUTE (lines ~1176-1186):\n  - `run`: a fake that answers ONLY args deep-equal to ['info', name, '--format', 'json'], with stdout JSON.stringify({ errors: [], info: { [name]: INFO } }) and stderr ''. Copy INFO verbatim from that file, ipv4 ['10.0.0.2'] included, since readGuestInfo is proven to accept it. Any other call throws 'unexpected provider call'.\n  - `ssh: path.join(os.tmpdir(), 'moe-stream', 'ssh')` and `keyDir: path.join(os.tmpdir(), 'moe-stream', 'keys')`: strings only, never created, and never executed because spawn is faked.\n  - `spawn(command, argv, options)`: records command and returns the child.\n  The provider records its run args and spawn commands in arrays the helper returns.\n(b) settle(code) passes its owned name to exitingProvider. After runCheckSession settles, it asserts that the run calls are exactly [['info', name, '--format', 'json']] and the spawn commands exactly [the fake ssh string]. That proves no real multipass or ssh ran and the SSH route was taken. It returns the Settled result unchanged.\n(c) The H1, H2 and H3 bodies stay byte-identical: no expectation is weakened, deleted or reworded. Only the fixture above them changes, plus a comment naming CQ-R14d3 (6ac51c42) and the scripts test's CHECK_ROUTE.\nOrdering note (mem:gotcha-local-runner-tests, R14d3 section): the spawn now follows an async info read. The fake child emits only from its stdin write callback, never synchronously after the call, so it attaches no listener late. Keep it that way.\nerror handling: an unexpected provider call throws inside the fake, so the session settles infra-failure and H1's code-failure expectation fails loudly instead of passing vacuously. This is a test-only change.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "note": "Fixture-only change; H1-H3 bodies untouched. 22 pre-existing dirty paths belong to others.",
+      "startedAt": "2026-11-01T12:05:30.258Z",
+      "completedAt": "2026-11-01T12:05:45.921Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification gate, run once (DoD 1 and 3): the full daemon suite in a whole-tree git-archive snapshot outside the checkout. Never npm ci or test in the shared checkout, which is the live runtime. The daemon suite reads docs/ and scripts/ too, hence the whole tree, as QA's original run used.\nS=$(mktemp -d /tmp/repair-h-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && cp /mnt/d/projexts/moes/packages/moe-daemon/src/delivery/repairPolicy.test.ts \"$S/packages/moe-daemon/src/delivery/repairPolicy.test.ts\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'umask 022 && npm ci && npx tsc --noEmit && npm test'\nIt must exit 0. Cite the vitest totals (files, passed, skipped) in complete_task; the pre-fix baseline was 222 files, 3 failed, 6698 passed, 20 skipped. Also confirm H1-H3 pass by name: npx vitest run src/delivery/repairPolicy.test.ts, 46/46, in the same snapshot.\nThe fresh full-suite output is the complete_task verification evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "note": "Snapshot gate exit 0 (tsc clean): 222 files passed, 6701 tests passed, 20 skipped (baseline 3 failed/6698). repairPolicy.test.ts alone 46/46, H1-H3 pass by name.",
+      "startedAt": "2026-11-01T12:05:46.558Z",
+      "completedAt": "2026-11-01T12:06:39.423Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review, as the final step (load adversarial-self-review). Check:\n1. git diff shows only fixture lines above the describe, with the H bodies untouched.\n2. The fake run throws on every call but the exact info read, and the spawn assertion pins the fake ssh string.\n3. No real binary path (multipass, ssh, ssh.exe) appears anywhere.\n4. The child still emits only from its write callback.\n5. Windows: os.tmpdir() joins are absolute and never created.\n6. No forbidden pattern literal appears.\nIf any byte changes, re-run step 2's exact command and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "note": "Self-review clean: the diff is fixture-only; the fake run records then throws on any call except the exact info read; the spawn assertion pins SSH; no real binary path appears (only a comment mentions multipass); the child still emits only from its write callback; the tmpdir paths are absolute and never created; no forbidden literal. No bytes changed after the step 2 gate.",
+      "startedAt": "2026-11-01T12:06:41.290Z",
+      "completedAt": "2026-11-01T12:06:46.265Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 317.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T11:59:05.110Z",
+  "updatedAt": "2026-11-01T12:12:13.978Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T12:03:34.768Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-01T12:11:48.668Z",
+    "wallClockMs": 493900
+  },
+  "contextFetchedBy": [
+    "architect-b520bc90",
+    "worker-cef53f62",
+    "qa-c5835a34"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T12:04:51.339Z",
+  "executionContract": {
+    "intendedBehavior": "repairPolicy.test.ts H1-H3 pass again against check-session.mjs as landed in 6ac51c42. Their fake provider gives the SSH route a fake info read, plus string ssh and keyDir, and records that only that info read and one fake-ssh spawn happened.",
+    "invariants": [
+      "Every existing H1-H3 expectation is kept byte-identical.",
+      "No test runs a real multipass or ssh binary.",
+      "scripts/local-runner/check-session.mjs is unchanged."
+    ],
+    "sourceAssumptions": [
+      "guest-stream.mjs openGuestStream: provider.ssh, provider.spawn, transportFiles(name, provider.keyDir), then readGuestInfo(name, provider) via provider.run before spawn; address must be a string.",
+      "scripts/tests/local-runner-check.test.mjs CHECK_ROUTE/INFO/infoOf (lines ~1176-1186) is the proven fake shape."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/repair-h-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && cp /mnt/d/projexts/moes/packages/moe-daemon/src/delivery/repairPolicy.test.ts \"$S/packages/moe-daemon/src/delivery/repairPolicy.test.ts\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'umask 022 && npm ci && npx tsc --noEmit && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "A runtime fallback in check-session.mjs (a spawn without the info read) was rejected. The route change is intended and the task rail confines the fix to the fixture.",
+    "codebaseInsights": "- openGuestStream reads the address through provider.run, which defaults to a real `multipass info`, before it spawns ssh.\n- Daemon tests import scripts/local-runner modules through relative URLs, so the snapshot needs the whole tree.",
+    "risks": "- H3 deep-equals two settles: both must use the same deterministic name and fake shape, or the results diverge.\n- The full suite takes minutes. Run it once, at the end.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/repairPolicy.test.ts",
+      "scripts/local-runner/guest-stream.mjs",
+      "scripts/local-runner/check-session.mjs",
+      "scripts/tests/local-runner-check.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "7e70cc18a5c97fdbe2259cc77901c7d62d98ca1e",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T12:04:51.361Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T12:05:30.258Z",
+  "reviewStartedAt": "2026-11-01T12:06:50.559Z",
+  "verification": {
+    "command": "S=$(mktemp -d /tmp/repair-h-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && cp /mnt/d/projexts/moes/packages/moe-daemon/src/delivery/repairPolicy.test.ts \"$S/packages/moe-daemon/src/delivery/repairPolicy.test.ts\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'umask 022 && npm ci && npx tsc --noEmit && npm test'",
+    "exitCode": 0,
+    "outputTail": "Test Files  222 passed (222)\n      Tests  6701 passed | 20 skipped (6721)\n   Duration  38.71s",
+    "reportedAt": "2026-11-01T12:06:50.559Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/repairPolicy.test.ts",
+    ".moe/tasks/task-5a635bc90aaa47acabede9307dd1579b.json",
+    ".moe/tasks/task-5bebd9d3a57049b2878a5068ac1f905e.json",
+    ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+    ".moe/tasks/task-c7cead1b2bc24863bea5141129ef47b1.json"
+  ],
+  "completionSummary": "Fixed packages/moe-daemon/src/delivery/repairPolicy.test.ts so H1-H3 pass against check-session.mjs as landed in 6ac51c42 (CQ-R14d3 SSH route). exitingProvider(code, name) now returns a provider with a fake run (answers only `info <name> --format json` with an ipv4 address, throws on anything else), string ssh/keyDir under os.tmpdir() (never created or executed), and a fake spawn. settle() asserts the run calls are exactly the one info read and the spawn commands exactly [fake ssh], so no real multipass or ssh runs. H1-H3 bodies and expectations are byte-identical; check-session.mjs is unchanged. Snapshot gate (git archive HEAD + this file, env -i, Node 24.21, npm ci, tsc --noEmit, npm test): exit 0, 222 files passed, 6701 tests passed, 20 skipped (baseline 3 failed/6698). repairPolicy.test.ts alone: 46/46.",
+  "commits": [
+    {
+      "sha": "8eddc284cb3f29dc24ed81fbf47ff4ee9b932455",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cef53f62@2026-11-01T12:05:05Z",
+      "paths": [
+        ".moe/tasks/task-5a635bc90aaa47acabede9307dd1579b.json",
+        ".moe/tasks/task-5bebd9d3a57049b2878a5068ac1f905e.json",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "recordedBy": "worker-cef53f62",
+      "recordedAt": "2026-11-01T12:07:12.520Z",
+      "treeId": "fb7c68108f96068d556e3569089e284aa8965e5b",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "6bc52f2e235fb3af0ea152c93e55a58f26170e1c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-c5835a34@2026-11-01T12:10:09Z",
+      "paths": [
+        ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+        ".moe/tasks/task-5bebd9d3a57049b2878a5068ac1f905e.json",
+        ".moe/tasks/task-c7cead1b2bc24863bea5141129ef47b1.json"
+      ],
+      "recordedBy": "qa-c5835a34",
+      "recordedAt": "2026-11-01T12:12:13.978Z",
+      "treeId": "e406637396c7bae8182583a7e564d9d07df84dd5",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-c5835a34@2026-11-01T12:10:09Z",
+    "at": "2026-11-01T12:12:13.978Z"
+  },
+  "completedAt": "2026-11-01T12:11:48.668Z",
+  "reviewCompletedAt": "2026-11-01T12:11:48.668Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 8eddc284 (on moe/work-2026-10-24, kind=completion, pushed). Diff is fixture-only: packages/moe-daemon/src/delivery/repairPolicy.test.ts +32/-10, all above the H describe. The other 2 paths are .moe/tasks board records. H1-H3 bodies are byte-identical. scripts/local-runner/check-session.mjs is unchanged since 6ac51c42 (git diff HEAD clean for both files).\nDoD1: H1-H3 pass against 6ac51c42's check-session.mjs: vitest -t 'real host check sessions' gave 3 passed. No expectation weakened or deleted.\nDoD2: exitingProvider's fake run records its args, answers only ['info', name, '--format','json'] with an ipv4 address, and throws on anything else. ssh/keyDir are tmpdir strings, never created or executed. settle() asserts runCalls is exactly that one info read and spawnCommands is exactly [SSH]. No real multipass, ssh or execFile appears in the file; the one 'multipass' hit is a comment.\nMutation probes in the snapshot, both killed (3 failed each): (a) the fake run's expected info name changed; (b) the spawn assertion changed from [SSH] to ['ssh']. The fixture assertions are load-bearing.\nDoD3: I re-ran task.verification: git archive HEAD + this test file into a mktemp snapshot, env -i, Node v24.21.0, npm ci OK, tsc --noEmit clean, npm test. Result: 222 files passed, 6701 passed | 20 skipped, no failures. This matches the worker's counts (baseline 3 failed/6698). The shared checkout was not built or installed.\nNot run: Gradle and scripts harnesses (out of scope for a daemon test-fixture change). Complexity pass: nothing to cut. The commit also carries a board record, .moe/tasks/task-5a635bc9...json, which the wrapper staged.",
+  "requiredCheckAtDone": null
+}

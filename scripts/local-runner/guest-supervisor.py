@@ -8,13 +8,16 @@
 # host frames on stdin into WORKSPACE) and 'export' (CQ-R09:
 # WORKSPACE's changes against its manifest, as frames on stdout, walked as the AGENT_IDENTITY account).
 # Exit codes: 0 relay, materialization or export complete; 64 usage; 65 malformed or mismatched snapshot stream, an
-# unreadable export manifest or workspace root, an export over its bounds, or a malformed or disallowed job frame; 66 no
-# materialized workspace for the job; 71 the job could not start, or the export could not become the AGENT_IDENTITY
-# account; 73 the workspace or its manifest already exists; 74 I/O failure or host EOF; 75 SIGTERM, SIGHUP or SIGINT; 76
-# host protocol violation; 77 not root. A bridge refusal before relay() writes no frame and starts no job: 74 EOF before
-# a whole job frame, 65, 66, and 71 for no AGENT_IDENTITY account, session home or launch config; nor does 77 write one.
-# After relay()'s hello, 71 (the guard, the job or the agent socket could not start), 74, 75 and 76 kill the child group
-# and end the stream with no observation; only 0 follows the one observation frame.
+# unreadable export manifest or workspace root, an export over its bounds, a malformed or disallowed job frame, or a
+# codex job's workspace holding .codex; 66 no materialized workspace for the job; 71 the job could not start,
+# materialize found no AGENT_IDENTITY account, or the export could not become that account; 73 the workspace or its
+# manifest already exists; 74 I/O failure or host EOF; 75 SIGTERM, SIGHUP or SIGINT; 76 host protocol violation; 77 not
+# root. A bridge refusal before relay() writes no frame and starts no job: 74 a failed read or EOF before a whole job
+# frame, 65, 66, and 71 for no AGENT_IDENTITY account, session home or launch config; nor does 77 write one. relay()
+# returns 74 with no job if it cannot write hello. After hello a failure never completes an observation frame: 71 for a
+# failed bridge setup (the wakeup pipe, host stream or agent socket) or a guard that could not start comes before any
+# child exists, while 71 for a guard that could not start the job, 74, 75 and 76 kill the child group before the stream
+# ends. relay() returns 0 only once the one observation frame is written.
 # Mode 'check' (CQ-R11a): one host check frame on stdin, then that approved command as the CHECK_IDENTITY account. It
 # shares the bridge's codes, and none writes a frame: 65 also for a malformed protected entry or a workspace entry reown
 # refuses, 66 no workspace, 71 no CHECK_IDENTITY account, a failed re-own, no session home or no protected-path mount
@@ -43,6 +46,14 @@
 # Mode 'dependencies' (CQ-R11e4): one snapshot into root-owned DEPENDENCIES (0755 directories, 0644 files) and a
 # private manifest, then {kind: 'materialized', digest} and 0; 65 malformed/mismatched stream, 73 existing tree or
 # manifest, 74 I/O failure, 77 not root, 64 any other argv. Stream refusals leave no new tree, manifest or staging.
+# Mode 'reset' (CQ-M07f): reads no stdin and returns a seat's reused VM to a clean workspace between jobs. It removes
+# WORKSPACE, WORKSPACE_MANIFEST and every SESSIONS home-* entry, each by lstat, so a link is unlinked as itself and
+# never followed, and a directory only through the fd-based shutil.rmtree. It never touches TOOLCHAIN, AGENTS,
+# DEPENDENCIES, the bootstrap files, readiness state or SESSIONS itself. Then {kind: 'reset'} and 0; 69 (EX_UNAVAILABLE,
+# no other mode's code) a moe-agent or moe-check process is alive, and nothing was removed; 71 no identity account, or
+# an rmtree that cannot avoid symlink attacks; 74 a removal or write failure, which can leave part removed (a retry
+# completes it); 77 not root. No refusal writes a frame. The other modes take 0, 64-66, 71, 73-77 and 79-82; 78 is
+# retired.
 import base64
 import contextlib
 import errno
@@ -1486,6 +1497,72 @@ def verify(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST):
         os.close(root)
 
 
+# CQ-M07f reset, for a seat's VM reused across jobs: materialize refuses an existing workspace or manifest (73).
+RESET_BUSY = os.EX_UNAVAILABLE  # 69
+
+
+# Whether any process runs with one of uids as its real, effective, saved or filesystem uid. The guest's root PID
+# namespace lists every job, those inside a GUARD's own PID namespace too. A process that exits mid-scan is skipped;
+# any other failure propagates, so reset fails closed.
+def identity_alive(uids, proc='/proc'):
+    for name in os.listdir(proc):
+        if not name.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, name, 'status'), 'rb') as status:
+                lines = status.read().split(b'\n')
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        for line in lines:
+            if line.startswith(b'Uid:'):
+                if any(int(field) in uids for field in line.split()[1:]):
+                    return True
+                break
+    return False
+
+
+# lstat, never stat: a link (or file) at path is unlinked as itself, never followed. A directory goes only through the
+# fd-based rmtree, which opens each level relative to its parent's descriptor and unlinks a link inside as a link.
+def remove_entry(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(info.st_mode):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
+
+
+# Reset runs between jobs under the host's job lease (R06). With no job identity process alive, nothing left in the
+# guest can start one, so the probe cannot be raced; a job-owned home can hold any link, and none is followed. SESSIONS
+# is root's own 0711 directory (session_home), so no job can swap it or a home in it.
+def reset(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, sessions=SESSIONS, uids=None, alive=identity_alive):
+    if uids is None:
+        try:
+            uids = [pwd.getpwnam(name).pw_uid for name in (AGENT_IDENTITY, CHECK_IDENTITY)]
+        except KeyError:
+            return os.EX_OSERR
+    if not shutil.rmtree.avoids_symlink_attacks:
+        return os.EX_OSERR
+    try:
+        if alive(set(uids)):
+            return RESET_BUSY
+        remove_entry(workspace)
+        remove_entry(manifest)
+        try:
+            names = os.listdir(sessions)
+        except FileNotFoundError:
+            names = []
+        for name in names:
+            if name.startswith('home-'):
+                remove_entry(os.path.join(sessions, name))
+        write_frame(out_fd, {'kind': 'reset'})
+        return 0
+    except OSError:
+        return os.EX_IOERR
+
+
 # CQ-R10d3a agents. Each binary is staged root-only in a 0700 directory INSIDE agents (dir_fd-relative, so a swapped
 # agents path cannot redirect it) and checked against its header. Only after the end frame, with nothing after it, is
 # each renamed onto agents/<cli>: a whole-file replacement of any older install, never a write in place. A handled
@@ -1643,11 +1720,14 @@ def install_toolchain(in_fd, out_fd, toolchain=TOOLCHAIN):
 # geteuid and the keywords (seams) of start_job or check_job are injectable from Python only (tests), never from argv or
 # the environment. No refusal writes to stdout.
 def main(argv, geteuid=os.geteuid, **seams):
-    # bridgeArgv and snapshotArgv pass exactly these, CQ-R11c's checkArgv passes ['check'] and CQ-R10d3 ['agents'].
-    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify'], ['agents'], ['toolchain'], ['dependencies']):
+    # openGuestStream (guest-stream.mjs) sends exactly one of these as $SSH_ORIGINAL_COMMAND; guest-ssh.mjs
+    # SUPERVISOR_MODES lists them in this order.
+    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify'], ['agents'], ['toolchain'], ['dependencies'], ['reset']):
         return os.EX_USAGE
     if geteuid() != 0:
         return os.EX_NOPERM
+    if argv == ['reset']:
+        return reset(1)
     if argv == ['dependencies']:
         return dependencies(0, 1)
     if argv == ['toolchain']:

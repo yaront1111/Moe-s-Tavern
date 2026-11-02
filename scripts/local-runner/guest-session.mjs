@@ -1,9 +1,11 @@
-// Host side of the CQ-R08 bridge: one `multipass exec ... moe-supervisor bridge` session for one host-bound job.
-// name, binding, sessionId, daemonInfoPath, forward, provider and the callbacks are trusted host-controller inputs
-// (R06 supplies ownership; forward must reach that same local daemon). Every guest byte is untrusted. The guest gets
-// no daemon address, port, token or setting: its argv is the constant bridgeArgv(name) and nothing is added to its
-// environment. A request reaches forward only after scopeRequest, a depth bound and a fresh loopback bind report from
-// the daemon itself. Child output reaches only onOutput, as bytes; the observation comes only from a supervisor frame.
+// Host side of the CQ-R08 bridge: one supervisor bridge session for one host-bound job, carried by one OpenSSH stream
+// (guest-stream.mjs, CQ-R14d2) to the owned guest's forced-command supervisor, never by `multipass exec`, whose stdio
+// truncates stdin on Linux and delivers none on Windows. name, binding, sessionId, daemonInfoPath, forward, provider
+// and the callbacks are trusted host-controller inputs (R06 supplies ownership; forward must reach that same local
+// daemon). Every guest byte is untrusted. The guest gets no daemon address, port, token or setting: its argv is
+// sshStreamArgv for this VM's pinned key, known_hosts and fresh address, and nothing is added to its environment.
+// A request reaches forward only after scopeRequest, a depth bound and a fresh loopback bind report from the daemon
+// itself. Child output reaches only onOutput, as bytes; the observation comes only from a supervisor frame.
 // Its stdin starts with the CQ-R10b job frame, the one place the job's credential goes.
 // This is local session logic, not VM, Multipass or network-isolation certification (CQ-R13): executionReady is false.
 import { spawn as spawnProcess } from 'node:child_process';
@@ -13,8 +15,9 @@ import http from 'node:http';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { JOB_IDENTITIES } from './guest-bootstrap.mjs';
-import { bridgeArgv, createFrameDecoder, encodeFrame, jobFrame, parseGuestFrame, scopeRequest } from './guest-bridge.mjs';
-import { invoker, QUERY_TIMEOUT_MS } from './lifecycle.mjs';
+import { createFrameDecoder, encodeFrame, jobFrame, parseGuestFrame, scopeRequest } from './guest-bridge.mjs';
+import { openGuestStream } from './guest-stream.mjs';
+import { invoker, isOwnedInstanceName, QUERY_TIMEOUT_MS } from './lifecycle.mjs';
 
 export const MAX_DAEMON_INFO_BYTES = 16_384;
 export const MAX_HEALTH_BYTES = 65_536; // the daemon's own probeDaemonHealth cap
@@ -25,8 +28,10 @@ const MAX_TIMEOUT_MS = 60_000;
 const LOOPBACK = new Set(['127.0.0.1', '::1']);
 const CONTROL = /[\x00-\x1f\x7f]/;
 const EXECUTION = ['attemptId', 'generation', 'sessionId'];
-// Host identity stamped after scoping, only onto tools whose daemon schema accepts it.
-const STAMPED = { 'moe.get_context': ['sessionId'], 'moe.start_step': EXECUTION, 'moe.complete_step': EXECUTION, 'moe.complete_task': EXECUTION };
+// Host identity stamped after scoping, only onto the tools whose daemon schema accepts it: the same six moe-proxy stamps
+// (EXECUTION_IDENTITY_TOOLS). qa_approve and qa_reject need it under verified-local (delivery/reviewBinding.ts).
+const STAMPED = { 'moe.get_context': ['sessionId'], 'moe.start_step': EXECUTION, 'moe.complete_step': EXECUTION, 'moe.complete_task': EXECUTION,
+  'moe.qa_approve': EXECUTION, 'moe.qa_reject': EXECUTION };
 const TIMEOUT = Symbol('timeout');
 // Only internal code literals reach here, so a message never carries a path, caller value, guest byte or upstream text.
 const sessionError = code => Object.assign(new Error(`Guest bridge session failed: ${code}.`), { code });
@@ -41,7 +46,8 @@ const refusal = (id, code) => encodeFrame({ kind: 'response', id, ok: false, err
  * no reply is written after it. An aborted forward may already have acted upstream; nothing reports that undone.
  * Anything else rejects with a fixed SESSION_* code and never yields an observation. forward(tool, args, {signal}) is
  * the trusted daemon transport returning an MCP tool result; onOutput(stream, Buffer) and onObservation(frame) are
- * synchronous. provider: {executable = 'multipass', spawn = child_process.spawn}. timeoutMs (1-60000) bounds hello,
+ * synchronous. provider: {executable = 'multipass', run = execFile} for the info read, plus openGuestStream's optional
+ * ssh, keyDir and spawn = child_process.spawn; it is copied at entry. timeoutMs (1-60000) bounds hello,
  * each forward, each stdin write and the wait for the provider to exit after teardown. job: {cli, credential: {name,
  * value}} is encoded once, with the binding's role, into the job frame that is the first stdin write. The credential
  * reaches only that frame: never argv, spawn options, env, an error, onOutput or any other provider call.
@@ -56,21 +62,22 @@ export async function runGuestSession(input) {
     const keys = isRecord(job) ? Object.keys(job) : [];
     if (keys.length !== 2 || !keys.includes('cli') || !keys.includes('credential')) throw sessionError('SESSION_INPUT_INVALID');
     const first = jobFrame({ cli: job.cli, role: frozen.role, credential: job.credential }); // the role comes only from the binding
-    if (typeof sessionId === 'string' && sessionId.trim() !== '' && sessionId.length <= 255 && !/[\0\r\n]/.test(sessionId)
+    if (isOwnedInstanceName(name) && typeof sessionId === 'string' && sessionId.trim() !== '' && sessionId.length <= 255 && !/[\0\r\n]/.test(sessionId)
       && typeof daemonInfoPath === 'string' && path.isAbsolute(daemonInfoPath) && !CONTROL.test(daemonInfoPath)
       && [forward, onOutput, onObservation, spawn].every(fn => typeof fn === 'function')
       && (signal === undefined || signal instanceof AbortSignal)
       && typeof executable === 'string' && executable.trim() !== '' && !CONTROL.test(executable)
       && Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= MAX_TIMEOUT_MS) {
-      options = { argv: bridgeArgv(name), binding: frozen, first, sessionId, daemonInfoPath, forward, onOutput, onObservation, signal, timeoutMs };
-      options.start = () => spawn(executable, options.argv, { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      // executable and run still drive the info read (and PKILL/PGREP); a later caller edit cannot change the route.
+      options = { name, provider: Object.freeze({ ...provider, executable, spawn }), binding: frozen, first, sessionId, daemonInfoPath, forward, onOutput, onObservation, signal, timeoutMs };
     }
   } catch { options = undefined; }
   if (!options) throw sessionError('SESSION_INPUT_INVALID');
   const refused = await daemonRefusal(options.daemonInfoPath, { timeoutMs: options.timeoutMs });
   if (refused || options.signal?.aborted) throw sessionError(refused ?? 'SESSION_ABORTED');
   let child;
-  try { child = options.start(); } catch { child = null; }
+  // The only spawn: a transport refusal (bad client or key path, no address) spawns nothing and is SESSION_SPAWN_FAILED.
+  try { child = await openGuestStream({ name: options.name, mode: 'bridge', provider: options.provider }); } catch { child = null; }
   if (typeof child?.kill !== 'function' || ![child, child.stdin, child.stdout, child.stderr].every(item => typeof item?.on === 'function')) {
     throw sessionError('SESSION_SPAWN_FAILED');
   }
@@ -165,8 +172,11 @@ function relay(child, options) {
     session.hello = later(session, () => stop(session, 'SESSION_TIMEOUT'));
     session.onAbort = () => stop(session, 'SESSION_ABORTED');
     options.signal?.addEventListener('abort', session.onAbort, { once: true });
+    // An abort that landed while openGuestStream read the address takes the one teardown path: no job frame is written.
+    if (options.signal?.aborted) session.onAbort();
     child.on('error', () => stop(session, 'SESSION_SPAWN_FAILED'));
     // Exit 0 after a clean EOF and the observation is the finish; a request still owed then was abandoned, not failed.
+    // Any other status, ssh's own 255 included, is the provider's failure: no supervisor code is derived from it.
     child.on('close', code => {
       if (code !== 0) stop(session, 'SESSION_PROVIDER_FAILED');
       else if (!session.ended || !session.observation) stop(session, 'SESSION_PROTOCOL_VIOLATION');
@@ -182,7 +192,9 @@ function relay(child, options) {
       stop(session);
     });
     child.stderr.on('error', () => {}).resume(); // drained unread: stderr is never protocol data
-    // The job frame is the first stdin write: Node keeps write order and pump writes only after a request.
+    // The job frame is the first stdin write: Node keeps write order and pump writes only after a request. Ending stdin
+    // stays the cancel and host-gone signal; the supervisor's 74 comes back as ssh's own exit status.
+    if (session.closing) return; // a session already torn down never receives the credential
     bounded(session, new Promise((done, failed) => child.stdin.write(options.first, error => (error ? failed(error) : done()))))
       .catch(error => stop(session, error === TIMEOUT ? 'SESSION_TIMEOUT' : 'SESSION_PROVIDER_FAILED'));
   });
@@ -332,7 +344,7 @@ async function remote(invoke, name, argv) {
 }
 
 /**
- * Proves that no agent-identity process is left in the owned guest, which a local kill of `multipass exec` never shows.
+ * Proves that no agent-identity process is left in the owned guest, which a local kill of the ssh client never shows.
  * Each round runs the fixed PKILL, then PGREP, through lifecycle's bounded invoker; provider is lifecycle's
  * {executable = 'multipass', run = execFile}, so one object can carry both run and runGuestSession's spawn. Resolves a
  * frozen {verified}: true only on pgrep exit 1 with a '0' count. pgrep exit 0 retries after delayMs; any other result,
