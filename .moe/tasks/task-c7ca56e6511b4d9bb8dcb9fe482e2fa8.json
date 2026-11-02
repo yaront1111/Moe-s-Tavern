@@ -83,8 +83,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -119,12 +119,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:09:43.239Z",
-  "updatedAt": "2026-11-02T20:27:12.195Z",
+  "updatedAt": "2026-11-02T21:19:23.067Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T09:13:29.502Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T21:18:32.378Z",
+    "wallClockMs": 43502876
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -242,9 +244,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-02T19:13:46Z",
-    "at": "2026-11-02T20:26:30.748Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-02T20:26:46Z",
+    "at": "2026-11-02T21:19:23.067Z"
+  },
+  "completedAt": "2026-11-02T21:18:32.378Z",
+  "reviewCompletedAt": "2026-11-02T21:18:32.378Z",
+  "reviewSummary": "Reviewed completion da5823b5. It is on moe/work-2026-10-24 and origin, and the candidate tree afa36b29 equals its tree. Diff: +177/-10 (167 net) over the 3 declared files. worktree-landing.{sh,ps1} are unchanged.\n\nDoD1: the twin helpers run before W's first sparse-checkout, in the added||finish block (ps1 in Install-MoeTaskWorktree, whose only caller is Initialize-MoeWorktree). They retry only EEXIST, 5 attempts, and any failure takes the added-W cleanup then MOE_WORKTREE_CREATE_FAILED.\nReal-git probes (2.43 Linux; PS 5.1 + Git for Windows 2.54):\n- free → true; preset → .git/config sha unchanged;\n- stale lock → 4 retries then refusal (~1.8 s);\n- lock released mid-backoff → 1 retry then success;\n- core.worktree/core.bare → skip; EACCES → immediate refusal;\n- global-only true → still writes --local; LC_ALL restored.\nRace repro, 20 repos × 2 parallel sparse-checkouts: without helper 16/120 failed; with helper 0/120 (10 retries).\n\nDoD2: sh mutants killed by AssertionErrors: drop-call, all-retry, no-eexist, no-preread, bound-4. ps1 (PS 5.1): drop-call and no-eexist killed. Controls 4/4 on sh, PS 5.1 and pwsh 7.\n\nDoD3/4: exact task.verification command, env-scrubbed, on a git archive of da5823b5 (sha256-checked): exit 0. postflight-safe bash NONE/Z, worktree-landing 18/0/0, parity PASS.\nWindows PS 5.1 on the same bytes: ParseFile 0 errors, BOM kept, parity-check.ps1 PASS, postflight-safe powershell NONE/Z, worktree-landing.ps1 18/0/0. npm run lint OK.\n\nNotes (non-blocking): MOE_WORKTREE_CONFIG_RETRY is not documented yet (WT-16/17/18 docs rows). Retrying the sparse-checkout on EEXIST would have been leaner, but the pre-set is the approved plan.",
+  "requiredCheckAtDone": null
 }
