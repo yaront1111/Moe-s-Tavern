@@ -100,9 +100,16 @@
           "reason": "Governor ruling, 09:15Z: task-c7ca56e6 sits behind the switch gate, and that gate waits on this row. The fallback snapshot therefore can never contain c7ca56e6, so the fallback now requires only WT-13's completion. This is the only change. Planner architect-0fcb7226 concurs (comment-cac81e8f).",
           "amendedBy": "governor-e6b40560",
           "amendedAt": "2026-11-02T09:30:09.230Z"
+        },
+        {
+          "amendmentId": "amend-2",
+          "description": "Verification. Run ONCE, fresh, from the repo root, as ONE command: `<checkRefs[0]> && <checkRefs[1]>`, exactly as in the executionContract.\n- [0] requires WT-13's completion in HEAD, prints the snapshot sha, makes a `git clone --shared` snapshot at HEAD, and copies the new file in with cmp (task rail; mem:gotcha-gate-hermetic-snapshot-from-wsl).\n- [1] runs the e2e from that snapshot with <parent-tmp> under /mnt/d/moe-scratch.\nThe governor resumes this row only once HEAD holds both WT-11's (task-dd1ee586b90d4fc785434454b1423e76) and WT-13's (task-fbe8e3880ddf47dfa8546f220acea770) completion commits (comment-56b2a0e5), so HEAD always carries WT-11. Check for WT-11's `Moe-Task: task-dd1ee586b90d4fc785434454b1423e76` + `Moe-Kind: completion` trailer before trusting any c1/c2 failure.\n\nThe run can take longer than one 10-minute tool call (drvfs checkouts of about 976 files per worktree and per gate workspace). In that case run the joined command under nohup with a log and an .exit file, and poll it in the foreground until it finishes (mem:gotcha-daemon-linux-snapshot-gate polling recipe). Never leave it running in the background past your turn.\n\nThe summary records:\n- the snapshot sha;\n- each scenario's wall time;\n- the output tail.\n\nIf HEAD's wrapper bytes carry a wip checkpoint of a still-open lane row (31187ec1, WT-10M or WT-14) and the run fails because of it:\n- re-run at the newest commit that contains BOTH WT-11's and WT-13's completion trailers but not that wip. task-c7ca56e6 lands after the switch, so no usable snapshot contains it (mem:gotcha-snapshot-gate-peer-wip-checkpoint).\n- If no such commit exists, do NOT verify on a snapshot without WT-11. Call moe.report_blocked with blockedOnTaskIds [] and a reason naming the wip sha and the failing c1/c2 output, then post the same in #governors. Never name the wip's row as the blocker: 31187ec1, WT-10M and WT-14 all wait on the switch gate, which waits on this row, so the daemon drops that id as a cycle.\n- disclose it;\n- never edit a wrapper.",
+          "reason": "Governor ruling 10:31Z, answering worker-b49a5155's 09:52Z ask (msg-e7435153). The fallback snapshot must also carry WT-11's completion, because c1 ('unlanded') and c2 (the LANDING-CONFLICT resume) are WT-11 behaviour; this is the same risk comment-4803785f cites. With no such commit, report_blocked with [] instead of naming a wip row, which would close a cycle through the gate. This is the only change.",
+          "amendedBy": "governor-e6b40560",
+          "amendedAt": "2026-11-02T10:28:22.826Z"
         }
       ],
-      "activeAmendmentId": "amend-1"
+      "activeAmendmentId": "amend-2"
     },
     {
       "stepId": "step-6",
@@ -111,7 +118,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 3,
+  "planRevision": 4,
   "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
@@ -157,7 +164,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T08:48:03.279Z",
-  "updatedAt": "2026-11-02T09:42:10.138Z",
+  "updatedAt": "2026-11-02T10:28:22.826Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T09:02:47.206Z",
     "plannedStepCount": 6,
