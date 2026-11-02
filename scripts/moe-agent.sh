@@ -1652,7 +1652,9 @@ if [ "$CLI_TYPE" = "grok" ]; then write_grok_config "$PROJECT" "$SERENA_PROJECT"
 # 503 reply naming another ABSOLUTE project exits 3 and prints that path (one
 # line, at most 300 chars). A relative or missing projectPath cannot be judged.
 # Paths compare by moe-proxy's comparableProjectPath (D:\x == D:/x == /mnt/d/x),
-# with ntpath/posixpath, never os.path, so Windows python agrees. WSL shares
+# Drive/UNC use a port of comparableProjectPath's collapse rule: drop empty and
+# '.' segments; '..' never climbs past the drive or UNC server and share.
+# POSIX uses posixpath, never os.path, so Windows python agrees. WSL shares
 # strip host/distro, preserving POSIX tail case before /mnt mapping. Bounded:
 # 3 s total (the watchdog also covers a trickled reply) and 64 KiB of body.
 # Resolve a name once and dial its first address: the /health guard refuses
@@ -1662,20 +1664,32 @@ probe_daemon_health() {
     local port="$2"
     local project="${3:-}"
     $PYTHON_CMD -c '
-import ipaddress, json, ntpath, os, posixpath, re, socket, sys, threading, urllib.error, urllib.request
+import ipaddress, json, os, posixpath, re, socket, sys, threading, urllib.error, urllib.request
 watchdog = threading.Timer(3, os._exit, (1,))
 watchdog.daemon = True
 watchdog.start()
 WINDOWS = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}[^\\/]")
+def collapse(p, keep):
+    kept = []
+    for s in p.split("/"):
+        if s in ("", "."):
+            continue
+        if s != "..":
+            kept.append(s)
+        elif len(kept) > keep:
+            kept.pop()
+    return "/".join(kept)
 def absolute(p):
     return isinstance(p, str) and (bool(WINDOWS.match(p)) or p.startswith("/"))
 def comparable(p):
     p = p.strip()
     if WINDOWS.match(p):
+        s = p.replace("\\", "/")
         share = re.match(r"//(?:wsl\$|wsl\.localhost)/[^/]+(/.*)?$",
-                         p.replace("\\", "/"), re.IGNORECASE | re.ASCII)
+                         s, re.IGNORECASE | re.ASCII)
         if not share:
-            return ntpath.normpath(p).replace("\\", "/").rstrip("/").lower()
+            unc = s.startswith("//")
+            return (("//" if unc else "") + collapse(s, 2 if unc else 1)).lower()
         p = "/" + (share.group(1) or "").lstrip("/")
     p = posixpath.normpath(p)
     m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
