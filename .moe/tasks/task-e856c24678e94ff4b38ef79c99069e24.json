@@ -1,0 +1,30 @@
+{
+  "id": "task-e856c24678e94ff4b38ef79c99069e24",
+  "epicId": "epic-be924fb8",
+  "title": "test: mention-provenance.ps1 fails its child-host probe whenever its parent is Windows PowerShell 5.1",
+  "description": "Found while planning task-86431c315e524b3b89af3bb3d2e7c98d (2026-11-02). It is a pre-existing harness bug, unrelated to that row's seam.\n\nRepro, at HEAD 7aa4148c, from a clean export of the tree on D: (no task worktree involved):\n`powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\mention-provenance.ps1 -PowerShell powershell`\nIt exits 1 before any wrapper launch:\n`FAIL: child host probe failed (exit 1); the stored-timestamp guard cannot be trusted on powershell`\nThe child prints `PROBE_HOST : The term 'PROBE_HOST' is not recognized ... CommandNotFoundException`.\n\nCause: the probe runs `& $psExe -NoProfile -Command $probeScript` (scripts/tests/mention-provenance.ps1, around line 62). Windows PowerShell 5.1's legacy native-argument passing drops the double quotes embedded in $probeScript, so the child runs `PROBE_HOST exe= + ...` as a command instead of a string.\n\nThe same file PASSES under a PowerShell 7 parent, `pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\mention-provenance.ps1`, with both `-PowerShell powershell` and `-PowerShell pwsh`. The default pwsh child under a 5.1 parent goes through the same 5.1 argument path, so expect it to fail too.\n\nLogs: D:\\moe-scratch\\t86431\\ps\\s1-mp.log (5.1 parent, FAIL) and s1-mp7-51.log / s1-mp7.log (pwsh parent, PASSED).\n\nFix direction, verify before use: pass the probe as -EncodedCommand (base64 of the UTF-16LE script), which both engines accept and no native quoting can damage. Keep the probe's purpose: a child that cannot answer must still fail the harness.",
+  "definitionOfDone": [
+    "Under a Windows PowerShell 5.1 parent, `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\mention-provenance.ps1` prints `mention-provenance.ps1 PASSED` with `-PowerShell powershell` and with `-PowerShell pwsh`.",
+    "Under a pwsh parent, the same two runs still print PASSED.",
+    "A child that cannot answer the probe still fails the harness with exit 1 and the `child host probe failed` line, for example `-PowerShell` naming a nonexistent exe.",
+    "The probe still records the PROBE_HOST and PROBE_TYPES lines it prints today; only the transport of the script to the child changes.",
+    "The new or changed lines are ASCII only, because the file has no BOM and PowerShell 5.1 reads it as ANSI."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 326.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T16:48:45.302Z",
+  "updatedAt": "2026-11-02T16:48:45.302Z"
+}

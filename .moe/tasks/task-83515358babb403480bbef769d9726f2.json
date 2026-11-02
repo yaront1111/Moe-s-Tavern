@@ -109,7 +109,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:12:05.776Z",
-  "updatedAt": "2026-11-02T16:29:36.317Z",
+  "updatedAt": "2026-11-02T16:30:21.860Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:16:31.051Z",
@@ -224,7 +224,8 @@
     "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
-    ".moe/tasks/task-83515358babb403480bbef769d9726f2.json"
+    ".moe/tasks/task-83515358babb403480bbef769d9726f2.json",
+    ".moe/tasks/task-e1024bb3e6194b828fcbf905babfebae.json"
   ],
   "completionSummary": "JetBrains now parses a delivery check exitCode as an exact JS safe integer (|n| <= 2^53-1) into a Long, matching the daemon (Number.isSafeInteger) and VS Code. Windows NTSTATUS 3221225477 renders as a failed exit row.\n- Models.kt: DeliveryCheckRun.exitCode is Long?. TaskVerification.exitCode stays Int.\n- MoeJson.kt: deliveryExitCode(): Long?, bound by MAX_SAFE_EXIT via abs() then longValueExact(). Both catch arms kept.\n- DeliveryPresentation: compares with 0L. The verdict rule is unchanged.\n- Corpus: D17 (gradlew.bat test, 3221225477, runner-observed) and D18 (9007199254740991), both checkFailed FAIL.\n- Tests: MoeJsonTest adds the range cases (±2^53 give null). DeliveryPresentationTest uses Long codes.\nSix files, +46/-16.\n\nRED at ed60ab31: D17 and D18 had no exit row, and MoeJsonTest failed at 2147483648. The unchanged VS Code delivery-corpus test was already 9/9 on the new rows. GREEN: 3 focused classes, 50/0.\n\nMutants (assertion kills, compileKotlin executed each time):\n- M1, Int bound: kills D17, D18 and MoeJsonTest.\n- M2, 2^53 off-by-one: kills MoeJsonTest.\n- M3, toLong: kills MoeJsonTest at 1.1.\n- M4, `code > 0L`: kills D12 and 2 DeliveryPresentationTest methods.\n\nGate at HEAD 105bff1f, exit 0: JUnit 571 (0 failures), VS Code 574 tests (570 pass, 4 skip, 0 fail).\n\nDEVIATION: the checkRef's tail `git diff --quiet HEAD -- moe-vscode/` kept failing on other tasks' uncommitted moe-vscode edits (VSC-23, VSC-24, then VSC-27, task-e1024bb3, which started mid-run). The verbatim run at 8122d0b9 passed every test (JUnit 571, VS Code 574/570/0) and failed only that tail. The submitted run scopes the tail to tests/delivery-corpus.test.cjs, the file DoD 2 names. The snapshot's moe-vscode is HEAD's bytes by construction, since only the six moe-jetbrains files are overlaid, so this task changes no moe-vscode file. QA can run the verbatim command once no moe-vscode work is in progress.\n\nTheoretical, not fixed: a fractional literal the daemon never serves (e.g. 9007199254740990",
   "commits": [
@@ -248,6 +249,22 @@
       "treeId": "8ca16e94a6582c5bc3ee31bd3842d702f2da6ed6",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "7473f31f5d820d2a19dea437074108c311df201a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T16:23:20Z",
+      "paths": [
+        ".moe/tasks/task-83515358babb403480bbef769d9726f2.json",
+        ".moe/tasks/task-e1024bb3e6194b828fcbf905babfebae.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T16:30:21.860Z",
+      "treeId": "83bf8985d8de8f5bd8925c7a40394fd97d8f4706",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -261,9 +278,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b49a5155@2026-11-02T15:59:02Z",
-    "at": "2026-11-02T16:22:42.632Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T16:23:20Z",
+    "at": "2026-11-02T16:30:21.860Z"
   },
   "completedAt": "2026-11-02T16:29:36.317Z",
   "reviewCompletedAt": "2026-11-02T16:29:36.317Z",
