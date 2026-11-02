@@ -11,20 +11,167 @@
     "The new or changed lines are ASCII only, because the file has no BOM and PowerShell 5.1 reads it as ANSI."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. RED run, then move the child-host probe to -EncodedCommand. Edit tool only; this is the task's one file. Background: mem:gotcha-powershell-curly-quotes-psquote (Windows PowerShell 5.1 drops embedded ASCII double quotes on the native -Command route; only -EncodedCommand avoids it).\n\nRED first, before any edit. From the checkout root (/mnt/d/projexts/moes), run C2 from executionContract.checkRefs once, verbatim. Expected result:\n- It ends `GATE rc=1`.\n- `LEG parent=powershell.exe child=powershell rc=1` and `LEG parent=powershell.exe child=pwsh rc=1` each follow `FAIL: child host probe failed (exit 1)`.\n- Both pwsh.exe legs print `mention-provenance.ps1 PASSED` with rc=0.\nKeep those lines for the summary. The architect's dry-run at 51ba4f6a gave exactly this.\n\nThen edit scripts/tests/mention-provenance.ps1 with the Edit tool. The GLOBAL customRule allows no shell writes to tracked files. Make two replacements and nothing else.\n\n(a) Directly under the `$probeScript = '...'` line (lines 51-54 at 51ba4f6a), replace these four lines:\n# Printed single-quoted with inner quotes doubled, so the line above is a\n# literally re-runnable command rather than an approximation of one.\n$probeDisplay = \"$psExe -NoProfile -Command '\" + ($probeScript -replace \"'\", \"''\") + \"'\"\nWrite-Host \"[probe] $probeDisplay\"\nwith exactly these eleven lines:\n# Sent as -EncodedCommand (base64 of the UTF-16LE text), never -Command. A\n# Windows PowerShell 5.1 parent passes native arguments with legacy quoting,\n# which strips the double quotes inside $probeScript: the child then ran\n# `PROBE_HOST exe= + ...` as a command, and the probe failed for either child.\n# Base64 has no quotes to strip, and both engines decode it the same way.\n$probeEncoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($probeScript))\n# [probe] is the exact command run, re-runnable as printed; [probe-script] is\n# the text it decodes to.\n$probeDisplay = \"$psExe -NoProfile -EncodedCommand $probeEncoded\"\nWrite-Host \"[probe] $probeDisplay\"\nWrite-Host \"[probe-script] $probeScript\"\n\n(b) In the try block (line 62 at 51ba4f6a), replace\n    $probeOut = @(& $psExe -NoProfile -Command $probeScript 2>&1 | ForEach-Object { \"$_\" })\nwith\n    $probeOut = @(& $psExe -NoProfile -EncodedCommand $probeEncoded 2>&1 | ForEach-Object { \"$_\" })\n\nLeave these byte-identical:\n- The `$probeScript = ...` line. The child then still answers with the same PROBE_HOST and PROBE_TYPES lines, and the harness still prints them as PROVENANCE_HOST and PROVENANCE_JSON_TYPES (DoD 4).\n- The param's ValidateSet, the `$psExe` choice, and the probe checks after the try.\n- Everything from `function Invoke-ProvenanceMode` to the end of the file. task-86431c31 depends on this row and anchors its step 2 on content in that function's $saved, try and finally blocks.\n\nError handling: the probe's error handling stays exactly as it is. Keep the try/catch/finally, `$probeRc = $LASTEXITCODE` and the `$probeRc -ne 0 -or -not $probeHostLine -or -not $probeTypeLine` test unchanged.\n- A child exe that does not resolve still lands in catch as `probe could not be launched: ...`.\n- A child that exits non-zero, or answers without both lines, still has its own output printed, then `FAIL: child host probe failed (exit N) ...` and exit 1 (DoD 3).\n- The parent's ErrorActionPreference stays Continue around the call, so the child's stderr is reported, not thrown.\n\nEncoding (DoD 5): the file has no BOM and LF endings, and Windows PowerShell 5.1 reads it as ANSI. Every added character must be plain ASCII: straight quotes, three dots rather than an ellipsis character, and no dash character other than the hyphen. Do not add a BOM. C1 checks the whole file.\n\nWhy this transport: base64 has no quote or space for 5.1's legacy native-argument quoting to damage, and powershell.exe and pwsh both accept -EncodedCommand. The architect probed it on this host. With exactly this edit, all four parent/child legs print PASSED, and a deliberately failing child's error comes back to either parent as readable text.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/mention-provenance.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/mention-provenance.ps1"
+      ],
+      "note": "RED at HEAD: C2 GATE rc=1, both powershell.exe legs rc=1 with probe FAIL; pwsh.exe legs PASSED. Edited probe to -EncodedCommand. Other dirty paths belong to peers, untouched.",
+      "startedAt": "2026-11-02T17:24:32.300Z",
+      "completedAt": "2026-11-02T17:25:40.172Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Verification: run once, fresh, after step 1. Three commands sit in executionContract.checkRefs. Run each verbatim from the checkout root (/mnt/d/projexts/moes). C2 is the complete_task evidence.\n\n- C1 (static, seconds) prints STATIC-OK and covers DoD 4, DoD 5 and the governor's scope note. It checks that:\n  - the whole file is ASCII, with no BOM and no CR;\n  - the `$probeScript =` line is unchanged against the pinned base 51ba4f6a;\n  - the probe call uses `-EncodedCommand $probeEncoded`, and no `-Command $probeScript` remains;\n  - the file from `function Invoke-ProvenanceMode` to the end is byte-identical to 51ba4f6a.\n  The base is pinned rather than HEAD, so QA can re-run C1 after the completion commit lands.\n- C2 (about a minute) covers DoD 1, DoD 2 and DoD 4.\n  - It exports HEAD into a fresh /mnt/d/moe-scratch/e856c246-gate.XXXXXX, on D: so Windows processes can read it, and copies this file in.\n  - It then runs the DoD command under each parent, powershell.exe (Windows PowerShell 5.1) and pwsh.exe, once with -PowerShell powershell and once with -PowerShell pwsh.\n  - Each of the four legs prints its PROVENANCE_HOST and PROVENANCE_JSON_TYPES lines, then `mention-provenance.ps1 PASSED` and `LEG ... rc=0`. The run ends `GATE rc=0`.\n  - It runs in a snapshot because scripts/moe-agent.ps1, which the harness launches, carries peers' uncommitted edits in the shared checkout.\n- C3 (seconds) covers DoD 3.\n  - A 5.1 driver removes pwsh's directory from PATH. node and python stay resolvable, because on this host they live elsewhere. The driver then runs the harness in place under a 5.1 parent with -PowerShell pwsh.\n  - It must print `probe could not be launched: The term 'pwsh' is not recognized ...`, `FAIL: child host probe failed (exit 1) ...`, `NEG rc=1` and NEG-OK.\n  - The param's ValidateSet admits only powershell and pwsh, so the DoD's 'nonexistent exe' is pwsh on a PATH where it does not exist.\n  - The harness stops at the probe, before any wrapper launch or temp dir, so this in-place run writes nothing.\n\nError handling for a red run:\n- If C2's two powershell.exe legs still fail at the probe, the edit did not reach the call: re-check (b).\n- If a leg fails after the probe (a mode FAIL, or the wrapper exits non-zero), compare that leg under pwsh.exe and against your RED run before blaming this change. The pwsh.exe legs passed at HEAD in the RED run.\n- Do not edit the wrapper, the seed or the fake proxy in this task.\n- If a leg hangs, its `timeout 900` ends it. Kill only PIDs you recorded; never pattern-kill.\n\nThe commands are written for a WSL seat. On a Git Bash seat, use /d/moe-scratch in place of /mnt/d/moe-scratch, and say so in the summary. You may delete the snapshot dirs your own runs printed (`snapshot=...`), by that exact path only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/mention-provenance.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/mention-provenance.ps1"
+      ],
+      "note": "C1 STATIC-OK, C2 GATE rc=0 (4 legs PASSED), C3 NEG-OK.",
+      "startedAt": "2026-11-02T17:25:40.781Z",
+      "completedAt": "2026-11-02T17:27:12.847Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Adversarial self-review, then complete_task. Load adversarial-self-review, then check:\n(1) `git diff --stat -- scripts/tests/mention-provenance.ps1` shows about +11/-4. `git diff -U0 -- scripts/tests/mention-provenance.ps1` touches only lines between `$probeScript =` and `$probeOut = @()`, plus the one call line in try.\n(2) Twice concurrently: each harness run keeps the probe in its own variables, and the child is a fresh process. Parallel runs, such as C2's legs or task-86431c31's later C4 run of this file, share nothing new.\n(3) Odd input: ValidateSet fixes the child names. `$probeScript` is a constant, so the base64 is about 1.3k chars, far under the 32k Windows command-line limit.\n(4) Wrong assumptions: a child that answers but also writes progress or errors to stderr adds lines to $probeOut. The harness keys only on the `PROBE_HOST ` and `PROBE_TYPES ` prefixes, so the extra lines are harmless on success and printed on failure.\n(5) The `[probe]` line is now the exact command run, and `[probe-script]` keeps today's readable script in the log. No other file reads either line: `git grep -nF '[probe' -- ':!.moe'` hits only this file.\n(6) Would I be embarrassed? The pwsh-parent legs, which task-86431c31's C4 test relies on, still pass in C2.\n\nIf any byte changes during review, re-run C1, C2 and C3 and use the fresh C2.\n\nThen call complete_task with:\n- verification: C2 (command, exitCode, and an outputTail with the four LEG lines and GATE rc=0);\n- modifiedFiles: exactly [scripts/tests/mention-provenance.ps1];\n- a summary that carries the RED result (both powershell.exe legs rc=1 at HEAD), C1 STATIC-OK, C3 NEG-OK and the C2 snapshot path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/mention-provenance.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/mention-provenance.ps1"
+      ],
+      "note": "Self-review: diff +11/-4 confined to probe block; no other reader of [probe] lines (git grep); constant base64 ~1.3k chars; pwsh-parent legs pass.",
+      "startedAt": "2026-11-02T17:27:12.870Z",
+      "completedAt": "2026-11-02T17:27:21.728Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote under \"keep the board moving\": a fleet-filed LOW harness bug. 3 architects and 3 workers are idle, and nothing else is claimable before WT-13 lands. The only open row that also edits scripts/tests/mention-provenance.ps1 is 86431c31, which is held until after the switch and edits a different hunk (Invoke-ProvenanceMode's $saved block, not the probe at lines 50-62). 86431c31 gets an edge on this row so the two edits land in order.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "LOW",
   "order": 326.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-2ef6deadbafb46e6a05727c399ff5638",
+      "author": "governor-e6b40560",
+      "content": "Governor note for the planner (17:06Z). This row was promoted to PLANNING to use idle seats. Before the worktree switch, it runs in the shared checkout.\n\nOne other open row edits this file: task-86431c315e524b3b89af3bb3d2e7c98d (86431c31, HIGH). It is held until after the switch. Its step 2 adds three lines that save, set and restore the env inside Invoke-ProvenanceMode's `$saved = @{ ... }` block, which is at line 140 at HEAD. I added an edge so 86431c31 depends on this row.\n\nConstraints:\n- Keep this row's edit to the child-host probe transport only: `$probeScript`, `$probeDisplay` and the `& $psExe -NoProfile -Command $probeScript` call, lines 50-62 at HEAD. Leave Invoke-ProvenanceMode untouched, so 86431c31's anchors stay valid.\n- 86431c31's C4 check runs this file under a pwsh parent with both child engines. Your DoD 2, which requires a pwsh parent to still pass, protects it. Please run both legs.",
+      "timestamp": "2026-11-02T17:06:18.649Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T16:48:45.302Z",
-  "updatedAt": "2026-11-02T16:48:45.302Z"
+  "updatedAt": "2026-11-02T17:27:25.518Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T17:06:08.302Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T17:06:12.248Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-4c1da905"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T17:23:17.405Z",
+  "executionContract": {
+    "intendedBehavior": "Under a Windows PowerShell 5.1 parent, the child-host probe in scripts/tests/mention-provenance.ps1 reaches either child intact, because it is sent as -EncodedCommand. The harness then prints `mention-provenance.ps1 PASSED` with -PowerShell powershell and with -PowerShell pwsh. Under a pwsh parent it still passes. A child that cannot answer still fails the harness with exit 1 and the `child host probe failed` line.",
+    "acceptanceCriteria": [
+      "DoD 1: in C2, the two powershell.exe legs (child powershell, child pwsh) each print `mention-provenance.ps1 PASSED` and `LEG ... rc=0`.",
+      "DoD 2: in C2, the two pwsh.exe legs each print `mention-provenance.ps1 PASSED` and `LEG ... rc=0`. C2 ends `GATE rc=0`.",
+      "DoD 3: C3 prints `FAIL: child host probe failed (exit 1) ...`, `NEG rc=1` and NEG-OK.",
+      "DoD 4: the `$probeScript =` line is byte-identical to 51ba4f6a (C1). Every C2 leg prints a PROVENANCE_HOST line and a PROVENANCE_JSON_TYPES line: `not-required host=WindowsPowerShell-5.1...` for the 5.1 child, `reader=Newtonsoft.Json... jobject=Newtonsoft.Json...` for the pwsh child.",
+      "DoD 5: C1 prints STATIC-OK. The whole file is ASCII, with no BOM and no CR."
+    ],
+    "invariants": [
+      "The `$probeScript` text is unchanged, so the child prints the same PROBE_HOST and PROBE_TYPES lines and the harness prints the same PROVENANCE_HOST and PROVENANCE_JSON_TYPES lines.",
+      "Failure handling is unchanged: the try/catch/finally, `$probeRc = $LASTEXITCODE`, the rc and line test, the FAIL line and exit 1.",
+      "The param's ValidateSet('powershell', 'pwsh') and the `$psExe` selection are unchanged.",
+      "Everything from `function Invoke-ProvenanceMode` to the end of the file is byte-identical to 51ba4f6a, where task-86431c31 anchors its step 2.",
+      "The file stays ASCII-only, with LF endings and no BOM."
+    ],
+    "compatibility": [
+      "The `[probe]` line now shows `<child> -NoProfile -EncodedCommand <base64>` instead of a -Command form, and a new `[probe-script]` line carries the decoded text. git grep finds no reader of either line outside this file.",
+      "task-86431c31 (WORKING, dependsOn this row) edits Invoke-ProvenanceMode's $saved, try and finally blocks by content anchors. Its C4 runs this harness under a pwsh parent with both children, which C2's pwsh.exe legs cover."
+    ],
+    "approvedScope": [
+      "scripts/tests/mention-provenance.ps1 only, in the probe block between the `$probeScript = ` line and the `$probeHostLine = ` line: the new `$probeEncoded`, the `$probeDisplay` value, the `[probe]` Write-Host, a new `[probe-script]` Write-Host, their comments, and the `& $psExe` probe call inside try."
+    ],
+    "reuse": [
+      "PowerShell's own -EncodedCommand switch, accepted by both engines, built with [Convert]::ToBase64String over [System.Text.Encoding]::Unicode (UTF-16LE). No helper and no temp file."
+    ],
+    "sourceAssumptions": [
+      "At 51ba4f6a, scripts/tests/mention-provenance.ps1 is 217 lines of ASCII with LF endings and no BOM (.gitattributes: `* text=auto eol=lf`). Line 12 holds the param ValidateSet, line 41 the `$psExe` selection and line 50 `$probeScript`. Lines 51-54 hold the display comment, `$probeDisplay` and `Write-Host \"[probe] $probeDisplay\"`. Line 62 holds the `$probeOut = @(& $psExe -NoProfile -Command $probeScript 2>&1 | ...)` call.",
+      "On this host powershell.exe is 5.1.26100 and pwsh is 7.6.9, a WindowsApps alias. node is in Program Files/nodejs and python in C:/Python314, so removing pwsh's directory from PATH leaves the harness's node and python checks green (C3)."
+    ],
+    "checkRefs": [
+      "b=51ba4f6a110e2b16278aff3c114ff0b317da5180; f=scripts/tests/mention-provenance.ps1; ! LC_ALL=C grep -nP '[^\\x00-\\x7F]' $f && [ \"$(head -c3 $f | od -An -tx1 | tr -d ' \\n')\" != efbbbf ] && ! grep -q $'\\r' $f && ! git diff -U0 $b -- $f | grep -E '^[-+]\\$probeScript = ' && git diff -U0 $b -- $f | grep -qF '+    $probeOut = @(& $psExe -NoProfile -EncodedCommand $probeEncoded 2>&1' && ! grep -nF -- '-Command $probeScript' $f && diff <(git show $b:$f | sed -n '/^function Invoke-ProvenanceMode/,$p') <(sed -n '/^function Invoke-ProvenanceMode/,$p' $f) && echo STATIC-OK",
+      "S=$(mktemp -d /mnt/d/moe-scratch/e856c246-gate.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp scripts/tests/mention-provenance.ps1 \"$S/scripts/tests/\" && cd \"$S\" || exit 1; echo \"snapshot=$S\"; rc=0; for p in powershell.exe pwsh.exe; do for c in powershell pwsh; do o=$(timeout 900 $p -NoProfile -ExecutionPolicy Bypass -File 'scripts\\tests\\mention-provenance.ps1' -PowerShell $c 2>&1 | tr -d '\\r'; exit ${PIPESTATUS[0]}); r=$?; printf '%s\\n' \"$o\" | grep -E '^(PROVENANCE_|mention-provenance\\.ps1|FAIL)'; echo \"LEG parent=$p child=$c rc=$r\"; [ $r -eq 0 ] && printf '%s\\n' \"$o\" | grep -q '^mention-provenance\\.ps1 PASSED' || rc=1; done; done; echo \"GATE rc=$rc\"; exit $rc",
+      "n='$ProgressPreference=\"SilentlyContinue\"; $d=Split-Path (Get-Command pwsh -EA Stop).Source; $env:PATH=($env:PATH -split \";\" | ? { $_ -and $_.TrimEnd(\"\\\") -ne $d.TrimEnd(\"\\\") }) -join \";\"; if (Get-Command pwsh -EA 0) { exit 9 }; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\mention-provenance.ps1 -PowerShell pwsh; exit $LASTEXITCODE'; o=$(timeout 300 powershell.exe -NoProfile -EncodedCommand \"$(printf %s \"$n\" | iconv -t UTF-16LE | base64 -w0)\" 2>&1 | tr -d '\\r'; exit ${PIPESTATUS[0]}); r=$?; printf '%s\\n' \"$o\" | grep -E 'could not be launched|^FAIL'; echo \"NEG rc=$r\"; [ $r -eq 1 ] && printf '%s\\n' \"$o\" | grep -q '^FAIL: child host probe failed' && echo NEG-OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) -EncodedCommand, chosen: base64 has no quotes or spaces, both engines accept it, and it was probed green on all four parent/child legs. (2) Escaping the inner quotes for 5.1's legacy argument passing: rejected. pwsh 7.3+ parents already escape them in their Standard/Windows argument-passing modes, so the fix would depend on the parent's version and $PSNativeCommandArgumentPassing. (3) Piping the script to `-Command -` on stdin: rejected. In stdin mode a terminating error does not reliably set the exit code, and 5.1 encodes the pipe with $OutputEncoding. (4) Writing the probe to a temp .ps1 and passing it with -File: rejected. It adds a temp file to create and clean up, and needs an execution-policy flag on the child. (5) Keeping the old `-Command '...'` [probe] display: rejected. It would no longer be what runs, and pasted at a 5.1 prompt it reproduces the bug.",
+    "codebaseInsights": "The probe is lines 44-88 of scripts/tests/mention-provenance.ps1. The child answers with PROBE_HOST and PROBE_TYPES lines, and the harness prints them as PROVENANCE_HOST and PROVENANCE_JSON_TYPES. Those are DoD 4's 'lines it prints today'. Nothing outside the file reads the [probe] display line. Under a PowerShell parent, a deliberately failing -EncodedCommand child's error comes back as plain text; this was probed for both parents and both children. A CLIXML progress blob appears only when bash launches powershell.exe -EncodedCommand directly, which is why C3's driver sets $ProgressPreference. The harness's -PowerShell param is ValidateSet('powershell','pwsh'), so DoD 3's example runs as pwsh on a PATH without pwsh. Architect dry-runs at 51ba4f6a: C2 RED gave both powershell.exe legs rc=1 with the probe FAIL line and both pwsh.exe legs PASSED. C2 GREEN gave GATE rc=0 in under a minute. C1 gave STATIC-OK both before and after a simulated commit, and C3 gave NEG-OK.",
+    "risks": "The shared checkout's scripts/moe-agent.ps1 is dirty with peers' edits, so C2 snapshots HEAD plus this one file instead of running in place. C3 may run in place because it exits at the probe. task-86431c31 (WORKING, held) dependsOn this row and edits Invoke-ProvenanceMode by content anchors, so this row must not touch that function; C1 enforces it. The file is BOM-less and 5.1 reads it as ANSI, so the Edit tool must not introduce typographic characters. C2 and C3 assume a WSL seat with Windows interop, with powershell.exe, pwsh.exe, iconv and base64 on PATH. C3 assumes node and python do not live in pwsh's directory. That holds on this host; with a Store-only python the harness would SKIP (exit 0), and C3 would fail visibly, never pass falsely. DoD 4 reading: the new [probe-script] line and the changed [probe] line are the transport's display. The PROBE_HOST/PROBE_TYPES answer and the PROVENANCE_* lines stay as they are.",
+    "keyFiles": [
+      "scripts/tests/mention-provenance.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "072dd78cf81c87ba529598f90aa21f3a3aae6821",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T17:23:17.429Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T17:24:32.300Z",
+  "reviewStartedAt": "2026-11-02T17:27:25.516Z",
+  "verification": {
+    "command": "C2 from executionContract.checkRefs: snapshot of HEAD + scripts/tests/mention-provenance.ps1 under /mnt/d/moe-scratch/e856c246-gate.XXXXXX; for p in powershell.exe pwsh.exe; for c in powershell pwsh: $p -NoProfile -ExecutionPolicy Bypass -File scripts\\tests\\mention-provenance.ps1 -PowerShell $c",
+    "exitCode": 0,
+    "outputTail": "mention-provenance.ps1 PASSED (8 stored cases + 2 synthetic delivery-failure cases, 3 modes)\nLEG parent=powershell.exe child=powershell rc=0\nLEG parent=powershell.exe child=pwsh rc=0\nLEG parent=pwsh.exe child=powershell rc=0\nLEG parent=pwsh.exe child=pwsh rc=0\nGATE rc=0",
+    "reportedAt": "2026-11-02T17:27:25.516Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/mention-provenance.ps1"
+  ],
+  "completionSummary": "Child-host probe in scripts/tests/mention-provenance.ps1 now sent as -EncodedCommand (base64 UTF-16LE of the unchanged $probeScript); [probe] shows the exact command, new [probe-script] shows the decoded text. RED at HEAD: both powershell.exe-parent legs rc=1 with 'child host probe failed'. After: C2 all four legs PASSED, GATE rc=0 (snapshot /mnt/d/moe-scratch/e856c246-gate.MNSlfJ, removed after). C1 STATIC-OK (ASCII, no BOM/CR, Invoke-ProvenanceMode onward byte-identical to 51ba4f6a). C3 NEG-OK (pwsh absent from PATH -> 'probe could not be launched', FAIL line, rc=1). Diff +11/-4, one file."
 }
