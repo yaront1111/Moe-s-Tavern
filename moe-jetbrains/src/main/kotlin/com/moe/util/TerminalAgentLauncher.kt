@@ -15,6 +15,7 @@ import com.intellij.openapi.util.SystemInfo
 import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
@@ -538,8 +539,8 @@ object TerminalAgentLauncher {
                     basePath, role, script.file.absolutePath, envOverrides, agentCommand, teamName, codexExec, workerId
                 )
                 // Graceful degrade when only the .ps1 exists: run it on the Windows
-                // side via WSL interop, with bash-safe escaping so the line survives
-                // being typed into a bash prompt.
+                // side via WSL interop. The line is only base64 after its prefix, so
+                // it needs no bash escaping to survive a bash prompt.
                 ScriptKind.POWERSHELL -> bashWrapPowerShell(
                     buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand, teamName, codexExec, workerId)
                 )
@@ -590,25 +591,12 @@ object TerminalAgentLauncher {
     ): String = buildWslBashCommand(basePath, role, scriptPath, envOverrides, agentCommand, teamName, codexExec)
 
     /**
-     * Convert a `powershell -NoProfile ... -Command "..."` line (backtick-escaped
-     * for a PowerShell host) into one that survives a bash prompt: interop needs
-     * the .exe suffix, and bash double quotes eat `$`, backticks, and `"` unless
-     * backslash-escaped. The PowerShell-level backtick escaping is first undone
-     * (every backtick powerShellLine emits escapes the character after it), then
-     * re-escaped for bash. Curly quotes need nothing in bash.
+     * Convert a `powershell -NoProfile ... -EncodedCommand <base64>` line into one that survives a bash prompt:
+     * interop needs only the .exe suffix, because base64 holds no `$`, backtick, quote or `!` for bash to expand.
+     * Any other line is returned unchanged.
      */
-    internal fun bashWrapPowerShell(psLine: String): String {
-        val prefix = "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
-        if (!psLine.startsWith(prefix) || !psLine.endsWith("\"")) return psLine
-        val inner = psLine.removePrefix(prefix).removeSuffix("\"")
-            .replace(PS_BACKTICK_ESCAPE) { it.groupValues[1] }
-        val bashEscaped = inner
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\$", "\\\$")
-            .replace("`", "\\`")
-        return "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$bashEscaped\""
-    }
+    internal fun bashWrapPowerShell(psLine: String): String =
+        if (psLine.startsWith(POWERSHELL_LINE_PREFIX)) "powershell.exe" + psLine.removePrefix("powershell") else psLine
 
     private fun buildPowerShellCommand(
         basePath: String,
@@ -650,18 +638,16 @@ object TerminalAgentLauncher {
         )
     }
 
-    // Inside "...", PowerShell treats the backtick, $, " and U+201C, U+201D, U+201E as special.
-    private val PS_DOUBLE_QUOTED_SPECIAL = Regex("[`\$\"“”„]")
-    private val PS_BACKTICK_ESCAPE = Regex("`(.)", RegexOption.DOT_MATCHES_ALL)
+    private const val POWERSHELL_LINE_PREFIX = "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand "
 
     /**
-     * Runs [psCommand] in a fresh `powershell`, escaped for the PowerShell prompt it is typed into: ONE pass puts a
-     * backtick before each backtick, $, " and curly double quote, so no escape it adds is escaped again.
+     * Runs [psCommand] in a fresh `powershell`. The typed line holds only base64 (of UTF-16LE, never UTF_16, which
+     * writes a BOM) after a fixed prefix, so no character of a value reaches the shell it is typed into (PowerShell,
+     * cmd, or bash under WSL), nor Windows PowerShell 5.1's native argument passing, which drops a plain `"`. This is
+     * the form VS Code's AgentLauncher and AccountsTreeProvider type. [psQuote] still guards the decoded script.
      */
-    private fun powerShellLine(psCommand: String): String {
-        val escaped = psCommand.replace(PS_DOUBLE_QUOTED_SPECIAL) { "`" + it.value }
-        return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
-    }
+    private fun powerShellLine(psCommand: String): String =
+        POWERSHELL_LINE_PREFIX + Base64.getEncoder().encodeToString(psCommand.toByteArray(Charsets.UTF_16LE))
 
     /**
      * Gate: when does JetBrains opt a role into Claude's interactive TUI?

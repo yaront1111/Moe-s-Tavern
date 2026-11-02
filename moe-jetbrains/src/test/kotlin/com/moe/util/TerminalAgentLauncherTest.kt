@@ -13,11 +13,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.util.Base64
 
 class TerminalAgentLauncherTest {
     @get:Rule
@@ -25,7 +25,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell worker Claude command stays in print mode`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "worker",
             scriptPath = "C:\\Users\\yaron\\AppData\\Roaming\\JetBrains\\PyCharm2025.2\\plugins\\moe-jetbrains\\scripts\\moe-agent.ps1",
@@ -46,7 +46,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell architect Claude command opts into interactive TUI`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "architect",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -60,7 +60,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell governor Claude command opts into interactive TUI`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "governor",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -74,7 +74,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell qa Claude command stays in print mode`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "qa",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -88,14 +88,14 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell worker non-Claude command stays provider native`() {
-        val codexCommand = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val codexCommand = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "worker",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
             envOverrides = emptyMap(),
             agentCommand = "codex"
         )
-        val geminiCommand = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val geminiCommand = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "worker",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -109,7 +109,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell exec modes do not force Claude interactive`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "worker",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -124,7 +124,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell codex exec passes -CodexExec`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "worker",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -141,7 +141,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell gemini exec passes -GeminiExec and never -CodexExec`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "worker",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -157,7 +157,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell architect Gemini command stays provider native`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "architect",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -173,7 +173,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell worker Grok command stays provider native`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "worker",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -192,7 +192,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell architect Grok command does not pass -Interactive`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "architect",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -209,7 +209,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell grok exec passes -GrokExec and never -CodexExec`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "architect",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -237,7 +237,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `PowerShell architect command no longer sets MOE_NO_PRINT_MODE env var`() {
-        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
             role = "architect",
             scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
@@ -376,7 +376,7 @@ class TerminalAgentLauncherTest {
         )
         assertTrue(bash.contains("MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js'"))
         assertTrue(bash.contains("MOE_RUNTIME_PROTECTED='1'"))
-        val ps = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val ps = decodedPowerShellCommand(
             basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
             envOverrides = env, agentCommand = "claude"
         )
@@ -390,7 +390,7 @@ class TerminalAgentLauncherTest {
             basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.sh",
             envOverrides = legacy, agentCommand = "claude"
         )
-        val ps = TerminalAgentLauncher.buildPowerShellCommandForTest(
+        val ps = decodedPowerShellCommand(
             basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
             envOverrides = legacy, agentCommand = "claude"
         )
@@ -412,12 +412,12 @@ class TerminalAgentLauncherTest {
         )
         val wrapped = TerminalAgentLauncher.bashWrapPowerShell(psLine)
 
-        assertTrue(wrapped.startsWith("powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \""))
-        // bash double quotes require \$ so PowerShell (not bash) expands $env:
-        assertTrue(wrapped.contains("\\\$env:MOE_DAEMON_PATH"))
-        // no PowerShell backtick escapes may survive — bash treats ` as command substitution
-        assertFalse(wrapped.contains("`\$"))
-        assertFalse(wrapped.contains("`\""))
+        // Base64 holds no $, backtick, quote or ! for bash to expand, so interop needs only the .exe suffix.
+        assertEquals("powershell.exe" + psLine.removePrefix("powershell"), wrapped)
+        val script = typedBashPsScript(wrapped)
+        assertEquals(typedPsScript(psLine), script)
+        // bash escapes nothing now, so the backslashes arrive single.
+        assertTrue(script, script.startsWith("\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; "))
     }
 
     @Test
@@ -429,7 +429,7 @@ class TerminalAgentLauncherTest {
     }
 
     @Test
-    fun `PowerShell accounts command quotes every word for the inner and outer shell`() {
+    fun `PowerShell accounts command quotes every word inside its encoded script`() {
         val command = TerminalAgentLauncher.buildAccountsCommand(
             AccountCli(
                 "C:\\Program Files\\nodejs\\node.exe",
@@ -441,10 +441,10 @@ class TerminalAgentLauncherTest {
         )
 
         assertEquals(
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\Program Files\\nodejs\\node.exe' " +
+            "& 'C:\\Program Files\\nodejs\\node.exe' " +
                 "'C:\\Users\\O''Brien\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js' " +
-                "'--accounts-file' 'D:\\moe`\$\\claude-accounts.json' 'login' 'acct-1'\"",
-            command
+                "'--accounts-file' 'D:\\moe\$\\claude-accounts.json' 'login' 'acct-1'",
+            typedPsScript(command)
         )
     }
 
@@ -554,7 +554,16 @@ class TerminalAgentLauncherTest {
             val label = "${row.role} wsl=${row.wsl} ${row.kind}"
             assertFalse(label, VerifiedLocalLaunch.isVmSeat(row.role, DeclaredProfile.LEGACY_LIKE))
             val expected = row.expected.replace("@S@", scriptAsTyped(row.wsl, row.kind))
-            assertEquals(label, expected, pinnedCommand(row.role, row.kind, row.wsl))
+            val actual = pinnedCommand(row.role, row.kind, row.wsl)
+            if (row.kind == POWERSHELL) {
+                // The row pins the decoded script. The typed bytes are rebuilt from it, so the framing is pinned too.
+                val exe = if (row.wsl) "powershell.exe" else "powershell"
+                assertEquals(label, expected, typedScript(actual, exe))
+                val encoded = Base64.getEncoder().encodeToString(expected.toByteArray(Charsets.UTF_16LE))
+                assertEquals(label, "$exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded", actual)
+            } else {
+                assertEquals(label, expected, actual)
+            }
         }
         assertEquals(16, PINNED_LEGACY.map { Triple(it.role, it.wsl, it.kind) }.toSet().size)
     }
@@ -564,9 +573,9 @@ class TerminalAgentLauncherTest {
         val native = pinnedCommand("worker", ScriptKind.POWERSHELL, wsl = false)
         val underWsl = pinnedCommand("worker", ScriptKind.POWERSHELL, wsl = true)
         assertEquals(TerminalAgentLauncher.bashWrapPowerShell(native), underWsl)
-        assertTrue(underWsl, underWsl.startsWith("powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \""))
-        assertTrue(underWsl, underWsl.contains("& '${scriptAsTyped(true, ScriptKind.POWERSHELL)}' -Role worker -Project "))
-        assertTrue(native, native.contains("& '$PINNED_SCRIPT' -Role worker -Project 'D:\\projexts\\app'"))
+        assertTrue(underWsl, underWsl.startsWith("powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "))
+        assertTrue(underWsl, typedBashPsScript(underWsl).contains("& '${scriptAsTyped(true, ScriptKind.POWERSHELL)}' -Role worker -Project "))
+        assertTrue(native, typedPsScript(native).contains("& '$PINNED_SCRIPT' -Role worker -Project 'D:\\projexts\\app'"))
         // Architect and governor keep today's commands: the pinned table above covers them under both toggles.
     }
 
@@ -665,11 +674,17 @@ class TerminalAgentLauncherTest {
                 teamName = ok, workerId = "worker-$ok", env = mapOf("MOE_DAEMON_PATH" to "C:/$ok")
             )
             val team = if (kind == ScriptKind.POWERSHELL) "-Team '$ok'" else "--team '$ok'"
-            assertTrue("$kind wsl=$wsl: $line", line.contains(team))
+            val typed = when {
+                kind != ScriptKind.POWERSHELL -> line
+                wsl -> typedBashPsScript(line)
+                else -> typedPsScript(line)
+            }
+            assertTrue("$kind wsl=$wsl: $line", typed.contains(team))
         }
         for (shell in AccountsShell.values()) {
             val line = accountsLine(shell, node = "C:/$ok/node", script = "C:/$ok/cli.js", registryFile = "C:/$ok/a.json", args = listOf("login", ok))
-            assertTrue("$shell: $line", line.contains("'login' '$ok'"))
+            val typed = if (shell == AccountsShell.POWERSHELL) typedPsScript(line) else line
+            assertTrue("$shell: $line", typed.contains("'login' '$ok'"))
         }
     }
 
@@ -698,12 +713,27 @@ class TerminalAgentLauncherTest {
     fun `a project path holding a right single quotation mark reaches the wrapper intact on both PowerShell routes`() {
         val path = "D:\\Bob\u2019s work"
         val native = agentLine(POWERSHELL, false, basePath = path)
-        assertTrue(native, native.contains("-Project 'D:\\Bob\u2019\u2019s work'"))
+        assertTrue(native, typedPsScript(native).contains("-Project 'D:\\Bob\u2019\u2019s work'"))
         val routes = mapOf(false to typedPsScript(native), true to typedBashPsScript(agentLine(POWERSHELL, true, basePath = path)))
         for ((wsl, script) in routes) {
             val words = psWords(script)
             assertEquals("wsl=$wsl: $script", path, words[words.indexOf("-Project") + 1])
         }
+    }
+
+    @Test
+    fun `an ASCII double quote or an exclamation mark reaches the wrapper byte-identical on every PowerShell route`() {
+        // Windows PowerShell 5.1's native argument passing dropped a plain " from the old -Command line, and an
+        // interactive bash expanded ! inside the WSL wrap's double quotes ('event not found').
+        val probes = listOf(
+            "a\"b",
+            "x\"; Write-Output PWNED6; #",
+            "D:\\work!x",
+            "!!",
+            "a!\$b",
+            "x'\u2018\u2019\u201A\u201B\u201C\u201D\u201E`\$\"!y"
+        )
+        probes.forEach { assertPsCarriersKeep(it) }
     }
 
     /**
@@ -766,34 +796,25 @@ class TerminalAgentLauncherTest {
         return words
     }
 
-    /** The script the PowerShell prompt passes to `powershell -Command`: a backtick takes the next character, which must be one powerShellLine escapes. */
-    private fun typedPsScript(line: String): String = typedScript(line, "powershell", '`', "`\$\"\u201C\u201D\u201E", strict = true)
+    /** The script a PowerShell prompt runs for a native [line]: the decoded `-EncodedCommand` argument. */
+    private fun typedPsScript(line: String): String = typedScript(line, "powershell")
 
-    /** The same for the WSL route's bash prompt: a backslash before a backslash, ", $ or backtick yields that character, and stays before any other. */
-    private fun typedBashPsScript(line: String): String = typedScript(line, "powershell.exe", '\\', "\\\"\$`", strict = false)
+    /** The same for the WSL route's bash prompt, where interop needs the `.exe` suffix. */
+    private fun typedBashPsScript(line: String): String = typedScript(line, "powershell.exe")
 
     /**
-     * Reads the "..." argument of a `<exe> -NoProfile -ExecutionPolicy Bypass -Command "..."` [line] as its shell does.
-     * [escape] before a character of [escaped] yields that character. [strict] fails on [escape] before any other
-     * character, which PowerShell might not keep (it turns `n into a newline). Every other character of [escaped] must
-     * arrive escaped.
+     * Decodes a `<exe> -NoProfile -ExecutionPolicy Bypass -EncodedCommand <base64>` [line] as PowerShell does: base64 of
+     * UTF-16LE. The tail must be only the base64 alphabet, so no shell the line is typed into sees a character of any
+     * value. Both checks run before the decode, so a decode exception cannot hide the line.
      */
-    private fun typedScript(line: String, exe: String, escape: Char, escaped: String, strict: Boolean): String {
-        val prefix = "$exe -NoProfile -ExecutionPolicy Bypass -Command \""
-        assertTrue("not a $exe -Command line: $line", line.startsWith(prefix) && line.endsWith("\""))
-        val body = line.substring(prefix.length, line.length - 1)
-        val script = StringBuilder()
-        var i = 0
-        while (i < body.length) {
-            val c = body[i]
-            val next = body.getOrNull(i + 1)
-            when {
-                c == escape && next != null && next in escaped -> { script.append(next); i += 2 }
-                c == escape && (strict || next == null) -> fail("$exe would not read $c$next as a literal in: $line")
-                else -> { assertFalse("unescaped $c in: $line", c != escape && c in escaped); script.append(c); i++ }
-            }
-        }
-        return script.toString()
+    private fun typedScript(line: String, exe: String): String {
+        val prefix = "$exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "
+        assertTrue("not a $exe -EncodedCommand line: $line", line.startsWith(prefix))
+        val encoded = line.substring(prefix.length)
+        assertTrue("not a $exe -EncodedCommand line, the tail is not only base64: $line", BASE64_TAIL.matches(encoded))
+        val bytes = Base64.getDecoder().decode(encoded)
+        assertTrue("odd UTF-16LE byte count ${bytes.size}: $line", bytes.size % 2 == 0)
+        return String(bytes, Charsets.UTF_16LE)
     }
 
     private fun agentLine(
@@ -820,13 +841,23 @@ class TerminalAgentLauncherTest {
             "D:\\projexts\\app", role, PINNED_SCRIPT, kind, PINNED_ENV, "claude", null, wsl, "$role-0000abcd"
         )
 
+    /** [buildPowerShellCommandForTest][TerminalAgentLauncher.buildPowerShellCommandForTest]'s line, decoded to the script PowerShell runs. */
+    private fun decodedPowerShellCommand(
+        basePath: String,
+        role: String,
+        scriptPath: String,
+        envOverrides: Map<String, String>,
+        agentCommand: String,
+        teamName: String? = null,
+        codexExec: Boolean = false
+    ): String = typedPsScript(
+        TerminalAgentLauncher.buildPowerShellCommandForTest(basePath, role, scriptPath, envOverrides, agentCommand, teamName, codexExec)
+    )
+
     // The script path is the only OS-dependent input (buildCommand types File.absolutePath), so it is substituted
-    // in the form each shell receives it; every other byte is literal.
-    private fun scriptAsTyped(wsl: Boolean, kind: ScriptKind): String = when {
-        !wsl -> PINNED_SCRIPT
-        kind == ScriptKind.BASH -> TerminalAgentLauncher.toWslPath(PINNED_SCRIPT)
-        else -> PINNED_SCRIPT.replace("\\", "\\\\")
-    }
+    // in the form each script receives it; every other byte is literal. A PowerShell row holds the decoded script.
+    private fun scriptAsTyped(wsl: Boolean, kind: ScriptKind): String =
+        if (wsl && kind == ScriptKind.BASH) TerminalAgentLauncher.toWslPath(PINNED_SCRIPT) else PINNED_SCRIPT
 
     private class Row(val role: String, val wsl: Boolean, val kind: ScriptKind, val expected: String)
 
@@ -854,24 +885,26 @@ class TerminalAgentLauncherTest {
         val AGENT_ROUTES = listOf(POWERSHELL to false, BASH to false, BASH to true, POWERSHELL to true)
         // U+0027, U+2018, U+2019, U+201A and U+201B: PowerShell's tokenizer reads each as a single quote (CharExtensions.IsSingleQuote).
         const val PS_SINGLE_QUOTES = "'‘’‚‛"
+        val BASE64_TAIL = Regex("[A-Za-z0-9+/]+={0,2}")
 
-        // Captured from today's buildCommand before this change (agentCommand claude, no team, workerId <role>-0000abcd).
+        // Captured from buildCommand before PowerShell moved to -EncodedCommand (agentCommand claude, no team, workerId <role>-0000abcd).
+        // A POWERSHELL row holds the script the typed line runs; the BASH rows hold the typed line itself.
         val PINNED_LEGACY = listOf(
-            Row("architect", false, POWERSHELL, "powershell -NoProfile -ExecutionPolicy Bypass -Command \"`\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; `\$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role architect -Project 'D:\\projexts\\app' -WorkerId 'architect-0000abcd' -Command 'claude' -Interactive\""),
+            Row("architect", false, POWERSHELL, "\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; \$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role architect -Project 'D:\\projexts\\app' -WorkerId 'architect-0000abcd' -Command 'claude' -Interactive"),
             Row("architect", false, BASH, "MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js' MOE_PROXY_PATH='C:\\moe\\proxy\\index.js' bash '@S@' --role architect --project 'D:\\projexts\\app' --worker-id 'architect-0000abcd' --command 'claude' --interactive"),
-            Row("architect", true, POWERSHELL, "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"\\\$env:MOE_DAEMON_PATH='C:\\\\moe\\\\daemon\\\\index.js'; \\\$env:MOE_PROXY_PATH='C:\\\\moe\\\\proxy\\\\index.js'; & '@S@' -Role architect -Project 'D:\\\\projexts\\\\app' -WorkerId 'architect-0000abcd' -Command 'claude' -Interactive\""),
+            Row("architect", true, POWERSHELL, "\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; \$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role architect -Project 'D:\\projexts\\app' -WorkerId 'architect-0000abcd' -Command 'claude' -Interactive"),
             Row("architect", true, BASH, "MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js' MOE_PROXY_PATH='/mnt/c/moe/proxy/index.js' bash '@S@' --role architect --project '/mnt/d/projexts/app' --worker-id 'architect-0000abcd' --command 'claude' --interactive"),
-            Row("worker", false, POWERSHELL, "powershell -NoProfile -ExecutionPolicy Bypass -Command \"`\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; `\$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role worker -Project 'D:\\projexts\\app' -WorkerId 'worker-0000abcd' -Command 'claude'\""),
+            Row("worker", false, POWERSHELL, "\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; \$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role worker -Project 'D:\\projexts\\app' -WorkerId 'worker-0000abcd' -Command 'claude'"),
             Row("worker", false, BASH, "MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js' MOE_PROXY_PATH='C:\\moe\\proxy\\index.js' bash '@S@' --role worker --project 'D:\\projexts\\app' --worker-id 'worker-0000abcd' --command 'claude'"),
-            Row("worker", true, POWERSHELL, "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"\\\$env:MOE_DAEMON_PATH='C:\\\\moe\\\\daemon\\\\index.js'; \\\$env:MOE_PROXY_PATH='C:\\\\moe\\\\proxy\\\\index.js'; & '@S@' -Role worker -Project 'D:\\\\projexts\\\\app' -WorkerId 'worker-0000abcd' -Command 'claude'\""),
+            Row("worker", true, POWERSHELL, "\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; \$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role worker -Project 'D:\\projexts\\app' -WorkerId 'worker-0000abcd' -Command 'claude'"),
             Row("worker", true, BASH, "MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js' MOE_PROXY_PATH='/mnt/c/moe/proxy/index.js' bash '@S@' --role worker --project '/mnt/d/projexts/app' --worker-id 'worker-0000abcd' --command 'claude'"),
-            Row("qa", false, POWERSHELL, "powershell -NoProfile -ExecutionPolicy Bypass -Command \"`\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; `\$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role qa -Project 'D:\\projexts\\app' -WorkerId 'qa-0000abcd' -Command 'claude'\""),
+            Row("qa", false, POWERSHELL, "\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; \$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role qa -Project 'D:\\projexts\\app' -WorkerId 'qa-0000abcd' -Command 'claude'"),
             Row("qa", false, BASH, "MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js' MOE_PROXY_PATH='C:\\moe\\proxy\\index.js' bash '@S@' --role qa --project 'D:\\projexts\\app' --worker-id 'qa-0000abcd' --command 'claude'"),
-            Row("qa", true, POWERSHELL, "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"\\\$env:MOE_DAEMON_PATH='C:\\\\moe\\\\daemon\\\\index.js'; \\\$env:MOE_PROXY_PATH='C:\\\\moe\\\\proxy\\\\index.js'; & '@S@' -Role qa -Project 'D:\\\\projexts\\\\app' -WorkerId 'qa-0000abcd' -Command 'claude'\""),
+            Row("qa", true, POWERSHELL, "\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; \$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role qa -Project 'D:\\projexts\\app' -WorkerId 'qa-0000abcd' -Command 'claude'"),
             Row("qa", true, BASH, "MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js' MOE_PROXY_PATH='/mnt/c/moe/proxy/index.js' bash '@S@' --role qa --project '/mnt/d/projexts/app' --worker-id 'qa-0000abcd' --command 'claude'"),
-            Row("governor", false, POWERSHELL, "powershell -NoProfile -ExecutionPolicy Bypass -Command \"`\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; `\$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role governor -Project 'D:\\projexts\\app' -WorkerId 'governor-0000abcd' -Command 'claude' -Interactive\""),
+            Row("governor", false, POWERSHELL, "\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; \$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role governor -Project 'D:\\projexts\\app' -WorkerId 'governor-0000abcd' -Command 'claude' -Interactive"),
             Row("governor", false, BASH, "MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js' MOE_PROXY_PATH='C:\\moe\\proxy\\index.js' bash '@S@' --role governor --project 'D:\\projexts\\app' --worker-id 'governor-0000abcd' --command 'claude' --interactive"),
-            Row("governor", true, POWERSHELL, "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"\\\$env:MOE_DAEMON_PATH='C:\\\\moe\\\\daemon\\\\index.js'; \\\$env:MOE_PROXY_PATH='C:\\\\moe\\\\proxy\\\\index.js'; & '@S@' -Role governor -Project 'D:\\\\projexts\\\\app' -WorkerId 'governor-0000abcd' -Command 'claude' -Interactive\""),
+            Row("governor", true, POWERSHELL, "\$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; \$env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role governor -Project 'D:\\projexts\\app' -WorkerId 'governor-0000abcd' -Command 'claude' -Interactive"),
             Row("governor", true, BASH, "MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js' MOE_PROXY_PATH='/mnt/c/moe/proxy/index.js' bash '@S@' --role governor --project '/mnt/d/projexts/app' --worker-id 'governor-0000abcd' --command 'claude' --interactive")
         )
     }

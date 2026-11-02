@@ -36,6 +36,7 @@ import java.text.MessageFormat
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
+import java.util.Base64
 import java.util.Locale
 import java.util.Properties
 import org.junit.Assert.assertEquals
@@ -320,13 +321,24 @@ class AccountPresentationTest {
             "C:\\Program Files\\nodejs\\node.exe",
             "C:\\Users\\O'Brien\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js"
         )
-        val psPrefix = "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\Program Files\\nodejs\\node.exe' " +
+        // The typed line is `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand <base64 of UTF-16LE>`; the
+        // script it runs is what the words are checked in. Tests share no helper module, so the decoder is local.
+        fun decode(line: String): String {
+            val prefix = "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand "
+            assertTrue("not a powershell -EncodedCommand line: $line", line.startsWith(prefix))
+            val tail = line.removePrefix(prefix)
+            assertTrue("the tail is not only base64: $line", Regex("[A-Za-z0-9+/]+={0,2}").matches(tail))
+            val bytes = Base64.getDecoder().decode(tail)
+            assertTrue("odd UTF-16LE byte count ${bytes.size}: $line", bytes.size % 2 == 0)
+            return String(bytes, Charsets.UTF_16LE)
+        }
+        val psPrefix = "& 'C:\\Program Files\\nodejs\\node.exe' " +
             "'C:\\Users\\O''Brien\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js' " +
-            "'--accounts-file' 'D:\\moe`\$\\claude-accounts.json'"
+            "'--accounts-file' 'D:\\moe\$\\claude-accounts.json'"
         fun ps(args: List<String>) =
-            TerminalAgentLauncher.buildAccountsCommand(windowsCli, "D:\\moe\$\\claude-accounts.json", args, AccountsShell.POWERSHELL)
-        assertEquals("$psPrefix 'vm-token' 'acct-1'\"", ps(set))
-        assertEquals("$psPrefix 'vm-token' 'acct-1' '--remove'\"", ps(remove))
+            decode(TerminalAgentLauncher.buildAccountsCommand(windowsCli, "D:\\moe\$\\claude-accounts.json", args, AccountsShell.POWERSHELL))
+        assertEquals("$psPrefix 'vm-token' 'acct-1'", ps(set))
+        assertEquals("$psPrefix 'vm-token' 'acct-1' '--remove'", ps(remove))
 
         val wslCli = AccountCli(
             "C:\\Program Files\\nodejs\\node.exe",
