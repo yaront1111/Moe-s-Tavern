@@ -3023,7 +3023,12 @@ worktree_stop() {
 }
 
 # provision_worktree -- worker pre-flight, design §1.1-§1.6. The fresh claim's
-# workspace (WT-01), else get_context's (WT-02), names the mode; none is shared.
+# workspace (WT-01) names the mode, else get_context's (WT-02), read only from a
+# context that answered for this task (its task.id is the claimed id); on such a
+# context no workspace is shared. With neither (a failed, empty or foreign read)
+# the mode is unknown: shared, unless the control checkout is on moe/control,
+# where it refuses MOE_WORKTREE_CONTEXT_FAILED (task-31187ec1). Worktree mode
+# refuses the same without that context, whose task.commits its ledger guard reads.
 # Shared mode refuses only an unlanded moe/task/<id> branch and touches nothing
 # else (epic rail 4). Worktree mode runs the guards, then reuses, re-adds or
 # creates the locked sparse worktree W = <git top>/.worktrees/<id> on
@@ -3031,7 +3036,7 @@ worktree_stop() {
 # the shared checkout. It never deletes a branch, W/.moe, or a W it did not add
 # in this session. Sets MOE_WT_MODE/PATH/BRANCH/TARGET. Twin: Initialize-MoeWorktree.
 provision_worktree() {
-    local tid="$PREFLIGHT_TASK_ID" parsed mode target foreign ver head w branch base found raw ref out verb longest sha fref
+    local tid="$PREFLIGHT_TASK_ID" parsed mode ctxread target foreign ver head w branch base found raw ref out verb longest sha fref
     local added=false finish=false
     local -a rows=()
     # The claim and context travel on stdin: one env string is capped at 128 KiB.
@@ -3046,12 +3051,18 @@ def load(s):
         return {}
     return d if isinstance(d, dict) else {}
 claim, ctx = load(claim), load(ctx)
-ws = claim.get("workspace") if isinstance(claim.get("workspace"), dict) else ctx.get("workspace")
+task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+# Read: get_context answered for THIS task. An error, {} or another task proves nothing.
+read = task.get("id") == tid
+if not read:
+    ctx, task = {}, {}
+cws = claim.get("workspace")
+ws = cws if isinstance(cws, dict) else ctx.get("workspace")
 ws = ws if isinstance(ws, dict) else {}
+mode = "worktree" if ws.get("mode") == "worktree" else "shared" if isinstance(cws, dict) or read else "unknown"
 t = ws.get("target").strip() if isinstance(ws.get("target"), str) else ""
 t = "?" if re.search(r"[\x00-\x1f\x7f]", t) else t
-task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
-own = {"moe/task/" + tid, "refs/heads/moe/task/" + tid, t, "refs/heads/" + t}
+own ={"moe/task/" + tid, "refs/heads/moe/task/" + tid, t, "refs/heads/" + t}
 out = []
 for r in task.get("commits") if isinstance(task.get("commits"), list) else []:
     if not isinstance(r, dict) or r.get("kind") not in ("checkpoint", "completion"):
@@ -3059,11 +3070,16 @@ for r in task.get("commits") if isinstance(task.get("commits"), list) else []:
     sha, ref = r.get("sha"), r.get("ref") if isinstance(r.get("ref"), str) else ""
     if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha) and ref not in own:
         out.append(sha.lower() + ":" + (re.sub(r"[^A-Za-z0-9._/@-]", "_", ref) or "-"))
-sys.stdout.write(("worktree" if ws.get("mode") == "worktree" else "shared") + "\x1f" + t + "\x1f" + " ".join(out))
+sys.stdout.write(mode + "\x1f" + ("1" if read else "0") + "\x1f" + t + "\x1f" + " ".join(out))
 ' "$tid" 2>/dev/null) || parsed=""
-    IFS=$'\x1f' read -r mode target foreign <<< "$parsed" || true
+    IFS=$'\x1f' read -r mode ctxread target foreign <<< "$parsed" || true
+    # A failed parse (no python, a crash) is unknown, never shared or worktree.
+    case "$mode" in worktree|shared) ;; *) mode=unknown ;; esac
     if [ "$mode" != worktree ]; then
         git_top || return 0
+        if [ "$mode" = unknown ] && control_worktree_mode; then
+            worktree_stop MOE_WORKTREE_CONTEXT_FAILED "get_context gave no context for $tid and the claim names no workspace, while the control checkout is on moe/control; unblock the task once get_context answers"
+        fi
         if git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/moe/task/$tid" > /dev/null && ! task_branch_landed HEAD "$tid"; then
             worktree_stop MOE_WORKTREE_MODE_MISMATCH "shared-mode claim, but moe/task/$tid holds worktree bytes HEAD lacks; land or rescue that branch first"
         fi
@@ -3087,6 +3103,7 @@ sys.stdout.write(("worktree" if ws.get("mode") == "worktree" else "shared") + "\
         || ! git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$target^{commit}" > /dev/null; then
         worktree_stop MOE_WORKTREE_CREATE_FAILED "the claim's target '$target' is not a local branch"
     fi
+    [ "$ctxread" = 1 ] || worktree_stop MOE_WORKTREE_CONTEXT_FAILED "get_context gave no context for $tid, so its commits cannot be checked against $target; unblock the task once get_context answers"
     read -ra rows <<< "$foreign" || true
     for sha in "${rows[@]}"; do
         fref="${sha#*:}"; sha="${sha%%:*}"
