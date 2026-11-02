@@ -1,0 +1,328 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "id": "P01",
+      "note": "No snapshot yet: settings null shows every default.",
+      "settings": null,
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P02",
+      "note": "An empty settings object shows the same defaults as null.",
+      "settings": {},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P03",
+      "note": "Every landing boolean flipped from its default.",
+      "settings": {"autoCommit":false,"checkpointCommits":false,"checkpointPush":false,"commitBoardState":false,"commitHooks":true},
+      "expect": [
+        { "label": "Auto-commit", "value": "Off", "detail": "No completion, checkpoint or rescue commits." },
+        { "label": "Checkpoint commits", "value": "Off", "detail": "No wip(task-<id>) commits; unlanded bytes wait for completion." },
+        { "label": "Push checkpoints", "value": "Off", "detail": "Checkpoints stay local." },
+        { "label": "Commit board state", "value": "Off", "detail": "This task's .moe/tasks/<id>.json is left uncommitted." },
+        { "label": "Commit hooks", "value": "Run on completion commits", "detail": "Completion commits run git hooks; checkpoints stay plumbing." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P04",
+      "note": "An empty consolidationBranch means the shared dated branch.",
+      "settings": {"consolidationBranch":""},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P05",
+      "note": "A literal consolidationBranch is trimmed and is the peel target.",
+      "settings": {"consolidationBranch":"  release/train  "},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "release/train", "detail": "Peel target and the branch complete_task requires." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P06",
+      "note": "A glob consolidationBranch is checked at complete_task only.",
+      "settings": {"consolidationBranch":"moe/work-*"},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-*", "detail": "Glob checked at complete_task only; wrappers still peel onto moe/work-<YYYY-MM-DD>." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P07",
+      "note": "An empty qualityGate disables the gate.",
+      "settings": {"qualityGate":""},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P08",
+      "note": "A qualityGate command is trimmed and shown.",
+      "settings": {"qualityGate":"  npm test  "},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "npm test", "detail": "Must exit 0 before the completion commit lands." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P09",
+      "note": "qualityGateScope everyTask gates every completion commit.",
+      "settings": {"qualityGateScope":"everyTask"},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Every task", "detail": "The gate runs before every task's completion commit." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P10",
+      "note": "An unknown qualityGateScope falls back to epic-final.",
+      "settings": {"qualityGateScope":"whenever"},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P11",
+      "note": "attribution.undeclared never.",
+      "settings": {"attribution":{"undeclared":"never"}},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Declared files only (never)", "detail": "A changed file nobody declared is never committed." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P12",
+      "note": "attribution.undeclared always.",
+      "settings": {"attribution":{"undeclared":"always"}},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Always commit (always)", "detail": "A changed file nobody declared is committed regardless of live peers." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P13",
+      "note": "attribution.undeclared solo, written explicitly.",
+      "settings": {"attribution":{"undeclared":"solo"}},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P14",
+      "note": "An unknown attribution.undeclared falls back to solo.",
+      "settings": {"attribution":{"undeclared":"sometimes"}},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P15",
+      "note": "Custom taskSizing thresholds.",
+      "settings": {"taskSizing":{"warnSteps":3,"maxSteps":6,"warnDistinctFiles":2,"maxDistinctFiles":4}},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 3 steps / 2 files, reject past 6 / 4", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P16",
+      "note": "A max below its warn is lifted to the warn value; the file thresholds keep their defaults.",
+      "settings": {"taskSizing":{"warnSteps":9,"maxSteps":2}},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 9 steps / 5 files, reject past 9 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P17",
+      "note": "The daemon reads the landing booleans strictly (!== false, === true): a string or a number never flips them.",
+      "settings": {"autoCommit":"false","checkpointCommits":0,"commitHooks":"true"},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P18",
+      "note": "taskSizing accepts only integer numbers above 0 (planSize.ts positiveInt): a numeric string, a fractional, zero and a negative all fall back to the defaults.",
+      "settings": {"taskSizing":{"warnSteps":"9","maxSteps":7.5,"warnDistinctFiles":0,"maxDistinctFiles":-1}},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    },
+    {
+      "id": "P19",
+      "note": "qualityGate and consolidationBranch count only as strings (moe-agent.sh isinstance str, complete_task typeof string): a number and a boolean are unset.",
+      "settings": {"qualityGate":42,"consolidationBranch":true},
+      "expect": [
+        { "label": "Auto-commit", "value": "On", "detail": "Every session exit lands this task's attributed paths." },
+        { "label": "Checkpoint commits", "value": "On", "detail": "Non-final exits commit as wip(task-<id>): ..." },
+        { "label": "Push checkpoints", "value": "On", "detail": "Checkpoint commits are pushed to the remote." },
+        { "label": "Commit board state", "value": "On", "detail": "Landing also stages this task's .moe/tasks/<id>.json." },
+        { "label": "Commit hooks", "value": "Skipped (plumbing commits)", "detail": "Landing writes the commit directly, so no git hook runs." },
+        { "label": "Landing branch", "value": "moe/work-<YYYY-MM-DD> (shared, default)", "detail": "No consolidationBranch set; wrappers peel onto the shared dated branch." },
+        { "label": "Quality gate", "value": "Disabled (no command configured)", "detail": "Nothing gates the completion commit." },
+        { "label": "Quality gate scope", "value": "Epic-final task only", "detail": "The gate runs only on the last open task of an epic." },
+        { "label": "Undeclared-file attribution", "value": "Commit when no other worker is live (solo)", "detail": "With a live peer, undeclared changes are reported unresolved instead." },
+        { "label": "Plan size limits", "value": "Warn past 8 steps / 5 files, reject past 12 / 10", "detail": "Applied to every submitted plan." }
+      ]
+    }
+  ]
+}

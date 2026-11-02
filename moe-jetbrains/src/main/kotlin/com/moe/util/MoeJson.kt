@@ -119,6 +119,43 @@ object MoeJson {
         return if (primitive.isBoolean) primitive.asBoolean else default
     }
 
+    /**
+     * Honours the value ONLY when it is a real JSON string, so a number or a boolean counts as unset.
+     * Mirrors the readers that apply `qualityGate` and `consolidationBranch`: `scripts/moe-agent.sh`
+     * (`isinstance(v, str)`, else `''`) and `completeTask.ts` (`typeof === 'string'`).
+     *
+     * [getStringOrDefault] cannot be used for landing policy: Gson's `asString` turns `42` into "42"
+     * and `true` into the literal branch "true". Never throws.
+     */
+    private fun JsonObject.getStrictStringOrDefault(key: String, default: String): String {
+        val element = get(key)
+        return if (element != null && element.isJsonPrimitive && element.asJsonPrimitive.isString) element.asString else default
+    }
+
+    /**
+     * Honours the value ONLY when it is a real JSON number that is an exact Int above 0, else null.
+     * Mirrors `positiveInt` in `packages/moe-daemon/src/util/planSize.ts` (typeof number,
+     * Number.isInteger, above 0, else the default).
+     *
+     * [getIntOrNull] cannot be used for plan-size policy: Gson's `asInt` turns "9" into 9 and truncates
+     * 7.5 to 7. The original literal is re-read exactly as [BigDecimal] (see [getPlanRevisionOrNull]), so
+     * a fraction, a numeric string, zero, a negative and a value past Int all give null. Values above
+     * Int.MAX_VALUE are null where the daemon would accept them; no real plan limit is that large.
+     * Never throws.
+     */
+    private fun JsonObject.getPositiveIntOrNull(key: String): Int? {
+        val primitive = get(key)?.takeIf { it.isJsonPrimitive }?.asJsonPrimitive ?: return null
+        if (!primitive.isNumber) return null
+        return try {
+            val value = BigDecimal(primitive.asString)
+            if (value.signum() <= 0 || value > BigDecimal(Int.MAX_VALUE)) null else value.intValueExact()
+        } catch (_: NumberFormatException) {
+            null
+        } catch (_: ArithmeticException) {
+            null
+        }
+    }
+
     private fun JsonObject.getStringListOrDefault(key: String, default: List<String> = emptyList()): List<String> {
         val element = get(key)
         if (element == null || element.isJsonNull || !element.isJsonArray) return default
@@ -220,16 +257,13 @@ object MoeJson {
             ?.takeIf { it.isJsonObject }
             ?.asJsonObject
             ?: JsonObject()
-        val warnSteps = sizing.getIntOrNull("warnSteps")?.takeIf { it > 0 } ?: 8
-        val warnDistinctFiles = sizing.getIntOrNull("warnDistinctFiles")?.takeIf { it > 0 } ?: 5
+        val warnSteps = sizing.getPositiveIntOrNull("warnSteps") ?: 8
+        val warnDistinctFiles = sizing.getPositiveIntOrNull("warnDistinctFiles") ?: 5
         return TaskSizingThresholds(
             warnSteps = warnSteps,
-            maxSteps = maxOf(warnSteps, sizing.getIntOrNull("maxSteps")?.takeIf { it > 0 } ?: 12),
+            maxSteps = maxOf(warnSteps, sizing.getPositiveIntOrNull("maxSteps") ?: 12),
             warnDistinctFiles = warnDistinctFiles,
-            maxDistinctFiles = maxOf(
-                warnDistinctFiles,
-                sizing.getIntOrNull("maxDistinctFiles")?.takeIf { it > 0 } ?: 10
-            )
+            maxDistinctFiles = maxOf(warnDistinctFiles, sizing.getPositiveIntOrNull("maxDistinctFiles") ?: 10)
         )
     }
 
@@ -259,8 +293,8 @@ object MoeJson {
             checkpointPush = getStrictBooleanOrDefault(settings, "checkpointPush", true),
             commitBoardState = getStrictBooleanOrDefault(settings, "commitBoardState", true),
             commitHooks = getStrictBooleanOrDefault(settings, "commitHooks", false),
-            consolidationBranch = settings.getStringOrDefault("consolidationBranch", "").trim(),
-            qualityGate = settings.getStringOrDefault("qualityGate", "").trim(),
+            consolidationBranch = settings.getStrictStringOrDefault("consolidationBranch", "").trim(),
+            qualityGate = settings.getStrictStringOrDefault("qualityGate", "").trim(),
             qualityGateScope = settings.getStringOrDefault("qualityGateScope", "epicFinal")
                 .takeIf { it in setOf("epicFinal", "everyTask") }
                 ?: "epicFinal",

@@ -1,0 +1,32 @@
+{
+  "id": "task-ba9590ce48f14712a160c9b74a9dab12",
+  "epicId": "epic-aabc654d",
+  "title": "bug: MoeProjectConnectionTest can hang forever in ConnectionFixture.close (WebSocketClient.closeBlocking has no timeout)",
+  "description": "Found by VSC-5 (task-0f2cc6eb) during its full JetBrains gate. The first `gradlew.bat test --rerun` in a snapshot passed (553 tests, 44s); the identical rerun hung for 10+ minutes in :test with no further results and had to be cancelled.\nEvidence: jstack of the Gradle test worker shows the \"Test worker\" thread parked in CountDownLatch.await <- org.java_websocket.client.WebSocketClient.closeBlocking(WebSocketClient.java:436) <- MoeProjectConnectionTest$ConnectionFixture.close(MoeProjectConnectionTest.kt:336) <- withConnection(:263) <- test `a disconnect or socket error fails pending requests as DISCONNECTED` (:228). closeBlocking() has no timeout, and the test calls client.onError(...) directly, which can leave the close latch never counted down after service.dispose().\nFix idea: bound the teardown (close() then awaitClose-with-timeout or a JUnit @Test(timeout)) so a stuck close fails the test instead of hanging the gate. Not a regression from VSC-5: the test does not touch settings or MoeJson.",
+  "definitionOfDone": [
+    "MoeProjectConnectionTest teardown cannot block without a timeout: a stuck client close fails or is abandoned within a few seconds.",
+    "`gradlew.bat test --rerun` in a snapshot passes at least 3 times in a row under the jetbrains-gradle lease, with the JUnit total in the summary."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's \"go on the vscode epic\" and the standing \"keep the board moving\". It's fleet-filed (VSC-5's worker), with no plan, no reopen, no deps, and no open row plans MoeProjectConnectionTest.kt. It's a recurring hazard: a hung closeBlocking() holds the jetbrains-gradle lease for 10+ minutes, and every JetBrains row in this epic queues behind that lease. VSC-7 is queued right now. Small, test-only fix.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 21,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T10:43:48.052Z",
+  "updatedAt": "2026-11-02T10:44:35.565Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T10:44:34.253Z",
+    "seq": 1
+  }
+}
