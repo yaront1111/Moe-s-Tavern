@@ -106,7 +106,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -129,11 +129,17 @@
       "author": "governor-e6b40560",
       "content": "Governor note for QA (18:13Z). This row's completion 7c60841f is on origin, and nothing else is editing these files right now, so the working tree equals HEAD for this row's paths. Size is +31/-4 non-board, well under the cap.\nThis is the last code prerequisite of the worktree switch (gate task-6519ed91). Because it changed wrapper bytes after WT-19b's dry run, I am re-running WT-19b's verification command on 7c60841f myself (snapshot clone, MOE_/CLAUDE env removed). Please review as usual. If you reject with a change to the bytes, say so plainly, and I will re-run the dry run on the fixed commit.",
       "timestamp": "2026-11-02T18:12:23.053Z"
+    },
+    {
+      "id": "comment-29382c0470ec42b6b32ded32c9909117",
+      "author": "qa-1106e678",
+      "content": "QA, about 19:10Z: approved 7c60841f as landed, with no byte changes. Your WT-19b dry-run re-run on 7c60841f is still the right commit. Both verification legs (bash, then PS 5.1) re-ran green from scratch .worktrees/task-x copies. Evidence is in the approval summary.",
+      "timestamp": "2026-11-02T19:10:29.781Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:03:45.669Z",
-  "updatedAt": "2026-11-02T18:12:23.053Z",
+  "updatedAt": "2026-11-02T19:10:29.781Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:15:39.522Z",
@@ -143,11 +149,14 @@
     "firstClaimAt": "2026-11-02T15:15:49.192Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T19:10:10.261Z",
+    "wallClockMs": 14061069
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-b49a5155"
+    "worker-b49a5155",
+    "qa-1106e678"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -333,5 +342,9 @@
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
     "scripts/tests/worktree-landing.sh"
-  ]
+  ],
+  "completedAt": "2026-11-02T19:10:10.261Z",
+  "reviewCompletedAt": "2026-11-02T19:10:10.261Z",
+  "reviewSummary": "Approved. I reviewed completion 7c60841f (on moe/work-2026-10-24 and origin): +31/-4 (27 net) over the six approved files. scripts/ is identical at 7c60841f and HEAD 7262e53f, and the tree was clean during the runs.\n\nDiff:\n- sh `[ \"${SEAM:-}\" != 1 ] &&` and ps1 `-and $env:SEAM -cne '1'`. WT-13's detection, message and exit 1 are unchanged, and the ps1 BOM is kept.\n- The harnesses set the seam at the top. cjs launch() gives wrapper copies null, so the four WT-13 wt-guard cases still test real refusals.\n- New cases: optout ('1' launches) and optout-strict ('true', ' 1', '0' are refused, with no CLI and no RPC). That assertion is meaningful because launch() clears evidence-rpcs.jsonl on every run.\n- worktree-landing.sh gains one env key; no case or list change.\n- Outside .moe, git grep finds the seam only in the six files.\n\nRe-ran task.verification verbatim, both legs concurrently:\n- Bash, EXIT=0:\n  - WT-13's own bytes (072dd78c) at task-head refuse with [ERROR] MOE_WRAPPER_IN_WORKTREE:.\n  - The W seat probe exits 1 with the refusal.\n  - postflight-safe bash failureClass NONE; worktree-landing 18/0/0; PASS parity-check.\n- PS 5.1 (checkRef 2), EXIT=0: the ps1 seat probe exits 1 with the refusal, postflight-safe powershell gives NONE, worktree-landing.ps1 18/0.\n- In both legs, cmp showed the six W files identical to 7c60841f.\n\nMutant: the sh condition changed to `-z`, run with wt-guard only. It was killed by \"wt-guard-optout-strict: seam 'true', exit 0\"; the unmutated control passed.\n\nDoD and all six acceptance criteria are met; parity and shared-checkout mode are unchanged. The other launcher suites and the docs seam row belong to follow-up task-86431c31. Complexity pass: nothing to cut. Logs are in /mnt/d/moe-scratch/qa-3c4be125.",
+  "requiredCheckAtDone": null
 }
