@@ -1541,6 +1541,48 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         Start-Sleep -Seconds 3
         $countAfterWait = if (Test-Path $heartbeatLogFile) { (Get-Content $heartbeatLogFile | Measure-Object -Line).Lines } else { 0 }
 
+        # Start-Sleep is in-process: no sleep child can be killed on PowerShell.
+        # Twin of [idle wait killed]'s clean/error deregistration checks.
+        Write-Host '[idle wait killed] clean exit and argv refusal have distinct reasons'
+        foreach ($idleMode in @('clean', 'unexpected')) {
+            $idleProject = Join-Path $tempRoot "idle-$idleMode"
+            $idleOut = Join-Path $tempRoot "idle-$idleMode.out"
+            New-Item -ItemType Directory -Force -Path (Join-Path $idleProject '.moe\messages') | Out-Null
+            Set-Content -Path (Join-Path $idleProject '.moe\project.json') -Encoding UTF8 -Value '{"id":"proj-idle","settings":{"autoCommit":false}}'
+            Set-Content -Path (Join-Path $idleProject '.moe\messages\chan-general.jsonl') -Encoding UTF8 -Value ''
+            Set-Content -Path (Join-Path $idleProject '.moe\daemon.json') -Encoding UTF8 -Value (@{port=9876;projectPath=$idleProject} | ConvertTo-Json -Compress)
+            $idleCommand = $trueCmd
+            $idleExpectedCode = 0
+            $idleReason = 'terminal_closed'
+            $idleSaved = @{}
+            foreach ($key in @('MOE_DISABLE_HEARTBEAT', 'FAKE_CODEX_REJECT_ARGV', 'FAKE_CODEX_ARGV_FILE')) {
+                $idleSaved[$key] = [Environment]::GetEnvironmentVariable($key)
+            }
+            try {
+                $env:MOE_DISABLE_HEARTBEAT = '1'
+                if ($idleMode -eq 'unexpected') {
+                    $idleCommand = $codexCmd
+                    $idleExpectedCode = 1
+                    $idleReason = 'unexpected_exit:1'
+                    $env:FAKE_CODEX_REJECT_ARGV = '1'
+                    $env:FAKE_CODEX_ARGV_FILE = Join-Path $tempRoot 'idle-codex-args.txt'
+                }
+                $idleCode = Invoke-WrapperProcess @('-Project', $idleProject, '-WorkerId', "worker-idle-$idleMode", '-Role', 'worker', '-NoStartDaemon', '-Command', $idleCommand, '-NoLoop') $idleOut
+                $idleLog = Get-Content (Join-Path $idleProject '.moe\deregister.log') -ErrorAction SilentlyContinue
+                if ($idleCode -ne $idleExpectedCode -or -not ($idleLog -match " worker-idle-$idleMode $idleReason`$")) {
+                    Get-Content $idleOut -ErrorAction SilentlyContinue | Write-Host
+                    $idleLog | Write-Host
+                    throw "IDLE WAIT FAILED: $idleMode exit=$idleCode; expected $idleExpectedCode and $idleReason"
+                }
+                if ($idleMode -eq 'unexpected' -and -not (Select-String -Path $idleOut -SimpleMatch 'MOE_CLI_ARGV_REJECTED' -Quiet)) {
+                    throw 'IDLE WAIT FAILED: argv probe did not refuse'
+                }
+            } finally {
+                foreach ($key in $idleSaved.Keys) { [Environment]::SetEnvironmentVariable($key, $idleSaved[$key]) }
+            }
+        }
+        Write-Host '[idle wait killed] ok'
+
         function Initialize-ReloadRepo {
             $dir = Split-Path $reloadWrapper
             foreach ($gitArgs in @(@('init', '-q'), @('config', 'user.name', 'Moe Test'),

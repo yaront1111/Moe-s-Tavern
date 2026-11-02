@@ -1733,6 +1733,108 @@ if [ "$count_after_wait" -ne "$count_at_exit" ]; then
   exit 1
 fi
 
+# --- Idle wait killed: only children of this arm's recorded wrapper are targets.
+idle_project() {
+  IDLE_PROJECT="$TMP_DIR/$1"
+  IDLE_OUT="$TMP_DIR/$1.out"
+  mkdir -p "$IDLE_PROJECT/.moe/messages"
+  printf '{"id":"proj-idle","settings":{"autoCommit":false}}\n' > "$IDLE_PROJECT/.moe/project.json"
+  : > "$IDLE_PROJECT/.moe/messages/chan-general.jsonl"
+  printf '{"port":9876,"projectPath":"%s"}\n' "$IDLE_PROJECT" > "$IDLE_PROJECT/.moe/daemon.json"
+}
+idle_sleep_pid() {
+  ps -A -o pid=,ppid=,comm= | awk -v parent="$idle_pid" '$2 == parent && $3 == "sleep" { print $1 }'
+}
+idle_fail() {
+  if [ -n "${idle_pid:-}" ]; then
+    idle_child="$(idle_sleep_pid)"
+    [ -z "$idle_child" ] || kill -KILL "$idle_child" 2>/dev/null || true
+    kill -KILL "$idle_pid" 2>/dev/null || true
+    wait "$idle_pid" 2>/dev/null || echo "idle wrapper exit status: $?" >&2
+  fi
+  cat "$IDLE_OUT" >&2 || true
+  cat "$IDLE_PROJECT/.moe/deregister.log" >&2 2>/dev/null || true
+  echo "IDLE WAIT FAILED: $1" >&2
+  exit 1
+}
+idle_wait_for_poll() {
+  local want="$1" deadline=$((SECONDS + $2)) claims
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    kill -0 "$idle_pid" 2>/dev/null || idle_fail 'wrapper exited instead of re-polling'
+    claims=$(grep -c '"tool":"claim_next_task"' "$IDLE_PROJECT/.moe/evidence-rpcs.jsonl" 2>/dev/null) || claims=0
+    idle_child="$(idle_sleep_pid)"
+    if [ "$claims" -ge "$want" ] && [ -n "$idle_child" ]; then return 0; fi
+    sleep 0.1
+  done
+  idle_fail "timed out waiting for poll $want"
+}
+
+# A failed diagnostic write must not turn a recovered sleep into a set -e exit.
+for idle_error_fd in 1 -; do
+  echo "[idle wait killed] sleep TERM/KILL survive; wrapper TERM stops (stderr=$idle_error_fd)"
+  idle_project "idle-wait-$idle_error_fd"
+  PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \
+    "$WRAPPER" --project "$IDLE_PROJECT" --worker-id worker-idle-wait --role worker \
+    --no-start-daemon --command /bin/true --loop --poll-interval 47 >"$IDLE_OUT" 2>&"$idle_error_fd" &
+  idle_pid=$!
+  idle_live_before="$LIVE_PIDS"
+  LIVE_PIDS="$LIVE_PIDS $idle_pid"
+  idle_wait_for_poll 1 "$POSTFLIGHT_TIMEOUT_SEC"
+  idle_repoll_limit=15
+  [ "$POSTFLIGHT_TIMEOUT_SEC" -ge 15 ] || idle_repoll_limit="$POSTFLIGHT_TIMEOUT_SEC"
+  idle_claims=1
+  for idle_signal in TERM KILL; do
+    kill -"$idle_signal" "$idle_child" || idle_fail "could not signal sleep $idle_child"
+    idle_claims=$((idle_claims + 1))
+    idle_wait_for_poll "$idle_claims" "$idle_repoll_limit"
+    idle_status=143
+    [ "$idle_signal" != KILL ] || idle_status=137
+    if [ "$idle_error_fd" != - ]; then
+      grep -Eq "MOE_IDLE_WAIT_INTERRUPTED:.*sleep exited $idle_status" "$IDLE_OUT" \
+        || idle_fail "missing interrupted-wait status $idle_status"
+    fi
+    if grep -Fq ' worker-idle-wait ' "$IDLE_PROJECT/.moe/deregister.log" 2>/dev/null; then
+      idle_fail 'a killed sleep deregistered the seat'
+    fi
+  done
+  kill -TERM "$idle_pid" || idle_fail 'could not signal wrapper'
+  # Bash defers its TERM trap until its foreground child returns, as before.
+  kill -TERM "$idle_child" 2>/dev/null || true
+  idle_deadline=$((SECONDS + POSTFLIGHT_TIMEOUT_SEC))
+  while kill -0 "$idle_pid" 2>/dev/null; do
+    [ "$SECONDS" -lt "$idle_deadline" ] || idle_fail 'wrapper TERM timed out'
+    sleep 0.1
+  done
+  idle_code=0
+  wait "$idle_pid" || idle_code=$?
+  idle_pid=''
+  LIVE_PIDS="$idle_live_before"
+  [ "$idle_code" -eq 0 ] || idle_fail "wrapper TERM exited $idle_code"
+  grep -Fq 'Agent stopped.' "$IDLE_OUT" || idle_fail 'wrapper TERM missed the stop trap'
+  grep -Eq ' worker-idle-wait terminal_closed$' "$IDLE_PROJECT/.moe/deregister.log" \
+    || idle_fail 'wrapper TERM did not deregister terminal_closed'
+done
+
+# A separate, registered one-shot seat fails its argv probe (scenario Z's seam).
+idle_project idle-unexpected
+mkdir -p "$TMP_DIR/idle-cli"
+cat > "$TMP_DIR/idle-cli/codex" <<'IDLE_CODEX'
+#!/usr/bin/env bash
+echo "error: unexpected argument '--sandbox' found" >&2
+exit 2
+IDLE_CODEX
+chmod +x "$TMP_DIR/idle-cli/codex"
+idle_code=0
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 \
+  timeout "$POSTFLIGHT_TIMEOUT_SEC" "$WRAPPER" --project "$IDLE_PROJECT" \
+  --worker-id worker-idle-unexpected --role worker --no-start-daemon \
+  --command "$TMP_DIR/idle-cli/codex" --no-loop >"$IDLE_OUT" 2>&1 || idle_code=$?
+[ "$idle_code" -eq 1 ] || idle_fail "argv refusal exited $idle_code, expected 1"
+grep -Fq 'MOE_CLI_ARGV_REJECTED' "$IDLE_OUT" || idle_fail 'argv probe did not refuse'
+grep -Eq ' worker-idle-unexpected unexpected_exit:1$' "$IDLE_PROJECT/.moe/deregister.log" \
+  || idle_fail 'argv refusal did not deregister unexpected_exit:1'
+echo '[idle wait killed] ok'
+
 reload_git() {
   git -C "$RELOAD_DIR/scripts" -c user.name='Moe Test' -c user.email=moe@test.local \
     -c commit.gpgsign=false -c core.autocrlf=false "$@"

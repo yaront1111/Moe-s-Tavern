@@ -174,10 +174,16 @@ route_prompt_overflow() { # VAR: the variable holding the prompt, rewritten in p
 }
 
 cleanup_temp() {
+    local exit_status=$?
     # This is the EXIT trap: it inherits `set -e`, and a failing command here
     # would abort the trap half-way (no rescue, no deregister). Everything
     # below is best-effort.
     set +e
+    local reason=terminal_closed
+    if [ "$exit_status" -ne 0 ]; then
+        reason="unexpected_exit:$exit_status"
+        echo "[WARN] seat exiting with status $exit_status; deregistering as $reason" >&2
+    fi
     # Kill the heartbeat sidecar first — it's just a background subshell, not
     # tracked by anything else, so a hard exit (Ctrl+C, error) would otherwise
     # leak it past this process's own lifetime. HEARTBEAT_PID/stop_heartbeat_sidecar
@@ -230,7 +236,7 @@ cleanup_temp() {
         # Via bash, not direct exec: bundled copies can lose the exec bit
         # (e.g. a bundler writeFile), which would silently skip deregister.
         bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
-            "{\"workerId\":\"$WORKER_ID\",\"reason\":\"terminal_closed\"}" \
+            "{\"workerId\":\"$WORKER_ID\",\"reason\":\"$reason\"}" \
             --project "$PROJECT" >/dev/null 2>&1 || true
     fi
     if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
@@ -2325,6 +2331,16 @@ fi
 LOOP_RUNNING=true
 if [ "$MIGRATION" = true ]; then trap 'exit 130' INT TERM
 else trap 'echo ""; echo "Agent stopped."; exit 0' INT TERM; fi
+
+# An externally killed idle/backoff sleep must not end the seat under set -e
+# (five seats lost on 2026-10-31). The wrapper's own INT/TERM still stops it:
+# Bash runs that trap's exit 0 when sleep returns, before evaluating the ||.
+idle_wait() {
+    local rc=0
+    sleep "$1" || rc=$?
+    [ "$rc" -eq 0 ] || echo "[WARN] MOE_IDLE_WAIT_INTERRUPTED: the ${1}s wait ended early (sleep exited $rc); the seat keeps looping." >&2 || true
+    return 0
+}
 
 # moe_rpc TOOL ARGS_JSON
 # Calls an MCP tool via the proxy and prints the tool's result text to stdout.
@@ -8608,14 +8624,14 @@ get_account_lease() {
                 *" $f1 "*) ;;
                 *) escalated="$escalated$f1 "; announce_account_untrusted "$f1" "$trust_why" ;;
             esac
-            sleep "$trust_sec"
+            idle_wait "$trust_sec"
             continue
         fi
         if [ "$kind" = wait ] && [ -n "$f2" ]; then
             case "$f1" in ''|*[!0-9]*) f1=60 ;; esac
             [ "$f1" -ge 1 ] || f1=60
             account_say "MOE_ACCOUNT_WAIT retry_in=${f1}s next_reset=$f2 - every signed-in account is spent; the held task stays held. (Ctrl+C to stop)"
-            sleep "$f1"
+            idle_wait "$f1"
             continue
         fi
         if [ "$kind" = off ]; then
@@ -8867,14 +8883,14 @@ while [ "$LOOP_RUNNING" = true ]; do
             else
                 echo -e "${YELLOW}[launch-failure]${NC} Backing off ${LAUNCH_FAIL_BACKOFF_SEC}s before relaunching (streak $LAUNCH_FAIL_STREAK); the held task stays held. (Ctrl+C to stop)"
             fi
-            sleep "$LAUNCH_FAIL_BACKOFF_SEC"
+            idle_wait "$LAUNCH_FAIL_BACKOFF_SEC"
         elif [ "$ACCOUNT_RELAUNCH" = true ]; then
             account_say "Relaunching now on the next account."
         else
             echo -e "${YELLOW}Agent idle, checking for tasks in ${POLL_INTERVAL} seconds... (Ctrl+C to stop)${NC}"
             # Honor --poll-interval (PS parity); a hardcoded 2s near-busy-spins a
             # full CLI relaunch every 2s on an idle worker.
-            sleep "$POLL_INTERVAL"
+            idle_wait "$POLL_INTERVAL"
         fi
         echo -e "${BLUE}Relaunching agent...${NC}"
     fi
@@ -9196,7 +9212,7 @@ except Exception:
                 echo "[no-task] No claimable task for role $ROLE; waiting up to ${MOE_TASKLESS_WAIT_SEC}s in the wrapper (single-shot run) rather than launching a CLI without one."
                 TASKLESS_WAITED=0
                 while [ "$TASKLESS_WAITED" -lt "$MOE_TASKLESS_WAIT_SEC" ]; do
-                    sleep "$MOE_TASKLESS_POLL_SEC"
+                    idle_wait "$MOE_TASKLESS_POLL_SEC"
                     TASKLESS_WAITED=$((TASKLESS_WAITED + MOE_TASKLESS_POLL_SEC))
                     [ "$TEAM_JOINED" = true ] || retry_team_join || true
                     CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")

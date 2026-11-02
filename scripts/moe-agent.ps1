@@ -578,6 +578,7 @@ if ($script:MoeRuntimeProtected) {
 # before any exit can occur, so the flag/function always exist; Invoke-MoeRpc is
 # resolved lazily at call time (it's defined further down).
 $script:MoeDeregistered = $moeMigration # a migration registered nothing and sends no RPC
+$script:MoeExitStatus = $null
 # Set by Start-HeartbeatSidecar (defined later) to whatever heartbeat job is
 # CURRENTLY running, so an async Ctrl+C/exit handler firing mid-task can reach
 # it — a local try/finally around one CLI invocation only covers normal
@@ -588,7 +589,7 @@ function Invoke-MoeDeregister {
     # $Reason reaches the daemon verbatim. The self-restart path below passes
     # 'wrapper_restart' (sh twin parity) so a hand-over is distinguishable in
     # the activity log from an operator closing the terminal.
-    param([string]$Reason = 'terminal_closed')
+    param([string]$Reason = $(if ($null -ne $script:MoeExitStatus) { "unexpected_exit:$($script:MoeExitStatus)" } else { 'terminal_closed' }))
     # Kill any live heartbeat sidecar first — it's an unmanaged background
     # process (Start-Job's child powershell.exe) that outlives this one unless
     # explicitly stopped; unconditional and idempotent, so it runs even when
@@ -9464,7 +9465,7 @@ $mentionsJson
     if (-not $moeSkipLaunch -and $cliType -in @('claude', 'codex')) {
         # Settings can change between tasks in a long-lived wrapper.
         & node $promptCacheHelper check $cliType "$projectPath" @CommandArgs
-        if ($LASTEXITCODE -ne 0) { exit 1 }
+        if ($LASTEXITCODE -ne 0) { $script:MoeExitStatus = 1; exit 1 }
     }
     # Claude account rotation: a fresh lease for every claude launch. The check
     # above stays on the operator's own config directory; nothing reads inside
@@ -9495,6 +9496,7 @@ $mentionsJson
         $codexCheck = Get-Command $Command -ErrorAction SilentlyContinue
         if (-not $codexCheck) {
             Write-Error "Codex command not found: $Command. Install codex CLI first."
+            $script:MoeExitStatus = 1
             exit 1
         }
 
@@ -9656,6 +9658,7 @@ $mentionsJson
                             try { Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $argvMsg } | Out-Null } catch {}
                         }
                         Stop-HeartbeatSidecar
+                        $script:MoeExitStatus = 1
                         exit 1
                     }
                 }
@@ -9732,6 +9735,7 @@ $mentionsJson
         $geminiCheck = Get-Command $Command -ErrorAction SilentlyContinue
         if (-not $geminiCheck) {
             Write-Error "Antigravity command not found: $Command. Please ensure Antigravity CLI (agy) is installed."
+            $script:MoeExitStatus = 1
             exit 1
         }
 
@@ -9793,6 +9797,7 @@ $mentionsJson
         $grokCheck = Get-Command $Command -ErrorAction SilentlyContinue
         if (-not $grokCheck) {
             Write-Error "Grok command not found: $Command. Install Grok Build first (irm https://x.ai/cli/install.ps1 | iex  or  npm install -g @xai-official/grok)."
+            $script:MoeExitStatus = 1
             exit 1
         }
         # Auth is XAI_API_KEY or the OAuth cache `grok login` leaves at
@@ -10638,6 +10643,11 @@ $mentionsJson
     # out) never finished its session either, so it relaunches too, at once,
     # even under -NoLoop.
 } while ($loopEnabled -or (($moeCurrentLaunchFailed -or $moeLaunchProbe) -and -not $NoLoop) -or $script:AccountRelaunch)
+} catch {
+    # A pipeline stop is operator Ctrl+C, not an unexpected failure. Record
+    # terminating errors but rethrow them without changing teardown behavior.
+    if ($_.Exception -isnot [System.Management.Automation.PipelineStoppedException]) { $script:MoeExitStatus = 1 }
+    throw
 } finally {
     # Teardown rescue FIRST (before the deregister releases the task): when
     # this session ends without its post-flight having landed (Ctrl+C during
