@@ -147,11 +147,17 @@
       "author": "architect-0fcb7226",
       "content": "Planner note from architect-0fcb7226, who wrote this plan, for @worker-b49a5155 and for QA.\n\nGovernor ruling #3 above (09:15Z) supersedes three lines of the approved plan, because c7ca56e6 now lands after the switch:\n1. **Step 2(d):** ignore \"Do NOT pre-set extensions.worktreeConfig …\". Instead, after (d) and before any seat starts, run `git -C <control> config extensions.worktreeConfig true`. This matches the switch checklist on gate task-6519ed9127ad4c359fd64b71f1a08be5.\n2. **executionContract:** two invariants no longer hold. \"extensions.worktreeConfig is not pre-set in the fixture\" is reversed: the key MUST be pre-set. \"task-c7ca56e6 fixes it and is a dependency\" is also void.\n3. **Step 5 fallback:** re-run at the newest commit that contains WT-13's completion but not that wip. Do not require \"WT-13's and task-c7ca56e6's completions\". c7ca56e6 sits behind the gate, and the gate waits on this row, so no snapshot this row can use will ever contain it.\n\nEverything else stands: the DoD, the checkRefs (they already require only WT-13), scenarios (a) and (b), the negative controls, and report_blocked on WT-13 before step 5.\n\nQA: the pre-set key is required by the ruling. Don't count it as a deviation. c7ca56e6's own forced-collision cases still cover the unset-key race.",
       "timestamp": "2026-11-02T09:29:03.579Z"
+    },
+    {
+      "id": "comment-56b2a0e5f29345fa97ea8f8f4a4daa03",
+      "author": "governor-e6b40560",
+      "content": "Governor: the block is correct, and so is your point about WT-11. Under the review-overlap protocol the human approved, WT-13 being DONE no longer implies WT-11 is DONE.\n\n**Unblock rule:** the governor sets this row back to WORKING once HEAD contains **both** WT-11's and WT-13's completion commits, even while they are still in QA. That way steps 5-6 run on the landed bytes. The daemon would otherwise wait for both to be DONE.\n\nThe harness trial (parallel failing only on MOE_CONTROL_ADVANCED, c1 only on 'rescued' vs 'unlanded') is the expected pre-WT-11/13 state. Thanks also for filing b6a3d41e. It's now promoted to PLANNING behind the switch gate, and the live checkout's .claude/agents is already populated, so the switch relaunch can't hit it.",
+      "timestamp": "2026-11-02T09:42:10.138Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T08:48:03.279Z",
-  "updatedAt": "2026-11-02T09:41:24.577Z",
+  "updatedAt": "2026-11-02T09:42:10.138Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T09:02:47.206Z",
     "plannedStepCount": 6,
@@ -251,5 +257,71 @@
   ],
   "blockedResourceId": null,
   "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-11-02T09:41:24.577Z"
+  "blockedAt": "2026-11-02T09:41:24.577Z",
+  "commits": [
+    {
+      "sha": "aacc03ad51cc488a26f15e0575fb0d39cfd73b0a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T09:15:47Z",
+      "paths": [
+        ".moe/tasks/task-065e4812d96247cc8394b3cd0416475d.json",
+        ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json",
+        ".moe/tasks/task-06dda5c1df29433ab4eb5c4230b38581.json",
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-185f728fd79c4658a86b8a0b40a66595.json",
+        ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+        ".moe/tasks/task-692a12df337c43edacb59fd0599ecff2.json",
+        ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json",
+        ".moe/tasks/task-6fbd08111de142508fb0402d06f24e3f.json",
+        ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+        ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
+        ".moe/tasks/task-a5f39d5535404f6e9e59f762c046f5e0.json",
+        ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+        ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json",
+        ".moe/tasks/task-db97dacb7b3843b4a6f747c154123501.json",
+        ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json",
+        ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T09:41:53.241Z",
+      "treeId": "9cccdccc70a04206edd569675f3c2a947fce0003",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-065e4812d96247cc8394b3cd0416475d.json",
+    ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json",
+    ".moe/tasks/task-06dda5c1df29433ab4eb5c4230b38581.json",
+    ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+    ".moe/tasks/task-185f728fd79c4658a86b8a0b40a66595.json",
+    ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+    ".moe/tasks/task-692a12df337c43edacb59fd0599ecff2.json",
+    ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json",
+    ".moe/tasks/task-6fbd08111de142508fb0402d06f24e3f.json",
+    ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json",
+    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+    ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
+    ".moe/tasks/task-a5f39d5535404f6e9e59f762c046f5e0.json",
+    ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+    ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json",
+    ".moe/tasks/task-db97dacb7b3843b4a6f747c154123501.json",
+    ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json",
+    ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+    "scripts/tests/worktree-e2e.cjs"
+  ],
+  "touchedFiles": [
+    "scripts/tests/worktree-e2e.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-b49a5155@2026-11-02T09:15:47Z",
+    "at": "2026-11-02T09:41:53.241Z"
+  }
 }
