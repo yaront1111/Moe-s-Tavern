@@ -99,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:47:03.844Z",
-  "updatedAt": "2026-11-02T18:20:09.556Z",
+  "updatedAt": "2026-11-02T18:21:11.569Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:47:34.974Z",
@@ -209,7 +209,42 @@
   "filesModified": [
     "moe-vscode/tests/wire-parity.test.cjs",
     "moe-vscode/src/types/moe.ts",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+    ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json"
+  ],
+  "completionSummary": "VS Code now handles the daemon's PINS_UPDATED broadcast like PINS. MoeDaemonClient.handleMessage has a new braced case that fires onPinsReceived once with {channel, pins}. A malformed frame (no payload object, a channel that is not a non-empty string, pins not an array) is a silent no-op. types/moe.ts lists PINS_UPDATED in the DaemonInboundMessage union and in DAEMON_MESSAGE_TYPES. wire-parity.test.cjs gains rows F1 to F6 (128 lines added, 0 removed vs 22c73558), run through the real client, the real provider and the raw chat.js page.\nRED before any src edit: not ok 23 F1, not ok 24 F2, not ok 25 F3 and not ok 28 F6, all with code ERR_ASSERTION. F4 and F5 passed. Totals: 28 tests, 24 pass, 4 fail.\nGate (git-archive snapshot, npm ci, lint, compile, test, node 24.21): exit 0, 583 tests, 579 pass, 0 fail, 4 skipped.\nMutant checkRef: killed 'typeof p.channel==string&&p.channel' and killed 'Array.isArray(p.pins)', exit 0, with only F4 failing.\nStatic checkRef: tests append-only and the union line is present, exit 0.\nSelf-review: no added line contains a forbidden pattern. Non-object pin entries pass through like PINS (noted, not filtered, out of scope). A whitespace channel fires, per the DoD's literal definition.",
+  "commits": [
+    {
+      "sha": "c02ca51e168dfdc70b2b1889933a22206bb7a5f8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T18:16:15Z",
+      "paths": [
+        ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+        ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/tests/wire-parity.test.cjs"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T18:21:11.569Z",
+      "treeId": "bfe12e0d505a7160081c72dff22a2fe4ed6ee232",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/wire-parity.test.cjs",
+    "moe-vscode/src/types/moe.ts",
     "moe-vscode/src/services/MoeDaemonClient.ts"
   ],
-  "completionSummary": "VS Code now handles the daemon's PINS_UPDATED broadcast like PINS. MoeDaemonClient.handleMessage has a new braced case that fires onPinsReceived once with {channel, pins}. A malformed frame (no payload object, a channel that is not a non-empty string, pins not an array) is a silent no-op. types/moe.ts lists PINS_UPDATED in the DaemonInboundMessage union and in DAEMON_MESSAGE_TYPES. wire-parity.test.cjs gains rows F1 to F6 (128 lines added, 0 removed vs 22c73558), run through the real client, the real provider and the raw chat.js page.\nRED before any src edit: not ok 23 F1, not ok 24 F2, not ok 25 F3 and not ok 28 F6, all with code ERR_ASSERTION. F4 and F5 passed. Totals: 28 tests, 24 pass, 4 fail.\nGate (git-archive snapshot, npm ci, lint, compile, test, node 24.21): exit 0, 583 tests, 579 pass, 0 fail, 4 skipped.\nMutant checkRef: killed 'typeof p.channel==string&&p.channel' and killed 'Array.isArray(p.pins)', exit 0, with only F4 failing.\nStatic checkRef: tests append-only and the union line is present, exit 0.\nSelf-review: no added line contains a forbidden pattern. Non-object pin entries pass through like PINS (noted, not filtered, out of scope). A whitespace channel fires, per the DoD's literal definition."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-13a877ad@2026-11-02T18:16:15Z",
+    "at": "2026-11-02T18:21:11.569Z"
+  }
 }

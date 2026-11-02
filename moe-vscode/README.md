@@ -39,10 +39,8 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 | `moe.daemon.port` | `0` | Daemon port (0 = auto-detect from `.moe/daemon.json`) |
 | `moe.daemon.autoStart` | `true` | Start the daemon when needed |
 | `moe.autoConnect` | `true` | Connect when the workspace contains `.moe` |
-| `moe.agentCommand` | `claude` | CLI used to launch agents: `claude`, `codex`, `gemini`, `grok`, or a custom CLI path |
 | `moe.chat.notifications.enabled` | `true` | Show notifications for agent chat messages |
 | `moe.chat.notifications.mutedChannels` | `[]` | Channel IDs to mute |
-| `moe.chat.notifications.soundEnabled` | `true` | Play a sound for new chat messages |
 
 ## Commands
 
@@ -79,6 +77,7 @@ The extension does not define default keyboard shortcuts.
 - Settings: Agent Teams toggle and a read-only landing policy; the unused branch and commit pattern fields are removed
 - Per-task worktrees are excluded from file watching and search; a deleted chat channel leaves the chat view
 - The packaged extension ships only the bundled `dist/extension.js`
+- The unused `moe.agentCommand` and `moe.chat.notifications.soundEnabled` settings are removed
 
 ### 0.8.0
 

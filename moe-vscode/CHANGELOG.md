@@ -23,6 +23,9 @@ VS Code parity with JetBrains and shared client behaviour (epic-aabc654d; see `d
 - The bundled scripts and docs come from `scripts/bundle-manifest.json`, the same list the JetBrains build reads. The vsix now also ships the remaining `docs/roles` reference files.
 - The vsix ships only the esbuild bundle `dist/extension.js`, without the tsc output or `eslint.config.mjs`. CI packages the extension and smoke-tests its bundle on every pull request.
 
+### Removed
+- The `moe.agentCommand` and `moe.chat.notifications.soundEnabled` settings, which the extension never read. **Moe: Start Agent** asks which CLI to launch (the last one used is listed first), and **Moe: Open Settings** still edits the project's agent command in `.moe/project.json`.
+
 ### Fixed
 - A deleted chat channel (CHANNEL_DELETED) leaves the channel list and the current selection.
 - Chat channel auto-selection matches JetBrains: on first load, or when the selected channel is gone, the view selects the general channel, else the first listed one. A repeated CHANNEL_CREATED frame no longer lists a channel twice.
