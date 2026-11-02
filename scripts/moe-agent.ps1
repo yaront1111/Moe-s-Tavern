@@ -8302,7 +8302,9 @@ try {
     try {
         # Node writes UTF-8 even when gemini/grok seats keep the OEM code page.
         [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
-        $script:AgentGitGuardRoot = $program | & node - $projectPath ([IO.Path]::GetTempPath())
+        # PS 5.1 quotes a native argument that contains a space but does not double its trailing backslash, so node read 'C:\x y\' as 'C:\x y"'
+        # and mkdtemp failed closed. GetTempPath() always ends in a separator, so '.' names the same directory (TrimEnd turns 'C:\' into 'C:').
+        $script:AgentGitGuardRoot = $program | & node - $projectPath ([IO.Path]::GetTempPath() + '.')
         $rc = $LASTEXITCODE
     } finally {
         [Console]::OutputEncoding = $encoding

@@ -112,15 +112,16 @@ function launch(f, cli, interactive, concurrent = false) {
   return run(shell, args, f.repo, f.env, f.mode === 'non-git' ? 'cli stdin\n' : undefined);
 }
 if (process.argv[2] === 'cli') agent();
-else for (const [cli, interactive, hooks, status, opts = {}] of ['custom', 'claude', 'codex', 'gemini', 'grok'].flatMap(cli => [[cli, true, false, 'WORKING'], [cli, false, true, 'REVIEW']]).concat([['custom', false, false, 'REVIEW']], win ? [['custom', false, false, 'REVIEW', { engine: 'pwsh.exe' }]] : [], ['gemini', 'grok'].map(cli => [cli, false, false, 'REVIEW', { mode: 'non-ascii-temp' }]))) {
-  test(`${opts.engine ? 'PS7' : win ? 'PS5.1' : 'bash'} ${cli} ${interactive ? 'interactive checkpoint' : `headless ${hooks ? 'hookful' : 'plumbing'} completion`}${opts.mode === 'non-ascii-temp' ? ' non-ASCII temp' : ''} refuses failed-cd commit and push before wrapper landing`, { skip: opts.engine && !pwsh && 'pwsh.exe not found' }, t => {
+else for (const [cli, interactive, hooks, status, opts = {}] of ['custom', 'claude', 'codex', 'gemini', 'grok'].flatMap(cli => [[cli, true, false, 'WORKING'], [cli, false, true, 'REVIEW']]).concat([['custom', false, false, 'REVIEW']], win ? [['custom', false, false, 'REVIEW', { engine: 'pwsh.exe' }]] : [], ['gemini', 'grok'].map(cli => [cli, false, false, 'REVIEW', { mode: 'non-ascii-temp' }]), [['custom', false, false, 'REVIEW', { mode: 'spaced-temp' }]])) {
+  test(`${opts.engine ? 'PS7' : win ? 'PS5.1' : 'bash'} ${cli} ${interactive ? 'interactive checkpoint' : `headless ${hooks ? 'hookful' : 'plumbing'} completion`}${{ 'non-ascii-temp': ' non-ASCII temp', 'spaced-temp': ' spaced temp' }[opts.mode] ?? ''} refuses failed-cd commit and push before wrapper landing`, { skip: opts.engine && !pwsh && 'pwsh.exe not found' }, t => {
     const f = Object.assign(fixture(t, cli, hooks, status, opts.mode), opts), before = snapshot(f), config = fs.readFileSync(path.join(f.gitdir, 'config'));
-    if (f.mode === 'non-ascii-temp') {
-      f.temp = path.join(path.dirname(f.result), 'témp'); fs.mkdirSync(f.temp);
+    const tempName = { 'non-ascii-temp': 'témp', 'spaced-temp': 'My Temp' }[f.mode];
+    if (tempName) {
+      f.temp = path.join(path.dirname(f.result), tempName); fs.mkdirSync(f.temp);
       if (win) {
         for (const key of Object.keys(f.env)) if (/^(TMP|TEMP)$/i.test(key)) delete f.env[key];
         Object.assign(f.env, { TMP: f.temp, TEMP: f.temp });
-        write(f.cli, `[Console]::OutputEncoding.CodePage | Set-Content -LiteralPath ${psquote(f.result + '.codepage')} -Encoding ASCII\n` + fs.readFileSync(f.cli, 'utf8'));
+        if (f.mode === 'non-ascii-temp') write(f.cli, `[Console]::OutputEncoding.CodePage | Set-Content -LiteralPath ${psquote(f.result + '.codepage')} -Encoding ASCII\n` + fs.readFileSync(f.cli, 'utf8'));
       } else f.env.TMPDIR = f.temp;
     }
     const r = launch(f, cli, interactive);
@@ -137,9 +138,9 @@ else for (const [cli, interactive, hooks, status, opts = {}] of ['custom', 'clau
     assert.equal(fs.existsSync(observed.hooks), false, 'only the seat temp is cleaned');
     if (f.temp) {
       const normalize = p => win ? path.resolve(p).toLowerCase() : path.resolve(p);
-      assert.ok(normalize(observed.hooks).startsWith(normalize(f.temp) + path.sep), 'hooks belong under the non-ASCII temp');
+      assert.ok(normalize(observed.hooks).startsWith(normalize(f.temp) + path.sep), 'hooks belong under the seat temp');
       assert.deepEqual(fs.readdirSync(f.temp, { recursive: true, withFileTypes: true }).filter(e => e.name.startsWith('moe-git-guard-')), []);
-      if (win) for (const suffix of ['.codepage', '.exit-codepage']) assert.equal(fs.readFileSync(f.result + suffix, 'ascii').trim(), '850');
+      if (win && f.mode === 'non-ascii-temp') for (const suffix of ['.codepage', '.exit-codepage']) assert.equal(fs.readFileSync(f.result + suffix, 'ascii').trim(), '850');
     }
     assert.deepEqual(fs.readFileSync(path.join(f.gitdir, 'config')), config);
     assert.match(git(f.repo, ['log', '-1', '--format=%s']), status === 'REVIEW' ? /^fix\(|^feat\(/ : /^wip\(/);
