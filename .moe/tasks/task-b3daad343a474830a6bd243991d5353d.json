@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -85,16 +85,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:45:00.055Z",
-  "updatedAt": "2026-11-02T09:57:07.953Z",
+  "updatedAt": "2026-11-02T10:00:13.421Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T09:51:28.827Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T10:00:13.421Z",
+    "wallClockMs": 524594
   },
   "contextFetchedBy": [
     "architect-93e0e956",
-    "worker-81a7999f"
+    "worker-81a7999f",
+    "qa-564d8bce"
   ],
   "tier": "standard",
   "effort": "high",
@@ -162,7 +165,44 @@
   },
   "filesModified": [
     "moe-jetbrains/src/test/resources/client-seat-tracker.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt",
+    ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
+    ".moe/tasks/task-b3daad343a474830a6bd243991d5353d.json"
+  ],
+  "completionSummary": "Added client-seat-tracker.json (version 1, 12 rows S01..S12, all planned values matched the real tracker, no JetBrains bug found, AgentSeatTracker.kt unchanged) and SeatTrackerCorpusTest.kt (well-formedness test + replay against the real AgentSeatTracker, all diverging ids reported at once). Mutant (closed() deregisters even when not open) in a snapshot copy fails the test naming S02, S03, S08; discarded. Full JetBrains suite in a git-archive snapshot under the jetbrains-gradle lease: BUILD SUCCESSFUL, 546 tests, 0 failures/errors/skipped. Note: a resendGone that saved the unchanged list is indistinguishable via the store.",
+  "commits": [
+    {
+      "sha": "25e70ba1ef1b271fb0868013ffe48bb1941e046d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T09:52:56Z",
+      "paths": [
+        ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
+        ".moe/tasks/task-b3daad343a474830a6bd243991d5353d.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt",
+        "moe-jetbrains/src/test/resources/client-seat-tracker.json"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T09:57:29.519Z",
+      "treeId": "562e89a2f9d17cb202b073b2d97fefa85ef6e478",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/resources/client-seat-tracker.json",
     "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt"
   ],
-  "completionSummary": "Added client-seat-tracker.json (version 1, 12 rows S01..S12, all planned values matched the real tracker, no JetBrains bug found, AgentSeatTracker.kt unchanged) and SeatTrackerCorpusTest.kt (well-formedness test + replay against the real AgentSeatTracker, all diverging ids reported at once). Mutant (closed() deregisters even when not open) in a snapshot copy fails the test naming S02, S03, S08; discarded. Full JetBrains suite in a git-archive snapshot under the jetbrains-gradle lease: BUILD SUCCESSFUL, 546 tests, 0 failures/errors/skipped. Note: a resendGone that saved the unchanged list is indistinguishable via the store."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-81a7999f@2026-11-02T09:52:56Z",
+    "at": "2026-11-02T09:57:29.519Z"
+  },
+  "completedAt": "2026-11-02T10:00:13.421Z",
+  "reviewCompletedAt": "2026-11-02T10:00:13.421Z",
+  "reviewSummary": "Approved. Completion commit 25e70ba1 (on moe/work-2026-10-24, pushed) adds client-seat-tracker.json (151 lines) and SeatTrackerCorpusTest.kt (102 lines), 253 net LOC of tests/resources, plus board records. AgentSeatTracker.kt, AgentSeatTrackerTest.kt and client-verdicts.json are untouched.\nDoD1: version 1, 12 rows S01..S12, unique ids, every listed case covered (launch/close, unknown close, double close, connect with open seats, restart resend, ack removal, unknown ack, double launch, close-then-connect, interleaved acks, restart, resend-until-ack). I hand-traced every row against AgentSeatTracker.kt and all expected values match. The corpus is plain strings and arrays, so VSC-20's TS replay can read it unchanged.\nDoD2: the test replays each row against the real tracker with recording load/save/deregister fakes. restart rebuilds the tracker over the current store, the dereg log spans restarts, and call order is compared. Exceptions are caught per row and all diverging ids come out in one assertEquals. A second test checks the corpus is well formed. A missing resource throws an AssertionError naming it.\nDoD3 (my own mutant run): in a scratch snapshot of 25e70ba1 I replaced the open-check in closed() with an unconditional deregister (exactly one replacement asserted). The focused run failed with S02, S03 and S08 in one assertion; the snapshot was then deleted.\nDoD4 (my re-run): under the jetbrains-gradle lease, `gradlew.bat test --rerun` via cmd.exe on a git-archive snapshot of 25e70ba1: BUILD SUCCESSFUL in 1m5s; JUnit XML total 546 tests, 0 failures, 0 errors, 0 skipped (matches the worker's count). SeatTrackerCorpusTest 2/2. Lease released.\nDoD5: only the two new files under moe-jetbrains; no tracker bug found.\nNon-blocking: a resendGone that re-saved an identical list is undetectable through the store (S04/S05/S12). The worker documented this limit; it is not a tracker defect. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
