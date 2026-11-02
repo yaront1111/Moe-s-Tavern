@@ -181,14 +181,54 @@ function killTree(child){
   if(winHost)cp.spawnSync('taskkill',['/T','/F','/PID',String(child.pid)],{stdio:'ignore'});
   else{try{process.kill(-child.pid,'SIGKILL');}catch{}}
 }
+// postflight.ps1's owned-console supervisor: the wrapper runs on its own hidden console; once <ready> appears, one real
+// Ctrl+C goes to that console alone, then <ready>.sent. It prints the wrapper's output, exits with its code, and prints
+// `[supervisor] FAILED: <why>` when the barrier never held, the wrapper outlived the limit, or a child of it outlived it.
+function consoleSupervisor(){
+  const f=path.join(root,'console-supervisor.ps1');
+  if(!present(f))write(f,`param([string]$Engine,[string]$ArgsFile,[string]$Ready,[string]$Log,[int]$LimitMs)
+$ErrorActionPreference='Stop'
+$arguments=([IO.File]::ReadAllText($ArgsFile)|ConvertFrom-Json)|ForEach-Object {'"'+$_+'"'}
+$p=Start-Process -FilePath $Engine -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $Log -RedirectStandardError "$Log.err"
+$null=$p.Handle;$start=$p.StartTime;$rc=98;$why=''
+try {
+  $until=[DateTime]::UtcNow.AddMilliseconds($LimitMs)
+  while(-not (Test-Path -LiteralPath $Ready)){if($p.HasExited -or [DateTime]::UtcNow -gt $until){throw 'the barrier never held'};Start-Sleep -Milliseconds 100}
+  Add-Type 'using System; using System.Runtime.InteropServices; public static class WtSignal {
+    [DllImport("kernel32.dll")] public static extern bool FreeConsole();
+    [DllImport("kernel32.dll")] public static extern bool AttachConsole(uint pid);
+    [DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(IntPtr h,bool add);
+    [DllImport("kernel32.dll")] public static extern bool GenerateConsoleCtrlEvent(uint code,uint group);
+  }'
+  [WtSignal]::FreeConsole()|Out-Null
+  if(-not [WtSignal]::AttachConsole($p.Id)){throw 'AttachConsole to the owned wrapper failed'}
+  [WtSignal]::SetConsoleCtrlHandler([IntPtr]::Zero,$true)|Out-Null
+  if(-not [WtSignal]::GenerateConsoleCtrlEvent(0,0)){throw 'the owned Ctrl+C failed'}
+  [IO.File]::WriteAllText("$Ready.sent",'sent')
+  if(-not $p.WaitForExit($LimitMs)){throw 'the wrapper outlived its interrupt'}
+  $left=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)"|Where-Object {$_.Name -ne 'conhost.exe' -and $_.CreationDate -ge $start})
+  if($left.Count){throw "a child outlived the wrapper: $(($left|ForEach-Object {$_.Name+' '+$_.ProcessId}) -join ', ')"}
+  $rc=$p.ExitCode
+} catch { $why="$_" } finally {
+  if(-not $p.HasExited){& taskkill /T /F /PID $p.Id|Out-Null;$p.WaitForExit(5000)|Out-Null}
+  foreach($o in @($Log,"$Log.err")){if(Test-Path -LiteralPath $o){Get-Content -LiteralPath $o}}
+}
+if($why){"[supervisor] FAILED: $why"}
+exit $rc
+`);
+  return f;
+}
 // One worker-seat run. A null knob is unset; WT_GIT_* knobs put the stub first on PATH.
 // opts.type launches typeShim(type) instead of the default CLI; opts.args extend the wrapper argv;
 // opts.role replaces the worker role; opts.signal SIGTERMs the wrapper once the fake logs that tool, or once
-// that function answers true (sh).
+// that function answers true (sh); opts.keep keeps .moe/attempts (the same seat restarting).
+// opts.ready interrupts the wrapper once that barrier file appears, then writes <ready>.sent: a SIGTERM (sh, which
+// must then leave no process in its group), or a real Ctrl+C on its own console (ps1, consoleSupervisor);
+// opts.kill hard-kills the tree once that file appears.
 async function launch(p,run,knobs={},opts={}){
   const moe=f=>path.join(p.dir,'.moe',f),role=opts.role||'worker';
   for(const f of ['wt-cli.log','evidence-rpcs.jsonl','record_commit.jsonl','context-count'])fs.rmSync(moe(f),{force:true});
-  fs.rmSync(moe('attempts'),{recursive:true,force:true});
+  if(!opts.keep)fs.rmSync(moe('attempts'),{recursive:true,force:true});
   const cli=opts.type?typeShim(opts.type):cliShim();
   const args=win?['-NoProfile','-ExecutionPolicy','Bypass','-File',wrapper,'-Project',p.dir,'-WorkerId',WID,'-Role',role,'-Team','Smoke','-NoStartDaemon','-Command',cli,'-NoLoop','-PollInterval','0']
     :[wrapper,'--project',p.dir,'--worker-id',WID,'--role',role,'--team','Smoke','--no-start-daemon','--command',cli,'--no-loop','--poll-interval','0'];
@@ -197,18 +237,30 @@ async function launch(p,run,knobs={},opts={}){
     HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),TMPDIR:wrapperTmp,TMP:wrapperTmp,TEMP:wrapperTmp,
     FAKE_TASK_STATUS:'WORKING',FAKE_CLAIM_WORKSPACE:p.ws(),...knobs};
   for(const k of Object.keys(env))if(env[k]==null)delete env[k];
-  if(env.WT_GIT_VERSION||env.WT_GIT_FAIL||env.WT_GIT_SWAP){
+  if(env.WT_GIT_VERSION||env.WT_GIT_FAIL||env.WT_GIT_SWAP||env.WT_GIT_HOLD){
     env[pathKey]=stub()+path.delimiter+(inherited[pathKey]||'');
     if(!win)env.BASH_ENV=path.join(stub(),'env.sh');
   }
-  const child=cp.spawn(engine,args,{env,stdio:['ignore','pipe','pipe'],detached:!winHost,windowsHide:true});
+  const sup=win&&opts.ready,argsFile=path.join(root,`${p.name}-${run}.args.json`);
+  if(sup)write(argsFile,JSON.stringify(args));
+  const child=cp.spawn(engine,sup?['-NoProfile','-ExecutionPolicy','Bypass','-File',consoleSupervisor(),engine,argsFile,opts.ready,argsFile+'.log',String(LIMIT-15000)]:args,
+    {env,stdio:['ignore','pipe','pipe'],detached:!winHost,windowsHide:true});
   let log='',timedOut=false;child.stdout.on('data',d=>{log+=d;});child.stderr.on('data',d=>{log+=d;});
   const timer=setTimeout(()=>{timedOut=true;killTree(child);},LIMIT);
-  const hit=typeof opts.signal==='function'?opts.signal:()=>(readOr(moe('evidence-rpcs.jsonl'))||'').includes(`"tool":"${opts.signal}"`);
-  const poll=opts.signal&&setInterval(()=>{if(hit()){clearInterval(poll);try{process.kill(child.pid,'SIGTERM');}catch{}}},100);
+  const at=opts.kill||(!sup&&opts.ready);
+  const hit=typeof opts.signal==='function'?opts.signal:at?()=>present(at):()=>(readOr(moe('evidence-rpcs.jsonl'))||'').includes(`"tool":"${opts.signal}"`);
+  const poll=(opts.signal||at)&&setInterval(()=>{
+    if(!hit())return;
+    clearInterval(poll);
+    if(opts.kill)return killTree(child);
+    try{process.kill(child.pid,'SIGTERM');}catch{}
+    if(opts.ready)write(opts.ready+'.sent','sent');
+  },100);
   const code=await new Promise((res,rej)=>{child.on('error',rej);child.on('close',c=>res(c));}).finally(()=>{clearTimeout(timer);clearInterval(poll);});
   log=util.stripVTControlCharacters(log);write(path.join(root,`${p.name}-${run}.log`),log);
   assert.ok(!timedOut,`${run}: the wrapper outlived ${LIMIT/1000}s and was killed`+tail(log));
+  let left=false;if(opts.ready&&!winHost)try{process.kill(-child.pid,0);left=true;}catch{}
+  assert.ok(!left&&!log.includes('[supervisor] FAILED'),`${run}: the supervisor failed, or a process outlived the wrapper`+tail(log));
   return {code,log,cliRan:present(moe('wt-cli.log')),blocked:rows(moe('evidence-rpcs.jsonl')).filter(r=>r.tool==='report_blocked')};
 }
 
@@ -684,7 +736,11 @@ async function wtReplayRemote(){
   git(root,'init','-q','--bare',bare);git(p.top,'remote','add','origin',bare);git(p.top,'push','-q','origin','main');
   let r=await landRun(p,'wt-replay-remote-1',{'src/a.txt':'done\n'},{...REVIEW,...net,WT_GIT_FAIL:'push'});
   const j1=readOr(journal(p)),peer=commitOn(p,'refs/wt-replay-remote/peer',{'src/peer.txt':'peer\n'}),swap=path.join(root,'wt-replay-remote.j2');
-  assert.ok(r.log.includes('MOE_PUSH_OUTCOME_UNKNOWN')&&j1,'no unknown push outcome, or no kept journal'+tail(r.log));
+  assert.ok(r.log.includes('MOE_PUSH_OUTCOME_UNKNOWN')&&j1&&!finals(p).length,'no unknown push outcome, no kept journal, or a finalize'+tail(r.log));
+  // WT-11: still unknown at the same seat's restart (origin unreachable): no finalize, no CLI, the attempt stays finalizing.
+  r=await landRun(p,'wt-replay-remote-down',{},{...net,WT_GIT_FAIL:'fetch',FAKE_CLAIM_MODE:'finalizing',MOE_TASKLESS_WAIT_SEC:'5'},{keep:true});
+  assert.deepEqual([readOr(journal(p)),finals(p),r.cliRan,phase(p),/MOE_PUSH_OUTCOME_UNKNOWN: task \S+ -- /.test(r.log)],[j1,[],false,'finalizing',true],
+    'a restart settled an unknown push'+tail(r.log));
   const j2=JSON.stringify({...JSON.parse(j1.replace(/^﻿/,'')),targetBefore:peer});
   git(p.top,'push','-q','origin',peer+':refs/heads/main');write(swap,j2);
   r=await landRun(p,'wt-replay-remote-2',{},{...net,WT_GIT_SWAP:swap,WT_GIT_SWAP_TO:journal(p)});
@@ -936,16 +992,59 @@ async function wtResume(){
   assert.deepEqual([parents(p.top,c),['src/a.txt','src/m.txt','src/p.txt','.gemini/g.md'].map(f=>git(p.top,'show',`${c}:${f}`)),parents(p.top,l2)[1],mh(),retryOf(p),finals(p)],
     [[b],['resolved\n','main m\n','partial\n','main g\n'],b,null,null,[['landed',c]]],'the resolved landing'+tail(r.log));
 }
-// The marker scan, from this wrapper's own function: each marker shape (CRLF too) and a path out of W are hits; a
-// resolved deletion (absent) and marker look-alikes are not.
+// The marker scan, from this wrapper's own function: each marker shape (CRLF too), a path out of W and a linked parent
+// (out of W, or in W over a missing file) are hits, as are a file link and a FIFO (never opened) under sh and a name
+// Windows cannot parse under ps1; a resolved deletion (absent) and marker look-alikes are not.
 function markerScan(){
-  const w=path.join(root,'marker-scan'),q=s=>"'"+s.replace(/'/g,"''")+"'";
-  const files={'lt.txt':'a\n<<<<<<< HEAD\n','gt.txt':'>>>>>>> theirs\r\n','eq.txt':'a\r\n=======\r\nb\r\n','ok.txt':'<<<<<<<x\n ======= \n=======x\n'};
+  const w=path.join(root,'marker-scan'),out=path.join(root,'marker-scan-out'),q=s=>"'"+s.replace(/'/g,"''")+"'";
+  const files={'lt.txt':'a\n<<<<<<< HEAD\n','gt.txt':'>>>>>>> theirs\r\n','eq.txt':'a\r\n=======\r\nb\r\n','ok.txt':'<<<<<<<x\n ======= \n=======x\n','sub/ok.txt':'b\n'};
   for(const [f,b] of Object.entries(files))write(path.join(w,f),b);
-  const args=[...Object.keys(files),'gone.txt','../x'];
-  const r=win?cp.spawnSync(engine,['-NoProfile','-NonInteractive','-Command',`${wrapperFn('Find-MoeConflictMarkers')}\nFind-MoeConflictMarkers ${q(w)} @(${args.map(q).join(',')})`],{encoding:'utf8'})
-    :cp.spawnSync(engine,['-c',`${wrapperFn('wt_marker_scan')}\nwt_marker_scan "$@"`,'_',w,...args],{encoding:'utf8',env:{...inherited,PYTHON_CMD:py}});
-  assert.deepEqual(String(r.stdout).trim().split(/\r?\n/).sort(),['../x','eq.txt','gt.txt','lt.txt'],'the marker scan: '+r.stderr);
+  write(path.join(out,'x.txt'),'clean\n');fs.symlinkSync(out,path.join(w,'out'),'junction');fs.symlinkSync(path.join(w,'sub'),path.join(w,'in'),'junction');
+  if(!win){fs.symlinkSync('ok.txt',path.join(w,'fl.txt'));cp.execFileSync('mkfifo',[path.join(w,'fifo.txt')]);}
+  const more=['../x','in/gone.txt','out/x.txt',...(win?(winHost?['a<b.txt']:[]):['fifo.txt','fl.txt'])],args=[...Object.keys(files),'gone.txt',...more],o={encoding:'utf8',timeout:60000};
+  const r=win?cp.spawnSync(engine,['-NoProfile','-NonInteractive','-Command',`${wrapperFn('Find-MoeConflictMarkers')}\nFind-MoeConflictMarkers ${q(w)} @(${args.map(q).join(',')})`],o)
+    :cp.spawnSync(engine,['-c',`${wrapperFn('wt_marker_scan')}\nwt_marker_scan "$@"`,'_',w,...args],{...o,env:{...inherited,PYTHON_CMD:py}});
+  assert.deepEqual(String(r.stdout).trim().split(/\r?\n/).sort(),['eq.txt','gt.txt','lt.txt',...more].sort(),'the marker scan: '+r.stderr);
+}
+// Teardown (§2.6). An interrupt before the CAS abandons the landing: main unmoved, no journal, T keeps the bytes, one
+// finalize 'failed', never unlanded. One from the CAS through the ledger row and finalize waits for both, then stops.
+// Either way the lease is released before the seat deregisters, the session is cut short and no process outlives it.
+// sh sends SIGTERM; ps1 sends a real Ctrl+C to the wrapper's own console.
+const phase=p=>JSON.parse(readOr(path.join(p.dir,'.moe','attempts','attempt-postflight.json'))||'{}').phase;
+const ended=p=>rows(path.join(p.dir,'.moe','messages','chan-general.jsonl')).some(m=>String(m.content).includes('worker session ended: task='));
+async function wtTeardown(){
+  for(const [n,hold,knobs] of [['pre','merge-tree',{}],['sync','--ff-only',{}],['ledger',null,{FAKE_EVIDENCE_MODE:'teardown-landed',FAKE_HOLD_DRAIN:'1'}]]){
+    const p=repo('wt-teardown-'+n,{settings:{...LANDS,qualityGate:gateCmd()}}),b=mainOf(p),held=path.join(root,`wt-teardown-${n}.held`),pre=n==='pre';
+    const ready=hold?held:path.join(p.dir,'.moe','gate-ready'),hk=hold?{WT_GIT_HOLD:hold,WT_GIT_HOLD_FILE:held}:{};
+    const r=await landRun(p,'wt-teardown-'+n,{'src/a.txt':'done\n'},{...REVIEW,WT_GATE_LOG:path.join(root,`wt-teardown-${n}-gate.jsonl`),...hk,...knobs},{ready}),c=mainOf(p);
+    assert.ok(present(ready+'.sent')&&!ended(p)&&(pre||r.log.includes('Agent stopped.')),`${n}: no interrupt, or the session was not cut short`+tail(r.log));
+    assert.deepEqual([pre?c:parents(p.top,c),git(p.top,'show',p.branch+':src/a.txt'),probe(p.top,'merge-base','--is-ancestor',c,p.branch),present(journal(p))],
+      [pre?b:[b],'done\n','0:',false],`${n}: main, T's bytes or ancestry, or a journal stayed`+tail(r.log));
+    assert.deepEqual([done(p).map(x=>[x.outcome,x.sha]),finals(p),phase(p)],[pre?[]:[['committed',c]],[pre?['failed',undefined]:['landed',c]],'closed'],
+      `${n}: the completion row, the one finalize or the attempt`+tail(r.log));
+    const seq=rpcs(p).map(x=>x.tool).filter(t=>['finalize_attempt',...LEASE,'deregister_worker'].includes(t));
+    assert.deepEqual([seq.filter(t=>t!=='finalize_attempt'),seq.indexOf('finalize_attempt')<seq.indexOf('deregister_worker'),
+      JSON.parse(read(path.join(p.dir,'.moe','resources','git-land-main.json'))).holders],[[LEASE[0],LEASE[2],'deregister_worker'],true,[]],
+      `${n}: the lease was not released, or the finalize or release came after the deregister`+tail(r.log));
+  }
+}
+// A hard death is not deferrable: the same seat's next pre-flight replays the journal while its claim is refused (the
+// attempt is still finalizing), launches no CLI and moves no ref. Killed at the CAS, C never published: routed unlanded
+// 'contention', T rescued. Killed after it, before the sync: C's exact row and finalize landed, no second landing.
+async function wtCrash(){
+  for(const [n,hold] of [['cas','-m'],['sync','--ff-only']]){
+    const p=repo('wt-crash-'+n,{settings:LANDS}),b=mainOf(p),held=path.join(root,`wt-crash-${n}.held`),cas=n==='cas';
+    let r=await landRun(p,'wt-crash-'+n,{'src/a.txt':'done\n'},{...REVIEW,WT_GIT_HOLD:hold,WT_GIT_HOLD_FILE:held},{kill:held});
+    const c=mainOf(p),t=revOf(p.top,p.branch);
+    assert.deepEqual([present(held),present(journal(p)),cas?c:parents(p.top,c),done(p),finals(p),phase(p)],[true,true,cas?b:[b],[],[],'finalizing'],
+      `${n}: the kill missed its point, or the journal, main, a row or a finalize`+tail(r.log));
+    r=await launch(p,`wt-crash-${n}-2`,{FAKE_CLAIM_MODE:'finalizing',MOE_TASKLESS_WAIT_SEC:'5'},{keep:true});
+    assert.deepEqual([mainOf(p),revOf(p.top,p.branch),present(journal(p)),r.cliRan,phase(p)],[c,t,false,false,'closed'],
+      `${n}: a ref moved, the journal stayed, a CLI ran, or the attempt is open`+tail(r.log));
+    assert.deepEqual(cas?[done(p).map(x=>[x.outcome,x.code,x.pushed]),unlanded(p).map(x=>[x.outcome,x.unlandedReason,x.conflictPaths,x.targetTip]),revOf(p.top,(retryOf(p)||{}).rescueRef)]
+      :[done(p).map(x=>[x.outcome,x.sha]),finals(p)],cas?[[['failed','MOE_COMMIT_FAILED_REF_CONTENTION',false]],[['unlanded','contention',[],b]],t]:[[['committed',c]],[['landed',c]]],
+      `${n}: the replay`+tail(r.log));
+  }
 }
 
 // DoD: both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_/MOE_MIGRATION_ codes.
@@ -961,7 +1060,7 @@ Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link
   'wt-checkpoint':wtCheckpoint,'wt-deny':wtDeny,'wt-recover':wtRecover,'wt-recover-moe':wtRecoverMoe,'wt-control-seats':wtControlSeats,
   'wt-stray':wtStray,'wt-push':wtPush,'wt-completion':wtCompletion,'wt-hooks':wtHooks,'wt-replay':wtReplay,'wt-replay-remote':wtReplayRemote,'wt-sync':wtSync,'wt-fails':wtFails,
   'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
-  'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,codes});
+  'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,codes});
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{
   let ok=0,failed=0;

@@ -6226,7 +6226,8 @@ receipt_replay() {
             if [ "$rc" = 1 ]; then
                 echo -e "${YELLOW}[WARN]${NC} MOE_PUSH_FAILED: task $tid -- origin moved past $before without $after, which can never apply."
                 # WT-11: a still-finalizing attempt is routed unlanded first; a failed route keeps the journal.
-                [ "$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")" != finalizing ] || replay_unlanded "$tid" "$aid" "$gen" "$owner" "$target" "$before" \
+                [ "$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")" != finalizing ] \
+                    || replay_unlanded "$tid" "$aid" "$gen" "$owner" "$target" "$before" remote MOE_PUSH_FAILED "origin moved past $before without the journaled landing" \
                     || { echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: the unlanded route of attempt $aid failed."; continue; }
                 rm -f "$f"; echo -e "${BLUE}[receipt]${NC} dropped $f."; continue
             fi
@@ -6237,7 +6238,14 @@ receipt_replay() {
         fi
         # A worktree journal (WT-08) whose C is absent stays for the task's next
         # worktree landing to supersede; one whose C is there owes its exact row.
+        # WT-11: absent while its attempt is still finalizing, its lander died before
+        # the CAS: routed unlanded, so the task's next worker re-lands from W.
         if [ -n "$wt" ] && [ -z "$landed" ]; then
+            if [ "$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")" = finalizing ]; then
+                replay_unlanded "$tid" "$aid" "$gen" "$owner" "$target" "$before" contention MOE_COMMIT_FAILED_REF_CONTENTION \
+                    "$target never took the journaled landing $after; its session is gone" && { rm -f "$f"; echo -e "${BLUE}[receipt]${NC} dropped $f."; continue; }
+                echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: the unlanded route of attempt $aid failed."; continue
+            fi
             echo -e "${BLUE}[receipt]${NC} $target does not contain $after; $f kept until task $tid lands again."
             continue
         elif [ -n "$wt" ] && { [ "$landed" != "$after" ] || ! receipt_ledger_send "$f" "$after"; }; then
@@ -6627,20 +6635,22 @@ push_task_branch() {
 # wt_marker_scan W PATH... -- WT-11 (design §2.5): print each W-relative PATH
 # holding a conflict-marker line, one starting '<<<<<<< ' or '>>>>>>> ' or
 # exactly '=======' (CRLF is a line end), and exit 1 on any. A missing path is
-# a resolved deletion; one resolving out of W, a link, a directory or an
-# unreadable file is a hit, never a clean scan. Twin: Find-MoeConflictMarkers.
+# a resolved deletion; one resolving out of W, a link (a linked parent too), a
+# directory or other non-regular file, or an unreadable file is a hit, never a
+# clean scan. Twin: Find-MoeConflictMarkers.
 wt_marker_scan() {
     $PYTHON_CMD - "$@" <<'PY'
 import os, sys
-w = os.path.realpath(sys.argv[1]); hits = []
+w = os.path.realpath(sys.argv[1]); hits = []; n = os.path.normcase
 def inside(r):
     try: return os.path.commonpath([w, r]) == w and r != w
     except ValueError: return False
 for p in dict.fromkeys(a for a in sys.argv[2:] if a):
     f = os.path.join(w, p); r = os.path.realpath(f)
-    if not inside(r): hits.append(p); continue
+    # A link anywhere below W, a linked parent too, resolves away from the lexical path.
+    if not inside(r) or n(r) != n(os.path.normpath(f)): hits.append(p); continue
     if not os.path.lexists(f): continue
-    if os.path.islink(f): hits.append(p); continue
+    if not os.path.isfile(r): hits.append(p); continue   # a directory, FIFO or device is never opened
     try:
         with open(r, "rb") as h:
             if any(l.rstrip(b"\r\n").startswith((b"<<<<<<< ", b">>>>>>> ")) or l.rstrip(b"\r\n") == b"=======" for l in h): hits.append(p)
@@ -7191,15 +7201,16 @@ take_unlanded_route() {
     wt_release_signals
 }
 
-# replay_unlanded TASK ATTEMPT GENERATION WORKER TARGET B -- a journaled C origin
-# can never take routes its still-finalizing attempt unlanded 'remote' under the
-# journal's identity: the task tip rescued, the row, the finalize.
+# replay_unlanded TASK ATTEMPT GENERATION WORKER TARGET B REASON CODE MESSAGE -- a
+# journaled C that never landed routes its still-finalizing attempt unlanded under
+# the journal's identity: the task tip rescued, the row, the finalize.
+# Twin: Invoke-MoeReplayUnlanded.
 replay_unlanded() {
-    local LAND_TASK_ID="$1" LAND_BRANCH="${5#refs/heads/}" LAND_CODE=MOE_PUSH_FAILED LAND_MESSAGE="origin moved past $6 without the journaled landing"
-    local LAND_RESCUE_REF="" LAND_RESCUE_SHA="" MOE_UNLANDED_REASON=remote MOE_UNLANDED_TIP="$6" MOE_UNLANDED_PATHS="" ATTR_DIR=""
+    local LAND_TASK_ID="$1" LAND_BRANCH="${5#refs/heads/}" LAND_CODE="$8" LAND_MESSAGE="$9"
+    local LAND_RESCUE_REF="" LAND_RESCUE_SHA="" MOE_UNLANDED_REASON="$7" MOE_UNLANDED_TIP="$6" MOE_UNLANDED_PATHS="" ATTR_DIR=""
     local LAND_TREE="" LAND_TOOL_FILE_EFFECTIVE="" LAND_STATUS="" LAND_CLI_EXIT="" RESCUE_STAGED_FILE="" t args
     t=$(git -C "$MOE_TOP" rev-parse -q --verify "refs/heads/moe/task/$1^{commit}" 2>/dev/null) || return 1
-    unlanded_park "$t" remote && args=$(finalize_args "$1" "$2" "$3" "$4" unlanded) && moe_evidence_rpc finalize_attempt "$args" 3
+    unlanded_park "$t" "$7" && args=$(finalize_args "$1" "$2" "$3" "$4" unlanded) && moe_evidence_rpc finalize_attempt "$args" 3
 }
 
 # land_worktree_completion W BRANCH -- a worktree completion exit (design §2.2):

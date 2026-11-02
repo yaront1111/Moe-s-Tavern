@@ -2106,16 +2106,18 @@ function Send-MoeOwedLedgerRow($Journal, [string]$Sha) {
 function Get-MoeJournalAttempt($J, [string]$Outcome) {
     return @{ taskId=[string]$J.taskId; attemptId=[string]$J.attemptId; generation=$J.generation; workerId=[string]$J.workerId; runnerId=$script:MoeRunnerId; outcome=$Outcome }
 }
-# A journaled C origin can never take routes its still-finalizing attempt
-# unlanded 'remote' under the journal's identity: the task tip rescued, the
-# failed row (pushed:false), the finalize. Twin: replay_unlanded.
-function Invoke-MoeReplayUnlanded([hashtable]$Git, $J) {
+# A journaled C that never landed routes its still-finalizing attempt unlanded
+# under the journal's identity: the task tip rescued, the failed row
+# (pushed:false), the finalize. Twin: replay_unlanded.
+function Invoke-MoeReplayUnlanded([hashtable]$Git, $J, [string]$Why, [string]$Code, [string]$Msg) {
     $tid = [string]$J.taskId; $sid = if ($moeSid) { $moeSid } else { "$WorkerId@unknown" }
     $t = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', "refs/heads/moe/task/$tid^{commit}")
-    $r = if ($t.Rc -eq 0) { Invoke-MoeRescueRef -Git $Git -TaskId $tid -Reason 'remote' -Sid $sid -Sha (($t.Out -join '').Trim()) } else { $null }
-    if (-not $r -or $null -eq (Send-MoeRecordCommit @{ taskId = $tid; outcome = 'failed'; kind = 'completion'; ref = [string]$J.target; role = $Role; workerId = $WorkerId
-        sessionId = $sid; code = 'MOE_PUSH_FAILED'; message = "origin moved past $($J.targetBefore) without the journaled landing"; pushed = $false })) { return $false }
-    return (Send-MoeEvidence 'finalize_attempt' ((Get-MoeJournalAttempt $J 'unlanded') + (Get-MoeUnlandedFields 'remote' @() $r.Ref ([string]$J.targetBefore))) 3)
+    if ($t.Rc -ne 0) { return $false }
+    $r = Invoke-MoeRescueRef -Git $Git -TaskId $tid -Reason $Why -Sid $sid -Sha (($t.Out -join '').Trim())
+    $sent = $null -ne (Send-MoeRecordCommit @{ taskId = $tid; outcome = 'failed'; kind = 'completion'; ref = [string]$J.target; role = $Role; workerId = $WorkerId
+        sessionId = $sid; code = $Code; message = $Msg; pushed = $false })
+    if (-not ($r -and $sent)) { return $false }
+    return (Send-MoeEvidence 'finalize_attempt' ((Get-MoeJournalAttempt $J 'unlanded') + (Get-MoeUnlandedFields $Why @() $r.Ref ([string]$J.targetBefore))) 3)
 }
 
 # Crash replay of delivery receipts, run right AFTER the pre-flight claim: a
@@ -2162,7 +2164,8 @@ function Invoke-MoeReceiptReplay {
                         if ($null -eq $now -or [string]$now.targetAfter -cne $after -or [string]$now.targetBefore -cne [string]$j.targetBefore) { Write-Host "[receipt] $($f.FullName) was rewritten or removed meanwhile; left to its lander." -ForegroundColor Cyan; continue }
                         Write-Host "[WARN] MOE_PUSH_FAILED: task $($j.taskId) -- origin moved past $($j.targetBefore) without $after, which can never apply." -ForegroundColor Yellow
                         # WT-11: a still-finalizing attempt is routed unlanded first; a failed route keeps the journal.
-                        if ((Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId) -ceq 'finalizing' -and -not (Invoke-MoeReplayUnlanded $git $j)) {
+                        if ((Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId) -ceq 'finalizing' -and
+                            -not (Invoke-MoeReplayUnlanded $git $j 'remote' 'MOE_PUSH_FAILED' "origin moved past $($j.targetBefore) without the journaled landing")) {
                             Write-Host "[WARN] receipt journal $($f.FullName) kept: the unlanded route of attempt $($j.attemptId) failed." -ForegroundColor Yellow; continue
                         }
                         Remove-Item -LiteralPath $f.FullName -Force
@@ -2172,7 +2175,15 @@ function Invoke-MoeReceiptReplay {
                 } else { $landedAs = Find-MoeJournaledLanding $git.Top $j }
                 # A worktree journal (WT-08) whose C is absent stays for the task's next
                 # worktree landing to supersede; one whose C is there owes its exact row.
+                # WT-11: absent while its attempt is still finalizing, its lander died before
+                # the CAS: routed unlanded, so the task's next worker re-lands from W.
                 if ($wt -and -not $landedAs) {
+                    if ((Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId) -ceq 'finalizing') {
+                        if (Invoke-MoeReplayUnlanded $git $j 'contention' 'MOE_COMMIT_FAILED_REF_CONTENTION' "$($j.target) never took the journaled landing $($j.targetAfter); its session is gone") {
+                            Remove-Item -LiteralPath $f.FullName -Force; Write-Host "[receipt] dropped $($f.FullName)." -ForegroundColor Cyan; continue
+                        }
+                        Write-Host "[WARN] receipt journal $($f.FullName) kept: the unlanded route of attempt $($j.attemptId) failed." -ForegroundColor Yellow; continue
+                    }
                     Write-Host "[receipt] $($j.target) does not contain $($j.targetAfter); $($f.FullName) kept until task $($j.taskId) lands again." -ForegroundColor Cyan
                     continue
                 } elseif ($wt -and ($landedAs -cne [string]$j.targetAfter -or -not (Send-MoeOwedLedgerRow $j $landedAs))) {
@@ -6022,21 +6033,30 @@ function Get-MoeUnmergedPaths([string]$W) {
 # WT-11 (design §2.5): emit each W-relative path of $Paths holding a
 # conflict-marker line, one starting '<<<<<<< ' or '>>>>>>> ' or exactly
 # '=======' (CRLF is a line end). A missing path is a resolved deletion; one
-# resolving out of W, a link, a directory or an unreadable file is a hit, never
-# a clean scan. Twin: wt_marker_scan.
+# resolving out of W, a link (a linked parent too), a directory, or a path that
+# cannot be parsed or read is a hit, never a clean scan. Twin: wt_marker_scan.
 function Find-MoeConflictMarkers([string]$W, [string[]]$Paths) {
-    $root = [IO.Path]::GetFullPath($W).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $sep = [IO.Path]::DirectorySeparatorChar
+    $root = [IO.Path]::GetFullPath($W).TrimEnd('\', '/') + $sep
     $latin1 = [Text.Encoding]::GetEncoding(28591)   # byte for byte, so only ASCII markers match
     foreach ($p in @($Paths | Where-Object { $_ } | Select-Object -Unique)) {
-        $f = [IO.Path]::GetFullPath((Join-Path $W $p))
-        if (-not $f.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { $p; continue }
-        try { $a = [IO.File]::GetAttributes($f) } catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { continue } catch { $p; continue }
-        if ($a -band ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint)) { $p; continue }
-        try { $lines = $latin1.GetString([IO.File]::ReadAllBytes($f)).Split("`n") } catch { $p; continue }
-        foreach ($l in $lines) {
-            $l = $l.TrimEnd("`r")
-            if ($l.StartsWith('<<<<<<< ', [StringComparison]::Ordinal) -or $l.StartsWith('>>>>>>> ', [StringComparison]::Ordinal) -or $l -ceq '=======') { $p; break }
-        }
+        try {
+            $f = [IO.Path]::GetFullPath((Join-Path $W $p))
+            if (-not $f.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { $p; continue }
+            # Each component down from W, stopping at a missing one or a link.
+            $d = $root.TrimEnd($sep); $a = $null
+            foreach ($s in $f.Substring($root.Length).Split($sep)) {
+                $d += "$sep$s"
+                try { $a = [IO.File]::GetAttributes($d) } catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { $a = $null; break }
+                if ($a -band [IO.FileAttributes]::ReparsePoint) { break }
+            }
+            if ($null -eq $a) { continue }
+            if ($a -band ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint)) { $p; continue }
+            foreach ($l in $latin1.GetString([IO.File]::ReadAllBytes($f)).Split("`n")) {
+                $l = $l.TrimEnd("`r")
+                if ($l.StartsWith('<<<<<<< ', [StringComparison]::Ordinal) -or $l.StartsWith('>>>>>>> ', [StringComparison]::Ordinal) -or $l -ceq '=======') { $p; break }
+            }
+        } catch { $p }
     }
 }
 
@@ -6413,19 +6433,32 @@ function Publish-MoeWorktreeLanding([hashtable]$Git, [string]$Journal, [hashtabl
     return 0
 }
 
-# Ctrl+C waits from the CAS through the ledger row and finalize_attempt: while
-# TreatControlCAsInput is on it is a key, which the release finds and then
-# stops the agent on. A hard kill there is the journal replay's.
-# Twin: wt_defer_signals / wt_release_signals.
+# Ctrl+C waits from the CAS through the ledger row and finalize_attempt: a
+# native console handler, added for that window and removed after it, swallows
+# Ctrl+C and Ctrl+Break and remembers them; the release then stops the agent.
+# The last-added handler runs first, so the host's own handler and the console
+# mode stay as they were (no CancelKeyPress scriptblock, see the note at the
+# top; no TreatControlCAsInput, which throws without a console stdin). A hard
+# kill there is the journal replay's. Twin: wt_defer_signals / wt_release_signals.
+$script:MoeCtrlDeferSource = @'
+using System; using System.Runtime.InteropServices; using System.Threading;
+public static class MoeCtrlDefer {
+    public delegate bool Handler(uint type);
+    [DllImport("kernel32.dll")] static extern bool SetConsoleCtrlHandler(Handler h, bool add);
+    static readonly Handler handler = Swallow; static int hit, on;
+    static bool Swallow(uint type) { if (type > 1) return false; Interlocked.Exchange(ref hit, 1); return true; }
+    public static void On() { Interlocked.Exchange(ref hit, 0); if (Interlocked.Exchange(ref on, 1) == 0) SetConsoleCtrlHandler(handler, true); }
+    public static bool Off() { if (Interlocked.Exchange(ref on, 0) == 1) SetConsoleCtrlHandler(handler, false); return Interlocked.Exchange(ref hit, 0) == 1; }
+}
+'@
+$script:MoeCtrlDeferType = 'MoeCtrlDefer' + (Get-MoeSha256Hex ([Text.Encoding]::UTF8.GetBytes($script:MoeCtrlDeferSource))).Substring(0, 12)
 function Set-MoeCtrlCDeferred([bool]$On) {
     $hit = $false
     try {
-        [Console]::TreatControlCAsInput = $On
-        while (-not $On -and [Console]::KeyAvailable) {
-            $k = [Console]::ReadKey($true)
-            if ($k.Key -eq 'C' -and ($k.Modifiers -band [ConsoleModifiers]::Control)) { $hit = $true }
-        }
-    } catch {}
+        $t = $script:MoeCtrlDeferType -as [type]
+        if (-not $t -and $On) { Add-Type -TypeDefinition $script:MoeCtrlDeferSource.Replace('MoeCtrlDefer', $script:MoeCtrlDeferType) -ErrorAction Stop; $t = $script:MoeCtrlDeferType -as [type] }
+        if ($On) { $t::On() } elseif ($t) { $hit = $t::Off() }
+    } catch { Write-Host "[WARN] Ctrl+C is not deferred ($($_.Exception.Message)); an interrupt now is the journal replay's." -ForegroundColor Yellow }
     if ($hit) { Write-Host ''; Write-Host 'Agent stopped.'; exit 0 }
 }
 
@@ -6649,7 +6682,9 @@ function Invoke-MoeUnlandedRoute([hashtable]$Git, [hashtable]$Res, [hashtable]$L
         $r = Invoke-MoeRescueRef -Git $Git -TaskId $preflightTaskId -Reason $Why -Title $M.Title -Status $M.Status -Sid $M.Sid -Sha $t
         if ($r) { $Res.Ref = $r.Ref; $Res.Sha = $r.Sha }
     }
-    if ($Res.Ref -and $null -ne (Send-MoeRecordCommit ($Row + @{ outcome = 'failed'; code = $Res.Code; message = $L.Msg; pushed = $false }))) {
+    # The failed row goes even when the rescue failed (unlanded_park); the route needs both.
+    $sent = $null -ne (Send-MoeRecordCommit ($Row + @{ outcome = 'failed'; code = $Res.Code; message = $L.Msg; pushed = $false }))
+    if ($Res.Ref -and $sent) {
         $Res.Unlanded = Get-MoeUnlandedFields $Why $L.Paths $Res.Ref $L.B
         Complete-MoePostflight | Out-Null
     } else {

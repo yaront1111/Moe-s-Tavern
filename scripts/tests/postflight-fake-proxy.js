@@ -229,6 +229,8 @@ function holdForInterrupt() {
   const ledger = tool === 'record_commit' && args.kind === 'completion'
     && args.outcome === {'teardown-landed': 'committed', 'teardown-nothing': 'nothing'}[mode];
   if (!(scope || ledger) || fs.existsSync(ready)) return;
+  // FAKE_HOLD_DRAIN=1: the held call outlives a Ctrl+C on its console, as moe-proxy drains a pending call on SIGINT.
+  if (process.env.FAKE_HOLD_DRAIN === '1') process.on('SIGINT', () => {});
   fs.writeFileSync(ready, 'ready');
   for (let i = 0; i < 1200 && !fs.existsSync(ready + '.sent'); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
 }

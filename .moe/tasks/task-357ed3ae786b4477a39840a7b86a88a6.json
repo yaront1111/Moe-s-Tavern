@@ -170,7 +170,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:56.596Z",
-  "updatedAt": "2026-11-02T12:31:34.762Z",
+  "updatedAt": "2026-11-02T12:32:02.563Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:34:22.475Z",
     "plannedStepCount": 7,
@@ -281,7 +281,8 @@
     ".moe/epics/epic-aabc654d.json",
     ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json",
     ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json",
-    ".moe/tasks/task-720f81a6917d4490ab3b5a58c2217ccb.json"
+    ".moe/tasks/task-720f81a6917d4490ab3b5a58c2217ccb.json",
+    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
   ],
   "completionSummary": "The VS Code Accounts view now has JetBrains' account actions: add (then sign-in of the new account on ACCOUNT_ADDED), sign in, remove (modal: Sign out and remove via the CLI / Remove only), move up/down, rename and set the switch percent.\n- AccountsTreeProvider.ts (+207/-3): accountsCommandLine runs `<node> <cli.js> --accounts-file <file> <args>` with every word quoted (bash single quotes; Windows `& '...'` in -EncodedCommand). Every C0 control and DEL is refused, because sendText types keys such as Ctrl-U into the shell's line editor.\n- The terminal uses the bundle's tab name. A createTerminal failure copies the line to the clipboard and shows the bundle warning.\n- Every handler re-checks actions() before and after its dialog. A false sender result shows the not-connected warning.\n- Enablement: setContext moe.accounts.canAdd/canSwitchAt, plus row contextValue 'moe.account' with tokens canSignIn/canRename/canMoveUp/canMoveDown/canRemove, active once registerCommands() runs. VSC-14's accounts-view.test.cjs is unedited.\n- package.json (+27/-2): 7 commands, view/title, view/item/context and commandPalette entries. extension.ts: +1 line.\n- NEW tests/accounts-actions.test.cjs (359 lines, 14 tests).\nEvidence:\n- RED at HEAD; mutants 44/44 killed.\n- The planned canMoveUp mutant fails K2 on C04, C06, C11 and C13, among others.\n- checkRef verbatim at 95ab5ba8: EXIT=0, 550 tests / 546 pass / 4 skip / 0 fail; lint 0, compile 0.\n- No MoeDaemonClient.ts, AccountPresentation.ts, moe-jetbrains or corpus change (sha256 e08b58c8...).\nSIZE: 589 net (runtime 230, test 359), over the 400 cap. Pre-emptive EPIC waiver prop-8f3527c671aa4070801a0cc13383b818 is PENDING at submit time; fallback slices are runtime 230 and test 359.\nDeviations: handlers are private and reached via the registered commands; onAccountAdded is subscribed in registerCommands() because VSC-14's fake has no such member.\nKnown divergence, inherited from VSC-14: no rows while disconnected, so C09's CLI-only Sign in is u",
   "commits": [
@@ -306,6 +307,22 @@
       "treeId": "12dea3b313f2e63437bba9be980cd7489fd0492b",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "9a3e367d33316e4f2da41d5a87b157306e9686aa",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T12:27:47Z",
+      "paths": [
+        ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T12:32:02.563Z",
+      "treeId": "41ddb96b7d6eaa233eeb9045f4d3467b552cc53c",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -317,9 +334,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-4c1da905@2026-11-02T12:09:51Z",
-    "at": "2026-11-02T12:27:45.846Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-564d8bce@2026-11-02T12:27:47Z",
+    "at": "2026-11-02T12:32:02.563Z"
   },
   "blockedReason": "Verdict-less park on a PENDING size waiver (governor-e6b40560 12:28Z, item 3). VSC-15 substance is GREEN; the only open item is the 400-line cap. Completion 5e972820 is pushed and on moe/work-2026-10-24. moe-vscode numstat is +594/-5 = 589 net: AccountsTreeProvider.ts 207/3, package.json 27/2, extension.ts 1/0, tests/accounts-actions.test.cjs 359/0. That matches the waiver text exactly. Waiver prop-8f3527c671aa4070801a0cc13383b818 (EPIC ADD_RAIL) was still PENDING, and no epic rail covers VSC-15, so I gave no approval and no size-reject.\nQA evidence:\n(1) Gate: git archive of 5e97282 into /tmp/vsc15-qa-5tvGRK, then in moe-vscode under env -i, node v24.21.0: npm ci OK, lint 0, compile 0. npm test: 550 tests / 546 pass / 4 skip / 0 fail.\n(2) My own 14 mutants were 14/14 killed: add without isValidLabel, rename unchanged, bash double quotes, remove on dismiss, foreign ACCOUNT_ADDED, 7.5%, canRemove, canSwitchAt from add, a swapped move offset, no not-connected warning, setContext and tokens before register, no control-character check, and remove without the post-dialog check.\n(3) DoD 1-5 are each mapped to tests A1-A8, K1-K3, Q1, P2 and S1. K2 covers all 15 corpus rows.\n(4) MoeDaemonClient.ts, AccountPresentation.ts, moe-jetbrains/**, the corpus and accounts-view.test.cjs are unchanged. No forbidden patterns. extension.ts calls registerCommands() at activation.\nOn resume: confirm the rail's numbers against the numstat above, then qa_approve. Details are in Serena memory task-task-357ed3ae786b4477a39840a7b86a88a6-qa-handoff.",
   "blockedResourceId": null,

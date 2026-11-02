@@ -87,43 +87,62 @@
     {
       "stepId": "step-5",
       "description": "5. Complete worktree teardown and finalizing-attempt recovery. Reuse WT-08/09's publication journal/state and WT-10's lease cleanup. Before L9, cancellation abandons publication and preserves task bytes/checkpoint/rescue without a main move. During L9-L12, defer handled cancellation until publication is classified and its ledger/finalize sequence finishes; release any lease in finally on all paths. Bash traps set a pending-stop flag during the narrow critical window and run the normal stop afterwards. PowerShell must use a native event handler/owned-process mechanism that is safe on 5.1 and 7, never a Console.CancelKeyPress PowerShell scriptblock (verified source warning); preserve existing handler/console settings and detach only this invocation's handler after the window. A forced process death is not claimed to be deferrable: recover from the durable journal. On next pre-flight, a REVIEW task with the pinned finalizing attempt first replays/reconciles its journal; confirmed publication owes only sync/ledger/finalize, proven absence reruns L4-L12 in W under the owner guard, unknown remote outcome stays finalizing with no finalize/no new CLI. Never apply a second landing to an already-contained C or let generic teardown turn unknown into failed/unlanded. Use the existing owned-console/signal test supervisor and deterministic Git/RPC barriers in both harnesses: interrupt before publish, after publish before sync, during ledger/finalize, hard death then replay, and unknown push then restart. Assert target/rescue/attempt truth, exactly one completion, no premature unlanded, lease released and no leaked child process; no sleep-only race tests.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
       ],
-      "startedAt": "2026-11-02T10:37:37.579Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "Teardown and finalizing-attempt recovery are in both wrappers, with twin tests.\n\n**Deferral window**\n- sh: wt_defer_signals / wt_release_signals. A trap sets MOE_WT_SIGNALED from the CAS until the ledger row and finalize are done. After that it prints \"Agent stopped.\" and the EXIT trap runs as usual.\n- ps1: Set-MoeCtrlCDeferred is an Add-Type native SetConsoleCtrlHandler delegate. It records the hit and swallows the event. On/Off are idempotent and Off detaches only this handler. There is no CancelKeyPress scriptblock.\n- Before the CAS, an interrupt abandons the landing: main unmoved, no journal, T keeps the bytes, finalize 'failed', never unlanded. The lease is released in the finally/EXIT path on all paths.\n\n**Replay**\n- Journaled C absent from the target while the pinned attempt is still finalizing (proven absence) → replay_unlanded / Invoke-MoeReplayUnlanded route it unlanded 'contention' (MOE_COMMIT_FAILED_REF_CONTENTION). T is rescued and B is the targetTip.\n- The replay never re-lands. The next worker re-runs L4-L12 in W under the owner guard through the landingRetry resume. This follows the one-route-helper rule (comments c2d608e0, 0a216f7e, §2.6).\n- Confirmed publication sends the row and finalize landed. The sync is left to the next pre-flight's recorded-C sync.\n- Unknown remote outcome keeps the journal and finalizes nothing.\n\n**Defect found by the full ps1 run, fixed**\n- The ps1 route sent no failed row when the rescue ref failed; sh's unlanded_park always sends it.\n- This made WT-08's wt-exhausted and wt-gate-exhausted fail on ps1.\n- Fixed in Invoke-MoeUnlandedRoute and Invoke-MoeReplayUnlanded: the row is now always sent, and the route needs both the row and the ref.\n\n**Harness**\nSame scope growth as step-1: the shared postflight-worktree.cjs, which postflight.sh and postflight.ps1 both run.\n- launch() gains opts.keep, opts.ready and opts.kill, plus a sh process-group leak check.\n- New consoleSupervisor: an owned hidden console, a real GenerateConsoleCtrlEvent, and a leaked-child check via Win32_Process.\n- New cases:\n  - wt-teardown: pre / sync / ledger.\n  - wt-crash: cas / sync, each a hard kill and then a same-seat restart replay.\n  - wt-replay-remote: an unknown-outcome restart that keeps the journal, sends no finalize, launches no CLI and leaves the attempt finalizing.\n- Fake proxy: FAKE_HOLD_DRAIN=1, opt-in, so a held call survives Ctrl+C the way moe-proxy drains.\n\n**Evidence (scratch snapshots)**\n- sh: full worktree suite 47/47 ok.\n- ps1 5.1: full suite 45 ok + 2 failed; after the fix, wt-fails, wt-gate, wt-unlanded, wt-replay-remote and wt-crash re-run 5/5 ok.\n- pwsh 7: wt-teardown and wt-crash ok.\n- RED checks:\n  - sh, deferral made a no-op → teardown 'sync' fails.\n  - sh, replay finalizing branch off → crash 'cas' fails.\n  - ps1, deferral made a no-op → teardown 'sync' fails.\n\nPeer dirty paths (.moe/roles, .moe/skills, other task json, docs/DEVELOPMENT.md, moe-jetbrains, moe-vscode, local-runner-bundle test, bundle-manifest) were left untouched.",
+      "startedAt": "2026-11-02T10:37:37.579Z",
+      "completedAt": "2026-11-02T12:13:21.160Z"
     },
     {
       "stepId": "step-6",
       "description": "6. Run the concentrated verification gate. From root exactly: `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh`. Require exit 0, safe-harness failureClass NONE, all held-out local/remote cases green unchanged and parity PASS. On native Windows run `node scripts/tests/postflight-safe.mjs powershell` and the held-out `powershell -NoProfile -File scripts/tests/worktree-landing.ps1` against the same revision; actual console cancellation must run, not be represented by a skipped POSIX signal case. Compare held-out files to WT-08T's landed SHA with git diff --quiet and compare sorted MOE_(WORKTREE|LAND|CONTROL|BOARD)_ token sets from both wrappers. Preserve existing shared-mode assertions and strict fake-proxy behavior. Capture fresh command/exitCode/outputTail as complete_task evidence plus Windows results. This consumer does not change the daemon wire contract or schema, so no daemon/IDE full regression; the full launcher/held-out regression covers the affected shared fixture. Do not print raw adversarial fixture output instead of using the safe runner.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Gate on the final bytes (sha256: sh e5a36548, ps1 025ed688, postflight-worktree.cjs 5f1e01cc, fake proxy abe08535), run from the root: `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh` exited rc=0. Output: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}; worktree-landing 18 passed, 0 failed, 0 errors; PASS parity-check.sh.\n\nWindows, same bytes (no commit touched scripts/ meanwhile):\n- `node scripts/tests/postflight-safe.mjs powershell` (Windows node.exe, cwd D:\\projexts\\moes): {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}.\n- `powershell -NoProfile -File scripts/tests/worktree-landing.ps1`: 18 passed, 0 failed, 0 errors, rc=0.\n- Explicit PS 5.1 run of wt-teardown (a real Ctrl+C sent to the wrapper's own console), wt-crash, marker-scan and codes: 4 ok.\n\nHeld-out worktree-landing.{sh,ps1}: `git diff --quiet 8ad04de7` and `git diff --quiet HEAD` both exit 0. The sorted MOE_(WORKTREE|LAND|CONTROL|BOARD)_ token sets of the two wrappers are identical (25 tokens).\n\nBytes changed during this step: I stopped my first gate run to fix a marker-scan defect the step-7 review found.\n- ps1 Find-MoeConflictMarkers read through a junction-linked parent directory out of W. On PS 5.1, GetFullPath threw out of the function on an unparseable name such as 'a<b.txt'. Both now fail closed: a component walk stops at any ReparsePoint, and a per-path try/catch turns any error into a hit.\n- sh wt_marker_scan now hits a linked parent (normcase(realpath) != normpath, for parity) and never opens a non-regular file; a FIFO used to hang open().\n- markerScan adds junction cases (one out of W, one in W over a missing file), plus a file link and a FIFO under sh and the unparseable name on a Windows host.\n- RED: HEAD's sh scan hung on the FIFO and timed out with no output; with the FIFO removed, a direct run of the same scan read through the in-W link. PS 5.1 threw 'Illegal characters in path', and both engines read through the junctions. GREEN on bash, PS 5.1 and PS 7.\n\nLogs are in D:\\moe-scratch\\wt11-evidence.",
+      "startedAt": "2026-11-02T12:13:27.759Z",
+      "completedAt": "2026-11-02T13:22:44.188Z"
     },
     {
       "stepId": "step-7",
       "description": "7. Final adversarial self-review and handoff. Load adversarial-self-review once, then inspect this task's diff for: unknown versus absent remote outcome; duplicate/lost finalize replies; rescue creation failure; stale assignee or identity; concurrent target advance; pending merge checkpoint clearing metadata; unmerged path loss; marker-free equal-tree merge; path traversal/symlink reads/CRLF; cancellation on either side of publication; finalizing replay that accidentally re-gates/relands a published C; and cleanup leaking a lease/child. Map every DoD to twin assertions, with held-out tests untouched. Confirm shared mode and daemon-only .moe writing are preserved. Keep this ≤400 net non-board lines by reusing landed helpers/fixtures; no broad refactor, docs, board snapshot or worktree removal. Fix any defects in the five declared files and rerun the same gate if bytes change. Worker uses complete_task with fresh evidence and records a handoff; wrapper owns commits. Whole-epic adversarial review/docs remain later tasks.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "note": "Adversarial review of `git diff c46c4a8c` over the four changed files (skill loaded once this session). One defect was found and fixed in-step, and the gate was re-run on the final bytes (see the step-6 note). The defect: the marker scan had linked-parent, unparseable-name and FIFO holes. Bytes unchanged since the gates (sha256 -c OK).\n\nRisk list:\n- Unknown vs absent remote outcome: an unsettled push (reconcile rc=2) is MOE_PUSH_OUTCOME_UNKNOWN: journal kept, no finalize, never routed (wtUnlanded 'unknown'). A hook rejection is MOE_PUSH_FAILED and routes 'remote' (wtUnlanded 'rejected'). A non-ff rejection or origin moved without C triggers the next round, and contention after the last one. In replay, rc=2 keeps the journal with no finalize (wt-replay-remote-down); rc=1 on a still-finalizing attempt routes unlanded 'remote'.\n- Duplicate/lost finalize: wtUnlanded 'contention' runs with finalize-loss-once and the retry counts once. Theoretical: a lost replay finalize keeps the journal, so the next replay re-parks (a second rescue ref and failed row) before finalizing again.\n- Rescue failure: the row still goes, nothing finalizes and the seat stops (wt-fails/wt-gate exhausted, both twins).\n- Stale identity: replay checks the journal's pinned attempt via moe_pinned_attempt_phase and skips a live foreign marker. The row's sessionId is the replaying session, which made the rescue ref.\n- Concurrent target advance: one CAS per round, then contention.\n- Pending-merge checkpoint: one parent, index kept, no merge --quit (wtResume run 2).\n- Unmerged path loss: the scan covers retry paths plus unmerged paths. W's bytes are staged onto merge-tree's seed with T's side on conflicted paths (wtResume run 4: resolved, B's m.txt, partial p.txt, B's DENY .gemini/g.md kept).\n- Equal-tree merge: forced [T,B] commit (wtUnlanded 'resolved to T').\n- Traversal/symlink/CRLF: markerScan.\n- Cancellation on either side of publication: wtTeardown pre/sync/ledger (real Ctrl+C on ps1).\n- Replay never re-gates or relands: wtCrash sync (no CLI, main parents [B]).\n- Lease/child leaks: lease released before deregister, holders []; sh process-group check; ps1 console supervisor.\n\nDoD mapping:\n1. wtUnlanded 'conflict'.\n2. wtUnlanded resume prompts plus wtResume run 2.\n3. wtResume runs 3 and 4.\n4. wtResume run 2.\n5. worktree-landing.{sh,ps1} 18/18 and unchanged vs 8ad04de7 and HEAD; postflight scenarios A..Z pass; codes case plus identical 25-token sets.\n6. Gate rc=0 and postflight.ps1 exit 0 on Windows.\n\nShared mode is unchanged: finalize_args emits the same payload for non-unlanded outcomes, and the L2 knobs are worktree-local. The wrappers write no .moe state; only the fake proxy stands in for the daemon.\n\nSize is +764/-88 (676 net), over 400, so I filed size-waiver proposal prop-2c1e923f (EPIC ADD_RAIL), now pending. No docs, board snapshot or worktree removal.",
+      "startedAt": "2026-11-02T13:22:59.477Z",
+      "completedAt": "2026-11-02T13:23:19.957Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-b49a5155",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -175,11 +194,17 @@
       "author": "qa-952969be",
       "content": "QA note from the WT-S round-2 review (qa-952969be). Contract correction for docs/plans/2026-10-30-per-task-worktrees.md §2.2 L2 versus §2.5.\n\nThe problem:\n- L2 ends with `git -C W reset -q`.\n- A mixed `git reset` with no pathspec deletes MERGE_HEAD and drops the unmerged index entries. I reproduced this on git 2.43 in a scratch repo: a `merge --no-commit` conflict, then `reset -q`, and MERGE_HEAD is gone.\n- So a checkpoint taken during a pending merge cannot \"leave MERGE_HEAD in place\" as §2.5 says. The same goes for §3.3's recovery checkpoint.\n- The next completion then skips the marker check, which only runs when MERGE_HEAD is set, and commits with one parent.\n- L5 usually catches the conflict again, because the old merge base is kept. But a resume that spans sessions then loops or nests markers. If the target's side of the conflict has since been reverted, markers can merge cleanly.\n\nFix it in this slice:\n- While MERGE_HEAD is set, L2 must not reset, or must restore MERGE_HEAD and the unmerged entries.\n- Run the marker scan whenever task.landingRetry is set, not only when MERGE_HEAD is.\n- Add a case: a checkpoint during a merge keeps MERGE_HEAD, and the completion still refuses leftover markers.",
       "timestamp": "2026-10-30T14:19:16.473Z"
+    },
+    {
+      "id": "comment-2b27f049e7c641859960581da490d7f1",
+      "author": "governor-e6b40560",
+      "content": "Governor, about 12:47Z, for the QA who claims this row. The worker filed pre-emptive size waiver prop-2c1e923f (EPIC ADD_RAIL, 676 net: runtime twins +534/-77, tests +230/-11). It is PENDING, and the human's click is asked in #general. Do NOT size-reject, because that only spends the reopen cap on the switch's critical path.\n\n1. **Review substance now, in parallel with the click,** in a snapshot of this row's completion commit.\n2. **Substance fails:** reject on substance only, with failedDodItems.\n3. **Substance is green and the proposal is still PENDING:** park verdict-less with report_blocked (blockedOnTaskIds: []), naming the waiver. The governor sets REVIEW the moment it reads APPROVED.\n4. **APPROVED by then:** check that the rail text matches `git diff --numstat c46c4a8c <completion>` over the 4 files, then approve.\n\n**Overlap:** when this row's completion lands, the governor drops WT-12's and WT-18c's edges on it (protocol msg-711d3413). WT-12 then edits moe-agent.sh/ps1 live, so verify only in a snapshot of the completion sha. If you reject with a byte change, say so, and the governor adds this row's dependsOn on WT-12.",
+      "timestamp": "2026-11-02T12:46:00.352Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:54:37.672Z",
-  "updatedAt": "2026-11-02T10:37:37.579Z",
+  "updatedAt": "2026-11-02T13:48:35.558Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:04.735Z",
@@ -189,7 +214,7 @@
     "firstClaimAt": "2026-10-30T13:29:07.408Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 7
   },
   "contextFetchedBy": [
     "architect-eb7de546",
@@ -204,7 +229,10 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:34:06.921Z",
@@ -258,24 +286,36 @@
       "treeId": "e1385429bdf4b12f82f5618df9b6e3d438b18434",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "7b748e12a04681d98370c668e62ca42fa859ba0b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T09:55:56Z",
+      "paths": [
+        ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
+        ".moe/tasks/task-ba9590ce48f14712a160c9b74a9dab12.json",
+        ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json",
+        ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T11:02:25.752Z",
+      "treeId": "3f181c51d3635a43f801098eda316298d92d5645",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/epics/epic-aabc654d.json",
-    ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
-    ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json",
-    ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json",
-    ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
-    ".moe/tasks/task-6519ed9127ad4c359fd64b71f1a08be5.json",
-    ".moe/tasks/task-720f81a6917d4490ab3b5a58c2217ccb.json",
-    ".moe/tasks/task-7e7bd0ec91ca488da2858f70cff32f65.json",
-    ".moe/tasks/task-7fa27666bdb94325b62c205e3599b165.json",
-    ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
-    ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
-    "scripts/moe-agent.ps1",
-    "scripts/moe-agent.sh",
     "scripts/tests/postflight-fake-proxy.js",
-    "scripts/tests/postflight-worktree.cjs"
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1"
   ],
   "touchedFiles": [
     "scripts/tests/postflight-fake-proxy.js",
@@ -287,7 +327,16 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-4c1da905@2026-11-02T09:02:10Z",
-    "at": "2026-11-02T09:55:24.967Z"
-  }
+    "sessionId": "worker-b49a5155@2026-11-02T09:55:56Z",
+    "at": "2026-11-02T11:02:25.752Z"
+  },
+  "reviewStartedAt": "2026-11-02T13:48:35.556Z",
+  "verification": {
+    "command": "node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\nPASS parity-check.sh\nrc=0",
+    "reportedAt": "2026-11-02T13:48:35.556Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "WT-11 (sh/ps1 parity). A proven-unpublished landing failure takes one unlanded route: release the lease, put refs/moe/rescue/<taskId>/<ts> at T, write the failed row (pushed:false), then finalize_attempt 'unlanded' with reason, conflictPaths (<=500), rescueRef and targetTip. Reasons: conflict (COMMIT_FAILED_CONFLICT, WORKTREE_UNRESOLVED_CONFLICT), contention (REF_CONTENTION, LAND_LEASE), gate, diverged, remote (LAND_FETCH_FAILED, PUSH_FAILED). An unsettled push stays MOE_PUSH_OUTCOME_UNKNOWN: no finalize, journal kept. Replay handles unlanded.\nThe next session with a landingRetry merges the target into W (hooks off, an existing MERGE_HEAD reused). Its prompt starts 'LANDING-CONFLICT:' when markers are left, else 'LANDING-RETRY:'.\nL2 with MERGE_HEAD runs a fail-closed marker scan over landingRetry.paths plus unmerged paths. A hit is a path outside W, a link anywhere in the path, a dir/FIFO/device, or an unparseable path; a missing path is a resolved deletion. A hit prints MOE_WORKTREE_UNRESOLVED_CONFLICT and lands nothing. Once clean, it makes a 2-parent task-branch commit (MERGE_HEAD as 2nd parent), then CAS, then merge --quit. A checkpoint during the merge has 1 parent and keeps MERGE_HEAD and the index. Teardown defers Ctrl+C; crash/finalizing recovery added.\nTests in postflight-worktree.cjs: wtUnlanded, wtResume, wtTeardown, wtCrash, wt-replay-remote-down, markerScan, codes.\nEvidence (hashes in D:\\moe-scratch\\wt11-evidence\\bytes.sha256): fresh bash gate 13:25-13:47Z rc=0 (postflight NONE, worktree-landing 18 passed, parity PASS).\nWindows: node.exe postflight-safe.mjs powershell exit 0, NONE; worktree-landing.ps1 18 passed; PS 5.1 marker-scan, wt-teardown (real Ctrl+C), wt-crash and codes: 4 ok.\nworktree-landing.{sh,ps1} and postflight.{sh,ps1} are unchanged. Both wrappers carry the same 25 codes.\nSize waiver prop-2c1e923f is PENDING (+764/-88 vs c46c4a8c).\nTheoretical: a lost replay finalize re-parks once more before finalizing."
 }

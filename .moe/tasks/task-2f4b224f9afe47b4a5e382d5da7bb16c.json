@@ -1,0 +1,33 @@
+{
+  "id": "task-2f4b224f9afe47b4a5e382d5da7bb16c",
+  "epicId": "epic-aabc654d",
+  "title": "bug: PowerShell quoting in both plugins lets curly quotes (and, in JetBrains, a backtick) break out of agent and accounts command lines",
+  "description": "Found while planning task-26a3dacde03c4195bfcd3e01e3c59efd (2026-11-02). It is a different class from that row's control characters. Verified with harmless Write-Output payloads on this host's Windows PowerShell 5.1.26100, run through -EncodedCommand:\n\n1. PowerShell's tokenizer reads U+2018, U+2019, U+201A and U+201B as single quotes. psQuote doubles only the ASCII ' in all three places it lives: moe-vscode/src/util/AgentLauncher.ts, moe-vscode/src/providers/AccountsTreeProvider.ts and moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt. Probe: `Write-Output 'x’; Write-Output PWNED1; ’'` printed x, then PWNED1. VS Code's -EncodedCommand does not help, because the break-out is inside the decoded script. A legitimate project path that holds ’ (for example D:\\Bob’s work) also fails to launch: the probe `Write-Output 'D:\\Bob’s work'` printed nothing.\n2. PowerShell also reads U+201C, U+201D and U+201E as double quotes. JetBrains powerShellLine wraps the inner script in an outer \"...\" and escapes only the ASCII \" and $. Probe: `Write-Output \"a”; Write-Output PWNED3; #\"` printed a, then PWNED3.\n3. JetBrains powerShellLine does not escape the backtick itself. A value holding `\" therefore becomes ``\" in the typed line: the outer PowerShell reads a literal backtick and then the closing quote. Probe: `Write-Output \"-Team 'x``\"; Write-Output PWNED2; #'\"` printed PWNED2.\n\nCarriers:\n- the team name: project.name from the repo-tracked .moe/project.json in VS Code; in JetBrains, the IDE project name, which is the directory name or a repo-tracked .idea/.name;\n- the project/workspace path;\n- the agent command: under LEGACY, JetBrains takes settings.agentCommand from .moe/project.json unchanged;\n- the accounts CLI words.\n\nFix direction:\n- In all three psQuote copies, double every PowerShell single-quote character: ', U+2018, U+2019, U+201A and U+201B. That is the rule of System.Management.Automation.Language.CodeGeneration.EscapeSingleQuotedStringContent.\n- In JetBrains, either escape the backtick first and the curly double quotes too in powerShellLine, and keep bashWrapPowerShell's un-escaping consistent with that, or move the PowerShell route to -EncodedCommand as VS Code does.\n\nDepends on task-26a3dace (the same launcher files) and on VSC-15 task-357ed3ae (AccountsTreeProvider.ts).",
+  "definitionOfDone": [
+    "psQuote in moe-vscode/src/util/AgentLauncher.ts, moe-vscode/src/providers/AccountsTreeProvider.ts and moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt doubles every PowerShell single-quote character (U+0027, U+2018, U+2019, U+201A, U+201B), with a test per file that fails on HEAD.",
+    "JetBrains' PowerShell agent and accounts lines, including the bashWrapPowerShell route, keep a value holding a backtick, `\", $, or U+201C/U+201D/U+201E inside its own argument, with tests that fail on HEAD.",
+    "A project path holding U+2019 (for example D:\\Bob’s work) reaches the wrapper intact on both plugins' PowerShell routes, shown by decoding or parsing the built line in a test.",
+    "VS Code lint, compile and test pass in a snapshot gate, and JetBrains gradlew.bat test passes under the jetbrains-gradle lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-26a3dacde03c4195bfcd3e01e3c59efd",
+    "task-357ed3ae786b4477a39840a7b86a88a6"
+  ],
+  "priority": "MEDIUM",
+  "order": 23,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T12:41:22.705Z",
+  "updatedAt": "2026-11-02T12:41:22.705Z"
+}
