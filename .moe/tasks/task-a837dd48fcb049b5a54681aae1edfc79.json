@@ -11,10 +11,47 @@
     "bash scripts/tests/parity-check.sh passes. The verification command (bash scripts/tests/postflight.sh, plus the ps1 harness for the twin) exits 0 from the task worktree."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). In scripts/tests/postflight-worktree.cjs (shared by postflight.sh and postflight.ps1), add `async function wtFollowLock()` directly after wtFollowRace. Register it with its own statement right after the `Object.assign(cases,{...});` line: `cases['wt-follow-lock']=wtFollowLock;`. Peers edit that one long line, so do not touch it. Edit with the Edit tool. Leave every existing case, the follows[] table and the PATH git stub unchanged; the 'lock' row stays byte-identical (DoD 3). These scenarios set no WT_GIT_* knob, so the real git runs (on ps1, git.ps1 runs in-process and would hide native stderr from the lock check).\n\nCounting: launch() passes knobs into the wrapper env, so set GIT_TRACE to an absolute file under root, one per scenario. Git appends `trace: built-in: git merge -q --ff-only --no-autostash <sha>` for every merge it runs, and only the follow passes --no-autostash (sh ~:6736, ps1 ~:6123). Helpers:\n- merges=f=>(readOr(f)||'').split('\\n').filter(l=>/trace: built-in: git merge .*--no-autostash/.test(l)).length;\n- behinds=r=>(r.log.match(/^\\[WARN\\] MOE_CONTROL_CHECKOUT_BEHIND: /gm)||[]).length (one [WARN] line per follow that gave up, whatever the #general throttle does);\n- lockOf=p=>path.join(git(p.top,'rev-parse','--absolute-git-dir').trim(),'index.lock').\nProbed with git 2.43: a merge blocked by a held lock exits 1 with \"error: Unable to create '<gitdir>/index.lock': File exists.\", and GIT_TRACE prints that built-in line once per merge.\n\nScenario 'released' (DoD 2): p=repo('wt-follow-lock-released'); old=mainOf(p); tip=commitOn(p,'refs/heads/main',{'src/b.txt':'b\\n'}); write the lock as ''. Run launch(p,'wt-follow-lock-released',{GIT_TRACE:t},{signal}). signal is polled every 100 ms and always returns false, so nothing is signalled. It records started=Date.now() once merges(t)>=1; 3 s after that it records gone=!present(lock), removes the lock and sets removed=true. Assert, each message ending in tail(r.log):\n- the MOE_CONTROL_ codes in the log are exactly ['MOE_CONTROL_ADVANCED'], with one `[OK] MOE_CONTROL_ADVANCED old..tip` line;\n- removed is true and gone is false ('the wrapper deleted index.lock');\n- merges(t)>=2 (at least one retry);\n- the symbolic HEAD is refs/heads/moe/control at tip, and main is tip;\n- r.code===0 && r.cliRan.\nIf the scenario fails before the removal, remove the lock in a finally.\n\nScenario 'held' (DoD 1 cap): a lock held for the whole launch, with GIT_TRACE. Assert:\n- behinds(r)>=1 and merges(t)===5*behinds(r) (5 tries per follow);\n- the lock is still present (then remove it);\n- no ADVANCED line, and HEAD is still old;\n- r.code===0 && r.cliRan.\n\nScenario 'other' (DoD 4): no lock. Write src/a.txt as 'human edit\\n' in the control checkout, then tip=commitOn(p,'refs/heads/main',{'src/a.txt':'landed\\n'}) (the follows 'edit' setup). Assert:\n- behinds(r)>=1 and merges(t)===behinds(r) (a non-lock merge failure is never retried);\n- the edit is kept, and HEAD is still old;\n- r.code===0 && r.cliRan.\n\nError handling in the test: every assertion names its scenario and ends with tail(r.log); the trace and lock paths sit under the suite's root, so its own cleanup removes them.\n\nRED proof before step 2, sh only, from the worktree root:\nT=$(mktemp -d) && cp scripts/tests/postflight-fake-proxy.js \"$T/fake-proxy.js\" && MOE_WORKTREE_ONLY=wt-follow-lock,wt-follow env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$T/fake-proxy.js\" \"$T\" \"$(command -v bash)\"\nExpect 'wt-follow-lock FAILED' on 'released' (codes [MOE_CONTROL_CHECKOUT_BEHIND], no ADVANCED) and 'wt-follow ok'. Keep that tail. mem:gotcha-postflight-worktree-mutant-copy has this loop and its Windows variant.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX scripts/moe-agent.sh follow_control_checkout, with the Edit tool. Anchor on the function, not on line numbers: peers in worktree mode move lines. Add `attempt` to its `local` line. Replace the block from `# The checked tip, not the ref:` through the MOE_CONTROL_ADVANCED echo with:\n    # The checked tip, not the ref: a target that moved since carries unchecked .moe paths.\n    # A held .git/index.lock (the IDE's git, a peer's landing or follow) is retried like\n    # index_refresh: at most 5 tries, 2 s apart. Any other failure is final. Never delete the lock.\n    for attempt in 1 2 3 4 5; do\n        rc=0\n        err=$(git -C \"$MOE_TOP\" -c core.hooksPath=\"$hooks\" merge -q --ff-only --no-autostash \"$tip\" 2>&1 >/dev/null) || rc=$?\n        new=$(git -C \"$MOE_TOP\" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || new=\"\"\n        [ \"$rc\" -ne 0 ] || break\n        # A peer's follow that held the index lock may already have moved HEAD to the tip.\n        [ -n \"$new\" ] && git -C \"$MOE_TOP\" merge-base --is-ancestor \"$tip\" \"$new\" 2>/dev/null && return 0\n        if [ \"$attempt\" -lt 5 ] && [[ \"$err\" == *index.lock* ]]; then sleep 2; continue; fi\n        control_alert MOE_CONTROL_CHECKOUT_BEHIND \"moe/control stays at $old, behind $target at $tip: ${err:0:1500}\"; return 0\n    done\n    [ \"$new\" = \"$old\" ] || echo -e \"${GREEN}[OK]${NC} MOE_CONTROL_ADVANCED $old..$new\"\nEvery try merges the same checked $tip, never a re-read target, and there is no sleep after the 5th try.\nError handling: every other failure keeps today's code, message and single attempt. That covers the local-edit and untracked refusals, plus the DIVERGED, .moe-paths BEHIND and NOT_FOLLOWING paths above, which return before the merge. The final BEHIND after a 5th lock failure is today's message. No new code or log line.\n`bash -n scripts/moe-agent.sh` must pass. [[ ]] and for-in are already used in this file and parse under macOS /bin/bash 3.2.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "FIX the twin, Invoke-MoeControlFollow in scripts/moe-agent.ps1, with the Edit tool (keep the UTF-8 BOM and LF). Replace the block from `# The checked tip, not the ref:` through the MOE_CONTROL_ADVANCED Write-Host with:\n        # The checked tip, not the ref: a target that moved since carries unchecked .moe paths.\n        # A held .git/index.lock (the IDE's git, a peer's landing or follow) is retried like\n        # Update-MoeSharedIndex: at most 5 tries, 2 s apart. Any other failure is final. Never delete the lock.\n        for ($attempt = 1; $attempt -le 5; $attempt++) {\n            $m = Invoke-MoeGit -Top $top -GitArgs @('-c', \"core.hooksPath=$hooks\", 'merge', '-q', '--ff-only', '--no-autostash', $tip) -MergeStderr\n            $new = & $one (Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD^{commit}'))\n            if ($m.Rc -eq 0) { break }\n            # A peer's follow that held the index lock may already have moved HEAD to the tip.\n            if ($new -and (Invoke-MoeGit -Top $top -GitArgs @('merge-base', '--is-ancestor', $tip, $new)).Rc -eq 0) { return }\n            $err = $m.Out -join \"`n\"\n            if ($attempt -lt 5 -and $err -like '*index.lock*') { Start-Sleep -Seconds 2; continue }\n            if ($err.Length -gt 1500) { $err = $err.Substring(0, 1500) }\n            Send-MoeControlAlert 'MOE_CONTROL_CHECKOUT_BEHIND' \"moe/control stays at $old, behind $target at ${tip}: $err\" $git; return\n        }\n        if ($new -cne $old) { Write-Host \"[OK] MOE_CONTROL_ADVANCED $old..$new\" -ForegroundColor Green }\nEvery return stays inside the existing try/finally, so the temp hooks dir is still removed on every path. Error handling is as in step 2: no new code, message or log line, so the codes case and parity-check's code-family diff stay unchanged. Parse check: [System.Management.Automation.Language.Parser]::ParseFile reports no errors under both powershell.exe and pwsh.exe (mem:gotcha-launcher-ps1-rows-from-wsl).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY. First, the fast loop on both engines:\n- the step-1 sh command, now printing 'wt-follow-lock ok' and 'wt-follow ok';\n- the same two cases under Windows PowerShell 5.1, from a D: tmp (mem:gotcha-postflight-worktree-mutant-copy):\nT=$(mktemp -d /mnt/d/moe-scratch/a837-XXXX) && cp scripts/tests/postflight-fake-proxy.js \"$T/fake-proxy.js\" && MOE_WORKTREE_ONLY=wt-follow-lock,wt-follow WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$T\")\\fake-proxy.js\" \"$(wslpath -w \"$T\")\" powershell\n\nThen run the ONE verification command, fresh, from the task worktree root (DoD 5):\nbash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh && node.exe scripts/tests/postflight-safe.mjs powershell\nIt takes about 50 min (postflight.sh about 20, the PS 5.1 harness about 30). Run it detached, as mem:gotcha-qa-windows-launcher-tests-from-wsl describes for the bash leg:\n( set -m; nohup env -i HOME=\"$HOME\" PATH=\"$PATH\" LANG=C.UTF-8 WSL_INTEROP=\"$WSL_INTEROP\" WSL_DISTRO_NAME=\"$WSL_DISTRO_NAME\" bash -c '<command>; echo $? > <exit file>' > <log> 2>&1 < /dev/null & )\n- set -m keeps SIGINT un-ignored, which postflight scenario W needs.\n- env -i keeps the seat's MOE_* out of the wrappers under test.\nPoll the exit file in the foreground with bounded waits; never end the turn while it runs.\n\nExpect:\n- parity PASS;\n- postflight.sh ending in 'PASS postflight.sh', with '[worktree] wt-follow-lock ok', '[worktree] wt-follow ok' and 'N ok, 0 failed';\n- the ps1 runner's line {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",...}.\nThe log tail and the exit code 0 are the complete_task evidence. No npm build, install or test anywhere (global rails).",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW of your own diff, then handoff.\n(1) Mutants. Put each in its own copy of the snapshot's whole scripts/ (mem:gotcha-postflight-worktree-mutant-copy), and run an unmutated control copy first. Use the sh subset MOE_WORKTREE_ONLY=wt-follow-lock.\n- M1: drop the `[[ \"$err\" == *index.lock* ]]` test, so every failure retries. It must fail 'other'.\n- M2: cap at 3 tries. It must fail 'held'.\n- M3: remove `sleep 2`. It must fail 'released'.\n- On ps1, run M1 on a BOM-preserving copy. It must fail 'other'.\nA mutant that drops the in-loop HEAD re-check is expected to survive. A merge with HEAD already at the tip exits 0 without taking the lock (probed, git 2.43), so the shortcut is reachable only between a failed merge and the next HEAD read; confirm it by reading both twins.\n(2) Re-read both twins and confirm:\n- every try merges the checked $tip;\n- sh resets rc on each try;\n- there is no sleep after the last try;\n- the ps1 returns stay inside the try/finally;\n- no path deletes a lock;\n- the non-lock BEHIND text and the hourly alert throttle are unchanged.\n`git diff` must touch only the two follow blocks, the sh local line, the new case and its registration line.\n(3) Edges:\n- an IDE lock held for more than 8 s ends BEHIND exactly as today, and the QA landed gate then stops the seat as today;\n- with two followers at once, each takes the lock in turn, and the loser's retry or its HEAD re-check covers it;\n- the worst-case added delay is 8 s per follow, at the loop top and at pre-flight.\n(4) Serena write_memory 'task-task-a837dd48fcb049b5a54681aae1edfc79-handoff', with the timings and the mutant results. Then complete_task with step 4's evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -26,11 +63,84 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:16:59.695Z",
-  "updatedAt": "2026-11-02T20:19:54.348Z",
+  "updatedAt": "2026-11-02T20:31:33.168Z",
   "metrics": {
-    "firstClaimAt": "2026-11-02T20:19:50.362Z"
+    "firstClaimAt": "2026-11-02T20:19:50.362Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T20:31:33.123Z",
+  "executionContract": {
+    "intendedBehavior": "When the control-checkout follow's `git merge --ff-only` fails because .git/index.lock is held, both launcher twins re-check HEAD, then retry the same checked tip, up to 5 tries, 2 s apart. A lock that the IDE or a peer holds for a few seconds therefore no longer leaves moe/control behind, and a QA claim right after a landing passes its landed gate. A lock held for the whole window, and every other failure, ends exactly as today.",
+    "acceptanceCriteria": [
+      "follow_control_checkout and Invoke-MoeControlFollow make at most 5 ff-only tries, 2 s apart, and retry only when the merge output contains index.lock; after each failed try they return quietly if HEAD already contains the tip.",
+      "wt-follow-lock 'released': a lock released about 3 s after the follow's first merge ends with exactly one MOE_CONTROL_ADVANCED old..tip line and HEAD at the tip, on both postflight.sh and postflight.ps1.",
+      "wt-follow-lock 'held' and the existing follows 'lock' row: a lock held throughout ends in MOE_CONTROL_CHECKOUT_BEHIND after 5 tries per follow, and the lock file is not deleted.",
+      "wt-follow-lock 'other' and the existing follows rows: non-lock merge failures and the DIVERGED, .moe-paths BEHIND and NOT_FOLLOWING paths behave as before, with one try."
+    ],
+    "invariants": [
+      "Never delete, reset, stash, force or clean: a refusal is still an alert and nothing moves",
+      "Every try merges the tip that the .moe-paths check already checked, never a re-read target ref",
+      "No new MOE_ code or log line, so the wrappers' code families stay identical and parity-check passes",
+      "The existing follows rows, including 'lock', and the PATH git stub stay byte-identical",
+      "moe-agent.ps1 keeps its UTF-8 BOM and LF; moe-agent.sh still passes bash -n and stays macOS /bin/bash 3.2 parseable"
+    ],
+    "compatibility": [
+      "Shared-checkout mode never runs the follow (HEAD is not moe/control), so it is unchanged",
+      "The alert throttle (one #general post per code per hour) is unchanged"
+    ],
+    "approvedScope": [
+      "The ff-only merge block of follow_control_checkout (plus its local line) in scripts/moe-agent.sh",
+      "The ff-only merge block of Invoke-MoeControlFollow in scripts/moe-agent.ps1",
+      "New wtFollowLock case in scripts/tests/postflight-worktree.cjs and its one registration statement"
+    ],
+    "reuse": [
+      "Retry shape and cap follow index_refresh (sh) and Update-MoeSharedIndex (ps1)",
+      "Fixtures repo(), commitOn() and launch() with a false-returning signal poller follow wtFollowRace",
+      "GIT_TRACE counting replaces a new stub knob"
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh follow_control_checkout: the merge at ~:6736 is the only git call with --no-autostash",
+      "scripts/moe-agent.ps1 Invoke-MoeControlFollow: the merge at ~:6123 sits inside try { } finally { Remove-Item $hooks }",
+      "scripts/tests/postflight-worktree.cjs: follows 'lock' row at ~:1238; launch() at ~:232; cases map at ~:1358",
+      "git 2.43 probe: a held lock gives exit 1 and \"error: Unable to create '.../index.lock': File exists.\"; HEAD already at the tip gives exit 0 even with the lock held; GIT_TRACE logs one 'trace: built-in: git merge ... --no-autostash <sha>' line per merge"
+    ],
+    "checkRefs": [
+      "bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh && node.exe scripts/tests/postflight-safe.mjs powershell"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Hold the first merge with the existing WT_GIT_HOLD stub knob (as wtFollowRace does): rejected. On ps1, git.ps1 runs in-process (mem:gotcha-postflight-worktree-git-stub), so the real git's lock stderr may never reach $m.Out, and the stub would sit on PATH for the whole launch. GIT_TRACE anchors the first merge with the real git and counts every try without changing the stub, which task-c7ca56e6 is also extending. 2) Add the try count to the existing 'lock' and 'edit' rows: rejected, because DoD 3 wants the existing 'lock' case unchanged; the cap and no-retry checks live in the new case instead. 3) A per-retry log line: rejected. Any new MOE_CONTROL_ code would change the wt-follow codes assertion for the 'lock' row, and the commit-path twin retries silently too. 4) A deterministic test of the in-loop HEAD re-check: not possible with today's stub. A merge whose HEAD already reached the tip exits 0 even with the lock held (probed, git 2.43), so the shortcut only matters between a failed merge and the next HEAD read; code review covers it.",
+    "codebaseInsights": "follow_control_checkout is at scripts/moe-agent.sh ~:6701, with its merge at :6736. Its twin Invoke-MoeControlFollow is at scripts/moe-agent.ps1 ~:6083, with its merge at :6123 inside a try/finally that removes the temp hooks dir. The commit-path precedents are index_refresh (sh :5081, 5 tries with a sleep after every try) and Update-MoeSharedIndex (ps1 :5203). A worker launch runs the follow twice, at the loop top (:8614) and at the pre-flight switch (:3107), so the ratio assertions (merges equal to 5 or 1 times the [WARN] BEHIND lines) stay true whatever the number of follows. Only the follow passes --no-autostash; the W-side merge at sh :7062 and ps1 :6568 does not. launch() merges knobs into the wrapper env and puts the stub on PATH only for WT_GIT_* knobs; inherited scrubs GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR and GIT_OBJECT_DIRECTORY, not GIT_TRACE. LIMIT is 180 s per launch, and the held scenario adds about 16 s.",
+    "risks": "Peers in worktree mode edit the same files: task-c7ca56e6 (provision_worktree plus the git stub plus cases), task-31187ec1 (pre-flight plus add-only cases) and WT-19. Keep the hunks inside the follow blocks, the new function and one new registration line, so the rebase merges cleanly; a true conflict routes back as designed. Windows legs from WSL: use node.exe with a D: tmp and WSLENV for MOE_WORKTREE_ONLY. The full gate is about 50 min and needs set -m (scenario W) and env -i. On a very slow host, the second try can come after the 3 s release; the assertions only need at least 2 merges, so that is fine. Docs: docs/plans/2026-10-30-per-task-worktrees.md §6 'Error handling' could gain a lock-retry bullet in WT-19's docs sweep; it is not in this task's file list.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-worktree.cjs",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "da5823b5003d95f9340411cd6498ee511aab2272",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T20:31:33.168Z",
+  "approvedPlanRevision": 1
 }

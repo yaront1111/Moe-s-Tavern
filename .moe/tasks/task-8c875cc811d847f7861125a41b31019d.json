@@ -13,21 +13,29 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (RED before the fix). Create scripts/tests/daemon-autostart-argv.test.mjs (node:test, ESM, LF, no BOM) with the Write tool and add its CI step with the Edit tool (ci.yml may be CONTESTED with task-3ad573a7 at landing; only a TOOL witness lands it). Reuse the engine detection and killTree shape of scripts/tests/protected-agent-command.test.mjs and the fake-daemon ppid trick of postflight.ps1's [protected runtime] P6 row.\n\nHeader comment: Start-Process -ArgumentList (PowerShell 5.1 and 7) joins its entries with single spaces and quotes none of them, so moe-agent.ps1's daemon autostart split the project \"control é [x] $;'\" into --project <root>\\control, é, [x], $;' and the launcher timed out with 'Daemon failed to start within 10s' (task-8c875cc8).\n\nEngines (win32 only): PowerShell 5.1 = path.join(SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'); PowerShell 7 = the absolute path `where.exe pwsh.exe` prints, resolved with the parent env because the rows run with a scrubbed PATH. Skip reasons: off win32 'Start-Process builds a native Windows command line; run this file with Windows node (node.exe from WSL)'; pwsh missing 'pwsh.exe not found'.\n\nPer test: root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'moe-autostart-'))) (native realpath expands 8.3 names such as RUNNER~1, so argv compares exactly); t.after removes it (rmSync recursive, force, maxRetries 5, retryDelay 200). LITERAL = \"control é [x] $;'\". The fake daemon, written as fake-daemon.cjs into a given dir:\n  const fs = require('fs'), path = require('path');\n  fs.writeFileSync(process.env.FAKE_DAEMON_RECORD, JSON.stringify(process.argv.slice(1)));\n  const project = process.argv[process.argv.indexOf('--project') + 1];\n  // process.ppid is the launcher, which outlives the start poll that probes this pid.\n  if (project && fs.existsSync(path.join(project, '.moe'))) fs.writeFileSync(path.join(project, '.moe', 'daemon.json'), JSON.stringify({ pid: process.ppid, port: 1, projectPath: project }));\nChild env: process.env minus keys matching /^(MOE_|FAKE_|CLAUDE|CODEX|GEMINI|GROK|XAI|GIT_)/i and PSModulePath (an inherited 5.1/7 module path breaks the other engine); exactly one PATH key (find it case-insensitively; Windows calls it Path) = [dirname(process.execPath), System32, SystemRoot] joined by ';', so `Start-Process -FilePath \"node\"` resolves and no real agent CLI or git is reachable; HOME and USERPROFILE = path.join(root, 'home'); TEMP and TMP = path.join(root, 'tmp').\n\nRow A, per engine: '<engine>: the daemon-autostart Start-Process passes literal-name paths as whole arguments'. Node writes cases.json (UTF-8) and a BOM'd driver.ps1 into root and runs <engine> -NoProfile -NonInteractive -ExecutionPolicy Bypass -File driver.ps1 -Wrapper <scripts/moe-agent.ps1> -Cases cases.json with cwd root; assert exit 0 with stderr in the message. The driver ($ErrorActionPreference = 'Stop'): [System.Management.Automation.Language.Parser]::ParseFile the wrapper and throw on any parse error; take the CommandAst nodes whose GetCommandName() is 'Start-Process' and whose Extent.Text contains '--project' and throw unless exactly one; dot-source [scriptblock]::Create($f.Extent.Text) for every FunctionDefinitionAst whose Name is a command called inside that statement; then for each case ([IO.File]::ReadAllText | ConvertFrom-Json) set $env:FAKE_DAEMON_RECORD, $daemonScript and $projectPath and dot-source [scriptblock]::Create(<the statement's Extent.Text>). Cases: (1) script path.join(root, LITERAL, 'fake-daemon.cjs'), project path.join(root, LITERAL): the literal fixture name in BOTH arguments; (2) script path.join(root, 'plain', 'fake-daemon.cjs'), project path.join(root, 'a \"b\" c') + path.sep: spaces, double quotes and a trailing backslash (a drive root such as C:\\ is a real project path). Create the script dirs, not the projects. Poll up to 20 s until every record exists, then assert each record deepEqual [script, 'start', '--project', project]; a missing record fails as 'node never ran the daemon script: its path was split'. Probed 2026-11-02 on 5.1.26100 and 7.6.9: the AST extract-and-run works on both, and today's construction gives [..., '--project', '<root>\\control', 'é', '[x]', \"$;'\"].\n\nRow B, per engine: '<engine>: the launcher autostarts the daemon under spaced project and daemon-script paths'. project = path.join(root, \"control é $;'\"), the literal fixture name without [x], because the target's path cmdlets read brackets as wildcards until task-3ad573a7 lands; write path.join(project, '.moe', 'project.json') = {\"id\":\"proj-argv\",\"name\":\"argv\",\"settings\":{\"autoCommit\":false}}. Daemon script = path.join(root, \"daemon é $;' dir\", 'fake-daemon.cjs'). Extra env: MOE_DAEMON_PATH = that script; MOE_PROXY_PATH = an inert path.join(root, 'proxy-stub.cjs') holding only a comment; MOE_DISABLE_HEARTBEAT=1; MOE_ACCOUNT_ROTATION=off; MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1 (the suite may run from a task worktree; task-86431c31); FAKE_DAEMON_RECORD = path.join(root, 'wrapper-argv.json'). spawn(<engine>, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', <scripts/moe-agent.ps1>, '-Project', project, '-WorkerId', 'worker-autostart-argv', '-Role', 'worker', '-NoLoop'], { cwd: root, env, windowsHide: true }). Stop it with taskkill /pid <child.pid> /T /F (that recorded PID only, never a pattern kill) as soon as stdout+stderr shows 'Daemon started (waited' or 'Daemon failed to start within', or at a 90 s cap. Assert the output matches /Daemon started \\(waited/ and not /Daemon failed to start/, and the record deepEqual [script, 'start', '--project', project]. RED today: node gets the truncated <root>\\daemon as its script and the launcher gives up after 10 s.\n\nError handling in the test: every driver and launcher spawn has a cap and reports its exit code, stdout and stderr in the assertion message; a spawn error (engine missing) fails the row with that error, not a hang; a missing record names which argument was split; t.after removes root even when an assertion fails.\n\nCI: in .github/workflows/ci.yml add this step directly AFTER the 'Test launcher daemon.json cap and seat re-registration' step (task-3ad573a7 inserts its own step just above that one; leave that spot alone so both merge cleanly):\n      - name: Test PowerShell daemon autostart arguments\n        # Start-Process builds a native Windows command line (PowerShell 5.1 and 7).\n        if: runner.os == 'Windows'\n        run: node --test scripts/tests/daemon-autostart-argv.test.mjs\n\nRED proof before step 2: from the worktree root run `node.exe --test scripts/tests/daemon-autostart-argv.test.mjs` (Windows node; WSL node skips every row, mem:gotcha-launcher-ps1-rows-from-wsl). All 4 rows must FAIL: row A with case 2's split argv and no case 1 record, row B with 'Daemon failed to start within 10s'. Keep that tail for the completion evidence. Rails: shell writes only outside the checkout; kill only PIDs this test started.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         ".github/workflows/ci.yml"
       ],
       "newFiles": [
         "scripts/tests/daemon-autostart-argv.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/daemon-autostart-argv.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Added scripts/tests/daemon-autostart-argv.test.mjs (Write tool) and the Windows-only CI step after 'Test launcher daemon.json cap and seat re-registration' (Edit tool). One change from the plan: row A collects every case's record and compares them in a single deepEqual, so the failure diff shows each case. RED against the pre-fix launcher (`node.exe --test scripts/tests/daemon-autostart-argv.test.mjs`): tests 4, pass 0, fail 4, skipped 0. Row A on 5.1 and 7: case 1 has no record (the script path was split), and case 2 records [..., '--project', '<root>\\a', 'b', 'c\\']. Row B on 5.1 and 7: 'Waiting for daemon... (10/10s)', then 'Daemon failed to start within 10s'. The fixture temp dirs were all removed (0 left).",
+      "startedAt": "2026-11-02T20:30:19.493Z",
+      "completedAt": "2026-11-02T20:35:01.895Z"
     },
     {
       "stepId": "step-2",
       "description": "FIX scripts/moe-agent.ps1 with the Edit tool (keep the UTF-8 BOM and LF endings; the path may be CONTESTED with task-3ad573a7 at landing, and only a TOOL witness lands it).\n(a) Insert this block after `$script:GrokEnvPrev = $null` and its blank line, before the `# daemon.json is repository content:` comment, i.e. outside daemon-json-cap.test.mjs's helper segment, which starts at `function Read-MoeDaemonJsonText(`:\n# Start-Process (PowerShell 5.1 and 7) joins -ArgumentList entries with single\n# spaces and quotes none of them, so a path with a space reached node as several\n# arguments. Quote every entry so the child's argv parser (the C runtime on\n# Windows, .NET on Unix) splits the line back into the same entries.\nfunction ConvertTo-MoeArgumentLine([string[]]$Arguments) {\n    @($Arguments | ForEach-Object { '\"' + ($_ -replace '(\\\\*)\"', '$1$1\\\"' -replace '(\\\\+)$', '$1$1') + '\"' }) -join ' '\n}\nBackslashes before a quote or at the end are doubled and a quote becomes backslash-quote. This exact body round-tripped, on 5.1.26100 and 7.6.9, the literal fixture name, an empty string, a \"b\" c\\, x\\\\, a tab, q\\\"r and C:\\. It calls no other wrapper function (row A defines only the functions the Start-Process statement itself calls).\n(b) At the daemon autostart, replace the two comment lines `# Pass arguments as an array so paths containing spaces or quotes survive` and `# Windows command-line escaping (Start-Process re-quotes each element).` with own-line comments (no trailing comments: task-3ad573a7's scanner masks only full-line ones) saying Start-Process quotes nothing, so the launcher passes one pre-quoted command line, and change only the -ArgumentList argument:\n        Start-Process -FilePath \"node\" -ArgumentList (ConvertTo-MoeArgumentLine @(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\")) -WindowStyle Hidden\nKeep '--project' literally inside the statement (row A finds the call by it).\nError handling: the daemon start's error handling stays exactly as it is. A missing daemon script still ends with Write-Error 'Moe daemon script not found' and exit 1; a daemon that writes no live daemon.json within 10 s still ends with Write-Error 'Daemon failed to start within 10s' and exit 1; a Start-Process failure still terminates under $ErrorActionPreference = 'Stop'. Leave everything else as it is too: -FilePath \"node\", -WindowStyle Hidden, no -WorkingDirectory (task-3ad573a7 adds the escaped current FileSystem location on top of this change), and the MOE_DAEMON_PATH and global-install fallback with its Test-Path checks. moe-agent.sh already passes an argv array (DAEMON_ARGS), so there is no bash twin and no parity string to add.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-02T20:38:31.555Z"
     },
     {
       "stepId": "step-3",
@@ -44,7 +52,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-d6c1cb7a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -56,7 +64,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T19:51:59.705Z",
-  "updatedAt": "2026-11-02T20:19:23.264Z",
+  "updatedAt": "2026-11-02T20:38:31.555Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T19:55:37.599Z",
@@ -65,16 +73,20 @@
   "metrics": {
     "firstClaimAt": "2026-11-02T19:56:27.367Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-d6c1cb7a"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T20:19:23.238Z",
   "executionContract": {
@@ -140,5 +152,35 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T20:19:23.264Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T20:30:19.493Z",
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-d6c1cb7a@2026-11-02T20:27:33Z",
+    "at": "2026-11-02T20:36:06.499Z"
+  },
+  "commits": [
+    {
+      "sha": "bc2d91e887c0d6b66c9975cb34aa2cf1beb1c15c",
+      "ref": "refs/heads/moe/task/task-8c875cc811d847f7861125a41b31019d",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-02T20:27:33Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/tests/daemon-autostart-argv.test.mjs"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-02T20:36:06.499Z",
+      "treeId": "001160062c28cf1c38ec6ee0eb3f20056c22735f",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".github/workflows/ci.yml",
+    "scripts/tests/daemon-autostart-argv.test.mjs"
+  ],
+  "unattributedPaths": []
 }

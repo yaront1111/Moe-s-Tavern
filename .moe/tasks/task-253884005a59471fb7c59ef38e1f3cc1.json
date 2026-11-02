@@ -53,11 +53,16 @@
     {
       "stepId": "step-3",
       "description": "Mirror step 2 in scripts/moe-agent.ps1 as Invoke-MoeMigrationLanding, with a `-LandBranch <string>` parameter and a help entry. Keep the same validation order, codes, strings and exit codes: 2 for bad args, 1 for refused or failed, 0 for landed or nothing to commit.\n\nCall the landed twins:\n- Sync-MoeLandTarget and Update-MoeLandTargetMirror.\n- The merge-tree helper.\n- The L9 publication and Resolve-MoePushOutcome.\n- New-MoeFrozenCandidate. Never call Send-MoeCandidate in this mode.\n- `Invoke-MoeFrozenGate ... -WorktreeMode` with a new `-NoEvidence` switch that skips Send-MoeCheckRun only.\n\nThe script's exit/finally path skips deregistration in this mode, and the mode sends no RPC.\n\nPowerShell 5.1 rules:\n- Run git through Invoke-MoeGit and PATH, and check every native exit code explicitly.\n- Compare refs and codes ordinally (-ceq or [string]::Equals with Ordinal; mem:gotcha-powershell-path-comparison-culture).\n- Restore any env var you set in try/finally.\n- Keep the file's UTF-8 BOM and LF line endings.\n\nError handling in this step:\n- A PowerShell exception inside the mode is caught and printed with the matching code, or generic MOE_COMMIT_FAILED when none applies. The mode then exits 1 after the finally block has removed the gate workspace.\n- No catch path publishes.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-02T20:15:44.776Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 twin done.\n- New param `-LandBranch <string>`, documented by a param-block comment (the ps1 help style).\n- Early checks: an empty value prints MOE_MIGRATION_BAD_ARGS and exits 2. The run then sets $NoStartDaemon, sets $script:MoeDeregistered=$moeMigration (so Invoke-MoeDeregister and the Exiting hook send nothing) and skips the team join.\n- Invoke-MoeFrozenGate gains `-NoEvidence`: Recorded starts true and Send-MoeCheckRun is skipped. Nothing else changes.\n- Send-MoeLandPush is split out of Publish-MoeWorktreeLanding (twin of wt_push_target; returns 0/1/2/3/4 with $script:MoePushDetail). Publish maps 3→1 and 4→2 with the same banners, journal, rescue and finalize side effects as before.\n- Invoke-MoeMigrationLanding sits after Invoke-MoeWorktreeRounds, as the sh twin sits after wt_land_rounds. It keeps the sh order, codes and strings: BAD_ARGS(2) → NO_GATE(1, .qualityGate is blank under MOE_DISABLE) → git top → checked-out guard → 2 rounds of Sync-MoeLandTarget/merge-tree -z/NOTHING_TO_COMMIT(0)/New-MoeFrozenCandidate + gate -WorktreeMode -NoEvidence/commit-tree -p B -p tip/re-check/Send-MoeLandPush or update-ref CAS/mirror → LANDED(0) | PUSH_FAILED | PUSH_OUTCOME_UNKNOWN | REF_CONTENTION.\n- try/catch prints `[WARN] <code>: migration of <b> onto main -- <msg>` and returns 1 or 2. finally runs Remove-MoeGateWorkspace. It never calls Send-MoeCandidate.\n- Dispatch sits right before \"Launching $cliType CLI...\" and removes the temp MCP config file in a finally. UTF-8 BOM and LF line endings are kept (verified).\n\nEvidence, native Windows PS 5.1 from snapshot D:\\moe-scratch\\wt10m-ps1:\n- postflight-migration.cjs ps1: 11/11 PASS on the first run.\n- 10 ps1 mutations, each caught for the expected reason: team, noevidence, parents, mirror, recheck, upfront, rejected-final, nothing, local-cas, unknown.\n- Held-out worktree-landing.ps1: 18 passed, 0 failed, covering the Publish refactor.\n- parity-check.sh PASS. The code-family diff between sh and ps1 is empty.\n- Held-out worktree-landing.sh/.ps1/postflight-worktree.cjs: git diff empty.\n\nLOC so far: sh +87, ps1 +87, test 202, harness +5, about 381 of 400.",
+      "startedAt": "2026-11-02T20:15:44.776Z",
+      "completedAt": "2026-11-02T20:37:13.066Z"
     },
     {
       "stepId": "step-4",
@@ -134,7 +139,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:35:19.557Z",
-  "updatedAt": "2026-11-02T20:15:44.776Z",
+  "updatedAt": "2026-11-02T20:38:24.257Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:41:12.579Z",
@@ -144,7 +149,7 @@
     "firstClaimAt": "2026-10-30T13:46:37.034Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-6fc3dd5c",
@@ -156,7 +161,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:11:57.139Z",
@@ -209,5 +215,40 @@
   },
   "planApprovedAt": "2026-10-30T14:11:57.166Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T19:36:54.559Z"
+  "workStartedAt": "2026-11-02T19:36:54.559Z",
+  "commits": [
+    {
+      "sha": "16d6ea4e9992dec57ea8953792d58438146210ba",
+      "ref": "refs/heads/moe/task/task-253884005a59471fb7c59ef38e1f3cc1",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-02T19:15:48Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-migration.cjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-02T20:38:24.257Z",
+      "treeId": "c01e676ec4c39bca350cc3394be1d81fc7b0b69b",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-migration.cjs",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/postflight.sh"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-8cf0816c@2026-11-02T19:15:48Z",
+    "at": "2026-11-02T20:38:24.257Z"
+  }
 }
