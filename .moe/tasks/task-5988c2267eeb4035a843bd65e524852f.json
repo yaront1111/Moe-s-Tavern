@@ -57,20 +57,26 @@
     {
       "stepId": "step-3",
       "description": "report_blocked merges stored ids only on an already-BLOCKED row (DoD 2). Three edits in reportBlocked.ts:\n\n(1) Line 172 becomes:\n  const storedBlockedOnIds = task.status === 'BLOCKED' && Array.isArray(task.blockedOnTaskIds) ? task.blockedOnTaskIds : [];\nLike `flipped`, it reads the `task` that line 159 re-reads after the resource arm's await. On a PLANNING/WORKING/REVIEW row, stored ids are leftovers of an old block that get_context and list_tasks hide. They come from archive_epic before this fix, or from release_task's refusal cascade (releaseTask.ts:311-327, out of scope). The block is computed from the supplied or reason-parsed ids alone.\n\n(2) The flip write (line 346) always sets the key:\n  blockedOnTaskIds: recordedBlockedOnIds.length > 0 ? recordedBlockedOnIds : null,\nupdateTask clears none of the block fields. Omitting the key would leave the stale list on the now-BLOCKED row, and the next dependency scan would restore the row on the stale DONE id (claim-thrash). set_task_status, archive_task and runDependencyUnblock already write null. The architect's full daemon suite run with this write showed no failure in src/state or src/tools.\n\n(3) Rewrite the comment above line 171 ('Structured dependency ids: stored ∪ (supplied OR legacy reason-parsed)…'): stored ids join only on the already-BLOCKED union-on-update arm, and say why.\n\nLeave everything else byte-identical:\n- the human-gated refusal, the resource arm and cycle detection;\n- satisfied-id filtering and the dependenciesSatisfied rule;\n- the repeat arm (blockedOnIdsChanged, identicalRepeat, the union including satisfied ids);\n- seat handling, paging and the response shape;\n- the tool description and the inputSchema text, which already say ids union on repeats of an already-BLOCKED task.\n\nError handling: no new throw or IO. Input validation and the refusal still run before any write or page. No docs/ edit (DoD 5): docs/MCP_SERVER.md already scopes blocked* fields to BLOCKED tasks.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/reportBlocked.ts"
       ],
-      "startedAt": "2026-11-02T22:36:14.570Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ],
+      "note": "Guarded stored dependency IDs by current post-await BLOCKED status; fresh flips now always write recorded IDs or null, clearing stale IDs on both resource and non-resource paths. Updated only dependency comment, guard and flip write. Already-BLOCKED union, validation, cycles, satisfied filtering, paging, seats and API shape unchanged. Existing collection logic reused; step-1 RED reproduced both defects; GREEN verification is next.",
+      "startedAt": "2026-11-02T22:36:14.570Z",
+      "completedAt": "2026-11-02T22:36:46.839Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, run once. Build a FRESH snapshot from the task worktree with the step-1 overlay recipe; it now carries all five changed files. Never run it in place in the shared control checkout (customRule: the daemon runs from packages/moe-daemon/dist). Run exactly:\n  cd packages/moe-daemon && npx vitest run src/tools/archiveEpic.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/setTaskStatus.test.ts\nIt must exit 0 with 4 files passed: 91 tests at HEAD ecf00c18 plus the new cases. The architect's run with the three cases above passed 94; if a later landing changed one of these files, report base + N. That command, its exit code and its output tail are the complete_task verification evidence (DoD 4).\n\nIn the same snapshot also run `npx tsc --noEmit -p .` (vitest does not typecheck the helper's Pick signature) and report its exit 0 beside the evidence.\n\nThen `git -C <worktree> diff --stat HEAD` must list only archiveEpic.ts, archiveTask.ts, reportBlocked.ts, archiveEpic.test.ts and reportBlocked.test.ts under packages/moe-daemon/src/tools (DoD 5). Declare those five as modifiedFiles.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/archiveEpic.test.ts",
         "packages/moe-daemon/src/tools/reportBlocked.test.ts"
       ],
+      "startedAt": "2026-11-02T22:36:46.867Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -113,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:52.279Z",
-  "updatedAt": "2026-11-02T22:36:14.570Z",
+  "updatedAt": "2026-11-02T22:36:46.867Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:25.066Z",
@@ -123,7 +129,7 @@
     "firstClaimAt": "2026-11-02T22:17:19.136Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -135,7 +141,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T22:31:04.067Z",
