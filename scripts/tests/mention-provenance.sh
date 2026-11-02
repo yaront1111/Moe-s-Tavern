@@ -134,6 +134,7 @@ run_mode() {
     countfail)   fail_kind="count" ;;
   esac
   set +e
+  # MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1 (below): WT-13's guard refuses $WRAPPER when this suite runs from a task worktree (task-86431c31).
   PATH="$TMP_DIR/bin:$PATH" \
   HOME="$HOME_DIR" \
   MOE_PROXY_PATH="$FAKE_PROXY" \
@@ -143,6 +144,7 @@ run_mode() {
   MOE_PROVENANCE_CAPTURE="$capture" \
   MOE_PROVENANCE_FAIL="$fail_kind" \
   MOE_TASKLESS_WAIT_SEC=5 \
+  MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1 \
   timeout 60s "$WRAPPER" \
     --project "$PROJECT_DIR" \
     --worker-id "$WORKER_ID" \

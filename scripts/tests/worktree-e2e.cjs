@@ -209,6 +209,7 @@ async function launch(s,n,o={}){
     FAKE_TASK_STATUS:'REVIEW',FAKE_CLAIM_WORKSPACE:ws,FAKE_CTX_WORKSPACE:ws,
     E2E_SEAT:s,E2E_SESSION:String(n),E2E_SEAT_STATE:sd,E2E_FAKE:FAKE,E2E_ROOT:root,E2E_CONTROL:C,
     E2E_CLI_RECORD:path.join(sd,`cli-${n}.jsonl`),E2E_CLI_WRITE:JSON.stringify(o.writes||{}),E2E_CLI_EXPECT_MARKERS:(o.markers||[]).join(',')};
+  env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER='1'; // `inherited` drops MOE_*: WT-13's guard refuses WRAPPER when it sits in a task worktree (task-86431c31)
   const args=[WRAPPER,'--project',C,'--worker-id','worker-e2e-'+s,'--role','worker','--team','E2E','--no-start-daemon',
     '--command',path.join(root,'shim-claude','claude'),'--no-loop','--poll-interval','0'];
   const child=cp.spawn(engine,args,{env,stdio:['ignore','pipe','pipe'],detached:true});

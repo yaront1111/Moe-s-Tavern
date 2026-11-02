@@ -342,6 +342,7 @@ async function runWrapper(label, during) {
   // Git Bash drops the backslashes of a native caller's argv, so sh gets forward slashes.
   const slash = (p) => (sh ? p.replace(/\\/g, '/') : p);
   const env = isolatedEnv({ MOE_PROXY_PATH: slash(PROXY_JS), MOE_DISABLE_HEARTBEAT: '1', PILOT_CLI_CONFIG: ctx.cliConfig });
+  env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'; // isolatedEnv drops MOE_*: WT-13's guard refuses REPO's wrapper when the pilot runs from a task worktree (task-86431c31)
   const common = [['--project', '-Project', slash(ctx.project)], ['--worker-id', '-WorkerId', WORKER], ['--role', '-Role', 'worker'],
     ['--command', '-Command', slash(ctx.cli)], ['--codex-exec', '-CodexExec'], ['--no-start-daemon', '-NoStartDaemon'],
     ['--no-loop', '-NoLoop'], ['--poll-interval', '-PollInterval', '0']];

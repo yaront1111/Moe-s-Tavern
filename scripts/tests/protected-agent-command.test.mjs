@@ -77,6 +77,7 @@ function run(engine, fx, { command, commandArgs = [], marker = '1', pathEntries,
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(MOE_|CLAUDE|FAKE_)/i.test(k)));
   Object.assign(env, { HOME: fx.home, USERPROFILE: fx.home, TMPDIR: fx.tmp, TEMP: fx.tmp, TMP: fx.tmp, PATH: pathEntries.join(SEP),
     MOE_NODE_COMMAND: fx.node, MOE_PROXY_PATH: fx.runtime, MOE_DAEMON_PATH: fx.runtime, MOE_DISABLE_HEARTBEAT: '1' });
+  env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'; // the filter above drops MOE_*: WT-13's guard refuses SH/PS1 when this suite runs from a task worktree (task-86431c31)
   if (windows) delete env.Path;
   if (marker !== null) env.MOE_RUNTIME_PROTECTED = marker;
   const common = { role: 'worker', id: 'worker-protected-cmd' };

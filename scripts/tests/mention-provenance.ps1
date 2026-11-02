@@ -149,6 +149,7 @@ function Invoke-ProvenanceMode {
         mode = $env:MOE_PROVENANCE_MODE; worker = $env:MOE_PROVENANCE_WORKER
         chan = $env:MOE_PROVENANCE_CHANNEL; cap = $env:MOE_PROVENANCE_CAPTURE
         waitSec = $env:MOE_TASKLESS_WAIT_SEC
+        seam = $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER
     }
     try {
         $env:MOE_PROXY_PATH = $fakeProxy
@@ -159,6 +160,7 @@ function Invoke-ProvenanceMode {
         $env:MOE_PROVENANCE_CHANNEL = $channel
         $env:MOE_PROVENANCE_CAPTURE = $capture
         $env:MOE_TASKLESS_WAIT_SEC = '5'
+        $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1' # WT-13's guard refuses $wrapper when this suite runs from a task worktree (task-86431c31)
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         & $psExe -NoProfile -File $wrapper `
@@ -178,6 +180,7 @@ function Invoke-ProvenanceMode {
         $env:MOE_PROVENANCE_WORKER = $saved.worker; $env:MOE_PROVENANCE_CHANNEL = $saved.chan
         $env:MOE_PROVENANCE_CAPTURE = $saved.cap
         $env:MOE_TASKLESS_WAIT_SEC = $saved.waitSec
+        $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = $saved.seam
     }
     if ($rc -ne 0) {
         Get-Content $wrapperOut -Tail 40 | ForEach-Object { Write-Host "  $_" }

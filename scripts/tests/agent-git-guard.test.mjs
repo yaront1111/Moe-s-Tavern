@@ -88,6 +88,7 @@ function fixture(t, cli, hooks, status = 'REVIEW', mode = '') {
     MOE_ACCOUNT_ROTATION: 'off', MOE_DISABLE_HEARTBEAT: '1', FAKE_TASK_STATUS: status, FAKE_SCOPE_PEERS_ACTIVE: '1',
     GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: f.original,
     GIT_CONFIG_KEY_1: 'guard.caller', GIT_CONFIG_VALUE_1: 'preserved', GIT_CONFIG_KEY_2: 'unused.key', GIT_CONFIG_VALUE_2: 'unused'  };
+  f.env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'; // `clean` drops MOE_*: WT-13's guard refuses scripts/moe-agent.* when this suite runs from a task worktree (task-86431c31)
   return f;
 }
 function launch(f, cli, interactive, concurrent = false) {
