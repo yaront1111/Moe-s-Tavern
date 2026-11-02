@@ -2139,7 +2139,8 @@ fi
 
 # Mirror .moe/agents/<name>.md to .claude/agents/<name>.md so Claude Code's
 # subagent loader discovers them. Idempotent: only copies files that don't
-# already exist in the destination (preserves user customizations).
+# already exist in the destination (preserves user customizations); a
+# destination another seat creates meanwhile is kept too.
 if [ "$ENABLE_AGENT_TEAMS" = "true" ] && [ -d "$MOE_DIR/agents" ]; then
     CLAUDE_AGENTS_DIR="$PROJECT/.claude/agents"
     mkdir -p "$CLAUDE_AGENTS_DIR"
@@ -2153,7 +2154,18 @@ if [ "$ENABLE_AGENT_TEAMS" = "true" ] && [ -d "$MOE_DIR/agents" ]; then
             AGENT_SKIPPED=$((AGENT_SKIPPED + 1))
             continue
         fi
-        cp "$src" "$dest"
+        # Two seats can pass -e together: GNU cp uses O_EXCL for a missing
+        # destination, so the loser sees EEXIST while its peer writes the same
+        # source. Count that file as kept (task-b6a3d41e).
+        if ! AGENT_CP_ERR=$(cp "$src" "$dest" 2>&1); then
+            if [ -e "$dest" ]; then
+                AGENT_SKIPPED=$((AGENT_SKIPPED + 1))
+                continue
+            fi
+            # A real failure still prints cp's diagnostic and ends pre-flight.
+            printf '%s\n' "$AGENT_CP_ERR" >&2
+            exit 1
+        fi
         AGENT_MIRRORED=$((AGENT_MIRRORED + 1))
     done
     if [ $AGENT_MIRRORED -gt 0 ] || [ $AGENT_SKIPPED -gt 0 ]; then

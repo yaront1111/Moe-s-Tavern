@@ -1001,7 +1001,15 @@ if ($enableAgentTeams) {
                 $skipped++
                 return
             }
-            Copy-Item -Path $src -Destination $dest -Force
+            # Like moe-agent.sh: a failed copy whose destination now exists lost
+            # to another seat. Any other failure rethrows, unchanged.
+            try {
+                Copy-Item -LiteralPath $src -Destination $dest -Force
+            } catch {
+                if (-not (Test-Path -LiteralPath $dest)) { throw }
+                $skipped++
+                return
+            }
             $mirrored++
         }
         if ($mirrored -gt 0 -or $skipped -gt 0) {
