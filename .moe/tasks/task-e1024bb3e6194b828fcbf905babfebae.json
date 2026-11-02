@@ -83,7 +83,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -103,7 +103,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:12:11.880Z",
-  "updatedAt": "2026-11-02T16:17:56.358Z",
+  "updatedAt": "2026-11-02T16:23:39.556Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:16:33.504Z",
@@ -116,7 +116,9 @@
     "firstClaimAt": "2026-11-02T15:59:17.263Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T16:23:39.556Z",
+    "wallClockMs": 1462293
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -188,7 +190,8 @@
   "planApprovedAt": "2026-11-02T16:01:26.577Z",
   "approvedPlanRevision": 1,
   "contextFetchedBy": [
-    "worker-81a7999f"
+    "worker-81a7999f",
+    "qa-564d8bce"
   ],
   "workStartedAt": "2026-11-02T16:10:17.473Z",
   "reviewStartedAt": "2026-11-02T16:17:56.356Z",
@@ -202,7 +205,46 @@
   "filesModified": [
     "moe-vscode/tests/windows-terminal-shell.test.cjs",
     "moe-vscode/src/util/AgentLauncher.ts",
+    "moe-vscode/src/providers/AccountsTreeProvider.ts",
+    ".moe/tasks/task-d2a3532ec05c49d384214ae15b01ba7e.json",
+    ".moe/tasks/task-e1024bb3e6194b828fcbf905babfebae.json"
+  ],
+  "completionSummary": "VSC-27 delivered in 3 files under moe-vscode/ (+11/-2 runtime, new 210-line test).\n1) AgentLauncher.launchAgent: createTerminal options are { name, cwd, ...(isWin ? { shellPath: WINDOWS_SHELL } : {}) } with WINDOWS_SHELL = 'powershell.exe'; the same isWin picks buildPowerShellCommand, so shell and line cannot disagree.\n2) AccountsTreeProvider.runCli: one `windows` flag drives accountsCommandLine(..., windows) and the shellPath spread. Clipboard fallback and its message are unchanged.\n3) Decision: explicit powershell.exe on win32, no shellArgs (-NoProfile would drop profile PATH for node/claude), no profile detection (more line builders, wider quoting surface). Linux, darwin and Remote-WSL (platform linux) get no shellPath key.\n4) New tests/windows-terminal-shell.test.cjs: W1 launcher (win32 exact options { name, cwd, shellPath } + -EncodedCommand framing; linux/darwin no shellPath key, bash line), W2 provider sign-in for C05 connected and C09 disconnected on win32/linux/darwin, W3 clipboard fallback and refused launcher terminal.\nRED before impl: W1 and W2 failed on the win32 shellPath assertion; W3 passed.\nGate (verbatim step-3 command, fresh snapshot, exit 0): lint 0, compile 0, npm test 577 tests, 573 pass, 4 skip, 0 fail; powershell-quoting and agent-launcher-controls unchanged (git diff --quiet exit 0). psQuote/shQuote/assertSafeArg and -EncodedCommand framing untouched; VSC-25 Q2 still passes.\nMutants (snapshot copies, restored): drop launcher spread, unconditional launcher shellPath, inverted provider flag, pwsh.exe in launcher, pwsh.exe in provider, provider drops shellPath - all killed by assertions, none by load errors.\nJetBrains needs no change: TerminalAgentLauncher types its line into the IDE's local shell widget; its Windows default shell is a separate concern outside this DoD. Not run: JetBrains Gradle (no JetBrains file touched).",
+  "commits": [
+    {
+      "sha": "b86c907714cf35068b03ed29c4b613f8241d9a70",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T16:09:30Z",
+      "paths": [
+        ".moe/tasks/task-d2a3532ec05c49d384214ae15b01ba7e.json",
+        ".moe/tasks/task-e1024bb3e6194b828fcbf905babfebae.json",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/windows-terminal-shell.test.cjs"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T16:18:38.136Z",
+      "treeId": "691306fd428f012a0c85582e4d3a17da8d6d43cf",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/windows-terminal-shell.test.cjs",
+    "moe-vscode/src/util/AgentLauncher.ts",
     "moe-vscode/src/providers/AccountsTreeProvider.ts"
   ],
-  "completionSummary": "VSC-27 delivered in 3 files under moe-vscode/ (+11/-2 runtime, new 210-line test).\n1) AgentLauncher.launchAgent: createTerminal options are { name, cwd, ...(isWin ? { shellPath: WINDOWS_SHELL } : {}) } with WINDOWS_SHELL = 'powershell.exe'; the same isWin picks buildPowerShellCommand, so shell and line cannot disagree.\n2) AccountsTreeProvider.runCli: one `windows` flag drives accountsCommandLine(..., windows) and the shellPath spread. Clipboard fallback and its message are unchanged.\n3) Decision: explicit powershell.exe on win32, no shellArgs (-NoProfile would drop profile PATH for node/claude), no profile detection (more line builders, wider quoting surface). Linux, darwin and Remote-WSL (platform linux) get no shellPath key.\n4) New tests/windows-terminal-shell.test.cjs: W1 launcher (win32 exact options { name, cwd, shellPath } + -EncodedCommand framing; linux/darwin no shellPath key, bash line), W2 provider sign-in for C05 connected and C09 disconnected on win32/linux/darwin, W3 clipboard fallback and refused launcher terminal.\nRED before impl: W1 and W2 failed on the win32 shellPath assertion; W3 passed.\nGate (verbatim step-3 command, fresh snapshot, exit 0): lint 0, compile 0, npm test 577 tests, 573 pass, 4 skip, 0 fail; powershell-quoting and agent-launcher-controls unchanged (git diff --quiet exit 0). psQuote/shQuote/assertSafeArg and -EncodedCommand framing untouched; VSC-25 Q2 still passes.\nMutants (snapshot copies, restored): drop launcher spread, unconditional launcher shellPath, inverted provider flag, pwsh.exe in launcher, pwsh.exe in provider, provider drops shellPath - all killed by assertions, none by load errors.\nJetBrains needs no change: TerminalAgentLauncher types its line into the IDE's local shell widget; its Windows default shell is a separate concern outside this DoD. Not run: JetBrains Gradle (no JetBrains file touched)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-81a7999f@2026-11-02T16:09:30Z",
+    "at": "2026-11-02T16:18:38.136Z"
+  },
+  "completedAt": "2026-11-02T16:23:39.556Z",
+  "reviewCompletedAt": "2026-11-02T16:23:39.556Z",
+  "reviewSummary": "Approved. Completion commit b86c9077 (in task.commits, on moe/work-2026-10-24, pushed). Diff: AgentLauncher.ts +7 (WINDOWS_SHELL + createTerminal spread keyed on the existing isWin that picks buildPowerShellCommand), AccountsTreeProvider.ts +4/-2 (one `windows` flag drives accountsCommandLine and the shellPath spread), new tests/windows-terminal-shell.test.cjs +210; ~219 net, under 400. Both createTerminal call sites in moe-vscode/src are covered.\nRe-ran task.verification verbatim in fresh snapshot (HEAD archive + the 3 files): npm ci ok, lint 0, compile 0, npm test 577 tests / 573 pass / 4 skip / 0 fail, trailing git diff --quiet on powershell-quoting and agent-launcher-controls exit 0 (unchanged).\nDoD1: W1 pins launcher options exactly {name,cwd,shellPath:'powershell.exe'} on win32 (both roles) with -EncodedCommand framing, and no shellPath key (Object.hasOwn) on linux/darwin (Remote-WSL is linux); W2 pins Accounts sign-in options {name, shellPath} on win32 for C05 connected and C09 disconnected, no key elsewhere, sent line equals accountsCommandLine(...,windows); W3 keeps the clipboard fallback and 'Failed to launch' catch when createTerminal throws.\nDoD2: psQuote/shQuote/assertSafeArg and -EncodedCommand untouched; no shellArgs (key list asserted); provider imports still only vscode + AccountPresentation.\nMy own mutants in the snapshot (restored, 3/3 pass after): dropping the launcher spread fails W1; unconditional provider shellPath fails W2.\nEpic rails ok: only moe-vscode + board json touched; no JetBrains file changed, Gradle not run.\nComplexity: nothing to cut. The duplicated 'powershell.exe' literal in the provider follows from the closed-require-map harness and is tied by a comment; no test holds it identical to WINDOWS_SHELL (Q2 covers only the quoting helpers), but W2 pins the value.",
+  "requiredCheckAtDone": null
 }
