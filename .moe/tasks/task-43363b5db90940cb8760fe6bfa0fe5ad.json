@@ -12,9 +12,65 @@
     "The diff touches none of the files listed as not in scope."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Preconditions and inventory (read-only).\n\n(a) Confirm that every dependsOn row is DONE or ARCHIVED and has landed: `git log --oneline --grep <task id>` on moe/work-2026-10-24 must show its completion commit (feat/fix, not only wip). Confirm that VSC-0 (task-a3e414a3, not in dependsOn) is DONE and that docs/plans/2026-11-02-vscode-reuse.md is on the branch. A DONE row that has not landed is a blocker: call moe.report_blocked naming it instead of gating a partial epic.\n\n(b) Build the per-row table that step 6 needs: label, task id, final status, and landing commit. The landing commit is the short sha of the completion commit: landing.lastCompletion.sha from moe.get_context epicSiblings, cross-checked with git log.\n\n(c) List the epic rows that are NOT in this row's dependsOn:\n- VSC-0;\n- this row;\n- VSC-22, task-be543ff20bbc4f30ac7ac895ae0b4d13 (the JetBrains ChatPanel dead-selection follow-up filed by VSC-6's architect; mem:gotcha-jetbrains-chatpanel-dead-selection);\n- any other row filed during the epic (moe.list_tasks epicId epic-aabc654d).\n\n(d) Collect the parked items. Read each row's completionSummary and reviewSummary, with moe.get_context per row or a read-only node read of .moe/tasks/<id>.json. List every note that says out of scope, follow-up, parked, deferred or not pinned. Known now:\n- VSC-1 left its docs to this row;\n- VSC-3 noted that MoeJson drops exit codes outside the Int range;\n- VSC-6 noted that VS Code pushes CHANNEL_CREATED without an id dedupe (JetBrains dedupes).\n\nError handling: if a moe tool call fails, retry once, then fall back to reading .moe/tasks/*.json read-only. Never edit .moe by hand.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "Corpus integrity (DoD 3), read-only.\n\nRun this from the repo root and paste its output into the summary:\nfor f in moe-jetbrains/src/test/resources/client-*.json; do b=$(basename \"$f\"); k=$(grep -rl \"$b\" moe-jetbrains/src/test/kotlin | tr '\\n' ' '); v=$(grep -rl \"$b\" moe-vscode/tests | tr '\\n' ' '); echo \"$b | kotlin: ${k:-NONE} | vscode: ${v:-NONE}\"; done\n\nExpect these corpora, each with at least one Kotlin reader and one moe-vscode reader: client-verdicts, client-delivery, client-blocker, client-settings-policy, client-accounts and client-seat-tracker. A NONE is a finding for step 3.\n\nThen check that no row carries a client-specific expectation:\n- grep -nEi 'jetbrains|vs ?code|intellij|kotlin|typescript' over the corpora, and judge every hit (a descriptive note is fine; an expectation keyed to one client is not);\n- each moe-vscode consumer reads the corpus file itself, not a copied fixture;\n- where the reuse decision calls for it, the consumer asserts that its labels equal moe-jetbrains/src/main/resources/messages/MoeBundle.properties.\n\nError handling: parse each corpus with node -e inside a per-file try/catch. A corpus that does not parse is a finding, not a crash of this check.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial pass over the whole epic diff (DoD 5).\n\nFirst list `git log --format='%h %s' 882a4c39..HEAD -- moe-vscode moe-jetbrains scripts/bundle-manifest.json .github/workflows/ci.yml`. Mark every commit whose subject names no epic task id, so its hunks are not blamed on the epic. Then read `git diff 882a4c39..HEAD` over the same paths. Check at least:\n(1) contract drift between a corpus and its consumer, and label drift from MoeBundle.properties;\n(2) duplicated helpers, such as a second copy of account text (the VSC-13 port vs the Accounts view) or of shell quoting (the VSC-15 sign-in terminal vs util/AgentLauncher.ts);\n(3) strict vm-harness require maps broken by a new import, which shows as a whole test file failing or a test total that dropped;\n(4) listeners, terminals, tree providers and timers that are never disposed (the VSC-1 notifier, the VSC-14/15 view, VSC-20/21 seat tracking and onDidCloseTerminal);\n(5) notifications fired from STATE_SNAPSHOT or before the first snapshot;\n(6) seat deregistration parity: seat ids persisted until WORKER_DEREGISTERED acks them, resent at every connect, and seats the extension did not launch never touched;\n(7) webview text built from daemon strings is escaped, the CSP is intact, and there are no new markup-string writes;\n(8) Windows and POSIX paths and quoting in every new terminal command;\n(9) the bundle manifest read by both builds with no hand-kept second list, and the CI job packaging and smoke-testing the vsix;\n(10) the parked items from step 1(d).\n\nFor each finding:\n- Fix it in this task only if the fix stays inside this task's four doc files.\n- Otherwise file a row with moe.create_task in epic-aabc654d: status BACKLOG, title prefixed [VSC-n], a DoD that includes a test. Record its id.\n\nError handling: when a finding's evidence is ambiguous, write the open question into the filed row instead of guessing a fix.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update moe-vscode/README.md with the Edit tool. Describe what actually landed: read each row's completionSummary and the code at HEAD, not the plans.\n\nFeatures, one line each and only for behaviour that shipped:\n- task-status notifications with View Task;\n- per-task worktrees kept out of file watching and search;\n- the Delivery section in task detail;\n- blocker parity on the board and in task detail;\n- Release Agent;\n- the Accounts view and its actions;\n- settings parity: enableAgentTeams, the read-only effective landing policy, and the dead branch/commit fields gone;\n- seat deregistration when an agent terminal closes;\n- deleted chat channels leaving the chat view.\n\nRegenerate the Commands list and the Extension settings table from moe-vscode/package.json (contributes.commands and contributes.configuration at HEAD), so every title and key matches. Under Release notes, add a short Unreleased block that mirrors the CHANGELOG entry. Keep the README's tone and length; no marketing.\n\nError handling: leave out any feature whose row did not ship (ARCHIVED or scoped down). Never describe one from its plan.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/README.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "CHANGELOG and manual checks.\n\nmoe-vscode/CHANGELOG.md: add one '## [Unreleased]' entry for the epic, above [0.8.0], with Keep a Changelog Added/Changed/Fixed sections. Do not bump the version; versions are synced at release.\n\nmoe-vscode/MANUAL_TESTS.md: replace the stale first line. An automated node:test suite now exists (`npm test`), and the manual checks cover what node:test cannot. Add sections in the file's existing style (numbered steps plus Expected lines):\n- task notifications: AWAITING_APPROVAL, BLOCKED, REVIEW and DONE; View Task opens the task; no notice on a reconnect snapshot;\n- the Accounts view and its sign-in terminal;\n- worktree exclusion: a file under .worktrees/ is absent from search and quick open but still listed in the Explorer;\n- Release Agent;\n- seat deregistration: launch a seat, close its terminal, and the worker deregisters and its task is released;\n- a deleted chat channel leaves both the channel list and the selection;\n- Remote-WSL, VS Code's answer to JetBrains' 'Run Agents in WSL' toggle: open the project through VS Code Remote-WSL; the extension host and the bundled daemon run inside the distro, and agents launch through moe-agent.sh.\n\nError handling: leave out the manual check for any behaviour that did not ship.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/MANUAL_TESTS.md"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Update the slice table in docs/plans/2026-11-02-vscode-reuse.md with the Edit tool.\n- Add 'Final status' and 'Landing commit' columns, filled from step 1(b). Use the short sha of each row's completion commit; for this row write 'this row'.\n- Add a 'Follow-ups filed during the epic' table. It lists VSC-22 (task-be543ff20bbc4f30ac7ac895ae0b4d13) and every row filed in step 3, with each one's status at the time of writing.\n- Replace the wave note that says 'At writing, VSC-2 and VSC-19 are DONE' with the final state.\n- Correct any Area cell that a row's landed diff contradicts. For example, VSC-6 touched MoeDaemonClient.ts and media/chat.js, not extension.ts.\n- Leave the Baseline, Gap list and Reuse decision sections as written (they are VSC-0's record), apart from a one-line pointer from Baseline to this row's final counts.\n\nError handling: a row whose landing commit cannot be found is marked 'not landed' with the reason, never guessed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Verification, run once, after steps 4-6 (DoD 1 and 2). There is no npm in the shared checkout; both gates use the UUID-free snapshot /mnt/d/moe-scratch/vsc18-gate (see mem:gotcha-vsce-package-uuid-path and mem:gotcha-vscode-gate-from-wsl).\n\nGate A: run executionContract.checkRefs[0] verbatim, with its output redirected to a log outside the checkout. It does the following:\n- archives HEAD and overlays the four docs;\n- builds packages/moe-daemon and packages/moe-proxy;\n- runs moe-vscode npm ci, lint, compile, test and package;\n- unzips the vsix and runs scripts/tests/onboarding.mjs on its extension/bundled directory.\nRecord: the npm test summary lines (tests, pass, fail, skipped) against the 882a4c39 baseline of 388 tests, 384 pass and 4 skip; the vsix file count and size; and onboarding's PASS line.\n\nGate B, JetBrains, in the same snapshot (the daemon and proxy are built there now):\n1. Call moe.acquire_resource { resourceId: 'jetbrains-gradle' } (mem:convention-jetbrains-gradle-lease).\n2. Run checkRefs[1] verbatim: cmd.exe `gradlew.bat test buildPlugin --rerun`, the JUnit total, the unzipped plugin zip, and the onboarding smoke on it.\n3. Call moe.release_resource right after the gradle run, even on failure.\nRecord BUILD SUCCESSFUL, the JUnit total (VSC-19's QA saw 546 at 25e70ba1) and onboarding's PASS line.\n\nSubmit Gate A as the complete_task verification, and cite Gate B's command, exit code and counts in the summary.\n\nError handling:\n- If prepareSandbox rejects the Linux-installed node_modules, redo Gate B in a second D:\\\\moe-scratch snapshot whose daemon and proxy were installed and built by Windows npm through cmd.exe, and say which variant ran.\n- A failure traced to a commit outside the epic is reported with its sha and filed, not fixed here.\n- Kill only PIDs you started; the onboarding smoke stops its own daemon.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-8",
+      "description": "Final self-review and summary.\n(1) DoD 6: `git status --short` and this task's diff touch only moe-vscode/README.md, moe-vscode/CHANGELOG.md, moe-vscode/MANUAL_TESTS.md and docs/plans/2026-11-02-vscode-reuse.md, and none of the description's not-in-scope files. Other sessions' dirty paths are not yours.\n(2) Re-read the four docs against HEAD: every command, setting key, behaviour and sha they name exists.\n(3) Assemble the summary:\n- the Gate A and Gate B commands, exit codes and counts against the baselines;\n- the corpus grep listing from step 2;\n- every adversarial finding, marked 'fixed here' or given its filed row id;\n- each parked item from step 1(d) and what happened to it.\n(4) Remove /mnt/d/moe-scratch/vsc18-gate after recording the results.\n\nError handling: if the re-read finds a doc claim that does not hold, fix the doc and rerun Gate A, because README.md and CHANGELOG.md ship inside the vsix.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -52,9 +108,89 @@
       "author": "architect-93e0e956",
       "content": "Architect note from the VSC-0 breakdown session, added after this row was created:\n1. dependsOn holds all 20 slice rows (VSC-1 to VSC-17 and VSC-19 to VSC-21), which is the daemon's cap. VSC-0 (task-a3e414a3, the breakdown row that writes docs/plans/2026-11-02-vscode-reuse.md) is NOT in the list. Before item 4 (the slice-table update), confirm VSC-0 is DONE and the doc is on the branch.\n2. Rows VSC-19, VSC-20 and VSC-21 (task-b3daad34, task-7fa27666, task-7e7bd0ec) were added after the description was written. They port JetBrains' AgentSeatTracker, so closing an agent's terminal deregisters its worker (DEREGISTER_WORKER with reason terminal_closed, acknowledged by WORKER_DEREGISTERED). Treat them as part of items 2-4. client-seat-tracker.json is in the corpus-integrity check. Add seat deregistration on terminal close to the README feature list and add a MANUAL_TESTS.md check (launch a seat, close its terminal, see the worker deregistered and its task released).",
       "timestamp": "2026-11-02T09:46:18.049Z"
+    },
+    {
+      "id": "comment-97b50ba723544e7d96a21958279e0d5c",
+      "author": "architect-93e0e956",
+      "content": "Gap for the hardening pass (architect-93e0e956, from planning VSC-8 task-185f728f and VSC-3 task-a5f39d55). Please fix it here or file it as a row, per this row's DoD.\n1. The VS Code Delivery section renders only when the task detail panel opens. VSC-8's DoD covers the initial HTML (TaskDetailPanel.getWebviewContent) and nothing else. Live updates go through postMessage 'updateTask' to media/taskDetail.js, which rebuilds only #blockerSection. So delivery evidence recorded while the panel is open (candidate, check run, receipt, attempt phase) stays stale until the panel is reopened. JetBrains refreshes its delivery section on every state update (TaskDetailDialog.refreshDeliverySection). VSC-11 edits media/taskDetail.js, which is why VSC-8 did not take the fix. A fix that avoids a second copy of the logic: have the panel post the precomputed deliveryRows (and labels) with 'updateTask', and have taskDetail.js rebuild an always-present #deliverySection from DOM text nodes, as renderBlocker does.\n2. Known cross-client gap, deliberately left out of client-delivery.json. The daemon accepts any safe-integer check exitCode. JetBrains MoeJson.deliveryExitCode returns null outside the Int range (TaskDelivery.exitCode is Int), so a code such as 3221225477 shows no exit row in JetBrains, while VS Code (Number.isSafeInteger, per VSC-8's plan) renders it as failed. The risk is low: PowerShell $LASTEXITCODE and bash codes stay in range. A real fix touches MoeJson.kt and Models.kt. Serena memory decision-client-corpus-conventions has the details.",
+      "timestamp": "2026-11-02T10:16:11.311Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:42:20.055Z",
-  "updatedAt": "2026-11-02T09:46:18.049Z"
+  "updatedAt": "2026-11-02T10:18:45.047Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:12:41.151Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:18:45.017Z",
+  "executionContract": {
+    "intendedBehavior": "Close epic-aabc654d.\n- Prove both plugins on the final HEAD. VS Code: lint, compile, test and package, plus the onboarding smoke on the vsix bundle. JetBrains: test and buildPlugin, plus the onboarding smoke on the zip.\n- Prove that every client-*.json corpus has a Kotlin reader and a moe-vscode reader, with no client-specific expectation.\n- Run an adversarial pass over the whole epic diff. Each finding is fixed in this row's docs or filed as a row.\n- Sweep moe-vscode README, CHANGELOG and MANUAL_TESTS, and the reuse doc's slice table, so they describe what landed.",
+    "acceptanceCriteria": [
+      "Gate A (checkRefs[0]) exits 0, and the summary reports its npm test counts against 882a4c39 (388/384/4) plus the onboarding PASS on the vsix bundle.",
+      "Gate B (checkRefs[1]), run under the jetbrains-gradle lease, prints BUILD SUCCESSFUL, the JUnit total and the onboarding PASS on the plugin zip.",
+      "The summary carries the corpus grep listing, every adversarial finding with 'fixed here' or a filed row id, and every parked item's outcome.",
+      "The slice table shows each row's final status and landing commit, plus a follow-ups table that includes VSC-22."
+    ],
+    "invariants": [
+      "The diff touches only moe-vscode/README.md, moe-vscode/CHANGELOG.md, moe-vscode/MANUAL_TESTS.md and docs/plans/2026-11-02-vscode-reuse.md.",
+      "No npm install, build or test runs in the shared checkout; every gate runs in /mnt/d/moe-scratch/vsc18-gate.",
+      "The jetbrains-gradle lease is held only around the gradle run and released even on failure.",
+      "Docs describe what landed at HEAD, never what a plan promised."
+    ],
+    "compatibility": [
+      "Leave the Baseline, Gap list and Reuse decision sections of the reuse doc as VSC-0 wrote them; only a pointer to the final counts is added.",
+      "No version bump in moe-vscode/package.json; the CHANGELOG entry is [Unreleased]."
+    ],
+    "sourceAssumptions": [
+      "scripts/tests/onboarding.mjs takes an extracted bundle directory: <vsix>/extension/bundled for VS Code, and <zip>/moe-jetbrains for JetBrains (.github/workflows/ci.yml 'Verify packaged JetBrains onboarding').",
+      "moe-jetbrains/build.gradle.kts prepareSandbox requires built, fresh packages/moe-daemon and moe-proxy dist plus node_modules (requireBundledAssets), and excludes node_modules/.bin from the copy.",
+      "vsce packages nothing from a path with a UUID-shaped segment (npm 12 redaction), so the gates use /mnt/d/moe-scratch.",
+      "Epic rows land as feat/fix(<task id>) completion commits on moe/work-2026-10-24. The epic baseline sha is 882a4c39."
+    ],
+    "checkRefs": [
+      "S=/mnt/d/moe-scratch/vsc18-gate && rm -rf \"$S\" && mkdir -p \"$S\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && git -C /mnt/d/projexts/moes rev-parse HEAD > \"$S/.snapshot-sha\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/README.md moe-vscode/CHANGELOG.md moe-vscode/MANUAL_TESTS.md docs/plans/2026-11-02-vscode-reuse.md \"$S\"/) && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && cd \"$1\" && for p in packages/moe-daemon packages/moe-proxy; do (cd \"$p\" && npm ci --no-audit --no-fund && npm run build) || exit 1; done && cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test && npm run package && mkdir ../vsix && unzip -q ./*.vsix -d ../vsix && cd .. && node scripts/tests/onboarding.mjs vsix/extension/bundled' _ \"$S\"",
+      "S=/mnt/d/moe-scratch/vsc18-gate && test -s \"$S/.snapshot-sha\" && /mnt/c/Windows/System32/cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$S\")\\\\moe-jetbrains && .\\\\gradlew.bat test buildPlugin --rerun\" && grep -ho 'tests=\"[0-9]*\"' \"$S\"/moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{s+=$2} END {print \"JUnit tests total: \" s}' && rm -rf \"$S/jb\" && mkdir \"$S/jb\" && unzip -q \"$S\"/moe-jetbrains/build/distributions/*.zip -d \"$S/jb\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node scripts/tests/onboarding.mjs jb/moe-jetbrains"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Code findings from the adversarial pass are FILED as rows, not fixed here. A fix would need files this plan cannot name in advance, and the gates would have to rerun. The DoD allows 'fixed or filed', so the only fixes made in this row are those confined to its four doc files.\n\nOne verification step with two gates, in the same UUID-free snapshot. Gate A builds the daemon and proxy that both packagers need. Gate B reuses them under the jetbrains-gradle lease, so the lease is held only for the gradle run. Gate A is the complete_task evidence; Gate B is cited in the summary (prior epic-final rows also submitted one principal gate). The epic diff is measured as 882a4c39..HEAD on the plugin paths, with non-epic commits listed and excluded, rather than stitched from per-row commits.",
+    "codebaseInsights": "- scripts/tests/onboarding.mjs takes an extracted bundle directory: <vsix>/extension/bundled for VS Code, and <zip>/moe-jetbrains for JetBrains (the CI step 'Verify packaged JetBrains onboarding' does exactly this).\n- moe-jetbrains/build.gradle.kts prepareSandbox calls requireBundledAssets(): packages/moe-daemon and moe-proxy dist must exist and be no older than their src (mtime check), plus node_modules. node_modules/.bin is excluded from the copy, so Linux-installed node_modules should copy cleanly from a /mnt/d snapshot. That is untested, so Gate B has the Windows-npm fallback.\n- `gradlew test` alone needs no dist (prepareTestSandbox).\n- vsce packages nothing from a UUID path, hence /mnt/d/moe-scratch.\n- VS Code baseline at 9ea87aa6 (after VSC-0/1/2 landed): lint 0, compile 0, 416 tests / 412 pass / 4 skip.\n- The epic-baseline sha for DoD counts is 882a4c39 (388/384/4).\n- VSC-22 (task-be543ff20bbc4f30ac7ac895ae0b4d13, BACKLOG) is outside dependsOn (cap 20); list it in the follow-ups table.",
+    "risks": "- Gate A runs three npm ci on NTFS through WSL. It is slow (minutes), so redirect output to a log outside the checkout.\n- A non-epic commit landing between epic rows can break a suite. Attribute it by sha before blaming the epic.\n- Docs must describe what landed: rows may be scoped down at plan time. Read completionSummaries and the code, not the slice descriptions.\n- The four docs ship in the vsix (README, CHANGELOG), so any doc edit after Gate A means rerunning Gate A.\n- Release the jetbrains-gradle lease even on failure. Leases are task-keyed and survive report_blocked.\n- Never edit the epic's files-to-avoid; file a row instead.",
+    "keyFiles": [
+      "docs/plans/2026-11-02-vscode-reuse.md",
+      "moe-vscode/README.md",
+      "moe-vscode/CHANGELOG.md",
+      "moe-vscode/MANUAL_TESTS.md",
+      "moe-vscode/package.json",
+      "scripts/tests/onboarding.mjs",
+      "moe-jetbrains/build.gradle.kts",
+      ".github/workflows/ci.yml",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "b7a67b97f9549bc04c44948ae87a708072b7c27f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:18:45.047Z",
+  "approvedPlanRevision": 1
 }
