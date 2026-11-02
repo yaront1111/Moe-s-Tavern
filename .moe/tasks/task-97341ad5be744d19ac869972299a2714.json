@@ -1,0 +1,412 @@
+{
+  "id": "task-97341ad5be744d19ac869972299a2714",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: the guest supervisor's relay leaves a finished job's background processes running and stops watching host EOF once the job closes its output pipes",
+  "description": "run_bridge stands the guard down on a normal finish without killpg (run_install always kills), so `sleep 300 &` or a setsid child outlives the job until VM deletion, contrary to check-evidence's teardown 'killed-and-reaped'; and pump stops polling in_fd once both output pipes close, so a host EOF (header: exit 74) goes unnoticed while the job runs on. Also: a bridge request pending at job exit turns a real observation into SESSION_PROTOCOL_VIOLATION (guest-session.mjs:169; runAgentJob has no caller yet), and the header's exit 75, materialize's \"leaves neither\" comment and snapshot-import.mjs's \"limit codes surface unchanged\" disagree with the code. Changes supervisorSha256, so certification reports must be re-run.",
+  "definitionOfDone": [
+    "After any job ends, no process of its group or session survives the observation frame, and a host EOF is acted on while a job with closed output pipes still runs, with tests.",
+    "The supervisor header and the cited comments match the code."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Use test-driven-development in local-runner-bridge.test.mjs. Replace S11's explicitly obsolete requirement that a grandchild survive normal completion with a death-before-observation assertion; this is an intentional behavior correction, not assertion weakening. Cover exit0, nonzero and signalled jobs with a lingering child that keeps output open or redirects it closed. Reuse existing guarded/session/frame helpers, accumulating PID output safely across chunks; assert the actual original exit/signal, one final observation only after owned descendants are gone, bounded completion, and an unrelated sentinel started by the test remains alive. Add a real-Python case whose job closes both output pipes but keeps running: close host in_fd after a deterministic ready/closed-output handshake, expect74 promptly with no observation and owned job cleanup. Add the same quiet-output case with malformed host data expecting76 and keep catchable-signal75 coverage. Existing task-a4a729ddaa8942679e8ae7cd57bd42f1 kernel-boundary tests cover setsid/setpgid/double-fork escape and supervisor SIGKILL; retain those unchanged and exercise its real root-Linux path when validating the completion boundary. Test cleanup may signal only exact recorded PIDs this test started, never names/UIDs/session scans; isolate privileged probes in owned namespaces.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "QA reopen-1 test fixes (bridge test only, +48/-1).\n- New S20 x2 (Linux-only skip: F_SETPIPE_SZ): the job enlarges one output pipe to 1 MiB, writes 512 KiB (bytes(range(256))*2048) to it and exits 3. HOLD wraps subprocess.Popen to learn the guard pid and, at the first output frame, waits (10 s bound) via os.waitid(P_PID, guard, WEXITED|WNOWAIT|WNOHANG) until the guard has exited, unreaped. So the start EOF arrives with all but one read unrelayed; no sleeps-as-sync. Asserts: the guard had exited while held ([true]), exact byte count and content of the heavy stream, the other stream empty, session() (hello first, outputs only, observation last), and exit {code: 3}. One row per stream pins each output EOF on its own.\n- OBSERVE done() now treats ProcessLookupError like FileNotFoundError. Probe: open /proc/<pid>/status, reap, read gives ProcessLookupError errno 3, so QA's premise holds.\nRED via mutants on scratch copies (current code already drains):\n- my driver /tmp/w97341-r2-tools/mut.py, ^S20: M04 and M04b killed by both rows (131072 of 524288 relayed); a stdout-only loop mutant is killed by the stderr row and a stderr-only one by the stdout row; the control passes 2/2.\n- QA's own driver /tmp/qa97341-tools/mut.py with its m04.json over ^S(1[1-9]|20): control 18/18; M04 and M04b each fail exactly the 2 S20 rows.\nGREEN: in place, S11 x6 + S20 x2 pass; 20 parallel runs of S20 (4 at a time) 20/20; under unshare -r, S11 x6 and S20 x2 pass. No new non-ASCII bytes. Foreign dirty paths (other sessions' .moe/tasks and scripts/moe-agent.*, postflight.*) left untouched.",
+      "startedAt": "2026-10-31T14:46:46.158Z",
+      "completedAt": "2026-10-31T14:51:00.572Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Make guard completion, not stdout/stderr lifetime, drive relay. After startup read returns '+', send the existing life-pipe stand-down byte immediately (as run_install already does); catch BrokenPipeError as the existing self-killed-group case. Extend pump to watch start_end in the SAME Bridge selector alongside host stdin, termination wakeup, agent sockets and output pipes. Keep servicing host EOF/protocol/signals even after both output streams close; no subsequent blocking completion-only read that stops watching host. An EOF on start_end marks guard completion; any unexpected control byte fails closed. Before reaping, SIGKILL the owned original process group while the unreaped guard pins its id (ProcessLookupError is benign), then drain remaining output to EOF. Only when completion EOF and both output EOFs are established may reap supply the single observation. Preserve raw wait status: cleanup must never turn a job's0/7/signal into a different observed result. The prerequisite's root-Linux kernel boundary guarantees all escaped descendants already ended before completion EOF; do not replace it with process scans or broaden kill scope. Keep finally teardown on all errors, close fds/selector/socket exactly once, retain signal-handler/wakeup restoration, and keep error handling mapping71 startup,74 I/O/hostEOF,75 caught signal,76 protocol. No busy polling, extra thread, second selector loop or public frame change.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "note": "No supervisor code change in round 2, by design. QA's reject (comment-b4b7df23) confirmed this step's runtime behaviour is correct: completion order, no observation before the group kill, killpg only while the guard is unreaped, raw wait status kept, fds/selector/socket closed once, no spin. The gap was a missing test, not code.\n- The drain this step implements (\"only when completion EOF and both output EOFs are established may reap supply the observation\") is now pinned by step 1's S20 rows. M04 (loop only on start_end), M04b (return at start EOF) and both one-stream loop mutants of this step's pump are each killed.\n- Re-checked: `grep -c \"except ProcessLookupError\" scripts/local-runner/guest-supervisor.py` prints 0; the GROUP_GONE comment+definition is byte-identical to a4c8204d (diff of the 3 lines is empty); guest-supervisor.py is unchanged since b245f476 at this point (only the header comment changes in step 3).",
+      "startedAt": "2026-10-31T14:51:05.079Z",
+      "completedAt": "2026-10-31T14:51:39.233Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Make guard completion, not stdout/stderr lifetime, drive relay. After startup read returns '+', send the existing life-pipe stand-down byte immediately (as run_install already does); catch BrokenPipeError as the existing self-killed-group case. Extend pump to watch start_end in the SAME Bridge selector alongside host stdin, termination wakeup, agent sockets and output pipes. Keep servicing host EOF/protocol/signals even after both output streams close; no subsequent blocking completion-only read that stops watching host. An EOF on start_end marks guard completion; any unexpected control byte fails closed. Before reaping, SIGKILL the owned original process group while the unreaped guard pins its id (a group with no member left to kill is benign: catch it as GROUP_GONE, never with a bare `except ProcessLookupError`, because darwin raises PermissionError for a group that holds only the zombie guard, which is the usual case, while Linux signals it as a no-op), then drain remaining output to EOF. Only when completion EOF and both output EOFs are established may reap supply the single observation. Preserve raw wait status: cleanup must never turn a job's0/7/signal into a different observed result. The prerequisite's root-Linux kernel boundary guarantees all escaped descendants already ended before completion EOF; do not replace it with process scans or broaden kill scope. Keep finally teardown on all errors, close fds/selector/socket exactly once, retain signal-handler/wakeup restoration, and keep error handling mapping71 startup,74 I/O/hostEOF,75 caught signal,76 protocol. No busy polling, extra thread, second selector loop or public frame change.\nGROUP_GONE: if scripts/local-runner/guest-supervisor.py already defines GROUP_GONE (the CI fix for PR #230, branch fix/ci-pr230, PR #232, is due to land on this branch), reuse it with `except GROUP_GONE:`. If it does not exist yet, add this exact definition after pump(), with its comment, so the later merge sees an identical line on both sides:\n```\n# killpg errors that mean no member of the job group is left to kill: ESRCH, and on darwin, where only the tests run this\n# file, EPERM for a group of zombies (Linux signals one as a no-op).\nGROUP_GONE = (ProcessLookupError, PermissionError) if sys.platform == 'darwin' else ProcessLookupError\n```\nCheck: after your change, `grep -c \"except ProcessLookupError\" scripts/local-runner/guest-supervisor.py` must print 0 (governor comment-4931235).",
+          "reason": "Folds governor-693b7073's binding comment-4931235 (from architect-b58e1112, msg-db71184c) into the step text. When the job leaves nothing behind, the group holds only the zombie guard. On darwin, killpg on that group raises PermissionError, not ProcessLookupError, so a bare `except ProcessLookupError` makes completion fail on the macOS CI leg. Neither the WSL gate nor QA would see that. Catch GROUP_GONE (PR #232's definition) instead. Nothing else in the step changes.",
+          "amendedBy": "governor-4764040b",
+          "amendedAt": "2026-10-31T12:51:16.897Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update local supervisor/guard/pump comments to describe the new completion/teardown order and production Linux descendant guarantee, without claiming the non-root POSIX import harness certifies isolation. Clarify header's pre-relay no-frame refusals versus failures after hello, preserving predecessor42's dependency82 contract. Correct materialize's 'handled failure leaves neither' comment: pre-publication failure cleans owned staging/manifest as applicable, but after successful rename an acknowledgement-write failure can leave the published workspace+manifest; this task does not change materialize rollback behavior. Current EX_TERMINATED=75/header are already consistent, and snapshot-import's claim that onFrame/R09a errors surface unchanged is supported by snapshot-transfer's current catch(finish(error)); leave those correct contracts alone. Update S15/S16/S17 stale 'pump ended/last start-pipe read' descriptions to the new quiet-output selector behavior without dropping their signal-race/no-spin/socket-EOF assertions.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "note": "Exit-code header rewritten (comment only, +10/-7, all lines <=120 cols, ASCII; the supervisor is 87368 bytes, under MAX_SUPERVISOR_BYTES 262144). I audited every return per mode against the new text:\n- 71: start_job no AGENT_IDENTITY account, no session home or launch config (before relay, no frame); materialize no AGENT_IDENTITY account (\"materialize found no AGENT_IDENTITY account\" is restored, QA 1a); export drop KeyError/OSError; run_bridge Popen/bridge.open (and the in_fd/wakeup registration) failure, now stated as \"a bridge (host stream or agent socket) or guard that could not start comes before any child exists\" (QA 1b); no '+' (\"a guard that could not start the job\") kills the group.\n- 74/75/76 after hello: every path is in run_bridge's second try, after Popen, so the finally kills the group (75: Terminated is raised only inside armed waits, which all run after Popen). A failed observation write, after the start-EOF killpg, gives 74 with the group already killed, hence \"a failure never completes an observation frame\".\n- Also: \"relay() exits 74 with no job if it cannot write hello\" (that path was uncovered), the 74 before relay reads \"a failed read or EOF\" (read_job catches OSError too), and 65 now lists start_job's codex-workspace-holding-.codex refusal, which the header never had.\n- \"relay() returns 0 only once the one observation frame is written\" replaces \"only 0 follows the one observation frame\", which read as contradicting check mode's documented 80 after the observation.\nUnchanged and QA-verified: GUARD, pump, materialize, run_install comments, EX_TERMINATED=75, the snapshot-import comment, S15/S16/S17 titles. The 82/check text is untouched.\nChecks: ast.parse ok; no test pins the header text (hashes are computed); full bridge file in place gives 76 tests, 75 pass, 0 fail, 1 skip (LA5, env-gated); no __pycache__ written.",
+      "startedAt": "2026-10-31T14:51:44.708Z",
+      "completedAt": "2026-10-31T14:54:49.260Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY once for the shared supervisor/guard protocol: create a full git archive snapshot outside the live checkout after prerequisites land, overlay ONLY these two final owned files, and export its absolute path as MOE_VERIFY_SNAPSHOT. Install host-native daemon dependencies with npm ci only there; retain lockfile and use Linux-only Node/npm/Git PATH on WSL. Run exactly cd \"$MOE_VERIFY_SNAPSHOT\" && node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test). This includes the prerequisite kernel guard and host pending-request tests; record source SHA, owned overlays, OS/kernel/Python/Node, capability/skip details, fresh exitCode/outputTail as complete_task evidence. Linux process/namespace rows must execute on a capable Linux host; Windows skips POSIX-only rows with their existing explicit reasons and macOS imported tests do not establish Linux isolation. No live checkout install/build/daemon tests, no .moe edits, no pattern-kill. New supervisorSha256 invalidates old certification: report the changed hash; CQ-R13/operator owns actual VM re-certification and verified-local remains unavailable.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh snapshot gate, GATE_EXIT=0 (log /tmp/w97341-r2-tools/gate1.log, driver gate.sh beside it).\n- MOE_VERIFY_SNAPSHOT=/tmp/moe-97341-r2-gate-m8N1Pe: a full git archive of HEAD d8681900 (a peer's CQ-V08 landing; it does not touch the two owned files) plus ONLY the overlays guest-supervisor.py sha256 79a3a82788ca871e56c9c7a13c5722afbc592aef429435d3083ba047e87dee04 and local-runner-bridge.test.mjs sha256 c2452da3eed573eea96b3f50655ba9c0937ea78ea77466bda81f3a0d5b879ad6.\n- npm ci + npm run build ran in the snapshot's packages/moe-daemon only; the lockfile hash 3257552d8aa31354 is unchanged.\n- env -i, PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin. Linux 6.18.33.1-microsoft-standard-WSL2 x86_64, uid 1000, Ubuntu 24.04.4 LTS, Python 3.12.3, node v24.21.0, npm 12.2.0, git 2.43.0.\n- Exact command: cd \"$MOE_VERIFY_SNAPSHOT\" && node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test).\n  - node --test: 647 tests, 644 pass, 0 fail, 3 skipped (LA5 needs MOE_PINNED_CODEX; K9 needs root for a mount namespace, CQ-R13 certifies; opt-in macOS native provider smoke). That is QA's 645 plus the 2 S20 rows. 82.2 s.\n  - vitest: 215/215 files, 6341 passed, 20 skipped.\n- No leftover process carries the gate's env marker. Nothing was built, installed or tested in the live checkout; no .moe edits; no pattern kill.\nNew supervisorSha256 79a3a827...ee04 supersedes 27b4a266... (comment-873e7ccb). It goes to CQ-R13 (task-f4811a72) after step 5. verified-local stays unavailable.",
+      "startedAt": "2026-10-31T14:54:54.158Z",
+      "completedAt": "2026-10-31T14:58:11.068Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review: reason through all orders of host EOF, output EOF, guard completion, signal wakeups, queued socket requests and late host data. No observation before descendant teardown; no successful observation if setup, control pipe or cleanup failed; no loss of buffered final output or job status; kill only the pinned owned group, never a reused/reaped pid; preserve original71/74/75/76 semantics and unrelated sentinel. Confirm owned fd/socket closure, no busy loop, no credential output, and both prerequisites compose without re-editing their tests. Keep S9-S17's meaningful protections; only S11's documented old leak requirement is reversed. If fixes change final source, rerun the same gate on refreshed snapshot bytes. Leave foreign dirty bytes and production activation untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Adversarial self-review of this round's diff (supervisor +10/-7 comment only; test +48/-1).\nFixed during review (header, comment-only): the no-child 71 now names every setup in run_bridge's first try (\"a failed bridge setup (the wakeup pipe, host stream or agent socket) or a guard that could not start\"); the wakeup-pipe registration had been missing. \"relay() exits 74\" now reads \"returns 74\", matching the next sentence. Re-hashed, then re-ran the same gate on refreshed bytes.\n- Final supervisorSha256 24e6746d1da930fa672207840ac217f8066be4bac78b46a6ecc386101e4d6b2c; test sha256 c2452da3....\n- Gate (/tmp/moe-97341-r2-gate-UfFSji, archive d8681900 plus the 2 overlays, lockfile unchanged): node 647 tests, 644 pass, 0 fail, 3 skips (LA5, K9, macOS smoke); vitest 215 files, 6341 pass, 20 skipped; GATE_EXIT=0.\n- Mutants on the final bytes over ^S(1[1-9]|20): control 18/18; M04, M04b, stdout-only and stderr-only loops all killed. No marked leftovers.\nS20 attack review:\n- Not vacuous: [true] proves the guard (hence the job) exited while the first frame was held, so at least 448 KiB sat unread at start EOF. A blocked job, or an F_SETPIPE_SZ that did nothing, fails at the 10 s bound instead of passing.\n- No sleeps-as-sync: the waitid WNOWAIT rendezvous.\n- A mid-observation drain mutant is caught by session() (observation last, outputs only between).\n- Cleanup: the job exits by itself (EPIPE if the harness dies), and a killed harness's guard takes the life-EOF kill path, so no long-lived processes.\n- Linux-only skip with its reason; it passes under unshare -r.\nOBSERVE: ESRCH is now treated as reaped; EACCES is impossible on /proc/<pid>/status.\nRuntime: unchanged since b245f476, which QA reviewed (order, pinned killpg, raw status, single close, no spin). The a4a7 G rows and the 5ee8 H9 rows pass unedited in the gate.\nTheoretical, pre-existing, not filed: EMFILE from os.pipe()/Bridge() before run_bridge's try (or Termination's pipe) after hello escapes as an uncaught OSError (Python exit 1, no child, no observation). It fails closed.",
+      "startedAt": "2026-10-31T14:58:13.886Z",
+      "completedAt": "2026-10-31T15:03:35.344Z"
+    }
+  ],
+  "planRevision": 2,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD 2 fails: the rewritten exit-code header no longer matches the code. Also, the start-EOF drain path this task added has no test; removing it drops output silently.\n\nWhat holds (full evidence in comment-b4b7df23):\n- Fresh snapshot gate of b245f476: node --test 645 tests, 642 pass, 0 fail, 3 pre-existing skips; vitest 215/215 files, 6341 pass; GATE_EXIT=0.\n- RED: on the parent supervisor, 9 of 16 S11-S19 rows fail.\n- Root-runner S11/S18/S19 pass.\n- 6 independent mutants are killed.\n- GROUP_GONE matches a4c8204d.\n- Code review: completion order and teardown are correct.\n\nRequired fixes:\n1. Header (DoD 2):\n   - Lines 12-13 dropped materialize's 71 for a missing AGENT_IDENTITY account (lines 667-672, reachable from main). CQ-R09c (efffad66) had documented it.\n   - Lines 16-17 say every after-hello 71 kills the child group. But a failed guard Popen or agent socket returns 71 before any child exists (line 504).\n2. Drain test: no row pins \"both output EOFs before the observation\".\n   - Two mutants survive every bridge, check and guard row:\n     - M04: the line-436 loop becomes `while start_end in selector.get_map():`.\n     - M04b: `return` right after the start-EOF killpg.\n   - With a job that enlarges its stdout pipe and a slow host consumer, both mutants relay 128 of 512 KiB, then write a normal exit observation. That is silent data loss.\n   - Add a row that kills both mutants.\n3. Minor: OBSERVE's done() should treat ProcessLookupError (ESRCH) as reaped.\n\nAfter the fixes, re-run the full snapshot gate and hand the new supervisorSha256 to CQ-R13.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 8,
+  "comments": [
+    {
+      "id": "comment-9ad4498740dd43d5a10f146d2827606d",
+      "author": "architect-21c9ed65",
+      "content": "SPIDR interface split: task-a4a729ddaa8942679e8ae7cd57bd42f1 owns root Linux kernel descendant containment while retaining GUARD '+'/completion-EOF/waitpid-status interface; task-5ee846b62b81438c9d508160235d15ac owns pending host requests at valid job completion. Parent owns output-independent relay completion/host EOF, normal group cleanup and local comment corrections, after both. Confirmed current EX_TERMINATED=75/header/S9 agree, and snapshot-transfer.runSupervisorStream forwards onFrame errors unchanged, so snapshot-import's R09a-code comment is now correct; do not change those semantics based on stale description. materialize's 'leaves neither' claim is inaccurate after publish/ack failure and needs correction.",
+      "timestamp": "2026-10-31T06:17:56.597Z"
+    },
+    {
+      "id": "comment-02cdc055446645258d3947e635fde165",
+      "author": "architect-b58e1112",
+      "content": "Architect heads-up from the a4a729dd plan (rev 1, 2026-10-31). This row depends on it.\n- GUARD as root now unshares a PID namespace and forks a trusted init. The job's parent is init, a fork of GUARD with the same cmdline. GUARD is now the grandparent and the supervisor the great-grandparent.\n- a4a729dd updates J4 in local-runner-bridge.test.mjs to match (+4/-3). That is the only change it makes to that file.\n- GUARD's private interface is unchanged: '+' once, start EOF only after GUARD exits, and the wait status mirrors the job.\n- The stand-down byte may now come right after '+'. Life stays watched after stand-down, so a later supervisor death still kills init, then the group.\n- A root job's escaped descendants (setsid, setpgid, double fork) are dead before completion EOF.\n- Kernel-boundary tests G1-G9 are in scripts/tests/local-runner-guard.test.mjs. Your step 1 keeps them unchanged.",
+      "timestamp": "2026-10-31T07:25:57.238Z"
+    },
+    {
+      "id": "comment-8501da9d13344d80878c24740ad16ed5",
+      "author": "architect-66fd8127",
+      "content": "Heads-up from task-a46b60e6, which depends on this row. It is informational only and does not change your plan or DoD.\n\nUnder a root runner (`unshare -r`, or real root in a guest), GUARD unshares a PID namespace. Inside the job, os.getpid() and os.getppid() return namespace-local numbers (2 and 1), and so does a fork() return value. A job that calls kill() on the harness's outer pid gets ESRCH. The guest's procfs still reports global pids.\n\na46b converts the existing rows after you land: S6, AGENT_CHILD, GROUP_JOB, S11, S12, S15, S16, S17, J4, K3, KI1 and KI2. It uses readlink('/proc/self'), /proc/<pid>/stat fields, a fork whose child pipes its global pid to the parent, and harness-side signals. If your NEW rows send job pids to the host (your S11 rewrite, the quiet-output host-EOF case), you may already read them from procfs. Either way, a46b audits and converts whatever remains. Please don't change other rows for this.\n\nReference: Serena memory task-task-a46b60e6aa63422fbd63934d17238396-prototype.",
+      "timestamp": "2026-10-31T12:37:23.563Z"
+    },
+    {
+      "id": "comment-4931235893494bc0bc10d7d6423c384d",
+      "author": "governor-693b7073",
+      "content": "Governor plan amendment for step 2 (from architect-b58e1112, msg-db71184c). It is binding for whoever works this row.\n\nStep 2 says \"SIGKILL the owned original process group while the unreaped guard pins its id (ProcessLookupError is benign)\". Do NOT write a bare `except ProcessLookupError` at that killpg. Catch GROUP_GONE instead.\n\nWhy: when the job leaves nothing behind (the usual case), the group holds only the zombie guard. Linux treats the killpg as a no-op, but darwin raises PermissionError. The completion would then fail on macOS, and the macOS CI leg runs the bridge tests. Your WSL gate and QA would not see this.\n\nHow:\n- If scripts/local-runner/guest-supervisor.py already defines GROUP_GONE (the CI fix for PR #230, branch fix/ci-pr230, is due to land on this branch soon), reuse it: `except GROUP_GONE:`.\n- If it does not exist yet, add this exact definition after pump(), with its comment, so the later merge sees an identical line on both sides:\n```\n# killpg errors that mean no member of the job group is left to kill: ESRCH, and on darwin, where only the tests run this\n# file, EPERM for a group of zombies (Linux signals one as a no-op).\nGROUP_GONE = (ProcessLookupError, PermissionError) if sys.platform == 'darwin' else ProcessLookupError\n```\nCheck: after your change, `grep -c \"except ProcessLookupError\" scripts/local-runner/guest-supervisor.py` must print 0.",
+      "timestamp": "2026-10-31T12:50:26.987Z"
+    },
+    {
+      "id": "comment-b4b7df23bf9e4623ab9f93c4145a88be",
+      "author": "qa-b29f7b3d",
+      "content": "QA review of completion b245f476 (qa-b29f7b3d, 2026-10-31): REJECT. Two required fixes, one minor. Everything else verified:\n\n**Verified**\n- Gate re-run fresh in a full `git archive b245f476` at /tmp/qa97341-gate-3Ws2Cj. The two overlay hashes, 27b4a266… and da6557d2…, match the worker's.\n  - npm ci + build ran only in the snapshot's packages/moe-daemon; the lockfile hash is unchanged.\n  - Environment: env -i Node 24.21.0, WSL2 6.18.33.1, uid 1000, Python 3.12.3.\n  - node --test: 645 tests, 642 pass, 0 fail, 3 skipped (LA5, K9, macOS smoke). vitest: 215/215 files, 6341 passed, 20 skipped. GATE_EXIT=0. No leftover processes carried my env marker.\n- RED: the new test file against the parent supervisor (8a631957…) fails 9 of 16: S11 ×6, S18 eof and malformed, S19. S12-S17 and S18 SIGTERM pass.\n- Root runner (`unshare -r`, run twice): S11 ×6, S13-S15, S17, S18 ×3 and S19 pass. S12 and S16 fail the same way on the parent b6cfcc4e. Those are the pre-existing namespace-pid rows that task-a46b60e6 owns.\n- My own mutants, on scratch copies with pattern `^S(1[1-9]) ` (unmutated control 16/16). All of these were KILLED:\n  - no pump killpg\n  - os.kill of the leader instead of killpg\n  - pump loop without start_end\n  - stray guard byte ignored\n  - SIGTERM instead of SIGKILL (the S11 closed rows)\n  - kill at output EOF instead of start EOF\n- GROUP_GONE hunks are byte-identical to a4c8204d, and `grep -c \"except ProcessLookupError\"` prints 0.\n- Code review of the run_bridge, pump and GUARD orderings:\n  - no observation before the group kill;\n  - killpg only while the guard is unreaped;\n  - raw wait status kept;\n  - fds, selector and socket closed once;\n  - no spin.\n- These comments match the code: materialize (handled failure before the rename vs. a failed frame write after it), GUARD, pump, run_install, EX_TERMINATED=75, and snapshot-import's \"R09a codes surface unchanged\" (supervise() → finish(error), snapshot-transfer.mjs:151).\n\n**1. DoD 2 fails: the exit-code header no longer matches the code**\n- (a) Header lines 12-13 now say \"71 the job could not start, or the export could not become the AGENT_IDENTITY account\".\n  - That drops materialize's 71. materialize() returns os.EX_OSERR when pwd.getpwnam(AGENT_IDENTITY) raises KeyError (guest-supervisor.py:667-672), and main() routes ['materialize'] to materialize(0, 1) with no owner, so production can reach it.\n  - CQ-R09c (efffad66) documented this as \"; or no AGENT_IDENTITY account\", and the pre-task header still carried it.\n  - The only \"no AGENT_IDENTITY account\" left is scoped to \"A bridge refusal before relay()\".\n- (b) Lines 16-17 say every after-hello 71, including \"the guard … or the agent socket could not start\", kills the child group. But run_bridge's `except (OSError, KeyError)` branch (:504) returns 71 for a failed guard Popen or bridge.open before any child exists, so nothing is killed.\n- Fix both, re-hash, and hand the new supervisorSha256 to CQ-R13 (task-f4811a72). It supersedes comment-873e7ccb's 27b4a266….\n\n**2. Draining output after the start EOF has no test (plan step 2: \"Only when completion EOF and both output EOFs are established may reap supply the single observation\"; step 5: no loss of buffered output)**\n- Two mutants survive all 74 bridge rows and every check/guard row (the scratch control fails only E8/DA5/TC1, which need files outside scripts/):\n  - M04: pump.py:436 → `while start_end in selector.get_map():`\n  - M04b: `return` right after the start-EOF killpg\n- Each was probed twice with /tmp/qa97341-tools/drain_probe.py. The job raises its stdout pipe to 1 MiB (fcntl F_SETPIPE_SZ=1031), writes 512 KiB of a known pattern and exits 3; the harness sleeps 0.1 s per output frame.\n  - The correct code relays all 524288 bytes, then the exit-3 observation.\n  - M04 and M04b relay 131072 bytes, then a normal-looking exit-3 observation. 384 KiB of the job's own output is silently lost.\n- Add a row (Linux-only skip is fine) that kills both mutants. It must assert:\n  - the exact relayed bytes;\n  - the observation is the last frame;\n  - the job's own status is kept.\n\n**3. Minor, fix while there**\n- OBSERVE's done() (bridge test, around line 1211) counts only FileNotFoundError as reaped. A pid released between open() and the first read raises ProcessLookupError (ESRCH).\n- That error escapes the write_frame hook, run_bridge maps it to 74, and S11 fails spuriously.\n- Treat ESRCH as reaped too.\n\nTools (scratch, kept): /tmp/qa97341-tools/{mut.py, mutants.json, drain_probe.py}.",
+      "timestamp": "2026-10-31T14:38:12.048Z"
+    },
+    {
+      "id": "comment-692404a2fc87466099a5778f2da39f9d",
+      "author": "governor-4764040b",
+      "content": "Governor note for the reopen-1 fix (14:42Z). This row has 2 DoD items, and DoD 2 has failed once. A second DoD 2 failure moves it to PLANNING automatically, and R13 (f4811a72) waits on this row. Close all four of QA's points before complete_task:\n- the header names materialize's no-account 71 again;\n- the kill claim covers only paths where a child group started;\n- a drain row kills mutants M04 and M04b, with exact bytes and the job status asserted (QA's probe is /tmp/qa97341-tools/drain_probe.py);\n- OBSERVE treats ProcessLookupError as reaped.\nKeep the GROUP_GONE block byte-identical: it matches PR #232, and the pending merge relies on that. Edit both files with this session's Edit tool (other open rows declare them). Re-hash, re-gate, and post the new supervisorSha256 for R13 as QA asked.",
+      "timestamp": "2026-10-31T14:40:25.666Z"
+    },
+    {
+      "id": "comment-27d25f5c51cb4ce89369bbfea6e01ea2",
+      "author": "qa-4398294e",
+      "content": "QA review of round-2 completion c96c587b (qa-4398294e, 2026-10-31): APPROVE. All four reopen-1 points are closed.\n\n**Delivery**\n- c96c587b (tree 30620db1) is a completion commit on moe/work-2026-10-24 and on origin. It was recorded at 15:26:58Z, after the reject at 14:40:03Z.\n- Owned-file diff: supervisor +10/-7 (header comment only), bridge test +48/-1. With b245f476, the task totals +273/-60 on the two files, under 400.\n- sha256 at c96c587b: supervisor 3a19f3bf…8190, test 98c56dc8…39ea. Both match the worker's gate overlays and the CQ-R13 hand-off (comment-b187a175 on task-f4811a72).\n\n**Gate, fresh**\n- Snapshot: full `git archive c96c587b` at /tmp/qa97341r2-gate-EoI8nH. npm ci + build ran only in its packages/moe-daemon; the lockfile 3257552d… is unchanged.\n  - Prebuild rewrote src/generated/initFiles.ts's historical-hash list. That happens in any archive with no .git, and the earlier gates share it.\n- Environment: env -i, Node 24.21.0, npm 12.2.0, Python 3.12.3, WSL2 6.18.33.1, uid 1000.\n- The exact task.verification command:\n  - node --test: 648 tests, 645 pass, 0 fail, 3 skips (LA5, K9, macOS smoke).\n  - vitest: 215/215 files, 6341 passed, 20 skipped.\n  - GATE_EXIT=0. Ran 15:32:20Z–15:34:35Z; 1-min load went from 8.9 to 14.3. No leftover processes carried my env marker.\n\n**DoD 2: header vs code (every return, per mode)**\n- 71:\n  - start_job: no account, home or config, before relay, no frame.\n  - materialize: KeyError from getpwnam(AGENT_IDENTITY) gives EX_OSERR, reachable from main(['materialize']). It is now named.\n  - export: drop() gives 71.\n  - run_bridge's first try: the wake_r register, bridge.open (in_fd, socket, KeyError) and the guard Popen give 71 before any child exists.\n  - No '+': 71, and the finally killpg's the group.\n- 74/75/76 after hello all come after Popen. The finally kills the group, or pump's start-EOF killpg already has, before a failed observation write.\n- Other paths:\n  - A failed hello write gives 74 with no job.\n  - read_job EOFError/OSError gives 74.\n  - codex .codex gives 65; 66 is the workspace; 64 and 77 come from main.\n  - relay() returns 0 only after write_frame(observation).\n  - PR #232's loads() ValueError stays in the 65/76 buckets.\n- The GUARD, pump, materialize, run_install and EX_TERMINATED comments are unchanged since round 1. Added lines are ≤120 columns and ASCII. GROUP_GONE is identical to a4c8204d, `except ProcessLookupError` count is 0, and ast parses.\n\n**S20 drain rows: my own driver**\n- /tmp/qa97341r2/tools/mut.py with m-drain.json, pattern `^S(1[1-9]|20) `, 4 in parallel. The control passes 18/18.\n- KILLED:\n  - M04: loop only on start_end.\n  - M04b: return after the start-EOF killpg.\n  - Stdout-only drain and stderr-only drain: each fails the other stream's row.\n  - Outputs unregistered at start EOF.\n  - The pre-task outputs-only loop: S11-closed, S15, S17 and S18 fail.\n- M04 and M04b pass the held [true] precondition, then fail on `relayed <stream> bytes expected 524288 actual 131072`.\n- S20 passed 16/16 in 4-parallel repeats.\n\n**Other checks**\n- OBSERVE ESRCH: a probe (open /proc/<pid>/status, reap, then read) raises ProcessLookupError errno 3. done() now counts it as reaped.\n- `unshare -r`, S11–S20: 16/18 pass. S12 and S16 fail the same way on pre-task b6cfcc4e (task-a46b60e6's rows). Every S11/S18/S19/S20 row passes.\n- Windows (Node 24.16 via cmd.exe, temp copy since removed): 76 tests, 23 pass, 0 fail, 53 skipped. S20 skips with the NO_GUEST reason.\n\n**Non-blocking**\n1. Pre-existing and disclosed: an EMFILE from Bridge() or the life/start os.pipe() between hello and run_bridge's try exits 1 uncaught. b6cfcc4e has the same order.\n2. S20 needs unprivileged F_SETPIPE_SZ up to 1 MiB, the default pipe-max-size. On a host with a lower cap the row fails loudly; it does not pass vacuously.\n\nNo certification or verified-local claim is made. CQ-R13 owns native re-certification of 3a19f3bf….",
+      "timestamp": "2026-10-31T15:41:05.029Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T05:23:11.019Z",
+  "updatedAt": "2026-10-31T15:41:57.667Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T05:34:47.842Z",
+    "seq": 1
+  },
+  "dependsOn": [
+    "task-42e9990c286a43fcab7edd716290a515",
+    "task-a4a729ddaa8942679e8ae7cd57bd42f1",
+    "task-5ee846b62b81438c9d508160235d15ac"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-31T06:11:56.863Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-31T15:41:14.162Z",
+    "wallClockMs": 34157299
+  },
+  "contextFetchedBy": [
+    "worker-88af1437",
+    "qa-b29f7b3d",
+    "qa-4398294e"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [
+    {
+      "item": "The supervisor header and the cited comments match the code.",
+      "rejectedAt": "2026-10-31T14:40:03.349Z",
+      "rejectedBy": "qa-b29f7b3d"
+    }
+  ],
+  "planSubmittedAt": "2026-10-31T06:20:27.727Z",
+  "executionContract": {
+    "intendedBehavior": "The guest relay observes a job only after its owned descendants are terminated, keeps host cancellation/protocol handling live while quiet jobs run, and describes actual error/publication behavior accurately.",
+    "acceptanceCriteria": [
+      "Completed jobs with background children cannot leave them alive at observation; true exit/signal is retained.",
+      "Closed-output live jobs react promptly to hostEOF with74/no observation and malformed host input with76.",
+      "Signal races, no-spin, output integrity, socket teardown and fd/handler restoration continue to pass.",
+      "Supervisor comments match actual framing/teardown/publication behavior; already-correct75/import contracts stay unchanged.",
+      "Full external runner+daemon gate passes including the two prerequisite slices; new supervisor hash is handed to final certification."
+    ],
+    "invariants": [
+      "One selector and waitpid-derived observation; no caller-minted trusted evidence.",
+      "Root Linux kernel containment from prerequisite is mandatory; no broad process sweep or PID-reuse hazard.",
+      "No live runtime build/install/test, .moe mutation, Git writes or native isolation enablement."
+    ],
+    "compatibility": [
+      "Public frames and exit-code meanings unchanged; normal background survival is deliberately removed.",
+      "Linux production guarantee; macOS/non-root POSIX import tests are non-certifying, Windows retains explicit POSIX skips.",
+      "Pending-request completion semantics are implemented by prerequisite, not duplicated here."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-bridge.test.mjs"
+    ],
+    "reuse": [
+      "GUARD startup/completion pipes, run_install kill-before-reap pattern, Bridge selector, Termination wakeup, existing S-series harness."
+    ],
+    "sourceAssumptions": [
+      "task-a4a729ddaa8942679e8ae7cd57bd42f1 preserves '+' once started, completion EOF after teardown and actual job wait-status mirroring.",
+      "task-5ee846b62b81438c9d508160235d15ac handles outstanding requests at valid host completion.",
+      "CQ-R13 remains sole epic final and owns fresh native certification."
+    ],
+    "checkRefs": [
+      "cd \"$MOE_VERIFY_SNAPSHOT\" && node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Separate coherent concerns: task-a4a729ddaa8942679e8ae7cd57bd42f1 owns Linux kernel-backed descendant containment without changing GUARD handshake; task-5ee846b62b81438c9d508160235d15ac owns terminal host pending-RPC cancellation; this parent owns output-independent relay completion and its comments/tests. Chosen: early stand-down plus existing completion pipe in the one selector, kill while guard remains unreaped, then waitpid observation. Rejected: killpg after reap (PID reuse), kill only on errors (leak), waiting solely for output EOF (hang), global PID/name/UID sweeps, and merely claiming VM deletion proves per-observation cleanup.",
+    "codebaseInsights": "Architect reproduced at archive0d6f2cd6: S11 passes only because it asserts a live leaked child; closed-output job plus hostEOF returned75 only after a1s fallback TERM rather than74. Current GUARD '+' then completion EOF and run_install's early-release/kill-before-reap pattern supply the seam. Namespace primitive probe in an owned user/PID namespace killed a setsid descendant before init wait completed while separately preserving job exit7. Current75 and snapshot-import/onFrame comments are not stale; materialize acknowledgement failure can leave the published pair.",
+    "risks": "requiredChecks omitted: live daemon cannot measure (PATH defect); re-add after restart. Safety-critical process lifetime, hence heavy/max. REPL clarification offered; conservative scope includes escaped descendants per task description and isolates that work in a prerequisite rather than weakening DoD. Parent depends structurally on both new prerequisites and42. No native certification can be reused after supervisor bytes change. Epic-size advisory is recorded; governor owns broader epic reorganization, not this bounded bug split.",
+    "keyFiles": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-bridge.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T06:20:27.751Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T13:15:42.101Z",
+  "reviewStartedAt": "2026-10-31T15:26:36.785Z",
+  "verification": {
+    "command": "cd \"$MOE_VERIFY_SNAPSHOT\" && node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)",
+    "exitCode": 0,
+    "outputTail": "MOE_VERIFY_SNAPSHOT=/tmp/moe-97341-r2-gate-Lt2udv (full git archive of e8df388279399db7b5a677d05bab9399a60043ad + ONLY overlays:\n3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190  scripts/local-runner/guest-supervisor.py\n98c56dc8072d0601473b78e7f5859ffcc8db02fe290894acc4e8d96bee4939ea  scripts/tests/local-runner-bridge.test.mjs\nlockfile sha256 before npm ci: 3257552d8aa31354\nuname: Linux 6.18.33.1-microsoft-standard-WSL2 x86_64; id -u: 1000; Ubuntu 24.04.4 LTS\npython3: Python 3.12.3 node: v24.21.0 npm: 12.2.0 git: git version 2.43.0\nPATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\nstarted: 2026-10-31T15:20:32Z\nlockfile sha256 after npm ci+build: 3257552d8aa31354\n[...]\n✔ S20 stdout ... (76.679642ms)\n✔ S20 stderr ... (77.019327ms)\n[...]\nℹ tests 648\nℹ suites 4\nℹ pass 645\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 83870.795636\n[...]\n Test Files  215 passed (215)\n      Tests  6341 passed | 20 skipped (6361)\n   Start at  17:21:58\n   Duration  37.67s (tests 92%, transform 4%, import 4%)\nfinished: 2026-10-31T15:22:36Z\nGATE_EXIT=0",
+    "reportedAt": "2026-10-31T15:26:36.785Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    ".moe/tasks/task-4359d60bbc9b4d1b83353edfbdaa518a.json",
+    ".moe/tasks/task-97341ad5be744d19ac869972299a2714.json",
+    ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json",
+    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json"
+  ],
+  "completionSummary": "Reopen-1 fix for QA comment-b4b7df23 (DoD 2) and governor comment-692404a2; all four points closed. (1a) The exit-code header names materialize's no-AGENT_IDENTITY-account 71 again. (1b) It claims the child-group kill only where a group started: a 71 for a failed bridge setup (wakeup pipe, host stream, agent socket) or a guard that could not start comes before any child exists; a 71 for a guard that could not start the job, and 74/75/76, kill the group. It also names relay()'s hello-write 74, the bridge's pre-job-frame 74 and codex .codex 65. The supervisor change is comment-only, and GROUP_GONE is byte-identical to PR #232. (2) S20 stdout+stderr: the job sets F_SETPIPE_SZ to 1 MiB, writes 512 KiB and exits 3; the harness holds the first output frame until waitid(WNOWAIT) shows the guard exited (asserted; at least 448 KiB unread). Each row asserts the exact 524288 bytes, the other stream empty, the observation as the last frame and exit code 3. (3) OBSERVE done() treats ProcessLookupError (ESRCH) as reaped. Mutants on the final bytes (^S(1[1-9]|20)): the control passed 18/18; M04 and M04b were killed (131072 bytes relayed instead of 524288), as were the stdout-only and stderr-only drains; 0 leftover pids. Mid-task, the main merge c9b771ea (PR #232) re-applied my uncommitted edits; a diff-of-diffs shows identical change lines, and the header still holds (loads() ValueError falls in the existing 65/76 buckets). Gate on HEAD e8df3882 plus the 2 overlays, npm ci/build in the snapshot only, env -i Node 24.21.0: node --test 648 tests, 645 pass, 0 fail, 3 skips (LA5, K9, macOS smoke); vitest 215 files, 6341 passed, 20 skipped; GATE_EXIT=0. The new supervisorSha256 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190 went to CQ-R13 as comment-b187a175, superseding 494b6ad6 and 873e7ccb. No certification is claimed; verified-local stays unavailable. Pre-existing theoretical residual: EMFILE before run_bridge's try exits 1 after hello, no child.",
+  "commits": [
+    {
+      "sha": "b245f47670e0c5f788ebdeaf8dcebf7018958cd8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T12:59:51Z",
+      "paths": [
+        ".moe/tasks/task-97341ad5be744d19ac869972299a2714.json",
+        ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T14:11:11.167Z",
+      "treeId": "151d4e09ff444c92c7fa4e19c8d440f889c24056",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/local-runner/guest-supervisor.py",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "c96c587b5b360c521088d34e9cc78afe39390456",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-88af1437@2026-10-31T14:40:18Z",
+      "paths": [
+        ".moe/tasks/task-4359d60bbc9b4d1b83353edfbdaa518a.json",
+        ".moe/tasks/task-97341ad5be744d19ac869972299a2714.json",
+        ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-88af1437",
+      "recordedAt": "2026-10-31T15:26:58.135Z",
+      "treeId": "30620db1ec20ff71325f8a081fd8566f88cab670",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/local-runner/guest-supervisor.py",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "b4732b391869bca2786e8d079f6178aff72bd12c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-4398294e@2026-10-31T15:27:02Z",
+      "paths": [
+        ".moe/tasks/task-97341ad5be744d19ac869972299a2714.json"
+      ],
+      "recordedBy": "qa-4398294e",
+      "recordedAt": "2026-10-31T15:41:57.667Z",
+      "treeId": "1a66cd24416351b11d26a271350cb6d1d0b1650f",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-supervisor.py"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-4398294e@2026-10-31T15:27:02Z",
+    "at": "2026-10-31T15:41:57.667Z"
+  },
+  "reviewCompletedAt": "2026-10-31T15:41:14.162Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "The supervisor header and the cited comments match the code."
+    ],
+    "issues": [
+      {
+        "type": "other",
+        "file": "scripts/local-runner/guest-supervisor.py",
+        "line": 12,
+        "description": "DoD 2 (header lines 12-13): '71 the job could not start, or the export could not become the AGENT_IDENTITY account' drops materialize's 71. materialize() returns EX_OSERR on KeyError from pwd.getpwnam(AGENT_IDENTITY) (lines 667-672), which main()'s ['materialize'] reaches. CQ-R09c (efffad66) documented it, and the pre-task header still had it. To pass: name materialize's no-account 71 again."
+      },
+      {
+        "type": "other",
+        "file": "scripts/local-runner/guest-supervisor.py",
+        "line": 16,
+        "description": "DoD 2 (lines 16-17): the text says every after-hello 71, including 'the guard ... or the agent socket could not start', kills the child group. A failed guard Popen or bridge.open returns 71 from run_bridge's `except (OSError, KeyError)` (line 504) before any child exists. To pass: claim the kill only where a child group started. Then re-hash, re-gate and hand the new supervisorSha256 to CQ-R13 (task-f4811a72), superseding comment-873e7ccb."
+      },
+      {
+        "type": "missing_feature",
+        "file": "scripts/tests/local-runner-bridge.test.mjs",
+        "description": "Plan step 2 needs both output EOFs before the observation; nothing pins it. M04 (line 436 becomes `while start_end in selector.get_map():`) and M04b (`return` after the start-EOF killpg) survive every bridge, check and guard row. Probe /tmp/qa97341-tools/drain_probe.py (1 MiB stdout pipe, 512 KiB written, 0.1 s per output frame): correct code relays 524288 bytes, the mutants 131072, then exit 3. To pass: a row (Linux-only is fine) that kills both and asserts the exact bytes and the job status."
+      },
+      {
+        "type": "other",
+        "file": "scripts/tests/local-runner-bridge.test.mjs",
+        "line": 1211,
+        "description": "Minor: OBSERVE's done() counts only FileNotFoundError as reaped. A pid released between open('/proc/<pid>/status') and the first read raises ProcessLookupError (ESRCH). That escapes the write_frame hook, run_bridge's `except OSError` returns 74 with no observation, and an S11 row fails spuriously. Treat ProcessLookupError as reaped too."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 2 fails: the rewritten exit-code header no longer matches the code. Also, the start-EOF drain path this task added has no test; removing it drops output silently.\n\nWhat holds (full evidence in comment-b4b7df23):\n- Fresh snapshot gate of b245f476: node --test 645 tests, 642 pass, 0 fail, 3 pre-existing skips; vitest 215/215 files, 6341 pass; GATE_EXIT=0.\n- RED: on the parent supervisor, 9 of 16 S11-S19 rows fail.\n- Root-runner S11/S18/S19 pass.\n- 6 independent mutants are killed.\n- GROUP_GONE matches a4c8204d.\n- Code review: completion order and teardown are correct.\n\nRequired fixes:\n1. Header (DoD 2):\n   - Lines 12-13 dropped materialize's 71 for a missing AGENT_IDENTITY account (lines 667-672, reachable from main). CQ-R09c (efffad66) had documented it.\n   - Lines 16-17 say every after-hello 71 kills the child group. But a failed guard Popen or agent socket returns 71 before any child exists (line 504).\n2. Drain test: no row pins \"both output EOFs before the observation\".\n   - Two mutants survive every bridge, check and guard row:\n     - M04: the line-436 loop becomes `while start_end in selector.get_map():`.\n     - M04b: `return` right after the start-EOF killpg.\n   - With a job that enlarges its stdout pipe and a slow host consumer, both mutants relay 128 of 512 KiB, then write a normal exit observation. That is silent data loss.\n   - Add a row that kills both mutants.\n3. Minor: OBSERVE's done() should treat ProcessLookupError (ESRCH) as reaped.\n\nAfter the fixes, re-run the full snapshot gate and hand the new supervisorSha256 to CQ-R13.",
+      "rejectedAt": "2026-10-31T14:40:03.349Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "The supervisor header and the cited comments match the code."
+      ],
+      "issues": [
+        {
+          "type": "other",
+          "file": "scripts/local-runner/guest-supervisor.py",
+          "line": 12,
+          "description": "DoD 2 (header lines 12-13): '71 the job could not start, or the export could not become the AGENT_IDENTITY account' drops materialize's 71. materialize() returns EX_OSERR on KeyError from pwd.getpwnam(AGENT_IDENTITY) (lines 667-672), which main()'s ['materialize'] reaches. CQ-R09c (efffad66) documented it, and the pre-task header still had it. To pass: name materialize's no-account 71 again."
+        },
+        {
+          "type": "other",
+          "file": "scripts/local-runner/guest-supervisor.py",
+          "line": 16,
+          "description": "DoD 2 (lines 16-17): the text says every after-hello 71, including 'the guard ... or the agent socket could not start', kills the child group. A failed guard Popen or bridge.open returns 71 from run_bridge's `except (OSError, KeyError)` (line 504) before any child exists. To pass: claim the kill only where a child group started. Then re-hash, re-gate and hand the new supervisorSha256 to CQ-R13 (task-f4811a72), superseding comment-873e7ccb."
+        },
+        {
+          "type": "missing_feature",
+          "file": "scripts/tests/local-runner-bridge.test.mjs",
+          "description": "Plan step 2 needs both output EOFs before the observation; nothing pins it. M04 (line 436 becomes `while start_end in selector.get_map():`) and M04b (`return` after the start-EOF killpg) survive every bridge, check and guard row. Probe /tmp/qa97341-tools/drain_probe.py (1 MiB stdout pipe, 512 KiB written, 0.1 s per output frame): correct code relays 524288 bytes, the mutants 131072, then exit 3. To pass: a row (Linux-only is fine) that kills both and asserts the exact bytes and the job status."
+        },
+        {
+          "type": "other",
+          "file": "scripts/tests/local-runner-bridge.test.mjs",
+          "line": 1211,
+          "description": "Minor: OBSERVE's done() counts only FileNotFoundError as reaped. A pid released between open('/proc/<pid>/status') and the first read raises ProcessLookupError (ESRCH). That escapes the write_frame hook, run_bridge's `except OSError` returns 74 with no observation, and an S11 row fails spuriously. Treat ProcessLookupError as reaped too."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-31T15:41:14.162Z",
+  "reviewSummary": "APPROVED round 2, completion c96c587b (on moe/work-2026-10-24 and origin, recorded after the reject). Full evidence: comment-27d25f5c.\n\nSize: owned diff supervisor +10/-7 (header comment only) and bridge test +48/-1. With b245f476 the task totals +273/-60, under 400.\n\nGate, fresh: full git archive of c96c587b; npm ci + build ran only in the snapshot (lockfile unchanged); env -i Node 24.21.0, Python 3.12.3, WSL2 uid 1000; the exact task.verification command.\n- node --test: 648 tests, 645 pass, 0 fail, 3 skips (LA5, K9, macOS smoke).\n- vitest: 215/215 files, 6341 passed.\n- GATE_EXIT=0; wall-clock 2m15s; no leftover processes.\n\nDoD 1: S11 x6, S18 x3 and S19 pass in the gate. Runtime is unchanged since round-1 QA verified it.\n\nDoD 2: I audited every return per mode. Materialize's no-account 71 is named again. The no-child 71s (wake_r register, bridge.open, guard Popen) are separated from the no-'+' 71 and from 74/75/76, which kill the group. Hello-write 74, read_job 74, codex .codex 65, and \"returns 0 only once the observation is written\" all match the code, and PR #232's loads() errors stay in the 65/76 buckets. Lines are 120 columns or less and ASCII; GROUP_GONE is identical to a4c8204d.\n\nS20, my own mutation driver over S11-S20: the control passes 18/18. Killed: M04, M04b (131072 of 524288 bytes relayed), stdout-only and stderr-only drains, outputs unregistered at start EOF, and the pre-task loop. S20 passed 16/16 parallel repeats.\n\nOBSERVE: the ESRCH premise is confirmed by a probe.\n\nOther runs:\n- unshare -r: every S11/S18/S19/S20 row passes; S12/S16 fail the same way on pre-task b6cfcc4e (owned by task-a46b60e6).\n- Windows Node 24.16: 0 fail; S20 skips via NO_GUEST.\n\nThe supervisorSha256 3a19f3bf... reached CQ-R13 (comment-b187a175). No certification is claimed.\n\nNon-blocking: a pre-existing EMFILE between hello and the try exits 1 (disclosed). S20 assumes F_SETPIPE_SZ can reach 1 MiB; if it can't, the row fails loudly.",
+  "requiredCheckAtDone": null
+}

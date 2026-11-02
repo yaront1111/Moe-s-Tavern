@@ -1,0 +1,288 @@
+{
+  "id": "task-7a77465621dc4d6588d5747394cb0ced",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R08] Scoped host guest bridge",
+  "description": "Objective: Use fixed-command bounded stdio framing for task-scoped agent requests and supervisor-only observations.\n\nDeliverable: Scoped host guest bridge. This is task R08 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/local-runner.test.mjs\n\nDependency aliases (wired by Moe task ids after import): R07, F06.",
+  "definitionOfDone": [
+    "Guest cannot reach raw host /mcp or /ws.",
+    "Caller-controlled role/worker IDs cannot elevate capabilities or change settings/dependencies.",
+    "Child stdout cannot impersonate supervisor protocol frames.",
+    "Fresh verification `node --test scripts/tests/local-runner.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Plan tests first (test-driven-development): append focused H-series tests for the new runGuestSession API specified below, reusing existing framing/binding/temporary-directory helpers and preserving B1-B15/S1-S8/I1-I7 unchanged. Use a small spawn-compatible fake with real Node PassThrough/Writable streams and a forward spy. Table-test H1: invalid binding/name/sessionId/callback/executable/path, missing/oversize/malformed/non-object daemon info, and explicit bindHost 0.0.0.0/::/localhost/non-loopback/null all refuse BEFORE spawn or forward; omitted bindHost, 127.0.0.1 and ::1 pass. H2: fixed argv and shell:false/windowsHide:true/three pipes; fragmented/coalesced frames, hello-first/exactly-once, monotonic request IDs, duplicate/replayed IDs, truncated EOF, duplicate/late observation, frames after observation, absent observation and nonzero provider close all fail closed. H3: each allowed role tool is scoped with exact identity fields, denied tools/foreign task or worker/guest sessionId or role/attempt/generation never reach forward, and changing the caller's binding after startup cannot change authorization. H4: bounded pending requests and depth, synchronous/async forward failure, malformed/oversize/deep replies, timeout/late resolution, slow/erroring stdin, external abort, spawn/stdio/callback errors, and provider stderr cannot become protocol data. Assert exact calls, responses, codes, cleanup and no duplicate replies rather than mere rejection. Focused RED/GREEN iteration is allowed; the sole completion gate is step 5.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Appended H1-H4 after I6, reusing the existing HELLO/REQUEST/OUTPUT/EXIT, BINDING/QA, header/framed, b64, until and after() helpers. B1-B15, S1-S8 and I1-I7 are unchanged; the only edit above them is the import block. The fake provider is built from real PassThrough/Writable streams and exits 74 on host EOF, as the supervisor does. H1 covers input, daemon-info and bindHost refusals before spawn. H2 covers framing order and exactly-once rules. H3 covers per-role stamping and denial, plus a binding snapshot the caller can't change. H4 covers depth, replies, the pending bound and every terminal branch. RED, run fresh with a Linux-only PATH and node v24.21.0: `node --test scripts/tests/local-runner-bridge.test.mjs` failed with ERR_MODULE_NOT_FOUND for scripts/local-runner/guest-session.mjs, which is the missing feature. The 545 dirty paths from other sessions are untouched.",
+      "startedAt": "2026-10-26T09:46:24.460Z",
+      "completedAt": "2026-10-26T10:00:01.503Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create the host-only session entry point with inline contract documentation: runGuestSession({name,binding,sessionId,daemonInfoPath,forward,onOutput,onObservation,signal,provider={},timeoutMs=30000}). provider supplies executable (default multipass) and spawn (default node:child_process spawn); forward(tool,args,{signal}) is the mandatory trusted host daemon transport returning an MCP tool-result JSON value. Require all three callbacks, validate timeoutMs as a positive safe integer <=60000, validate sessionId verbatim as nonblank <=255 UTF-16 units without NUL/CR/LF, validate the executable using the existing invoker convention, and require an absolute native-host daemonInfoPath. Snapshot/freeze the binding and validate it through scopeRequest on a harmless synthetic get_context request (no dispatch); use bridgeArgv(name) unchanged. Bounded-read at most 16 KiB plus an overflow sentinel from a regular daemon-info file, closing the file on every path; fail on missing/read/parse/shape errors. Admit only an absent own bindHost (daemon's default) or literal 127.0.0.1/::1; no DNS resolution, environment fallback, wildcard, coercion or WSL exception. Perform this guard before spawning and again before each actual forward. Spawn only the fixed bridgeArgv command with shell:false, windowsHide:true and piped stdin/stdout/stderr; no host daemon address/token/settings in the guest argv or env additions. Consume stdout using the existing decoder/parseGuestFrame; require hello first exactly once, strictly increasing request IDs (one last-ID counter, no growing replay set), and one terminal exit observation. Child output goes only to onOutput(stream,Buffer), never to a decoder or dispatcher. Drain/discard provider stderr without collecting or exposing it. Deliver onObservation and resolve {observation,executionReady:false} only after clean decoder EOF, provider close code 0/no signal, exactly one observation and no outstanding replies; a nonzero observed job exit is real data, not transport success of the job. No activation or readiness claim.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/guest-session.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-session.mjs"
+      ],
+      "note": "RESUME session. The previous CLI (cli-exit=1) wrote scripts/local-runner/guest-session.mjs, checkpointed in 750921e. I re-verified it on disk against every step-2 clause rather than trusting the dead session.\n- runGuestSession validates its whole input before spawn, each check failing as SESSION_INPUT_INVALID:\n  - sessionId is nonblank, at most 255 UTF-16 units, with no NUL/CR/LF, and is kept verbatim;\n  - the callbacks and spawn must be functions, and the signal an AbortSignal;\n  - executable uses multipass.mjs's convention (string, nonblank, no control characters);\n  - daemonInfoPath must be absolute with no control characters, and timeoutMs a safe integer from 1 to 60000;\n  - the binding is snapshotted and frozen, then checked through scopeRequest on a synthetic get_context, which is never dispatched;\n  - bridgeArgv(name) is used unchanged.\n- daemon.json read:\n  - open uses O_NOFOLLOW|O_NONBLOCK (0 where unsupported) and requires a regular file;\n  - it reads at most 16 KiB plus a one-byte overflow sentinel and always closes the handle;\n  - missing, unreadable, malformed or non-object content is SESSION_DAEMON_INFO_INVALID;\n  - only an absent bindHost or a literal 127.0.0.1/::1 passes; anything else is SESSION_DAEMON_NOT_LOOPBACK.\n- The guard runs before spawn and again before every forward.\n- spawn(executable, bridgeArgv, {shell:false, windowsHide:true, stdio: three pipes}). Hello must come first and once; request ids must strictly increase, tracked by one lastId; exactly one observation is allowed.\n- Output goes only to onOutput, and stderr is drained unread.\n- The session resolves {observation, executionReady:false} only after a clean decoder EOF, provider close code 0, one observation and no owed reply.\nEvidence (Linux node v24.21.0, python3 3.12.3):\n- bridge file: 34/34 pass, H1-H4 included;\n- baseline of the full four-file gate: exit 0, 247 pass, 1 skip (the macOS native smoke).\nSize note: so far +239 (session) and +253/-3 (tests). The 400-net target will be exceeded once step 4 lands; that is handled at completion.\nThe 551 dirty paths from other sessions are untouched.",
+      "startedAt": "2026-10-26T10:00:04.542Z",
+      "completedAt": "2026-10-26T10:21:19.430Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Error handling and bounded forwarding: Complete bounded forwarding and teardown. Keep stdout pumping independently while servicing requests serially, with at most 64 queued+active requests; excess, protocol violations or read failures end the session, never accumulate an unbounded queue. For each request call scopeRequest unchanged, reject argument trees deeper than 64 with a small iterative traversal before daemon dispatch, and catch serialization/send exceptions including RangeError. After scoping, stamp host sessionId onto get_context, and host attemptId/generation/sessionId onto start_step, complete_step and complete_task only; never stamp unsupported fields on heartbeat/get_handoff_history/QA tools. Policy/depth refusals receive exactly one response with the original supervisor ID and fixed error code, with zero forward calls. A forward rejection or MCP isError result gets only BRIDGE_UPSTREAM_FAILED (no exception/message/result echo); otherwise wrap the JSON tool result in {kind:'response',id,ok:true,result}. Encode responses with a conservative 1 MiB limit, leaving headroom for Python re-encoding below its 4 MiB cap; unencodable/oversize results get one small BRIDGE_RESPONSE_INVALID response. Serialize stdin writes and await their completion/backpressure while stdout continues; bound hello, each forward and each write by timeoutMs. Never retry mutations. On timeout or abort terminate the session, abort the per-session signal, ignore late results, and prevent post-close writes/callbacks/unhandled rejections. One idempotent cleanup path handles every terminal event: stop admitting/dispatching, close stdin to let the supervisor's host-EOF path reap the group, continue draining stdout, and wait at most timeoutMs before killing only the local spawned provider as fallback; clear timers and detach operational listeners safely. Any forced/unknown teardown remains failure and never produces a fabricated observation or proof of guest termination. All surfaced errors use fixed allowlisted codes/messages without caller values, paths or diagnostics. Finish the H-series assertions against each branch; no new wire kinds or edits to guest-bridge/supervisor.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Forwarding and teardown were already in guest-session.mjs from the resumed session. I re-verified each clause on disk:\n- serial pump, 64 queued plus active requests, depth checked iteratively before forward;\n- the host stamps sessionId on get_context and attemptId/generation/sessionId on start_step, complete_step and complete_task only;\n- BRIDGE_UPSTREAM_FAILED and BRIDGE_RESPONSE_INVALID, a 1 MiB response cap, and timeoutMs bounds on hello, each forward and each write;\n- one idempotent stop: abort forwards, destroy stdin, drain stdout, and SIGKILL the local provider only after timeoutMs.\n\nEdits:\n1. Removed the redundant pre-read abort check; the post-read check still refuses before spawn.\n2. The fake provider's kill now closes asynchronously, as Node does. The old synchronous close hid a defect: dropping `failure ??= 'SESSION_TIMEOUT'` would deliver an observation after a forced kill of a real process.\n3. New H4 row: a provider killed after a clean EOF and observation gives SESSION_TIMEOUT, kills ['SIGKILL'] and no observation.\n4. H4 pins the bounds [16384, 64, 64, 1048576].\n5. H1 refuses a daemon path containing a newline.\n6. H2:\n   - a replay loop (ids 3 then 2, sent after the first answer) ends the session with forwarded=1;\n   - a never-aborted signal has 0 abort listeners after resolve;\n   - the truncated-EOF case is now [HELLO, EXIT, header(9)].\n\nMutation sweep on a /tmp snapshot, H tests only (env -i, Linux node v24.21.0), harness /tmp/cq-r08-tools/mutate.py:\n- run1: 42 mutants, 38 killed. Survivors were replay-allowed, listener-kept and no-decoder-end; the same three ran green as tests passing for the wrong reason (owed reply or missing observation masked them).\n- After the fixes, run2: 4/4 killed, including no-id-check. The two replay mutants die by the 30 s timeout because the session never ends.\n- Expected survivor: no-isFile. On Linux every non-regular file I can build fails anyway (directory EISDIR, FIFO EOF or EAGAIN, device by the size cap). The check stays as the stated \"regular file\" contract.\n\nFresh run: `node --test scripts/tests/local-runner-bridge.test.mjs`, 34/34 pass, 0 skipped. diff --check is clean.\nSize: guest-session.mjs +238, bridge test +271/-3. The 551 dirty paths from other sessions are untouched.",
+      "startedAt": "2026-10-26T10:21:22.126Z",
+      "completedAt": "2026-10-26T10:31:54.154Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add one bounded real-Python end-to-end H test using the existing LOAD/PEER/SUPERVISOR conventions and python3 -I -B. Inject spawn only to replace the fixed Multipass launch with the actual supervisor relay harness; still assert the production executable/argv/options passed to it. The actual child connects to relay's agent socket, sends an allowed request plus forbidden role/settings/dependency/foreign-identity requests, receives precisely correlated success/refusal frames, writes binary stdout containing forged hello/request/exit frames, and exits with a chosen nonzero code. Run the new JS host session, not the old manual answering helper: assert forward sees only the scoped allowed call with host session identity, forged bytes are delivered byte-for-byte solely as output, and only waitpid's real exit reaches onObservation. Exercise a silent real child with host abort as well: stdin EOF terminates/reaps it and removes its socket; keep finally/after cleanup for assertion failures. Use 30-second test deadlines and existing explicit win32 skip; Linux exercises real SO_PEERCRED, macOS uses PEER injection. A non-loopback daemon fixture must prevent even starting this harness. Document in test/entry-point comments that these are real local supervisor integration tests, not live VM or network-isolation certification; defer the epic docs sweep and native probes to R13.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Added H5, one real-Python end-to-end test, with { skip: NO_GUEST, timeout: 30_000 }. Off Linux it uses PEER injection; Linux uses the real SO_PEERCRED.\n\nHarness:\n- supervised(job, ...args) is the injected spawn. It records the production launch, which H5 asserts equals SPAWNED: 'multipass', bridgeArgv(NAME), {shell:false, windowsHide:true, three pipes}.\n- It then runs `python3 -I -B -c LOAD+relay(..., agent_socket, agent_uid=os.getuid()) guest-supervisor.py` with those same options, creating the socket dir only at spawn.\n- It joins the existing `sessions` after() cleanup, which kills the job and supervisor and removes the dir.\n- The new JS runGuestSession drives it; the old manual answering helper is not used.\n\nCoverage:\n1. A daemon.json with bindHost 0.0.0.0 gives SESSION_DAEMON_NOT_LOOPBACK, and the harness is never launched (launches=[]).\n2. The real agent job connects to the socket and sends 5 requests with ids 40-44:\n   - get_context {} is the allowed call;\n   - role qa, init_project (settings), set_task_dependencies and a foreign workerId are the forbidden ones.\n   It writes each answer to stderr, writes binary stdout (forged HELLO, REQUEST and EXIT frames plus 00 ff 0a), and exits 3.\n3. Assertions:\n   - forward saw exactly [get_context {taskId, workerId, sessionId: host SESSION_ID}];\n   - stdout output equals the forged bytes byte for byte;\n   - the agent got answered(40) and then refusals 41 IDENTITY_MISMATCH, 42/43 TOOL_DENIED and 44 IDENTITY_MISMATCH, each under its own id;\n   - the observation is the waitpid exit {code 3};\n   - the supervisor exited 0 and the socket is removed.\n4. Silent job plus abort: the session closes stdin, the supervisor exits 74, and the job is dead and reaped. The socket is gone, there is no observation and no local kill.\nThe comments state these are local processes, not VM/Multipass/network certification (CQ-R13).\n\nProof by mutation, H5 only, 4/4 killed:\n- scoping bypassed;\n- stamping removed;\n- output fed to the dispatcher (SESSION_PROTOCOL_VIOLATION);\n- stdin not closed on abort (job alive, socket kept).\nNo leftover sleep jobs and no __pycache__.\n\nFresh `node --test scripts/tests/local-runner-bridge.test.mjs`: 35/35 pass, 0 skipped, diff --check clean.\nSize so far: +238, then +332/-3.",
+      "startedAt": "2026-10-26T10:31:57.335Z",
+      "completedAt": "2026-10-26T10:35:15.626Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification — the single completion gate. From repo root run fresh: node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs . This is the existing complete local-runner CI command and a superset of the task's named local-runner.test.mjs gate, covering the shared bridge consumers without changing their wire contract. On Linux use native Linux Node/python3 and a Linux-only PATH, preserving any Windows dependencies. Require exit 0, no newly skipped host tests, and record the platform-specific Python skips explicitly. Retain full log/path and supply this exact command, exitCode and fresh outputTail to complete_task. Check the scoped diff for whitespace errors, unchanged B/S/I tests, exactly the two owned source/test paths and <=400 net changed LOC. Do not claim real Multipass certification or alter other package/docs/launcher files.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate, run fresh from the repo root under env -i with a Linux-only PATH (node v24.21.0, python3 3.12.3, uid 1000; Windows node_modules untouched):\n`node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs`\n- exit 0: 249 tests, 248 pass, 0 fail, 0 cancelled, 1 skipped. Log: /tmp/cq-r08-worker-3729a0d6-gate.log.\n- The only skip is the existing \"opt-in native provider smoke on real macOS hardware\" (macOS support is not established by this run).\n- The baseline before H5 was 248/247/1, so no host test is newly skipped. The POSIX Python tests (S/I/H5) run on Linux and skip only on win32, with the existing NO_GUEST reason.\n\nDoD command alone, `node --test scripts/tests/local-runner.test.mjs`: exit 0, 193 tests, 192 pass, 1 skip. Log: /tmp/cq-r08-worker-3729a0d6-dod.log.\n\nScope checks:\n- `git diff d258861` (R08c landing) shows exactly the two owned paths.\n- The bridge-test hunks are the import block plus the appended H section, and B1-B15, S1-S8 and I1-I7 are byte-identical.\n- diff --check is clean.\n- No other package, doc or launcher file was changed, and nothing claims real Multipass certification.\n\nFAILED check: size. The change is +570/-3, which is 567 net (guest-session.mjs +238; bridge test +332/-3), against the plan's 400 target. R08c's waiver does not cover R08. Every added line implements a plan or DoD clause, and step 3's sweep showed the tests were already minimal for their guards. After step 6 fixes the final counts, I will file a human size-exception proposal (the R08c pattern) and ping #governors, rather than re-slice green work.",
+      "startedAt": "2026-10-26T10:35:20.242Z",
+      "completedAt": "2026-10-26T10:36:32.686Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final adversarial self-review (adversarial-self-review), once over this task's diff: try role/worker/task/session substitution, settings/dependency calls, deeply nested JSON, duplicate/replayed IDs and hello/exit races; forge protocol bytes in both child output streams; overlap abort/timeout/provider close with a late forward and a backpressured write; change daemon bind metadata before a later request; verify no retry, no unbounded queue/history/output buffer, no leaked file/timer/listener, and no optimistic remote-termination evidence. Confirm startup guard and denied-call assertions fail if their checks are removed, and that output cannot reach the control dispatcher. Preserve the approved prerequisite behavior and host-only trust assumptions. Fix any finding within these two paths and rerun the same gate if bytes changed so completion evidence is fresh. Record the result and downstream lifecycle/certification limitations in the handoff; leave landing to the wrapper and finish through complete_task for independent QA.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Adversarial self-review over the two owned paths (numstat vs 750921e~1: guest-session.mjs +238/-0, bridge test +343/-3).\n\nFindings fixed in this step:\n- The hello deadline is the only deadline, but its cancellation once hello arrives was untested. An H4 row now covers it: a job runs 3x timeoutMs and still settles with its observation.\n- The fake kill now closes asynchronously, as in Node. A synchronous close masked the `failure ??= 'SESSION_TIMEOUT'` guard. A forced-kill row covers it: SESSION_TIMEOUT, kills ['SIGKILL'], no observation.\n- The H2 replay, abort-listener and decoder-end checks were rebuilt, because owed replies, the once-listener and a missing observation each masked a mutant.\n- Four of my lines over 150 characters were wrapped (formatting only).\n\nMutation evidence: 55 mutants, 54 killed. The step-6 set (8/8 killed):\n- startup daemon guard removed;\n- abort precheck removed;\n- get_context stamped with the execution trio;\n- hello not cancelled;\n- failure overwritten;\n- executionReady true;\n- lastId not advanced;\n- stop not idempotent.\nEarlier, the step-4 e2e set killed no-scope, no-stamp, output-dispatched and no-stdin-close. The one survivor, no-isFile, is equivalent on Linux: reading a directory fails with EISDIR, which is refused anyway.\n\nChecklist covered:\n- binding substitution and a caller mutating the binding after start (snapshot);\n- settings and dependency tools are TOOL_DENIED end to end;\n- nested JSON is depth-bounded both ways;\n- replayed and duplicate ids are a violation;\n- hello and exit ordering races;\n- frame-shaped bytes on both child streams stay output;\n- abort, timeout or close overlapping a late forward or a backpressured write;\n- the daemon bindHost is re-checked per request;\n- no retry, a pending bound of 64, no buffered output, and no leaked fd, timer or listener;\n- executionReady is always false.\n\nTheoretical or downstream:\n- The daemon-guard TOCTOU between the check and the forward.\n- A supervisor killed by a signal leaves its start_new_session job alive. This was observed locally when a mutant run's supervisor was SIGKILLed: the orphan was reparented to init and swept. That is R10/R11 territory.\n- Real multipass/sudo EOF propagation and guest-to-host /mcp and /ws probes belong to R13.\n\nFresh gate after the final bytes:\n- the 4-file node --test exits 0: 249 tests, 248 pass, 0 fail, 1 macOS skip;\n- the DoD command alone exits 0 (193/192/1);\n- diff --check is clean, there are no forbidden patterns and no __pycache__.\n\nSize: proposal prop-719ef03262304f53ba007b430e121f78 (PENDING), pinged in #governors.",
+      "startedAt": "2026-10-26T10:36:36.098Z",
+      "completedAt": "2026-10-26T10:50:39.254Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 222.5,
+  "comments": [
+    {
+      "id": "comment-ffb6d54a2c824b30aad3c9db58ea3217",
+      "author": "architect-26ba32c3",
+      "content": "Split on 2026-10-25 (architect-26ba32c3). The full bridge measured at about 650 net LOC: a host codec and scoping module, a guest supervisor in Python (the guest has python3 but no Node), a host session, and tests. That is far over the 400-net-LOC QA limit, and no rail waives it. Following this epic's M01 and C02 pattern, this row keeps its full DoD and becomes the final slice, depending on:\n- CQ-R08a task-f981d059 (PLANNING): scripts/local-runner/guest-bridge.mjs, which is the frame protocol, guest frame schema, per-role request scoping and fixed bridgeArgv. Tests go in the new scripts/tests/local-runner-bridge.test.mjs, registered in CI.\n- CQ-R08b task-502c00a5 (BACKLOG): scripts/local-runner/guest-supervisor.py, a stdlib-only supervisor that is the sole writer of its stdout. It relays child output only as base64 output frames and reports exit only from its own waitpid.\n- CQ-R08c task-10e201f9 (BACKLOG): the agent request ingress, a Unix socket that admits only the moe-agent peer uid, assigns its own ids, and routes each response back to the requester only.\n\nWhat remains for this row, to plan once the three slices land:\n- The host bridge session: run bridgeArgv through the R06 invoker style with an injected spawn, require hello first, pump frames, and pass each request through scopeRequest and an injected forward. Bound in-flight requests and time them out, deliver output and observations to callbacks, and fail closed by killing the child on any violation.\n- A loopback-only daemon guard: refuse to open when `.moe/daemon.json` records a non-loopback bindHost. That is WSL agent mode's 0.0.0.0, which a Multipass guest could reach through its gateway.\n- An end-to-end test between the JS session and the real Python supervisor that proves DoD 1-3.\nVerification: `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bridge.test.mjs`. It is a superset of the DoD command, so local-runner.test.mjs, which R04 and R05 also edit, is never touched.",
+      "timestamp": "2026-10-25T10:33:54.671Z"
+    },
+    {
+      "id": "comment-647799a90cec4f4b95c09d28ec8bf758",
+      "author": "worker-c1d9de02",
+      "content": "Handoff from CQ-R08a (task-f981d0597b26401a974c0fcd8829107e, guest-bridge.mjs). This is a requirement for the CQ-R08 forwarding path, not a defect in R08a.\n\n1. Deeply nested args. parseGuestFrame and scopeRequest enforce exact keys and allowlists but no nesting depth. A guest frame within 256 KiB can carry about 100k levels of nesting in an allowed arg value, and JSON.parse accepts it. Re-serializing such a value can throw RangeError (stack overflow). encodeFrame already catches that and returns BRIDGE_FRAME_INVALID, but the CQ-R08 forwarding must catch JSON.stringify/send errors too, or bound the depth before forwarding, so a guest cannot crash the host session or the daemon.\n2. Duplicate JSON keys. JS JSON.parse keeps the last occurrence of a duplicate key, and Python json does too by default. The R08b/c supervisor should not rely on first-wins.\n3. Lost frames on error. Any decoder error poisons it, and any frames already decoded in the same push are discarded. The session should treat a throw as teardown.",
+      "timestamp": "2026-10-25T10:53:07.434Z"
+    },
+    {
+      "id": "comment-33c4c94363d54193ac8389e036cd33ee",
+      "author": "qa-b0c1741e",
+      "content": "QA note from the CQ-R08a review, for planning CQ-R08. guest-bridge.mjs TOOLS (in 17bc7ac) matches every committed daemon inputSchema. However, the uncommitted CQ-F06 edit (task-b03c0c7744e84955a7a069255a124ef7, Served context identity) adds a `sessionId` property to the moe.get_context schema. Today a guest-sent sessionId gets BRIDGE_ARGUMENT_DENIED, which fails closed. Once F06 lands, CQ-R08 should decide explicitly between two options: stamp a host-owned sessionId from the binding (preferred, since a receipt binds to the owning attempt), or keep refusing it. It should not add sessionId to the guest argument allowlist without a decision. Also note the B9 pin in scripts/tests/local-runner-bridge.test.mjs, which any table change must update.",
+      "timestamp": "2026-10-25T11:05:38.052Z"
+    },
+    {
+      "id": "comment-e48d6a67e7664d139b98730673d70176",
+      "author": "worker-7d158765",
+      "content": "CQ-R08b (task-502c00a5) handoff: two gaps in the guest-supervisor relay that belong downstream, not in R08b.\n1. A silent child and a host that has gone: the relay notices only on its next frame write (EPIPE → exit 74, then killpg+reap). CQ-R08c should put stdin (host frames) in the same selectors loop, so host EOF ends the session promptly.\n2. A SIGTERM or SIGHUP sent to the supervisor uses the default action and kills Python without running the finally. The child's session group (start_new_session) then survives. Only KeyboardInterrupt/OSError paths kill and reap today. Signal-driven teardown belongs to CQ-R08 or CQ-R10/R11.\nExit-code contract for the host session: 0 relay complete; 64 usage; 71 child failed to start (hello, then EOF, no observation); 74 I/O failure (child group killed); 77 not root; 78 root with no job. relay also resets SIGCHLD to SIG_DFL, because an inherited SIG_IGN would let the kernel discard the status before waitpid reads it.",
+      "timestamp": "2026-10-26T05:14:32.725Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:10.214Z",
+  "updatedAt": "2026-10-27T14:45:37.236Z",
+  "dependsOn": [
+    "task-84c2da018ce74995b609805dab4fe7da",
+    "task-b03c0c7744e84955a7a069255a124ef7",
+    "task-f981d0597b26401a974c0fcd8829107e",
+    "task-502c00a50db340c9941cae20eeef1021",
+    "task-10e201f9cdec49578c71981cd4799551"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T10:21:06.541Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-27T14:44:09.838Z",
+    "wallClockMs": 188583297
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "architect-1520cc31",
+    "worker-3729a0d6",
+    "qa-6fa5d758"
+  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T09:35:05.714Z",
+  "planningNotes": {
+    "approachesConsidered": "Reuse the already-landed R08a codec/scoping and R08b/c supervisor, and finish the host-session slice specified by comment-ffb6d54a2c824b30aad3c9db58ea3217. That comment explicitly calls for injected spawn and injected forward; do NOT build another WebSocket/MCP client or change either launcher. The exported session is usable with a trusted host transport, not a stub. Keep the established wire shapes/TOOLS/BINDING_KEYS unchanged. Reject guest sessionId; stamp the host-owned sessionId after scopeRequest instead of widening the guest allowlist. No VM provisioning, job-table activation, evidence minting, or verified-local enablement.",
+    "codebaseInsights": "Verified guest-bridge.mjs exports bridgeArgv, createFrameDecoder, parseGuestFrame, encodeFrame, scopeRequest and frame bounds. Decoder errors poison it and discard frames in that push; never recover. scopeRequest binds exactly role/workerId/taskId/attemptId/generation, stamps workerId/taskId only where the schema accepts them, and denies guest identity/evidence/settings/dependency mutations. Current daemon getContext accepts sessionId; startStep, completeStep and completeTask accept sessionId/attemptId/generation. Supervisor relay has one selector, increasing request IDs and a 64-request total bound; host EOF kills/reaps its child group. Direct SIGTERM/SIGHUP currently bypasses its finally, so close host stdin and keep draining before killing the local provider as a bounded fallback. main(['bridge']) still fails closed with 78 until R10/R11 supply jobs. index.ts omits bindHost only for default 127.0.0.1. Existing LOAD/PEER/SUPERVISOR/agent helpers in local-runner-bridge.test.mjs support the real-Python integration without root or a test CLI. CI already runs that file on all three host OSes.",
+    "risks": "Two edited files only: new guest-session.mjs and the existing bridge tests; target <=400 net changed LOC with existing helpers and table-driven cases, not weakened tests or compressed unreadable code. R08c's size exception does not apply here. The binding, instance, daemonInfoPath and forward callback are trusted host-controller inputs; the caller obtains ownership from R06 and must bind forward to that same protected daemon. Guest data must never choose them. Loopback admission plus no guest network client is source-level evidence, NOT live Multipass/network certification; R13 retains actual guest-to-host endpoint probes and the whole-epic gate. SIGTERM/SIGHUP and durable job-tree cancellation remain R10/R11 responsibilities; a forced local transport kill does not prove remote termination. Preserve dirty/peer bytes and every B/S/I test. No direct .moe edits or agent Git writes. Linux verification uses native Linux Node/system PATH; never replace Windows node_modules. POSIX Python integration skips only with the existing win32 reason; mock host-session tests run everywhere.",
+    "keyFiles": [
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "packages/moe-daemon/src/tools/getContext.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T09:35:05.833Z",
+  "workStartedAt": "2026-10-26T09:46:24.460Z",
+  "commits": [
+    {
+      "sha": "750921e82ef06735c9d69cdb94c5864df8328a4c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T09:35:29Z",
+      "paths": [
+        ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+        ".moe/tasks/task-df5384bf7fbd4b7ba3dedb43d7373ffa.json",
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T10:10:55.540Z",
+      "treeId": "31b96171819c19676b0dc6413d18c939afec7166",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "b0e59828784fd3407ab86dbd2bcff8dc34583f4d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T10:11:01Z",
+      "paths": [
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+        ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T10:54:13.566Z",
+      "treeId": "d7d69cda117e010c2cccd253da6d110157595ddd",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "b83d6380642d69b9b6c0327124e2824419eabb79",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-6fa5d758@2026-10-27T14:26:44Z",
+      "paths": [
+        ".moe/tasks/task-6b607b1278914531a75bfe16decf3199.json",
+        ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+        ".moe/tasks/task-ad0dc2e7557d4ceca42ce7fab3708942.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-6fa5d758",
+      "recordedAt": "2026-10-27T14:45:37.236Z",
+      "treeId": "532281ce0460c6fe9fb29709ac35907904718b47",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-session.mjs",
+    ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+    ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+    ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-6b607b1278914531a75bfe16decf3199.json",
+    ".moe/tasks/task-ad0dc2e7557d4ceca42ce7fab3708942.json"
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-session.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-6fa5d758@2026-10-27T14:26:44Z",
+    "at": "2026-10-27T14:45:37.236Z"
+  },
+  "reviewStartedAt": "2026-10-26T10:53:14.210Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs",
+    "exitCode": 0,
+    "outputTail": "v24.21.0\n✔ H1 invalid input, unsafe daemon info and an aborted signal refuse before spawn (17.931107ms)\n✔ H2 the stream must be hello, then requests and output, then one observation, and the provider must exit 0 (130.937277ms)\n✔ H3 each role tool is forwarded with only the host-bound identity, and refused requests never reach forward (32.357921ms)\n✔ H4 replies, bounds and failures each answer once or end the session with a fixed code (980.499289ms)\n✔ H5 end to end, the real supervisor and agent get scoped answers, forged bytes stay output and only waitpid exits (131.354974ms)\n✔ CLI native-smoke prints the evidence and exits 0 only when native support is established (0.615525ms)\n﹣ opt-in native provider smoke on real macOS hardware establishes support (0.070193ms) # native provider smoke not run: macOS support is NOT established by this run\n✔ real sysctl and Multipass processes: macOS prerequisites read genuine output and name a virtualbox driver (251.218411ms)\nℹ tests 249\nℹ suites 0\nℹ pass 248\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 19294.997511",
+    "reportedAt": "2026-10-26T10:53:14.210Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-R08 host session is delivered: plan rev 1, 6/6 steps. New scripts/local-runner/guest-session.mjs (238 lines) exports runGuestSession. H1-H5 were added to local-runner-bridge.test.mjs (+343/-3); B/S/I are unchanged.\n\nDesign:\n- Inputs are validated pre-spawn and the binding is frozen; the fixed bridgeArgv runs with shell:false.\n- A bounded O_NOFOLLOW daemon.json read admits only an absent bindHost, 127.0.0.1 or ::1, before spawn and before each forward.\n- Hello first within timeoutMs; increasing ids; at most 64 pending; output never decoded; one observation, then nothing.\n- Per request: scopeRequest, depth 64, host stamping (sessionId on get_context; attempt, generation and session on start_step, complete_step and complete_task), a bounded forward with no retry, a 1 MiB cap.\n- Fixed error codes. Stdin-first teardown, SIGKILL only after timeoutMs. executionReady is always false.\n\nDoD:\n1. No raw /mcp or /ws path: the scoped bridge is the only channel, and a non-loopback daemon is refused (H1, H3-H5).\n2. Role or worker substitution gives IDENTITY_MISMATCH; settings and dependency tools give TOOL_DENIED; the binding is snapshotted (H3, H5).\n3. Forged frames on child stdout stay byte-exact output; the exit comes only from waitpid (H5).\n4. The 4-file gate exits 0: 249 tests, 248 pass, 1 pre-existing macOS skip. H5 uses real SO_PEERCRED and skips only on win32. The DoD file alone exits 0 (193/192/1).\n\nMutation: 55 mutants, 54 killed; the survivor no-isFile is equivalent on Linux (EISDIR).\n\nSize: 584 changed (+581/-3, 578 net), above the 400 cap. prop-719ef03262304f53ba007b430e121f78 (cap 620) is PENDING human review; #governors pinged. QA: confirm it is APPROVED before approving.\n\nNot certified: no VM, Multipass or sudo. Handoffs are on R10 (signal teardown leaves the guest job alive) and R13 (native EOF and network probes). No .moe edits or Git writes.",
+  "completedAt": "2026-10-27T14:44:09.838Z",
+  "reviewCompletedAt": "2026-10-27T14:44:09.838Z",
+  "reviewSummary": "CQ-R08 approved. Completion b0e5982 (tree d7d69cd matches) plus checkpoint 750921e, both on moe/work-2026-10-24 and origin; the owned paths are unchanged at HEAD a7b407c and clean in the worktree.\n\nSize: numstat vs 750921e~1 is guest-session.mjs +238 and the bridge test +343/-3, 584 changed, within the epic rail \"CQ-R08 size exception\" (cap 620). B/S/I are byte-identical; only the imports and the appended H section changed.\n\nFresh gate from a pure git archive, env -i, Node v24.21.0 (CI's version), python3 3.12.3:\n- 4-file local-runner gate: exit 0, 249 tests, 248 pass, 1 skip (pre-existing macOS smoke), at both b0e5982 and HEAD.\n- DoD command alone: exit 0, 193/192/1.\n- Bridge file 5x: 35/35 each.\n- Windows Node 24.16: H1-H4 pass, H5 skipped by the existing NO_GUEST.\n\nDoD:\n1. argv is the constant bridgeArgv with no env added. bindHost is admitted only if absent, 127.0.0.1 or ::1, matching daemon index.ts:663. Checked before spawn (H1/H5) and before each forward (H4).\n2. Role/worker substitution gives IDENTITY_MISMATCH; settings/dependency tools give TOOL_DENIED; the binding is frozen (H3/H5). Stamping mirrors proxy utils.ts:254 and the daemon schemas.\n3. Forged frames on child stdout/stderr stay byte-exact output; the exit comes only from the supervisor's waitpid (H2/H5).\n4. Fresh output supplied.\n\nQA mutants: 19/19 killed:\n- scoping, both daemon guards, a widened loopback set;\n- output or stderr re-decoded, stamping, a live binding, depth;\n- duplicate id, stdin close, owed replies, isError, exit code;\n- frames after observation, hello first, the pending bound, the response cap, error echo.\n\nNon-blocking:\n- H4 test line 803 uses Promise.withResolvers (Node 22+) and fails on Node 20.18; CI is Node 24; noted on R13.\n- Ponytail: isRecord duplicates guest-bridge's helper; two identical error handlers; net -3 lines possible.\n\nNot certified: VM/Multipass EOF and network probes (R13), signal teardown (R10). executionReady stays false.",
+  "requiredCheckAtDone": null
+}

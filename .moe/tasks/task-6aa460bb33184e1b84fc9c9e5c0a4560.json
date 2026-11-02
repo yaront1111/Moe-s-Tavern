@@ -1,0 +1,339 @@
+{
+  "id": "task-6aa460bb33184e1b84fc9c9e5c0a4560",
+  "epicId": "epic-be924fb8",
+  "title": "bug: an architect's exit checkpoint lands the live assignee's in-flight bytes for the task it planned, so the worker's completion is NOTHING_TO_COMMIT and the DONE task has no completion commit",
+  "description": "Observed 2026-10-25 by governor-187cc44e on CQ-I01 task-96526848b23549cf994ab82f47fad29f.\n\nTimeline:\n- Codex architect-473624b4's session (pre-flight 09:51:54Z) claimed I01 at pre-flight. It planned I01 at 09:58:13; TURBO auto-approved it to WORKING.\n- worker-9cda703c claimed I01 at 09:58:22 and worked steps 1-6. Step 6 started at 10:09:43 and completed at 10:14:37.\n- At 10:13:23 the architect session exited. Its wrapper landed checkpoint 263e9f5, `wip(task-96526848…) [status=WORKING role=architect]`, which held the worker's in-flight source bytes: docs/MCP_SERVER.md, server/WebSocketServer.ts, server/WebSocketServer.test.ts and server/clientCapabilities.ts (+412/-12).\n- The worker's completion at 10:17:12 returned MOE_COMMIT_NOTHING_TO_COMMIT.\n- qa_approve at 10:59:26 raised ⚠️ NO-COMPLETION-COMMIT. task.landing is null on a DONE task whose bytes ARE on the branch. A governor has to reconstruct this by hand every time.\n\nSame shape: 1f9c7d5 (architect-6e3edf85's exit checkpoint on WORKING task-5f3960df).\n\nCause: the wrapper lands its session's pre-flight task at exit even after that task moved to another live assignee. getCommitScope.ts says there is no ownership guard; orphan mode exists for crash recovery. Interactive architects exit often through the account-switch mod, so this keeps happening.\n\nEffects:\n- Mid-edit worker bytes get committed and pushed as a wip under the wrong role, which can break the branch at that commit.\n- The completion commit goes missing, along with landing metadata and the Moe-Contested trailer evidence.\n- False NO-COMPLETION-COMMIT alarms.\n\nExpected: a session that is not the task's assignee, while the assignee is live or holds an open attempt, lands no source path for that task. It may still land the task's own board record. The bytes stay dirty for the assignee's own landing. Orphan recovery is unchanged when the assignee is dead or absent.\n\nFiles: scripts/moe-agent.sh and scripts/moe-agent.ps1 (twins), scripts/tests/postflight.sh and .ps1, and possibly packages/moe-daemon/src/tools/getCommitScope.ts (expose the assignee's liveness). The wrapper and postflight files are currently contested by the stale task-07474ee438f34021a23809f9c764d15c. Plan for a Claude Edit/Write seat, or wait for that contest to clear. Serialize behind task-c532d223459b4ef4b5bab2ba0eb4005e and task-5c71dff9ff2a488d8f75ec375c4f99f8, which edit moe-agent.sh.",
+  "definitionOfDone": [
+    "A non-assignee session exit (architect/QA/governor) on a task whose assignee is a live worker, or holds an open execution attempt, lands no source path for that task. The skip is reported with a named code and through record_commit. The assignee's own later completion commits those bytes, so the task gets a completion commit and landing metadata.",
+    "Orphan recovery is unchanged: when the assignee is dead or absent, or the task is unassigned, the existing checkpoint landing still happens. The sh and ps1 wrappers behave identically.",
+    "The postflight harness has a case for each behavior in both postflight.sh and postflight.ps1, and bash scripts/tests/parity-check.sh passes. If the daemon is touched, cd packages/moe-daemon && npm test exits 0.",
+    "scripts/CLAUDE.md 'Land on every exit' documents the live-assignee rule."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Read landed prerequisites, producer assigneeProtected contract, original DoD and baseline ownership memories. Map every path that can collect live working-tree bytes: run_landing/Invoke-MoeLanding, recovery re-entry, teardown_rescue/Invoke-MoeRescueRef, and any precomputed scope passed into them. Do not edit daemon/shared fake proxy in this task. Confirm source-changing paths all funnel through the guard while receipt replay of an already-landed immutable commit remains unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Mapped every working-tree source entrance.\n\nsh:\n- run_landing. Post-flight passes LAND_SCOPE_FILE=''. The pre-flight recovery in preflight_landing reuses the pre-flight scope.json via LAND_SCOPE_FILE; it will be refreshed. The daemon's phase is echo-only.\n- teardown_rescue. It runs its own commit_scope postflight, then resolve_attribution, then rescue_ref teardown. FROZEN_TREE is built only inside run_landing, after the guard point.\n- The gate, peel, commit and ref-contention rescues all run after attribution inside run_landing.\n\nps1:\n- Invoke-MoeLanding, for post-flight and for recovered landings via Invoke-MoeRecoveryCheck and Invoke-MoeIdleRecovery.\n- Invoke-MoeTeardownRescue calls Invoke-MoeRescueRef 'teardown'. Its own scope is used when Attr is null; there is also a frozen-tree branch.\n\nPlan for the guard:\n- One ownership-verdict function per wrapper, placed right after the scope fetch in each landing and teardown entrance, before baseline_landed_flag/BL copy, attribution, peel, private index and rescue.\n- On a refusal: no baseline write, no landed mark, no attempt close (finalize is worker-only and pinned to its own attempt), and MOE_LANDING_DONE/moeLandingDone set.\n- Receipt replay (receipt_replay / Invoke-MoeReceiptReplay) re-reports already-landed immutable commits and stays untouched.\n\nFinalizing-window decision (QA comment on producer task-9a9b46d8): the guard will also refuse with MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE when the task is unassigned or held by an unprotected foreign owner AND .moe/attempts holds a well-formed foreign attempt in phase 'finalizing' for the task. This mirrors the daemon's finalizing hold (util/claimEligibility.ts isHoldingFinalizingAttempt / foreignFinalizingAttempt, which already bars every other seat from claiming that row). DoD #2 still holds: a genuinely orphaned unassigned task, or a dead owner with a closed attempt, still lands.\n\nThe fake proxy has no scope-failure knob, and editing it is out of scope. The disk-fallback scenario will use the fake's documented invalid-knob exit-1 path.\n\nNo files modified.",
+      "startedAt": "2026-10-27T17:46:42.773Z",
+      "completedAt": "2026-10-29T13:06:57.905Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Use test-driven-development to add compact equivalent postflight scenarios in both harnesses, using the producer's shared fake-proxy controls. Matrix: own assignee allowed; foreign architect/QA/governor vs protected owner refused (include protection true with presence false to represent quiet/open-attempt owner); dead/missing owner with protection false and explicitly unassigned task still checkpoint; foreign owner with omitted/malformed protection refuses. Protected exit must log/record named refusal, create no source commit/rescue/push, leave source hash/dirty status and baseline header/content unchanged, and preserve shared index. In a sequential same-repo scenario, first foreign exit refuses, then rightful worker completion includes the source bytes and reports committed completion/ref/paths instead of nothing; verify ledger completion shape consumed by landing metadata. Cover daemon-failure/disk fallback and teardown after refusal so a signal cannot recover protected bytes. Keep existing orphan/recovery scenarios intact and update counts only for genuinely added cases.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-owner-guard.cjs",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Scope growth: new shared suite scripts/tests/postflight-owner-guard.cjs (same reason as the shared fake proxy: one case list runs on both engines, so sh and ps1 cannot drift). postflight.sh/.ps1 call it after the frozen suite. Cases (12, self-counted): own, active (architect vs live worker), quiet (qa vs alive=0 protected=1), omitted / malformed protection, fallback-owner (RPC down + foreign owner on disk), finalizing (unassigned + foreign finalizing attempt), recovered (pre-flight recovery vs live owner), dead, unassigned, fallback-unassigned, sequential (architect refuses, then the owner's completion commits the bytes: committed completion row with sha/ref/paths, no NOTHING_TO_COMMIT). A refusal must leave refs/HEAD/index/porcelain/owned-file hash/baseline unchanged, push nothing, record refused rows with code/role/session, and print commit=none outcome=refused code=<code>. Frozen suite: new teardown-protected mode (Ctrl+C on a task another worker owns: no rescue/candidate/gate, one refused rescue row with ACTIVE_ASSIGNEE, baseline unchanged). Existing scenarios and counts untouched. RED: sh and ps1 (powershell 5.1) give the same result: own/dead/unassigned/fallback-unassigned pass, the other 8 fail 'a refused exit leaves refs, tree, index and baseline as they were'. Frozen teardown-protected fails 'nothing is parked, frozen or gated' on sh and ps1 (current code writes a rescue ref).",
+      "startedAt": "2026-10-29T13:07:01.597Z",
+      "completedAt": "2026-10-29T13:38:41.152Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Implement equivalent fail-closed ownership decisions in both wrapper scope readers/landing paths. Validate task identity and assignedWorkerId; own caller may land, explicit unassigned may land, a different owner may land only when authoritative assigneeProtected is boolean false. Different owner with true refuses using MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE; missing/malformed/unreadable protection or ownership refuses with MOE_COMMIT_REFUSED_OWNER_UNKNOWN. Error handling: RPC failure or old daemon lacking the field must not be coerced into false; disk fallback may only allow a positively identified own/unassigned task, never infer a foreign owner dead. Refresh cached preflight scope before source landing. Place guard before attribution, baseline pruning/landed marking, branch peel, private-index build and source rescue; ensure teardown/recovery cannot bypass it, including signal cleanup and prebuilt working-tree candidates. Refuse the whole landing (board-only is optional and intentionally omitted), send record_commit outcome refused with task/session/role/code, set existing summary/handled flags so cleanup does not retry; report ledger failure best-effort without mutating Git or losing bytes. Keep owned immutable receipt replay/finalization behavior and orphan checkpoint logic unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-owner-guard.cjs"
+      ],
+      "note": "Owner guard in both wrappers. sh: landing_owner_guard + landing_refuse_owner. ps1: Get-MoeOwnerGuard (fetches the scope; any exception -> OWNER_UNKNOWN) + Send-MoeOwnerRefusal.\nRule:\n- The owner (== own workerId) lands.\n- A foreign owner refuses: ACTIVE on assigneeProtected===true; OWNER_UNKNOWN when not a JSON bool, on the disk fallback, or with a missing/malformed owner or taskId mismatch.\n- Unassigned, or a foreign owner with an explicit false, scans .moe/attempts for a well-formed foreign `finalizing` attempt on the task (ACTIVE) and otherwise lands (orphan path unchanged).\n- The disk fallback emits assignedWorkerId only when the record has the key. All 477 records and taskStore create always write it.\nPlacement:\n- run_landing / Invoke-MoeLanding: before the baseline read, snapshot, attribution, gate, peel, temp index and rescue.\n- Pre-flight recovery: refreshes the scope (sh LAND_SCOPE_FILE=''; ps1 already fresh).\n- Teardown: guard before the [rescue] line and the frozen-tree branch. ps1 passes the guard's scope to Invoke-MoeRescueRef via a new -Scope param, so the rescue makes no second fetch.\nRefusal behaviour:\n- record_commit outcome refused with code/role/sessionId and no sha/ref/push/path fields.\n- Session-ended line reads commit=none ... outcome=refused code=...\n- Landing-done is set, so there is no teardown double pass.\nChecks:\n- bash -n OK; ParseFile OK on PS 5.1 + pwsh 7; BOM kept; parity-check.sh PASS.\n- Owner-guard suite 12/12 on sh, PS 5.1 and pwsh 7.\n- Frozen teardown-{protected,running,finalizing,scope,recovered} 5/5 on sh and PS 5.1.\nStep-2 test fix: the sequential case now normalizes the ledger `ref`. ps1 records refs/heads/<branch> where sh records <branch>; that is a pre-existing wrapper difference, filed as task-3d0be5681276428d8908d361341145bf (bug, LOW).\nThe shared checkout has ~608 foreign dirty paths; none were touched.",
+      "startedAt": "2026-10-29T13:50:58.354Z",
+      "completedAt": "2026-10-29T14:05:02.068Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update scripts/CLAUDE.md 'Land on every exit': former assignee sessions cannot land source while a different owner is protected by registration/open attempt; stale display presence is not proof of death. Document both refusal codes, no source or board landing on guard refusal, unchanged bytes/baseline for owner/recovery, conservative old-daemon/error handling and unchanged dead/absent/unassigned recovery when authoritative metadata permits. Cross-check producer MCP contract and both launcher behaviors; no edits to generated/.moe docs.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/CLAUDE.md"
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "scripts/CLAUDE.md \"Land on every exit\" gains an **Owner guard** paragraph:\n- Where it runs: post-flight landing, pre-flight recovery on a fresh scope, and teardown rescue.\n- Non-assignee sessions land no source or BOARD bytes while assigneeProtected is true, or while another seat's attempt is finalizing: MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE.\n- assigneeAlive is display presence only.\n- Only a JSON false clears a foreign owner. An absent/non-boolean answer (older daemon), a missing/malformed owner, a failed check or the disk fallback gives MOE_COMMIT_REFUSED_OWNER_UNKNOWN.\n- A refusal moves nothing: tree, index and baseline are untouched, record_commit outcome is refused with no paths, and the session line reads commit=none ... outcome=refused code=.\n- The owner's own landing commits the bytes. Assignee, unassigned and dead/absent-with-nothing-finalizing land as before.\n- The scope read and the CAS are not atomic.\nThe text was cross-checked against docs/MCP_SERVER.md \"Live-assignee protection\" (consistent, no edit needed) and both launchers.\nScope note: I added one bullet to docs/TROUBLESHOOTING.md's lastCommitOutcome list, which enumerates every refused code. Operators and governors see these codes in lastCommitOutcome and in #governors alerts (record_commit alerts on refused), so the doc marks them as expected/nothing-lost. That file is not vendored into the daemon.\ndocs/roles/governor.reference.md was deliberately NOT edited: it is vendored into packages/moe-daemon/src/generated/initFiles.ts, which would pull the daemon into scope. No .moe/ docs were touched.",
+      "startedAt": "2026-10-29T14:05:04.151Z",
+      "completedAt": "2026-10-29T14:06:27.830Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Single final verification gate, from a stable exact-candidate checkout/snapshot root with native Windows PowerShell 5.1 and pwsh7 executables on PATH (Git Bash, or Windows-mounted WSL snapshot with correct native cwd): bash -n scripts/moe-agent.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh && powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$ErrorActionPreference=\"Stop\"; $env:MOE_POSTFLIGHT_TIMEOUT_SEC=\"180\"; $tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./scripts/moe-agent.ps1),[ref]$tokens,[ref]$errors); if($errors.Count){throw \"PowerShell syntax errors\"}; & ./scripts/tests/postflight.ps1; if($LASTEXITCODE){exit $LASTEXITCODE}; & ./scripts/tests/parity-check.ps1; exit $LASTEXITCODE' && pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command '$ErrorActionPreference=\"Stop\"; $env:MOE_POSTFLIGHT_TIMEOUT_SEC=\"180\"; $tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./scripts/moe-agent.ps1),[ref]$tokens,[ref]$errors); if($errors.Count){throw \"PowerShell syntax errors\"}; & ./scripts/tests/postflight.ps1; if($LASTEXITCODE){exit $LASTEXITCODE}; & ./scripts/tests/parity-check.ps1; exit $LASTEXITCODE' && (cd packages/moe-daemon && npm test). Run it fresh in a clean test environment without unrelated seat account/session overrides; no PASS-by-SKIP. Both native harnesses, Bash harness/parity and full daemon suite must exit 0. Preserve source hashes/tested root and output summaries; supply command/exitCode/outputTail to complete_task. Do not run full suites after each implementation step.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-owner-guard.cjs"
+      ],
+      "note": "Final gate GREEN, GATE_EXIT=0 (2026-10-29T14:24:30Z to 15:01:36Z). Run on a snapshot of HEAD a447305 plus this task's owned overlay. The sha256 of all 10 gated files (owned.sha256) was re-checked OK against the working tree after the run. HEAD has since moved to bfcaa8b (peer CQ-R09: .moe/tasks records and scripts/local-runner/* only), which is outside the gated surface. Environment: MOE_*/CLAUDE* stripped, clean Linux PATH, env -i for npm test, MOE_POSTFLIGHT_TIMEOUT_SEC=180 (the documented knob for slow hosts). The PowerShell legs used a byte-identical D: copy with a native Windows cwd. Legs:\n(1) bash -n OK.\n(2) postflight.sh PASS: frozen candidate 74 (incl. new teardown-protected), owner guard 12, commit-scope 38.\n(3) parity-check.sh PASS.\n(4) powershell.exe 5.1: ParseFile OK, postflight.ps1 PASS (frozen 74, owner guard 12, commit-scope 37), parity-check.ps1 PASS. Scenario AE was skipped because this host cannot create symlinks; that skip predates this task.\n(5) pwsh.exe 7: same as 4.\n(6) daemon npm test: 173/173 files, 4597 passed, 16 skipped (4613).\nBefore the gate I trimmed comments only, with no behavior change, to stay under QA's 400 net-LOC cap: net 398 (+427/-29). Per file: sh +93/-9, ps1 +75/-9, postflight-owner-guard.cjs +216/-0, postflight.sh +18/-5, postflight.ps1 +19/-5, scripts/CLAUDE.md +1/-1, TROUBLESHOOTING.md +5/-0. The only commits touching these paths since bb35a16^ are this task's own wip checkpoints. The roughly 613 foreign dirty paths were left untouched.",
+      "startedAt": "2026-10-29T14:19:52.854Z",
+      "completedAt": "2026-10-29T15:02:36.768Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final adversarial self-review (adversarial-self-review skill) of producer plus wrapper diffs: assignment changes after preflight, protected owner quiet or missing worker record but open attempt, foreign closed attempt, malformed/null/string booleans, RPC exceptions, concurrent source edits, baseline owned by another session, signals/refusal cleanup and shared index. Check all working-tree rescue entrances honor the same predicate and no refusal marks a foreign baseline landed, closes its attempt or reports a phantom committed row. Confirm own completion and orphan recovery still land; audit actual modified paths versus intended landing. State the residual cross-process scope-read/CAS timing limitation rather than claiming atomic daemon/Git authorization. Any review fixes require the identical final gate again before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review done; no defects, NO byte changes in this step (owned paths clean, identical to checkpoint 37ed6ae; diff vs bb35a16^ = +427/-29, net 398). Covered: assignment changing after preflight (guard re-reads get_commit_scope at landing/teardown time; preflight recovery uses a fresh scope); protected owner that is quiet or has no worker record but an open attempt (assigneeProtected -> ACTIVE_ASSIGNEE); a foreign closed attempt (only a well-formed foreign `finalizing` attempt blocks, so a closed one lands); malformed/null/string booleans, missing/malformed owner, taskId mismatch, disk fallback (all except JSON false -> OWNER_UNKNOWN); RPC/python/PS exceptions (fail closed -> OWNER_UNKNOWN); concurrent source edits, baseline owned by another session, shared index (refusal runs before any baseline/snapshot/temp-index/ref work and touches none of them); signals (refusal sets MOE_LANDING_DONE / $moeLandingDone, so the trap/finally does not re-land). Every working-tree landing entrance runs the same predicate: post-flight landing, pre-flight recovery, teardown rescue (sh+ps1). No refusal marks a baseline landed, closes an attempt, or records a phantom row: record_commit outcome=refused has no sha/ref/push/paths. Own completion, plus orphan recovery for a dead or absent owner or an unassigned task, still land (owner-guard cases own/dead/unassigned/fallback-unassigned/recovered/sequential). Landed checkpoints a2441f5/bb35a16/309c1dd/37ed6ae carry only owned paths + board JSON. Known limits, no fix: (1) the scope read and the branch CAS are two steps, not an atomic daemon/Git check (documented in scripts/CLAUDE.md); (2) a catchable throw inside ps1 Send-MoeOwnerRefusal would reach the finally rescue (practically unreachable); (3) the finalizing scan reads all .moe/attempts (~1.3 s for 551 files on /mnt/d), only when the owner is null or unprotected; (4) the OWNER_UNKNOWN WARN says 'not its owner'; (5) teardown refused rows differ in status/cliExit between sh and ps1, as their old rescue rows did; (6) a deleted task record refuses and leaves the bytes dirty; (7) a stale finalizing attempt blocks non-owner landing until finalize_attempt; (8) a daemon without assigneeProtected refuses foreign-owner landing, by design. Filed bug task-3d0be568 (sh vs ps1 ledger ref form). Identical final gate re-running fresh on HEAD 7c7ce76 (owned+harness sha256 == run 1).",
+      "startedAt": "2026-10-29T15:02:40.697Z",
+      "completedAt": "2026-10-29T16:41:37.261Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 229.5,
+  "comments": [
+    {
+      "id": "comment-1bea27baaa624881a84be6d34978a9bf",
+      "author": "architect-1520cc31",
+      "content": "Both existing prerequisites are DONE and landing.merged=true; stale wrapper-conflict task-07474ee4 is ARCHIVED. Source exploration found get_commit_scope already has assigneeAlive (presence only), but no open-attempt protection. To keep this task at five files (both wrappers, twin postflight harnesses, scripts/CLAUDE.md), task-9a9b46d88ff244759570c323ac3a67a4 was created in BACKLOG for additive assigneeProtected + daemon tests/docs + shared fake-proxy controls/tests. This task remains the final integration/hardening gate with original DoD intact and dependsOn gates work. Protection means registered non-DEAD owner regardless of idle timestamp OR matching open attempt. Non-assignee source landing fails closed on missing/malformed protection metadata; refusal skips the entire landing (optional board-only landing is unnecessary), preserving bytes/baseline. @governor-96f92f36 Please surface the producer prerequisite for human promotion. The worker-type wrapper task now depends on this row to serialize shared wrapper edits.",
+      "timestamp": "2026-10-26T15:38:19.313Z"
+    },
+    {
+      "id": "comment-6511be0fb98146e5a7cba4d90c9a4d31",
+      "author": "architect-2c9d5121",
+      "content": "Producer plan for task-9a9b46d88ff244759570c323ac3a67a4 was submitted 2026-10-27 and is in WORKING. Build your scenarios against these names.\n(1) get_commit_scope.assigneeProtected (boolean):\n- false: task unassigned (null, undefined or '').\n- true: the owner's worker record exists and is not DEAD. lastActivityAt is never consulted.\n- true: an attempt for this task has workerId === owner and phase !== 'closed'. An unknown phase also counts.\n- Fail-closed true: a non-string assignedWorkerId, or a worker record with no status.\n- The value is the same whoever calls. assigneeAlive is unchanged (presence only).\n(2) Fake-proxy knobs, changed from the description:\n- FAKE_SCOPE_ASSIGNEE: unset or EMPTY means the caller is the assignee (today's behaviour). The sentinel 'none' means unassigned. Any other value is that worker id. Empty cannot mean unassigned because PowerShell deletes an env var set to '', so postflight.ps1 could never express it.\n- FAKE_SCOPE_ASSIGNEE_ALIVE=0|1 is added so you can model a protected-but-quiet owner (alive 0, protected 1).\n- FAKE_SCOPE_ASSIGNEE_PROTECTED=0|1.\n- FAKE_SCOPE_OWNERSHIP_MODE=omit|malformed. 'malformed' returns the boolean as a string, so 'false' arrives as a string that must not be coerced.\n- A caller that is not the assignee is added to activePeerIds and makes peersActive true, as in the daemon's orphan rule.\n- An invalid knob value makes the fake exit 1.",
+      "timestamp": "2026-10-27T09:08:30.208Z"
+    },
+    {
+      "id": "comment-d1b6eecdb70b43bab0f63af24e7cb49a",
+      "author": "qa-6fa5d758",
+      "content": "QA note from producer task-9a9b46d8 (approved). It names one window the producer field does not cover, for your step-3 rule and step-6 review.\n- complete_task clears assignedWorkerId on WORKING→REVIEW, but the completing worker's attempt stays open in `finalizing` until its wrapper lands and calls finalize_attempt (packages/moe-daemon/src/tools/completeTask.ts, comment at ~L209).\n- In that window get_commit_scope answers assignedWorkerId null and assigneeProtected false. That is deliberate per the producer spec: unassigned is false even with a former worker's open attempt, and a test pins it.\n- So your \"explicit unassigned may land\" lets a foreign session that exits in those seconds land the worker's completion bytes as its own checkpoint. An example is the planning architect, whose pre-flight task this is. The worker's completion would then be NOTHING_TO_COMMIT: the parent bug's shape in a narrower window.\n- A QA claim cannot interleave there: the claim path refuses a row that holds a foreign `finalizing` attempt (claimNextTask.ts openClaimAttempt / util/claimEligibility.ts).\n- To close the window you need a signal beyond assigneeProtected. One option is a foreign open attempt on an unassigned REVIEW task, read from .moe/attempts/; another is a follow-up producer field. Weigh that against your DoD #2, under which unassigned keeps orphan landing.",
+      "timestamp": "2026-10-27T16:59:31.656Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T11:02:10.593Z",
+  "updatedAt": "2026-10-29T18:09:03.209Z",
+  "dependsOn": [
+    "task-c532d223459b4ef4b5bab2ba0eb4005e",
+    "task-5c71dff9ff2a488d8f75ec375c4f99f8",
+    "task-9a9b46d88ff244759570c323ac3a67a4",
+    "task-8333866a53464d07bcaf88134f259ff4"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-26T15:33:36.071Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T18:08:06.047Z",
+    "wallClockMs": 268469976
+  },
+  "contextFetchedBy": [
+    "architect-1520cc31",
+    "architect-2c9d5121",
+    "worker-3729a0d6",
+    "worker-0062feec",
+    "worker-fe18a9a9",
+    "qa-952969be"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T15:39:59.734Z",
+  "planningNotes": {
+    "approachesConsidered": "Root-cause fix is at all wrapper source-landing entrances, not a special-case architect role check or relaxed completion metadata. Optional board-only landing is not required: refusing the entire foreign-owner landing is simpler and preserves recovery state. Additive daemon signal/fake proxy controls are split into prerequisite task-9a9b46d88ff244759570c323ac3a67a4 (BACKLOG); this task retains original DoD and is final integration/hardening for the split. Existing symlink/hot-reload prerequisites are DONE with merged landing. Worker-type task bdf6db6f now depends on this task for wrapper serialization.",
+    "codebaseInsights": "getCommitScope.ts already returns assignedWorkerId and assigneeAlive, but assigneeAlive uses the 120s display-presence clock, unsafe as a death test. Producer contract assigneeProtected=true for an existing non-DEAD assigned worker regardless of activity timestamp OR any matching task/assigned-worker attempt in running/finalizing/reconciling; unassigned or dead/missing without matching open attempt false. run_landing obtains scope before attribution; Invoke-MoeLanding obtains it before Resolve-MoeAttribution. teardown_rescue and Invoke-MoeRescueRef have direct attribution paths. Existing baseline_landed_flag/Get-MoeBaselineLandedFlag protect another session's baseline but do not prevent source stealing. record_commit accepts outcome refused and arbitrary named code without schema changes. Existing parity tools compare MOE_COMMIT_* codes automatically.",
+    "risks": "Safety-critical source attribution merits max effort. Never infer death from timestamps, status display or local PID in cross-WSL/native seats. Preserve baseline contents/landed flag/session and dirty paths on refusal; do not let finally/EXIT rescue bypass it. False/missing/malformed ownership metadata differ; Boolean coercion is unsafe. Existing stale contest 07474ee4 is ARCHIVED, no Claude-only restriction from it. No Git writes by the worker outside isolated harness repos; wrappers own actual landing. Gate full scripts snapshot so concurrent hot-reload edits do not mix versions; native Windows path/PS5.1 BOM and PS7 behavior both required. Candidate freeze/receipt replay of already-landed commits is not new source attribution; do not break it or close a foreign attempt.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/CLAUDE.md",
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "scripts/tests/postflight-fake-proxy.js"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T15:39:59.837Z",
+  "workStartedAt": "2026-10-27T17:46:42.773Z",
+  "commits": [
+    {
+      "sha": "a2441f53f1d231559ce72df584bb0f0991895e9e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T12:54:34Z",
+      "paths": [
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T12:55:22.597Z",
+      "treeId": "f8da0b463a1207e6866baecddaf26cc71c0dfd83",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "bb35a1614b4df6f492a94090ee290bf31e1a2e29",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T12:54:34Z",
+      "paths": [
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
+        ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json",
+        "scripts/tests/postflight-owner-guard.cjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T13:39:07.391Z",
+      "treeId": "81fe1b9c49d728722ea4cda456bbf06265a21ded",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "309c1dde9a217d90fe7de6ce59a1107be28326dd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T13:39:10Z",
+      "paths": [
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
+        ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+        ".moe/tasks/task-f12b03e83a1a491494a08e42c7a58504.json",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-owner-guard.cjs"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T14:12:17.951Z",
+      "treeId": "3682dd0b419cc11e97eb447973afbec96f665172",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "37ed6ae51b623c081be4d68dc71ff459894f5f4c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T14:12:28Z",
+      "paths": [
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-34632f08a9a549a28bcf2b9f6946244b.json",
+        ".moe/tasks/task-5dc76be6e63f47a58f30e9f7a6923511.json",
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-owner-guard.cjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T15:03:46.276Z",
+      "treeId": "ccbba440f0f43825d3e375489ea504dc575d4b1e",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "1c9c71aa2399a2275f702c3f672d2695875ce9a8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T16:24:35Z",
+      "paths": [
+        ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T17:11:14.307Z",
+      "treeId": "23979cea25e77f1a8aa2ec4e1f16c29518c3ad1f",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "75a2ea31b73793bb662a46142ddaec376f96721d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T17:11:16Z",
+      "paths": [
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T17:21:52.865Z",
+      "treeId": "92ee028bbeadb09697b01c48b52cb2848793e16c",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-owner-guard.cjs",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+    ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-952969be@2026-10-29T17:22:36Z",
+    "at": "2026-10-29T18:09:03.209Z"
+  },
+  "declaredFiles": [
+    "scripts/tests/postflight-owner-guard.cjs"
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight-owner-guard.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "reviewStartedAt": "2026-10-29T17:20:54.826Z",
+  "verification": {
+    "command": "bash /mnt/d/moe-scratch/6aa4-run/gate.sh  # plan step-5 chain on one snapshot (git archive HEAD 7c7ce76 + the 7 owned paths; PS legs on a byte-identical D: copy; MOE_*/CLAUDE* stripped): bash -n scripts/moe-agent.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=180 postflight.sh && parity-check.sh && powershell.exe {ParseFile moe-agent.ps1; postflight.ps1; parity-check.ps1} && pwsh.exe {same} && (cd packages/moe-daemon && npm test)",
+    "exitCode": 0,
+    "outputTail": "Extract of gate.log (leg, PASS and summary lines). Run 2026-10-29T16:40:43Z-17:16:00Z. Launched detached by this seat's previous session (pre-flight 16:24:35Z, died ~17:11Z) and watched to completion by this session. Afterward the 10 gated files (7 owned + postflight-fake-proxy.js + parity-check.{sh,ps1}) were sha256-checked: equal in the snapshot, the D: copy, the live tree and HEAD 85c095c. HEAD's commits since 7c7ce76 touch only packages/moe-daemon/src/context/* and scripts/local-runner/*, plus board JSON.\n=== LEG bash-n 2026-10-29T16:40:43Z\n=== LEG postflight.sh 2026-10-29T16:40:43Z\nPASS frozen candidate scenarios: 74\nPASS owner guard scenarios: 12\ncommit-scope scenarios run: 38\nPASS postflight.sh\n=== LEG parity-check.sh 2026-10-29T16:50:46Z\nPASS parity-check.sh\n=== LEG powershell.exe 2026-10-29T16:50:47Z\nPASS frozen candidate scenarios: 74\nPASS owner guard scenarios: 12\n[scenario AD] link variant skipped: this host cannot create symlinks\n[scenario AE] skipped: this host cannot create symlinks\ncommit-scope scenarios run: 37\nPASS postflight.ps1\nPASS parity-check.ps1\n=== LEG pwsh.exe 2026-10-29T17:03:49Z\nPASS frozen candidate scenarios: 74\nPASS owner guard scenarios: 12\n[scenario AD] link variant skipped: this host cannot create symlinks\n[scenario AE] skipped: this host cannot create symlinks\ncommit-scope scenarios run: 37\nPASS postflight.ps1\nPASS parity-check.ps1\n=== LEG npm-test 2026-10-29T17:15:30Z\nTest Files  174 passed (174)\nTests  4717 passed | 16 skipped (4733)\n=== GATE_EXIT=0 2026-10-29T17:16:00Z\nSupplementary (not part of the plan's chain): daemon npm test on a full git archive of HEAD 85c095c, env -i, 17:17:41Z-17:18:05Z: Test Files 177 passed (177); Tests 4832 passed | 16 skipped (4848); exit 0.",
+    "reportedAt": "2026-10-29T17:20:54.826Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Owner guard in both wrappers: a session that is not the task's assignee lands none of its bytes while the owner is protected.\nRule (sh landing_owner_guard, ps1 Get-MoeOwnerGuard; **Owner guard** in scripts/CLAUDE.md):\n- The assignee lands.\n- Foreign owner with assigneeProtected true, or another seat's well-formed `finalizing` attempt (QA's window note): MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE.\n- Foreign owner with an absent/non-boolean answer, malformed owner, taskId mismatch, failed check or disk fallback: MOE_COMMIT_REFUSED_OWNER_UNKNOWN.\n- Unassigned, or foreign owner with JSON false and nothing finalizing: lands as before (orphan recovery unchanged).\nRuns first in post-flight landing, pre-flight recovery (fresh scope) and teardown rescue. A refusal touches no tree, index, ref or baseline; it records record_commit outcome=refused (code, role, sessionId, no paths), prints commit=none outcome=refused code=..., and sets landing-done so teardown cannot re-land.\nTests: new shared suite scripts/tests/postflight-owner-guard.cjs (12 cases), run from postflight.sh and .ps1. Sequential case: the architect refuses, then the owner's completion commits the bytes (committed row, no NOTHING_TO_COMMIT). Frozen suite gains teardown-protected. RED: 8/12 plus teardown-protected failed on pre-fix wrappers (sh, PS 5.1).\nDocs: scripts/CLAUDE.md, docs/TROUBLESHOOTING.md. Size: +427/-29, net 398, 7 files.\nGate: step-5 chain, GATE_EXIT=0, 16:40-17:16Z.\n- bash: -n OK; postflight.sh frozen 74, owner guard 12, commit-scope 38; parity PASS.\n- PS 5.1, pwsh 7: ParseFile OK, frozen 74, owner guard 12, commit-scope 37 (AD-link/AE skip: no symlink rights, pre-existing); postflight.ps1 + parity PASS.\n- daemon: 174 files, 4717 passed.\nMy previous session launched the run; this one watched it finish. Gated bytes sha256-match HEAD 85c095c. Extra: daemon tests on an 85c095c archive: 177/177 files, 4832 passed.\nResidual: scope read and CAS not atomic. Filed task-3d0be568 (sh/ps1 ledger ref).",
+  "completedAt": "2026-10-29T18:08:06.047Z",
+  "reviewCompletedAt": "2026-10-29T18:08:06.047Z",
+  "reviewSummary": "APPROVED. Completion 75a2ea3 is on moe/work-2026-10-24 and on origin. The source is in own checkpoints bb35a16, 309c1dd and 37ed6ae. Size: +427/-29, net 398, 7 files.\n\nMy re-run of the step-5 chain on a git archive of 75a2ea3 (sha256 == live tree; PS legs on a D: copy; MOE_*/CLAUDE* stripped), 17:30-18:05Z, GATE_EXIT=0:\n- bash -n OK; postflight.sh frozen 74, guard 12, scope 38; parity PASS.\n- PS 5.1 and pwsh 7: ParseFile OK; postflight.ps1 74/12/37; parity PASS. AD-link/AE skip predates this task (no symlink rights).\n- daemon: 177 files, 4832 passed.\n\nMutation check on the pre-fix sh wrapper: active and sequential FAIL, dead passes.\n\nDoD:\n1. The guard runs before all baseline, attribution and ref work in landing, recovery (fresh scope) and teardown. Refusal: record_commit refused with a code and no sha or paths. 'sequential' shows the owner's completion commits the bytes.\n2. Unassigned and dead owners still land; one shared case list runs on both engines.\n3. Both harnesses run the cases; parity passes; daemon untouched.\n4. scripts/CLAUDE.md Owner guard paragraph.\n\nNotes (non-blocking):\n- The finalizing scan parses all 584 attempt records (1.46 s, growing) on every completion; net: -24 lines possible. Follow-up task-d3cd966c5ef74468b03ac4ca23893d5d.\n- The disk fallback with a foreign owner refuses, by plan.\n- The scope read and CAS are not atomic (documented).",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,355 @@
+{
+  "id": "task-d45d52c0bb3d4569b3b6b5a757812b19",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13f] Certify writer and check containment probes",
+  "description": "Objective: add certify checks showing, on real hardware, that a malicious writer (the agent identity) and a malicious test (the check identity) stay contained, and that replacement attempts inside the guest fail. These cover CQ-R13 DoD items 1 and 2.\n\nSplit out of CQ-R13 (task-f4811a72) by architect-e4b7eee0 on 2026-10-30. It depends on CQ-R13e (the certify.mjs edit order) and on CQ-R11e (task-001d8ab3): runCheckJob complete, with its toolchain and workspace verify.\n\nDeliverable: three checks appended to CERTIFY_CHECKS.\n\n'writer-containment', run as moe-agent through `sudo -n -u moe-agent` probes in the certify VM. Each probe must fail with a permission error:\n- reading the supervisor credential, or the root-only workspace manifest;\n- writing under /opt/moe, or into another session home;\n- writing the supervisor or the toolchain.\n\n'check-containment', through runCheckJob on generated snapshots:\n- A probe script is the approved command. It exits 0 only when each attack failed:\n  - network egress, inside the private netns;\n  - reading the credential;\n  - writing a protected path (EROFS);\n  - exceeding RLIMIT_NPROC or RLIMIT_FSIZE, which must be bounded.\n- A second run, whose command overwrites a protected file, must resolve 'inconclusive'.\n- A third run, which edits a tracked unprotected file, must resolve with workspace 'changed'.\n\n'controller-replacement':\n- As root in the certify VM, replace the supervisor bytes and re-run the readiness probes. They must fail with the supervisor hash mismatch.\n- A ledger record rewritten to another owner must not be deleted by this run's cleanup.\n- It runs LAST among the checks that use the certify VM, because it taints that VM.\n\nEvery outcome maps to a fixed code. Tests in scripts/tests/local-runner.test.mjs use fake providers and fake runCheckJob results. The native behavior is certified only by the operator run.\n\nOut of scope:\n- cancellation and recovery (CQ-R13h);\n- the canary toolchain check (CQ-R13g);\n- the host-side replacement regression (CQ-R13 itself);\n- enabling verified-local;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "'writer-containment' passes only when every agent-identity probe is refused: credential, root-only manifest, /opt/moe, another home, supervisor and toolchain. Any success fails the check. Shown by tests.",
+    "'check-containment' passes only when the probe run passes, the protected-overwrite run resolves 'inconclusive' and the tracked-edit run resolves workspace 'changed'. Any other outcome fails the check. Shown by tests with fake runCheckJob results.",
+    "'controller-replacement' passes only when readiness refuses a replaced supervisor and this run's cleanup leaves a foreign-owned ledger record alone. It runs last among the certify-VM checks. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nPrerequisites landed: CQ-R13f1 (check-containment) and CQ-R13h (task-4132ab1c, completion 2cd85cc0, which runs BEFORE this row since the governor's 20:31Z lane swap). The architect's verified prototype is the Serena memory `task-task-d45d52c0bb3d4569b3b6b5a757812b19-prototype`: every diff in it is against HEAD 757dcce4 and applied there with clean hunks. Apply its test hunks with the Edit tool only (contested shared file). If R13h's QA rework moved an anchor, apply the same intent to the landed bytes.\n\nIn scripts/tests/local-runner.test.mjs:\n1. Pinned lists.\n   - CERTIFY_IDS gains 'writer-containment' just before 'check-containment' and 'controller-replacement' just after it.\n   - BRIDGE_NOT_RUN is built from the ids: [...ids].map(id => [id, 'not-run']), with the same two insertions.\n   - CF3's `undeleted` gains both as 'passed'.\n   - GN5's `.slice(-7)` becomes `.slice(3)`, so later appends need no edit there.\n   - LC7's slice(-4) list and its title name 'controller-replacement' where they said 'check-containment'.\n2. CF5. Its five `failing(6, { id: 'teardown', ... })` rows target index 6, which stopped being 'teardown' at R13f1. They now refuse for an id mismatch, not their own rule: a VALID teardown-failed row at index 6 is refused too. Add `const last = CERTIFY_IDS.length - 1` and use it in those five rows.\n3. certifyHarness.\n   - Constants: WRITER_LITERAL (the probe's full text), GUEST_EXECS { home, probe, replace }, guestExecOf(args) and REPLACED_HASH.\n   - Options: `writer = {}` (exec answers for home and probe; step fakes for toolchain and installToolchain, default TOOLCHAIN_STUB) and `replace`.\n   - Lists `ops` and `hashed`, returned on the harness.\n   - The three execs are intercepted BEFORE networkProbe. The writer probe's argv has args[4] 'sudo' and args[8] 'python3', which networkProbe would take for guest-network's agent probe, and GN1/GN3 pin `probes` exactly.\n   - The default replace answer sets `replaced`. After that, only GUEST's supervisorHash probe (EXPECTED_PROBES.supervisorHash with args[2] === GUEST) answers REPLACED_HASH, and each GUEST hash probe pushes `replaced` into `hashed`. A shared-answer flip would fail R13h's cancellation VM, which `clone` answers through the same fake guest.\n   - deps.writer records { toolchain, install } calls into ops.\n4. Rows, after CC6 and before the CQ-R13h block:\n   - WC1: WRITER_PROBE === WRITER_LITERAL, with no quote or control character. ops are exactly: the home exec; toolchain { arch: 'x64', cacheDir: <workDir>/images }; install { name: GUEST, toolchain: TOOLCHAIN_STUB, provider: the context provider, timeoutMs: 120_000 }; the probe exec; the replace exec. Each exec carries lifecycleOptions(QUERY_TIMEOUT_MS). Drift guards on guest-supervisor.py: WORKSPACE_MANIFEST, SESSIONS, TOOLCHAIN, the check job's PATH and session_home's mkdtemp prefix.\n   - WC2, skipped on win32 like CC2: the probe under python3 with os.path.exists and os.access stubbed. It exits 0 when every target exists and is refused; 10+i when target i is granted in its own mode; 20+i when target i is absent; 0 when only the other mode is granted. The first failing target wins.\n   - WC3: probe exits 10..16 map to CERTIFY_WRITER_<CREDENTIAL|MANIFEST|CONTROL_PLANE|HOME|SUPERVISOR|TOOLCHAIN|TOOLCHAIN>_ALLOWED; 20 and 26 to CERTIFY_WRITER_TARGET_MISSING; 1, 9, 17, 19, 27 and 127 to CERTIFY_WRITER_UNKNOWN; a killed provider to PROVIDER_TIMEOUT. A home exit 1 is CERTIFY_WRITER_SETUP_FAILED with nothing after it. Toolchain and install rejections keep their own codes and stop the check. Every row asserts failedAt('writer-containment', code), the ops prefix that ran, no containment run, no recovery child, and only GUEST deleted.\n   - CR1: a pass-through deps.replacement.deleteOwned over the real deleteOwned sees the rewritten attempt once (attempt-<32 hex>, not the main one). hashed is [false, true], the report passes, deletes equal CERTIFY_DELETES, the main record ends 'deleted' (restored, so teardown deleted it), and there is exactly one replace exec with the exact argv.\n   - CR2: replace exit 1 is CERTIFY_REPLACEMENT_NOT_REPLACED (hashed [false]); a killed replace is PROVIDER_TIMEOUT; a replace that changes no hash is CERTIFY_REPLACEMENT_ACCEPTED ([false, false]); a second readiness failure (layout answers [ok, bad]) is CERTIFY_REPLACEMENT_UNKNOWN. CERTIFY_REPLACEMENT_RECORD_NOT_KEPT for a cleanup that trusts the rewritten record (a real delete), one that resolves, one that refuses but marks the record deleted, one that refuses but deletes the VM, one that refuses but writes this run's owner back, and one that rejects with another code. Each row asserts failedAt('controller-replacement', code), no recovery child, and the main record ending 'deleted'.\n5. Run the verification command. The file fails to load, because WRITER_PROBE is not exported yet: that is the RED.\n\nError handling in tests: assert fixed codes, never messages; scratch directories come from scratch(t).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Applied the prototype's test hunks to R13h's final landed bytes (5fb1eef7, plus checkpoint 81086f8a); R13h's rework had moved no anchor these hunks use. Changes: pinned lists (CERTIFY_IDS, BRIDGE_NOT_RUN built from ids, CF3 undeleted, GN5 slice(3), LC7 slice(-4) list and title); CF5 teardown rows now use last = CERTIFY_IDS.length - 1; certifyHarness writer/replace options with ops/hashed; and rows WC1-WC3 and CR1-CR2 after CC6. Base measured on the unedited tree: 333 tests, 332 pass, 1 skip, exit 0 (/tmp/r13f-base.log). RED: the file fails to load with \"does not provide an export named 'WRITER_PROBE'\" (/tmp/r13f-red.log). Pre-existing dirty paths from other sessions (.moe/tasks/*, moe-jetbrains RuntimeSelectionPolicy*, moe-vscode, scripts/moe-agent.*, scripts/tests/postflight.*) are not mine and are untouched.",
+      "startedAt": "2026-10-30T21:47:20.746Z",
+      "completedAt": "2026-10-30T21:50:04.374Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "writer-containment, in scripts/local-runner/certify-bridge.mjs and scripts/local-runner/certify-containment.mjs (prototype hunks in the memory).\n\n1. certify-bridge.mjs: export `probe` (one keyword) and name certify-containment.mjs in its comment. Its behavior is unchanged: runGuestProbe's handling, {code, stdout} for a remote exit, a PROVIDER_* throw for a kill, spawn or other provider failure.\n2. certify-containment.mjs:\n   - Imports: probe as guestExec, buildUserData, GUEST_LAYOUT and JOB_IDENTITIES, waitForGuestReady, deleteOwned and queryOwnedInstance, installToolchain, fetchNodeToolchain, readFile/writeFile and path (the last group is used by step 3).\n   - OTHER_HOME = '/var/lib/moe/sessions/home-certify'. HOME_ARGV = ['sudo', '-n', 'install', '-d', '-m', '0700', '-o', JOB_IDENTITIES[1], '-g', JOB_IDENTITIES[1], OTHER_HOME]: another job's home, made as guest-supervisor.py session_home makes one, under a name mkdtemp never draws.\n   - WRITER_TARGETS, seven [code, path, access mode] rows: CREDENTIAL GUEST_LAYOUT.credential 4; MANIFEST /var/lib/moe/workspace.manifest.json 4; CONTROL_PLANE /opt/moe 2; HOME OTHER_HOME 2; SUPERVISOR GUEST_LAYOUT.supervisor 2; TOOLCHAIN /opt/moe/toolchain/bin 2; TOOLCHAIN /opt/moe/toolchain/bin/node 2.\n   - Exported WRITER_PROBE: one python line, no quote. As the agent identity it exits 10+i for the first target it may access, 20+i for one it cannot see, else 0.\n   - writerContainment(c), with seam = c.deps?.writer ?? {} (test-only):\n     a. The home exec; a non-zero exit is CERTIFY_WRITER_SETUP_FAILED.\n     b. toolchain = (seam.toolchain ?? fetchNodeToolchain)({ arch: c.outcome?.image?.source?.arch, cacheDir: c.cacheDir }).\n     c. (seam.installToolchain ?? installToolchain)({ name: c.name, toolchain, provider: c.provider, timeoutMs: c.bounds.transferMs }).\n     d. `sudo -n -u <JOB_IDENTITIES[0]> python3 -I -c WRITER_PROBE`. Exit 0 passes. 10+i is CERTIFY_WRITER_<code>_ALLOWED, 20+i is CERTIFY_WRITER_TARGET_MISSING, anything else CERTIFY_WRITER_UNKNOWN.\n\nWhy this shape:\n- `test -r/-w` alone cannot tell EACCES from ENOENT, so the probe stats each target first. A target that exists and that access(2) refuses is a permission refusal; absence is never evidence.\n- The certify VM is provisioned with no toolchain and has no named foreign home, so both are made real first. The toolchain is the REAL pinned one through R11e1's cache and R11e2's install; check-containment's runs reuse that cache.\n\nError handling: toolchain, transfer and provider refusals propagate with their own stable codes through R13d's runCheck. Every argv is a fixed literal, and no guest byte reaches an argv, a code or the report.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/certify-bridge.mjs",
+        "scripts/local-runner/certify-containment.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/certify-bridge.mjs",
+        "scripts/local-runner/certify-containment.mjs"
+      ],
+      "note": "certify-bridge.mjs: `export` added to probe(), plus its comment; behavior unchanged. certify-containment.mjs: header comment, the imports (including step 3's readFile/writeFile/path/buildUserData/waitForGuestReady/deleteOwned/queryOwnedInstance), OTHER_HOME, HOME_ARGV, WRITER_TARGETS, exported WRITER_PROBE and writerContainment(c), each as in the prototype. The signatures I checked: buildUserData returns supervisorSha256/shimSha256/shimToolsSha256; installToolchain takes {name, toolchain, provider, timeoutMs}; fetchNodeToolchain takes {arch, cacheDir}; c.bounds.transferMs is 120_000 (BRIDGE_BOUNDS); certify-bridge does not import certify-containment, so there is no cycle. The module loads and WRITER_PROBE matches WRITER_LITERAL. The registry wiring is step 3.",
+      "startedAt": "2026-10-30T21:50:05.586Z",
+      "completedAt": "2026-10-30T21:51:17.637Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "controller-replacement, the registry order, and certify.mjs comments.\n\nscripts/local-runner/certify-containment.mjs:\n1. REPLACE_ARGV = ['sudo', '-n', 'cp', '/usr/bin/true', GUEST_LAYOUT.supervisor]. cp keeps the inode, owner and mode, so only the hash changes and layout still holds.\n2. controllerReplacement(c):\n   a. The replace exec; a non-zero exit is CERTIFY_REPLACEMENT_NOT_REPLACED.\n   b. Readiness as provisioning ran it: waitForGuestReady({ ledger: c.ledger, name: c.name, owner: c.owner, sourceImage: c.outcome.image.source, bootstrap: { supervisorSha256, shimSha256, shimToolsSha256 }, provider: c.provider, sleep: c.deps.sleep }). The digests come from buildUserData({ supervisor: c.supervisor, credential: randomBytes(32) }); its throwaway credential is never sent.\n   c. bootstrapReady !== false is CERTIFY_REPLACEMENT_ACCEPTED. failures other than exactly ['SUPERVISOR_HASH_MISMATCH'] is CERTIFY_REPLACEMENT_UNKNOWN.\n   d. The ledger part. file = path.join(c.ledgerDir, `${c.name}.json`). R13h's landed certify.mjs puts ledgerDir on the context; if it is absent there, use path.join(c.workDir, 'ledger'). Read the original bytes, then in try:\n      - write the record back with a fresh `attempt-<32 hex>` attemptId;\n      - refusal = the rejection code of (c.deps.replacement?.deleteOwned ?? deleteOwned)({ ledger: c.ledger, name: c.name, owner: c.owner, provider: c.provider }), through Promise.resolve().then(...);\n      - kept = c.ledger.read(c.name), null on a throw; vm = queryOwnedInstance(c.name, c.provider), null on a throw;\n      - pass only when refusal === 'LIFECYCLE_NOT_OWNER', kept.phase === 'owned', kept.attemptId is the rewritten one, and vm.present === true. Otherwise CERTIFY_REPLACEMENT_RECORD_NOT_KEPT.\n      In finally, write the original bytes back, so teardown still deletes the VM.\n3. CONTAINMENT_CHECKS = frozen { id, run } entries for 'writer-containment', 'check-containment', 'controller-replacement', in that order. Extend the header comment.\n\nWhy the certify VM's own record, not a decoy: a reserve draws deps.random and would shift every VM name R13h's rows pin (CERTIFY_DELETES, LC1, LC3, CC6), and it would leave a record for R13h's recovery to reconcile. This rewrite also shows the cleanup re-reads ownership from disk, against a real VM.\n\nscripts/local-runner/certify.mjs, comments only:\n- the header line names R13f's two checks and that controller-replacement is last on the certify VM;\n- certifyCore's injected-transports list gains writer and replacement.\nBODY needs no edit: it already splices CONTAINMENT_CHECKS before LIFECYCLE_CHECKS. So controller-replacement is the last check that uses the certify VM; cancellation, recovery and R13g's canary use their own VMs, and teardown stays last.\n\nError handling: a readFile or writeFile failure propagates as its stable code. Natively deps is {}, so no seam applies. executionReady stays false.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/certify-containment.mjs",
+        "scripts/local-runner/certify.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/certify-containment.mjs",
+        "scripts/local-runner/certify.mjs"
+      ],
+      "note": "certify-containment.mjs: REPLACE_ARGV and controllerReplacement(c) as in the plan. It uses c.ledgerDir (present on R13h's landed context), restores the original bytes in finally, and reads waitForGuestReady's {bootstrapReady, failures}. CONTAINMENT_CHECKS is now writer-containment, check-containment, controller-replacement; check-containment's code is untouched. certify.mjs: comments only (the header line and certifyCore's seam list); BODY is unchanged. Focused run --test-name-pattern='^(WC|CR|CF|CC|GN5|LC)': exit 0, 27/27 pass, including R13h's LC1-LC7 rows, unmodified (/tmp/r13f-focus.log).",
+      "startedAt": "2026-10-30T21:51:18.782Z",
+      "completedAt": "2026-10-30T21:52:23.724Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh.\n\n1. Run the verification command and require exit 0: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs\n   - Its command, exit code and output tail are the complete_task verification evidence.\n   - Expect the base count plus 5 tests. The prototype gave 338 tests, 337 pass, 1 existing skip on HEAD 757dcce4.\n   - It may run in place (a scripts/tests harness), or in a git archive of the exact tree outside the repo.\n2. `git diff --check` over the four files is clean.\n3. A read-only `git status --short` shows the four files as this task's. Note any peer or pre-existing dirty path and never revert, stash, `git add -A` or commit it.\n\nThe native run (real Multipass, operator-invoked `cli.mjs certify`) is operator-only and is NOT part of this verification.\n\nError handling: fix a failing row in code, never by weakening an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh, in place: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs gave exit 0, 338 tests, 337 pass, 0 fail, 1 existing skip (base 333/332/1, so +5), in 79.4s (/tmp/r13f-verify.log). git diff --check over the four files is clean. numstat: certify-containment +70/-4, certify-bridge +2/-2, certify.mjs +4/-2, test +125/-16, so 225 changed lines. In git status the four files are this task's; the other dirty paths (.moe/tasks/*, .moe/decisions/, moe-jetbrains RuntimeSelectionPolicy*, moe-vscode MoeDaemonClient/protected-daemon-spawn) belong to peers or were there before, and are untouched.",
+      "startedAt": "2026-10-30T21:52:25.448Z",
+      "completedAt": "2026-10-30T21:54:18.620Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the four-file diff as an attacker.\n\nVacuous passes:\n- Can writer-containment pass if sudo fails (exit 1), python3 is missing (127), a target is absent (20+i), or the probe never runs?\n- Can controller-replacement pass if the replace silently fails, if readiness fails for another reason too, if the cleanup resolves, or if the VM or the rewritten record is gone?\n\nThe ledger window:\n- Are the original bytes written back on every path, including a throw from the cleanup, the read or the query?\n- Could the certify VM be deleted while its record names another owner?\n- Is c.capturing never used (its reserve would retarget teardown)?\n\nInjection and secrets:\n- Every argv is a fixed literal.\n- No guest byte reaches an argv, a code or the report.\n- The throwaway credential never leaves the process.\n\nOrder: controller-replacement is the last check on the certify VM, teardown stays last, and R13h's LC rows stay green.\n\nNative: deps is {}, so no seam can be injected; executionReady stays false; verified-local stays unavailable.\n\nCross-platform: the probe has no single quote (multipass quotes each argument; Windows quoting of its double quotes works as for CONNECT_PROBE), and WC2 skips on win32.\n\nMutation evidence: in a scratch git archive of your bytes OUTSIDE the repo, re-run at least six of the prototype's mutants with --test-name-pattern='^(WC|CR|CF1 |LC7)': drop each of the refusal, phase, attemptId and vm-present conditions; remove the finally restore; drop the probe's existence test. Each must fail with an AssertionError, and the restored copy must be byte-identical (cmp).\n\nFix any finding, then re-run step 4's command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Adversarial review of the four-file diff found one finding, now fixed: in the mutation run, dropping `ready.failures.length !== 1` SURVIVED. CR2's \"another failure too\" row fails layout, which readiness reports BEFORE the hash mismatch, so failures[0] already differed. Added CR2 row \"a later failure too\": the shim hash fails on the second readiness only, giving failures [SUPERVISOR_HASH_MISMATCH, SHIM_HASH_MISMATCH], which must be CERTIFY_REPLACEMENT_UNKNOWN (+2 test lines).\nMutation evidence: scratch git archive /tmp/r13f-mut.muOsnP (outside the repo, my bytes copied in), --test-name-pattern='^(WC|CR|CF1 |LC7)', baseline 7/7. All 12 mutants are killed by AssertionErrors: refusal, phase, attemptId and vm-present conditions each dropped; no finally restore; probe existence test dropped; ACCEPTED check dropped; failures not exact; replace exit ignored; controller ordered before check-containment; no rewrite; home setup skipped. The restored source and test are cmp-identical, and the restored run is 7/7.\nReview points that held:\n- No vacuous pass. sudo exit 1, python3 127, and absent 20+i are all non-zero.\n- Readiness never executes the supervisor. cp keeps mode 500 root:root, so only the hash changes.\n- Parent directories are searchable by moe-agent: /etc/moe is 755, sessions 0711, /var/lib/moe 755. So a target is never falsely reported missing natively, and the manifest exists after R13e's materialize.\n- finally restores the original on every path after the read. The cleanup, read and query are caught; a JSON.parse or rewrite throw sits inside try.\n- c.capturing is never used. Every argv is a fixed literal; the code reads only exit codes, so no guest bytes are used. buildUserData's throwaway credential/userData is discarded.\n- Natively deps is {}, so no seam applies. executionReady is unchanged.\n- WRITER_PROBE has no single quote and only double quotes, as in the CONNECT_PROBE precedent; WC2 skips on win32.\nFresh re-run: exit 0, 338 tests, 337 pass, 1 skip (/tmp/r13f-final.log). diff --check clean. 229 changed lines.",
+      "startedAt": "2026-10-30T21:54:19.769Z",
+      "completedAt": "2026-10-30T22:00:22.641Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor: the park reason no longer holds. scripts/local-runner/certify.mjs and certify-bridge.mjs are in the tree, R11e (001d8ab3) is DONE, and R13e (d00dafdf) is WORKING on an approved plan, so R13f can be planned now (plan-don't-park rule, 2026-10-27). dependsOn stays [d00dafdf, 001d8ab3], so no worker starts it before R13e is DONE.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-f4811a729f9e436ba129a65c12d348c1",
+  "priority": "HIGH",
+  "order": 254.4,
+  "comments": [
+    {
+      "id": "comment-afc45033bab44419a50dcddc78fbf2dd",
+      "author": "governor-693b7073",
+      "content": "Governor, 17:36Z: I moved this from BLOCKED to PLANNING so the plan is ready the moment R13e lands. Every hop in the R13 chain was paying planning latency.\n\nThe park reason is gone:\n- scripts/local-runner/certify.mjs (R13d) is in the tree, so submit_plan's affectedFiles check passes.\n- R11e (001d8ab3) is DONE, which gives runCheckJob its final shape.\n- R13e (d00dafdf) is WORKING on an approved 4-step plan, and step 1 has landed (checkpoint f7b5e172). certify-bridge.mjs is in the tree.\n\nPlanner:\n- Follow the plan-don't-park rule. Plan against R13e's approved plan and the landed bytes, and name any R13e interface you assume, such as the snapshot generate-and-materialize helper, as an assumption in the plan. Do not report_blocked again.\n- The resume pointers in the old blockedReason still apply: certify.mjs BODY order, the context fields, the teardown-last rule, check-lifecycle.mjs runCheckJob, 'controller-replacement' last before teardown, and fake-provider rows in scripts/tests/local-runner.test.mjs.\n- dependsOn stays [d00dafdf, 001d8ab3], so no worker can start before R13e is DONE.",
+      "timestamp": "2026-10-30T17:36:21.172Z"
+    },
+    {
+      "id": "comment-a69c61416beb4f66b00b6425aec045e2",
+      "author": "governor-693b7073",
+      "content": "@architect-899a90d6 FYI for this plan: QA (qa-ba3f4f35) is rejecting R13e (d00dafdf) narrowly on a race in the guest-network check (certify-bridge.mjs:170-173). A real TCP connect can be queued while accepted() is still 0, and then server.close drops it, so the check false-passes. The fix is a bounded listener observation/drain barrier plus a regression test, inside that one check. QA says no R13f interface redesign is indicated: the registry entry shape, context fields and snapshot helper stay the same. Plan as you were, and if a check of yours also uses a listener witness, use the same drain-before-close rule.",
+      "timestamp": "2026-10-30T17:43:43.240Z"
+    },
+    {
+      "id": "comment-9ec6579760f7432ca5d00418ffcde931",
+      "author": "architect-899a90d6",
+      "content": "Architect, 2026-10-30: two decisions the human made in the architect REPL.\n\n1. Split for size. The three checks measured about 470 changed lines, over QA's 400 cap. New prerequisite CQ-R13f1 (task-4e2ab1584c3140019be709b94c71f1cc) lands 'check-containment' in scripts/local-runner/certify-containment.mjs. This row adds 'writer-containment' before it and 'controller-replacement' after it in the same module, and its gate re-runs all three. DoD 2 is delivered by R13f1's landed bytes and re-verified here.\n\n2. The protected-overwrite run. On a correct guest the check job can never change a protected file: CQ-R11b bind-mounts it read-only, so the job's own write fails with EROFS. 'inconclusive' (supervisor exit 80) only happens when a protected file changes during the run and the after-run hash check catches it. So in R13f1 the command tries the overwrite (refused), then waits, and once the session has started the certify host changes the file as root in the guest's own mount namespace. The run must resolve 'inconclusive', which keeps DoD 2 literal and exercises the after-run check natively. The probe run separately requires the job's own write to fail with EROFS.",
+      "timestamp": "2026-10-30T18:02:49.514Z"
+    },
+    {
+      "id": "comment-c09bff2e268644b58c3b53d77670d89f",
+      "author": "governor-693b7073",
+      "content": "Governor, 20:35Z, for the planner: LANE SWAP. [CQ-R13h] 4132ab1c now runs BEFORE this row. It was ready, and this row had sat unplanned for 3h because its architect seat froze. This row now dependsOn 4132ab1c. Plan on top of R13h's landed certify.mjs: insert this row's checks before LIFECYCLE_CHECKS (BODY = [...R13d's core, ...BRIDGE_CHECKS, ...<R13f checks>, ...LIFECYCLE_CHECKS]), keep 'teardown' last, and merge your bounds into the existing table. The human's split and design decisions in comment-9ec65797 still stand.",
+      "timestamp": "2026-10-30T20:31:19.710Z"
+    },
+    {
+      "id": "comment-902004126b57412995c91ca95a8b2771",
+      "author": "governor-4764040b",
+      "content": "@architect-915213a1 From the governor: this row is no longer yours on the board, and you need to re-claim it before submit_plan.\n- You claimed it at 20:24:27Z. At 20:25:31Z it was released from the board (WORKER_RELEASED, \"stripped from architect-915213a1 ... Released from board\"). The likeliest cause is the human acting late on an earlier ask about the frozen architect-899a90d6.\n- It's now PLANNING, unassigned and HIGH. Your transcript shows you're still planning it.\n- Re-claim it now, before submit_plan: moe.claim_next_task {statuses:[\"PLANNING\"], taskId:\"task-d45d52c0bb3d4569b3b6b5a757812b19\"}. That also stops architect-4ff0711c from picking it up when it frees.\n- Your exploration so far still counts.\n- Before you submit, read governor-693b7073's lane-swap comment above (20:31Z). The row now dependsOn R13h 4132ab1c, which worker-c75a6f39 is coding, so your checks go in before LIFECYCLE_CHECKS on R13h's certify.mjs. The human's split decisions in comment-9ec65797 stand.",
+      "timestamp": "2026-10-30T20:37:59.483Z"
+    },
+    {
+      "id": "comment-2a5fd5f4a22f4be1935fbf3ca7cdcdfc",
+      "author": "architect-915213a1",
+      "content": "Planner note (architect-915213a1, 21:24Z). Read this before step 1.\n\nR13h (4132ab1c) was QA-rejected at 21:13Z, against the 2cd85cc0 this plan builds on. Its fix adds rows to scripts/tests/local-runner.test.mjs (at least two LC5 recovery cases), and it may also touch recovered() in certify-lifecycle.mjs. This row's files and DoD are unchanged, and so are its steps. Apply them to R13h's FINAL landed bytes, not to 2cd85cc0 or 757dcce4.\n\n1. Step 1, item 1, \"LC7\": this means the R13h row that asserts CERTIFY_CHECKS' last four ids (`.slice(-4)`) are ['check-containment', 'cancellation', 'recovery', 'teardown']. Its title reads \"... run after check-containment, before teardown ...\". Edit the row that holds that content after R13h lands, whatever its number is.\n2. Step 5's `--test-name-pattern='^(WC|CR|CF1 |LC7)'`: use that row's final number.\n3. Step 4's \"338 tests, 337 pass, 1 skip\" was measured on 757dcce4. Re-measure the base on R13h's final tree, then expect base + 5 tests with the same single skip.\n4. R13h's new LC5 rows run with this row's three checks ahead of recovery, and they must pass unmodified. If one fails, the cause is in this row's code, e.g. an exec interception or the GUEST-keyed hash flip matching too broadly. Fix it there. Never edit R13h's LC5 rows or certify-lifecycle.mjs: neither is in this plan's files.\n5. The prototype's hunks (Serena memory task-task-d45d52c0…-prototype) are against 757dcce4. Where R13h's fix moved an anchor, apply the same intent to the landed bytes, as step 1 already says.",
+      "timestamp": "2026-10-30T21:23:54.178Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:04:16.594Z",
+  "updatedAt": "2026-10-30T22:10:04.170Z",
+  "dependsOn": [
+    "task-d00dafdf2dde4a41bf5983b1f7d495de",
+    "task-001d8ab383ef41088e045b2e41ed0e1e",
+    "task-4e2ab1584c3140019be709b94c71f1cc",
+    "task-4132ab1c40064e898f8a306cf4145f67"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:29:13.938Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T22:09:32.589Z",
+    "wallClockMs": 56418651
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "architect-899a90d6",
+    "architect-915213a1",
+    "worker-25da16b2",
+    "qa-12f7cf2d"
+  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Not plannable yet. This row is blocked on its own two dependencies and returns to PLANNING automatically once both are DONE.\n\n1. CQ-R13e, task-d00dafdf2dde4a41bf5983b1f7d495de. Another architect is still planning it, and through it CQ-R13d.\n   - CQ-R13d creates scripts/local-runner/certify.mjs, with the CERTIFY_CHECKS BODY/TEARDOWN registry and the shared check context. The file is not in the tree yet, so submit_plan's affectedFiles check refuses it.\n   - CQ-R13e appends its checks, plus the snapshot generate-and-materialize step that check mode needs. 'check-containment' should reuse that step rather than duplicate it.\n2. CQ-R11e, task-001d8ab383ef41088e045b2e41ed0e1e. It owns runCheckJob's final shape with the toolchain and offline dependency phases, and its R11e1-e5 slices are still in flight. 'check-containment' drives runCheckJob and asserts its outcomes: 'inconclusive', and workspace 'changed'.\n\nPlanning now would mean guessing three unlanded APIs (the registry entry shape, R13e's snapshot helper, runCheckJob's result) and replanning later.\n\nResume: read the landed certify.mjs (BODY order, context fields, the teardown-last rule), R13e's checks and check-lifecycle.mjs runCheckJob. Then plan the three BODY checks, with 'controller-replacement' last before teardown, and fake-provider rows in scripts/tests/local-runner.test.mjs. Pointers are in this row's Serena handoff memory.",
+  "commits": [
+    {
+      "sha": "8bce5e730f4548d48f0687cf21b4417c8a0543a0",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-915213a1@2026-10-30T20:24:29Z",
+      "paths": [
+        ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json"
+      ],
+      "recordedBy": "architect-915213a1",
+      "recordedAt": "2026-10-30T20:24:42.164Z",
+      "treeId": "127745b71a8381bc861ffaccebc88dc0b252d63a",
+      "status": "PLANNING",
+      "pushed": false
+    },
+    {
+      "sha": "aed10c40cc0c2dfdd653525acb7cdde2d9b882b9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-915213a1@2026-10-30T20:24:29Z",
+      "paths": [
+        ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json"
+      ],
+      "recordedBy": "architect-915213a1",
+      "recordedAt": "2026-10-30T21:18:08.004Z",
+      "treeId": "be2c883071368eeb9b99fefd63cdb5b128939b18",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "3a393e4a3da1b0c072f9ba1e3b1551f6b9377c61",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-30T21:45:58Z",
+      "paths": [
+        ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+        ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
+        ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+        ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json",
+        "scripts/local-runner/certify-bridge.mjs",
+        "scripts/local-runner/certify-containment.mjs",
+        "scripts/local-runner/certify.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-30T22:01:14.533Z",
+      "treeId": "db6673869cfff6ad3c1fea75b5849b2d1f62f0b1",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "d809012ff4c5e221c62760495dc767a0a768f037",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-12f7cf2d@2026-10-30T22:03:24Z",
+      "paths": [
+        ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json"
+      ],
+      "recordedBy": "qa-12f7cf2d",
+      "recordedAt": "2026-10-30T22:10:04.170Z",
+      "treeId": "90f29ae4e2532836a26a5f7896d38694d65a81f3",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/certify-bridge.mjs",
+    "scripts/local-runner/certify-containment.mjs",
+    "scripts/local-runner/certify.mjs",
+    ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+    ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
+    ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+    ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-12f7cf2d@2026-10-30T22:03:24Z",
+    "at": "2026-10-30T22:10:04.170Z"
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T21:16:33.385Z",
+  "executionContract": {
+    "intendedBehavior": "Two certify checks join R13f1's 'check-containment' in CONTAINMENT_CHECKS, in this order: 'writer-containment', 'check-containment', 'controller-replacement'. They sit before R13h's LIFECYCLE_CHECKS, and 'teardown' stays last. writer-containment, in the certify VM, first makes another job's session home (root `install -d -m 0700 -o moe-check -g moe-check /var/lib/moe/sessions/home-certify`) and installs the real pinned Node toolchain (fetchNodeToolchain + installToolchain). It then runs one fixed python probe as moe-agent, and passes only when every target exists and access(2) refuses the agent: reading the supervisor credential and the root-only workspace manifest, and writing /opt/moe, the other home, the supervisor, the toolchain bin directory and its node binary. controller-replacement replaces the supervisor's bytes as root (`cp /usr/bin/true`) and re-runs waitForGuestReady with the real bytes' digests. It requires bootstrapReady false with failures exactly ['SUPERVISOR_HASH_MISMATCH']. It then rewrites the certify VM's own ledger record to another attemptId and requires this run's cleanup (deleteOwned with this run's owner) to reject LIFECYCLE_NOT_OWNER, while the record stays 'owned' with the rewritten attempt and the VM stays present. The original record bytes are written back on every path, so teardown still deletes the VM. Every outcome is one fixed code. check-containment is unchanged.",
+    "acceptanceCriteria": [
+      "DoD 1: writer-containment passes only when the probe exits 0. Exits 10..16 fail as CERTIFY_WRITER_<CREDENTIAL|MANIFEST|CONTROL_PLANE|HOME|SUPERVISOR|TOOLCHAIN>_ALLOWED, 20..26 as CERTIFY_WRITER_TARGET_MISSING, other exits as CERTIFY_WRITER_UNKNOWN, a failed home setup as CERTIFY_WRITER_SETUP_FAILED, and provider/toolchain/transfer refusals with their own codes (WC1-WC3).",
+      "DoD 2: check-containment is R13f1's landed bytes, unchanged; CC1-CC6 stay green with only the pinned id lists edited.",
+      "DoD 3: controller-replacement passes only when the replace exits 0, readiness refuses with exactly SUPERVISOR_HASH_MISMATCH, and this run's cleanup rejects LIFECYCLE_NOT_OWNER on the rewritten record while the record stays 'owned' with the rewritten attempt and the VM is still present. Otherwise NOT_REPLACED, ACCEPTED, UNKNOWN or RECORD_NOT_KEPT (CR1, CR2). It is the last check on the certify VM (CERTIFY_IDS, LC7).",
+      "DoD 4: the verification command exits 0, and its output is supplied to complete_task."
+    ],
+    "invariants": [
+      "'teardown' is the last check; controller-replacement is the last check that uses the certify VM.",
+      "The original ledger record bytes are restored on every controller-replacement path.",
+      "No guest byte reaches an argv, a failure code or the report; every argv is a fixed literal.",
+      "Natively deps is {}, so no seam can be injected; transport 'injected' never certifies.",
+      "executionReady stays false and verified-local stays unavailable; nothing claims isolation.",
+      "certify-containment.mjs's check-containment code and R13h's certify-lifecycle.mjs are unchanged."
+    ],
+    "compatibility": [
+      "Report schema version 1 is unchanged; only the ordered check ids grow, as R13e/R13f1/R13h did.",
+      "R13h's rows (LC1-LC7, CERTIFY_DELETES and the recovery names) stay green; only LC7's id list and title change.",
+      "certify-bridge.mjs probe() behaves as before for guest-network."
+    ],
+    "approvedScope": [
+      "certify-containment.mjs: OTHER_HOME, HOME_ARGV, WRITER_TARGETS, exported WRITER_PROBE, REPLACE_ARGV, writerContainment, controllerReplacement, CONTAINMENT_CHECKS order, header comment.",
+      "certify-bridge.mjs: `export` on the existing probe(), plus its comment; behavior unchanged.",
+      "certify.mjs: comments only (the header line, certifyCore's seam list).",
+      "local-runner.test.mjs: certifyHarness options writer/replace with ops/hashed; WRITER_LITERAL, GUEST_EXECS, guestExecOf, REPLACED_HASH; pinned lists (CERTIFY_IDS, BRIDGE_NOT_RUN, CF3, GN5, LC7); the CF5 teardown-index fix; rows WC1-WC3, CR1-CR2.",
+      "Test-only seams deps.writer = { toolchain, installToolchain } and deps.replacement = { deleteOwned }, absent natively."
+    ],
+    "reuse": [
+      "certify-bridge.mjs probe (exported) instead of a new exec helper.",
+      "buildUserData for the readiness digests; waitForGuestReady for the re-run.",
+      "fetchNodeToolchain + installToolchain (R11e1/R11e2) for the real toolchain target.",
+      "deleteOwned and queryOwnedInstance from lifecycle.mjs.",
+      "Test helpers: certifyHarness, failedAt, TOOLCHAIN_STUB, CERTIFY_DELETES, probeExit, answering, KILLED, layout, EXPECTED_PROBES."
+    ],
+    "sourceAssumptions": [
+      "R13h landed in 2cd85cc0: certify.mjs BODY = [...BRIDGE_CHECKS, ...CONTAINMENT_CHECKS, ...LIFECYCLE_CHECKS]; the context carries ledgerDir; the test file has TOOLCHAIN_STUB, CERTIFY_DELETES, failedAt and certifyHarness's clone, which answers other VMs through the one fake guest.",
+      "certify-bridge.mjs probe({name, provider}, argv): {code, stdout} for a remote exit, a PROVIDER_* throw otherwise.",
+      "guest-readiness.mjs waitForGuestReady requires an 'owned' record of the owner, runs every CHECKS probe, and records the image only when clean; digestCheck yields SUPERVISOR_HASH_MISMATCH.",
+      "guest-supervisor.py: WORKSPACE_MANIFEST 0600 root; SESSIONS 0711 with mkdtemp 'home-' homes; TOOLCHAIN /opt/moe/toolchain (root-owned, data_filter, no group/other write), and its bin is first on a check job's PATH.",
+      "lifecycle.mjs deleteOwned re-reads the record and rejects LIFECYCLE_NOT_OWNER before any provider call; queryOwnedInstance reports presence by exact name."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Writer probes. Rejected: readiness-style `sudo -n -u moe-agent test -r|-w`, because exit 1 is both EACCES and ENOENT, and the task asks for permission errors. Chosen: one python probe as moe-agent that stats each target and then asks access(2), with distinct exits for granted (10+i) and missing (20+i) targets.\n- Toolchain target. The certify VM has no toolchain. Rejected: a root-made stand-in directory, and probing only the parent. Chosen: install the REAL pinned toolchain into the certify VM with R11e1/R11e2's functions, so the probe checks the real install modes.\n- Foreign record. Rejected: a decoy record from ledger.reserve. It draws deps.random, so it would shift every VM name R13h's rows pin (CERTIFY_DELETES, LC1, LC3, CC6), and it would linger for R13h's recovery reconcile. Chosen: rewrite the certify VM's own record to another attempt, check the refusal against a real VM, then restore the original bytes.\n- Seams. Rejected: reusing R13h's deps.checkSteps (mem:decision-certify-check-observation). Chosen: separate deps.writer and deps.replacement keys.",
+    "codebaseInsights": "- certify-bridge.mjs already has the exec helper with the readiness exit semantics (probe); exporting it beats a third copy.\n- R13h's certifyHarness `clone` answers every launched VM through ONE fake guest, so per-VM answer changes must be keyed on args[2] === GUEST.\n- networkProbe classifies any `sudo -n -u <id> python3` exec as guest-network's agent probe. Intercept R13f's execs before it, because GN1/GN3 pin `probes` exactly.\n- CF5's index-6 teardown rows have been vacuous since R13f1 added an id; use CERTIFY_IDS.length - 1.",
+    "risks": "- Native timing: the readiness re-run is about 35 multipass execs, and the toolchain install streams about 30-50 MB. Both stay within the fixed QUERY_TIMEOUT_MS and transferMs bounds.\n- If the restore write fails, teardown refuses (another owner) and the certify VM leaks. That is reported as the check's code plus CERTIFY_TEARDOWN_FAILED.\n- R13h may still be reworked by its QA. Apply the prototype's intent to the landed bytes, not stale line numbers.\n- Lane: 9eaa4c4e (LOW, same test file) now dependsOn this row (set by the architect); 6bc91f38 and R13g follow it.",
+    "keyFiles": [
+      "scripts/local-runner/certify-containment.mjs",
+      "scripts/local-runner/certify-bridge.mjs",
+      "scripts/local-runner/certify.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/local-runner/snapshot-transfer.mjs",
+      "scripts/local-runner/toolchain-cache.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T21:16:33.406Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T21:47:20.746Z",
+  "reviewStartedAt": "2026-10-30T22:00:53.463Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, from the installed pins only (23.490241ms)\nℹ tests 338\nℹ suites 0\nℹ pass 337\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 77575.733956\nexit 0",
+    "reportedAt": "2026-10-30T22:00:53.463Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-R13f adds 'writer-containment' and 'controller-replacement' around R13f1's 'check-containment', applying the architect prototype to R13h's final landed bytes (5fb1eef7). check-containment's code is unchanged.\n\nwriter-containment: as root it makes another job's home, then installs the real pinned toolchain (fetchNodeToolchain + installToolchain). One fixed python probe then runs as moe-agent. It exits 0 only when each of the 7 targets exists and access(2) refuses it: credential, manifest, /opt/moe, the other home, the supervisor, toolchain bin and node. Probe exits 10+i are CERTIFY_WRITER_<KIND>_ALLOWED, 20+i TARGET_MISSING, anything else UNKNOWN; a failed home setup is SETUP_FAILED.\n\ncontroller-replacement: `sudo -n cp /usr/bin/true` over the supervisor, then waitForGuestReady with buildUserData digests. It requires failures exactly [SUPERVISOR_HASH_MISMATCH]. It then rewrites this VM's own ledger record to another attempt. deleteOwned with this run's owner must reject LIFECYCLE_NOT_OWNER, while the record stays 'owned' with that attempt and the VM stays present. The original bytes are restored in finally. Otherwise NOT_REPLACED, ACCEPTED, UNKNOWN or RECORD_NOT_KEPT.\n\nOrder: writer, check, controller, then R13h's cancellation and recovery; teardown stays last.\n\nTests: WC1-WC3, CR1-CR2, pinned lists, and CF5's vacuous index-6 rows now use the last index.\n\nSelf-review finding, fixed: the 'failures not exact' mutant survived, because the layout failure row fails BEFORE the hash. I added the CR2 row 'a later failure too' (shim hash, +2 lines).\n\nEvidence:\n- Base 333/332/1; RED on the missing WRITER_PROBE export.\n- Final fresh run: exit 0, 338 tests, 337 pass, 1 existing skip.\n- 12/12 scratch mutants killed by AssertionErrors (/tmp/r13f-mut.muOsnP), restored cmp-identical.\n- diff --check clean. 229 changed lines (+203/-24) across the 4 approved files.\n\nNative certify is operator-only and was not run. executionReady false; verified-local unavailable. No Git writes or .m",
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/certify-bridge.mjs",
+    "scripts/local-runner/certify-containment.mjs",
+    "scripts/local-runner/certify.mjs"
+  ],
+  "completedAt": "2026-10-30T22:09:32.589Z",
+  "reviewCompletedAt": "2026-10-30T22:09:32.589Z",
+  "reviewSummary": "Reviewed completion 3a393e4a (on moe/work-2026-10-24, pushed). Source diff: 229 changed lines (+203/-24) across exactly the 4 approved files. check-containment's code, certify-lifecycle.mjs and R13h's LC rows are untouched.\n\nRe-ran the verification in a clean git archive of 3a393e4a: env -i Node v24.21.0 node --test scripts/tests/local-runner.test.mjs. Exit 0: 338 tests, 337 pass, 0 fail, 1 existing skip, matching the evidence. diff --check is clean.\n\nDoD:\n1. writer-containment. WC2 runs the real probe in python3 with stubbed exists/access: 0 only when every target exists and is refused, 10+i if granted, 20+i if absent, first failure wins. WC3 gives every outcome a fixed code. WC1 pins the argv, the ops order and the supervisor drift guards.\n2. check-containment: R13f1's bytes, unchanged; CC1-CC6 green.\n3. controller-replacement. CR1 covers the pass path, with the record restored so teardown deletes. CR2 has 11 negative rows, each asserting its end state. LC7 and CERTIFY_IDS pin it last on the certify VM.\n4. Verification reproduced, exit 0.\n\nMy 7 independent mutants are all killed by AssertionErrors: swapped 10/20 offsets, no ACCEPTED check, ledger part skipped, install timeout changed, the shim replaced instead of the supervisor, cleanup owner from the rewritten attempt, no toolchain install. The restored copy is cmp-identical and 7/7.\n\nNatively runIsolationCertify passes deps {} with native=true, so the seams exist only on the injected transport. executionReady false; verified-local unavailable.\n\nNon-blocking:\n(a) \"Another home\" is a moe-check-owned home, per the contract; same-uid agent homes are not distinguished.\n(b) A failing finally writeFile leaves the record rewritten, and teardown then fails closed.\n\nNative certify is operator-only and was not run.",
+  "requiredCheckAtDone": null
+}

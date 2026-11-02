@@ -1,0 +1,240 @@
+{
+  "id": "task-02fd5931f7274a6696ef84e7d3da4efb",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C02b1] Daemon snapshot manifest verification",
+  "description": "Objective: give the daemon its own pure verifier for R09's frozen SourceSnapshot. The snapshot is the {version:1, commit, tree, base, overlay, excluded} object that scripts/local-runner/source-export.mjs exportSourceSnapshot resolves. Both base and overlay are validateImport results ({entries, digest}) from scripts/local-runner/source-snapshot.mjs. The CQ-C02b snapshot source adapter (task-311dbda4) then serves context only from bytes the daemon itself re-verified, never from writer declarations.\n\nSplit out of CQ-C02b by architect-e4b7eee0 on 2026-10-29. The reason is size: verification plus serving, with tests, is about 420 lines, over QA's 400 net cap. Verification is the self-contained, security-relevant seam, as R09a was for R09.\n\nInterface (CQ-C02b plans against these exact names):\n- New module packages/moe-daemon/src/context/snapshotManifest.ts.\n- `export type SnapshotRefusal = 'SNAPSHOT_INPUT_INVALID' | 'SNAPSHOT_LIMIT_EXCEEDED' | 'SNAPSHOT_ENTRY_INVALID' | 'SNAPSHOT_SYMLINK_DENIED' | 'SNAPSHOT_PATH_INVALID' | 'SNAPSHOT_CONTROL_PATH' | 'SNAPSHOT_PATH_COLLISION' | 'SNAPSHOT_HASH_MISMATCH' | 'SNAPSHOT_DIGEST_MISMATCH'`.\n- `export interface VerifiedSnapshotFile { readonly path: string; readonly executable: boolean; readonly size: number; readonly sha256: string; readonly data: Uint8Array }`. data is a private copy; sha256 is recomputed from that copy.\n- `export interface VerifiedSnapshot { readonly version: 1; readonly commit: string; readonly tree: string; readonly identity: { readonly base: string; readonly overlay: string }; readonly base: ReadonlyMap<string, VerifiedSnapshotFile>; readonly overlay: ReadonlyMap<string, VerifiedSnapshotFile | { readonly kind: 'delete'; readonly path: string }>; readonly excluded: number }`. The identity digests are recomputed with R09a's framing.\n- `export function verifySourceSnapshot(raw: unknown): { ok: true; snapshot: VerifiedSnapshot } | { ok: false; code: SnapshotRefusal; layer?: 'base' | 'overlay' }`. It is pure: no filesystem, process, network or Git access. It never throws, and it never returns a partial view.\n- `export function snapshotPathRefusal(path: string): 'SNAPSHOT_PATH_INVALID' | 'SNAPSHOT_CONTROL_PATH' | null`. This is R09a's validateImportPath ported verbatim to TypeScript: the CONTROL_SEGMENTS list at any depth after foldCase, FORBIDDEN_CHAR, DEVICE_NAME, 8.3 short names, NFC and well-formedness, and the 1024-byte path and 255-byte segment bounds. A control segment is checked before portability.\n\nRules:\n- Exact keys and plain prototypes. data is a Uint8Array or Buffer measured with the intrinsic byteLength getter, then copied before it is hashed.\n- size must equal the byte length. A declared sha256 that differs from the recomputed one gives SNAPSHOT_HASH_MISMATCH. A declared layer digest that differs from the recomputed one gives SNAPSHOT_DIGEST_MISMATCH.\n- Entries are sorted by UTF-8 path bytes and unique.\n- Collisions are refused within a layer, as in R09a's refuseCollisions, and across the merged view: a base file that is an ancestor of an overlay file not deleted by the overlay.\n- Base holds file entries only.\n- R09a's bounds apply: 10,000 entries and 256 MiB.\n- version is 1. commit and tree are full lowercase ids. excluded is a non-negative safe integer.\n\nScope boundaries: verification and its regression tests only. No serving, no activation, no MCP tool, no scripts/ change. Consume the LANDED R09a and R09b format; do not redefine it. Approved full CQ-01–CQ-08 rollout (2026-10-24). Use original Moe source; daemon owns state, wrappers own host Git writes. Strong profile stays disabled until isolation, evidence and client gates pass. Never directly edit .moe.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "verifySourceSnapshot accepts exactly the frozen SourceSnapshot that R09b exportSourceSnapshot resolves, and returns a frozen view whose identity digests and per-file sha256 are recomputed from the entry bytes. A conformance test feeds the same entries through the landed scripts/local-runner/source-snapshot.mjs validateImport and asserts equal digests and sha256 values. The test is skipped only when scripts/ is absent, as in the Docker context.",
+    "snapshotPathRefusal matches R09a validateImportPath on a shared table: control segments at any depth and case-folded, traversal, empty and dot segments, forbidden and invisible characters, device and 8.3 short names, non-NFC text, and the byte bounds. Every row gives the same accept/refuse outcome and code through both implementations.",
+    "A malformed, symlink, colliding (within a layer or across the merged view), out-of-bounds, sha256-mismatched or digest-mismatched input returns { ok: false, code } with one fixed SnapshotRefusal, never a partial view and never a throw. Hostile shapes (exotic prototypes, accessors, Proxies, spoofed byteLength) are covered, and each code has a named test that fails when its guard is removed.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Port R09a's path rule.\n\nCreate packages/moe-daemon/src/context/snapshotManifest.ts. It is PURE: it imports only node:crypto, and the source is ASCII-only.\n- Header comment: the module mirrors scripts/local-runner/source-snapshot.mjs (R09a) validateImportPath and seal framing, so keep the two in sync. A parity test pins them.\n- Constants, all exported:\n  - SNAPSHOT_MAX_PATH_BYTES 1024, SNAPSHOT_MAX_SEGMENT_BYTES 255, SNAPSHOT_MAX_ENTRIES 10000, SNAPSHOT_MAX_BYTES 268435456.\n  - SNAPSHOT_CONTROL_SEGMENTS: the frozen list '.git', '.gitmodules', '.moe', '.mcp.json', '.claude', '.codex', '.gemini', '.grok', '.worktrees'.\n- Private regexes:\n  - FORBIDDEN_CHAR, byte-identical to R09a's: backslash, colon, Windows-reserved, C0/DEL/C1, U+061C, U+200B-U+200F, U+202A-U+202E, U+2060-U+206F and U+FEFF, all written as escapes.\n  - DEVICE_NAME, with the superscripts escaped as ¹, ² and ³.\n- Private helpers: foldCase (upper-then-lower), isShortName (8.3 shape), portableSegment, wellFormed and utf8Length.\n\n`export function snapshotPathRefusal(path: string): 'SNAPSHOT_PATH_INVALID' | 'SNAPSHOT_CONTROL_PATH' | null` follows R09a's order exactly:\n1. A non-string, empty or over-bound path gives INVALID.\n2. Any segment that is a control segment after foldCase gives CONTROL. This check runs BEFORE portability, so '.git/CON' is CONTROL.\n3. Then: not well-formed, not NFC, FORBIDDEN_CHAR, or a non-portable segment (empty, '.', '..', over 255 bytes, a leading space, a trailing space or dot, a device name, an 8.3 short name) gives INVALID.\n4. Otherwise null.\n\nCreate packages/moe-daemon/src/context/snapshotManifest.test.ts with test P1, a shared path table of [path, expected code or null]. Rows:\n- portable paths: 'a.ts', 'src/x/y.md', NFC 'é.ts', 'a.b.c';\n- control at any depth and case: '.git', '.git/x', 'a/.GIT/x', '.moe/p.json', 'x/.Moe', '.mcp.json', '.claude/x', '.codex', '.gemini/x', '.grok', '.worktrees/a', '.gitmodules', dotless-i '.gıt', and '.git/CON' (CONTROL wins);\n- traversal and empty: '..', 'a/../b', './a', 'a/./b', 'a//b', '/a', 'a/';\n- forbidden characters: backslash, ':', '<', NUL, U+202E, U+FEFF, U+200B, U+061C, U+009F;\n- device names: 'CON', 'con.txt', 'a/NUL', 'COM1', 'LPT¹', 'CON .txt', 'CONIN$';\n- 8.3 short names: 'PROGRA~1', 'GIT~1', 'a/ABCDEFGH~12.txt';\n- trailing and leading spaces or dots: 'a.', 'a ', ' a';\n- non-NFC 'é.ts' and a lone surrogate;\n- bounds: a 1024-byte path is ok, 1025 bytes is INVALID; a 255-byte segment is ok, 256 bytes is INVALID.\n\nAssert every row through snapshotPathRefusal. When the repo's scripts/local-runner/source-snapshot.mjs exists (resolve the repo root relatively from import.meta.url and load it with a dynamic import of pathToFileURL(...).href), also run each row through R09a validateImportPath: a throw maps to its error.code, a return maps to null. Assert identical outcomes and codes. Use describe/it.skipIf when scripts/ is absent, as in the Docker context.\n\nTo write the \\u escapes, follow mem gotcha-js-hostile-input-species-and-literal-escapes, then check that `LC_ALL=C grep -nP '[^\\x00-\\x7f]'` finds nothing in either file.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/context/snapshotManifest.ts",
+        "packages/moe-daemon/src/context/snapshotManifest.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/snapshotManifest.ts",
+        "packages/moe-daemon/src/context/snapshotManifest.test.ts"
+      ],
+      "note": "snapshotPathRefusal ported from R09a validateImportPath; FORBIDDEN_CHAR/DEVICE_NAME lines copied byte-for-byte from source-snapshot.mjs (the Write tool decoded \\u escapes into literal chars on first write, so I replaced the lines from R09a by script; both files are ASCII-only, checked with LC_ALL=C grep -P). P1: 58 table rows plus the R09a parity row, 59/59 green in a Linux snapshot (vitest, node v24.21.0). Plan deviation: the plan's row 'a/ABCDEFGH~12.txt' is NOT an 8.3 name (its base is 11 chars), so it is listed as accepted as 'ABCDEFGH~12.txt', and 'a/ABCDE~12.txt' is the refused short-name row. I added a multibyte segment-bound pair (127x U+00E9 + 'a' ok, 128x U+00E9 INVALID) and a non-string row (42). Shared checkout has ~625 peers' dirty paths; I left them untouched.",
+      "startedAt": "2026-10-29T14:46:38.836Z",
+      "completedAt": "2026-10-29T14:51:29.844Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement `export function verifySourceSnapshot(raw: unknown)` in snapshotManifest.ts. Export the SnapshotRefusal, VerifiedSnapshotFile and VerifiedSnapshot types exactly as task-02fd5931's description names them; CQ-C02b (task-311dbda4) plans against those names.\n\nNever throws, and never returns a partial view (mem gotcha-pure-validator-hostile-input):\n- Wrap ALL reads in one try/catch. An unexpected throw from a getter, Proxy trap or revoked proxy maps to SNAPSHOT_INPUT_INVALID at the top level and SNAPSHOT_ENTRY_INVALID inside an entry.\n- Read every property once into a local.\n- Check own keys with Reflect.ownKeys for an exact match.\n- Accept only plain prototypes: Object.prototype or null.\n\nSnapshot level:\n- Exact keys {version, commit, tree, base, overlay, excluded}.\n- version === 1.\n- commit and tree are full lowercase hex ids of the same length (40 or 64), checked with typeof === 'string' plus /^[0-9a-f]{40}$|^[0-9a-f]{64}$/ with no m flag.\n- excluded is a non-negative safe integer.\n- Each layer has exact keys {entries, digest}. digest is 64-char lowercase hex.\n- entries is a real Array with prototype Array.prototype. Read its length ONCE and require Number.isInteger && >= 0 && <= SNAPSHOT_MAX_ENTRIES. Over the cap gives LIMIT_EXCEEDED, any other failure INPUT_INVALID. Then loop index < count reading entries[index] once each: no slice, map or species copy.\n\nEntries:\n- kind 'symlink' gives SNAPSHOT_SYMLINK_DENIED, checked first, as R09a does.\n- File keys are exactly {kind, path, executable, size, sha256, data}: the SEALED shape R09a's seal returns and R09b's layers carry. Delete keys are exactly {kind, path}. Anything else gives ENTRY_INVALID.\n- path goes through snapshotPathRefusal; its code is returned as is.\n- executable is boolean.\n- data is an ArrayBuffer view whose prototype is Uint8Array.prototype or Buffer.prototype.\n- size is the intrinsic byteLength, read through the %TypedArray%.prototype getter captured at module load. The declared size must be a safe integer equal to it, else ENTRY_INVALID.\n- Running total > SNAPSHOT_MAX_BYTES gives LIMIT_EXCEEDED. Check it BEFORE copying or hashing.\n- Copy with new Uint8Array(data) and require copy.byteLength === size.\n- The declared sha256 must be 64-char lowercase hex, else ENTRY_INVALID. If it differs from sha256(copy), give SNAPSHOT_HASH_MISMATCH.\n- Base must hold files only; a delete there gives ENTRY_INVALID.\n- Entries must be strictly increasing by Buffer.compare of their UTF-8 path bytes. An exact repeat gives PATH_COLLISION; any other order gives ENTRY_INVALID.\n- Within a layer, a case-folded duplicate or an ancestor/descendant pair gives SNAPSHOT_PATH_COLLISION, through R09a's folded-segment trie.\n- An overlay delete must name an existing base file, as R09b only ever emits; otherwise ENTRY_INVALID.\n\nLayer digest:\n- Recompute it with R09a's framing:\n  1. 'moe-source-snapshot-v1\\0';\n  2. u32be(count);\n  3. per entry in path-byte order: the kind byte (0x46 file, 0x44 delete), u32be(path byte length) and the path bytes;\n  4. a file adds the executable byte, u32be(size) and the 32 raw sha256 bytes.\n- A recomputed digest that differs from the declared one gives SNAPSHOT_DIGEST_MISMATCH, with the layer named.\n\nMerged view:\n- base files, minus overlay deletes, plus overlay files (an overlay file replaces a base file at the same path).\n- Run the same trie over it. Any case-folded duplicate or ancestor pair across layers gives SNAPSHOT_PATH_COLLISION. Examples: base file 'x' plus overlay file 'x/y' with no delete of 'x'; base 'A.ts' plus overlay 'a.ts'.\n\nResult:\n- Return {ok:true, snapshot}: a frozen object with frozen identity {base, overlay} = the recomputed digests, and Maps of frozen VerifiedSnapshotFile {path, executable, size, sha256, data: the private copy} plus frozen {kind:'delete', path}.\n- Every failure returns {ok:false, code, layer?}.\n\nTests, in the same file, table-driven:\n- V1 conformance (skipIf no scripts/): build base and overlay with R09a validateImport, assemble the snapshot, and verify. Assert ok; identity equal to each digest; per-file sha256 equal; Object.isFrozen on the view, identity and entries; and that mutating the input data after verification leaves view.data unchanged.\n- V3 refusals: ONE named row per code. Each mutates a structuredClone of a good snapshot.\n  - INPUT_INVALID: null, an array, a missing key, an extra key, version 2, an uppercase commit, a 40/64 length mismatch, excluded -1, 1.5 and '0', and a class-instance prototype.\n  - LIMIT_EXCEEDED: a length of 10001, and one zero-filled Uint8Array of 2**28+1 bytes (refused before hashing).\n  - ENTRY_INVALID: missing size, an extra key, a size mismatch, a non-boolean executable, a number-array data, a Float64Array, an uppercase sha256, a delete in base, an orphan overlay delete, unsorted entries, and an own byteLength spoof.\n  - SYMLINK_DENIED: in either layer.\n  - PATH_INVALID and CONTROL_PATH: entry paths.\n  - PATH_COLLISION: a repeat, a case-fold, an ancestor, and the 3 cross-layer cases.\n  - HASH_MISMATCH: flip a byte, keep the declared sha256.\n  - DIGEST_MISMATCH: a wrong digest, or a flipped executable bit with the digest kept.\n- V4 hostile: a Symbol, a BigInt, a function, Proxies with throwing get, ownKeys and getPrototypeOf traps, a revoked Proxy, and a counting getter (read exactly once). Each gives ok:false with no throw.\n- V5: an entries array with its own constructor[Symbol.species], and a Proxy over an array whose length is an object, give INPUT_INVALID or no effect, and the count is read once.\n\nError handling: every branch returns a code. Never rethrow.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/snapshotManifest.ts",
+        "packages/moe-daemon/src/context/snapshotManifest.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/snapshotManifest.ts",
+        "packages/moe-daemon/src/context/snapshotManifest.test.ts"
+      ],
+      "note": "verifySourceSnapshot implemented with the exact exported names (SnapshotRefusal, VerifiedSnapshotFile, VerifiedSnapshot), plus an exported alias SnapshotVerification for the result union. Refusals are module-minted objects tracked in a WeakSet (not instanceof), so a thrown hostile Proxy can neither pose as one nor throw again from the catch. Layer-scoped refusals carry layer:'base'|'overlay'; top-level and merged-view refusals carry none. Byte bound is per layer (256 MiB each), as R09b bounds each validateImport separately; a combined bound would refuse legitimate exports. Tests: a test-side seal() oracle (independent framing) builds fixtures, so V3-V5 run without scripts/; V1 checks the oracle and the verifier against R09a validateImport. V3 has 39 named rows covering all 9 codes, including a trailing-newline digest (m-flag), a proto-swapped Float64Array (reaches the copy-length guard QA flagged as untested in R09a), and 3 cross-layer collisions asserted with no layer. V4: null/array/Symbol/BigInt/function, get/ownKeys/getPrototypeOf trap Proxies, a revoked Proxy, a throwing entry Proxy, a thrown hostile Proxy, and once-only getters on 14 properties. V5: own species constructor never invoked; Proxy length read once; an object length is never coerced. 112/112 green in the Linux snapshot; tsc --noEmit clean. Plan deviation: the V4 counting-getter row expects ok:true with every count 1 (the getters return undefined after the first read), not ok:false. Size so far 218 + 158 = 376 lines.",
+      "startedAt": "2026-10-29T14:51:30.819Z",
+      "completedAt": "2026-10-29T14:57:01.173Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add the real-producer conformance test and the purity test to snapshotManifest.test.ts. Both are skipped only when scripts/ is absent.\n\nV2:\n1. In a mkdtemp git repo (follow repositorySource.test.ts's temp-repo pattern: execFileSync git with a GIT_*-scrubbed env, cleaned in afterAll), commit 'a.ts' and 'dir/b.ts'.\n2. Modify 'a.ts', delete 'dir/b.ts', and add an untracked 'c.ts' plus '.moe/x.json'.\n3. Run the LANDED scripts/local-runner/source-export.mjs exportSourceSnapshot({repoDir, commit}).\n4. Assert:\n- verifySourceSnapshot(export) is ok, and its identity equals {base: export.base.digest, overlay: export.overlay.digest}.\n- The overlay map holds a.ts and c.ts as files and dir/b.ts as a delete.\n- excluded equals the export's excluded, and '.moe/x.json' is in neither map.\n- A structuredClone of the export that gains an extra key is refused INPUT_INVALID. That proves exact keys hold against the real shape.\nError handling: an export failure fails the test with its error code; never skip on a failure.\n\nV6: read snapshotManifest.ts as text and assert:\n- it is ASCII-only (no char above 0x7f, which also rules out Trojan Source);\n- it imports only 'node:crypto';\n- it contains no fs, child_process or process.env.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/snapshotManifest.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/snapshotManifest.test.ts",
+        "packages/moe-daemon/src/context/snapshotManifest.ts"
+      ],
+      "note": "V2: a mkdtemp git repo (GIT_*-scrubbed env, system/global config masked, cleaned in afterAll) commits a.ts and dir/b.ts, then modifies a.ts, deletes dir/b.ts, and adds c.ts plus .moe/x.json. It runs the LANDED exportSourceSnapshot; an export failure fails the test with its code. Asserts: ok; identity equals both export digests; base keys [a.ts, dir/b.ts]; overlay [a.ts file, c.ts file, dir/b.ts delete]; excluded 1 on both sides, so .moe/x.json is in neither map; a structuredClone plus an extra key is INPUT_INVALID. V6: the module's only import is node:crypto; no fs, child_process, process.env, import( or require(; both files have no char above 0x7f. V6 runs unconditionally (it needs no scripts/), which is stricter than the plan's skipIf. 114/114 green, tsc clean. I trimmed the module (a header line, a loop, a comment) to keep the total at 398 lines (module 213 + test 185). Fixed one bug in my own draft: a mkdirSync(...) ?? writeFileSync helper skipped the write, because mkdirSync returns a path.",
+      "startedAt": "2026-10-29T14:57:02.083Z",
+      "completedAt": "2026-10-29T14:58:36.381Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once, fresh, plus a mutation sweep.\n1. In a Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate: whole-repo git archive HEAD, overlay ONLY this task's two files, a symlinked native packages/moe-daemon/node_modules after checking the lockfile modulo CR, env -i with the nvm node bin on PATH, NO_COLOR=1), run `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`. Both must exit 0. cmp the overlaid files against the worktree before citing the run, and supply the npm test output to complete_task.\n2. Mutation sweep on a scratch copy of the snapshot only, never the shared tree, applying several mutants per run where useful (mem gotcha-architect-plans-must-enumerate-test-cases). Each must turn its named row red:\n- drop the control-before-portability order: P1 '.git/CON';\n- drop isShortName: P1;\n- lower-only fold: P1 '.gıt';\n- skip the symlink check: V3;\n- skip the size === byteLength check: V3;\n- copy after hashing, or hash the input instead of the copy: V1 mutation-after-verify;\n- skip the sha256 compare: V3 HASH;\n- skip the digest compare: V3 DIGEST;\n- skip the cross-layer trie: V3 cross-layer rows;\n- re-read length: V5;\n- drop the try/catch: V4.\nRecord the kill list in the step note. A survivor is either killed by a new row or argued equivalent in the note.\n3. Keep the diff at or under 400 net lines including tests and comments. Measure with wc -l early: QA's cap applies, and no size rail covers this row.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/snapshotManifest.test.ts",
+        "packages/moe-daemon/src/context/snapshotManifest.ts"
+      ],
+      "note": "Gate setup: Linux-native snapshot /tmp/moe-c02b1.r87bbx (git archive HEAD bfcaa8b, whole repo; npm ci with node v24.21.0; lockfile unchanged vs HEAD; env -i, NO_COLOR=1; only my two files overlaid, both cmp-equal to the worktree). `cd packages/moe-daemon && npm test`: exit 0, 174 files passed, 4717 tests passed and 16 skipped. snapshotManifest.test.ts ran all 120 with no skip. `npx tsc --noEmit`: exit 0.\n\nMutation sweep: /tmp/moe-c02b1-mut/mutate.mjs ran each mutant against the snapshot copy only. 52 mutants, 48 killed.\nPlan list, all killed: control-after-portability (P1 '.git/CON'), isShortName (P1), lower-only fold (P1 '.gıt'), symlink check (V3), size===byteLength (V3), view data = input (V1), sha256 compare (V3 HASH), digest compare (V3 DIGEST x3), cross-layer trie (3 cross rows), re-read length (V5), entry catch and top-level catch (V4).\nAlso killed: wellFormed, NFC, path and segment utf8 bounds, HEX64 m flag, FULL_ID m flag, typeof commit/tree, version, excluded integer/sign, byte and entry LIMIT, count-integer guard, copy-length guard, view-prototype check, delete-names-base, order check, plain prototype, key count, Array.isArray-only, Array.prototype-only, typeof executable, sha256 and digest formats, kind and executable digest bytes, freeze, all 3 trie guards, control fold, and owned() reading a prototype.\nRows added this step to kill survivors (all inline): multibyte path over 1024 bytes; Uint8ClampedArray; String commit/tree; ids with a trailing newline; subclassed entries; array-like entries.\n4 equivalent survivors:\n(1) the path.length precheck, since utf8 length >= .length;\n(2) hashing the input instead of the copy, since no input code runs between copy and hash, and V1 kills the view-is-input variant;\n(3) the exact-repeat check, since the trie gives the same PATH_COLLISION;\n(4) data.byteLength instead of the intrinsic getter, since the copy-length guard gives the same ENTRY_INVALID; only the pre-copy memory bound differs.\nSize: 213 + 186 = 399 lines, both new files, under 400.",
+      "startedAt": "2026-10-29T14:58:37.301Z",
+      "completedAt": "2026-10-29T15:02:48.543Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review: load adversarial-self-review and walk this task's own diff. This is the last step.\n- Can ANY input make verifySourceSnapshot throw, return ok with bytes it did not hash, or hash a value other than the one it validated (a getter returning different values, a resized buffer, a species copy)?\n- Is there any O(n^2) path over 10,000 entries? The trie must stay linear in total path length.\n- Are R09a's rules mirrored exactly, with the P1 parity rows green?\n- Does the module stay pure and ASCII-only?\n- Is any project global forbiddenPattern token present in the code or tests? In particular, do not spell the dunder-prototype property name in a test; build the exotic prototype with Object.create or setPrototypeOf.\nReport both files in complete_step.modifiedFiles, and write the task handoff memory with the final exported names for CQ-C02b.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/snapshotManifest.ts",
+        "packages/moe-daemon/src/context/snapshotManifest.test.ts"
+      ],
+      "note": "Adversarial self-review of this task's own two files. A RESUME session re-verified the state from disk: both files matched checkpoint 34a440c before this step's edits.\n\nCan any input throw, return ok with unhashed bytes, or hash something other than what was validated? No. I probed this with a scratch script against the real module:\n- A DataView, a BigInt64Array posing as a Uint8Array, a detached view (size 0) and a getter throwing a primitive string all give ENTRY_INVALID with no throw.\n- A resizable length-tracking view and a SharedArrayBuffer view verify correctly, and the copy is a private, non-shared buffer.\n- Proxies, accessors, species and a spoofed byteLength are already covered by V3/V4/V5.\n- Each property is read once. viewLength runs the intrinsic getter, the copy follows with no input code in between, and only the copy is hashed.\n\nO(n^2)? None:\n- the trie is linear in total path length;\n- key and prototype checks run on constant-size lists;\n- path.length is bounded before the UTF-8 measurement.\n\nParity with R09a:\n- snapshotPathRefusal, FORBIDDEN_CHAR, DEVICE_NAME, foldCase, isShortName, portableSegment, the trie and the digest framing match source-snapshot.mjs line by line;\n- the P1 parity row, V1 and V2 are green.\n\nPurity: imports only node:crypto. Both files are ASCII-only with no CR, and contain no forbidden token (grep exit 1).\n\nEdits made in this step (net 0 lines, still 213 + 186 = 399):\n(1) The type comment now says the view's Maps, like TypedArray data, cannot be frozen at runtime. The probe showed Object.isFrozen(view.base) is false and .set works. The ReadonlyMap type is the compile-time guard.\n(2) The V2 put helper is now a plain block, replacing an array-literal sequencing trick.\n\nTheoretical only, left unchanged: excluded -0 is accepted and returned as -0. It is a non-negative safe integer, and R09b never emits it.\n\nFresh gate: Linux snapshot /tmp/moe-c02b1-gate.UdueUM (git archive of HEAD ac47dbd plus only my two files, cmp-equal; package.json and package-lock.json equal modulo CR; native node_modules; env -i, node v24.21.0, NO_COLOR=1).\n- `cd packages/moe-daemon && npm test`: exit 0, 174 files passed, 4717 tests passed, 16 skipped. snapshotManifest.test.ts ran all 120 tests, none skipped.\n- `npx tsc --noEmit`: exit 0.\n\nThe ~625 dirty paths belonging to peers were left untouched.",
+      "startedAt": "2026-10-29T15:02:49.537Z",
+      "completedAt": "2026-10-29T16:23:56.752Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-491a2d8cff4d45afbdac79539098ebb1",
+    "task-697fb2de19324ccb851defaf9f24043b"
+  ],
+  "priority": "HIGH",
+  "order": 223,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T14:40:35.408Z",
+  "updatedAt": "2026-10-29T16:54:24.312Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T14:43:03.450Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T16:53:43.224Z",
+    "wallClockMs": 7839774
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0",
+    "worker-5ebbf433",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T14:45:17.405Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Import scripts/local-runner/source-snapshot.mjs from the daemon at runtime. Rejected: the daemon is a separate package; the IDE bundles and the Docker image ship packages/moe-daemon alone. So the daemon gets a verbatim TypeScript port, pinned by a parity table and conformance tests against the landed module.\n2. Re-run R09a's validateImport on the sealed layers. Rejected: validateImport takes UNSEALED input entries {kind, path, executable, data} and recomputes everything, but the R09b SourceSnapshot carries SEALED entries {kind, path, executable, size, sha256, data}. The daemon must verify the sealed shape and compare the declarations against recomputation (HASH/DIGEST mismatch codes).\n3. Throw fixed-code errors as R09a does. Rejected for the daemon API: a discriminated {ok, code} result keeps the CQ-C02b adapter's 'snapshot-unverifiable:<code>' mapping exception-free.\n4. Reuse workloadSnapshot.ts checkPortablePath. Rejected: it is not exported, not equal to R09a (no control segments, only the .git and git~1 short names), and it throws invalidInput with path text.",
+    "codebaseInsights": "Landed facts from R09a source-snapshot.mjs:\n- seal() returns Object.freeze({entries: frozen sorted entries, digest}). File entries are {kind, path, executable, size, sha256 hex, data}; deletes are {kind, path}.\n- The digest framing is the one in step 2.\n- CONTROL_SEGMENTS are refused at any depth after foldCase, and BEFORE portability.\n- validateImport refuses symlink kinds first and measures data with the intrinsic byteLength getter.\n- Its QA (round 2) required: read the count once, no species copies, an ASCII-only source.\n\nLanded facts from R09b source-export.mjs:\n- exportSourceSnapshot resolves Object.freeze({version:1, commit, tree, base, overlay, excluded}).\n- The overlay holds only changed files and deletes of committed paths. Control paths are excluded and counted.\n- A file-to-directory replacement collides inside validateImport.\n\nDaemon tests may import scripts/*.mjs through a repo-relative file URL, skipped when absent (the Docker context). Daemon tests run only in a Linux-native snapshot from WSL.",
+    "risks": "- Port drift from R09a: the P1 parity table plus V1/V2 conformance catch it while scripts/ exists.\n- Hostile-input escapes:\n  - wrap every read;\n  - read the count once, and loop only by index;\n  - use the intrinsic byteLength getter;\n  - hash the private copy only.\n- 256 MiB allocation in tests: use one zero-filled 2**28+1 buffer, which is lazily committed, and refuse it before any copy or hash.\n- Size: about 150 runtime plus 210 test lines, so stay table-driven to remain under 400 net.\n- Rails:\n  - Never spell the forbidden dunder-prototype token, even in a test; use Object.create(null) or Object.setPrototypeOf.\n  - No .moe edits and no Git writes; temp repos only.\n- Interface: the exact names are a contract for CQ-C02b (task-311dbda4, already planned against them). Renaming one requires amending that plan.",
+    "keyFiles": [
+      "scripts/local-runner/source-snapshot.mjs",
+      "scripts/local-runner/source-export.mjs",
+      "scripts/tests/local-runner-snapshot.test.mjs",
+      "packages/moe-daemon/src/context/repositorySource.test.ts",
+      "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-29T14:45:17.503Z",
+  "workStartedAt": "2026-10-29T14:46:38.836Z",
+  "commits": [
+    {
+      "sha": "34a440c047f229b2e34885f0c6ec92371024343e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T14:45:41Z",
+      "paths": [
+        ".moe/tasks/task-02fd5931f7274a6696ef84e7d3da4efb.json",
+        ".moe/tasks/task-3e5c59e3b719413783e067455f567721.json",
+        ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
+        ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+        "packages/moe-daemon/src/context/snapshotManifest.test.ts",
+        "packages/moe-daemon/src/context/snapshotManifest.ts"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T15:03:13.828Z",
+      "treeId": "6ab71c1ffac942e9e3ec28c4e1564f030c6749b3",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "7c7ce766514ebde57440a3112791b6c4f39ba88f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T15:03:16Z",
+      "paths": [
+        ".moe/tasks/task-02fd5931f7274a6696ef84e7d3da4efb.json",
+        "packages/moe-daemon/src/context/snapshotManifest.test.ts",
+        "packages/moe-daemon/src/context/snapshotManifest.ts"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T16:24:58.466Z",
+      "treeId": "31d87b28eaf2bc546cf48bd073e1f0040a5ebdc3",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "8e69e21bfb68a777280294753a6584989e5b2a7e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T16:47:56Z",
+      "paths": [
+        ".moe/tasks/task-02fd5931f7274a6696ef84e7d3da4efb.json",
+        ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
+        ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+        ".moe/tasks/task-53daa94fa9d7405a831eb727eec803ac.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T16:54:24.312Z",
+      "treeId": "6d7c81e324d06a3ed973a17d37bebe10cbac048c",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/context/snapshotManifest.ts",
+    "packages/moe-daemon/src/context/snapshotManifest.test.ts",
+    ".moe/tasks/task-02fd5931f7274a6696ef84e7d3da4efb.json",
+    ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
+    ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+    ".moe/tasks/task-53daa94fa9d7405a831eb727eec803ac.json"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/context/snapshotManifest.ts",
+    "packages/moe-daemon/src/context/snapshotManifest.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T16:47:56Z",
+    "at": "2026-10-29T16:54:24.312Z"
+  },
+  "reviewStartedAt": "2026-10-29T16:24:15.864Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Run in a Linux-native snapshot /tmp/moe-c02b1-gate.UdueUM: git archive of HEAD ac47dbd plus only snapshotManifest.ts and .test.ts, both cmp-equal to the worktree; lockfile equal modulo CR; native node_modules; env -i, node v24.21.0, NO_COLOR=1.\n ✓ src/context/snapshotManifest.test.ts (120 tests) 138ms\n ✓ src/util/ids.test.ts (4 tests) 3ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n\n Test Files  174 passed (174)\n      Tests  4717 passed | 16 skipped (4733)\n   Start at  18:23:19\n   Duration  21.35s (tests 91%, transform 4%, import 4%)\n\nnpx tsc --noEmit: exit 0",
+    "reportedAt": "2026-10-29T16:24:15.864Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-C02b1 adds the daemon's own pure verifier for R09b's frozen SourceSnapshot, in packages/moe-daemon/src/context/snapshotManifest.ts (213 lines) and its test (186 lines). That is 399 new lines, under the 400 cap.\n\nContract, exact names for CQ-C02b (task-311dbda4):\n- verifySourceSnapshot(raw) returns {ok:true, snapshot} or {ok:false, code, layer?}. The result union is also exported as SnapshotVerification.\n- The SnapshotRefusal (9 codes), VerifiedSnapshotFile and VerifiedSnapshot types.\n- snapshotPathRefusal, plus the SNAPSHOT_MAX_*/SNAPSHOT_CONTROL_SEGMENTS constants.\n- Layer-scoped refusals carry layer; top-level and merged-view refusals carry none.\n- Sealed entry shape: {kind, path, executable, size, sha256, data}. Each sha256 and both layer digests are recomputed from a private copy and compared with the declared ones.\n- The byte bound is 256 MiB per layer, as R09b bounds each validateImport separately.\n\nTests (120, none skipped in the gate):\n- P1: a 59-row path table checked against R09a validateImportPath.\n- V1: conformance with validateImport.\n- V2: a real temp repo through the landed exportSourceSnapshot.\n- V3: 39 named refusal rows covering all 9 codes, including 3 cross-layer collisions.\n- V4/V5: Proxies, accessors, read-once counting, species and Proxy length.\n- V6: purity, and both files ASCII-only.\n\nMutation sweep (step 4): 52 mutants, 48 killed. The 4 survivors are equivalent, argued in the step-4 note.\n\nSelf-review (step 5) probes all held:\n- DataView, BigInt64Array, detached buffers and a thrown string are refused without a throw.\n- Resizable and SAB views verify, and the copy is private.\n- No O(n^2) path.\n\nStep 5 also documented that the view's Maps, like TypedArray data, cannot be frozen at runtime; ReadonlyMap is the compile-time guard. It simplified the V2 put helper too.\n\nTheoretical only: excluded -0 is accepted.\n\nGate: fresh `npm test` exit 0 (174 files, 4717 passed, 16 skipped) and tsc --noEmit exit 0, run in a Linux snapshot of HEAD with onl",
+  "completedAt": "2026-10-29T16:53:43.224Z",
+  "reviewCompletedAt": "2026-10-29T16:53:43.224Z",
+  "reviewSummary": "Approved CQ-C02b1.\n\nDelivery: checkpoint 34a440c (source) and completion 7c7ce76, on moe/work-2026-10-24, pushed. 399 net new lines in two files, under the cap. The files are unchanged through HEAD 2eda20f.\n\nGate, re-run in a fresh Linux snapshot (git archive of 7c7ce76, own npm ci with an unchanged lockfile, env -i, node v24.21.0, files cmp-equal):\n- npm test exit 0: 174 files; 4717 passed, 16 skipped; all 120 snapshotManifest tests ran.\n- tsc --noEmit exit 0.\n\nDoD:\n1. sha256 and digests are recomputed from a private copy, with framing matching R09a seal line by line. V1 checks against validateImport; V2 checks a real exportSourceSnapshot.\n2. snapshotPathRefusal is a verbatim port of validateImportPath. The 59-row P1 table runs through both, codes included.\n3. All 9 codes have named V3 rows. V4 and V5 cover Proxies, accessors, species, Proxy length and a spoofed byteLength.\n\nMy mutation check: 24/24 killed by their named rows. Covered: the symlink, hash, digest, both tries, limits, delete-base, entry catch, exact keys, copy-length, id-length, wellFormed, private copy, prototype, excluded sign, size, order, control, fold, shortName, sha256 format and freeze.\n\nMy probes held:\n- species and an own constructor on data or its buffer run no user code;\n- an entries getter is read once;\n- empty layers, SHA-256 ids and a null prototype verify;\n- 10,000 deep paths take about 120 ms;\n- a thrown revoked Proxy gives INPUT_INVALID with no throw.\n\nRails: no forbidden tokens, ASCII-only, node:crypto is the only import, no scripts/ change.\n\nNotes for CQ-C02b, none blocking:\n- The Maps and data are not frozen at runtime (documented).\n- The byte bound is per layer, as in R09b.\n- As the task rules require, a cross-layer case-fold twin is refused, though R09b can export one.\n- excluded -0 is accepted.\n\nComplexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

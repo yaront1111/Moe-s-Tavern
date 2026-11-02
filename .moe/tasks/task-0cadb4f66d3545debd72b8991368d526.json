@@ -1,0 +1,266 @@
+{
+  "id": "task-0cadb4f66d3545debd72b8991368d526",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code declares and documents two settings it never reads (moe.agentCommand, moe.chat.notifications.soundEnabled), so changing either does nothing",
+  "description": "Files: moe-vscode/package.json (contributes.configuration), moe-vscode/README.md (settings table, :42 and :45), and one node:test under moe-vscode/tests (a new file, or a row in an existing one). No open row declares any of them. I checked all 37 open rows at 2026-11-02 17:51Z. task-550847ba edits other moe-vscode files, so there is no shared file.\n\nDefect, read at HEAD 2bb683f8:\n- package.json declares 8 moe.* settings. moe-vscode/src reads 6 of them through getConfiguration: moe.autoConnect (extension.ts:487), moe.daemon.host, .port and .autoStart (MoeDaemonClient.ts:1219, :1283, :1455, :1864), and moe.chat.notifications.enabled and .mutedChannels (ChatViewProvider.ts:224).\n- moe.agentCommand is never read. A launch takes its CLI from the Moe: Start Agent quick pick (extension.ts:314-351, which remembers the last pick in workspaceState moe.lastProvider), and AgentLauncher.launchAgent runs that provider (AgentLauncher.ts:370-379). The agentCommand Moe does use lives in the project settings (.moe/project.json settings.agentCommand). That is what Moe: Open Settings edits (SettingsPanel.ts:183) and what JetBrains reads (TerminalAgentLauncher.kt:314).\n- moe.chat.notifications.soundEnabled is never read, and no code plays a sound. ChatViewProvider.ts:236-237 says sound comes from the OS notification, and webview audio does not play while the panel is hidden.\n- README.md:42 and :45 document both settings as working.\nRepro: set \"moe.agentCommand\": \"codex\" and \"moe.chat.notifications.soundEnabled\": false in VS Code settings. Moe: Start Agent still preselects the last CLI used, and notifications behave exactly as before. No getConfiguration reader names either key.\n\nFix: remove both declarations from contributes.configuration, and remove their two rows from the README table. Don't wire them in. The project-level agentCommand is the one source of truth that JetBrains and the wrappers already use, and an IDE-level copy would disagree with it. Whether the quick pick should default to the project's agentCommand, as JetBrains' agentCommandFor does, is a separate parity question and out of scope.\nTest: add a node:test that reads package.json and the src tree, and fails, naming the key, when a declared moe.* key has no reader. A key counts as read when one src file calls getConfiguration('<section>') and .get('<leaf>') such that section + '.' + leaf equals the key. That catches the next dead setting before it ships.\nError handling: if package.json can't be read, or declares no configuration properties, the test fails with that reason. It never passes on an empty set.",
+  "definitionOfDone": [
+    "moe-vscode/package.json contributes.configuration no longer declares moe.agentCommand or moe.chat.notifications.soundEnabled. The other six settings keep the same keys, types, defaults and descriptions.",
+    "The settings table in moe-vscode/README.md drops both rows and lists exactly the six remaining keys.",
+    "A node:test under moe-vscode/tests fails, naming the key, when a moe.* key declared in package.json has no getConfiguration reader in moe-vscode/src, using the rule in the description. RED first: on HEAD it fails naming exactly moe.agentCommand and moe.chat.notifications.soundEnabled, and the completion evidence quotes that output. It passes after the change. An unreadable package.json, or one with no configuration properties, fails the test.",
+    "No moe-vscode/src change. The project-level agentCommand flow in Moe: Open Settings is untouched.",
+    "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0, and no existing test is weakened. Never run npm in the shared checkout (GLOBAL rule 0)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED test first (TDD; DoD 3). Create moe-vscode/tests/configuration-readers.test.cjs with the Write tool (GLOBAL rule 2: never cp or shell-write it into the tree). The architect staged a verified reference at /mnt/d/moe-scratch/cfg-readers-architect/configuration-readers.test.cjs (the same folder as D:/moe-scratch/cfg-readers-architect; 93 lines, ASCII only, sha256 12c4189c91aabe61f32a5703b9a2f44da06931df2ca685b0b07653bf0300ddb1). Read it and Write the same content. It is a NEW file on purpose: wire-parity.test.cjs belongs to task-550847ba. What it does, and what the checkRefs rely on, so keep all of it if you change anything: (a) node builtins only (node:assert/strict, node:fs, node:os, node:path, node:test), no new dependency, root = path.join(__dirname, '..'). (b) declaredSettings(pkgPath) parses package.json. Any read or parse error throws `cannot read ${pkgPath}: ${error.message}`. It collects the keys of every `properties` under contributes.configuration (one object or an array of them, through [].concat), keeps the ones that start with 'moe.', and throws `${pkgPath} declares no moe.* configuration properties` when none remain. (c) settingsReadIn(text) returns every section + '.' + leaf, where section is a string literal passed to getConfiguration( and leaf is one passed to .get( or .get<T>( in the same text. That is the description's rule, as the two regexes at reference lines 33-34. Keep the optional type-argument group: every real reader is .get<boolean>/<number>/<string>/<string[]>(...), so dropping it marks all 8 keys dead. (d) deadSettings(pkgPath, srcDir) calls declaredSettings FIRST, then reads every .ts file under fs.readdirSync(srcDir, { recursive: true }). It joins sections and leaves within one file only, never across files, and returns the declared keys nothing reads, in declared order. (e) Tests, in this order. C1 asserts deadSettings(root/package.json, root/src) deepStrictEqual [] with the message `declared in package.json with no getConfiguration reader in src: ${dead.join(', ')}`. C2: a missing package.json fails with the ENOENT reason and a truncated one with the JSON parse reason (reference lines 64-71). C3: four texts with no moe.* property ('{}', no configuration, empty properties, an array form holding only 'other.key') each fail with the 'declares no moe.* configuration properties' reason. C4: an array-form fixture declaring moe.a.b, moe.c, moe.split.x, moe.attr and other.setting, with src/top.ts and src/deep/nested.ts, yields exactly ['moe.split.x', 'moe.attr']. The architect dry-ran mutants against it: a cross-file join, a lax getX regex, no recursive walk, no double-quote support and no 'moe.' filter each fail C4 (and C1 or C3). Fixtures live in fs.mkdtempSync(path.join(os.tmpdir(), 'moe-configuration-readers-')) and are removed in finally, the tests/daemon-json-cap.test.cjs pattern. Error handling: the test never passes on an empty set. A read or parse failure, a missing src dir (readdirSync ENOENT) or zero moe.* keys fails C1 with that reason, and nothing is caught or skipped. Then, BEFORE you edit package.json, run checkRef 1 (RED at a3269a28) verbatim from the repo root. It must print 'RED at a3269a28: 1', with only C1 failing on 'declared in package.json with no getConfiguration reader in src: moe.agentCommand, moe.chat.notifications.soundEnabled'. Quote that line in this step's note and in the completion summary (DoD 3). Never run npm in the shared checkout (GLOBAL rule 0).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/configuration-readers.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/configuration-readers.test.cjs"
+      ],
+      "note": "Test written via Write (sha256 matches reference). RED at a3269a28: 1 — only C1 failed: \"declared in package.json with no getConfiguration reader in src: moe.agentCommand, moe.chat.notifications.soundEnabled\". Dirty paths from other sessions left alone.",
+      "startedAt": "2026-11-02T18:19:28.495Z",
+      "completedAt": "2026-11-02T18:19:48.595Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix (DoD 1, DoD 4). In moe-vscode/package.json, use the Edit tool to delete exactly two blocks under contributes.configuration.properties: 'moe.agentCommand' (string, default 'claude') and 'moe.chat.notifications.soundEnabled' (boolean, default true, currently the last property). Then drop the comma after the 'moe.chat.notifications.mutedChannels' block, which becomes the last property, so the file stays valid JSON. Change nothing else. The other six keep their keys, types, defaults and descriptions. The configuration title, commands, menus, configurationDefaults, scripts and dependencies stay as they are, and package-lock.json does not change. Do not wire either key into src. The project-level agentCommand in .moe/project.json (Moe: Open Settings, SettingsPanel.ts:183) stays the single source of truth that JetBrains and the wrappers read. Whether the Start Agent quick pick should default to it is a separate parity question, out of scope. GREEN check: from the repo root, `node --test moe-vscode/tests/configuration-readers.test.cjs` passes 4/4. It needs node builtins only, no npm, and writes only under the OS temp dir. Error handling: if C1 still fails, its message names the key still declared without a reader. Fix package.json, never the test.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "note": "Removed moe.agentCommand and moe.chat.notifications.soundEnabled blocks plus trailing comma; 10 deletions. node --test configuration-readers.test.cjs: 4/4 pass.",
+      "startedAt": "2026-11-02T18:19:51.461Z",
+      "completedAt": "2026-11-02T18:20:03.062Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs (DoD 2). Use the Edit tool for both files. In moe-vscode/README.md, under '## Extension settings', delete exactly the two table rows for `moe.agentCommand` and `moe.chat.notifications.soundEnabled` and nothing else in that section, so the table lists exactly the six keys package.json declares. Under '## Release notes' > '### Unreleased', append one bullet: '- The unused `moe.agentCommand` and `moe.chat.notifications.soundEnabled` settings are removed'. In moe-vscode/CHANGELOG.md, under '## [Unreleased]', add a '### Removed' subsection between '### Changed' and '### Fixed' (Keep a Changelog order) with one bullet: '- The `moe.agentCommand` and `moe.chat.notifications.soundEnabled` settings, which the extension never read. **Moe: Start Agent** asks which CLI to launch (the last one used is listed first), and **Moe: Open Settings** still edits the project's agent command in `.moe/project.json`.' Then run checkRef 3 verbatim from the repo root. It must exit 0 and print 'DoD1-2 ok: moe.daemon.host, moe.daemon.port, moe.daemon.autoStart, moe.autoConnect, moe.chat.notifications.enabled, moe.chat.notifications.mutedChannels'. It compares package.json's contributes.configuration and the README settings section against a3269a28 minus the two keys, so any other change in either place fails it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/README.md",
+        "moe-vscode/CHANGELOG.md"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/README.md",
+        "moe-vscode/CHANGELOG.md"
+      ],
+      "note": "README: two table rows dropped + one Unreleased bullet; CHANGELOG: ### Removed between Changed and Fixed. checkRef 3 prints DoD1-2 ok with the six keys, exit 0.",
+      "startedAt": "2026-11-02T18:20:06.116Z",
+      "completedAt": "2026-11-02T18:20:21.973Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify (DoD 3, DoD 5). Run the four executionContract checkRefs verbatim from the repo root, in order. checkRef 1 prints 'RED at a3269a28: 1'. checkRef 2 prints 'unreadable or empty package.json fails C1: 1'. checkRef 3 prints the 'DoD1-2 ok: ...' line. checkRef 4 is the snapshot gate: git archive HEAD plus this row's four files, then npm ci, lint, compile and test under node v24.21.0, ending 'gate exit: 0' (mem:gotcha-vscode-gate-from-wsl). checkRef 4 is the completion evidence: complete_task verification = {command: checkRef 4 verbatim, exitCode: 0, outputTail holding the tests/pass/fail summary lines and 'gate exit: 0'}. Quote checkRef 1's C1 line and the result lines of checkRefs 2 and 3 in the summary. The architect's dry run of a3269a28 plus this change gave 581 tests, 577 pass, 4 skipped (Windows-only), 0 fail. The counts can move with HEAD; 0 fail is the bar. Error handling for a red run: a failure in configuration-readers.test.cjs, or a lint or compile error, is this row's to fix. A failure in a test file this row does not own is attributed per mem:gotcha-snapshot-gate-peer-wip-checkpoint: tie it to a peer's checkpoint with git log on that file, re-run checkRef 4 with only that file removed from the snapshot, and disclose both runs. Never edit another row's file, and never run npm in the shared checkout (GLOBAL rule 0).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef1 RED at a3269a28: 1 (C1: \"declared in package.json with no getConfiguration reader in src: moe.agentCommand, moe.chat.notifications.soundEnabled\"); checkRef2 \"unreadable or empty package.json fails C1: 1\"; checkRef3 \"DoD1-2 ok: <six keys>\"; checkRef4 snapshot gate: 581 tests, 577 pass, 4 skipped, 0 fail, gate exit: 0.",
+      "startedAt": "2026-11-02T18:20:22.689Z",
+      "completedAt": "2026-11-02T18:20:55.269Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (final step). Read your diff as QA will: git diff -- moe-vscode/package.json moe-vscode/README.md moe-vscode/CHANGELOG.md, plus the new test file. Check that: (1) only the two property blocks left package.json, and it still parses; (2) the README settings table holds exactly the six keys, and the two release-note bullets are the only other doc changes; (3) git status --short moe-vscode/ shows only your four paths, with no src byte and no existing test file touched (any other dirty path belongs to a peer: leave it alone); (4) the test cannot pass vacuously: C1 reads package.json first, nothing is caught, and C2/C3 assert the exact reasons. The per-file cross product and counting comments are the description's rule, stated in the header comment, not bugs; (5) on Windows, readdirSync recursive returns backslash paths that path.join handles, fixtures are removed in finally, and nothing assumes a POSIX path; (6) no added line contains a project.json globalRails.forbiddenPatterns string. If this review changes any byte, re-run step 4's four commands and cite the fresh runs. complete_step modifiedFiles: moe-vscode/package.json, moe-vscode/README.md, moe-vscode/CHANGELOG.md, moe-vscode/tests/configuration-readers.test.cjs.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/package.json",
+        "moe-vscode/README.md",
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/tests/configuration-readers.test.cjs"
+      ],
+      "note": "Diff reviewed: only two property blocks + trailing comma left package.json (parses); README/CHANGELOG changes as planned; no forbidden pattern strings. Dirty moe-vscode/src/services/MoeDaemonClient.ts, src/types/moe.ts and tests/wire-parity.test.cjs belong to peer task-550847ba — untouched. No byte changed after step 4, so its runs stand.",
+      "startedAt": "2026-11-02T18:20:56.227Z",
+      "completedAt": "2026-11-02T18:21:04.347Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Worktree switch done (19:14Z): the control checkout is on moe/control at 0d8422ce, worktreeMode is on, and doctor exits 0. The drain park is over. Completion 19d3fc0c is in moe/control's history, so QA reviews the landed bytes.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 332.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T17:50:00.342Z",
+  "updatedAt": "2026-11-02T19:15:59.440Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T17:53:46.877Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T17:58:01.666Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T19:15:59.440Z",
+    "wallClockMs": 4677774
+  },
+  "contextFetchedBy": [
+    "architect-fda9823f",
+    "worker-4c1da905",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T18:18:04.189Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code's contributes.configuration declares only the six moe.* settings the extension reads (moe.daemon.host, moe.daemon.port, moe.daemon.autoStart, moe.autoConnect, moe.chat.notifications.enabled, moe.chat.notifications.mutedChannels), and the README settings table lists exactly those six. moe.agentCommand and moe.chat.notifications.soundEnabled are removed, not wired in. The agent CLI comes from the Moe: Start Agent quick pick, and the project-level agentCommand in .moe/project.json (Moe: Open Settings) stays the single source of truth that JetBrains and the wrappers use. A new node:test, moe-vscode/tests/configuration-readers.test.cjs, fails and names the key whenever package.json declares a moe.* key that no src .ts file reads, where read means one file calls getConfiguration('<section>') and .get('<leaf>') with section + '.' + leaf equal to the key. It fails with the reason when package.json is unreadable or declares no moe.* properties, so it never passes on an empty set. The moe-vscode CHANGELOG [Unreleased] and the README release notes record the removal.",
+    "acceptanceCriteria": [
+      "DoD 1: package.json contributes.configuration equals a3269a28's minus exactly the two properties, with the same title and the same keys, types, defaults and descriptions for the other six (checkRef 3).",
+      "DoD 2: the README '## Extension settings' section equals a3269a28's minus exactly the two table rows, and its rows are exactly the six package.json keys (checkRef 3).",
+      "DoD 3: on a3269a28's package.json and src only C1 fails, with 'declared in package.json with no getConfiguration reader in src: moe.agentCommand, moe.chat.notifications.soundEnabled' (checkRef 1, quoted in the completion summary). After the change all four tests pass (checkRef 4). A missing package.json, or one with empty properties, fails C1 with the reason (checkRef 2), and C2/C3 pin both reasons in-file.",
+      "DoD 4: no moe-vscode/src byte changes. SettingsPanel's agentCommand field and the .moe/project.json flow are untouched.",
+      "DoD 5: checkRef 4 (git archive HEAD plus this row's four files; npm ci, lint, compile, test) prints 'gate exit: 0', and no existing test file is edited."
+    ],
+    "invariants": [
+      "No moe-vscode/src change, and no edit to any existing file under moe-vscode/tests.",
+      "package.json stays valid JSON. package-lock.json, scripts, commands, menus and configurationDefaults are untouched.",
+      "The test uses node builtins only (no new dependency), writes only under os.tmpdir() and removes its fixtures in finally. Its error handling never turns a read failure or an empty key set into a pass.",
+      "No added line contains a project.json globalRails.forbiddenPatterns string."
+    ],
+    "compatibility": [
+      "A user's settings.json entry for either key stays where it is, and VS Code shows it as an unknown setting. Neither key ever had an effect, so behaviour does not change.",
+      "contributes.configuration keeps its object shape (title plus properties). The test also accepts the array form VS Code allows.",
+      "JetBrains keeps its own moe.chat.notifications.soundEnabled (a PropertiesComponent key, ChatPanel.kt:115). This row does not touch it."
+    ],
+    "approvedScope": [
+      "moe-vscode/package.json: delete contributes.configuration.properties['moe.agentCommand'] and ['moe.chat.notifications.soundEnabled'], plus the trailing comma the deletion leaves, and nothing else.",
+      "moe-vscode/README.md: delete the two '## Extension settings' table rows, and append one '### Unreleased' release-notes bullet.",
+      "moe-vscode/CHANGELOG.md: one '### Removed' subsection with one bullet in [Unreleased], between '### Changed' and '### Fixed'.",
+      "moe-vscode/tests/configuration-readers.test.cjs (new): declaredSettings, settingsReadIn, deadSettings and withFixture, plus tests C1-C4."
+    ],
+    "reuse": [
+      "node:test plus node:assert/strict, like every moe-vscode/tests/*.test.cjs. The fixture helper follows tests/daemon-json-cap.test.cjs (mkdtempSync under os.tmpdir(), rmSync in finally). fs.readdirSync with recursive: true (Node 20+, and CI runs Node 24) replaces a hand-written walk.",
+      "No TypeScript-AST scan: the description's grep rule, as two regexes, needs no node_modules and no vm harness."
+    ],
+    "sourceAssumptions": [
+      "Readers at a3269a28: extension.ts:487-488 getConfiguration('moe') + get<boolean>('autoConnect'); MoeDaemonClient.ts:1219-1221, 1283-1288, 1322, 1455-1456 and 1864-1865 getConfiguration('moe') + daemon.port, daemon.host, daemon.autoStart, autoConnect; ChatViewProvider.ts:224-229 getConfiguration('moe.chat.notifications') + enabled, mutedChannels.",
+      "Nothing reads either dead key. extension.ts:314-351 pickProvider uses a quick pick and workspaceState moe.lastProvider. ChatViewProvider.ts:236-237 has only a comment about sound. SettingsPanel.ts:183 edits the project-level agentCommand.",
+      "The package.json 'test' script is node --test tests/*.test.cjs, so the new file runs in npm test. 'lint' (eslint src) and 'compile' (tsc, tsconfig include src/**/*) never see tests/.",
+      "git grep at a3269a28: only moe-vscode/package.json and moe-vscode/README.md name the two keys; JetBrains ChatPanel.kt has its own, unrelated property. There is no moe-vscode commit between 2bb683f8 and 7c60841f.",
+      "moe-vscode/src holds only .ts files (22), and .gitattributes forces LF."
+    ],
+    "checkRefs": [
+      "K=0; R=$(git rev-parse --show-toplevel) && M=$(mktemp -d) && git -C \"$R\" archive a3269a28 moe-vscode/package.json moe-vscode/src | tar -x -C \"$M\" && mkdir \"$M/moe-vscode/tests\" && cp \"$R/moe-vscode/tests/configuration-readers.test.cjs\" \"$M/moe-vscode/tests/\" && cd \"$M/moe-vscode\" && { node --test --test-reporter=tap tests/configuration-readers.test.cjs > ../o 2>&1; [ $? != 0 ]; } && cat ../o && grep -q '^not ok 1 - C1:' ../o && [ \"$(grep -c '^not ok' ../o)\" = 1 ] && grep -Eq 'reader in src: moe\\.agentCommand, moe\\.chat\\.notifications\\.soundEnabled$' ../o && K=1; cd \"$R\"; rm -rf \"$M\"; echo \"RED at a3269a28: $K\"; [ \"$K\" = 1 ]",
+      "K=0; R=$(git rev-parse --show-toplevel) && M=$(mktemp -d) && git -C \"$R\" archive a3269a28 moe-vscode/src | tar -x -C \"$M\" && mkdir \"$M/moe-vscode/tests\" && cp \"$R/moe-vscode/tests/configuration-readers.test.cjs\" \"$M/moe-vscode/tests/\" && cd \"$M/moe-vscode\" && t() { node --test --test-reporter=tap tests/configuration-readers.test.cjs > ../o 2>&1; [ $? != 0 ] && grep -q '^not ok 1 - C1:' ../o && grep -Eq \"$1\" ../o; } && t 'cannot read .*package\\.json: ENOENT' && echo '{\"contributes\":{\"configuration\":{\"properties\":{}}}}' > package.json && t 'declares no moe\\.\\* configuration properties' && K=1; cd \"$R\"; rm -rf \"$M\"; echo \"unreadable or empty package.json fails C1: $K\"; [ \"$K\" = 1 ]",
+      "cd \"$(git rev-parse --show-toplevel)\" && node -e 'const fs=require(\"fs\"),a=require(\"assert/strict\"),x=require(\"child_process\").execSync,g=f=>x(\"git show a3269a28:moe-vscode/\"+f,{encoding:\"utf8\"}),r=f=>fs.readFileSync(\"moe-vscode/\"+f,\"utf8\"),D=[\"moe.agentCommand\",\"moe.chat.notifications.soundEnabled\"],b=JSON.parse(g(\"package.json\")).contributes.configuration,n=JSON.parse(r(\"package.json\")).contributes.configuration;for(const k of D){a.ok(k in b.properties);delete b.properties[k]}a.deepStrictEqual(n,b);const K=Object.keys(n.properties),s=t=>t.split(\"## Extension settings\")[1].split(\"\\n## \")[0].split(\"\\n\"),ns=s(r(\"README.md\"));a.deepStrictEqual(ns,s(g(\"README.md\")).filter(l=>!D.some(k=>l.includes(\"`\"+k+\"`\"))));const R=ns.filter(l=>l.startsWith(\"| `moe.\")).map(l=>l.split(\"`\")[1]);a.equal(K.length,6);a.deepStrictEqual(R,K);console.log(\"DoD1-2 ok:\",R.join(\", \"))'",
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc-cfg-gate-XXXXXX) && echo \"snapshot $S\" && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/package.json moe-vscode/README.md moe-vscode/CHANGELOG.md moe-vscode/tests/configuration-readers.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'; C=$?; cd \"$R\"; rm -rf \"$S\"; echo \"gate exit: $C\"; [ \"$C\" = 0 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Wiring the two settings in was rejected by the task: the project agentCommand is the single source of truth, an IDE-level copy would disagree with it, and nothing plays a sound (webview audio does not play while the panel is hidden). A TypeScript-AST scan was rejected: it needs the typescript package plus a harness, and the description fixes a grep rule. The test does not go in wire-parity.test.cjs, which task-550847ba edits (governor reopenReason). Asserting in the test that the README table equals package.json is out of scope; checkRef 3 covers it for this row. The CHANGELOG and README release-note lines document this change, following the earlier 'branch and commit pattern fields are removed' precedent.",
+    "codebaseInsights": "Every real reader passes a type argument (.get<boolean>(...)), so the leaf regex must allow <...> before the parenthesis; without it all 8 keys read as dead. The per-file cross product is deliberate (the rule as written) and over-approximates: an unrelated .get('<leaf>') in a file with a matching section counts as a reader, and so does a commented-out one. That is accepted, because the test only has to catch a key nothing reads. The architect dry-ran the reference test, the mutants and all four checkRefs at a3269a28. RED names exactly the two keys; GREEN after the simulated fix; the full snapshot gate gave 581 tests, 577 pass, 4 skipped, 0 fail. Mutants killed: a vacuous C1 (checkRef 1), a swallowed read error (checkRef 2), and, through C1/C3/C4, no type-argument group, a cross-file join, no recursive walk, no 'moe.' filter, a lax getX regex and no double-quote leaves. checkRef 3 also fails on an extra line in the README settings section.",
+    "risks": "1) Deleting the last property leaves a trailing comma on the mutedChannels block, and invalid JSON fails npm ci and checkRef 3. 2) checkRefs 1-3 pin a3269a28, the pre-fix base, on purpose, so they stay valid after landing; do not swap in HEAD. 3) checkRef 4 copies the four files from the shared checkout. No other open row declares them (scan of all 40 open rows at 18:15Z), but QA should still cmp each overlaid file against the completion commit (mem:gotcha-snapshot-gate-peer-wip-checkpoint). 4) On Windows, readdirSync recursive returns backslash paths, which path.join handles, and C2's ENOENT text and temp path both match the regexes. 5) Never run npm in the shared checkout; the gate runs only in the mktemp snapshot.",
+    "keyFiles": [
+      "moe-vscode/package.json",
+      "moe-vscode/README.md",
+      "moe-vscode/CHANGELOG.md",
+      "moe-vscode/src/extension.ts",
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/providers/ChatViewProvider.ts",
+      "moe-vscode/tests/daemon-json-cap.test.cjs",
+      "/mnt/d/moe-scratch/cfg-readers-architect/configuration-readers.test.cjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "7c60841f4b2be6adeac6d399e36f3590fe43f3fa",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T18:18:04.218Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T18:19:28.495Z",
+  "reviewStartedAt": "2026-11-02T18:21:09.557Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc-cfg-gate-XXXXXX) && echo \"snapshot $S\" && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/package.json moe-vscode/README.md moe-vscode/CHANGELOG.md moe-vscode/tests/configuration-readers.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'; C=$?; cd \"$R\"; rm -rf \"$S\"; echo \"gate exit: $C\"; [ \"$C\" = 0 ]",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 581\nℹ suites 0\nℹ pass 577\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 3830.689848\ngate exit: 0",
+    "reportedAt": "2026-11-02T18:21:09.557Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/configuration-readers.test.cjs",
+    "moe-vscode/package.json",
+    "moe-vscode/README.md",
+    "moe-vscode/CHANGELOG.md",
+    ".moe/tasks/task-0cadb4f66d3545debd72b8991368d526.json",
+    ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json"
+  ],
+  "completionSummary": "Removed the dead moe.agentCommand and moe.chat.notifications.soundEnabled declarations from moe-vscode/package.json and their two README table rows (plus a README release-note bullet and a CHANGELOG ### Removed entry). Added moe-vscode/tests/configuration-readers.test.cjs (C1-C4): fails naming any declared moe.* key with no getConfiguration/.get reader in src, and fails with the reason on an unreadable package.json or an empty moe.* set. RED at a3269a28: only C1 failed with \"declared in package.json with no getConfiguration reader in src: moe.agentCommand, moe.chat.notifications.soundEnabled\". checkRef2: \"unreadable or empty package.json fails C1: 1\". checkRef3: \"DoD1-2 ok: moe.daemon.host, moe.daemon.port, moe.daemon.autoStart, moe.autoConnect, moe.chat.notifications.enabled, moe.chat.notifications.mutedChannels\". Snapshot gate (git archive HEAD + 4 files; npm ci, lint, compile, test): 581 tests, 577 pass, 4 skipped, 0 fail, gate exit 0. No moe-vscode/src change; no existing test edited.",
+  "commits": [
+    {
+      "sha": "19d3fc0c3c1a85e271e2a93ff68bf25ffe0038de",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T18:18:18Z",
+      "paths": [
+        ".moe/tasks/task-0cadb4f66d3545debd72b8991368d526.json",
+        ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json",
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/README.md",
+        "moe-vscode/package.json",
+        "moe-vscode/tests/configuration-readers.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T18:22:41.576Z",
+      "treeId": "fcc7494c02fa1414ba5a2ccc1ad64b0d93959274",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/configuration-readers.test.cjs",
+    "moe-vscode/package.json",
+    "moe-vscode/README.md",
+    "moe-vscode/CHANGELOG.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T18:18:18Z",
+    "at": "2026-11-02T18:22:41.576Z"
+  },
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedReason": null,
+  "priorBlockedReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion 19d3fc0c has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode.",
+  "blockedResourceId": null,
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-02T19:15:59.440Z",
+  "reviewCompletedAt": "2026-11-02T19:15:59.440Z",
+  "reviewSummary": "Reviewed landed completion 19d3fc0c (in moe/control, this worktree-mode control checkout at 0d8422ce). moe-vscode diff is net about 84 LOC (package.json -10, README +1/-2, CHANGELOG +3, new test +93), under the size cap. Re-ran checkRefs myself: (1) RED at a3269a28: only C1 fails, 'declared in package.json with no getConfiguration reader in src: moe.agentCommand, moe.chat.notifications.soundEnabled'; C2-C4 pass. (2) Missing package.json (ENOENT) and empty-properties package.json both fail C1 with their reason. (3) contributes.configuration equals a3269a28's minus exactly the two properties; README settings section equals a3269a28's minus the two rows, with exactly the six remaining keys ('DoD1-2 ok'). (4) task.verification re-run verbatim (git archive HEAD + 4 files, env -i, node v24.21.0, npm ci, lint, compile, test): 587 tests, 583 pass, 4 skipped, 0 fail, 'gate exit: 0' (up from the worker's 581 because peer task-550847ba's tests have since landed). In place, the new test passes 4/4. Also checked: the commit touches no moe-vscode/src byte, no existing test, no package-lock.json; package.json parses; the test's sha256 matches the architect's reference; it uses node builtins only, fixtures under os.tmpdir() removed in finally, nothing caught, so an unreadable or empty package.json cannot pass. No forbidden patterns in added lines. The two keys now appear only in CHANGELOG/README/the new test, plus JetBrains ChatPanel.kt:115, whose own key is intentionally untouched. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

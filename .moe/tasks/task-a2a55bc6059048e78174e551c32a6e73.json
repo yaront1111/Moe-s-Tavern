@@ -1,0 +1,218 @@
+{
+  "id": "task-a2a55bc6059048e78174e551c32a6e73",
+  "epicId": "epic-be924fb8",
+  "title": "get_commit_scope: add finalizingAttempt, the task's finalizing attempt as claim_next_task's hold selects it",
+  "description": "Split from task-d3cd966c5ef74468b03ac4ca23893d5d (its DoD 1). The daemon half lands now. The wrapper half waits for the in-flight wrapper edits and the pending main merge.\n\nAdd a field to moe.get_commit_scope's response: `finalizingAttempt: { attemptId, workerId, generation } | null`. It is additive.\n- It names the task's well-formed finalizing attempt exactly as `finalizingAttemptsByTask(state).get(task.id)` (packages/moe-daemon/src/util/claimEligibility.ts) selects it:\n  - phase 'finalizing';\n  - non-blank id, taskId and workerId;\n  - a safe-integer generation >= 1;\n  - the highest generation when two exist.\n- It names the attempt whoever holds it, the caller included. Each wrapper compares workerId to itself; the owner guard ignores its own attempt.\n- No other response field changes.\n- The tool's inline description says what the field means and that an older daemon omits it.\n\nWhy: the owner guard in both wrappers (sh landing_owner_guard, ps1 Get-MoeOwnerGuard) reads and parses every .moe/attempts/*.json record. It does this on every landing where the task is unassigned or held by an unprotected owner, which includes every worker completion. On 2026-10-29, 584 records took 1.46 s, and the count grows by one per claim. task-d3cd966c switches both wrappers to this field and documents it in docs/MCP_SERVER.md. That doc is in the pending main merge's change set, so its edit waits with the wrappers.",
+  "definitionOfDone": [
+    "moe.get_commit_scope returns finalizingAttempt: { attemptId, workerId, generation } for the attempt that finalizingAttemptsByTask (util/claimEligibility.ts) selects for the task, else null. The caller's own attempt is named too. Every other response field is unchanged.",
+    "getCommitScope.test.ts covers: no attempts gives null; one well-formed finalizing attempt gives exactly { attemptId, workerId, generation }; running and closed attempts give null; malformed finalizing records (blank workerId; generation 0) give null; two finalizing attempts give the higher generation; another task's finalizing attempt gives null; the caller's own finalizing attempt is still named.",
+    "The tool's inline description documents the field and says an older daemon omits it. docs/MCP_SERVER.md is updated by task-d3cd966c5ef74468b03ac4ca23893d5d.",
+    "In a Linux-native snapshot of packages/moe-daemon, npx vitest run, npx tsc --noEmit and a type check of getCommitScope.test.ts all exit 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Gate, then tests first in packages/moe-daemon/src/tools/getCommitScope.test.ts.\n\nGate: from /mnt/d/projexts/moes, `git status --porcelain -- packages/moe-daemon/src/tools/getCommitScope.ts packages/moe-daemon/src/tools/getCommitScope.test.ts` must print nothing. It was clean on 2026-10-30, and no open task plans either file. If a file is dirty, call moe.get_commit_scope { taskId: 'task-a2a55bc6059048e78174e551c32a6e73' } and read peerDeclared:\n- if declaring peers exist, report_blocked with those task ids;\n- if nobody declares the path, report_blocked with no ids, naming the paths.\nNever revert, stash or commit other sessions' bytes. The checkout's other dirty paths belong to peers.\n\nTests. Use the file's existing helpers: h.setupMoeFolder/createEpic/createTask, then `await h.state.load()`; openAttempt/setAttemptPhase from ../state/attemptStore.js; h.state.attempts.set(...) for records openAttempt refuses to create (it allows one open attempt per task).\n(a) In `interface ScopeResult`, after assigneeProtected, add `finalizingAttempt: { attemptId: string; workerId: string; generation: number } | null;`.\n(b) In the existing test 'only adds the assigneeProtected key to the reply':\n- add 'finalizingAttempt' to the expected key list;\n- rename it to 'adds only the assigneeProtected and finalizingAttempt keys to the reply'.\nEvery other key stays exactly as listed.\n(c) Append `describe('finalizingAttempt', ...)` at the end of the top-level describe. Its setup creates task-1 (status REVIEW, unassigned, as complete_task leaves it) and task-2, then calls `await h.state.load()`. Write these `it`s, asserting exact values:\n1. 'is null with no attempts, and for running, reconciling and closed attempts': `toBeNull()` before any attempt; again after `open('task-1','worker-done')` (running); after setAttemptPhase(...,'reconciling'); and after setAttemptPhase(...,'closed').\n2. 'names exactly the finalizing attempt, whoever asks': `const a = await setAttemptPhase(h.state, (await open('task-1','worker-done')).id, 'finalizing')`. Then `toStrictEqual({ attemptId: a.id, workerId: 'worker-done', generation: a.generation })` for scope({workerId:'worker-other'}), for scope() with no caller, and for scope({workerId:'worker-done'}): the caller's own attempt is still named. Also scope({taskId:'task-2'}).finalizingAttempt is null: another task's finalizing attempt.\n3. 'skips malformed finalizing records': patch the finalizing record in place with h.state.attempts.set(a.id, {...a, workerId: '  '}) and expect null; with generation 0, null; with generation 1.5, null; with id '' (keyed under a.id), null.\n4. 'keeps the highest generation when two are finalizing': after a (generation 1) is finalizing, set 'attempt-high' {...a, id:'attempt-high', workerId:'worker-high', generation: 9} FIRST, then 'attempt-low' {...a, id:'attempt-low', workerId:'worker-low', generation: 2}. Expect toStrictEqual({ attemptId:'attempt-high', workerId:'worker-high', generation: 9 }). Inserting the high record first makes the test fail for an implementation that picks by insertion order or picks the first record.\n\nRed proof: in the step-3 snapshot (or by running the step-3 command early), `npx vitest run src/tools/getCommitScope.test.ts` must fail on the new tests and the key-list test before step 2. Record that in the step note. Error handling: none of these tests may throw on a malformed record; the reply must still be returned.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "Gate clean (both files). Tests added. Red proof: whole-repo Linux snapshot of HEAD + only the test file overlaid, vitest on getCommitScope.test.ts: 5 failed (4 new finalizingAttempt tests + key-list test) / 41 passed. Other dirty paths (743) belong to peers; untouched.",
+      "startedAt": "2026-10-30T00:41:24.735Z",
+      "completedAt": "2026-10-30T00:41:51.606Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement in packages/moe-daemon/src/tools/getCommitScope.ts.\n(a) Add `import { finalizingAttemptsByTask } from '../util/claimEligibility.js';` after the attemptStore import. Reuse it as-is: do not copy isHoldingFinalizingAttempt and do not edit claimEligibility.ts. Its predicate is the field's contract:\n- phase 'finalizing';\n- non-blank id, taskId and workerId;\n- Number.isSafeInteger(generation) && generation >= 1;\n- the highest generation wins, because listAttempts sorts by generation.\n(b) Next to `const assigneeProtected = isAssigneeProtected(state, task);`, add:\n```ts\n      // The finalizing hold claim_next_task enforces (util/claimEligibility.ts), named whoever\n      // holds it: the wrapper's owner guard compares workerId instead of parsing .moe/attempts.\n      const finalizing = finalizingAttemptsByTask(state).get(task.id);\n```\n(c) In the returned object, right after `assigneeProtected,`, add:\n```ts\n        // Additive: an older daemon omits it, and the wrapper then scans .moe/attempts itself.\n        finalizingAttempt: finalizing\n          ? { attemptId: finalizing.id, workerId: finalizing.workerId, generation: finalizing.generation }\n          : null,\n```\nOnly these three properties. Never spread the attempt: runnerId, workspace and the timestamps stay off the wire.\n(d) Append one sentence to the tool's `description` string, after '...must leave the task\\'s source paths alone.':\n' finalizingAttempt names the task\\'s finalizing attempt exactly as claim_next_task\\'s finalizing hold selects it ({attemptId, workerId, generation}, whoever holds it, the caller included) or is null; a daemon older than the field omits it.'\n\nError handling: finalizingAttemptsByTask skips malformed records instead of throwing (loadEntities admits any JSON with an id), so no new error path exists. The tool still never refuses a caller.\nCost: one in-memory pass over state.attempts per call, the same index claim_next_task builds per claim. get_commit_scope runs a few times per session.\ndocs/MCP_SERVER.md is NOT edited here. task-d3cd966c documents the field after the pending main merge lands, because that merge touches the doc.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts"
+      ],
+      "note": "finalizingAttempt added via finalizingAttemptsByTask; description sentence appended.",
+      "startedAt": "2026-10-30T00:41:52.205Z",
+      "completedAt": "2026-10-30T00:41:58.037Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Regression gate. Run once, after steps 1-2; it is the complete_task evidence. From /mnt/d/projexts/moes, run exactly this, and submit the command, its exit code and the output tail:\n`D=$(mktemp -d /tmp/moe-a2a5-XXXX) && git archive HEAD | tar -x -C $D && cp packages/moe-daemon/src/tools/getCommitScope.ts packages/moe-daemon/src/tools/getCommitScope.test.ts $D/packages/moe-daemon/src/tools/ && P=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" && (cd $D/packages/moe-daemon && printf '%s' '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"incremental\":false,\"types\":[\"node\"]},\"include\":[\"src/tools/getCommitScope.test.ts\"],\"exclude\":[]}' > tsconfig.test-check.json && env -i HOME=$HOME PATH=$P npm ci --no-audit --no-fund >/dev/null && env -i HOME=$HOME PATH=$P npx vitest run && env -i HOME=$HOME PATH=$P npx tsc --noEmit && env -i HOME=$HOME PATH=$P npx tsc -p tsconfig.test-check.json); rc=$?; rm -rf $D; echo VERIFY_EXIT=$rc; [ $rc -eq 0 ]`\n\nWhy this shape:\n- The shared tree's node_modules is Windows-native, so vitest cannot start under WSL there.\n- The snapshot archives the WHOLE repo. Doc-contract and fixture tests read docs/, scripts/ and .gitignore at the root; with only packages/moe-daemon archived, 12 files fail.\n- Only this task's two files are overlaid, so peers' dirty bytes stay out.\n- The package tsconfig excludes tests, so the scratch tsconfig.test-check.json type-checks the test file. It exited 0 at HEAD.\n\nMeasured on 2026-10-30 with this exact command and a prototype of steps 1-2: 188 files, 5260 passed, 16 skipped, VERIFY_EXIT=0, about 35 s.\n\nOn a failure, fix the code and rerun. Never weaken a test.\nFor the red proof in step 1, the same command with HEAD's getCommitScope.ts (overlay only the test file) must fail.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate command ran exactly: 189 files passed, 5276 passed / 16 skipped, tsc --noEmit and test-file type check clean, VERIFY_EXIT=0.",
+      "startedAt": "2026-10-30T00:41:58.803Z",
+      "completedAt": "2026-10-30T00:42:41.695Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review of this task's diff (load adversarial-self-review). Check each of these:\n(1) The field equals what finalizingAttemptsByTask(state).get(task.id) selects: no other predicate and no caller filter. The caller's own attempt is named; foreignFinalizingAttempt must NOT be used, because it hides the caller's own attempt.\n(2) Exactly { attemptId, workerId, generation }, or null: never undefined, never the spread record.\n(3) Every other reply key and value is unchanged; the key-list test pins it.\n(4) Malformed records (blank ids, generation 0, non-integer generation) give null and never throw.\n(5) Concurrency: the tool reads in-memory state under the global mutex. Two calls give the same answer for the same state, and the field is caller-independent, like assigneeProtected.\n(6) The tool description sentence is accurate, and no docs/MCP_SERVER.md edit slipped in, since that belongs to task-d3cd966c.\n(7) `git diff --stat` touches only the two planned files, and nothing under .moe/ was edited by hand.\nFix anything found, rerun step 3's command, and submit the fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "Self-review of diff: field uses finalizingAttemptsByTask only (no caller filter, no foreignFinalizingAttempt); exactly 3 props or null; no other key changed (key-list test pins); malformed records covered; no docs/MCP_SERVER.md or .moe edits; diff --stat touches only the two planned files (+77/-3). No code change after the step-3 gate run, so its output stands.",
+      "startedAt": "2026-10-30T00:42:42.633Z",
+      "completedAt": "2026-10-30T00:42:46.764Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 262.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T00:20:53.436Z",
+  "updatedAt": "2026-10-30T01:35:33.138Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T00:34:25.107Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T01:35:10.199Z",
+    "wallClockMs": 3645092
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-5ebbf433",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T00:40:54.139Z",
+  "executionContract": {
+    "intendedBehavior": "moe.get_commit_scope adds finalizingAttempt: { attemptId, workerId, generation } for the task's finalizing attempt exactly as claim_next_task's finalizing hold selects it (util/claimEligibility.ts finalizingAttemptsByTask), whoever holds it and the caller included, else null. Every other reply field is unchanged. The tool description documents the field and says an older daemon omits it.",
+    "acceptanceCriteria": [
+      "The new describe('finalizingAttempt') tests pass and fail before step 2 (red proof).",
+      "Full daemon vitest, tsc --noEmit and the test-file type check exit 0 in a whole-repo Linux snapshot."
+    ],
+    "invariants": [
+      "Caller-independent: a foreign caller, no caller and the attempt's own worker get the same value.",
+      "Only the three properties travel; the attempt's runnerId, workspace and timestamps never reach the reply.",
+      "Malformed attempt records are skipped and never thrown on; the tool still refuses no caller.",
+      "Every pre-existing reply key and value is unchanged."
+    ],
+    "compatibility": [
+      "Additive field: wrappers that predate it ignore it; task-d3cd966c teaches both wrappers to use it and to fall back to scanning .moe/attempts when it is absent."
+    ],
+    "approvedScope": [
+      "getCommitScopeTool handler reply (finalizingAttempt) and its description string",
+      "getCommitScope.test.ts: ScopeResult, the key-list test, describe('finalizingAttempt')"
+    ],
+    "reuse": [
+      "finalizingAttemptsByTask from util/claimEligibility.ts, unchanged; no copy of isHoldingFinalizingAttempt."
+    ],
+    "sourceAssumptions": [
+      "util/claimEligibility.ts exports finalizingAttemptsByTask(state): Map<taskId, ExecutionAttempt>, built over listAttempts (sorted by generation), keeping the highest well-formed finalizing attempt per task.",
+      "state/attemptStore.ts openAttempt refuses a second open attempt per task; tests patch extra records with h.state.attempts.set.",
+      "getCommitScope.test.ts type-checks at HEAD (scratch tsconfig run exited 0, 2026-10-30)."
+    ],
+    "checkRefs": [
+      "D=$(mktemp -d /tmp/moe-a2a5-XXXX) && git archive HEAD | tar -x -C $D && cp packages/moe-daemon/src/tools/getCommitScope.ts packages/moe-daemon/src/tools/getCommitScope.test.ts $D/packages/moe-daemon/src/tools/ && P=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" && (cd $D/packages/moe-daemon && printf '%s' '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"incremental\":false,\"types\":[\"node\"]},\"include\":[\"src/tools/getCommitScope.test.ts\"],\"exclude\":[]}' > tsconfig.test-check.json && env -i HOME=$HOME PATH=$P npm ci --no-audit --no-fund >/dev/null && env -i HOME=$HOME PATH=$P npx vitest run && env -i HOME=$HOME PATH=$P npx tsc --noEmit && env -i HOME=$HOME PATH=$P npx tsc -p tsconfig.test-check.json); rc=$?; rm -rf $D; echo VERIFY_EXIT=$rc; [ $rc -eq 0 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Exporting isHoldingFinalizingAttempt and filtering listAttempts(state, task.id) was rejected: it edits a third file (claimEligibility.ts) and rebuilds the same predicate. finalizingAttemptsByTask(state).get(task.id) is literally the contract. foreignFinalizingAttempt was rejected because it hides the caller's own attempt, which the wrapper needs in order to land its own completion. The docs edit is deferred to task-d3cd966c because the pending main merge touches docs/MCP_SERVER.md.",
+    "codebaseInsights": "The steps were prototyped in a whole-repo Linux snapshot on 2026-10-30. getCommitScope.test.ts went from 42 to 45 tests, and the full daemon suite was 188 files / 5260 passed / 16 skipped, with tsc and the test-file type check at 0. The existing test 'only adds the assigneeProtected key to the reply' pins the exact key set and must gain 'finalizingAttempt'. openAttempt allows one open attempt per task, so the two-finalizing case patches records in with h.state.attempts.set, as the assigneeProtected tests already do.",
+    "risks": "(1) Archiving only packages/moe-daemon makes 12 doc-contract and fixture files fail; the gate archives the whole repo. (2) Using foreignFinalizingAttempt would make every worker completion's own attempt invisible. (3) Spreading the attempt would leak runnerId and workspace onto the wire. (4) A garbage generation elsewhere in the store makes listAttempts' comparator return NaN. That ordering quirk is shared with claim_next_task and out of scope.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T00:40:54.219Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T00:41:24.735Z",
+  "reviewStartedAt": "2026-10-30T00:42:51.775Z",
+  "verification": {
+    "command": "D=$(mktemp -d /tmp/moe-a2a5-XXXX) && git archive HEAD | tar -x -C $D && cp packages/moe-daemon/src/tools/getCommitScope.ts packages/moe-daemon/src/tools/getCommitScope.test.ts $D/packages/moe-daemon/src/tools/ && (cd $D/packages/moe-daemon && npm ci && npx vitest run && npx tsc --noEmit && npx tsc -p tsconfig.test-check.json); rc=$?; rm -rf $D; echo VERIFY_EXIT=$rc  # exact plan step-3 command (env -i PATH wrapping elided here)",
+    "exitCode": 0,
+    "outputTail": "Test Files  189 passed (189)\n Tests  5276 passed | 16 skipped (5292)\n Duration 30.53s\nnpm run 'tsc' --noEmit\nnpm run 'tsc' -p tsconfig.test-check.json\nVERIFY_EXIT=0",
+    "reportedAt": "2026-10-30T00:42:51.775Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.ts",
+    ".moe/tasks/task-54dc3d385ef542a08a0a8e9aa2ce8969.json",
+    ".moe/tasks/task-a2a55bc6059048e78174e551c32a6e73.json"
+  ],
+  "completionSummary": "moe.get_commit_scope now returns finalizingAttempt: {attemptId, workerId, generation} | null, taken from finalizingAttemptsByTask(state).get(task.id) with no caller filter, so the caller's own attempt is named too. Only those three properties travel. The tool description documents the field and says an older daemon omits it. Tests: a new describe('finalizingAttempt') with 4 tests, plus the key-list test updated. Red proof: against HEAD's getCommitScope.ts, 5 tests failed. docs/MCP_SERVER.md is untouched, per the plan; task-d3cd966c documents the field.",
+  "commits": [
+    {
+      "sha": "e92eeac739d6eee71fd501881b85289fc47ab00e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T00:41:00Z",
+      "paths": [
+        ".moe/tasks/task-54dc3d385ef542a08a0a8e9aa2ce8969.json",
+        ".moe/tasks/task-a2a55bc6059048e78174e551c32a6e73.json",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.ts"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T00:43:17.867Z",
+      "treeId": "226519b0b8335eb869627273c3728bcca4c9aaae",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "9fbd652a1f3ece392ae147c167b46d816ea2741e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T01:33:42Z",
+      "paths": [
+        ".moe/tasks/task-54dc3d385ef542a08a0a8e9aa2ce8969.json",
+        ".moe/tasks/task-a2a55bc6059048e78174e551c32a6e73.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T01:35:33.138Z",
+      "treeId": "41fd6468894debfac4d3837cc3ccd13df48218c9",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T01:33:42Z",
+    "at": "2026-10-30T01:35:33.138Z"
+  },
+  "completedAt": "2026-10-30T01:35:10.199Z",
+  "reviewCompletedAt": "2026-10-30T01:35:10.199Z",
+  "reviewSummary": "Reviewed completion commit e92eeac (on moe/work-2026-10-24, pushed). Code diff: getCommitScope.ts +10/-1 and getCommitScope.test.ts +70/-2, about 74 net LOC, under the 400 cap. The commit also carries two .moe/tasks board records. I read the diff and util/claimEligibility.ts. The field comes straight from finalizingAttemptsByTask(state).get(task.id): no caller filter, no foreignFinalizingAttempt, and no copied predicate. It returns exactly {attemptId, workerId, generation} or null, and the attempt's runnerId, workspace and timestamps stay off the wire. Every other reply key is unchanged, and the key-list test pins that. The description sentence is accurate and says an older daemon omits the field. No docs/MCP_SERVER.md edit, which task-d3cd966c owns. claimEligibility.ts is untouched. The worktree matches HEAD for both files.\n\nRe-ran the plan's step-3 gate myself: whole-repo `git archive HEAD` Linux snapshot, only the two task files overlaid, run under `env -i PATH=...`. Result: vitest 189 files passed, 5276 passed / 16 skipped, `npx tsc --noEmit` clean, test-file type check (tsconfig.test-check.json) clean, VERIFY_EXIT=0. Matches the worker's reported evidence.\n\nRed proof: I overlaid the pre-change getCommitScope.ts (e92eeac~1) on the new tests. All 5 fail, which are the 4 new finalizingAttempt tests plus the key-list test. So the tests are not vacuous.\n\nDoD: (1) field behavior, including the caller's own attempt named, is covered by the 'whoever asks' test. (2) The test list covers every case the DoD names: no attempts, running/reconciling/closed, blank workerId, generation 0 and 1.5, an empty id, higher generation inserted first, another task's attempt, and the caller's own. All use toStrictEqual or toBeNull on exact values. (3) The description documents the field and the older-daemon omission. (4) Gate green as above. Mutation-resistant tests, no deleted or weakened tests, no scope creep.",
+  "requiredCheckAtDone": null
+}

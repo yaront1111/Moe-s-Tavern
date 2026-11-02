@@ -1,0 +1,250 @@
+{
+  "id": "task-09e784e5dd214833b8b9df66038941cc",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-2] VS Code: keep per-task worktrees out of file watching and search, matching JetBrains",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). First wave: no dependencies, files disjoint from the other first-wave rows.\n\nObjective: this project switches to worktree mode today. Worker worktrees live at `<project root>/.worktrees/<taskId>` (scripts/moe-agent.sh: `w=\"$MOE_TOP/.worktrees/$tid\"`; docs/plans/2026-10-30-per-task-worktrees.md section 7.5), each a full checkout. JetBrains reserves that folder as excluded (moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt plus WorktreeExclusionListener in plugin.xml), so the IDE never indexes the copies. VS Code has nothing, so its file watcher and search crawl every worktree.\n\nDeliverable: moe-vscode/package.json gains `contributes.configurationDefaults` that add `\"**/.worktrees/**\": true` to `files.watcherExclude` and `\"**/.worktrees\": true` to `search.exclude`; new moe-vscode/tests/worktree-exclusion.test.cjs reads package.json and asserts them. Before writing the plan, confirm from the VS Code documentation (Contribution Points, configurationDefaults) whether a contributed default for an object-valued setting is MERGED with the core default or REPLACES it, and cite the source in the plan. If it replaces, the contributed objects must also carry the core defaults (files.watcherExclude: `**/.git/objects/**`, `**/.git/subtree-cache/**`, `**/node_modules/*/**`, `**/.hg/store/**`; search.exclude: `**/node_modules`, `**/bower_components`, `**/*.code-search`), and the test asserts those keys too. `files.exclude` is NOT changed: JetBrains still shows an excluded folder, and a user may open a worktree on purpose.\n\nNot in scope: commands, views or any other package.json contribution (later rows own them), git extension settings (the default git.repositoryScanMaxDepth of 1 never reaches .worktrees/<id>), and any file other than the two above.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl). Baseline at 882a4c39: 388 tests, 384 pass, 4 skip, 0 fail.",
+  "definitionOfDone": [
+    "moe-vscode/package.json contributes.configurationDefaults sets files.watcherExclude[\"**/.worktrees/**\"] and search.exclude[\"**/.worktrees\"] to true, and does not contribute files.exclude.",
+    "The plan cites the VS Code documentation on whether object-valued configurationDefaults merge or replace; if they replace, the contributed objects also carry every core default key listed in the description.",
+    "moe-vscode/tests/worktree-exclusion.test.cjs parses package.json and asserts every key from the first two items, including that files.exclude is not contributed, and goes red when any one of those keys is deleted (checked key by key in a scratch copy).",
+    "The task's diff touches only moe-vscode/package.json and moe-vscode/tests/worktree-exclusion.test.cjs.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the pin test first (RED). Create moe-vscode/tests/worktree-exclusion.test.cjs with the Write tool, not a shell write: per the rail, a shell write leaves no TOOL witness and the path is HELD at landing. Follow the sibling tests' style (e.g. tests/lint-config.test.cjs): 'use strict', node:assert/strict, node:fs, node:path, node:test, and no third-party require. Add a header comment of at most 6 lines saying why. Per-task worktrees live at <project root>/.worktrees/<taskId> (scripts/moe-agent.sh:3072), and each is a full checkout. JetBrains excludes the folder (com.moe.util.WorktreeExclusion). VS Code MERGES an object-valued configurationDefaults entry into the core default (configurationRegistry.ts mergeDefaultConfigurationsForConfigurationProperty at tag 1.140.0, our engines floor). So each contributed object carries ONLY the .worktrees key, and the core keys stay VS Code's. Write one helper, configurationDefaults(). It reads path.join(__dirname, '..', 'package.json') with fs.readFileSync and JSON.parse, then asserts with a named message that pkg.contributes.configurationDefaults is an object. Three tests: (1) assert.deepEqual(defaults['files.watcherExclude'], { '**/.worktrees/**': true }); (2) assert.deepEqual(defaults['search.exclude'], { '**/.worktrees': true }); (3) assert.equal(Object.hasOwn(defaults, 'files.exclude'), false), because the Explorer keeps showing .worktrees, as in JetBrains. Exact strict deepEqual is deliberate: it goes red when a key is deleted, when it is set to false, or when someone starts copying core default keys. Error handling: a missing or unparsable package.json throws inside the helper and fails every test with the parse error. A missing configurationDefaults block fails with the named assertion message, never with a TypeError on undefined. From the checkout root (the worktree root in worktree mode), run `node --test moe-vscode/tests/worktree-exclusion.test.cjs`. It is plain node, not npm, and reads only package.json. Expect tests 3, pass 0, fail 3 (RED) against the unedited package.json.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/worktree-exclusion.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/worktree-exclusion.test.cjs"
+      ],
+      "note": "Pin test written; RED against unedited package.json (3 fail, named assertion message).",
+      "startedAt": "2026-11-02T09:54:11.727Z",
+      "completedAt": "2026-11-02T09:54:21.444Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the contribution (GREEN). With the Edit tool, insert contributes.configurationDefaults into moe-vscode/package.json directly after the contributes.configuration object, that is, after its closing brace and before the closing brace of contributes that precedes \"scripts\". Keep the 2-space indentation, one key per line, and LF endings. The value is exactly \"configurationDefaults\": { \"files.watcherExclude\": { \"**/.worktrees/**\": true }, \"search.exclude\": { \"**/.worktrees\": true } }. Change nothing else. Do not contribute files.exclude: the Explorer keeps the folder visible, matching JetBrains. Do not copy the core default keys. VS Code merges them, as the sources in executionContract.sourceAssumptions show. Also, the description's watcherExclude list is stale: VS Code 1.140.0's default is .git/objects/**, .git/subtree-cache/**, .hg/store/** plus their */ variants, with no **/node_modules/*/**. A copy would re-add an exclusion VS Code dropped. Do not bump the version or reformat the single-line command objects. Error handling: the file must stay valid JSON, because the step-1 test parses it and goes red otherwise. VS Code drops a configurationDefaults key whose setting is not machine-overridable, window, resource or language-overridable scoped, and warns (configurationExtensionPoint.ts). Both settings here are RESOURCE scoped, so both apply. Re-run `node --test moe-vscode/tests/worktree-exclusion.test.cjs`: expect tests 3, pass 3, fail 0 (GREEN).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "note": "configurationDefaults added; 3/3 GREEN; diff is 8 insertions.",
+      "startedAt": "2026-11-02T09:54:22.192Z",
+      "completedAt": "2026-11-02T09:54:28.791Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification: the one regression gate. Run executionContract.checkRefs[1] exactly as written, from the checkout root (the worktree root in worktree mode). Never run npm in the shared checkout (GLOBAL rail; mem:gotcha-vscode-gate-from-wsl). The checkRef archives HEAD of the whole repo into a fresh mktemp dir and overlays only this task's two files. It then runs `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` in <snapshot>/moe-vscode, under env -i with nvm Node v24.21.0. Expect exit 0 and 0 failures. The architect dry-ran this exact command at aacc03ad with this exact diff: tests 391, pass 387, skipped 4, fail 0. That is the 388/384/4 baseline plus the 3 new tests; a sibling row that lands first may raise the totals, so judge by 0 failures. This command, its exit code and its output tail are the complete_task verification evidence. Error handling for a red run: if npm ci fails on the network, re-run once, then call report_blocked with the npm error tail. Lint (eslint src) and compile (tsconfig include src/**/*) never read this diff. So if either goes red, re-run the gate without the two cp overlays to prove the break is pre-existing, and report it in a task comment. Do not patch files outside this task's two. If worktree-exclusion fails, fix step 1 or 2, and never weaken an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/package.json",
+        "moe-vscode/tests/worktree-exclusion.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/package.json",
+        "moe-vscode/tests/worktree-exclusion.test.cjs"
+      ],
+      "note": "Snapshot gate exit 0: tests 391, pass 387, skip 4, fail 0.",
+      "startedAt": "2026-11-02T09:54:29.424Z",
+      "completedAt": "2026-11-02T09:54:43.121Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (load the adversarial-self-review skill; this is the final step). (a) DoD 3, the key-by-key mutation check. Run executionContract.checkRefs[0] exactly as written, from the checkout root. It copies the test into a mktemp scratch dir. Then, for each mutation of a scratch package.json (keep, dropWatchKey, dropSearchKey, dropWatch, dropSearch, dropAll, addFilesExclude), it runs node --test on the copy and prints one line. Expect every line to end in ok and the command to exit 0: keep exits 0 and every mutation exits non-zero. The architect dry-ran it: on the unedited package.json it went RED (exit 1, `keep 1 BAD`), and after the step-2 edit it went GREEN. (b) DoD 4, the diff scope. `git status --porcelain -- moe-vscode` must list exactly ` M moe-vscode/package.json` and `?? moe-vscode/tests/worktree-exclusion.test.cjs`. A path another session dirtied is theirs: note it and never revert it. `git diff -- moe-vscode/package.json` must be one hunk that adds only configurationDefaults. (c) Checklist: package.json is valid JSON; files.exclude is absent; no core key is copied. The test has no third-party require and resolves package.json from __dirname, so it passes from any cwd and on Windows node. Concurrency is not a concern: the manifest is static and the test is read-only. Error handling for a red check: a BAD line means the assertion for that key is too weak. Tighten the test, then re-run (a) and the step-3 gate. Report both files in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/package.json",
+        "moe-vscode/tests/worktree-exclusion.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/package.json",
+        "moe-vscode/tests/worktree-exclusion.test.cjs"
+      ],
+      "note": "Mutation check: keep exits 0, all 6 mutations exit 1 (all ok). git status shows only the two task files; package.json diff is one hunk adding only configurationDefaults. Self-review: no concurrency, input or side-effect risk; static JSON and a read-only test.",
+      "startedAt": "2026-11-02T09:54:43.907Z",
+      "completedAt": "2026-11-02T09:54:54.132Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:38:52.755Z",
+  "updatedAt": "2026-11-02T09:57:06.059Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T09:39:18.043Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T09:56:35.410Z",
+    "wallClockMs": 1037367
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-b49a5155",
+    "qa-564d8bce"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T09:53:13.537Z",
+  "executionContract": {
+    "intendedBehavior": "With the Moe extension installed, VS Code by default keeps every per-task worktree (<project root>/.worktrees/<taskId>, a full checkout) out of the file watcher (files.watcherExclude) and out of text search and quick open (search.exclude), in every workspace, like JetBrains' WorktreeExclusion. The Explorer still lists .worktrees, because files.exclude is untouched. VS Code merges each contributed object into the core default, so its own default keys keep applying. A user or workspace setting can still turn the key off.",
+    "acceptanceCriteria": [
+      "moe-vscode/package.json contributes.configurationDefaults is exactly {\"files.watcherExclude\":{\"**/.worktrees/**\":true},\"search.exclude\":{\"**/.worktrees\":true}} and has no files.exclude.",
+      "The plan cites the VS Code documentation and source on merge vs replace (sourceAssumptions 1-3). The verdict is MERGED, so no core default key is copied.",
+      "moe-vscode/tests/worktree-exclusion.test.cjs asserts both objects exactly and that files.exclude is absent. checkRefs[0] prints ok for keep and for every mutation, and exits 0.",
+      "git status --porcelain -- moe-vscode lists only moe-vscode/package.json and moe-vscode/tests/worktree-exclusion.test.cjs.",
+      "checkRefs[1] (the git-archive snapshot gate) exits 0 with 0 failures."
+    ],
+    "invariants": [
+      "package.json stays valid JSON with LF endings (.gitattributes * text=auto eol=lf).",
+      "files.exclude is never contributed.",
+      "The core default keys of files.watcherExclude and search.exclude stay owned by VS Code and are not copied."
+    ],
+    "compatibility": [
+      "Every existing contribution (activationEvents, viewsContainers, views, commands, menus, configuration.properties) and the version stay byte-identical. The 388 existing moe-vscode tests are unchanged.",
+      "User and workspace settings still win per key: VS Code merges object settings across the default, user, workspace and folder scopes (sourceAssumptions 2)."
+    ],
+    "approvedScope": [
+      "moe-vscode/package.json: one new contributes.configurationDefaults object with exactly the keys files.watcherExclude and search.exclude.",
+      "moe-vscode/tests/worktree-exclusion.test.cjs: a new node:test file with three tests over package.json."
+    ],
+    "reuse": [
+      "VS Code's native contributes.configurationDefaults. It is declarative and applied when the extension is scanned, so it needs no activation code and writes no settings.",
+      "The test follows the sibling moe-vscode/tests/*.test.cjs files (node:test with node:assert/strict), which `npm test` (node --test tests/*.test.cjs) picks up.",
+      "JetBrains parity reference: moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt, which excludes <project>/.worktrees on every project open (plugin.xml WorktreeExclusionListener)."
+    ],
+    "sourceAssumptions": [
+      "Docs, https://code.visualstudio.com/api/references/contribution-points#contributes.configurationDefaults: \"Contribute default values for other registered configurations and override their defaults.\" The page does NOT say whether an object value merges with the core default or replaces it.",
+      "Docs, https://code.visualstudio.com/docs/configure/settings#_settings-precedence: \"Values with primitive types and Array types are overridden,\" \"But, values with Object types are merged.\"",
+      "Source of truth at tag 1.140.0, which is our engines.vscode floor (^1.140.0): https://github.com/microsoft/vscode/blob/1.140.0/src/vs/platform/configuration/common/configurationRegistry.ts mergeDefaultConfigurationsForConfigurationProperty. It reads \"// If the default value is an object, merge the objects and store the source of each keys\"; existingDefaultValue = existingDefaultOverride?.value ?? property?.defaultDefaultValue; value = { ...(types.isObject(existingDefaultValue) ? existingDefaultValue : {}), ...value }. Verdict: MERGED (shallow; contributed keys win). main is the same.",
+      "https://github.com/microsoft/vscode/blob/1.140.0/src/vs/workbench/api/common/configurationExtensionPoint.ts accepts configurationDefaults keys only for MACHINE_OVERRIDABLE, WINDOW, RESOURCE or LANGUAGE_OVERRIDABLE settings without disallowConfigurationDefault. Any other key is dropped with a warning.",
+      "https://github.com/microsoft/vscode/blob/1.140.0/src/vs/workbench/contrib/files/browser/files.contribution.ts: files.watcherExclude is RESOURCE scoped. Its default is .git/objects/**, .git/subtree-cache/**, .hg/store/** and their */ variants, all true, with no **/node_modules/*/**, so the description's core list is stale. A source comment there says VS Code avoids '**' in its own defaults because the RegExp gets complex in large workspaces. files.exclude is RESOURCE scoped too.",
+      "search.exclude is object typed and RESOURCE scoped, with the long-standing default {**/node_modules, **/bower_components, **/*.code-search}. Its 1.140.0 registration has moved out of contrib/search/browser/search.contribution.ts and was not re-located. The merge rule above applies to any object-typed property.",
+      "scripts/moe-agent.sh:3072 sets w=\"$MOE_TOP/.worktrees/$tid\", and .gitignore:97 lists .worktrees/. The file watcher never reads .gitignore, and search honours it only while search.useIgnoreFiles is on, so the excludes are still needed."
+    ],
+    "checkRefs": [
+      "M=$(mktemp -d) && mkdir \"$M/tests\" && cp moe-vscode/tests/worktree-exclusion.test.cjs \"$M/tests/\" && node -e 'const fs=require(\"fs\"),{spawnSync}=require(\"child_process\"),[m,src]=process.argv.slice(1),D=p=>p.contributes.configurationDefaults;const t={keep:p=>0,dropWatchKey:p=>delete D(p)[\"files.watcherExclude\"][\"**/.worktrees/**\"],dropSearchKey:p=>delete D(p)[\"search.exclude\"][\"**/.worktrees\"],dropWatch:p=>delete D(p)[\"files.watcherExclude\"],dropSearch:p=>delete D(p)[\"search.exclude\"],dropAll:p=>delete p.contributes.configurationDefaults,addFilesExclude:p=>D(p)[\"files.exclude\"]={\"**/.worktrees\":true}};let b=0;for(const[k,f]of Object.entries(t)){const p=JSON.parse(fs.readFileSync(src));try{f(p)}catch(e){}fs.writeFileSync(m+\"/package.json\",JSON.stringify(p));const r=spawnSync(process.execPath,[\"--test\",m+\"/tests/worktree-exclusion.test.cjs\"]).status;const ok=k===\"keep\"?r===0:r!==0;console.log(k,r,ok?\"ok\":\"BAD\");b+=!ok}process.exit(b?1:0)' \"$M\" moe-vscode/package.json",
+      "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$R/moe-vscode/package.json\" \"$S/moe-vscode/\" && cp \"$R/moe-vscode/tests/worktree-exclusion.test.cjs\" \"$S/moe-vscode/tests/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Copy the core default keys into the contributed objects. Rejected: VS Code 1.140.0 merges an object-valued configurationDefaults entry into the core default (configurationRegistry.ts mergeDefaultConfigurationsForConfigurationProperty). The description's core list is also stale: VS Code dropped **/node_modules/*/** and moved its .git patterns off '**'. A copy would re-add an exclusion VS Code removed and pin it forever. (2) Runtime code that calls workspace.getConfiguration().update on activate. Rejected: it writes user or workspace settings, needs activation, and races the user, whereas configurationDefaults is declarative. (3) files.exclude. Rejected by the DoD: JetBrains still shows an excluded folder, and a user may open a worktree on purpose. (4) A root-relative '.worktrees/**' pattern, since VS Code's own watcher defaults avoid '**' for RegExp cost. Rejected: the DoD fixes '**/.worktrees/**', and the '**/' prefix keeps the exclusion working when the opened folder is an ancestor of the project. JetBrains handles an ancestor content root the same way.",
+    "codebaseInsights": "moe-vscode tests are node:test .cjs files, run by `node --test tests/*.test.cjs`. Lint is `eslint src --ext ts`, so tests are not linted. Compile is TS7 native (tsconfig include src/**/*) and runs Linux-side only in a snapshot (mem:gotcha-vscode-gate-from-wsl). package.json and the tests are LF. .vscodeignore excludes tests/**, so the test never ships in the .vsix. The architect dry-ran both checkRefs: the snapshot gate at aacc03ad plus this diff gave 391 tests, 387 pass, 4 skipped, 0 fail; the mutation gate went RED on the unedited package.json and GREEN after the edit.",
+    "risks": "Edit only the insertion in package.json: do not reformat the single-line command objects or the views entry. Write both files with the Edit and Write tools (rail: shell writes leave no TOOL witness, so the path is HELD at landing). Run every command from the checkout root, which is the worktree root in worktree mode; the snapshot checkRef resolves it with git rev-parse --show-toplevel. The contributed defaults apply in every workspace where the extension is enabled, not only Moe projects. That matches the JetBrains listener, which also runs on every project open, and a .worktrees folder elsewhere is a git-worktree farm too, so this is intended. Sibling first-wave rows (VSC-1 owns src/ files, never package.json) may land first and raise the test totals, so judge the gate by 0 failures. checkRefs[0] is 978 chars; do not re-wrap it.",
+    "keyFiles": [
+      "moe-vscode/package.json",
+      "moe-vscode/tests/lint-config.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "aacc03ad51cc488a26f15e0575fb0d39cfd73b0a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T09:53:13.563Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T09:54:11.727Z",
+  "reviewStartedAt": "2026-11-02T09:54:58.353Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$R/moe-vscode/package.json\" \"$S/moe-vscode/\" && cp \"$R/moe-vscode/tests/worktree-exclusion.test.cjs\" \"$S/moe-vscode/tests/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "✔ files.watcherExclude keeps per-task worktrees out of the file watcher\n✔ search.exclude keeps per-task worktrees out of search and quick open\n✔ files.exclude is not contributed, so the Explorer still lists .worktrees\nℹ tests 391\nℹ pass 387\nℹ fail 0\nℹ skipped 4",
+    "reportedAt": "2026-11-02T09:54:58.353Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/worktree-exclusion.test.cjs",
+    "moe-vscode/package.json",
+    ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
+    ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+    ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json"
+  ],
+  "completionSummary": "Added contributes.configurationDefaults to moe-vscode/package.json (files.watcherExclude {**/.worktrees/**: true}, search.exclude {**/.worktrees: true}). VS Code merges object defaults (configurationRegistry.ts at 1.140.0), so no core keys are copied. files.exclude is not contributed. New tests/worktree-exclusion.test.cjs pins both objects exactly and the files.exclude absence; the key-by-key mutation check is all ok. The snapshot gate passed: lint, compile and 391 tests (387 pass, 4 skip, 0 fail).",
+  "commits": [
+    {
+      "sha": "c46c4a8c0fc0a0b4ebb91b0ccde25683c46ad67c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T09:53:42Z",
+      "paths": [
+        ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
+        ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+        ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+        "moe-vscode/package.json",
+        "moe-vscode/tests/worktree-exclusion.test.cjs"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T09:55:21.585Z",
+      "treeId": "f48755c382a5a6d987068f227bd1a6c563ec58fc",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "d5c615a3660ad9a8c21480337c7b78ec91ce49f8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T09:55:28Z",
+      "paths": [
+        ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T09:57:06.058Z",
+      "treeId": "9e3429a0b91d296914448164481c69fe6f23edcf",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/worktree-exclusion.test.cjs",
+    "moe-vscode/package.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-564d8bce@2026-11-02T09:55:28Z",
+    "at": "2026-11-02T09:57:06.058Z"
+  },
+  "completedAt": "2026-11-02T09:56:35.410Z",
+  "reviewCompletedAt": "2026-11-02T09:56:35.410Z",
+  "reviewSummary": "Reviewed completion commit c46c4a8c (on moe/work-2026-10-24, kind completion, pushed). moe-vscode diff = package.json +8 lines (contributes.configurationDefaults = exactly {files.watcherExclude:{**/.worktrees/**:true}, search.exclude:{**/.worktrees:true}}, no files.exclude, existing contributions untouched, valid JSON, LF) and new tests/worktree-exclusion.test.cjs (31 lines, 3 node:test tests with strict deepEqual + files.exclude absence, named assertion for missing block). Other 3 paths in the commit are wrapper-staged .moe/tasks board records. Net ~39 LOC, well under 400. Re-ran task.verification myself: git archive HEAD snapshot + overlay, env -i nvm node v24.21.0, `npm ci && npm run lint && npm run compile && npm test` -> exit 0, tests 391, pass 387, skipped 4, fail 0 (baseline 388/384/4 + 3 new). Re-ran checkRefs[0] mutation check: keep 0 ok; dropWatchKey, dropSearchKey, dropWatch, dropSearch, dropAll, addFilesExclude all exit 1 ok (every key deletion goes red). Merge-vs-replace: verdict MERGED, sourced to configurationRegistry.ts at 1.140.0 (decision-vscode-configurationdefaults-merge) so no core keys copied, correct (description's core list was stale). DoD 1-5 all met. Ponytail pass: nothing to cut. No rails violated (no npm in the shared checkout, no forbidden files touched; moe-vscode working tree clean vs the commit).",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,259 @@
+{
+  "id": "task-f9789178469f499ca3268fc4b392bd0c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: daemon `npm run build` deletes dist/ before its generators run, so a build that fails from WSL left the live daemon with no dist on disk",
+  "description": "Found 2026-10-30 18:42Z by the governor. D:\\projexts\\moes\\packages\\moe-daemon\\dist did not exist, and the gap dates from about 15:31Z (the packages/moe-daemon directory mtime). The live supervisor (pid 13744) and _run (pid 17468, eb0ebaa, started 06:07Z) run from that dist. They kept going only because the code was already loaded. Any _run crash would have hit a supervisor respawn of a missing module: 5 failures in 60s and the board down. The governor restored dist from a clean eb0ebaa staging build at 18:45Z (byte-identical, `status` smoke OK). The daemon was not restarted.\n\nMechanism (reproduced read-only from WSL in the shared checkout):\n- package.json `prebuild` = `npm run clean && npm run generate-init-files && npm run generate-skill-files`. `clean` rmSyncs dist FIRST.\n- The shared checkout's node_modules are a Windows install. From WSL, `npx tsx scripts/generate-init-files.ts` exits 1. `npx tsc` throws \"Unable to resolve @typescript/typescript-linux-x64\": TypeScript here is the native-compiler build, and only the win32-x64 platform package is installed.\n- So `npm run build` from any WSL seat in the shared checkout deletes dist and then fails. Open plans whose gates do exactly that are WT-03b (9eae3377), WT-16 (48f0b3aa) and CQ-I06 (4e412148). Governor comments on those rows redirect them to an isolated snapshot.\n\nFix: make a failed build leave the existing dist alone. Minimum: run both generators before clean, so clean is the last prebuild step right before tsc. tsc emits despite type errors (noEmitOnError is unset), so a type error still rebuilds dist. A stronger variant is allowed if it stays small: tsc into a temp outDir, then rename.",
+  "definitionOfDone": [
+    "packages/moe-daemon/package.json: a build whose generators fail leaves an existing dist/ untouched. At minimum, `prebuild` runs generate-init-files and generate-skill-files BEFORE clean. Windows `npm run build` in a clean clone still produces a complete dist, and the regenerated initFiles.ts/skillFiles.ts stay byte-identical (git status --porcelain empty afterwards).",
+    "A test in packages/moe-daemon (vitest) pins the ordering. It reads package.json and fails if `clean` (or any rm of dist) can run before both generators succeed. It is proven RED by a scratch mutant that restores the old order.",
+    "Evidence that the failure mode is gone: in a scratch COPY (never the shared checkout) holding a marker file at dist/.keep, running `npm run build` where the generators fail (for example from WSL against Windows-native node_modules) exits non-zero AND dist/.keep still exists. `cd packages/moe-daemon && npm test` exits 0 fresh in a Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate)."
+  ],
+  "taskRails": [
+    "Never run `npm run build`, `npm run clean`, `npm ci` or `npm install` in the shared checkout D:\\projexts\\moes (or /mnt/d/projexts/moes). The live daemon runs from its packages/moe-daemon/dist. Use a git archive or clone snapshot outside the repo for every build or verification step.",
+    "Scope: packages/moe-daemon/package.json plus one small test file; no other package, no launcher, no CI change."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TEST FIRST (RED). Create packages/moe-daemon/src/util/buildScriptOrder.test.ts (~80 lines; helpers stay in the test file, no production module). Header comment: the running daemon loads its modules from dist/, so `npm run build` must fail BEFORE anything deletes dist when a generator or the compiler cannot run (task-f9789178: a WSL build against the Windows-native node_modules deleted the live dist). Read the scripts the way src/server/McpAdapter.test.ts:109 reads the manifest: fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8').\nHelpers:\n(a) splitSteps(name, body): scan the body tracking single and double quotes; split on && outside quotes; throw `npm script \"<name>\" chains steps with \"<op>\"; only && stops the next step after a failure` for ; | || or a lone & outside quotes (cmd.exe runs the command after a lone & even when the first one failed).\n(b) runOrder(scripts, name, depth = 0): the leaf commands `npm run <name>` executes, in order: the steps of pre<name>, then <name>, then post<name> (a missing script adds nothing). A step that is exactly `npm run <x>` or `npm run-script <x>` expands to runOrder(scripts, x, depth + 1), because npm runs x's own pre/post hooks too. Throw past depth 8.\n(c) orderViolations(scripts): string[] over runOrder(scripts, 'build'); a thrown error becomes the only violation. Classify leaves: generator = contains scripts/generate-init-files.ts (resp. scripts/generate-skill-files.ts); probe = exactly `tsc --version` or `tsc -v`; emit = `tsc` or `tsc <args>` that is not the probe; removal = a whole-word, case-insensitive rmSync | rmdirSync | rimraf | rm | rmdir | del | rd | Remove-Item AND a `dist` path token (dist bounded by start/end, whitespace, a quote, a paren, a comma or a path separator). Violations, exact wording: 'generate-init-files never runs', 'generate-skill-files never runs', 'tsc --version never runs', 'nothing removes dist' (clean must still run so outputs of deleted sources do not linger; this also stops the order check from passing vacuously if the removal pattern ever misses), 'tsc never emits', `\"<leaf>\" removes dist before the generators and the compiler probe succeed` for each removal indexed before the last generator/probe, and 'tsc emits before dist is removed' when the emit precedes the last removal.\nError handling: splitSteps and runOrder throw descriptive errors (the offending script and operator; the recursion depth), orderViolations reports a thrown error as its single violation rather than crashing the suite, and an unreadable or invalid package.json fails the test with the fs/JSON error.\nCases: (1) the real scripts -> toEqual([]). (2) it.each over { ...real, ...override }, each asserting toContainEqual(expect.stringContaining(needle)):\n- prebuild 'npm run clean && npm run generate-init-files && npm run generate-skill-files' (HEAD's old order) -> 'removes dist before'\n- prebuild 'npm run generate-init-files && npm run generate-skill-files; tsc --version && npm run clean' -> 'chains steps with \";\"'\n- prebuild without `tsc --version && ` -> 'tsc --version never runs'\n- prebuild without ` && npm run clean` -> 'nothing removes dist'\n- prebuild undefined, build `node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && npm run generate-init-files && npm run generate-skill-files && tsc --version && tsc` -> 'removes dist before'\n- prebuild without clean, build 'tsc && npm run clean' -> 'emits before'\nThe planner prototyped this classification against the real manifest and these rows; it separates them exactly as listed. The project's globalRails forbiddenPatterns apply to the test file too, comments and strings included.\nRED: in a Linux snapshot built per step 4 with ONLY this test overlaid (package.json still HEAD's), run `env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npx vitest run src/util/buildScriptOrder.test.ts` from its packages/moe-daemon: case (1) fails naming the clean step, and every row passes. Never run npm in /mnt/d/projexts/moes (task rail).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/util/buildScriptOrder.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/buildScriptOrder.test.ts"
+      ],
+      "note": "Added test-local splitSteps/runOrder/orderViolations and 25 regression cases (mandatory six plus hooks, recursion, aliases, removers, missing generators/emit, non-&& operators, quoted operators). RED in whole-repo archive /tmp/moe-f978-red.LbqqkN, only new test overlaid and cmp verified; native npm ci then env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npx vitest run src/util/buildScriptOrder.test.ts: rc=1, 1 failed / 24 passed. Real manifest assertion identifies clean's rmSync as removing dist before prerequisites and missing probe; every mutant row passes. Shared-tree peer dirty paths noted, untouched. No npm ran in shared checkout. Snapshots are verification-only; source delivery remains the shared two-file diff for wrapper landing.",
+      "startedAt": "2026-10-30T19:05:19.953Z",
+      "completedAt": "2026-10-30T19:06:10.772Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX. packages/moe-daemon/package.json: change ONLY scripts.prebuild to `npm run generate-init-files && npm run generate-skill-files && tsc --version && npm run clean`. Every other byte stays (clean, build = tsc, both generator scripts, 2-space JSON, LF, final newline); `git diff packages/moe-daemon/package.json` shows one -/+ line pair.\nOrder rationale (repeat it in the step note): generators first, so a generator failure (WSL tsx/esbuild against win32 node_modules) stops the chain before clean. Then `tsc --version`: TypeScript 7's bin/tsc resolves its native platform binary (node_modules/typescript/lib/getExePath.js) before doing anything and throws \"Unable to resolve @typescript/typescript-<platform>\" when it is missing (verified 2026-10-30: from WSL rc=1; on Windows \"Version 7.0.2\" rc=0). So dist also survives a compiler that cannot start, even after the generators stop needing tsx (node >= 22.18 can run them by type stripping). Clean last, right before build's tsc, so stale outputs of deleted sources are still removed and a type error still rebuilds dist (noEmitOnError unset).\nDo not touch moe-vscode/bundled/daemon/package.json (gitignored packaging copy), packages/moe-proxy or packages/moe-claude-plugin (same clean-first prebuild, but out of this row's scope by rail; the planner flagged it to the governor). Overlay the edited file into the step-1 snapshot (cp + cmp) and rerun the step-1 vitest command: all cases pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/package.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/package.json"
+      ],
+      "note": "Only scripts.prebuild changed, git diff confirms one -/+ line pair. Generators now run first so WSL tsx/esbuild failure stops before clean; tsc --version next resolves TS7's native platform binary (verified getExePath.js), preserving dist if the compiler cannot start even if generators later use node type stripping; clean last still removes stale output before tsc emission (noEmitOnError unset). Copied/cmp manifest into step-1 Linux archive; same env-i npx vitest run src/util/buildScriptOrder.test.ts rc=0, all 25 passed. No other package edited. Loaded runtime's ponytail recommendation from docs/skills (not installed under host skill root); reused existing npm lifecycle and one-line ordering, no new production helper.",
+      "startedAt": "2026-10-30T19:06:10.806Z",
+      "completedAt": "2026-10-30T19:06:28.678Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "REAL-BUILD EVIDENCE (DoD 1 + first half of DoD 3). All of it runs outside /mnt/d/projexts/moes. Every cd is `cd <dir> || exit 1`. cmd.exe inherits the translated /mnt/d cwd, so only call it from a /mnt/d dir, and pipe its output through `tr -d '\\r'`.\n(a) Windows clean clone: `W=$(mktemp -d /mnt/d/projexts/moe-f978-win.XXXXXX)`, `cd $W || exit 1`, `cmd.exe /d /c \"git clone --quiet --no-hardlinks --branch moe/work-2026-10-24 D:\\projexts\\moes repo\"`. Use Windows git: a WSL `git clone --shared` stores a WSL-only alternates path, so the generator's Windows `git log` of the docs history fails, the shipped-body list shrinks and initFiles.ts differs. If Windows git refuses the source for dubious ownership, clone from WSL with `git clone --no-hardlinks` (never --shared) and add `-c safe.directory=*` to each Windows git call. Copy the two owned files from the worktree into $W/repo (cmp). Then in $W/repo: `cmd.exe /d /c \"git add packages/moe-daemon/package.json packages/moe-daemon/src/util/buildScriptOrder.test.ts && git -c user.name=moe-scratch -c user.email=scratch@example.invalid commit -q -m scratch-overlay\"`. This is a separate repository, so the agent Git guard does not apply. `git status --porcelain` must now print nothing.\n(b) In $W/repo/packages/moe-daemon: `cmd.exe /d /c \"npm ci --no-audit --no-fund && npm run build\" > $W/win-new.log 2>&1; echo rc=$?` -> rc=0, and the log shows generate-init-files, generate-skill-files, Version 7.0.2, clean, then tsc. `cmd.exe /d /c \"git status --porcelain\"` -> empty, so initFiles.ts/skillFiles.ts are byte-identical (at 77e9e47c a generator run in a full clone reproduced both exactly). `cmd.exe /d /c \"node dist\\index.js --version\"` -> 0.8.0.\n(c) Same output as the old order: `cp -r dist $W/dist.new`. Set the clone's prebuild to the old literal with node (p.scripts.prebuild = 'npm run clean && npm run generate-init-files && npm run generate-skill-files'; write JSON.stringify(p, null, 2) + '\\n'). `cmd.exe /d /c \"npm run build\"` -> rc=0. `diff -r $W/dist.new dist` -> no output (the reorder changes nothing in a complete dist). `cmd.exe /d /c \"git checkout -- package.json\"` -> porcelain empty again.\n(d) Failure mode gone (node_modules here are Windows-native, exactly like the shared checkout's): `touch dist/.keep`; `env -i HOME=$HOME PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm run build > $W/wsl-new.log 2>&1; echo rc=$?` -> rc != 0, the log fails inside generate-init-files and never reaches clean, and `ls dist/.keep dist/index.js` lists both. Contrast: set the old-order literal again (as in c) and run the same WSL command -> rc != 0 AND `ls dist` reports No such file or directory.\nPut the rc values, log tails, porcelain output and ls lines in the step note, then `rm -rf $W` (plain npm install, no junctions).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Real Windows full-history clone /mnt/d/projexts/moe-f978-win.f31Oac (Windows git clone --no-hardlinks), only owned files copied/cmp and committed there. Before build porcelain empty. Windows npm ci && npm run build rc=0: both generators -> Version 7.0.2 -> clean -> tsc. After build porcelain EMPTY (generated initFiles.ts/skillFiles.ts unchanged). node dist\\index.js --version prints 0.8.0. Old-order Windows build rc=0; diff -r saved-new-dist dist rc=0/no output. Restore manifest: porcelain EMPTY. WSL new-order npm run build rc=1, generate-init-files TransformError: @esbuild/win32-x64 installed but @esbuild/linux-x64 required; never reached clean; ls lists dist/.keep and dist/index.js. Old-order WSL build rc=1 with same generator error; ls dist: No such file or directory. Logs retained /tmp/moe-f978-evidence. Scratch clone removed (Python shutil.rmtree because execution guard rejected rm -rf), ls -d /mnt/d/projexts/moe-f978-win.* finds none. No npm ran in shared checkout.",
+      "startedAt": "2026-10-30T19:06:28.701Z",
+      "completedAt": "2026-10-30T19:07:30.572Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "GATE (completion evidence) + RED mutant + compiler-probe proof, in a fresh Linux snapshot per mem:gotcha-daemon-linux-snapshot-gate.\nSnapshot: `SNAP=$(mktemp -d) && mkdir $SNAP/repo && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C $SNAP/repo`. Archive the WHOLE repo: initFiles.test.ts and non-routineWorkloads.test.ts read repo-root files. Overlay ONLY packages/moe-daemon/package.json and packages/moe-daemon/src/util/buildScriptOrder.test.ts (cp + cmp; never overlay peers' dirt). `cd $SNAP/repo/packages/moe-daemon || exit 1`, then `env -i HOME=$HOME PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm ci --no-audit --no-fund`.\nVerification command (run fresh; submit its exit code and output tail to complete_task): `cd $SNAP/repo/packages/moe-daemon && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm test` -> exit 0 (read the summary with grep -a). If it fails, run the same command on a plain `git archive HEAD` with no overlay. Failures that reproduce there belong to peers: name the files and the owning row, and moe.report_blocked with blockedOnTaskIds on that row. Never edit their files.\nThen, in the same snapshot:\n(i) RED mutant (DoD 2): set prebuild to the old literal (node one-liner as in step 3c) and run `npx vitest run src/util/buildScriptOrder.test.ts` under the same env -i -> case (1) fails naming the clean step. Restore the file (cp + cmp from the worktree) -> passes.\n(ii) Compiler-probe proof, only AFTER the gate (here the generators rewrite src/generated without git history): `mkdir -p dist && touch dist/.keep && mv node_modules/@typescript/typescript-linux-x64 $SNAP/ts-aside`. Run `npm run build` (same env -i) -> both generators succeed (\"no git history\" warnings are expected in an archive), `tsc --version` fails with \"Unable to resolve\", rc != 0, and dist/.keep is still there. Contrast once with `tsc --version && ` deleted from prebuild -> rc != 0 and dist gone. Move the package back, then `rm -rf $SNAP`.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/buildScriptOrder.test.ts"
+      ],
+      "note": "Whole-repo native Linux archive /tmp/moe-f978-gate.ttT9Hn, ONLY owned two files overlaid/cmp, native npm ci. Fresh final env-i npm test rc=0: 214 files passed; 6229 passed / 20 skipped (6249), 29.06s, /tmp/moe-f978-evidence/gate-final.log. Added scratch narrowed tsc check for new test: found ES2023 findLastIndex incompatible with repo ES2022 lib; corrected own helper to map(...).lastIndexOf(true), retaining behavior. Scratch test typecheck rc=0 and 25/25 narrow tests; full gate above rerun after correction. Old-order mutant rc=1, real-case assertion names clean rmSync before prerequisites, 1 failed/24 passed; restore/cmp -> 25 passed. Then moved aside @typescript/typescript-linux-x64: both generators succeeded, compiler probe failed Unable to resolve (rc=1), dist/.keep remained. Remove probe and retry: generators succeeded, rc=1, dist absent. Restored compiler package. Both Linux snapshots removed via scoped shutil.rmtree; logs retained /tmp/moe-f978-evidence. No npm/build/clean/install ran in shared checkout.",
+      "startedAt": "2026-10-30T19:07:30.598Z",
+      "completedAt": "2026-10-30T19:09:52.321Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's two-file diff. Record each answer in the step note.\n- Order: do both generators and the probe run before every dist removal, and is && the only joiner? Do the generators touch dist? (scripts/generate-*.ts read docs/ and write only src/generated/*.ts.)\n- Other build paths: packages/moe-daemon/Dockerfile runs npm install, COPY ., npm run build; with no docs/ in its context both generators print \"skipping\" and exit 0. Also check CI's 3-OS `npm run build` and prepublishOnly. `tsc --version` resolves wherever `tsc` itself does; on Windows it goes through node_modules/.bin/tsc.cmd (step 3 log).\n- Residual risks to state, not fix: (1) A tsc crash mid-emit after clean still leaves a partial dist. The temp-outDir + rename variant was rejected: Windows has no atomic directory swap, and renaming a freshly written tree there fails with EPERM/EBUSY under AV or indexers. (2) A Windows in-place build of the shared checkout still succeeds and compiles peers' WIP into the live dist, so \"never build the shared checkout\" stands (governor comment on this row).\n- Test: could it pass vacuously? No: it requires both generators, the probe, a removal and an emit, and each it.each row shows its violation firing. It is strict on purpose: any ; | || or lone & (a future 2>&1 included) in a build-chain script fails it with that script's name.\n- Hygiene: the test file holds none of the project's globalRails forbiddenPatterns. Your own changes are exactly the two files: package.json diff is one line pair, and the test is new. `ls -d /mnt/d/projexts/moe-f978-win.*` finds nothing. Nothing ran npm in /mnt/d/projexts/moes.\nReport modifiedFiles: packages/moe-daemon/package.json, packages/moe-daemon/src/util/buildScriptOrder.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/package.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/package.json",
+        "packages/moe-daemon/src/util/buildScriptOrder.test.ts"
+      ],
+      "note": "Adversarial review of own two-file diff completed. ORDER: both generators + probe precede clean, only && joins; generators read docs and write only src/generated/{initFiles,skillFiles}.ts, never dist. PATHS: Docker installs dev tools then COPY/build, missing docs yields successful skips; CI Ubuntu/Windows/macOS builds and prepublishOnly use same lifecycle; real Windows build resolves .bin/tsc.cmd and Version 7.0.2. CONCURRENCY: independent builds still race existing generated/dist files; shared-tree builds remain prohibited. INPUTS: trusted package manifest only; unreadable/invalid JSON fails suite; missing commands cannot pass vacuously; operators report offending script, recursion bounded at 8; no dynamic execution or production API changes. SIDE EFFECTS: test only reads manifest, no subprocesses/files/listeners to leak; prebuild failure short-circuits before clean. ASSUMPTIONS: compiler-version probe checks startability, not success of later emission. RESIDUALS (not expanded in scope): mid-emit tsc crash can leave partial dist; successful Windows in-place build would still mix peer WIP into live dist. Temp-tree rename rejected in plan for Windows EPERM/EBUSY/nonatomic swap. TEST: 25 cases cover mandatory mutations, all required stages, hook expansion, unsafe joiners/removers; static guard deliberately strict (future 2>&1 rejected), not a general shell interpreter. HYGIENE: package JSON exactly one byte-preserving requested substitution; new test 115 lines, helper functions <=50, no forbidden patterns; only these two source files edited, peers untouched, no npm in shared checkout, all own scratch clones/archives removed. Fresh reproducible recipe (whole HEAD archive + only own overlays/cmp + native npm ci + plan env-i npm test) rc=0: 214 files passed, 6239 passed / 20 skipped (6259), 43.31s; /tmp/moe-f978-evidence/verification.log. Extra 10 tests reflect newly landed peer HEAD since prior gate. Scoped diff --check passes. No issues requiring further scope.",
+      "startedAt": "2026-10-30T19:09:52.343Z",
+      "completedAt": "2026-10-30T19:11:40.540Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 314.6,
+  "comments": [
+    {
+      "id": "comment-8e69328e63cb4b939d66147edb5c898e",
+      "author": "governor-693b7073",
+      "content": "Governor note for the planner: why a code fix and not another note. The hazard is already documented in at least five Serena notes:\n- gotcha-gate-hermetic-snapshot-from-wsl\n- gotcha-linux-vitest-reuse-native-node-modules\n- gotcha-live-windows-scratch-daemon-from-wsl\n- gotcha-local-runner-ci-prebuild\n- gotcha-moe-doc-generated-artifacts\nEach says some form of \"never npm run build/prebuild on the shared checkout: clean deletes dist\". A seat still did it today (~15:31Z), and three open plans (WT-03b, WT-16, CQ-I06) still name the in-place build as their gate. When documentation keeps losing, make the dangerous step harmless.\n\nAlso keep in mind: from Windows, an in-place build SUCCEEDS but compiles peers' uncommitted WIP into the live daemon's dist. Ordering alone doesn't stop that; the \"never build the shared checkout\" rule still applies. Only the delete-then-fail path is this row's fix.",
+      "timestamp": "2026-10-30T18:47:39.395Z"
+    },
+    {
+      "id": "comment-e121954d8b5e44e8a9e7867628ae4e37",
+      "author": "architect-bc59d28a",
+      "content": "@governor-693b7073 Planned (rev 1, now WORKING). The new prebuild is `npm run generate-init-files && npm run generate-skill-files && tsc --version && npm run clean`.\n\nWhy `tsc --version` too: TypeScript 7's bin/tsc resolves its native platform package before it does anything else. I checked read-only: from WSL it exits 1 (\"Unable to resolve @typescript/typescript-linux-x64\"); on Windows it prints \"Version 7.0.2\". So dist also survives a compiler that cannot start, even after the generators stop needing tsx. Your comment's other point still holds: a Windows in-place build succeeds and compiles peers' WIP into the live dist. The no-shared-build rule stays.\n\nOutside this row (the scope rail keeps it out): packages/moe-proxy and packages/moe-claude-plugin use the same clean-first prebuild (`npm run clean` then tsc). The launchers run `$ROOT_DIR/packages/moe-proxy/dist/index.js`. So a WSL proxy build in the shared checkout would delete the proxy dist and break every new seat's MCP bridge. If you want a follow-up row, the same one-line fix works there: `tsc --version && npm run clean`.",
+      "timestamp": "2026-10-30T19:05:18.392Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T18:47:05.583Z",
+  "updatedAt": "2026-10-30T19:17:44.036Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T18:47:10.766Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T19:17:24.249Z",
+    "wallClockMs": 1813483
+  },
+  "contextFetchedBy": [
+    "architect-bc59d28a",
+    "worker-c2da129d",
+    "architect-4ae016fb",
+    "qa-ba3f4f35"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T19:04:40.005Z",
+  "executionContract": {
+    "intendedBehavior": "`npm run build` in packages/moe-daemon runs generate-init-files, generate-skill-files and a `tsc --version` compiler probe before `clean` removes dist/. A build that cannot generate or cannot start the native compiler (e.g. WSL against the shared checkout's Windows-native node_modules) exits non-zero with the existing dist/ untouched. A working build still deletes the old dist and emits a complete one, with src/generated/initFiles.ts and skillFiles.ts byte-identical.",
+    "acceptanceCriteria": [
+      "scripts.prebuild is exactly `npm run generate-init-files && npm run generate-skill-files && tsc --version && npm run clean`; no other package.json byte changes.",
+      "src/util/buildScriptOrder.test.ts fails in each of these cases: a dist removal can run before both generators and the probe succeed; a build-chain script joins steps with anything but &&; the generators, probe, clean or emit disappear; tsc emits before the last removal. It fails on HEAD's old order (scratch mutant).",
+      "Windows clean clone (scratch commit of the two files): npm ci + npm run build rc 0, git status --porcelain empty afterwards, dist byte-identical (diff -r) to an old-order build, and node dist\\index.js --version prints 0.8.0.",
+      "In a scratch copy with Windows-native node_modules, WSL npm run build exits non-zero and keeps dist/.keep and dist/index.js (old order: non-zero, dist gone). In a Linux snapshot with the TypeScript platform package moved aside, it exits non-zero and keeps dist/.keep.",
+      "In a Linux snapshot, `npm test` in packages/moe-daemon exits 0."
+    ],
+    "invariants": [
+      "clean still runs: after every generator and the probe, and before build's tsc emits.",
+      "Generator scripts, tsconfig.json and every other package are unchanged.",
+      "No npm build, clean, ci or install ever runs in /mnt/d/projexts/moes."
+    ],
+    "compatibility": [
+      "The Docker build (packages/moe-daemon/Dockerfile; no docs/ in its context, so both generators exit 0), CI's 3-OS npm run build and prepublishOnly keep working.",
+      "moe-vscode/bundled/daemon/package.json is a gitignored packaging copy and is not edited."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/package.json scripts.prebuild",
+      "New packages/moe-daemon/src/util/buildScriptOrder.test.ts with test-local helpers splitSteps, runOrder and orderViolations."
+    ],
+    "reuse": [
+      "The manifest read of src/server/McpAdapter.test.ts:109; the snapshot recipe in mem:gotcha-daemon-linux-snapshot-gate; the Windows-from-WSL build recipe in mem:gotcha-live-windows-scratch-daemon-from-wsl."
+    ],
+    "sourceAssumptions": [
+      "node_modules/typescript/lib/tsc.js (TypeScript 7.0.2) calls getExePath() from lib/getExePath.js before executing anything. It throws 'Unable to resolve <platform package>' when the native binary is missing (2026-10-30: WSL rc=1; Windows prints 'Version 7.0.2', rc=0).",
+      "scripts/generate-init-files.ts and scripts/generate-skill-files.ts write only src/generated/initFiles.ts and skillFiles.ts, and exit 0 when docs/roles or docs/skills is absent.",
+      "tsconfig.json: outDir dist, rootDir src, excludes src/**/*.test.ts and src/tools/toolTestHarness.ts, noEmitOnError unset. vitest.config.ts includes src/**/*.test.ts."
+    ],
+    "checkRefs": [
+      "cd $SNAP/repo/packages/moe-daemon && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm test",
+      "cd $SNAP/repo/packages/moe-daemon && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npx vitest run src/util/buildScriptOrder.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Chosen: prebuild = generators, then `tsc --version`, then clean. It is one line and adds no new failure mode. (2) Reorder only (the row's stated minimum). It leaves the second half of the governor's repro open: once the generators no longer depend on tsx, a tsc that cannot resolve its native platform package would delete dist again. node >= 22.18 can run them by type stripping, since they import only node builtins. The probe costs one native exec. (3) tsc into a temp outDir, then rename. Rejected: Windows has no atomic directory swap, so it is still rm + rename, and renaming freshly written trees fails with EPERM/EBUSY under AV or indexers. It is also more moving parts than a scope-railed row allows. (4) Drop clean. Rejected: outputs of deleted sources would linger in dist, the npm package and the IDE bundles.",
+    "codebaseInsights": "npm runs prebuild, then build, then postbuild, and it also runs the pre/post hooks of a nested `npm run x`. cmd.exe and sh treat && the same way, but cmd treats a lone & like ;. The generators never read or write dist. At HEAD 77e9e47c, a generator run in a full clone reproduced src/generated byte-identically, so DoD 1's empty-porcelain check is achievable. A git archive has no history and changes initFiles.ts's shipped-body list, so DoD 1 needs a real Windows git clone. TypeScript 7's bin/tsc resolves the native binary before parsing args, so `tsc --version` is a real startability probe. moe-proxy and moe-claude-plugin have the same clean-first prebuild, and the launchers run packages/moe-proxy/dist/index.js. Both are out of this row's scope (rail) and flagged to the governor.",
+    "risks": "Any npm build in /mnt/d/projexts/moes deletes or replaces the live daemon's dist. Every build runs in $W or $SNAP behind `cd <dir> || exit 1`. With WSL interop, call cmd.exe only from a /mnt/d cwd and strip \\r before diffing. Peer WIP checkpoints can turn the full suite red at HEAD: prove it with a plain-HEAD archive and block on the owning row; never edit their files. The test is deliberately strict: any ; | || or & in a build-chain script fails it. isEpicFinal is true only because this is the newest row of a rolling bug epic. The full-system check here is the whole daemon suite plus a real Windows build; the epic diff spans 88+ landed rows and is not re-reviewed by this row.",
+    "keyFiles": [
+      "packages/moe-daemon/package.json",
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "packages/moe-daemon/scripts/generate-skill-files.ts",
+      "packages/moe-daemon/tsconfig.json",
+      "packages/moe-daemon/Dockerfile",
+      "packages/moe-daemon/src/server/McpAdapter.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T19:04:40.025Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T19:05:19.953Z",
+  "reviewStartedAt": "2026-10-30T19:11:50.394Z",
+  "verification": {
+    "command": "set -o pipefail; SNAP=$(mktemp -d /tmp/moe-f978-verify.XXXXXX) && mkdir \"$SNAP/repo\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$SNAP/repo\" && for P in packages/moe-daemon/package.json packages/moe-daemon/src/util/buildScriptOrder.test.ts; do cp \"/mnt/d/projexts/moes/$P\" \"$SNAP/repo/$P\" && cmp \"/mnt/d/projexts/moes/$P\" \"$SNAP/repo/$P\" || exit 1; done && cd \"$SNAP/repo/packages/moe-daemon\" && env -i HOME=$HOME PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm ci --no-audit --no-fund && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh whole-repo archive with only package.json and buildScriptOrder.test.ts overlaid/cmp; native npm ci succeeded.\nTest Files  214 passed (214)\n     Tests  6239 passed | 20 skipped (6259)\n  Duration  43.31s (tests 93%, import 3%, transform 3%)\nverification_rc=0\nFull log: /tmp/moe-f978-evidence/verification.log",
+    "reportedAt": "2026-10-30T19:11:50.394Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/buildScriptOrder.test.ts",
+    "packages/moe-daemon/package.json",
+    ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+    ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+    ".moe/tasks/task-f9789178469f499ca3268fc4b392bd0c.json",
+    ".moe/tasks/task-9eae3377dd504f8b8007986d51c651e9.json"
+  ],
+  "completionSummary": "Reordered daemon prebuild to both generators, compiler startability probe, then clean; added 25 lifecycle/order regression cases. Fresh isolated daemon suite: 214 files, 6239 passed / 20 skipped. Scratch narrowed test typecheck passes. Real Windows clone build succeeds, generated files unchanged, complete dist byte-identical to old order, version 0.8.0. WSL generator failure and missing-native-compiler repros preserve dist with fix; old-order/no-probe contrasts destroy it. Old-order regression mutant fails as intended. Only two owned source files changed; all checks outside live checkout; scratch clones/archives removed. Handoff and compiler-probe gotcha saved in Serena. Existing concurrent-build/mid-emit risks remain; shared checkout builds still prohibited.",
+  "commits": [
+    {
+      "sha": "7f393bc4cfe5bd4b3b6b62f022bf37a7dbb39786",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T19:04:45Z",
+      "paths": [
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+        ".moe/tasks/task-f9789178469f499ca3268fc4b392bd0c.json",
+        "packages/moe-daemon/package.json",
+        "packages/moe-daemon/src/util/buildScriptOrder.test.ts"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T19:12:08.373Z",
+      "treeId": "88195635e3fb7f63a1edd5618bea2826c7ac3b4b",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "19b7525fc170e584526e6f659cdbc29a98b97b23",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T19:13:22Z",
+      "paths": [
+        ".moe/tasks/task-9eae3377dd504f8b8007986d51c651e9.json",
+        ".moe/tasks/task-f9789178469f499ca3268fc4b392bd0c.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T19:17:44.036Z",
+      "treeId": "f66d5543ceaee92a861b649dabee577f0468c03e",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T19:13:22Z",
+    "at": "2026-10-30T19:17:44.036Z"
+  },
+  "completedAt": "2026-10-30T19:17:24.249Z",
+  "reviewCompletedAt": "2026-10-30T19:17:24.249Z",
+  "reviewSummary": "Verified recorded completion 7f393bc4cfe5bd4b3b6b62f022bf37a7dbb39786 with git show and git branch --contains on moe/work-2026-10-24. Owned source +116/-1 (net 115): exactly one package.json prebuild line and a 115-line regression test; whole commit net 357 includes daemon-authored board snapshots. No out-of-scope source changes or forbidden patterns.\nRe-ran task.verification.command (whole-repo archive, cmp-matched owned files, fresh native npm ci, sanitized env npm test): exit 0, 214 files, 6239 passed/20 skipped. Independently reran npm test on a pinned completion-SHA archive: same counts, exit 0. Focused Linux test green/restored 25/25; old-order scratch mutant fails the real manifest assertion (1 failed/24 passed). Scratch narrowed test tsc: exit 0.\nReal Windows clean full-history clone pinned to completion: npm ci && npm run build exit 0; git status --porcelain empty before/after, proving generated initFiles.ts/skillFiles.ts unchanged; node dist\\index.js --version = 0.8.0. Old-order Windows build exit 0, diff -r dist identical. Native Windows focused test 25/25.\nWSL against Windows-native dependencies: fixed build exit 1 in generator, SHA256 of dist/.keep and dist/index.js unchanged; old order exit 1 and dist absent. Linux compiler-platform package moved aside: both generators succeed, probe exits 1, marker SHA256 unchanged; no-probe contrast deletes dist. All checks outside live checkout; snapshots removed, logs /tmp/moe-f978-qa-evidence. All DoD/contract checks satisfied; no authorized deferrals or unrun required checks. Docker no-doc skips, CI and prepublish lifecycle statically checked. Existing concurrent-build/mid-emit risks remain outside scope; shared-build prohibition remains. Complexity pass: Lean already. Handoff written, reusable findings retained in gotcha-daemon-prebuild-compiler-probe; handoff retirement preflight has no destination collision.",
+  "requiredCheckAtDone": null
+}

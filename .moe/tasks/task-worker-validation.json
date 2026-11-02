@@ -1,0 +1,73 @@
+{
+  "id": "task-worker-validation",
+  "epicId": "epic-daemon",
+  "title": "Enforce single worker per epic constraint",
+  "description": "Validate that only one worker can be assigned to an epic.",
+  "definitionOfDone": [
+    "Daemon rejects worker registration if epic already has worker",
+    "Error message explains the constraint",
+    "Existing workers can be replaced if explicitly requested"
+  ],
+  "taskRails": [
+    "Check workers list in StateManager",
+    "Return structured error response"
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add getWorkersByEpic method to StateManager. Check workers list in StateManager. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-05T13:06:33.605Z",
+      "completedAt": "2026-02-05T13:07:29.341Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update claimNextTask to validate worker-per-epic (already done). Return structured error response. Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "startedAt": "2026-02-05T13:07:29.504Z",
+      "completedAt": "2026-02-05T13:07:29.732Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add replaceExisting flag to worker assignment. Log all auto-approval actions to activity.log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "startedAt": "2026-02-05T13:07:29.892Z",
+      "completedAt": "2026-02-05T13:07:30.051Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update MCP_SERVER.md with constraint documentation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-02-05T13:07:35.565Z",
+      "completedAt": "2026-02-05T13:07:55.258Z"
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "QA FAIL: Not implemented. All 4 implementation steps are PENDING. Need to add worker-per-epic validation in McpAdapter/StateManager that rejects registration if epic already has worker, with optional replaceExisting flag.",
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 2,
+  "createdAt": "2026-02-03T12:30:00.000Z",
+  "updatedAt": "2026-06-09T10:59:58.639Z",
+  "priority": "MEDIUM",
+  "comments": [],
+  "metrics": {
+    "firstClaimAt": "2026-02-04T18:34:27.048Z"
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "id": "task-0f0d9905",
+  "epicId": "epic-daemon",
+  "title": "Add schema versioning and migration support",
+  "description": "Support evolving .moe/ file schema over versions.\n\n**Problem:** Upgrading daemon could break existing .moe/ folders.\n\n**Solution:**\n- Add \"schemaVersion\" field to project.json\n- On load, check version and run migrations if needed\n- Create migrations/ folder with upgrade scripts\n- Log migration actions",
+  "definitionOfDone": [
+    "project.json includes schemaVersion",
+    "Migrations run automatically on load",
+    "Rollback strategy documented",
+    "Test covers v1 -> v2 migration"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Verify schemaVersion in schema.ts and migrations folder. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/migrations/index.ts"
+      ],
+      "startedAt": "2026-02-05T13:16:15.996Z",
+      "completedAt": "2026-02-05T13:16:27.730Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify v1_to_v2 migration. Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/migrations/v1_to_v2.ts"
+      ],
+      "startedAt": "2026-02-05T13:16:28.698Z",
+      "completedAt": "2026-02-05T13:16:33.758Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify StateManager runs migrations on load. Log all auto-approval actions to activity.log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-05T13:16:34.687Z",
+      "completedAt": "2026-02-05T13:16:42.024Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify MoeProjectInitializer includes schemaVersion.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectInitializer.kt"
+      ],
+      "startedAt": "2026-02-05T13:16:42.863Z",
+      "completedAt": "2026-02-05T13:16:49.697Z"
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 3,
+  "reopenReason": "Rollback strategy still not documented. Add to docs/SCHEMA.md or migrations/README.md explaining: on failure returns original data, backup before migration recommended.",
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 10,
+  "createdAt": "2026-02-04T14:21:02.885Z",
+  "updatedAt": "2026-06-09T10:59:58.434Z",
+  "priority": "MEDIUM",
+  "comments": [],
+  "metrics": {
+    "firstClaimAt": "2026-02-04T19:04:36.482Z"
+  }
+}

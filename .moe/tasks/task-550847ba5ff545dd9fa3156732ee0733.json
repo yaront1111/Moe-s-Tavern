@@ -1,0 +1,287 @@
+{
+  "id": "task-550847ba5ff545dd9fa3156732ee0733",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code drops the daemon's PINS_UPDATED broadcast, so pins an agent adds or removes (moe.chat_pin / chat_unpin) never reach the chat view until the channel is switched",
+  "description": "Files: moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/types/moe.ts, moe-vscode/tests/wire-parity.test.cjs. No open row declares any moe-vscode file. I checked all 35 open rows at 2026-11-02 17:45Z. The JetBrains half is task-b9e0bb5a. The two rows touch disjoint files and neither depends on the other.\n\nOrigin: the same unfiled follow-up as task-b9e0bb5a. VSC-0 (task-a3e414a3) records it in docs/plans/2026-11-02-vscode-reuse.md:40 and row D7 (:73), and VSC-6 (task-9f6a725f) left it out of scope.\n\nDefect, read at HEAD 2bb683f8:\n- On every pin, unpin and toggle, the daemon broadcasts {type:'PINS_UPDATED', payload:{channel, pins}} with the channel's full pin list (chatStore.ts :513, :530, :547). moe.chat_pin and moe.chat_unpin produce only that broadcast. PIN_CREATED, PIN_REMOVED and PIN_TOGGLED go only to the socket that made the request (WebSocketServer.ts:1128, :1142, :1156).\n- MoeDaemonClient.handleMessage (:1497) has cases for PINS (:1718), PIN_CREATED, PIN_REMOVED and PIN_TOGGLED, but none for PINS_UPDATED, so that frame falls through the switch.\n- ChatViewProvider.ts requests pins again only when the page sends 'selectChannel' (:171-175). media/chat.js keeps a pinCache per channel and replaces it only on 'loadPins' (:571-574).\nResult: a pin a governor or agent adds with moe.chat_pin stays invisible in the VS Code chat view until the user switches channel and back. An unpin, or a toggle made in another window, behaves the same way.\n\nRepro (this is the failing test): in the section-B harness of wire-parity.test.cjs (the production MoeDaemonClient and ChatViewProvider plus the raw media/chat.js page), deliver {type:'PINS_UPDATED', payload:{channel:<the selected channel>, pins:[one pin]}}. Today no 'loadPins' is posted and the page's pinned section stays empty.\n\nFix: handle 'PINS_UPDATED' the same way as 'PINS', by firing onPinsReceived with {channel, pins}. The provider already turns that into 'loadPins', which replaces the channel's pinCache and re-renders when that channel is selected. Also add PINS_UPDATED to the DaemonInboundMessage union and to DAEMON_MESSAGE_TYPES in types/moe.ts, so the wire list stays complete.\nError handling: a malformed frame fires nothing and never throws out of handleMessage. Malformed means no payload object, a channel that is not a non-empty string, or pins that is not an array. PINS keeps its current behavior.\n\nOut of scope:\n- JetBrains: task-b9e0bb5a.\n- RESOURCE_UPDATED: no client has a view for it, so handling it would be a feature.\n- ChatViewProvider.ts and media/chat.js: both are already correct.\n- Any daemon change.",
+  "definitionOfDone": [
+    "MoeDaemonClient.handleMessage handles a PINS_UPDATED frame the same way as PINS. onPinsReceived fires once with {channel, pins}, carrying the full list in payload order. The chat view gets one 'loadPins', and media/chat.js shows the new list when that channel is selected. PINS, PIN_CREATED, PIN_REMOVED and PIN_TOGGLED behave exactly as before.",
+    "A malformed PINS_UPDATED frame fires nothing, posts nothing to the chat view, and never throws out of handleMessage. Malformed means no payload object, a channel that is not a non-empty string, or pins that is not an array.",
+    "types/moe.ts lists PINS_UPDATED in the DaemonInboundMessage union, with payload {channel: string; pins: PinEntry[]}, and in DAEMON_MESSAGE_TYPES.",
+    "moe-vscode/tests/wire-parity.test.cjs gains test rows that run through the real client, the real provider and the raw chat.js page. One pin delivered for the selected channel renders in the pinned section. An empty pins array clears that section. A frame for another channel updates that channel's cache and leaves the selected channel's pinned section unchanged. Each malformed case posts nothing. RED first: the first two rows fail on the unchanged client, and the completion evidence quotes the failing output.",
+    "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0, and no existing test is weakened. Never run npm in the shared checkout (GLOBAL rule 0)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED), append-only, in moe-vscode/tests/wire-parity.test.cjs, with the Edit tool only (GLOBAL rule: no shell writes into the checkout). Append a new section F after test E4, whose closing `});` is the file's last line today. Change no existing line: the static checkRef fails on any removed line since 22c73558. Reuse the file's harness, and add no new file, helper module or dependency (mem:gotcha-vscode-wire-parity-test-harness, mem:pattern-vscode-webview-script-vm-test). The harness pieces are withProvider/setup (the real MoeDaemonClient plus the real ChatViewProvider), loadPage (the raw media/chat.js), jsonCopy, load and compile.\n\nA verified reference of the whole section is /mnt/d/moe-scratch/pins550-architect/section-f.cjs (D:\\moe-scratch\\pins550-architect\\section-f.cjs): 128 lines, starting with one blank line, sha256 372cc711c6bc2e30c5ac275853cf7ae69f8d94c990fe8b05d55dd17efa7f8bfd. Appending it byte-identically gives fixed/moe-vscode/tests/wire-parity.test.cjs, sha256 44184cb4ae93f5c7a48597205250c75fa28d1a17741438752df586fde3d1a343. Byte-identical is preferred. A deviation must keep the row ids and title prefixes, the full F4 case list and every assertion below.\n\nSection contents:\n- Constants: TYPES_PATH, plus PIN_A, PIN_B and PIN_C in the daemon's PinEntry shape. PIN_B is done, and no list used is in id or time order.\n- withPinsChain(body): withProvider({withSnapshot:true}) plus loadPage(). Call page.updateChannels([CHAN_G, CHAN_X]), which auto-selects chan-g. Add a recorder on client.onPinsReceived (jsonCopy). deliver(frame) calls h.deliver(frame), splices h.posts, relays each post to page.send, and returns those posts.\n- pinnedView(page) returns display (pinnedSection.style.display), count (pinCount.textContent), ids (each pinnedList child's first child's dataset.messageId) and done (className === 'pinned-item done').\n\nRows, with titles starting exactly 'F1:' to 'F6:' (the mutant checkRef greps 'F4:'):\n- F1: PINS_UPDATED chan-g [PIN_A]. fired == [{channel:'chan-g', pins:[PIN_A]}]. The returned posts == [one loadPins]. pinnedView == {display:'', count:'1', ids:[PIN_A.messageId], done:[false]}.\n- F2: PINS chan-g [PIN_B, PIN_A] shows two pins. Then PINS_UPDATED chan-g [] fires once with [], posts one loadPins with [], and pinnedSection display is 'none'.\n- F3: PINS chan-g [PIN_A], then PINS_UPDATED chan-x [PIN_C, PIN_B]. It fires and posts once, in payload order, and chan-g's pinnedView is unchanged. After page.clickTab(1), page.stateWrites.at(-1).pinCache deep-equals {'chan-g':[PIN_A], 'chan-x':[PIN_C, PIN_B]}.\n- F4: after PINS chan-g [PIN_A], 15 malformed payloads in three families:\n  - no payload object: a frame without payload, null, 'chan-g', 42, [];\n  - channel not a non-empty string: missing, '', 7, null, ['chan-g'];\n  - pins not an array: missing, null, {}, a string, {0: PIN_A, length: 1}.\n  Per frame: assert.doesNotThrow, then {fired, posts} deep-equals {fired: [], posts: []}. At the end the shown pins are untouched.\n- F5: each frame posts exactly one message, as it does today:\n  - PINS with a list gives loadPins;\n  - list-less PINS gives {type:'loadPins', channel:'chan-g'};\n  - PIN_CREATED gives pinCreated;\n  - PIN_REMOVED gives pinRemoved;\n  - PIN_TOGGLED gives pinToggled.\n  Only the two PINS frames reach onPinsReceived. The list-less row pins today's unvalidated PINS (DoD: PINS behaves exactly as before), so never 'fix' it.\n- F6: load(compile(TYPES_PATH), TYPES_PATH, {}). isDaemonMessage is true for PINS_UPDATED and PINS, and false for 'PINS_UPDATE'.\n\nNever write a project.json globalRails.forbiddenPatterns string into the file. The page's markup-property write lands on the generic stub element, so read the pinned list through children only.\n\nRED first (DoD 4). Before any src edit, run this verbatim from inside the checkout. It copies five files to a mktemp dir and runs node --test there: no npm, and nothing is written to the checkout.\nR=$(git rev-parse --show-toplevel)/moe-vscode && M=$(mktemp -d) && cd \"$R\" && cp --parents {src/{services/MoeDaemonClient,providers/ChatViewProvider,types/moe}.ts,media/chat.js,tests/wire-parity.test.cjs} \"$M\" && cd \"$M\" && NODE_PATH=$R/node_modules ~/.nvm/versions/node/v24.21.0/bin/node --test --test-reporter=tap tests/wire-parity.test.cjs > o 2>&1; grep -E \"^(not )?ok [0-9]+ - F|^# (tests|pass|fail)|code: 'ERR_ASSERTION'\" o\nVerified at 22c73558:\n- not ok 23 F1, not ok 24 F2, not ok 25 F3 and not ok 28 F6, each with code: 'ERR_ASSERTION';\n- ok 26 F4 and ok 27 F5;\n- # tests 28, # pass 24, # fail 4.\nKeep this output: the completion evidence quotes the F1 and F2 failures. Error handling for this run: if every row is red, or the run reports 'tests 1', the harness failed to load. That is not RED, so fix the test before moving on.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/wire-parity.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/wire-parity.test.cjs"
+      ],
+      "note": "Appended section F byte-identical to the reference (sha 44184cb4...). RED: not ok 23 F1, 24 F2, 25 F3, 28 F6 (ERR_ASSERTION); ok 26 F4, 27 F5; 28 tests/24 pass/4 fail. 0 removed lines vs base.",
+      "startedAt": "2026-11-02T18:18:11.863Z",
+      "completedAt": "2026-11-02T18:19:06.940Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "moe-vscode/src/types/moe.ts (DoD 3), with the Edit tool only. Make two edits:\n1) In DaemonInboundMessage, directly after the PINS member (line ~508), add exactly `  | { type: 'PINS_UPDATED'; payload: { channel: string; pins: PinEntry[] } }`. The static checkRef greps this text.\n2) In DAEMON_MESSAGE_TYPES (line ~546), make the pin row `'PINS', 'PINS_UPDATED', 'PIN_CREATED', 'PIN_REMOVED', 'PIN_TOGGLED',`.\n\nChange nothing else. The list's other gaps (CHANNEL_DELETED, WORKER_DEREGISTERED, ACCOUNTS_UPDATED) are out of scope. After this step, test F6 passes. Reference: /mnt/d/moe-scratch/pins550-architect/fix-types.diff.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "startedAt": "2026-11-02T18:19:07.598Z",
+      "completedAt": "2026-11-02T18:19:18.636Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "moe-vscode/src/services/MoeDaemonClient.ts, handleMessage (DoD 1 and 2), with the Edit tool only.\n\nPlacement: add a braced `case 'PINS_UPDATED': { ... }` directly after `case 'PINS':` (line ~1718). Leave PINS, PIN_CREATED, PIN_REMOVED and PIN_TOGGLED byte-identical.\n\nDo NOT add PINS_UPDATED as a fall-through label on PINS. PINS stays unvalidated (F5 pins a list-less PINS that still posts), while PINS_UPDATED is validated.\n\nBody:\n`const channel = payload?.channel; const pins = payload?.pins; if (typeof channel !== 'string' || channel.length === 0 || !Array.isArray(pins)) { break; } this._onPinsReceived.fire({ channel, pins }); break;`\nPass pins through as the same array, in payload order, with its entries unchanged, as PINS does.\n\nError handling: a malformed frame is a silent no-op, like CHANNEL_CREATED and CHANNEL_DELETED. Malformed means no payload object, a channel that is not a non-empty string, or pins that is not an array. It produces no event, no cache write and no throw, and the outer try/catch stays the error handling backstop.\n\nRules:\n- Use the literal non-empty check, not isNonBlankString. The DoD calls only '' malformed, so a whitespace channel id still fires.\n- Fire _onPinsReceived exactly once and nothing else. Fire no _onStateChanged: the provider posts updateWorkers and updateChannels on state events, and F1's exactly-one-post assertion would fail.\n- Add no import. Several vm harnesses transpile this file with closed require maps.\n\nComment the case in 3 or 4 lines. Say that the daemon broadcasts this frame to every /ws client after each pin, unpin and toggle (chatStore), with the channel's full list. Say that moe.chat_pin and moe.chat_unpin produce only this frame, and that it is applied like PINS.\n\nReference: /mnt/d/moe-scratch/pins550-architect/fix-client.diff. After this step, step 1's RED command shows 28 tests, 28 pass, 0 fail.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "28/28 pass after the change.",
+      "startedAt": "2026-11-02T18:19:19.149Z",
+      "completedAt": "2026-11-02T18:19:25.698Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh, from inside the checkout, in this order (DoD 1 to 5). Never run npm in the shared checkout (GLOBAL rule 0; mem:gotcha-vscode-gate-from-wsl). Every npm call runs in the gate's git-archive snapshot.\n\n1) Run the gate checkRef verbatim. It takes git archive HEAD, overlays the three files, and runs npm ci, lint, compile and test under env -i with node v24.21.0. The architect's dry run with the reference change exited 0: 583 tests, 579 pass, 0 fail, 4 skipped (Windows-only). This command and its output tail are the complete_task verification.\n\n2) Run the mutant checkRef verbatim. It appends a partial-validation PINS_UPDATED override to a scratch copy of the client, once checking only the channel and once only the pins. It must print 'killed: typeof p.channel==\"string\"&&p.channel' and 'killed: Array.isArray(p.pins)' and exit 0, with only F4 failing, with ERR_ASSERTION. It relies on MoeDaemonClient.prototype.handleMessage, this._onPinsReceived and the 'F4:' title. The architect checked that it exits 1 when F4 lacks either case family, or when F6 is red.\n\n3) Run the static checkRef verbatim. It checks that wire-parity.test.cjs has no removed line since 22c73558 and that the union line is present.\n\nError handling for a red run:\n- If the snapshot gate fails only in a file this task did not touch, follow mem:gotcha-snapshot-gate-peer-wip-checkpoint. Attribute the failure with git log, re-run with that file removed from the snapshot, and disclose both runs.\n- A red row in wire-parity.test.cjs, or a lint or compile error in the two src files, is this task's to fix.\n\nPut step 1's RED output (F1 and F2 not ok) and these three results in the complete_task summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/wire-parity.test.cjs",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/wire-parity.test.cjs",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "note": "Gate exit 0: 583 tests, 579 pass, 0 fail, 4 skipped. Mutants both killed (F4 only). Static check OK.",
+      "startedAt": "2026-11-02T18:19:26.114Z",
+      "completedAt": "2026-11-02T18:19:59.449Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff only (load the adversarial-self-review skill).\n\nCheck the diff:\n- The test file: git diff --numstat 22c73558 shows 0 removed lines.\n- The MoeDaemonClient.ts diff is the one new case. PINS through PIN_TOGGLED are unchanged and no import was added.\n- The types diff is exactly the two lines.\n- No added line in the three files contains a project.json globalRails.forbiddenPatterns string. Grep the added lines for each entry.\n\nThink through these cases:\n- A replayed PINS_UPDATED: the replace is idempotent.\n- A PINS_UPDATED racing the GET_PINS reply on a channel select: same socket, daemon order. The later frame wins, and both carry full lists.\n- A frame for a channel the page never listed: it is cached, which is harmless.\n- A frame before STATE_SNAPSHOT: still delivered, because pins are not snapshot state. PINS behaves the same.\n- Pins entries that are not objects: they pass through unchanged, exactly like PINS. This is out of scope per the DoD, since the daemon builds the entries from its pin store. Note it, but do not filter.\n- A whitespace channel: it fires, by the DoD's literal definition.\n- No test spends a real timer or socket.\n\nReport the findings in the complete_task summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/wire-parity.test.cjs",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "note": "Self-review: test file 128 added/0 removed vs 22c73558; client diff is the one new braced case (+12, no import); types diff is the 2 edits (+3/-1); forbidden-pattern grep of added lines found none. Replay is idempotent; racing GET_PINS reply: both full lists, later wins; unlisted channel is cached harmlessly; non-object pin entries pass through like PINS (noted, not filtered); whitespace channel fires per the DoD's literal definition. No timers or sockets in tests.",
+      "startedAt": "2026-11-02T18:19:59.864Z",
+      "completedAt": "2026-11-02T18:20:04.122Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Worktree switch done (19:14Z): the control checkout is on moe/control at 0d8422ce, worktreeMode is on, and doctor exits 0. The drain park is over. Completion c02ca51e is in moe/control's history, so QA reviews the landed bytes.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 331.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T17:47:03.844Z",
+  "updatedAt": "2026-11-02T19:16:31.468Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T17:47:34.974Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T17:56:43.565Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T19:15:56.603Z",
+    "wallClockMs": 4753038
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956",
+    "worker-13a877ad",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T18:15:56.326Z",
+  "executionContract": {
+    "intendedBehavior": "A PINS_UPDATED frame from the daemon reaches the VS Code chat view the same way a PINS reply does. The daemon broadcasts that frame to every /ws client after each pin, unpin or toggle, and it carries the channel's full pin list.\n\nMoeDaemonClient fires onPinsReceived once with {channel, pins}, and ChatViewProvider posts one loadPins. media/chat.js then replaces that channel's pinCache, and redraws the pinned section when that channel is selected. So pins that agents add or remove with moe.chat_pin or moe.chat_unpin show up live, instead of after a channel switch.\n\nA malformed PINS_UPDATED frame is a silent no-op. PINS, PIN_CREATED, PIN_REMOVED and PIN_TOGGLED behave exactly as before.",
+    "acceptanceCriteria": [
+      "A well-formed PINS_UPDATED (a payload object, a channel that is a non-empty string, and pins that is an array) fires onPinsReceived exactly once with {channel, pins}. pins holds the same entries in payload order. The provider posts exactly one {type:'loadPins', channel, pins}, and nothing else fires or posts.",
+      "On the page, a list for the selected channel is shown, and an empty list hides the pinned section. A list for another channel only replaces that channel's pinCache, and the shown section stays unchanged.",
+      "A malformed PINS_UPDATED (no payload object; a channel that is not a non-empty string; pins that is not an array) produces no event and no post, and no exception leaves handleMessage.",
+      "PINS (including its unvalidated list-less form), PIN_CREATED, PIN_REMOVED and PIN_TOGGLED post exactly what they post at 22c73558.",
+      "types/moe.ts: DaemonInboundMessage has the member | { type: 'PINS_UPDATED'; payload: { channel: string; pins: PinEntry[] } }, and DAEMON_MESSAGE_TYPES has 'PINS_UPDATED', so isDaemonMessage accepts it.",
+      "wire-parity.test.cjs gains rows F1 to F6 after E4, append-only. F1 and F2 (and also F3 and F6) fail on the unchanged code with ERR_ASSERTION, and all 28 rows pass after the change."
+    ],
+    "invariants": [
+      "handleMessage never throws, and one frame fires at most one onPinsReceived event.",
+      "Every line of wire-parity.test.cjs at 22c73558 stays byte-identical (append-only).",
+      "MoeDaemonClient.ts gains no import, because the vm test harnesses use closed require maps.",
+      "No added line contains a project.json globalRails.forbiddenPatterns string."
+    ],
+    "compatibility": [
+      "onPinsReceived keeps its {channel: string; pins: PinEntry[]} event shape. ChatViewProvider.ts and media/chat.js are unchanged: they already turn onPinsReceived into a loadPins post that replaces pinCache.",
+      "No daemon change and no wire-shape change: the client only starts consuming a frame the daemon already broadcasts (chatStore.ts:513, :530, :547).",
+      "PINS stays unvalidated. PIN_CREATED, PIN_REMOVED and PIN_TOGGLED are unchanged."
+    ],
+    "approvedScope": [
+      "MoeDaemonClient.handleMessage: one new braced case 'PINS_UPDATED', placed directly after case 'PINS'.",
+      "types/moe.ts: the DaemonInboundMessage union member PINS_UPDATED and its DAEMON_MESSAGE_TYPES entry.",
+      "tests/wire-parity.test.cjs: a new section F after E4 (TYPES_PATH, PIN_A/B/C, withPinsChain, pinnedView, rows F1 to F6)."
+    ],
+    "reuse": [
+      "The existing path: onPinsReceived emitter, then the ChatViewProvider loadPins post, then the chat.js loadPins handler. No new emitter and no new webview message.",
+      "The wire-parity harness from VSC-6 and VSC-24 (withProvider/setup, loadPage, jsonCopy, load, compile). No new test file or helper module."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/chatStore.ts:513, :530 and :547 emit {type:'PINS_UPDATED', payload:{channel, pins}} with the full list, and StateManager.ts:348 types it.",
+      "moe-vscode/src/services/MoeDaemonClient.ts:1718: case 'PINS' fires _onPinsReceived({channel: payload.channel, pins: payload.pins}) with no validation. The default case logs 'Unknown message type', which is where PINS_UPDATED lands today.",
+      "moe-vscode/src/providers/ChatViewProvider.ts:43-46 posts {type:'loadPins', channel, pins} for each onPinsReceived. Its lines 93-101 post updateWorkers and updateChannels on onStateChanged.",
+      "moe-vscode/media/chat.js:571-574: loadPins sets pinCache[channel] = pins || [] and calls renderPins when channel === currentChannel. saveState (line 28) persists pinCache.",
+      "moe-vscode/src/types/moe.ts:508 holds the PINS union member and :546 the DAEMON_MESSAGE_TYPES pin row. The module has no imports."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t pins550-gate-XXXXXX) && echo \"snapshot $S\" && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/types/moe.ts moe-vscode/tests/wire-parity.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+      "R=$(git rev-parse --show-toplevel)/moe-vscode && M=$(mktemp -d) && cd \"$R\" && cp --parents {src/{services/MoeDaemonClient,providers/ChatViewProvider,types/moe}.ts,media/chat.js,tests/wire-parity.test.cjs} \"$M\" && cd \"$M\" && C=src/services/MoeDaemonClient.ts && cp $C c.ts && t() { cp c.ts $C && printf '\\n;(function(){var P=MoeDaemonClient.prototype,o=P.handleMessage;P.handleMessage=function(d){var m=JSON.parse(d),p=m.payload||{};if(m.type!=\"PINS_UPDATED\")return o.call(this,d);if(%s)this._onPinsReceived.fire({channel:p.channel,pins:p.pins})}})();\\n' \"$1\" >> $C && NODE_PATH=$R/node_modules ~/.nvm/versions/node/v24.21.0/bin/node --test --test-reporter=tap tests/wire-parity.test.cjs > o 2>&1; [ $(grep -c '^not ok' o) = 1 ] && grep -q '^not ok [0-9]* - F4:' o && grep -q \"code: 'ERR_ASSERTION'\" o && echo \"killed: $1\"; } && t 'typeof p.channel==\"string\"&&p.channel' && t 'Array.isArray(p.pins)'",
+      "cd \"$(git rev-parse --show-toplevel)\" && [ \"$(git diff --numstat 22c735581a35a8a3e4a51cf0d231620c47e24805 -- moe-vscode/tests/wire-parity.test.cjs | cut -f2)\" = 0 ] && grep -Fq \"| { type: 'PINS_UPDATED'; payload: { channel: string; pins: PinEntry[] } }\" moe-vscode/src/types/moe.ts && echo \"tests append-only; PINS_UPDATED in the union\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) A fall-through `case 'PINS_UPDATED': case 'PINS':` with shared validation. Rejected: it changes PINS for malformed frames, and the DoD says PINS behaves exactly as before. F5 pins the list-less PINS post, so this variant fails.\n2) A fall-through without validation. Rejected: DoD 2 needs malformed frames to fire nothing.\n3) A separate guarded case firing the existing emitter. CHOSEN.\n4) isNonBlankString for the channel. Rejected: the DoD defines a malformed channel as one that is not a non-empty string.\n5) A moe-vscode/CHANGELOG.md bullet. Left out: the row's file list is fixed at three files, and task-0cadb4f6 (VS Code settings, PLANNING) states it is disjoint from this row's files.\n6) A pinnedList Proxy in loadPage, for multi-render tests. Not needed: no row renders the selected channel twice, so loadPage stays byte-identical.",
+    "codebaseInsights": "The VS Code client keeps no pin cache. Pins live only in chat.js's pinCache, filled by loadPins, pinCreated, pinRemoved and pinToggled, and saved only when saveState runs. The page re-renders pins only for the selected channel. Selecting a channel does not render from the cache: the provider requests GET_PINS, and the PINS reply renders.\n\nThe generic page stub in wire-parity.test.cjs does not clear children on the page's markup-property write. So count rendered pins only after a single render, or through pinCount.\n\nIn the chain, ChatViewProvider posts loadPins straight from onPinsReceived, with no visibility or ready gate beyond the 'ready' handshake that setup() performs.\n\nThe JetBrains twin task-b9e0bb5a is already in REVIEW (1f4078c9). It routes PINS_UPDATED through its PINS branch, which is validated there.",
+    "risks": "- Weakening F4 by dropping a case family is caught by the mutant checkRef. A missing channel family leaves the pins-only mutant alive, and a missing pins family leaves the channel-only one alive.\n- Merging the cases is caught by F5's list-less PINS row.\n- Emitting onStateChanged as well is caught by the exactly-one-post assertions in F1, F2 and F3.\n- The vm realm: compare jsonCopy'd values only.\n- The snapshot gate can go red on a peer's WIP checkpoint: see mem:gotcha-snapshot-gate-peer-wip-checkpoint.\n- The static checkRef pins base 22c73558. No open row declares wire-parity.test.cjs (overlap scan of 40 open rows at 18:10Z), so a later edit by another row is unlikely before landing.\n- Non-object pin entries pass through exactly as with PINS. This is out of scope per the DoD.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/types/moe.ts",
+      "moe-vscode/tests/wire-parity.test.cjs",
+      "moe-vscode/src/providers/ChatViewProvider.ts",
+      "moe-vscode/media/chat.js",
+      "packages/moe-daemon/src/state/chatStore.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "7c60841f4b2be6adeac6d399e36f3590fe43f3fa",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T18:15:56.355Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T18:18:11.863Z",
+  "reviewStartedAt": "2026-11-02T18:20:09.554Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t pins550-gate-XXXXXX) && echo \"snapshot $S\" && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/types/moe.ts moe-vscode/tests/wire-parity.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "✔ F1 … F6 (all ok)\nℹ tests 583\nℹ suites 0\nℹ pass 579\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0",
+    "reportedAt": "2026-11-02T18:20:09.554Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/wire-parity.test.cjs",
+    "moe-vscode/src/types/moe.ts",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+    ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json",
+    ".moe/tasks/task-0cadb4f66d3545debd72b8991368d526.json",
+    ".moe/tasks/task-864103f3a772481f8e6bed3051a820ea.json",
+    ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+    ".moe/tasks/task-c76a8bf8241c497ebde5437dda19f953.json"
+  ],
+  "completionSummary": "VS Code now handles the daemon's PINS_UPDATED broadcast like PINS. MoeDaemonClient.handleMessage has a new braced case that fires onPinsReceived once with {channel, pins}. A malformed frame (no payload object, a channel that is not a non-empty string, pins not an array) is a silent no-op. types/moe.ts lists PINS_UPDATED in the DaemonInboundMessage union and in DAEMON_MESSAGE_TYPES. wire-parity.test.cjs gains rows F1 to F6 (128 lines added, 0 removed vs 22c73558), run through the real client, the real provider and the raw chat.js page.\nRED before any src edit: not ok 23 F1, not ok 24 F2, not ok 25 F3 and not ok 28 F6, all with code ERR_ASSERTION. F4 and F5 passed. Totals: 28 tests, 24 pass, 4 fail.\nGate (git-archive snapshot, npm ci, lint, compile, test, node 24.21): exit 0, 583 tests, 579 pass, 0 fail, 4 skipped.\nMutant checkRef: killed 'typeof p.channel==string&&p.channel' and killed 'Array.isArray(p.pins)', exit 0, with only F4 failing.\nStatic checkRef: tests append-only and the union line is present, exit 0.\nSelf-review: no added line contains a forbidden pattern. Non-object pin entries pass through like PINS (noted, not filtered, out of scope). A whitespace channel fires, per the DoD's literal definition.",
+  "commits": [
+    {
+      "sha": "c02ca51e168dfdc70b2b1889933a22206bb7a5f8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T18:16:15Z",
+      "paths": [
+        ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+        ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/tests/wire-parity.test.cjs"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T18:21:11.569Z",
+      "treeId": "bfe12e0d505a7160081c72dff22a2fe4ed6ee232",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "364d5230819e43bb02b630f9ec7ec5ec2c464f59",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-93e0e956@2026-11-02T17:56:33Z",
+      "paths": [
+        ".moe/tasks/task-0cadb4f66d3545debd72b8991368d526.json",
+        ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json",
+        ".moe/tasks/task-864103f3a772481f8e6bed3051a820ea.json",
+        ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+        ".moe/tasks/task-c76a8bf8241c497ebde5437dda19f953.json"
+      ],
+      "recordedBy": "architect-93e0e956",
+      "recordedAt": "2026-11-02T18:44:09.699Z",
+      "treeId": "9f6dc91cf97cbb7c021ffc7b8a67f9311bfa3e83",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/wire-parity.test.cjs",
+    "moe-vscode/src/types/moe.ts",
+    "moe-vscode/src/services/MoeDaemonClient.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-02T19:13:53Z",
+    "at": "2026-11-02T19:16:31.468Z"
+  },
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedReason": null,
+  "priorBlockedReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion c02ca51e has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode.",
+  "blockedResourceId": null,
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-02T19:15:56.603Z",
+  "reviewCompletedAt": "2026-11-02T19:15:56.603Z",
+  "reviewSummary": "Reviewed landed completion c02ca51e (in moe/control history under HEAD 0d8422ce; no self-landing). Own diff: MoeDaemonClient.ts +12, types/moe.ts +2/-1, wire-parity.test.cjs +128/-0 (~141 LOC, under the 400 cap). Diff read: one braced `case 'PINS_UPDATED'` after PINS; validates non-empty string channel and Array.isArray(pins), fires _onPinsReceived once, else silent break; no import; PINS/PIN_CREATED/PIN_REMOVED/PIN_TOGGLED untouched. types/moe.ts has the union member and DAEMON_MESSAGE_TYPES entry. Daemon emitters confirmed (chatStore.ts:513/530/547). Re-ran task.verification verbatim (git-archive snapshot of HEAD, 3-file overlay, env -i, node 24.21, npm ci/lint/compile/test): exit 0, 587 tests, 583 pass, 0 fail, 4 skipped (more than the worker's 583 because HEAD has later peer tests; F1-F6 pass). Mutant checkRef verbatim: killed channel-check and pins-check mutants, rc 0, only F4 failing (ERR_ASSERTION). Static checkRef: test file 0 removed lines vs 22c73558, union line present. Reproduced RED myself: new tests vs pre-fix client/types (c02ca51e^) give not ok F1, F2, F3, F6; F4/F5 ok; 28 tests, 24 pass, 4 fail. Forbidden-pattern grep of added lines: none. DoD 1-5 all mapped: F1-F3 run real client + real provider + raw chat.js page (one pin shows, empty list hides section, other channel only updates its cache, payload order kept); F4 has 15 malformed payloads with doesNotThrow and zero events/posts; F5 pins the unchanged PINS incl. list-less, PIN_CREATED/REMOVED/TOGGLED; F6 checks isDaemonMessage. Not verified: a live daemon-to-VS Code run (no IDE here); the vm harness is the accepted proof path. Non-blocking: non-object pin entries pass through like PINS (out of scope per DoD); a whitespace-only channel fires per the DoD's literal wording.",
+  "requiredCheckAtDone": null
+}

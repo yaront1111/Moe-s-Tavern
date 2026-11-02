@@ -1,0 +1,301 @@
+{
+  "id": "task-dd545bf1cc1843208e23de1d8c2d1756",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: protected PATH filter compares a not-yet-existing PATH leaf lexically, so a leaf under a link, 8.3, subst or mapped-drive ancestor of the project can read as outside",
+  "description": "This residual of the protected-profile Windows alias work is known and QA-accepted, and it is not tracked anywhere else. Recorded at 16:46Z on 2026-10-30 by RF06b rev 3's planner (architect-bd1eb82d, msg-2ff1c7ae) and in Serena decision-protected-windows-alias-refusal (line 30): \"A not-yet-existing PATH leaf below a link, 8.3, subst or mapped-drive ancestor is still compared lexically. QA accepted this, and JetBrains shares it. An ancestor walk or a dev+ino identity check would close it later.\"\n\nWhy it matters: isOutsideProject resolves existing paths through realpath (VS Code) or toRealPath and isSameFile (JetBrains). A PATH entry that does not exist when the daemon spawns falls back to a lexical comparison. If that entry's existing ancestor is a junction, symlink, 8.3 short name, subst drive or mapped drive that leads into the project, the entry reads as outside and is kept. A directory created there later, inside the project, then becomes searchable for bare-name spawns.\n\nDirection (the planner decides): walk to the nearest existing ancestor and compare it by identity. That means stat(…, {bigint:true}) dev+ino in VS Code and Files.isSameFile or the fileKey in JetBrains, against the project root and its ancestors. Or drop non-existent PATH entries under the protected profile. Probe SMB and mapped-drive identity natively before relying on dev+ino.\n\nScope: both IDEs, for parity. VS Code's moe-vscode/src/services/MoeDaemonClient.ts PATH filter, and JetBrains' RuntimeSelectionPolicy.isOutsideProject and MoeDaemonSupervisor.protectedPathEntries. It dependsOn RF06b (032c9739) and 52fb6178, the last open rows on those files.",
+  "definitionOfDone": [
+    "On a Windows host under the protected profile, a PATH entry that does not exist, whose nearest existing ancestor is a junction, symlink, 8.3 name, subst drive or mapped drive leading into the project, is dropped from the protected daemon PATH in both IDEs. An entry under a genuinely outside ancestor is kept. Shown by tests in moe-vscode/tests and RuntimeSelectionPolicyTest that need no network.",
+    "Legacy profile, POSIX hosts and the existing protected rows behave as before. Their existing tests pass unchanged.",
+    "The verification gates exit 0, with their output supplied to complete_task: `cd moe-vscode && npm test && npm run compile`, and the JetBrains gate (cmd.exe gradlew.bat test --rerun from WSL)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test first, VS Code. File: moe-vscode/tests/protected-daemon-spawn.test.cjs. Re-read it and MoeDaemonClient.ts as landed. Dependency dcde1ed4 also edits MoeDaemonClient.ts, so keep its bytes. Change no existing row; reuse fixture(), write(), real and plain.\n\nAdd ONE row after 'Windows alias project bases…': test('Windows missing PATH leaves are judged by their nearest existing ancestor', { skip: process.platform !== 'win32' && 'Windows only' }, t => …).\n\nFixture: `let mapped; const f = fixture(t, true, { ...fs, realpathSync: { native: q => q === mapped ? share : real(q) } })`.\n- share is the project through its loopback admin share, \\\\localhost\\<drive>$<rest>, built the way the base-alias row builds it.\n- mapped = path.join(f.outside, 'mapped'); mkdir it. It stands in for a mapped network drive, whose real path is UNC. No network is used.\n- mkdir p\\sub.\n\nLinks (every target stays inside the fixture):\n- outside\\to-project: a junction to p.\n- outside\\to-sub: a junction to p\\sub.\n- outside\\sym: a 'dir' symlink to p\\sub, falling back to a junction on EPERM (this host lacks the privilege).\n- outside\\dangling: a junction to p\\later. mkdir later, link it, then rmdir later, so it is a dangling link into the project.\n- outside\\to-home: a junction to f.home, the outside control.\n\n8.3: shortRoot = the trimmed output of execFileSync('cmd.exe', ['/d', '/s', '/c', `\"for %I in (\"${root}\") do @echo %~sI\"`], { windowsVerbatimArguments: true, encoding: 'utf8' }), with root = path.dirname(p). The probe gave C:\\...\\Temp\\MOE-DD~1. If it equals root (8.3 names are off on that volume), leave the 8.3 entries out with t.diagnostic.\n\nsubst: add a small withSubst(target, fn) helper.\n- Try letters Z..D whose X:\\ does not exist, and run %SystemRoot%\\System32\\subst.exe X: <target>. Exit 1 means the letter is taken; try the next.\n- Run fn in try and `subst X: /D` in finally. Assert the /D exit code only when fn succeeded. Never touch a drive the helper did not create.\n- With no free letter, leave the subst entries out with t.diagnostic.\nNest it twice: S rooted at p\\sub (the descendant-root shape QA found on 1c2bfeca) and T rooted at f.outside.\n\nAssert, with the entry as each label:\n- isOutsideProject(e, p) === false for to-project\\later, to-sub\\later\\bin, sym\\later, dangling, dangling\\bin, <shortRoot>\\project\\later, S:\\later and mapped\\later.\n- isOutsideProject(e, p) === true for outside\\later, to-home\\later, <shortRoot>\\outside\\later and T:\\later.\n- While S and T exist: protectedDaemonEnvironment({ PATH: [...inside, ...outside].join(';'), SystemRoot }, p, f.node, true, undefined).PATH equals [path.dirname(f.node), ...outside].join(';') exactly.\n\nNative proof of the threat, AFTER filtering:\n- Copy System32\\whoami.exe to p\\sub\\later\\bin\\moe-dd545-leaf.exe.\n- spawnSync('moe-dd545-leaf', { cwd: f.outside, env: { PATH: <to-sub\\later\\bin>, SystemRoot } }).status === 0. This is the control: the raw entry now runs project code.\n- With the filtered env, error.code === 'ENOENT'.\n\nError handling in the harness:\n- subst cleanup runs in finally even when fn throws.\n- No helper swallows an assertion.\n- The fixture's t.after rmSync unlinks junctions without following them; the existing junction rows rely on this.\n\nRED, natively: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && node --test --test-name-pattern=nearest tests/protected-daemon-spawn.test.cjs\" must FAIL on the inside entries. Record that output. Then cmd.exe /d /c subst must list nothing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "note": "Added the withSubst(t, target, fn) helper and the Windows-only row 'Windows missing PATH leaves are judged by their nearest existing ancestor' after the alias-base row. No existing row changed. The matrix has 8 inside entries: to-project\\later, to-sub\\later\\bin, sym\\later (a dir symlink that falls back to a junction on EPERM), dangling, dangling\\bin, <8.3>\\project\\later, S:\\later (subst to p\\sub), and mapped\\later (a fake realpath maps it to \\\\localhost\\C$ of the project). It has 4 outside entries: outside\\later, to-home\\later, <8.3>\\outside\\later, and T:\\later (subst to outside). The PATH equality is exact. The whoami spawn proof runs after filtering.\nRED, native: `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && node --test --test-name-pattern=nearest tests/protected-daemon-spawn.test.cjs\"` exits 1 with AssertionError on outside\\to-project\\later (true !== false).\nA scratch collector variant (D:\\moe-scratch\\dd545-red, outside the repo) on the unchanged source lists all 8 inside entries as read-outside and all 4 outside controls correct. The 8.3 short name MOE-RF~1 and subst Z: were both available.\ncmd.exe /d /c subst lists nothing afterwards. Peer dirty paths (scripts/*, .moe/tasks/*) are untouched.",
+      "startedAt": "2026-10-30T21:34:42.245Z",
+      "completedAt": "2026-10-30T21:38:17.231Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Production, VS Code. File: moe-vscode/src/services/MoeDaemonClient.ts. Change only pathForms (about line 379) and add one new private helper beside it.\n\nWhen does pathForms push a second form, missingRealPath(forms[0])? When all three hold:\n- the native realpath of p fails with ENOENT;\n- the host is Windows: process.platform === 'win32', the host default every predicate here uses, never the test-only windows parameter;\n- the resolved spelling forms[0] is not isWindowsAlias, so no UNC or device spelling is walked or looked up again.\n\nmissingRealPath(resolved) walks dir = resolved upward. At each level whose realpath came back ENOENT:\n1. Call lstatSync(dir). If it succeeds, the entry exists but does not resolve (a dangling junction or symlink): throw.\n2. On lstat ENOENT, prepend path.basename(dir) to the tail and set dir = path.dirname(dir). If dirname returns dir unchanged (a drive root, e.g. a removed drive), throw: there is no existing ancestor.\n3. Try fs.realpathSync.native(dir). On success, return path.join(real, ...tail). On ENOENT, continue. Rethrow any other code.\n\nError handling: every throw lands in isOutsideProject's existing catch, so the answer is false and the entry is dropped (fail closed).\n\nThe pushed form goes through the existing checks unchanged:\n- isWindowsAlias refuses a UNC real path, such as a mapped drive's;\n- the folded isWithin compares it against both project forms.\n\nKeep unchanged:\n- the ENOENT-only tolerance and its comment;\n- every export and signature;\n- POSIX: no walk off win32;\n- the imports: add none, because seven vm harnesses use closed require maps.\nAdd one comment line on the why: a folder created there later is searched where its nearest existing ancestor really is (a link, 8.3 name, subst or mapped drive).\n\nRe-run the step-1 native command: GREEN. Then run `cd moe-vscode && npm test` under WSL Linux: every existing row passes and the new row is skipped.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "MoeDaemonClient.ts +22/-0, no imports added. When realpath returns ENOENT, pathForms now pushes missingRealPath(forms[0]), but only on process.platform === 'win32' and only when the resolved spelling is not isWindowsAlias. The ENOENT-only tolerance and its comment are unchanged.\n\nmissingRealPath walks up from the resolved spelling:\n- lstat succeeds: throws 'an existing path does not resolve' (a dangling link);\n- lstat fails with anything but ENOENT: rethrows;\n- dirname reaches its fixed point: throws 'no existing ancestor';\n- otherwise it tries realpath.native on the parent: a hit returns real + tail, ENOENT goes up one level, any other error is rethrown.\nEvery throw lands in isOutsideProject's catch, so the answer is false.\n\nGREEN, native:\n- the step-1 command exits 0, 1/1 pass, with no 8.3 or subst diagnostic, so every entry ran;\n- protected-daemon-spawn + daemon-identity: 81 tests, 80 pass, 1 existing skip, 0 fail.\nWSL Linux `cd moe-vscode && npm test`: 348 tests, 344 pass, 4 skipped (the new row plus 3 existing), 0 fail.\n`npx eslint src/services/MoeDaemonClient.ts` exits 0. git diff --check is clean. subst lists nothing.",
+      "startedAt": "2026-10-30T21:38:18.440Z",
+      "completedAt": "2026-10-30T21:40:45.551Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Test first, JetBrains. File: moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt.\n\nRe-read it and RuntimeSelectionPolicy.kt as these rows landed them:\n- 526a2080;\n- 1c2bfeca rev 2 (descendant subst roots);\n- 52fb6178 (non-plain project bases).\nKeep their bytes. Change no existing row: N1-N8, S1-S9 and theirs.\n\nAdd one row with the next free N number: `N<k> on Windows a missing PATH leaf answers as its nearest existing ancestor`. It starts with assumeTrue(\"Windows path forms\", RuntimeSelectionPolicy.windowsHost).\n\nFixture, under temporaryFolder: work\\proj (with proj\\sub), work\\outside, work\\home and work\\mapped (an existing outside folder). Every link target stays inside temporaryFolder, because TemporaryFolder's delete descends through junctions.\n\nLinks, made with the existing helpers, each guarded by assumeTrue on its result:\n- junction(outside\\to-sub → proj\\sub);\n- symlink(outside\\link → proj), which falls back to a junction;\n- a dangling junction outside\\dangling → proj\\later (create later, link it, then delete later);\n- junction(outside\\to-home → home), the outside control.\n\n8.3: shortWork = the trimmed output of ProcessBuilder(\"cmd\", \"/d\", \"/c\", \"for\", \"%I\", \"in\", \"($work)\", \"do\", \"@echo\", \"%~sI\"). The probe showed this works without quoting. Leave the 8.3 entries out when the path has a space, or when the short form equals the long one, and print the reason.\n\nsubst: nest the existing withSubst twice: S rooted at proj\\sub (a descendant root) and T rooted at outside.\n\nAssert, each labelled:\n(a) assertFalse(isOutsideProject(e, proj.path)) for to-sub\\later\\bin, link\\later, dangling, dangling\\bin, <shortWork>\\proj\\later and S:\\later.\n(b) assertTrue for outside\\later, to-home\\later, <shortWork>\\outside\\later and T:\\later.\n(c) Parity: for every ancestor A above, isOutsideProject(A + \\later) == isOutsideProject(A).\n(d) A mapped drive without network: isOutsideProject(File(mapped, \"later\").path, proj.path, resolve = { if (it == mapped.path) Paths.get(share(\"localhost\", proj)) else runCatching { Paths.get(it).toRealPath() }.getOrNull() }) is false, while the default lookup answers true.\n(e) LEGACY keeps today's answer: the internal overload with RuntimeProfile.LEGACY is true for to-sub\\later\\bin.\n(f) Inside both subst drives, supervisorFor(proj, { null }, { null }).protectedDaemonEnvironment(env, proj.path), with PATH = inside + outside entries, leaves exactly mapOf(\"PATH\" to the outside entries in order). Use assertEquals on the whole map.\n\nRED, under the jetbrains-gradle lease. Call moe.acquire_resource just before the run and release right after; never hold it across steps. Run: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\". It must fail on the to-sub and dangling entries, because today's identity walk only sees an alias of the project root itself. Afterwards cmd.exe /d /c subst must list nothing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Added the row `N15 on Windows a missing PATH leaf answers as its nearest existing ancestor` after N14, with an inline 8.3 snippet; no existing row changed. The fixture is temporaryFolder work\\{proj\\sub, outside, home, mapped}. Links: to-sub (junction to proj\\sub), link (symlink to proj, junction fallback), dangling (junction to proj\\later, which is then deleted), and to-home; each is guarded by assumeTrue. Two nested withSubst drives: S on proj\\sub, T on outside.\n\nAssertions:\n- One whole-map assertEquals keyed by entry. Inside entries must answer false: to-sub\\later\\bin, link\\later, dangling, dangling\\bin, <8.3>\\proj\\later, S:\\later, plus the mapped leaf through the share resolve seam. Kept entries must answer true: outside\\later, to-home\\later, <8.3>\\outside\\later, T:\\later.\n- A parity map: every ancestor A answers exactly as A\\later.\n- An exact supervisor protectedDaemonEnvironment map equality.\n- The mapped stand-in is true under the default lookup; the LEGACY control is true.\n\nRED under the jetbrains-gradle lease (taken right before the run and released right after): `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\"` exited 1 with 70 tests and 1 failed (N15). The actual map differs from the expected map in exactly 3 entries: outside\\dangling=true, outside\\dangling\\bin=true, and mapped\\later through its share=true.\n\nDeviation from the plan's RED prediction: to-sub\\later\\bin already answers false on the landed code, and so do link, 8.3 (JUNIT1~2) and S:\\later. physicalFolder, extracted by 08bb7723 from 1c2bfeca rev 2's walk, already climbs NoSuchFile ancestors to the nearest existing folder and compares by identity. N9's \"$d\\missing\\leaf\" row already pins that case. What the landed code still misses:\n(1) dangling links: NoSuchFile on the link is treated as missing, so the walk skips to the outside parent;\n(2) an ancestor whose resolve answer is a share. Step 4's conjunct closes both.\n\nAll 8.3 and subst entries ran, with no skip printed. cmd.exe /d /c subst lists nothing.",
+      "startedAt": "2026-10-30T21:40:46.870Z",
+      "completedAt": "2026-10-30T21:46:09.831Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Production, JetBrains. File: moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt. Change only the internal isOutsideProject overload (about line 284) and add one new private helper.\n\nAppend ONE conjunct, after every check that 526a2080, 1c2bfeca and 52fb6178 landed:\n(profile == RuntimeProfile.LEGACY || !windowsHost || real != null || ancestorOutside(candidate.normalize(), basePath, foldCase, resolve))\nUse whatever name the landed code gives the candidate's real-path lookup in place of `real`. Because the conjunct comes last, the spelling, base and plain-local checks have all passed before it makes any new lookup, so no share is contacted.\n\nThe helper gets a KDoc on the why: a folder created there later lands where the nearest existing ancestor really is. Its logic:\n1. If !Files.notExists(path, LinkOption.NOFOLLOW_LINKS), return false. The entry exists but did not resolve: a dangling link, or a failed lookup.\n2. Walk ancestor = path.parent while Files.notExists(ancestor, NOFOLLOW_LINKS). If that reaches null, return false: nothing above exists, e.g. a removed drive.\n3. Otherwise return isOutsideProject(ancestor.toString(), basePath, RuntimeProfile.PROTECTED, foldCase, resolve).\nThe recursion re-runs every landed check, including 1c2bfeca rev 2's drive-letter handling, on a path that exists. Each call is on a strictly shorter path, so it terminates.\n\nError handling: everything stays inside the existing try, so any Exception or IOError answers false.\n\nDo not touch MoeDaemonSupervisor.kt. protectedPathEntries, nodeOnProtectedPath and ProtectedStateStore.usableFor inherit the rule through isOutsideProject. A store root whose parents do not exist yet is judged by an outside ancestor and stays usable, so PS6, PS7 and D1's usableFor assertion must stay green.\n\nRe-run the step-3 focused gradle command under the same lease rule: GREEN.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "note": "RuntimeSelectionPolicy.kt gains one trailing conjunct in the internal isOutsideProject, after outsideByIdentity: `(!strict(profile) || real != null || ancestorOutside(candidate.normalize(), basePath, foldCase, resolve))`. strict() is the landed PROTECTED && windowsHost gate, equivalent to the plan's LEGACY || !windowsHost because RuntimeProfile has only LEGACY and PROTECTED.\n\nA new private ancestorOutside, with a KDoc on the why:\n- returns false when !Files.notExists(path, NOFOLLOW_LINKS): a dangling link or a failed lookup;\n- otherwise walks .parent while notExists(NOFOLLOW_LINKS); null gives false;\n- otherwise answers isOutsideProject(ancestor, basePath, PROTECTED, foldCase, resolve). The recursion is on a strictly shorter path and stays inside the existing try/catch.\n\nNo imports added: Files, LinkOption and Path are already imported. MoeDaemonSupervisor.kt and ProtectedStateStore.kt are not touched. The throwing `untouched` seams in N11/N14 short-circuit before the conjunct, so they still see no lookup.\n\nGREEN under the lease (taken right before the run, released after): the same focused command exits 0 in 10s. compileKotlin, compileTestKotlin and :test all executed. RSPT 70 tests, 0 skipped/failed/errors; N15 and PS6/PS7/D1/N9 pass. cmd.exe /d /c subst lists nothing.",
+      "startedAt": "2026-10-30T21:46:11.011Z",
+      "completedAt": "2026-10-30T21:47:49.825Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification. Run it once and fresh, and hold the jetbrains-gradle lease only around it. Run exactly this; the string is the complete_task verification command and must exit 0:\ncmd.exe /d /c \"cd /d D:\\projexts\\moes && cd moe-vscode && npm test && npm run compile\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n\nAs supplementary POSIX evidence, also run `cd moe-vscode && npm test` under WSL Linux. The new row skips there, and every existing row must pass.\n\nReport in complete_task:\n- VS Code native counts: tests, pass, skip, fail. The new row must have RUN, not skipped. Include the tsc exit code.\n- Gradle totals from build/test-results/test/*.xml, with the RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest counts. :test must have executed, not shown UP-TO-DATE.\n- That cmd.exe /d /c subst lists nothing.\n\nIf Gradle exits red but its daemon log shows BUILD SUCCESSFUL, that is the known IPC flake (mem:gotcha-gradle-jetbrains-shared-box). Rerun once and report both runs.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "note": "One change before the gate: the VS Code row's 8.3 probe now runs %SystemRoot%\\System32\\cmd.exe by absolute path, not the bare 'cmd.exe'. libuv searches the cwd first (mem:gotcha-windows-libuv-spawn-searches-cwd-first), and withSubst already calls subst.exe the same way.\n\nVerification ran fresh and exactly as planned, with the jetbrains-gradle lease held only around it:\n`cmd.exe /d /c \"cd /d D:\\projexts\\moes && cd moe-vscode && npm test && npm run compile\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exited 0.\n\nVS Code native:\n- 348 tests, 344 pass, 4 skipped, 0 fail.\n- The new row RAN (✔ 63.9ms).\n- The 4 skips are existing privilege/platform rows: the symlinked PATH row, P1 lstat, P1 dangling, P4.\n- tsc -p ./ exited 0 (the && chain continued).\n\nGradle:\n- BUILD SUCCESSFUL in 22s, and :test executed.\n- 28 XML files, all timestamped after the gate start: 496 tests, 0 skipped, 0 failures, 0 errors.\n- RuntimeSelectionPolicyTest 70/70 (N15 included); MoeDaemonSupervisorTest 79/79.\n\nSupplementary WSL Linux `cd moe-vscode && npm test`, after the edit: 348 tests, 344 pass, 4 skipped (the new row is skipped with \"Windows only\"), 0 fail.\n\ncmd.exe /d /c subst lists nothing. The full log is in /tmp/dd545-gate.log.",
+      "startedAt": "2026-10-30T21:47:50.923Z",
+      "completedAt": "2026-10-30T21:50:52.244Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's diff only: git diff on the four files. Load adversarial-self-review. Check:\n1. Order. Neither IDE makes a new lookup before the candidate's spelling checks. VS Code skips the walk for alias spellings, and the JetBrains conjunct is last.\n2. Fail closed. Each of these answers not-outside: a non-ENOENT or non-NoSuchFile error, a dangling link at any level, a removed drive, and a recursion that throws.\n3. Termination. The VS Code loop stops at the dirname fixed point, and the JetBrains recursion runs on strictly shorter paths.\n4. LEGACY and POSIX are unchanged. The gates read the host and the profile, never a test override.\n5. Parity. The same matrix answers the same in both IDEs.\n6. Twice or concurrently. The filter is a spawn-time snapshot. Only a write outside the project, which is outside the threat model, can re-point an outside ancestor later. Note this; don't fix it.\n7. Tests. Every assertion is labelled, and the PATH equality is exact. Tests remove only subst drives they created. No link target leaves the fixture. No existing row changed.\n\nSave a Serena handoff named task-task-dd545bf1cc1843208e23de1d8c2d1756-handoff. In decision-protected-windows-alias-refusal, update the 'Known remaining gap' line to say the gap is closed on Windows under protected. Record these residuals:\n- POSIX symlink ancestors stay lexical (DoD 2).\n- A PATH entry that is a dangling link, even one pointing outside, is now dropped. This is an accepted fail-closed cost.\n- RF02 alias-spelling keys stay with task-9a1da6f6.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Adversarial self-review of the four files (+135/-1; git diff --check clean).\n\n1. Order. VS Code walks only after realpath ENOENT, and only on a non-alias resolved spelling. The JetBrains conjunct is last and short-circuits after every landed check; the throwing `untouched` seams in N11/N14 still see no lookup.\n2. Fail closed. These all answer false: a non-ENOENT lstat or realpath error (VS Code); an existing-but-unresolved path at any level, i.e. lstat OK or !notExists(NOFOLLOW); no existing ancestor (the dirname fixed point / a null parent); and any throw inside the existing try.\n3. Termination. VS Code stops at the dirname fixed point. JetBrains recurses on a strictly shorter, existing path, at most 2 deep.\n4. LEGACY and POSIX are unchanged. VS Code checks process.platform, and only startProtectedDaemon reaches the filter. JetBrains checks strict(profile), which is PROTECTED && windowsHost.\n5. Parity. Both IDEs drop the same matrix and keep the same outside entries.\n6. Concurrency. The filter is a spawn-time snapshot. Only a write outside the project can re-point an outside ancestor later. Noted, not fixed.\n7. Tests. Label-only edits after the first gate: the VS Code PATH and ENOENT asserts, and N15's three assertEquals. All link targets stay inside the fixture. withSubst removes only drives it created, in finally. No existing row changed. No leftover moe-rf06b-* in Temp; subst is empty.\n\nResidual found: ProtectedStateStore.usableFor is now false for a store root that is, or sits below, a dangling link. storedProfile then reads ABSENT where it used to read UNTRUSTED. This is no new downgrade: a dangling root holds no readable record, and deleting the root already reads ABSENT. The read-gate change is out of scope; recorded for RF07.\n\nThe final gate re-ran on the final bytes (sha-checked unchanged during the run) and exited 0. VS Code native: 348 tests, 344 pass, 4 skip, 0 fail; the new row ran; tsc OK. Gradle: compileTestKotlin and :test executed; 496 tests, 0 skipped, failed or errored; RSPT 70, MDST 79. Linux: 348 tests, 344 pass, 4 skip.\n\nSerena: wrote task-task-dd545bf1cc1843208e23de1d8c2d1756-handoff; updated decision-protected-windows-alias-refusal (the gap is now closed) and gotcha-windows-subst-ancestor-walk (dangling links).",
+      "startedAt": "2026-10-30T21:50:53.392Z",
+      "completedAt": "2026-10-30T21:55:42.497Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-032c973941bc41d9b051eedacb7de0b6",
+    "task-52fb6178b3684db89d6e8a5a351c63ea",
+    "task-dcde1ed47ee54a23af192f4467271fc9",
+    "task-1c2bfeca0ec34589b8cb498abc082549",
+    "task-08bb772304644c91afae8ae78a6c6344"
+  ],
+  "priority": "LOW",
+  "order": 312.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T16:47:51.273Z",
+  "updatedAt": "2026-10-30T22:19:25.202Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T17:23:37.820Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T17:24:24.245Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T22:18:43.260Z",
+    "wallClockMs": 17659015
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "architect-bc59d28a",
+    "worker-c75a6f39",
+    "qa-12f7cf2d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T17:50:08.865Z",
+  "executionContract": {
+    "intendedBehavior": "Under the protected profile on a Windows host, a PATH entry that does not resolve yet is judged by its nearest existing ancestor, so a folder created there later cannot reach the project.\n- VS Code adds the ancestor's native real path plus the missing tail as a compared form.\n- JetBrains re-runs isOutsideProject on that ancestor, which inherits 1c2bfeca's drive handling.\nIn both IDEs, a missing leaf is dropped from the protected daemon PATH when it sits under a junction, symlink, 8.3 name, subst drive or mapped drive that leads into the project, whether to its root or to any folder inside it. A leaf under a genuinely outside ancestor is kept. An entry that exists but does not resolve (a dangling link), or that has no existing ancestor (a removed drive), proves nothing and is dropped. POSIX hosts and the legacy profile keep today's answers.",
+    "acceptanceCriteria": [
+      "Native Windows, VS Code (new row in protected-daemon-spawn.test.cjs). isOutsideProject is false, and protectedDaemonEnvironment drops the entry, for a missing leaf under each of these: a junction to the project; a junction to a folder inside it; a directory symlink (a junction where the symlink privilege is missing); a dangling junction into the project, both the link itself and a leaf below it; the 8.3 spelling of the fixture root; a subst drive rooted at a project subfolder; and a folder whose real path is the project's admin share (fs seam, no network). It is true, and the entry is kept, under the outside folder, a junction to an outside folder, the 8.3 outside spelling and a subst drive rooted outside. The PATH string is asserted exactly.",
+      "Native Windows, VS Code: after filtering, a whoami.exe copy is created inside the project under the junction leaf. It runs through the raw PATH (control, status 0) and gives ENOENT through the filtered PATH.",
+      "Native Windows, JetBrains (new N row in RuntimeSelectionPolicyTest): the same matrix gives the same answers, with the mapped drive simulated through the resolve seam. Every missing leaf answers exactly as its nearest existing ancestor does. supervisor.protectedDaemonEnvironment keeps exactly the outside entries, in order. LEGACY keeps today's answer.",
+      "Both new rows fail on the pre-change production code (RED is recorded) and pass after it.",
+      "Existing rows in protected-daemon-spawn.test.cjs, RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest pass unchanged. WSL Linux npm test passes, with the new row skipped."
+    ],
+    "invariants": [
+      "Applies only on a Windows host under protected. VS Code gates on process.platform === 'win32' (only protected flows call this filter); JetBrains gates on profile == PROTECTED && windowsHost. POSIX and LEGACY answers do not change.",
+      "No new lookup runs before the candidate's spelling checks. VS Code skips the walk for isWindowsAlias spellings, and the JetBrains conjunct is last, so no UNC or device spelling is ever looked up.",
+      "Only a confirmed not-found (ENOENT, or Files.notExists with NOFOLLOW_LINKS) moves the walk up. Any other lookup error, an entry that exists but does not resolve, or a missing ancestor all answer not-outside.",
+      "isOutsideProject never throws in either IDE. A kept entry stays the validated spelling as written.",
+      "Tests remove only the subst drives they created, in finally blocks, and keep every link target inside the fixture."
+    ],
+    "compatibility": [
+      "These signatures are unchanged: isOutsideProject, protectedPathEntries and protectedDaemonEnvironment in both IDEs, plus installedArtifact and installedExecutable. No new refusal strings. No new imports in MoeDaemonClient.ts, whose vm harnesses use closed require maps.",
+      "ProtectedStateStore.usableFor keeps accepting a store root whose parents do not exist yet, because that root is judged by its outside ancestor.",
+      "MoeDaemonSupervisor.kt is not edited. protectedPathEntries, nodeOnProtectedPath and the LEGACY Windows Restart stop environment reach the rule only through isOutsideProject's profile gate."
+    ],
+    "approvedScope": [
+      "VS Code MoeDaemonClient.ts: pathForms pushes a Windows nearest-existing-ancestor real form, through one new private helper (e.g. missingRealPath).",
+      "JetBrains RuntimeSelectionPolicy.kt: the internal isOutsideProject gains one trailing PROTECTED + Windows conjunct. It calls one new private helper (e.g. ancestorOutside) that re-runs isOutsideProject on the nearest existing ancestor.",
+      "Tests: one Windows-only node:test row, with withSubst and short-name helpers, in protected-daemon-spawn.test.cjs; one N row, with a short-name snippet, in RuntimeSelectionPolicyTest."
+    ],
+    "reuse": [
+      "VS Code: fs.realpathSync.native, whose GetFinalPathNameByHandle resolves junction, symlink, 8.3 and subst roots and returns a mapped drive as UNC; fs.lstatSync; isWindowsAlias; isWithin and comparablePath; the fixture(t, true, fsApi) seam.",
+      "JetBrains: Files.notExists(..., NOFOLLOW_LINKS); the landed isOutsideProject itself, run on the ancestor (including 1c2bfeca rev 2's drive handling); the resolve seam; the junction, symlink, withSubst, share and supervisorFor test helpers."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/services/MoeDaemonClient.ts:370-385: isOutsideProject calls pathForms(p) and pathForms(basePath). pathForms tolerates ENOENT only, then compares the spelling lexically.",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt:284-309: the internal isOutsideProject with `val real by lazy { resolve(path) }` and the 1c2bfeca identity conjunct. outsideByIdentity walks Path.parent, so it misses alias roots inside the project and dangling links. 1c2bfeca rev 2 and 52fb6178 reshape this before this task reaches WORKING.",
+      "MoeDaemonSupervisor.kt:598-601 (protectedPathEntries) and ProtectedStateStore.kt:37 (usableFor) call isOutsideProject.",
+      "Native probe by architect-bd1eb82d, 2026-10-30, in D:\\arch-dd54-probe (node v24.16.0, JDK 17.0.20). Node: realpath resolves junction, subst and 8.3 roots; a missing leaf gives ENOENT for both realpath and lstat; a dangling junction gives realpath ENOENT but lstat OK; a removed drive gives ENOENT, and dirname('Z:\\') is 'Z:\\'. Java: notExists(NOFOLLOW_LINKS) is false for a dangling junction and true below it; toRealPath keeps subst roots; 8.3 parents resolve to long names. A bare-name spawn through a raw junction leaf or subst leaf ran a project exe created afterwards (status 0)."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"cd /d D:\\projexts\\moes && cd moe-vscode && npm test && npm run compile\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Drop every PATH entry that does not exist under protected (the description's fallback). It is the simplest, but DoD 1 requires keeping a missing leaf under a genuinely outside ancestor. Rejected.\n(2) dev+ino identity (bigint stat) in VS Code against the project root and its ancestors. Rejected as unnecessary: Node's realpath.native already resolves junction, symlink, 8.3 and subst roots to the local path (probed), and a mapped drive comes back UNC, which isWindowsAlias refuses. Identity would also need an SMB probe, and it still misses alias roots inside the project.\n(3) Chosen: judge a missing leaf by its nearest existing ancestor. A missing leaf is outside if and only if that ancestor is, because the tail cannot enter the project: the project's own next segment exists, so it would have been the ancestor.\n- VS Code appends the tail to the ancestor's realpath, through one local helper in pathForms.\n- JetBrains re-runs isOutsideProject on the ancestor. toRealPath keeps subst and mapped drive letters, and 1c2bfeca rev 2 is redesigning exactly that for existing paths, so the recursion inherits whatever rev 2 lands.\n(4) Rejected for JetBrains: appending the tail to toRealPath(ancestor), as VS Code does. That would depend on rev 2's drive mechanism accepting a path that does not exist.\n(5) Test existence with lstat or NOFOLLOW_LINKS, not plain exists. Otherwise a dangling link (an entry that exists but does not resolve, e.g. a junction to a project folder not created yet) would be skipped over to an outside parent instead of failing closed.\n(6) Rejected: POSIX too. Symlink ancestors have the same hole there, but DoD 2 says POSIX behaves as before. Recorded as a residual.",
+    "codebaseInsights": "- VS Code: pathForms (MoeDaemonClient.ts ~379) serves both the candidate and the base. Only protected flows reach it; D7 shows legacy never does.\n- The vm harnesses inject fs through fixture(t, protectedProfile, fsApi). A fake realpathSync must be an object { native }, as the 'realpath errors are refusals' row does.\n- Cross-realm values: compare strings or JSON, not objects (mem:gotcha-vscode-vm-test-harness).\n- JetBrains realPathOrNull returns null on ANY failure, so a null real path does not mean missing. Files.notExists(NOFOLLOW_LINKS) is the confirmed-missing test; it is false when the answer is unknown or access is denied.\n- outsideByIdentity skips NoSuchFile ancestors. So it already catches aliases OF the project root (N8's $d\\missing), but not aliases of a folder INSIDE the project (QA's 1c2bfeca reopen, mem:gotcha-windows-subst-ancestor-walk), and not dangling links.\n- libuv's Windows PATH search runs <cwd>\\name.exe first, so spawn proofs use cwd f.outside (mem:gotcha-windows-libuv-spawn-searches-cwd-first).\n- Gates from WSL:\n  - VS Code runs natively via cmd.exe, which is where the Windows-only rows run (mem:gotcha-vscode-gate-from-wsl).\n  - JetBrains runs cmd.exe gradlew.bat --rerun under the jetbrains-gradle lease. A ':test UP-TO-DATE' run executes nothing (mem:gotcha-gradle-jetbrains-shared-box).\n- Probe scripts live outside the repo: D:\\arch-dd54-probe\\probe.cjs (node) and Probe.java + run.cmd (JDK 17).",
+    "risks": "- 1c2bfeca rev 2 and 52fb6178 will reshape isOutsideProject before this runs. Re-read the code, keep their bytes and put the new conjunct last. If the landed rev 2 still answers the subst-descendant root S:\\ as outside, the S rows here fail for the same reason. Do not weaken them: comment on the task with the evidence and @mention the governor.\n- TemporaryFolder's delete descends through junctions, so every JetBrains link target must stay inside temporaryFolder. VS Code's rmSync unlinks without following.\n- A subst drive leaks if a test dies mid-body. Remove it in a finally block, touch only the test's own drive, and check that cmd.exe /d /c subst is empty after every run.\n- 8.3 names can be off per volume (e.g. in CI). Those entries skip with an explicit diagnostic, never a silent pass.\n- CI runs the VS Code tests on windows-latest as admin, so the 'dir' symlink is real there; here it falls back to a junction.\n- Accepted fail-closed costs on Windows under protected: a PATH entry that is a dangling link (even one pointing outside) is dropped, and so is one on a removed drive. JetBrains has already dropped removed-drive entries since 1c2bfeca.\n- Threat model: the filter is a spawn-time snapshot. Only a write outside the project can re-point an outside ancestor later.\n- File overlap: dcde1ed4 (WORKING) edits MoeDaemonClient.ts, and 9a1da6f6 edits RuntimeSelectionPolicy.kt. So this row now dependsOn dcde1ed4 and 1c2bfeca, and 9a1da6f6 dependsOn this row.\n- RF07 (f3f364a6) does not depend on this LOW row. If its docs describe the missing-leaf gap, they go stale when this lands; that is the governor's call.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/protected-daemon-spawn.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T17:50:08.897Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "bfd17de50ae61707ba2666d5723aad6e636bdae5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-bd1eb82d@2026-10-30T17:24:25Z",
+      "paths": [
+        ".moe/tasks/task-9a1da6f665fd42c68df1b657b247e414.json",
+        ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json"
+      ],
+      "recordedBy": "architect-bd1eb82d",
+      "recordedAt": "2026-10-30T17:51:44.935Z",
+      "treeId": "65e74b6a02b28397ae08c281c8d8ffaa4996ce2b",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "1f6c272119d7845ecf37f366e1d88d028a8c96a2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c75a6f39@2026-10-30T21:34:04Z",
+      "paths": [
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+        ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "recordedBy": "worker-c75a6f39",
+      "recordedAt": "2026-10-30T21:56:55.294Z",
+      "treeId": "0bc817609fbc558b89bc317249cba2f4f91eb9dd",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "57d25c82e338d81f03c1dea38346bae3c8e1bd47",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-12f7cf2d@2026-10-30T22:10:38Z",
+      "paths": [
+        ".moe/tasks/task-9eaa4c4e4ef74d43ab2538e0010b098e.json",
+        ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json"
+      ],
+      "recordedBy": "qa-12f7cf2d",
+      "recordedAt": "2026-10-30T22:19:25.202Z",
+      "treeId": "28bf565f4574ff8cd6c8d99d975a906ef5f81f08",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-vscode/tests/protected-daemon-spawn.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+    ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json",
+    ".moe/tasks/task-9eaa4c4e4ef74d43ab2538e0010b098e.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-12f7cf2d@2026-10-30T22:10:38Z",
+    "at": "2026-10-30T22:19:25.202Z"
+  },
+  "workStartedAt": "2026-10-30T21:34:42.245Z",
+  "reviewStartedAt": "2026-10-30T21:56:30.927Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes && cd moe-vscode && npm test && npm run compile\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "VS Code (native Windows node):\n✔ Windows missing PATH leaves are judged by their nearest existing ancestor (68.8857ms)\nℹ tests 348\nℹ pass 344\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4   (existing privilege/platform rows: symlinked PATH, P1 lstat, P1 dangling, P4)\n> tsc -p ./   (exit 0, && chain continued)\nJetBrains:\n> Task :compileTestKotlin\n> Task :test\nBUILD SUCCESSFUL in 24s\n11 actionable tasks: 3 executed, 8 up-to-date\nbuild/test-results/test: 28 fresh XML (21:53:34Z-21:53:55Z), 496 tests, 0 skipped, 0 failures, 0 errors; RuntimeSelectionPolicyTest 70/70 (N15 0.244s), MoeDaemonSupervisorTest 79/79\ncmd.exe /d /c subst: empty\nexit=0",
+    "reportedAt": "2026-10-30T21:56:30.927Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "On a Windows host under protected, a PATH entry that does not exist yet is now judged by its nearest existing ancestor, in both IDEs. POSIX and LEGACY are unchanged.\n- VS Code, MoeDaemonClient.ts +22: on realpath ENOENT for a non-alias spelling, pathForms adds missingRealPath: the ancestor's realpath.native plus the missing tail. A level that exists but does not resolve (a dangling link) throws, as does a missing ancestor or a non-ENOENT error. The isOutsideProject catch turns every throw into false. No imports added.\n- JetBrains, RuntimeSelectionPolicy.kt +15/-1: one trailing conjunct, `!strict || real != null || ancestorOutside(...)`. The new private ancestorOutside returns false for !notExists(NOFOLLOW). Otherwise it walks up and re-runs isOutsideProject on the ancestor, which inherits the 1c2bfeca, 52fb and 08bb drive logic. Supervisor and store files are not touched.\nTests (+98, no existing row changed):\n- VS Code Windows row: 8 inside entries dropped (junction to the project and to a project folder, dir symlink, dangling link and its leaf, 8.3, subst to p\\sub, admin-share real path through an fs seam) and 4 kept. The PATH is asserted exactly. whoami spawn proof: raw PATH status 0, filtered PATH ENOENT.\n- JetBrains N15: whole-map answers, a parity map (A vs A\\later), exact supervisor env, the mapped-share seam, a LEGACY control.\nRED on the unchanged code:\n- VS Code: all 8 inside entries read outside (scratch D:\\moe-scratch\\dd545-red).\n- JetBrains: 3 entries wrong, dangling, dangling\\bin and the mapped share. to-sub, link, 8.3 and S: were already right through 08bb's physicalFolder walk. The plan predicted to-sub would fail; it was written before 1c2bfeca rev 2.\nEvidence: gate exit 0. VS Code native 348 tests, 344 pass, 4 existing skips; the new row ran; tsc OK. Gradle 496 tests, 0 skipped/failed/errored; RSPT 70, MDST 79. Linux npm test 344 pass, 4 skipped (including the new row). subst empty; eslint OK; bytes sha-checked unchanged during the gate.\nResiduals fo",
+  "touchedFiles": [
+    "moe-vscode/tests/protected-daemon-spawn.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+  ],
+  "completedAt": "2026-10-30T22:18:43.260Z",
+  "reviewCompletedAt": "2026-10-30T22:18:43.260Z",
+  "reviewSummary": "APPROVED. Reviewed completion 1f6c2721 (pushed, in moe/work-2026-10-24 + origin). The tree has no diff from it in moe-vscode/ or moe-jetbrains/. Code +135/-1 (net 134), 4 files. Tests +50/-0 and +48/-0, no existing row changed. Supervisor and store untouched; no new imports or signatures.\nQA re-ran the gate:\n- VS Code native `npm test && npm run compile`: exit 0. 348 tests, 344 pass, 0 fail, 4 existing skips. New row RAN; tsc OK.\n- `gradlew.bat test --rerun`, under the jetbrains-gradle lease (released after): exit 0, :test executed. 28 fresh XML files: 496 tests, 0 skip/fail/err. RSPT 70 (N15 ran, no 8.3 skip), MDST 79.\n- WSL Linux node --test: 344 pass, 4 skip (new row skipped as Windows only).\n- subst empty after each run; no temp leftovers.\nRED reproduced: in a scratch copy outside the repo, the new VS Code row fails on 1f6c2721^ MoeDaemonClient.ts (outside\\to-project\\later true!==false) and passes on 1f6c2721. JetBrains RED by code reading, not a run: old physicalFolder skips a dangling junction via NoSuchFile, so dangling, dangling\\bin and mapped read outside. This matches the worker's recorded 3-entry RED.\nDoD:\n- 1: 8 inside entries dropped, 4 outside kept, exact PATH. The whoami proof gives raw status 0 and filtered ENOENT. N15 checks whole map, parity, supervisor env, mapped seam, LEGACY. No network.\n- 2: POSIX and LEGACY gated (win32 / strict(profile)); existing rows pass.\n- 3: gates green.\nInvariants: no lookup before the spelling checks (alias skip; conjunct last). Fails closed on non-ENOENT, existing-unresolved or no-ancestor. Terminates (dirname fixed point; recursion ≤2).\nResidual, non-blocking: a dangling store root now reads ABSENT, not UNTRUSTED. Deleting the root already gives ABSENT with the same access, so it opens no new downgrade path. Noted for RF07.\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,50 @@
+{
+  "id": "task-80f76f99cca64dc1909765af71977e46",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V01a] Protected check definition shape",
+  "description": "Objective: define the structured, approval-bound shape of a protected required check. This is the definition an architect approves, consumed by CQ-V01b and by CQ-V01 (task-bde8654052f648f9b209174c3708322b), which was split by SPIDR because a single slice would exceed QA's 400-line cap.\n\nDeliverable: a producer contract. Later slices consume these exact names.\n- types/schema.ts:\n  - `ProtectedCheckDefinition = { id: string; command: string; configs?: string[]; scripts?: string[]; assertionRoots?: string[] }`.\n  - `TaskExecutionContract.requiredChecks?: ProtectedCheckDefinition[]`, appended after checkRefs in the canonical F03 key order. checkRefs stays as it is.\n- state/validators.ts: validateExecutionContract validates requiredChecks strictly and losslessly (no truncation), refusing with INVALID_INPUT naming the exact field. Rules:\n  - at most 20 definitions;\n  - id: 1-64 chars of [A-Za-z0-9._-], starting alphanumeric, unique;\n  - command: non-blank, single line, at most 1000 chars, kept exactly as given (the command as the runner will run it);\n  - every path list: at most 50 entries, each through normalizeAffectedFile (no globs, traversal or absolute paths), deduplicated in first-seen order;\n  - unknown keys are refused; empty lists are omitted.\n  The contract is already approval-material, so a requiredChecks change advances planRevision through the existing F03 path, unchanged.\n- New pure module packages/moe-daemon/src/delivery/requiredChecks.ts:\n  - definitionDigest(defs): lowercase sha256 hex of the canonical JSON of validated definitions, with key order id, command, configs, scripts, assertionRoots and lists as stored.\n  - protectedPaths(defs): the sorted, deduplicated union of every path list, each with its kind.\n- tools/submitPlan.ts inputSchema declares requiredChecks inside executionContract.\n\nNOT in scope:\n- measuring file content or any Git read (CQ-V01b);\n- candidate protected entries, the delivery predicate and get_context (CQ-V01);\n- running checks;\n- docs, held for CQ-V12;\n- verified-local.\nContracts without requiredChecks behave exactly as today.\n\nVerification (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "validateExecutionContract accepts valid requiredChecks losslessly (normalized paths, first-seen dedupe, empty lists omitted) and refuses each invalid shape with INVALID_INPUT naming the exact field. Invalid shapes: over 20 definitions, a bad or duplicate id, a blank, multiline or oversized command, an unnormalized, glob, absolute or traversal path, over 50 paths, an unknown key. Proven by new vitest cases.",
+    "submit_plan accepts executionContract.requiredChecks through its inputSchema and persists it. A resubmission that changes only requiredChecks advances planRevision, and an identical resubmission does not. Proven by new vitest cases.",
+    "definitionDigest is deterministic: equal definitions give the same digest, and any changed id, command or path gives a different one. protectedPaths returns the sorted, deduplicated union with each path's kind. Proven by unit tests.",
+    "Contracts without requiredChecks are unchanged: the existing F03 contract tests pass unmodified.",
+    "Fresh `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-bf86954dc6bc43279d96d77cf0ebff88",
+    "task-709f669139764663926c04ed72cdae5d"
+  ],
+  "priority": "HIGH",
+  "order": 227.3,
+  "comments": [
+    {
+      "id": "comment-040cf4afeec74ffca323eaae180c4f7e",
+      "author": "architect-6e3edf85",
+      "content": "Superseded by task-72efb0b663ec4b3da35a685ebb30ed34 (same title and scope), and archived before any work. Two DoD items here contradicted the code. DoD 2 said an identical resubmission does not advance planRevision, but derivePlanRevision advances it on every PLAN_SUBMITTED. DoD 4 said the existing F03 tests pass unmodified, but state/executionContract.test.ts pins the exact allowlist (FIELDS and the submit_plan schema parity check), and DoD 1-2 put requiredChecks inside the contract. The replacement proves materiality through updateTask writes, and allows only allowlist extensions.",
+      "timestamp": "2026-10-24T22:42:56.159Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T22:38:40.481Z",
+  "updatedAt": "2026-10-24T22:43:00.829Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T22:41:06.901Z"
+  },
+  "contextFetchedBy": [
+    "architect-6e3edf85"
+  ]
+}

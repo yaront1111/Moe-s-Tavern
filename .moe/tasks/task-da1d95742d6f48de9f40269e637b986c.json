@@ -1,0 +1,107 @@
+{
+  "id": "task-da1d95742d6f48de9f40269e637b986c",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: check-dispatch landedRunCheck calls runCheckJob without the now-required dependencies dir list",
+  "description": "CQ-R11e (task-001d8ab3) makes runCheckJob's `dependencies` input REQUIRED: 0-16 lockfile dirs, where [] means no dependency phase. scripts/local-runner/check-dispatch.mjs landedRunCheck (CQ-V04b, line ~134) passes no `dependencies`, so every real dispatch now rejects with CHECK_JOB_INPUT_INVALID. That fails closed, and the dispatch tests inject runCheck, so nothing in CI catches it. The fix needs a decision on who maps a check definition to its lockfile dirs (CQ-R13 / V epic). Do not silently default to [].",
+  "definitionOfDone": [
+    "check-dispatch passes runCheckJob a decided dependencies list for each owed check, never an implicit default; a test pins it against the real runCheckJob input contract."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Parked as superseded. QA's R11e reject #1 (14:44Z) puts the check-dispatch landedRunCheck caller integration into R11e's own rework under DoD 2. Archive this row once 001d8ab3 is DONE, or re-promote it if anything is left over.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-001d8ab383ef41088e045b2e41ed0e1e"
+  ],
+  "priority": "MEDIUM",
+  "order": 310.6,
+  "comments": [
+    {
+      "id": "comment-1d7244da92924ce68c713e847cd37fe0",
+      "author": "governor-693b7073",
+      "content": "@architect-899a90d6 Governance facts for your plan. This is not a ruling; the planner decides the disposition.\n1. The move to PLANNING at 15:19:29Z was a human board drag: TASK_UPDATED with no workerId and the order reset to 310.6. Treat it as the human wanting this row resolved.\n2. This row was parked at 14:45Z as superseded. Since then, R11e rev 2 (task-001d8ab3) was submitted and approved at 15:13:28Z. It is WORKING now with worker-262588d0 (Codex), on step 1 of 4.\n   - Its step 2 edits scripts/local-runner/check-dispatch.mjs. owedChecks gets `dependencies: lockfileDirs(def.configs)`, a decided list. landedRunCheck passes `dependencies` through with NO default. A check without an array stops with RUNNER_DEPENDENCIES_UNDECLARED before any VM starts. landedRunCheck is exported with a `steps` arg, so tests drive the real runCheckJob (QA's issue 2).\n   - That matches this row's DoD item for item: \"a decided dependencies list for each owed check, never an implicit default; a test pins it against the real runCheckJob input contract\".\n3. R11e's step 2 names one residual: the quality-gate obligation has no dependency source, and it flags that \"to the epic's final task\".\n4. This row dependsOn 001d8ab3, so nothing planned here is claimable before R11e is DONE. Any plan step that edits check-dispatch.mjs would duplicate R11e's in-flight edit.\nYour options:\n- plan a verify-and-close against R11e's landed bytes;\n- scope this row to a residual R11e does not cover;\n- archive it as covered (the holder may archive a held PLANNING row).",
+      "timestamp": "2026-10-30T15:20:52.964Z"
+    },
+    {
+      "id": "comment-e052a64ff28646fbabb4a7ad06c6a538",
+      "author": "architect-899a90d6",
+      "content": "Archived on the human's REPL call (architect-899a90d6, 15:2xZ). The governor's 'archive once 001d8ab3 is DONE' is pulled forward, and nothing is planned here.\n\nR11e rev 2 (task-001d8ab3, WORKING, steps 1-2 of 4 done in the working tree) already delivers this DoD:\n- check-dispatch.mjs: lockfileDirs(def.configs) gives each owed check's dirs from the approved definition. An exact 'package-lock.json' gives '.', and '<dir>/package-lock.json' gives '<dir>'.\n- An owed gate that no definition covers stops before any VM with RUNNER_DEPENDENCIES_UNDECLARED, so there is no implicit default.\n- landedRunCheck(projectPath, steps) is exported and passes `dependencies` through, with no default.\n- local-runner-dispatch.test.mjs row D runs the real landedRunCheck adapter. Without dependencies it gets CHECK_JOB_INPUT_INVALID and never provisions; with [] it reaches provision.\n\nR11e's DoD 2 and QA reject #1 are now the only tracker for this fix. Design: Serena mem decision-local-runner-check-dependency-dirs.\n\nUndo: set_task_status ARCHIVED -> BACKLOG.",
+      "timestamp": "2026-10-30T17:29:22.058Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T14:25:50.462Z",
+  "updatedAt": "2026-10-30T17:30:08.806Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T15:19:29.829Z",
+    "seq": 2
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:44:04.132Z"
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "architect-899a90d6"
+  ],
+  "commits": [
+    {
+      "sha": "6f916be7ce824e2abf37cf28d4c6cc1adf2e11ef",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-bd1eb82d@2026-10-30T14:44:05Z",
+      "paths": [
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+        ".moe/tasks/task-f0abb6d69bd8466982d7bbb6543e31bc.json"
+      ],
+      "recordedBy": "architect-bd1eb82d",
+      "recordedAt": "2026-10-30T14:54:12.736Z",
+      "treeId": "a0024a97c998592fd184bb02785a1ce73d627ec1",
+      "status": "BACKLOG",
+      "pushed": true
+    },
+    {
+      "sha": "54886465791f5a2f096c3f1facdb79fe8a1b46dd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-899a90d6@2026-10-30T15:19:32Z",
+      "paths": [
+        ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+        ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+        ".moe/tasks/task-da1d95742d6f48de9f40269e637b986c.json"
+      ],
+      "recordedBy": "architect-899a90d6",
+      "recordedAt": "2026-10-30T17:30:08.805Z",
+      "treeId": "c6297617f4046c5ca9136e2a6b16752d1d6cd41b",
+      "status": "ARCHIVED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+    ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+    ".moe/tasks/task-f0abb6d69bd8466982d7bbb6543e31bc.json",
+    ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+    ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+    ".moe/tasks/task-da1d95742d6f48de9f40269e637b986c.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-899a90d6@2026-10-30T15:19:32Z",
+    "at": "2026-10-30T17:30:08.805Z"
+  }
+}

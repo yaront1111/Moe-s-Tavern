@@ -1,0 +1,259 @@
+{
+  "id": "task-ab029075e214413483456f26eef0269a",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11e3] Host offline npm dependency cache",
+  "description": "Objective: from a candidate's package-lock.json files, the host builds an offline npm dependency cache in which every package is verified by the lockfile's OWN integrity hash. The network-isolated check VM can then install dependencies with no network at all. This is the dependency half of the human's CQ-R11e decision (architect REPL, 2026-10-30): an offline cache, with `npm ci --offline --ignore-scripts` in the guest.\n\nSplit from CQ-R11e (task-001d8ab3) by architect-e4b7eee0 on 2026-10-30. It depends on CQ-R11e1 (task created alongside this one) for the shared bounded https downloader that agent-cache.mjs exports.\n\nDeliverable: a new scripts/local-runner/dependency-cache.mjs exporting buildDependencyCache({ lockfiles: [{dir, bytes}], cpu, cacheDir }, { fetch }).\n- Parse each lockfile; only lockfileVersion 2 or 3 is accepted.\n- Accept ONLY registry tarball entries: a `resolved` https URL on the fixed registry host registry.npmjs.org, plus an sha512 `integrity`.\n- Refuse git, file, link, http, other-host, alias-to-tarball and integrity-less entries with fixed codes, BEFORE any download.\n- Skip optional entries whose os/cpu fields exclude linux plus the guest cpu.\n- Download each package through CQ-R11e1's shared downloader, and verify the SRI sha512 before keeping it. Per-file bytes, total bytes and entry count are all bounded.\n- Write an npm-compatible offline form, deterministic for a given lockfile set. Choose and document ONE of:\n  - npm's cacache layout, which `--offline --cache <dir>` reads;\n  - tarballs a loopback-only registry can serve inside the guest's netns, with npm's replace-registry-host.\n- Resolve a frozen {cacheDir, digest, packages, bytes}.\n- The host never runs npm, node scripts or candidate code to BUILD the cache.\n\nTests, in scripts/tests/local-runner-check.test.mjs:\n- fixture lockfiles and an injected fetch;\n- refusal rows;\n- one end-to-end row proving that the host's own npm accepts the result. `npm ci --offline --ignore-scripts` (or the loopback-registry form) installs the fixture lockfile in a temp project with no network: npm_config_registry is pointed at an unroutable address, and the test fails if npm reaches out.\n\nScope boundaries:\n- No streaming into the guest and no install phase (CQ-R11e4).\n- No toolchain (CQ-R11e1/R11e2), no orchestration (CQ-R11e).\n- No .moe edits; no verified-local claim.\n- Fixed error codes, with no URL, path or body in any message.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-check.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "Only lockfile v2/v3 registry entries whose resolved URL is https on the fixed registry host, with sha512 integrity, are accepted. Every other entry kind fails closed with a fixed code before any download. Shown by tests.",
+    "Each tarball is kept only when its bytes match its lockfile integrity. A mismatch, an oversized body, a non-https redirect or an interrupted transfer fails closed with nothing partial kept. Shown by tests with an injected fetch.",
+    "The produced cache lets npm install the fixture lockfile offline with --ignore-scripts and no network reachable. Shown by an end-to-end test.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. Two tasks land before this one:\n- CQ-R11e3a (task-e40ad69f) creates scripts/local-runner/dependency-cache.mjs with admitLockfiles, dependencyError, the DEPENDENCY_* admission codes and rows DA1-DA5.\n- CQ-R11e1 (task-b799056d) exports the shared bounded downloader from agent-cache.mjs and adds its rows to this file.\nRe-read dependency-cache.mjs, agent-cache.mjs (the downloader's JSDoc and options record) and this file first.\n\nReuse caught(), sha() and R11e1's injected-fetch fixture helper, if it added one. Its shape is the R10d2/image-cache one: each call returns {ok, status, url, headers, body: ReadableStream}. Otherwise write one small helper. Rows use the prefix DC: grep `test('DC` first, and note that DA belongs to R11e3a.\n\nHelpers (keep them small):\n- tgz(files): a minimal ustar writer plus zlib.gzipSync, for `package/package.json` fixtures. Each file gets a 512-byte header with name, mode 0000644, size in octal, typeflag '0', magic 'ustar\\0' '00' and checksum, then data padded to 512, and the archive ends with two zero blocks. The architect's prototype of exactly this was installed by npm 12.2.0.\n- sri(buf) = 'sha512-' + base64(sha512(buf)).\n- canonical(name) = `https://registry.npmjs.org/${name}/-/${name.split('/').pop()}-1.0.0.tgz`.\n- lockOf(packages): the Buffer of a lockfileVersion 3 JSON.\n- listing(dir): the recursive file list with each file's sha256.\n\nRows:\n\nDC1, refusal before any download. Use a recording fetch and a fresh mkdtemp cacheDir.\n(a) A non-record input, an extra key, and a missing, relative or '' cacheDir each give DEPENDENCY_INPUT_INVALID.\n(b) An admission refusal reaches the caller with R11e3a's code and text unchanged. Each lockfile has a valid FIRST entry, and then one of:\n- a git+https entry: DEPENDENCY_SOURCE_UNSUPPORTED;\n- a sha1 integrity: DEPENDENCY_INTEGRITY_INVALID;\n- a `src/x` key: DEPENDENCY_LOCATION_INVALID.\nFor each case, fetch was called 0 times and cacheDir is still empty or absent.\n\nDC2, only verified bytes are kept. Use one-package lockfiles, one per failure, each in a fresh cacheDir:\n1. the body is another tarball's bytes: DEPENDENCY_CHECKSUM_MISMATCH;\n2. the body is over MAX_PACKAGE_BYTES, both as a content-length over the bound and as a stream that enqueues one reused 1 MiB chunk past it: DEPENDENCY_TOO_LARGE;\n3. a 302 to an http://registry.npmjs.org/ location: DEPENDENCY_DOWNLOAD_FAILED;\n4. a body stream that errors after its first chunk: DEPENDENCY_DOWNLOAD_FAILED.\nEach case rejects with the exact code and its fixed message, and the message contains no 'http', no 'registry' and no cacheDir text. The recursive cacheDir listing has no '.part' file and no kept file for that digest. A following call with the right fetch then succeeds, so nothing poisoned the cache.\n\nDC3, the verified tree. Lockfile '.' holds A and the scoped B. Lockfile 'sub' holds B again (the same integrity, at a nested location) and C. The fetch serves A, B and C by their canonical URLs.\n- The result is deeply frozen. packages === 3, and fetch was called exactly 3 times (B once).\n- tree.entries are exactly the three `_cacache/content-v2/sha512/<h[0:2]>/<h[2:4]>/<h[4:]>` paths plus 'moe-dependencies.json', all executable:false.\n- Each content entry's data equals its fixture bytes. The manifest's data is exactly Buffer.from('{\"version\":1,\"dirs\":[\".\",\"sub\"]}').\n- digest === tree.digest, and both equal validateImport(<the same entries, built independently in the test>).digest. bytes === the sum of every tree entry's size.\n- The same lockfiles in reverse order give the same digest.\n- A second call on the same cacheDir, with a fetch that throws, gives the same digest with 0 fetch calls: a cache hit.\n- After one kept file in cacheDir is overwritten with other bytes, the next call never puts those bytes in the tree. R10d2's cache-hit contract says it re-downloads once: fetch is called once and the digest is unchanged. If the landed downloader refuses instead, assert that DEPENDENCY_ code.\n\nDC4: OFFLINE_INSTALL_ARGS is frozen and deepEqual ['--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0'].\n\nDC5, end to end with the host's own npm and no network, { timeout: 180_000 }.\n- npmCli is <dirname(process.execPath)>/node_modules/npm/bin/npm-cli.js on win32, and <dirname(process.execPath)>/../lib/node_modules/npm/bin/npm-cli.js elsewhere. Skip the row, with that reason, ONLY when that file is missing or process.arch is not x64 or arm64. The verification run must show it ran. cpu = process.arch.\n- Fixtures: moe-fixture-a@1.0.0, @moe-fixture/b@1.0.0, and the optional moe-fixture-aix@1.0.0 with os ['aix']. The cache skips aix, and npm skips it on every CI OS.\n- The project package.json has dependencies a and b, optionalDependencies aix, and scripts.postinstall `node -e \"require('fs').writeFileSync('root-ran.txt','x')\"`. The root '' entry of the v3 lockfile mirrors its dependencies.\n- Call buildDependencyCache({ lockfiles: [{ dir: '.', bytes }], cpu, cacheDir }, { fetch: fixtureFetch }). Write each tree entry to <base>/tree/<path>.\n- On POSIX, chmod files 0444 and directories 0555; t.after restores 0644/0755 before rmSync. Then take the listing.\n- Counting registry: http.createServer on 127.0.0.1:0, which counts every request and answers 500.\n- Run with an ASYNC spawn, never spawnSync: a blocked event loop would stop the in-process server from counting. The command is process.execPath with [npmCli, 'ci', ...OFFLINE_INSTALL_ARGS, '--cache', treeDir], with cwd set to the project and a minimal env:\n  - PATH: dirname(process.execPath) plus '/usr/bin:/bin', or plus %SystemRoot%\\System32 on win32;\n  - HOME set to a temp home. On win32 also set USERPROFILE, TEMP and TMP to it, and pass SystemRoot and ComSpec through.\n  - npm_config_registry=http://127.0.0.1:<port>/;\n  - npm_config_userconfig and npm_config_globalconfig set to files that do not exist.\n- Assert:\n  - exit 0;\n  - node_modules/moe-fixture-a/package.json and node_modules/@moe-fixture/b/package.json byte-equal the fixtures';\n  - node_modules/moe-fixture-aix is absent, and so is root-ran.txt;\n  - the registry received 0 requests;\n  - the tree listing is unchanged.\n- Positive control: in a fresh project copy, run OFFLINE_INSTALL_ARGS without '--ignore-scripts'. It must exit 0 with root-ran.txt present and still 0 registry requests. This shows the marker's absence above is not vacuous.\n\nArchitect prototype, npm 12.2.0 on Node 24.21, 2026-10-30: this exact setup passes. Three findings shaped it:\n- Without --no-update-notifier, the server sees 1 request even under --offline.\n- Without --logs-max=0, a writable cache gains _logs. That is the Windows case, where chmod is a no-op.\n- npm 12 blocks DEPENDENCY install scripts by default (its allow-scripts policy), so the marker must be the ROOT postinstall.\n\nRun the file. The new rows must fail only because buildDependencyCache and OFFLINE_INSTALL_ARGS do not exist yet. Every E, K, C, DA and R11e1 row still passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "DC1-DC5 appended to scripts/tests/local-runner-check.test.mjs; the import lines for dependency-cache.mjs (+ MAX_DEPENDENCY_BYTES, MAX_PACKAGE_BYTES, OFFLINE_INSTALL_ARGS, buildDependencyCache) and source-snapshot.mjs (+ MAX_IMPORT_BYTES, validateImport) were extended. Reuses R11e1's fixtureFetch/scratchDir/refusedAs and R11e3a's sri/regUrl/ok/lock; new helpers: tgz (minimal ustar+gzip), tarball, entryOf, servedBy, dependencyRefusal, listing. RED: the file fails to link with 'does not provide an export named MAX_DEPENDENCY_BYTES', the only failure reason (static named imports, so E/K/C/DA/TC rows cannot run until step 2 adds the exports). Pre-existing dirty peer paths (guest-supervisor.py, local-runner.test.mjs, postflight.*) untouched.",
+      "startedAt": "2026-10-30T06:42:15.984Z",
+      "completedAt": "2026-10-30T06:45:15.007Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/local-runner/dependency-cache.mjs: buildDependencyCache and OFFLINE_INSTALL_ARGS. Edit R11e3a's LANDED bytes, and leave admitLockfiles, its rules and the DA rows unchanged.\n\nImports:\n- the shared downloader that CQ-R11e1 exports from './agent-cache.mjs', under its landed name and options record;\n- validateImport and MAX_IMPORT_BYTES from './source-snapshot.mjs';\n- readFile and mkdir from node:fs/promises;\n- isAbsolute from node:path;\n- createHash from node:crypto.\n\nConstants:\n- MAX_PACKAGE_BYTES = 67_108_864, per tarball.\n- MAX_DEPENDENCY_BYTES = MAX_IMPORT_BYTES - 65_536: the tree's byte bound, with room left for moe-dependencies.json.\n- export OFFLINE_INSTALL_ARGS = Object.freeze(['--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0']).\n\nOFFLINE_INSTALL_ARGS' comment states the caller contract, `<node> <npm-cli.js> ci ...OFFLINE_INSTALL_ARGS --cache <tree root>`, which CQ-R11e5 mirrors in Python. It also says why each flag is there:\n- --offline: never fetch;\n- --ignore-scripts: no root or dependency lifecycle script runs;\n- --no-update-notifier: the update notifier ignores --offline and would reach the registry;\n- --logs-max=0: no _logs are written into the cache;\n- --no-audit and --no-fund: no further registry calls.\n\nMESSAGES gains these codes, each with fixed text: DEPENDENCY_DOWNLOAD_FAILED, DEPENDENCY_CHECKSUM_MISMATCH, DEPENDENCY_TOO_LARGE, and DEPENDENCY_CACHE_FAILED for local cache I/O.\n\nexport async function buildDependencyCache(input, { fetch } = {}):\n1. Read input once. It must be a plain record with exactly the keys lockfiles, cpu and cacheDir, and cacheDir must be a non-empty string that isAbsolute accepts. Anything else is DEPENDENCY_INPUT_INVALID.\n2. Call const { dirs, packages } = admitLockfiles({ lockfiles, cpu }) synchronously, BEFORE any fs or fetch call. Its refusals propagate unchanged.\n3. mkdir(cacheDir, { recursive: true, mode: 0o700 }), unless the downloader creates it itself. cacheDir is the persistent, controller-private store.\n4. Download sequentially, in packages order. For each package:\n   - Await the shared downloader with the url, the sha512 expectation, maxBytes MAX_PACKAGE_BYTES, a file named by the sha512 hex inside cacheDir, and { fetch }.\n   - Map a rejection by its code's suffix, and never pass the downloader's message through:\n     - _CHECKSUM_MISMATCH → DEPENDENCY_CHECKSUM_MISMATCH;\n     - _TOO_LARGE → DEPENDENCY_TOO_LARGE;\n     - _UNREADABLE, or local I/O → DEPENDENCY_CACHE_FAILED;\n     - anything else, including a non-Error thrown by a hostile fetch → DEPENDENCY_DOWNLOAD_FAILED.\n   - Read the kept file once; a read error is DEPENDENCY_CACHE_FAILED. Recompute sha512 over the bytes in memory. A length over MAX_PACKAGE_BYTES, or a digest other than the admitted one, is DEPENDENCY_CHECKSUM_MISMATCH. The tree carries exactly these verified bytes, so a file swapped after the downloader's check never reaches the guest.\n   - Add the length to total. Once total passes MAX_DEPENDENCY_BYTES, refuse with DEPENDENCY_LIMIT_EXCEEDED before the next download.\n5. Build the entries:\n   - each package as {kind:'file', path: `_cacache/content-v2/sha512/${h.slice(0,2)}/${h.slice(2,4)}/${h.slice(4)}`, executable:false, data};\n   - {kind:'file', path:'moe-dependencies.json', executable:false, data: Buffer.from(JSON.stringify({version:1, dirs}))}.\n   tree = validateImport(entries). A snapshot error becomes DEPENDENCY_LIMIT_EXCEEDED for SNAPSHOT_LIMIT_EXCEEDED, and DEPENDENCY_INPUT_INVALID otherwise. No SNAPSHOT_* code escapes.\n6. Return Object.freeze({ tree, digest: tree.digest, packages: packages.length, bytes: <the sum of tree entry sizes> }).\n\nModule header:\n- The cacache layout, and why it is enough. pacote reads any entry that has both integrity and resolved by digest (cacache.get.stream.byDigest), so no index-v5 entries and no registry are needed. DC5 proves it.\n- The tree and manifest contract: CQ-R11e4 streams the tree with hostFrames, and CQ-R11e5 reads the dirs in moe-dependencies.json.\n- cacheDir is the persistent controller-private store, and the tree is the per-call subset.\n- The host never runs npm, node scripts or candidate code to build the cache.\n\nError handling:\n- Every rejection is a dependencyError with a fixed DEPENDENCY_ code and fixed text, with no URL, path, body or downloader message.\n- Nothing stays in cacheDir except files that the shared downloader verified and renamed.\n- Concurrent builds that share cacheDir are safe through its exclusive .part and atomic rename. The same digest gives the same name and identical bytes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/dependency-cache.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "dependency-cache.mjs: buildDependencyCache, OFFLINE_INSTALL_ARGS (exact plan order), MAX_PACKAGE_BYTES=64 MiB, MAX_DEPENDENCY_BYTES=MAX_IMPORT_BYTES-65536, and 4 new codes (DOWNLOAD_FAILED, CHECKSUM_MISMATCH, TOO_LARGE, CACHE_FAILED) with fixed text. Uses R11e1's landed fetchPinnedFile({url, file:<cacheDir>/<sha512>.tgz, size:null, maxBytes, algorithm:'sha512', digest}). PINNED_<kind> maps by suffix; PINNED_INPUT_INVALID maps to CACHE_FAILED because every option is an admitted value, so it can only mean a cached link or non-file. Admission runs before mkdir/fetch. Each kept file is re-read through an O_NOFOLLOW handle, bounded to MAX_PACKAGE_BYTES+1, and re-hashed in memory. validateImport seals the tree; a SNAPSHOT_* error maps to LIMIT_EXCEEDED or INPUT_INVALID.\nDeviations from the plan text:\n(1) readInput also refuses a cacheDir containing a control character, mirroring agent-cache's CONTROL rule, and refuses a non-function fetch, both before admission (DC1 rows).\n(2) The kept file is read through a bounded no-follow descriptor instead of a plain readFile, so a swapped symlink or device cannot be followed or read unbounded.\nTests:\n- Strengthened after mutation probes: DC3 checks cacheDir mode 0700, and that a directory at a kept name gives CACHE_FAILED with 0 fetches. DC5 adds a 'missing tarball' install that fails with 0 registry requests, which makes --offline load-bearing (the no---offline mutant survived without it).\n- 14 mutants probed; 12 killed. Survivors: (a) no in-memory re-hash, which is defense-in-depth behind fetchPinnedFile with no deterministic swap seam; (b) no --logs-max=0 on POSIX, where the read-only tree already blocks _logs (DC4 pins the flag, and on Windows the listing check covers it).\n- The full file was green before these test additions: 46 tests, 45 pass, 1 skip (K9, root-only). DC rows after the additions: 5/5 pass.",
+      "startedAt": "2026-10-30T06:45:15.841Z",
+      "completedAt": "2026-10-30T06:49:42.357Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, after green.\n\n1. Run env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner-check.test.mjs.\n   - It must exit 0, with DC1-DC5 run. DC5 must NOT be skipped: its ok line carries no '# SKIP'.\n   - Every E, K, C, DA and R11e1 row still passes.\n   - Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. Size. Right after first green, run git diff --numstat on the two files. Count only this task's lines, against R11e3a's and R11e1's landed bytes; additions plus deletions must total at most 400. If over, merge rows that share setup (DC2's four failures in one table, DC3's phases in one test) rather than dropping cases.\n3. `git diff --check` is clean on both files, and a read-only `git status --short` shows this task changed only those two. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code. Never weaken a DA, DC or R11e1 row, never skip DC5 to get green, and never let a test reach the network.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Fresh: env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner-check.test.mjs gave exit 0, with 46 tests: 45 pass, 0 fail and 1 skip (K9, root-only, pre-existing). DC1-DC5 all ran; DC5's line carries no SKIP. Every E/K/C/DA/TC row passes. Size by git diff --numstat: dependency-cache.mjs +101/-1, local-runner-check.test.mjs +188/-2, so 292 in total (cap 400). The 3 deletions are the two import lines R11e3a/R11e1 landed, now extended. git diff --check is clean on both. git status --short scripts/local-runner scripts/tests shows only my two paths, plus the pre-existing peer paths postflight.ps1/postflight.sh, which I left untouched. Extra regression: local-runner-agents + local-runner-bundle gave 32/32 pass, so agent-cache consumers are unaffected.",
+      "startedAt": "2026-10-30T06:49:43.252Z",
+      "completedAt": "2026-10-30T06:50:21.577Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review and read the two-file diff as an attacker:\n- Can any fs write or fetch happen before admitLockfiles has accepted every lockfile? DC1 must show zero calls.\n- Can bytes reach the tree that were not hashed IN MEMORY against the lockfile's sha512? Consider a swapped cached file, a symlinked entry in cacheDir, and a short read.\n- Can any failure leave a .part or an unverified file in cacheDir, or resolve a partial tree? Consider a mismatch, an oversize, a redirect, an abort, a full disk, and a hostile fetch that throws a string.\n- R11e runs checks in parallel, so two builds can share cacheDir at once. Are the .part names exclusive and the rename atomic? Does the same digest give the same name and identical bytes?\n- Does any message carry a URL, path, body or the downloader's text?\n- Bounds: 16 lockfiles of 16 MiB, 9,999 packages, 64 MiB per tarball and the total byte cap. Is the tree's memory bounded by MAX_IMPORT_BYTES?\n- Does DC5 really prove the offline guarantee: --offline, the counting registry, the unchanged read-only tree, and the positive control? Does it hold on Windows and macOS CI: the npm-cli.js path, the env, no shell, and an arm64 cpu?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 3's command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Adversarial self-review of the two-file diff.\nFIXED: the doc promised fixed-code-only rejections, but a null options argument or a throwing fetch getter rejected with a raw TypeError or the getter's error. Options are now read inside readInput's guarded block (`const { fetch = globalThis.fetch } = options ?? {}`), and a new DC1 assertion covers a throwing fetch getter, which gives DEPENDENCY_INPUT_INVALID with 0 fetches and no cacheDir.\nCHECKED, holds:\n- No fs or fetch happens before admission (DC1 records 0 calls and no cacheDir).\n- Tree bytes are the ones hashed in memory: the buffer is ours, a short read fails the hash, and a symlink fails O_NOFOLLOW → CACHE_FAILED.\n- No .part file survives any failure (fetchPinnedFile's finally). A thrown string becomes DOWNLOAD_FAILED.\n- There is no partial tree, because every throw rejects the whole call.\n- Messages are fixed.\n- Concurrent builds use exclusive pid+random .part files, renamed atomically.\nTHEORETICAL, noted only:\n(1) In R11e1's fetchPinnedFile: if a CORRUPT kept file exists and two builds race, one build's cached() can unlink the file the other just renamed. The other then fails closed with CACHE_FAILED (ENOENT), and no wrong bytes are ever kept. This needs prior corruption of the controller-private cacheDir. It is not my file to change, and not filed.\n(2) ENOSPC during a download surfaces as DOWNLOAD_FAILED, not CACHE_FAILED, because the downloader collapses unknown fs codes.\n(3) Peak memory at a successful max-size build is about 2 × MAX_DEPENDENCY_BYTES (my buffers plus validateImport's copies). The tree itself is bounded by MAX_IMPORT_BYTES, and the total is checked after each package, so a refusal comes before the next download.\n(4) The 256 MiB total cap has no test row (too heavy). validateImport's own SNAPSHOT_LIMIT_EXCEEDED → DEPENDENCY_LIMIT_EXCEEDED backs it up.\nCROSS-PLATFORM: DC1-DC5 (plus DA/TC) also pass under native Windows Node 24.16 / npm 11.13.0, run from WSL. That covers the win32 npm-cli path, the env with SystemRoot/ComSpec, the cmd.exe positive control, and the chmod no-op, where the listing check holds. Linux gate: npm 12.2.0.\nFresh re-run: exit 0, 46 tests, 45 pass, 1 skip (K9). Size: +102/-1 and +189/-2, so 294 ≤ 400. diff --check is clean.",
+      "startedAt": "2026-10-30T06:50:22.455Z",
+      "completedAt": "2026-10-30T06:51:55.182Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
+  "priority": "HIGH",
+  "order": 253.3,
+  "comments": [
+    {
+      "id": "comment-130df21062d74f198cce319fe290fbc0",
+      "author": "architect-e4b7eee0",
+      "content": "Contract pinned by architect-e4b7eee0 on 2026-10-30 for the consumers, CQ-R11e4 (stream), CQ-R11e5 (in-guest install) and CQ-R11e (lifecycle). The description left these open; plan against them.\n\n1. Form: npm's cacache layout. Each kept tarball's bytes go at `_cacache/content-v2/sha512/<hex[0:2]>/<hex[2:4]>/<hex[4:]>`, where hex is the integrity's sha512. No index entries and no loopback registry. pacote reads by digest when an entry has both integrity and resolved, and the end-to-end row proves it.\n\n2. Result: buildDependencyCache resolves a frozen {tree, digest, packages, bytes}.\n- tree is source-snapshot.mjs validateImport's sealed {entries, digest} over that offline tree. Every file is executable:false, plus a root `moe-dependencies.json` = {\"version\":1,\"dirs\":[the lockfile dirs, sorted, '.' for the root]}.\n- digest === tree.digest. This is the snapshot digest framing that the guest's materialize already verifies, so R11e4 streams it with snapshot-transfer.mjs hostFrames unchanged.\n- cacheDir stays the persistent, controller-private download store; the tree is the per-call subset.\n- Bounds: validateImport's own MAX files and bytes, which the guest mirrors.\n\n3. Export OFFLINE_INSTALL_ARGS: the exact npm flags the end-to-end row passes to `npm ci`, always including --offline and --ignore-scripts. R11e5 mirrors it in Python and drift-tests it.\n- Run that row against a READ-ONLY copy of the tree (chmod -R a-w). The guest serves it root-owned (files 0644, directories 0755) to the check identity.\n- If npm needs a writable location, pass one with a flag (for example --logs-dir under a temp home), never a writable cache.\n\n4. Extra refusals, before any download:\n- A packages key that is not a node_modules location, i.e. not only `node_modules/<name>` segments (scoped names allowed). An entry located outside node_modules would make npm extract a tarball into source paths.\n- Entries with `inBundle: true` ship inside their parent's verified tarball: skip them, never fetch them.\n- Do not filter optional entries on `libc`. An extra package is harmless, and a missing one fails the offline install.\n\n5. Error codes: every rejection code starts with DEPENDENCY_ (map the shared downloader's codes). R11e passes them through and falls back to CHECK_DEPENDENCIES_FAILED.\n\nKnown consequence, not in scope: packages/moe-claude-plugin/package-lock.json has 49 dev entries with neither resolved nor integrity. They are refused, so a check that lists that directory is infra-failure until its lockfile is regenerated.",
+      "timestamp": "2026-10-29T22:52:50.792Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:37:19.825Z",
+  "updatedAt": "2026-10-30T07:05:45.353Z",
+  "dependsOn": [
+    "task-b799056d744749ba8ca9e4888f3452c4",
+    "task-e40ad69f14194e2c89b43727588c2b25"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:57:55.595Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T07:05:14.023Z",
+    "wallClockMs": 29238428
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-5ebbf433",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T23:16:11.836Z",
+  "executionContract": {
+    "intendedBehavior": "buildDependencyCache({lockfiles, cpu, cacheDir}, {fetch}) admits the lockfiles through admitLockfiles before any I/O. It then downloads each admitted registry tarball through CQ-R11e1's shared bounded downloader into the persistent cacheDir. Only bytes that are re-hashed in memory against the lockfile sha512 are kept. It resolves a frozen {tree, digest, packages, bytes}, where tree is validateImport over the npm cacache content-v2 files plus moe-dependencies.json. OFFLINE_INSTALL_ARGS is the exact flag set with which npm ci installs offline from that tree, read-only and with no network.",
+    "acceptanceCriteria": [
+      "No fetch or fs write happens before admission succeeds (DC1).",
+      "A mismatch, an oversize, a non-https redirect or an interrupted transfer rejects with a fixed DEPENDENCY_ code and leaves no .part or unverified file (DC2).",
+      "The tree is exactly the verified content-v2 files plus moe-dependencies.json. It is deterministic, deduplicated and reused from cacheDir (DC3).",
+      "The host npm installs the fixture offline from a read-only tree, with 0 registry requests and no scripts, and a positive control (DC5)."
+    ],
+    "invariants": [
+      "Error messages are fixed text, with no URL, path, body or downloader message.",
+      "The host never runs npm, node scripts or candidate code to build the cache.",
+      "No verified-local or isolation claim is made, and there are no .moe edits."
+    ],
+    "compatibility": [
+      "R11e3a's admitLockfiles and its DA rows are unchanged.",
+      "The shared downloader, fetchAgentBinary, fetchNodeToolchain and R11e1's rows are unchanged.",
+      "The result shape {tree, digest, packages, bytes} and the OFFLINE_INSTALL_ARGS order are as consumed by CQ-R11e, R11e4 and R11e5."
+    ],
+    "approvedScope": [
+      "buildDependencyCache, OFFLINE_INSTALL_ARGS, MAX_PACKAGE_BYTES, MAX_DEPENDENCY_BYTES, and the codes DEPENDENCY_DOWNLOAD_FAILED, DEPENDENCY_CHECKSUM_MISMATCH, DEPENDENCY_TOO_LARGE and DEPENDENCY_CACHE_FAILED, in dependency-cache.mjs",
+      "Rows DC1-DC5 in scripts/tests/local-runner-check.test.mjs"
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner-check.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected alternatives:\n- One task holding admission, download and the end-to-end row. It measured about 450-500 lines against the 400-line QA cap, so it was split by SPIDR Interface: CQ-R11e3a (task-e40ad69f) holds the pure admission.\n- A loopback registry in the guest netns, and writing index-v5 entries. Neither is needed: the architect prototype shows npm 12.2.0 installs offline from content-v2 files alone, from a read-only tree.\n- Building the cache with npm or pacote on the host. Forbidden.\n- Concurrent downloads. Sequential is simpler, and the persistent cacheDir makes refills rare.\n- Adding dependency-cache.mjs to local-runner-bundle.test.mjs's required list. check-lifecycle.mjs imports it, so it is not an entry point, and local-runner/** already ships it.\n- A dependency postinstall as the --ignore-scripts control. npm 12 blocks dependency scripts by default, so the ROOT postinstall (candidate code) is the meaningful control.\n- Passing a per-call maxBytes equal to the remaining total budget. Rejected for a simple running total checked after each kept file.",
+    "codebaseInsights": "How the consumers use this task:\n- validateImport entries carry their data in memory, and CQ-R11e4's installDependencies streams the tree unchanged with snapshot-transfer.mjs hostFrames.\n- CQ-R11e (task-001d8ab3) calls steps.dependencies({lockfiles, cpu, cacheDir}) only for non-empty lockfiles. It maps rejections with /^DEPENDENCY_[A-Z0-9_]{1,60}$/, falling back to CHECK_DEPENDENCIES_FAILED, and requires digest === tree.digest.\n- CQ-R11e5 runs [node, npm-cli.js, 'ci', ...OFFLINE_INSTALL_ARGS, '--cache', tree] and mirrors OFFLINE_INSTALL_ARGS as a Python tuple pinned by its drift test. Keep the array's exact order.\n\nASSUMED INTERFACES, none landed at plan time:\n(1) CQ-R11e3a's admitLockfiles({lockfiles, cpu}) → frozen {dirs, packages:[{integrity, sha512, url}]}, plus dependencyError and the DEPENDENCY_* admission codes, exactly as task-e40ad69f's description pins them.\n(2) CQ-R11e1's shared downloader export from agent-cache.mjs. architect-bd1eb82d was still planning it; my capability list is in comment-a31ca860 on that task. It needs sha512 verification, a per-call maxBytes, a named file in cacheDir, an injected fetch, cache-hit re-verification and suffix-mappable codes. If the landed export cannot verify sha512, report_blocked naming R11e1; never fork a second downloader or edit agent-cache.mjs.\nThe fake fetch shape is {ok, status, url, headers, body: ReadableStream}, as in the R10d2 and image-cache tests.",
+    "risks": "- The host's test npm can differ from the guest's: 12.2.0 here, 10/11 on CI's setup-node, and whatever toolchain R11e1 pins for the guest. All six flags exist since npm 8.\n- Windows: chmod is a no-op. The unchanged-listing assertion plus --logs-max=0 still catch writes, and the positive control needs SystemRoot and ComSpec for cmd.exe.\n- macOS CI runs on arm64, so pass cpu = process.arch.\n- DC5 must use an async spawn. With spawnSync, a regression that reaches the registry would hang instead of being counted.\n- Size: measure right after first green.\n- packages/moe-claude-plugin/package-lock.json is refused: 49 entries have no resolved. This is known and out of scope.\n- The global forbidden patterns apply to test strings too: never write the double-underscore proto literal or an eval call.",
+    "keyFiles": [
+      "scripts/local-runner/dependency-cache.mjs",
+      "scripts/local-runner/agent-cache.mjs",
+      "scripts/local-runner/source-snapshot.mjs",
+      "scripts/local-runner/snapshot-transfer.mjs",
+      "scripts/local-runner/image-cache.mjs",
+      "scripts/tests/local-runner-check.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T23:16:11.942Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:42:15.984Z",
+  "reviewStartedAt": "2026-10-30T06:52:28.126Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner-check.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ DC1 input and admission refusals reach the caller before any fetch or cache write\n✔ DC2 a mismatched, oversized, http-redirected or interrupted tarball fails closed, keeps nothing and poisons nothing\n✔ DC3 the tree is exactly the verified content-v2 files plus moe-dependencies.json, deterministic, deduplicated and reused\n✔ DC4 OFFLINE_INSTALL_ARGS is the frozen offline npm ci flag set, and the byte bounds are fixed\n✔ DC5 the host npm installs the fixture offline from the read-only tree, with no registry request and no script run (625.697095ms)\n﹣ K9 under the real mounts a root check job cannot write, chmod, rename, replace or unlink a protected file, nor rename its directory # SKIP needs root (pre-existing)\nℹ tests 46\nℹ suites 0\nℹ pass 45\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 12537.744749",
+    "reportedAt": "2026-10-30T06:52:28.126Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/dependency-cache.mjs",
+    ".moe/tasks/task-43088e9b504b49a5ae59c562fcc0c784.json",
+    ".moe/tasks/task-98ffe33f448746e6bc802db0b5624fd0.json",
+    ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+    ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+    ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+    ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json",
+    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+    ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json",
+    ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json",
+    ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+    ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json"
+  ],
+  "completionSummary": "CQ-R11e3 delivered: a host offline npm dependency cache.\n- scripts/local-runner/dependency-cache.mjs (+102/-1) adds buildDependencyCache(input, options):\n  - The input must be an exact {lockfiles, cpu, cacheDir} record. cacheDir must be absolute with no control characters, and fetch must be a function. Options are read inside a guard.\n  - admitLockfiles runs before any I/O. Then mkdir 0700, then sequential fetchPinnedFile({url, file:<cacheDir>/<sha512>.tgz, size:null, maxBytes:64 MiB, algorithm:'sha512'}) from R11e1.\n  - Each kept file is re-read through an O_NOFOLLOW handle bounded to MAX+1 bytes and re-hashed in memory.\n  - The tree is validateImport over the cacache content-v2 paths plus moe-dependencies.json {\"version\":1,\"dirs\":[...]}. It resolves a frozen {tree, digest, packages, bytes}.\n- Also exported: OFFLINE_INSTALL_ARGS (exact plan order, each flag commented), MAX_PACKAGE_BYTES, MAX_DEPENDENCY_BYTES, and the codes DEPENDENCY_DOWNLOAD_FAILED, _CHECKSUM_MISMATCH, _TOO_LARGE and _CACHE_FAILED.\n  - PINNED_* codes map by suffix; PINNED_INPUT_INVALID becomes CACHE_FAILED (a cached link or non-file).\n  - Messages are fixed text. admitLockfiles and DA1-DA5 are unchanged.\n- Tests DC1-DC5 (+189/-2). DC5 runs the host npm (12.2.0) against a read-only tree with a counting loopback registry:\n  - 0 requests, no root postinstall, aix optional skipped, listing unchanged;\n  - a positive control without --ignore-scripts;\n  - a missing-tarball install that fails with 0 requests. Without this case, a no-`--offline` mutant survived.\n- Size: 294 lines (cap 400). diff --check is clean.\n- Fresh gate: exit 0, 46 tests, 45 pass, 1 skip (K9, root-only, pre-existing).\n- DC1-DC5 also pass on native Windows Node 24.16 / npm 11.13.0, run from WSL. local-runner-agents + -bundle: 32/32 pass.\n- Mutation: 15 probes, 13 killed. Two survivors:\n  - the in-memory re-hash, which is defense-in-depth behind fetchPinnedFile and has no deterministic swap seam;\n  - --logs-max=0 on POSIX, where the re",
+  "commits": [
+    {
+      "sha": "4773404ac30b9e87f4675a05d32f7267cc7b5b45",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T06:39:18Z",
+      "paths": [
+        ".moe/tasks/task-43088e9b504b49a5ae59c562fcc0c784.json",
+        ".moe/tasks/task-98ffe33f448746e6bc802db0b5624fd0.json",
+        ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+        ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+        ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json",
+        ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json",
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T06:53:36.394Z",
+      "treeId": "453dc69a9d05296900dae83eb4b562ac1adc11bb",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "5aec497113b86f5b7642812d8840870252ac1b49",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T07:00:21Z",
+      "paths": [
+        ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+        ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+        ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T07:05:45.353Z",
+      "treeId": "6eaac0bc7c1fe7b4d679dab9e02e8f49f39d5927",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T07:00:21Z",
+    "at": "2026-10-30T07:05:45.353Z"
+  },
+  "completedAt": "2026-10-30T07:05:14.023Z",
+  "reviewCompletedAt": "2026-10-30T07:05:14.023Z",
+  "reviewSummary": "Reviewed completion commit 4773404a (on moe/work-2026-10-24; working-tree bytes of both files == HEAD). Diff: 2 files, +291/-3 = 294 ≤ 400; scope matches plan (dependency-cache.mjs + DC1-DC5 only; agent-cache/admitLockfiles/DA/TC rows untouched).\n\nGate re-run fresh: env -i HOME PATH=nvm-node-24.21 node --test scripts/tests/local-runner-check.test.mjs → exit 0, 46 tests, 45 pass, 0 fail, 1 skip (K9 root-only, pre-existing). DC5 ran (no SKIP, 596ms, npm 12.2.0). Cross-platform: DC1-DC5 5/5 under native Windows Node 24.16 from WSL.\n\nDoD:\n1 Registry-only admission before any download: DC1 (git/sha1/location + input refusals, 0 fetches, no cacheDir); full refusal set (file/link/http/other-host/alias/integrity-less) is DA3, and admitLockfiles runs synchronously before mkdir/fetch.\n2 Verified bytes only: DC2 covers mismatch, declared+streamed oversize, 302→http, mid-stream error; each exact fixed code, no http/registry/cacheDir text, cacheDir empty (incl. .part), and a follow-up good build succeeds.\n3 Offline install: DC5 read-only tree, counting loopback registry 0 requests, root postinstall not run, aix optional skipped, listing unchanged; positive control (no --ignore-scripts) runs it; missing tarball fails with 0 requests (makes --offline load-bearing).\n4 Verification evidence present and reproduced.\n\nMutation probes (isolated git-archive copy): 18 run, 16 killed (mkdir-before-admit, content path, code maps x3, manifest bytes, control/absolute checks, error leak, packages/bytes/freeze/mode/executable, options guard, --no-update-notifier). Survivors: in-memory re-hash removal and O_NOFOLLOW removal in readKept. Both are defense-in-depth behind fetchPinnedFile's lstat + hash, with no deterministic swap seam. Non-blocking.\n\nNotes (non-blocking): the MAX_DEPENDENCY_BYTES total cap has no row (validateImport SNAPSHOT_LIMIT backs it). The cached() concurrent-corrupt race in agent-cache is already disclosed. No .moe edits, no verified-local claim.",
+  "requiredCheckAtDone": null
+}

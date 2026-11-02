@@ -1,0 +1,197 @@
+{
+  "id": "task-97eb1979",
+  "epicId": "epic-settings",
+  "title": "add columns",
+  "description": "let me extend the board and add more columns like - deployment\nalso i want to limit amount of tasks in a column, only one deployment is allowed at a time",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Step 1: Add DEPLOYING to TaskStatus type in schema.ts. Add the new status to the TaskStatus union type (after REVIEW, before DONE). Bump CURRENT_SCHEMA_VERSION from 3 to 4. Add columnLimits field to ProjectSettings interface as an optional Record<string, number> to store per-column WIP limits. Error handling: columnLimits defaults to empty object when undefined.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-02-08T21:47:40.819Z",
+      "completedAt": "2026-02-08T21:49:38.241Z",
+      "note": "Added DEPLOYING to TaskStatus union, columnLimits to ProjectSettings as optional Record<string, number>, bumped CURRENT_SCHEMA_VERSION to 4.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Step 2: Create v3_to_v4 migration. Add a new migration file that bumps schema version to 4 and initializes columnLimits with { DEPLOYING: 1 } as the default (matching the user requirement of 1 deployment at a time). Register the migration in migrations/index.ts. Add test for the migration in migrations.test.ts verifying both the version bump and default columnLimits value.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/migrations/v3_to_v4.ts",
+        "packages/moe-daemon/src/migrations/index.ts",
+        "packages/moe-daemon/src/migrations/migrations.test.ts"
+      ],
+      "startedAt": "2026-02-08T21:49:41.838Z",
+      "completedAt": "2026-02-08T21:51:31.000Z",
+      "note": "Created v3_to_v4 migration with columnLimits default. Added tests.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/migrations/v3_to_v4.ts",
+        "packages/moe-daemon/src/migrations/index.ts",
+        "packages/moe-daemon/src/migrations/migrations.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Step 3: Update status transitions in setTaskStatus.ts. Add DEPLOYING to VALID_STATUSES array. Add transition rules: REVIEW can go to DEPLOYING, DEPLOYING can go to DONE or BACKLOG or WORKING (reopen). Also allow DONE -> DEPLOYING for reopens. Error handling: existing isValidTransition function already handles unknown statuses gracefully.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.ts"
+      ],
+      "startedAt": "2026-02-08T21:51:34.843Z",
+      "completedAt": "2026-02-08T21:52:13.533Z",
+      "note": "Added DEPLOYING to transitions and reopen detection.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Step 4: Update the duplicate VALID_TRANSITIONS map in WebSocketServer.ts (UPDATE_TASK handler). Add the same DEPLOYING transitions as Step 3. Add WIP limit enforcement: before allowing a status change TO a column with a limit, count existing tasks in that status and reject with a clear error message if the limit would be exceeded. Read columnLimits from state.project.settings.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-02-08T21:52:17.379Z",
+      "completedAt": "2026-02-08T21:52:44.786Z",
+      "note": "Updated VALID_TRANSITIONS with DEPLOYING. Added WIP limit enforcement in UPDATE_TASK handler.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Step 5: Add WIP limit enforcement to the MCP setTaskStatus tool. Before applying a status transition, check columnLimits from state.project.settings. If the target status has a limit and the current count of tasks in that status meets or exceeds the limit, throw a notAllowed error with a clear message like Column DEPLOYING is at its WIP limit of 1. Error handling: gracefully handle missing columnLimits (treat as no limit).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.ts"
+      ],
+      "startedAt": "2026-02-08T21:52:48.808Z",
+      "completedAt": "2026-02-08T21:53:09.768Z",
+      "note": "Added WIP limit check in MCP setTaskStatus after transition validation. Gracefully handles missing columnLimits.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/setTaskStatus.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Step 6: Update other MCP tools that reference statuses. In searchTasks.ts, add DEPLOYING to the status enum. In listTasks.ts, add deploying count to the counts object. In completeTask.ts, keep moving tasks to REVIEW (no change needed - deployment is a separate manual step). In qaApprove.ts, keep REVIEW -> DONE (no change - deploying is optional). Test these tools handle DEPLOYING tasks correctly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/searchTasks.ts",
+        "packages/moe-daemon/src/tools/listTasks.ts"
+      ],
+      "startedAt": "2026-02-08T21:53:13.669Z",
+      "completedAt": "2026-02-08T21:53:35.268Z",
+      "note": "Added DEPLOYING to search enum and deploying count to listTasks. completeTask and qaApprove unchanged as planned.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/searchTasks.ts",
+        "packages/moe-daemon/src/tools/listTasks.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Step 7: Update StateManager.updateSettings to handle columnLimits field. Ensure the updateSettings method merges columnLimits from incoming settings properly, and sanitize values (must be positive integers). Error handling: reject negative or zero limits.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-08T21:53:38.940Z",
+      "completedAt": "2026-02-08T21:54:09.770Z",
+      "note": "updateSettings now merges columnLimits with validation. normalizeProject preserves columnLimits.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "Step 8: Update the JetBrains plugin board. In MoeToolWindowPanel.kt, add a buildTaskColumn call for DEPLOYING between REVIEW and DONE. In BoardStyles.kt, add a color palette for DEPLOYING status (use a purple/violet theme to distinguish from the green tones of REVIEW/DONE). In MoeBundle.properties, add moe.column.deploying=Deploying string. Display WIP limit indicator in TaskColumn header when a limit is configured (show as count / limit instead of just count).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/BoardStyles.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-02-08T21:54:13.362Z",
+      "completedAt": "2026-02-08T21:55:18.340Z",
+      "note": "Added DEPLOYING column with purple/violet palette. TaskColumn now shows count/limit when wipLimit set. Model updated with columnLimits.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/BoardStyles.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ]
+    },
+    {
+      "stepId": "step-9",
+      "description": "Step 9: Update MoeToolWindowPanel.kt helper functions. Add DEPLOYING to the displayStatus function (pass through as-is). Update mapEpicStatus to map DEPLOYING to ACTIVE or COMPLETED as appropriate. Ensure drag-and-drop between columns works correctly with DEPLOYING.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-02-08T21:55:22.729Z",
+      "completedAt": "2026-02-08T21:55:38.806Z",
+      "note": "Updated mapEpicStatus to map DEPLOYING to COMPLETED. displayStatus already passes DEPLOYING through. Drag-and-drop works via server-side transition validation.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-10",
+      "description": "Step 10: Add and update tests. Add vitest tests in tools.test.ts for: (a) DEPLOYING status transitions work correctly, (b) WIP limit enforcement blocks transitions when limit is reached, (c) WIP limit enforcement allows transitions when under limit, (d) missing columnLimits treated as no limit. Test error messages are clear and actionable.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "startedAt": "2026-02-08T21:55:42.743Z",
+      "completedAt": "2026-02-08T21:56:42.046Z",
+      "note": "Added 9 tests covering DEPLOYING transitions, WIP limits, and search/list tools.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-11",
+      "description": "Step 11: Update documentation. Update docs/SCHEMA.md to document: the new DEPLOYING status in the TaskStatus type, the new columnLimits field in ProjectSettings, the updated state machine diagram showing DEPLOYING, and the WIP limit behavior.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "startedAt": "2026-02-08T21:56:46.113Z",
+      "completedAt": "2026-02-08T21:57:24.908Z",
+      "note": "Updated SCHEMA.md with DEPLOYING status, columnLimits field, updated state machine diagram, and WIP limit documentation.",
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ]
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 1,
+  "createdAt": "2026-02-08T21:08:44.405Z",
+  "updatedAt": "2026-02-08T23:39:36.679Z",
+  "planSubmittedAt": "2026-02-08T21:30:49.180Z",
+  "planApprovedAt": "2026-02-08T21:45:20.771Z",
+  "workStartedAt": "2026-02-08T21:47:40.819Z",
+  "completedAt": "2026-02-08T21:57:49.465Z",
+  "reviewStartedAt": "2026-02-08T21:57:49.465Z",
+  "reviewCompletedAt": "2026-02-08T22:21:13.440Z",
+  "comments": []
+}

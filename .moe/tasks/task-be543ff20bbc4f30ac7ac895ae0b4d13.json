@@ -1,0 +1,259 @@
+{
+  "id": "task-be543ff20bbc4f30ac7ac895ae0b4d13",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-22] JetBrains: chat panel stops selecting a deleted channel, matching VS Code (VSC-6)",
+  "description": "Epic epic-aabc654d. Filed by the VSC-6 architect (task-9f6a725ff14c4c08b4acb203884e7ae5) under the epic rule that a client disagreement is fixed or filed, never left client-specific.\n\nDefect (verified at 9ea87aa6): moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt updateChannels(channels) rebuilds channelModel (a DefaultComboBoxModel) with the combo action listener suppressed (updatingChannels), then re-selects only `channels.find { it.id == previousId }`. When the selected channel was deleted (CHANNEL_DELETED, which MoeMessageDispatcher already removes from state), toSelect is null. currentChannelId stays on the dead id, while DefaultComboBoxModel.addElement auto-selects the first added channel in the combo. The panel then shows one channel in the combo, keeps the dead channel's messages, and sendCurrentMessage posts to the deleted channel. VSC-6 fixes the same case in VS Code: media/chat.js falls back to the first remaining channel, or none.\n\nObjective: when previousId is no longer listed, choose the channel by the same rule as the initial selection (the general-type channel, else the first). Set currentChannelId to it, refresh the messages and pinned panes, and request its messages and pins. When the list is empty, clear currentChannelId so sending is a no-op. Extract the rule as a pure function, for example ChatChannelSelection.choose(channels, previousId): ChatChannel?, so it is unit-testable headless, and have ChatPanel.updateChannels call it. It is a tiny rule, so it is ported with mirrored tests and needs no shared corpus (decision-vscode-plugin-reuse).\n\nNot in scope: VS Code (VSC-6 owns it), the daemon, MoeMessageDispatcher. Not in VSC-18's dependsOn, because that list is at its 20-id cap. Human-gated in BACKLOG.",
+  "definitionOfDone": [
+    "A JUnit 4 test drives the extracted selection rule: a still-listed previous id is kept; a previous id that is gone yields the general-type channel, else the first channel; no previous id yields the general-type channel, else the first; an empty list yields null.",
+    "ChatPanel.updateChannels uses that rule. When the selected channel disappears, currentChannelId moves to the chosen channel and its messages and pins are requested, or currentChannelId becomes null when no channel remains.",
+    "`gradlew.bat test` from cmd.exe passes on native Windows under the jetbrains-gradle lease, with no existing test file weakened."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the pure rule and its JUnit 4 test, both with the Write tool.\n\n1) moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt: `object ChatChannelSelection` in package com.moe.toolwindow. Its only import is com.moe.model.ChatChannel. No Swing, no IDE API.\n- `const val GENERAL_TYPE = \"general\"`.\n- `fun choose(channels: List<ChatChannel>, previousId: String?): ChatChannel?`:\n  - if previousId is non-null and some channel has that id, return that channel;\n  - otherwise return `channels.firstOrNull { it.type == GENERAL_TYPE } ?: channels.firstOrNull()`;\n  - an empty list returns null.\n- KDoc: this one rule serves both the initial selection and the fallback when the selected channel was deleted (CHANNEL_DELETED, or a refresh that no longer lists it). It matches VS Code's VSC-6 fallback in moe-vscode/media/chat.js. 'First' means the daemon's list order (StateManager sorts snapshot channels by createdAt, and persistence seeds #general first), NOT the combo's name order.\n- Error handling: the rule is total. An empty list or an unknown or blank id is ordinary input that yields the fallback or null, never an exception, so callers need no try/catch.\n\n2) moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt: JUnit 4 (org.junit.Test, org.junit.Assert.assertSame/assertNull), headless.\nFixtures use the ChatChannel(id, name, type) constructor:\n- general = ChatChannel(\"chan-general\", \"general\", \"general\");\n- zeta = ChatChannel(\"chan-zeta\", \"zeta\", \"custom\");\n- alpha = ChatChannel(\"chan-alpha\", \"alpha\", \"role\");\n- qa = ChatChannel(\"chan-qa\", \"qa\", \"role\").\nUse assertSame, so the rule must return the listed instance. One @Test per DoD case:\n(a) a still-listed previous id is kept: choose(listOf(zeta, general, qa), \"chan-qa\") is qa, not general. Also choose(listOf(general, zeta), \"chan-zeta\") is zeta.\n(b) a previous id that is gone yields the general-type channel: choose(listOf(zeta, general), \"chan-deleted\") is general, even though zeta comes first.\n(c) a gone previous id with no general-type channel yields the FIRST listed: choose(listOf(zeta, alpha), \"chan-deleted\") is zeta. This pins list order, not name order.\n(d) no previous id: choose(listOf(zeta, general), null) is general, and choose(listOf(zeta, alpha), null) is zeta.\n(e) an empty list yields null: choose(emptyList(), \"chan-general\") and choose(emptyList(), null) are both null.\n(f) determinism: with two general-type channels, the first listed one wins.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt"
+      ],
+      "note": "Wrote ChatChannelSelection.kt (pure rule) and ChatChannelSelectionTest.kt (6 JUnit 4 tests) with Write. Gate runs in step 3.",
+      "startedAt": "2026-11-02T11:21:19.963Z",
+      "completedAt": "2026-11-02T11:21:33.036Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Wire the rule into ChatPanel.updateChannels in moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt, with the Edit tool.\nKeep, unchanged: the fingerprint early-return, `updatingChannels = true` with its try/finally reset, `val previousId = currentChannelId`, and the name-sorted channelModel fill. Replace only the `if (channelModel.size > 0) { ... }` selection block with:\n```\nval toSelect = ChatChannelSelection.choose(channels, previousId)\nif (toSelect != null) channelCombo.selectedItem = toSelect\ncurrentChannelId = toSelect?.id\nif (currentChannelId != previousId) {\n    refreshMessages()\n    refreshPinnedPanel()\n    if (toSelect != null) {\n        service.requestMessages(toSelect.id)\n        service.requestPins(toSelect.id)\n    }\n}\n```\nWhy:\n- A deleted selection now moves to the chosen channel. The combo shows it, which overrides the first element that DefaultComboBoxModel.addElement auto-selected. Both panes redraw from that channel's cache, and its messages and pins are requested; the replies redraw again through setMessages and onPins.\n- An emptied list sets currentChannelId to null. sendCurrentMessage then returns at `currentChannelId ?: return`, refreshMessages shows noMessagesLabel and refreshPinnedPanel hides the pinned pane. The empty model already has no selection after removeAllElements.\n- A still-listed selection is untouched: no refresh, no re-request, as today.\n- The first-time selection (previousId null) now also refreshes. That is harmless: with an empty cache it shows the same no-messages label.\nError handling:\n- Keep the try/finally, so updatingChannels is reset even if a refresh throws.\n- requestMessages and requestPins already return early when disconnected (MoeCommandSender.ensureConnected), and sendMessage swallows send failures, so no new handling is needed.\n- updateChannels runs only on the EDT (onState uses invokeLater), so no locking is needed.\nOut of scope: do not touch the combo action listener, MoeMessageDispatcher, MoeProjectService, the messagesByChannel/pinsByChannel caches (dropping a deleted channel's cache is not asked for) or any VS Code file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "note": "Replaced the selection block in ChatPanel.updateChannels with ChatChannelSelection.choose, with currentChannelId set to the chosen id or null, and refresh and request only on a change. Fingerprint return, try/finally and combo fill are untouched.",
+      "startedAt": "2026-11-02T11:21:36.297Z",
+      "completedAt": "2026-11-02T11:21:42.790Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Gate on native Windows under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease, mem:gotcha-jetbrains-gate-snapshot, mem:gotcha-jetbrains-gradle-from-wsl). WSL has no JDK, so Gradle runs through cmd.exe, in /mnt/d/moe-scratch snapshots only.\n- Acquire the lease (moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId, note}) right before the first Gradle run, and release it (moe.release_resource) right after the last one, also on failure.\n- If the lease is queued, moe.report_blocked with resourceId \"jetbrains-gradle\". Never hold the lease across a block.\n1) Mutant proof:\n   - Build /mnt/d/moe-scratch/vsc22-mutant exactly as the checkRef builds its snapshot.\n   - In that copy of ChatChannelSelection.kt only, restore the old bug: a non-null previousId returns its lookup result directly, even when that is null, so a deleted selection yields null. Use an exact-string replace and assert with grep -c, before and after, that it hit once.\n   - Run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc22-mutant\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.ChatChannelSelectionTest --rerun'`. It must FAIL in cases (b) and (c).\n   - Then rm -rf that directory.\n2) Run the checkRef verbatim, from the repo root. Confirm BUILD SUCCESSFUL, and confirm from the snapshot's moe-jetbrains/build/test-results/test/TEST-*.xml (not the banner alone) that:\n   - TEST-com.moe.toolwindow.ChatChannelSelectionTest.xml exists with tests >= 6 and failures = errors = 0;\n   - the total failures and errors across all the XML files are 0.\n   Report the total test count, labelled Windows.\nError handling for a red run:\n- A compile or test failure in a file outside this task's three files (for example a peer's wip checkpoint on HEAD) follows mem:gotcha-snapshot-gate-peer-wip-checkpoint. Never edit another file to turn the gate green.\n- A failure inside these three files is fixed in the shared tree with Edit, then the checkRef reruns.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "note": "Windows gate under the jetbrains-gradle lease (released). Mutant (a non-null previousId returns its lookup, null included; grep -c 1 before and after) FAILED 3 of 6 tests: goneIdFallsBackToGeneralType (b), goneIdWithoutGeneralFallsBackToFirstInListOrder (c), and firstOfTwoGeneral (f). Mutant dir removed. checkRef: BUILD SUCCESSFUL; ChatChannelSelectionTest 6 tests, 0 failures, 0 errors; Windows total 564 tests, 0 failures, 0 errors.",
+      "startedAt": "2026-11-02T11:21:43.730Z",
+      "completedAt": "2026-11-02T11:23:51.185Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff. This is the only review step.\nWould a test fail if choose:\n- ignored previousId and always returned general (case a);\n- returned null for a deleted id (the original bug, cases b and c);\n- chose by name order (case c);\n- threw on an empty list (case e)?\nPanel checks:\n- Does the combo's shown item always equal currentChannelId after a fallback?\n- Does an emptied list leave currentChannelId null, so sendCurrentMessage is a no-op?\n- Are the panes refreshed only on a change?\n- Is updatingChannels still reset in finally?\n- Is the unused `channelModel.size > 0` guard gone?\n- Is there no new import except the same-package object?\nScope:\n- `git status --porcelain` and `git diff --stat`: this task touches only ChatChannelSelection.kt (new), ChatChannelSelectionTest.kt (new) and ChatPanel.kt.\n- No existing test file changed (DoD 3).\n- Peers own every other dirty path (for example MoeJson.kt): never revert, stage or commit them.\n- Report all three files in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "note": "Self-review: the mutant gate shows tests bite on null-for-deleted and list order; the always-general variant is caught by (a). The combo is set explicitly, so it matches currentChannelId. An empty list gives a null id, so sendCurrentMessage is a no-op. Panes refresh only on a changed id. try/finally and fingerprint return are intact, the size>0 guard is gone, and there is no new import. Diff touches only the 3 task files (ChatPanel +8/-12). moe-jetbrains/build.gradle.kts is a peer's dirty path and was left alone. No existing test file changed.",
+      "startedAt": "2026-11-02T11:23:52.215Z",
+      "completedAt": "2026-11-02T11:24:01.666Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote (human 2026-11-02 ~09:00Z: \"go on the vscode epic\"; standing \"keep the board moving\"). Fleet-filed by the VSC-6 architect, no plan, no reopen, no deps, and no open row plans ChatPanel.kt or a ChatChannelSelection file. 2 coders idle with 0 claimable WORKING rows. JetBrains-first parity per CLAUDE.md.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 20,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T10:10:02.811Z",
+  "updatedAt": "2026-11-02T11:35:05.831Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T10:26:37.639Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:43:08.563Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T11:34:28.813Z",
+    "wallClockMs": 3080250
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956",
+    "worker-4c1da905",
+    "qa-1106e678"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:47:10.806Z",
+  "executionContract": {
+    "intendedBehavior": "When the selected chat channel disappears from the JetBrains channel list (CHANNEL_DELETED, or a refresh that no longer lists it), the chat panel switches to the general-type channel, else the first listed channel. It refreshes the messages and pinned panes and requests that channel's messages and pins. When no channel remains, it clears the selection so sending is a no-op. The rule is a pure ChatChannelSelection.choose, shared with the initial selection, and matches VS Code's VSC-6 fallback.",
+    "acceptanceCriteria": [
+      "ChatChannelSelection.choose keeps a still-listed previous id. For a gone or null previous id it returns the first general-type channel, else the first listed channel (daemon list order). It returns null for an empty list. JUnit 4 asserts each case with assertSame/assertNull.",
+      "ChatPanel.updateChannels calls ChatChannelSelection.choose. On a changed selection it sets currentChannelId to the chosen id or null, refreshes the messages and pinned panes, and requests messages and pins only for a non-null choice. An unchanged selection triggers no refresh or request.",
+      "A mutant that restores the old null-on-deleted behaviour in choose fails ChatChannelSelectionTest.",
+      "The checkRef (`gradlew.bat test --rerun` from cmd.exe in a /mnt/d/moe-scratch snapshot under the jetbrains-gradle lease) passes with 0 failures and 0 errors, and no existing test file changes."
+    ],
+    "invariants": [
+      "The fingerprint early-return, the updatingChannels suppression with its finally reset, and the name-sorted combo fill stay as they are.",
+      "The combo action listener, MoeMessageDispatcher, MoeProjectService and every VS Code file are unchanged.",
+      "No existing test file is modified or weakened.",
+      "Gradle runs only under the jetbrains-gradle lease in a /mnt/d/moe-scratch snapshot. No npm command runs in the shared checkout."
+    ],
+    "compatibility": [
+      "A still-listed selection behaves exactly as today: no refresh, no re-request. The initial selection still picks the general-type channel, else the first."
+    ],
+    "approvedScope": [
+      "ChatChannelSelection: a new object in com.moe.toolwindow with GENERAL_TYPE and choose(channels, previousId).",
+      "ChatPanel.updateChannels: the selection block only."
+    ],
+    "reuse": [
+      "The existing initial-selection expression in ChatPanel.updateChannels (general-type, else first) becomes ChatChannelSelection.choose. The behaviour being matched is VS Code's VSC-6 fallback in moe-vscode/media/chat.js.",
+      "The VSC-4 snapshot gate form: git archive, cp --parents, then cmd.exe gradlew.bat test --rerun."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt updateChannels re-selects only channels.find { it.id == previousId } when previousId != null. A deleted selection therefore leaves currentChannelId on the dead id, while DefaultComboBoxModel.addElement auto-selects the first added channel.",
+      "ChatPanel.sendCurrentMessage returns early on `currentChannelId ?: return`. refreshMessages shows noMessagesLabel for a null id, and refreshPinnedPanel hides the pinned pane for a null id.",
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt: data class ChatChannel(id, name, type, linkedEntityId = null, createdAt = \"\").",
+      "MoeCommandSender.requestMessages and requestPins return early when not connected (ensureConnected), and sendMessage swallows send exceptions.",
+      "MoeMessageDispatcher CHANNEL_DELETED filters the channel out of state and publishes the new state. ChatPanel.onState calls updateChannels on the EDT via invokeLater.",
+      "packages/moe-daemon/src/state/StateManager.ts sorts snapshot channels by createdAt, and persistence.ts seeds #general first. VS Code media/chat.js updateChannels deselects a vanished channel, then selects channels[0]."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=/mnt/d/moe-scratch/vsc22-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt $S/ && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc22-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Two alternatives were rejected:\n- A richer decision object (channel plus a changed flag) returned from the rule. `toSelect?.id != previousId` is one comparison in the panel, and the DoD names choose(channels, previousId).\n- A Swing-level ChatPanel test. It needs a Project and MoeProjectService, so the wiring stays thin and is checked in review, and the rule carries the tests. That is the JetBrains-first pure-presentation pattern.\nA red/green pair of Gradle runs was replaced by one mutant run plus the full checkRef. The mutant restores the exact old bug, so it proves the tests bite at the cost of one extra Gradle run under the shared lease.",
+    "codebaseInsights": "DefaultComboBoxModel.removeAllElements clears the selection, and the first addElement auto-selects that element. The action listener is muted by updatingChannels, so the combo and currentChannelId drift apart unless selectedItem is set explicitly. Channel types are general, role and custom (daemon chatStore.ts). Gradle `test` does not need the daemon or proxy dist, and a warm cache runs in seconds.",
+    "risks": "There is a small known client divergence, out of scope here. VS Code's chat.js picks channels[0] after a deselect, while JetBrains picks general-type, else first. They agree whenever #general is the oldest channel, which is the daemon default (persistence seeds it first). This was filed as a comment on VSC-18. HEAD can carry a peer's red wip checkpoint (mem:gotcha-snapshot-gate-peer-wip-checkpoint). MoeJson.kt is dirty from a peer's task and must not be staged.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+      "moe-vscode/media/chat.js"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3cfc3c78c714ea48378502184ce4062d41e7518e",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:47:10.827Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T11:21:19.963Z",
+  "reviewStartedAt": "2026-11-02T11:24:08.313Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=/mnt/d/moe-scratch/vsc22-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents <3 task files> $S/ && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc22-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'",
+    "exitCode": 0,
+    "outputTail": "BUILD SUCCESSFUL in 57s; 11 actionable tasks: 11 executed. Windows: TEST-com.moe.toolwindow.ChatChannelSelectionTest.xml tests=6 failures=0 errors=0; total 564 tests, 0 failures, 0 errors. Mutant run (old bug restored): 6 tests completed, 3 failed (BUILD FAILED), as required.",
+    "reportedAt": "2026-11-02T11:24:08.313Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt",
+    ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+    ".moe/tasks/task-be543ff20bbc4f30ac7ac895ae0b4d13.json",
+    ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json"
+  ],
+  "completionSummary": "Added ChatChannelSelection.choose (pure rule: keep a still-listed id, else general-type channel, else first in list order, else null) with 6 JUnit 4 tests. ChatPanel.updateChannels now uses it: a deleted selection moves to the chosen channel and requests its messages and pins; an empty list nulls currentChannelId so sending is a no-op. A mutant restoring the old null-on-deleted behaviour fails 3 of the 6 tests.",
+  "commits": [
+    {
+      "sha": "d2a55eb5af79e7e433b0fbef3d5a68f323575985",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T11:20:32Z",
+      "paths": [
+        ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+        ".moe/tasks/task-be543ff20bbc4f30ac7ac895ae0b4d13.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T11:24:33.525Z",
+      "treeId": "7c013b26c6258a146e66b77caccc9f36bfb47407",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "827ea4b228387231959901910a6ab756739b2b9e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T11:31:12Z",
+      "paths": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-be543ff20bbc4f30ac7ac895ae0b4d13.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T11:35:05.831Z",
+      "treeId": "6325431644db4e3b900f073640df431a94ee29d1",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T11:31:12Z",
+    "at": "2026-11-02T11:35:05.831Z"
+  },
+  "completedAt": "2026-11-02T11:34:28.813Z",
+  "reviewCompletedAt": "2026-11-02T11:34:28.813Z",
+  "reviewSummary": "Approved. Reviewed completion d2a55eb5 (git show; on moe/work-2026-10-24). ~+83/-12 code LOC: ChatChannelSelection.kt +27, ChatPanel.kt +8/-12, new ChatChannelSelectionTest.kt +48. Scope matches plan: fingerprint return, updatingChannels try/finally, name-sorted combo fill, combo listener, dispatcher and VS Code files untouched; no existing test file changed.\nDoD1: 6 JUnit 4 tests (assertSame/assertNull): kept id, gone->general-type, gone->first in list order, null->general else first, empty->null, two general-type. DoD2: ChatPanel uses choose; selectedItem set only when non-null (overrides the combo auto-select); currentChannelId = toSelect?.id, so empty list nulls it and sendCurrentMessage no-ops; refresh + requestMessages/requestPins only on a changed id, requests only for non-null; refreshMessages/refreshPinnedPanel handle a null id.\nDoD3: re-ran checkRef myself under the jetbrains-gradle lease (released): fresh git archive HEAD + 3 task files in /mnt/d/moe-scratch/vsc22-qa, cmd.exe gradlew.bat test --rerun -> BUILD SUCCESSFUL; ChatChannelSelectionTest 6 tests, 0 failures, 0 errors; Windows total 564 tests, 0 failures, 0 errors. Mutants in the snapshot copy only (compileKotlin executed, originals restored, snapshot deleted): old null-on-deleted fails 3 tests; ignoring previousId fails stillListedPreviousIdIsKept; name-order fallback fails 2 tests.\nUnverified: ChatPanel Swing wiring has no headless test (reviewed by reading only). Non-blocking: VS Code chat.js falls back to channels[0], JetBrains to the general-type channel (divergence filed on VSC-18). build.gradle.kts is a peer's dirty path, not in this commit.",
+  "requiredCheckAtDone": null
+}

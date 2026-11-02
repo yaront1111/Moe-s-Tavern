@@ -1,0 +1,61 @@
+{
+  "id": "task-97161de1",
+  "epicId": "epic-daemon",
+  "title": "Add health check endpoint to daemon",
+  "description": "Add /health HTTP endpoint for monitoring.\n\n**Response:**\n```json\n{\n  \"status\": \"healthy\",\n  \"version\": \"0.1.0\",\n  \"uptime\": 3600,\n  \"projectPath\": \"/path/to/project\",\n  \"stats\": {\n    \"tasks\": 42,\n    \"epics\": 5,\n    \"workers\": 2,\n    \"wsConnections\": 3\n  }\n}\n```\n\n**Use cases:**\n- Docker health checks\n- Monitoring systems\n- Plugin connection diagnostics",
+  "definitionOfDone": [
+    "GET /health returns status",
+    "Includes version and uptime",
+    "Includes task/epic counts",
+    "Returns 503 if unhealthy"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Verify HTTP server setup in index.ts. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "startedAt": "2026-02-05T13:15:24.895Z",
+      "completedAt": "2026-02-05T13:15:36.339Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify /health endpoint in WebSocketServer.ts. Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-02-05T13:15:37.220Z",
+      "completedAt": "2026-02-05T13:15:48.683Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify getStats method in StateManager. Log all auto-approval actions to activity.log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-05T13:15:49.517Z",
+      "completedAt": "2026-02-05T13:15:59.671Z"
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 4,
+  "reopenReason": "503 unhealthy response still not implemented. Add health checks and return 503 when unhealthy.",
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 9,
+  "createdAt": "2026-02-04T14:21:02.881Z",
+  "updatedAt": "2026-06-09T10:59:58.529Z",
+  "priority": "MEDIUM",
+  "comments": [],
+  "metrics": {
+    "firstClaimAt": "2026-02-04T19:02:23.374Z"
+  }
+}

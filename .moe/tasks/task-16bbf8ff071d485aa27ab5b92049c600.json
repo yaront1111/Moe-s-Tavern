@@ -1,0 +1,244 @@
+{
+  "id": "task-16bbf8ff071d485aa27ab5b92049c600",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V07] Durable local integration intent",
+  "description": "Objective: Make intent persistence mandatory before target mutation in strong-profile wrappers.\n\nDeliverable: Durable local integration intent. This is task V07 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs\n\nDependency aliases (wired by Moe task ids after import): V06, R12.",
+  "definitionOfDone": [
+    "Unwritable journal refuses Git mutation.",
+    "Expected-old ref CAS is retained.",
+    "Intended target and candidate/tree/revision are durable before effect.",
+    "Fresh verification `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "scripts/moe-agent.sh: pin the attempt's execution profile, and make intent mandatory in the strong profile. Read the LANDED V06 and R12 first, and keep every peer's bytes; this file is a collision hotspot.\n\n(a) Pin the profile in pin_attempt_identity, from the SAME record moe_attempt_read verified (executionPolicySnapshot.profile).\n- Store it in a NON-exported wrapper variable, PINNED_ATTEMPT_PROFILE, so a CLI can never set it.\n- It is reset together with MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION, at the loop top and on every reset and refresh path, so the three are always pinned together.\n- Strong means PINNED_ATTEMPT_PROFILE = 'verified-local'. Anything else (legacy, observe, empty or unpinned) keeps today's behavior.\n\n(b) In the completion CAS loop (about line 4739), when strong:\n- No frozen candidate (FROZEN_CANDIDATE_ID or FROZEN_TREE empty) gives LAND_CODE MOE_COMMIT_REFUSED_INTENT_INCOMPLETE.\n- Otherwise write the receipt journal DURABLY BEFORE update-ref: receipt_report plus treeSha (FROZEN_TREE), baseRevision (= targetBefore), planRevision (the pinned snapshot's) and profile.\n  - The write goes through $PYTHON_CMD: open the tmp file, write, flush, os.fsync, os.replace, then fsync the directory fd on POSIX. Windows cannot fsync a directory and relies on the NTFS rename.\n  - Any failure gives LAND_CODE MOE_COMMIT_REFUSED_INTENT_UNWRITABLE.\n- On either refusal: LAND_OUTCOME='refused', moe_temp_index_drop, and NO update-ref and NO rescue_ref (no ref mutation at all). The bytes and baseline stay for the next session. Print a [WARN] line with the code, and return the refusal code the way the existing MOE_COMMIT_REFUSED_* codes do, so record_commit reports it.\n\n(c) Legacy and observe keep today's best-effort receipt_journal_write.\n\nThe expected-old CAS is unchanged (`update-ref ref new old`, or the zero id), and a failed CAS still deletes that attempt's journal. Error handling: every new failure path is fail-closed under strong only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh: pin_attempt_identity pins PINNED_ATTEMPT_PROFILE and PINNED_ATTEMPT_PLAN_REVISION from the same verified moe_attempt_read record. Both are non-exported and unset at the loop top and at the pin's start; an unset also drops an inherited export.\n\nland_plumbing CAS loop, strong branch (completion + verified-local, gated or not):\n- MOE_COMMIT_REFUSED_INTENT_INCOMPLETE when there is no frozen candidate, FROZEN_TREE differs from the tree, or the plan revision or attempt is missing.\n- Otherwise receipt_report (it adds treeSha, baseRevision=targetBefore, planRevision and profile under strong only) goes to the new intent_journal_write: Python tmp, fsync, os.replace, then a dir fsync on POSIX. Any failure removes the tmp file and the journal and returns MOE_COMMIT_REFUSED_INTENT_UNWRITABLE.\n- On a refusal: LAND_OUTCOME=refused, temp index dropped, return 4. Push is skipped, so no update-ref, rescue ref or push.\n- The legacy gated branch is byte-unchanged (it is now an elif).\n\nAlso in run_landing: the refused case skips the \"commit by hand\" advice for MOE_COMMIT_REFUSED_INTENT_*, and the refused record_commit carries LAND_MESSAGE, which is empty for every legacy refusal. Pre-existing dirty paths are untouched (.moe/tasks/*, repairPolicy.test.ts, guest-supervisor.py, local-runner-check.test.mjs, .moe/decisions/).",
+      "startedAt": "2026-10-31T10:43:37.539Z",
+      "completedAt": "2026-10-31T10:45:33.198Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/moe-agent.ps1: the exact twin of step 1, in string parity (codes, banners, env and settings names), keeping peers' bytes.\n- Pin $script:PinnedAttemptProfile with the attempt pair: same source, and the same reset sites as the MOE_ATTEMPT_* pair.\n- When strong:\n  - MOE_COMMIT_REFUSED_INTENT_INCOMPLETE when there is no frozen candidate.\n  - Otherwise a durable journal: a FileStream with FileOptions.WriteThrough, Write, Flush($true), then a rename over the destination ([IO.File]::Move with overwrite, or Replace).\n  - Failure gives MOE_COMMIT_REFUSED_INTENT_UNWRITABLE.\n  - No ref update and no rescue ref.\n- Legacy keeps Write-MoeReceiptJournal's best-effort path.\n- The file stays UTF-8 with a BOM (Windows PowerShell 5.1).\nThen run `bash scripts/tests/parity-check.sh`, and its .ps1 sibling when pwsh is available. Register the new codes there only if the check requires an explicit list.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "ps1 twin:\n- Set-MoeAttemptIdentity pins $script:PinnedAttemptProfile and $script:PinnedAttemptPlanRevision from the SAME Read-MoeAttempt record that verified the pair (the restructure only captures that record; semantics unchanged). They are reset there and at the loop top beside the MOE_ATTEMPT_* reset. The profile is validated with \\A..\\z.\n- New Write-MoeIntentJournal: a WriteThrough FileStream with Flush($true), then File.Replace if the target exists, else File.Move. Not Move-Item -Force, which deletes first. Returns $false with the tmp file removed.\n- The CAS loop's strong branch, before the legacy elif, gives MOE_COMMIT_REFUSED_INTENT_INCOMPLETE (no $script:MoeFrozen of this $built.Tree, or no planRevision or attempt) or MOE_COMMIT_REFUSED_INTENT_UNWRITABLE.\n- A refusal writes the same baseline as the ps1 NO_OWNED_PATHS refusal, sends record_commit refused with code, message and ref=$branch, and returns before update-ref and push. The finally rescues only failed outcomes, so no rescue ref.\n- The legacy branch is byte-unchanged.\n\nThe receipt carries treeSha, baseRevision, planRevision and profile under strong, so the post-push rewrite keeps them, the same as sh's receipt_report.\n\nsh tweak: the case pattern now names both codes; parity-check counted the bare prefix.\n\nChecks: BOM kept, 0 CR. ParseFile is OK on PS 5.1 and pwsh 7. parity-check.sh, plus parity-check.ps1 on PS 5.1 and pwsh, all PASS.",
+      "startedAt": "2026-10-31T10:46:15.931Z",
+      "completedAt": "2026-10-31T10:47:54.748Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/tests/postflight.sh: add harness modes beside the existing receipt-* modes, reusing their fixture.\n- A frozen gate candidate, with QUALITY_GATE set.\n- An attempt record in .moe/attempts carrying executionPolicySnapshot {version:2, profile, planRevision, deliveryPolicy:'local-branch'}.\n- 'Unwritable' means a REGULAR FILE placed at <gitdir>/moe/receipt, so mkdir fails the same way on every OS (no chmod).\n\nModes, each asserting exact codes and Git state:\n- intent-strong-unwritable: refused MOE_COMMIT_REFUSED_INTENT_UNWRITABLE; the target ref is byte-identical; no refs/moe/rescue/*; worktree bytes and baseline intact; record_commit sees outcome refused.\n- intent-strong: the MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF seam reads the journal BEFORE the ref moves and asserts target, candidateId, treeSha, baseRevision, landedRevision and planRevision. The landing then succeeds.\n- intent-strong-cas: the seam moves the branch, so the expected-old CAS fails and rebuilds. The first attempt's journal is replaced, and the final journal and ref match the final landing.\n- intent-legacy-unwritable: profile legacy prints the [WARN] and lands as today.\n- intent-strong-nocandidate: refused MOE_COMMIT_REFUSED_INTENT_INCOMPLETE, with no ref moves.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Added 5 frozen-suite modes: intent-strong, intent-strong-cas, intent-strong-unwritable, intent-strong-nocandidate, intent-legacy-unwritable. Each pre-writes the attempt record with executionPolicySnapshot (verified-local or legacy, planRevision 3). A .git/hooks/reference-transaction hook logs every prepared ref update, recording old (the expected-old git was handed, so the CAS) and the journal as it stood at that instant. A regular file at .git/moe/receipt makes the journal unwritable. Deviation from the plan text: no new seam, the hook stands in for it. MOE_FROZEN_TEST_ONLY=<5 modes> bash scripts/tests/postflight.sh gives PASS 5. Mutants on scratch copies in /mnt/d/moe-scratch/v07-mut were all killed: best-effort write under strong, rescue on refusal, no journal before update-ref, dropped expected-old CAS, profile read from env (both strong-unwritable and forged-env legacy). Real wrapper + forged MOE_EXECUTION_PROFILE/PINNED_ATTEMPT_PROFILE env: legacy still lands (PASS).",
+      "startedAt": "2026-10-31T10:47:59.025Z",
+      "completedAt": "2026-10-31T10:56:05.042Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "scripts/tests/postflight.ps1: the twin modes of step 3, with the same names and assertions, against moe-agent.ps1. Use the same regular-file-at-receipt-dir trick. Keep the harness's existing structure and timeouts, and run it with pwsh when available. If no native PowerShell is reachable, say so; do not claim it ran.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Mirrored the 5 intent-* modes into the postflight.ps1 frozen suite. The here-string is byte-identical to the sh heredoc (cmp OK); BOM kept, 0 CR, ParseFile 0 errors. Ran MOE_FROZEN_TEST_ONLY=<5 intent modes> on Windows PowerShell 5.1.26100 (child=powershell): PASS 5, 29 s. Ran the same on pwsh 7.6.9 (child=pwsh): PASS 5. ps1 mutants on scratch copies, all killed: Write-MoeIntentJournal replaced by $true fails intent-strong-unwritable (ref moved, receipt sent) and intent-strong ('the intent is durable before the effect'); expected-old dropped from update-ref fails intent-strong ('the expected-old CAS is kept').",
+      "startedAt": "2026-10-31T10:56:10.181Z",
+      "completedAt": "2026-10-31T10:58:47.230Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verify once, fresh.\n1. Run the DoD command, `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs`, which must exit 0. Supply its command, exit code and output tail to complete_task.\n2. ALSO run, and report in the summary:\n- `bash scripts/tests/postflight.sh` (the new intent-* modes plus every existing mode; widen MOE_POSTFLIGHT_TIMEOUT_SEC on a busy box);\n- the postflight.ps1 harness when pwsh is available;\n- `bash scripts/tests/parity-check.sh`.\n3. Mutants, on scratch copies, restored afterwards:\n- a best-effort write under strong: intent-strong-unwritable;\n- a rescue ref on refusal: intent-strong-unwritable;\n- the journal written after update-ref: intent-strong;\n- the profile read from an env var the CLI can set instead of the pinned variable: intent-legacy-unwritable must stay green, and a forged-env variant must stay legacy.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Verification only, no file changes.\n- DoD `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs`:\n  - WSL: exit 0, 50 tests, 48 pass, 2 skipped (PowerShell-engine tests skip on linux).\n  - Windows node v24.16: exit 0, 148 tests, 148 pass, 0 skipped.\n- Full `bash scripts/tests/postflight.sh` (MOE_POSTFLIGHT_TIMEOUT_SEC=240): PASS postflight.sh, rc=0, frozen suite 79/79.\n- Full postflight.ps1 on Windows PowerShell 5.1: PASS postflight.ps1, rc=0, frozen 79/79.\n- pwsh 7.6.9: ran the 5 intent modes only (PASS 5). The full pwsh leg was not run (known HEAD failure task-44b817f9).\n- parity-check.sh and parity-check.ps1: PASS.\n- Mutants, scratch copies only (/mnt/d/moe-scratch/v07-mut), all killed:\n  - sh best-effort write → intent-strong-unwritable\n  - sh rescue on refusal → intent-strong-unwritable\n  - sh no journal before update-ref → intent-strong\n  - sh dropped expected-old → intent-strong\n  - sh profile from env MOE_EXECUTION_PROFILE → intent-strong-unwritable, and forged-env intent-legacy-unwritable\n  - ps1 Write-MoeIntentJournal→$true → intent-strong-unwritable and intent-strong\n  - ps1 dropped expected-old → intent-strong\n- Control: the real wrapper with a forged MOE_EXECUTION_PROFILE / PINNED_ATTEMPT_PROFILE=verified-local env still lands legacy (PASS).",
+      "startedAt": "2026-10-31T10:58:49.436Z",
+      "completedAt": "2026-10-31T11:21:24.668Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "One adversarial self-review of this task's diff, the last step. Check:\n- Can any path move the target ref, or write any ref, before the durable intent exists under strong?\n- Can a crash between fsync and rename lose the intent? The tmp file is replayed or ignored.\n- Can the CLI influence the profile? It cannot, because the variable is non-exported and pinned from the store.\n- Does the legacy path stay byte-for-byte as today?\n- Windows: there is no directory fsync, which is documented.\n- Disk full, a read-only gitdir, and concurrent landings of two tasks (separate per-task journals).\n- Does the next pre-flight's recovery checkpoint land a refused strong completion without intent? Note it as an open item for V12; do not fix it here.\n- No .moe edits; parity holds.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Adversarial self-review of the 4-file diff. No code change needed.\n1. Target ref before the intent: none. The only target update-ref follows the strong branch. Pre-existing ref writes before the intent never touch the target (V08b):\n   - rescue refs on gate or commit-tree failure (refs/moe/rescue/*);\n   - the hooked-commit scratch worktree's detached HEAD;\n   - the 3x-CAS REF_CONTENTION rescue ref.\n2. Crash between fsync and rename: leaves <task>.json.tmp.<pid>. Both replays glob *.json, so it is ignored and never deleted (a tiny leak, theoretical). A crash after the rename but before the dir fsync happens while update-ref has not yet run.\n3. CLI cannot touch the profile. PINNED_* is never exported and is unset at the loop top and at the pin start; ps1 uses script variables only. The forged-env control proves it. Residual: the profile is only as trustworthy as the attempt store. A hand-edited attempt record without a snapshot pins legacy, by design (\"missing snapshot pins nothing\"); the daemon's verified-local completion gates still apply.\n4. Legacy behaviour is byte-for-byte unchanged:\n   - the legacy journal block is untouched;\n   - receipt_report output is identical unless profile=verified-local;\n   - legacy refused rows still send message \"\", since LAND_MESSAGE is reset at landing start and no legacy refusal sets it.\n5. Windows has no directory fsync; documented in both twins.\n6. Disk full or a read-only gitdir: the exception gives exit 1 / $false, so UNWRITABLE refuses and the tmp file is removed.\n7. Concurrency:\n   - Two tasks use per-task journals with pid-suffixed tmp files.\n   - The same task across seats is covered: receipt_replay skips any journal whose task has a live foreign marker.\n8. Open for V12, not fixed: the next pre-flight's recovery checkpoint lands a refused strong completion's bytes as a wip checkpoint without an intent journal.\n9. Deviation: no new seam. A reference-transaction hook proves on-disk-before-effect and the CAS old value.\n10. No .moe edits; parity-check.sh/.ps1 PASS.",
+      "startedAt": "2026-10-31T11:21:28.386Z",
+      "completedAt": "2026-10-31T11:22:03.755Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:35:00.493Z",
+  "updatedAt": "2026-10-31T11:43:24.204Z",
+  "dependsOn": [
+    "task-6a5d5a13257b48c9940ae3b22347ff7d",
+    "task-44a9e97be68a4166822b64416cea7ab5",
+    "task-01f37ac63316409ab581f5a189002cb8",
+    "task-9d27749421b045c18a6c6eb99694236d",
+    "task-7db14e2df19949a8bfdb150e0f29ffcb",
+    "task-042dc0ddb9b64c60a98a567b71723351"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:54:31.207Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-31T11:42:53.710Z",
+    "wallClockMs": 154102503
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "architect-e4b7eee0",
+    "worker-3a9b4568",
+    "qa-b29f7b3d"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:57:53.446Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Detect the strong profile from get_context executionPolicy.effectiveProfile at landing. Rejected: an extra unserved RPC at landing, which fails open when the daemon is unreachable. The attempt record's executionPolicySnapshot.profile is daemon-recorded at claim and already read by moe_attempt_read when the identity is pinned, so it is pinned once and never caller-minted.\n2. Fail closed on an unreadable record whenever MOE_ATTEMPT_ID is set. Rejected: a legacy row with a transiently unreadable record would be refused, breaking legacy policy. Pinning at pre-flight avoids that, because strict rows are always pinned.\n3. Journal before commit-tree. Rejected: the intent must name the new commit. Object writes are inert, and the effect is the ref move.\n4. Tests in the three DoD node files. They exercise launcher runtime, resume and prompt caching, not landing, so the behavioral tests go in postflight.{sh,ps1}, where the receipt journal is already tested. The DoD command still runs and is the complete_task evidence.",
+    "codebaseInsights": "- scripts/moe-agent.sh about 4739: gated completion (QUALITY_GATE) runs receipt_journal_write (best-effort) before update-ref with the expected-old CAS, and a failed CAS removes the journal.\n- receipt_journal_path is <gitdir>/moe/receipt/<taskId>.json. receipt_report builds the fields, and receipt_journal_fields validates replays; extra keys are allowed.\n- moe_attempt_read at about line 2156 returns the open attempt JSON, including executionPolicySnapshot.\n- The ps1 twins are Get-MoeReceiptJournalPath and Write-MoeReceiptJournal (about 2700), with call sites around 4809 and 4897.\n- The test seam MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF runs between commit-tree and update-ref.\n- postflight.sh already has receipt-* modes to copy.",
+    "risks": "- Collision hotspot: moe-agent.{sh,ps1} are held by several WORKING rows (6aa460bb, bc8410af and others). Build on their landed bytes, never revert them.\n- V06 and R12 are unplanned (in dependsOn per the rollout). V07's mechanism does not consume them; adapt if they land a profile signal.\n- verified-local is unavailable in production, so the strong branch is test-only until certification. Never enable it.\n- Python is required for the durable write; it is already required by the receipt helpers.\n- ps1 BOM and parity.\n- Recovery checkpoints of a refused strong completion are not intent-journaled: an open item for V12.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/parity-check.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:57:53.572Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T10:43:37.539Z",
+  "reviewStartedAt": "2026-10-31T11:22:31.540Z",
+  "verification": {
+    "command": "node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ bash: the post-session payload is missing keeps the resume count\n✔ bash: the pre-launch payload is missing keeps the resume count\n✔ bash: the pre-launch payload names another task keeps the resume count\n✔ bash: a first session's progress stays quiet when nothing was counted (38.52207ms)\nℹ tests 50\nℹ suites 0\nℹ pass 48\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0\nℹ duration_ms 1054.08343\n(skipped 2 = PowerShell-engine tests, '# no PowerShell engine on linux'; the same command on Windows node v24.16 ran 148 tests, 148 pass, 0 skipped, exit 0)",
+    "reportedAt": "2026-10-31T11:22:31.540Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+    ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json"
+  ],
+  "completionSummary": "CQ-V07: under the strong profile, the integration intent must be durable before the target moves.\n- Both wrappers read executionPolicySnapshot.{profile,planRevision} from the verified attempt record into non-exported variables:\n  - sh: PINNED_ATTEMPT_PROFILE / PINNED_ATTEMPT_PLAN_REVISION, unset at the loop top and at the pin.\n  - ps1: $script:Pinned*.\n- A completion with profile verified-local journals its intent before update-ref, with fsync before the rename and a directory fsync on POSIX. The intent adds treeSha, baseRevision, planRevision and profile.\n- Refusal codes, with no update-ref, no rescue ref and no push; bytes and baseline are kept:\n  - MOE_COMMIT_REFUSED_INTENT_INCOMPLETE: no frozen candidate of this tree, no plan revision, or no attempt.\n  - MOE_COMMIT_REFUSED_INTENT_UNWRITABLE: the write failed.\n- The expected-old CAS is unchanged, and the legacy best-effort journal is unchanged.\n- New postflight.{sh,ps1} frozen modes: intent-strong, intent-strong-cas, intent-strong-unwritable, intent-strong-nocandidate, intent-legacy-unwritable.\n  - A reference-transaction hook records each prepared target move, with its old value (the CAS) and the journal on disk at that instant.\n  - A regular file at .git/moe/receipt makes the journal unwritable.\n- Evidence:\n  - DoD exit 0; Windows node 148/148.\n  - Full postflight.sh PASS; full postflight.ps1 (PS 5.1) PASS; pwsh 7 intent modes PASS 5.\n  - parity-check sh and ps1 PASS.\n  - Mutants on scratch copies, 8 of 8 killed: best-effort write, rescue on refusal, no journal before update-ref, dropped expected-old, profile from env, and the ps1 twins.\n  - A forged env var still lands legacy.\n- Open items, not fixed:\n  - V12: the next pre-flight's recovery checkpoint lands a refused strong completion without intent.\n  - V08b: pre-existing rescue refs come before the intent but never touch the target.\n  - An orphan .tmp file after a crash mid-write is ignored by replay but never deleted.\n  - Windows has no directory fsync.\n- D",
+  "commits": [
+    {
+      "sha": "65f78435192c9adc2ab7dedfff33b17e991fe8ae",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3a9b4568@2026-10-31T10:37:02Z",
+      "paths": [
+        ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+        ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-3a9b4568",
+      "recordedAt": "2026-10-31T11:22:55.626Z",
+      "treeId": "ecf4fde280fef73bdd1b24d2b7c178e55c59ef9c",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "b1e3ed201816e23ccbb4dfa7aaf13f0708dd4ea5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-31T11:22:59Z",
+      "paths": [
+        ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-31T11:43:24.204Z",
+      "treeId": "1bc2937d680623b2ee01694e7b94efd29ea92193",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-31T11:22:59Z",
+    "at": "2026-10-31T11:43:24.204Z"
+  },
+  "completedAt": "2026-10-31T11:42:53.710Z",
+  "reviewCompletedAt": "2026-10-31T11:42:53.710Z",
+  "reviewSummary": "CQ-V07 approved. Reviewed completion 65f78435 (tree ecf4fde2), on moe/work-2026-10-24. Non-board diff net 268 LOC, under the 400 cap.\n\nRe-ran:\n- DoD node --test (3 files): exit 0, 48 pass, 2 linux skips.\n- Snapshot of 65f78435:\n  - FULL postflight.sh: PASS rc=0 (frozen 79/79 incl. legacy receipt-*, owner guard 16/16).\n  - parity-check.sh: PASS.\n- PS 5.1: postflight.ps1 intent-* modes PASS 5; parity-check.ps1 PASS.\n- My sh mutants, all killed: strong branch skipped, expected-old dropped, UNWRITABLE refusal ignored.\n\nDoD:\n1. Unwritable journal refuses Git mutation: met. The refusal comes before update-ref, then no push, no rescue ref, baseline kept; asserted in the test.\n2. Expected-old CAS retained: met. Probe old == baseRevision; intent-strong-cas covers the race.\n3. Intent durable before the effect: met. The prepared-event snapshot holds target, candidate, tree, base, landed revision and planRevision; fsync, rename, dir fsync.\n4. Fresh verification exits 0: met.\n\nRails:\n- The profile is pinned from the verified attempt record into non-exported variables, reset at the loop top and at the pin.\n- Strong is not enabled.\n- No hand .moe edits.\n- ps1 BOM kept, 0 CR, sh and ps1 test hunks byte-identical.\n- The recovery-checkpoint residual is owned by CQ-V08b (task-7f82e200).\n\nNon-blocking notes:\n- An incidental whitespace edit in ps1: `$script:MoeRunnerId =\"runner-\"`.\n- When the dir fsync fails after os.replace, the code unlinks the new path, which drops any overwritten prior journal (rare).",
+  "requiredCheckAtDone": null
+}

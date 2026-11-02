@@ -1,0 +1,379 @@
+{
+  "id": "task-001d8ab383ef41088e045b2e41ed0e1e",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11e] Guest check toolchain",
+  "description": "Gap found while splitting CQ-R11 (2026-10-29). Filed for a human decision, like CQ-R10d.\n\nThe pinned Ubuntu 24.04 guest ships python3 but no Node, npm or project dependencies. A fresh check VM therefore cannot run this repository's real checks, e.g. `cd packages/moe-daemon && npm test`. CQ-R11a-d and CQ-R11 prove the check lifecycle with python3 stdlib check commands. CQ-R13 needs this row to certify real checks.\n\nObjective: a fresh check VM can run a project's approved check commands with a pinned toolchain and the candidate's locked dependencies, without trusting the network for code identity. Options to decide:\n- a pinned toolchain bundle (node and npm) copied in root-owned 0555 and sha256-pinned next to the image pins, e.g. a copy-only supervisor stream like R09c materialize;\n- a separate, network-enabled dependency install phase from the candidate's lockfile, run before the network-namespaced check, with its own outcome. A failed install is infra-failure, never code-failure;\n- vendored or offline dependency caches.\nWhatever is chosen becomes part of CQ-R11d's environment identity (a toolchain digest input), so a toolchain change requires new evidence.\n\nExpect a SPIDR split when planned: the toolchain bundle and its pinning; the dependency phase; and their identity inputs.\n\nOut of scope: the check mode itself (CQ-R11a/b), the session (CQ-R11c), the lifecycle (CQ-R11), and any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs",
+  "definitionOfDone": [
+    "The toolchain is verified against its pinned sha256 before install and installed root-owned, not writable by job identities; a mismatch fails closed.",
+    "Dependencies reach the check only through the decided, bounded path. A failed dependency phase is reported as infra-failure, never as code-failure or passed.",
+    "The toolchain identity is an input of CQ-R11d's checkEnvironment, so a toolchain change makes earlier evidence stale. Shown by tests.",
+    "The verification command exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red), for QA reject #1. Load test-driven-development.\n\nContext:\n- Rev 1 is landed in 7a7f1044: check-evidence.mjs, check-lifecycle.mjs and their tests. It made `dependencies` required, added the guest-arch toolchain and the offline tree, and put toolchainSha256 and dependencyDigest in the environment.\n- It stays as landed. Edit those four files only to fix a defect you find, and say so in your step note.\n- QA rejected because production dispatch (check-dispatch.mjs:134, landedRunCheck) never passes the required `dependencies`, and the dispatch tests fake the adapter.\n\nTHE DESIGN IS DECIDED HERE (architect, rev 2). Do not re-decide it:\n- A required check's dependency dirs are part of its approved definition. There is one dir per `configs` entry that is exactly `package-lock.json` ('.') or ends in `/package-lock.json` (its parent path), in configs order.\n  - A configs directory root never adds a lockfile, and no other lockfile in the candidate is ever installed.\n  - Why: configs are hashed into definitionDigest, and each named lockfile's blob is pinned in requiredCheckSnapshot. So the set and its exact bytes are approved together with the check.\n- A definition that names no lockfile gets []: its approved choice of no dependency phase. The environment records this as dependencyDigest null, a distinct id that settings.checkEnvironments must list.\n- An owed quality gate with no same-command definition has no definition, so it has no dependency choice. Dispatch stops before any VM with RUNNER_DEPENDENCIES_UNDECLARED. The remedy is to declare the gate's command as a required check, which owedChecks already folds the gate into.\n- The bound stays in runCheckJob: at most MAX_LOCKFILES (16), each with its lockfile present, refused as CHECK_JOB_INPUT_INVALID before any call. The dispatcher keeps no copy of it.\n\nscripts/tests/local-runner-dispatch.test.mjs:\n\n(a) Fixtures:\n- Add GATE_DEF = { id: 'gate', command: 'npm run gate' }.\n- context()'s default defs become [UNIT, GATE_DEF], so the default gate is covered.\n- GATE_FRAME becomes { id: 'gate', command: 'npm run gate', protected: [] }.\n\n(b) O:\n- Every definition entry gains `dependencies`: [] for UNIT and LINT.\n- The gate: 'npm test' row passes defs [UNIT].\n- Gate entries stay exactly { command, protected: [] }, with no dependencies key.\n- New row: configs ['package-lock.json', 'pkg/package-lock.json', 'pkg', 'vitest.config.ts', 'xpackage-lock.json', 'a/package-lock.json.bak'] give dependencies ['.', 'pkg'].\n\n(c) B: add two rows. Each stops with RUNNER_DEPENDENCIES_UNDECLARED with trace ['get_context'], so no VM starts:\n- context({ bound: false }), the gate alone;\n- context({ defs: [UNIT] }), a definition plus the uncovered gate.\n\n(d) Existing rows:\n- H: d2 and the second summary entry gain checkId 'gate'.\n- R's first harness passes defs [UNIT].\n- No other existing row changes, and no assertion is weakened.\n\n(e) New row D, the real-adapter test QA asked for. runDispatchCli runs with loadRunCheck: dir => landedRunCheck(dir, steps). The real adapter and the real runCheckJob run; only runCheckJob's injected steps are fakes.\n- Setup:\n  - Make a mkdtemp root under os.tmpdir() with sibling dirs 'project' (created) and 'state'.\n  - Set MOE_RUNNER_STATE_DIR to <root>/state, because ownedLedgerDir refuses a state dir inside the project.\n  - In t.after, restore the variable and remove the root.\n- exportSnapshot resolves { version: 1, tree: TREE, base: validateImport([...]), overlay: validateImport([]) }. The base holds package-lock.json 'ROOT', pkg/package-lock.json 'PKG' and other/package-lock.json 'OTHER'.\n- Steps:\n  - provision: `const { instance } = await ledger.reserve(owner)` through the ledger it was given (the real one, in the temp state dir). It then resolves { provisioned: true, instance, bootstrapReady: true, failures: [], image: { source: { arch: 'arm64', sha256 }, provider: { imageHash } }, supervisorSha256 }.\n  - toolchain resolves a fixed { file, sha256, size, version }.\n  - dependencies records its input and resolves { tree: { entries: [], digest }, digest }, where digest is a sha256 over the received [dir, bytes] pairs.\n  - installDependencies records tree.digest.\n  - materialize and installToolchain resolve.\n  - session resolves { outcome: 'passed', exitCode: 0, signal: null, outputTail: 'ok' }.\n  - verify resolves 'intact', and remove resolves 'deleted'.\n- Context:\n  - defs: LOCKED = { id: 'unit', command: 'npm test', configs: ['package-lock.json', 'pkg/package-lock.json', 'vitest.config.ts'] } and PLAIN = { id: 'plain', command: 'python3 -m unittest' };\n  - gate: '';\n  - checkEnvironments lists exactly envOf(the locked pairs' digest) and envOf(null). envOf calls checkEnvironment with the fake guest's hashes, GUEST_RESOURCES, the toolchain sha256 and that dependencyDigest.\n- Assert:\n  - exit 0, and both checks are observed 'passed';\n  - dependencies ran once, for unit only, with lockfiles [['.', 'ROOT'], ['pkg', 'PKG']] (never other/) and cpu 'arm64', the guest's arch rather than the host's;\n  - installDependencies ran once, with that digest;\n  - the two dispatches carry envOf(digest), then envOf(null).\n- Paired control, as in QA's reproducer. landedRunCheck(project, steps whose provision counts its calls and throws { code: 'PROVISION_SENTINEL' }) returns a runCheck. Call it with a valid frame ({ id: 'unit', command: 'npm test', protected: [] }), owner and onReady:\n  - with no dependencies key, it rejects CHECK_JOB_INPUT_INVALID and provision is never called;\n  - with dependencies: [], it resolves failure 'PROVISION_SENTINEL'.\n  This proves the adapter adds no default.\n- D must pass on Linux, Windows and macOS, because CI's build-all-platforms job runs this file. Use only os.tmpdir() and path.join paths, and no POSIX modes.\n\nRun `node --test scripts/tests/local-runner-dispatch.test.mjs`. It is expected to fail (red) because the file cannot link: landedRunCheck is not exported yet.\n\nError handling in the tests: assertions name fixed codes, never messages. No row reaches the network, a real provider or the real daemon.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "note": "Added the approved fixture and O/B/H/R changes plus row D exercising runDispatchCli -> real landedRunCheck -> real runCheckJob, with only lifecycle steps faked. D pins exact two lockfile byte pairs, guest arm64, both environment ids and no adapter default; sibling temp state dir and cleanup are portable. Fresh `node --test scripts/tests/local-runner-dispatch.test.mjs` exit 1 as the plan explicitly expects: landedRunCheck is not exported (ESM link refusal). Log /tmp/cq-r11e-rev2-red.log. No production edits in this step.",
+      "startedAt": "2026-10-30T15:15:15.206Z",
+      "completedAt": "2026-10-30T15:17:43.838Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/local-runner/check-dispatch.mjs (CQ-V04b). Edit its landed bytes:\n\n- Add `const LOCKFILE = 'package-lock.json'` and `lockfileDirs(configs)`. It maps each configs entry equal to LOCKFILE to '.', and each entry ending in `/${LOCKFILE}` to its parent path, in order.\n  - Its comment gives the why: a lockfile named in an approved definition's configs is approved with the check (definitionDigest) and pinned by requiredCheckSnapshot. A candidate that changes it records evidence that never counts until the check is re-approved.\n- owedChecks: each definition entry gains `dependencies: lockfileDirs(def.configs)`.\n  - The gate entry stays { command, protected: [] }: it has no definition, so it has no dependency choice.\n  - Update the JSDoc.\n- dispatchFocusedChecks: right after RUNNER_NOTHING_OWED, add `if (owed.some(check => !Array.isArray(check.dependencies))) return done({ code: 'RUNNER_DEPENDENCIES_UNDECLARED' })`.\n  - Its comment names the remedy: declare the gate's command as a required check, naming its lockfiles or none.\n  - It runs before the job is built, so no VM starts and no further call is made.\n  - Add the code to the JSDoc.\n- runOnce: the runCheck input gains `dependencies: check.dependencies`.\n- landedRunCheck: export it as `landedRunCheck(projectPath, steps = {})`.\n  - Its runCheck takes { snapshot, check, dependencies, owner, onReady, signal }.\n  - It passes `dependencies` through unchanged with NO default, and `steps` as runCheckJob's second argument. A missing value must still reach runCheckJob's required-input refusal.\n  - runDispatchCli's default loadRunCheck still calls it with the project path only, so production runs runCheckJob's real steps.\n- Header: name the dependency choice and the new stop code.\n- Leave runOnce's gate shapes alone (no checkId; frame id 'quality-gate'):\n  - they are V04b's wire shape for the gate obligation;\n  - they become reachable again once the gate has a declared dependency source, which is flagged to the epic's final task.\n\nError handling:\n- No new throw path. owedChecks still runs inside dispatchFocusedChecks' try, so malformed configs (not an array, or a non-string entry) give RUNNER_CONTEXT_INVALID.\n- Every refusal stays a fixed code, never a path, a lockfile byte or a message.\n\nRun `node --test scripts/tests/local-runner-dispatch.test.mjs`: every row passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/check-dispatch.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "note": "Implemented approved-config lockfileDirs, upfront undeclared-gate refusal, separate dependencies pass-through in runOnce, and exported landedRunCheck(projectPath, steps={}) with no dependency default. Original lifecycle/evidence files untouched. Test-file scope retained from step 1; added row C to pin this step's documented malformed-configs error handling (null/object/string/non-string entry). Export-only intermediate run reproduced O/B/D assertion failures, C failed before implementation; final focused command `node --test scripts/tests/local-runner-dispatch.test.mjs` exit 0, 12/12. Logs /tmp/cq-r11e-rev2-red-assertions.log, /tmp/cq-r11e-rev2-red-context.log, /tmp/cq-r11e-rev2-green.log. Corrected D's fixture decoding after verifying validateImport copies bytes into Uint8Array (Buffer.from required for UTF-8). No network/provider/daemon used; no isolation claim.",
+      "startedAt": "2026-10-30T15:18:15.697Z",
+      "completedAt": "2026-10-30T15:20:33.524Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh.\n\n1. Run `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-dispatch.test.mjs`.\n   - This is the DoD command plus the dispatch file.\n   - It must exit 0. Its command, exit code and output tail are complete_task's verification evidence.\n   - The existing opt-in skips stay as they are.\n2. `git diff --check -- scripts/local-runner/check-dispatch.mjs scripts/tests/local-runner-dispatch.test.mjs` is clean.\n3. A read-only `git status --short` shows that this rework changed only those two files. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n4. Size:\n   - Report `git diff --numstat` for the two files, and the task total including 7a7f1044's four source/test files (QA measured +267/-58, net +209).\n   - QA's rule is >400 net changed LOC. Keep this rework within about 100 changed lines.\n   - If the net total would pass 400, say so in a task comment before complete_task.\n\nError handling: fix a failing row in code. Never weaken a row that pins a code, a boundary or an order.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh exact plan six-file env -i / Node v24.21.0 verification exited 0: 438 tests, 435 passed, 0 failed/cancelled, 3 existing skips (38.4s). Log /tmp/cq-r11e-rev2-verification.log. Scoped git diff --check clean. Rework numstat: check-dispatch +20/-6; dispatch tests +83/-9; total +103/-15, 118 changed/net +88. Including QA's landed 7a7f1044 +267/-58: task total +370/-73, 443 changed/net +297, below >400 net threshold. Only these two source/test paths changed by this session; peer/pre-existing dirty paths and daemon-owned board changes untouched. Branch moe/work-2026-10-24. No source modification in this verification step.",
+      "startedAt": "2026-10-30T15:20:55.468Z",
+      "completedAt": "2026-10-30T15:21:57.793Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the two-file diff as an attacker:\n- Can any owed check reach runCheck without an array `dependencies`? Can it reach runCheck with dirs other than its own approved definition's named lockfiles: a configs dir root, a lockfile elsewhere in the candidate, or the gate?\n- Can the adapter supply a default, either [] or every lockfile? D's paired control must fail if `dependencies = []` is added to landedRunCheck's destructuring.\n- Does the refusal come before the job, the VM and every /runner call other than get_context?\n- Mutation probes. Run them in a scratch copy in a mktemp dir, with absolute imports and `git -C` for any git read, never under scripts/tests/. Each of these must turn a row red:\n  - drop the dependencies pass-through in runOnce;\n  - pass [] from landedRunCheck;\n  - let a dir root add its lockfile;\n  - let the gate default to [];\n  - use process.arch instead of the guest's arch.\n- Windows and macOS for D: is there any POSIX-only path or mode, or a state dir inside the project?\n- A definition that names more than 16 lockfiles fails at its own turn (RUNNER_CHECK_FAILED, no VM), and earlier checks may already have run. That is accepted. Say so if you see a cheaper fix.\n- Would I be embarrassed if this shipped?\n\nFix any finding, then re-run step 3's command fresh before complete_task. No verified-local or isolation claim; executionReady stays false.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review completed on the scoped two-file diff: concurrency, malformed/hostile input, approved-context assumptions, OS portability and cleanup/error paths reviewed; no new defect. No dependency choice inferred from directory roots, candidate-only lockfiles or uncovered gates. Required-input validation, lifecycle bound/order and environment identity unchanged. >16 named lockfiles still fail at that check's turn before its VM; earlier checks may have run, as approved. D's sibling temp state and environment restoration are portable; native Windows Node v24.16.0 D passed 1/1 (macOS reviewed, not executed). Six scratch-only mutation probes all killed by assertions: dropped runOnce dependencies, forced [], directory inference, gate [], host arch and destructuring default []; the last fails with Missing expected rejection. Scratch baseline/restored both 12/12, artifacts /tmp/cq-r11e-rev2-mutations-sdqwmum5. No shared files mutated by probes. Final fresh exact step-3 command exit 0: 438 tests, 435 pass, 0 fail/cancelled, 3 existing skips, 38754ms (/tmp/cq-r11e-rev2-final.log). Scoped hashes unchanged; diff --check clean. No Git writes/direct .moe edits; executionReady remains false and no isolation/verified-local claim.",
+      "startedAt": "2026-10-30T15:21:57.815Z",
+      "completedAt": "2026-10-30T15:27:40.074Z"
+    }
+  ],
+  "planRevision": 2,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Re-plan handoff. QA reject #1 (DoD 2) needs the production caller fixed, and the approved rev-1 scope excludes it. The worker reported blocked with blockedOnTaskIds [] as instructed, and the human's standing delegation covers this re-plan.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-37dd3edb921c42eca56efefb36832992",
+    "task-5b0a2bcf70f34c62ba29df0f7ff99988",
+    "task-b799056d744749ba8ca9e4888f3452c4",
+    "task-1e7f5a2dc15b4de5b384a814c4505ed8",
+    "task-ab029075e214413483456f26eef0269a",
+    "task-71516084821845a29f79570b0a63f274",
+    "task-41fc271bec774d0b910c88691b18a2ea",
+    "task-b294377dde9e4ab6b1d422163b941115"
+  ],
+  "priority": "HIGH",
+  "order": 253.5,
+  "comments": [
+    {
+      "id": "comment-b29548aa0a9b452cb590a66775c0c91e",
+      "author": "governor-693b7073",
+      "content": "Governor lane edge, 13:23Z: this row now dependsOn b294377d.\n- Both rows edit scripts/tests/local-runner.test.mjs.\n- b294377d becomes claimable when R11e4 lands, and runs in parallel with R11e5 41fc271b, which touches other files. So this should cost no wall-clock, unless b294377d outlasts R11e5.\n- Undo: removeDependsOn [\"task-b294377dde9e4ab6b1d422163b941115\"].",
+      "timestamp": "2026-10-30T13:21:38.234Z"
+    },
+    {
+      "id": "comment-30be8ae2491947d39ed7995d8ff251a3",
+      "author": "qa-ba3f4f35",
+      "content": "@worker-0062feec QA of completion 7a7f1044: the new required dependencies key makes the existing check-dispatch.mjs landedRunCheck adapter reject every dispatch with CHECK_JOB_INPUT_INVALID. I see your follow-up task-da1d95742d6f48de9f40269e637b986c, but no rail explicitly authorizes leaving this existing caller broken. Was this compatibility break approved/deferred elsewhere, or should the adapter integration be repaired in this review round? I am rerunning the recorded checks and reviewing the composition.",
+      "timestamp": "2026-10-30T14:39:34.015Z"
+    },
+    {
+      "id": "comment-3ac2975246584406a22df4caf8661159",
+      "author": "governor-693b7073",
+      "content": "@worker-6e57c4f8 Governor correction for this rework, at 14:47Z: the deferral rail prop-bfeda355 is WITHDRAWN (prop-722793d3 approved), and it is no longer on the row.\n- QA's reject #1 stands. DoD 2 covers the production caller, so integrate an explicit, approved, bounded dependency-dir choice into scripts/local-runner/check-dispatch.mjs landedRunCheck.\n- Add the real-adapter regression test that QA's issue 2 asks for.\n- If the approved plan's scope excludes check-dispatch.mjs or local-runner-dispatch.test.mjs, or the dependency-dir choice needs a design decision you can't take, call report_blocked with explicit blockedOnTaskIds [] and ask for a re-plan. A governor will flip the row to PLANNING.\n- da1d9574 is parked as superseded by this rework.",
+      "timestamp": "2026-10-30T14:45:31.403Z"
+    },
+    {
+      "id": "comment-af49bc2729ed4d5da7cc5c3036b731f6",
+      "author": "worker-6e57c4f8",
+      "content": "Reopen audit: confirmed both QA findings in the landed code: check-dispatch's default adapter omits required dependencies, and its tests inject the adapter. The newly supplied CQ-R11e compatibility-deferral task rail explicitly assigns the caller repair and real-adapter coverage to task-da1d95742d6f48de9f40269e637b986c and excludes that break from this row's DoD. I will preserve required-input validation and identity binding, reuse the landed implementation/tests, and rerun the approved six-file verification fresh. No dispatcher scope expansion or universal [] fallback; no isolation claim. Existing unrelated dirty paths will remain untouched.",
+      "timestamp": "2026-10-30T14:46:24.197Z"
+    },
+    {
+      "id": "comment-42b543b21b1b48599db215ccd7c95581",
+      "author": "governor-693b7073",
+      "content": "Planner note from the governor, at 14:52Z: the row is back in PLANNING for rev 2.\n\nWhy:\n- QA reject #1 stands: DoD 2's \"dependencies reach the check only through the decided, bounded path\" covers the production caller.\n- Rev 1 scoped only check-evidence.mjs, check-lifecycle.mjs and their two test files. It left the check-definition-to-lockfile-dir mapping to the caller and gave no approved choice for it (worker-6e57c4f8's blockedReason; handoff in Serena).\n- My deferral rail prop-bfeda355 was withdrawn (prop-722793d3) and is not on the row.\n\nRev 2 must add:\n1. The scripts/local-runner/check-dispatch.mjs landedRunCheck integration (~line 134). It passes runCheckJob's required dependencies through an explicit, bounded dependency-dir choice. Make that design choice in the plan, under TURBO auto-approve; the worker must not infer it (not [], not every lockfile).\n2. A real-adapter regression test in scripts/tests/local-runner-dispatch.test.mjs (QA issue 2). The existing dispatch tests fake the adapter.\n\nInputs:\n- task-da1d9574 (BACKLOG, superseded by this rework) describes the caller bug. Fold its analysis in. I archive it when this row is DONE.\n\nLane:\n- No other open row plans check-dispatch.mjs or local-runner-dispatch.test.mjs.\n- The local-runner.test.mjs and local-runner-check.test.mjs lanes already wait on this row (R13a, R13b, R13g and R13), so they need no edge changes.",
+      "timestamp": "2026-10-30T14:51:49.330Z"
+    },
+    {
+      "id": "comment-771f0fa972d54ba0ab28fd31bf839881",
+      "author": "architect-bd1eb82d",
+      "content": "@architect-4ae016fb This is input for rev 2, not a ruling. I planned da1d9574 until the governor parked it as superseded, and these are the source facts I checked at HEAD 6e15af27. Use whatever saves you a re-read.\n\nThe break\n- check-dispatch.mjs:134-135 calls runCheckJob without `dependencies`. check-lifecycle.mjs:22-24 requires every key that is not in OPTIONAL (provider, signal, timeoutMs), so the call gets CHECK_JOB_INPUT_INVALID before provision.\n- `dependencies` cannot travel inside the `check` frame. parse() (line 62) requires the check's keys to be exactly command, id and protected. It has to be a separate argument of the runCheck seam: runOnce at check-dispatch.mjs:62 currently passes {snapshot, check, owner, onReady, signal}.\n\nOption A: a first-class field on the approved definition (explicit; [] means no dependency phase)\n- ProtectedCheckDefinition (schema.ts:759) is only {id, command, configs?, scripts?, assertionRoots?}.\n- validateRequiredChecks (validators.ts:153-185) throws on any other key, and it drops an empty path list, so an explicit [] would need its own handling.\n- The submit_plan schema has additionalProperties:false on the requiredChecks items (submitPlan.ts:271).\n- definitionDigest (requiredChecks.ts) hashes only [id, command, configs, scripts, assertionRoots].\n- The quality gate has no definition. A gate setting would also mean a daemon change: the settings allowlist is at validators.ts ~330-345, although get_context serves settings wholesale (getContext.ts:570).\n- So this option is a shared-schema change and needs full daemon regression. It is larger than R11e.\n\nOption B: runner-only, from the configs the definition already has\n- The dirs come from the `package-lock.json` paths that a definition lists literally in `configs`. A directory root never pulls one in.\n- Those bytes sit in requiredCheckSnapshot.entries. The evidence counts only while the candidate's protected entries equal the approved snapshot (policy.ts header).\n- Two gaps:\n  - A definition that lists no lockfile gets [] by rule, which is QA's \"silently default npm checks to []\".\n  - The gate has no approved lockfile, so it would have to stop before any VM starts, with a fixed code.\n\nAlready bound either way\n- checkEnvironment hashes dependencyDigest, and the tree's moe-dependencies.json names the sorted dirs.\n- onReady refuses any environment that settings.checkEnvironments does not list (RUNNER_ENVIRONMENT_NOT_APPROVED).\n- So a change to the dependency set needs a newly human-listed environment id.\n\nTest seam for QA's issue 2\n- landedRunCheck is not exported, and it calls runCheckJob with no step injection: real provisionGuest, toolchain fetch and so on.\n- A real-adapter test needs an exported adapter that takes runCheckJob's step overrides (fake provision, toolchain, dependencies, materialize, installToolchain, installDependencies, session, verify and remove). It can then assert that the chosen dirs reach the `dependencies` step as lockfiles and the environment's dependencyDigest. With [], the dependencies step must never be called.",
+      "timestamp": "2026-10-30T14:53:07.110Z"
+    },
+    {
+      "id": "comment-ff778cbef78842049b49a27be34df74d",
+      "author": "architect-899a90d6",
+      "content": "Architect note for R11e's worker and QA: the follow-up bug row task-da1d9574 (check-dispatch omits runCheckJob's `dependencies`) has been ARCHIVED on the human's call. Its whole DoD is delivered by this row's rev 2 (lockfileDirs, RUNNER_DEPENDENCIES_UNDECLARED, the exported landedRunCheck, test row D). DoD 2 here is now the only tracker for the production caller fix. Nothing may be deferred to da1d9574. Any leftover belongs in this row's rework, or in a new row if it is genuinely out of scope.",
+      "timestamp": "2026-10-30T17:29:24.613Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T13:27:38.551Z",
+  "updatedAt": "2026-10-30T17:29:24.613Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:33:18.537Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 9,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T15:49:37.849Z",
+    "wallClockMs": 62179312
+  },
+  "contextFetchedBy": [
+    "worker-6e57c4f8",
+    "architect-bd1eb82d",
+    "qa-ba3f4f35",
+    "architect-4ae016fb",
+    "worker-262588d0",
+    "qa-952969be"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T15:13:28.077Z",
+  "planningNotes": {
+    "approachesConsidered": "- Chosen: the dependency set is part of the approved check definition, read from the package-lock.json paths that its configs name literally.\n  - No daemon change is needed.\n  - The set and its bytes are bound by definitionDigest and requiredCheckSnapshot.\n  - The environment id (dependencyDigest) must be human-listed in settings.checkEnvironments.\n- A first-class `dependencies` field on ProtectedCheckDefinition, plus a gate setting: rejected for this row.\n  - It is the most explicit option, but it changes the shared schema (schema.ts, validators.ts, the submitPlan.ts schema, definitionDigest) and needs full daemon regression.\n  - That makes it a V-epic change, larger than R11e. It is flagged to the epic's final task.\n- Giving the gate [] under the same rule, since policy.ts judges the gate as a definition that protects no files: rejected.\n  - An npm gate would silently run with no dependency phase and report code-failure, which QA reject #1 forbids.\n  - The gate also has no surface on which anyone could approve a choice.\n- Installing every lockfile in the candidate: rejected. It is inference, which QA forbids, and packages/moe-claude-plugin's lockfile has entries that R11e3 refuses, so every check would be infra-failure.\n- A runner-side mapping file: rejected. It would be a second authority, not bound to plan approval.\n- Refusing the uncovered gate at its own turn rather than up front: rejected, because earlier checks would spend VMs on a dispatch that cannot complete.\n- Pre-checking the 16-lockfile bound in the dispatcher: rejected.\n  - It would duplicate MAX_LOCKFILES.\n  - A static import of dependency-cache.mjs would defeat landedRunCheck's lazy loading (RUNNER_SEAM_UNAVAILABLE).",
+    "codebaseInsights": "- owedChecks folds the gate into any definition whose trimmed command equals it, so covering the gate takes one requiredChecks entry.\n- runCheckJob's parse refuses dependencies that are missing, not an array, over 16, duplicated or without a lockfile, with CHECK_JOB_INPUT_INVALID before any call. runOnce maps any runCheck rejection to RUNNER_CHECK_FAILED, with no VM and no dispatch.\n- landedRunCheck imports the lifecycle lazily, and ownedLedgerDir creates the state dir. So tests set MOE_RUNNER_STATE_DIR to a sibling of the project.\n- The real ledger's reserve writes one record under the state dir. runCheckJob captures run.name from it, and the guest's instance must equal it.\n- reportFor replaces the exported snapshot's overlay with validateImport([]). workspaceEntries needs version 1, base and overlay.\n- CI's local-runner line runs this test file on ubuntu, windows and macos (build-all-platforms).\n- No docs list the RUNNER_* dispatch codes.",
+    "risks": "- Size: rev 1 is +267/-58 (net +209). This rework should stay within about 100 changed lines; QA's rule is >400 net.\n- runOnce's gate-only branches become unreachable until the gate has a declared dependency source. Keep them, since they are the V04b wire shape; the epic's final task decides.\n- A definition naming more than 16 lockfiles fails at its own turn (RUNNER_CHECK_FAILED, no VM), and earlier checks may already have run.\n- Windows and macOS: D uses only os.tmpdir() and path.join. syncDir already ignores failures, and writeNew uses 'wx' 0o600.\n- The red in step 1 is a link error from the missing export, not failing rows.\n- docs/MCP_SERVER.md is planned by four WORKING rows, so the approver-facing doc of this rule goes to the epic's final docs sweep (f4811a72), not this row.",
+    "keyFiles": [
+      "scripts/local-runner/check-dispatch.mjs",
+      "scripts/tests/local-runner-dispatch.test.mjs",
+      "scripts/local-runner/check-lifecycle.mjs",
+      "scripts/local-runner/check-evidence.mjs",
+      "scripts/local-runner/vm-control.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 2,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T15:13:28.107Z",
+  "approvedPlanRevision": 2,
+  "workStartedAt": "2026-10-30T14:15:29.180Z",
+  "reviewStartedAt": "2026-10-30T15:28:06.224Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-dispatch.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, from the installed pins only (25.00599ms)\nℹ tests 438\nℹ suites 0\nℹ pass 435\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 38754.191637",
+    "reportedAt": "2026-10-30T15:28:06.224Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-dispatch.test.mjs",
+    "scripts/local-runner/check-dispatch.mjs",
+    ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+    ".moe/tasks/task-4ca62c89674c466181fc306175d25d2c.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
+  ],
+  "completionSummary": "CQ-R11e rev 2 repairs QA reject #1 in two files only. check-dispatch derives dependency dirs from literal package-lock.json configs in each approved definition, passes them separately through runOnce and the real landedRunCheck adapter with no default, and stops the entire owed set before any VM when a gate lacks a same-command definition (RUNNER_DEPENDENCIES_UNDECLARED). Lifecycle required-input validation, MAX_LOCKFILES, step order and evidence identity remain unchanged; rev 1's four files untouched.\nReal-adapter row D covers exact ROOT/PKG snapshot bytes, exclusion of OTHER, guest arm64, installation digest, locked/null dependency environments, and omission versus explicit []. Additional C pins malformed-config refusal. Existing assertions retained with approved fixture changes.\nFresh exact six-file verification: exit 0, 438 tests, 435 pass, 0 fail/cancelled, 3 existing skips (38.75s); /tmp/cq-r11e-rev2-final.log. Focused dispatch 12/12; native Windows Node v24.16 D 1/1; macOS reviewed, not executed. Six mutation probes killed by assertions, baseline/restored 12/12, /tmp/cq-r11e-rev2-mutations-sdqwmum5; includes the adapter default [] paired-control failure.\nAdversarial review and scoped diff --check clean. Rework +103/-15 (net +88); including prior +267/-58, task total +370/-73 (443 changed/net +297). >16 lockfiles still fail before that check's VM at its own turn; earlier checks may run as approved. Handoff and Uint8Array fixture gotcha saved in Serena. No agent Git writes/direct .moe edits, peer bytes untouched. Wrapper owns landing. executionReady stays false; no verified-local or isolation claim.",
+  "commits": [
+    {
+      "sha": "7a7f1044c0d7fdc34591ad6fb035de4c826d3069",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T14:13:56Z",
+      "paths": [
+        ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+        ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/tests/local-runner-check.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T14:35:59.853Z",
+      "treeId": "9512c83146ff4abae74f59bde6bd9cbe3f858624",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "64ebece79962bbbd01a0e4cf3c3ef5b7ea2d3ce8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-6e57c4f8@2026-10-30T14:44:42Z",
+      "paths": [
+        ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+        ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json"
+      ],
+      "recordedBy": "worker-6e57c4f8",
+      "recordedAt": "2026-10-30T14:49:03.877Z",
+      "treeId": "7c28614146bc6b283a47f16cceb7e34d0b5e6ec3",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "ef7497c976f3ec855346403cb0cef5f45187aee3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-262588d0@2026-10-30T15:13:45Z",
+      "paths": [
+        ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+        ".moe/tasks/task-4ca62c89674c466181fc306175d25d2c.json",
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "recordedBy": "worker-262588d0",
+      "recordedAt": "2026-10-30T15:28:21.258Z",
+      "treeId": "13f1b1e12feb714b008778fb2432c8d67e23a2ab",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "d1e7cbad62892caee825d5259bac4d1db00ba699",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T15:38:00Z",
+      "paths": [
+        ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T15:50:16.482Z",
+      "treeId": "72c5ea577d72f73bdd1cd5c1c7b8ddf3bf4190e2",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/check-lifecycle.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T15:38:00Z",
+    "at": "2026-10-30T15:50:16.482Z"
+  },
+  "reviewCompletedAt": "2026-10-30T15:49:37.849Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Dependencies reach the check only through the decided, bounded path. A failed dependency phase is reported as infra-failure, never as code-failure or passed."
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "scripts/local-runner/check-lifecycle.mjs",
+        "line": 22,
+        "description": "P1: dependencies is now mandatory, but production check-dispatch.mjs:134-135 omits it. Every default dispatch fails CHECK_JOB_INPUT_INVALID before provision/onReady, surfaced as RUNNER_CHECK_FAILED. Integrate an explicit approved bounded dependency-dir choice into this caller. Retain required-input validation and identity binding; do not silently default npm checks to [] or infer every candidate lockfile."
+      },
+      {
+        "type": "missing_feature",
+        "file": "scripts/tests/local-runner-dispatch.test.mjs",
+        "line": 189,
+        "description": "Add regression coverage using the real dispatch adapter with runCheckJob (fake provider/transfer steps are fine). Current tests replace loadRunCheck/runCheck and pass while production is broken. Cover explicit no-dependency checks and approved lockfile dirs reaching the lifecycle and intended environment. Reproducer: /tmp/qa-r11e-dispatch-repro.mjs; evidence: /tmp/qa-r11e-dispatch-repro.log."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Reviewed 7a7f1044c0d7fdc34591ad6fb035de4c826d3069 on moe/work-2026-10-24; +267/-58 source/tests (325 changed, net +209), plus board metadata. DoD 2 fails at the production caller: mandatory dependencies breaks every default check-dispatch invocation before provisioning. Follow-up task-da1d95742d6f48de9f40269e637b986c documents but does not fix this regression; rails do not authorize deferral. Asked worker in comment-30be8ae2491947d39ed7995d8ff251a3.\nExact-commit archive /tmp/qa-r11e.V1mNwC: recorded five-file command exit 0, 423/426 passed/3 existing skips; plan six-file command (+local-runner-agents) exit 0, 446/449 passed/3 skips, after native-lock-matched daemon tsc exit 0. Same clean env/Node v24.21.0. Dispatch suite 10/10 passes with fake adapter. Logs /tmp/qa-r11e-5-final.log, /tmp/qa-r11e-6.log, /tmp/qa-r11e-dispatch-suite.log. Initial missing archive fixture failures resolved with same-SHA CI/bundler files. git show --check clean.\nRepro: node /tmp/qa-r11e-dispatch-repro.mjs /tmp/qa-r11e.V1mNwC with MOE_RUNNER_STATE_DIR=/tmp/qa-r11e-repro-state. Actual default runDispatchCli exits 2/RUNNER_CHECK_FAILED; only get_context called, no observation. Omitted dependencies throws CHECK_JOB_INPUT_INVALID before provision; explicit [] reaches injected provision. No VM/network used. Output /tmp/qa-r11e-dispatch-repro.log. Pinned install, bounds, cleanup and freshness checks otherwise pass. Complexity: net -0 lines. No isolation claimed.",
+      "rejectedAt": "2026-10-30T14:44:24.644Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Dependencies reach the check only through the decided, bounded path. A failed dependency phase is reported as infra-failure, never as code-failure or passed."
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "scripts/local-runner/check-lifecycle.mjs",
+          "line": 22,
+          "description": "P1: dependencies is now mandatory, but production check-dispatch.mjs:134-135 omits it. Every default dispatch fails CHECK_JOB_INPUT_INVALID before provision/onReady, surfaced as RUNNER_CHECK_FAILED. Integrate an explicit approved bounded dependency-dir choice into this caller. Retain required-input validation and identity binding; do not silently default npm checks to [] or infer every candidate lockfile."
+        },
+        {
+          "type": "missing_feature",
+          "file": "scripts/tests/local-runner-dispatch.test.mjs",
+          "line": 189,
+          "description": "Add regression coverage using the real dispatch adapter with runCheckJob (fake provider/transfer steps are fine). Current tests replace loadRunCheck/runCheck and pass while production is broken. Cover explicit no-dependency checks and approved lockfile dirs reaching the lifecycle and intended environment. Reproducer: /tmp/qa-r11e-dispatch-repro.mjs; evidence: /tmp/qa-r11e-dispatch-repro.log."
+        }
+      ]
+    }
+  ],
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Governor correction comment-3ac2975246584406a22df4caf8661159 withdrew the compatibility deferral; fresh get_context confirms its removal. QA reject #1 stands: check-dispatch landedRunCheck omits runCheckJob's required dependencies, and existing dispatch tests fake the adapter. Approved plan revision 1 excludes check-dispatch.mjs and local-runner-dispatch.test.mjs and leaves check-definition-to-lockfile-dir mapping unspecified. Per the governor's explicit instruction, an approved re-plan/design choice is required; I will not silently choose [] or infer every lockfile. No source/test files modified; unrelated dirty paths preserved. Started step-1 only. Fresh targeted two-file test command exit 0 (326 tests/324 pass/0 fail/2 skips; /tmp/r11e-reopen-step1.log), but it does not cover this production composition bug and is not completion verification. Full handoff and updated gotcha recorded in Serena. The superseded follow-up is not a dependency; blockedOnTaskIds is explicitly empty.",
+  "blockedOnTaskIds": null,
+  "planningEntry": {
+    "from": "BLOCKED",
+    "at": "2026-10-30T14:51:37.191Z",
+    "seq": 1
+  },
+  "executionContract": {
+    "intendedBehavior": "Production check dispatch (scripts/local-runner/check-dispatch.mjs) gives runCheckJob each owed check's approved dependency dirs: the parent dir of every package-lock.json that its approved definition names literally in configs ('.' for the root), or [] when it names none. An owed quality gate with no same-command definition has no approved dependency choice, so dispatch stops before any VM with RUNNER_DEPENDENCIES_UNDECLARED. runCheckJob keeps `dependencies` required and binds the chosen set into the environment (dependencyDigest), which onReady checks against settings.checkEnvironments.",
+    "acceptanceCriteria": [
+      "runDispatchCli exits 0 with the real landedRunCheck and the real runCheckJob, where only runCheckJob's injected steps are faked, for an approved definition naming two lockfiles plus one naming none. The dependencies step sees exactly the named lockfiles' snapshot bytes and the guest's arch, and the dispatches carry the matching environments.",
+      "At the adapter, omitting dependencies still rejects CHECK_JOB_INPUT_INVALID before provisioning, while dependencies [] reaches provisioning.",
+      "An owed gate that no definition covers stops with RUNNER_DEPENDENCIES_UNDECLARED, after get_context only."
+    ],
+    "invariants": [
+      "No adapter default: landedRunCheck never invents [] or a lockfile list.",
+      "Only lockfiles named literally in an approved definition's configs are installed. A configs directory root, or any other lockfile in the candidate, never adds one.",
+      "No VM starts for an owed set that holds an undeclared dependency choice.",
+      "runCheckJob's validation, its MAX_LOCKFILES bound, the evidence identity and the step order stay as landed in 7a7f1044.",
+      "No verified-local or isolation claim; executionReady stays false."
+    ],
+    "compatibility": [
+      "owedChecks still mirrors policy.ts's owed set. The gate entry keeps its shape, with no dependencies key.",
+      "The args of moe.record_check_dispatch and moe.record_check_observation are unchanged. No daemon, schema or settings change.",
+      "runDispatchCli's argv, report shape and exit codes are unchanged, apart from the new stop code."
+    ],
+    "approvedScope": [
+      "check-dispatch.mjs: lockfileDirs (new); owedChecks, whose definition entries gain dependencies; dispatchFocusedChecks, which can stop with RUNNER_DEPENDENCIES_UNDECLARED; runOnce, whose runCheck input gains dependencies; landedRunCheck, now exported, which passes a second steps argument to runCheckJob.",
+      "local-runner-dispatch.test.mjs: fixtures, O/B/H/R adjustments, new row D."
+    ],
+    "reuse": [
+      "runCheckJob's existing required-input validation and MAX_LOCKFILES bound; owedChecks' folding of the gate into a same-command definition; the test file's harness and context fixtures."
+    ],
+    "sourceAssumptions": [
+      "check-dispatch.mjs:134-135: landedRunCheck calls runCheckJob without dependencies. check-lifecycle.mjs:22-24: KEYS requires it, since OPTIONAL is only provider, signal and timeoutMs.",
+      "packages/moe-daemon/src/state/validators.ts validateCheckPaths: configs entries are normalized and deduped, at most 50, file or directory paths, with no globs.",
+      "packages/moe-daemon/src/delivery/requiredChecks.ts: measureRequiredCheckSnapshot needs a blob at the approved revision for every configs path, and definitionDigest hashes configs.",
+      "scripts/local-runner/vm-control.mjs ownedLedgerDir honours MOE_RUNNER_STATE_DIR and refuses a state dir inside the project."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-dispatch.test.mjs"
+    ]
+  },
+  "completedAt": "2026-10-30T15:49:37.849Z",
+  "reviewSummary": "Reviewed rev-2 completion ef7497c9 (tree 13f1b1e1; on local+origin moe/work-2026-10-24). check-dispatch.mjs +20/-6, dispatch test +83/-9 = 118 changed/net +88; task total with 7a7f1044 +370/-73 (net +297). Rev-1 files untouched since 7a7f1044; checkpoint 64ebece7 board-only; diff --check clean, no forbidden patterns.\nExact-commit archive /tmp/qa2-r11e.Ky9jBk, env -i Node v24.21.0: six-file verification command exit 0, 438/435 pass/0 fail/3 existing skips (/tmp/qa2-r11e-six.log); five-file DoD command exit 0, 426/423/0/3 (/tmp/qa2-r11e-five.log).\nReject-#1 repro with DEFAULT loadRunCheck (real adapter + real runCheckJob steps, temp state dir, no VM/network): plain and lockfile-naming checks now reach real provisioning (failure CHECK_PROVISION_UNAVAILABLE, no Multipass here) instead of CHECK_JOB_INPUT_INVALID; uncovered gate stops RUNNER_DEPENDENCIES_UNDECLARED after get_context only (/tmp/qa2-repro2.log).\n9 own scratch mutations all killed (12/12 baseline+restore): drop runOnce pass-through, adapter default [], suffix w/o '/', no refusal, gate [], adapter drops steps, reversed order, dir-root inference, adapter infers lockfiles.\nDoD1 pinned/root-owned toolchain: landed code unchanged, TC/TT/KI green. DoD2: caller passes only literal package-lock.json configs dirs, MAX_LOCKFILES kept in runCheckJob; dependency failures are infra-failure before onReady, never passed/code-failure. DoD3: E9 + D's envOf(digest)/envOf(null). DoD4: evidence present, re-run green. Contract ACs/invariants hold; daemon normalizes configs.\nNon-blocking: row C is a disclosed test-only addition; runOnce bare-gate branches now unreachable, kept per plan, flagged in CQ-R13; >16 lockfiles stop as RUNNER_CHECK_FAILED without failure code (plan-accepted); D not run on macOS (worker Windows 1/1). Mid-epic, no daemon/schema change; executionReady false, no isolation claim.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,266 @@
+{
+  "id": "task-6a742a093a37429c9467b23c3bc13d63",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R05] macOS VM provisioning",
+  "description": "Objective: Automatically provision owned Linux VMs on certified Intel/Apple Silicon hosts.\n\nDeliverable: macOS VM provisioning. This is task R05 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/local-runner.test.mjs\n\nDependency aliases (wired by Moe task ids after import): R02, R06, R07.",
+  "definitionOfDone": [
+    "Select matching pinned image architecture.",
+    "Unsupported host/provider combinations are explicit.",
+    "Native provider smoke establishes support; mocks/skips alone do not.",
+    "Fresh verification `node --test scripts/tests/local-runner.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test-first (RED). Append ONE new section, `// CQ-R05 macOS VM provisioning`, to the END of scripts/tests/local-runner.test.mjs, after R04's section (R05 depends on R04).\n\n**Fixture rules**\n- Keep every existing byte (LF). Add only new imports: platform-macos.mjs, native-smoke.mjs, plus the landed provision, cli, image-cache, lifecycle, guest-bootstrap and guest-readiness modules.\n- Reuse the earlier fakes. No real Multipass, sysctl, network or paid calls.\n\nEnumerate these groups. Mutation-resistant assertions only.\n\n**Image architecture (DoD 1)**\n- **M1. detectHostArch({ run, sysctlExecutable, processArch }).**\n  - argv is exactly ['/usr/sbin/sysctl', ['-in', 'hw.optional.arm64']], with shell:false, a bounded buffer and SIGKILL.\n  - stdout '1' gives 'arm64', EVEN with processArch 'x64' (Node under Rosetta on Apple Silicon).\n  - '' or '0' with processArch 'x64' gives 'x64'.\n  - '' with processArch 'arm64' (inconsistent) gives null.\n  - Any error, or other output, gives null.\n- **M2. Matching pinned image.** Run provisionGuest(macosPlatform with injected probes).\n  - An arm64 host (including the Rosetta case) makes fetch request EXACTLY the manifest images.arm64.url, and the launch file URL ends with `<images.arm64.sha256>.img`.\n  - An x64 host gives images.x64.\n  - An unknown arch makes no fetch and leaves provisioned false.\n\n**Explicit unsupported combinations (DoD 2)**\n- **M3.** The frozen MACOS_SUPPORT_MATRIX deep-equals the darwin entries of loadCertifiedProvider().hosts as {arch, driver} pairs (a drift guard): [{x64, qemu}, {arm64, qemu}].\n  - Each of these gives 'host-provider-combination' false with an action naming the exact observed combination, e.g. 'darwin/arm64 + virtualbox is not a certified combination (certified: qemu); Moe never changes local.driver':\n    - driver 'virtualbox' on arm64;\n    - driver 'applevz' on x64;\n    - an unknown arch 'ia32' (via 'host-macos', naming 'darwin/ia32').\n  - The driver token is validated (/^[a-z][a-z0-9-]{0,31}$/) before it appears in text; anything else is rendered as 'unknown'.\n  - Both certified pairs give true.\n- **M4. Doctor wiring.**\n  - doctor is called with host {platform:'darwin', arch:<detected>} and executable '/usr/local/bin/multipass' by default. The official v1.17.0 pkg postinstall symlinks /usr/local/bin/multipass.\n  - PROVIDER_NOT_FOUND or VERSION_* (e.g. '1.17.0+win' on a Mac) gives 'multipass-installed' false.\n  - PROVIDER_ACCESS_DENIED gives 'multipass-authenticated' false.\n- **M5. Aggregate.**\n  - Items are in a FIXED order, each EXACTLY {id, satisfied, requiresElevation, action}.\n  - ready is true only when all items are true.\n  - The result carries `arch` (null when unknown) and primaryName.\n- **M6. provisionGuest arch wiring.**\n  - `pre.arch` takes precedence over a static platform.arch.\n  - The R03 and R04 sections pass unchanged, since their prerequisites return no arch.\n\n**Native smoke (DoD 3: native provider smoke establishes support; mocks and skips do not)**\n- **M7.** nativeSmokeCore with injected deps and a fully passing fake provider returns evidence with EXACTLY the keys {kind:'native-provider-smoke', platform, arch, result:'passed', transport:'injected', supportEstablished:false, bootstrapReady:true, image:{sourceSha256, providerImageHash}, failures:[], cleanup:'deleted'}.\n  - The only delete argv is ['delete', '--purge', <the smoke's own instance>].\n- **M8.** Prerequisites not ready gives result 'blocked' and supportEstablished false, with zero fetch, launch or ledger records.\n- **M9.** Readiness failing gives result 'failed'. Cleanup STILL deletes the smoke's own instance, and supportEstablished is false.\n- **M10. runNativeProviderSmoke** (the real entry, which accepts ONLY {workDir}).\n  - A relative or empty workDir throws NATIVE_SMOKE_INPUT_INVALID before any probe.\n  - Any extra option key (e.g. {workDir, provider:{run}} or {workDir, fetch}) throws NATIVE_SMOKE_INPUT_INVALID with zero calls. Dependencies cannot be injected into the native path.\n- **M11. CLI.**\n  - platformFor('darwin') === macosPlatform.\n  - `native-smoke --work-dir <abs>` calls the injected smoke dependency, prints one JSON line, and exits 0 ONLY when evidence.supportEstablished === true; otherwise 2.\n  - A missing or relative --work-dir, or extra args, gives CLI_INPUT_INVALID before any call.\n  - The R02, R03 and R04 CLI tests are unchanged.\n- **M12. OPT-IN native smoke.**\n  - It runs only on darwin with MOE_NATIVE_PROVIDER_SMOKE === '1' and an absolute MOE_NATIVE_SMOKE_WORK_DIR.\n  - Otherwise `skip` with the reason 'native provider smoke not run: macOS support is NOT established by this run'.\n  - When it runs, it asserts result 'passed' and supportEstablished true.\n\n**Real process (POSIX only, `{ skip: process.platform === 'win32' }`)**\n- **M13.**\n  - Write fake `sysctl` (prints 1) and fake `multipass` (1.17.0+mac / qemu) executables in a mkdtemp dir whose path has a space.\n  - Run macosPlatform.prerequisites with sysctlExecutable and provider.executable pointing at them. Expect ready true with arch 'arm64' through genuine process output.\n  - A 'virtualbox' driver variant gives ready false naming the combination.\n\nRun the file: the new tests are RED and the earlier sections are green. Note this in the step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "RED: appended the CQ-R05 section (M1-M13) to scripts/tests/local-runner.test.mjs. Ran it in a /tmp git-archive snapshot with placeholder platform-macos/native-smoke modules: 12 fail (11 new tests plus the updated R04 platformFor assertion), 179 pass; earlier sections are green. Deviations:\n(1) In place, I edited the R04 test 'the CLI selects the Linux platform module...': platformFor('darwin') is now macosPlatform, and I added a 'sunos' null check. R04's handoff asked R05 to make this edit.\n(2) The smoke deps include `random` (ledger names), so R03's fakeVm/fakeGuest answer GUEST.\n(3) On DRIVER_UNSUPPORTED, the other doctor items stay null (the R03/R04 convention), not true.\nPeers' dirty paths are untouched.",
+      "startedAt": "2026-10-25T11:20:13.414Z",
+      "completedAt": "2026-10-25T11:23:08.870Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create scripts/local-runner/platform-macos.mjs. All probes are read-only. Moe surfaces operator actions and never performs them: no sudo, installs, `multipass set` or driver changes.\n\n**Exports**\n- `MACOS_SUPPORT_MATRIX`, frozen: [{arch:'x64', driver:'qemu'}, {arch:'arm64', driver:'qemu'}]. It mirrors R02's certified-provider.json darwin hosts.\n- `detectHostArch({ run, sysctlExecutable = '/usr/sbin/sysctl', processArch = process.arch })`:\n  - argv ['-in', 'hw.optional.arm64'], with options {encoding:'utf8', shell:false, windowsHide:true, timeout:10_000, maxBuffer:MAX_PROBE_BUFFER, killSignal:'SIGKILL'}.\n  - Trimmed '1' gives 'arm64': Apple Silicon, including a Node process translated by Rosetta, so the arm64 image is still selected.\n  - '' or '0' with processArch 'x64' gives 'x64'.\n  - Anything else, or an error, gives null. It never throws.\n- `macosPlatform`, frozen: {id:'darwin', arch:null, executable:'/usr/local/bin/multipass', prerequisites}. The arch is detected per call, and provisionGuest uses pre.arch.\n\n**`prerequisites({ provider = {}, cacheDir, doctor = runDoctor, probe = probeMultipass, run, sysctlExecutable, host = { platform: process.platform, arch: process.arch } } = {})`**\n1. **Arch.** arch = host.platform === 'darwin' ? await detectHostArch({ run, sysctlExecutable, processArch: host.arch }) : null.\n2. **Doctor.** doctor({ host: { platform:'darwin', arch: arch ?? host.arch }, executable: provider.executable ?? macosPlatform.executable, run: provider.run }).\n3. **Combination.** When the doctor reports DRIVER_UNSUPPORTED, call R02's read-only probeMultipass(...) ONCE to read the driver token, used only to NAME the combination. Validate the token against /^[a-z][a-z0-9-]{0,31}$/, otherwise render it as 'unknown'.\n4. **Items**, in FIXED order, each EXACTLY {id, satisfied, requiresElevation, action}:\n   - **host-macos:** darwin with arch in {x64, arm64}. False names 'darwin/<arch|unknown>'; null when sysctl was unknown.\n   - **multipass-installed:** requiresElevation true. Action: install Multipass 1.17.0 for macOS (+mac pkg), which requires an administrator.\n   - **multipass-authenticated:** requiresElevation true. Action: an administrator sets local.passphrase; the user runs `multipass authenticate`.\n   - **host-provider-combination:** {arch, driver} must be in MACOS_SUPPORT_MATRIX. False gives the explicit action '<platform>/<arch> + <driver> is not a certified combination (certified: qemu); Moe never changes local.driver.' requiresElevation true.\n   Items a failing doctor code cannot speak to are null, never true.\n5. **Return** {platform:'darwin', arch, ready: all items satisfied === true, prerequisites, primaryName: doctor.primaryName ?? null, certification:'not-established'}.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) probe errors map to false or null. No raw output enters reports, and nothing throws out of prerequisites().\n\nMake M1 and M3-M5 green.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/platform-macos.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/platform-macos.mjs"
+      ],
+      "note": "Created platform-macos.mjs. It exports a frozen MACOS_SUPPORT_MATRIX, detectHostArch (one bounded sysctl, never throws) and a frozen macosPlatform {id:'darwin', arch:null, executable:'/usr/local/bin/multipass', prerequisites}. Items, in order: host-macos, multipass-installed, multipass-authenticated, host-provider-combination. On DRIVER_UNSUPPORTED, one extra read-only probeMultipass names the combination; the token is validated, otherwise rendered 'unknown'. The doctor and the probe run under settle(), so nothing rejects. The result also carries providerCode, for parity with win32/linux and the CLI. Deviations:\n- sysctl uses provider.run (one transport, like linux snap), not a separate `run` option.\n- The combination is satisfied iff the doctor's providerReady. The doctor already checked that exact {darwin, arch} manifest entry's driver, and the M3 drift guard keeps the matrix equal to it. The matrix also names the certified drivers.\nIn the snapshot, 5/5 pass: M1, M3, M4, M5 and the M13 real-process test.",
+      "startedAt": "2026-10-25T11:23:18.394Z",
+      "completedAt": "2026-10-25T11:23:56.921Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire macOS into the shared composition and the CLI platform map.\n\n**1. provision.mjs.** R03 created it and R04 extended it; R05 depends on R04. It is listed under newFiles ONLY because it does not exist at plan time; R05 MODIFIES it.\n- In provisionGuest, use `const arch = pre.arch ?? platform.arch` for ensurePinnedImage.\n- If arch is not 'x64' or 'arm64', return the not-ready shape with zero mutation. This is defense in depth: prerequisites already block it.\n- Nothing else changes. The R03 and R04 sections must pass unchanged.\n\n**2. cli.mjs.** Add `darwin: macosPlatform` to PLATFORMS. platformFor stays as R04 defined it.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) unchanged propagation. An unknown arch never reaches a download or launch.\n\nMake M2 and M6 green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/cli.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/provision.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/provision.mjs",
+        "scripts/local-runner/cli.mjs"
+      ],
+      "note": "Changes:\n- provision.mjs (+4/-2): `const arch = pre?.arch ?? platform.arch`. A non-ready pre, or an arch outside IMAGE_ARCHES (imported from guest-bootstrap), returns the existing not-ready shape before any primary check, download, reserve or launch. ensurePinnedImage now gets `arch`.\n- cli.mjs (+2/-1): adds the macosPlatform import and the darwin PLATFORMS entry.\n\nSnapshot run (skip pattern: the R02 10s hung test): 187 pass, 4 fail. The failures are only the step-4 native-smoke and CLI tests. M2, M6 and every R03/R04 test pass.",
+      "startedAt": "2026-10-25T11:23:57.964Z",
+      "completedAt": "2026-10-25T11:24:25.599Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Create scripts/local-runner/native-smoke.mjs and the CLI `native-smoke` command. A native provider smoke is the ONLY thing that can establish platform support. Mocks and skips cannot.\n\n**1. `nativeSmokeCore({ platform, workDir, deps })`.** deps is undefined for a native run, or an object of injected test transports {provider, fetch, digest, sleep, prerequisites}.\n- `transport = deps === undefined ? 'native' : 'injected'`.\n- Paths: ledger = createLedger(join(workDir, 'ledger')); cacheDir = join(workDir, 'images').\n- Owner: a synthetic smoke identity {taskId:'task-nativesmoke', attemptId:`attempt-${randomBytes(16).toString('hex')}`, generation:1}.\n- Bootstrap inputs: supervisor = Buffer.from('#!/bin/sh\\nexit 0\\n'); credential = randomBytes(32), never persisted or reported.\n- Call provisionGuest({ platform, ledger, owner, cacheDir, supervisor, credential, ...deps }).\n- Not provisioned gives result 'blocked'. bootstrapReady true gives 'passed'. Anything else gives 'failed'.\n- A thrown error gives 'failed', with failures [its sanitized code].\n- **ALWAYS, in finally**, run cleanupOwned({ ledger, provider, attemptPhase: id => id === owner.attemptId ? 'closed' : null, leaseHeld: () => false }), so ONLY this smoke's own VM is deleted and other records are preserved. cleanup is 'deleted', 'none' (nothing launched), 'preserved' or 'failed'.\n- `supportEstablished = transport === 'native' && result === 'passed' && cleanup !== 'failed'`.\n- Return EXACTLY {kind:'native-provider-smoke', platform: platform.id, arch, result, transport, supportEstablished, bootstrapReady, image:{sourceSha256, providerImageHash}|null, failures, cleanup}. No paths or secrets.\n\n**2. `runNativeProviderSmoke(options)`.**\n- options must have EXACTLY the one key `workDir`, an absolute path without control characters. Otherwise throw NATIVE_SMOKE_INPUT_INVALID before anything runs. This makes the native path non-injectable.\n- platform = platformFor(process.platform); null throws NATIVE_SMOKE_UNSUPPORTED_HOST.\n- Return nativeSmokeCore({ platform, workDir }) with deps undefined.\n\n**3. cli.mjs.**\n- Add `native-smoke --work-dir <abs>`, validated like the other flags, with an injectable `nativeSmoke` dependency (the runCli test seam).\n- Print one JSON line.\n- Exit 0 ONLY when supportEstablished === true, otherwise 2.\n\n**Header comment.** Running the smoke launches and deletes a real owned VM. It is operator-invoked on real hardware, and its evidence is what CQ-R13 consumes to establish support claims.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) every failure is a stable code inside the evidence, and cleanup runs on every path.\n\nMake M7-M11 green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/cli.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/native-smoke.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/native-smoke.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Created native-smoke.mjs and the CLI `native-smoke --work-dir <abs>` command.\n\nDeviation, stricter than the plan: the exported nativeSmokeCore({platform, workDir, deps}) ALWAYS reports transport 'injected'. 'native' is reachable only through the private path that runNativeProviderSmoke({workDir}) uses, on platformFor(process.platform). So even a caller-supplied platform with deps undefined cannot claim support.\n- runNativeProviderSmoke checks Reflect.ownKeys === ['workDir'] (absolute, no control characters). Otherwise it throws NATIVE_SMOKE_INPUT_INVALID; a host with no module gives NATIVE_SMOKE_UNSUPPORTED_HOST.\n- supportEstablished = native && passed && cleanup === 'deleted' (stricter than !== 'failed').\n- The smoke ALWAYS runs cleanupOwned, with only its random attempt closed, so other records in the workDir are preserved (tested).\n- The evidence image is set only on a passed bootstrap. Failures are stable codes.\n- The arch comes from a wrapper on platform.prerequisites, so provisionGuest's return shape and the R03/R04 fixtures are unchanged.\n- deps also accept `random`, for the test ledger names.\n\nCLI:\n- smokeReport sanitizes refusals to NATIVE_SMOKE_* codes, else NATIVE_SMOKE_UNAVAILABLE.\n- native-smoke.mjs is loaded by dynamic import, which avoids a static import cycle (it imports platformFor).\n- Exit 0 only when supportEstablished === true.\n- USAGE now names native-smoke. I updated the R03 test's USAGE constant to match (one line).\n\nSize: total changed LOC is 399 (cli +22/-11, provision +5/-3, platform-macos 64, native-smoke 60, tests +231/-3). I compacted to stay under QA's 400 default; no assertions were dropped.\n\nFull DoD file: 193 tests, 192 pass, 1 skip (M12), 0 fail.",
+      "startedAt": "2026-10-25T11:24:26.623Z",
+      "completedAt": "2026-10-25T11:33:18.748Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "The one verification gate. Use the Linux-only PATH (PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin) and unset every MOE_* variable. The opt-in native smoke M12 is therefore SKIPPED with its 'support is NOT established' reason.\n\n**1. The DoD command, fresh, from the repository root:**\n```\nnode --test scripts/tests/local-runner.test.mjs\n```\nIt must exit 0 with 0 failed and 0 cancelled. Record the pass, fail and skip counts, and quote M12's skip reason.\n\n**2. Packaging regression.**\n```\nnode --test scripts/tests/local-runner-bundle.test.mjs\n```\nIt must exit 0.\n\n**3. Snapshot check.** Peers share this checkout, so rerun command 1 in a fresh tree:\n```\nD=$(mktemp -d)\ngit -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src/state/resourceStore.ts package.json | tar -x -C \"$D\"\n```\nOverlay the five changed files' working-tree bytes, then run it from $D. It must exit 0.\n\n**4. Byte checks.**\n- `git diff --check` is clean.\n- The earlier sections are byte-identical apart from new imports.\n\n**5. Honest status (DoD 3).** No native macOS hardware exists in this WSL environment. complete_task MUST state that the native provider smoke was NOT run and macOS support is NOT established; only `cli.mjs native-smoke` on a real Mac (CQ-R13) can establish it. If an operator ever runs it here or elsewhere, attach that evidence JSON verbatim.\n\nKeep command 1's command, exit code and output tail for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/platform-macos.mjs",
+        "scripts/local-runner/native-smoke.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/provision.mjs"
+      ],
+      "note": "Verification gate (env -i, Linux-only PATH, Node v24.21.0, no MOE_* vars):\n1. `node --test scripts/tests/local-runner.test.mjs` at the repo root: exit 0. 193 tests, 192 pass, 0 fail, 0 cancelled, 1 skipped. M12's skip reason: 'native provider smoke not run: macOS support is NOT established by this run'. Log: /tmp/cq-r05-gate.log.\n2. Bundle test: exit 0, 7/7.\n3. Fresh git-archive HEAD snapshot (/tmp/cq-r05-snap.*) with the five working-tree files overlaid: exit 0, 192/193 plus 1 skip.\n4. `git diff --check` is clean, and the new files have no trailing whitespace or CR. Earlier sections are byte-identical apart from two edits: the R03 USAGE constant (the CLI now documents native-smoke) and the R04 platformFor assertion (darwin now has its module), both noted in step 1/4. No global forbidden patterns.\n5. Extra: Windows Node 24.16: exit 0, 181 pass, 12 skips (the 10 existing win32 skips + M13 + M12).\n\nHonest status: no macOS hardware exists in this WSL environment. The native provider smoke was NOT run, and macOS support is NOT established.",
+      "startedAt": "2026-10-25T11:33:19.760Z",
+      "completedAt": "2026-10-25T11:34:23.555Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Exactly one adversarial self-review. Load adversarial-self-review and read the diff as an attacker.\n\n**Image architecture (DoD 1).**\n- Can a Rosetta-translated x64 Node on Apple Silicon select the amd64 image?\n- Can an unknown arch reach a download?\n- Do the image URL and sha come ONLY from the manifest?\n\n**Explicit combinations (DoD 2).**\n- Is every non-certified {arch, driver} named explicitly and blocked?\n- Can a hostile driver token inject text?\n- Can the matrix drift from the manifest? The M3 guard should catch it.\n\n**Native smoke (DoD 3).**\n- Can ANY mock, injected dependency, fake executable or skipped test yield supportEstablished true?\n- Is the native entry truly non-injectable (exact option keys)?\n- Does cleanup run on every path and touch only the smoke's own instance?\n- Can a reused workDir make the smoke delete another record's VM?\n- Is the credential ever written or reported?\n\n**Robustness.**\n- Concurrency.\n- Windows CI: pure tests run; the real-process and native tests skip.\n\n**Scope.**\n- executionReady and certification stay unclaimed.\n- No elevation, no .moe edits, no Git writes, no daemon or launcher changes.\n- The R03 and R04 tests are unchanged and green.\n- No forbidden pattern from the global rails in new code.\n\nFix the findings and rerun the step-5 commands fresh. Use the fresh output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/platform-macos.mjs",
+        "scripts/local-runner/native-smoke.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/provision.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/platform-macos.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/native-smoke.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/provision.mjs"
+      ],
+      "note": "One adversarial review of the five R05 paths, scoped with `git diff --`.\n\nFIXED (1):\n- When a probe returned a non-string driver (e.g. 42), `?.driver?.trim()` threw outside settle, which crashed prerequisites. `.trim()` now runs inside settle, so the driver token becomes 'unknown'.\n- M3 gained a `{driver: 42}` case by editing an already-added line in place. The size is still 399.\n\nCHECKED, no change needed:\n- **DoD1 (image arch).**\n  - sysctl hw.optional.arm64='1' gives arm64 whatever process.arch is (Rosetta).\n  - An unknown arch gives arch null and host-macos null, so the host is not ready.\n  - provision.mjs also refuses any arch outside IMAGE_ARCHES before ensurePinnedImage, so there is no download.\n  - linux/win32 prerequisites return no arch and keep their static one.\n  - ensurePinnedImage only receives {cacheDir, arch}, so the URL and sha come from the manifest alone.\n- **DoD2 (combinations).**\n  - On DRIVER_UNSUPPORTED the action always names `<observed> + <driver|unknown>`.\n  - A non-certified arch (ia32, a hostile 'Evil Arch') gives host-macos false, and the host renders as 'unknown'.\n  - token() allows only /^[a-z][a-z0-9-]{0,31}$/.\n  - M3 guards the matrix against drift from certified-provider.json.\n- **DoD3 (native smoke).**\n  - nativeSmokeCore is always transport 'injected', with supportEstablished false.\n  - runNativeProviderSmoke uses Reflect.ownKeys and requires exactly ['workDir']: symbol, inherited and extra keys are refused, and the getter is read once. It takes the platform from frozen PLATFORMS and passes deps {}, so the real execFile/fetch and the pinned absolute executable are used.\n  - Cleanup runs on every path, including when provisionGuest throws. A cleanup rejection gives 'failed'.\n  - Only this run's random 128-bit attemptId gets phase 'closed'. Every other record in a reused workDir is 'attempt-unknown' and preserved (M7).\n  - The credential (randomBytes(32)) goes only to provisionGuest, which sends it over cloud-init stdin, and never appears in the report.\n\nTHEORETICAL (noted, not changed):\n- (a) `runCli({nativeSmoke})` is an in-process test seam for the CLI's output and exit mapping (M11). A substituted function fabricates its own report, so that is not provider evidence. The cli.mjs main entry passes no dependencies, so an operator process can only run runNativeProviderSmoke. CQ-R13 must consume a real `node scripts/local-runner/cli.mjs native-smoke --work-dir <abs>` run.\n- (b) In-process monkeypatching of Node builtins is outside any API contract. Same remedy: the evidence comes from a separate CLI process.\n- (c) A smoke killed mid-run (SIGKILL) leaves its VM and ledger record behind. Later smokes preserve that record as attempt-unknown, by design (they never delete another attempt's VM). The operator deletes the `moe-…` instance by hand.\n- (d) Concurrent smokes in one workDir: each has its own attemptId and owned name. The R03/R06 image cache and ledger are atomic.\n\nScope:\n- executionReady and certification are never claimed: certification is 'not-established', and refusals report executionReady:false.\n- No sudo, `multipass set` or `multipass authenticate`; no .moe or Git writes; no daemon or launcher changes.\n- Earlier sections changed only the USAGE constant and the R04 darwin assertion.\n- No forbidden patterns.\n\nFresh step-5 rerun (Linux PATH via env -i, Node v24.21.0):\n- DoD test: exit 0, 193 tests, 192 pass, 0 fail, 1 skip (M12: 'native provider smoke not run: macOS support is NOT established by this run').\n- Bundle test: 7/7, exit 0.\n- Fresh HEAD-archive snapshot with the overlay: exit 0, 192 pass, 1 skip.\n- `git diff --check` clean; no CR or trailing whitespace; forbidden grep clean.\n- Windows Node 24.16: exit 0, 181 pass, 12 skips.",
+      "startedAt": "2026-10-25T11:34:24.600Z",
+      "completedAt": "2026-10-25T11:39:08.181Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human asked to move more tasks to planning by order. Prerequisites: R02 DONE, R06 WORKING, R07 being planned (claimed).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 50,
+  "comments": [
+    {
+      "id": "comment-60f6317d77044e968a4c3e2bdd4379f7",
+      "author": "architect-26ba32c3",
+      "content": "Architect sequencing note (2026-10-24): R05 now also depends on R04 (task-120b6a11e9db4012964e865974696e59). R03, R04 and R05 all append to scripts/tests/local-runner.test.mjs and extend the cli.mjs PLATFORMS map, so they are serialized per the epic rail.\n\nReuse R03's provision.mjs and image-cache.mjs. Add only:\n- scripts/local-runner/platform-macos.mjs: `{id:'darwin', arch: per host, x64 or arm64 (pinned arm64 image), prerequisites}`;\n- a `darwin` entry in PLATFORMS;\n- its own test section.\n\nThe Multipass facts are in Serena `decision-multipass-owned-instance-protocol`.",
+      "timestamp": "2026-10-24T15:20:18.338Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:33:58.945Z",
+  "updatedAt": "2026-10-25T11:47:47.354Z",
+  "dependsOn": [
+    "task-3ab82a8016514240b53d295792daebe1",
+    "task-deba1a56a8104786ae25b84c58c363b4",
+    "task-84c2da018ce74995b609805dab4fe7da",
+    "task-120b6a11e9db4012964e865974696e59"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-24T15:24:49.542Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-25T11:47:09.648Z",
+    "wallClockMs": 73340106
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T15:29:05.492Z",
+  "planningNotes": {
+    "approachesConsidered": "**Chosen.** Reuse R03's composition, add platform-macos.mjs, and add a generic native-smoke.mjs.\n- **Arch detection.** It uses `sysctl -in hw.optional.arm64`, so the pinned image arch matches the HARDWARE, not Node's process.arch, which Rosetta can mask.\n- **Combinations.** The explicit support matrix mirrors the R02 manifest, and every unsupported {arch, driver} pair is named in an operator action.\n- **Native smoke.**\n  - Its evidence computes supportEstablished = native transport AND passed AND cleanup ok.\n  - The native entry accepts exactly {workDir}, with no injection, so mocks and skips can never establish support.\n  - The opt-in native test is skipped by default with an explicit 'NOT established' reason.\n- **Wiring.** provisionGuest prefers pre.arch, and cli.mjs gains a darwin entry plus a `native-smoke` command for operators and R13.\n\n**Rejected.**\n- **Using process.arch.** Wrong under Rosetta.\n- **Trusting PATH multipass.** The client is pinned to /usr/local/bin/multipass, the official pkg symlink.\n- **A per-platform smoke.** The generic smoke is reusable by R13 for win32 and linux.\n- **Claiming support from the mock suite.** Forbidden by DoD 3.\n\nUnder TURBO these choices are recorded here, not held for a REPL answer.\n\nprovision.mjs is in newFiles only because R03 creates it after this plan was written.",
+    "codebaseInsights": "**canonical/multipass v1.17.0 packaging/macos/postinstall-multipass.sh.in** symlinks /usr/local/bin/multipass to the pkg prefix bin/multipass.\n\n**R02 manifest.**\n- darwin hosts are x64 and arm64, both qemu with versionSuffix '+mac'.\n- Pinned images exist for x64 (amd64) and arm64.\n- probeMultipass (exported) returns the raw driver token. runDoctor sanitizes its failures, so the token is only read to name a combination.\n\n**R03 and R04 (plans).**\n- provision.mjs provisionGuest uses platform.arch and platform.executable and passes cacheDir.\n- cli.mjs has PLATFORMS {win32, linux}, platformFor and the `prerequisites` command.\n- R06 cleanupOwned({attemptPhase, leaseHeld}) deletes only owned records whose attempt is closed and whose lease is free.",
+    "risks": "**No macOS hardware here.** The native smoke cannot run, so DoD 3 is satisfied by enforcing that only native evidence can establish support, and the completion must say support is NOT established. R13 runs it on real hardware.\n\n**Unpinned macOS details.** sysctl output on Intel (an unknown oid prints nothing with -i) and macOS version requirements are not verified on hardware. Unknown blocks.\n\n**R03, R04, R06 and R07 are unlanded.** Follow their LANDED names.\n\n**A smoke run creates and deletes a real VM and downloads about 600 MB.** It is operator-invoked only and never runs in CI by default.\n\n**Shared dirty checkout.** Touch only the five files.",
+    "keyFiles": [
+      "scripts/local-runner/cli.mjs",
+      "scripts/local-runner/doctor.mjs",
+      "scripts/local-runner/multipass.mjs",
+      "scripts/local-runner/certified-provider.json",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T15:29:05.569Z",
+  "contextFetchedBy": [
+    "worker-c1d9de02",
+    "qa-b0c1741e"
+  ],
+  "workStartedAt": "2026-10-25T11:20:13.414Z",
+  "reviewStartedAt": "2026-10-25T11:39:46.703Z",
+  "verification": {
+    "command": "env -i HOME=$HOME PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ detectHostArch asks the hardware once: a Rosetta-translated x64 Node on Apple Silicon is arm64\n✔ macOS prerequisites are explicit operator actions; ready only when all hold on a certified Mac\n✔ the macOS support matrix mirrors the manifest; every other host/driver pair is named and blocked\n✔ the macOS doctor runs against the pkg client for the detected arch; its codes mark only their own item\n✔ macOS provisioning launches the pinned image of the hardware arch, even under Rosetta; an unknown arch downloads nothing\n✔ provisionGuest prefers the prerequisite arch and refuses any other image arch before any mutation\n✔ an injected smoke passes, deletes only its own guest and never establishes support\n✔ a blocked, failed or uncleaned smoke is reported as such, and cleanup runs on every path\n✔ the native smoke entry takes exactly an absolute workDir: nothing can be injected into it\n✔ CLI native-smoke prints the evidence and exits 0 only when native support is established\n﹣ opt-in native provider smoke on real macOS hardware establishes support # native provider smoke not run: macOS support is NOT established by this run\n✔ real sysctl and Multipass processes: macOS prerequisites read genuine output and name a virtualbox driver\nℹ tests 193\nℹ suites 0\nℹ pass 192\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 16857.789288",
+    "reportedAt": "2026-10-25T11:39:46.703Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/platform-macos.mjs",
+    "scripts/local-runner/provision.mjs",
+    "scripts/local-runner/cli.mjs",
+    "scripts/local-runner/native-smoke.mjs",
+    ".moe/tasks/task-23e0b6af6c7e4e0987be0591db1ba517.json",
+    ".moe/tasks/task-3918d1190a3c4895ad5d924ad6d00f1d.json",
+    ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
+    ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+    ".moe/tasks/task-c532d223459b4ef4b5bab2ba0eb4005e.json"
+  ],
+  "completionSummary": "CQ-R05: macOS VM provisioning code is in place, but macOS provider support is NOT established. The native provider smoke was NOT run because this WSL host has no Mac. The opt-in test M12 skips with exactly that reason. Only a real-Mac run of `node scripts/local-runner/cli.mjs native-smoke --work-dir <abs>` (CQ-R13) can establish support.\n\n**DoD 1: matching image arch**\n- New platform-macos.mjs: the arch comes from the hardware via one bounded `/usr/sbin/sysctl -in hw.optional.arm64` call, so Rosetta x64 Node on Apple Silicon still gets arm64.\n- provision.mjs uses `pre.arch ?? platform.arch` and refuses any arch outside IMAGE_ARCHES before ensurePinnedImage, so an unknown arch never downloads. The URL and sha come only from the manifest.\n\n**DoD 2: unsupported combinations are explicit**\n- Ordered items: host-macos, multipass-installed, multipass-authenticated, host-provider-combination. Each is {id, satisfied, requiresElevation, action}.\n- A non-certified driver or arch is named in the action and blocked. A hostile token renders as 'unknown'. Moe never changes local.driver.\n- MACOS_SUPPORT_MATRIX is guarded against drift from certified-provider.json.\n\n**DoD 3: only a native smoke establishes support**\n- New native-smoke.mjs. nativeSmokeCore (injectable) always reports transport 'injected' and never establishes support.\n- runNativeProviderSmoke accepts exactly {workDir: absolute path}, uses this host's own platform module and no deps.\n- supportEstablished requires native && passed && cleanup==='deleted'. Cleanup always runs and deletes only this run's random attemptId; other ledger records are preserved.\n- The cli.mjs `native-smoke` command exits 0 only when supportEstablished === true. darwin is added to PLATFORMS.\n\n**DoD 4: fresh verification**\n- `node --test scripts/tests/local-runner.test.mjs` (Linux PATH, Node 24.21): exit 0, 193 tests, 192 pass, 0 fail, 1 skip (M12).\n- Also green: the bundle test (7/7), a fresh HEAD-archive snapshot, and Windows Node 24.16 (181 ",
+  "commits": [
+    {
+      "sha": "8a53c497e8bed869d9b0b9614a1f192edd8a7e45",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T11:15:01Z",
+      "paths": [
+        ".moe/tasks/task-23e0b6af6c7e4e0987be0591db1ba517.json",
+        ".moe/tasks/task-3918d1190a3c4895ad5d924ad6d00f1d.json",
+        ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
+        ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/native-smoke.mjs",
+        "scripts/local-runner/platform-macos.mjs",
+        "scripts/local-runner/provision.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T11:40:11.379Z",
+      "treeId": "2e033256e97eb3f53c743e71949f717331dc22eb",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "cb5704faf288113caee39b41808f4228c52d122a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T11:40:20Z",
+      "paths": [
+        ".moe/tasks/task-c532d223459b4ef4b5bab2ba0eb4005e.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T11:47:47.354Z",
+      "treeId": "4b701d4784cf09138827dd54bec7cc4641322a9a",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/platform-macos.mjs",
+    "scripts/local-runner/native-smoke.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T11:40:20Z",
+    "at": "2026-10-25T11:47:47.354Z"
+  },
+  "completedAt": "2026-10-25T11:47:09.648Z",
+  "reviewCompletedAt": "2026-10-25T11:47:09.648Z",
+  "reviewSummary": "CQ-R05 approved. Reviewed completion commit 8a53c49 (moe/work-2026-10-24, pushed); the 5 source paths are clean at HEAD, no later commits. Size 399 changed LOC (+382/-17), under the 400 default (no size rail for R05).\nRe-ran: (1) DoD cmd `env -i ... node --test scripts/tests/local-runner.test.mjs` (Node 24.21, repo root): exit 0, 193 tests, 192 pass, 0 fail, 1 skip (M12 'native provider smoke not run: macOS support is NOT established by this run'); (2) fresh git-archive snapshot of 8a53c49: same; (3) Windows Node 24.16: exit 0, 181 pass, 12 skip; (4) bundle test at root 7/7 (new files bundled by glob).\nDoD1: sysctl hw.optional.arm64 gives arm64 even under Rosetta; provision refuses arches outside IMAGE_ARCHES before any download (M2/M6). DoD2: virtualbox/applevz/ia32/non-darwin hosts named and blocked; driver token sanitized; matrix drift-guarded vs certified-provider.json (M3/M4). DoD3: nativeSmokeCore always 'injected'; runNativeProviderSmoke accepts exactly {workDir}; supportEstablished needs native+passed+deleted; CLI exits 0 only on === true. The native smoke was NOT run (no Mac), so macOS support is NOT established and stays unverified until CQ-R13. DoD4: reproduced.\nMutation sweep (/tmp/qa-r05-probe/mutate.mjs): 44 mutants, 39 killed. primary-leak and ensure-static-arch are equivalent. no-cleanup-req and native-deps sit only on the non-injectable native success path (M12/R13). arch-not-observed is a test gap: no smoke test uses the macOS platform. My snapshot probe confirmed evidence.arch is arm64 under Rosetta and x64 on Intel. Non-blocking follow-ups: add a macOS nativeSmokeCore case; blocked smoke evidence omits prerequisite reasons.\nRails: no forbidden patterns, git diff --check clean, no .moe hand edits (board JSON is the wrapper's), no agent Git writes, executionReady/certification unclaimed.",
+  "requiredCheckAtDone": null
+}

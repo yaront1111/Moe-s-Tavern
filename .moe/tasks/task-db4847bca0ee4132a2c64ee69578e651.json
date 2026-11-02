@@ -1,0 +1,39 @@
+{
+  "id": "task-db4847bca0ee4132a2c64ee69578e651",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: cosmetically identical starting source in maintenance-usage-unknown-format and refactor-usage-counter-normalization",
+  "description": "Found in CQ-M03 assembly: both cases start from src/promptCacheUsage.mjs differing only in a header comment and one line wrap (assessments, intended behavior and rubric ids differ). The assembler's cosmetic-copy rule therefore keys on starting contents + assessments and a test pins this exact pair. Architect to decide whether to re-pin one case on a different source file (moves its category pin, per-case digest, CORPUS_FREEZE and corpus digest; producer modules are QA-approved and were not edited by M03).",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Feed rule (human-approved, by order): no prerequisites. Corpus follow-up from CQ-M03 assembly. An architect decides whether to re-pin one of the two near-identical starting sources; LOW, so it is planned after HIGH rows.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 225.5,
+  "comments": [
+    {
+      "id": "comment-263ae6fd75764312ac22daa473bfa43b",
+      "author": "architect-6e3edf85",
+      "content": "Architect decision (architect-6e3edf85, 2026-10-25): KEEP the pair, no re-pin. Archiving this row: nothing is left to do.\n\nEvidence:\n1. The executed CQ-M04c baseline (task-e4adf15c, DONE, landed 400928a) binds both case digests: docs/baselines/cq-m04/expected.json caseDigest sha256:e4ccdcdf... (maintenance-usage-unknown-format) and sha256:0e5ded27... (refactor-usage-counter-normalization), plus records/<id>.json for each case and report.json/report.md. Re-pinning either case changes its snapshot/case digest, its FROZEN_CASES row and CORPUS_FREEZE.corpusDigest (sha256:9d0e42e6...). The committed baseline would then no longer match the corpus, and the 20-workload n=1 matched baseline would have to be re-run. That costs real model spend and breaks the matched comparison the CQ-TOKEN-MEASURE-v1 rail requires for later promotion claims.\n2. The overlap is by design, not a defect. In matchedCorpus.ts, checkDistinct keys the cosmetic-copy rule on starting contents PLUS assessments (taskKey: \"cases may share a source file, but not both halves of a task\"). The matchedCorpus.test.ts case \"shares cosmetically identical starting contents only where the tasks differ, and pins that disclosed pair\" pins exactly this pair. It asserts the two cases have different snapshot digests, assessment digests, intended behavior and rubric criterion ids. A maintenance edit (unknown-format usage rendering) and a refactor (counter normalization) of the same module are different tasks.\n3. A new shared-source pair, or a third case on the same source, still fails that test, so the exception cannot widen silently.\n\nRevisit only if a corpus v2 is cut for another reason (new workloads or a changed starting commit). In that case, move one of these cases to a different source in the same change and re-run the baseline once. If a human disagrees, un-archive with set_task_status ARCHIVED->BACKLOG.",
+      "timestamp": "2026-10-24T22:53:23.528Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T15:24:50.560Z",
+  "updatedAt": "2026-10-24T22:53:28.471Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T22:50:33.959Z"
+  },
+  "contextFetchedBy": [
+    "architect-6e3edf85"
+  ]
+}

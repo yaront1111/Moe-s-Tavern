@@ -1,0 +1,374 @@
+{
+  "id": "task-cf952313817d4b76b300b10a043aba7b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07b] Daemon readiness evaluator for verified-local",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8). Design: mem:decision-cq-m07-verified-local-activation. Depends on CQ-M07a (task-5a635bc9), whose certification reader it consumes.\n\nObjective: compute a readiness snapshot for verified-local from facts the daemon observes itself, never from anything a caller, a setting-as-grant, an env var, a persisted label or a project file can supply.\n\nDeliverable: new packages/moe-daemon/src/delivery/executionReadiness.ts plus its vitest file, exporting evaluateExecutionReadiness(deps) -> Promise of a frozen ReadinessSnapshot { ready, missingCapabilities: string[] (stable order), evaluatedAt, evidence: { reportSha256, platform, arch, providerVersion } | null }.\n- Every input is injected (production defaults are wired in CQ-M07c):\n  - CQ-M07a's certification result;\n  - the LIVE Multipass version from this host's pinned client: read-only `version --format json`, the shipped platform module's pinned executable (never a PATH lookup), a bounded timeout. It must equal the accepted report's provider.version; a timeout, error or malformed output is a missing capability. No seat runs Multipass; the daemon is not a seat, and unit tests always inject the probe;\n  - one named daemon-observed check per capability in today's list (executionProfile.ts): protected-host-control-plane (the daemon's own install real path is outside the project; MOE_RUNTIME_PROTECTED or any env var never counts), isolated-agent-and-qa-vms and isolated-check-vm (the accepted report's certify rows that prove them passed: name the check ids), authenticated-runner-evidence (this project's runner channel key exists, as server/runnerChannel.ts files it), revision-bound-local-delivery (settings.deliveryPolicy is 'local-branch'; a setting may only refuse here, never grant).\n- Add ids for evidence failures (for example certification-report-missing, provider-version-mismatch) and keep one stable ordering; consumers (CQ-M07d's projection, IDE dialogs) list them verbatim.\n\nNOT in scope: holding the snapshot, assertExecutionProfileReady, activationGaps and scheduling (CQ-M07c); the MCP and /ws projection (CQ-M07d).\n\nVerification: the new vitest file in a git-archive snapshot with this task's files overlaid (cd <snapshot>/packages/moe-daemon && npm ci && npx vitest run src/delivery/executionReadiness.test.ts, under env -i with the nvm Node 24 PATH), never in the shared checkout.",
+  "definitionOfDone": [
+    "With every injected fact present and matching, evaluateExecutionReadiness returns ready true and an empty missingCapabilities (vitest).",
+    "Each capability failing alone gives ready false with exactly that id; several failing list all of them in the stable order (vitest table).",
+    "A live version different from the report's, a probe timeout, a probe error and malformed probe output each give a fixed id; the fake probe records exactly the pinned executable path and argv `version --format json` (vitest).",
+    "MOE_RUNTIME_PROTECTED=1 and other MOE_* or HOME env values, a readiness label persisted in settings or task JSON, and a valid report placed inside the project or .moe/ never make it ready (vitest rows).",
+    "The named vitest run passes in a git-archive snapshot."
+  ],
+  "taskRails": [
+    "Unit tests never spawn a real Multipass client; the probe is always injected outside production wiring."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Build the evaluator module, plus one export in runnerChannel.ts.\n\nRead first:\n- `mem:decision-cq-m07-verified-local-activation` (decision 4 and the fixed contracts);\n- `mem:task-task-5a635bc90aaa47acabede9307dd1579b-handoff` and this task's comment-bb5e5943 (CQ-M07a's reader contract);\n- the LANDED packages/moe-daemon/src/delivery/certificationEvidence.ts. If a landed name differs from the contract, follow the code and say so in the step note.\n\nNever edit certificationEvidence.ts (CQ-M07a and CQ-M07f own it) or executionProfile.ts (CQ-M07c owns it). Nothing imports the new module yet, so verified-local stays unavailable.\n\n**A. server/runnerChannel.ts.** Add only `export function isRunnerKey(value: unknown): value is string`, returning `typeof value === 'string' && KEY_RE.test(value)`, with a one-line doc: the stored-key format authenticateRunner accepts. Change nothing else.\n\n**B. New delivery/executionReadiness.ts.** Keep it leaf-safe. Its runtime imports are only node:fs/promises, node:path, ./certificationEvidence.js, ../server/runnerChannel.js (isRunnerKey) and ../util/affectedFiles.js (pathKey). Never import a state store, StateManager, policy.ts, executionProfile.ts or a logger: CQ-M07c's snapshot holder imports this module's ids and types. It never reads process.env, process.platform, os.homedir() or a project file; every fact comes from `inputs`.\n\nExports:\n1. **Ids.** One frozen, stable order, which consumers list verbatim.\n   - `READINESS_CAPABILITIES`: protected-host-control-plane, isolated-agent-and-qa-vms, isolated-check-vm, authenticated-runner-evidence, revision-bound-local-delivery (today's assertExecutionProfileReady order).\n   - `READINESS_EVIDENCE_IDS`: certification-host-unsupported, certification-store-unsafe, certification-unreadable, certification-report-missing, certification-report-rejected, certification-report-mismatch, provider-probe-failed, provider-probe-timeout, provider-probe-malformed, provider-version-mismatch.\n   - `READINESS_IDS` (capabilities, then evidence) and `type ReadinessId`. missingCapabilities is always `READINESS_IDS.filter(id => missing.has(id))`, so it is unique and stably ordered whatever order the checks finish in.\n2. **Certify rows per capability.** Frozen; every id must be in CERTIFY_CHECK_IDS, and together they cover all 13 (row meanings: the docs/CERTIFICATION.md table).\n   - `AGENT_VM_ROWS` (isolated-agent-and-qa-vms): provision, readiness, no-mounts, bridge-framing, bridge-eof, guest-network, writer-containment, controller-replacement, recovery, teardown.\n   - `CHECK_VM_ROWS` (isolated-check-vm): provision, readiness, no-mounts, guest-network, check-containment, controller-replacement, cancellation, recovery, canary-check, teardown.\n3. **`CERTIFICATION_REFUSAL_IDS: Readonly<Record<CertificationRefusal, ReadinessId>>`.** It is exhaustive, so tsc fails when CQ-M07a adds a code. Each key carries the CERTIFICATION_ prefix.\n   - HOST_UNSUPPORTED → certification-host-unsupported.\n   - STORE_UNSAFE and STORE_IN_PROJECT → certification-store-unsafe.\n   - INPUT_INVALID, STORE_UNAVAILABLE and STORE_UNREADABLE → certification-unreadable.\n   - STORE_MISSING and REPORT_NONE → certification-report-missing.\n   - REPORT_UNSAFE, REPORT_UNREADABLE, REPORT_OVERSIZE, REPORT_MALFORMED, REPORT_SCHEMA, REPORT_CHECKS, REPORT_INJECTED and REPORT_UNCERTIFIED → certification-report-rejected.\n   - REPORT_PLATFORM, REPORT_ARCH, REPORT_IMAGE, REPORT_SUPERVISOR and REPORT_PROVIDER_VERSION → certification-report-mismatch. This is the operator's re-certify signal after a pin move such as CQ-M07f's.\n4. **The pinned client.** `pinnedMultipassClient(platform: string, programFiles?: string): string | null` is a compiled port of scripts/local-runner/platform-{linux,macos,windows}.mjs `executable`, because the daemon cannot import scripts/ at runtime; step 2's drift row proves parity.\n   - linux: '/snap/bin/multipass'.\n   - darwin: '/usr/local/bin/multipass'.\n   - win32: path.win32.join(root, 'Multipass', 'bin', 'multipass.exe'), where root is programFiles when it is drive-absolute (letter, colon, backslash), else 'C:\\Program Files'. That is exactly platform-windows.mjs's driveRoot.\n   - Anything else: null. Never a bare 'multipass', never a PATH lookup.\n   - Also export `PROBE_ARGS` = ['version', '--format', 'json'], `PROBE_TIMEOUT_MS` = 10_000 and `PROBE_MAX_BYTES` = 65_536 (multipass.mjs MAX_PROBE_TIMEOUT_MS and MAX_PROBE_BUFFER).\n5. **Types.**\n   - `ProbeRunner`: execFile-compatible, `(file: string, args: string[], options) => Promise<{ stdout: unknown }>`.\n   - `ReadinessInputs`, with every member required except programFiles:\n     - projectRoot: the project this daemon serves.\n     - daemonInstallDir: the daemon's own package root, which holds dist/ and node_modules/. CQ-M07c wires it from import.meta.url.\n     - runnerKeyPath: CQ-M07c wires runnerKeyPath(projectRoot).\n     - settings: unknown. Only an own deliveryPolicy is read.\n     - readCertification: () => Promise<CertificationEvidence>. CQ-M07c wires () => readHostCertificationEvidence(projectRoot), never readCertificationStore.\n     - runProbe: ProbeRunner. CQ-M07c wires promisify(execFile). There is NO default, so a unit test can never spawn a real client (task rail).\n     - programFiles?: string. process.env.ProgramFiles in production. It only locates the win32 client, as platform-windows.mjs does, and can never grant.\n     - now: () => Date.\n   - `ReadinessSnapshot`: { ready: boolean; missingCapabilities: readonly ReadinessId[]; evaluatedAt: string; evidence: { reportSha256: string; platform: string; arch: string | null; providerVersion: string | null } | null }.\n6. **`evaluateExecutionReadiness(inputs): Promise<ReadinessSnapshot>`.** Error handling: it never rejects for a failing fact. Each capability has one named private check function, each with its own try/catch, and a failure adds only that check's ids. Run a, b and c concurrently with d.\n   a. **protected-host-control-plane.** projectRoot and daemonInstallDir must be absolute strings without control characters. realpath both, plus projectRoot/.moe (only ENOENT skips it). The check passes only when the install tree and the project tree, and .moe's real path, are disjoint: neither contains the other. Use a private `inside(root, target)` copied from certificationEvidence.ts (the commitMaterializer.ts:156 idiom, case-folded through pathKey). Any error fails the check. No env var, MOE_RUNTIME_PROTECTED included, is consulted.\n   b. **authenticated-runner-evidence.** runnerKeyPath must be absolute without control characters. lstat must show a regular file (a symlink fails) of at most 64 bytes. Its utf8 content must pass isRunnerKey. realpath(runnerKeyPath) must also lie outside the project's and .moe's real paths, because a key inside the project is reachable by whatever reads the project. Read the key at most once, and never put its bytes in the snapshot, an error or a log.\n   c. **revision-bound-local-delivery.** It passes only when settings is a non-null object with an OWN deliveryPolicy === 'local-branch' (Object.prototype.hasOwnProperty.call). Every other value fails: absent, null, inherited, or a throwing getter. No other settings key is read, so a setting can only refuse.\n   d. **Certification, then the live probe.**\n      - Await inputs.readCertification(). A rejection, a non-object, or ok:false without one recognised refusal gives certification-unreadable. ok:false maps each refusal through CERTIFICATION_REFUSAL_IDS (an unknown code gives certification-unreadable), and both isolation capabilities go missing. Without an accepted report the probe is NOT run, so a host that never certified spawns no Multipass client.\n      - ok:true, with sha256 matching /^[0-9a-f]{64}$/ and an object report: evidence = frozen { reportSha256, platform, arch, providerVersion: report.provider.version }. This is the accepted report's identity, and it is set even when the probe then fails.\n      - Probe. executable = pinnedMultipassClient(report.platform, inputs.programFiles); null gives provider-probe-failed without a call. Otherwise call runProbe(executable, [...PROBE_ARGS], { encoding: 'utf8', shell: false, windowsHide: true, timeout: PROBE_TIMEOUT_MS, maxBuffer: PROBE_MAX_BYTES, killSignal: 'SIGKILL' }) exactly once. Race it against a guard timer of PROBE_TIMEOUT_MS + 1000 ms, created in the same synchronous block as the call, unref'd and cleared on every path, so a runner that never settles still ends the evaluation.\n      - Classify the probe result:\n        - provider-probe-timeout: the guard fired, or a rejection carries killed === true or code 'ETIMEDOUT'.\n        - provider-probe-failed: any other rejection (ENOENT, EACCES, a nonzero exit, maxBuffer), a synchronous throw, or a runProbe that is not a function.\n        - provider-probe-malformed: the resolved stdout is not a string, exceeds PROBE_MAX_BYTES, does not JSON.parse to a non-array object, or lacks string `multipass` and `multipassd`. This is doctor.mjs's parse; extra keys are allowed.\n      - Live match: `multipass` and `multipassd` must both equal report.provider.version (a non-string version fails), else provider-version-mismatch. Any provider id fails both isolation capabilities.\n      - After a live match, each isolation capability passes only when every one of its rows is in report.checks with result 'passed'. A missing, 'failed' or 'not-run' row fails only the capabilities that list it.\n   e. evaluatedAt = inputs.now().toISOString(), read once after the checks. now is not a fact and is not guarded. Return a deep-frozen snapshot (the object, missingCapabilities and evidence), with ready === (missingCapabilities.length === 0).\n\nNo caller value, setting-as-grant, env var, persisted label or project file can make it ready: the only grants are the checks above. Write files only with Edit/Write; report every path in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/runnerChannel.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/executionReadiness.ts"
+      ],
+      "note": "Round 2 after a SIZE-ONLY QA reject (failedDodItems empty). QA's route is: no byte changes, file the waiver, run a fresh gate, then complete_task. NO BYTES CHANGED in this step. The empty modifiedFiles list is truthful; nothing was created or edited.\n\nEvidence that the landed step-1 bytes are untouched:\n- `git show --numstat --format= 3c30b30a -- packages/` gives executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2. That is +637/-0, exactly QA's numbers.\n- `git log 3c30b30a..HEAD` over the 3 paths shows no commits, and `git diff 3c30b30a HEAD` over them is empty.\n- `git status --porcelain` over them is clean.\n- 3c30b30a is an ancestor of HEAD 8acf93c3.\n\nPrerequisite unchanged: certificationEvidence.ts was last touched by 63ae437a, and there is no diff from 63ae437a to HEAD or in the worktree. executionProfile.ts is unchanged as well. CQ-M07a's WIP commit 53a58b50 touched board JSON only.\n\nNothing imports executionReadiness outside its own files, so verified-local stays unavailable.\n\nWaiver filed: prop-3cfb744496df4d3f91183f42041ca963 (EPIC ADD_RAIL, PENDING). Its text is 773 chars on a single line. It names 3c30b30a and the 3 numstats and says \"waives size only; grow only by QA-required fixes\", modeled on the approved CQ-M05 rail prop-ae32e9bb. Pinged #governors as msg-4fe2b76f.\n\nPeer and pre-existing dirty paths in the shared checkout were left untouched.",
+      "startedAt": "2026-11-01T10:50:22.112Z",
+      "completedAt": "2026-11-01T10:51:00.048Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Write packages/moe-daemon/src/delivery/executionReadiness.test.ts in vitest. tsconfig excludes tests, so step 3's tsc covers only the module. Assert exact arrays with toEqual, never truthiness.\n\n**Fixtures.**\n- One mkdtemp root per test, holding project/, project/.moe/ and a disjoint install/. Remove it in afterEach, and restore env and timers there too (vi.unstubAllEnvs, vi.useRealTimers).\n- The runner key comes from the REAL ensureRunnerKey(project), called under vi.stubEnv('MOE_RUNNER_KEY_DIR', '<root>/keys'), so 'as runnerChannel.ts files it' is proven. Unstub right after.\n- settings: { deliveryPolicy: 'local-branch' }.\n- readCertification returns a frozen { ok: true, sha256: 'a'.repeat(64), report }. The report has the schema shape, built from CERTIFY_CHECK_IDS (all 'passed', code null) and CERTIFICATION_PINS for linux/x64, with provider.version '1.17.0'.\n- runProbe is a fake that records (file, args, options) and resolves { stdout: JSON.stringify({ multipass: '1.17.0', multipassd: '1.17.0' }), stderr: '' }.\n- now is a fixed Date.\n- Import runner modules the way certificationEvidence.test.ts does: new URL('../../../../scripts/local-runner/<name>', import.meta.url).\n- Every runProbe is a fake: never spawn a real Multipass client (task rail). Symlink rows skip only on win32 EPERM, as certificationEvidence.test.ts does.\n\n**Rows.**\n1. **DoD 1.** All facts present gives ready true, missingCapabilities [], evidence { reportSha256: 'a' x 64, platform: 'linux', arch: 'x64', providerVersion: '1.17.0' } and evaluatedAt equal to the fixed ISO. The snapshot, its array and its evidence are Object.isFrozen, and the probe ran exactly once.\n2. **DoD 2, it.each: each capability failing alone gives exactly [that id].**\n   - Control plane: the install inside the project (project/node_modules/moe-daemon); the project inside the install (install/projects/p).\n   - Runner key: path absent; a symlink to a valid key; a malformed key 'short'; a valid key placed inside the project.\n   - Delivery: deliveryPolicy 'legacy', 'remote-push', absent and null; an inherited one (Object.create({ deliveryPolicy: 'local-branch' })); settings null.\n   - Certify rows, it.each over CERTIFY_CHECK_IDS: that row alone 'failed' (code 'CERTIFY_X') in an ok:true report gives exactly the capabilities whose list (AGENT_VM_ROWS, CHECK_VM_ROWS) holds it. Add one row for a check missing from report.checks.\n   - Several failing at once list every id in READINESS_IDS order.\n   - Coverage: AGENT_VM_ROWS ∪ CHECK_VM_ROWS equals CERTIFY_CHECK_IDS as a set, and neither lists an unknown id.\n3. **DoD 3: the probe.**\n   - A live client of '1.18.0', or a client that matches with a different multipassd, gives exactly [isolated-agent-and-qa-vms, isolated-check-vm, provider-version-mismatch], with evidence still the report's.\n   - provider-probe-timeout:\n     - a rejection { killed: true, signal: 'SIGKILL' };\n     - a rejection { code: 'ETIMEDOUT' };\n     - a never-settling runner under vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }). Start the evaluation, await the fake's own 'invoked' deferred, then vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS + 1000).\n   - provider-probe-failed: rejections { code: 'ENOENT' }, { code: 1 } and { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }, plus a runner that throws synchronously.\n   - provider-probe-malformed: stdout 'nope', '[]', '{\"multipass\":1,\"multipassd\":\"1.17.0\"}', '{\"multipass\":\"1.17.0\"}', a 65_537-byte string, and a Buffer.\n   - The recorded call: exactly one call, with file === '/snap/bin/multipass' for a linux report, args toEqual ['version', '--format', 'json'], options.timeout === PROBE_TIMEOUT_MS and options.shell === false.\n   - A win32 report with programFiles 'D:\\PF' records 'D:\\PF\\Multipass\\bin\\multipass.exe'.\n   - An ok:false certification makes zero calls.\n4. **Certification mapping.** it.each over CERTIFICATION_REFUSALS: { ok: false, refusals: [code] } gives exactly [isolated-agent-and-qa-vms, isolated-check-vm, CERTIFICATION_REFUSAL_IDS[code]] and evidence null. A rejecting reader, a non-object, refusals [] and an unknown code each give certification-unreadable.\n5. **DoD 4: no shortcut makes it ready.**\n   - **Env.** Use a failing baseline: install inside the project, key absent, ok:false STORE_MISSING. Then vi.stubEnv MOE_RUNTIME_PROTECTED='1', MOE_RUNNER_KEY_DIR=<a dir holding a valid key for this project>, MOE_EXECUTION_PROFILE='verified-local', and HOME and USERPROFILE=<a fake home>. The snapshot toEqual the unstubbed one.\n   - **Labels.** settings { deliveryPolicy: 'legacy', executionReady: true, readiness: { ready: true, missingCapabilities: [] } } still gives revision-bound-local-delivery. A task JSON and a project.json under project/.moe carrying ready:true labels change nothing.\n   - **Real reader seam** (describe.skipIf(!hostIdentity())). Write one canonical valid report into a 0700 store: the bytes are JSON.stringify(report) + '\\n', the name is certification-<platform>-<arch>-<YYYYMMDDTHHMMSSZ>-<6 hex>.json, and it matches hostIdentity() and CERTIFICATION_PINS. Set readCertification = () => readCertificationStore({ storeDir, projectRoot }).\n     - With storeDir OUTSIDE the project: ready true, and evidence.reportSha256 = sha256(file bytes). This is the control, so the refusals below are not vacuous.\n     - The same bytes under project/.moe/certification and under project/certification: certification-store-unsafe, not ready, evidence null.\n   - **Real production reader.** Stub HOME and USERPROFILE to a fake home holding that valid report; as a precondition assert os.homedir() === the fake home. With readCertification = () => readHostCertificationEvidence(project) and deliveryPolicy 'legacy', it is never ready, and evidence?.reportSha256 is never the planted sha. The reader reads os.userInfo().homedir read-only.\n6. **Drift.**\n   - pinnedMultipassClient('linux') === linuxPlatform.executable, ('darwin') === macosPlatform.executable, and ('win32', process.env.ProgramFiles) === windowsPlatform.executable (platform-*.mjs).\n   - win32 with undefined, '', 'relative' and a UNC root gives 'C:\\Program Files\\Multipass\\bin\\multipass.exe'; 'freebsd' gives null.\n   - PROBE_TIMEOUT_MS and PROBE_MAX_BYTES equal multipass.mjs MAX_PROBE_TIMEOUT_MS and MAX_PROBE_BUFFER.\n   - READINESS_CAPABILITIES toEqual the missingCapabilities that assertExecutionProfileReady('verified-local') throws today (MoeError.context).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/executionReadiness.test.ts"
+      ],
+      "note": "This is a no-byte round after a size-only reject. NO BYTES CHANGED: the empty modifiedFiles list is truthful.\n\nexecutionReadiness.test.ts is byte-identical to its landed version in 3c30b30a (+380, new): there are no commits since, `git diff 3c30b30a HEAD` is empty and the worktree is clean.\n\nQA round 1 found the test matrix (plan step-2 rows 1-6) substantively sound: the gate passed 259/259 and 10/10 QA mutants were killed. QA asked for no test change, so the test-driven-development skill does not apply to this round; nothing is new to drive red.\n\nIts rows run fresh in step 3's archive gate.",
+      "startedAt": "2026-11-01T10:51:03.229Z",
+      "completedAt": "2026-11-01T10:51:08.714Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, after steps 1 and 2: the one gate, in a git-archive snapshot. Never run npm ci, npm test or a build in the shared checkout (global rail), and never run Multipass.\n\nFirst confirm HEAD carries CQ-M07a's landing: `git log moe/work-2026-10-24 --grep 'Moe-Task: task-5a635bc90aaa47acabede9307dd1579b' --format=%h` must print a sha. If it prints nothing, stop and call moe.report_blocked with blockedOnTaskIds ['task-5a635bc90aaa47acabede9307dd1579b'].\n\nRun exactly this. Its command, exit code and output tail are the complete_task verification evidence:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-cf952313-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/delivery/executionReadiness.ts packages/moe-daemon/src/delivery/executionReadiness.test.ts packages/moe-daemon/src/server/runnerChannel.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/delivery/executionReadiness.test.ts src/server/runnerChannel.test.ts'`\n\nWhat it does:\n- It overlays this task's three files on a whole-repo archive of HEAD, so the drift rows read HEAD's platform-*.mjs and multipass.mjs.\n- tsc typechecks the module, including the exhaustive CERTIFICATION_REFUSAL_IDS record. vitest does not typecheck.\n- It runs the new test file plus runnerChannel.test.ts, which shows the isRunnerKey export changed nothing.\n\nExpect exit 0 and 0 failures. On this linux/x64 host nothing is skipped except the win32-only EPERM guards.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "The plan's exact command ran fresh at HEAD 8acf93c3 and exited 0. No tracked bytes changed.\n\nPrecondition: the CQ-M07a landing grep prints 53a58b50, 8ce2cda4 and 63ae437a.\n\nThe snapshot is a pure git archive of HEAD. The overlay was a no-op, checked two ways:\n- before the run, `git diff --quiet HEAD` over the 3 paths;\n- after the run, cmp of each snapshot file against `git show HEAD:<path>`, all identical.\n\nThe snapshot files' sha256 values:\n- executionReadiness.ts a1803daa…\n- executionReadiness.test.ts 2a0e018e…\n- runnerChannel.ts 2df78187…\n\nRun results:\n- npm ci: \"added 74 packages in 1s\".\n- `tsc --noEmit`: clean, with zero `error TS` lines. Vitest only runs after tsc exits 0.\n- vitest:\n  - executionReadiness.test.ts: 114 tests passed.\n  - runnerChannel.test.ts: 41 tests passed.\n  - Test Files 2 passed (2), Tests 155 passed (155), 0 skipped.\n\nSnapshot /tmp/moe-cf952313-xuXoX6; logs /tmp/moe-cf952313-gate3.log and gate3.clean.log.\n\nNothing ran in the shared checkout, and no Multipass client was run.",
+      "startedAt": "2026-11-01T10:51:10.748Z",
+      "completedAt": "2026-11-01T10:52:44.784Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read `git diff HEAD -- packages/moe-daemon/src/server/runnerChannel.ts` and the two new files as an attacker would.\n\n- **Grant paths.** `grep -n \"process\\.\\|os\\.\\|homedir\\|readFileSync\" packages/moe-daemon/src/delivery/executionReadiness.ts` must show no env, platform or home read. Only the four checks can remove an id, and deliveryPolicy can only refuse.\n- **Never rejects.** Each check is isolated. The guard timer is cleared and unref'd on every path, so vitest exits with no open handle. A throwing settings getter, a rejecting reader and a synchronous probe throw each map to their own id.\n- **Probe.** At most one call, only after an accepted report, with the exact argv and the pinned path. There is no default runner.\n- **Containment.** Case folding goes through pathKey. A realpath error fails closed. A .moe ENOENT is the only skip. Both directions of containment are checked.\n- **Secrets.** Key bytes never reach the snapshot, an error or a log.\n- **Order and freezing.** missingCapabilities is a filter over READINESS_IDS. The snapshot, its array and its evidence are frozen.\n- **Scope.** The runnerChannel.ts diff is the export alone. certificationEvidence.ts and executionProfile.ts are byte-unchanged (`git diff --quiet HEAD -- packages/moe-daemon/src/delivery/certificationEvidence.ts packages/moe-daemon/src/delivery/executionProfile.ts`). Nothing imports executionReadiness.ts, so verified-local is still unavailable.\n\nFix anything found, re-run step 3's gate, and submit its fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        ".serena/memories/task-task-cf952313817d4b76b300b10a043aba7b-handoff.md"
+      ],
+      "note": "The adversarial self-review ran once, over the landed bytes in 3c30b30a. `git diff HEAD` over the 3 paths is empty, because they are unchanged since landing. I found nothing to fix, so NO tracked bytes changed. The only path written was the Serena handoff memory, which is gitignored under .serena and which the wrapper does not commit.\n\nPlan checks:\n- **Grant paths.** grep for `process.`, `os.`, `homedir` and `readFileSync` in executionReadiness.ts finds nothing. The imports are fs/promises, path, a type-only import from certificationEvidence, isRunnerKey and pathKey: leaf-safe.\n- **Never rejects.** Each check has its own try/catch. The guard timer is unref'd and cleared in finally. A synchronous probe throw, a rejecting reader and a throwing settings getter each map to their own id.\n- **Probe.** It runs once, only after an accepted identity, with the pinned path and argv version --format json. There is no default runner.\n  - Node execFile sets killed:true on a timeout, giving the timeout id. maxBuffer raises ERR_CHILD_PROCESS_STDIO_MAXBUFFER without killed, giving the failed id; that is correct.\n- **Platform values.** Report platform values are process.platform style (win32, linux, darwin, per CERTIFICATION_PINS), so pinnedMultipassClient maps every pinned host.\n- **Key format.** It matches authenticateRunner: KEY_RE on the raw stored bytes, no trim, and ensureRunnerKey writes no newline.\n- **Containment.** It uses pathKey, checks both directions and fails closed. A .moe ENOENT is the only skip.\n- **Secrets.** Key bytes never leave runnerKeyFiled.\n- **Order and freezing.** missingCapabilities is a filter over READINESS_IDS, deduped by a Set. The snapshot, its array and its evidence are frozen.\n- **Scope.**\n  - The runnerChannel.ts diff is the isRunnerKey export alone.\n  - certificationEvidence.ts is still at 63ae437a, and it and executionProfile.ts are unchanged.\n  - No importer exists in packages, moe-jetbrains or scripts, so verified-local stays unavailable.\n  - The tests import no child_process, and afterEach unstubs env, restores real timers and removes the temp root.\n\nTheoretical only, with no change:\n- result.ok is read up to 3 times; the reader is daemon-wired and trusted.\n- An intermediate-directory symlink could be swapped between open and realpath, but that needs write access to ~/.moe.\n- win32 has no O_NOFOLLOW, so lstat is the only guard there.\n- The key buffer is not zeroed.\n- The evaluator is not single-flight; that belongs to CQ-M07c.\n\nHEAD moved to 929e69b6 after step 3; that peer commit touched only launcher scripts and board JSON. I re-ran the plan's exact gate fresh at HEAD 929e69b6:\n- EXIT 0, tsc clean, 114 + 41 = 155 passed, 0 skipped.\n- Overlay cmp: identical to HEAD.\n- Snapshot /tmp/moe-cf952313-3Q0jAy; log /tmp/moe-cf952313-gate4.clean.log.",
+      "startedAt": "2026-11-01T10:52:47.592Z",
+      "completedAt": "2026-11-01T10:56:49.879Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Size waiver prop-3cfb7447 APPROVED by the human at 14:22:27Z. The CQ-M epic now carries the \"CQ-M07b size exception\" rail exactly once. The park reason is gone, so the row returns to REVIEW for QA round 2. Substance was already green (259/259, 10/10 mutants).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [],
+  "priority": "MEDIUM",
+  "order": 231.02,
+  "comments": [
+    {
+      "id": "comment-bb5e59432a394a26b0ab20ae608bffc0",
+      "author": "architect-b520bc90",
+      "content": "READER CONTRACT from CQ-M07a (task-5a635bc9, plan rev 1, architect-b520bc90). Please plan the evaluator against these names. Full rationale: mem:task-task-5a635bc90aaa47acabede9307dd1579b-handoff.\n\n- **Module.** `packages/moe-daemon/src/delivery/certificationEvidence.ts`, a leaf that nothing imports yet.\n- **Production entry.** `readHostCertificationEvidence(projectRoot): Promise<CertificationEvidence>`. It takes no store and no host argument, and it never rejects.\n  - The store is `path.join(os.userInfo().homedir, '.moe', 'certification')`. `certificationStoreDir()` returns it, or null when os.userInfo() fails.\n  - `readCertificationStore({storeDir, projectRoot})` is a test seam only. Never call it from the evaluator.\n- **Result.** A frozen `{ok: true, report, sha256}` (the newest accepted report by finishedAt, with the sha256 of its exact bytes) or `{ok: false, refusals}`.\n- **Refusal codes.** Each code is fixed and prefixed `CERTIFICATION_`, and the list is exported as `CERTIFICATION_REFUSALS`.\n  - Input, host and store: INPUT_INVALID, HOST_UNSUPPORTED, STORE_UNAVAILABLE, STORE_MISSING, STORE_UNSAFE, STORE_IN_PROJECT, STORE_UNREADABLE.\n  - Reading files: REPORT_NONE, REPORT_UNSAFE, REPORT_UNREADABLE, REPORT_OVERSIZE, REPORT_MALFORMED.\n  - Judging a report: REPORT_SCHEMA, REPORT_CHECKS, REPORT_INJECTED, REPORT_UNCERTIFIED, REPORT_PLATFORM, REPORT_ARCH, REPORT_IMAGE, REPORT_SUPERVISOR, REPORT_PROVIDER_VERSION.\n- **What ok:true already guarantees.** The report passes the TypeScript port of validateCertificationReport. It is transport native and certified. Its platform and arch are this host's (`hostIdentity()`, from CERTIFICATION_PINS.hosts). Its image.sourceSha256 and supervisorSha256 equal the shipped pins. Its provider.version equals a pinned version plus this host's versionSuffix.\n- **Left to M07b (decision 4, \"live match\").** Probe the LIVE `multipass version` client with the pinned client and require it to equal `report.provider.version`. Map the refusals into missingCapabilities ids.\n  - Reading the store is async and the evaluator's job; assertExecutionProfileReady stays synchronous over the snapshot.\n- **Pin caveat.** The pins are a hand-kept compiled constant with a drift test (mem:decision-certification-evidence-pins). A daemon built before a supervisor change refuses reports certified after it, until the daemon is rebuilt. That is fail-closed by design.",
+      "timestamp": "2026-11-01T09:29:24.085Z"
+    },
+    {
+      "id": "comment-17bfc7a0ebd841a9946c27c87bcf1c6b",
+      "author": "governor-f668f954",
+      "content": "Governor early-start ruling (governor-f668f954, 2026-11-01 10:02Z). QA is the gate right now: one QA seat has WT-09, R14d1 and M07a queued, and three coders are idle. So this row no longer dependsOn CQ-M07a (task-5a635bc9).\n- M07a is in REVIEW, and its bytes have landed as **63ae437a**: certificationEvidence.ts and its test.\n- This row shares no file with M07a: runnerChannel.ts, executionReadiness.ts and executionReadiness.test.ts. No other open row declares those files.\n\nRules for the worker:\n- Build against the LANDED certificationEvidence.ts at 63ae437a, and never edit it. That's already your plan.\n- If QA rejects M07a and its exported contract changes, re-sync this row to the new bytes before completing. Check `git log -1 -- packages/moe-daemon/src/delivery/certificationEvidence.ts` right before complete_task, and name the sha you built against in the summary.\n- QA: review against the M07a bytes at that sha.\n\nOrdering kept: CQ-M07c (task-9ae89d5e) now dependsOn M07a directly, as well as this row, so nothing past this row runs before M07a is DONE.",
+      "timestamp": "2026-11-01T10:01:08.479Z"
+    },
+    {
+      "id": "comment-ba4de36582ee4b77a003b814ade0b7b6",
+      "author": "governor-f668f954",
+      "content": "Governor note for this row's QA (governor-f668f954, 10:30Z). CQ-M07a (task-5a635bc9) was rejected at 10:29Z on DoD 4, and the rejection is **test-only**.\n- QA's words: \"The current port is correct; this is a gap in what the tests can detect.\"\n- The fix adds VARIANTS rows to `certificationEvidence.test.ts`, one per rule, so that six possible loosenings would fail. No change to `certificationEvidence.ts` was asked for.\n- So this row's build basis, certificationEvidence.ts at 63ae437a, still holds. Review it normally against those bytes.\n\nOnly if M07a's rework does change `certificationEvidence.ts` should this row be re-checked against the new exports: check `git log -1 -- packages/moe-daemon/src/delivery/certificationEvidence.ts`. CQ-M07c already dependsOn M07a directly, so nothing past this row runs before M07a is DONE.",
+      "timestamp": "2026-11-01T10:30:00.927Z"
+    },
+    {
+      "id": "comment-5ffd5bf1066649e88a2dcdac8f0c1fe6",
+      "author": "qa-1e84238e",
+      "content": "QA round 2 (qa-1e84238e, 11:05Z): PARKED, not rejected. The substance is green again, but the size waiver is still PENDING.\n\nFresh evidence this session:\n- **Bytes unchanged.** `git diff 3c30b30a HEAD` over executionReadiness.ts, executionReadiness.test.ts and runnerChannel.ts is empty, and the worktree is clean for them. The archive copies are byte-identical to `git show HEAD:` (sha256 a1803daa…, 2a0e018e…, 2df78187…).\n- **This round's completion** bf327c83 is board JSON only: this row's record plus a DONE peer's. It is on moe/work-2026-10-24. The packages/ bytes stay in completion 3c30b30a, an ancestor of HEAD.\n- **Size.** `git show --numstat --format= 3c30b30a -- packages/`: executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2. That is +637/-0, net 637 (runtime 257, tests 380), and it equals the text of prop-3cfb744496df4d3f91183f42041ca963 exactly.\n- **Gate.** The plan's exact command at HEAD bf327c83 (snapshot /tmp/moe-cf952313-y6OAaR, log /tmp/moe-qa-cf952313-r2-gate.log): npm ci, then `tsc --noEmit` clean, then vitest 155/155 (114 + 41), EXIT 0.\n  - tsc is TypeScript 7.0.2 (native), so it runs in about 0.4 s. A planted type error makes it exit 1, so it does typecheck.\n- **Neighbours.** In the same snapshot, adding certificationEvidence.test.ts (63) and executionProfile.test.ts (41) gives 259/259, EXIT 0.\n- **Dependencies unchanged since 3c30b30a:** certificationEvidence.ts (still 63ae437a, the governor's build basis), executionProfile.ts, util/affectedFiles.ts, runnerChannel.ts, and scripts/local-runner platform-*.mjs and multipass.mjs. M07a's dirty certificationEvidence.test.ts in the shared tree belongs to a peer and is outside this gate.\n- **Still unavailable.** Nothing imports executionReadiness outside its test, so verified-local stays unavailable. The module has no process., os. or homedir reads.\n- **Fresh read of executionReadiness.ts** agrees with round 1 (10/10 QA mutants killed):\n  - each fact is its own try/catch check;\n  - the probe runs at most once, only after an accepted identity, with the pinned path, the exact argv and a guard timer that is unref'd and cleared in finally;\n  - key bytes never leave runnerKeyFiled;\n  - missingCapabilities is READINESS_IDS filtered, and the snapshot and evidence are deep-frozen.\n\nWhy park: QA's 400-LOC rule yields only to a rail. allRails.epic still carries only the CQ-M05 size exception, and prop-3cfb7444 (EPIC ADD_RAIL, filed 10:50:30Z) is PENDING. A second size-only reject would burn reopen 2 and start a worker session that can only wait.\n\nResume:\n- APPROVED: set_task_status REVIEW. QA confirms the rail in allRails.epic against the numstat above, re-runs the gate and approves naming the size. No new bytes are needed.\n- REJECTED: set_task_status PLANNING. The architect splits the review scope over the landed bytes, with no rewrite.",
+      "timestamp": "2026-11-01T11:06:25.831Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-01T08:06:50.081Z",
+  "updatedAt": "2026-11-01T14:52:49.008Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-01T09:31:01.899Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-11-01T14:51:37.785Z",
+    "wallClockMs": 19235886
+  },
+  "contextFetchedBy": [
+    "qa-1e84238e",
+    "architect-b520bc90",
+    "worker-cef53f62",
+    "qa-c5835a34"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-01T09:55:53.056Z",
+  "executionContract": {
+    "intendedBehavior": "evaluateExecutionReadiness(inputs) returns a deep-frozen ReadinessSnapshot for verified-local, computed only from facts the daemon observes through injected inputs:\n- the daemon install tree is disjoint from the project;\n- a valid runner key is filed outside the project;\n- settings has an own deliveryPolicy of 'local-branch';\n- CQ-M07a accepted a host certification report, and its provider version equals the live pinned Multipass client's.\n\nIt never rejects for a failing fact and never reads env, platform or home itself. Holding and wiring the snapshot belong to CQ-M07c.",
+    "acceptanceCriteria": [
+      "With every injected fact present and matching, ready is true, missingCapabilities is empty, and evidence is the accepted report's identity.",
+      "Each failing fact adds exactly its own ids, listed in READINESS_IDS order.",
+      "A version mismatch, a probe timeout, a probe error and malformed probe output each give a fixed provider-* id.",
+      "No env value, settings label, task or project JSON label, or report stored inside the project makes it ready."
+    ],
+    "invariants": [
+      "No env var, settings key other than deliveryPolicy, persisted label, task/project JSON or caller value can add readiness. deliveryPolicy can only refuse.",
+      "missingCapabilities is a unique subset of READINESS_IDS in READINESS_IDS order, and ready === (missingCapabilities.length === 0).",
+      "Per evaluation, the Multipass probe runs at most once and only after an accepted report. It uses the pinned executable with argv exactly ['version','--format','json'], bounded by PROBE_TIMEOUT_MS plus a guard timer, and never a PATH lookup.",
+      "Runner key bytes never appear in the snapshot, an error or a log.",
+      "executionReadiness.ts stays leaf-safe: node built-ins, certificationEvidence.ts, runnerChannel.ts and util/affectedFiles.ts only."
+    ],
+    "compatibility": [
+      "assertExecutionProfileReady, executionProfile.ts and certificationEvidence.ts are untouched. Nothing imports the evaluator, so verified-local stays unconditionally unavailable.",
+      "runnerChannel.ts behavior is unchanged: ensureRunnerKey and authenticateRunner keep their code."
+    ],
+    "approvedScope": [
+      "executionReadiness.ts exports READINESS_CAPABILITIES, READINESS_EVIDENCE_IDS, READINESS_IDS, ReadinessId, AGENT_VM_ROWS, CHECK_VM_ROWS, CERTIFICATION_REFUSAL_IDS, pinnedMultipassClient, PROBE_ARGS, PROBE_TIMEOUT_MS, PROBE_MAX_BYTES, ProbeRunner, ReadinessInputs, ReadinessSnapshot and evaluateExecutionReadiness.",
+      "runnerChannel.ts gains only the isRunnerKey export."
+    ],
+    "reuse": [
+      "CQ-M07a's readHostCertificationEvidence, CertificationEvidence, CertificationRefusal, CERTIFY_CHECK_IDS, CERTIFICATION_REFUSALS and CERTIFICATION_PINS.",
+      "runnerChannel KEY_RE through the isRunnerKey export.",
+      "The pathKey containment idiom from commitMaterializer.ts:156, as copied in certificationEvidence.ts.",
+      "platform-*.mjs pinned executables and doctor.mjs's version parse, ported with drift rows."
+    ],
+    "sourceAssumptions": [
+      "executionProfile.ts:108-124 assertExecutionProfileReady throws MoeError whose context.missingCapabilities lists the five capability ids in order.",
+      "server/runnerChannel.ts:36 KEY_RE /^[A-Za-z0-9_-]{43}$/; runnerKeyPath at :42 reads MOE_RUNNER_KEY_DIR and os.homedir() at call time.",
+      "scripts/local-runner/platform-linux.mjs:22, platform-macos.mjs:14 and platform-windows.mjs:20 define executable; each module exports {linux,macos,windows}Platform.executable.",
+      "scripts/local-runner/multipass.mjs exports MAX_PROBE_TIMEOUT_MS = 10_000 and MAX_PROBE_BUFFER = 65_536.",
+      "certificationEvidence.ts (CQ-M07a, landing) exports CertificationRefusal, CERTIFICATION_REFUSALS (21 codes), CertificationEvidence, readHostCertificationEvidence(projectRoot) and readCertificationStore({storeDir, projectRoot})."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-cf952313-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/delivery/executionReadiness.ts packages/moe-daemon/src/delivery/executionReadiness.test.ts packages/moe-daemon/src/server/runnerChannel.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/delivery/executionReadiness.test.ts src/server/runnerChannel.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- **Evidence ids.** A 1:1 kebab copy of CQ-M07a's 21 CERTIFICATION_ codes was rejected as noise. Six grouped ids each match one operator action: the host can't run it, fix the store, run certify, re-run certify natively, re-certify after a pin move, or investigate IO. The exhaustive Record keeps the grouping compile-checked.\n- **Probe on every evaluation.** Rejected: hosts that never certified (most, including this WSL dev box) would spawn Multipass on every evaluation. The probe runs only against an accepted report, which is the only thing it can match.\n- **ProgramFiles.** Kept in parity with platform-windows.mjs driveRoot, so the daemon probes the same client the runner launches VMs with. Hard-coding C:\\Program Files would diverge on a host with Windows on another drive. The value only locates a client of the pinned shape; it cannot supply the report, and the OS-account store is the trust root.\n- **Containment.** A dev/inode ancestor walk was rejected for the established path idiom (commitMaterializer.ts:156, CQ-M07a).\n- **Exporting M07a's inside().** Rejected, to stay file-disjoint from CQ-M07f, which edits certificationEvidence.ts for the pin bump.\n- **Duplicating KEY_RE.** Rejected: the isRunnerKey export keeps one source.",
+    "codebaseInsights": "- runnerKeyPath (server/runnerChannel.ts:42) honors MOE_RUNNER_KEY_DIR and os.homedir(). The evaluator takes the path as an input, so it reads no env itself. index.ts:764 ensures the key at daemon start, and KEY_RE is 43 base64url chars.\n- certify's provider.version is doctor.mjs's observed client version, which requires multipass === multipassd (scripts/local-runner/doctor.mjs:60-72, certify.mjs:85-87).\n- Pinned clients are platform-linux.mjs:22, platform-macos.mjs:14 and platform-windows.mjs:20 (driveRoot on ProgramFiles). Probe bounds are multipass.mjs MAX_PROBE_TIMEOUT_MS 10s and MAX_PROBE_BUFFER 64 KiB.\n- CQ-M07a's ok:true already implies certified (every row passed). The per-row capability mapping is defense in depth, and it's the only way to fail one isolation capability alone in a test.\n- util/affectedFiles.ts imports only node:fs, node:path and util/errors, so it is leaf-safe. runnerChannel.ts imports node built-ins only.\n- tsconfig excludes tests, so the gate's tsc covers the module.",
+    "risks": "- CQ-M07a is WORKING; its names may move in QA. Follow the landed code.\n- Fake timers: limit toFake to setTimeout/clearTimeout so the concurrent fs checks are unaffected. Await the fake's invoked deferred before advancing.\n- The real-reader rows read the real os.userInfo().homedir store read-only. Never assert on its contents beyond the planted sha, and keep another capability failing so the dev box's real store can't flip ready.\n- The win32 drift row compares under the same process.env.ProgramFiles that both sides see, so it holds on any host.\n- CQ-M07c must keep READINESS_CAPABILITIES equal to its default missing list, or update the drift row.\n- The evaluator is not single-flight. Coalescing concurrent evaluations is CQ-M07c's scheduling concern.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/certificationEvidence.ts",
+      "packages/moe-daemon/src/delivery/executionProfile.ts",
+      "packages/moe-daemon/src/server/runnerChannel.ts",
+      "scripts/local-runner/platform-windows.mjs",
+      "scripts/local-runner/doctor.mjs",
+      "scripts/local-runner/multipass.mjs",
+      "docs/CERTIFICATION.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "79693e957ead87848c3d3de6818891ca874c3a79",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-01T09:55:53.078Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T10:01:47.835Z",
+  "reviewStartedAt": "2026-11-01T10:58:10.291Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-cf952313-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/delivery/executionReadiness.ts packages/moe-daemon/src/delivery/executionReadiness.test.ts packages/moe-daemon/src/server/runnerChannel.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/delivery/executionReadiness.test.ts src/server/runnerChannel.test.ts'",
+    "exitCode": 0,
+    "outputTail": "added 74 packages in 1s\n(npx tsc --noEmit: no output, 0 'error TS' lines; vitest runs only after tsc exits 0)\n ✓ src/delivery/executionReadiness.test.ts (114 tests) 585ms\n ✓ src/server/runnerChannel.test.ts (41 tests) 1014ms\n\n Test Files  2 passed (2)\n      Tests  155 passed (155)\n   Start at  12:56:32\n   Duration  2.16s (tests 57%, transform 36%, import 7%)\nEXIT=0 (HEAD 929e69b6; snapshot /tmp/moe-cf952313-3Q0jAy; the overlay is byte-identical to HEAD by cmp against git show HEAD:, so this is a pure archive of HEAD; log /tmp/moe-cf952313-gate4.clean.log)",
+    "reportedAt": "2026-11-01T10:58:10.291Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/server/runnerChannel.ts",
+    ".serena/memories/task-task-cf952313817d4b76b300b10a043aba7b-handoff.md",
+    ".moe/tasks/task-5e2dcd2c0e9643e19aeddaa1ae9d406d.json",
+    ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json",
+    ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+    ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+    ".moe/tasks/task-7b23ea0f39424ca4ae09dc1cba5a8018.json",
+    ".moe/tasks/task-bb1502b1fcb04f0e99fa5328be05ef4e.json",
+    ".moe/tasks/task-cd2977e10648489fa3d63b0a376ca6fa.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "CQ-M07b round 2: a no-byte round after QA's SIZE-ONLY reject (failedDodItems empty), following QA's route.\n\n1. Waiver: filed prop-3cfb744496df4d3f91183f42041ca963, an EPIC ADD_RAIL (773 chars, one line). It names completion 3c30b30a and the exact numstat (git show --numstat --format= 3c30b30a -- packages/): executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2 (+637/-0; runtime 257, tests 380), and says \"waives size only; grow only by QA-required fixes\". It is modeled on the approved CQ-M05 rail prop-ae32e9bb, and was still PENDING at completion (filed 10:50:30Z).\n2. Pinged #governors: msg-4fe2b76f.\n3. No bytes changed: git diff 3c30b30a HEAD over the 3 paths is empty, and the worktree is clean. Built against certificationEvidence.ts at 63ae437a, which git log -1 re-checked right before complete_task (unchanged); executionProfile.ts is unchanged too. Nothing imports executionReadiness, so verified-local stays unavailable.\n4. Fresh gate: the plan's exact command at HEAD 929e69b6. The overlay is byte-identical to HEAD (cmp against git show HEAD:), so the snapshot is a pure archive. EXIT 0, tsc clean, 114 + 41 = 155 passed, 0 skipped. The only later commit, 2fbeaa7e, changed a peer's board JSON, not a gate input.\n5. The adversarial self-review found no real risk; the theoretical notes are in the step-4 note.\n\nFor QA:\n- If \"CQ-M07b size exception\" is in allRails.epic: match it against the numstat, re-run the gate and approve.\n- If prop-3cfb7444 is still PENDING and the substance is unchanged: park (comment, then report_blocked with no row ids in the reason, then #governors). Do not reject again.",
+  "commits": [
+    {
+      "sha": "3c30b30a501d466e1b110fae01b2e815b51171dd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-009c883d@2026-11-01T10:01:03Z",
+      "paths": [
+        ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+        ".moe/tasks/task-41d0c5a9855143ceb3ab81e61aaf9fa9.json",
+        ".moe/tasks/task-b0485bb1cacf4d3b84979e9256078737.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json",
+        "packages/moe-daemon/src/delivery/executionReadiness.test.ts",
+        "packages/moe-daemon/src/delivery/executionReadiness.ts",
+        "packages/moe-daemon/src/server/runnerChannel.ts"
+      ],
+      "recordedBy": "worker-009c883d",
+      "recordedAt": "2026-11-01T10:19:39.139Z",
+      "treeId": "25e77bdeb58ddf35f03e537dcd4c67d818b67e92",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "877d2257aaabd85740999c5498a2d7494e7ca6ae",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1e84238e@2026-11-01T10:30:45Z",
+      "paths": [
+        ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json"
+      ],
+      "recordedBy": "qa-1e84238e",
+      "recordedAt": "2026-11-01T10:36:24.157Z",
+      "treeId": "d9112403c170e79e7aad349ade8e2b4a7830ea15",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "37d62f2af19ff282762cbcd0f6469242df82dc3d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-b520bc90@2026-11-01T09:30:59Z",
+      "paths": [
+        ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+        ".moe/tasks/task-d56fb46eb0a941808a7ba7e0588f2fd5.json"
+      ],
+      "recordedBy": "architect-b520bc90",
+      "recordedAt": "2026-11-01T10:42:09.272Z",
+      "treeId": "190f64fd538689fc3088e3b8fcf7ea97b50c0f76",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "bf327c83140398262b911e235b37ff01318ef69b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cef53f62@2026-11-01T10:47:59Z",
+      "paths": [
+        ".moe/tasks/task-5e2dcd2c0e9643e19aeddaa1ae9d406d.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
+      ],
+      "recordedBy": "worker-cef53f62",
+      "recordedAt": "2026-11-01T10:58:29.938Z",
+      "treeId": "04620c48378ea79d4481c7cf5e8f82be3c301301",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "652f5eb3a98a2b73c2696c56f250a0e4da2dfc63",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1e84238e@2026-11-01T10:58:55Z",
+      "paths": [
+        ".moe/tasks/task-324d4f53cf28486d8bc0de70b6a99b8d.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json"
+      ],
+      "recordedBy": "qa-1e84238e",
+      "recordedAt": "2026-11-01T11:07:09.182Z",
+      "treeId": "b0aed9bb83f2ee549f20b4e97cf7f46d4f20db9d",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "87f4841afe7e98b732479c43fd3d4eff3cb03a1c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-c5835a34@2026-11-01T14:41:40Z",
+      "paths": [
+        ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+        ".moe/tasks/task-7b23ea0f39424ca4ae09dc1cba5a8018.json",
+        ".moe/tasks/task-bb1502b1fcb04f0e99fa5328be05ef4e.json",
+        ".moe/tasks/task-cd2977e10648489fa3d63b0a376ca6fa.json",
+        ".moe/tasks/task-cf952313817d4b76b300b10a043aba7b.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-c5835a34",
+      "recordedAt": "2026-11-01T14:52:49.008Z",
+      "treeId": "0ba7c0020408ff24d7931cd83770cc28a4ae2bf3",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/server/runnerChannel.ts",
+    "packages/moe-daemon/src/delivery/executionReadiness.ts",
+    "packages/moe-daemon/src/delivery/executionReadiness.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-c5835a34@2026-11-01T14:41:40Z",
+    "at": "2026-11-01T14:52:49.008Z"
+  },
+  "reviewCompletedAt": "2026-11-01T14:51:37.785Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "file": "packages/moe-daemon/src/delivery/executionReadiness.test.ts",
+        "description": "Oversized: 637 net changed lines under packages/ in 3c30b30a (executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2), with no epic or project rail that waives size for this row. Fix: the worker files an EPIC ADD_RAIL size exception (moe.propose_rail) naming exactly those numstats and \"waives size only\". Do not change, re-slice or re-land the bytes. Then complete a round that changes no bytes, with a fresh archive gate."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Size-only reject: no DoD item failed. Completion 3c30b30a changes 637 net lines under packages/ (git show --numstat --format= 3c30b30a -- packages/): executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2 (+637/-0; runtime 257, tests 380). QA's default rejects anything over 400 net changed LOC unless a project or epic rail waives it. This epic's only size rail is scoped to CQ-M05, and .moe/proposals holds no proposal for this row. Same route as CQ-M05.\n\nThe substance passed in full, so no code change is needed:\n- Gate re-run on a fresh git archive of 3c30b30a under env -i with Node 24: npm ci, tsc --noEmit clean, then vitest over the executionReadiness, runnerChannel, certificationEvidence and executionProfile tests: 259/259, EXIT 0.\n- DoD 1-4 each map to vitest rows:\n  - 1: the deep-frozen ready snapshot.\n  - 2: the ALONE table, the it.each over certify rows, the ordered multi-failure row.\n  - 3: version mismatch, timeout, failed and malformed probes, with the pinned path and argv recorded.\n  - 4: env, label and in-project-store rows, plus a real-reader control that is ready.\n- I ran 10 mutants of my own; all were killed: own deliveryPolicy, the install-contains-project direction, key-in-project, the multipassd compare, ETIMEDOUT, duplicate rows (every to some), the Object.hasOwn refusal lookup, the .moe realpath, the sha256 regex, the PROBE_MAX_BYTES cap.\n- certificationEvidence.ts is still at 63ae437a and executionProfile.ts is unchanged. Nothing imports the new module, so verified-local stays unavailable.\n\nRoute: do not re-slice or rewrite the landed bytes.\n1. File moe.propose_rail as an EPIC ADD_RAIL, under 1000 chars, naming commit 3c30b30a, the three files with their numstat, and \"waives size only; grow only by QA-required fixes\".\n2. Ping #governors with the proposal id.\n3. Run a round that changes no bytes, with a fresh gate on a pure git archive of HEAD.\n4. Call complete_task.\nQA approves once the rail is in allRails.epic.",
+      "rejectedAt": "2026-11-01T10:35:16.871Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "file": "packages/moe-daemon/src/delivery/executionReadiness.test.ts",
+          "description": "Oversized: 637 net changed lines under packages/ in 3c30b30a (executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2), with no epic or project rail that waives size for this row. Fix: the worker files an EPIC ADD_RAIL size exception (moe.propose_rail) naming exactly those numstats and \"waives size only\". Do not change, re-slice or re-land the bytes. Then complete a round that changes no bytes, with a fresh archive gate."
+        }
+      ]
+    }
+  ],
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Size waiver pending; substance green. QA round 2 parks this row rather than issue a second size-only reject.\n\nSize: completion 3c30b30a, `git show --numstat --format= 3c30b30a -- packages/` = executionReadiness.ts +255, executionReadiness.test.ts +380, runnerChannel.ts +2 (+637/-0; runtime 257, tests 380). That exceeds QA's 400 cap, and no rail waives it yet. prop-3cfb744496df4d3f91183f42041ca963 (EPIC ADD_RAIL, filed 10:50:30Z, text equal to this numstat) is PENDING, and allRails.epic holds only the CQ-M05 size exception.\n\nSubstance, fresh at 11:05Z:\n- Bytes unchanged since 3c30b30a: empty diff, clean worktree, snapshot cmp identical. This round's completion bf327c83 is board JSON only.\n- The plan's exact archive gate at HEAD bf327c83: npm ci, tsc clean, vitest 155/155, EXIT 0. With the certificationEvidence and executionProfile neighbours: 259/259.\n- Dependencies unchanged; certificationEvidence.ts is still 63ae437a. Nothing imports the module, so verified-local stays unavailable.\n- Full evidence is in QA's round-2 comment.\n\nResume:\n- APPROVED: set_task_status REVIEW. QA matches the rail to the numstat, re-runs the gate and approves. No new bytes.\n- REJECTED: set_task_status PLANNING. The architect splits the review scope over the landed bytes.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-01T14:51:37.785Z",
+  "reviewSummary": "CQ-M07b QA round 3 (qa-c5835a34): APPROVED. Size waived by epic rail \"CQ-M07b size exception\" (prop-3cfb7444, approved 14:22Z, present once); its text equals `git show --numstat --format= 3c30b30a -- packages/`: executionReadiness.ts +255 (A), executionReadiness.test.ts +380 (A), runnerChannel.ts +2 (M) = +637/-0, net 637 (runtime 257, tests 380). Reviewed on substance.\nDelivery: packages bytes in completion 3c30b30a; this round's completion bf327c83 (10:58Z, after the 10:35Z reject) is board JSON only; both on moe/work-2026-10-24; no commit touches the 3 paths after 3c30b30a; worktree clean for them.\nGate: recorded command re-run fresh at HEAD 62f83b4c (snapshot /tmp/moe-cf952313-GbuBO2, overlay cmp = HEAD): npm ci, tsc --noEmit 0 errors, vitest 114+41 = 155/155, 0 skipped, EXIT 0. Neighbours certificationEvidence (83) + executionProfile (41): 279/279.\nDrift: certificationEvidence.ts moved 63ae437a -> 3afbdc59 (CQ-M07f), a supervisorSha256 pin only, no export change; the gate covers it.\nDoD: 1 deep-frozen ready snapshot naming the report; 2 ALONE table (21 rows) + it.each over the 13 certify rows + ordered multi-failure row; 3 mismatch, timeout (killed, ETIMEDOUT, guard), failed and malformed probes, call records pinned path + argv version --format json; 4 env, label and in-project/.moe store rows via the real CQ-M07a reader, with a ready control; 5 gate green.\nContract: leaf-safe imports, no process/os/home reads, own deliveryPolicy only, one probe only after an accepted report, key bytes stay local, runnerChannel diff = isRunnerKey export, no importer (verified-local stays unavailable).\nMutants: 17/20 killed. 3 advisory survivors on correct code: realpath guard for a key dir symlinked into the project, external SIGKILL classed as timeout, control chars in paths. Each pinnable: 3 QA rows pass 117/117 on the original; each mutant fails its row. Follow-up card task-cd2977e10648489fa3d63b0a376ca6fa (BACKLOG, LOW).",
+  "requiredCheckAtDone": null
+}

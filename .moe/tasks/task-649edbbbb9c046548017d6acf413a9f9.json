@@ -1,0 +1,228 @@
+{
+  "id": "task-649edbbbb9c046548017d6acf413a9f9",
+  "epicId": "epic-be924fb8",
+  "title": "bug: accounts CLI reports a missing claude as 'unknown', not MOE_CLAUDE_NOT_FOUND, when PATH holds an unsearchable dir",
+  "description": "claudeAuth.ts runClaude sets notFound only on ENOENT. libuv's execvp returns EACCES when any PATH dir is unsearchable (here /root/.local/bin, mode 700). Repro on WSL: `cd packages/moe-daemon && npx vitest run src/accounts/cli.test.ts` fails 'says when claude cannot be found…' with stderr ''. It passes once that entry is removed from PATH. Fix: on POSIX also treat EACCES as not found when the bin is a bare name, or resolve it on PATH first as the win32 path does.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST, in a NEW file: packages/moe-daemon/src/accounts/claudeAuth.test.ts.\nWhy a new file: governor-693b7073's pending merge of main rewrites cli.test.ts's 'says when claude cannot be found' test to use an absolute missing path. That makes it deterministic, but it no longer reproduces this bug. A separate file is the regression and never overlaps the merge, so this task needs no merge gate. Don't touch cli.test.ts.\n\nSetup:\n- Wrap the cases in `describe.runIf(process.platform === 'linux' && process.getuid?.() !== 0)`. These are POSIX execvp semantics, verified on Linux, and root bypasses directory permissions.\n- In beforeEach, create a mkdtemp dir. Inside it make `locked` (mkdirSync, then chmodSync 0o000) and an empty dir.\n- In afterEach, chmod `locked` back to 0o700 BEFORE rmSync, so cleanup still works after a failed assertion.\n- Every case passes an explicit env object. Never spread process.env: the seat's PATH, MOE_* and CLAUDE_CONFIG_DIR would leak in.\n- Precondition, the first assertion of each EACCES case: `spawnSync('moe-no-such-claude-binary', [], { env: { PATH: locked } }).error?.code` equals 'EACCES'. This proves the case really takes the EACCES branch and cannot pass through ENOENT.\n\nCases:\n1. Bare name behind an unsearchable dir:\n   - `runClaude(claudeCommand({ MOE_CLAUDE_BIN: 'moe-no-such-claude-binary' }, 'linux'), ['auth', 'status', '--json'], { PATH: locked }, false)` toEqual `{ status: null, stdout: '', notFound: true }`.\n   - `probeSignIn(<same command>, { PATH: locked })` toEqual `{ state: 'unknown', notFound: true }`.\n   - With PATH `<empty>:<locked>` it is still not found.\n2. Explicit path that exists but cannot run: a 0o644 file `<dir>/claude-no-exec`, run as `{ file: <it>, prefix: [], shell: false, missing: false }`. Expect notFound false and status null. This is deliberately unchanged: the task scopes the fix to bare names, and a present-but-unrunnable path is a different fault.\n3. Control: PATH = the empty dir (ENOENT) still gives notFound true.\n4. End to end, the reported symptom. Use io collecting out/err lines like cli.test.ts's cli() helper, with env `{ MOE_ACCOUNTS_FILE: <dir>/claude-accounts.json, MOE_CLAUDE_BIN: 'moe-no-such-claude-binary', PATH: locked }`.\n   - `runAccountsCli(['add'], io)` returns 0.\n   - `runAccountsCli(['check'], io)` returns 1, and err contains `MOE_CLAUDE_NOT_FOUND: could not run \"moe-no-such-claude-binary\"`.\n   - `readRegistry(<file>)` still shows acct-1's signInCheckedAt as null.\n   - `runAccountsCli(['login', 'acct-1'], io)`'s err contains MOE_CLAUDE_NOT_FOUND.\n   - accountConfigDir derives from the registry file, so the account folder stays in the temp dir.\n\nRed proof: in step 3's snapshot, before step 2, cases 1 and 4 must fail (notFound false: 'unknown', with no MOE_CLAUDE_NOT_FOUND line) and cases 2 and 3 must pass. Quote it.\nReport the new file in complete_step.newFiles/modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/accounts/claudeAuth.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/accounts/claudeAuth.test.ts"
+      ],
+      "note": "New claudeAuth.test.ts. Red proof in Linux snapshot at HEAD: 2 failed (bare name behind unsearchable dir; CLI MOE_CLAUDE_NOT_FOUND) | 2 passed (explicit non-exec path; ENOENT control). Dirty paths of other sessions untouched.",
+      "startedAt": "2026-10-30T00:16:16.809Z",
+      "completedAt": "2026-10-30T00:16:44.255Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX packages/moe-daemon/src/accounts/claudeAuth.ts, in runClaude's return value:\n  notFound: errorCode === 'ENOENT' || (errorCode === 'EACCES' && path.basename(command.file) === command.file),\n\n`path` is already imported. The bare-name test is enough on every platform:\n- On win32 a bare name never reaches spawn: claudeCommand resolves it first, or returns missing.\n- A resolved win32 file is a full path.\n- The .js fake runs as process.execPath, an absolute path.\n\nAdd a two-line comment above it saying why: POSIX execvp keeps searching past an unsearchable PATH directory, or past a claude without the execute bit, then fails EACCES instead of ENOENT. For a PATH lookup that still means no runnable claude. An explicit path that exists but cannot run stays 'unknown'.\n\nError handling is otherwise unchanged:\n- status stays null on any spawn error.\n- signInStateOf still answers 'unknown' when notFound.\n- cli.ts's notFoundMessage (\"could not run \\\"<bin>\\\". Install Claude Code ... put it on PATH\") already fits this case.\n\nNo other file changes. Report claudeAuth.ts in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/accounts/claudeAuth.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/accounts/claudeAuth.ts"
+      ],
+      "note": "notFound now also true for EACCES on a bare-name command.file, plus 2-line comment.",
+      "startedAt": "2026-10-30T00:16:45.393Z",
+      "completedAt": "2026-10-30T00:16:50.295Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY in a Linux-native snapshot. The shared tree's daemon node_modules is Windows-native, so vitest fails at startup under WSL. The snapshot is HEAD plus this task's two files. Run from the repo root. This is the task's one verification command; use it as complete_task.verification:\n\nNB=$(dirname \"$(command -v node)\"); SNAP=$(mktemp -d /tmp/moe-649e-XXXX) && mkdir -p \"$SNAP/repo\" && git archive HEAD | tar -x -C \"$SNAP/repo\" && for f in packages/moe-daemon/src/accounts/claudeAuth.ts packages/moe-daemon/src/accounts/claudeAuth.test.ts; do cp \"$f\" \"$SNAP/repo/$f\"; done && cd \"$SNAP/repo/packages/moe-daemon\" && printf '{ \"extends\": \"./tsconfig.json\", \"compilerOptions\": { \"noEmit\": true, \"incremental\": false, \"types\": [\"node\"] }, \"include\": [\"src/accounts/claudeAuth.test.ts\"], \"exclude\": [] }\\n' > tsconfig.test-check.json && env -i HOME=\"$HOME\" PATH=\"$NB:/usr/local/bin:/usr/bin:/bin\" npm ci --no-audit --no-fund >/dev/null 2>&1 && env -u MOE_PROJECT_PATH -u MOE_WORKER_ID NO_COLOR=1 npx vitest run src/accounts/ && env -i HOME=\"$HOME\" PATH=\"$NB:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 npx vitest run && env -i HOME=\"$HOME\" PATH=\"$NB:/usr/local/bin:/usr/bin:/bin\" npx tsc --noEmit && env -i HOME=\"$HOME\" PATH=\"$NB:/usr/local/bin:/usr/bin:/bin\" npx tsc -p tsconfig.test-check.json; rc=$?; cd /mnt/d/projexts/moes; rm -rf \"$SNAP\"; echo \"GATE_EXIT=$rc\"; [ \"$rc\" -eq 0 ]\n\nWhat each run does:\n- The FIRST vitest run keeps the seat's own PATH, which on this box contains the mode-700 /root/.local/bin. That is the task's original failing environment.\n  - At planning, cli.test.ts failed 1/14 there at HEAD and passed 13 + 1 skipped with a clean PATH.\n  - After the fix, src/accounts/ must pass in it. After the merge lands, main's absolute-path test passes in it regardless.\n- The second run is the full daemon suite under env -i. At planning, on HEAD: 187 files, 5250 passed, 16 skipped.\n- Then the package tsc and the new file's type check; both must exit 0.\nIf a file outside src/accounts fails, rerun without the cp overlay. Failing on pure HEAD too means it is pre-existing: quote both runs. Grep summaries with `grep -a`, since vitest logs can hold NUL bytes. Quote the summaries and GATE_EXIT in complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Snapshot: src/accounts 4 files 37 passed|1 skipped; full suite 188 files 5257 passed|16 skipped; tsc=0; test-check tsc=0.",
+      "startedAt": "2026-10-30T00:16:51.331Z",
+      "completedAt": "2026-10-30T00:17:39.544Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's diff.\n1. Scope:\n   - `git diff --stat HEAD -- packages/moe-daemon/src/accounts/claudeAuth.ts` shows only the one expression and its comment.\n   - The new test file is the only other path.\n   - cli.test.ts and cli.ts are untouched.\n2. Mutation proof, in step 3's snapshot. Make each change, run `npx vitest run src/accounts/claudeAuth.test.ts`, see it red, then restore:\n   (a) Back to `notFound: errorCode === 'ENOENT'`: cases 1 and 4 must fail.\n   (b) Drop the bare-name condition (`|| errorCode === 'EACCES'`): case 2 must fail.\n   Quote both failing assertions.\n3. Checklist:\n   - afterEach restores mode 0o700 before rmSync, including when a case failed.\n   - runIf skips Windows and root. As root, EACCES never occurs, so the precondition assert would fail.\n   - No case reads process.env, so a seat's PATH/MOE_*/CLAUDE_CONFIG_DIR cannot change the outcome.\n   - An interactive login (`auth login --claudeai`) takes the same branch, which case 4's login line covers.\n   - The win32 path is unchanged: findWindowsCommand still resolves before spawn.\n   - An explicit MOE_CLAUDE_BIN path behaves as before.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/accounts/claudeAuth.ts",
+        "packages/moe-daemon/src/accounts/claudeAuth.test.ts"
+      ],
+      "note": "Review: diff is claudeAuth.ts +3/-1 and the new test; cli.ts and cli.test.ts untouched. Mutants in the snapshot: (a) ENOENT-only: 2 failed (unsearchable-dir bare name; CLI MOE_CLAUDE_NOT_FOUND). (b) every EACCES: 1 failed (explicit non-exec path notFound). Restored: 4 passed. afterEach chmods 0o700 before rmSync; runIf Linux and non-root; every case passes explicit env objects; login line covered by case 4; win32 path untouched.",
+      "startedAt": "2026-10-30T00:17:40.577Z",
+      "completedAt": "2026-10-30T00:17:50.098Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 261.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T18:26:00.035Z",
+  "updatedAt": "2026-10-30T01:33:08.804Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-29T19:06:02.573Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T00:11:43.771Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T01:32:44.614Z",
+    "wallClockMs": 4860843
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-b5749787",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T00:15:48.829Z",
+  "executionContract": {
+    "intendedBehavior": "When claude is looked up by bare name on PATH and the spawn fails EACCES (an unsearchable PATH directory, or a claude without the execute bit), runClaude reports notFound. So the accounts CLI prints MOE_CLAUDE_NOT_FOUND instead of reading the account as 'unknown'. ENOENT, explicit paths and the win32 resolution behave as before.",
+    "acceptanceCriteria": [
+      "runClaude with a bare missing name and PATH = a mode-000 dir returns { status: null, stdout: '', notFound: true }, after a precondition proves the raw spawn errno is EACCES.",
+      "accounts check/login in that environment print MOE_CLAUDE_NOT_FOUND, and signInCheckedAt stays null.",
+      "An explicit non-executable path still yields notFound false (scope pinned).",
+      "Mutants (ENOENT-only; every EACCES) each turn a case red.",
+      "The snapshot gate exits 0, including src/accounts with the seat PATH that contains /root/.local/bin."
+    ],
+    "invariants": [
+      "cli.test.ts and cli.ts are untouched.",
+      "The win32 path (findWindowsCommand, missing) is unchanged.",
+      "status is null on any spawn error."
+    ],
+    "compatibility": [
+      "No stored state or wire change; only the CLI's message for this environment changes from 'unknown' to MOE_CLAUDE_NOT_FOUND."
+    ],
+    "approvedScope": [
+      "claudeAuth.ts runClaude: the notFound expression plus a comment.",
+      "New file claudeAuth.test.ts."
+    ],
+    "reuse": [
+      "claudeCommand, runClaude, probeSignIn, runAccountsCli, readRegistry; the io-collecting pattern of cli.test.ts's cli() helper."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/accounts/claudeAuth.ts runClaude returns notFound: errorCode === 'ENOENT'; claudeCommand returns the bare bin on non-win32.",
+      "packages/moe-daemon/src/accounts/cli.ts prints notFoundMessage when probeSignIn or runClaude reports notFound."
+    ],
+    "checkRefs": [
+      "npx vitest run src/accounts/  (step 3 snapshot, seat PATH, MOE_PROJECT_PATH/MOE_WORKER_ID unset)",
+      "npx vitest run  (same snapshot, env -i)",
+      "npx tsc --noEmit",
+      "npx tsc -p tsconfig.test-check.json  (only src/accounts/claudeAuth.test.ts)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Resolve claude on PATH first on POSIX, as win32 does. Rejected: it is a new resolver and changes how claude is spawned (absolute path, skipping empty PATH entries), all to fix one errno mapping. The bare-name EACCES mapping is one expression. (2) Treat every EACCES as not found. Rejected: the task scopes the fix to bare names, and an explicit path that exists but cannot run is a different fault (case 2 pins this). (3) Change cli.test.ts's existing not-found test. Rejected: main's commit, arriving with governor-693b7073's pending merge, already rewrites it to use an absolute missing path, which no longer exercises the bug. Editing it would collide with the merge.",
+    "codebaseInsights": "- claudeAuth.runClaude maps only ENOENT to notFound.\n- claudeCommand returns the bare `claude` (or MOE_CLAUDE_BIN) on POSIX. On win32 it resolves PATH x PATHEXT first and returns missing when nothing matches.\n- Measured with libuv in WSL as uid 1000:\n  - a mode-000 dir on PATH, before or after an empty dir, gives EACCES;\n  - an empty dir gives ENOENT;\n  - a non-executable file gives EACCES, found on PATH or given by path.\n- The seat PATH here contains /root/.local/bin (mode 700), which is why the original failure appears. Repro at HEAD in a Linux snapshot: cli.test.ts fails 1/14 with the seat PATH and passes with a clean one.\n- cli.ts notFoundMessage: 'MOE_CLAUDE_NOT_FOUND: could not run \"<bin>\". Install Claude Code where this terminal runs (and put it on PATH), then try again.'\n- accountConfigDir derives from the registry file path, so a temp MOE_ACCOUNTS_FILE keeps account folders in the temp dir.\n- 3f6817f1 touches only cli.test.ts in src/accounts (6+/2-).",
+    "risks": "- The daemon tests cannot run from the shared tree under WSL, because node_modules is Windows-native. Use step 3's snapshot.\n- A root runner bypasses permissions, which is why the cases runIf non-root.\n- macOS libuv semantics are unverified, which is why they runIf Linux. CI runs daemon tests on ubuntu only.\n- Leaving `locked` at mode 0o000 breaks tmp cleanup, so restore it before rmSync.",
+    "keyFiles": [
+      "packages/moe-daemon/src/accounts/claudeAuth.ts",
+      "packages/moe-daemon/src/accounts/cli.ts",
+      "packages/moe-daemon/src/accounts/cli.test.ts",
+      "packages/moe-daemon/src/accounts/registry.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T00:15:48.922Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T00:16:16.809Z",
+  "reviewStartedAt": "2026-10-30T00:18:35.803Z",
+  "verification": {
+    "command": "Plan step-3 snapshot gate (git archive HEAD + the two task files; npm ci; vitest run src/accounts/ with seat PATH; env -i vitest run; tsc --noEmit; tsc -p tsconfig.test-check.json)",
+    "exitCode": 0,
+    "outputTail": "src/accounts: Test Files 4 passed (4); Tests 37 passed | 1 skipped (38)\nfull suite: Test Files 188 passed (188); Tests 5257 passed | 16 skipped (5273)\ntsc --noEmit and tsc -p tsconfig.test-check.json exited 0\nGATE_EXIT=0",
+    "reportedAt": "2026-10-30T00:18:35.803Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/accounts/claudeAuth.test.ts",
+    "packages/moe-daemon/src/accounts/claudeAuth.ts",
+    ".moe/tasks/task-649edbbbb9c046548017d6acf413a9f9.json",
+    ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json"
+  ],
+  "completionSummary": "runClaude now reports notFound for EACCES when the command is a bare name (unsearchable PATH dir or claude without execute bit), so the accounts CLI prints MOE_CLAUDE_NOT_FOUND instead of reading the account as unknown. Explicit paths, ENOENT and the win32 path are unchanged. Change: claudeAuth.ts (+3/-1) plus new claudeAuth.test.ts (4 cases, runIf non-root Linux, EACCES precondition via raw spawnSync). Red at HEAD (2 failed, 2 passed); mutants (ENOENT-only; every EACCES) each turn a case red.",
+  "commits": [
+    {
+      "sha": "3b9ce142699f3b93dbfb662dfaae41de9abcf3c3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b5749787@2026-10-30T00:15:54Z",
+      "paths": [
+        ".moe/tasks/task-649edbbbb9c046548017d6acf413a9f9.json",
+        "packages/moe-daemon/src/accounts/claudeAuth.test.ts",
+        "packages/moe-daemon/src/accounts/claudeAuth.ts"
+      ],
+      "recordedBy": "worker-b5749787",
+      "recordedAt": "2026-10-30T00:19:00.003Z",
+      "treeId": "2658fbc858a58933b0bf31a163b6538f463426cf",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "413d9f080b51ab645eaa6eabb713edec7641914a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T01:31:02Z",
+      "paths": [
+        ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
+        ".moe/tasks/task-649edbbbb9c046548017d6acf413a9f9.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T01:33:08.804Z",
+      "treeId": "0803d1f036276b7b2e3cdb25cfe1e29ceb4a0c28",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/accounts/claudeAuth.test.ts",
+    "packages/moe-daemon/src/accounts/claudeAuth.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T01:31:02Z",
+    "at": "2026-10-30T01:33:08.804Z"
+  },
+  "completedAt": "2026-10-30T01:32:44.614Z",
+  "reviewCompletedAt": "2026-10-30T01:32:44.614Z",
+  "reviewSummary": "Approved. Reviewed completion commit 3b9ce14 (on moe/work-2026-10-24, pushed, ancestor of HEAD d199aab). Non-board diff is +96/-1 (claudeAuth.ts +3/-1, new claudeAuth.test.ts +93), well under the 400-LOC cap. cli.ts and cli.test.ts are untouched.\n\nRe-ran the plan's gate in a fresh Linux snapshot of HEAD (git archive, npm ci). The two task files are byte-identical to HEAD:\n- `vitest run src/accounts/` on the seat PATH, which contains the mode-700 /root/.local/bin: 4 files, 37 passed | 1 skipped, exit 0.\n- Full suite under `env -i`: 189 files, 5276 passed | 16 skipped, exit 0.\n- `tsc --noEmit` exit 0; `tsc -p tsconfig.test-check.json` exit 0.\n\nMutants, run in the snapshot:\n- (a) ENOENT-only: 2 failed (bare name behind unsearchable dir; CLI MOE_CLAUDE_NOT_FOUND), 2 passed.\n- (b) every EACCES (bare-name condition dropped): 1 failed (explicit non-exec path expected notFound false), 3 passed.\n- Restored: 4 passed.\n\nChecked each acceptance criterion against the code and tests:\n- runClaude returns { status: null, stdout: '', notFound: true } for a bare missing name with PATH = mode-000 dir, after an EACCES precondition via raw spawnSync.\n- accounts check/login print MOE_CLAUDE_NOT_FOUND, and signInCheckedAt stays null.\n- An explicit non-executable path still gives notFound false.\n- The win32 path (findWindowsCommand / missing) is unchanged, and status stays null on any spawn error.\n\nTest hygiene: afterEach restores 0o700 before rmSync, runIf skips Windows and root, and every case passes an explicit env object. A shell:true win32 command has a full-path file, so the basename test can never match it.\n\nNot verified here: the Windows-native behaviour, because the cases are runIf Linux and non-root by design. That is acceptable, since the win32 path is untouched. Complexity pass: nothing to cut; the one-expression fix is minimal.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,367 @@
+{
+  "id": "task-3c4be1254a4b43d0b5e72e0fd8cd0604",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: MOE_WRAPPER_IN_WORKTREE refuses the wrapper test harnesses when a worker runs them inside its task worktree",
+  "description": "WT-13's guard (design §6.1) refuses any moe-agent.{sh,ps1} whose path is under <repo>/.worktrees/task-*. A worktree-mode worker that runs `bash scripts/tests/postflight.sh` or `worktree-landing.sh` from W launches W's own wrapper copy ($ROOT_DIR = W), so every wrapper case prints MOE_WRAPPER_IN_WORKTREE and fails. Repro: after WT-13 lands, copy scripts/ into <repo>/.worktrees/task-x/ and run its postflight.sh. A harness-only opt-out, or a WT-19 ruling, is needed before wrapper tasks run in worktree mode.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Tests first: wt-guard seam cases and the HEAD repro (RED).\n\nPhase 0:\n- Confirm WT-13 landed: `git log -1 --format=%h -E --grep='^(feat|fix)\\(task-fbe8e388' HEAD` prints a sha.\n- Read its LANDED code at HEAD:\n  - moe-agent.sh: `moe_wrapper_in_worktree` and the `if moe_wrapper_in_worktree \"$SCRIPT_DIR\"; then ... MOE_WRAPPER_IN_WORKTREE ... exit 1; fi` after it;\n  - moe-agent.ps1: `$moeInWorktree = & {...}` and `if ($moeInWorktree) {...}`;\n  - postflight-worktree.cjs: `launch()` and `wtGuard` (case 'wt-guard').\n- If WT-13 reshaped any of these, apply the same edits to the landed shape. Never change WT-13's detection, message or exit code.\n- Re-read this row's comments and #governors first: a later comment can override this plan.\n\nRED repro (the governor's evidence; record it in the step note):\n`S=$(mktemp -d /mnt/d/moe-scratch/3c4be125-red.XXXXXX) && git -C \"$S\" init -q && mkdir -p \"$S/.worktrees/task-x\" && git archive HEAD scripts | tar -x -C \"$S/.worktrees/task-x\" && bash \"$S/.worktrees/task-x/scripts/tests/postflight.sh\"`\nIt must exit non-zero within seconds and print `[ERROR] MOE_WRAPPER_IN_WORKTREE:`, because its first wrapper launch (the --help check) is refused.\n\nThen edit scripts/tests/postflight-worktree.cjs, with the Edit tool only:\n(a) launch(): add `MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:opts.wrapper?null:'1'` to the env object BEFORE `...knobs`.\n  - The existing `if(env[k]==null)delete env[k]` loop then drops it for every opts.wrapper copy.\n  - So only the suite's own wrapper carries the seam, and a case can still pass it as a knob.\n  - The suite's `inherited` scrubs MOE_*, which is why it must be re-added here.\n  - Add one comment line saying why, and that copies never get it.\n(b) wtGuard: keep the four existing cases and their assertions byte-for-byte. They launch copies, so they now run without the seam and keep proving that a real launch from W is refused. Append two cases:\n  - 'wt-guard-optout': the registered-W copy (the same path as 'wt-guard-in') with knob {MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:'1'} must give code 0, cliRan, and no MOE_WRAPPER_IN_WORKTREE in the log.\n  - 'wt-guard-optout-strict': the same copy with each of 'true', ' 1' and '0' must give code 1, the `[ERROR] MOE_WRAPPER_IN_WORKTREE:` line, no CLI and no .moe/evidence-rpcs.jsonl.\n  - Put the value in each assertion message, and update the wtGuard header comment.\n\nFast RED, in a scratch scripts snapshot, never the shared tree (mem:gotcha-postflight-worktree-mutant-copy):\n`T=$(mktemp -d /mnt/d/moe-scratch/3c4be125-wt.XXXXXX) && git archive HEAD scripts | tar -x -C \"$T\" && cp scripts/tests/postflight-worktree.cjs \"$T/scripts/tests/\" && mkdir \"$T/tmp\" && cp scripts/tests/postflight-fake-proxy.js \"$T/tmp/fake-proxy.js\" && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_WORKTREE_ONLY=wt-guard node \"$T/scripts/tests/postflight-worktree.cjs\" sh \"$T/scripts/moe-agent.sh\" \"$T/tmp/fake-proxy.js\" \"$T/tmp\" \"$(command -v bash)\"`\nExpected RED: an AssertionError at wt-guard-optout, because the wrapper still refuses. A TypeError or other harness fault is not RED.\n\nerror handling: every new test assertion names its case and value; no other case changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Phase 0: WT-13 landed (072dd78c); guard shapes at HEAD match the plan (sh moe-agent.sh:23-35, ps1 :112-139, launch() :232, wtGuard :1180). git status --short scripts/ was clean at start.\nGovernor RED repro: from a /mnt/d/moe-scratch/3c4be125-red.TfB4MW git-init repo with HEAD scripts at .worktrees/task-x, postflight.sh exited 1 in 0.2s and printed [ERROR] MOE_WRAPPER_IN_WORKTREE: (from its first wrapper launch).\nEdits (Edit tool): launch() env adds MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER: opts.wrapper?null:'1' before ...knobs, with a comment. wtGuard header updated; cases wt-guard-optout (seam '1' → exit 0, CLI ran, no refusal) and wt-guard-optout-strict ('true', ' 1', '0' → exit 1, refusal line, no CLI, no RPC) appended; the four WT-13 cases are untouched.\nFast RED (scratch $T=/mnt/d/moe-scratch/3c4be125-wt.m2ynFM, MOE_WORKTREE_ONLY=wt-guard, sh): AssertionError: wt-guard-optout: seam '1', exit 1, or the W copy did not launch. That is the expected RED, not a harness fault. Dirty paths outside scripts/ belong to other sessions and were left untouched.",
+      "startedAt": "2026-11-02T17:22:30.642Z",
+      "completedAt": "2026-11-02T17:24:15.307Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. The wrapper twins honour the exact-'1' seam (Edit tool only).\n\nscripts/moe-agent.sh:\n- Change only the refusal condition, to `if [ \"${MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:-}\" != 1 ] && moe_wrapper_in_worktree \"$SCRIPT_DIR\"; then`.\n- Keep the function, the message and `exit 1`.\n- Add a short comment covering:\n  - it is a test seam only, set by the launcher harnesses (postflight.{sh,ps1}, postflight-worktree.cjs, worktree-landing.{sh,ps1}) so a worktree-mode worker can run them from its own W (task-3c4be125);\n  - exactly '1' skips this one refusal, and nothing else reads it;\n  - no launch path sets it: not the IDE plugins, moe-team, operators or runbooks.\n- The Edit tool is rename-safe for running seats and leaves the TOOL witness these contested paths need (mem:gotcha-bash-hot-reload-incremental-parse).\n- Then run `bash -n scripts/moe-agent.sh`. Keep bash 3.2 syntax.\n\nscripts/moe-agent.ps1:\n- `if ($moeInWorktree -and $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER -cne '1') {`, with the twin comment.\n- -cne is case-sensitive, so $null, 'true', ' 1' and '0' all keep the refusal.\n- Keep the UTF-8 BOM and LF endings. The file must still parse on PS 5.1.\n\nerror handling:\n- This is a pure string compare on an env value, with no new IO or git call.\n- Unset, or any other value, takes WT-13's refusal path and exit 1 unchanged.\n- A failed git probe stays fail-open, exactly as WT-13 landed it.\n- The name sits outside the MOE_WORKTREE_/LAND_/CONTROL_/BOARD_/COMMIT_/ATTR_ code families and does not contain the substring MOE_WRAPPER_IN_WORKTREE, so the code-family greps and wt-guard's log asserts are unaffected (mem:gotcha-wrapper-code-family-grep-counts-identifiers).\n\nGREEN:\n- Rerun step 1's fast test command with both twins also copied into $T/scripts/: wt-guard passes on sh.\n- Then run PS 5.1 from WSL on the same $T. It must pass (mem:gotcha-postflight-worktree-mutant-copy):\n`cd \"$T\" && MOE_WORKTREE_ONLY=wt-guard WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$T/scripts/tests/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$T/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$T/tmp/fake-proxy.js\")\" \"$(wslpath -w \"$T/tmp\")\" powershell`",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Edits (Edit tool):\n- moe-agent.sh: the refusal condition is now `if [ \"${MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:-}\" != 1 ] && moe_wrapper_in_worktree \"$SCRIPT_DIR\"; then`, plus a 4-line test-seam comment.\n- moe-agent.ps1: `if ($moeInWorktree -and $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER -cne '1') {`, plus the twin comment.\nThe function bodies, message and exit 1 are byte-identical.\nChecks: bash -n OK. PS 5.1 ParseFile reports 0 errors. BOM ef bb bf is kept and there are 0 CRs.\nGREEN (scratch $T=/mnt/d/moe-scratch/3c4be125-wt.m2ynFM, MOE_WORKTREE_ONLY=wt-guard): sh `[worktree] 1 ok, 0 failed` exit 0; PS 5.1 via Windows node.exe `[worktree] 1 ok, 0 failed` exit 0.\nPeer note: scripts/tests/worktree-e2e.cjs is dirty with WT-19b's (task-48aafb88) live edit. It is not this task's, and the step-4 overlay copies only this task's six files.",
+      "startedAt": "2026-11-02T17:24:16.289Z",
+      "completedAt": "2026-11-02T17:25:32.358Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. The harnesses set the seam. Edit tool only, and no case, assertion or expected-list changes.\n\nscripts/tests/postflight.sh:\n- Add `export MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1` directly after `export MOE_ACCOUNT_ROTATION=off`.\n- Add a two-line comment: a worktree-mode worker runs this harness from its own task worktree, where WT-13's guard refuses the wrapper copy; postflight-worktree.cjs re-adds the seam for its own wrapper only, so its refusal cases stay real.\n- This covers:\n  - every direct \"$WRAPPER\" launch;\n  - postflight-owner-guard.cjs, which inherits MOE_* (it filters only FAKE_/OG_);\n  - the frozen suite, which inherits everything except GIT_/HOME/TMP.\n\nscripts/tests/postflight.ps1:\n- Add `$env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'` directly after `$env:MOE_ACCOUNT_ROTATION = 'off'`, with the twin comment.\n- Keep its BOM.\n\nscripts/tests/worktree-landing.sh:\n- Inside the WTJS suite's launch, add `MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:'1'` to the `env` object right after `MOE_ACCOUNT_ROTATION:'off'`, with a one-line comment.\n- The suite's `inherited` scrubs MOE_*, so this is the only place the seam can enter.\n- worktree-landing.ps1 extracts this same suite between the WTJS markers, so it needs no edit.\n- The held-out cases, the `--list` output and worktree-landing.ps1's $expectedCases stay unchanged; that key and its comment are the whole diff.\n\nOut of scope: do NOT touch the other launcher suites (agent-git-guard, protected-agent-command, agent-runtime, wave1-pilot, mention-provenance, worktree-e2e). They are filed as a follow-up row.\n\nerror handling:\n- None of these lines adds IO.\n- A missing or misspelled key shows up only as the refusal when run from W, which step 4's test commands catch.\n- Run `bash -n` on both .sh harnesses after editing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/worktree-landing.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/worktree-landing.sh"
+      ],
+      "note": "Edits (Edit tool):\n- postflight.sh: `export MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1` after `export MOE_ACCOUNT_ROTATION=off`, plus a 2-line comment.\n- postflight.ps1: the twin `$env:... = '1'` line plus comment; BOM kept, 0 CRs, PS 5.1 ParseFile 0 errors.\n- worktree-landing.sh: one key `MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:'1'` after `MOE_ACCOUNT_ROTATION:'off'` in the WTJS suite's launch env, plus a one-line comment above `const env`. No case, list or held-out change; worktree-landing.ps1 is untouched.\nbash -n passes on both .sh harnesses.\nIn code, `git grep -n MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER` hits only the six task files. The only other hits are plan text in .moe/tasks board records (this row, 86431c31, b1ca54f2).\nScanned postflight.sh for MOE_ scrubs: the env -u/unset lists name specific vars only, never the seam.",
+      "startedAt": "2026-11-02T17:25:32.994Z",
+      "completedAt": "2026-11-02T17:26:26.412Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Verification: run once, fresh, from task-worktree copies.\n\nBefore running:\n- `git status --short scripts/` must list only this task's six files. Otherwise peers' bytes would enter the overlay: attribute them and wait (mem:gotcha-snapshot-gate-peer-wip-checkpoint).\n\nHow to run:\n- Run both legs from the repo root /mnt/d/projexts/moes.\n- Each leg takes longer than the Bash tool's 10-minute cap, so write each exact command into its own scratch script under /mnt/d/moe-scratch.\n- Start each with `( set -m; nohup bash <script> > <log> 2>&1 < /dev/null & echo $! > <pidfile> )`. `set -m` keeps SIGINT un-ignored, which postflight scenario W needs.\n- Wait with bounded `timeout 590` polls.\n- Run the two legs concurrently, and kill only recorded PIDs (mem:gotcha-qa-windows-launcher-tests-from-wsl, mem:gotcha-harness-snapshot-needs-full-archive).\n\nBASH LEG (this is the complete_task verification), verbatim:\nU=$(env|awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \",$1}') && B=$(git log -1 --format=%H -E --grep='^(feat|fix)\\(task-fbe8e388' HEAD) && S=$(mktemp -d /mnt/d/moe-scratch/3c4be125.XXXXXX) && git -C \"$S\" init -q && H=\"$S/.worktrees/task-head\" && W=\"$S/.worktrees/task-x\" && mkdir -p \"$H\" \"$W\" && git archive \"$B\" scripts|tar -x -C \"$H\" && git archive HEAD scripts|tar -x -C \"$W\" && cp --parents scripts/moe-agent.{sh,ps1} scripts/tests/{postflight.{sh,ps1},postflight-worktree.cjs,worktree-landing.sh} \"$W\" && ! env $U bash \"$H/scripts/tests/postflight.sh\" >\"$S/h.log\" 2>&1 && grep -qF '[ERROR] MOE_WRAPPER_IN_WORKTREE:' \"$S/h.log\" && { env $U MOE_PROXY_PATH=/none bash \"$W/scripts/moe-agent.sh\" --project \"$S\" --role worker --no-start-daemon --no-loop >\"$S/s.log\" 2>&1; test $? -eq 1; } && grep -qF '[ERROR] MOE_WRAPPER_IN_WORKTREE:' \"$S/s.log\" && env $U node \"$W/scripts/tests/postflight-safe.mjs\" bash && env $U bash \"$W/scripts/tests/worktree-landing.sh\" && bash \"$W/scripts/tests/parity-check.sh\"\n\nWhat the bash leg proves:\n- the governor's repro fails on WT-13's landed completion bytes (task-head, $B);\n- a seat-shaped launch of the W copy without the seam exits 1 with the refusal line. MOE_PROXY_PATH=/none and --no-start-daemon mean nothing could reach a daemon even if the guard failed open;\n- from the W copy, postflight-safe prints failureClass NONE. That covers every postflight.sh case, both node suites and the new wt-guard cases;\n- worktree-landing.sh passes all cases, and parity-check passes.\nExpect exit 0.\n\nPS 5.1 LEG, verbatim:\nP=$(mktemp -d /mnt/d/moe-scratch/3c4be125-ps.XXXXXX) && git -C \"$P\" init -q && W=\"$P/.worktrees/task-x\" && mkdir -p \"$W\" && git archive HEAD scripts|tar -x -C \"$W\" && cp --parents scripts/moe-agent.{sh,ps1} scripts/tests/{postflight.{sh,ps1},postflight-worktree.cjs,worktree-landing.sh} \"$W\" && cd \"$W\" && { powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'scripts\\moe-agent.ps1' -Project \"$(wslpath -w \"$P\")\" -WorkerId worker-x -Role worker -NoStartDaemon -NoLoop >\"$P/s.log\" 2>&1; test $? -eq 1; } && grep -qF '[ERROR] MOE_WRAPPER_IN_WORKTREE:' \"$P/s.log\" && \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell && powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'scripts\\tests\\worktree-landing.ps1'\n\nExpect exit 0: the ps1 seat probe is refused, postflight-safe powershell prints NONE, and worktree-landing.ps1 exits 0.\n- Windows git accepts a WSL-created D: scratch repo (probed 2026-11-02).\n- pwsh 7 is optional (`... postflight-safe.mjs pwsh`); CI runs it.\n- On a native Windows seat, build the same `git init` + .worktrees\\task-x copy in PowerShell and run the same three checks.\n\nOn any failure:\n- Re-run that harness raw from the same copy (postflight-safe hides output).\n- Fix only within the six files, then run BOTH legs fresh again.\n- Save each leg's command, exit code and output tail.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/worktree-landing.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/worktree-landing.sh"
+      ],
+      "note": "Both legs ran fresh and concurrently, verbatim, from /mnt/d/moe-scratch/3c4be125-{bash,ps}-leg.sh, detached with set -m nohup (17:26:53Z start).\nBASH LEG: EXIT=0 at 18:05:32Z (S=/mnt/d/moe-scratch/3c4be125.6Ol56B, B=072dd78c).\n- h.log (WT-13 bytes at task-head) shows [ERROR] MOE_WRAPPER_IN_WORKTREE.\n- The seat probe s.log shows exit 1 and the refusal line.\n- postflight-safe: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}.\n- worktree-landing 18 passed, 0 failed; PASS parity-check.sh.\nPS 5.1 LEG: EXIT=0 at 18:09:36Z (P=/mnt/d/moe-scratch/3c4be125-ps.EIIwqo).\n- The ps1 seat probe exits 1 with `[ERROR] MOE_WRAPPER_IN_WORKTREE: D:\\...\\task-x\\scripts\\moe-agent.ps1 ...`.\n- postflight-safe: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}.\n- worktree-landing.ps1: 18 passed, 0 failed.\nOverlay check: cmp shows the six W-copy files in both legs byte-identical to the working tree. At launch, peers' dirty mention-provenance.ps1 (e856c246) and worktree-e2e.cjs (WT-19b) were outside the overlay; git archive HEAD supplied them.",
+      "startedAt": "2026-11-02T17:26:27.166Z",
+      "completedAt": "2026-11-02T18:10:01.200Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "5. Adversarial self-review, then complete_task. Load adversarial-self-review, then check:\n\n(1) Only the refusal condition reads the seam. WT-13's detection, message and exit are byte-identical: `git diff` shows only the condition and comments.\n\n(2) `git grep -n MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER` lists only the six files: never moe-team.*, moe-jetbrains/**, moe-vscode/**, packages/** or docs/**. This is the evidence that real launch paths never set it.\n\n(3) Mutants. Run one at a time in scratch copies, never the shared tree, and restore each afterwards (mem:gotcha-postflight-worktree-mutant-copy):\n- M1: sh condition reverted to `if moe_wrapper_in_worktree \"$SCRIPT_DIR\"; then` → wt-guard fails at wt-guard-optout.\n- M2: sh test changed to `[ -z \"${MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:-}\" ]` → wt-guard fails at wt-guard-optout-strict ('true').\n- M3: ps1 `-and ... -cne '1'` removed → wt-guard fails under PS 5.1.\n- M4: postflight.sh export deleted in a W copy → that copy's postflight.sh fails at its first launch with MOE_WRAPPER_IN_WORKTREE.\n- M5: launch()'s default key deleted in a W copy → `MOE_WORKTREE_ONLY=wt-board` from that copy fails with the refusal.\nEach kill must be the named AssertionError or refusal line, never a harness fault.\n\n(4) Concurrency and state: the seam is a read-only env lookup, with no files and no locks, so concurrent seats or harnesses cannot race on it. A real seat's env never has it, and WSL interop does not forward it to Windows processes (each harness sets it per engine).\n\n(5) Size: `git diff --numstat` on the six files should show under 60 net lines.\n\nThen:\n- If any bytes change, re-run both legs.\n- Call complete_task with the bash-leg verification (command, exitCode, outputTail).\n- Report modifiedFiles as exactly the six files.\n- The summary must carry: the RED repro; the PS-leg command, exit code and JSON line; and the mutant kills.\n\nThis step adds no error handling of its own: any test failure loops back to step 4.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/worktree-landing.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/worktree-landing.sh"
+      ],
+      "note": "Adversarial self-review (skill loaded). No bytes changed after step 4's legs.\n(1) The diff shows only the two refusal conditions plus comments; detection, message and exit 1 are untouched.\n(2) `git grep -n MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER -- ':!.moe'` hits exactly the six files: wrappers 1 each, postflight.sh 1, postflight.ps1 1, cjs 3, worktree-landing.sh 1. Nothing in moe-team.*, moe-jetbrains, moe-vscode, packages or docs.\n(3) Mutants, each in its own scratch copy (/mnt/d/moe-scratch/3c4be125-m*), all killed by the named line, never a harness fault:\n- M1 `wt-guard-optout: seam '1', exit 1`;\n- M2 `wt-guard-optout-strict: seam 'true', exit 0, no MOE_WRAPPER_IN_WORKTREE refusal`;\n- M3 (PS 5.1) `wt-guard-optout: seam '1', exit 1`;\n- M4: the W copy's postflight.sh rc=1 with the [ERROR] MOE_WRAPPER_IN_WORKTREE line;\n- M5: wt-board FAILED with the refusal in its log (the unmutated M5ctl passed).\n(4) The seam is a read-only env lookup with no IO and no locks. `[ != 1 ]` is a string compare, so '01' is refused too. A real seat's env never has it. Theoretical: postflight.{sh,ps1} export it process-wide, so a future guard test there must unset it per launch. An operator exporting it globally would bypass the guard; accepted by design, since the name is test-only.\n(5) Size: +31/-4, 27 net.",
+      "startedAt": "2026-11-02T18:10:02.077Z",
+      "completedAt": "2026-11-02T18:10:25.607Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote, now on the worktree-switch path. After the switch, every wrapper-lane row (WT-10M first) runs postflight/worktree-landing harnesses from its task worktree. WT-13's MOE_WRAPPER_IN_WORKTREE guard refuses those wrapper copies, so their verification cannot pass. The switch gate task-6519ed91 now depends on this row. Plan the harness-only opt-out; dependsOn WT-13 keeps it after WT-13 in the shared lane.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [],
+  "priority": "HIGH",
+  "order": 38,
+  "comments": [
+    {
+      "id": "comment-9328a06fc9aa4aefa5ee39b821a65767",
+      "author": "governor-e6b40560",
+      "content": "Governor, about 15:16Z, for the planner. This row is now a prerequisite of the worktree-switch gate, task-6519ed91, and is HIGH. Please plan it promptly, because it is on the switch's critical path.\n\n**Constraints:**\n- The fix must let the wrapper test harnesses run from inside a task worktree: postflight.{sh,ps1}, worktree-landing.{sh,ps1} and parity-check. Real seats launched from a worktree copy must still be refused, as WT-13's §6.1 guard intends. So use a harness-scoped opt-out: an env var that the harnesses set and the real launch paths never set. Do not use a blanket bypass.\n- Both twins change together, and parity-check.sh must pass.\n- dependsOn WT-13 (task-fbe8e388) keeps this row after WT-13 in the shared lane.\n- WT-19b (task-48aafb88) also runs after WT-13. It owns only scripts/tests/worktree-e2e.cjs. If your plan touches that file, add dependsOn on WT-19b.\n- Show DoD evidence with a repro: copy scripts/ into <repo>/.worktrees/task-x/ and run its postflight.sh. It fails on HEAD and passes with the fix. Also show a real seat launch from W is still refused.",
+      "timestamp": "2026-11-02T15:15:59.769Z"
+    },
+    {
+      "id": "comment-9ad5a82e2b6240c09851bce35e7d74d7",
+      "author": "governor-e6b40560",
+      "content": "Governor note for QA (18:13Z). This row's completion 7c60841f is on origin, and nothing else is editing these files right now, so the working tree equals HEAD for this row's paths. Size is +31/-4 non-board, well under the cap.\nThis is the last code prerequisite of the worktree switch (gate task-6519ed91). Because it changed wrapper bytes after WT-19b's dry run, I am re-running WT-19b's verification command on 7c60841f myself (snapshot clone, MOE_/CLAUDE env removed). Please review as usual. If you reject with a change to the bytes, say so plainly, and I will re-run the dry run on the fixed commit.",
+      "timestamp": "2026-11-02T18:12:23.053Z"
+    },
+    {
+      "id": "comment-29382c0470ec42b6b32ded32c9909117",
+      "author": "qa-1106e678",
+      "content": "QA, about 19:10Z: approved 7c60841f as landed, with no byte changes. Your WT-19b dry-run re-run on 7c60841f is still the right commit. Both verification legs (bash, then PS 5.1) re-ran green from scratch .worktrees/task-x copies. Evidence is in the approval summary.",
+      "timestamp": "2026-11-02T19:10:29.781Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T15:03:45.669Z",
+  "updatedAt": "2026-11-02T19:11:16.946Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T15:15:39.522Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T15:15:49.192Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T19:10:10.261Z",
+    "wallClockMs": 14061069
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-b49a5155",
+    "qa-1106e678"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T15:45:57.024Z",
+  "executionContract": {
+    "intendedBehavior": "A worker can run postflight.{sh,ps1}, worktree-landing.{sh,ps1} and parity-check green from inside its task worktree.\n\nThe postflight and worktree-landing harnesses give the wrapper copies they launch MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1. Both wrappers skip WT-13's MOE_WRAPPER_IN_WORKTREE refusal only when that variable is exactly '1'.\n\nEvery other launch of a wrapper under <repo>/.worktrees/task-* is still refused with exit 1, before any daemon, config or claim side effect. That covers real seats, IDE and moe-team launches, a seat-shaped launch, and wt-guard's own refusal cases.\n\nNothing else in the wrappers reads the variable.",
+    "acceptanceCriteria": [
+      "Governor repro: a copy of WT-13's landed scripts/ at <scratch git repo>/.worktrees/task-head/ fails postflight.sh with [ERROR] MOE_WRAPPER_IN_WORKTREE:. A copy of HEAD plus this task's six files at .worktrees/task-x/ passes postflight-safe bash (failureClass NONE), worktree-landing.sh and parity-check.sh.",
+      "PS 5.1: from a <scratch git repo>/.worktrees/task-x/ copy, postflight-safe powershell reports NONE and worktree-landing.ps1 exits 0.",
+      "A seat-shaped launch of the W copy's moe-agent.sh and moe-agent.ps1 without the variable exits 1 and prints [ERROR] MOE_WRAPPER_IN_WORKTREE:.",
+      "wt-guard, on both engines: the four WT-13 cases pass unchanged. The registered-W copy launches (exit 0, CLI ran) with the variable set to '1'. With 'true', ' 1' and '0' it is refused, with no RPC and no CLI.",
+      "git grep finds MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER only in scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/postflight.sh, scripts/tests/postflight.ps1, scripts/tests/postflight-worktree.cjs and scripts/tests/worktree-landing.sh.",
+      "No existing postflight or worktree-landing case, assertion, --list output or worktree-landing.ps1 $expectedCases entry changes."
+    ],
+    "invariants": [
+      "WT-13's detection (moe_wrapper_in_worktree / $moeInWorktree), its message text and its exit 1 are unchanged.",
+      "No real launch path sets the variable: not the IDE plugins, moe-team, runbooks or docs.",
+      "Shared-checkout mode behaviour is unchanged (epic rail 4). Both twins stay in parity, and bash scripts/tests/parity-check.sh passes.",
+      "The held-out worktree-landing cases are unchanged; only the suite's launch env gains the key."
+    ],
+    "compatibility": [
+      "postflight-safe.mjs, worktree-landing.ps1, CI's harness commands and the shared fake proxy are unchanged.",
+      "Any value other than exactly '1' (unset, 'true', ' 1', '0') keeps today's refusal."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh: the condition of the MOE_WRAPPER_IN_WORKTREE refusal `if` after moe_wrapper_in_worktree, plus its comment.",
+      "scripts/moe-agent.ps1: the condition of `if ($moeInWorktree)`, plus its comment.",
+      "scripts/tests/postflight-worktree.cjs: one key in launch()'s env object, and two cases appended to wtGuard with its header comment.",
+      "scripts/tests/postflight.sh and scripts/tests/postflight.ps1: one env line each at the top, beside MOE_ACCOUNT_ROTATION.",
+      "scripts/tests/worktree-landing.sh: one key in the WTJS suite's launch env, plus a comment."
+    ],
+    "reuse": [
+      "The MOE_POSTFLIGHT_TEST_ test-seam prefix, as in MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF (docs/CONFIGURATION.md lists it as 'Test seam only').",
+      "launch()'s existing knob and null-deletion mechanism, instead of a new option.",
+      "The harness-top env pattern: export MOE_ACCOUNT_ROTATION=off and $env:MOE_ACCOUNT_ROTATION = 'off'."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh, about lines 23-35 in WT-13's working tree on 2026-11-02: moe_wrapper_in_worktree, then `if moe_wrapper_in_worktree \"$SCRIPT_DIR\"; then` echo [ERROR] MOE_WRAPPER_IN_WORKTREE ... exit 1. Re-read it at HEAD once WT-13 lands.",
+      "scripts/moe-agent.ps1, about lines 117-139: `$moeInWorktree = & {...}`, then `if ($moeInWorktree) { [Console]::Error.WriteLine('[ERROR] MOE_WRAPPER_IN_WORKTREE: ...'); exit 1 }`.",
+      "scripts/tests/postflight-worktree.cjs: `inherited` scrubs MOE_*. launch() builds env as {...inherited, MOE_PROXY_PATH, ..., ...knobs}, then deletes null values. wtGuard is registered as case 'wt-guard'. MOE_WORKTREE_ONLY selects cases.",
+      "scripts/tests/worktree-landing.sh: the WTJS suite's `inherited` scrubs MOE_|CLAUDE|GIT_|FAKE_, and its launch env (about line 286) holds MOE_ACCOUNT_ROTATION:'off'. worktree-landing.ps1 extracts that suite between the WTJS markers.",
+      "postflight-owner-guard.cjs inherits MOE_* (it filters FAKE_/OG_ only). postflight.sh's frozen suite inherits everything except GIT_/HOME/TMP. postflight.sh:9 and postflight.ps1:4 set MOE_ACCOUNT_ROTATION at the top.",
+      "parity-check.{sh,ps1} only grep the wrappers and never launch them."
+    ],
+    "checkRefs": [
+      "U=$(env|awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \",$1}') && B=$(git log -1 --format=%H -E --grep='^(feat|fix)\\(task-fbe8e388' HEAD) && S=$(mktemp -d /mnt/d/moe-scratch/3c4be125.XXXXXX) && git -C \"$S\" init -q && H=\"$S/.worktrees/task-head\" && W=\"$S/.worktrees/task-x\" && mkdir -p \"$H\" \"$W\" && git archive \"$B\" scripts|tar -x -C \"$H\" && git archive HEAD scripts|tar -x -C \"$W\" && cp --parents scripts/moe-agent.{sh,ps1} scripts/tests/{postflight.{sh,ps1},postflight-worktree.cjs,worktree-landing.sh} \"$W\" && ! env $U bash \"$H/scripts/tests/postflight.sh\" >\"$S/h.log\" 2>&1 && grep -qF '[ERROR] MOE_WRAPPER_IN_WORKTREE:' \"$S/h.log\" && { env $U MOE_PROXY_PATH=/none bash \"$W/scripts/moe-agent.sh\" --project \"$S\" --role worker --no-start-daemon --no-loop >\"$S/s.log\" 2>&1; test $? -eq 1; } && grep -qF '[ERROR] MOE_WRAPPER_IN_WORKTREE:' \"$S/s.log\" && env $U node \"$W/scripts/tests/postflight-safe.mjs\" bash && env $U bash \"$W/scripts/tests/worktree-landing.sh\" && bash \"$W/scripts/tests/parity-check.sh\"",
+      "P=$(mktemp -d /mnt/d/moe-scratch/3c4be125-ps.XXXXXX) && git -C \"$P\" init -q && W=\"$P/.worktrees/task-x\" && mkdir -p \"$W\" && git archive HEAD scripts|tar -x -C \"$W\" && cp --parents scripts/moe-agent.{sh,ps1} scripts/tests/{postflight.{sh,ps1},postflight-worktree.cjs,worktree-landing.sh} \"$W\" && cd \"$W\" && { powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'scripts\\moe-agent.ps1' -Project \"$(wslpath -w \"$P\")\" -WorkerId worker-x -Role worker -NoStartDaemon -NoLoop >\"$P/s.log\" 2>&1; test $? -eq 1; } && grep -qF '[ERROR] MOE_WRAPPER_IN_WORKTREE:' \"$P/s.log\" && \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell && powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'scripts\\tests\\worktree-landing.ps1'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: one env test seam, MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER, honoured only when it is exactly '1'. This follows the governor's 15:16Z constraint comment-9328a06f: an env var that the harnesses set and real launch paths never set, not a blanket bypass.\n\nRejected:\n(1) Scoping the guard to launches whose --project is in the wrapper's own repository. It needs no harness edits, but a real seat launched from W against another project would start. That breaks the governor's constraint and WT-13's documented §6.1 rule.\n(2) A seam whose value names the allowed W path. It needs path canonicalization across WSL, MSYS and Windows, for no gain: the threat is the worker's own W anyway.\n(3) The caller setting the var on the verification command line. The cjs suites scrub MOE_*, and WT-14's gate scrubs MOE_* before starting the harness, so the harness itself has to set it.\n(4) A non-MOE_ name that slips through the suites' env filters. That is hidden coupling to the filter regexes, and wt-guard's refusal cases would inherit it too.\n(5) A notice line whenever the seam is used. Harness output would then depend on where it runs, and in-place and from-W runs could diverge.",
+    "codebaseInsights": "How each harness passes env to the wrapper:\n- postflight.sh's direct \"$WRAPPER\" launches inherit the harness env. postflight.sh already sets MOE_ACCOUNT_ROTATION=off at its top, and postflight.ps1 has the twin line.\n- postflight.sh/ps1 run three node suites:\n  - the frozen suite inherits everything except GIT_/HOME/TMP;\n  - postflight-owner-guard.cjs inherits MOE_*, filtering only FAKE_/OG_;\n  - postflight-worktree.cjs scrubs MOE_* and builds each launch env as {...inherited, ..., ...knobs}, then deletes null values. That makes a per-copy default a one-liner, and only launch() spawns the full wrapper there; the other engine spawns extract functions.\n- worktree-landing.sh's WTJS suite scrubs MOE_|CLAUDE|GIT_|FAKE_. worktree-landing.ps1 extracts that same suite, so one key covers both engines.\n\nOther facts:\n- parity-check only greps the wrappers, so it already runs from W.\n- postflight.sh references ROOT_DIR only for scripts/. postflight-safe, worktree-landing and parity-check need only a scripts/ copy.\n- Windows git accepts a git-init'ed scratch repo created from WSL on D: (probed 2026-11-02: show-prefix `.worktrees/task-x/scripts/`).\n- Both leg commands were syntax-checked with bash -n. cp --parents with nested braces copies exactly the six files, and the `^(feat|fix)\\(task-<id8>` grep finds WT-12's completion 1f9950ee.",
+    "risks": "- WT-13 (fbe8e388) is still WORKING (4/6 steps). Its guard, wtGuard and launch() may change before it lands. Edit the landed shape, never its detection.\n- worktree-landing.sh is WT-08T's held-out suite (only commit 8ad04de7). This row adds one launch-env key and changes no case. A later row that checks \"held-out unchanged\" with `git diff 8ad04de7` must compare against this row's completion instead (#governors note).\n- The other launcher suites (agent-git-guard, protected-agent-command, agent-runtime, wave1-pilot, mention-provenance, worktree-e2e) still refuse from W. WT-19's full-regression command runs worktree-e2e.cjs. They are filed as a separate follow-up row, out of this row's scope.\n- Peers' dirty bytes could enter the overlay copy; check `git status --short scripts/` first.\n- ps1 BOM and PS 5.1 parse.\n- The bash leg needs set -m for scenario W's SIGINT.\n- Long legs: about 20 min for bash and 30-35 min for PS 5.1; run them concurrently.\n- All six files are declared by other open rows (contested at landing), so edit with the Edit tool to leave the TOOL witness.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-worktree.cjs",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/worktree-landing.sh",
+      "docs/plans/2026-10-30-per-task-worktrees.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "78642f851af4f5adba54fedff9143328c24d9892",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T15:45:57.052Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "046f2ead2a2bdb27850262e9db5e703e232c9f7a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-0fcb7226@2026-11-02T15:15:47Z",
+      "paths": [
+        ".moe/tasks/task-83515358babb403480bbef769d9726f2.json",
+        ".moe/tasks/task-86431c315e524b3b89af3bb3d2e7c98d.json",
+        ".moe/tasks/task-e856c24678e94ff4b38ef79c99069e24.json"
+      ],
+      "recordedBy": "architect-0fcb7226",
+      "recordedAt": "2026-11-02T17:01:36.422Z",
+      "treeId": "f81852878d7f1f5f6f100bb608e23630e0b2087a",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "7c60841f4b2be6adeac6d399e36f3590fe43f3fa",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T17:20:57Z",
+      "paths": [
+        ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+        ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/worktree-landing.sh"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T18:11:43.048Z",
+      "treeId": "cd607dbefb1f73f9fa3a8a3ce52ea0ef72f6ec21",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/tests/postflight-worktree.cjs",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "0d8422ce1f1302f8bc2ecff22d88581bb938b5fc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T18:25:12Z",
+      "paths": [
+        ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+        ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T19:11:16.946Z",
+      "treeId": "6d50efbb8fda392063fe0cc2cf01e3905761975c",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/worktree-landing.sh",
+    ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+    ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+    ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T18:25:12Z",
+    "at": "2026-11-02T19:11:16.946Z"
+  },
+  "workStartedAt": "2026-11-02T17:22:30.642Z",
+  "reviewStartedAt": "2026-11-02T18:10:47.317Z",
+  "verification": {
+    "command": "U=$(env|awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \",$1}') && B=$(git log -1 --format=%H -E --grep='^(feat|fix)\\(task-fbe8e388' HEAD) && S=$(mktemp -d /mnt/d/moe-scratch/3c4be125.XXXXXX) && git -C \"$S\" init -q && H=\"$S/.worktrees/task-head\" && W=\"$S/.worktrees/task-x\" && mkdir -p \"$H\" \"$W\" && git archive \"$B\" scripts|tar -x -C \"$H\" && git archive HEAD scripts|tar -x -C \"$W\" && cp --parents scripts/moe-agent.{sh,ps1} scripts/tests/{postflight.{sh,ps1},postflight-worktree.cjs,worktree-landing.sh} \"$W\" && ! env $U bash \"$H/scripts/tests/postflight.sh\" >\"$S/h.log\" 2>&1 && grep -qF '[ERROR] MOE_WRAPPER_IN_WORKTREE:' \"$S/h.log\" && { env $U MOE_PROXY_PATH=/none bash \"$W/scripts/moe-agent.sh\" --project \"$S\" --role worker --no-start-daemon --no-loop >\"$S/s.log\" 2>&1; test $? -eq 1; } && grep -qF '[ERROR] MOE_WRAPPER_IN_WORKTREE:' \"$S/s.log\" && env $U node \"$W/scripts/tests/postflight-safe.mjs\" bash && env $U bash \"$W/scripts/tests/worktree-landing.sh\" && bash \"$W/scripts/tests/parity-check.sh\"",
+    "exitCode": 0,
+    "outputTail": "2026-11-02T17:26:53Z\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\nPASS parity-check.sh\nS=/mnt/d/moe-scratch/3c4be125.6Ol56B B=072dd78cf81c87ba529598f90aa21f3a3aae6821\n2026-11-02T18:05:32Z\nEXIT=0",
+    "reportedAt": "2026-11-02T18:10:47.317Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Harness-only opt-out for WT-13's MOE_WRAPPER_IN_WORKTREE guard. The seam is MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER, honoured only when it is exactly '1'.\n\nChanges (six files, +31/-4):\n- Wrapper twins: only the refusal condition changes (sh `[ \"${X:-}\" != 1 ] &&`, ps1 `-and $env:X -cne '1'`). Detection, message and exit 1 are byte-identical.\n- postflight.sh and postflight.ps1 set the seam at the top.\n- postflight-worktree.cjs launch() gives it to the suite's own wrapper only (copies get null). New wt-guard cases: wt-guard-optout (seam '1', exit 0, CLI ran) and wt-guard-optout-strict ('true', ' 1', '0': exit 1, refusal, no RPC or CLI).\n- worktree-landing.sh adds one launch-env key. No case or list changes; worktree-landing.ps1 is untouched.\n\nEvidence:\n- RED: a HEAD scripts copy at <scratch git repo>/.worktrees/task-x made postflight.sh exit 1 in 0.2s with [ERROR] MOE_WRAPPER_IN_WORKTREE:.\n- Bash leg (verification above): exit 0. The task-head (072dd78c) repro is refused, the seat probe exits 1 with the refusal, postflight-safe bash gives NONE, worktree-landing 18/18, parity PASS.\n- PS 5.1 leg: exit 0 (/mnt/d/moe-scratch/3c4be125-ps-leg.sh, the plan's command verbatim). The ps1 seat probe exits 1 with the refusal, postflight-safe powershell gives {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}, and worktree-landing.ps1 gives 18 passed, 0 failed.\n- wt-guard GREEN on sh and on PS 5.1 (1 ok).\n- Mutant kills, each in a scratch copy:\n  - M1 sh revert: wt-guard-optout seam '1' exit 1;\n  - M2 -z: wt-guard-optout-strict seam 'true' exit 0;\n  - M3 ps1 revert (PS 5.1): wt-guard-optout;\n  - M4 postflight.sh export removed in a W copy: refusal at the first launch;\n  - M5 launch() key removed in a W copy: wt-board fails with the refusal (the control passed).\n- `git grep -- ':!.moe'` finds the seam only in the six files; .moe/tasks board records mention it only as plan text.\n- Overlay copies matched the working tree byte for byte (cmp",
+  "touchedFiles": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/worktree-landing.sh"
+  ],
+  "completedAt": "2026-11-02T19:10:10.261Z",
+  "reviewCompletedAt": "2026-11-02T19:10:10.261Z",
+  "reviewSummary": "Approved. I reviewed completion 7c60841f (on moe/work-2026-10-24 and origin): +31/-4 (27 net) over the six approved files. scripts/ is identical at 7c60841f and HEAD 7262e53f, and the tree was clean during the runs.\n\nDiff:\n- sh `[ \"${SEAM:-}\" != 1 ] &&` and ps1 `-and $env:SEAM -cne '1'`. WT-13's detection, message and exit 1 are unchanged, and the ps1 BOM is kept.\n- The harnesses set the seam at the top. cjs launch() gives wrapper copies null, so the four WT-13 wt-guard cases still test real refusals.\n- New cases: optout ('1' launches) and optout-strict ('true', ' 1', '0' are refused, with no CLI and no RPC). That assertion is meaningful because launch() clears evidence-rpcs.jsonl on every run.\n- worktree-landing.sh gains one env key; no case or list change.\n- Outside .moe, git grep finds the seam only in the six files.\n\nRe-ran task.verification verbatim, both legs concurrently:\n- Bash, EXIT=0:\n  - WT-13's own bytes (072dd78c) at task-head refuse with [ERROR] MOE_WRAPPER_IN_WORKTREE:.\n  - The W seat probe exits 1 with the refusal.\n  - postflight-safe bash failureClass NONE; worktree-landing 18/0/0; PASS parity-check.\n- PS 5.1 (checkRef 2), EXIT=0: the ps1 seat probe exits 1 with the refusal, postflight-safe powershell gives NONE, worktree-landing.ps1 18/0.\n- In both legs, cmp showed the six W files identical to 7c60841f.\n\nMutant: the sh condition changed to `-z`, run with wt-guard only. It was killed by \"wt-guard-optout-strict: seam 'true', exit 0\"; the unmutated control passed.\n\nDoD and all six acceptance criteria are met; parity and shared-checkout mode are unchanged. The other launcher suites and the docs seam row belong to follow-up task-86431c31. Complexity pass: nothing to cut. Logs are in /mnt/d/moe-scratch/qa-3c4be125.",
+  "requiredCheckAtDone": null
+}

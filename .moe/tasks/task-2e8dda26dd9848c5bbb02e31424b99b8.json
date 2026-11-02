@@ -1,0 +1,277 @@
+{
+  "id": "task-2e8dda26dd9848c5bbb02e31424b99b8",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10d5] Typed guest shim argument schemas",
+  "description": "Objective: give the guest MCP shim from CQ-R10d1 (task-9faf1ef30b0a4264b6dccce1e7bf5b1d) typed argument schemas, so that a codex seat in the guest can pass arrays, objects and numbers.\n\nWhy: the R10d1 contract builds each tool's inputSchema from argument keys alone. Codex's MCP schema sanitizer gives every property without a type the type string; see sanitize_json_schema in codex-rs core/src/openai_tools.rs and its test test_mcp_tool_property_missing_type_defaults_to_string. A codex worker or QA seat would therefore send modifiedFiles, verification, blockedOnTaskIds, failedDodItems, issues and commentsLimit as strings, and the daemon's schemas would refuse those calls. Claude seats are not affected. The human chose this follow-up in the architect REPL on 2026-10-30: R10d1 stays key-only, and the types come in a sibling slice ordered before the R10d final task.\n\nDeliverable:\n- scripts/local-runner/guest-mcp-tools.json gives each allowlisted key the property schema that the committed daemon inputSchema gives it (packages/moe-daemon/src/tools/<name>.ts). At minimum: type, items.type for arrays, and nested object types where the daemon declares them, for example complete_task's verification. Choose the exact fragment subset and justify it; descriptions are optional.\n- guest-mcp-shim.py load_tools accepts and validates the new shape and fails closed: a malformed table serves no tools. tools/list emits the fragments and keeps additionalProperties false.\n- A drift test compares the keys with guest-bridge.mjs TOOLS and the fragments with the daemon schemas. The planner chooses the source and records the trade-off:\n  - the built packages/moe-daemon/dist tool definitions: CI builds the daemon before the local-runner step, but a local run needs a built daemon;\n  - or a bounded static read of the TypeScript source.\n- Every existing SH row in scripts/tests/local-runner-agents.test.mjs still passes. buildUserData and readiness pick up the new tools.json bytes with no test edits, because R10d1 computes the expected content from the repo files.\n\nNot in scope: guest-bridge.mjs TOOLS and scopeRequest, the daemon schemas, the host session, the CLI configs (CQ-R10d4), and any verified-local or isolation claim.\n\nDependencies: this task depends on CQ-R10d4 (task-60626bee13034a178fed55c697d14d06) only to serialize the shared agents test file and shim files along the R10d chain. The CQ-R10d orchestrator (task-90847011452544dc868039ff435b018b) waits on this task.\n\nVerification command (fresh run, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs (on WSL, use env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "For every allowlisted key, guest-mcp-tools.json carries the type that the daemon tool inputSchema gives that property, plus the item type for arrays. The shim's tools/list emits those types, and no emitted property lacks a type. Shown by tests in scripts/tests/local-runner-agents.test.mjs.",
+    "A drift test fails when tools.json disagrees with guest-bridge.mjs TOOLS on the keys, or with the daemon tool inputSchemas on the types.",
+    "load_tools refuses a malformed typed table and serves no tools, and every existing CQ-R10d1 SH row still passes unchanged in behavior.",
+    "The verification command exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Covers DoD 1-3. Load test-driven-development.\n\nStart from the LANDED bytes of scripts/tests/local-runner-agents.test.mjs: R10d1's SH1-SH9 plus the rows R10d2 (AC) and R10d3 added. Keep every row. If R10d1 renamed a helper named below when it landed, make the same change to the landed equivalent.\n\n1. Helpers.\n- node:fs gains existsSync.\n- TABLE = JSON.parse(readFileSync(TOOLS_FILE, 'utf8')): the checked-in typed table, role -> tool -> key -> fragment. PROJECTION (role -> tool -> TOOLS args) stays.\n- listed(role) keeps the names and key order from TOOLS[role], but each property's schema becomes TABLE[role][name][key] instead of {}:\n  {name, inputSchema: {type: 'object', properties: Object.fromEntries(args.map(key => [key, TABLE[role][name][key]])), additionalProperties: false}}\n  SH1 and SH8 use it, so SH8 needs no other edit.\n- launch() gains a `tools` option, default TOOLS_FILE, that replaces the TOOLS_FILE argv entry. Existing calls are unchanged.\n- typed(schema) drops the description keyword at every schema level and keeps everything else in order:\n  `const typed = ({ description, ...schema }) => ({ ...schema, ...(schema.items && { items: typed(schema.items) }), ...(schema.properties && { properties: Object.fromEntries(Object.entries(schema.properties).map(([key, value]) => [key, typed(value)])) }) });`\n  Never use a JSON.stringify replacer on 'description': it would also delete qa_reject's issue PROPERTY named description.\n- Optional: extract SH1's temp-file writes and its one load_tools spawnSync into helpers that TY3 reuses.\n\n2. SH1 moves to the typed shape with the same behavior. It still pins the keys to TOOLS, serves exactly MOE_ROLE's tools, serves none to unknown roles, refuses every malformed table, and loads the table at the size bound.\n- Replace the key-projection byte pin with two checks:\n  (a) the file is exactly `${JSON.stringify(TABLE)}\\n`, one compact line;\n  (b) TABLE mapped to role -> tool -> Object.keys(fragments) deepEquals PROJECTION.\n  The full pin to TOOLS plus the daemon is TY1's job.\n- Translate the load_tools cases so each still isolates its own refusal. A tool value [] becomes {}, and a listed key becomes a typed fragment:\n  - small = '{\"worker\":{\"moe.x\":{}}}';\n  - {\"moe.Get\":{}} and {\"get_context\":{}};\n  - duplicate key: {\"moe.x\":{\"a\":{\"type\":\"string\"},\"a\":{\"type\":\"string\"}}};\n  - duplicate role: {\"worker\":{\"moe.x\":{}},\"worker\":{}};\n  - bad key: {\"moe.x\":{\"1a\":{\"type\":\"string\"}}};\n  - the [1] case becomes a non-object fragment, {\"moe.x\":{\"a\":1}};\n  - the NaN case uses {}.\n  '{', '[]', {\"worker\":[]}, {\"moe.x\":\"view\"}, the invalid UTF-8 case and both size cases are unchanged.\n- The repo file's expected load_tools result becomes TABLE.\n\n3. New rows under a '// CQ-R10d5 typed argument schemas' section at the end of the file.\n\nTY1 (DoD 2): the drift test. It also runs on win32; timeout 60_000.\n- DAEMON_TOOLS = new URL('../../packages/moe-daemon/dist/tools/index.js', import.meta.url).\n- First: assert.ok(existsSync(DAEMON_TOOLS), 'build the daemon first: cd packages/moe-daemon && npm install && npm run build'). A missing build FAILS the row; it never skips.\n- `const daemon = new Map((await import(DAEMON_TOOLS.href)).getTools(null).map(tool => [tool.name, tool.inputSchema]))`.\n- For every role and tool of TOOLS:\n  - daemon.get(tool)?.additionalProperties is false, with the tool name as the message;\n  - every arg key is an own key of its properties, with the tool and key as the message.\n- expected = role -> tool -> key -> typed(daemon property), in TOOLS order. Then: assert.equal(readFileSync(TOOLS_FILE, 'utf8'), `${JSON.stringify(expected)}\\n`).\n- Anchors on expected, so a typed() bug cannot pass with a file regenerated by the same bug:\n  - complete_step.modifiedFiles = {type: 'array', items: {type: 'string'}};\n  - complete_task.verification = {type: 'object', properties: {command: {type: 'string'}, exitCode: {type: 'number'}, outputTail: {type: 'string'}}, required: ['command', 'exitCode'], additionalProperties: false};\n  - get_context.commentsLimit = {type: 'number'};\n  - qa_reject.issues.items.properties.description = {type: 'string'}.\n- A comment above TY1 says that tools.json is generated from TOOLS plus the built daemon's inputSchemas by exactly this projection, and is never hand-edited. It also says why the source is the built daemon and not src: heartbeat's ATTEMPT_PRESENCE_KINDS and qa_reject's VALID_ISSUE_TYPES enums exist only at runtime. CI builds the daemon before this step on all three OSes.\n\nTY2 (DoD 1; skip NO_GUEST). For worker and qa, read the shim's real tools/list through exchange:\n- per tool, [name, Object.keys(inputSchema.properties)] deepEquals TOOLS[role]'s [name, args], so the walk below is never empty;\n- every inputSchema has type 'object' and additionalProperties false;\n- a walk finds no property, array items or nested property without a string type. An array with no items counts as untyped. The flattened result must be []:\n  `const untyped = (schema, path) => typeof schema?.type !== 'string' ? [path] : [...(schema.type === 'array' ? untyped(schema.items, `${path}[]`) : []), ...Object.entries(schema.properties ?? {}).flatMap(([key, value]) => untyped(value, `${path}.${key}`))];`\n\nTY3 (DoD 3; skip NO_GUEST).\n- Let S = {type: 'string'} and nest(n) = n === 1 ? S : {type: 'array', items: nest(n - 1)}. Write each case as JSON.stringify({worker: {'moe.x': M}}).\n- load_tools returns {} for every M below:\n  - ['a'], the R10d1 key-list shape;\n  - {a: {}};\n  - {a: {type: X}} for X 'date', 'null', ['string', 'null'] and 1;\n  - {type: 'array'}, and {type: 'array', items: {}};\n  - items on a string, and enum ['1'] on a number;\n  - a string with description, default or $ref;\n  - an object with no properties, with properties [], with {b: {}}, or with a property named '1b';\n  - with properties {b: S}: required ['c'], ['b', 'b'], 'b' and [['b']];\n  - additionalProperties {};\n  - enum [], [1], ['a', 'a'], 'a' and [['a']];\n  - nest(9).\n- Positive control: GOOD = {s: {type: 'string', enum: ['a']}, n: {type: 'number'}, i: {type: 'integer'}, b: {type: 'boolean'}, d: nest(8), o: {type: 'object', properties: {c: S}, required: ['c'], additionalProperties: false}}. The table {worker: {'moe.x': GOOD, 'moe.y': {}}} loads unchanged (deepEqual).\n- End to end: a shim launched with `tools` set to the {a: {}} file answers tools/list with {tools: []} and a tools/call of moe.get_context with TOOL_DENIED.\n\n4. Run `node --test scripts/tests/local-runner-agents.test.mjs`; on WSL use the env -i form in step 3. Confirm each row is red for the right reason:\n- SH1(b): the key lists give array indices;\n- TY1: the bytes differ;\n- TY2: the properties are {};\n- TY3: the old shim loads ['a'] and refuses GOOD.\nEvery other row stays green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-agents.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-agents.test.mjs"
+      ],
+      "note": "Tests-first red: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-agents.test.mjs exited 1: 18 pass, 5 expected failures (SH1 key-list indices; SH8 shares listed() typed expectations; TY1 byte drift; TY2 untyped property; TY3 old key-list accepted). All other SH/AB rows retained and green. existsSync already imported by landed AB rows, so reused it. Three task paths were clean at start; peer/pre-existing dirty paths untouched. Landed shim lacks the plan-assumed _unique decoder; step 2 must add duplicate-key rejection for the approved SH1 duplicate cases, without changing tools/call decoding.",
+      "startedAt": "2026-10-30T08:34:32.321Z",
+      "completedAt": "2026-10-30T08:35:48.951Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implementation (DoD 1, DoD 3). Start from the LANDED shim bytes.\n\nError handling: the shim stays fail-closed.\n- A missing, unreadable, oversized, non-UTF-8, non-JSON or malformed typed table makes load_tools return {}, so the shim serves no tools. That covers one bad fragment anywhere and the R10d1 key-list shape.\n- The validators never raise on any decoded JSON value; RecursionError stays caught at decode, and the explicit depth bound keeps validation off Python's recursion limit.\n- tools/call's fixed errors and its relay are unchanged.\n- TY1 fails, never skips, without a daemon build.\n\nscripts/local-runner/guest-mcp-shim.py:\n1. Constants:\n   - MAX_SCHEMA_DEPTH = 8. A property fragment is depth 1, and each items or properties level adds 1. Today's deepest chain, qa_reject issues -> items -> type, reaches depth 3.\n   - KEYWORDS maps each accepted type to the keywords its fragment may carry beside 'type': 'string': {'enum'}, 'number': set(), 'integer': set(), 'boolean': set(), 'array': {'items'}, 'object': {'properties', 'required', 'additionalProperties'}.\n2. Private validators beside load_tools. Check types before any set(), len() or membership test, so ['string', 'null'] as a type is refused, never a TypeError. Use exact type() checks, as the file already does; a bool is not an int.\n   - A fragment is a dict at depth <= MAX_SCHEMA_DEPTH. Its 'type' is a str key of KEYWORDS, and it has no keys other than 'type' and KEYWORDS[type].\n   - array: 'items' is required, and is a fragment at depth + 1.\n   - object: 'properties' is required: a dict of KEY-matching names to fragments at depth + 1. 'required', if present, is a list of distinct str, each a key of properties. 'additionalProperties', if present, is a bool.\n   - string: 'enum', if present, is a non-empty list of distinct str.\n   The architect's prototype of these rules was about 25 lines.\n3. load_tools keeps its bounded read, size bound and strict decode. The table is valid only as a dict of role -> dict of TOOL-matching name -> dict of KEY-matching argument name -> fragment at depth 1. Anything else returns {}. Update its comment.\n4. _Shim.__init__ lists each tool as {'name': name, 'inputSchema': {'type': 'object', 'properties': fragments, 'additionalProperties': False}}. The loaded fragments are emitted as they are, in file order.\n5. call() is unchanged. `key not in self.tools[name]` is dict membership, so the shim still checks argument keys only. Values pass through unchanged; scopeRequest and the daemon stay the enforcement points. Do not add value validation.\n6. Header comment: tools.json gives each argument key its daemon property schema without descriptions, because codex's schema sanitizer types an untyped property as a string.\n\nscripts/local-runner/guest-mcp-tools.json: GENERATE it; never hand-edit it.\n1. Use the existing build in packages/moe-daemon/dist. NEVER run npm install or npm run build in the shared packages/moe-daemon: its prebuild rewrites the tracked src/generated files, and other sessions share dist.\n2. Before writing, confirm that the build is current for the 21 allowlisted (tool, key) pairs:\n   - print them with the command below, minus the write;\n   - compare them with the inputSchema literals in packages/moe-daemon/src/tools/{getContext,addComment,heartbeat,startStep,completeStep,completeTask,reportBlocked,qaApprove,qaReject}.ts.\n   On 2026-10-30 the architect found them identical against the build of 2026-10-29 18:44. getContext.ts changed after that build, but only outside the allowlist. If they differ, build the daemon in a scratch copy and generate from that copy.\n3. Run from the repo root, using step 3's env -i Node 24 form:\nnode --input-type=module -e \"import { writeFileSync } from 'node:fs'; import { TOOLS } from './scripts/local-runner/guest-bridge.mjs'; const { getTools } = await import('./packages/moe-daemon/dist/tools/index.js'); const daemon = new Map(getTools(null).map(tool => [tool.name, tool.inputSchema])); const typed = ({ description, ...schema }) => ({ ...schema, ...(schema.items && { items: typed(schema.items) }), ...(schema.properties && { properties: Object.fromEntries(Object.entries(schema.properties).map(([key, value]) => [key, typed(value)])) }) }); writeFileSync('scripts/local-runner/guest-mcp-tools.json', JSON.stringify(Object.fromEntries(Object.entries(TOOLS).map(([role, tools]) => [role, Object.fromEntries(Object.entries(tools).map(([tool, entry]) => [tool, Object.fromEntries(entry.args.map(key => [key, typed(daemon.get(tool).properties[key])]))]))]))) + '\\n')\"\n   It writes one compact LF line; the architect's scratch run wrote 1769 bytes.\n\nThen `node --test scripts/tests/local-runner-agents.test.mjs` must be all green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-mcp-shim.py",
+        "scripts/local-runner/guest-mcp-tools.json"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-mcp-shim.py",
+        "scripts/local-runner/guest-mcp-tools.json"
+      ],
+      "note": "Implemented depth-8 typed fragment validators and all-or-nothing loading; tools/list emits ordered schemas, tools/call and relay unchanged. Added table-only duplicate-key decoding because the landed R10d1 lacked the plan-assumed _unique hook; default request/response decoding remains unchanged. Read all nine source inputSchemas and enum definitions and compared all allowlisted properties with the existing dist output; match confirmed, no shared build/install. Generated compact LF tools.json (1769 bytes). Fresh focused env -i Node 24 agents suite: exit 0, 23/23 pass, no skips. git diff --check clean. Peer dirty paths untouched.",
+      "startedAt": "2026-10-30T08:35:48.975Z",
+      "completedAt": "2026-10-30T08:36:40.890Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE (DoD 4). From the repo root, run fresh:\n`node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs`\nOn WSL, run it as:\n`env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs`\nwith no MOE_* variables and POSIX python3 on PATH.\n- It must exit 0. Give complete_task its command, exitCode and output tail.\n- local-runner.test.mjs holds the R07 rows. They compute the buildUserData and readiness expectations from the repo files, so they must pass with NO edit. That is the evidence that bootstrap and readiness pick up the new tools.json bytes.\n- Record `git diff --numstat` for the three files in the completion summary.\n- If anything fails, edit only what the failure needs.\n- Never stage, revert or report other sessions' dirty paths.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Required fresh env -i Node 24 command exited 0: 274 tests, 273 pass, 1 platform skip, 0 failures (33.9s); R07 and SH9 untouched and green. Numstat: shim +46/-8, table +1/-1, agents tests +95/-14. Extra all-local-runner run: 481 tests, 464 pass, 14 failures, 3 skips. Root-cause investigation traced all 14 to active peer tests-first work: DB1-DB4 await task-2cf1c6be (worker-fe18a9a9); unlanded TC1-TC5/TT1-TT3 added during my session await task-1e7f5a2d (worker-55e6716a). No edits to their files, no duplicate bug. Final review will rerun the exact named suite in a read-only HEAD archive plus only my three-file overlay so peer in-flight tests are not misrepresented as passing.",
+      "startedAt": "2026-10-30T08:36:40.968Z",
+      "completedAt": "2026-10-30T08:39:16.656Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's own diff; this is the final step. Load adversarial-self-review. Read the diff as a hostile tools.json and a careless future editor.\n- Inputs: a 256 KiB table of nesting; a huge enum; unhashable values in type, required or enum; a bool where a str or int is expected; a fragment at depth 8 next to one at depth 9.\n- Can any decoded value raise out of load_tools? Does one bad fragment anywhere refuse the whole table?\n- Can any text in the table reach tools/list outside the six keywords?\n- Does the shim still check argument keys only?\n- Does TY1 fail, never skip, without a build?\n- Does typed() keep qa_reject's description property?\n\nRun the mutation probes in a scratch copy, never in the shared tree:\n- mktemp -d. Copy scripts/local-runner and scripts/tests into <tmp>/scripts/.\n- Symlink <tmp>/packages to the repo's packages directory, so TY1 finds the build. NEVER write through that link.\n- First confirm that an unmutated run passes, so no kill is just a missing build.\n- Run each probe as `timeout 120 node --test --test-name-pattern='^(SH1|SH8|TY[1-3]) ' <tmp>/scripts/tests/local-runner-agents.test.mjs`, and score it by exit code.\n\nEach mutant must be killed by the named rows:\n1. _fragment accepts any dict: TY3.\n2. items is optional for arrays: TY3.\n3. KEYWORDS['string'] also accepts 'description': TY3.\n4. The depth check uses <, so nest(8) is refused; or it is dropped, so nest(9) loads: TY3.\n5. The required-subset check is dropped: TY3.\n6. load_tools still accepts the key-list shape: TY3.\n7. tools/list emits {} per key again: SH1, SH8, TY2.\n8. The copy's tools.json types commentsLimit as 'string': TY1, while SH1 stays green, which isolates the type drift.\n9. The copy's tools.json drops modifiedFiles' items: TY1, SH1.\n10. The copy's guest-bridge.mjs adds 'resourceId' to report_blocked: SH1(b), TY1. This is the key drift against TOOLS.\n11. typed() becomes a JSON.stringify replacer that drops every description key: TY1.\n\nIf a mutant survives, add a test that kills it, unless the mutant is provably equivalent; then say why in the step note. If this review changes any byte, re-run the step-3 command and give complete_task that fresh output. Then kill any python3 you started (match by your scratch path) and remove the scratch dir. Report the three files in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-mcp-shim.py",
+        "scripts/local-runner/guest-mcp-tools.json",
+        "scripts/tests/local-runner-agents.test.mjs"
+      ],
+      "note": "Adversarial review read own diff; strengthened TY3 with null/bool/unhashable inputs and mixed valid/invalid siblings incl. depth8 beside9. All 15 scratch mutants killed by named rows (both depth variants plus missing-build, duplicate-key and shared projection/generator description-bug probes); unmutated baselines passed, no timeouts. Additional 256KiB deep JSON, 25,000-string enum and nested object/array boundary probes passed. No mutable shared state or new IO beyond bounded table load; handles close, no trust escalation. Every call/relay method AST-identical to HEAD. After final test edits reran exact plan WSL command in HEAD 52d45cb6 archive + only own three-file overlay (inspected packages build linked): exit 0, 274 tests, 273 pass, 1 existing macOS skip, 30.9s. Overlay byte-equal to final shared files. Shared optional broad run red only for active peer DB and TC/TT tasks documented in step3/handoff, not claimed passing. git diff --check clean; numstat shim +46/-8, table +1/-1, tests +98/-14 (168 total). Scratch children/copies cleaned; Serena handoff and schema gotcha saved. No peer paths or .moe edited; wrappers own landing.",
+      "startedAt": "2026-10-30T08:39:16.679Z",
+      "completedAt": "2026-10-30T08:43:31.677Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-60626bee13034a178fed55c697d14d06"
+  ],
+  "priority": "HIGH",
+  "order": 252.45,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:27:09.588Z",
+  "updatedAt": "2026-10-30T08:47:21.815Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:33:02.111Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T08:47:05.542Z",
+    "wallClockMs": 36843431
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-6e57c4f8",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:54:11.480Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/local-runner/guest-mcp-tools.json maps role -> tool -> argument key -> that key's property schema from the daemon tool inputSchema, with every description annotation removed. Everything else is verbatim: type, plus enum, items, properties, required and additionalProperties wherever the daemon declares them.\n\nguest-mcp-shim.py load_tools accepts only that typed shape, nested at most 8 deep. Anything else serves no tools, the R10d1 key-list shape included.\n\ntools/list emits each allowlisted tool as {type: 'object', properties: <the typed fragments>, additionalProperties: false}, so every emitted property, array item and nested property carries a type. A codex seat's schema sanitizer therefore keeps arrays, objects and numbers instead of defaulting them to string.\n\ntools/call is unchanged and still checks argument keys only. A drift row pins tools.json byte for byte to TOOLS' keys and the built daemon's inputSchemas. executionReady stays false and verified-local stays unavailable.",
+    "acceptanceCriteria": [
+      "TY1 (all platforms): tools.json equals JSON.stringify(role -> tool -> key -> typed(daemon property)) + '\\n'. Every allowlisted tool exists in the daemon's getTools(null) with additionalProperties false, and every key exists in it. The anchors hold for modifiedFiles, verification, commentsLimit and qa_reject's issue property 'description'. Without a daemon build the row fails with the build command; it never skips.",
+      "TY2: for worker and qa, tools/list names and keys follow TOOLS, every inputSchema is an object with additionalProperties false, and no emitted property, array item or nested property lacks a string type.",
+      "TY3: load_tools returns {} for every malformed typed table: the key-list shape; untyped; an unknown or union type; an array without typed items; a keyword on the wrong type or outside the set; a bad object; a bad required; a non-boolean additionalProperties; a bad enum; depth 9. The all-keywords table at depth 8 loads unchanged. A shim on a refused table lists no tools and answers TOOL_DENIED.",
+      "SH1-SH9 and the rows R10d2 and R10d3 added pass. SH1 keeps every R10d1 check in the typed shape: the key pin to TOOLS, tools/list per role, the unknown roles, each malformed case, and the table at the size bound."
+    ],
+    "invariants": [
+      "The shim checks argument keys only. Value types are advisory to the client; guest-bridge.mjs scopeRequest and the daemon stay the enforcement points.",
+      "A table is all-or-nothing: one malformed fragment anywhere serves no tools. load_tools never raises.",
+      "tools.json carries no description text and keeps every property name, including qa_reject's issue property 'description'. It is one compact LF line, generated and never hand-edited.",
+      "These stay unchanged: guest-bridge.mjs, the daemon sources, guest-bootstrap.mjs, guest-readiness.mjs, guest-supervisor.py, ci.yml and the host session. No .moe edits. executionReady stays false and verified-local stays unavailable; no isolation claim.",
+      "The drift row fails, never skips, when packages/moe-daemon/dist is absent. npm install and npm run build are never run in the shared packages/moe-daemon."
+    ],
+    "compatibility": [
+      "buildUserData and R07 readiness copy and hash tools.json as bytes. The R07 rows and SH9 compute their expectations from the repo files, so they pass with no edit.",
+      "MAX_TOOLS_BYTES (256 KiB) is unchanged; the typed file is about 1.8 KB.",
+      "Claude seats get richer schemas (enum, items, nested required). Codex seats get typed arguments. The tools/call request frames are unchanged."
+    ],
+    "approvedScope": [
+      "guest-mcp-shim.py: MAX_SCHEMA_DEPTH, KEYWORDS, private fragment validators, load_tools validation, the tools/list emission in _Shim.__init__, and the header and load_tools comments.",
+      "guest-mcp-tools.json: the regenerated typed table.",
+      "local-runner-agents.test.mjs: TABLE, typed(), DAEMON_TOOLS, the listed() fragments, the launch() tools option, SH1's typed expectations, rows TY1-TY3, and optional temp-file and load_tools helpers."
+    ],
+    "reuse": [
+      "R10d1's load_tools decode path (_decode, _unique, MAX_TOOLS_BYTES), the TOOL and KEY regexes, and the exact type() idiom.",
+      "The daemon registry getTools() in packages/moe-daemon/src/tools/index.ts, the only tool registry, through its built dist. The allowlisted tool factories ignore their state argument.",
+      "The test file's LOAD, launch, exchange and spawnSync harness, and PROJECTION."
+    ],
+    "sourceAssumptions": [
+      "guest-bridge.mjs TOOLS: worker and qa map 10 tools to entry.args, 21 (tool, key) pairs in all: view, commentsLimit, commentsMaxChars, content, presenceKind, stepId, modifiedFiles, note, verification, summary, reason, needsFrom, currentStepId, blockedOnTaskIds, candidateId, failedDodItems and issues. get_handoff_history has none.",
+      "The daemon property schemas of those keys use only type, enum, items, properties, required and additionalProperties, plus description. Sources: packages/moe-daemon/src/tools/getContext.ts, addComment.ts, heartbeat.ts, startStep.ts, completeStep.ts, completeTask.ts, reportBlocked.ts, qaApprove.ts and qaReject.ts.",
+      "heartbeat's presenceKind enum is Array.from(ATTEMPT_PRESENCE_KINDS), and qa_reject's issues.items.properties.type enum is VALID_ISSUE_TYPES. Both are runtime values.",
+      "In .github/workflows/ci.yml, the 'Build (matrix.os)' job runs 'Build daemon' (npm install and npm run build in packages/moe-daemon) before 'Test local runner prerequisite bundles' on ubuntu, windows and macos. packages/moe-daemon/dist is gitignored.",
+      "R10d1 (task-9faf1ef3): load_tools(path) gives role -> TOOL -> a key list. _Shim.__init__ builds self.listed with {} per key, and call() checks `key not in self.tools[name]`. In the test file, SH1 pins the file to PROJECTION, listed() feeds SH1 and SH8, and launch() passes TOOLS_FILE positionally."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Drift source: the BUILT daemon, chosen over a bounded static read of src/tools/*.ts.\n- How: packages/moe-daemon/dist/tools/index.js getTools(null).\n- For: it gives the exact runtime inputSchema, computed enums included (ATTEMPT_PRESENCE_KINDS, VALID_ISSUE_TYPES), with no parser to maintain. CI builds the daemon before the local-runner step on ubuntu, windows and macos.\n- Cost: a local run needs a built daemon. Without one, TY1 fails with the build command and never skips. A stale local build can lag src until CI rebuilds it.\n- Why not the static read: it needs a TS object-literal parser that handles template-literal descriptions and nested objects, and it still cannot resolve the computed enums. So it either drops enums or leaves them unchecked. The only precedent, local-runner.test.mjs reading RESOURCE_ID_RE, matches a single regex literal.\n\n2. Fragment subset: the daemon property schema minus description annotations. Today that is type, enum, items, properties, required and additionalProperties.\n- A verbatim structural copy makes the drift check a byte comparison, with no lossy projection to get wrong.\n- Claude gets the enum hints. Codex's sanitizer keeps type, items, properties and required, and ignores keywords it does not model.\n- Rejected, a minimal type and items subset: it drops enum and nested required, and its projection could false-green.\n- Rejected, including descriptions: every doc-only daemon edit would churn tools.json and fail the local-runner suite, and a description carries no type.\n\n3. Top-level required in tools/list: not added. It is not a per-property schema, and the daemon refuses a missing required argument with its own error.\n\n4. Value validation in the shim: not added. scopeRequest and the daemon stay the enforcement points.\n\n5. Keeping the R10d1 key-list shape as a fallback: rejected. It would emit untyped properties, the bug this task fixes; the shim fails closed instead.\n\n6. A checked-in generator module: rejected. R10d1's precedent is a one-off command in the plan, and TY1 pins the bytes.",
+    "codebaseInsights": "- getTools(null) from the built daemon works on WSL with the shared node_modules, in about 4 s on /mnt/d. Every allowlisted tool factory takes an unused _state.\n- The architect's scratch run of the generator wrote 1769 bytes.\n- qa_reject's issues.items.properties holds a PROPERTY named description, beside type, file and line. A naive JSON.stringify replacer would delete it, and the shim would then refuse the table, because required names 'description'.\n- The shared dist was built 2026-10-29 18:44 and matches src for all 21 allowlisted pairs. getContext.ts changed later, but only in basePacketId and contextEpoch, which are outside the allowlist.\n- The daemon's prebuild rewrites the tracked src/generated/initFiles.ts and skillFiles.ts, so a build in the shared tree would dirty tracked files.\n- R10d1's R07 updates and SH9 compute the buildUserData and readiness expectations from the repo files, so a tools.json change needs no edit there.\n- .gitattributes forces LF everywhere, so the byte pin holds on the windows-latest CI leg.\n- codex-rs sanitize_json_schema gives an untyped property type string. It infers object or array only from properties or items, and fills a missing items with string. With every fragment typed, nothing is inferred.",
+    "risks": "- R10d1 (WORKING), R10d2 and R10d3 will still change this test file and the shim before this task runs. Start from the landed bytes, and if a helper was renamed, apply the change to its landed equivalent.\n- Never run npm install or npm run build in the shared packages/moe-daemon. If the build is missing, or stale for the 21 pairs, build in a scratch copy.\n- An exact-HEAD archive run, by QA or by the epic-final task, must build the daemon inside the archive first, because dist is gitignored.\n- Mutation probes need <tmp>/packages linked to the real packages directory, or TY1 fails for every mutant. Never write through that link.\n- If a future daemon module starts a timer at import, TY1's test process would hang. Today a plain import exits.\n- Keep tools.json one compact LF line, and regenerate it rather than editing it by hand.\n- The global forbiddenPatterns (eval(, __proto__, innerHTML) apply to tests too.\n- The shared checkout carries other sessions' dirty paths. Report only the three files.",
+    "keyFiles": [
+      "scripts/local-runner/guest-mcp-shim.py",
+      "scripts/local-runner/guest-mcp-tools.json",
+      "scripts/tests/local-runner-agents.test.mjs",
+      "scripts/local-runner/guest-bridge.mjs",
+      "packages/moe-daemon/src/tools/index.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:54:11.570Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "32710914eb64f639b049813d0c7752ba30001631",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-bd1eb82d@2026-10-29T22:33:01Z",
+      "paths": [
+        ".moe/tasks/task-43088e9b504b49a5ae59c562fcc0c784.json",
+        ".moe/tasks/task-98ffe33f448746e6bc802db0b5624fd0.json",
+        ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+        ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json",
+        ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+        ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json",
+        ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json"
+      ],
+      "recordedBy": "architect-bd1eb82d",
+      "recordedAt": "2026-10-30T06:53:07.643Z",
+      "treeId": "f8cd6e95d917a679faad56522b3d9b49eb48917c",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "909b50629acdfe2f8d02c79056a4746a3b67b3c9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-6e57c4f8@2026-10-30T08:33:36Z",
+      "paths": [
+        ".moe/tasks/task-0c72d59aad37467fb49e5ad699692d78.json",
+        ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+        ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+        "scripts/local-runner/guest-mcp-shim.py",
+        "scripts/local-runner/guest-mcp-tools.json",
+        "scripts/tests/local-runner-agents.test.mjs"
+      ],
+      "recordedBy": "worker-6e57c4f8",
+      "recordedAt": "2026-10-30T08:44:09.069Z",
+      "treeId": "2633271fd00ac6e3a5f68429de875a39c675fa17",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "cfd583a8f3d53611be771b3c27511d0ef364986f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T08:44:31Z",
+      "paths": [
+        ".moe/epics/epic-be924fb8.json",
+        ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+        ".moe/tasks/task-c61311dc98424120be5775ce91c50ed0.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T08:47:21.815Z",
+      "treeId": "7ca8b4c982edd14a882dabcb79075f4841bbdcef",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/local-runner-agents.test.mjs",
+    "scripts/local-runner/guest-mcp-shim.py",
+    "scripts/local-runner/guest-mcp-tools.json",
+    ".moe/tasks/task-0c72d59aad37467fb49e5ad699692d78.json",
+    ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+    ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+    ".moe/epics/epic-be924fb8.json",
+    ".moe/tasks/task-c61311dc98424120be5775ce91c50ed0.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T08:44:31Z",
+    "at": "2026-10-30T08:47:21.815Z"
+  },
+  "workStartedAt": "2026-10-30T08:34:32.321Z",
+  "reviewStartedAt": "2026-10-30T08:43:49.264Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs",
+    "exitCode": 0,
+    "outputTail": "Final command ran in read-only HEAD 52d45cb6d815ec814dfbd308fe1ba271c6998baa archive with the task's three-file overlay, byte-equal to final shared files; peer in-flight tests were not included. Existing inspected daemon build supplied via packages symlink.\n✔ AH3 end to end, installAgents installs both stand-ins as 0555 through the real supervisor\n✔ RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, from the installed pins only\nℹ tests 274\nℹ suites 0\nℹ pass 273\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 30875.987908\nEXIT=0",
+    "reportedAt": "2026-10-30T08:43:49.264Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-R10d5: generated 1769-byte typed argument table from TOOLS + inspected built daemon schemas; preserved qa_reject's description property. Shim validates whitelisted fragments through depth 8 and rejects any malformed/duplicate table entry all-or-nothing. tools/list emits typed fragments; tools/call and relay remain AST-identical. SH1 translated without behavioral loss; TY1-TY3 cover schema/key drift, fully typed listings and hostile tables. 15/15 scratch mutants killed, including both depth variants, missing build, duplicate keys and common projection/generator corruption. Manual bounded-deep/25,000-enum probes pass.\nFinal required suite: exit 0, 274 tests, 273 pass, 1 existing macOS smoke skip (30.9s). Executed after final edits in HEAD 52d45cb6 archive + only own three-file overlay, byte-equal to shared files. Earlier shared required run also passed. Optional full local-runner glob was NOT green: 14 failures belong to active tests-first peer tasks task-2cf1c6be (DB) and task-1e7f5a2d (TC/TT); peers notified, their bytes untouched. No duplicate bug.\nNumstat: guest-mcp-shim.py +46/-8; guest-mcp-tools.json +1/-1; local-runner-agents.test.mjs +98/-14. Total 168 changed lines; diff-check clean. Scratch cleaned; Serena handoff/gotcha saved. No .moe/Git writes by worker; no isolation or verified-local claim.",
+  "completedAt": "2026-10-30T08:47:05.542Z",
+  "reviewCompletedAt": "2026-10-30T08:47:05.542Z",
+  "reviewSummary": "Approved CQ-R10d5. Reviewed recorded completion commit 909b5062 (on moe/work-2026-10-24): shim +46/-8, tools.json +1/-1, agents test +98/-14 = 168 LOC (<400). guest-bridge.mjs, daemon sources, bootstrap, readiness, supervisor, ci.yml untouched.\n\nRe-ran the required command in a scratch `git archive 909b5062` (shared tree is peer-dirty) with packages symlinked to the existing dist, no build: env -i nvm node24 node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs -> exit 0, 274 tests, 273 pass, 0 fail, 1 existing macOS skip. SH1-SH9, TY1-TY3 and R07 rows pass unedited.\n\nDoD1: TY1 pins tools.json byte for byte to TOOLS + built daemon inputSchemas (anchors: modifiedFiles, verification, commentsLimit, qa_reject issue 'description' property); TY2 shows every emitted property/item/nested property typed.\nDoD2: TY1 fails (never skips) without dist; checks keys vs TOOLS and additionalProperties false.\nDoD3: 21 hostile tables run through load_tools directly (key-list, untyped, union/unhashable type, bool/dict enum, bad required, depth 9, dup keys, NaN, BOM, 200k-deep JSON) all refused, no exception; depth-8 all-keywords table loads. TY3 covers refused table -> TOOL_DENIED end to end.\nDoD4: command/exit/tail match task.verification.\n\nDist currency: qaApprove/qaReject/getContext src changed after the 08:03 dist build; I re-read their inputSchemas and the allowlisted properties match tools.json.\n\n6 own mutants killed by named rows: depth off-by-one both ways (TY3), required-subset dropped (TY3), commentsLimit as string (TY1 only), modifiedFiles items dropped (SH1/SH8/TY1/TY2), emit {} per key (SH1/SH8/TY2). Scratch removed.\n\nNot verified: the worker's optional all-local-runner glob (red from peer tasks 2cf1c6be and 1e7f5a2d), outside this command. executionReady and verified-local stay unavailable; no isolation claim. No complexity findings.",
+  "requiredCheckAtDone": null
+}

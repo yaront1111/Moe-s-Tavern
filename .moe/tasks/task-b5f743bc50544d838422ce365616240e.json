@@ -1,0 +1,229 @@
+{
+  "id": "task-b5f743bc50544d838422ce365616240e",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "[CQ-F12a] Proxy completion identity transport",
+  "description": "Objective: complete the CQ-F09 execution-identity transport for step and task completion, and document the transport where it lives. Split out of CQ-F12 (task-72184c6505cc41e8b6066732011ffb70) for size. F12 stays the epic's single final integration and hardening task, and it depends on this row.\n\nWhy: CQ-F08 gave moe.complete_step and moe.complete_task the optional attemptId, generation and sessionId inputs (the same guard as start_step). But moe-proxy's EXECUTION_IDENTITY_TOOLS table (packages/moe-proxy/src/utils.ts, stampExecutionIdentity) still covers only get_context (sessionId) and start_step (attemptId, generation, sessionId). Without stamping, a proxied verified-local session cannot complete steps or the task. This is the CQ-F08 hand-forward recorded on task-72184c65, comment-0de6f303507449e5ac79926d124caea9.\n\nDeliverable:\n1. EXECUTION_IDENTITY_TOOLS gains complete_step and complete_task with the attempt and session groups, under every spelling (moe.x, moe_x, x). The fence is the same as F09's:\n   - the session env owns the values;\n   - a presented value that is not === the env value is refused EXECUTION_IDENTITY_SUBSTITUTED (-32003);\n   - a malformed or partial carried env group is refused EXECUTION_IDENTITY_INVALID (-32602);\n   - with no identity env, the legacy raw passthrough applies.\n   No other tool joins the table.\n2. Unit tests in packages/moe-proxy/src/utils.test.ts.\n3. The transport docs that F09/F10/F11 deferred: packages/moe-proxy/README.md (env vars and the stamping table), the root CLAUDE.md moe-proxy row, and scripts/CLAUDE.md (the launchers' execution identity: the served pre-flight get_context, pin_attempt_identity / Set-MoeAttemptIdentity exporting MOE_ATTEMPT_ID + MOE_ATTEMPT_GENERATION both-or-neither, unserved post-flight/adoption reads, the codex override and grok table keys).\n\nScope boundaries:\n- No daemon change.\n- docs/MCP_SERVER.md, docs/SCHEMA.md, docs/CONFIGURATION.md and docs/PLAN_APPROVAL_FRESHNESS.md belong to CQ-F12b.\n- Document only what landed.\n- scripts/CLAUDE.md is also in REVIEW-stage task-7a0b188151a74356a4965b3cc589eddf's plan, hence the dependency.\n\nApproved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). Use original Moe source; daemon owns state, wrappers own host Git writes. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe.\n\nVerification command (fresh, exit 0 required): cd packages/moe-proxy && npm test",
+  "definitionOfDone": [
+    "moe-proxy stamps attemptId, generation (a JSON number) and sessionId from the session env onto moe.complete_step and moe.complete_task under every spelling, and refuses a caller-substituted value (EXECUTION_IDENTITY_SUBSTITUTED) or a malformed/partial env group (EXECUTION_IDENTITY_INVALID) without mutating or forwarding; get_context/start_step stamping and the no-identity legacy passthrough are unchanged.",
+    "Unit tests pin stamping, substitution, partial and malformed env refusal and every spelling for both completion tools, and other tools stay unstamped.",
+    "packages/moe-proxy/README.md, the root CLAUDE.md moe-proxy row and scripts/CLAUDE.md describe the landed execution-identity transport: env names and validity rules, the four stamped tools, both refusal codes, and the launchers' attempt pin and unserved reads.",
+    "Fresh verification `cd packages/moe-proxy && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD red: extend packages/moe-proxy/src/utils.test.ts, describe 'stampExecutionIdentity' (around lines 588-716), before touching utils.ts.\n(a) In the test 'matches every spelling of the carried tools and nothing else' (:694): remove 'moe.complete_step' and 'moe.complete_task' from the list that must stay unstamped, because they join the table. Add near-miss names that must still return false with untouched arguments: 'moe.complete_steps', 'moe.complete', 'moe.qa_approve', 'moe.submit_plan', 'moe.report_blocked'. Every other existing test stays byte-identical.\n(b) Add a block parametrized over COMPLETION = ['complete_step', 'complete_task'] that reuses the describe's SESSION, FULL, IDENTITY, MARK, call, refusal and messageOf helpers. Use args { taskId: 't1', stepId: 's1' } for complete_step and { taskId: 't1' } for complete_task. For each tool, pin:\n- T1, every spelling. Under FULL, each of `moe.${tool}`, `moe_${tool}`, bare `${tool}`, and a `moe_${tool}` message first passed through resolveToolCallName(msg, new Map()) returns true. Its arguments toEqual the original args plus IDENTITY, and generation is the number 7, never '7'.\n- T2, session-only env { MOE_SESSION_ID: SESSION }: returns true and adds only sessionId.\n- T3, legacy passthrough. env {} and the blank env { MOE_SESSION_ID: '', MOE_ATTEMPT_ID: '  ', MOE_ATTEMPT_GENERATION: '' } both return false and leave args untouched, including args that already present attemptId 'x' or generation '7'.\n- T4, equal presented values. Each of IDENTITY, { attemptId: 'attempt-0123' }, { generation: 7 } and { sessionId: SESSION } is accepted and completed to the full identity.\n- T5, substitution. attemptId 'attempt-other', attemptId null, generation '7', generation 8, generation null and sessionId `${SESSION} ` each toEqual refusal(-32003, 'EXECUTION_IDENTITY_SUBSTITUTED'). The arguments are unchanged, and the message never contains 'attempt-'.\n- T6, partial attempt env. { MOE_SESSION_ID: SESSION, MOE_ATTEMPT_ID: 'attempt-0123' } and { MOE_SESSION_ID: SESSION, MOE_ATTEMPT_GENERATION: '7', MOE_ATTEMPT_ID: ' ' } give refusal(-32602, 'EXECUTION_IDENTITY_INVALID') with the arguments unchanged: the completion tools carry the attempt group, so a partial group refuses them as it refuses start_step.\n- T7, malformed env: MOE_ATTEMPT_GENERATION '0', '07', '1e3' or '9007199254740992'; MOE_ATTEMPT_ID `a b${MARK}`; MOE_SESSION_ID `${MARK}\\nx` or MARK + 'x'.repeat(256 - MARK.length). Each gives INVALID with the arguments unchanged, and the message contains neither the bad value nor MARK.\nThen run the step-4 recipe with ONLY this test file overlaid on the snapshot, so it runs against HEAD's utils.ts, and record the red result in the step note. The new completion tests fail, because the table lacks both tools; the F09 tests stay green. Never run npm test inside the shared checkout from WSL: see Serena memory gotcha-proxy-npm-test-shared-checkout-deletes-dist.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.test.ts"
+      ],
+      "note": "Red run in Linux snapshot /tmp/moe-f12a-tt7t2J (git archive HEAD packages/moe-proxy, native npm ci, only utils.test.ts overlaid, HEAD utils.ts; env -i): 12 failed | 69 passed (81). The 12 are the new describe.each('complete_step'|'complete_task') tests x6 (full identity under every spelling, session-only, equal presented, substitution, partial env, malformed env); legacy passthrough T3 passes on both (it is the unchanged behavior), the edited spelling test (near-misses) and all F09 tests stay green. Edits: the unstamped list in 'matches every spelling...' lost complete_step/complete_task and gained complete_steps/complete/qa_approve/submit_plan/report_blocked; one nested describe.each block added at the end of describe('stampExecutionIdentity'). The shared checkout was not used for npm test. Other sessions' dirty paths untouched.",
+      "startedAt": "2026-10-26T10:08:28.239Z",
+      "completedAt": "2026-10-26T10:09:15.229Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement: in packages/moe-proxy/src/utils.ts, add complete_step and complete_task to the EXECUTION_IDENTITY_TOOLS initialiser (:253) with start_step's groups, ['attempt', 'session']. The reason: they take the same optional attemptId (at most 128 chars), generation (integer >= 1) and sessionId inputs, and call the same assertExecutionAuthorized guard (packages/moe-daemon/src/tools/completeStep.ts:24-53, completeTask.ts:149-176). The existing loop already registers the moe.x, moe_x and x spellings. No other tool joins.\nUpdate the stampExecutionIdentity doc comment (:295-306) to name all four tools and cite CQ-F12a.\nDo not change the group readers, the fence logic, index.ts (its fence already calls stampExecutionIdentity for every tools/call element, index.ts:129) or the daemon.\nError handling stays exactly F09's: a refusal never mutates, forwards or echoes a value, and an unexpected throw fails closed with EXECUTION_IDENTITY_INVALID.\nRe-run the step-4 command: everything is green, and the completion tests are no longer red.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "note": "utils.ts: complete_step and complete_task join EXECUTION_IDENTITY_TOOLS with ['attempt','session'] (the existing loop registers moe.x / moe_x / x); stampExecutionIdentity doc comment names all four tools and cites CQ-F12a. No reader, fence, index.ts or daemon change. Snapshot /tmp/moe-f12a-tt7t2J (native npm ci, env -i): full `npm test` rc 0, 98/98 (utils 81, input-framing 3, index 14); the 12 red tests are green. Other sessions' dirty paths untouched.",
+      "startedAt": "2026-10-26T10:09:16.969Z",
+      "completedAt": "2026-10-26T10:09:49.836Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Document the landed execution-identity transport. README.md is ASCII LF; CLAUDE.md and scripts/CLAUDE.md are UTF-8 LF. Verify every statement against the code before you write it, and document only what landed.\n(a) packages/moe-proxy/README.md.\n- Add MOE_SESSION_ID, MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION to Environment Variables.\n- Add a short 'Execution identity' section. Sources: utils.ts:244-346 and index.ts:120-160. Cover:\n  - The session env owns the values: scripts/moe-agent.{sh,ps1} set them, never the CLI caller. A blank value counts as unset.\n  - Validity. MOE_SESSION_ID is at most 255 chars with no NUL/CR/LF, sent verbatim. MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION are both or neither. attemptId matches [A-Za-z0-9_-]{1,128}. generation is a positive safe integer in plain decimal digits, sent as a JSON number.\n  - The stamping table. get_context gets sessionId. start_step, complete_step and complete_task get attemptId, generation and sessionId. This applies to the moe.x, moe_x and x spellings, and to no other tool.\n  - Refusals. EXECUTION_IDENTITY_SUBSTITUTED (-32003): a presented field is not === the env value. EXECUTION_IDENTITY_INVALID (-32602): a malformed or partial carried group, or an unexpected error. error.data is { tool, codeName }, and no value is echoed.\n  - JSON-RPC batches are fenced per element; one refusal drops the whole frame.\n  - With no identity env, the line is forwarded byte-for-byte (legacy) and the daemon decides.\n(b) Root CLAUDE.md, packages/moe-proxy/ row. Add one clause: the proxy also stamps the session's execution identity (MOE_SESSION_ID; MOE_ATTEMPT_ID + MOE_ATTEMPT_GENERATION, both or neither) onto get_context, start_step, complete_step and complete_task, and refuses a caller-substituted or malformed identity (EXECUTION_IDENTITY_SUBSTITUTED / EXECUTION_IDENTITY_INVALID). Point to packages/moe-proxy/README.md.\n(c) scripts/CLAUDE.md, Wrapper behaviour. Add one bullet, **Execution identity** (CQ-F09 to CQ-F12a), after the heartbeat-sidecar bullet:\n- Each iteration exports MOE_SESSION_ID = `<workerId>@<preflight-iso>` (sh:6274, plus its ps1 twin).\n- The pre-flight get_context is the one served read: {taskId}, plus sessionId when MOE_SESSION_ID is set.\n- pin_attempt_identity (sh:2156) / Set-MoeAttemptIdentity (ps1:1549) export MOE_ATTEMPT_ID + MOE_ATTEMPT_GENERATION, both or neither, after verifying the claim's attempt record. Both are blank on any failure and refreshed on resume, and the loop top resets both (sh:6237).\n- Post-flight and adoption get_context reads run unserved through moe_rpc_unserved (sh:2047) / Invoke-MoeRpcUnserved (ps1:1453), with MOE_SESSION_ID blanked so they mint no receipt.\n- moe-proxy stamps the identity onto the four tools; see its README.\nIn the MCP-servers bullet, the parenthetical 'likewise `MOE_RUNNER_PROCESS_STARTED_AT`/`MOE_RUNNER_HOST`; codex ... gets all three in its per-seat `-c mcp_servers.moe=…` override' is now incomplete. Name the three identity keys too, and replace 'all three' with an accurate count. Verify the grok literal `KEY = \"${KEY:-}\"` lines (sh:1353-1355, ps1:1160) and the codex override order (sh python block :1153-1196; ps1 Get-CodexMoeServerOverride :233): MOE_SESSION_ID, then the attempt pair, before MOE_WORKER_ID.\n\nContested paths. scripts/CLAUDE.md is also in task-a103c2f4c9984b7481dbefca4d52fdf0's plan. This task now depends on that one, so it is DONE before you can claim. Still, before editing, check read-only for other unfinished peers: every .moe/tasks/*.json not DONE/ARCHIVED whose filesModified, declaredPaths or plan affectedFiles name README.md, CLAUDE.md or scripts/CLAUDE.md. Ignore a peer that depends on this task, as the daemon does. A path an unfinished peer declares lands only when a witnessed editing tool wrote it: Claude's built-in Edit/Write/MultiEdit, or a Serena editor such as replace_content. A Bash, sed, heredoc or apply_patch write is silently dropped.\n- A claude seat: make every doc edit with such a tool.\n- A codex/gemini/grok seat facing such a peer: finish steps 1-2, then call moe.report_blocked with blockedOnTaskIds set to that peer.\nKeep the project's global forbiddenPatterns out of all text.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/README.md",
+        "CLAUDE.md",
+        "scripts/CLAUDE.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/README.md",
+        "CLAUDE.md",
+        "scripts/CLAUDE.md"
+      ],
+      "note": "Docs, all written with the built-in Edit tool (witnessed). Contested-path check: read-only scan of .moe/tasks/*.json for unfinished tasks naming README.md / CLAUDE.md / scripts/CLAUDE.md found only this task (a103 is DONE). (a) packages/moe-proxy/README.md (+25): three identity env vars; new 'Execution identity' section: session env owns values, blank = unset, validity rules, stamping table (get_context sessionId; start_step/complete_step/complete_task attemptId+generation+sessionId; every spelling; no other tool), both refusal codes with -32003/-32602, error.data {tool, codeName}, nothing echoed/mutated, per-element batch fence, legacy byte-for-byte passthrough. Verified against utils.ts readers/table and index.ts fenceExecutionIdentity/writeIdentityRefusal/stdin handler. (b) root CLAUDE.md moe-proxy row: one clause + README pointer. (c) scripts/CLAUDE.md: new **Execution identity** bullet after the heartbeat bullet (MOE_SESSION_ID export, served pre-flight get_context args, pin_attempt_identity / Set-MoeAttemptIdentity both-or-neither + blank on failure + resume refresh + loop-top reset, moe_rpc_unserved / Invoke-MoeRpcUnserved unserved post-flight/adoption reads, proxy stamping), and the MCP-servers bullet now names the three identity keys, the grok literal KEY = \"${KEY:-}\" lines, and the codex override (six keys, order SESSION, pair, WORKER_ID, runner; sh emits keys that are set, ps1 emits the pair both-or-neither). Cited function names, not line numbers. README ASCII, 0 CR in all three files, no forbidden tokens. Nothing documents verified-local as enabled or any isolation claim; docs/MCP_SERVER.md, SCHEMA.md, CONFIGURATION.md, PLAN_APPROVAL_FRESHNESS.md untouched (F12b).",
+      "startedAt": "2026-10-26T10:09:51.598Z",
+      "completedAt": "2026-10-26T10:11:15.892Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Regression check, run once and fresh from the repo root. This is the DoD command `cd packages/moe-proxy && npm test`, run inside a Linux snapshot. The shared checkout's packages/moe-proxy/node_modules is a Windows install: from WSL, npm test there deletes dist and then fails tsc (Serena memory gotcha-proxy-npm-test-shared-checkout-deletes-dist).\nCommand: `bash -c 'set -e; SNAP=$(mktemp -d); git archive HEAD packages/moe-proxy | tar -x -C \"$SNAP\"; cp packages/moe-proxy/src/utils.ts packages/moe-proxy/src/utils.test.ts \"$SNAP/packages/moe-proxy/src/\"; cd \"$SNAP/packages/moe-proxy\"; npm ci --no-audit --no-fund; env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/bin:/bin\" TMPDIR=/tmp npm test'`\nIt must exit 0, with the pretest tsc build passing and every test green. A plan-time dry run on HEAD passed 84/84 in about 24 s. On a native Windows seat, the same recipe in Git Bash works. This command's fresh output is the moe.complete_task verification evidence; name the snapshot path in the summary.\nThen run a quick mutation proof on a copy of the snapshot. Apply each mutation alone, run vitest on src/utils.test.ts, confirm it fails, then restore:\nM1 drop complete_step from the table;\nM2 drop complete_task;\nM3 give the completion tools only ['session'];\nM4 register only the moe.x spelling for them.\nRecord the failing test names in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh DoD run in Linux snapshot /tmp/tmp.7kJKOMD3jh (git archive HEAD packages/moe-proxy, utils.ts + utils.test.ts overlaid and cmp-identical to the worktree, native npm ci, env -i): `cd packages/moe-proxy && npm test` rc 0, pretest tsc build ok, 3 files / 98 tests passed (utils 81, input-framing 3, index 14). Log: /tmp/moe-f12a-final.log. Mutation proof on a copy (each alone, vitest src/utils.test.ts, then restored; restored = 81/81): M1 drop complete_step -> 6 failed (all 6 complete_step tests: equal-presented, malformed env, partial env, substitution, session-only, full-identity-every-spelling); M2 drop complete_task -> 6 failed (the same six for complete_task); M3 completion tools only ['session'] -> 10 failed (both tools: full identity, equal presented, malformed, partial, substitution; session-only still passes as expected); M4 only the moe.x spelling -> 4 failed (full-identity-every-spelling and substitution-every-spelling, both tools). All four killed. No shared-checkout npm test, no file changes in this step.",
+      "startedAt": "2026-10-26T10:11:18.176Z",
+      "completedAt": "2026-10-26T10:12:07.329Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, the final step. Load the adversarial-self-review skill and read `git diff` of the five files as an attacker:\n- Can a caller still smuggle a foreign attemptId or generation onto complete_step/complete_task? Check a string generation, null, a trailing space, and the alias spelling.\n- Does a partial or malformed env refuse the completion tools without blocking get_context?\n- Does a legacy seat with no identity env keep the byte-for-byte passthrough?\n- Docs: every env name, rule, code, tool and line reference matches the code at HEAD. Nothing documents unlanded behaviour, such as an enabled verified-local mode or isolation claims (task rail). No contract owned by CQ-F12b leaked in (docs/MCP_SERVER.md, docs/SCHEMA.md, docs/CONFIGURATION.md, docs/PLAN_APPROVAL_FRESHNESS.md stay untouched).\n- No daemon, wrapper, index.ts or .moe file changed, and other sessions' dirty paths were neither touched nor reported as yours.\n- `git diff --numstat` over the five files stays under QA's 400 net-LOC cap.\nIf anything changes, re-run the step-4 command fresh before moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of `git diff` over the five files (utils.ts +7/-3, utils.test.ts +88/-2, README +25, root CLAUDE.md +1/-1, scripts/CLAUDE.md +2/-1; net ~120, under the 400 cap). Runtime change is two table entries plus a comment, so the fence logic is F09's unchanged. Inputs: a string generation ('7'), null, 8, attemptId null or another id, and a sessionId with a trailing space are each refused SUBSTITUTED (strict !==, no coercion) under moe.x / moe_x / bare x and via resolveToolCallName; presented values equal to the env are accepted and completed. A partial or malformed env refuses the completion tools (INVALID, args untouched, message echoes neither the bad value nor the marker) while get_context still gets sessionId (existing F09 test, unchanged). No identity env or blank env returns false: the proxy adds nothing and the raw line is forwarded unless an earlier step already rewrote it; the daemon decides (T3 for both tools). Concurrency/side effects: the function is pure apart from in-place stamping of the parsed message, with no state, IO or throw path (the catch fails closed). Docs: every env name, rule, code, tool and function name was checked against utils.ts, index.ts and moe-agent.{sh,ps1}; scripts/CLAUDE.md cites function names, not line numbers; no verified-local-enabled or isolation claim; docs/MCP_SERVER.md, SCHEMA.md, CONFIGURATION.md and PLAN_APPROVAL_FRESHNESS.md, the daemon, index.ts and both wrappers are untouched (git status clean for them), and no .moe file was edited. Other sessions' dirty paths were not touched or reported. Residual, for F12: the comments at moe-agent.sh:6273 and its ps1 twin still say the proxy stamps only get_context/start_step (deliberately left alone: a wrapper edit hot-reloads the fleet). Nothing changed after the step-4 run, so no re-run needed.",
+      "startedAt": "2026-10-26T10:12:09.638Z",
+      "completedAt": "2026-10-26T10:12:29.923Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-bf14bb1e39494eba83158a26e36ddb20",
+    "task-3c54775146c946208dd90a94e2e9caac",
+    "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",
+    "task-fdbc59358b8746a4b19073b5f2ef5a7c",
+    "task-7a0b188151a74356a4965b3cc589eddf",
+    "task-a103c2f4c9984b7481dbefca4d52fdf0"
+  ],
+  "priority": "CRITICAL",
+  "order": 234.2,
+  "comments": [
+    {
+      "id": "comment-9952fb08ab154c63bc9ab0d6bd16251f",
+      "author": "architect-4c57a52b",
+      "content": "Planning note (architect-4c57a52b): I added task-a103c2f4c9984b7481dbefca4d52fdf0 to dependsOn. That task is WORKING, and its plan also edits scripts/CLAUDE.md; the CQ-F epic rail says overlapping affectedFiles are serialized by an explicit dependency. a103 is small (one mod and its tests, plus docs). CQ-F12b and CQ-F12 already depend on this row, so they are serialized transitively. The daemon's commit scope ignores a waiter's plan-declared paths (getCommitScope.ts:112-119), so neither contests a103's landing. Verification must run in a Linux snapshot, as step 4 shows, never in the shared checkout from WSL: there, `npm test` deletes packages/moe-proxy/dist and then fails tsc.",
+      "timestamp": "2026-10-26T09:52:14.493Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T09:42:30.162Z",
+  "updatedAt": "2026-10-26T10:19:13.951Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T09:45:19.636Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-26T10:17:48.787Z",
+    "wallClockMs": 1949151
+  },
+  "contextFetchedBy": [
+    "architect-4c57a52b",
+    "worker-7d158765",
+    "qa-7c627d35"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T09:51:55.622Z",
+  "planningNotes": {
+    "approachesConsidered": "The table entry is the whole runtime change. index.ts:129 fences every tools/call element through stampExecutionIdentity, and the daemon's complete_step/complete_task already accept and check the same three inputs through assertExecutionAuthorized (CQ-F08).\nRejected:\n- A separate stamping path for the completion tools: it would duplicate F09's fence.\n- An index.test.ts e2e test: the DoD names unit tests, and F09's e2e already proves the wiring is table-driven.\n- Editing the moe-agent.sh:6273 comment ('stamps it ... onto the CLI's get_context/start_step', now incomplete) and its ps1 twin: any wrapper edit hot-reloads every running seat. That comment is a hand-forward for F12's sweep.\nScope follows the task's own split: docs/MCP_SERVER.md, docs/SCHEMA.md, docs/CONFIGURATION.md and docs/PLAN_APPROVAL_FRESHNESS.md belong to CQ-F12b.",
+    "codebaseInsights": "- utils.ts:252-255 builds EXECUTION_IDENTITY_TOOLS as a Map over the moe.x/moe_x/x spellings. GROUP_READERS (:291) is per group; a partial attempt group refuses only the tools that carry it.\n- utils.test.ts:701 currently asserts that complete_step/complete_task stay UNSTAMPED; that list must change.\n- packages/moe-proxy/vitest.config.ts blanks 9 MOE_* vars, so the suite is hermetic in seats.\n- package.json: pretest builds and prebuild cleans dist. The shared node_modules is Windows-native, so use the snapshot recipe from WSL.\n- Live seats run the plugin-bundled proxy, so this reaches the fleet only via a plugin rebuild.\n- reattach_attempt requires a matching generation and never bumps it, so a wrapper-pinned pair stays valid across a daemon restart. Stamping completion adds no failure class beyond F09's start_step stamping.\n- Dependency added at plan time: this task now depends on task-a103c2f4 (WORKING; it also edits scripts/CLAUDE.md), per the CQ-F rail 'Serialize overlapping affectedFiles through explicit dependencies'. F12b and F12 depend on this row, so they are serialized transitively. The daemon's commit scope ignores a waiter's plan-declared paths (getCommitScope.ts:112-119), so neither contests a103's landing.",
+    "risks": "- Docs accuracy is the main QA risk. F10's sh codex override emits the non-empty keys, while F11's ps1 emits the pair both-or-neither; both pins are both-or-neither, so describe the observable contract, not one engine's code.\n- Do not describe verified-local as enabled (task rail).\n- Contested scripts/CLAUDE.md: the dependency makes a103 terminal before this task can claim. Step 3 still carries the witnessed-edit rule and a non-claude block branch for any newer peer.\n- npm ci needs registry access; it worked at plan time.\n- Size: about +3 runtime, +70 test and +25 doc lines.",
+    "keyFiles": [
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-proxy/src/utils.test.ts",
+      "packages/moe-proxy/src/index.ts",
+      "packages/moe-proxy/README.md",
+      "CLAUDE.md",
+      "scripts/CLAUDE.md",
+      "packages/moe-daemon/src/tools/completeStep.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T09:51:55.720Z",
+  "workStartedAt": "2026-10-26T10:08:28.239Z",
+  "reviewStartedAt": "2026-10-26T10:12:45.576Z",
+  "verification": {
+    "command": "cd packages/moe-proxy && npm test   # run in Linux snapshot /tmp/tmp.7kJKOMD3jh: git archive HEAD packages/moe-proxy, utils.ts + utils.test.ts overlaid (cmp-identical to the worktree), native npm ci, env -i HOME PATH TMPDIR",
+    "exitCode": 0,
+    "outputTail": " ✓ src/utils.test.ts (81 tests) 42ms\n ✓ src/input-framing.test.ts (3 tests) 480ms\n ✓ src/index.test.ts (14 tests) 16191ms\n   ✓ moe-proxy graceful shutdown (14)\n     ✓ returns error response when server never responds and message times out 5081ms\n     ✓ does not crash when connection drops during message exchange 663ms\n     ✓ drops a late daemon response that arrives after the per-message timeout 9072ms\n\n Test Files  3 passed (3)\n      Tests  98 passed (98)\n   Start at  12:11:30\n   Duration  19.09s (tests 67%, transform 23%, import 10%)\n",
+    "reportedAt": "2026-10-26T10:12:45.576Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-proxy/src/utils.test.ts",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-proxy/README.md",
+    "CLAUDE.md",
+    "scripts/CLAUDE.md",
+    ".moe/tasks/task-b5f743bc50544d838422ce365616240e.json"
+  ],
+  "completionSummary": "CQ-F12a delivered (plan rev 1, 5/5 steps, five files, net about 120 LOC). moe-proxy now stamps the session's execution identity onto complete_step and complete_task as it does onto start_step. The session env owns attemptId, generation (a JSON number) and sessionId, under every spelling (moe.x, moe_x, x). A presented value that is not === the env value is refused EXECUTION_IDENTITY_SUBSTITUTED (-32003). A malformed or partial carried env group is refused EXECUTION_IDENTITY_INVALID (-32602). With no identity env the legacy passthrough is unchanged, and no other tool joined the table. The runtime change is two entries in EXECUTION_IDENTITY_TOOLS in utils.ts plus its doc comment, with no change to the group readers, the fence, index.ts or the daemon. utils.test.ts: the unstamped list drops the two tools and gains near-miss names, and a describe.each over both tools adds 7 tests (every spelling, session-only, legacy passthrough, equal presented values, substitution, partial env, malformed env). Red first: 12 failed. Green: 81/81. Docs: packages/moe-proxy/README.md (env vars plus an Execution identity section), the root CLAUDE.md moe-proxy row, and a scripts/CLAUDE.md Execution identity bullet plus the updated MCP-servers parenthetical (served pre-flight get_context, pin_attempt_identity / Set-MoeAttemptIdentity both-or-neither, unserved post-flight and adoption reads, the codex override order and the grok literal lines). No verified-local or isolation claim; the F12b docs are untouched. Verification ran in Linux snapshot /tmp/tmp.7kJKOMD3jh (git archive HEAD, overlay cmp-identical, native npm ci, env -i): npm test rc 0, 98/98. Mutants M1-M4 (drop either tool, session-only group, moe.x spelling only) all killed. For F12: the comments at moe-agent.sh:6273 and its ps1 twin still say the proxy stamps only get_context/start_step; they were left alone because a wrapper edit hot-reloads the fleet.",
+  "commits": [
+    {
+      "sha": "b86505f189b87746063a3620d4603538e970e2d2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T10:06:46Z",
+      "paths": [
+        ".moe/tasks/task-b5f743bc50544d838422ce365616240e.json",
+        "CLAUDE.md",
+        "packages/moe-proxy/README.md",
+        "packages/moe-proxy/src/utils.test.ts",
+        "packages/moe-proxy/src/utils.ts",
+        "scripts/CLAUDE.md"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T10:14:21.354Z",
+      "treeId": "374cc894473aed35353123964c9ca7d4901e8560",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "57ad4ea00ba8a0a7a49c3f251ad49105f9323163",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T10:14:25Z",
+      "paths": [
+        ".moe/tasks/task-b5f743bc50544d838422ce365616240e.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T10:19:13.951Z",
+      "treeId": "47e67406e9d2dcffe94913e3380954493bf3e339",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-proxy/src/utils.test.ts",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-proxy/README.md",
+    "CLAUDE.md",
+    "scripts/CLAUDE.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T10:14:25Z",
+    "at": "2026-10-26T10:19:13.951Z"
+  },
+  "completedAt": "2026-10-26T10:17:48.787Z",
+  "reviewCompletedAt": "2026-10-26T10:17:48.787Z",
+  "reviewSummary": "Reviewed completion commit b86505f (on moe/work-2026-10-24, recorded kind=completion, pushed). About 125 net LOC outside the .moe task JSON, under the 400 cap. No daemon, index.ts, wrapper or F12b doc changes. Re-ran verification: git archive b86505f into fresh Linux snapshot /tmp/qa-f12a.KICjma (committed bytes, no overlay), native npm ci, env -i, `cd packages/moe-proxy && npm test` -> rc 0, 98/98 (utils 81, input-framing 3, index 14), matching the worker's evidence. DoD1: complete_step and complete_task join EXECUTION_IDENTITY_TOOLS with ['attempt','session'] under moe.x / moe_x / x; fence unchanged (strict !==, SUBSTITUTED -32003, INVALID -32602, no identity env = legacy passthrough). DoD2: describe.each over both tools pins every spelling incl. alias and numeric generation, session-only env, legacy/blank passthrough, equal presented values, substitution (other id, null, '7', 8, trailing-space session), partial and malformed env; near-miss names stay unstamped. No test deleted or weakened beyond the two names that now join, as planned. DoD3: README, root CLAUDE.md row and scripts/CLAUDE.md bullets checked against utils.ts, moe-agent.sh (MOE_SESSION_ID export, pin_attempt_identity, loop-top reset, moe_rpc_unserved on post-flight and adoption reads), moe-agent.ps1 (Set-MoeAttemptIdentity, Invoke-MoeRpcUnserved, grok literal lines, codex override order). No verified-local or isolation claim. DoD4: fresh npm test exit 0 recorded and reproduced. Residual, not a defect, for CQ-F12: comments at moe-agent.sh:6273 and its ps1 twin still say the proxy stamps only get_context/start_step; left alone because a wrapper edit hot-reloads the fleet.",
+  "requiredCheckAtDone": null
+}

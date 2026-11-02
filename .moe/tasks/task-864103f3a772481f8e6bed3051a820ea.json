@@ -1,0 +1,244 @@
+{
+  "id": "task-864103f3a772481f8e6bed3051a820ea",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the JetBrains plugin ships the daemon's and proxy's devDependencies (about 168 MB uncompressed) beside 3.5 MB of runtime modules; bundle only the lockfile's production packages",
+  "description": "Files: moe-jetbrains/build.gradle.kts only: the prepareSandbox node_modules copies (:189-199) and a check beside requireBundledAssets (:89). No open row declares it. I checked all 38 open rows at 2026-11-02 17:53Z. .github/workflows/ci.yml is held by two WORKING rows and stays out of scope.\n\nOrigin: DONE rows promised this follow-up and nobody filed it. VSC-0 (task-a3e414a3) row D8, docs/plans/2026-11-02-vscode-reuse.md:74, reads: \"Bundled node_modules ship devDependencies (vitest, typescript, rolldown) in both plugins | A follow-up to VSC-16\". VSC-16 (task-6fbd0811, DONE) put it out of scope: \"both plugins ship vitest and typescript today; the vsix was 61 MB at 882a4c39\". This is the JetBrains half, done first. The VS Code half is a separate row that depends on this one.\n\nMeasured at HEAD 2bb683f8, from each package-lock.json (lockfileVersion 3) plus `du` of the checkout's installs:\n- packages/moe-daemon/node_modules: 43 dev-only top-level packages (83.8 MB) and 30 production packages (3.3 MB).\n- packages/moe-proxy/node_modules: 43 dev-only packages (83.8 MB) and 1 production package, ws (0.2 MB).\n- build.gradle.kts copies both trees whole into <plugin>/daemon/node_modules and <plugin>/proxy/node_modules, excluding only **/.bin/**.\n- The production dependencies are chokidar, pino, pino-pretty and ws. The devDependencies are @types/node, @types/ws, tsx, typescript and vitest. In the shipped dist, the only devDependency imports (vitest) are in compiled *.test.js files, which the dist copy already excludes.\n\nFix: copy only the lockfile's production packages. That means every packages[\"node_modules/…\"] entry, nested paths included, that lacks \"dev\": true. Keep \"devOptional\" and \"optional\" entries. Read the lockfile with the JsonSlurper the manifest code already uses.\nGuard: pruning adds a new risk. A future runtime import of a dev-only package would fail only when a user starts the daemon. So the build must scan the dist .js files it actually copies (after the test exclusion) for bare specifiers: static `from '…'`, dynamic `import('…')` and `require('…')`, skipping node: builtins and relative paths. It fails, naming the specifier, when that package is not in the copied node_modules.\nError handling: the build fails with a GradleException that names the file or package when package-lock.json is missing or unparseable, when it has no packages map (lockfileVersion below 2), or when a production entry is missing on disk. It never falls back to copying the whole tree.\n\nOut of scope:\n- VS Code (moe-vscode/scripts/bundle-assets.mjs): separate row.\n- .github/workflows/ci.yml: held by other rows.\n- The daemon's and proxy's package.json, and any npm install change.",
+  "definitionOfDone": [
+    "The buildPlugin zip's daemon/node_modules and proxy/node_modules hold exactly the lockfile's production packages. No entry marked \"dev\": true ships, including typescript, vitest, tsx and @types/*. Every production entry ships: chokidar, pino, pino-pretty, ws and their production dependencies. The completion evidence compares an `unzip -Z1` listing against the lockfile.",
+    "The build fails, naming the specifier, when a bare import in a copied daemon/dist or proxy/dist .js file names a package missing from the copied node_modules. Prove it with a negative control in a scratch copy of the repo, never by editing the shared checkout's dist: add a non-test dist file that imports 'typescript', and buildPlugin must fail with that name.",
+    "A missing or unparseable package-lock.json, or one with no packages map, fails the build with a GradleException naming the file. Nothing falls back to copying the whole tree.",
+    "The bundled daemon loads from the unzipped plugin. `node <unzipped>/…/daemon/dist/index.js doctor --project <empty temp dir>` reaches its checklist output with no ERR_MODULE_NOT_FOUND. It may exit 1 because .moe is missing.",
+    "`cd moe-jetbrains && ./gradlew buildPlugin test` exits 0 under the jetbrains-gradle lease. The evidence reports the zip size before and after. The shipped file set outside the two node_modules trees is unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Baseline snapshot and BEFORE zip for the DoD 5 'before' side. This step changes no repo file. Set E=/mnt/d/moe-scratch/864103f3 and S=$E/r at the top of EVERY shell call; vars do not persist. The Windows path of S is D:\\moe-scratch\\864103f3\\r; keep it short for long node_modules paths. Use a fresh S. This recipe makes no junctions, so rm -rf of your own S is safe (mem:gotcha-qa-snapshot-junction-cleanup).\n(1) Run mkdir -p \"$S\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\". Take the full archive: the daemon prebuild reads docs/skills, and the manifest copies scripts/ and docs/. Write the HEAD sha to $E/README.\n(2) Install and build both packages IN THE SNAPSHOT. The GLOBAL customRule forbids npm ci and npm run build in the shared checkout. Its dists are also older than src (daemon dist 10-31 19:17Z vs src 11-02 17:35Z, proxy 10-31 08:45Z vs 11-02 17:49Z), so requireFreshDist would fail an in-place buildPlugin. Commands: cmd.exe /d /c 'cd /d D:\\moe-scratch\\864103f3\\r\\packages\\moe-daemon && call npm ci --no-audit --no-fund && call npm run build', then the same for packages\\moe-proxy. Windows node 24 and npm are on PATH. WSL npm also works but is slow on drvfs; then guard each step with `cd \"$S/packages/moe-daemon\" || exit 1`. Confirm that both dist/index.js files exist.\n(3) Write the DoD 1 comparison script to $E/compare.mjs. It is a scratch file, so a shell write is fine. Usage: node compare.mjs <listing> <daemon lock> <proxy lock>. For pkg in [daemon, proxy] it takes the listing lines under `moe-jetbrains/<pkg>/node_modules/` and derives package keys with /^((?:@[^/]+\\/[^/]+|[^@/][^/]*)(?:\\/node_modules\\/(?:@[^/]+\\/[^/]+|[^@/][^/]*))*)\\//, dropping lines that do not match. It reads the lock's `packages` keys that start with node_modules/, splits them into prod (no dev:true) and dev (sliced past the 13-char prefix), and prints JSON {shipped, prod, missing, extra, devShipped}.\n(4) Take the jetbrains-gradle lease NOW and hold it through step 4: moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId, note:\"864103f3 snapshot builds + build.gradle.kts edit window\"}. Steps 2-3 edit the shared tree's build.gradle.kts, and a peer's in-place gradle run must never compile it half-edited. If you are queued, call moe.report_blocked with that resourceId; the grant unblocks you (mem:convention-jetbrains-gradle-lease).\n(5) BEFORE build with HEAD's unchanged build file: cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\864103f3\\r\\moe-jetbrains && .\\gradlew.bat buildPlugin' > \"$E/before-build.txt\" 2>&1, expecting exit 0. Then cp the snapshot's moe-jetbrains/build/distributions/moe-jetbrains-0.8.0.zip to $E/before.zip, run unzip -Z1 on it into $E/before.txt, and record stat -c %s. Run compare.mjs on before.txt: its devShipped list (typescript, vitest, tsx, @types/*, ...) is the defect evidence. From WSL bash the cmd.exe spelling works (mem:gotcha-jetbrains-gradle-from-wsl). From Git Bash it is a false green (mem:gotcha-bash-cmd-d-c-false-green), so use PowerShell there. Prove every gradle run by the zip's mtime and size, never by BUILD SUCCESSFUL alone.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Snapshot of HEAD 19d3fc0c at /mnt/d/moe-scratch/864103f3/r (git archive). Windows npm ci and build ran for the daemon and proxy, both rc 0. The jetbrains-gradle lease was granted at 18:24:13Z. BEFORE buildPlugin: rc 0, 9 of 9 tasks executed, zip 64,546,287 bytes, 4549 listing lines. compare.mjs on before.txt: daemon ships 74 (31 prod + 43 dev), proxy 44 (1 prod + 43 dev). The dev entries include typescript, vitest, tsx, @types/node, @types/ws and others. No repo file was changed. The other dirty paths in the shared tree belong to other sessions and were left alone.",
+      "startedAt": "2026-11-02T18:22:34.885Z",
+      "completedAt": "2026-11-02T18:25:40.620Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Production-only copy from the lockfile, with error handling (DoD 1 and 3). Edit moe-jetbrains/build.gradle.kts with the Edit tool only; the GLOBAL customRule bars shell writes to tracked files.\n(1) Next to the bundled* vals (:20-28), add val bundledDaemonLock = repoRoot.resolve(\"packages/moe-daemon/package-lock.json\"), val bundledProxyLock = repoRoot.resolve(\"packages/moe-proxy/package-lock.json\") and val distTestExcludes = listOf(\"**/*.test.*\", \"**/*.spec.*\"). Use exclude(distTestExcludes) in both dist from-blocks (:185-188, :193-196), so the copy and step 3's scan share one pattern list.\n(2) Beside the manifest helpers (:34-69), add fun productionPackages(lockfile: File): List<String>, parsing with groovy.json.JsonSlurper as bundleCopies does. It returns, sorted, every `packages` key that starts with \"node_modules/\" and whose entry is not \"dev\": true, as the path under node_modules (\"chokidar\", \"@pinojs/redact\", \"pino-pretty/node_modules/sonic-boom\"). optional, devOptional and peer entries ship, and keys outside node_modules (the \"\" root) are ignored. Every failure is a GradleException naming the lockfile, and none falls back to copying the whole tree:\n- readText throwing java.io.IOException gives \"Lockfile $lockfile is missing or unreadable: ...\".\n- parseText throwing (catch Exception) gives \"... is not valid JSON: ...\".\n- A missing `packages` map gives \"... has no packages map (npm lockfileVersion 2 or newer is required)\".\n- An entry that is not an object is an error.\n- So is a key that does not fully match Regex(\"\"\"node_modules/(?:@[^/\\\\]+/)?[^/\\\\]+(?:/node_modules/(?:@[^/\\\\]+/)?[^/\\\\]+)*\"\"\") or has a \".\" or \"..\" segment. This mirrors manifestString's no-.. rule, so no key can copy from outside node_modules.\n- So is a non-dev entry with \"link\": true: a link resolves outside node_modules, and npm creates links even for optional entries (mem:gotcha-npm-lockfile-link-inbundle).\n(3) Add val daemonPackages: List<String> by lazy { productionPackages(bundledDaemonLock) } and the proxy twin. They are read when prepareSandbox is configured. The lockfiles are tracked, so `test` in a snapshot without node_modules is unaffected.\n(4) Replace the whole-tree node_modules blocks (:189-192 and :197-200) with one child spec per entry: daemonPackages.forEach { rel -> from(bundledDaemonModules.resolve(rel)) { into(\"$pluginContentRoot/daemon/node_modules/$rel\"); exclude(\"node_modules/**\") } }, and the same for the proxy. Each entry drops its own nested node_modules, because nested production entries are their own keys. A dev-only nested package therefore never ships, and nothing is copied twice. The root .bin and node_modules/.package-lock.json stop shipping: neither is a package, and Node never reads them.\n(5) Rewrite the comment above the copies. It should say what ships (non-dev lockfile entries only), why (VSC-0 D8: about 168 MB of devDependencies such as typescript, vitest and tsx), and that step 3's guard checks the dist against that set.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "note": "build.gradle.kts gains bundledDaemonLock/bundledProxyLock, distTestExcludes (now used by both dist from-blocks), lockfileKey, productionPackages(lockfile) and the lazy daemonPackages/proxyPackages. productionPackages throws a GradleException naming the lockfile for each of: missing or unreadable, not valid JSON, no packages map, non-object entry, unsafe key (regex plus ./.. segment), non-dev link entry. The whole-tree node_modules copies are now per-entry child specs that exclude their own node_modules/**. Intermediate snapshot check (prepareSandbox --rerun buildPlugin --rerun): rc 0, zip 4,742,186 bytes (BEFORE 64,546,287). compare.mjs: daemon shipped 31 = prod 31, proxy 1 = prod 1; missing, extra and devShipped are all empty. The nested pino-pretty/node_modules/sonic-boom ships beside the top-level sonic-boom. No .bin or .package-lock.json ships.",
+      "startedAt": "2026-11-02T18:25:41.299Z",
+      "completedAt": "2026-11-02T18:27:28.784Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Presence check and dist import guard, then tests by negative controls (DoD 2 and 3, plus the description's error handling).\n(1) In build.gradle.kts beside requireBundledAssets (:89), add fun requireBundledPackages() and call it in prepareSandbox's doFirst right after requireBundledAssets(). It collects problems for BOTH packages and then throws ONE GradleException listing all of them, so a single run names every hit.\n(a) Presence. Every productionPackages entry needs <modulesDir>/<rel>/package.json as a file. Otherwise name each missing entry and its lockfile, and say: run npm ci in packages/<pkg>. Gradle's from() of a missing directory copies nothing silently, so this check is the only thing that stops a bundle lacking a runtime package. There is no exemption for optional entries. None is non-dev today, and a platform-skipped native would ship host-only bytes, so fail closed.\n(b) Imports. At script level, define val daemonDistScripts = fileTree(bundledDaemonDir) { include(\"**/*.js\", \"**/*.mjs\", \"**/*.cjs\"); exclude(distTestExcludes) } and the proxy twin. These are exactly the dist files the copy ships, with the same Ant patterns. Read each file and collect group 2 of four Kotlin raw-string regexes:\n- static: (?m)^\\s*(?:import|export)\\b[^'\"`;]*?\\bfrom\\s*(['\"])([^'\"\\n]+)\\1\n- side-effect: (?m)^\\s*import\\s*(['\"])([^'\"\\n]+)\\1\n- dynamic: \\bimport\\s*\\(\\s*(['\"])([^'\"\\n]+)\\1\\s*\\)\n- require: \\brequire\\s*\\(\\s*(['\"])([^'\"\\n]+)\\1\\s*\\)\nSkip a specifier that starts with \".\" or \"/\" or has a URL scheme. ^[A-Za-z][A-Za-z0-9+.-]*: covers every node: builtin, file: and data:. The package name is the first two segments when the specifier starts with \"@\", else the first segment. Skip names in val nodeBuiltins = setOf(\"_http_agent\", \"_http_client\", \"_http_common\", \"_http_incoming\", \"_http_outgoing\", \"_http_server\", \"_stream_duplex\", \"_stream_passthrough\", \"_stream_readable\", \"_stream_transform\", \"_stream_wrap\", \"_stream_writable\", \"_tls_common\", \"_tls_wrap\", \"assert\", \"async_hooks\", \"buffer\", \"child_process\", \"cluster\", \"console\", \"constants\", \"crypto\", \"dgram\", \"diagnostics_channel\", \"dns\", \"domain\", \"events\", \"fs\", \"http\", \"http2\", \"https\", \"inspector\", \"module\", \"net\", \"os\", \"path\", \"perf_hooks\", \"process\", \"punycode\", \"querystring\", \"readline\", \"repl\", \"stream\", \"string_decoder\", \"sys\", \"timers\", \"tls\", \"trace_events\", \"tty\", \"url\", \"util\", \"v8\", \"vm\", \"wasi\", \"worker_threads\", \"zlib\"). That is Node 24's module.builtinModules reduced to top-level names. The dist imports fs, path, crypto, child_process, http, net, os, url, dns, zlib and async_hooks with no node: prefix, so a node:-only skip would fail on day one. Report any other name that is not a TOP-LEVEL shipped entry (one without \"/node_modules/\"; only those resolve from dist/) as \"'<spec>' (<dist-relative invariantSeparatorsPath>:<line>)\", where line is 1 plus the newlines before the match. The message reads: \"Bundled <pkg> dist imports packages its bundled node_modules does not ship (devDependencies are not bundled): ...\".\n(2) Tests, run IN THE SNAPSHOT under the held lease, never against the shared checkout's dist (DoD 2). Copy the edited file over the snapshot's (cp /mnt/d/projexts/moes/moe-jetbrains/build.gradle.kts \"$S/moe-jetbrains/\") and cmp them. Run sha256sum on both snapshot lockfiles into $E/lock.sha256. Then run each case with cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\864103f3\\r\\moe-jetbrains && .\\gradlew.bat buildPlugin' > \"$E/nc-N.txt\" 2>&1. Expect a nonzero exit and the quoted names, then restore the input and run sha256sum -c:\n- N1 (DoD 2). Add $S/packages/moe-daemon/dist/zz-nc.js with these four lines: import ts from 'typescript';, then import { createRequire } from 'node:module';, then const require = createRequire(import.meta.url); require('tsx');, then export const v = await import('vitest');. Add $S/packages/moe-daemon/dist/zz-nc.test.js with import ts from 'typescript'; (it must NOT be reported, because test files never ship). Add $S/packages/moe-proxy/dist/zz-nc.js with import 'vitest';. Expect one message naming 'typescript' zz-nc.js:1, 'tsx' :3 and 'vitest' :4 for the daemon and 'vitest' zz-nc.js:1 for the proxy. It must not mention node:module or zz-nc.test.js. Delete the three files afterwards.\n- N2. mv the snapshot's packages/moe-daemon/package-lock.json aside; expect 'missing or unreadable' naming the file.\n- N3. Make it the single character {; expect 'not valid JSON' naming the file.\n- N4. Make it {\"lockfileVersion\":1,\"dependencies\":{}}; expect 'no packages map' naming the file.\n- N5. mv the snapshot's packages/moe-daemon/node_modules/pino-pretty/node_modules/sonic-boom to $E/sonic-boom.moved; expect the presence message naming pino-pretty/node_modules/sonic-boom, which proves nested entries are checked. mv it back.\nIf a case does not fail as stated, fix build.gradle.kts in the shared tree, re-copy and cmp, and rerun from N1.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "note": "Added daemonDistScripts/proxyDistScripts (fileTree with distTestExcludes), importSpecifiers (the 4 planned regexes), urlScheme, nodeBuiltins (the 56 planned names), unshippedImports, bundleProblems and requireBundledPackages(). requireBundledPackages() is called in prepareSandbox doFirst after requireBundledAssets() and throws one GradleException listing both packages' problems. One deviation: the line number counts the newlines before the specifier (group 2), not before the match start, because a leading (?m)^\\s* can start the match on an earlier blank line. Matches are sorted by position. RED: the step-2 file built N1 rc 0 and shipped zz-nc.js. GREEN, all in the snapshot with the lease held: N1 rc 1 named 'typescript' (zz-nc.js:1), 'tsx' (zz-nc.js:3), 'vitest' (zz-nc.js:4) for moe-daemon and 'vitest' (zz-nc.js:1) for moe-proxy; node:module and zz-nc.test.js appear 0 times. N2 rc 1 'is missing or unreadable', N3 rc 1 'is not valid JSON', N4 rc 1 'has no packages map'; each names D:\\moe-scratch\\864103f3\\r\\packages\\moe-daemon\\package-lock.json. N5 rc 1, the presence message names pino-pretty/node_modules/sonic-boom. Extras: N6 key node_modules/../../x, N7 key with a backslash and N8 an optional link entry each fail rc 1 with a named lockfile error. Every input was restored: sha256sum -c OK, sonic-boom moved back, zz-nc files deleted.",
+      "startedAt": "2026-11-02T18:27:29.668Z",
+      "completedAt": "2026-11-02T18:29:04.476Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate and evidence (DoD 1, 4 and 5), still under the lease.\n(1) Gate: the DoD's `./gradlew buildPlugin test`, run in the snapshot (HEAD plus this task's build.gradle.kts; cmp it again first). Give every task its own --rerun, because --rerun binds only to the task named just before it (mem:gotcha-gradle-uptodate-inside-chained-gate): cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\864103f3\\r\\moe-jetbrains && .\\gradlew.bat prepareSandbox --rerun buildPlugin --rerun test --rerun' 2>&1 | tee \"$E/gate.txt\". Expect exit 0. Sum the TEST-*.xml under $S/moe-jetbrains/build/test-results/test and expect failures and errors to be 0. Then cp the zip to $E/after.zip, run unzip -Z1 on it into $E/after.txt, and record its size.\n(2) DoD 1: node \"$E/compare.mjs\" \"$E/after.txt\" \"$S/packages/moe-daemon/package-lock.json\" \"$S/packages/moe-proxy/package-lock.json\". Expect daemon shipped = prod = 31 with missing, extra and devShipped empty, and proxy shipped = prod = 1 (ws). Also grep after.txt and expect no typescript/, vitest/, tsx/ or @types/ directory under either node_modules.\n(3) DoD 5: diff the sorted before.txt and after.txt after dropping the ^moe-jetbrains/(daemon|proxy)/node_modules/ lines. Expect them identical. Report both zip sizes in bytes.\n(4) DoD 4: U=$(mktemp -d); P=$(mktemp -d); unzip -q \"$E/after.zip\" -d \"$U\"; node \"$U/moe-jetbrains/daemon/dist/index.js\" doctor --project \"$P\" > \"$E/doctor.txt\" 2>&1, and record rc right away. Expect checklist output with rc 0 or 1, and grep -c ERR_MODULE_NOT_FOUND \"$E/doctor.txt\" to give 0. WSL node is fine, because every shipped package is pure JS.\n(5) Release the lease with moe.release_resource {resourceId:\"jetbrains-gradle\", taskId, workerId}, on failure too.\nIn complete_task, verification is the gate command (the --rerun long form meets the DoD's short form; say so), its exitCode and gate.txt's tail. The summary gives HEAD, the before and after zip sizes, the compare output, the outside-node_modules diff result, one line per N1-N5 and the doctor rc. It also states the shipping rule in one sentence for the VS Code twin c76a8bf8: non-dev lockfile entries, each without its nested node_modules, plus the dist import guard.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "note": "Gate in snapshot (HEAD 19d3fc0c plus this build.gradle.kts, cmp OK, lockfiles sha256 OK): `prepareSandbox --rerun buildPlugin --rerun test --rerun` exited 0, BUILD SUCCESSFUL in 56s, 13 actionable tasks with 7 executed (prepareSandbox, buildPlugin and test all executed). JUnit: 36 TEST-*.xml, all newer than the gate start, 574 tests with 0 failures, 0 errors and 0 skipped. Zip size went from 64,546,287 bytes before to 4,742,186 after. DoD 1, compare.mjs on the after listing: daemon shipped 31 = prod 31, proxy 1 = prod 1 (ws); missing, extra and devShipped are all []. 0 typescript/vitest/tsx/@types lines (1424 before). DoD 5: the 807 listing lines outside node_modules are identical. DoD 4: the plan's path daemon/dist/index.js does not exist, because the dist is copied straight into daemon/, so the run used daemon/index.js. `node <unzip>/moe-jetbrains/daemon/index.js doctor --project <empty tmp>` gave rc 1 with '[FAIL] .moe/ presence' and 0 ERR_MODULE_NOT_FOUND. pino, pino-pretty, chokidar and ws also import from the unzipped daemon dir, and ws from the proxy dir. The jetbrains-gradle lease was released and granted to b9e0bb5a.",
+      "startedAt": "2026-11-02T18:29:05.340Z",
+      "completedAt": "2026-11-02T18:30:57.952Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of the build.gradle.kts diff; load the adversarial-self-review skill.\n(1) Scope: git diff --stat shows only moe-jetbrains/build.gradle.kts as yours, well under 400 net LOC. Report it in complete_step.modifiedFiles and leave peers' dirty paths alone.\n(2) Disjoint child specs: every entry excludes its own node_modules/**, and nested keys copy to their own nested path. The top-level sonic-boom and pino-pretty's nested sonic-boom are different versions, and both ship.\n(3) Path safety: the key regex and the ./.. check reject a crafted key such as node_modules/../../x or a backslash, and link entries are refused.\n(4) Configuration vs execution: only the lockfile parse runs at configuration time. The presence check and scan run in doFirst, so `test` needs no node_modules. The lockfiles are tracked, so a test-only snapshot still configures.\n(5) Scan edge cases:\n- A multi-line `import {` ... `} from 'x'` matches, because the negated class spans newlines.\n- An identifier like copyFrom or a call like Array.from(...) never matches: there is no word boundary inside copyFrom, and Array.from is followed by a paren, not a quote.\n- CRLF dist files work.\n- A specifier inside a vendored template literal (generated/skillFiles.js embeds docs/skills as 30,901 lines) would be a fail-closed false positive naming its file:line. HEAD has none. Add no allowlist.\n(6) No error path falls back to copying the whole tree.\n(7) Messages use invariantSeparatorsPath.\n(8) Would I be embarrassed if a user's daemon hit ERR_MODULE_NOT_FOUND? Imports by string (pino's transport target 'pino-pretty') are invisible to the scan. They ship because they are non-dev lockfile entries, and the doctor run loads the daemon's static graph.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "note": "Self-review of `git diff -- moe-jetbrains/build.gradle.kts` (+112/-10, net 102; the only path of mine; peers' dirty paths left alone). The file is now 343 lines, over the 300 guideline, because the row confines scope to this file; every function is 50 lines or fewer.\n(2) Child specs are disjoint: pino-pretty/node_modules/ holds only sonic-boom, and both sonic-boom versions ship.\n(3) Path safety is shown by N6 (../../x), N7 (backslash) and N8 (optional link). A scope-only key would fail the package.json presence check.\n(4) Only the lockfile parse runs at configuration; presence and scan run in doFirst. The gate's test task passed.\n(5) Multi-line imports match. import.meta and require.resolve( do not match. The line number comes from the specifier's offset, which is CRLF-safe. A `require('x')` inside a comment or string in dist would be a named, fail-closed false positive (risk (a)); HEAD has none, since the positive gate is green, and no allowlist was added.\n(6) No error path falls back to copying the whole tree.\n(7) Dist paths use invariantSeparatorsPath.\n(8) String-target imports (pino transport 'pino-pretty') ship as non-dev entries, and pino-pretty imports from the unzipped daemon dir.\nNo code change came from this review.",
+      "startedAt": "2026-11-02T18:30:58.785Z",
+      "completedAt": "2026-11-02T18:31:32.903Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Worktree switch done (19:14Z): the control checkout is on moe/control at 0d8422ce, worktreeMode is on, and doctor exits 0. The drain park is over. Completion 30d483e9 is in moe/control's history, so QA reviews the landed bytes.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 333.7,
+  "comments": [
+    {
+      "id": "comment-c9b682dd56964812b6474aca820a36e5",
+      "author": "architect-0fcb7226",
+      "content": "Planner note from architect-0fcb7226, fixing the DoD 4 path. @worker-b49a5155, please apply this before step-4.\n\nThe bundle has no dist/ level. prepareSandbox copies packages/moe-daemon/dist INTO <root>/daemon, so the zip holds moe-jetbrains/daemon/index.js. I checked /mnt/d/moe-scratch/864103f3/before.txt: it has that file and 0 entries under daemon/dist/.\n\nIn step-4(4), run: node \"$U/moe-jetbrains/daemon/index.js\" doctor --project \"$P\". Do not use …/daemon/dist/index.js. A wrong entry path exits 1 with MODULE_NOT_FOUND and prints no checklist, and grep -c ERR_MODULE_NOT_FOUND alone does not catch that. So also confirm that the checklist output is present.\n\nQA: read DoD 4's `<unzipped>/…/daemon/dist/index.js` as that file. The intent is unchanged: the bundled daemon loads with no ERR_MODULE_NOT_FOUND.\n\narchitect-93e0e956 found this while planning the VS Code twin c76a8bf8 (msg-6736bb09).\n\nThere are no other plan changes:\n- On your snapshot's dist, the step-3(b) regexes give exactly {chokidar, pino, ws} for the daemon and {ws} for the proxy. Add no npm-name-shape filter.\n- The presence check stays fail-closed for optional and devOptional entries too.",
+      "timestamp": "2026-11-02T18:28:39.813Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T17:52:29.881Z",
+  "updatedAt": "2026-11-02T19:13:53.713Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T17:53:48.921Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T18:06:32.142Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-b49a5155"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T18:20:20.706Z",
+  "executionContract": {
+    "intendedBehavior": "buildPlugin bundles each package's node_modules as exactly its package-lock.json non-dev entries, nested ones included. Every failure is a named GradleException, with no fallback: a missing, unparseable or packages-less lockfile, an unsafe key, a link entry, a non-dev entry missing on disk, or a bare import in a shipped dist .js file that names a package the bundle does not ship. The file set outside the two node_modules trees is unchanged.",
+    "acceptanceCriteria": [
+      "After-zip compare: daemon ships exactly its 31 non-dev entries and proxy ships ws. No dev entry ships, including typescript, vitest, tsx and @types/*.",
+      "N1: one buildPlugin failure names 'typescript', 'tsx' and 'vitest' with file:line for the daemon negative file and 'vitest' for the proxy one. The .test.js file and node:module are not reported.",
+      "N2-N4: a missing lockfile, '{' and a lockfileVersion-1 shape each fail with a GradleException naming the lockfile.",
+      "N5: a missing nested production entry fails, naming pino-pretty/node_modules/sonic-boom.",
+      "The doctor run from the unzipped after-zip reaches its checklist with no ERR_MODULE_NOT_FOUND.",
+      "The snapshot gate exits 0. The before and after zip sizes are reported, and the listing outside node_modules is identical."
+    ],
+    "invariants": [
+      "No error path copies the whole node_modules tree.",
+      "The dist copies keep excluding **/*.test.* and **/*.spec.* through the shared list.",
+      "requireBundledAssets' existing checks are unchanged.",
+      "No file other than moe-jetbrains/build.gradle.kts changes: not ci.yml, not package.json, not moe-vscode."
+    ],
+    "compatibility": [
+      "Installed plugins need no runtime change: Node resolves the same production packages from daemon/node_modules and proxy/node_modules.",
+      "`./gradlew test` still needs no node_modules, because the presence check and the scan run only in prepareSandbox's doFirst."
+    ],
+    "approvedScope": [
+      "build.gradle.kts gains the bundledDaemonLock/bundledProxyLock and distTestExcludes vals, fun productionPackages(lockfile), the lazy daemonPackages/proxyPackages, val nodeBuiltins, the daemon/proxy distScripts fileTrees and fun requireBundledPackages() (called in prepareSandbox doFirst). The two whole-tree node_modules from-blocks become per-entry child specs."
+    ],
+    "reuse": [
+      "Reuses JsonSlurper and the manifestString path-safety idea, the existing prepareSandbox doFirst hook, and Gradle fileTree with the same Ant excludes as the dist copy."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/build.gradle.kts:189-192 and :197-200 copy the whole node_modules trees, excluding **/.bin/**.",
+      "moe-jetbrains/build.gradle.kts:52-69 parses the bundle manifest with groovy.json.JsonSlurper.",
+      "moe-jetbrains/build.gradle.kts:89-116 is requireBundledAssets, called in prepareSandbox doFirst at :183.",
+      "packages/moe-daemon/package-lock.json and packages/moe-proxy/package-lock.json are lockfileVersion 3, with a packages map keyed by node_modules paths."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\864103f3\\r\\moe-jetbrains && .\\gradlew.bat prepareSandbox --rerun buildPlugin --rerun test --rerun'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Chosen: per-entry child copy specs from the lockfile's non-dev keys, each excluding its own nested node_modules. This follows the description, reuses the JsonSlurper pattern and is easy to review.\n(2) Rejected: one from(node_modules) with an include Spec predicate. Gradle only descends into directories the spec admits, so the predicate would also have to admit ancestor directories such as @pinojs and pino-pretty/node_modules. That is harder to read and review.\n(3) Rejected: `npm ci --omit=dev` into a staging directory at build time. It adds npm and network to the plugin build, and the row pins the lockfile approach.\n(4) Rejected: reading node_modules/.package-lock.json. DoD 3 names package-lock.json.\n(5) Rejected: getting builtins from `node -p require('module').builtinModules` at build time. That puts a node exec in configuration; the pinned list is deterministic.\n(6) Rejected: skipping only node:-prefixed builtins, as the description literally says. The dist imports fs, path and others without the prefix, so the build would fail at HEAD.\n(7) Rejected: JUnit or TestKit tests for build-script logic. They would need buildSrc or new files, and the row is build.gradle.kts only. DoD 2 and 3 define the tests as recorded negative controls, and the guard itself is the lasting regression check, which CI's buildPlugin job runs on every PR.",
+    "codebaseInsights": "- Lockfiles at HEAD 2ae7cb70:\n  - Daemon: lockfileVersion 3, 143 node_modules entries, 31 of them non-dev. 30 are top-level, plus the nested pino-pretty/node_modules/sonic-boom, which is a different version from the top-level sonic-boom.\n  - Proxy: 113 entries, 1 non-dev (ws).\n  - Every optional or peer entry is also dev, there are no link entries, and every non-dev entry is present on disk.\n- Bare imports in the dist at HEAD:\n  - Daemon: chokidar, pino and ws, plus unprefixed builtins (async_hooks, child_process, crypto, dns, fs, http, net, os, path, url, zlib) and node:*.\n  - Proxy: ws, plus fs, http, net and path.\n  - Neither has a bare dynamic import() or require().\n- The zip lays files out as moe-jetbrains/{daemon,proxy}/node_modules/... The 10-31 shared zip was 92,043,830 bytes, with 3726 daemon and 1636 proxy node_modules entries.\n- requireBundledAssets uses check(), which throws IllegalStateException. The row wants GradleException for the new failures.\n- No configuration cache is enabled (gradle.properties sets only jvmargs), so doFirst lambdas that call script functions are fine, as today.\n- VSC-16 and VSC-18 built buildPlugin in /mnt/d/moe-scratch git-archive snapshots after running npm ci and build there.",
+    "risks": "(a) Fail-closed false positives. Vendored doc content embedded in dist template literals that contains a line-start `import ... from '<bare>'` or `require('<bare>')` would fail the build, naming file:line. HEAD has none. The fix then belongs in the doc or generator; do not add an allowlist.\n(b) A future non-dev optional native that npm skips for os or cpu would fail the presence check. That is deliberate; there is none today.\n(c) Lease span. Hold the lease from the BEFORE build through the gate, so that the shared-tree edit window is covered. b9e0bb5a's worker queues through report_blocked with resourceId and is unblocked on grant.\n(d) Gradle UP-TO-DATE. Use --rerun after every task in the gate. A fresh snapshot runs everything anyway.\n(e) The Git Bash cmd.exe false green. Prove runs by zip mtime and size and by the XML sums.\n(f) Snapshot npm ci needs registry or cache access. Windows npm is faster than WSL npm on drvfs.\n(g) The VS Code twin c76a8bf8 depends on this row and should mirror the rule. The completion summary states it.",
+    "keyFiles": [
+      "moe-jetbrains/build.gradle.kts",
+      "packages/moe-daemon/package-lock.json",
+      "packages/moe-proxy/package-lock.json",
+      "scripts/bundle-manifest.json",
+      "docs/plans/2026-11-02-vscode-reuse.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "7c60841f4b2be6adeac6d399e36f3590fe43f3fa",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T18:20:20.731Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T18:22:34.885Z",
+  "reviewStartedAt": "2026-11-02T18:32:05.626Z",
+  "verification": {
+    "command": "cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\864103f3\\r\\moe-jetbrains && .\\gradlew.bat prepareSandbox --rerun buildPlugin --rerun test --rerun'",
+    "exitCode": 0,
+    "outputTail": "> Task :prepareSandbox\n> Task :buildSearchableOptions SKIPPED\n> Task :prepareJarSearchableOptions SKIPPED\n> Task :jarSearchableOptions SKIPPED\n> Task :buildPlugin\n> Task :processTestResources\n> Task :prepareTestSandbox\n> Task :prepareTest\n> Task :compileTestKotlin\n> Task :compileTestJava NO-SOURCE\n> Task :testClasses\n> Task :instrumentTestCode SKIPPED\nWARNING: java.lang.System::load has been called by com.sun.jna.Native (benign JEP 472)\n\n> Task :test\n\nBUILD SUCCESSFUL in 56s\n13 actionable tasks: 7 executed, 6 up-to-date\n[JUnit XML: 36 TEST-*.xml, all newer than gate start 18:29:20Z; 574 tests, 0 failures, 0 errors, 0 skipped. Zip mtime 18:29:43Z]",
+    "reportedAt": "2026-11-02T18:32:05.626Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/build.gradle.kts",
+    ".moe/tasks/task-864103f3a772481f8e6bed3051a820ea.json",
+    ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+    ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json"
+  ],
+  "completionSummary": "JetBrains buildPlugin now bundles only each package-lock.json's production entries. Only moe-jetbrains/build.gradle.kts changed (+112/-10). Evidence is from snapshot /mnt/d/moe-scratch/864103f3/r: git archive of HEAD 19d3fc0c plus this file (cmp OK), with Windows npm ci and build of the daemon and proxy in the snapshot.\nGATE: `prepareSandbox --rerun buildPlugin --rerun test --rerun`, the --rerun long form of the DoD's `./gradlew buildPlugin test`, run under the jetbrains-gradle lease. rc 0, 574 JUnit tests, 0 failures, 0 errors.\nZIP: 64,546,287 bytes before, 4,742,186 after.\nDoD 1: compare.mjs on `unzip -Z1` against the lockfiles. Daemon shipped 31 = prod 31 (nested pino-pretty/node_modules/sonic-boom included), proxy 1 = prod 1 (ws). missing, extra and devShipped are all []. 0 typescript/vitest/tsx/@types lines, down from 1424.\nDoD 5: the 807 listing lines outside the two node_modules trees are identical before and after.\nNegative controls (each rc 1; inputs restored, sha256 OK):\n- N1 (DoD 2): one message names 'typescript' (zz-nc.js:1), 'tsx' (zz-nc.js:3) and 'vitest' (zz-nc.js:4) for moe-daemon, and 'vitest' (zz-nc.js:1) for moe-proxy. It does not mention node:module or zz-nc.test.js. RED: the build without the guard ran rc 0 and shipped zz-nc.js.\n- N2 'is missing or unreadable', N3 '{' 'is not valid JSON', N4 lockfileVersion 1 'has no packages map'. Each is a GradleException naming the lockfile, on the nested '> Lockfile' line under 'Could not create task :prepareSandbox'.\n- N5: the presence error names pino-pretty/node_modules/sonic-boom.\n- Extras: N6 key ../../x, N7 backslash key and N8 optional link entry are each refused, naming the lockfile.\nDoD 4: the zip holds the dist at daemon/index.js; the plan's daemon/dist/index.js does not exist. `node <unzip>/moe-jetbrains/daemon/index.js doctor --project <empty tmp>` gave rc 1 ([FAIL] .moe/ presence) with 0 ERR_MODULE_NOT_FOUND. pino, pino-pretty, chokidar and ws import from the unzipped tree.\nRule for VS Code twi",
+  "commits": [
+    {
+      "sha": "30d483e968668913c81ddd3cc21b87ff1c57c46a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T18:20:15Z",
+      "paths": [
+        ".moe/tasks/task-864103f3a772481f8e6bed3051a820ea.json",
+        ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+        ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T18:32:57.506Z",
+      "treeId": "dea025d79f367783113c5bfca4c1f5fa284dc34a",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/build.gradle.kts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-b49a5155@2026-11-02T18:20:15Z",
+    "at": "2026-11-02T18:32:57.506Z"
+  },
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedReason": null,
+  "priorBlockedReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion 30d483e9 has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode.",
+  "blockedResourceId": null,
+  "blockedOnTaskIds": null
+}

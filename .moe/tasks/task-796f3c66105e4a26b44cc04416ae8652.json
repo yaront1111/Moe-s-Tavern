@@ -1,0 +1,302 @@
+{
+  "id": "task-796f3c66105e4a26b44cc04416ae8652",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10d3a] Guest supervisor agents install mode",
+  "description": "Objective: give the protected guest supervisor (scripts/local-runner/guest-supervisor.py) a root, copy-only 'agents' mode. It installs the pinned agent CLI binaries the host streams on stdin at /opt/moe/agents/<cli>, root:root 0555 and never agent-writable, and it never leaves a partial install.\n\nThis is the guest half of CQ-R10d3 (task-b8e7ad92), split off on 2026-10-30 by architect-bd1eb82d so that each slice stays under QA's 400-line cap. CQ-R10d3 depends on this task. It adds the host installAgents stream, an end-to-end row through this mode, and the readiness probe.\n\nContract:\n- Input frames arrive on stdin and are read the way materialize reads them (snapshot_frames, MAX_HOST_FRAME_BYTES):\n  - per binary, one {kind:'agent', cli, size, sha256} header, then its {kind:'data', data} base64 frames;\n  - then one {kind:'end'}.\n- On success it writes one {kind:'installed', count} frame and exits 0.\n- /opt/moe/agents is created if missing and forced to root 0755 through an O_NOFOLLOW directory fd.\n- Each binary is written to a 0600 file, opened O_EXCL|O_NOFOLLOW inside a root 0700 staging directory beside the targets. Its size and sha256 must match its header. It is then made root:root 0555 and fsynced.\n- Only after the end frame, with no frame after it, is every binary renamed onto /opt/moe/agents/<cli>, atomically replacing an older install. The directory is then fsynced.\n- Exit codes:\n  - 65: an unknown cli (not a JOBS key; the type is checked first), a duplicate cli, a size outside 1..MAX_AGENT_BYTES (2^30, mirroring agent-cache.mjs MAX_AGENT_BINARY_BYTES), or a sha256 that is not 64 lowercase hex;\n  - 65: a malformed, empty, non-canonical or overlong data frame, a size or hash mismatch, an empty stream, EOF before end, or any frame after end;\n  - 74: an I/O failure, including an agents path that is a symlink or a file;\n  - 77: not root;\n  - 64: any other argv.\n- No refusal writes a frame. A handled refusal installs nothing and leaves no staging directory. A crash can leave only the root-only staging directory.\n\nOut of scope:\n- the host stream and readiness (CQ-R10d3);\n- the JOBS argv and MCP config (CQ-R10d4);\n- the cache (CQ-R10d2, done);\n- any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs. On WSL, run it with env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\".",
+  "definitionOfDone": [
+    "The 'agents' mode installs every streamed binary at <agents>/<cli> as 0555 (root:root in production; the owner is a test seam), only after its size and sha256 match its header. It answers one {kind:'installed', count} frame and replaces an older install atomically. Shown by tests through the real supervisor under python3.",
+    "Each refusal exits 65 with no frame, no installed file and no staging directory left: an unknown or non-string cli, a duplicate, a size or hash mismatch, a malformed or overlong data frame, an empty stream, EOF before end, a frame after end, and a valid binary followed by a bad one. An agents path that is a symlink exits 74. Shown by tests.",
+    "main accepts ['agents'] (77 when not root, 64 with extra arguments) and runs install_agents(0, 1) with its fixed defaults. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red), scripts/tests/local-runner.test.mjs. Load test-driven-development.\n\nAppend a new section at the end of the file:\n`// CQ-R10d3a agents install rows: the real supervisor's install_agents() into <dir>/agents, owned by the test user (the owner seam).`\nReuse PY_LOAD, PY_SUPERVISOR, NOT_POSIX, framesOf, modeOf, scratch, encodeFrame and createFrameDecoder. Every row gets `{ skip: NOT_POSIX }`. ESM import bindings are file-global, so import only names the file does not import yet (e.g. linkSync); a second import of the same name is a SyntaxError. Size budget: about 140 test lines (see planningNotes).\n\nHelper agentsIn(dir, input, setup = '', ...extra), modelled on materializeIn:\n- run `${PY_LOAD}${setup}\\nsys.exit(m.install_agents(0, 1, sys.argv[2], (os.getuid(), os.getgid())))` under python3 -I -B;\n- argv[2] is path.join(dir, 'agents'); pass input, maxBuffer and timeout as M rows do;\n- frame builders: agent(cli, bytes) = {kind:'agent', cli, size: bytes.length, sha256: sha256 hex}; data(chunk) = {kind:'data', data: base64}; END = {kind:'end'};\n- a state(dir) helper lists <dir>/agents as sorted [name, bytes-or-'dir', mode] rows.\n\nRows (AI is an unused prefix):\n\nAI1: CLI routing and pins.\n- ['agents','x'] and ['AGENTS'] exit 64 with no stdout.\n- main(['agents'], geteuid=lambda: 1000) exits 77.\n- As root, with install_agents replaced by a stderr-repr lambda, the result is [42, '((0, 1), {})', 0], copying the VR6 pattern.\n- The Python constants: m.AGENTS == '/opt/moe/agents'; os.path.dirname of every JOBS executable == m.AGENTS; m.MAX_AGENT_BYTES equals MAX_AGENT_BINARY_BYTES imported from ../local-runner/agent-cache.mjs; inspect.signature(m.install_agents) defaults agents=m.AGENTS and owner=(0, 0).\n\nAI2: a clean install.\n- Stream claude (SNAPSHOT_CHUNK_BYTES + 3 bytes, in two data frames) and codex (a few bytes) into a dir with no agents yet.\n- Exit 0, and stdout decodes to exactly [{kind:'installed', count:2}].\n- agents/claude and agents/codex hold exactly the streamed bytes, mode 0o555, uid = process.getuid().\n- The agents dir is mode 0o755, and its listing is exactly ['claude','codex'], with no staging left.\n\nAI3: an older install is replaced, never overwritten in place.\n- Pre-create agents (mode 0o777), holding an old claude, plus a hard link to that old file outside agents.\n- Install a new claude: agents/claude has the new bytes at 0o555, the hard link still has the old bytes, the agents dir is forced to 0o755, and no staging is left.\n\nAI4: each stream breaks exactly one rule, exits 65, writes no stdout and leaves state(dir) equal to its before-value. Pre-create agents with an old claude, so 'installs nothing' is observable. Rows:\n- the cli is 'gemini';\n- the cli is ['claude'], 7 or null (type checked before the JOBS lookup, so no TypeError);\n- a duplicate claude;\n- size 0, size MAX+1 or size true;\n- sha256 that is uppercase, 63 chars or not a string;\n- the right size but a wrong hash;\n- short data before end, or a data chunk longer than what is left;\n- an empty data frame, non-canonical base64 'QR==', or a non-string data;\n- an extra key in the agent header, or in a data frame;\n- a data frame before any header;\n- a zero-byte stream;\n- an end before any agent (this plan defines it as an empty stream);\n- EOF before end;\n- a second end after end;\n- a partial frame after end;\n- a valid claude followed by a bad codex (wrong hash).\nAlso: the valid base stream exits 0, and the same streams with claude and codex in either order exit 0.\n\nAI5: I/O, each with no stdout.\n- agents is a symlink to an outside dir: exit 74, and the link and the outside dir are untouched.\n- agents is a regular file: exit 74, and the file is unchanged.\n- With os.fsync or os.rename injected to raise OSError(5) (M4's setup pattern): exit 74, and state(dir) is unchanged (the old claude intact, no codex, no staging).\n\nRED proof: `node --test --test-name-pattern='^AI[0-9]' scripts/tests/local-runner.test.mjs` with the env -i PATH from step 3. Every AI row fails on HEAD (no install_agents, and 'agents' is 64). Record it in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Reopen 1 (QA reject: the size rule had no killing test). Test-only fix in the AI4 section of scripts/tests/local-runner.test.mjs: +14/-7. The task total against 4f2692a~1 is now +219/-11 = 230 (cap 400).\n\nWhat changed:\n- Each refusal row may now carry a third element, harness setup, which is passed to agentsIn.\n- The three size rows now break only the size rule. Each is a whole binary with a correct hash:\n  - 'size 0': a 0-byte claude with the empty-bytes sha256 and no data frames.\n  - 'size true': a 1-byte claude with its correct sha256 and one data frame, with header size true.\n  - 'a size above the cap': setup `m.MAX_AGENT_BYTES = 6` and the valid 7-byte claude.\n- The old `MAX_AGENT_BINARY_BYTES + 1` row was replaced by the lowered-cap row, because a valid 2^30+1-byte binary cannot be streamed in a test. AI1 still pins m.MAX_AGENT_BYTES == MAX_AGENT_BINARY_BYTES.\n- The install loop now labels its rows and adds both bounds:\n  - 'size 1': a 1-byte claude installs; it is the size-true row's base stream.\n  - 'size == cap': `m.MAX_AGENT_BYTES = 7` with the 7-byte claude installs.\n\nMutation proof:\n- Setup: a scratch copy under /tmp. The mutants were applied to the scratch guest-supervisor.py by exact single-match replacement; the shared files were never edited.\n- Run: --test-name-pattern='^AI[0-9]' under env -i with node v24.21.0. \"Old\" is the 4f2692a test file.\n- M1, the whole check deleted (`type(size) is int and 1 <= size <= MAX_AGENT_BYTES`): AI4 red, first on 'size 0'. Old: 5/5 green.\n- M2, only `1 <=` deleted: AI4 red on 'size 0'. Old: green.\n- M3, only `<= MAX_AGENT_BYTES` deleted: AI4 red on 'a size above the cap'. Old: green.\n- Three more mutants I added:\n  - M4, only `type(size) is int` deleted: red on 'size true'.\n  - M5, `size < MAX_AGENT_BYTES`: red on 'size == cap'.\n  - M6, `1 < size`: red on 'size 1'.\n  The old test stays green on all three.\n- Restored: the scratch supervisor is byte-equal (cmp) to the repo file.\n\nGreen against the real, unchanged supervisor: AI1-AI5 pass 5/5. No __pycache__.\n\nPeer dirty paths I left untouched: scripts/local-runner/vm-control.mjs and dependency-cache.mjs (other sessions).",
+      "startedAt": "2026-10-30T06:51:42.859Z",
+      "completedAt": "2026-10-30T06:56:14.864Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN, scripts/local-runner/guest-supervisor.py. Stdlib only, and the same style as materialize.\n\n1. Constants, beside JOBS:\n   - AGENTS = '/opt/moe/agents';\n   - MAX_AGENT_BYTES = 1073741824, with the comment '2**30, mirrors agent-cache.mjs MAX_AGENT_BINARY_BYTES'.\n2. Extract receive()'s data-frame loop into a helper, e.g. copy_data(frames, fd, size), returning the hashlib.sha256 object.\n   - Each data frame must be an exact {kind:'data', data} with a str, non-empty, strictly validated, canonical base64 chunk no longer than the bytes left.\n   - Call it from both receive() and install_agents. M2-M4 must stay green.\n3. install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0)):\n   a. Create agents with mkdir(0o755) when missing (FileExistsError is fine). Open it with WALK (O_NOFOLLOW|O_DIRECTORY), then own(fd, owner, 0o755). A symlink or a file therefore fails in os.open: OSError, exit 74.\n   b. The staging dir is created dir_fd-relative inside agents: name '.staging-' plus os.urandom(8).hex(), mkdir 0o700 via dir_fd, opened with WALK via dir_fd, then own(staging, owner, 0o700). No path-based tempfile, so a swapped agents path cannot redirect it.\n   c. Loop over the frames from snapshot_frames(in_fd), until an 'end' frame:\n      - expect(frame, 'agent', 'cli', 'size', 'sha256');\n      - cli: type str FIRST, then a JOBS key, then not already seen. Check duplicates explicitly, because O_EXCL's FileExistsError would surface as 74, not 65;\n      - size: type(size) is int (so no bool), and 1 <= size <= MAX_AGENT_BYTES;\n      - sha256: type str and DIGEST.fullmatch;\n      - os.open(cli, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0o600, dir_fd=staging);\n      - copy_data; the hexdigest must equal the header's;\n      - own(fd, owner, 0o555), then os.fsync, then close in a finally.\n   d. expect(frame, 'end'). Refuse an end before any agent as the empty stream. Then `next(frames, None) is not None` is a frame after end, refused. snapshot_frames already refuses a partial frame at EOF.\n   e. Only then: os.rename(cli, cli, src_dir_fd=staging, dst_dir_fd=root) for each binary, in header order. That atomically replaces any older file, never writing in place. Then rmdir the staging dir via dir_fd, then os.fsync(root).\n   f. write_frame(out_fd, {'kind': 'installed', 'count': n}) and return 0.\n   g. Exits: (ValueError, RecursionError) is os.EX_DATAERR (65); OSError is os.EX_IOERR (74). The finally block, best-effort and swallowing OSError, unlinks any file still in staging, removes the staging dir and closes every fd. No refusal writes a frame.\n4. main: accept ['agents'] in the argv tuple. After the root check (77), `if argv == ['agents']: return install_agents(0, 1)`. Anything else stays 64.\n5. Header comment: add the 'agents' mode (CQ-R10d3a) to the Modes paragraph, with its codes (0, 64, 65, 74, 77) and 'no refusal writes a frame'.\n\nError handling: every OSError path, including cleanup, is bounded and never masks the first error's exit code. A crash can leave only the root 0700 staging dir. Mid-rename I/O failures are documented in a comment (per-file atomic; see planningNotes.risks).\n\nRun the focused rows, `--test-name-pattern='^(AI|M)[0-9]'`: all green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "note": "Reopen 1: no runtime change, because QA found the supervisor correct. Its rejection was a test gap only, which step-1 closed.\n\n- scripts/local-runner/guest-supervisor.py is byte-identical to the 4f2692a delivery: `git diff --quiet 4f2692a HEAD` and `git diff --quiet HEAD` both report no change.\n- The delivered install_agents keeps the size rule at L1152-1153: `type(size) is int and 1 <= size <= MAX_AGENT_BYTES`. It reads the module global MAX_AGENT_BYTES at call time, which is why the tests' `m.MAX_AGENT_BYTES = N` setup reaches it.\n- Focused rows, `--test-name-pattern='^(AI|M)[0-9]'` under env -i with node v24.21.0: 9 tests, 9 pass, 0 fail (M1-M4 and AI1-AI5).",
+      "startedAt": "2026-10-30T06:56:20.484Z",
+      "completedAt": "2026-10-30T06:56:34.441Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh.\n1. The DoD command, on WSL under a clean env: `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`. It must exit 0 with zero failures. complete_task gets { command: 'node --test scripts/tests/local-runner.test.mjs', exitCode, outputTail }, and the summary names the env -i form.\n2. Neighbour check, because the supervisor changed: `node --test scripts/tests/local-runner-bridge.test.mjs`, under the same env. It also loads guest-supervisor.py. Report it in the summary.\n3. No bytecode left behind: `git status --porcelain scripts/local-runner` shows no __pycache__ (every python3 run uses -B).\n4. Size: `git diff --numstat HEAD -- scripts/local-runner/guest-supervisor.py scripts/tests/local-runner.test.mjs` must total 400 changed lines or fewer. Report it.\nA failure is diagnosed and fixed, never retried into green. Never weaken an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Fresh verification after the step-1 test fix (reopen 1):\n\n1. DoD command: `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`\n   - Exit 0: 247 tests, 246 pass, 0 fail, 1 skip. The skip is the pre-existing opt-in macOS native smoke. AI1-AI5 are all green.\n2. Neighbour check: `local-runner-bridge.test.mjs` under the same env exits 0, 55/55 pass.\n3. No __pycache__ under scripts/local-runner, by both git status and find.\n4. Size:\n   - this fix, against HEAD: +14/-7 in local-runner.test.mjs only; guest-supervisor.py is unchanged;\n   - task total against 4f2692a~1: +219/-11 = 230 changed lines (cap 400).\n\nPeer landings during the step:\n- HEAD moved to 19a310c2 with three peer commits: 4773404a, f4e99ab2 and 19a310c2.\n- They touched dependency-cache.mjs, local-runner-check.test.mjs, vm-control.mjs and local-runner-vm-control.test.mjs, but neither of my files (`git log 4f2692a..HEAD` on them is empty).\n- local-runner.test.mjs imports none of those modules.\n- My diff against HEAD is only my two AI4 hunks.",
+      "startedAt": "2026-10-30T06:56:38.685Z",
+      "completedAt": "2026-10-30T06:57:57.613Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a host or agent trying to land bytes it should not.\n\n1. Mutants. Apply each to a scratch copy of guest-supervisor.py, loaded by the tests through a temporary PY_SUPERVISOR override in a scratch copy of the test file; never edit the shared files. Each must turn the named row red:\n   (a) skip the sha256 compare: AI4 wrong hash;\n   (b) a JOBS lookup before the type check: AI4 list cli (a TypeError escapes);\n   (c) rename each binary as soon as it is verified, before end: AI4 'valid claude then bad codex';\n   (d) open agents without O_NOFOLLOW: AI5 symlink;\n   (e) write the target in place instead of renaming: AI3 hard link;\n   (f) default owner AGENT_IDENTITY, or mode 0o755 for binaries: AI1 or AI2;\n   (g) accept an end with no agents: AI4 end-first;\n   (h) drop the duplicate check: AI4 duplicate (it would exit 74 through O_EXCL);\n   (i) no cleanup on refusal: AI4 state (staging left).\n   Afterwards restore, cmp, and rerun green.\n2. Fds: every fd is closed on every path; no path-based call follows a name the agent could swap; staging is never created outside agents.\n3. Bounds: no unbounded read (frames are capped by MAX_HOST_FRAME_BYTES, binaries by MAX_AGENT_BYTES, and the agent count by JOBS).\n4. Concurrency: a concurrent second install. Each run gets its own staging name, and renames are per-file atomic, so the last writer wins whole files. Callers serialize per VM (R06 job lease).\n5. Scope: no host stream, readiness or argv changes (those belong to CQ-R10d3/R10d4).\n\nRecord the findings and fixes in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of this reopen's diff: the AI4 hunks in scripts/tests/local-runner.test.mjs, +14/-7.\n\n1. Mutants:\n   - Setup: a scratch copy in /tmp. Each mutant was an exact single-match replacement in the scratch guest-supervisor.py. Shared files were never edited.\n   - Run: --test-name-pattern='^AI[0-9]' under env -i with node v24.21.0, against the NEW test file, because the AI4 loop was restructured.\n   - All 12 mutants were killed:\n     - (a) skip the sha256 compare: AI4, 'a wrong hash'.\n     - (b) the JOBS lookup before the type check: AI4, 'cli [\"claude\"]' (a TypeError traceback, exit 1).\n     - (c) rename each binary as verified, before end: AI4, first on 'a duplicate cli', where the first claude is already installed. It is the same partial-install class as 'valid claude then bad codex'.\n     - (d) no O_NOFOLLOW on agents: AI5.\n     - (e) write in place instead of renaming: AI3 (the hard link) and AI5.\n     - (f1) owner default AGENT_IDENTITY: AI1.\n     - (f2) 0755 binaries: AI2, AI3 and AI4.\n     - (g) accept an end with no agents: AI4, 'an end before any agent'.\n     - (h) no duplicate check: AI4, 'a duplicate cli' (74 through O_EXCL).\n     - (i) no cleanup on refusal: AI4, 'an unknown cli' (staging left), and AI5.\n     - QA's (j), no frame-after-end check: AI4, 'a second end'.\n     - QA's (k), no own(root, 0o755): AI3.\n   - The step-1 size mutants M1-M6 were also all killed.\n   - Restored: the scratch supervisor cmp-equals the repo file, and AI1-AI5 pass 5/5. The scratch dir is deleted.\n2. Test diff:\n   - A row without setup passes undefined, so agentsIn's default '' applies.\n   - Each row gets its own scratch dir, cleaned by t.after.\n   - The lowered-cap rows depend on install_agents reading the module global MAX_AGENT_BYTES at call time. A refactor that bound the cap at def time would turn them red; that is intended, since the comment documents the seam.\n3. Inputs:\n   - NaN, Infinity and float sizes reach Python as floats, because take_frames' json.loads has no parse_constant. The `type(size) is int` check refuses them, and M4 proves that check is tested.\n   - A negative size is refused by `1 <=`, and copy_data's `len(chunk) > left` refuses it again.\n4. Coverage: the real 2^30 cap has no standalone row. A stream that is valid except for its size would have to carry 2^30+1 bytes.\n   - AI1 pins m.MAX_AGENT_BYTES == MAX_AGENT_BINARY_BYTES.\n   - The lowered-cap rows test the comparison, including its boundary.\n5. Scope: test-only. The supervisor, host stream, readiness and argv are unchanged.\n\nNo new defects found.",
+      "startedAt": "2026-10-30T06:58:00.029Z",
+      "completedAt": "2026-10-30T07:00:19.125Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "The code is correct, but the contract's size rule (header size outside 1..MAX_AGENT_BYTES, or not an int, exits 65) has no test that fails when it is removed.\n\nMutation proof: in a scratch copy, deleting `type(size) is int and 1 <= size <= MAX_AGENT_BYTES` (guest-supervisor.py:1152-1153) leaves AI1-AI5 green, 5/5. So does deleting only the lower bound, or only the upper bound. That check is the only bound on how many bytes a stream may write to the guest disk, since copy_data's `<= left` is relative to the header's size.\n\nOn that mutant these all install (exit 0), where the real commit refuses each with 65:\n- size 0 with the empty-bytes sha256 and no data installs a 0-byte claude;\n- size `true` with a correct 1-byte binary installs it;\n- with m.MAX_AGENT_BYTES = 6, a valid 7-byte binary installs past the cap.\n\nThe AI4 size rows keep C's 7-byte data and hash, so each also breaks a second rule. AI4 promised exactly one.\n\nTo pass:\n- Make each size row otherwise valid: zero-byte header with the empty sha and no data; size true with a correct 1-byte binary; cap lowered via setup (m.MAX_AGENT_BYTES = N-1) with a valid N-byte binary. Each exits 65, no stdout, agentsState == OLD_AGENTS.\n- Add the boundary: size == cap installs.\n- Prove it: mutants deleting the whole check, only `1 <=`, and only `<= MAX_AGENT_BYTES` each turn AI4 red; note it in your step note.\n\nVerified fine:\n- DoD command, fresh at 4f2692a (env -i, node v24.21.0): exit 0; 247 tests, 246 pass, 1 skip (pre-existing).\n- Bridge neighbour: 55/55. No __pycache__. Tree matches the commit.\n- Size: 223 lines.\n- My mutants were killed: no frame-after-end check, and no own(root).\n- Routing, 64/77, the O_NOFOLLOW open, dir_fd staging, rename-after-end, cleanup and copy_data (M rows green) are correct.\n- /opt/moe is created by guest-bootstrap.mjs:17.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 252.25,
+  "comments": [
+    {
+      "id": "comment-d8e505b96e124ab187e4cb3bf9023f71",
+      "author": "architect-bd1eb82d",
+      "content": "@architect-4ae016fb, contract note from architect-bd1eb82d, 2026-10-30. I created this row by splitting CQ-R10d3. CQ-R10d3 (task-b8e7ad92) is now planned at revision 1 and depends on this row. Its AI3 end-to-end row and its host stream rely on the following, so please keep them in your plan, or tell me and I'll amend R10d3:\n\n- **Python entry point:** `install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0))`, with `AGENTS = '/opt/moe/agents'`. R10d3's AI3 calls it through PY_LOAD as `m.install_agents(0, 1, <scratch agents dir>, (os.getuid(), os.getgid()))`, the way T7 calls materialize. main(['agents']) runs `install_agents(0, 1)`.\n- **Frames in:**\n  - per binary, `{kind:'agent', cli, size, sha256}` with exactly those keys, then base64 `{kind:'data', data}` frames (canonical, non-empty, never past size, any chunk size up to the remaining size);\n  - then `{kind:'end'}`.\n  The host sends both AGENT_CLIS in order (claude, codex) in 1 MiB chunks, and closes stdin right after end.\n- **Frame out:** exactly one `{kind:'installed', count}` on success. The host requires count === the number of binaries sent.\n- **Files:** each CLI is renamed onto `<agents>/<cli>` at mode 0555, and nothing else is left in `<agents>`; AI3 asserts readdirSync is exactly ['claude', 'codex']. Re-install replaces an older file atomically.\n- **Constant:** MAX_AGENT_BYTES = 1073741824, mirroring agent-cache.mjs MAX_AGENT_BINARY_BYTES. A one-line equality row against the JS export would pin it.\n- **Overlap:** CQ-R10d3 appends its rows to scripts/tests/local-runner.test.mjs after your AG rows. CQ-R10d4 and CQ-R11e2 edit guest-supervisor.py after you (main's argv list and the header lines).\n\nSizing: I estimated about 60 runtime lines and 50 test lines, well under QA's 400 cap.",
+      "timestamp": "2026-10-30T06:29:13.396Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:24:18.022Z",
+  "updatedAt": "2026-10-30T07:15:27.284Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:27:17.977Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T07:14:40.980Z",
+    "wallClockMs": 2843003
+  },
+  "contextFetchedBy": [
+    "worker-e60b90bd",
+    "qa-952969be"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [
+    {
+      "item": "Each refusal exits 65 with no frame, no installed file and no staging directory left: an unknown or non-string cli, a duplicate, a size or hash mismatch, a malformed or overlong data frame, an empty stream, EOF before end, a frame after end, and a valid binary followed by a bad one. An agents path that is a symlink exits 74. Shown by tests.",
+      "rejectedAt": "2026-10-30T06:49:57.988Z",
+      "rejectedBy": "qa-952969be"
+    }
+  ],
+  "planSubmittedAt": "2026-10-30T06:31:40.160Z",
+  "executionContract": {
+    "intendedBehavior": "guest-supervisor.py gains a root, copy-only 'agents' mode: install_agents(0, 1) reads {kind:'agent', cli, size, sha256} headers, each followed by its base64 data frames, then {kind:'end'}. It verifies every binary in a root 0700 staging dir inside /opt/moe/agents. Only after end, with no frame after it, does it rename each binary onto /opt/moe/agents/<cli> as root:root 0555, then fsyncs the dir and answers one {kind:'installed', count} frame. Refusals write no frame and leave no install and no staging: 65 for data errors, 74 for I/O (including a symlinked or file agents path), 77 when not root, 64 for other argv.",
+    "acceptanceCriteria": [
+      "AI1: argv routing (64/77/route), AGENTS and JOBS consistency, MAX_AGENT_BYTES == MAX_AGENT_BINARY_BYTES, and the default owner (0, 0).",
+      "AI2: a clean two-binary install gives exact bytes, 0555, the test uid, a 0755 dir, one installed frame and no staging.",
+      "AI3: an older install is replaced by rename, never written in place; a pre-existing dir mode is forced to 0755.",
+      "AI4: every listed malformed or mismatched stream exits 65 with no frame and leaves state unchanged.",
+      "AI5: a symlink or file agents path, and injected fsync or rename failures, exit 74 with no frame and state unchanged."
+    ],
+    "invariants": [
+      "Production installs are root:root 0555 and never agent-writable.",
+      "No refusal writes a frame; a handled refusal before the renames installs nothing and leaves no staging.",
+      "materialize behavior and the M rows are unchanged.",
+      "Standard library only."
+    ],
+    "compatibility": [
+      "The existing modes and argv (bridge, check, materialize, export, verify) are unchanged."
+    ],
+    "approvedScope": [
+      "guest-supervisor.py: AGENTS, MAX_AGENT_BYTES, the copy_data extraction from receive(), install_agents, main routing and the header comment",
+      "local-runner.test.mjs: the AI1-AI5 section"
+    ],
+    "reuse": [
+      "snapshot_frames, expect, own, WALK, DIGEST and write_frame from guest-supervisor.py; the materializeIn/VR6 test patterns."
+    ],
+    "sourceAssumptions": [
+      "guest-supervisor.py materialize/receive/snapshot_frames/main as at HEAD",
+      "agent-cache.mjs exports MAX_AGENT_BINARY_BYTES = 2 ** 30",
+      "JOBS executables live in /opt/moe/agents"
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: a new install_agents() modelled on materialize(): frames from snapshot_frames, a root 0700 staging dir, verify everything, then rename.\n- Staging is created dir_fd-relative INSIDE the agents dir, so each rename is a same-directory-tree renameat onto /opt/moe/agents/<cli>. That is atomic per file, and a swapped path cannot redirect it.\n\nRejected:\n- tempfile.mkdtemp(dir=agents): it is path-based, so a symlink swapped in after the O_NOFOLLOW open could redirect staging.\n- Renaming each binary right after its verification: a later bad frame would leave a partial install, which the contract forbids.\n- Swapping a whole versioned directory or a symlink for all-or-nothing installs: the JOBS executables are fixed paths, and the contract makes a symlinked agents dir an I/O refusal.\n- Duplicating receive()'s data loop: extracting copy_data keeps one canonical base64 and bounds rule for materialize and agents.\n\nDecision recorded for CQ-R10d3's host: an end frame before any agent header counts as the empty stream (65). The host must send at least one binary.",
+    "codebaseInsights": "- guest-supervisor.py: snapshot_frames(in_fd) yields host frames capped at MAX_HOST_FRAME_BYTES and raises ValueError on a partial frame at EOF.\n- expect(frame, kind, *keys) enforces exact keys. own(fd, owner, mode) does fchown + fchmod. WALK = O_RDONLY|O_DIRECTORY|O_NOFOLLOW. DIGEST = [0-9a-f]{64}.\n- receive() holds the data-frame rules: str, strict b64decode, non-empty, len <= left, canonical re-encode.\n- materialize returns EX_DATAERR for (ValueError, RecursionError) and EX_IOERR for OSError, and cleans up in a finally.\n- main(argv, geteuid=os.geteuid, **seams) checks the argv tuple, then root (77), then routes.\n- JOBS = {'claude': ('/opt/moe/agents/claude', ...), 'codex': ('/opt/moe/agents/codex', ...)}.\n- Tests: M1-M4 and VR6 load the real file with importlib under python3 -I -B and pass the owner seam (os.getuid(), os.getgid()). Refusals assert [status, stdout.length, listing].\n- agent-cache.mjs exports MAX_AGENT_BINARY_BYTES = 2 ** 30.\n- Ordering: no nonterminal peer edits these two files ahead of this row. CQ-R10d3 depends on it, and R10d4, R11e2, R11e4, R11e5, R11e, R13a, R13d and R13 are all downstream.",
+    "risks": "1) Renames are per-file atomic, not set-atomic. An I/O failure between two renames (74) leaves each binary whole but possibly mixed old and new. CQ-R10d3's readiness pin-hash probe fails closed on that. Document it in a comment; AI5 covers a failure on the first rename (nothing installed).\n2) O_EXCL on a duplicate cli raises FileExistsError (an OSError), so it would exit 74. Check duplicates explicitly, for 65.\n3) An unhashable cli (list or dict) raises TypeError on `in JOBS` and escapes both handlers. Check the type first.\n4) A bool is an int subclass, so check `type(size) is int`.\n5) Tests run as a normal user: the owner seam is (uid, gid), and fchown to self works. The production default must stay (0, 0); AI1 pins it.\n6) ESM imports are file-global in the 4.3k-line test file, so duplicate import names are a SyntaxError.\n7) Every python3 run uses -B, so no __pycache__ ships in the IDE bundles.\n8) QA cap: keep the total at 400 changed lines or fewer. Target about 80 runtime and about 140 test lines.",
+    "keyFiles": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/agent-cache.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:31:40.182Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:33:57.484Z",
+  "reviewStartedAt": "2026-10-30T07:01:28.605Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ CJ10 end to end, the real supervisor verify reports a passed job's edits as changed, and its own new files as intact (1102.118705ms)\n✔ AI1 the supervisor CLI takes exactly agents, only as root, and routes it to install_agents(0, 1) with root /opt/moe/agents defaults (205.871055ms)\n✔ AI2 a clean stream installs each binary at <agents>/<cli> as 0555 with its exact bytes in a 0755 dir, and answers once (59.017313ms)\n✔ AI3 a reinstall replaces an older binary by rename, never in place, and forces the agents dir to 0755 (45.868344ms)\n✔ AI4 a malformed, mismatched or partial stream exits 65 with no frame and installs nothing (1286.609326ms)\n✔ AI5 an agents path that is a symlink or a file, or a failed fsync or rename, exits 74 with no frame and installs nothing (169.325158ms)\nℹ tests 247\nℹ suites 0\nℹ pass 246\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 32186.752521",
+    "reportedAt": "2026-10-30T07:01:28.605Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+    ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+    ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
+  ],
+  "completionSummary": "CQ-R10d3a, reopen 1. QA rejected because the size rule had no killing test. This round changes tests only: scripts/tests/local-runner.test.mjs, +14/-7 in AI4. The supervisor is byte-identical to 4f2692a, whose code QA verified as correct. Task total against 4f2692a~1: +219/-11 = 230 lines (cap 400).\n\nFix:\n- Each AI4 refusal row can now carry harness setup, passed to agentsIn.\n- Each size row is a whole binary with a correct hash, so only the size rule refuses it:\n  - 'size 0': a 0-byte claude with the empty sha256 and no data;\n  - 'size true': a valid 1-byte claude with header size true;\n  - 'a size above the cap': `m.MAX_AGENT_BYTES = 6` with the valid 7-byte claude.\n- The install loop adds both bounds: 'size 1' installs, and 'size == cap' (`m.MAX_AGENT_BYTES = 7`) installs.\n- The MAX+1 row became the lowered-cap row, because a stream valid apart from its size would need 2^30+1 bytes. AI1 still pins MAX_AGENT_BYTES == agent-cache.mjs MAX_AGENT_BINARY_BYTES.\n\nMutation proof: a scratch copy, AI1-AI5 run under env -i; the shared files were never edited. The old 4f2692a test stays green on all six mutants.\n- Deleting the whole size check: AI4 red ('size 0').\n- Deleting only `1 <=`: red ('size 0').\n- Deleting only `<= MAX_AGENT_BYTES`: red ('a size above the cap').\n- Three more:\n  - deleting only `type(size) is int`: red ('size true');\n  - `< MAX`: red ('size == cap');\n  - `1 <`: red ('size 1').\n- Against the new file, plan mutants a-i plus QA's j and k are all still killed.\n\nVerification, run fresh at HEAD b1b6d7d8 as `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`:\n- Exit 0: 247 tests, 246 pass, 0 fail, 1 skip (the pre-existing macOS smoke).\n- Neighbour local-runner-bridge.test.mjs: 55/55.\n- No __pycache__.\n\nNo verified-local or isolation claim.",
+  "commits": [
+    {
+      "sha": "4f2692a7b157632b4ae4af2e12edfaf65feeda3d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T06:31:48Z",
+      "paths": [
+        ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+        ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+        ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json",
+        ".moe/tasks/task-b8b8faba152a4d7fae09d9388407f707.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T06:42:15.273Z",
+      "treeId": "f14cf73f8e44fe98605e3d305c75ce69c50a56cc",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "22c07c36c8191ca4fb7bce1be550f9df0fd2f09b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T06:50:03Z",
+      "paths": [
+        ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+        ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T07:02:04.146Z",
+      "treeId": "5dbb56450a2f96a3c25ea0dbcf2f3bd5a7045a52",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "f56c65ff4aa7b5a35b0470407e7903dd94791524",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T07:06:19Z",
+      "paths": [
+        ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T07:15:27.284Z",
+      "treeId": "06fb5922fd0322b746fdd3118b1c93835226a141",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-supervisor.py"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T07:06:19Z",
+    "at": "2026-10-30T07:15:27.284Z"
+  },
+  "reviewCompletedAt": "2026-10-30T07:14:40.980Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Each refusal exits 65 with no frame, no installed file and no staging directory left: an unknown or non-string cli, a duplicate, a size or hash mismatch, a malformed or overlong data frame, an empty stream, EOF before end, a frame after end, and a valid binary followed by a bad one. An agents path that is a symlink exits 74. Shown by tests."
+    ],
+    "issues": [
+      {
+        "type": "test_failure",
+        "file": "scripts/tests/local-runner.test.mjs",
+        "line": 4369,
+        "description": "The AI4 size rows (0, MAX+1, true) keep C's 7-byte data and hash, so each also fails a second rule and stays 65 when the size check at guest-supervisor.py:1152-1153 is deleted. Make each row otherwise valid, so size is its only broken rule (see the reason for the three streams). Each must exit 65 with no stdout and agentsState == OLD_AGENTS."
+      },
+      {
+        "type": "test_failure",
+        "file": "scripts/tests/local-runner.test.mjs",
+        "line": 4369,
+        "description": "Cover the upper bound and its boundary through the setup seam: with m.MAX_AGENT_BYTES = N-1, a valid N-byte binary exits 65, and size == cap exits 0. Acceptance: scratch mutants deleting the whole size check, only `1 <=`, and only `<= MAX_AGENT_BYTES` must each turn AI4 red."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "The code is correct, but the contract's size rule (header size outside 1..MAX_AGENT_BYTES, or not an int, exits 65) has no test that fails when it is removed.\n\nMutation proof: in a scratch copy, deleting `type(size) is int and 1 <= size <= MAX_AGENT_BYTES` (guest-supervisor.py:1152-1153) leaves AI1-AI5 green, 5/5. So does deleting only the lower bound, or only the upper bound. That check is the only bound on how many bytes a stream may write to the guest disk, since copy_data's `<= left` is relative to the header's size.\n\nOn that mutant these all install (exit 0), where the real commit refuses each with 65:\n- size 0 with the empty-bytes sha256 and no data installs a 0-byte claude;\n- size `true` with a correct 1-byte binary installs it;\n- with m.MAX_AGENT_BYTES = 6, a valid 7-byte binary installs past the cap.\n\nThe AI4 size rows keep C's 7-byte data and hash, so each also breaks a second rule. AI4 promised exactly one.\n\nTo pass:\n- Make each size row otherwise valid: zero-byte header with the empty sha and no data; size true with a correct 1-byte binary; cap lowered via setup (m.MAX_AGENT_BYTES = N-1) with a valid N-byte binary. Each exits 65, no stdout, agentsState == OLD_AGENTS.\n- Add the boundary: size == cap installs.\n- Prove it: mutants deleting the whole check, only `1 <=`, and only `<= MAX_AGENT_BYTES` each turn AI4 red; note it in your step note.\n\nVerified fine:\n- DoD command, fresh at 4f2692a (env -i, node v24.21.0): exit 0; 247 tests, 246 pass, 1 skip (pre-existing).\n- Bridge neighbour: 55/55. No __pycache__. Tree matches the commit.\n- Size: 223 lines.\n- My mutants were killed: no frame-after-end check, and no own(root).\n- Routing, 64/77, the O_NOFOLLOW open, dir_fd staging, rename-after-end, cleanup and copy_data (M rows green) are correct.\n- /opt/moe is created by guest-bootstrap.mjs:17.",
+      "rejectedAt": "2026-10-30T06:49:57.988Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Each refusal exits 65 with no frame, no installed file and no staging directory left: an unknown or non-string cli, a duplicate, a size or hash mismatch, a malformed or overlong data frame, an empty stream, EOF before end, a frame after end, and a valid binary followed by a bad one. An agents path that is a symlink exits 74. Shown by tests."
+      ],
+      "issues": [
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "line": 4369,
+          "description": "The AI4 size rows (0, MAX+1, true) keep C's 7-byte data and hash, so each also fails a second rule and stays 65 when the size check at guest-supervisor.py:1152-1153 is deleted. Make each row otherwise valid, so size is its only broken rule (see the reason for the three streams). Each must exit 65 with no stdout and agentsState == OLD_AGENTS."
+        },
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "line": 4369,
+          "description": "Cover the upper bound and its boundary through the setup seam: with m.MAX_AGENT_BYTES = N-1, a valid N-byte binary exits 65, and size == cap exits 0. Acceptance: scratch mutants deleting the whole size check, only `1 <=`, and only `<= MAX_AGENT_BYTES` must each turn AI4 red."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-30T07:14:40.980Z",
+  "reviewSummary": "Approve, reopen 1. Completion commit 22c07c36 on moe/work-2026-10-24, recorded after reject 1 (tree 5dbb564 matches). Test-only, +14/-7 in AI4; guest-supervisor.py byte-identical to 4f2692a (code verified in round 1). HEAD == 22c07c36 for both files, tree clean. Size vs 4f2692a~1: +219/-11 = 230 (cap 400).\n\nGate, fresh, env -i, node v24.21.0: node --test scripts/tests/local-runner.test.mjs exit 0, 247 tests, 246 pass, 0 fail, 1 skip (pre-existing macOS smoke); matches task.verification. Bridge neighbour 55/55. No __pycache__.\n\nReject 1 closed. My mutants on a git-archive scratch copy (^AI[0-9]) each turn AI4 red, restored byte-equal:\n- whole size check deleted, only `1 <=` deleted, `0 <= size`: 'size 0'\n- only `<= MAX_AGENT_BYTES` deleted, cap bound at def time: 'a size above the cap'\n- only `type(size) is int` deleted, isinstance(size, int): 'size true'\n- `< MAX`: 'size == cap'; `1 < size`: 'size 1'\n\nDoD:\n1. AI2/AI3: exact bytes, 0555, uid seam, 0755 dir, one installed frame, rename replace (hard link keeps old bytes); AI1 pins owner (0, 0).\n2. AI4 rows each isolate one rule: 65, no stdout, state == OLD_AGENTS. AI5: symlink/file agents path, fsync/rename failure: 74.\n3. AI1: 64 extra argv, 77 non-root, routes to install_agents(0, 1).\n4. Verification evidence present and reproduced.\n\nNon-blocking:\n(a) Two outcome-equivalent mutants survive the full file: no sha256 format check, and copy_data without `len(chunk) > left`. The hash compare, and left never returning to 0, still refuse the same streams with 65; only fail-fast and pre-refusal bytes differ, which no DoD item covers. The second is pre-existing from R09c receive().\n(b) The architect comment plans R10d3 rows with the same AI prefix ('AI3'). R10d3 should pick another prefix.\n(c) Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

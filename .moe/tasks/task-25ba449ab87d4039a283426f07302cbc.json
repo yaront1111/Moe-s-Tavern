@@ -1,0 +1,401 @@
+{
+  "id": "task-25ba449ab87d4039a283426f07302cbc",
+  "epicId": "epic-be924fb8",
+  "title": "bug: daemon/proxy path comparison folds POSIX case on Windows and disagrees with UNC identity rules",
+  "description": "Adversarial review of task-e7f4026a found pre-existing comparableProjectPath drift in packages/moe-proxy/src/utils.ts and the daemon twin: Windows node maps /home/qa/OtherProject and /home/qa/otherproject to the same c:/home/qa/otherproject, while launcher/JetBrains preserve POSIX case.\nLinux proxy also gives different keys for \\\\srv\\share\\proj vs //SRV/SHARE/PROJ/; WSL UNC \\\\wsl.localhost\\Ubuntu\\home\\u\\proj vs /home/u/proj differs on both OSes although Kotlin maps it. Pure helper repro against b2138fba built bytes: /tmp/e7f4-resume.mvnO0m/{path-parity.mjs,linux-path-parity.log,windows-path-parity.log}; Windows harness C:/Users/Yaron/AppData/Local/Temp/e7f4-resume.IXcXBP/path-parity.mjs.\nKeep this outside the current launcher QA fix; define one cross-platform comparison contract and add Linux/native-Windows regressions before changing shared utilities.",
+  "definitionOfDone": [
+    "Case-distinct absolute POSIX served paths do not compare equal solely because the client runs on Windows.",
+    "UNC and WSL-share equivalence rules are explicit and tested against the launcher and JetBrains rules.",
+    "Proxy/daemon identity and discovery suites cover the corrected comparison on Linux and native Windows without regressing drive-/mnt spellings."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Phase0: read rejectionDetails and mem:task-task-25ba449ab87d4039a283426f07302cbc-handoff, mem:gotcha-native-lifecycle-versus-transport-path-identity and mem:gotcha-proxy-npm-test-shared-checkout-deletes-dist. This plan explicitly supersedes rev1's prohibition on lifecycle consumer edits: retain the landed six-file transport work, fix only the two daemon files. Using test-driven-development, add native-alias tests to the existing index.test lifecycle fixture. Native Linux alias='/' + absolute temp path; Windows alias=drive-absolute temp path without its drive, with subprocess cwd on that same drive. Assert actual native path.resolve(alias) equals fixture path before destructive calls. With live native PID and real loopback /health reporting canonical path, existingDaemonBlocksStart(alias) must probe and return true, keeping daemon.json and daemon.lock bytes exactly unchanged. Assert status(alias) reports running without deletion and stop(alias) takes validated-PID signaling (intercept nonzero signals safely, preserve signal0 checks), not stale cleanup; no live project operations. Cover canonical and alternate request spellings and directly test probeDaemonHealth so a caller cannot bypass normalization. Add tests only; leave transport/foreign/X9-X11 assertions intact.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Tests only (TDD RED), inside the existing lifecycle fixture as nested describe 'native aliases of --project' under the WSL-boundary block, reusing healthServer/writeDaemonFiles/killSpyWithoutSignals/jsonPath/lockPath/stopPath.\n- The alias is '/'+testDir on POSIX, and testDir minus its drive with forward slashes on Windows. beforeEach chdirs (real chdir, not a spy; the forks pool allows it, precedent claudeSkills.test.ts) to testDir's parent, so a Windows root-relative alias resolves on the fixture drive. It asserts path.relative(testDir, path.resolve(alias))==='' and isSameProjectPath(alias,testDir)===false before any destructive call; afterEach restores the cwd.\n- X12 it.each canonical/alias: live process.pid, real loopback /health reporting the canonical path, daemon.json + lock written.\n  - existingDaemonBlocksStart must return true after exactly 1 probe, with both files byte-identical.\n  - statusDaemon must log 'Daemon status' {status:'running', owner:'local'} (logger.info spy).\n  - stopDaemon (nonzero signals intercepted, signal 0 real) must send only [pid,'SIGTERM']. After 3 probes the bytes are kept and the sentinel is written; no stale cleanup.\n- X13: probeDaemonHealth called directly gives [own canonical, own alias, recorded alias, reported alias] = [true, true, false, false]. The last two pin that recorded and reported paths are never resolved.\n- X14 (step-3 contention, drafted here to share the fixture): a real child imports source index.ts via `--import <abs tsx URL>`, with cwd = testDir's drive.\n- RED in isolated snapshot /tmp/moe-25ba-w093.ctB3E2 (HEAD archive + matching-lock Linux node_modules via cp -al, index.ts == HEAD, MOE_* unset): 4 failed | 32 passed (36).\n  - X12 alias: [false, 0, null, null]. Start refused nothing, made 0 probes, and both files were deleted (QA P1 #1).\n  - X13: [true, false, false, false].\n  - X14 both cases: 'expected true to be false'; the contender replaced the live lock (QA P1 #2).\n  - The canonical controls and all 31 old tests pass.\n- Shared dirty paths of other sessions untouched.",
+      "startedAt": "2026-10-30T14:07:57.416Z",
+      "completedAt": "2026-10-30T14:11:01.133Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Reconcile native lifecycle identity at the shared comparison boundaries in index.ts using existing canonicalProjectPath. In staleLockReason compare stored path against canonicalProjectPath(projectPath) only AFTER unchanged foreign-lock early return. In validateDaemonInfoForProject derive canonical own path once and use it for the precheck and every health-probe branch, preserving the original stored spelling for isForeignDaemonInfo and result.info. In probeDaemonHealth canonicalize its own expectedProjectPath too (it is exported/called directly) and use that SAME expectation for both metadata and /health response comparisons. Keep reported/stored absolute paths on unchanged comparableProjectPath; do not normalize foreign data through this host's path.resolve or add 'native OR transport' equality. Error handling keeps current invalid-shape/mismatch/network timeout results and foreign flags. Audit startDaemon/startSupervisor, existingDaemonBlocksStart, stopDaemon/statusDaemon and lock-wait cleanup: no raw expected path may escape these shared boundaries. Do not change cleanup policy, TTL, storage shapes or pure exported transport functions. Add short why-comments explaining own-native vs reported-transport semantics.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "index.ts, +13/-4, using existing canonicalProjectPath (path.resolve) on OUR request only.\n- staleLockReason: after the unchanged foreign-lock early return, it compares the recorded lock path with canonicalProjectPath(projectPath). acquireLock persists that same form.\n- validateDaemonInfoForProject: `own` is derived once and used for the precheck, every foreign-probe host and the native probe. isForeignDaemonInfo still classifies the original stored spelling; result.info, reasons and foreign flags are unchanged.\n- probeDaemonHealth (exported): canonicalizes expectedProjectPath itself and uses that one `own` for both the daemon.json and the /health body comparisons.\n- Unchanged: stored and reported paths still go only through the transport comparableProjectPath (never resolved, no native-OR-transport equality); the pure transport functions, cleanup policy, TTL, storage/health/MCP shapes.\n- Why-comments added at all three boundaries.\n- Call-chain audit: superviseDaemon/startDaemon go through existingDaemonBlocksStart, then validate (canonical), then cleanupStaleDaemonFiles, then removeStaleLock/staleLockReason (canonical). startDaemon's acquireLock retries only through removeStaleLock (canonical), and the lock-wait re-validate is canonical. stopDaemon and statusDaemon both go through validate (canonical). There is no other raw comparison: grep finds only the four isSameProjectPath sites, all now fed `own`. No wiring changes were needed.\n- GREEN in isolated snapshot /tmp/moe-25ba-w093.ctB3E2 (MOE_* unset):\n  - index.test.ts 36/36 (31 old, including X1-X11, plus 5 new);\n  - healthHost + bindHosts 77/77;\n  - tsc --noEmit OK.",
+      "startedAt": "2026-10-30T14:11:05.479Z",
+      "completedAt": "2026-10-30T14:12:32.237Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add the missing real-contention regression to index.test.ts with one compact parameterized helper: child owner imports source index.ts through Node --import tsx (existing repository precedent), acquires in an absolute temp fixture, emits a readiness result, and stays alive while parent contender calls acquireLock with same/mixed aliases. Use absolute module URLs and explicit child cwd, not process.platform spoofing or unsafe relative cwd spies. Assert owner alive, original lock owner PID/bytes, contender false and no replacement/removal; test both owner-normal/contender-alternate and owner-alternate/contender-alternate (lock persists canonical form). Bounded startup/readiness/exit timers, error/early-exit rejection, child kill-and-await plus temp/server cleanup in finally on all assertions; do not call releaseLock from a losing contender. Reuse fixture helpers, no additional test file or dist-only child dependency. Retain fresh-lock timeout semantics, foreign-X3-X8 cases and PID-mismatch rejection as controls. These cases must run with real native paths on Linux and Windows.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "The real-contention regression X14 (drafted in step-1's RED pass, same file) was checked against every step-3 requirement.\n- Helper: one parameterized lockOwner(projectPath). A real child runs `node --import <absolute tsx loader URL> --input-type=module --eval`, importing source index.ts by absolute file URL (no dist), with explicit cwd = testDir's parent (testDir's drive on Windows), LOG_LEVEL=silent, and `acquireLock(spelling)`. It prints 'locked'/'refused' and stays alive on setInterval.\n- No platform spoofing and no cwd spies. The parent does a real chdir to the same dir and asserts the alias precondition.\n- Cases (it.each): owner canonical / contender alias, and owner alias / contender alias.\n- Assertions:\n  - the recorded lock pid equals the child pid, and isSameProjectPath(recorded, testDir) holds (canonical persisted);\n  - the contender's acquireLock returns false;\n  - the lock bytes are identical afterwards;\n  - process.kill(owner, 0) is true and exitCode is null (owner alive).\n  The contender never calls releaseLock.\n- Bounds and cleanup:\n  - readiness timer 30s; error and early-exit both reject (probe: a broken child import failed in 58ms with 'lock owner exited early (1)');\n  - afterEach kill-and-await on every child via SIGTERM, then SIGKILL after 5s; the per-test timeout is 60s;\n  - outer afterEach closes the servers and removes testDir.\n- Linux evidence (snapshot /tmp/moe-25ba-w093.ctB3E2):\n  - RED against HEAD index.ts: both X14 cases 'expected true to be false';\n  - GREEN with the step-2 fix: 5/5 consecutive runs of the alias block passed, about 0.65s per child;\n  - no orphan processes (ps); 0 leftover fixture dirs.\n- Retained controls passing: fresh/stale lock timeout, X3-X8 foreign, PID-mismatch stop.\n- The native Windows run is in step-4.",
+      "startedAt": "2026-10-30T14:12:53.430Z",
+      "completedAt": "2026-10-30T14:13:38.743Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Concentrated verification, in isolated Linux and native-Windows snapshots ONLY (never build globally-linked shared dist or use live .moe): archive source, overlay and cmp the two edits, install/reuse platform-native dependencies matching lockfiles, sanitize inherited MOE_* environment. Run fresh exact gate: (cd packages/moe-proxy && npm test) && (cd packages/moe-daemon && npm run build && npx vitest run src/index.test.ts src/server/healthHost.test.ts src/server/bindHosts.test.ts) && node --test scripts/tests/daemon-json-cap.test.mjs . Submit that command/exitCode/outputTail, plus native-Windows same-three-leg counts/logs; native-alias/real-process tests must run, not skip. Existing authorized launcher WSL-share todos remain owned by task-3def0804; no new todo/skip. Prove new tests fail by assertion when only lifecycle normalization is removed in a scratch mutant. Review task-wide original completion plus reopen growth: baseline net168 leaves at most232 new net lines under400; no unrelated proxy/launcher edits, generated files or dependency changes. The previous passing gate is not evidence for this correction.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Verification, isolated snapshots only (no shared build, no live .moe, MOE_*/CLAUDE_* unset; Windows interop forwards no MOE vars, `set MOE` is empty).\n\nLINUX gate:\n- Snapshot /tmp/moe-25ba-w093gate.iMlTcF = git archive HEAD c4ac2288 plus my 2 files (cmp ok). Daemon and proxy node_modules are cp -al copies whose package-lock md5 equals HEAD's.\n- Exact command `(cd packages/moe-proxy && npm test) && (cd packages/moe-daemon && npm run build && npx vitest run src/index.test.ts src/server/healthHost.test.ts src/server/bindHosts.test.ts) && node --test scripts/tests/daemon-json-cap.test.mjs`: GATE EXIT=0.\n  - Proxy 6 files, 290/290.\n  - Daemon build ok; 3 files, 113/113, i.e. index 36 (all run) plus 77.\n  - cap: tests 63, pass 16, fail 0, skipped 46 (PS engines on Linux), todo 1 (python WSL-share row, task-3def0804).\n  - Log /tmp/moe-25ba-w093-gate-linux.log.\n\nNATIVE WINDOWS:\n- Snapshot C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-25ba-w093win.Pclewo, same sources (cmp ok). node_modules were robocopied read-only from the shared Windows install; vitest 5.0.5 matches the lock.\n- Same three legs, all rc 0:\n  - proxy 287 pass / 3 skip (290). The 2 skips beyond the earlier 1 are a peer's it.skipIf(win32) at moe-proxy index.test.ts:873 (3a5cbb32, task-b5a17635), not this task.\n  - daemon 94 pass / 19 skip (113): +5 versus the earlier 89/19, so every new test RAN. Verbose index run: 33 pass / 3 skip, only the existing X9, X11 and /dev/zero guards; X12×2, X13 and X14×2 pass.\n  - cap 63: 57 pass / 3 todo (WSL-share rows, task-3def0804) / 3 skip (existing Git Bash rows). PS5.1 and PS7 both ran.\n  - Logs /tmp/moe-25ba-w093-win-{proxy,daemon,index-verbose,cap}.log.\n- No new todo or skip.\n\nMUTATION (scratch /tmp/moe-25ba-w093-mut.*, /tmp/moe-25ba-w093-scripts/mutate.py), all failures by assertion:\n- all lifecycle normalization removed: X12 alias, X13 and X14×2 fail (4 failed, 32 passed);\n- lock site only: X14×2;\n- validate only: X12 alias (daemon.json deleted);\n- probe metadata only: X13;\n- probe /health body only: X13.\n\nSIZE: reopen +114/-7 = net 107 (index.ts +15/-6, index.test.ts +99/-1). Task-wide net 168 + 107 = 275, under 400 and inside the 232 reopen budget. No proxy/launcher/generated/dependency edits.\n\n0 leftover fixture dirs and 0 owner node.exe processes on both OSes.",
+      "startedAt": "2026-10-30T14:13:53.283Z",
+      "completedAt": "2026-10-30T14:19:51.096Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review, once: walk every destructive consumer with /tmp vs //tmp, Windows drive vs root-relative, relative '.', UNC, WSL shares, /mnt drive aliases, case-distinct POSIX served paths and malformed/unreachable/foreign metadata. Verify only OUR native request is resolved, foreign metadata is preserved without trusting same-numbered local PIDs, no second fresh-lock owner is admitted, status never deletes live files, and stop signals only the validated local daemon. Check repeated/concurrent calls and subprocess cleanup, keep historical formats and transport table intact. Fix findings and rerun the named gate before complete_task; include Linux/native-Windows evidence and answer QA issues explicitly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Adversarial self-review: no in-scope finding, so this step made no code change.\n\nWalked every destructive consumer: existingDaemonBlocksStart, the startDaemon lock-wait cleanup, stopDaemon, statusDaemon, removeStaleLock/acquireLock. All 4 isSameProjectPath sites take own=path.resolve(--project). Only tests import the exports. fs reads path.join(R,'.moe',…), the same file as own/.moe, so own names the directory whose files are touched. The trim in the key only affects recorded values.\n- //tmp/x vs /tmp/x (Linux) and C:\\x vs /x (Windows from C:): blocks with 1 probe; status says running with nothing deleted; stop sends SIGTERM to the validated pid only (X12). A contender is refused while the owner stays live, both for canonical/alias and alias/alias (X14).\n- Relative '.', drive-relative D:, '\\x', UNC, \\\\wsl$ and \\\\wsl.localhost shares, /mnt/<d>, '..' and a trailing '/': the key is unchanged from pre-reopen. path.resolve is the identity for absolute POSIX.\n- Case-distinct POSIX served paths stay distinct, so they are blocked as foreign and nothing is deleted.\n- Foreign or malformed metadata: no pid trust, no deletion, no signal (unchanged).\n- Windows root-relative /x from another drive resolves to that drive, which is also where fs reads.\n\nTheoretical, fail-safe: a daemon *started* with an alias records the raw alias (//x on Linux, /x on Windows), which classifies as foreign. Start then exits 1 and status says 'unknown', but nothing is deleted, no second daemon starts and no signal is sent. Fixing that needs native-OR-transport equality, which the plan forbids.\n\nTests: the cwd is restored in afterEach. Owners are pushed before readiness and killed (SIGKILL after 5s); readiness errors or early exit reject. The import guard keeps main() from running in the child, and vi.restoreAllMocks runs between tests. Stray owners on both OSes: 0.\n\nFiled (pre-existing, out of scope, scratch-probe repros):\n- task-eea78d1d: a symlink, 8.3 or trailing-dot spelling deletes a live daemon.json.\n- task-4ca62c89: an empty lock left in the O_EXCL create-to-write window is replaced.\n- task-f33bf7af: doctor resolves the reported path; the proxy does not resolve its own MOE_PROJECT_PATH.\n- Commented on task-c83d7847 that it is superseded.\n\nFresh gate on HEAD 933fc324 plus the 2 files (only repositorySource.test.ts changed since c4ac2288): EXIT=0. Proxy 290/290, daemon 113/113, cap 16 pass / 0 fail / 46 skip / 1 todo. Log /tmp/moe-25ba-w093-gate2-linux.log. Scratch snapshots removed.",
+      "startedAt": "2026-10-30T14:21:06.434Z",
+      "completedAt": "2026-10-30T14:32:31.179Z"
+    }
+  ],
+  "planRevision": 2,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Governor re-plan handoff, following the worker's request (msg-9a2bb5cc).\n\nWhy a re-plan: QA reject #1 (13:49Z) found two P1 lifecycle regressions in completion 86a5dca9.\n- existingDaemonBlocksStart deletes a healthy daemon.json and lock with no /health probe under native aliases (//tmp/x vs /tmp/x on Linux; C:\\x vs /x on Windows).\n- staleLockReason unlinks a live lock and admits a second writer.\nThe approved executionContract (invariants/approvedScope) and step-2 forbid touching staleLockReason, probeDaemonHealth, validateDaemonInfoForProject and the deleters. amend_plan_step cannot change the contract.\n\nRe-plan scope:\n- Reconcile native lifecycle identity (canonicalize our own project path) with the new OS-independent transport key. Audit stop/status as well.\n- Keep the foreign-PID and cross-OS foreign-daemon safeguards.\n- Add permanent Linux and native-Windows tests for healthy-daemon metadata preservation and for two-process live-lock contention.\n- QA repros are /tmp/qa25ba-live-daemon.mjs and /tmp/qa25ba-lock-race.mjs, against parent 86a5dca9^.\n- Superseded LOW row: c83d7847, now in BACKLOG.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 20,
+  "comments": [
+    {
+      "id": "comment-4fb234ad2bb641daace0bdef9646a629",
+      "author": "qa-952969be",
+      "content": "QA input from the task-e7f4026a reopen-1 review (qa-952969be, 2026-10-30), for the shared path rule. This is non-blocking. I ran a 46-row table through the REAL ps1 Get-MoeDaemonIdentity on PS5.1 and PS7 against a fake /health, and through the sh probe's python comparable() on Linux and Windows python. Every realistic same-project spelling and every distinct-project row agrees across engines. The exotic divergences all come from Unicode case-folding:\n(1) 'D:/qa/\\u00c5' vs 'D:/qa/\\u212b' (Angstrom sign), and 'D:/qa/K' vs 'D:/qa/\\u212a' (Kelvin sign): python and PS7 say same; PS5.1 says foreign. NTFS's upcase table treats these as distinct names, so lowercasing over-folds.\n(2) ps1's case-insensitive -match/-notmatch on [A-Za-z] accepts a Kelvin-sign 'drive' ('\\u212a:/x'): PS says foreign or same where sh/proxy say unknown.\nNeither yields a realistic wrong adoption, but a defined shared rule (upcase vs lowercase, ASCII-only drive class) would settle both. Table and runner: /tmp/qa952-e7f4.xiPE0L/probe/{windows-table.txt,linux-table.txt,runner.mjs,rows.mjs}.",
+      "timestamp": "2026-10-30T12:02:22.377Z"
+    },
+    {
+      "id": "comment-5224dca6bfad4f5fb8c435a5fb3a6d8c",
+      "author": "governor-693b7073",
+      "content": "@architect-bd1eb82d You planned this row. It needs your narrow scope amendment to proceed.\n- QA reject #1 (13:49Z, qa-ba3f4f35) found two P1 lifecycle regressions:\n  - existingDaemonBlocksStart deletes a healthy daemon.json and lock under native aliases (//tmp/x vs /tmp/x; C:\\x vs /x);\n  - staleLockReason unlinks a live lock and admits a second writer.\n- The approved executionContract and step-2 forbid touching staleLockReason, probeDaemonHealth, validateDaemonInfoForProject and the deleters. worker-262588d0 has reproduced the regressions and is parking the row until you amend (msg-9a2bb5cc).\n- Options: amend_plan_step to admit those lifecycle consumers plus Linux and native-Windows preservation/contention tests, keeping the OS-independent transport contract and the foreign-PID safeguards. Or request_replan if it outgrows a narrow amendment.\n- c83d7847, the LOW follow-up, is parked in BACKLOG as superseded by this reopen.\n- Lane note: 724e31fa dependsOn this row (packages/moe-proxy/src/utils.ts). 724e31fa sits about 3 lane slots out, so there's slack, but not unlimited.",
+      "timestamp": "2026-10-30T13:52:41.305Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:27:29.451Z",
+  "updatedAt": "2026-10-30T14:48:06.462Z",
+  "planningEntry": {
+    "from": "BLOCKED",
+    "at": "2026-10-30T13:53:23.489Z",
+    "seq": 2
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T12:55:56.361Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 11,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T14:47:10.294Z",
+    "wallClockMs": 6673933
+  },
+  "contextFetchedBy": [
+    "worker-262588d0",
+    "qa-ba3f4f35",
+    "architect-eb7de546",
+    "worker-093a65d0",
+    "architect-bd1eb82d",
+    "architect-899a90d6",
+    "architect-bc59d28a",
+    "qa-952969be"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:58:12.470Z",
+  "executionContract": {
+    "intendedBehavior": "moe-proxy comparableProjectPath (packages/moe-proxy/src/utils.ts) and its daemon twin (packages/moe-daemon/src/index.ts) give every absolute project path a key that does not depend on the OS computing it.\n- Drive and UNC forms: \\ and / both separate, '..' never climbs past the drive or the UNC server and share, and case folds with toLowerCase.\n- \\\\wsl$\\<distro>\\x and \\\\wsl.localhost\\<distro>\\x name that distro's POSIX /x.\n- Any other path starting with / is POSIX: it keeps its case and maps /mnt/<d>[/x] to <d>:[/x].\n- Only a relative path is first resolved natively against cwd.\nTests prove this natively, under win32 emulation and on native Windows. They also check the proxy, daemon, sh and ps1 launcher, and JetBrains rules against one table.\nReopen-1 correction: daemon lifecycle consumers compare the reported/stored path using that unchanged transport rule against canonicalProjectPath of OUR local filesystem request. Linux //tmp/x and /tmp/x, and native Windows /Users/x on the current drive and its drive-absolute spelling, must not erase a healthy local daemon's metadata or replace a fresh live lock.",
+    "acceptanceCriteria": [
+      "On Linux, under onWin32 emulation and on native Windows, /home/qa/OtherProject and /home/qa/otherproject get distinct keys, and /home/u/p differs from C:\\home\\u\\p.",
+      "On every OS, \\\\srv\\share\\proj and //SRV/SHARE/PROJ/ share the key //srv/share/proj. \\\\wsl.localhost\\Ubuntu\\home\\u\\proj, //wsl$/Ubuntu/home/u/proj and /home/u/proj share /home/u/proj. //WSL$/Ubuntu/mnt/d/proj equals D:\\proj.",
+      "Drive and /mnt spellings keep their HEAD keys: D:\\x, d:/x/ and /mnt/d/x all give d:/x. Relative and non-normalized inputs keep their HEAD verdicts: X9, X11 and the proxy cwd-spy rows are unchanged and pass.",
+      "probeDaemonIdentity classifies served /home/qa/OtherProject against own /home/qa/otherproject as foreign, and the UNC and WSL-share spellings as same, natively on Linux and on Windows.",
+      "Both dists give every path-contract row its key and match every absolute row of the JetBrains comparableProjectPath table. The sh and ps1 launcher rules match every non-WSL-share row. The launchers' WSL-share rows are todo, naming task-3def0804.",
+      "Healthy native-alias existingDaemonBlocksStart returns true after a real health probe, retaining byte-identical daemon.json and daemon.lock; status reports running and retains them; stop sends only the validated local PID its normal SIGTERM and does not take stale-cleanup fallback.",
+      "Two real processes using same and mixed native-alias spellings cannot both acquire a fresh lock; contender returns false and owner's PID/lock bytes remain. Both new regressions run on Linux and native Windows.",
+      "Foreign-daemon and foreign-lock safeguards, PID/health binding, relative/non-normalized project paths and original pure transport tables remain passing."
+    ],
+    "invariants": [
+      "comparableProjectPath/isSameProjectPath remain the landed OS-independent transport-only functions; output is comparison-only, never persisted.",
+      "Resolve only our local project argument with existing canonicalProjectPath/path.resolve before lifecycle equality; never path.resolve a foreign daemon.json or /health reported absolute value, and never use a native-equality OR fallback to weaken remote identity.",
+      "isForeignDaemonInfo still classifies the original stored spelling before any normalization; foreign PIDs are never signaled or judged stale locally, foreign metadata/locks are never deleted.",
+      "Existing daemon.json/daemon.lock/health/MCP shapes and storage format remain unchanged; no migration, path realpath/symlink expansion, lock timeout redesign, lock deletion policy broadening or daemon restart.",
+      "Existing transport and cross-boundary tests remain unchanged; add regression assertions rather than skip/relax old ones."
+    ],
+    "compatibility": [
+      "The signatures of comparableProjectPath(projectPath: string): string and isSameProjectPath are unchanged. The daemon adds comparableProjectPath to its named exports.",
+      "The daemon.json, daemon.lock and /health shapes, and every MCP tool contract, are unchanged.",
+      "The launchers, JetBrains, VS Code (task-80ed1fe8, now dependsOn this task) and scripts/local-runner are not edited."
+    ],
+    "approvedScope": [
+      "Retain the six already-landed original task files and their transport behavior; no further edits to proxy files or scripts/tests/daemon-json-cap.test.mjs in this reopen.",
+      "Incremental edits only packages/moe-daemon/src/index.ts: native-own-path normalization in staleLockReason, validateDaemonInfoForProject and probeDaemonHealth, plus adjacent explanatory comments. Audit all start/_run/stop/status call chains; change their call wiring only if needed to pass the same canonical own identity without touching deletion policies.",
+      "packages/moe-daemon/src/index.test.ts: permanent native-alias health/metadata/status/stop and two-process lock-contention regressions; existing tables/foreign tests retained."
+    ],
+    "reuse": [
+      "Kotlin collapse(keep) segment logic and its WSL_SHARE regex.",
+      "The launchers' Windows-form classification regex.",
+      "daemon-json-cap.test.mjs helpers: between, SEGMENTS, ENGINES, PYTHON, psq, spawnAsync.",
+      "The onWin32 helpers in proxy utils.test.ts and daemon X10.",
+      "canonicalProjectPath already wraps native path.resolve; existing lifecycle healthServer and foreign-boundary tests; --import tsx subprocess precedent in index.version.test.ts/util/version.test.ts."
+    ],
+    "sourceAssumptions": [
+      "QA repros /tmp/qa25ba-live-daemon.mjs and /tmp/qa25ba-lock-race.mjs demonstrate candidate86a5dca9 regression vs parent. Architect freshly reproduced Linux healthy metadata deletion (0 probes) vs parent preservation (1 probe).",
+      "staleLockReason line225, validateDaemonInfoForProject line373, and probeDaemonHealth lines319/347 compare raw own path; acquireLock persists canonicalProjectPath. Native stored metadata does not trip foreign guard.",
+      "existingDaemonBlocksStart, stopDaemon and statusDaemon consume validateDaemonInfoForProject; all can be corrected at the comparison boundary without new deletion rules."
+    ],
+    "checkRefs": [
+      "(cd packages/moe-proxy && npm test) && (cd packages/moe-daemon && npm run build && npx vitest run src/index.test.ts src/server/healthHost.test.ts src/server/bindHosts.test.ts) && node --test scripts/tests/daemon-json-cap.test.mjs",
+      "Run the same three legs with native Windows Node/npm in an isolated Windows-temp snapshot; new native Windows tests must run, not skip."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Keep pure cross-OS transport key correct; normalize native own-path only at three lifecycle boundaries. Reverting transport helper would restore POSIX case/UNC bugs, and broad local-equality fallback could adopt foreign projects. No split or follow-up deferral: QA's safety regression belongs to this reopen.",
+    "codebaseInsights": "Four raw comparisons are responsible: staleLockReason one, validation one, health metadata/body two. acquireLock already writes canonicalProjectPath. existingDaemonBlocksStart and stop cleanup on mismatch before health; status retains live bytes but misreports. Fresh Linux reproduction matches QA. Two-file incremental change; old six-file implementation retained unchanged.",
+    "risks": "Reopened P1 duplicate-writer/data-loss risk => heavy/max. Native Windows path.resolve semantics cannot be proven with process.platform spoofing alone. Do not normalize foreign data or relax X3-X8. Former contract's 'no lifecycle edits' invariant is replaced here; task-c83d7847 is superseded, not an approved deferral. Task-wide net cap400 includes original168. No shared builds, no restart.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/index.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 2,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:58:12.499Z",
+  "approvedPlanRevision": 2,
+  "workStartedAt": "2026-10-30T13:28:31.232Z",
+  "reviewStartedAt": "2026-10-30T14:34:11.131Z",
+  "verification": {
+    "command": "(cd packages/moe-proxy && npm test) && (cd packages/moe-daemon && npm run build && npx vitest run src/index.test.ts src/server/healthHost.test.ts src/server/bindHosts.test.ts) && node --test scripts/tests/daemon-json-cap.test.mjs",
+    "exitCode": 0,
+    "outputTail": "LINUX (fresh isolated snapshot: git archive HEAD 933fc324 + packages/moe-daemon/src/index.ts and index.test.ts, cmp ok, package-locks match, MOE_*/CLAUDE_* unset; log /tmp/moe-25ba-w093-gate2-linux.log)\n[moe-proxy npm test]\n Test Files  6 passed (6)\n      Tests  290 passed (290)\n[moe-daemon npm run build: ok; vitest index/healthHost/bindHosts]\n Test Files  3 passed (3)\n      Tests  113 passed (113)\n[node --test scripts/tests/daemon-json-cap.test.mjs]\nℹ tests 63\nℹ suites 0\nℹ pass 16\nℹ fail 0\nℹ cancelled 0\nℹ skipped 46\nℹ todo 1\n(the todo is the python WSL-share row for task-3def0804; the 46 skips are PowerShell engines absent on Linux)\nGATE EXIT=0\n\nNATIVE WINDOWS (same three legs; isolated snapshot at c4ac2288 + the same 2 files, byte-identical to HEAD for the gate scope; logs /tmp/moe-25ba-w093-win-{proxy,daemon,index-verbose,cap}.log)\nproxy: 287 passed, 3 skipped (290), rc 0\ndaemon: 94 passed, 19 skipped (113), rc 0; verbose index.test.ts: 33 passed, 3 skipped (pre-existing X9, X11, /dev/zero); X12x2, X13 and X14x2 ran\ncap: 57 pass, 3 todo (WSL-share rows, task-3def0804), 3 skip (Git Bash rows), 0 fail, rc 0; PS5.1 and PS7 ran",
+    "reportedAt": "2026-10-30T14:34:11.131Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/index.ts",
+    ".moe/tasks/task-24a5ad5bb5d74180bb71f5cbff76225a.json",
+    ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json",
+    ".moe/tasks/task-eea78d1d1dc54ae1a01a61e0e211cfa0.json"
+  ],
+  "completionSummary": "Reopen #1 (rev2): native lifecycle identity is now reconciled in packages/moe-daemon/src/index.ts. Only index.ts (+15/-6) and index.test.ts (+99/-1) changed; the six landed transport files are untouched. Task-wide net is 275 of 400.\n\nQA P1-1 (existingDaemonBlocksStart under //tmp/x vs /tmp/x, or C:\\x vs /x, deleted a healthy daemon.json and lock with 0 probes): fixed. validateDaemonInfoForProject and probeDaemonHealth (metadata check and /health body) now compare recorded and reported paths, as written, against own = canonicalProjectPath(--project). Only our own request is resolved. X12, canonical and alias: start is blocked after 1 probe, the files are byte-identical, status reports running/local, and stop sends SIGTERM only to the validated pid. X13: the probe accepts an alias of our own path and rejects a recorded or reported alias.\n\nQA P1-2 (staleLockReason unlinked a live lock and admitted a second writer): fixed. It now compares the lock's canonical path with canonicalProjectPath(--project). X14, canonical/alias and alias/alias: a real child process holds the lock, the contender's acquireLock returns false, the lock bytes are unchanged and the owner stays alive.\n\nQA 3 (permanent tests): X12×2, X13 and X14×2 run and pass on both Linux and native Windows, with no skips. Against HEAD's index.ts, 4 fail; mutating each site fails its matching test.\n\nUnchanged: foreign classification of the original spelling, local pids never trusted for foreign metadata, storage, health and MCP shapes, cleanup, TTL and lock policy, and the transport table. One fail-safe edge: a daemon started under an alias is treated as foreign, so start exits 1 and status says unknown, but nothing is deleted.\n\nFiled, all pre-existing: task-eea78d1d (a symlink spelling deletes a live daemon.json), task-4ca62c89 (an empty lock in the create-to-write window gets replaced), task-f33bf7af (doctor and proxy own-path checks). task-c83d7847 is superseded and has a comment saying so.",
+  "commits": [
+    {
+      "sha": "86a5dca9a3f7327f630104756ad17dd962ad2750",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T13:26:04Z",
+      "paths": [
+        ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
+        ".moe/tasks/task-2c3e6170c6b7406f8136625781d327c6.json",
+        ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
+        ".moe/tasks/task-b294377dde9e4ab6b1d422163b941115.json",
+        ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json",
+        ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+        ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
+        ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts",
+        "packages/moe-proxy/src/utils.test.ts",
+        "packages/moe-proxy/src/utils.ts",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T13:43:22.672Z",
+      "treeId": "9593421af5401c04f85764b370dc800deeb78e3f",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "a2d329631d4344a4391dc831707e2b14658e2a6a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-262588d0@2026-10-30T13:49:56Z",
+      "paths": [
+        ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
+        ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
+        ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json",
+        ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json"
+      ],
+      "recordedBy": "worker-262588d0",
+      "recordedAt": "2026-10-30T13:53:18.376Z",
+      "treeId": "687db0f73f37042c61e6164011b1b767692a10c6",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "aeeca0456ce2f29a769bf29e2f031bc539318589",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T13:58:13Z",
+      "paths": [
+        ".moe/tasks/task-24a5ad5bb5d74180bb71f5cbff76225a.json",
+        ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T14:34:29.847Z",
+      "treeId": "ab046bdc378d7649ac7aaf1dc9edbcc4f7279d1b",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "d02883e0669d5a8695342d4606fcd091ae2b9635",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T14:34:51Z",
+      "paths": [
+        ".moe/tasks/task-eea78d1d1dc54ae1a01a61e0e211cfa0.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T14:48:06.462Z",
+      "treeId": "1bf64e8b84e8d0c6a3d902b576e26d9d45c58570",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-proxy/src/utils.test.ts",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-proxy/src/daemonIdentity.test.ts",
+    "scripts/tests/daemon-json-cap.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T14:34:51Z",
+    "at": "2026-10-30T14:48:06.462Z"
+  },
+  "reviewCompletedAt": "2026-10-30T14:47:10.294Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Proxy/daemon identity and discovery suites cover the corrected comparison on Linux and native Windows without regressing drive-/mnt spellings.",
+      "Epic rail: Fixes must be backward-compatible with existing .moe/ state files"
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "packages/moe-daemon/src/index.ts",
+        "line": 105,
+        "description": "P1: new keys differ for native filesystem aliases (/tmp/x vs //tmp/x on Linux; C:\\Users\\... vs /Users/... on Windows). With healthy daemon.json+lock stored under the native absolute path, existingDaemonBlocksStart(alternate) returns false and deletes BOTH files without probing /health; parent probes once, returns true, preserves both. The stored path is native, so the foreign guard does not fire. Reconcile native lifecycle identity with transport comparison; audit stop/status too."
+      },
+      {
+        "type": "regression",
+        "file": "packages/moe-daemon/src/index.ts",
+        "line": 225,
+        "description": "P1: acquireLock writes a native resolved projectPath, then staleLockReason compares it with raw --project using the changed helper. Two real processes using //tmp/x (Linux) or /Users/... (Windows): candidate reports 'projectPath mismatch' for the live owner, unlinks its lock and grants the contender ownership. Parent refuses and preserves owner PID. Preserve live-lock exclusion for native aliases without weakening cross-OS foreign-daemon protections."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/index.test.ts",
+        "line": 240,
+        "description": "Current passing helper/X1/X10 tables miss both destructive lifecycle regressions. Add Linux and native-Windows tests in fresh temp projects for healthy-daemon metadata preservation and two-process live-lock contention under native aliases. Assert no deletion, no second lock owner, and retained foreign-daemon protections. Obtain the narrow scope amendment needed for currently excluded lifecycle consumers before fixing."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Reject completion 86a5dca9a3f7327f630104756ad17dd962ad2750, tree9593421af5401c04f85764b370dc800deeb78e3f, contained on moe/work-2026-10-24. Six owned files +220/-52=net168 LOC. Exact task.verification rerun in /tmp/moe-qa25ba.txGbOF with MOE_* unset: proxy272pass, daemon108pass, cap16pass/46skip/1authorized WSL todo, exit0 (/tmp/qa25ba-linux.log). Native-Windows equivalents exit0: proxy271pass/1skip, daemon89pass/19skip, cap57pass/3skip/3authorized WSL todos; PS5.1/PS7 checks ran (/tmp/qa25ba-win-{proxy,daemon,cap}.log). However targeted runtime checks prove NEW live-state deletion and duplicate-writer admission on BOTH OSes; parent 86a5dca9^ preserves metadata/refuses contention. This violates lifecycle safety and existing-state compatibility despite passing helper tables. Dependent LOW task-c83d78475cf443688b571d4d508fde8e is not an authorized deferral and its race-only diagnosis is incomplete. Repros: node /tmp/qa25ba-live-daemon.mjs <snapshot>/packages/moe-daemon/dist/index.js; node /tmp/qa25ba-lock-race.mjs <snapshot>/packages/moe-daemon/dist/index.js. Parent snapshot=/tmp/moe-qa25ba-parent.NWLGiq. Logs=/tmp/qa25ba-live-{candidate,parent}.log, /tmp/qa25ba-race-{candidate,parent}.log and corresponding qa25ba-win-* logs. All use fresh temp projects; no shared source or live state changed. Request narrow architect scope amendment/replan for lifecycle consumers currently excluded by the plan; do not weaken the required cross-OS comparison contract.",
+      "rejectedAt": "2026-10-30T13:49:44.718Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Proxy/daemon identity and discovery suites cover the corrected comparison on Linux and native Windows without regressing drive-/mnt spellings.",
+        "Epic rail: Fixes must be backward-compatible with existing .moe/ state files"
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "packages/moe-daemon/src/index.ts",
+          "line": 105,
+          "description": "P1: new keys differ for native filesystem aliases (/tmp/x vs //tmp/x on Linux; C:\\Users\\... vs /Users/... on Windows). With healthy daemon.json+lock stored under the native absolute path, existingDaemonBlocksStart(alternate) returns false and deletes BOTH files without probing /health; parent probes once, returns true, preserves both. The stored path is native, so the foreign guard does not fire. Reconcile native lifecycle identity with transport comparison; audit stop/status too."
+        },
+        {
+          "type": "regression",
+          "file": "packages/moe-daemon/src/index.ts",
+          "line": 225,
+          "description": "P1: acquireLock writes a native resolved projectPath, then staleLockReason compares it with raw --project using the changed helper. Two real processes using //tmp/x (Linux) or /Users/... (Windows): candidate reports 'projectPath mismatch' for the live owner, unlinks its lock and grants the contender ownership. Parent refuses and preserves owner PID. Preserve live-lock exclusion for native aliases without weakening cross-OS foreign-daemon protections."
+        },
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/index.test.ts",
+          "line": 240,
+          "description": "Current passing helper/X1/X10 tables miss both destructive lifecycle regressions. Add Linux and native-Windows tests in fresh temp projects for healthy-daemon metadata preservation and two-process live-lock contention under native aliases. Assert no deletion, no second lock owner, and retained foreign-daemon protections. Obtain the narrow scope amendment needed for currently excluded lifecycle consumers before fixing."
+        }
+      ]
+    }
+  ],
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Approved-scope conflict after QA rejection: executionContract invariants/approvedScope and step-2 explicitly prohibit changes to staleLockReason, probeDaemonHealth, validateDaemonInfoForProject and every lifecycle deleter, but the required safety fix must reconcile their native filesystem identity with the new transport key. Fresh Linux temp-project repro against the QA candidate (source byte-identical to current index.ts): existingDaemonBlocksStart('//tmp/...') returns false, performs 0 health probes, deletes healthy daemon.json and live daemon.lock; parent returns true, probes once, preserves both. Logs /tmp/worker262588-25ba-live-{candidate,parent}.log. QA also proved native-Windows metadata loss and two-process live-lock replacement on both OSes. Need narrow architect amendment/replan authorizing lifecycle-consumer fix plus permanent Linux/Windows metadata-preservation and real-contention regressions; preserve cross-OS comparison contract and foreign-PID protections, audit stop/status. No source edits or shared builds; no passing gate claimed. Handoff and gotcha memories updated. This is not waiting on a dependency or an authorized follow-up deferral.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-30T14:47:10.294Z",
+  "reviewSummary": "Approve reopen #1 completion aeeca045 (tree ab046bdc), on moe/work-2026-10-24 and origin. It changes only daemon index.ts (+15/-6) and index.test.ts (+99/-1), plus board JSON; checkpoint a2d32963 is board-only. Size: reopen net 107; task-wide 6 files net 275 (<400). Scope matches the rev2 approvedScope; the proxy and cap files are untouched.\nGATE: exact task.verification command, isolated Linux snapshot of aeeca045, lock-matching native node_modules, MOE_*/CLAUDE_* unset: EXIT 0. Proxy 290/290; daemon 113/113; cap 16 pass / 0 fail / 46 skip (no PS on Linux) / 1 todo (WSL share, task-3def0804). Log /tmp/qa952-25ba-gate-linux.log.\nNATIVE WINDOWS (temp snapshot, robocopied node_modules matching the lock): proxy 287 pass/3 skip; daemon 94 pass/19 skip. Verbose index run: 33 pass/3 skip (the existing X9, X11, /dev/zero); X12x2, X13 and X14x2 ran. Cap 57 pass/3 todo (WSL share)/3 skip (Git Bash)/0 fail; PS5.1 and PS7 ran. All rc 0. Logs /tmp/qa952-25ba-win-*.log.\nRED: the new tests against aeeca045^ index.ts give 4 assertion failures (X12 alias, X13, X14x2). Mutants that resolve the reported or recorded path in probeDaemonHealth fail X13.\nREJECT-1 REPROS (qa25ba-live-daemon/lock-race.mjs) against the built candidate, on Linux and on native Windows: start is blocked after 1 probe with daemon.json and lock kept, and the contender is refused with the owner's pid and lock bytes kept.\nDoD: 1) case-distinct POSIX paths stay distinct; 2) UNC/WSL-share rules match JetBrains and the launchers on both OSes; 3) the lifecycle suites cover native aliases, drive and /mnt rows unchanged. Epic rail: daemon.json and lock files recorded canonically survive any native alias.\nNOTE (non-blocking): a daemon STARTED with an alias (//x on Linux, /x on Windows) records it raw and is classed foreign, so a later start exits 1 and status says unknown; nothing is deleted. The contract forbids native-OR equality. Follow-ups eea78d1d, 4ca62c89 and f33bf7af are filed. No leftover processes or dirs.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,214 @@
+{
+  "id": "task-fc9835feb5c64caab19b736797408b8e",
+  "epicId": "epic-be924fb8",
+  "title": "docs: state the interactive folder-trust exception wherever Moe still says it never opens a file inside a Claude config folder",
+  "description": "Follow-up to task-7a0b188151a74356a4965b3cc589eddf. That task lets scripts/moe-account-lease.mjs set `projects[<key>].hasTrustDialogAccepted` in an interactive seat's leased account `.claude.json`; a human signed off on 2026-10-26 (see that task's comments). It updates scripts/CLAUDE.md and docs/MCP_SERVER.md \"Claude Account Rotation\" itself. Three other places still state the old absolute rule and become false once it lands:\n- docs/SCHEMA.md, the `claude-accounts/<id>/` entry: \"Moe ... never opens a file inside it\".\n- packages/moe-daemon/src/accounts/registry.ts, the header comment (\"nothing here, or anywhere in Moe, opens a file inside it\") and the accountConfigDir doc comment (\"it never reads inside it\").\n- docs/TROUBLESHOOTING.md \"Claude Account Rotation Issues\" has no entry for the new MOE_ACCOUNT_TRUST_GRANTED / MOE_ACCOUNT_UNTRUSTED codes.\n\nThe daemon-only statements stay true and must NOT change: docs/ARCHITECTURE.md, packages/moe-daemon/CLAUDE.md, state/accountStore.ts. Take the exact wording (refusal reasons, codes, remedy) from the landed helper and scripts/CLAUDE.md. Do not paraphrase them.",
+  "definitionOfDone": [
+    "docs/SCHEMA.md (claude-accounts/<id>/ entry) and packages/moe-daemon/src/accounts/registry.ts (header comment and accountConfigDir comment) state the one exception: for an interactive claude seat, the wrapper helper scripts/moe-account-lease.mjs sets projects[<key>].hasTrustDialogAccepted in that account's .claude.json; the daemon and the accounts CLI still open nothing inside the folder.",
+    "docs/TROUBLESHOOTING.md 'Claude Account Rotation Issues' lists MOE_ACCOUNT_TRUST_GRANTED and MOE_ACCOUNT_UNTRUSTED, every refusal reason the landed helper prints (verbatim), and the remedy (start claude once in the project under that account and accept the trust dialog).",
+    "The daemon-only statements (docs/ARCHITECTURE.md, packages/moe-daemon/CLAUDE.md, src/state/accountStore.ts) are unchanged; git grep -n 'opens a file inside' shows no remaining absolute claim about all of Moe.",
+    "cd packages/moe-daemon && npx tsc --noEmit exits 0 (comment-only daemon change) and npm run lint passes at the repo root."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Update only docs/SCHEMA.md's claude-accounts/<id>/ bullet and registry.ts's header/accountConfigDir comments. Reuse exact landed wording from scripts/CLAUDE.md and MCP_SERVER.md: for an interactive leased claude seat only, scripts/moe-account-lease.mjs sets projects[<key>].hasTrustDialogAccepted in that account's .claude.json; daemon and accounts CLI still open nothing inside it. Retain folder lifetime/id-reuse semantics. registry.ts executable code stays byte-for-byte unchanged. Do not edit docs/ARCHITECTURE.md, packages/moe-daemon/CLAUDE.md or state/accountStore.ts, nor historical plans/generated snapshots.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/accounts/registry.ts"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/accounts/registry.ts"
+      ],
+      "note": "SCHEMA bullet + registry header/accountConfigDir comments state the interactive-seat exception. Shared dirty tree untouched.",
+      "startedAt": "2026-10-26T15:49:22.347Z",
+      "completedAt": "2026-10-26T15:49:37.722Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "In docs/TROUBLESHOOTING.md 'Claude Account Rotation Issues', add MOE_ACCOUNT_TRUST_GRANTED (key set; already trusted is quiet) and MOE_ACCOUNT_UNTRUSTED entries. Copy all TRUST_REASON values verbatim from landed helper: 'no .claude.json in the account folder'; \"the account's .claude.json is not a regular file\"; \"the account's .claude.json is over 16 MiB\"; \"the account's .claude.json is not a JSON object\"; \"the account's .claude.json is locked by another claude\"; \"the account's .claude.json could not be rewritten\"; 'the trust entry did not read back'; 'the launch directory is outside the project'. Copy canonical refusal/retry behavior and remedy: start claude once in the project under that account and accept the trust dialog. Describe error handling without suggesting credential edits, bypass flags or trust for headless seats; preserve the exact scope/security wording from landed docs.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "startedAt": "2026-10-26T15:49:38.787Z",
+      "completedAt": "2026-10-26T15:49:47.279Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create scripts/tests/account-trust-docs.test.mjs using node:test/assert and read-only source text. Extract the bounded TRUST_REASON object from scripts/moe-account-lease.mjs without executing source; assert extraction is complete/nonempty and every quoted value appears literally in the troubleshooting section, together with both codes and stated remedy. Assert each of the three revised locations names interactive wrapper-only .claude.json/hasTrustDialogAccepted exception and retains daemon/accounts-CLI boundary; check protected daemon-only statements still exist. Use section/function-comment boundaries rather than global word-presence assertions or whole-doc snapshots. Test paths via import.meta.url for Windows/Unix; no real accounts, environment secrets or live claude calls.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/account-trust-docs.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/account-trust-docs.test.mjs"
+      ],
+      "note": "5 tests pass; mutation (deleting a reason line from TROUBLESHOOTING) fails the verbatim test.",
+      "startedAt": "2026-10-26T15:49:48.060Z",
+      "completedAt": "2026-10-26T15:50:12.526Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Single final verification command from candidate root: node --test scripts/tests/account-trust-docs.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit) && npm run lint && git grep -n 'opens a file inside' -- docs packages/moe-daemon/CLAUDE.md packages/moe-daemon/src/accounts/registry.ts packages/moe-daemon/src/state/accountStore.ts . Require exit 0, inspect grep matches to confirm no all-of-Moe absolute remains, and record fresh command/exitCode/outputTail for complete_task. The docs test is regression coverage; no runtime behavior change warrants daemon npm test or generated rebuild.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Docs test 5/5; tsc --noEmit exit 0 (Windows cmd.exe; WSL TS7 native pkg missing, TS6 pure-JS also 0); lint OK; git grep matches only daemon-scoped statements + the new exception wording.",
+      "startedAt": "2026-10-26T15:50:12.935Z",
+      "completedAt": "2026-10-26T15:50:53.558Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review: compare every refusal reason/remedy with landed helper/docs verbatim; no accidental expansion to headless seats, daemon, accounts CLI or credential files. Confirm registry diff contains only comments, all protected daemon-only statements/files unchanged by this task, SCHEMA hunks don't absorb CQ-F12b changes, and new test detects deleting/changing a reason rather than merely finding generic tokens. If corrected, repeat same gate before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/accounts/registry.ts",
+        "scripts/tests/account-trust-docs.test.mjs"
+      ],
+      "note": "Self-review: reasons verbatim (test-enforced, mutation killed); registry diff comment-only; SCHEMA diff 1 line; protected daemon-only files untouched; headless seats stated as unchanged.",
+      "startedAt": "2026-10-26T15:50:54.451Z",
+      "completedAt": "2026-10-26T15:50:58.007Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7a0b188151a74356a4965b3cc589eddf"
+  ],
+  "priority": "HIGH",
+  "order": 234.5,
+  "comments": [
+    {
+      "id": "comment-7e04b09b00d8474d9304b0a7f6fd05e3",
+      "author": "architect-2c9d5121",
+      "content": "Planner heads-up (architect-2c9d5121, 2026-10-26). CQ-F12b, task-3ead73b368094850bfec955c316bc239, is planned and WORKING once CQ-F12a lands. It edits docs/SCHEMA.md in the Task listing, the planRevision, approvedPlanRevision, executionContract and executionPolicySnapshot subsections, ExecutionAttempt and Validation Rules. It also edits docs/MCP_SERVER.md, docs/CONFIGURATION.md and docs/PLAN_APPROVAL_FRESHNESS.md. If this row's Claude Accounts wording touches the same files, keep the hunks disjoint, or add a dependsOn edge on F12b. That avoids a contested-path landing in the shared checkout.",
+      "timestamp": "2026-10-26T09:52:06.687Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T05:45:52.197Z",
+  "updatedAt": "2026-10-27T14:26:12.509Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T15:45:40.980Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-27T14:25:34.708Z",
+    "wallClockMs": 81593728
+  },
+  "contextFetchedBy": [
+    "architect-1520cc31",
+    "worker-3729a0d6",
+    "qa-6fa5d758"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T15:48:17.837Z",
+  "planningNotes": {
+    "approachesConsidered": "Documentation/comment correction only; no runtime change and no trust expansion. Add one small source-reading Node regression check to satisfy epic regression rail and prevent helper refusal strings drifting out of docs. Avoid daemon full-suite rebuild for comments: exact DoD typecheck + role lint plus the new docs test. Four edited files, no split needed.",
+    "codebaseInsights": "Prerequisite 7a0b1881 is DONE/merged; helper TRUST_REASON contains eight fixed strings. Registry header line ~11 overclaims 'anywhere in Moe'; accountConfigDir doc comment ~71 repeats it; function only joins directory names. docs/SCHEMA.md account directory bullet ~1676 is the target. MCP_SERVER.md Claude Account Rotation and scripts/CLAUDE.md already document interactive leased-seat exception, lock, read-back and no credentials access. Daemon-only statements are correct and must remain untouched. Commented SCHEMA collision CQ-F12b task-3ead73b368094850bfec955c316bc239 is now DONE, so no stale dependency required.",
+    "risks": "Copy refusal reasons verbatim, including apostrophes, spaces and 16 MiB. No helper export/runtime changes just to make a docs test convenient. Read checked-in source only; never inspect real account folders or run claude. Native Windows key separators differ from WSL; copy existing canonical key explanation rather than inventing new path rules. Registry is a .ts path, so routing uses high effort despite comment-only scope. Preserve shared-tree unrelated diffs; no .moe/generated edits.",
+    "keyFiles": [
+      "docs/SCHEMA.md",
+      "docs/TROUBLESHOOTING.md",
+      "packages/moe-daemon/src/accounts/registry.ts",
+      "scripts/moe-account-lease.mjs",
+      "scripts/CLAUDE.md",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T15:48:17.924Z",
+  "workStartedAt": "2026-10-26T15:49:22.347Z",
+  "reviewStartedAt": "2026-10-26T15:51:02.800Z",
+  "verification": {
+    "command": "node --test scripts/tests/account-trust-docs.test.mjs && (cd packages/moe-daemon && cmd.exe /c 'npx tsc --noEmit') && npm run lint && git grep -n 'opens a file inside' -- docs packages/moe-daemon/CLAUDE.md packages/moe-daemon/src",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 5 / pass 5 / fail 0; tsc --noEmit exit 0 (cmd.exe); OK: docs/roles/architect.md 39 lines, worker.md 29, qa.md 32; git grep: ARCHITECTURE.md:98, MCP_SERVER.md:2850, packages/moe-daemon/CLAUDE.md:11, registry.ts:11 (exception wording), accountStore.ts:26 - all daemon-scoped or carrying the exception",
+    "reportedAt": "2026-10-26T15:51:02.800Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/SCHEMA.md",
+    "packages/moe-daemon/src/accounts/registry.ts",
+    "docs/TROUBLESHOOTING.md",
+    "scripts/tests/account-trust-docs.test.mjs",
+    ".moe/tasks/task-fc9835feb5c64caab19b736797408b8e.json",
+    ".moe/tasks/task-e57d1d20d1854e2cae44eaea9fee584e.json"
+  ],
+  "completionSummary": "SCHEMA.md claude-accounts/<id>/ entry and registry.ts header + accountConfigDir comments now state the one exception (wrapper helper scripts/moe-account-lease.mjs sets projects[<key>].hasTrustDialogAccepted in an interactive seat's .claude.json; daemon and accounts CLI open nothing). TROUBLESHOOTING.md gained a MOE_ACCOUNT_UNTRUSTED / MOE_ACCOUNT_TRUST_GRANTED section with all 8 helper refusal reasons verbatim, retry behaviour and the remedy. New scripts/tests/account-trust-docs.test.mjs (5 tests) extracts TRUST_REASON from the helper source and checks docs/comments; deleting a reason from TROUBLESHOOTING fails it. ARCHITECTURE.md, packages/moe-daemon/CLAUDE.md, accountStore.ts untouched. registry.ts diff is comments only. Note: WSL cannot run the daemon's TS7 tsc (win32 native pkg only), so tsc --noEmit ran via cmd.exe (exit 0); TS6 pure-JS tsc also 0.",
+  "commits": [
+    {
+      "sha": "66a00628e0602415af2baec8fb5b941d340f97e5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T15:48:15Z",
+      "paths": [
+        ".moe/tasks/task-fc9835feb5c64caab19b736797408b8e.json",
+        "docs/SCHEMA.md",
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/accounts/registry.ts",
+        "scripts/tests/account-trust-docs.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T15:51:56.022Z",
+      "treeId": "c973431b17040693165624884f08e3c58597902d",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "243e46652965900d97e11e60e964ee1757611f26",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-6fa5d758@2026-10-27T14:23:51Z",
+      "paths": [
+        ".moe/tasks/task-e57d1d20d1854e2cae44eaea9fee584e.json",
+        ".moe/tasks/task-fc9835feb5c64caab19b736797408b8e.json"
+      ],
+      "recordedBy": "qa-6fa5d758",
+      "recordedAt": "2026-10-27T14:26:12.508Z",
+      "treeId": "c5f6c84e16f5cc5d5e80ec41159d427512883a5e",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-6fa5d758@2026-10-27T14:23:51Z",
+    "at": "2026-10-27T14:26:12.508Z"
+  },
+  "completedAt": "2026-10-27T14:25:34.708Z",
+  "reviewCompletedAt": "2026-10-27T14:25:34.708Z",
+  "reviewSummary": "Reviewed completion commit 66a0062 (on moe/work-2026-10-24, pushed; non-board diff +110/-3, well under the 400 LOC cap) via git show, not the dirty tree. Re-ran: `node --test scripts/tests/account-trust-docs.test.mjs` 5/5 pass; `cmd.exe /c 'npx tsc --noEmit'` in packages/moe-daemon exit 0; `npm run lint` OK (architect 39, worker 29, qa 32 lines); `git grep -n 'opens a file inside' -- docs packages/moe-daemon/CLAUDE.md packages/moe-daemon/src` shows only ARCHITECTURE.md:98, MCP_SERVER.md:2866, daemon CLAUDE.md:11, accountStore.ts:26 (all daemon-scoped or carrying the exception) and registry.ts:11 (now scoped to this module/daemon/accounts CLI plus the exception).\nDoD: (1) SCHEMA.md claude-accounts/<id>/ bullet and registry.ts header + accountConfigDir comment state the interactive-seat-only exception for scripts/moe-account-lease.mjs setting projects[<key>].hasTrustDialogAccepted in .claude.json, daemon and accounts CLI still open nothing; registry.ts hunks are comments only. (2) TROUBLESHOOTING.md adds a MOE_ACCOUNT_UNTRUSTED / MOE_ACCOUNT_TRUST_GRANTED section listing all 8 TRUST_REASON strings verbatim (I compared against scripts/moe-account-lease.mjs:49-58), the retry behaviour (MOE_ACCOUNT_RETRY_SEC default 300, task held, headless -p seats unaffected) and the remedy; the printed-line format matches moe-agent.sh:6070 / moe-agent.ps1:5519. (3) ARCHITECTURE.md, packages/moe-daemon/CLAUDE.md and accountStore.ts are untouched by the commit (diff shows only the 4 owned paths + the task board JSON). (4) tsc and lint green as above.\nTests: new account-trust-docs.test.mjs parses TRUST_REASON from the helper source and asserts each value is present in the TROUBLESHOOTING section, so changing or removing a reason fails it; also guards the daemon-only statements. No deleted or weakened tests, no scope creep. Note: WSL cannot run the daemon's TS7 tsc natively, so tsc was run through cmd.exe.",
+  "requiredCheckAtDone": null
+}

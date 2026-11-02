@@ -1,0 +1,224 @@
+{
+  "id": "task-06dda5c1df29433ab4eb5c4230b38581",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-9] VS Code: task detail and board blocker logic pass the shared blocker corpus",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-4 (task-db97dacb7b3843b4a6f747c154123501), which lands moe-jetbrains/src/test/resources/client-blocker.json. This row must pass it UNCHANGED (held-out test). A row VS Code cannot meet because JetBrains is wrong is filed against JetBrains, never edited.\n\nObjective: VS Code computes block causes twice: moe-vscode/src/panels/TaskDetailPanel.ts (exported blockCause, blockedPrerequisiteIds, blockerFacts) and moe-vscode/media/board.js (its own blockCause and blockedPrerequisiteIds in browser JS). Both must agree with each other and with JetBrains' TaskBlockerPresentation on every corpus row: the cause (RESOURCE_WAIT, DEPENDENCY_WAIT, EXTERNAL_BLOCK or null), the prerequisite ids in order, and the independent needs-human-review flag.\n\nDeliverable: new moe-vscode/tests/blocker-corpus.test.cjs that runs every row through BOTH implementations: TaskDetailPanel.ts transpiled under node:vm (reuse the loadModule shape of tests/task-blocker-visibility.test.cjs, whose require map holds only `vscode` and `./PlanReviewPanel`), and the raw media/board.js in its own vm context, calling its top-level functions (mem:convention-vscode-renderer-tests: function declarations become context properties). Fix any disagreement in TaskDetailPanel.ts and/or media/board.js, and name each fixed row id in the summary.\n\nTaskDetailPanel.ts is shared with VSC-8 and VSC-11: in shared-checkout mode do not run concurrently with them; after the worktree switch they merge independently.\n\nNot in scope: blocker wording (fact text differs by client on purpose), any moe-jetbrains file, the corpus.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/blocker-corpus.test.cjs runs every row of moe-jetbrains/src/test/resources/client-blocker.json through TaskDetailPanel.ts's blockCause and blockedPrerequisiteIds and through media/board.js's blockCause and blockedPrerequisiteIds, and every row passes on both, with all failing ids reported together.",
+    "The test also checks each row's expected needs-human-review flag against the field both renderers read.",
+    "A scratch-copy mutant of media/board.js's blockCause that ignores the BLOCKED-status check makes the test fail (mutant discarded afterwards).",
+    "client-blocker.json and every moe-jetbrains file are unchanged by this task's diff.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create moe-vscode/tests/blocker-corpus.test.cjs with the Write tool. Use 'use strict' and only node:test, node:assert/strict, node:vm, fs, path and typescript.\nExpect no production change. The architect's dry run at 1f9885eb ran all 17 rows (B01-B17) of moe-jetbrains/src/test/resources/client-blocker.json through all three VS Code copies of the rule, and every row passed. This row's deliverable is the held-out guard.\nLoading. Copy the pieces from tests/task-blocker-visibility.test.cjs; tests share no helper module.\n- TaskDetailPanel.ts: transpile it (CommonJS, ES2020, esModuleInterop) and run it with that file's loadModule shape. The require map holds only `vscode` and `./PlanReviewPanel` (PlanReviewPanel.ts itself loaded with { vscode }); any other require throws. The vscode stub must be a plain `{}`: a strict Proxy at the top level breaks esModuleInterop's import helper, which reads its module marker (the dry run hit this).\n- media/board.js: raw, in its own vm.createContext. Provide:\n  - acquireVsCodeApi returning { getState: () => undefined, setState, postMessage };\n  - document with addEventListener, body.addEventListener, and getElementById for epicFilter, addEpicBtn, searchInput and searchClear;\n  - window.addEventListener;\n  - setTimeout/setInterval stubs that arm nothing, so no timer outlives the test.\n  Its top-level function declarations (blockCause, blockedPrerequisiteIds, renderTaskCard) become context properties (mem:convention-vscode-renderer-tests).\n- media/taskDetail.js: the THIRD copy. The row description says the rule is computed 'twice', but taskDetail.js carries its own blockCause and blockedPrerequisiteIds for live updates. Run it raw in its own context. Its document.getElementById returns a node with dataset { taskId, taskStatus } plus no-op addEventListener and appendChild; document.createElement and createTextNode return such nodes too; window has addEventListener.\nTests. Each ends with ONE assert.deepEqual(failures, []), so all failing ids are reported together.\n- C0, corpus shape: version 1, at least 14 rows, unique ids.\n- C1 (DoD 1): for every row and every surface in [['TaskDetailPanel.ts', panel module], ['board.js', board context], ['taskDetail.js', detail context]]:\n  - blockCause(row.task) must equal row.cause (strict !==, so undefined is not null);\n  - JSON.stringify(Array.from(blockedPrerequisiteIds(row.task))) must equal JSON.stringify(row.prerequisiteIds). vm-realm arrays fail deepStrictEqual.\n  Record failures in exactly these formats, because checkRef 2 greps them: `${row.id} ${surface}: expected cause <json>, got <json>`, `${row.id} ${surface}: expected ids <json>, got <json>`, and `${row.id} ${surface}: threw <err>`.\n  Pass row.task exactly as the corpus gives it: VS Code keeps the /ws task object as parsed JSON, so that is exactly what the client reads.\n- C2 (DoD 2): for every row, each of these must equal row.needsHumanReview:\n  - the field both renderers read, `row.task.needsHumanReview === true`;\n  - TaskDetailPanel's needsHumanAttention(row.task);\n  - whether board.js's renderTaskCard({ ...BASE, ...row.task }, [], column) shows the 'chip-question' attention chip.\n  The card's 'chip-blocked' label must equal BLOCK_CAUSE_LABEL[row.cause] from the panel module, or be absent when row.cause is null. BASE supplies display fields only (title, priority, description, definitionOfDone, implementationPlan, comments, order), never a block field. column is 'WORKING' for BLOCKED (display-mapped), otherwise the status.\nError handling:\n- A row that throws on one surface is recorded as that surface's failure, and the loop continues.\n- A missing or unreadable corpus fails C0 with the path in the message.\n- Nothing is skipped silently.\nIf a row ever fails on a VS Code copy, because that copy changed after planning: fix the rule in that copy (TaskDetailPanel.ts, media/board.js or media/taskDetail.js), report the file in complete_step.modifiedFiles, and name the fixed row ids in the summary. If JetBrains is the one that is wrong, file it with a task comment plus a #general post. Never edit the corpus, and never add a VS Code-only expectation (mem:decision-vscode-plugin-reuse).\nIterate with `cd moe-vscode && node --test tests/blocker-corpus.test.cjs`, using plain node; never run npm in the shared checkout.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/blocker-corpus.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/blocker-corpus.test.cjs"
+      ],
+      "note": "New blocker-corpus.test.cjs; all 17 rows pass on TaskDetailPanel.ts, board.js, taskDetail.js. No production change. Shared checkout has 32 other dirty paths, untouched.",
+      "startedAt": "2026-11-02T10:34:24.121Z",
+      "completedAt": "2026-11-02T10:34:53.707Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification. Run once from the checkout root, executing the three executionContract checkRefs exactly as written, in this order.\n(1) checkRef 2, the mutant (DoD 3):\n- It copies the two webview scripts, both panels, the new test and the corpus into a mktemp dir.\n- It deletes board.js's BLOCKED-status gate. The exact line `if (!task || task.status !== 'BLOCKED') { return null; }` must occur exactly once, or the check exits 2.\n- It runs the test there with NODE_PATH at the checkout's moe-vscode/node_modules.\n- It exits 0 only when that run FAILED with B04, B05, B06 and B17 reported as `<id> board.js: expected cause`.\n- It deletes the copy, which discards the mutant, and prints the mutant run's exit code; put that line in the step note.\n(2) checkRef 3 (DoD 4): the corpus at HEAD and in the working tree equals VSC-4's 4ad2f057 bytes, and no commit carrying this task's Moe-Task trailer touches moe-jetbrains/.\n(3) checkRef 1, the gate (DoD 5): a git-archive snapshot of HEAD with the new test overlaid, then npm ci, lint, compile and the full suite under env -i with the nvm Node 24.21 PATH (mem:gotcha-vscode-gate-from-wsl).\n- Expect clean lint and compile and 0 failed tests; 4 Windows-only skips are normal.\n- tests/task-blocker-visibility.test.cjs must pass unchanged.\n- The planning dry run with a prototype of this test: 453 tests, 449 pass, 4 skip, 0 fail.\n- The gate's fresh command, exit code and output tail are the moe.complete_task verification evidence.\nError handling for a red run:\n- Treat a red C1 or C2 row as step 1 says: fix the VS Code copy, or file JetBrains; never touch the corpus.\n- A MODULE_NOT_FOUND or ENOENT before any assertion is a snapshot or overlay mistake, not a product failure.\n- If checkRef 2 exits because the gate line is not found exactly once, board.js has changed shape since planning. Report that with a task comment; do not edit the checkRef.\nNever run npm in the shared checkout. A subagent that runs a gate is told to kill only PIDs it started, never by name or pattern.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/tests/blocker-corpus.test.cjs"
+      ],
+      "note": "checkRef2: \"mutant test exit: 1 (non-zero = killed)\", B04/B05/B06/B17 reported. checkRef3 exit 0. checkRef1 gate exit 0: 473 tests, 469 pass, 4 skip, 0 fail.",
+      "startedAt": "2026-11-02T10:34:54.561Z",
+      "completedAt": "2026-11-02T10:35:16.784Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Final step: load adversarial-self-review and read the new test as an attacker.\n(1) Could any assertion pass vacuously?\n- An empty rows array: C0 guards it.\n- A surface whose function is missing: calling it throws, which is recorded as a failure.\n- A card regex that never matches: C2 would then fail every row with a cause.\n- undefined compared with null: the strict comparison catches it.\n(2) Each of the three copies is loaded from its production file, never re-implemented.\n(3) No timer, listener or temp file outlives the test.\n(4) No forbidden-pattern token appears in the file.\n(5) The diff is exactly the new test file: no production change unless step 1's contingency fired, and then each fixed row id is named.\nIf anything changed, re-run checkRef 1 and use that fresh result in moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/tests/blocker-corpus.test.cjs"
+      ],
+      "note": "Self-review: C0 guards empty rows/missing functions; strict comparisons; all three copies loaded from production source; timers stubbed; no forbidden tokens; diff is only the new test file. Mutant proved the test is not vacuous. Nothing changed after the gate.",
+      "startedAt": "2026-11-02T10:35:17.714Z",
+      "completedAt": "2026-11-02T10:35:21.712Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-db97dacb7b3843b4a6f747c154123501"
+  ],
+  "priority": "MEDIUM",
+  "order": 10,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:40:33.911Z",
+  "updatedAt": "2026-11-02T10:38:46.730Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:27:11.974Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-02T10:38:13.962Z",
+    "wallClockMs": 661988
+  },
+  "contextFetchedBy": [
+    "architect-d54b05fd",
+    "worker-4c1da905",
+    "qa-1106e678"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:32:57.743Z",
+  "executionContract": {
+    "intendedBehavior": "A held-out guard. tests/blocker-corpus.test.cjs replays every row of moe-jetbrains/src/test/resources/client-blocker.json through all three VS Code copies of the blocker rule: TaskDetailPanel.ts, media/board.js and media/taskDetail.js, via blockCause and blockedPrerequisiteIds. It checks the needsHumanReview flag through the field itself, through needsHumanAttention, and through board.js's rendered attention and cause chips. The planning dry run passed all 17 rows on all three copies, so no production change is expected.",
+    "acceptanceCriteria": [
+      "Every corpus row gives its expected cause and prerequisite ids, in order, on TaskDetailPanel.ts, board.js and taskDetail.js. All failures are reported in one assertion as '<id> <surface>: ...'.",
+      "For every row, row.task.needsHumanReview === true, needsHumanAttention(row.task) and board.js's attention chip all equal the row's needsHumanReview. The card's cause chip matches the row's cause label, or is absent when the cause is null.",
+      "The board.js mutant without the BLOCKED-status gate fails B04, B05, B06 and B17 (checkRef 2).",
+      "client-blocker.json and every moe-jetbrains file are unchanged (checkRef 3).",
+      "The snapshot gate exits 0 with 0 failed tests (checkRef 1)."
+    ],
+    "invariants": [
+      "Never edit the corpus and never skip a row.",
+      "Each copy of the rule is executed from its production source, never re-implemented in the test."
+    ],
+    "compatibility": [
+      "The corpus is consumed unchanged, with no client-specific expectation.",
+      "tests/task-blocker-visibility.test.cjs and every other existing test stay unchanged.",
+      "No moe-jetbrains file changes, so the JetBrains gradle rail does not apply."
+    ],
+    "approvedScope": [
+      "New file moe-vscode/tests/blocker-corpus.test.cjs.",
+      "Contingency only, if a row fails on a VS Code copy: the rule in that copy (TaskDetailPanel.ts blockCause/blockedPrerequisiteIds, media/board.js or media/taskDetail.js), with each fixed row id named."
+    ],
+    "reuse": [
+      "The tests/task-blocker-visibility.test.cjs harness: loadModule with the { vscode, './PlanReviewPanel' } require map, the board.js context, and the chip classes.",
+      "Collecting every failure and ending with one assertion, as tests/agent-seat-tracker.test.cjs does."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/panels/TaskDetailPanel.ts exports blockCause, blockedPrerequisiteIds, needsHumanAttention and BLOCK_CAUSE_LABEL; its value imports are vscode and ./PlanReviewPanel.",
+      "moe-vscode/media/board.js and media/taskDetail.js each declare top-level blockCause and blockedPrerequisiteIds, and each contains `if (!task || task.status !== 'BLOCKED') { return null; }` exactly once. board.js declares renderTaskCard(task, epics, columnStatus), which emits 'chip chip-blocked' and 'chip chip-question' spans.",
+      "moe-jetbrains/src/test/resources/client-blocker.json is version 1 with rows B01-B17 {id, note, task, cause, prerequisiteIds, needsHumanReview}, landed by VSC-4 in 4ad2f057 (DONE)."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d -t vsc9-gate-XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$R/moe-vscode/tests/blocker-corpus.test.cjs\" \"$S/moe-vscode/tests/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+      "R=$(git rev-parse --show-toplevel) && M=$(mktemp -d -t vsc9-mut-XXXXXX) && cd \"$R\" && cp --parents moe-vscode/media/{board,taskDetail}.js moe-vscode/src/panels/{TaskDetail,PlanReview}Panel.ts moe-vscode/tests/blocker-corpus.test.cjs moe-jetbrains/src/test/resources/client-blocker.json \"$M/\" && node -e 'const fs=require(\"fs\"),f=process.argv[1],s=fs.readFileSync(f,\"utf8\"),a=\"if (!task || task.status !== \\x27BLOCKED\\x27) { return null; }\";if(s.split(a).length!==2)process.exit(2);fs.writeFileSync(f,s.replace(a,\"if (!task) { return null; }\"))' \"$M/moe-vscode/media/board.js\" && O=$(NODE_PATH=\"$R/moe-vscode/node_modules\" node --test \"$M/moe-vscode/tests/blocker-corpus.test.cjs\" 2>&1); C=$?; rm -rf \"$M\"; for b in B04 B05 B06 B17; do printf '%s' \"$O\" | grep -q \"$b board.js: expected cause\" || C=0; done; echo \"mutant test exit: $C (non-zero = killed)\"; [ \"$C\" -ne 0 ]",
+      "git diff --quiet 4ad2f0577474f02be9e000de8041a7fcf2b85bc8 HEAD -- moe-jetbrains/src/test/resources/client-blocker.json && git diff --quiet HEAD -- moe-jetbrains/src/test/resources/client-blocker.json && ! git log --format= --name-only --grep 'Moe-Task: task-06dda5c1df29433ab4eb5c4230b38581' HEAD | grep '^moe-jetbrains/'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Covering only TaskDetailPanel.ts and board.js, as the row text says, was rejected: media/taskDetail.js has a third copy that drives live updates, and covering it costs one vm context.\n- Rendering the taskDetail.js live update for the flag was rejected: task-blocker-visibility already pins live update == initial render, and C2 checks the field, the panel helper and the card.\n- No production fix is planned, because the dry run found no divergence.",
+    "codebaseInsights": "Dry run (scratch mirror):\n- C1 and C2 passed 17/17 rows on all three copies at 1f9885eb.\n- The full snapshot gate with the prototype gave lint 0, compile 0, 453 tests, 449 pass, 4 skip, 0 fail.\n- checkRef 2 killed B04, B05, B06 and B17. Its controls (a reformatted gate line; a test that never checks board.js) both exit 1, so it cannot pass falsely.\nHarness facts:\n- A strict Proxy vscode stub breaks transpileModule's esModuleInterop import helper; use a plain object.\n- board.js and taskDetail.js keep top-level declarations (only indented), so their functions are vm context properties.",
+    "risks": "- TaskDetailPanel.ts is shared with VSC-11, but this plan does not edit it. If the contingency fix fires there, coordinate per the row's shared-file note.\n- The failure-text format is load-bearing for checkRef 2. Keep `<id> <surface>: expected cause` verbatim.",
+    "keyFiles": [
+      "moe-jetbrains/src/test/resources/client-blocker.json",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt",
+      "moe-vscode/src/panels/TaskDetailPanel.ts",
+      "moe-vscode/media/board.js",
+      "moe-vscode/media/taskDetail.js",
+      "moe-vscode/tests/task-blocker-visibility.test.cjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6fa401dc28d00dbdfd3d5b145341bd5c05c099fe",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:32:57.769Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T10:34:24.121Z",
+  "reviewStartedAt": "2026-11-02T10:35:26.185Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d -t vsc9-gate-XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$R/moe-vscode/tests/blocker-corpus.test.cjs\" \"$S/moe-vscode/tests/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 473\nℹ suites 0\nℹ pass 469\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 1334.686347",
+    "reportedAt": "2026-11-02T10:35:26.185Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/blocker-corpus.test.cjs",
+    ".moe/tasks/task-06dda5c1df29433ab4eb5c4230b38581.json",
+    ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json"
+  ],
+  "completionSummary": "Added moe-vscode/tests/blocker-corpus.test.cjs: replays all 17 rows (B01-B17) of the unchanged client-blocker.json through blockCause and blockedPrerequisiteIds on all three VS Code copies (TaskDetailPanel.ts, media/board.js, media/taskDetail.js), each loaded from production source, with failures reported together as '<id> <surface>: ...'. Also checks the needsHumanReview flag through the field, needsHumanAttention and board.js's attention chip, plus the cause chip label. No production change was needed: every row passed on every copy, so no row id was fixed. Mutant (board.js without the BLOCKED gate, scratch copy) fails B04, B05, B06, B17 and was discarded. Corpus and moe-jetbrains untouched. Snapshot gate: lint 0, compile 0, 473 tests, 469 pass, 4 skip, 0 fail.",
+  "commits": [
+    {
+      "sha": "89062f864d398df62054e02da7b50f6a58e24c19",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T10:34:00Z",
+      "paths": [
+        ".moe/tasks/task-06dda5c1df29433ab4eb5c4230b38581.json",
+        "moe-vscode/tests/blocker-corpus.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T10:35:47.257Z",
+      "treeId": "08cc0934ae42e50c5e1788179072123b35ec6036",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "785d8063921e3b43588c832fd309ea33c755b318",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T10:37:01Z",
+      "paths": [
+        ".moe/tasks/task-06dda5c1df29433ab4eb5c4230b38581.json",
+        ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T10:38:46.730Z",
+      "treeId": "69e08f9eaf2c8c4b8cbd0485fc115a2c32d7fe9d",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/blocker-corpus.test.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T10:37:01Z",
+    "at": "2026-11-02T10:38:46.730Z"
+  },
+  "completedAt": "2026-11-02T10:38:13.962Z",
+  "reviewCompletedAt": "2026-11-02T10:38:13.962Z",
+  "reviewSummary": "APPROVED. Completion commit 89062f86 (recorded, pushed, on moe/work-2026-10-24): diff is only moe-vscode/tests/blocker-corpus.test.cjs (+157, new) + the task's board json; no production change, no moe-jetbrains file touched (dirty jetbrains paths in shared tree belong to other sessions, not this commit).\n\nRe-ran myself:\n1) task.verification (git archive HEAD snapshot in /tmp, env -i nvm Node 24.21: npm ci, lint, compile, npm test): exit 0, 473 tests / 469 pass / 4 skip / 0 fail; snapshot deleted.\n2) checkRef 2 mutant (scratch board.js without the BLOCKED gate, line found exactly once): test exit 1, B04/B05/B06/B17 each reported as \"<id> board.js: expected cause\"; mutant dir removed. Test is not vacuous.\n3) checkRef 3 exit 0: client-blocker.json byte-identical to 4ad2f057 at HEAD and working tree; no commit with this task's Moe-Task trailer touches moe-jetbrains/.\n4) In the snapshot C0/C1/C2 pass and tests/task-blocker-visibility.test.cjs (31 tests) passes unchanged.\n\nDoD: (1) C1 replays every row through blockCause + blockedPrerequisiteIds on TaskDetailPanel.ts (node:vm, require map vscode + ./PlanReviewPanel), board.js and taskDetail.js (raw vm contexts), strict compare, all failures in one assertion \"<id> <surface>: ...\". (2) C2 checks row.task.needsHumanReview, needsHumanAttention, board.js chip-question, and the cause chip vs BLOCK_CAUSE_LABEL. (3) mutant killed. (4) corpus + jetbrains unchanged. (5) snapshot gate green.\n\nRails: no forbidden tokens; no npm in shared checkout; no row needed a production fix. Missing corpus fails with its path; a throwing row is recorded per surface and the loop continues. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

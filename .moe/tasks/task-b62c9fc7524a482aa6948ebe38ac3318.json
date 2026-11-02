@@ -1,0 +1,299 @@
+{
+  "id": "task-b62c9fc7524a482aa6948ebe38ac3318",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "fix(wrapper): moe_temp_index_build drops edits to CRLF-committed files as MOE_ATTR_CONCURRENT when git converts EOLs on add",
+  "description": "Defect, observed 2026-10-24: scripts/moe-agent.sh `moe_temp_index_build` (and presumably its moe-agent.ps1 twin) stages each candidate with `GIT_INDEX_FILE=<temp, seeded from HEAD> git add`. It then requires the staged blob to equal the snapshot blob from `git hash-object --stdin-paths`, and on a mismatch drops the path as MOE_ATTR_CONCURRENT (\"moved under us\"), to be retried at the next exit.\n\nWhen git converts line endings on add (core.autocrlf=true, the Git for Windows default; core.autocrlf=input; or a `text`/`text=auto` attribute), the two paths disagree for any file whose HEAD blob contains CRLF. git's safer-autocrlf rule makes `git add` keep the CRLF blob, but `hash-object` has no index entry to consult, so it normalizes to LF.\n\nResult: every edit to such a file is silently dropped at every landing. Seen in CQ-M01d's 71c7dbe: schema.ts was dropped, with snapshot 30fd236 vs staged 34ffef5. qa-b0c1741e confirmed the mechanism (msg cb08c18b in #governors).\n\nThis repo works around it with repo-local core.autocrlf=false, and the sibling line-endings chore removes all CRLF blobs. Other Moe users on Windows with the default autocrlf=true and any CRLF-committed file remain exposed.\n\nSuggested fix: detect \"moved under us\" by re-running the same `hash-object` after `git add` and comparing it with the snapshot. Keep the staged blob as-is, and never compare across the two conversion paths. Keep the sh and ps1 twins in parity.",
+  "definitionOfDone": [
+    "moe_temp_index_build in both scripts/moe-agent.sh and scripts/moe-agent.ps1 no longer compares a `git add`-staged blob against a `hash-object` snapshot from a different conversion path; a genuinely concurrent edit between snapshot and staging is still detected and dropped as MOE_ATTR_CONCURRENT.",
+    "New postflight regression cases (bash and ps1): edit a file whose HEAD blob is CRLF under core.autocrlf=true, under core.autocrlf=input, and under a `* text=auto` attribute. Each lands in the completion commit with no MOE_ATTR_CONCURRENT; a concurrent-modification case still drops.",
+    "bash scripts/tests/postflight.sh, scripts/tests/postflight.ps1 and bash scripts/tests/parity-check.sh pass."
+  ],
+  "taskRails": [
+    "Fix the twins together (scripts/moe-agent.sh and scripts/moe-agent.ps1); keep moe-agent.ps1 UTF-8 with BOM."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Bash twin: compare like with like in moe_temp_index_build (scripts/moe-agent.sh ~4021-4058; LF file). Load test-driven-development: write step 3's AC scenario first and watch it fail against this unmodified function.\nToday the function stages each candidate with `GIT_INDEX_FILE=$TI_INDEX git add` (index-aware: git's safer-autocrlf rule keeps a CRLF blob when the temp index, seeded from HEAD, already holds CRLF). It then requires that staged blob to equal the snapshot blob, which git_dirty_snapshot (~2693-2750) computed with `git -C \"$MOE_TOP\" hash-object --stdin-paths` (falling back to `hash-object -- <path>`). hash-object never loads an index, so it normalizes CRLF to LF under core.autocrlf=true/input or a text/text=auto attribute. For an UNCHANGED CRLF-committed file the two disagree, and the path is dropped as MOE_ATTR_CONCURRENT at every landing.\nChange ONLY the mismatch decision:\n- blob 'D': unchanged (a staged entry means moved).\n- staged == snapshot: keep (fast path, unchanged).\n- otherwise re-run the snapshot's own command on the worktree: `rehash=$(git -C \"$MOE_TOP\" hash-object -- \"$p\" 2>/dev/null) || rehash=\"\"`, with NO GIT_INDEX_FILE, exactly as the snapshot ran. Keep the STAGED blob as git add produced it iff rehash is non-empty and equals the snapshot blob. Else take the existing reset/rm + `MOE_ATTR_CONCURRENT` drop, byte-for-byte unchanged.\nA '?' (unhashable) snapshot, a file deleted or edited after the snapshot, and a failed re-hash all still drop. Declare the new locals.\nComment the why, and add a `ponytail:` note on the known ceiling: the re-hash runs after `git add`, so an edit reverted inside that window (ABA) keeps the intermediate staged blob. Hashing the staged bytes through the same conversion would close it, but needs a binary pipe the ps1 twin cannot do safely.\nError handling: any git failure in the new branch counts as moved (drop and retry next exit), never as unchanged. No new codes, banners or env names, so parity-check stays as is.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "moe_temp_index_build (scripts/moe-agent.sh ~4036-4080): 'D' branch unchanged; staged==snapshot fast path unchanged; otherwise re-run `git -C \"$MOE_TOP\" hash-object -- \"$p\"` (no GIT_INDEX_FILE, exactly like the snapshot) and keep the staged blob iff actual and rehash are non-empty and rehash==snapshot blob; else the unchanged reset/rm + MOE_ATTR_CONCURRENT drop. Why-comment + `ponytail:` ABA ceiling note added; header comment updated.\nDEVIATION (required, found by explore): the kept path's staged_out record now carries the STAGED blob (blob=\"$actual\"), not the snapshot blob. The importee guard's index mode (resolve_attribution ~3878) does `rev-parse :0:<p>` against that column and raises MOE_IMPORTEE_INDEX_BLOB_MISMATCH otherwise, so a CRLF .ts/.mjs (the reported schema.ts case) would have failed the whole landing. Other staged_out consumers (index_refresh, baseline_after_landing, baseline_extra_rows, record_commit paths) read only the path column. Proven: mutation m0 (record snapshot blob) turns AC red via a crlf.mjs fixture added to AC.\nTDD: AC written first; RED against HEAD's moe-agent.sh in a scratch copy (autocrlf-true: 'HEAD is not the completion -- the edit never landed'; the old landing is a silent MOE_COMMIT_NOTHING_TO_COMMIT). GREEN with the fix: AC ok, AD ok (CAS rebuild ran, ledger row skipped=[...{crlf.txt,MOE_ATTR_CONCURRENT}]). bash -n ok; node --test importee-guard-bash.test.mjs 40/40 pass. All edits via the Edit tool. 486 dirty foreign paths in the shared tree left untouched.",
+      "startedAt": "2026-10-24T22:01:55.664Z",
+      "completedAt": "2026-10-24T22:07:46.612Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "SEAT CHECK FIRST, before any edit: all four plan files are declared by seatless nonterminal peers. task-07474ee438f34021a23809f9c764d15c (PLANNING) has plan + filesModified on all four; task-e92b2cb33f744bf18074fc87121f22df (BACKLOG) has plan paths on moe-agent.sh and both postflight harnesses. Under attribution.contested=skip-untouched each file lands ONLY with a TOOL witness, so make every edit in this plan with the Edit/Write tools. A seat WITHOUT Edit/Write tools (codex/gemini/grok) must not edit anything: call moe.report_blocked { blockedOnTaskIds: ['task-07474ee438f34021a23809f9c764d15c'], reason: 'needs an Edit/Write-capable seat: all four plan files are contested by seatless peers; governor: unblock onto a Claude seat (resolveBlocks) or clear the stale contest' } and end the session.\nBash twin: compare like with like in moe_temp_index_build (scripts/moe-agent.sh ~4021-4058; LF file). Load test-driven-development: write step 3's AC scenario first and watch it fail against this unmodified function.\nToday the function stages each candidate with `GIT_INDEX_FILE=$TI_INDEX git add` (index-aware: git's safer-autocrlf rule keeps a CRLF blob when the temp index, seeded from HEAD, already holds CRLF). It then requires that staged blob to equal the snapshot blob, which git_dirty_snapshot (~2693-2750) computed with `git -C \"$MOE_TOP\" hash-object --stdin-paths` (falling back to `hash-object -- <path>`). hash-object never loads an index, so it normalizes CRLF to LF under core.autocrlf=true/input or a text/text=auto attribute. For an UNCHANGED CRLF-committed file the two disagree, and the path is dropped as MOE_ATTR_CONCURRENT at every landing.\nChange ONLY the mismatch decision:\n- blob 'D': unchanged (a staged entry means moved).\n- staged == snapshot: keep (fast path, unchanged).\n- otherwise re-run the snapshot's own command on the worktree: `rehash=$(git -C \"$MOE_TOP\" hash-object -- \"$p\" 2>/dev/null) || rehash=\"\"`, with NO GIT_INDEX_FILE, exactly as the snapshot ran. Keep the STAGED blob as git add produced it iff rehash is non-empty and equals the snapshot blob. Else take the existing reset/rm + `MOE_ATTR_CONCURRENT` drop, byte-for-byte unchanged.\nA '?' (unhashable) snapshot, a file deleted or edited after the snapshot, and a failed re-hash all still drop. Declare the new locals.\nComment the why, and add a `ponytail:` note on the known ceiling: the re-hash runs after `git add`, so an edit reverted inside that window (ABA) keeps the intermediate staged blob. Hashing the staged bytes through the same conversion would close it, but needs a binary pipe the ps1 twin cannot do safely.\nError handling: any git failure in the new branch counts as moved (drop and retry next exit), never as unchanged. No new codes, banners or env names, so parity-check stays as is.",
+          "reason": "Correction: all four plan files are contested by seatless peers (task-07474ee4, task-e92b2cb3), so they land only with Edit/Write (TOOL) witnesses. Added a seat check so a Codex seat blocks with a reason instead of doing work that cannot land.",
+          "amendedBy": "architect-6e3edf85",
+          "amendedAt": "2026-10-24T22:02:14.633Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-2",
+      "description": "PowerShell twin: the same decision in Build-MoeTempIndexTree (scripts/moe-agent.ps1 ~3600-3640). The file is LF and starts with a UTF-8 BOM; keep both exactly (any editor; verify afterwards with `head -c3 | od -An -tx1` = ef bb bf and with `git diff --stat` vs `git diff --ignore-cr-at-eol --stat` matching).\nKeep the 'D' and staged -eq snapshot branches. Otherwise re-run the snapshot's own command the way the ps1 snapshot does (~2460-2470: `& git -C $Top hash-object --stdin-paths`, fallback `& git -C $Top hash-object -- $p`): call `& git -C $Top hash-object -- $c.Path` directly, NOT through `Invoke-MoeGit -IndexFile` (no temp index, so the same conversion path as the snapshot). `$match` is true only when that call exits 0 and its trimmed first output line -eq `$c.Blob`. The mismatch path (reset/rm + MOE_ATTR_CONCURRENT) stays unchanged.\nCarry the same why-comment and ponytail ceiling note as the sh twin. Error handling: a non-zero exit or empty output counts as moved. No new strings that parity-check tracks.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Build-MoeTempIndexTree (scripts/moe-agent.ps1 ~3627-3645): 'D' and staged -eq snapshot branches unchanged; on a non-D mismatch with a non-empty staged blob, re-hash via `Invoke-MoeGit -Top $Top -GitArgs @('hash-object','--',$c.Path)` (NO -IndexFile, so GIT_INDEX_FILE is untouched, same -C $Top and TOP-relative path as the snapshot); $match only when Rc 0 and the trimmed first output line -eq $c.Blob. Mismatch path (reset/rm + MOE_ATTR_CONCURRENT) unchanged. Same why-comment + ponytail ABA note as the sh twin; header comment updated.\nSmall deviation from the step text: Invoke-MoeGit (without -IndexFile) instead of a raw `& git`, because it pins $ErrorActionPreference='Continue' around the call (a raw `& git ... 2>$null` under a Stop preference can throw on hash-object's 'fatal: Unable to hash' stderr in PS 5.1) and is the function's own idiom. Identical decision to sh: both require a non-empty staged blob and an exact re-hash==snapshot. $landed keeps the snapshot record: the ps1 importee guard reads `:0:<path>` from the index itself and never compares .Blob, and the other Landed consumers read only .Path.\nChecks: BOM ef bb bf intact; 0 CR bytes; git diff --stat == --ignore-cr-at-eol --stat (20 lines); PS 5.1 Parser.ParseFile errors=0. Behavior tests come in step 4. Edited with the Edit tool (TOOL witness).",
+      "startedAt": "2026-10-24T22:08:48.160Z",
+      "completedAt": "2026-10-24T22:09:34.998Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Bash regression scenarios in scripts/tests/postflight.sh (LF), after AB2, reusing make_scope_project, run_scope_wrapper, committed_paths, scope_fail and the fake proxy's `.moe/record_commit.jsonl` (each record_commit's args, including the `skipped` list that carries staging drops).\nScenario AC (CRLF HEAD blob, three conversion modes; counts as ONE scenario):\n- For each mode in autocrlf-true, autocrlf-input and text-auto: make_scope_project <dir> '[\"crlf.txt\"]'.\n- `printf 'one\\r\\ntwo\\r\\n' > crlf.txt` and commit it with `-c core.autocrlf=false`.\n- Mode setup: `git config core.autocrlf true` / `input`; for text-auto, commit `* text=auto` in .gitattributes in a SECOND commit with autocrlf=false.\n- Fixture sanity: `git cat-file blob HEAD:crlf.txt` contains CR, else fail the fixture.\n- Then `printf 'one\\r\\ntwo edited\\r\\n' > crlf.txt` and run the wrapper.\n- Assert: exit 0; crlf.txt is in committed_paths; the last committed record_commit row's skipped list has no MOE_ATTR_CONCURRENT entry; and `git cat-file blob HEAD:crlf.txt` is byte-equal (cmp) to the worktree file, i.e. the staged CRLF blob landed as git add made it.\nScenario AD (a genuinely concurrent edit still drops, on a CRLF file under autocrlf=true):\n- Seed crlf.txt as in AC under core.autocrlf=true; filesModified ['owned-a.txt','crlf.txt']; write owned-a.txt and the edited crlf.txt.\n- Set MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF to a command that rewrites crlf.txt as `one\\r\\nconcurrent\\r\\n` and then commits a peer file (like scenario O). The CAS retry rebuilds the temp index against the OLD snapshot.\n- Assert: exit 0; ours is on top of the peer commit; owned-a.txt is in HEAD; HEAD:crlf.txt is still the seed bytes; the committed record_commit row's skipped list names crlf.txt with MOE_ATTR_CONCURRENT.\nBump the exact-count check 34 -> 36 and add AC and AD to its list text.\nRED proof: run AC against the parent wrapper (HEAD's scripts/moe-agent.sh in a scratch copy) and record that it fails with crlf.txt missing / MOE_ATTR_CONCURRENT. AD passes on both the parent and the fix by design; its proof is step 6's mutation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "scripts/tests/postflight.sh after AB2: helper seed_crlf_file + scenarios AC and AD; exact count 34 -> 36 with 'AC, AD' in the list text.\nAC (one scenario, loop over autocrlf-true / autocrlf-input / text-auto; .gitattributes committed in a second commit with autocrlf=false; fixture sanity: HEAD:crlf.txt has CR): edit -> assert exit 0, no MOE_ATTR_CONCURRENT in record_commit.jsonl or the wrapper log, HEAD subject is the completion, completion holds EXACTLY crlf.mjs + crlf.txt, and both HEAD blobs cmp byte-equal to the CRLF worktree files. Addition beyond the plan: crlf.mjs (a SRC_EXT file) so the importee guard's index-blob check is exercised; it is what kills the 'record the snapshot blob' mutant (step-1 note).\nAD (one scenario, loop over three post-snapshot changes via MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF + peer commit, so the CAS retry rebuilds against the old snapshot): rewrite (amend: as planned), delete (amend-1's delete variant), dir (crlf.txt replaced by a directory: added by me because the sh guard requiring a non-empty staged blob already drops a plain delete, so only the dir variant reaches 'staged entry present, re-hash failed' and pins mutation (3)). Asserts per variant: exit 0, completion on top of peer-race, owned-a.txt in HEAD, HEAD:crlf.txt == seed blob, committed ledger row skipped has {crlf.txt, MOE_ATTR_CONCURRENT}.\nRED proof (scratch copy, HEAD's moe-agent.sh): AC fails in EACH mode run alone: 'autocrlf-true|autocrlf-input|text-auto: HEAD is not the completion -- the edit never landed' (the old landing is a silent MOE_COMMIT_NOTHING_TO_COMMIT). AD passes on the parent (by design). GREEN with the fix: AC ok, AD ok, every variant logged 'moved while landing ... rebuilding on the new tip'. Full-harness run is step 5. Edited with the Edit tool.",
+      "startedAt": "2026-10-24T22:09:53.080Z",
+      "completedAt": "2026-10-24T22:11:26.301Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Bash regression scenarios in scripts/tests/postflight.sh (LF), after AB2, reusing make_scope_project, run_scope_wrapper, committed_paths, scope_fail and the fake proxy's `.moe/record_commit.jsonl` (each record_commit's args, including the `skipped` list that carries staging drops).\nScenario AC (CRLF HEAD blob, three conversion modes; counts as ONE scenario):\n- For each mode in autocrlf-true, autocrlf-input and text-auto: make_scope_project <dir> '[\"crlf.txt\"]'.\n- `printf 'one\\r\\ntwo\\r\\n' > crlf.txt` and commit it with `-c core.autocrlf=false`.\n- Mode setup: `git config core.autocrlf true` / `input`; for text-auto, commit `* text=auto` in .gitattributes in a SECOND commit with autocrlf=false.\n- Fixture sanity: `git cat-file blob HEAD:crlf.txt` contains CR, else fail the fixture.\n- Then `printf 'one\\r\\ntwo edited\\r\\n' > crlf.txt` and run the wrapper.\n- Assert: exit 0; crlf.txt is in committed_paths; the last committed record_commit row's skipped list has no MOE_ATTR_CONCURRENT entry; and `git cat-file blob HEAD:crlf.txt` is byte-equal (cmp) to the worktree file, i.e. the staged CRLF blob landed as git add made it.\nScenario AD (a genuinely concurrent edit still drops, on a CRLF file under autocrlf=true):\n- Seed crlf.txt as in AC under core.autocrlf=true; filesModified ['owned-a.txt','crlf.txt']; write owned-a.txt and the edited crlf.txt.\n- Set MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF to a command that rewrites crlf.txt as `one\\r\\nconcurrent\\r\\n` and then commits a peer file (like scenario O). The CAS retry rebuilds the temp index against the OLD snapshot.\n- Assert: exit 0; ours is on top of the peer commit; owned-a.txt is in HEAD; HEAD:crlf.txt is still the seed bytes; the committed record_commit row's skipped list names crlf.txt with MOE_ATTR_CONCURRENT.\n- AD also runs a DELETE variant in a second project: the hook deletes crlf.txt instead of rewriting it. The deletion after the snapshot must not land: HEAD:crlf.txt still holds the seed bytes, and skipped names crlf.txt with MOE_ATTR_CONCURRENT.\nBump the exact-count check 34 -> 36 and add AC and AD to its list text.\nRED proof: run AC against the parent wrapper (HEAD's scripts/moe-agent.sh in a scratch copy) and record that it fails with crlf.txt missing / MOE_ATTR_CONCURRENT. AD passes on both the parent and the fix by design; its proof is step 6's mutation.",
+          "reason": "Add AD's delete variant, so that \"a failed re-hash counts as moved\" is pinned by a test (the mutation list in step 6 relies on it).",
+          "amendedBy": "architect-6e3edf85",
+          "amendedAt": "2026-10-24T22:02:14.701Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-4",
+      "description": "PowerShell regression scenarios in scripts/tests/postflight.ps1 (LF), mirroring AC and AD with that harness's helpers (New-ScopeProject, Invoke-GateWrapper, Assert-ScopeRun, Get-CommittedPaths, Get-HeadSubject, the hook-peer.cmd pattern and `.moe/record_commit.jsonl`).\n- Write every CRLF fixture with `[IO.File]::WriteAllBytes` (never Set-Content, which rewrites line endings on Windows PowerShell 5.1).\n- Pass core.autocrlf explicitly on every git call that seeds or configures the repos: Git for Windows defaults core.autocrlf=true system-wide.\n- AD's hook: the pre-update-ref seam runs through `cmd /d /s /c`, so put the rewrite in a small .cjs file run by `node \"<path>\"` (as the race modes do) followed by the peer commit in a .cmd file, rather than quoting CR bytes through cmd.\n- Same assertions as step 3. Bump the exact-count check 34 -> 36 with AC and AD in its message.\nRED proof against the parent moe-agent.ps1 as in step 3, run on Windows PowerShell 5.1 (and pwsh if available).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "scripts/tests/postflight.ps1 after AB2: helpers Write-CrlfBytes ([IO.File]::WriteAllBytes), Get-GitId, New-CrlfSeed (every seeding/config git call pins core.autocrlf; fixture sanity = rev-parse HEAD:crlf.txt equals `hash-object --no-filters` of the raw CRLF bytes); scenarios AC and AD mirroring the sh twin; exact count 34 -> 36 with 'AC, AD' in the message.\nAC: loop over autocrlf-true/autocrlf-input/text-auto, crlf.txt + crlf.mjs; asserts exit 0, no MOE_ATTR_CONCURRENT in the ledger or wrapper log, HEAD subject is the completion, committed paths exactly 'crlf.mjs crlf.txt', and byte equality as blob id == `hash-object --no-filters` (PowerShell cannot pipe CR bytes out of git intact).\nAD: crlf-hook.cmd runs crlf-hook.cjs via node (CRLF_HOOK_MODE = rewrite|delete|dir; cmd never quotes CR bytes) then `call hook-peer.cmd`; per variant asserts ours on top, HEAD~1 'peer-hook', owned-a.txt in HEAD, HEAD:crlf.txt == seed blob, and a committed ledger row whose skipped has {path crlf.txt, code MOE_ATTR_CONCURRENT} (parsed with ConvertFrom-Json: the ps1 wrapper builds skipped entries from unordered hashtables, so key order is not stable for a string match).\nRuns (focused runner = harness setup + helpers + AC/AD + the harness's own catch/finally, scratch copies on D:\\moe-scratch\\b62c): GREEN on Windows PowerShell 5.1 (AC ok, AD ok; every AD variant logged 'moved under us ... rebuilding' and '[skip] crlf.txt MOE_ATTR_CONCURRENT') and on pwsh 7.6.8 (AC ok, AD ok). RED on 5.1 with HEAD's moe-agent.ps1: 'SCENARIO AC FAILED: autocrlf-true: crlf.txt was dropped as MOE_ATTR_CONCURRENT'. Per-mode RED proven on the bash twin only (same git mechanism). BOM ef bb bf intact, 0 CR bytes, diff --stat == --ignore-cr-at-eol. PS 5.1 parser: 0 errors. Edited with the Edit tool. Full harness runs are step 5.",
+      "startedAt": "2026-10-24T22:11:28.601Z",
+      "completedAt": "2026-10-24T22:34:46.454Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "PowerShell regression scenarios in scripts/tests/postflight.ps1 (LF), mirroring AC and AD with that harness's helpers (New-ScopeProject, Invoke-GateWrapper, Assert-ScopeRun, Get-CommittedPaths, Get-HeadSubject, the hook-peer.cmd pattern and `.moe/record_commit.jsonl`).\n- Write every CRLF fixture with `[IO.File]::WriteAllBytes` (never Set-Content, which rewrites line endings on Windows PowerShell 5.1).\n- Pass core.autocrlf explicitly on every git call that seeds or configures the repos: Git for Windows defaults core.autocrlf=true system-wide.\n- AD's hook: the pre-update-ref seam runs through `cmd /d /s /c`, so put the rewrite in a small .cjs file run by `node \"<path>\"` (as the race modes do) followed by the peer commit in a .cmd file, rather than quoting CR bytes through cmd.\n- Same assertions as step 3, including AD's delete variant. Bump the exact-count check 34 -> 36 with AC and AD in its message.\nRED proof against the parent moe-agent.ps1 as in step 3, run on Windows PowerShell 5.1 (and pwsh if available).",
+          "reason": "Mirror AD's new delete variant in the PowerShell harness.",
+          "amendedBy": "architect-6e3edf85",
+          "amendedAt": "2026-10-24T22:02:14.765Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification gate (run once, fresh, after steps 1-4). Use a SNAPSHOT of scripts/, never the live shared tree (peers edit the wrappers): `cp -R scripts <scratch>/` (a directory holding scripts/ is a complete harness root).\n1. `bash scripts/tests/postflight.sh` from the snapshot (Linux/WSL; MOE_POSTFLIGHT_TIMEOUT_SEC=180 on a busy box; every MOE_* env var unset). This is the named verification command for complete_task; its 'commit-scope scenarios run: 36' line must appear.\n2. `scripts/tests/postflight.ps1` on Windows PowerShell 5.1: from WSL copy the snapshot to /mnt/d/moe-scratch/<x>/ and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\<x>\\scripts\\tests\\postflight.ps1'` (pipe the output through tr -d '\\0'); add pwsh where installed. If no PowerShell can run it, say so; never report a pass you did not run.\n3. `bash scripts/tests/parity-check.sh` and scripts/tests/parity-check.ps1 (via the same route; the BOM check lives there).\n4. Direct callers of the changed function: `node --test scripts/tests/importee-guard-bash.test.mjs` (it extracts moe_temp_index_build; its existing MOE_ATTR_CONCURRENT expectation for b.mjs must still hold) and `powershell.exe -NoProfile -File scripts/tests/importee-guard.ps1`.\nA failure in an untouched scenario: rerun the plain-HEAD snapshot to prove it pre-existing before calling it foreign.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "The gate ran fresh from a snapshot of scripts/ (/tmp/moe-b62c/gate, mirrored to D:\\moe-scratch\\b62c\\gate). The snapshot is sha256-identical to the four live files: sh 6b4992c6, ps1 a848d68e, postflight.sh 8140ee56, postflight.ps1 9f1a2266. Every MOE_* env var was unset; MOE_POSTFLIGHT_TIMEOUT_SEC=180.\n1. `bash scripts/tests/postflight.sh`: \"[scenario AC] ok\", \"[scenario AD] ok\", \"commit-scope scenarios run: 36\", \"PASS postflight.sh\", exit 0.\n2. postflight.ps1 on Windows PowerShell 5.1: AC ok, AD ok, 36 scenarios, \"PASS postflight.ps1\", exit 0. The same on pwsh 7 (WindowsApps pwsh.exe): AC ok, AD ok, 36, PASS, exit 0.\n3. `bash scripts/tests/parity-check.sh`: PASS, exit 0. parity-check.ps1 (5.1, includes the BOM check): PASS, exit 0.\n4. `node --test scripts/tests/importee-guard-bash.test.mjs`: 40/40, exit 0; the b.mjs MOE_ATTR_CONCURRENT expectation still holds. importee-guard.ps1: 48 passed, 0 failed, exit 0.\nNo untouched scenario failed, so no plain-HEAD rerun was needed. No files were modified in this step.",
+      "startedAt": "2026-10-24T22:34:55.771Z",
+      "completedAt": "2026-10-24T22:59:07.956Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review with mutation proof (load adversarial-self-review), then complete_task.\nAttack:\n- Does any path now land that changed after the snapshot? Trace AD, a file deleted after the snapshot, a symlink, and a '?' snapshot.\n- Does the fast path still skip the extra hash for ordinary files?\n- Is the re-hash run exactly like the snapshot in both twins (no GIT_INDEX_FILE, TOP-relative path, same -C)?\n- Do paths with spaces, quotes or Unicode survive the PowerShell native-argument call?\n- Is the BOM intact?\n- Are sh/ps1 decisions identical?\nMutation proof in a scratch copy, never the live tree:\n(1) accept every mismatch without re-hashing: AD must go red;\n(2) drop the fallback, i.e. the old behavior: AC must go red;\n(3) re-hash with GIT_INDEX_FILE set to the temp index: AC must go red;\n(4) compare the re-hash with the STAGED blob instead of the snapshot: AD must go red.\nDo (1)-(4) on both twins; add a case for any survivor. If any byte changed, rerun step 5's command and submit THAT output.\nReport every modified path in complete_step.modifiedFiles (the four files above). No Git writes; no .moe edits.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Adversarial review plus mutation proof. Each mutant was run in a scratch copy that used the gate's own test files and differed by one production line.\n- Bash (/tmp/moe-b62c/ms1-4):\n  - ms1 (accept every mismatch, `rehash=\"$blob\"`): AD rewrite went RED.\n  - ms2 (old behaviour, `if false`): AC autocrlf-true went RED.\n  - ms3 (empty/failed re-hash counted as unchanged): AD dir went RED.\n  - ms4 (re-hash compared with the staged blob): AC went RED.\n- ps1 on PS 5.1 (D:\\moe-scratch\\b62c\\mp1-4): the same mutants went RED on the same scenarios.\n- Earlier mutant m0 (sh records the snapshot blob, not the staged one): AC went RED via the .mjs importee guard.\n- The delete variant does not kill mutant 3, because the staged-blob guard already drops a deletion. The dir variant (my addition) is what pins mutant 3.\nReview traces:\n- Delete after the snapshot: the staged entry is empty, so the path drops (both twins).\n- A directory replacing the file: hash-object fails, so the path drops.\n- A '?' snapshot can never equal a real hash, so it drops.\n- Fast path: staged == snapshot skips the re-hash (sh elif; ps1 `-not $match` guard).\n- The re-hash uses the snapshot's exact form: `git -C TOP hash-object -- <TOP-relative path>` with no index (sh raw git; ps1 Invoke-MoeGit without -IndexFile, i.e. `& git -C $Top @GitArgs`). This matches the snapshot's per-path fallback.\n- PS 5.1 probe through the real Invoke-MoeGit on the path `sp ace/ü é.txt`: staged CRLF blob e1587ff; the re-hash returns the LF-normalized 4cb29ea, so the path is kept correctly. A path containing `\"` is impossible on Windows.\n- Twin difference (deliberate): sh writes the STAGED blob to staged_out, because the importee guard compares it with :0:path. ps1 keeps the snapshot record in Landed; its guard reads :0:path directly and other consumers read only .Path.\n- Theoretical residuals:\n  - ABA within the add→re-hash window, marked with a ponytail: comment.\n  - Symlinks: hash-object follows links, so a symlink edit now lands when the target content is unchanged (before this fix it always dropped as CONCURRENT); a retarget to an identical-content file goes undetected, the same blind spot the snapshot already has. Filed as task-c532d223459b4ef4b5bab2ba0eb4005e (bug:, LOW, dependsOn this task).\n- No bytes changed in this step. The live sha256s equal the step-5 gate snapshot. BOM ef bb bf is intact; all four files are LF-only.\n- get_commit_scope(postflight): all four files are ASSERTED for this task and peerDeclared by task-07474ee4. Every edit to them was made with the Edit tool in this session (TOOL witness).",
+      "startedAt": "2026-10-24T22:59:19.708Z",
+      "completedAt": "2026-10-24T23:00:13.579Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Adversarial self-review with mutation proof (load adversarial-self-review), then complete_task.\nAttack:\n- Does any path now land that changed after the snapshot? Trace AD, a file deleted after the snapshot, a symlink, and a '?' snapshot.\n- Does the fast path still skip the extra hash for ordinary files?\n- Is the re-hash run exactly like the snapshot in both twins (no GIT_INDEX_FILE, TOP-relative path, same -C)?\n- Do paths with spaces, quotes or Unicode survive the PowerShell native-argument call?\n- Is the BOM intact?\n- Are sh/ps1 decisions identical?\nMutation proof in a scratch copy, never the live tree:\n(1) accept every mismatch without re-hashing: AD must go red;\n(2) drop the fallback, i.e. the old behavior: AC must go red;\n(3) treat an empty/failed re-hash as unchanged: AD's delete variant must go red;\n(4) compare the re-hash with the STAGED blob instead of the snapshot: AC must go red.\nDo (1)-(4) on both twins; add a case for any survivor. If any byte changed, rerun step 5's command and submit THAT output.\nReport every modified path in complete_step.modifiedFiles (the four files above). Before complete_task, re-check `moe.get_commit_scope { taskId, phase: 'postflight' }` peerDeclared and confirm each of the four files was written with Edit/Write in THIS session (TOOL witness); a file finished by any other means gets a byte-identical Edit round trip (sha256 equal before and after; for moe-agent.ps1 the BOM too). No Git writes; no .moe edits.",
+          "reason": "Mutation (3) as written was an equivalent mutant (hash-object never loads an index), and (4) is caught by AC, not AD. Corrected the list and added the TOOL-witness check before complete_task.",
+          "amendedBy": "architect-6e3edf85",
+          "amendedAt": "2026-10-24T22:02:14.828Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    }
+  ],
+  "planRevision": 17,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Feed rule (human-approved, by order): no prerequisites. MEDIUM wrapper hardening for the MOE_ATTR_CONCURRENT drop on CRLF-committed files.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231,
+  "comments": [
+    {
+      "id": "comment-c8766a4008544bcb88dc3026825d18d6",
+      "author": "architect-6e3edf85",
+      "content": "Architect correction (amend-1 on steps 1, 3, 4 and 6). My planningNotes said none of the four files was contested at plan time. That was wrong.\n\n**All four files are contested.** They are declared by seatless nonterminal peers:\n- task-07474ee4 (PLANNING): plan + filesModified on all four.\n- task-e92b2cb3 (BACKLOG): plan paths on moe-agent.sh and both postflight harnesses.\n\nUnder attribution.contested=skip-untouched, each file lands only with an Edit/Write (TOOL) witness. So:\n- **Claude seats:** make every edit with Edit/Write.\n- **Seats without Edit/Write (codex/gemini/grok):** step 1 now tells you to report_blocked on task-07474ee4 with a governor-facing reason, rather than doing work that cannot land.\n\n**Mutation list (step 6) fixed.**\n- The old (3) was an equivalent mutant: hash-object never loads an index, so GIT_INDEX_FILE changes nothing.\n- The new (3) is \"treat a failed re-hash as unchanged\". It is proven by AD's new delete variant (steps 3-4).\n- (4) is caught by AC, not AD.",
+      "timestamp": "2026-10-24T22:02:25.618Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T15:37:18.097Z",
+  "updatedAt": "2026-10-24T23:50:45.401Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T21:54:32.559Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-24T23:50:08.619Z",
+    "wallClockMs": 6936060
+  },
+  "contextFetchedBy": [
+    "architect-6e3edf85",
+    "worker-c1d9de02",
+    "qa-b0c1741e"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T21:59:56.518Z",
+  "planningNotes": {
+    "approachesConsidered": "- Chosen, per the task's suggested fix: on a staged/snapshot mismatch, re-run the snapshot's own `hash-object` on the worktree and keep the staged blob when it still equals the snapshot. Small, identical in both twins, and it never compares across conversion paths.\n- Rejected: hashing the STAGED bytes through hash-object (`git cat-file blob <staged> | git hash-object --stdin --path=<p>`). It closes the ABA window, but Windows PowerShell 5.1 pipes native output as text and corrupts binary/CRLF bytes, so the ps1 twin cannot do it safely. Noted as a ponytail ceiling.\n- Rejected: removing the temp-index entry before `git add` so add normalizes like hash-object. That changes what is committed (whole-file CRLF->LF flips on every landing), against \"keep the staged blob as-is\" and git's own add semantics.\n- Rejected: skipping the check whenever EOL conversion is configured. It would also accept genuinely concurrent edits; scenario AD exists to catch that.",
+    "codebaseInsights": "Snapshot:\n- sh git_dirty_snapshot (~2693) hashes TOP-relative paths in one `hash-object --stdin-paths` (fallback per path).\n- ps1 twin at ~2416-2470.\nTemp index:\n- moe_temp_index_build (sh ~4021) / Build-MoeTempIndexTree (ps1 ~3600): read-tree base, `git add :(literal)p`, `ls-files -s`.\n- Landing calls it once per CAS attempt with the SAME candidates file, so the MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF seam (scenario O) forces a rebuild against the old snapshot. That is how AD simulates a concurrent edit.\n- Rescue (sh ~4596) uses the same function.\nTest harnesses:\n- The fake proxy appends record_commit args to `.moe/record_commit.jsonl`; their `skipped` list carries staging drops (MOE_RC_DROPPED).\n- Both postflight harnesses assert an exact scope-scenario count (34) with a list string.\n- scripts/tests/importee-guard-bash.test.mjs extracts moe_temp_index_build and expects MOE_ATTR_CONCURRENT for a worktree change after the snapshot; it must stay green.",
+    "risks": "- Windows: Git for Windows defaults to core.autocrlf=true system-wide, so ps1 fixtures must set it explicitly. Set-Content rewrites line endings (use WriteAllBytes). cmd-quoting CR bytes is fragile (use a node .cjs).\n- The live shared tree's scripts change under peers; run the long harnesses from a snapshot.\n- Long runtimes; prove pre-existing failures on plain HEAD.\n- ABA ceiling (documented): an edit reverted between snapshot and add can keep an intermediate blob. It needs a change-and-revert within milliseconds of the wrapper's own staging.\n- A contested path needs a TOOL witness: check get_commit_scope peerDeclared for the four files before complete_task. None at plan time.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/importee-guard-bash.test.mjs",
+      "scripts/tests/importee-guard.ps1"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T21:59:56.598Z",
+  "workStartedAt": "2026-10-24T22:01:55.664Z",
+  "reviewStartedAt": "2026-10-24T23:00:28.537Z",
+  "verification": {
+    "command": "bash scripts/tests/postflight.sh",
+    "exitCode": 0,
+    "outputTail": "[scenario Z2] ok\n[scenario AA] a taskless single-shot run never launches an unbound CLI\n[scenario AA] ok\n[scenario AB] a chat-only session that adopts a task refuses to land, loudly\n[scenario AB] ok\n[scenario AB2] a notification-only relaunch onto a retained BLOCKED hold refuses quietly\n[scenario AB2] ok\n[scenario AC] an edit to a CRLF-committed file lands under autocrlf=true, autocrlf=input and text=auto\n[scenario AC] ok\n[scenario AD] a CRLF-committed file rewritten, deleted or replaced after the snapshot still drops as MOE_ATTR_CONCURRENT\n[scenario AD] ok\ncommit-scope scenarios run: 36\n[team join] a full team is reported and the NO_TEAM_MEMBERSHIP claim refusal is named\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\nPASS postflight.sh\npostflight.sh exit=0\n(run fresh from a scripts/ snapshot sha256-identical to the live files; MOE_* unset, MOE_POSTFLIGHT_TIMEOUT_SEC=180)",
+    "reportedAt": "2026-10-24T23:00:28.537Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    ".moe/tasks/task-6177c9c4711542509512fa96cfee8b50.json",
+    ".moe/tasks/task-72efb0b663ec4b3da35a685ebb30ed34.json",
+    ".moe/tasks/task-b62c9fc7524a482aa6948ebe38ac3318.json",
+    ".moe/tasks/task-db4847bca0ee4132a2c64ee69578e651.json",
+    ".moe/tasks/task-db57e0148a9d47839c4159aab8a8c16d.json"
+  ],
+  "completionSummary": "Fixed the false MOE_ATTR_CONCURRENT drop of edits to CRLF-committed files, in both wrapper twins (moe_temp_index_build in scripts/moe-agent.sh, Build-MoeTempIndexTree in scripts/moe-agent.ps1).\nCause: `git add` into the temp index seeded from HEAD keeps a CRLF blob that HEAD already holds (safer-autocrlf). The snapshot's `hash-object` loads no index, so under core.autocrlf=true/input or text=auto it hashes the LF-normalized content. Staged and snapshot blobs then never match.\nFix: on a mismatch, re-run the snapshot's own hash (`git -C TOP hash-object -- <p>`, no index). If it still equals the snapshot, keep the blob git add staged. Otherwise, or if the hash fails, drop as MOE_ATTR_CONCURRENT as before. The fast path is unchanged.\n- sh records the STAGED blob, which the importee guard checks against :0:path.\n- The ABA window is marked with a ponytail: comment.\nTests: postflight.sh/.ps1 add scenario AC (CRLF HEAD blob under autocrlf=true, autocrlf=input and `* text=auto`; crlf.txt and crlf.mjs land byte-exact with no CONCURRENT skip) and scenario AD (CAS-retry seam; rewrite, delete or dir-replace after the snapshot still drops crlf.txt as CONCURRENT while owned-a.txt lands). The scenario count goes from 34 to 36.\nRED: the parent wrappers fail AC in sh and ps1.\nMutations, killed in both twins: accept-all (AD), old behaviour (AC), failed-re-hash-as-unchanged (AD dir), compare-to-staged (AC). Recording the snapshot blob in sh fails AC.\nFresh gate from a snapshot identical to the live files:\n- postflight.sh: PASS, 36, exit 0.\n- postflight.ps1: PASS, 36, exit 0 on PS 5.1 and on pwsh 7.\n- parity-check.sh and parity-check.ps1 (BOM check included): PASS.\n- importee-guard-bash.test.mjs 40/40; importee-guard.ps1 48/0.\nFollow-up: task-c532d223459b4ef4b5bab2ba0eb4005e. The snapshot fingerprints a symlink by its target's content.",
+  "commits": [
+    {
+      "sha": "2895a843eaa4299de992158926425443b6362dac",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-24T22:00:21Z",
+      "paths": [
+        ".moe/tasks/task-6177c9c4711542509512fa96cfee8b50.json",
+        ".moe/tasks/task-72efb0b663ec4b3da35a685ebb30ed34.json",
+        ".moe/tasks/task-b62c9fc7524a482aa6948ebe38ac3318.json",
+        ".moe/tasks/task-db4847bca0ee4132a2c64ee69578e651.json",
+        ".moe/tasks/task-db57e0148a9d47839c4159aab8a8c16d.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-24T23:01:09.153Z",
+      "treeId": "9f1e76afad6e277fda1a3cecc3dd0db150800b70",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "dd8e526f3539ac1e198d4f3074dad1cfb36c0de4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T23:19:21Z",
+      "paths": [
+        ".moe/tasks/task-72efb0b663ec4b3da35a685ebb30ed34.json",
+        ".moe/tasks/task-b62c9fc7524a482aa6948ebe38ac3318.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T23:50:45.401Z",
+      "treeId": "083a4176dd3ada3408686ca1eb89804bdbb73f23",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.ps1"
+  ],
+  "unattributedPaths": [
+    "2026-10-24-ai-code-quality-and-context.md"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T23:19:21Z",
+    "at": "2026-10-24T23:50:45.401Z"
+  },
+  "completedAt": "2026-10-24T23:50:08.619Z",
+  "reviewCompletedAt": "2026-10-24T23:50:08.619Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 2895a843 (on moe/work-2026-10-24 and origin). Re-ran everything from git-archive snapshots of the committed bytes, MOE_*/CLAUDE* env unset, MOE_POSTFLIGHT_TIMEOUT_SEC=180.\n\nDoD1:\n- On a mismatch, both twins re-run the snapshot's own `git -C TOP hash-object -- p` with no temp index.\n- They keep the path only when the staged blob and re-hash are non-empty and re-hash == snapshot; else the unchanged MOE_ATTR_CONCURRENT drop.\n- The 'D' branch and fast path are unchanged.\n- sh staged_out now carries the staged blob; the importee guard needs it, and the other consumers read only the path.\n- Mechanism reproduced on git 2.43: temp-index add 210f053 vs hash-object 73c60c5.\n\nDoD2: AC (autocrlf true/input/text=auto, txt+mjs, byte-exact, no CONCURRENT) and AD (CAS seam: rewrite/delete/dir still drop) exist in both harnesses.\n\nDoD3 re-run:\n- postflight.sh: PASS, 36 scenarios, exit 0.\n- postflight.ps1 on PS 5.1: PASS, 36, exit 0.\n- parity-check.sh: PASS. parity-check.ps1 (BOM check): PASS.\n- importee-guard bash 40/40, ps1 48/0.\n\nRail \"test fails on old behaviour\":\n- Parent sh wrapper: AC FAILED (edit never landed), exit 1.\n- Parent ps1 wrapper on 5.1: AC FAILED (dropped as CONCURRENT), exit 1.\n- My accept-all sh mutant: killed by AD rewrite.\n\nTask rail: twins fixed together; ps1 has BOM ef bb bf and 0 CR bytes.\n\nSize: about 40 production + 218 test LOC, plus 5 board-state .moe/tasks records.\n\nPonytail: nothing to cut; the ABA ponytail ceiling is acceptable; symlink follow-up is task-c532d223. pwsh 7 not re-run by me.",
+  "requiredCheckAtDone": null
+}

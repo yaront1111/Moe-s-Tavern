@@ -1,0 +1,281 @@
+{
+  "id": "task-eb85340bf5ee4bde84ca8658a0ca0cd2",
+  "epicId": "epic-be924fb8",
+  "title": "fix: forward launcher worker type through the MCP proxy",
+  "description": "Proxy prerequisite for task-bdf6db6f65b04a009c88c1e49aed3848; consume the optional workerType registration contract from task-0b40957cd116453aa76965059743fefb. Deliver MOE_WORKER_TYPE -> workerType injection ONLY on claim_next_task/join_team, after alias resolution, including explicit-workerId calls made by wrapper preflight. Match injectWorkerId's conservative defaults: leave any caller-owned workerType key unchanged, no-op for unset/blank env or malformed messages, never throw, never alter unrelated tools or tools/list. Forward nonblank strings verbatim; daemon owns the uppercase allowlist and CLAUDE fallback. Include a separate mutation boolean in index.ts serialization so type-only mutation reaches the wire. Preserve runner/execution identity guards. Own src/utils.ts, src/index.ts, a new src/workerType.test.ts (helper cases plus subprocess wire test against ephemeral WebSocket server), vitest.config.ts (blank ambient MOE_WORKER_TYPE), and README.md. No launcher changes and no daemon/schema edits. Root verification: (cd packages/moe-proxy && npm test). Use test-owned temporary projects and cleanup child processes/sockets/timeouts, never the live .moe. npm test rebuilds dist: perform it on an isolated copy of current bytes if this shared checkout's dist is serving active agents.",
+  "definitionOfDone": [
+    "Tests inject workerType for claim_next_task and join_team (canonical and alias forms), including calls with explicit workerId and absent workerType.",
+    "Explicit workerType keys remain unchanged; unset/blank environment, malformed/null/array message shapes, tools/list, and unrelated tools remain untouched; unknown nonblank values reach daemon validation unchanged.",
+    "A spawned real proxy's WebSocket request contains type when it is the only mutation, and preserves existing workerId/runner/execution identity semantics.",
+    "Proxy tests blank inherited MOE_WORKER_TYPE unless a fixture deliberately sets it, clean temporary resources on failure, and README documents scope/defaults/ownership.",
+    "Fresh (cd packages/moe-proxy && npm test) exits 0 with completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Setup, then the helper test-first (load test-driven-development). (1) Contract: this row is gated on task-0b40957cd116453aa76965059743fefb. Confirm it landed (get_context epicSiblings landing.merged, or git log moe/work-2026-10-24 --grep 'Moe-Task: task-0b40957cd116453aa76965059743fefb') and that grep -n workerType packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/joinTeam.ts shows an optional string workerType in both inputSchemas. If the landed name or meaning differs, stop and moe.report_blocked for a replan rather than adapting. (2) Isolated runner. NEVER run npm test, npm run build or clean, tsc or vitest inside the shared checkout's packages/moe-proxy: the global moe-proxy is a symlink to it, live WSL seats spawn its gitignored dist for every wrapper RPC, clean deletes dist first, and the shared node_modules is a Windows install. Record stat -c '%Y %s' packages/moe-proxy/dist/index.js now. Cut a snapshot: ROOT=$(git rev-parse --show-toplevel); SNAP=$(mktemp -d ${TMPDIR:-/tmp}/moe-proxy-gate.XXXXXX); git -C $ROOT archive HEAD packages/moe-proxy | tar -x -C $SNAP; git -C $ROOT diff --quiet HEAD -- packages/moe-proxy/package.json packages/moe-proxy/package-lock.json packages/moe-proxy/tsconfig.json must exit 0; then (cd $SNAP/packages/moe-proxy && npm ci --no-audit --no-fund) with the Linux node/npm on PATH. Record the base commit (git rev-parse HEAD). 'Sync' below means: cp each owned file that exists (src/utils.ts, src/index.ts, src/workerType.test.ts, vitest.config.ts, README.md) from $ROOT/packages/moe-proxy into $SNAP/packages/moe-proxy and cmp it. Edit only in the worktree; build and test only in $SNAP. If npm ci cannot reach the registry, report_blocked with its error; never fall back to an in-place run. (3) RED. Create packages/moe-proxy/src/workerType.test.ts with describe('injectWorkerType') importing { injectWorkerType, resolveToolCallName } from './utils.js' (utils.test.ts style). Table-driven and mutation-resistant: assert the returned boolean AND the whole arguments object with toEqual, or against a structuredClone taken before the call. (a) For each of moe.claim_next_task, moe_claim_next_task, claim_next_task, moe.join_team, moe_join_team, join_team, a tools/call whose arguments carry an explicit workerId and no workerType returns true and its arguments equal the original plus workerType: 'CODEX'. Also pass moe_claim_next_task and moe_join_team through resolveToolCallName(frame, new Map()) first (the index.ts order): the name becomes the dotted daemon name and the type is still injected. (b) Caller-owned key: arguments already holding workerType 'GEMINI', 'codex', '', null or 0 return false and stay unchanged. (c) Env undefined, '', ' ' or a tab/newline-only value returns false, unchanged. (d) Verbatim: env 'codex', ' Codex ', 'CURSOR' or 'claude-code' returns true with exactly that string; the proxy never trims, re-cases or allowlists (the daemon validates CLAUDE/CODEX/GEMINI/GROK and falls back to CLAUDE). (e) Scope: tools/list with and without params returns false and its params gain no workerType; moe.get_context, moe.start_step, moe.complete_task, moe.wait_for_task, moe.chat_who, moe.list_workers, moe.heartbeat, moe.reattach_attempt and serena_find_symbol return false, unchanged; initialize and ping return false. (f) Malformed: null, undefined, 42, 'str', [], a top-level batch array holding a valid claim frame (left untouched, as injectWorkerId does), tools/call without params, params null/'bad'/[], a numeric name, arguments missing/null/[]/'x' all return false without throwing; Object.freeze'd arguments return false instead of throwing a TypeError, which pins the try/catch error handling. Sync, then in $SNAP run npx vitest run src/workerType.test.ts: it must fail (no such export). (4) GREEN in packages/moe-proxy/src/utils.ts, right after injectRunnerIdentity, reusing CLAIM_TOOL rather than respelling it: const WORKER_TYPE_TOOLS = new Set([...CLAIM_TOOL, 'moe.join_team', 'moe_join_team', 'join_team']); and export function injectWorkerType(parsed: unknown, envWorkerType: string | undefined): boolean with injectRunnerIdentity's guard ladder: a non-string or blank env, a non-object message, a method other than tools/call, params not an object, a name that is not a string in WORKER_TYPE_TOOLS, arguments that are not a plain object, or Object.prototype.hasOwnProperty.call(args, 'workerType') each return false; otherwise set args.workerType = envWorkerType and return true; the whole body sits in try/catch returning false. Unlike injectWorkerId it does NOT bail when the call names its own workerId, and it never touches tools/list. Doc comment in injectRunnerIdentity's style: what and why (the launcher reports the CLI it started; the daemon records and validates it), the rules (caller key wins, blank means unset, verbatim), and 'Returns true if the parsed object was mutated. Never throws.' Sync and re-run: green. Nothing else in utils.ts changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "newFiles": [
+        "packages/moe-proxy/src/workerType.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-proxy/src/workerType.test.ts"
+      ],
+      "note": "Contract confirmed: task-0b40957c landed (commit f107447, epicSiblings landed=true); optional workerType (WORKER_TYPE_SCHEMA) is in claimNextTask.ts:274 and joinTeam.ts:56. Snapshot at /tmp/moe-proxy-gate.J9Y30O, base d9cdc684, native npm ci (node 24.21.0), package files diff-quiet vs HEAD; shared dist/index.js stat before = '1792606998 24357'. RED: 72/72 failed ('injectWorkerType is not a function'). GREEN: injectWorkerType added after injectRunnerIdentity (WORKER_TYPE_TOOLS = CLAIM_TOOL + join_team x3); 72/72 pass, utils.test.ts still green (153 total), tsc --noEmit clean. Helper mutants killed (failures of 72): drop own-key check 6, trim value 3, bail on workerId 15, drop blank guard 3, join-only tool set 8, drop array guard 1. Dirty-tree note: ~610 other dirty paths belong to other sessions; packages/moe-proxy was clean at start.",
+      "startedAt": "2026-10-29T13:47:31.523Z",
+      "completedAt": "2026-10-29T13:48:52.976Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Wire tests, RED first. Add describe('worker type on the wire') to packages/moe-proxy/src/workerType.test.ts. Model the harness on src/input-framing.test.ts (spawn(process.execPath, [path.join(__dirname, '../dist/index.js')]), await once(server, 'listening'), a test-owned project whose .moe/daemon.json names the ephemeral port with projectPath set to that dir, stderr drained) but bound every wait and own every resource. A local startProxy(env) creates fs.mkdtempSync(path.join(os.tmpdir(), 'moe-proxy-worker-type-')), a WebSocketServer({ port: 0, host: '127.0.0.1' }) that records each raw frame string and replies { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'ok' }] } }, and a child spawned with env { ...process.env, MOE_PROJECT_PATH: dir, ...env }. It pushes each resource onto a cleanup list BEFORE awaiting anything, then waits for the daemon-side connection with a deadline (reject on timeout or on an early child exit, quoting its stderr), and returns { frames, lines, send(lines), waitForLines(n), close() }. afterEach drains the list in reverse, each item in its own try/catch so one failure never skips the rest: the child first (stdin.end(), up to about 3 s for exit, then SIGKILL and a short bounded wait; a proxy whose server vanished keeps reconnecting for minutes), then terminate the server's clients and await server.close(), then clear any timer and fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }). Waits use vi.waitFor with { timeout: 5000 } or a deadline loop that clears its interval on both paths; do not copy index.test.ts's unbounded connection polling. Per-test timeout 20000. No live .moe and no real daemon. Type everything for strict tsc: tsconfig include src compiles test files into dist during pretest. Tests: exact toEqual on parsed params, byte equality on raw frames where stated. (A) 'type-only mutation reaches the wire': env { MOE_WORKER_ID: 'worker-w', MOE_WORKER_TYPE: 'CODEX' } (runner, session and attempt env stay blank through vitest.config). Send the wrapper pre-flight shapes exactly as moe_rpc in scripts/moe-agent.sh writes them (Python json.dumps spacing, dotted name, explicit workerId): moe.join_team {teamId: 'team-1', workerId: 'worker-w'} and moe.claim_next_task {statuses: ['WORKING'], workerId: 'worker-w'}; then, in the same non-canonical spacing, a moe.claim_next_task that carries its own workerType 'GEMINI' and an unrelated moe.list_workers {workerId: 'worker-w'}. Expect frames 0 and 1 to parse to { name: 'moe.join_team', arguments: { teamId: 'team-1', workerId: 'worker-w', workerType: 'CODEX' } } and { name: 'moe.claim_next_task', arguments: { statuses: ['WORKING'], workerId: 'worker-w', workerType: 'CODEX' } }, and frames 2 and 3 to be byte-identical to the lines sent. (B) 'keeps workerId, runner and execution identity semantics': env { MOE_WORKER_ID: 'architect-t', MOE_WORKER_TYPE: 'GROK', MOE_RUNNER_PROCESS_STARTED_AT: '4242@1337', MOE_RUNNER_HOST: 'build-box', MOE_SESSION_ID: 'architect-t@2026-10-27T00:00:00Z', MOE_ATTEMPT_ID: 'attempt-0123', MOE_ATTEMPT_GENERATION: '3', MOE_TOOL_NAME_STYLE: 'underscore' }. Send moe_claim_next_task {statuses: ['PLANNING']}, moe_join_team {teamId: 'team-1'}, moe.get_context {taskId: 'task-1'}, moe.start_step {taskId: 'task-1', stepId: 'step-1', attemptId: 'attempt-other'} and tools/list {}. Expect exactly four daemon frames in this order, compared as { method, params }: moe.claim_next_task with { statuses: ['PLANNING'], workerId: 'architect-t', processStartedAt: '4242@1337', host: 'build-box', workerType: 'GROK' }; moe.join_team with { teamId: 'team-1', workerId: 'architect-t', workerType: 'GROK' }; moe.get_context with { taskId: 'task-1', workerId: 'architect-t', sessionId: 'architect-t@2026-10-27T00:00:00Z' } and no workerType; tools/list with params { workerId: 'architect-t' } and no workerType. The start_step never reaches the daemon; its stdout reply (match by id, not position) has error.code -32003 and error.data { tool: 'moe.start_step', codeName: 'EXECUTION_IDENTITY_SUBSTITUTED' }. (C) 'forwards a nonblank value verbatim and treats blank as unset': one startProxy per variant, each closed before the next. MOE_WORKER_TYPE ' codex ': a claim with an explicit workerId reaches the daemon with workerType exactly ' codex '. '' and a spaces-and-tab value: the same hand-spaced claim line arrives byte-identical. RED: sync, npm run build in $SNAP, npx vitest run src/workerType.test.ts. A, B and the nonblank C variant must fail on the missing workerType while the unit block and the blank C variants pass; record that in the step note. Then make one assertion fail on purpose in the snapshot copy and confirm afterEach leaves no child process (ps for the snapshot's dist/index.js) and no moe-proxy-worker-type-* dir; restore that copy and cmp it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/workerType.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/workerType.test.ts"
+      ],
+      "note": "Wire tests added to src/workerType.test.ts (describe 'worker type on the wire': A type-only mutation, B workerId/runner/execution identity, C verbatim + 2 blank variants); harness startProxy() owns dir/server/child on a reverse-drained cleanup list with per-item try/catch, bounded waits (5s vi.waitFor, 3s stdin-end then SIGKILL), timers cleared on both paths, 20s per-test timeout, strict tsc clean. RED (sync, npm run build in $SNAP, vitest): A, B and nonblank-C failed, and the assertion diff is exactly the missing workerType key (B: both workerType lines; the runner pair, sessionId and workerId already matched); unit block and both blank-C variants passed (62/65). Cleanup probes in the snapshot copy: (1) deliberate assertion failure after a live proxy, (2) wrong dist path so the child exits early (error quotes its stderr): both left 0 child procs for the snapshot's dist/index.js and 0 moe-proxy-worker-type-* dirs; copy restored and cmp-identical. Size watch: no task waiver, so non-board net LOC must stay <=400; workerType.test.ts is 269 lines.",
+      "startedAt": "2026-10-29T13:48:54.956Z",
+      "completedAt": "2026-10-29T13:51:35.416Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "GREEN: wire it and keep the suite hermetic. packages/moe-proxy/src/index.ts: add injectWorkerType to the './utils.js' import list (alphabetical, after injectRunnerIdentity). In the stdin handler insert const typed = injectWorkerType(parsed, process.env.MOE_WORKER_TYPE); after injectRunnerIdentity and BEFORE fenceExecutionIdentity, which stays last with its comment, and extend the condition to (renamed || mutated || stamped || typed || identity) ? JSON.stringify(parsed) : line. The separate boolean is the point: a wrapper pre-flight claim or join (dotted name, explicit workerId, no runner pair, not an identity tool) has no other mutation, so without it the raw line goes out and the type is silently lost. Nothing else moves: alias resolution first, workerId and runner injection, the identity fence and its refusal error handling, queueing, timeouts and tools/list rewriting stay as they are. packages/moe-proxy/vitest.config.ts: add 'MOE_WORKER_TYPE' to the blanked env list and to the comment above it. Seats will export it once task-bdf6db6f65b04a009c88c1e49aed3848 lands, every spawned proxy inherits process.env, and index.test.ts's exact claim-arguments assertions would then gain a workerType key. A fixture that needs a type sets it in its own spawn env. Proofs, all in $SNAP after sync and npm run build: (1) npx vitest run src/workerType.test.ts is green. (2) Temporarily drop typed from the condition in the snapshot copy, rebuild and rerun: test A fails while B still passes (B's frames carry other mutations). Restore and cmp. (3) Hermeticity: MOE_WORKER_TYPE=CODEX npx vitest run is green, and the same run with the snapshot's vitest.config.ts change reverted fails in index.test.ts's exact claim-arguments tests. Restore and cmp. Record the three results in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/vitest.config.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/vitest.config.ts"
+      ],
+      "note": "index.ts: injectWorkerType imported after injectWorkerId (alphabetical, after injectRunnerIdentity/injectWorkerId); `typed` computed after injectRunnerIdentity and before fenceExecutionIdentity (which stays last), and added to the re-serialize condition. vitest.config.ts: 'MOE_WORKER_TYPE' added to the blanked env list and the comment. Proofs in $SNAP (/tmp/moe-proxy-gate.J9Y30O, rebuilt each time): (1) src/workerType.test.ts green, 65/65. (2) dropping `typed` from the condition: test A fails and the nonblank-C test fails (both lose the type), B still passes (its frames carry other mutations), 63/65; restored, cmp-identical. (3a) MOE_WORKER_TYPE=CODEX npx vitest run, config as edited: 4 files, 163/163 green. (3b) same run with vitest.config.ts reverted to HEAD: index.test.ts fails 2 (the runner-identity claim-arguments test and the execution-identity underscore test), so the blank is load-bearing; restored, cmp-identical. 0 leaked child procs / temp dirs afterwards.",
+      "startedAt": "2026-10-29T13:51:37.516Z",
+      "completedAt": "2026-10-29T13:52:37.409Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Document the transport in packages/moe-proxy/README.md only. docs/MCP_SERVER.md belongs to task-0b40957cd116453aa76965059743fefb; docs/CONFIGURATION.md, the root CLAUDE.md proxy row and the launchers belong to task-bdf6db6f65b04a009c88c1e49aed3848. (1) Environment Variables: add MOE_WORKER_TYPE, the agent CLI the launcher started, added to the registration tools (see Worker type). (2) A short '## Worker type' section after Execution identity. Scope: the proxy adds workerType from MOE_WORKER_TYPE to moe.claim_next_task and moe.join_team under every spelling (moe.x, moe_x, bare x), including calls that name their own workerId (the wrapper pre-flight's claim and join always do). No other tool, no tools/list and no JSON-RPC batch gets it, the same reach as the workerId and runner-identity injection. Defaults: a blank or unset value adds nothing; a caller's own workerType key is forwarded untouched whatever its value; the value is sent verbatim, never trimmed or re-cased. Ownership: the launcher (scripts/moe-agent.{sh,ps1}) owns the value, the CLI it starts; the daemon owns validation (exact CLAUDE, CODEX, GEMINI or GROK; anything else registers as CLAUDE) and records or refreshes worker.type. Point to moe.claim_next_task and moe.join_team in docs/MCP_SERVER.md instead of restating their rules. It is registration metadata: unlike the execution identity it is never compared or refused, and it authorizes nothing. (3) In the last paragraph of Execution identity, the list of earlier rewrites becomes (alias rename, workerId, runner identity or worker type), in the file's backtick style. House style: short sentences, backticked names, no other README changes (stale lines such as the MCP Tools table are out of scope). Re-read the section against utils.ts and the tests: every statement must be true of the code.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/README.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/README.md"
+      ],
+      "note": "README only: MOE_WORKER_TYPE added to Environment Variables; new '## Worker type' section after Execution identity (scope: claim_next_task/join_team under every spelling incl. explicit workerId, no other tool/tools-list/batch; defaults: blank or unset adds nothing, caller key untouched, verbatim; ownership: launcher owns value, daemon owns validation and records/refreshes worker.type, pointer to docs/MCP_SERVER.md instead of restating rules; registration metadata, never compared or refused); the last Execution identity paragraph's rewrite list is now (alias rename, `workerId`, runner identity or worker type). Re-read against utils.ts, the tests and docs/MCP_SERVER.md (claim_next_task ~L1270, join_team ~L2105): every statement holds, and the ../../docs/MCP_SERVER.md link target exists. Net diff so far (git numstat, non-board): README +12/-1, index.ts +4/-1, utils.ts +36, vitest.config.ts +5/-4, workerType.test.ts +269 = about 320 net, under the 400 cap.",
+      "startedAt": "2026-10-29T13:52:39.547Z",
+      "completedAt": "2026-10-29T13:52:59.572Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification gate, the one regression run. This is a mid-epic slice and the proxy package suite is its whole blast radius; task-bdf6db6f65b04a009c88c1e49aed3848 owns the cross-package run. Sync all five owned files into $SNAP/packages/moe-proxy and cmp each. If HEAD moved since the snapshot and git diff --quiet <snapshot base> HEAD -- packages/moe-proxy reports a difference, rebuild the snapshot from the new HEAD with the step 1 recipe and re-sync. From $SNAP run exactly: (cd packages/moe-proxy && npm test). Its pretest rebuilds the snapshot's dist with tsc, then vitest runs the utils, input-framing, index and workerType test files. Run it in the seat's normal environment, because vitest.config.ts blanking the seat's MOE_* exports is part of what it proves. Require exit 0 and zero failed tests. complete_task verification is { command: '(cd packages/moe-proxy && npm test)', exitCode: 0, outputTail: the vitest summary }; the summary names the tested root ($SNAP), its base commit and that the five owned files were cmp-identical. Confirm the shared checkout's packages/moe-proxy/dist/index.js stat equals the step 1 record, so no in-place build happened. On a failure, fix the cause in the worktree, re-sync and re-run the same command; never weaken an assertion. Remove $SNAP after complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate: (cd packages/moe-proxy && npm test) run from the snapshot root /tmp/moe-proxy-gate.J9Y30O (git archive of HEAD d9cdc684 for packages/moe-proxy, native npm ci, node v24.21.0), in the seat's normal environment (11 MOE_* vars exported, blanked by vitest.config.ts). pretest rebuilt dist with tsc (clean), vitest: EXIT=0, 4 files passed, 163/163 tests (utils, input-framing, index, workerType). The 5 owned files (src/utils.ts, src/index.ts, src/workerType.test.ts, vitest.config.ts, README.md) are cmp-identical between the worktree and $SNAP. HEAD moved to 4de578b; git diff --quiet d9cdc684 HEAD -- packages/moe-proxy exits 0 (no drift), so the snapshot was not rebuilt. Shared packages/moe-proxy/dist/index.js stat is unchanged ('1792606998 24357' before and after), so no in-place build happened. 0 leaked child procs, 0 moe-proxy-worker-type-* dirs. modifiedFiles [] on purpose: this step changed no bytes (the owned files were reported by steps 1-4).",
+      "startedAt": "2026-10-29T13:53:02.995Z",
+      "completedAt": "2026-10-29T13:53:33.976Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final adversarial self-review (load adversarial-self-review), scoped to this task's diff of the five owned files, read as an attacker. Check: (1) a frame whose only mutation is the type is re-serialized: typed is in the condition and test A pins it. (2) The execution-identity fence still runs last and still refuses substitution without forwarding (test B). (3) A caller-owned workerType of any value, a blank or whitespace env, tools/list, a batch array, unrelated tools and malformed shapes stay untouched, and nothing throws. (4) Values stay verbatim: no trim, re-case or allowlist in the proxy, because the daemon owns validation and the CLAUDE fallback. (5) Two proxies running at once (the wrapper pre-flight's and the CLI's) share no state: the helper is pure and reads env per frame. (6) Every child, socket, server, timer and temp dir in workerType.test.ts is released on the failure path too (step 2's probe). (7) README statements match the code. (8) Scope: only the five owned files changed; no index.test.ts, daemon, launcher, schema or docs edits, no .moe hand-edits, and the shared dist is untouched. If the review changes bytes, re-run the step 5 gate fresh before complete_task. Report every created or modified path in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/workerType.test.ts",
+        "packages/moe-proxy/vitest.config.ts",
+        "packages/moe-proxy/README.md"
+      ],
+      "note": "Adversarial review of `git diff` on the 5 owned paths (plus the untracked test file), no bytes changed, so the step-5 gate stands (no re-run needed). (1) typed is in the re-serialize condition; test A and the drop-`typed` mutant (A and nonblank-C fail, B survives) pin it. (2) The fence still runs last and refuses substitution without forwarding (test B, error -32003, tool moe.start_step). (3) Caller-owned key of any value (incl. null, '', 0, undefined-valued), blank/whitespace/non-string env, tools/list, batches, unrelated tools, malformed shapes, frozen arguments and a throwing Proxy message all return false, unchanged, no throw. (4) Verbatim: no trim, re-case or allowlist (' codex ', ' CODEX', 'CODEX\\n' pinned); a newline value stays on one wire line because JSON.stringify escapes it. (5) Helper is pure, env read per frame: two concurrent proxies share no state. (6) Harness releases child, socket, server, timers, temp dir on failure paths (two probes, 0 leaks). (7) README re-read against code and docs/MCP_SERVER.md: holds. (8) Scope: only the 5 owned files changed in packages/moe-proxy; no index.test.ts, daemon, launcher, schema, docs or .moe edits; shared dist stat unchanged. Theoretical, noted for QA: a caller-owned workerType null is forwarded untouched by design, which resets an EXISTING seat to CLAUDE in the daemon (mem task-0b40957c N8), so launchers must omit the key rather than send null; no length cap on the env value (daemon validates; 1 MB stdin cap bounds input only). Net non-board LOC about 320, under the 400 cap.",
+      "startedAt": "2026-10-29T13:53:36.269Z",
+      "completedAt": "2026-10-29T13:54:20.605Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-bdf6db6f65b04a009c88c1e49aed3848",
+  "dependsOn": [
+    "task-0b40957cd116453aa76965059743fefb"
+  ],
+  "priority": "MEDIUM",
+  "order": 2,
+  "comments": [
+    {
+      "id": "comment-b818c1db3f12494f8d9b92413af4458d",
+      "author": "architect-4c57a52b",
+      "content": "@architect-2c9d5121 The daemon contract planned in task-0b40957c (plan rev 1, WORKING) is what this proxy slice consumes:\n- workerType is an optional string on claim_next_task and join_team, with no enum. A key the caller omits counts as \"not reported\": a record created by that call gets CLAUDE, and an existing record keeps its type with no write. Your no-op for unset or blank MOE_WORKER_TYPE gives exactly that.\n- A supplied value counts only when it is exactly CLAUDE, CODEX, GEMINI or GROK (case-sensitive). Anything else, including 'codex', ' CODEX', '', null and non-strings, is recorded as CLAUDE. The daemon never refuses on type, so forwarding non-blank strings verbatim is correct.\n- The refresh runs after the claim passes input validation (statuses, runner identity), before every return path (alreadyAssigned, no-work, governor redirect). It writes only `type`, and keeps lastActivityAt.",
+      "timestamp": "2026-10-27T09:01:47.963Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T15:28:49.626Z",
+  "updatedAt": "2026-10-29T13:58:12.561Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-27T08:46:03.757Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T13:57:31.327Z",
+    "wallClockMs": 191487570
+  },
+  "contextFetchedBy": [
+    "architect-2c9d5121",
+    "worker-fe18a9a9",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-27T08:58:35.782Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Extend injectWorkerId to also add workerType: rejected. It bails when the call names its own workerId, which every wrapper pre-flight claim and join does, and it also writes tools/list and every tool. (2) Stamp it like the execution identity (caller cannot override, a mismatch is refused): rejected. The type is registration metadata, the task says a caller-owned key wins, and a refusal would turn a metadata disagreement into a failed claim. (3) Normalize (trim, uppercase, allowlist) in the proxy: rejected. The daemon (task-0b40957c) is the one validation authority with its CLAUDE fallback, so the proxy forwards verbatim and unknown values reach that validation unchanged. (4) Reuse another injector's flag for re-serialization: rejected. A pre-flight frame has no other mutation, so a type-only frame needs its own boolean or the raw line goes out without the type. (5) Put the wire test in index.test.ts: rejected, not an owned file; a self-contained workerType.test.ts follows input-framing.test.ts. (6) Inject into batch elements: rejected for parity with injectWorkerId and injectRunnerIdentity, which leave batches alone; the pre-flight never batches.",
+    "codebaseInsights": "packages/moe-proxy/src/utils.ts: injectWorkerId (:167) skips calls that carry workerId and also writes tools/list. injectRunnerIdentity (:218) is the model: one tool set (CLAIM_TOOL :199, three spellings), own-key check, blank env means unset, verbatim, try/catch returning false. index.ts:565-573 runs resolveToolCallName, injectWorkerId, injectRunnerIdentity, then fenceExecutionIdentity (last), and re-serializes only when one of their booleans is true. The wrapper pre-flight (scripts/moe-agent.sh moe_rpc :1988, team join :1734) pipes one Python json.dumps frame per call into a fresh proxy process that inherits the wrapper env, with a dotted name and an explicit workerId. The daemon passes params.arguments to handlers raw (McpAdapter.ts:301) and never enforces inputSchema or additionalProperties at runtime, so a new proxy talking to an older daemon is harmless: the extra key is ignored. vitest.config.ts blanks the seat's MOE_* env for test workers; spawned proxies inherit process.env. input-framing.test.ts is the best harness model (process.execPath, once listening, vi.waitFor, afterEach cleanup); index.test.ts's connection waits are unbounded. tsconfig include src means tsc compiles test files into dist during pretest, so a strict-typing error in the test breaks npm test.",
+    "risks": "SHARED DIST HAZARD, verified 2026-10-27: the global npm moe-proxy (C:/Users/Yaron/AppData/Roaming/npm/node_modules/moe-proxy) is a symlink to this checkout's packages/moe-proxy, and live WSL seats run its dist/index.js (same inode, 4 live processes; wrapper RPCs and heartbeats spawn a fresh one per call). dist is gitignored and stale on purpose (2026-10-21, before CQ-F09). npm test runs pretest build, whose prebuild clean deletes dist first, and the shared node_modules is a Windows install (win32 tsc and esbuild binaries). An in-place run from WSL can leave dist deleted and break every WSL seat's RPCs; even a successful in-place build silently deploys unreviewed proxy behavior. So every build and test runs in a git-archive snapshot with a native npm ci. Seat env: once the launchers export MOE_WORKER_TYPE every spawned proxy inherits it, and the vitest.config blank is what keeps index.test.ts's exact-arguments assertions valid. Contract drift: if task-0b40957c lands a different field name or semantics, report_blocked for a replan. Cross-platform: use process.execPath, path.join and os.tmpdir; on Windows rmSync may need maxRetries after the child exits; close the child before the server or the proxy keeps reconnecting. Keep the value verbatim and add no length cap (the daemon validates; the 1 MB stdin line cap bounds it). Out of scope: the root CLAUDE.md moe-proxy row and docs/CONFIGURATION.md (task-bdf6db6f's sweep), docs/MCP_SERVER.md (task-0b40957c), the launchers, index.test.ts.",
+    "keyFiles": [
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-proxy/src/index.ts",
+      "packages/moe-proxy/src/input-framing.test.ts",
+      "packages/moe-proxy/src/index.test.ts",
+      "packages/moe-proxy/vitest.config.ts",
+      "packages/moe-proxy/README.md",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "planApprovedAt": "2026-10-27T08:58:35.884Z",
+  "commits": [
+    {
+      "sha": "f284ef5464ed703bb247f95d985f98bf29c2b89e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-2c9d5121@2026-10-27T08:46:00Z",
+      "paths": [
+        ".moe/epics/epic-be924fb8.json",
+        ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+        ".moe/tasks/task-6971d6897bc24817b72ad673dfd68a67.json",
+        ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+        ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
+        ".moe/tasks/task-758bb59a61bd443382e02aea44b515c9.json",
+        ".moe/tasks/task-8333866a53464d07bcaf88134f259ff4.json",
+        ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+        ".moe/tasks/task-93dee42f71db4a6a8e47a8de052ad411.json",
+        ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+        ".moe/tasks/task-9ef257f58b7f4c4191f206f67bf3d865.json",
+        ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json",
+        ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+        ".moe/tasks/task-bc8410afe7144ddda804b60af000864d.json",
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json"
+      ],
+      "recordedBy": "architect-2c9d5121",
+      "recordedAt": "2026-10-27T17:17:34.705Z",
+      "treeId": "5cf563356ad670158bccd14f8d6021716c20ae85",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "29216f534637548c27d73b7bc595ebb841c91d36",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T13:46:53Z",
+      "paths": [
+        ".moe/tasks/task-6971d6897bc24817b72ad673dfd68a67.json",
+        ".moe/tasks/task-eb85340bf5ee4bde84ca8658a0ca0cd2.json",
+        "packages/moe-proxy/README.md",
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-proxy/src/workerType.test.ts",
+        "packages/moe-proxy/vitest.config.ts"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T13:55:18.672Z",
+      "treeId": "4eb480d749af980afcff3142c837e7e32cdc7bb5",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "0281118f98cb4d5e28de902ebb74cdb324511d71",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T13:55:54Z",
+      "paths": [
+        ".moe/tasks/task-cfa0b48ba83e4f3f813a80504f62bdb9.json",
+        ".moe/tasks/task-eb85340bf5ee4bde84ca8658a0ca0cd2.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T13:58:12.561Z",
+      "treeId": "d0f1df2cf4a2252345d3e768e41874ced5ae15a2",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-proxy/src/workerType.test.ts",
+    "packages/moe-proxy/src/index.ts",
+    "packages/moe-proxy/vitest.config.ts",
+    "packages/moe-proxy/README.md",
+    ".moe/tasks/task-6971d6897bc24817b72ad673dfd68a67.json",
+    ".moe/tasks/task-eb85340bf5ee4bde84ca8658a0ca0cd2.json",
+    ".moe/tasks/task-cfa0b48ba83e4f3f813a80504f62bdb9.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T13:55:54Z",
+    "at": "2026-10-29T13:58:12.561Z"
+  },
+  "workStartedAt": "2026-10-29T13:47:31.523Z",
+  "reviewStartedAt": "2026-10-29T13:54:52.612Z",
+  "verification": {
+    "command": "(cd packages/moe-proxy && npm test)  # run from a git-archive snapshot of packages/moe-proxy at base d9cdc684 (no proxy drift to HEAD b049b8e), the 5 owned files cmp-identical to the worktree, native npm ci, node v24.21.0, seat env intact (MOE_* blanked by vitest.config.ts); never in the shared checkout",
+    "exitCode": 0,
+    "outputTail": "npm notice run moe-proxy@0.8.0 pretest -> prebuild -> clean -> build (tsc, clean) -> test -> vitest run\n RUN  v5.0.5 /tmp/moe-proxy-gate.J9Y30O/packages/moe-proxy\n Test Files  4 passed (4)\n      Tests  163 passed (163)\n   Start at  15:54:28\n   Duration  16.27s (tests 99%, import 1%)\nEXIT=0",
+    "reportedAt": "2026-10-29T13:54:52.612Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "The proxy now forwards MOE_WORKER_TYPE as workerType on claim_next_task and join_team (all three spellings, after alias resolution, including calls that name their own workerId). Delivered in the working tree, uncommitted; the wrapper lands it.\n\nCode (packages/moe-proxy, net about 320 non-board LOC, under the 400 cap):\n- src/utils.ts: injectWorkerType + WORKER_TYPE_TOOLS (CLAIM_TOOL plus three join_team spellings), placed after injectRunnerIdentity with the same guard ladder and try/catch. A caller-owned workerType key (any value) wins; blank or unset env is a no-op; the value is sent verbatim. Never touches tools/list, batches or unrelated tools.\n- src/index.ts: `typed` computed after injectRunnerIdentity and before the execution-identity fence (still last); added to the re-serialize condition so a type-only frame reaches the wire.\n- vitest.config.ts: MOE_WORKER_TYPE blanked.\n- src/workerType.test.ts (new): helper table plus wire tests against an ephemeral ws server and the built proxy: A type-only mutation, B workerId/runner/execution identity (start_step refused with -32003), C verbatim and blank variants.\n- README.md: env var, '## Worker type' section, rewrite list.\n\nVerification: the plan's command run in a git-archive snapshot (never the shared checkout): exit 0, 4 files, 163/163. The shared dist/index.js stat is unchanged, so there was no in-place build.\n\nRED-GREEN: helper RED 72/72 then green. Wire RED failed A, B and nonblank-C on exactly the missing workerType key. Mutants killed: six on the helper (drop own-key check, trim, bail on workerId, drop blank guard, join-only set, drop array guard); dropping `typed` fails A and nonblank-C (B survives by design). Hermeticity: with ambient MOE_WORKER_TYPE=CODEX and the old config, index.test.ts fails 2 tests; with the new config the suite is green. Failure-path cleanup probes (forced assertion failure, wrong dist path) left 0 child processes and 0 temp dirs.\n\nNote for downstream: a caller-owned workerType null is ",
+  "touchedFiles": [
+    "packages/moe-proxy/src/workerType.test.ts",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-proxy/src/index.ts",
+    "packages/moe-proxy/vitest.config.ts",
+    "packages/moe-proxy/README.md"
+  ],
+  "completedAt": "2026-10-29T13:57:31.327Z",
+  "reviewCompletedAt": "2026-10-29T13:57:31.327Z",
+  "reviewSummary": "Reviewed completion 29216f5 (on moe/work-2026-10-24, pushed, in task.commits): 5 owned files under packages/moe-proxy, net 320 non-board LOC (<400, no waiver needed), no daemon/launcher/schema edits.\n\nRe-ran `(cd packages/moe-proxy && npm test)` in a fresh git-archive snapshot of 29216f5 (native npm ci, node 24.21.0, seat MOE_* env intact): exit 0, 4 files, 163/163. Shared dist/index.js stat unchanged, so no in-place build. Own mutant: dropping `typed` from the re-serialize condition fails 'type-only mutation reaches the wire' and 'forwards a nonblank value verbatim' (63/65); restored and cmp'd. 0 leaked proxy children, 0 temp dirs.\n\nDoD:\n1. All six claim/join spellings get workerType, with explicit workerId and absent workerType, and still after alias rename (unit + wire B).\n2. Caller-owned key (GEMINI, codex, '', null, 0) untouched. Blank/non-string env, tools/list, initialize/ping, unrelated tools, malformed/batch/frozen/hostile messages all return false, unchanged, no throw. Values verbatim, so unknown values reach daemon validation (daemon takes optional workerType: claimNextTask.ts:274, joinTeam.ts:56).\n3. Real proxy vs ephemeral ws server: type-only frames (explicit workerId) carry workerType, non-registration and own-key frames are byte-identical. B keeps workerId/runner/session identity, get_context and tools/list carry no type, and start_step with a substituted attemptId is refused -32003 and not forwarded. `typed` runs before the identity fence, which stays last.\n4. vitest.config.ts blanks MOE_WORKER_TYPE. Harness registers cleanup before any await, drains in reverse with per-item try/catch, and bounds every wait. README matches the code.\n5. Fresh npm test exit 0.\n\nComplexity pass: nothing to cut. Note for task-bdf6db6f: the proxy forwards a caller-owned workerType null untouched and the daemon records that as CLAUDE for an existing seat, so the launcher should export MOE_WORKER_TYPE only when it has a value.",
+  "requiredCheckAtDone": null
+}

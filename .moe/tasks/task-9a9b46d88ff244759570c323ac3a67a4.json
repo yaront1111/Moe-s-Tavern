@@ -1,0 +1,307 @@
+{
+  "id": "task-9a9b46d88ff244759570c323ac3a67a4",
+  "epicId": "epic-be924fb8",
+  "title": "fix: expose commit-scope assignee protection to launchers",
+  "description": "Producer prerequisite split from task-6aa460bb33184e1b84fc9c9e5c0a4560, which retains both wrapper implementations, twin postflight scenarios, scripts/CLAUDE.md and the final integration/hardening gate. Add an additive boolean assigneeProtected to moe.get_commit_scope: false for explicitly unassigned task; otherwise true if its assigned worker record exists and status is not DEAD, OR listAttempts(state, task.id) contains a phase != closed attempt belonging to that same assigned worker. A stale lastActivityAt is not proof of death: do not use assigneeAlive/presence timeout as permission to land source. Preserve existing assigneeAlive and all scope output/attribution behavior. Error handling stays read-only/fail-closed for malformed records. Add matching response controls to the single shared postflight-fake-proxy.js, defaulting to today's caller-as-assignee behavior, plus standalone fixture tests. New proposed fixture envs FAKE_SCOPE_ASSIGNEE (explicit foreign ID or empty for unassigned), FAKE_SCOPE_ASSIGNEE_PROTECTED (0/1), FAKE_SCOPE_OWNERSHIP_MODE (omit/malformed to exercise older/bad replies). Omit means omit the new protection field only, not break legacy output. No launcher, baseline, commit ledger schema or task-state changes. Own five files: src/tools/getCommitScope.ts, its .test.ts, docs/MCP_SERVER.md, scripts/tests/postflight-fake-proxy.js, new scripts/tests/postflight-owner-scope.test.mjs. Verification from root: node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test).",
+  "definitionOfDone": [
+    "get_commit_scope returns boolean assigneeProtected without removing/changing existing fields, documented in docs/MCP_SERVER.md alongside live-assignee protection semantics.",
+    "Daemon tests cover own/foreign caller, fresh and stale non-DEAD owner, DEAD/missing owner with matching running/finalizing/reconciling attempts, closed/foreign-worker/other-task attempts, and unassigned tasks.",
+    "Missing/dead owner with no matching open attempt is unprotected; status freshness alone never makes a registered non-DEAD owner unprotected; output is caller-independent and ignores old foreign attempts.",
+    "Shared fake proxy supports normal/foreign/unassigned and missing/malformed protection-field fixtures while unchanged invocations retain existing semantics, proven by new standalone Node tests.",
+    "Fresh node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test) exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Daemon predicate, test-first (load test-driven-development). Contract, additive, read-only and caller-independent: assigneeProtected is false when task.assignedWorkerId is null, undefined or '' (unassigned, the daemon's isTaskClaimable meaning). Otherwise it is true when that worker's record exists with status !== 'DEAD', however stale or unparsable its lastActivityAt: a quiet build is not a death, so never use assigneeAlive, isWorkerAlive or LIVENESS_TIMEOUT_MS here. Otherwise it is true when listAttempts(state, task.id) holds an attempt whose workerId === the assignee and whose phase !== 'closed' (running, finalizing, reconciling, and also an unrecognized hand-edited phase). Otherwise false. Fail-closed error handling for malformed records: a non-string truthy assignedWorkerId is protected, a worker record without a status is protected, an unknown attempt phase counts as open; nothing throws or writes. RED first, in a new describe('assigneeProtected') block in packages/moe-daemon/src/tools/getCommitScope.test.ts, reusing the file's scope() helper, h.createTask/h.createWorker, openAttempt and setAttemptPhase the way the peerActive tests do (one open attempt per task at a time: open, close, open). (1) Unassigned (null) is false, even with an open attempt a former worker left on the task; assignedWorkerId patched in memory to '' is false. (2) Registered non-DEAD owner: fresh lastActivityAt is true; lastActivityAt '2020-01-01T00:00:00.000Z' gives assigneeProtected true while assigneeAlive is false (the stale-presence trap the parent bug hit); 'garbage' lastActivityAt is true; at least two non-DEAD statuses are true. (3) DEAD owner, and missing owner (no record), each with no attempts: false. (4) For both the DEAD and the missing owner, an owner attempt (workerId = assignee) in running, finalizing and reconciling is true, table-driven. (5) Missing owner with only: the owner's closed attempt, false; an open attempt on this task by worker-other, false; an open owner attempt on a different task, false; the owner's closed attempt followed by a foreign open one, false. (6) Fail-closed: an owner attempt patched to phase 'paused' through h.state.attempts.set (as the corrupt lastPhaseAt test does) is true; assignedWorkerId patched in memory to 42 is true; an owner record patched to have no status is true. (7) Caller independence: for one protected and one unprotected fixture, scope({ workerId: owner }), scope({ workerId: 'worker-other' }) and scope({}) agree on assigneeProtected. Assert the stale-owner expectations with a foreign or absent caller FIRST, because a call by the owner itself refreshes its lastActivityAt through touchWorker. (8) Additive: add assigneeProtected: boolean to the ScopeResult interface. On one fixture called without phase/sessionId, assert Object.keys(result).sort() equals today's key set plus 'assigneeProtected'. Existing tests stay untouched and green. Run only that file through the step 4 runner (Linux snapshot on WSL, in place on native Windows): npx vitest run src/tools/getCommitScope.test.ts, and the new cases fail. GREEN in packages/moe-daemon/src/tools/getCommitScope.ts: a module-level function isAssigneeProtected(state: StateManager, task: Task): boolean implementing exactly the contract, with a doc comment saying why presence is not used. Compute const assigneeProtected = isAssigneeProtected(state, task) next to assigneeAlive, before the caller's touchWorker, and return it right after assigneeAlive. Append one clause to the tool description: it is still no ownership guard, but assigneeProtected tells a caller that is not the assignee whether it must leave the task's source paths alone. Leave every other field, the inputSchema and the peer/liveness logic unchanged. Re-run: green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "Round 2 after a size-only QA reject. No bytes changed. The step-1 code and tests landed in 201d5ab and are re-verified here. The empty modifiedFiles is deliberate: the fallback names only this task's own unchanged, landed files. Filed size-exception proposal prop-a3ac15754218441c9a3b43595af3fece (EPIC ADD_RAIL, PENDING) and pinged #governors (msg-9367d398). Proof: in a pure git archive of HEAD cf96fd3 (no overlay), getCommitScope.ts and getCommitScope.test.ts cmp-equal both `git show 201d5ab:<path>` and the worktree, and `git log 201d5ab..HEAD -- <5 owned paths>` is empty. isAssigneeProtected at HEAD matches the contract: null, undefined or '' gives false; a non-string id gives true; a record that is not DEAD gives true, and lastActivityAt is never read; otherwise true iff an attempt has workerId === owner and phase !== 'closed'. It is computed before touchWorker. Focused run in the snapshot (env -i, node 24.21.0, native node_modules symlink, package.json and lock equal modulo CR): `npx vitest run src/tools/getCommitScope.test.ts` passed 42/42. Fresh worker mutants, in the snapshot copy only, restored and cmp-checked: status allowlist (=== 'WORKING') fails 10/42; drop the null/undefined check 1; drop the own-attempt clause 8; wire the field to assigneeAlive 17; statusless record unprotected 1. All killed. Peer dirty paths in the shared checkout were left alone.",
+      "startedAt": "2026-10-27T13:57:16.658Z",
+      "completedAt": "2026-10-27T13:59:26.536Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Shared fixture controls, test-first: the knobs in scripts/tests/postflight-fake-proxy.js plus a new standalone suite, scripts/tests/postflight-owner-scope.test.mjs (node:test with node:assert/strict, ESM like postflight-safe.test.mjs). Harness: each test creates fs.mkdtempSync(path.join(os.tmpdir(), 'moe-owner-scope-')) holding .moe/project.json and .moe/tasks/task-postflight.json (id, title, status WORKING, one COMPLETED step with modifiedFiles ['src/a.ts']). It runs the in-repo fake with spawnSync(process.execPath, [fakePath], { input: one JSON-RPC tools/call line for moe.get_commit_scope { taskId: 'task-postflight', workerId: 'architect-x', phase: 'postflight' }, cwd: dir, env, encoding: 'utf8', timeout: 10000 }), where env is process.env with every FAKE_* and MOE_* key deleted (seat exports must not leak in) plus MOE_PROJECT_PATH: dir and the test's knobs. Parse the one stdout line's result.content[0].text. Remove the dir in t.after or finally with force and maxRetries, so a failed assertion leaves nothing behind. Knob contract, read ONLY inside case 'get_commit_scope' and documented in its existing knob comment:\n- FAKE_SCOPE_ASSIGNEE: unset or empty means today's caller-as-assignee (assignedWorkerId = args.workerId || null). The value 'none' means unassigned (null). Any other value is that worker id. Unassigned is a sentinel rather than an empty value because PowerShell deletes an environment variable set to '': postflight.ps1 could never express an empty value, so an empty value must mean the same thing on every engine.\n- FAKE_SCOPE_ASSIGNEE_ALIVE=0|1 sets assigneeAlive. Default: true as today, except false for 'none'.\n- FAKE_SCOPE_ASSIGNEE_PROTECTED=0|1 sets assigneeProtected. Default: true when assignedWorkerId is set, false when it is null, which is the daemon's answer for a registered owner and for an unassigned task.\n- FAKE_SCOPE_OWNERSHIP_MODE: unset serves assigneeProtected as a boolean. 'omit' leaves out that one key, as a daemon from before the field does, with every other key unchanged. 'malformed' serves String(value); 'false' as a string is the coercion trap a wrapper must refuse.\n- Mirror getCommitScope.ts's orphan rule: a caller (args.workerId) that is not assignedWorkerId is appended to activePeerIds and makes peersActive true. livePeerIds and alwaysInclude still follow FAKE_SCOPE_PEERS_ACTIVE only. With FAKE_SCOPE_ASSIGNEE unset the caller is the assignee, so nothing changes.\n- Any other value of these knobs throws an Error naming the knob (exit 1, nothing on stdout), so a typo cannot silently pass a scenario.\nTests, with deepStrictEqual on whole objects where possible:\n(a) Unchanged invocation, no knobs: the legacy fields equal today's (assignedWorkerId 'architect-x', assigneeAlive true, livePeerIds [], activePeerIds [], peersActive false, alwaysInclude [own record, project.json]), plus assigneeProtected true; the key set is today's plus 'assigneeProtected' only. With FAKE_SCOPE_PEERS_ACTIVE=1 the legacy peer fields are unchanged. With no workerId: assignedWorkerId null, assigneeAlive true, assigneeProtected false. FAKE_SCOPE_ASSIGNEE='' answers exactly like unset.\n(b) Foreign: FAKE_SCOPE_ASSIGNEE=worker-owner gives assignedWorkerId 'worker-owner', assigneeAlive true, assigneeProtected true, activePeerIds ['architect-x'], peersActive true, and livePeerIds and alwaysInclude as in (a).\n(c) Quiet protected owner: adding ALIVE=0 gives assigneeAlive false and assigneeProtected true.\n(d) Dead or missing owner: ALIVE=0 with PROTECTED=0 gives both false.\n(e) Unassigned: 'none' gives null, false, false, with the caller in activePeerIds.\n(f) Omit: (b)'s knobs plus OWNERSHIP_MODE=omit deep-equal (b)'s reply minus the assigneeProtected key, and 'assigneeProtected' in reply is false.\n(g) Malformed with PROTECTED=0: assigneeProtected === 'false' (typeof string). Default: 'true'.\n(h) Fail loud: PROTECTED=yes, ALIVE=2 and OWNERSHIP_MODE=bogus each exit non-zero with the knob name on stderr and empty stdout. The same bad knob still leaves a heartbeat call answered normally.\nRED: node --test scripts/tests/postflight-owner-scope.test.mjs fails before the fixture change; GREEN after. Keep the fixture's error handling style (no live daemon, no network) and keep its header comment accurate. Do not touch postflight.sh, postflight.ps1, parity checks or other handlers such as join_team (task-6aa460bb and task-8333866a own them).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-owner-scope.test.mjs"
+      ],
+      "note": "No bytes changed in round 2. scripts/tests/postflight-fake-proxy.js and scripts/tests/postflight-owner-scope.test.mjs cmp-equal `git show 201d5ab:<path>` and the worktree, in a pure git archive of HEAD cf96fd3. The fallback to affectedFiles names only this task's own landed fixture file. Re-verified in that snapshot under env -i with node 24.21.0: `node --test scripts/tests/postflight-owner-scope.test.mjs` passed 13/13, and no /tmp/moe-owner-scope-* dir was left behind, even after the failing mutant runs. Six fixture mutants on the snapshot copy only, restored and cmp-checked; each line gives the failing tests out of 13:\n- F1, the omit knob ignored: 1.\n- F2, protected defaulting to true for an unassigned task: 2.\n- F3, the orphan rule dropped: 6.\n- F4, malformed serving a boolean instead of String(): 1.\n- F5, a typo knob accepted silently: 1.\n- F6, ALIVE defaulting to true for 'none': 1.\nAll six killed. Legacy differential: the pre-change fake (201d5ab^ = 6cc1797, which has no assigneeProtected) against the landed fake, 240 legacy knob/arg combinations, 0 mismatches modulo the one new key, and that key equals assignedWorkerId !== null in every one. The knobs are read only inside case 'get_commit_scope', and the header comment matches the code. postflight.sh/.ps1, the parity checks and the other handlers are untouched.",
+      "startedAt": "2026-10-27T13:59:33.275Z",
+      "completedAt": "2026-10-27T14:01:00.837Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/MCP_SERVER.md, edit the moe.get_commit_scope section only (around line 662). Five live tasks declare this file and the checkout already carries a peer's uncommitted hunks (get_context isEpicFinal / epic finalTaskId, update_epic). Never revert, reflow or tidy anything outside this section. (1) Returns: add assigneeProtected: boolean right after assigneeAlive, with a comment covering these points:\n- false for an unassigned task;\n- true while the assignee's worker record exists and is not DEAD (however stale its lastActivityAt), or while the task has a non-closed attempt that this assignee opened;\n- malformed records fail closed;\n- the value is caller-independent and the field is additive.\nAnnotate assigneeAlive as the 120 s display-presence window (isWorkerAlive): it is never evidence that the assignee is dead and never permission to land. (2) Notes: add a 'Live-assignee protection' bullet covering:\n- the field is what a landing session that is not the assignee consults before it lands the task's source paths (wrapper side: task-6aa460bb33184e1b84fc9c9e5c0a4560);\n- while it is true, that session lands no source path for the task;\n- only boolean false permits a landing, so a missing field (older daemon), a non-boolean value or a failed RPC must be treated as protected, never coerced to false;\n- the disk fallback has no protection signal, so a wrapper on it cannot infer that a foreign assignee is dead.\n(3) Keep the 'No ownership guard' bullet true (the tool still serves every caller and refuses none) and the fallback bullet accurate. Re-read the section against the code and tests; every statement must hold. Nothing else in the file changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "No bytes changed in round 2. docs/MCP_SERVER.md cmp-equals `git show 201d5ab:docs/MCP_SERVER.md`, HEAD and the worktree, and `git status` shows that path clean. The fallback names this task's own landed doc.\n\nThis task's own hunks in 201d5ab are both inside the moe.get_commit_scope section, which starts at line 662:\n- @@ -676 +681,7: the Returns comments for assigneeAlive and assigneeProtected, +7/-1;\n- @@ -706 +717,2: the 'No ownership guard' clause plus the 'Live-assignee protection' bullet, +2/-1;\n- together +9/-2.\nThe commit's other docs hunks are cd2e4477's, carried under Moe-Contested and not touched here: 216 +1/-1, 238 +6/-1, 1626 +1/-1, 1643 +2/-1, 1656 +3/-0, together +13/-4.\n\nEvery statement was re-checked against the code:\n- isWorkerAlive in util/workerLiveness.ts returns false for DEAD and for an unparsable time, otherwise now - last <= 120000, which is the documented display window.\n- isAssigneeProtected matches each documented rule: false when unassigned; true for a record that is not DEAD, with lastActivityAt never read; true for an own non-closed or unknown-phase attempt; fail-closed on a non-string id and on a statusless record; independent of the caller.\n- The tool still refuses no caller, so the 'No ownership guard' bullet holds.\n- The disk-fallback bullet stays accurate: the fallback has no protection signal.\n- The never-coerce rule (absent field, \"false\" string or failed RPC means protected) matches the fixture's omit and malformed modes, which the step-2 tests pin.",
+      "startedAt": "2026-10-27T14:01:05.103Z",
+      "completedAt": "2026-10-27T14:01:28.575Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "The single verification gate. Command, from the root of the tested tree: node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test).\n\nOn WSL the shared checkout's packages/moe-daemon/node_modules is a Windows install (vitest dies on rolldown's native binding), so run it from a Linux snapshot (see mem:gotcha-daemon-linux-snapshot-gate and mem:gotcha-full-daemon-suite-scratch-root-needs-claude-md):\n- SNAP=$(mktemp -d /tmp/moe-9a9b-gate.XXXXXX).\n- git -C <repo root> archive HEAD | tar -x -C $SNAP. Archive the whole repo: the initFiles, benchmark and docs tests read root .gitignore, CLAUDE.md and docs/.\n- Overlay exactly the five owned paths from the worktree and cmp each one. Never overlay git diff --name-only: peers' half-done edits would come along. docs/MCP_SERVER.md goes in as the worktree has it, peer hunks included, because that is what a contested landing commits.\n- Symlink $SNAP/packages/moe-daemon/node_modules to /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules, after checking that its package.json and package-lock.json equal the snapshot's modulo CR. If they differ or it is gone, run npm ci in the snapshot.\n- Run under env -i HOME=$HOME PATH=<nvm node bin>:/usr/local/bin:/usr/bin:/bin, so no MOE_* or FAKE_* leaks in.\n\nOn native Windows (Git Bash) the command may run in place: daemon npm test is plain vitest and never rebuilds dist.\n\nRequire exit 0 and zero failed tests. complete_task verification gets the command, exitCode and outputTail (the node:test pass/fail counts plus the vitest summary); also state the tested root and base commit. Never install into, build in or edit the shared checkout's node_modules or dist. On a failure, fix the cause in the worktree, re-overlay and re-run the same command fresh. Never weaken an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh gate, exit 0. Command, run from the tested root: node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test).\nTested root: /tmp/moe-9a9b-r2-gate.Vm1r8I, a pure `git archive` of HEAD cf96fd3 with no worktree overlay. That is valid because the five owned paths are clean in the worktree; each one cmp-equals both `git show 201d5ab:<path>` and the worktree file. The symlinked native node_modules (/tmp/moe-linux-daemon.3EJTl5) has package.json and package-lock.json equal to the snapshot's modulo CR. The run used env -i with HOME and node 24.21.0 on PATH, so no MOE_* or FAKE_* variable reached it. It ran in the foreground from 14:01:48Z to 14:02:16Z.\nResults: node:test 13 tests, 13 pass, 0 fail. tsc --noEmit printed nothing. vitest: Test Files 170 passed (170); Tests 4343 passed, 16 skipped (4359). These are the same counts QA saw on 201d5ab.\nThe shared checkout's node_modules and dist were not touched, and no bytes changed. The log is at /tmp/moe-9a9b-r2/gate.log.",
+      "startedAt": "2026-10-27T14:01:34.891Z",
+      "completedAt": "2026-10-27T14:02:24.572Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review (load adversarial-self-review) of this task's five-file diff, read as an attacker:\n(1) Fail-open hunt: no path may return false for a registered non-DEAD owner, or for a missing or DEAD owner holding its own non-closed attempt. Check stale or garbage lastActivityAt, unknown statuses, unknown phases, two open attempts and generation disorder; each must give true and be pinned by a test.\n(2) Over-protection: unassigned tasks, and missing or DEAD owners with only closed, foreign-worker or other-task attempts, must give false, so orphan recovery still lands.\n(3) The value is caller-independent and the change adds no writes. touchWorker stays the only side effect, after the computation.\n(4) Every existing field, the inputSchema and the peer/liveness logic are unchanged, and the existing tests are untouched.\n(5) Fixture: unset or empty knobs reproduce today's reply plus exactly one key. 'omit' removes only that key, and malformed is a string. Typos fail loudly. Knobs are read only by get_commit_scope. The orphan rule matches getCommitScope.ts. Temp dirs are removed on failure too.\n(6) The docs match the code, including the never-coerce rule for absent or non-boolean values.\n(7) Scope: only the five owned files changed. No postflight harness, wrapper, parity, schema or .moe edits; peers' docs hunks untouched.\nIf the review changes bytes, re-run the step 4 gate fresh before complete_task. Report every created or modified path in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of the five-path diff 201d5ab^..201d5ab found no defect, so no bytes changed and the step-4 gate stands.\n\n(1) Fail-open. A registered owner that is not DEAD is protected whatever its lastActivityAt; any status other than 'DEAD', even undefined or garbage, protects. A missing or DEAD owner is protected by any own attempt in a phase other than 'closed'; .some() runs over every generation, so two open attempts or a disorderly generation still protect. getWorker is backed by Map<string, Worker>, so a prototype key cannot resolve. Fresh mutants confirm it: status allowlist 10/42, own-attempt clause dropped 8, null check dropped 1, statusless record unprotected 1, wiring to assigneeAlive 17. QA's own mutants were 10/1/5/1.\n(2) Over-protection. Unassigned, and a missing or DEAD owner with only closed, foreign-worker or other-task attempts, all give false; tests pin each.\n(3) The computation is one synchronous read-only pass, and listAttempts returns detached copies. touchWorker stays the only side effect, and it runs after the computation. A throw would fail the RPC, which the docs define as protected, so it fails closed.\n(4) The rest of the response is unchanged: only additions plus the appended sentence in the description, inputSchema untouched. Both test files are pure additions (+196/-0 and +185/-0), so no existing test was edited.\n(5) Fixture: the 240-combination legacy differential shows 0 mismatches, including key order through JSON.stringify. The 6 fixture mutants are killed. The knobs are read only in get_commit_scope, temp dirs are removed even when a test fails, and parity-check.sh PASSes in the snapshot.\n(6) The docs match the code, as re-checked in step 3.\n(7) Scope: the completion holds the five owned paths plus board JSON. docs/MCP_SERVER.md and the fake proxy are carried under Moe-Contested trailers.\n\nTheoretical, deliberately unchanged:\n- A fake call that combines FAKE_SCOPE_PEERS_ACTIVE=1, a foreign FAKE_SCOPE_ASSIGNEE and the caller id 'worker-peer' would list 'worker-peer' twice. No scenario does that.\n- An attempt whose workerId differs from assignedWorkerId only in case or whitespace is not attributed to the owner. Only a hand edit can produce one.\n- A registered owner that has gone quiet stays protected until it deregisters, a restart purges it, or release_task runs. That over-protection is deliberate.",
+      "startedAt": "2026-10-27T14:02:27.144Z",
+      "completedAt": "2026-10-27T14:03:51.987Z"
+    }
+  ],
+  "planRevision": 22,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "The size-only hold is cleared. The human APPROVED prop-a3ac15754218441c9a3b43595af3fece, the EPIC size exception for this row (net 449, landed completion 201d5ab). Following QA's stated route: confirm the rail in allRails.epic, re-run the gate fresh and approve with the bytes unchanged.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-6aa460bb33184e1b84fc9c9e5c0a4560",
+  "priority": "HIGH",
+  "order": 3,
+  "comments": [
+    {
+      "id": "comment-073aef54436b486482c34518f0e870c6",
+      "author": "architect-2c9d5121",
+      "content": "Planner note for this task's worker. docs/MCP_SERVER.md already holds uncommitted hunks from task-cd2e447728224044abe7fa669d42f7fb: get_context isEpicFinal/finalTaskId, create_epic and update_epic. They were held out of that task's completion 4137865 as a contested path.\n- Do not revert, reflow or re-edit those hunks. Edit only the get_commit_scope section, with your CLI's file-editing tool (a Claude Edit/Write call is the TOOL witness a contested path needs).\n- List docs/MCP_SERVER.md in complete_step.modifiedFiles.\n- Your landing may carry the cd2e4477 hunks under a Moe-Contested trailer. Say so in your completion summary, so QA does not read them as your scope creep.\n- If cd2e4477 lands those hunks first, ignore this note.",
+      "timestamp": "2026-10-27T09:14:54.701Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T15:36:53.728Z",
+  "updatedAt": "2026-10-27T17:01:20.162Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-27T08:59:11.778Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-27T16:59:46.881Z",
+    "wallClockMs": 28835103
+  },
+  "contextFetchedBy": [
+    "qa-6fa5d758",
+    "worker-7d158765"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-27T09:08:04.988Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Reuse assigneeAlive (presence): rejected. Its 120 s display window flags a quiet build as dead, so a foreign session would land live bytes, which is exactly the parent bug. (2) currentAttempt() instead of listAttempts().some(): rejected. It sees only known OPEN_PHASES and only the highest generation; listAttempts plus phase !== 'closed' plus a workerId match fails closed on unknown phases and on duplicate opens. (3) Protect a task with ANY open attempt: rejected. The DoD ignores foreign-worker attempts, and a stale foreign attempt would block orphan recovery. (4) An ownership guard inside the tool: rejected. The wrapper calls it post-flight for QA-owned, unassigned-BLOCKED and DONE tasks; the guard belongs to the wrapper (task-6aa460bb), and the tool stays read-only and caller-independent. (5) The description proposed an empty FAKE_SCOPE_ASSIGNEE for 'unassigned': replaced by the 'none' sentinel. PowerShell deletes an env var set to '', so postflight.ps1 could not express it and the twin harnesses would silently test different cases. (6) Keeping the fake's hard-coded assigneeAlive:true: rejected. The parent's matrix needs a quiet-but-protected owner (alive false, protected true), and the parent's plan forbids it from editing the fake.",
+    "codebaseInsights": "getCommitScope.ts:\n- assigneeAlive = isWorkerAlive (120 s presence, :148); the orphan rule is at :145; touchWorker(caller) runs at :183, after the computation; peerTaskActive already scans listAttempts per peer.\n\nattemptStore.ts:\n- Phases are running/finalizing/reconciling/closed (OPEN_PHASES).\n- listAttempts returns detached copies in generation order and never throws on JSON-loaded records.\n- openAttempt allows one open attempt per task and does not need the task to exist; setAttemptPhase allows any open-to-open or closed move.\n\nworkerStore.ts:\n- touchWorker returns null for a missing or DEAD worker (no throw).\n- isTaskClaimable treats a falsy assignedWorkerId as unassigned.\n\nEverything else:\n- McpAdapter enforces no inputSchema, so the change is additive JSON.\n- The fake proxy's get_commit_scope case (~:456) hard-codes assignedWorkerId = args.workerId || null and assigneeAlive true. Both harnesses copy the file to a temp dir; parity-check.sh only checks the copy lines and the request-parsing line.\n- No wrapper consumes assigneeAlive today (grep), so the new fields are inert until task-6aa460bb.\n- getCommitScope.test.ts fixtures: h.createWorker/createTask, openAttempt/setAttemptPhase, and in-memory patches via h.state.attempts.set.\n- The repo root package.json has no type, so the fake runs as CommonJS in place.",
+    "risks": "docs/MCP_SERVER.md is declared by live tasks 0b40957c, 72184c65, 8333866a, bc8410af and cd2e4477, and carries a peer's uncommitted hunks. Edit only the get_commit_scope section and list the path in complete_step.modifiedFiles; the contested landing carries the peer hunks under a Moe-Contested trailer, which is expected. postflight-fake-proxy.js is declared by task-8333866a (REVIEW): leave its other handlers alone. The WSL daemon gate needs the Linux snapshot; never npm install, build or tsc-emit in the shared checkout. The node test must scrub the inherited FAKE_*/MOE_* env. Fail-open is the dangerous direction; over-protection only delays orphan recovery until deregister or the reconcile window. task-6aa460bb will consume these names, so do not rename them: assigneeProtected (boolean), FAKE_SCOPE_ASSIGNEE ('none' sentinel), FAKE_SCOPE_ASSIGNEE_ALIVE, FAKE_SCOPE_ASSIGNEE_PROTECTED, FAKE_SCOPE_OWNERSHIP_MODE (omit|malformed).",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/postflight-safe.test.mjs",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-27T09:08:05.086Z",
+  "workStartedAt": "2026-10-27T09:09:31.350Z",
+  "reviewStartedAt": "2026-10-27T14:04:53.706Z",
+  "verification": {
+    "command": "node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test)   [run 2026-10-27T14:01:48Z-14:02:16Z from a Linux snapshot /tmp/moe-9a9b-r2-gate.Vm1r8I: pure git archive of HEAD cf96fd3, no overlay; the 5 owned paths cmp-equal 201d5ab and the worktree; native node_modules symlinked (package.json and lock equal modulo CR); env -i. HEAD is now 5787844, which adds only board JSON]",
+    "exitCode": 0,
+    "outputTail": "node:test: ℹ tests 13 | ℹ pass 13 | ℹ fail 0\ntsc --noEmit: clean (no output)\nvitest: Test Files 170 passed (170) | Tests 4343 passed | 16 skipped (4359) | Duration 26.06s\nGATE_EXIT=0",
+    "reportedAt": "2026-10-27T14:04:53.706Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/getCommitScope.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "scripts/tests/postflight-fake-proxy.js",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json",
+    ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json",
+    ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json",
+    ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+    ".moe/tasks/task-4af8b8c17d1f4949b0d85e24e69f986f.json",
+    ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
+    ".moe/tasks/task-8333866a53464d07bcaf88134f259ff4.json"
+  ],
+  "completionSummary": "Round 2 after a size-only QA reject; no bytes changed. The deliverable is still landed completion 201d5ab (pushed, moe/work-2026-10-24). The five owned paths cmp-equal 201d5ab both at HEAD and in the worktree, and `git log 201d5ab..HEAD` on them is empty, so this round lands board JSON only.\nSize: filed prop-a3ac15754218441c9a3b43595af3fece (EPIC ADD_RAIL). It was still PENDING at complete_task, and only a human can resolve it. The rail names 201d5ab and the numstat:\n- getCommitScope.ts +24/-1\n- getCommitScope.test.ts +196/-0\n- postflight-fake-proxy.js +45/-7\n- postflight-owner-scope.test.mjs +185/-0\n- docs/MCP_SERVER.md +9/-2\nOwn total +459/-10, net 449: 68 runtime/fixture/docs, 381 tests. The other docs hunks (+13/-4) are cd2e4477's, under Moe-Contested; the whole commit is net 458. #governors was pinged (msg-9367d398). If the proposal is still PENDING, park from REVIEW; if APPROVED, approve with the bytes unchanged.\nRe-verified from a pure git archive of HEAD cf96fd3 (env -i, node 24.21.0). HEAD has since moved to 5787844, a board-only checkpoint, so the tested code equals HEAD's.\n- getCommitScope.test.ts: 42/42.\n- getCommitScope.ts mutants, failures of 42: status allowlist 10, own-attempt clause dropped 8, null check dropped 1, wired to assigneeAlive 17, statusless record unprotected 1. All killed.\n- Fixture mutants, failures of 13: omit ignored 1, protected-by-default for unassigned 2, orphan rule dropped 6, malformed sent as a boolean 1, typo knob accepted 1, ALIVE default for none 1. All killed.\n- Legacy differential, 6cc1797 fake vs the landed one: 240 combos, 0 mismatches.\n- parity-check.sh: PASS.\nGate: node:test 13/13, tsc clean, vitest 170 files with 4343 passed and 16 skipped, exit 0. The self-review found no defect; theoretical residuals are in the step-5 note. filesModified comes from the affectedFiles fallback: it lists unchanged paths.",
+  "commits": [
+    {
+      "sha": "201d5ab4299ba43ba0b44fdfc251e8443ae2cd07",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T09:08:35Z",
+      "paths": [
+        ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+        ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json",
+        ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json",
+        ".moe/tasks/task-cfa0b48ba83e4f3f813a80504f62bdb9.json",
+        ".moe/tasks/task-ec99ee714f174553b91ea0a6b9d2d47a.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-owner-scope.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T09:17:22.284Z",
+      "treeId": "782318d8d2238bb54f1b2519313fc0fb8e5444ac",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-0b40957cd116453aa76965059743fefb"
+        },
+        {
+          "path": "scripts/tests/postflight-fake-proxy.js",
+          "taskId": "task-8333866a53464d07bcaf88134f259ff4"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "cf96fd3faef2bd4af1a5660f695ada43465a2d7d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-6fa5d758@2026-10-27T13:49:10Z",
+      "paths": [
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json"
+      ],
+      "recordedBy": "qa-6fa5d758",
+      "recordedAt": "2026-10-27T13:54:28.603Z",
+      "treeId": "2d21636b64789763d93a1609de6d8734ab4266b0",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "8dca342ba183cb34d00d6e5383f11b6e5a7f328f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-27T13:53:33Z",
+      "paths": [
+        ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json",
+        ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-27T14:06:45.983Z",
+      "treeId": "fd1429a3b61bd72cb292460dcc72e7471e36f218",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "bbd614a1732b0df8b1e68018b27d48b58e76448a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-6fa5d758@2026-10-27T14:17:12Z",
+      "paths": [
+        ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json",
+        ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json"
+      ],
+      "recordedBy": "qa-6fa5d758",
+      "recordedAt": "2026-10-27T14:23:18.829Z",
+      "treeId": "ef01a337807896d2a41b1dd7ea744ea3b1af4da8",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "3973f7f8d8ea1be9853ea9488b8acf32a7cd4768",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-6fa5d758@2026-10-27T16:49:02Z",
+      "paths": [
+        ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+        ".moe/tasks/task-4af8b8c17d1f4949b0d85e24e69f986f.json",
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
+        ".moe/tasks/task-8333866a53464d07bcaf88134f259ff4.json",
+        ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json"
+      ],
+      "recordedBy": "qa-6fa5d758",
+      "recordedAt": "2026-10-27T17:01:20.162Z",
+      "treeId": "ec6767adef6890af1785273b7e356201493542e5",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.ts",
+    "scripts/tests/postflight-owner-scope.test.mjs",
+    "scripts/tests/postflight-fake-proxy.js",
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-6fa5d758@2026-10-27T16:49:02Z",
+    "at": "2026-10-27T17:01:20.162Z"
+  },
+  "reviewCompletedAt": "2026-10-27T16:59:46.881Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "description": "Net 449 own LOC (458 for the whole commit), over the 400 cap, no rail waiver. Tests are 381 of it: getCommitScope.test.ts +196 and postflight-owner-scope.test.mjs +185. Substance verified and correct; the fix is a human-approved rail exception for landed commit 201d5ab, not a re-slice or code change.",
+        "file": "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "SIZE-ONLY reject. Substance is clean; no DoD item failed and no bytes need to change.\n\nVerified on completion 201d5ab (on moe/work-2026-10-24, pushed), pure git archive in a Linux snapshot, env -i: `node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test)` exit 0 (node:test 13/13; tsc clean; vitest 170 files, 4343 passed, 16 skipped). Mutants in the snapshot copy only (presence instead of status; any-worker attempt; running-only phase; non-string owner unprotected) fail 10/1/5/1 of the 42 getCommitScope tests. All five DoD items are met. The fake proxy keeps legacy behaviour and docs match the code.\n\nDefect: the diff is over the 400 net-LOC cap and no rail waives it (the epic's size-exception rail names task-7a0b1881 only).\nOwn bytes: getCommitScope.test.ts +196, postflight-owner-scope.test.mjs +185, getCommitScope.ts +24/-1, postflight-fake-proxy.js +45/-7, docs/MCP_SERVER.md +9/-2 (two get_commit_scope hunks) = net 449. The whole commit is +472/-14 = net 458; the other docs hunks (lines 216, 238, 1626, 1643, 1656) are cd2e4477's, carried under Moe-Contested.\n\nRoute (do not re-slice, revert or re-land 201d5ab; see mem:decision-size-only-reject-of-landed-bytes):\n1. File moe.propose_rail (EPIC ADD_RAIL, or MODIFY of the size-exception rail) naming 201d5ab, the per-file numstat above, \"waive size-based rejection of those landed bytes; grow only by QA-required fixes; do not re-slice or add scope\".\n2. Ping #governors with the proposal id.\n3. When APPROVED, call complete_task again with unchanged bytes. QA will confirm the rail text against numstat, re-run the gate and approve. While it is PENDING, report_blocked from REVIEW is the right park.",
+      "rejectedAt": "2026-10-27T13:53:02.185Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "description": "Net 449 own LOC (458 for the whole commit), over the 400 cap, no rail waiver. Tests are 381 of it: getCommitScope.test.ts +196 and postflight-owner-scope.test.mjs +185. Substance verified and correct; the fix is a human-approved rail exception for landed commit 201d5ab, not a re-slice or code change.",
+          "file": "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+        }
+      ]
+    }
+  ],
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Size-only hold from REVIEW. The task is waiting on a human decision on prop-a3ac15754218441c9a3b43595af3fece, an EPIC ADD_RAIL size exception on epic-be924fb8 that is still PENDING. The work itself checks out: no DoD item failed and no bytes need to change.\n\nQA round 2 (qa-6fa5d758, 2026-10-27 14:20Z):\n- The five owned paths are byte-identical to landed completion 201d5ab at HEAD c006918 and in the worktree; `git log 201d5ab..HEAD` on them is empty. 8dca342 changes board JSON only.\n- I re-ran the gate fresh from a pure git archive of HEAD c006918, with env -i and node 24.21.0: `node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test)` exited 0. node:test 13/13, tsc clean, vitest 170 files with 4349 passed and 16 skipped.\n- I checked the proposal's rail text against `git show --numstat 201d5ab`. Own bytes are +459/-10, net 449:\n  - getCommitScope.ts +24/-1\n  - its test +196/-0\n  - fake proxy +45/-7, every hunk inside case get_commit_scope\n  - owner-scope test +185/-0\n  - docs +9/-2, in the hunks at new lines 681 and 717\n  The peer docs hunks add +13/-4, so the whole commit is net 458. The text is accurate.\n\nThe epic rails still waive size only for the 4758ad1 landing. QA cannot approve over the 400 net-LOC cap, and rejecting again would only use up a reopen.\n\nRoute:\n- APPROVED: run set_task_status REVIEW, or unblock_worker with resolveBlocks:true. QA then confirms the rail in allRails.epic, re-runs the gate and approves with the bytes unchanged.\n- REJECTED: run set_task_status PLANNING and split the review scope, not the bytes (mem:decision-size-only-reject-of-landed-bytes).",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-27T16:59:46.881Z",
+  "reviewSummary": "Round 3 approve, bytes unchanged. Size rail APPROVED: prop-a3ac1575 resolvedBy HUMAN 16:46Z; exact text in allRails.epic. It waives own +459/-10 net 449 (getCommitScope.ts +24/-1, test +196/-0, fake proxy +45/-7, owner-scope test +185/-0, docs +9/-2 in hunks @681/@717); other docs hunks +13/-4 are peer content under Moe-Contested, whole commit net 458.\nDelivery: completion 201d5ab on moe/work-2026-10-24 and origin. 5 owned blobs identical at 201d5ab, HEAD 0244b1c and worktree; git log 201d5ab..HEAD on them empty; later task commits cf96fd3/8dca342/bbd614a are board JSON only.\nGate (fresh, pure git archive of HEAD, env -i, node 24.21.0, native node_modules with deps equal modulo CR): node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test) exit 0. node:test 13/13; tsc clean; vitest 170 files, 4361 passed, 16 skipped; getCommitScope.test.ts 42/42. parity-check.sh PASS.\nMutants, in snapshot copies only, restored and cmp-checked. Runtime, failing of 42: presence for status 10, any-worker attempt 1, running-only 5, non-string owner unprotected 1, wired to assigneeAlive 17. Dropping the '' check survives as an equivalent mutant ('' resolves to no record and no attempt). Fixture, failing of 13: omit ignored 1, orphan rule dropped 6, malformed as boolean 1, typo accepted 1, protected default true 2.\nLegacy differential, old fake (201d5ab^) vs landed: 432 combos, 0 mismatches; new key = assignedWorkerId!==null in all.\nDoD: 1 additive field + Returns/Live-assignee docs + key-set test; 2-3 describe('assigneeProtected') covers own/foreign/absent caller, fresh/stale/garbage non-DEAD owner, DEAD/missing x running/finalizing/reconciling/closed, foreign-worker and other-task attempts, unassigned and '' ids, fail-closed malformed records; 4 fixture knobs + 13 node tests; 5 gate above.\nponytail: lean already, net: -0 lines possible. Finalizing-window note left for consumer task-6aa460bb.",
+  "requiredCheckAtDone": null
+}

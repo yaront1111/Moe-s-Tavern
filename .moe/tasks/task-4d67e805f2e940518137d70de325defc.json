@@ -1,0 +1,252 @@
+{
+  "id": "task-4d67e805f2e940518137d70de325defc",
+  "epicId": "epic-be924fb8",
+  "title": "bug: claim_next_task's file-collision notice doesn't mark which colliding peers are live and mentions nobody, so two live seats editing one file learn of it only at landing",
+  "description": "Observed twice on 2026-10-30, both times on docs/MCP_SERVER.md.\n\n1. 03:43:45Z: the collision notice for task-915d7e84 listed bc8410af among 8 peers. bc8410af's completion landing (03:44Z) held docs/MCP_SERVER.md as MOE_ATTR_CONTESTED_UNTOUCHED(task-915d7e84). QA then rejected bc8410af at 03:50Z because its docs never reached HEAD.\n2. 06:16:18Z: the collision notice for task-574c0b36 listed the live CQ-V03 (task-9cc13170, worker-e60b90bd, started 06:14Z) among 5 peers. 574c0b36's landing e67ca0e (06:22:35Z) committed V03's in-progress MCP_SERVER.md hunks under 574c0b36's id. Nothing was lost, but both workers and both QA reviews had to untangle the attribution by hand.\n\nRoot cause: claimNextTask.ts (about line 741) builds the notice from util/affectedFiles.ts computeFileCollisions. That function treats every nonterminal row that declares the file alike: a peer that is assigned and actively being edited looks the same as an unassigned row that is still waiting on its dependencies. It then posts to #workers with no @mentions. chat_wait only wakes a seat on a mention or a human message, so nobody is paged. The claim response's fileCollision array carries the same undifferentiated list.\n\nWanted: flag the colliding peers that are live (assigned to a registered, non-DEAD worker), and page those seats plus the claimer, so they can coordinate before either one lands. Keep it advisory: the claim is never blocked.",
+  "definitionOfDone": [
+    "Each claim_next_task response fileCollision entry whose peer task is assigned to a registered, non-DEAD worker carries that worker's id (for example liveAssignee). Entries for unassigned peers, or peers held by a DEAD seat, carry none. Unit tests cover all three cases.",
+    "When at least one colliding peer is live, the #workers notice @mentions each live peer's assignee and the claiming worker, so their chat_wait wakes, and lists the live peers before the dormant ones. A claim whose only collisions are dormant posts no mention. Tests assert the message's mentions in both cases.",
+    "The claim is never blocked or delayed by collision computation (a failure is still swallowed), and the docs/MCP_SERVER.md claim_next_task section describes the new field."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first, in packages/moe-daemon/src/tools/governanceFeatures.test.ts. Put them next to the existing 'claiming a task with overlapping files returns a fileCollision warning, does not block' test. That test must stay green unchanged: its worker-a is never registered, so it gets no liveAssignee.\n\nShared fixture: setupMoe('TURBO'); writeEpic(); plus a second epic 'epic-2' written the same way. writeTask task-B: WORKING, unassigned, one plan step with affectedFiles ['src/foo.ts']. WORKING peers, each with a step on 'src/foo.ts':\n- task-live: epicId 'epic-2', assigned 'worker-live'. It must be in a different epic: the single-worker-per-epic+status rule (claimNextTask.ts ~605) skips a teamless claimer whose epic+status a live other worker already holds.\n- task-unassigned: assignedWorkerId null.\n- task-dead: assigned 'worker-dead'.\n- task-gone: assigned 'worker-gone', which is never registered.\nThen `await state.load()`. After load, register with state.createWorker: 'worker-live' (status 'CODING', currentTaskId 'task-live', epicId 'epic-2') and 'worker-dead' (status 'DEAD'). Claim with `claimNextTaskTool(state).handler({ workerId: 'worker-b', statuses: ['WORKING'], taskId: 'task-B' }, state)`. Capture chat with `state.subscribe(e => ...)`, keeping MESSAGE_CREATED events (payload is the message, `routingTargets` the routed seats). Unsubscribe in finally.\n\nCases:\n(a) DoD 1, liveness: `fileCollision` toEqual exactly, sorted by task id as today: task-dead, task-gone, task-live, task-unassigned. Each has files ['src/foo.ts']. Only task-live carries `liveAssignee: 'worker-live'`. The other three must have no liveAssignee key at all. This covers unassigned, DEAD-held and unregistered-held.\n(b) DoD 2, live notice: exactly one MESSAGE_CREATED event whose payload.content contains 'file collision on task-B'. Its payload.mentions toEqual ['worker-live', 'worker-b']. Its routingTargets toEqual ['worker-live', 'worker-b']: those are exactly the seats whose chat_wait wakes (chatWait.ts isRelevant). 'task-live' appears before each dormant id in the content. 'worker-dead' and 'worker-gone' never appear in it.\n(c) DoD 2, dormant-only: the same fixture without task-live and worker-live. task-B and task-unassigned both also list 'packages/@scope/x.ts'. Then payload.mentions toEqual [] and the content still names task-unassigned, task-dead and task-gone. RED today: the raw '@scope' in a path parses as a mention (mentionRouter.ts parseRawMentions).\n(d) DoD 3, a failure is swallowed: after load, corrupt one peer in memory so the scan throws: `(state.tasks.get('task-unassigned')!.implementationPlan[0] as unknown as { affectedFiles: unknown }).affectedFiles = 42;` (collectTaskAffectedFiles then throws 'not iterable'). The claim resolves with hasNext true and no `fileCollision` key, and state.getTask('task-B').assignedWorkerId is 'worker-b'. RED today: computeFileCollisions runs outside any try, so the tool throws AFTER the assignment and attempt were written. If something earlier in the claim path trips on the corrupt peer instead, find an injection that only the collision scan reaches, and say so in the step note.\n(e) Mention safety: a live peer whose registered assignee id is not one mention token, e.g. 'worker x' (in its own epic). The response entry still carries liveAssignee 'worker x'. The notice's payload.mentions toEqual ['worker-b'] and routingTargets toEqual ['worker-b']. Unfiltered, '@worker x' at line start would parse as the group token 'worker' and page every worker seat.\n\nRun `npx vitest run src/tools/governanceFeatures.test.ts` and record the RED output. (a), (b), (d) and (e) fail; (c) fails on '@scope'. The suite's other tests pass. From WSL, run it in the Linux-native snapshot described in step 4.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts"
+      ],
+      "note": "RED (Linux-native snapshot /tmp/moe-4d67-gate.hM9aKi, env -i, node v24.21.0): `npx vitest run src/tools/governanceFeatures.test.ts` → Tests 5 failed | 14 passed (19). (a) fileCollision lacks liveAssignee; (b) mentions [] not ['worker-live','worker-b']; (c) mentions ['scope'] not [] (raw '@scope' in a path parses as a mention); (d) 'TypeError: number 42 is not iterable' thrown from computeFileCollisions at claimNextTask.ts:741, after the assignment was written; (e) liveAssignee undefined. The pre-existing collision test stays green. Deviation from plan (e): state.createWorker validates ids ([A-Za-z0-9_-] via validateEntityId), so 'worker x' cannot be registered through the API; the fixture creates the worker with a safe id and re-keys the in-memory record to 'worker x', standing in for a hand-edited workers/*.json. (d) injection (affectedFiles=42) is reached only by the collision scan, as planned. Shared tree: claimNextTask.ts and governanceFeatures.test.ts had no foreign dirty hunks before my edit.",
+      "startedAt": "2026-10-30T06:50:01.215Z",
+      "completedAt": "2026-10-30T06:51:35.914Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN in packages/moe-daemon/src/tools/claimNextTask.ts, in the collision block at ~734-752 (the response spread at ~835 needs no change). claimNextTask.ts is also declared by the dormant WORKING row task-af83018e (CQ-V09). Edit it only with a wrapper-observed editing tool, so the skip-untouched landing takes it; a shell write leaves no witness and it would be held as MOE_ATTR_CONTESTED_UNTOUCHED.\n\n1. Liveness. `let fileCollision: Array<FileCollision & { liveAssignee?: string }> = [];` Import the FileCollision type from ../util/affectedFiles.js; leave affectedFiles.ts itself untouched. Inside `try { ... } catch (error) { logger.warn({ error, taskId: task.id }, '...'); fileCollision = []; }` (logger is already imported), map computeFileCollisions' result. For each entry, look up the peer with state.tasks.get(c.task). When `peer?.assignedWorkerId && !state.isTaskAssignedToInactiveWorker(peer)`, return `{ ...c, liveAssignee: peer.assignedWorkerId }`; otherwise return c untouched, with no key. This is the claim path's own claimability predicate: missing or DEAD means inactive. It never looks at idle time, because a quiet seat is still live (workerStore.ts isTaskAssignedToInactiveWorker). Keep the response array's existing task-id order.\n\n2. Notice, still in its own try/catch and still awaited (one bounded append, as today).\n- describe(c) = `${c.task}: ` followed by the first 3 files, each wrapped in an inline code span (backtick, file, backtick), joined by ', ', plus '…' when there are more. Code spans are blanked by stripQuotedSpans, so an '@' inside a path is never a mention.\n- live = entries with liveAssignee; dormant = the rest.\n- No live entry: post exactly `⚠️ file collision on ${task.id}: ${dormant.map(describe).join(' | ')}`. That is today's wording, with no mention.\n- Otherwise: page = the unique ids of [...live assignees in order, params.workerId when set], filtered with /^\\w[\\w-]*$/ (the token grammar of parseRawMentions in util/mentionRouter.ts). An id that cannot round-trip as one mention, say one with spaces or newlines, is never written with '@', so it cannot smuggle in a group token. Content: `${page.map(id => '@' + id).join(' ')} ⚠️ file collision on ${task.id}. Live: ${live.map(describe).join(' | ')}`, then `; dormant: ${dormant.map(describe).join(' | ')}` when there are dormant entries, then `. Coordinate before either of you lands.` Do not print assignee ids anywhere else in the content; the structured liveAssignee carries the mapping for the claimer.\n- Update the block comment above to match: advisory, never blocks the claim, live peers paged.\n\nThe error handling and edge cases are tested in step 1:\n- A computation failure leaves fileCollision [] (no key in the response) and logs a warning.\n- A post failure is swallowed as today, and postToRoleChannel also catches internally.\n- No workerId: page only the live assignees.\n- A claimer that is also a live assignee is deduped.\n- A live assignee that equals the claimer's id cannot happen in practice; dedupe covers it anyway.\nRe-run `npx vitest run src/tools/governanceFeatures.test.ts src/util/affectedFiles.test.ts` until all pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts"
+      ],
+      "note": "GREEN in the snapshot: `npx vitest run src/tools/governanceFeatures.test.ts src/util/affectedFiles.test.ts` → 2 files, 48 tests passed. claimNextTask.ts: added markLivePeers (state.isTaskAssignedToInactiveWorker predicate, no idle heuristic), describeCollision (code-quoted files, first 3, backtick swapped for a quote), collisionNotice (live first; page = unique live assignees + claimer filtered by /^\\w[\\w-]*$/; dormant-only keeps today's wording with no mention), and wrapped the computation in try/catch with logger.warn. Added one test beyond the plan, (f): a path containing a backtick would end its code span early and could page a seat; covered by the quote swap. Edits went through the Edit tool only (wrapper-observed). git diff of claimNextTask.ts showed only my hunks.",
+      "startedAt": "2026-10-30T06:51:37.551Z",
+      "completedAt": "2026-10-30T06:52:36.493Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs (DoD 3), docs/MCP_SERVER.md, `### moe.claim_next_task` section only.\n(1) Response shape line ~1426 becomes `fileCollision?: Array<{ task: string, files: string[], liveAssignee?: string }>,  // advisory only`.\n(2) In the `fileCollision[]` bullet ~1454, after its first sentence, add:\n- An entry whose peer task is assigned to a registered, non-DEAD worker carries `liveAssignee`, that worker's id. This is the claimability predicate, so a quiet seat is still live. Unassigned peers, and peers held by a missing or DEAD seat, carry none.\n- When at least one peer is live, the `#workers` heads-up @mentions each live assignee and the claimer, which wakes their `chat_wait`, and lists the live peers before the dormant ones.\n- A heads-up with only dormant peers mentions nobody.\n- File names in the heads-up are code-quoted.\n- A failure computing collisions never fails the claim: it is logged, and the response omits `fileCollision`.\nKeep everything else in the bullet.\n\nThis file is contested: it is declared by four WORKING rows, one of them live (task-a9d1a74d, worker-fe18a9a9, CQ-V04). Rules:\n- Edit it only with a wrapper-observed editing tool, and only these two spots.\n- Immediately before complete_task, run `git diff -- docs/MCP_SERVER.md`. It must show only this task's two hunks.\n- If another task's in-progress hunks are present, never revert, stash or rewrite them. Post in #workers mentioning that task's assignee so they know the hunks will ride this completion commit, and name the carried hunks in the completion summary so QA can attribute them. That is the hand-untangling this task exists to prevent.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Two edits in the claim_next_task section only (Edit tool): response shape line (liveAssignee?: string) and the fileCollision[] bullet (liveAssignee meaning, live-peer paging + ordering, dormant-only mentions nobody, code-quoted files, failure never fails the claim). `git diff -U0 -- docs/MCP_SERVER.md` shows exactly these two hunks (@@ -1438 and @@ -1466); the 12 peer lines that were dirty earlier landed in HEAD b25131b (CQ-V04) meanwhile, so no foreign hunks ride this task.",
+      "startedAt": "2026-10-30T06:52:38.115Z",
+      "completedAt": "2026-10-30T06:52:50.367Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate. Run it once, fresh, after steps 1-3. This is the complete_task evidence.\n\nclaim_next_task's response is a shared wire surface, even if the change is additive, so run the full daemon suite plus the typecheck: `cd packages/moe-daemon && npx tsc --noEmit && npm test`. Exit 0, quoting the Test Files and Tests totals.\n\nFrom WSL the in-tree node_modules are Windows-native, so follow mem:gotcha-daemon-linux-snapshot-gate:\n- `git archive HEAD` of the whole repo into a scratch dir.\n- Overlay ONLY this task's three files (an explicit list, never `git diff --name-only`).\n- `npm ci` in packages/moe-daemon, or symlink a native install with an equal lockfile.\n- Run under `env -i HOME=$HOME PATH=<nvm node bin>:/usr/local/bin:/usr/bin:/bin NO_COLOR=1`.\n- `cmp` the three files against the shared tree before citing the run, and say in the evidence that it ran in the snapshot.\nAlso type-check the test file with a scratch tsconfig: extends ./tsconfig.json, include only src/tools/governanceFeatures.test.ts, `\"types\": [\"node\"]`. The main tsconfig excludes tests.\n\nMutants (scratch copies, restored, cmp-verified). Count one as killed only on real test failures, not on a compile failure:\n- M1, no liveAssignee mapping: (a), (b) and (e) fail.\n- M2, dormant assignees also @mentioned: (c) fails, or (b) fails on 'worker-dead'.\n- M3, file names not code-quoted: (c) fails.\n- M4, the collision try/catch removed: (d) fails.\n- M5, the /^\\w[\\w-]*$/ filter removed: (e) fails.\n- M6, dormant listed before live: (b) fails.\nReport each mutant's result in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Gate ran in the Linux-native snapshot /tmp/moe-4d67-final.im3XN9 (git archive of HEAD b25131b, node_modules symlinked to a native install with an equal lockfile, env -i node v24.21.0). The 3 task files were overlaid by explicit list and cmp-verified against the shared tree. `cd packages/moe-daemon && npx tsc --noEmit && npm test` → exit 0, Test Files 199 passed (199), Tests 5549 passed | 16 skipped (5565). The test file type-checks with a scratch tsconfig (extends ./tsconfig.json, include only governanceFeatures.test.ts, types node): exit 0. Mutants on scratch copies of claimNextTask.ts (restored, cmp ok), each a real test failure not a compile failure: M1 no liveAssignee mapping → 3 failed (a)(b)(e); M2 liveness predicate dropped so DEAD/missing-held assignees are live and @mentioned → 5 failed (a)(b)(c)(e)(f); M3 files not code-quoted → 2 failed (c)(f); M4 try/catch removed → 1 failed (d); M5 MENTION_TOKEN filter removed → 1 failed (e); M6 dormant listed before live → 1 failed (b). Note: M2 is realized as dropping the predicate, because dormant entries carry no assignee for collisionNotice to mention.",
+      "startedAt": "2026-10-30T06:52:51.356Z",
+      "completedAt": "2026-10-30T06:54:03.413Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's own diff (load adversarial-self-review). Check:\n(a) The claim still never fails or waits on collisions. Every new line sits inside a try, the computation is synchronous over in-memory maps under the claim mutex, and nothing new does IO except the existing awaited post.\n(b) Liveness matches the claimability predicate exactly: missing or DEAD means dormant; quiet-but-registered means live. No idle-time heuristic.\n(c) A seat that dies between the computation and the post gets one stale advisory mention, which is harmless.\n(d) No raw id is written with '@' unless it is a single mention token, and nothing else in the content can form a mention: task ids are daemon-generated and paths are code-quoted.\n(e) The dormant-only wording is unchanged apart from the code-quoted files.\n(f) The response stays additive: liveAssignee is optional, there is no key on dormant entries, and the order is unchanged. The existing collision test and affectedFiles.test.ts stay green.\n(g) The 10 KB chat cap: a giant collision list makes the post fail, which is logged and the claim is unaffected (unchanged behaviour).\n(h) Re-check `git diff` for the three contested files right before complete_task, as in step 3. No .moe edits, no forbidden patterns.\nFix anything found, re-run the step 4 gate if any byte changed, then complete_task with the step 4 evidence and the step 1 RED output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review of the task's own diff (claimNextTask.ts, governanceFeatures.test.ts, docs/MCP_SERVER.md). (a) markLivePeers, computeFileCollisions and the notice build all sit inside a try; the scan is synchronous over in-memory maps under the claim mutex; the only IO is the existing awaited, internally-catching post. (b) Liveness uses state.isTaskAssignedToInactiveWorker, with no idle heuristic. (c) A seat dying between scan and post yields one stale advisory mention, harmless. (d) FOUND AND FIXED: an id that passes the token grammar but IS a group token (a seat named 'qa'/'all'/'worker') would write '@qa' at line start and page every seat; the filter now also requires !isGroupToken(id) (imported from util/mentionRouter.js), test (f) added. A path with a backtick could end its code span early; swapped for a quote, test (g). Task ids are daemon-generated. (e) Dormant-only wording is unchanged apart from code-quoted files. (f) Response is additive: optional liveAssignee, no key on dormant entries, order unchanged. (g) A giant list fails the post at the 10KB cap, logged, claim unaffected (unchanged). (h) git diff of the 3 files shows only this task's hunks (docs: exactly @@ -1438 and @@ -1466); no .moe edits, no forbidden patterns. Bytes changed after the first gate, so the step-4 gate was re-run: snapshot from HEAD 4773404, 3 files cmp-verified, tsc --noEmit && npm test exit 0, Test Files 199 passed, Tests 5550 passed | 16 skipped; test-file tsc exit 0; mutants M1-M7 all killed by real failures (M7 = group-token filter removed → (f)).",
+      "startedAt": "2026-10-30T06:54:05.283Z",
+      "completedAt": "2026-10-30T06:55:46.564Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 268.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:35:01.788Z",
+  "updatedAt": "2026-10-30T07:51:18.787Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:40:57.614Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T07:50:23.468Z",
+    "wallClockMs": 4165854
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555",
+    "worker-093a65d0",
+    "qa-ba3f4f35"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:49:02.919Z",
+  "planningNotes": {
+    "approachesConsidered": "1) Chosen: compute liveAssignee in claimNextTask.ts with the existing state.isTaskAssignedToInactiveWorker predicate, and build the notice there. The change stays in one runtime file, and util/affectedFiles.ts stays a pure file-overlap util. 2) Rejected: passing workers into computeFileCollisions. That widens a pure util's signature and its tests for no gain. 3) Rejected: reordering the response array live-first. The DoD only orders the notice, and the response order is an existing contract. 4) Rejected: blocking or delaying the claim on a live collision. The task says advisory only.",
+    "codebaseInsights": "Chat mentions are parsed from content: parseRawMentions in util/mentionRouter.ts strips code spans/blocks and matches /(?<![\\w@])@(\\w[\\w-]*)/. Group tokens ('worker', 'workers', 'all'...) address only in a line's addressing prefix. routeSystemMessage routes to the parsed mentions when there are any, otherwise to every non-IDLE, non-DEAD seat. chat_wait wakes when routingTargets includes the seat. The claimer's worker record is created or updated before the collision block (claimNextTask.ts ~664), so its mention resolves. Role channels are ensured on load (persistence.ts ensureRoleChannels). In tests, state.subscribe receives MESSAGE_CREATED with routingTargets. The single-worker-per-epic+status rule (~605) skips a teamless claimer when a live other worker holds the same epic+status, so the live peer in tests needs its own epic.",
+    "risks": "Contested landing:\n- claimNextTask.ts is declared by the dormant row task-af83018e (CQ-V09).\n- docs/MCP_SERVER.md is declared by four WORKING rows. One is live: task-a9d1a74d, worker-fe18a9a9.\n- Edit both with a wrapper-observed editing tool, check `git diff` for foreign hunks before complete_task, and never revert a peer's bytes.\n\nWSL gate: run it in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate). Never run `npm run build` in the shared tree: prebuild deletes the dist/ the live daemon runs from. Use `npx tsc --noEmit`.\n\nPre-existing and out of scope: other system lines in the claim path (#general 'claimed task', 'is online') print params.workerId raw. Worker ids are not validated anywhere; file that separately if it matters.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/util/affectedFiles.ts",
+      "packages/moe-daemon/src/util/mentionRouter.ts",
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "packages/moe-daemon/src/tools/chatWait.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:49:02.939Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:50:01.215Z",
+  "reviewStartedAt": "2026-10-30T06:56:06.699Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx tsc --noEmit && npm test",
+    "exitCode": 0,
+    "outputTail": "Ran in a Linux-native /tmp snapshot (git archive of HEAD 4773404, node_modules symlinked to a native install with an equal lockfile, env -i node v24.21.0); the 3 task files were overlaid by explicit list and cmp-verified against the shared tree.\n Test Files  199 passed (199)\n      Tests  5550 passed | 16 skipped (5566)\n   Duration  26.62s\nTest-file typecheck (scratch tsconfig, types node): exit 0.",
+    "reportedAt": "2026-10-30T06:56:06.699Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+    ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+    ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+    ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+    ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+    ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
+    ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
+  ],
+  "completionSummary": "claim_next_task's fileCollision entries now carry liveAssignee when the peer task is assigned to a registered, non-DEAD worker (the claim's own isTaskAssignedToInactiveWorker predicate, no idle heuristic); unassigned, DEAD-held and unregistered-held peers carry no key. The #workers notice @mentions each live assignee and the claimer (so their chat_wait wakes) and lists live peers before dormant ones; a dormant-only claim posts the old wording with no mention. File names are code-quoted (a raw '@scope' in a path used to parse as a mention); a backtick in a path is swapped for a quote; an id that is not one mention token, or is itself a group token (a seat named 'qa'), is never written with '@'. The collision scan now sits in a try/catch (logged, response omits fileCollision): before, a throw failed the tool AFTER the assignment and attempt were written. docs/MCP_SERVER.md: response shape + fileCollision[] bullet only. Tests: governanceFeatures.test.ts cases (a)-(g); RED run before the fix was 5 failed | 14 passed (a-e failing). Mutants M1 no mapping, M2 liveness predicate dropped, M3 no code-quoting, M4 no try/catch, M5 no token-grammar filter, M6 dormant listed first, M7 no group-token check: all killed by real test failures. Deviation from plan: state.createWorker only accepts [A-Za-z0-9_-] ids, so the 'worker x' case re-keys the in-memory worker record. Final git diff of the 3 files shows only this task's hunks (docs: @@ -1438 and @@ -1466); no foreign hunks ride this commit.",
+  "commits": [
+    {
+      "sha": "f4e99ab2178672579e901d9f4d6e417e6b119f8f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T06:49:12Z",
+      "paths": [
+        ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+        ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+        ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+        ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
+        ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T06:56:36.310Z",
+      "treeId": "fa6874186a25aa0a8d91945da766f554a6cb9fa3",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-66e8d7d1e9ef4ba281cdb2f505d47e7d"
+        },
+        {
+          "path": "packages/moe-daemon/src/tools/claimNextTask.ts",
+          "taskId": "task-af83018e892149a1a18cd6a946edeba5"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "b6a66475cbf1911b6c0db78f49ca312661dce190",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T07:45:49Z",
+      "paths": [
+        ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+        ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T07:51:18.787Z",
+      "treeId": "804dd0e3ceb9e6d09f0b503401541e8deddcb5b5",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-66e8d7d1e9ef4ba281cdb2f505d47e7d"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [
+    "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+    "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T07:45:49Z",
+    "at": "2026-10-30T07:51:18.787Z"
+  },
+  "completedAt": "2026-10-30T07:50:23.468Z",
+  "reviewCompletedAt": "2026-10-30T07:50:23.468Z",
+  "reviewSummary": "Reviewed completion f4e99ab2178672579e901d9f4d6e417e6b119f8f (tree fa6874186a25aa0a8d91945da766f554a6cb9fa3), contained on moe/work-2026-10-24 and origin's tracking ref. Non-board diff: +236/-13, net 223 LOC across the 3 planned files; remaining paths are daemon board records. Used a full git archive of that exact commit in /tmp/moe-4d67-qa.BdSmpP/repo, fresh native npm ci and scrubbed env (Node v24.21.0); no shared-tree overlays. Re-ran `cd packages/moe-daemon && npx tsc --noEmit && npm test`: exit 0, 199 files passed, 5550 passed / 16 skipped. Scratch test-file tsconfig with types node: `npx tsc -p tsconfig.qa.json`, exit 0. Re-ran governanceFeatures + affectedFiles: 2 files / 49 tests passed. Regression sensitivity: substituting only the parent claimNextTask implementation caused all 7 added cases to fail (7 failed / 14 passed); restored delivered bytes and cmp-verified all 3 task files against the commit. Verified liveAssignee uses registered/non-DEAD liveness (no idle heuristic), absent on unassigned/DEAD/missing owners; live-first notices target live peers plus claimer; dormant-only notices have no mentions; mention-token/group-token/path/backtick guards prevent unintended broadcasts. Scan failure leaves assignment intact and omits fileCollision; both scan and notice errors are fail-open. Existing API/state shapes remain backward-compatible, and both claim_next_task docs hunks landed. No forbidden patterns or weakened tests. Complexity pass: Lean already. Ship.",
+  "requiredCheckAtDone": null
+}

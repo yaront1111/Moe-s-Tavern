@@ -1,0 +1,261 @@
+{
+  "id": "task-185f728fd79c4658a86b8a0b40a66595",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-8] VS Code: Delivery section in task detail from the shared delivery corpus",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-3 (task-a5f39d5535404f6e9e59f762c046f5e0), which lands moe-jetbrains/src/test/resources/client-delivery.json. This row must pass that corpus UNCHANGED: it is a held-out test, and QA rejects a diff that edits it. A row VS Code cannot meet because JetBrains is wrong is filed against JetBrains, never edited.\n\nObjective: JetBrains' task detail shows a Delivery section (DeliveryPresentation.kt, MoeBundle keys moe.delivery.*): candidate SHA and base, the runner-reported check (command, exit-code verdict, outcome, source), whether the required check counted by policy, the reported delivery target and landed revision, and the owning attempt phase. The daemon serves it as task.delivery on /ws (packages/moe-daemon/src/server/WebSocketServer.ts, deliveryProjection from packages/moe-daemon/src/state/deliveryProjection.ts). VS Code drops it: src/types/moe.ts has no delivery type and TaskDetailPanel.ts renders nothing.\n\nDeliverable:\n- moe-vscode/src/types/moe.ts: the TaskDelivery shape (type-only; transpileModule elides it).\n- moe-vscode/src/panels/TaskDetailPanel.ts: an exported `deliveryRows(delivery)` returning `{ labelKey, value, fullValue, outcome }[]` with JetBrains' semantics; a `DELIVERY_LABELS` map from labelKey to English; and a Delivery section (title from moe.delivery.title) rendered with escapeHtml, PASS and FAIL styled, the full value in a title attribute, nothing rendered when the list is empty. Keep this code inside TaskDetailPanel.ts: three peer test files load the panel under node:vm with a strict require map, so a new value import breaks them (mem:gotcha-vscode-panel-strict-require-map).\n- new moe-vscode/tests/delivery-corpus.test.cjs: loads the corpus via `path.join(__dirname, '../../moe-jetbrains/src/test/resources/client-delivery.json')`, checks deliveryRows against every row (all failing ids reported together), checks DELIVERY_LABELS against the moe.delivery.* values parsed from moe-jetbrains/src/main/resources/messages/MoeBundle.properties (VSC-0's shared-strings rule), and renders one populated and one null delivery through the real panel HTML (fake webview, pattern in tests/task-blocker-visibility.test.cjs).\n\nTaskDetailPanel.ts is shared with VSC-9 and VSC-11: in shared-checkout mode do not run concurrently with them; after this project's worktree switch they merge independently.\n\nNot in scope: the board card, commit and landing lists, verification evidence, any moe-jetbrains file, the corpus.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo (the test reads moe-jetbrains files) into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/delivery-corpus.test.cjs runs every row of moe-jetbrains/src/test/resources/client-delivery.json through TaskDetailPanel's exported deliveryRows and passes, reporting all failing ids at once.",
+    "The same test asserts DELIVERY_LABELS equals the moe.delivery.* entries parsed from moe-jetbrains/src/main/resources/messages/MoeBundle.properties.",
+    "The rendered task-detail HTML for a populated delivery holds the Delivery title and one escaped row per expected entry in corpus order; for a null delivery it holds no Delivery section.",
+    "client-delivery.json and every moe-jetbrains file are unchanged by this task's diff (`git diff --exit-code <base> -- moe-jetbrains` exits 0).",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures, with task-blocker-visibility, task-time-budget and approval-paths passing unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the consumer test moe-vscode/tests/delivery-corpus.test.cjs FIRST, with the Write tool; it stays red until steps 2-3 land. Copy the harness shape of tests/task-blocker-visibility.test.cjs into this file (transpile, strict, loadModule, fakeVscode, panelDependencies with `vscode` and `./PlanReviewPanel`, renderDetail through TaskDetailPanel.createOrShow with a strict client stub and dispose in finally, and a makeTask fixture like its own). Never require that test file (mem:convention-vscode-renderer-tests, mem:gotcha-vscode-panel-strict-require-map). The corpus is `path.join(__dirname, '../../moe-jetbrains/src/test/resources/client-delivery.json')`, landed by VSC-3 (task-a5f39d55, plan revision 1): `{ version: 1, rows: [ { id, note, delivery, expect: [ { labelKey, value, fullValue, outcome } ] } ] }`, 16 rows D01..D16, and every expect entry spells all four members with outcome 'PASS', 'FAIL' or null. Never edit the corpus or any moe-jetbrains file. Its error handling: an unreadable or unparseable corpus or MoeBundle.properties fails with a message naming the path; every per-row check collects `<id>: ...` messages and ends in one assert, so all failing ids show at once. Tests:\n1. `every corpus row renders through deliveryRows`: version 1 and at least 12 rows. For each row compare `JSON.parse(JSON.stringify(panel.deliveryRows(row.delivery)))` with row.expect using util.isDeepStrictEqual. The JSON round trip strips vm-realm prototypes, and it drops an undefined outcome so that one cannot pass for null. Collect `\"<id>: expected <json>, got <json>\"` and finish with one assert.deepStrictEqual(failures, []).\n2. `DELIVERY_LABELS equals the bundle's moe.delivery.* entries`: parse moe-jetbrains/src/main/resources/messages/MoeBundle.properties with `/^(moe\\.delivery\\.[A-Za-z]+)=(.*?)\\r?$/gm`, the way managed-vm.test.cjs parses its codes. Assert at least 14 entries and that no value contains a backslash (a properties escape this parser does not decode). Then deepStrictEqual the parsed object with a JSON round trip of DELIVERY_LABELS (title plus 13 row keys), and assert every corpus labelKey has a label.\n3. `the task detail renders one escaped delivery row per expected entry`: render EVERY corpus row through the real panel with makeTask({ delivery: row.delivery }). Match rows across the HTML with step 3's markup contract, `/<div class=\"delivery-row(?: delivery-(pass|fail))?\"><div class=\"field-label\">([^<]*)<\\/div><div class=\"delivery-value\" title=\"([^\"]*)\">([^<]*)<\\/div><\\/div>/g` (the architect dry-ran it in node). Compare each match, in order, with its expected entry: the outcome class (pass, fail or none), escapeHtml(DELIVERY_LABELS[labelKey]), escapeHtml(fullValue) and escapeHtml(value). The test's escapeHtml is a local copy of the panel's five replacements (& < > \" '). A row with entries holds `<div class=\"section-title\">Delivery</div>` exactly once, inside `id=\"deliverySection\"`. A row with an empty expect (D01 null, D06 empty strings) holds neither `id=\"deliverySection\"` nor `delivery-row`. Also assert that D07's raw `<b>npm test</b>` never appears unescaped, and that the page's style block defines the `.delivery-pass` and `.delivery-fail` selectors.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/delivery-corpus.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/delivery-corpus.test.cjs"
+      ],
+      "note": "Wrote moe-vscode/tests/delivery-corpus.test.cjs (Write tool, new file): corpus replay of all rows via deliveryRows with failures collected into one assert, DELIVERY_LABELS vs MoeBundle.properties moe.delivery.* parse, rendered-HTML contract per corpus row (outcome class, escaped label/title/value, section order, title once, no section for empty), plus escaping, styling, absent-vs-null, and malformed-input tests. Red until steps 2-3. Peers' dirty paths (chat.js, MoeDaemonClient.ts, AgentSeatTracker.ts, other tests, .moe) left untouched.",
+      "startedAt": "2026-11-02T10:16:54.726Z",
+      "completedAt": "2026-11-02T10:17:49.332Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Types and the presentation port.\n- In moe-vscode/src/types/moe.ts, add a type-only `TaskDelivery` interface mirroring packages/moe-daemon/src/state/deliveryProjection.ts, with every member optional: currentCandidate {id, treeSha, shortSha, baseRevision}, latestCheckRun {command, exitCode, source, outcome}, requiredCheckSatisfied, deliveryReceipt {target, landedRevision}, attemptPhase. Add `delivery?: TaskDelivery | null` to Task, with a comment that the daemon serves it on /ws and the raw client passes it through untouched, like the blocker fields.\n- In moe-vscode/src/panels/TaskDetailPanel.ts, add these exports next to the blocker presentation block. Keep them inside the file with no new value import (mem:gotcha-vscode-panel-strict-require-map):\n  - `DeliveryOutcome = 'PASS' | 'FAIL'`;\n  - `DeliveryRow { labelKey: string; value: string; fullValue: string; outcome: DeliveryOutcome | null }`;\n  - `DELIVERY_TITLE_KEY = 'moe.delivery.title'`;\n  - `DELIVERY_LABELS: Record<string, string>`, the 14 moe.delivery.* entries copied exactly from moe-jetbrains/src/main/resources/messages/MoeBundle.properties lines 258-271;\n  - `deliveryRows(delivery: unknown): DeliveryRow[]`, a port of moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt plus MoeJson.parseDelivery's type guards, because VS Code receives raw wire JSON.\n- deliveryRows rules:\n  - Anything but a non-null, non-array object gives []. currentCandidate, latestCheckRun and deliveryReceipt get the same guard.\n  - A text member counts only as a non-empty string; anything else is absent, never coerced or thrown on.\n  - Row order: candidateSha, candidateBase, checkCommand, exit verdict, checkOutcome, checkSource, required-check verdict, receiptTarget, landedRevision, attemptPhase.\n  - candidateSha is treeSha when that is a non-empty string, else shortSha. An empty treeSha must fall back: a bare `??` would keep it (corpus D04).\n  - SHA rows (candidateSha, candidateBase, landedRevision) show value.slice(0, 8) and keep the full fullValue. Every other row has fullValue === value. outcome is null unless stated below.\n  - The exit verdict renders only when exitCode is a number that passes Number.isSafeInteger (the daemon's store contract; strings are never coerced). It passes iff code === 0 and the outcome is absent, empty or exactly 'passed': moe.delivery.checkPassed PASS. Otherwise a non-zero code gives moe.delivery.checkFailed FAIL, and exit 0 with any other outcome gives moe.delivery.checkNotPassed FAIL. The value is String(code).\n  - checkOutcome is shown verbatim, never whitelisted (anything but 'passed' fails closed). checkSource shows only 'runner-observed' or 'agent-reported'.\n  - requiredCheckSatisfied === true gives moe.delivery.requiredCheckCounted 'yes' PASS; === false gives moe.delivery.requiredCheckNotCounted 'no' FAIL; anything else gives no row.\n- Error handling: deliveryRows never throws on malformed input; every failed guard means \"no row\", as in JetBrains.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "note": "Added the type-only TaskDelivery plus Task.delivery?: TaskDelivery | null to moe.ts. Added DeliveryOutcome, DeliveryRow, DELIVERY_TITLE_KEY, DELIVERY_LABELS (14 entries, copied from MoeBundle.properties) and deliveryRows (port of DeliveryPresentation.rows + MoeJson guards; non-empty-string guard so an empty treeSha falls back; Number.isSafeInteger exit codes; never throws) to TaskDetailPanel.ts. No new import. Edit tool only. Peers' dirty paths untouched.",
+      "startedAt": "2026-11-02T10:17:51.104Z",
+      "completedAt": "2026-11-02T10:18:23.397Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Render the section in moe-vscode/src/panels/TaskDetailPanel.ts.\n- Add `private renderDelivery(task: Task): string` and call it in getWebviewContent directly after `<div id=\"blockerSection\">...</div>`. That is the order JetBrains' TaskDetailDialog uses: blocker, then delivery, then the editable fields.\n- It returns '' when deliveryRows(task.delivery) is empty. Otherwise it returns exactly this markup, each row on one line, which step 1's test matches:\n  - open: `<div class=\"delivery-section\" id=\"deliverySection\"><div class=\"section-title\">${escapeHtml(DELIVERY_LABELS[DELIVERY_TITLE_KEY])}</div>`;\n  - per row: `<div class=\"delivery-row[ delivery-pass| delivery-fail]\"><div class=\"field-label\">${escapeHtml(label)}</div><div class=\"delivery-value\" title=\"${escapeHtml(row.fullValue)}\">${escapeHtml(row.value)}</div></div>`, where label = DELIVERY_LABELS[row.labelKey] ?? row.labelKey;\n  - close: `</div>`.\n- Every daemon-supplied string is runner-reported text and goes through the existing escapeHtml. Never interpolate one raw.\n- Add CSS next to .blocker-text:\n  - `.delivery-section { margin-bottom: 12px; }`;\n  - `.delivery-value { font-size: 12px; font-family: var(--vscode-editor-font-family); white-space: pre-wrap; word-wrap: break-word; }`;\n  - `.delivery-pass .delivery-value { color: var(--vscode-testing-iconPassed); }`;\n  - `.delivery-fail .delivery-value { color: var(--vscode-testing-iconFailed); }`.\n- The section is read only: no action, no copy button, no client call (the strict client stubs in three peer tests would throw).\n- Leave live refresh through media/taskDetail.js out of scope. VSC-11 edits that file, and the architect noted the gap on the epic-final row VSC-18. Leave media/taskDetail.js unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "note": "Added private renderDelivery (exact markup contract: div.delivery-section#deliverySection > div.section-title + div.delivery-row[.delivery-pass|.delivery-fail] > div.field-label + div.delivery-value[title=fullValue]; every string via escapeHtml; '' when no rows), called directly after #blockerSection and before the editable fields, plus the 4 CSS rules next to .blocker-text. media/taskDetail.js untouched. Edit tool only.",
+      "startedAt": "2026-11-02T10:18:24.529Z",
+      "completedAt": "2026-11-02T10:18:40.373Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Gate in fresh Linux-native snapshots. Never run npm in the shared checkout (GLOBAL rail; mem:gotcha-vscode-gate-from-wsl). Use the checkRef's env -i PATH for every node and npm call.\n1) Red/green: build a snapshot the way the checkRef does, but overlay only tests/delivery-corpus.test.cjs. Run `npm ci --no-audit --no-fund`, then `node --test tests/delivery-corpus.test.cjs`. It must FAIL, because HEAD has no deliveryRows or DELIVERY_LABELS. Then overlay moe.ts and TaskDetailPanel.ts and rerun: it passes.\n2) Mutant, in that snapshot copy only: make deliveryRows pass every exit 0 whatever the outcome, with an exact-string replace asserted to hit once. The focused test must fail and name D09 and D10. Then discard the snapshot.\n3) Run the checkRef verbatim (it builds a new snapshot). Confirm exit 0 and 0 failures. Report the test count against the 882a4c39 baseline (388 tests, 384 pass, 4 skip) plus this file's tests, peers' landed tests included. Confirm task-blocker-visibility, task-time-budget and approval-paths pass.\nError handling for a red run:\n- A red row here is most likely a port slip: re-read DeliveryPresentation.kt first.\n- If a corpus row is genuinely wrong because JetBrains is wrong, never edit the corpus and never bend deliveryRows to it. Comment on task-a5f39d55 with moe.add_comment, naming the row, and stop.\n- A failure in a file this task never touched that ties to a peer's wip checkpoint follows mem:gotcha-snapshot-gate-peer-wip-checkpoint: disclose it, and never report_blocked on it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/delivery-corpus.test.cjs",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/delivery-corpus.test.cjs",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "note": "Gate in git-archive snapshots under env -i, nvm Node v24.21.0, never npm in the shared checkout. (1) RED: snapshot of HEAD + only the new test: node --test fails exit 1 ('deliveryRows is not a function'). GREEN: overlaying moe.ts + TaskDetailPanel.ts gives 9/9 pass. (2) Mutants, snapshot only: exit-0-always-passes fails D09 and D10 (as required); raw ?? treeSha fails D04; unescaped title fails D07[0]; unescaped value fails D07; slicing the receipt target fails D15/D16; policy verdict inferred from the run fails D07-D10; string exit coerced fails the malformed-input test. Real file restored: 9/9 again. (3) checkRef verbatim (fresh snapshot): exit 0 - lint 0, compile 0, npm test: tests 451, pass 447, fail 0, skipped 4 (baseline 882a4c39: 388 tests, 384 pass, 4 skip; +63 = this file's 9 plus peers' tests already on HEAD). task-blocker-visibility, task-time-budget and approval-paths together: 60/60 pass, unchanged. Scratch snapshots deleted. No peer wip checkpoint failure seen.",
+      "startedAt": "2026-11-02T10:18:41.363Z",
+      "completedAt": "2026-11-02T10:19:43.924Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff, the only review step.\n- Would the corpus test still pass if deliveryRows:\n  - used `treeSha ?? shortSha` (D04 must fail);\n  - cut a non-SHA target (D15);\n  - inferred the policy verdict from the last run (D13, D14);\n  - whitelisted an unknown outcome as passed (D10);\n  - returned undefined instead of null outcomes (the JSON round trip must make that fail);\n  - or emitted rows in JSON member order (D16)?\n- Would the HTML test fail if escapeHtml were dropped from the value or from the title attribute? Does any daemon string reach the HTML without escapeHtml?\n- Malformed input (numbers, arrays, null members, a string exitCode) must never throw.\n- No value import was added to TaskDetailPanel.ts, and no new client member is touched.\n- Confirm with `git status --porcelain` that the task touched only moe-vscode/src/types/moe.ts, moe-vscode/src/panels/TaskDetailPanel.ts and moe-vscode/tests/delivery-corpus.test.cjs.\n- Confirm `git diff --exit-code HEAD -- moe-jetbrains/src/test/resources/client-delivery.json moe-jetbrains/src/main/resources/messages/MoeBundle.properties` exits 0 (DoD 4; after landing, QA checks `git diff --exit-code <landing>^ <landing> -- moe-jetbrains`).\n- Peers own every other dirty path: never revert, stage or commit them.\n- Report the three files in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/delivery-corpus.test.cjs",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/delivery-corpus.test.cjs",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "note": "Adversarial self-review of the diff (git diff on my paths). Corpus-strength mutants, run in a snapshot copy only, all fail named rows: treeSha ?? shortSha -> D04; slicing the receipt target -> D15/D16; policy verdict inferred from the run -> D07-D10; exit-0-always-passes -> D09 and D10; unescaped title attribute -> D07[0]; unescaped value -> D07; a string exit code coerced -> the malformed-input test. The JSON round trip turns an undefined outcome into null-vs-missing and fails the deepStrictEqual. Row order is fixed in code (D16 reverses JSON members and passes). Malformed input (null, number, string, array, wrong-typed members, string/fractional/unsafe exit codes) returns no row and never throws, pinned by 3 tests. Every daemon string goes through escapeHtml (label, title, value); DELIVERY_LABELS is indexed only by internal keys. No value import added to TaskDetailPanel.ts (still vscode and ./PlanReviewPanel) and no new client member touched; peers' task-blocker-visibility/time-budget/approval-paths 60/60 pass. getWebviewContent only reaches renderDelivery after the `!task` early return. git status: this task touched only moe.ts, TaskDetailPanel.ts and the new test; `git diff --exit-code HEAD -- moe-jetbrains moe-vscode/media/taskDetail.js` exits 0 (corpus, MoeBundle.properties and taskDetail.js unchanged). Known, deliberate limits: the section renders once with the initial HTML, so a delivery change while the panel is open does not refresh (live refresh lives in media/taskDetail.js, owned by VSC-11, noted on VSC-18); an exit code outside Int32 renders in VS Code but JetBrains drops it (JetBrains MoeJson gap recorded in mem:decision-client-corpus-conventions, not pinned by the corpus). Scratch snapshots deleted.",
+      "startedAt": "2026-11-02T10:19:46.840Z",
+      "completedAt": "2026-11-02T10:20:09.402Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-a5f39d5535404f6e9e59f762c046f5e0"
+  ],
+  "priority": "HIGH",
+  "order": 9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:40:23.707Z",
+  "updatedAt": "2026-11-02T10:23:44.369Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:09:03.837Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T10:23:08.774Z",
+    "wallClockMs": 844937
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956",
+    "worker-4c1da905",
+    "qa-564d8bce"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:15:59.386Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code's task detail shows JetBrains' Delivery section. TaskDetailPanel's exported deliveryRows ports DeliveryPresentation.rows plus MoeJson's wire guards and passes the shared corpus moe-jetbrains/src/test/resources/client-delivery.json unchanged. DELIVERY_LABELS equals MoeBundle's moe.delivery.* entries. The initial panel HTML renders one escaped row per entry directly after the blocker section, PASS/FAIL styled, with the full value in a title attribute, and renders nothing for an empty list.",
+    "acceptanceCriteria": [
+      "tests/delivery-corpus.test.cjs runs every client-delivery.json row through the exported deliveryRows and reports all failing ids in one assertion.",
+      "The same test asserts DELIVERY_LABELS equals the 14 moe.delivery.* entries parsed from MoeBundle.properties.",
+      "Rendering every corpus row through the real panel gives one escaped delivery-row per expected entry in corpus order, the Delivery title once for a non-empty list, and no deliverySection for D01 and D06.",
+      "The exit-0-always-passes mutant fails D09 and D10 in a snapshot copy.",
+      "The checkRef exits 0 with 0 failures, and task-blocker-visibility, task-time-budget and approval-paths pass unchanged."
+    ],
+    "invariants": [
+      "No value import is added to TaskDetailPanel.ts and no new MoeDaemonClient member is touched, so the strict require maps and client stubs in three peer tests stay green.",
+      "client-delivery.json, MoeBundle.properties, every other moe-jetbrains file and media/taskDetail.js are unchanged.",
+      "Every daemon-supplied string reaches the HTML through escapeHtml.",
+      "No npm or node test command runs in the shared checkout; gates run in mktemp snapshots under env -i with nvm Node v24.21.0."
+    ],
+    "compatibility": [
+      "Task.delivery is optional and nullable; a task without delivery renders exactly as before, with no section."
+    ],
+    "approvedScope": [
+      "TaskDetailPanel.ts exports DeliveryOutcome, DeliveryRow, DELIVERY_TITLE_KEY, DELIVERY_LABELS and deliveryRows, plus a private renderDelivery called after #blockerSection.",
+      "Markup contract: div.delivery-section#deliverySection > div.section-title + div.delivery-row[.delivery-pass|.delivery-fail] > div.field-label + div.delivery-value[title=fullValue].",
+      "moe.ts: a type-only TaskDelivery and Task.delivery?: TaskDelivery | null."
+    ],
+    "reuse": [
+      "tests/task-blocker-visibility.test.cjs: transpile/strict/loadModule/renderDetail harness and makeTask fixture shape.",
+      "tests/managed-vm.test.cjs: the MoeBundle.properties line regex.",
+      "TaskDetailPanel.ts escapeHtml and the .section-title/.field-label styles."
+    ],
+    "sourceAssumptions": [
+      "VSC-3 (task-a5f39d55, plan revision 1) lands client-delivery.json as { version: 1, rows: [ { id, note, delivery, expect: [ { labelKey, value, fullValue, outcome } ] } ] } with 16 rows D01..D16; D01 null and D06 empty strings expect []; D07 command is ' <b>npm test</b> '; D09 and D10 are exit 0 with a non-passed outcome.",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt rows() and moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt parseDelivery define the semantics being ported.",
+      "moe-vscode/src/panels/TaskDetailPanel.ts value-imports only vscode and ./PlanReviewPanel; live updates go through postMessage updateTask to media/taskDetail.js.",
+      "moe-jetbrains TaskDetailDialog.createCenterPanel orders the blocker wrapper, then the delivery wrapper, then priority."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc8-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/types/moe.ts moe-vscode/src/panels/TaskDetailPanel.ts moe-vscode/tests/delivery-corpus.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "deliveryRows takes the raw wire object (unknown) and carries MoeJson's type guards itself, because VS Code has no parser layer, so the same corpus bytes drive both clients. Exit codes follow the daemon contract (Number.isSafeInteger) rather than JetBrains' Int range. The corpus does not pin out-of-Int codes, and JetBrains dropping them is a recorded JetBrains gap (mem:decision-client-corpus-conventions). Rejected: re-rendering the whole HTML on every state change for live refresh, which would lose unsaved edits and the scroll position. Deferred: live refresh through media/taskDetail.js, which is not in this DoD and is a file VSC-11 owns; noted on VSC-18. The pinned single-line markup lets the test match rows by regex without a DOM parser.",
+    "codebaseInsights": "Panels load under node:vm with strict require maps and strict client proxies (three peer tests), so helpers stay inside TaskDetailPanel.ts. vm-realm return values fail deepStrictEqual on prototypes; round-trip them through JSON first. The webview CSP allows inline styles. The initial HTML is built once in the constructor, and later updates go through postMessage to media/taskDetail.js.",
+    "risks": "TaskDetailPanel.ts is shared with VSC-9 and VSC-11; in shared-checkout mode do not run concurrently with them. The corpus is held out: a corpus edit is an automatic QA reject. The snapshot must be the WHOLE repo, because the test reads moe-jetbrains files. A HEAD carrying a peer's red wip checkpoint can turn the full gate red (mem:gotcha-snapshot-gate-peer-wip-checkpoint). The test count grows as peers land tests, so compare against the baseline and name the new file's count.",
+    "keyFiles": [
+      "moe-vscode/src/panels/TaskDetailPanel.ts",
+      "moe-vscode/src/types/moe.ts",
+      "moe-vscode/tests/task-blocker-visibility.test.cjs",
+      "moe-vscode/tests/managed-vm.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "287d86c5b049711ed6c788f8ee61a36d07ce87be",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:15:59.410Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T10:16:54.727Z",
+  "reviewStartedAt": "2026-11-02T10:20:34.855Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc8-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/types/moe.ts moe-vscode/src/panels/TaskDetailPanel.ts moe-vscode/tests/delivery-corpus.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 451\nℹ suites 0\nℹ pass 447\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\n(gate exit=0; lint and compile clean; 0 failing tests; delivery-corpus 9/9; task-blocker-visibility + task-time-budget + approval-paths 60/60)",
+    "reportedAt": "2026-11-02T10:20:34.855Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/delivery-corpus.test.cjs",
+    "moe-vscode/src/types/moe.ts",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    ".moe/tasks/task-185f728fd79c4658a86b8a0b40a66595.json",
+    ".moe/tasks/task-7fa27666bdb94325b62c205e3599b165.json"
+  ],
+  "completionSummary": "VS Code task detail now shows JetBrains' Delivery section. TaskDetailPanel.ts exports DeliveryOutcome, DeliveryRow, DELIVERY_TITLE_KEY, DELIVERY_LABELS (14 entries equal to MoeBundle's moe.delivery.*) and deliveryRows (port of DeliveryPresentation.rows plus MoeJson's wire guards; empty treeSha falls back to shortSha, exit verdict only for safe-integer codes, never throws), and a private renderDelivery placed directly after #blockerSection (div.delivery-section#deliverySection, PASS/FAIL rows, full value in a title attribute, every string through escapeHtml, nothing for an empty list). moe.ts gets a type-only TaskDelivery and Task.delivery?: TaskDelivery | null. New tests/delivery-corpus.test.cjs replays all 16 rows of client-delivery.json UNCHANGED (all failing ids in one assert), compares DELIVERY_LABELS with the bundle, renders every row through the real panel HTML, and pins escaping, styling, absent-vs-null and malformed input (9 tests). Mutants in a snapshot copy: exit-0-always-passes fails D09 and D10; treeSha ?? shortSha fails D04; sliced target fails D15/D16; unescaped title/value fail D07. No value import added, media/taskDetail.js and every moe-jetbrains file unchanged (git diff --exit-code HEAD exits 0). Gate: checkRef verbatim in a git-archive snapshot exit 0, lint 0, compile 0, 451 tests, 447 pass, 0 fail, 4 skip (baseline 388; +9 here, rest peers' landed tests); task-blocker-visibility, task-time-budget, approval-paths 60/60. Limits: the section renders once with the initial HTML (live refresh is media/taskDetail.js, VSC-11/VSC-18); an exit code outside Int32 renders here but JetBrains drops it (recorded gap, not pinned).",
+  "commits": [
+    {
+      "sha": "ff0e829073301f09b03beb4b9744958956e53ff5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T10:16:01Z",
+      "paths": [
+        ".moe/tasks/task-185f728fd79c4658a86b8a0b40a66595.json",
+        ".moe/tasks/task-7fa27666bdb94325b62c205e3599b165.json",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/tests/delivery-corpus.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T10:21:16.579Z",
+      "treeId": "eff550880da653a0d78a938f558e4aed7f3ead61",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/delivery-corpus.test.cjs",
+    "moe-vscode/src/types/moe.ts",
+    "moe-vscode/src/panels/TaskDetailPanel.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-564d8bce@2026-11-02T10:21:23Z",
+    "at": "2026-11-02T10:23:44.369Z"
+  },
+  "completedAt": "2026-11-02T10:23:08.774Z",
+  "reviewCompletedAt": "2026-11-02T10:23:08.774Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit ff0e8290 (recorded, pushed, on moe/work-2026-10-24 == HEAD).\nRe-ran checkRef verbatim in a fresh git-archive snapshot outside the checkout (env -i, nvm Node v24.21.0): npm ci, lint 0, compile 0, npm test 451 tests / 447 pass / 0 fail / 4 skip. Unmasked focused run: delivery-corpus + task-blocker-visibility + task-time-budget + approval-paths = 69/69 (60 peers unchanged). Mutant in snapshot only (passed = code === 0): corpus test failed naming D09 and D10; restored 9/9. No npm/node test in the shared checkout; scratch deleted.\nDoD 1-3: all client-delivery.json rows replayed through exported deliveryRows, failures in one assert (JSON round trip, so undefined never passes for null); DELIVERY_LABELS deepStrictEqual to MoeBundle moe.delivery.*; every row rendered through the real createOrShow with a markup regex (outcome class, escaped label/title/value, order), title once in #deliverySection, after blocker and before editable fields, no section for D01/D06/null/absent.\nDoD 4: git diff --exit-code ff0e8290^ ff0e8290 -- moe-jetbrains moe-vscode/media exits 0.\nDoD 5: gate exit 0, 0 failures.\nRead DeliveryPresentation.kt and MoeJson.parseDelivery against deliveryRows: same order, empty-treeSha fallback, 8-char SHA rows, exit verdict rule, source whitelist, verbatim outcome, boolean-only policy verdict. Never throws; all daemon strings via escapeHtml; no new value import.\nSize: gross 444 lines excl .moe (159 production, 285 test, mostly copied harness); reviewed in full, not rejected on size.\nUnverified: JetBrains (untouched). Disclosed non-defects: no live refresh (media/taskDetail.js, VSC-11/18); exit code outside Int32 renders here, JetBrains drops it.",
+  "requiredCheckAtDone": null
+}

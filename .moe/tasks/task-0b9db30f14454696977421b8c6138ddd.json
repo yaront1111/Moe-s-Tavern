@@ -1,0 +1,198 @@
+{
+  "id": "task-0b9db30f14454696977421b8c6138ddd",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: daemon openProjectGit refusal misses worktree-scoped Git config",
+  "description": "packages/moe-daemon/src/util/cachedPlanPaths.ts:134 refuses partialclone/promisor/core.worktree repos via `git config --local --includes --get-regexp`, but --local never reads $GIT_DIR/config.worktree, which Git applies to every command once extensions.worktreeConfig=true. So `git config --worktree remote.o.promisor true` (or core.worktree) passes the refusal, and per the code's own comment Git <2.44 ignores GIT_NO_LAZY_FETCH. Same defect QA found in CQ-R09b (task-697fb2de19324ccb851defaf9f24043b, fixed there by dropping --local since system/global are env-masked; repro row E7 in scripts/tests/local-runner-snapshot.test.mjs).",
+  "definitionOfDone": [
+    "openProjectGit's config refusal reads every unmasked scope (local, worktree, command line), and a test with extensions.worktreeConfig=true plus a --worktree promisor or core.worktree key is refused",
+    "Daemon tests for cachedPlanPaths pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix the refusal scope in packages/moe-daemon/src/util/cachedPlanPaths.ts, and pin its argv in cachedPlanPaths.test.ts (DoD 1).\n\n- openProjectGit (line ~134): drop '--local'. The call becomes ['config', '--includes', '--get-regexp', '^(extensions\\\\.partialclone|remote\\\\..*\\\\.promisor|core\\\\.worktree)$'].\n  - With no scope flag, Git reads every unmasked scope: local, worktree ($GIT_DIR/config.worktree, which Git applies once extensions.worktreeConfig=true) and the command line.\n  - readOnlyGitEnv already masks system and global (GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null or NUL) and strips every inherited GIT_*, including GIT_CONFIG_PARAMETERS.\n  - This is the same fix QA required in CQ-R09b's source-export.mjs (repro row E7 in scripts/tests/local-runner-snapshot.test.mjs).\n- Update the comment above it to say this, and why --local is wrong: it never reads config.worktree. Keep the error text 'local Git config sets <key>; ...' unchanged, so the existing it.each rows pass unchanged.\n- Exit 1 from `git config --get-regexp` with no match is already '' through runGit's config exit-1 rule; keep it.\n- Error handling: unchanged. Any Git failure still rejects through failure(); a match still throws the refusal.\n- In cachedPlanPaths.test.ts, add one row with the mocked runner: the config call's args deep-equal the exact array above, so '--local' is absent.\n- Leave src/benchmarks/maintenanceWorkloads.ts alone. Its copy is a benchmark workload description of historical code, not live behavior.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.test.ts"
+      ],
+      "note": "Dropped --local; added argv pin row. Many peer dirty paths noted, untouched.",
+      "startedAt": "2026-10-29T17:43:25.233Z",
+      "completedAt": "2026-10-29T17:43:36.571Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Real-Git regression rows in a NEW packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts (DoD 1).\n\nIt must be a separate file, because cachedPlanPaths.test.ts mocks node:child_process and ./gitExecutable.js for the whole file.\n- Build fixtures as repositorySource.test.ts's fixture() does: a mkdtemp repo; execFileSync('git', ...) with env stripped of GIT_* plus GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL (/dev/null, or NUL on win32); `git init`, a user, and one commit. Remove the roots in afterEach.\n- Call openProjectGit(root) with the REAL default runner.\n\nRows:\n- A plain repository resolves, and its git('rev-parse --show-toplevel', ...) works.\n- With `git config extensions.worktreeConfig true`:\n  - `git config --worktree remote.o.promisor true` rejects with a message containing 'remote.o.promisor';\n  - `git config --worktree core.worktree <root>` rejects with 'core.worktree'. Setting the repo root itself keeps the earlier toplevel check passing, so the CONFIG refusal is what fires;\n  - an include.path in config.worktree, pointing at a file that sets remote.o.promisor, rejects (--includes).\n- Control: the same promisor key in config.worktree WITHOUT extensions.worktreeConfig resolves. Git ignores that file then, so the check is no stricter than Git itself.\n\nMutation pin: putting '--local' back must fail the three worktree rows. Check it once in a scratch copy, and say so in your step note.\n\nError handling in the test: fixture git failures throw (execFileSync) and fail the row, never skip it.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts"
+      ],
+      "note": "6 real-Git rows incl. HOME .gitconfig masked control. Mutation (--local restored in scratch snapshot) failed the 3 worktree rows + argv pin.",
+      "startedAt": "2026-10-29T17:43:37.345Z",
+      "completedAt": "2026-10-29T17:44:21.749Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run this once, fresh: `cd packages/moe-daemon && npx vitest run cachedPlanPaths requiredChecks planReuse repositorySource`. These are the cachedPlanPaths tests (DoD 2) plus every openProjectGit caller's suite.\n\nOn WSL the in-tree node_modules is Windows-native. Run it in a Linux snapshot as the Serena memory gotcha-daemon-linux-snapshot-gate describes:\n- `git archive HEAD` of the whole repo;\n- overlay ONLY this task's three files;\n- npm ci under env -i with the nvm Node 24 PATH;\n- set NO_COLOR=1.\nExit 0 is required, and its output tail is the complete_task verification evidence. cmp the overlaid files against the worktree before citing the run.\n\nNote peers' dirty paths and continue. Error handling for the gate: fix a failure's cause, never weaken a row, then re-run the whole command.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Linux snapshot gate: 9 files, 559 tests passed, exit 0; owned files cmp-identical.",
+      "startedAt": "2026-10-29T17:44:22.426Z",
+      "completedAt": "2026-10-29T17:44:34.388Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the diff. Load the adversarial-self-review skill first.\n\nCheck that:\n- no scope is left unread: a local include.path, includeIf, config.worktree, and command-line -c values passed by the runner;\n- GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT/KEY/VALUE and GIT_DIR are stripped by readOnlyGitEnv;\n- dropping --local cannot newly read system or global config: both stay env-masked, and a HOME .gitconfig with the key must not trigger a refusal. Add a row if that is not already implied;\n- the refusal message never echoes more than the key name;\n- requiredChecks, planReuse and repositorySource keep their behavior.\n\nFix anything found with a row, then re-run step 3's command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.test.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts"
+      ],
+      "note": "Reviewed: readOnlyGitEnv strips all GIT_* (PARAMETERS/COUNT/DIR) and masks system/global; HOME .gitconfig control row already added; -c args from readOnlyGitArgs don't match the regexp; message echoes only first token (key). No new findings; step-3 run stands (no code changed since).",
+      "startedAt": "2026-10-29T17:44:35.579Z",
+      "completedAt": "2026-10-29T17:44:50.059Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 251.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T12:21:36.378Z",
+  "updatedAt": "2026-10-29T18:53:24.518Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:59:00.892Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T18:52:57.698Z",
+    "wallClockMs": 6836806
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-fe18a9a9",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T17:00:44.465Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected these options:\n- Adding '--worktree' as a second call. Two calls, and command-line scope would still be missed.\n- Listing scopes explicitly with --show-scope. More parsing for the same answer.\nDropping --local, as CQ-R09b did, is the minimal fix: system and global are already env-masked.",
+    "codebaseInsights": "- readOnlyGitEnv (cachedPlanPaths.ts:37) strips GIT_* and sets NOSYSTEM, GLOBAL=/dev/null or NUL, NO_LAZY_FETCH and TERMINAL_PROMPT=0.\n- runGit treats config exit 1 as ''.\n- openProjectGit's callers are requiredChecks.ts, planReuse.ts, planReuseState.ts and repositorySource.ts.\n- cachedPlanPaths.test.ts mocks child_process for the whole file, so the real-Git rows need their own file.\n- repositorySource.test.ts:113 fixture() is the real-Git fixture pattern.",
+    "risks": "- On WSL, daemon tests need the Linux snapshot gate.\n- core.worktree pointing elsewhere is refused earlier by the toplevel check, so the row must point at the root itself to reach the config refusal.\n- Windows CI: `git config --worktree` needs Git >= 2.20, which runners have.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+      "packages/moe-daemon/src/util/cachedPlanPaths.test.ts",
+      "packages/moe-daemon/src/context/repositorySource.test.ts",
+      "scripts/local-runner/source-export.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T17:00:44.558Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T17:43:25.233Z",
+  "reviewStartedAt": "2026-10-29T17:44:52.943Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx vitest run cachedPlanPaths requiredChecks planReuse repositorySource (Linux snapshot, env -i, node v24.21.0, NO_COLOR=1)",
+    "exitCode": 0,
+    "outputTail": "✓ src/context/planReuseState.test.ts (117 tests)\n Test Files  9 passed (9)\n      Tests  559 passed (559)\nexit=0",
+    "reportedAt": "2026-10-29T17:44:52.943Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+    "packages/moe-daemon/src/util/cachedPlanPaths.test.ts",
+    "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts",
+    ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
+    ".moe/tasks/task-3b4e3833e3c74927b4cdf455663cf6b4.json",
+    ".moe/tasks/task-9048e7ec78c34af1a7805c4c4129196e.json"
+  ],
+  "completionSummary": "openProjectGit config refusal now drops --local, so config.worktree (extensions.worktreeConfig=true) and command-line scopes are read; system/global stay env-masked. Added argv pin row in cachedPlanPaths.test.ts and new cachedPlanPaths.git.test.ts (6 real-Git rows: plain, worktree promisor, worktree core.worktree, include.path via config.worktree, control w/o extension, HOME .gitconfig masked). Mutation (--local restored) fails the 3 worktree rows + argv pin.",
+  "commits": [
+    {
+      "sha": "5f497451db8dab305b0c8fe682f2dfe06959b0af",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T17:42:57Z",
+      "paths": [
+        ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
+        ".moe/tasks/task-3b4e3833e3c74927b4cdf455663cf6b4.json",
+        "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.test.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T17:45:18.865Z",
+      "treeId": "d02948e053c0a232cbe32675a05bec92f3a0222d",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+          "taskId": "task-3e5c59e3b719413783e067455f567721"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "16c20c47ce0bebeee22cef069ffc0ab1fda0df9d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T18:51:24Z",
+      "paths": [
+        ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
+        ".moe/tasks/task-9048e7ec78c34af1a7805c4c4129196e.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T18:53:24.518Z",
+      "treeId": "f6695ba6b21da22b3b31719756c71310d8956766",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T18:51:24Z",
+    "at": "2026-10-29T18:53:24.518Z"
+  },
+  "completedAt": "2026-10-29T18:52:57.698Z",
+  "reviewCompletedAt": "2026-10-29T18:52:57.698Z",
+  "reviewSummary": "Reviewed completion commit 5f497451 (on moe/work-2026-10-24; recorded, pushed=true) via git show, not the dirty tree. Source diff is +6/-2 in cachedPlanPaths.ts: '--local' dropped from the openProjectGit config --get-regexp call, so Git reads local, config.worktree (once extensions.worktreeConfig=true) and command-line scopes. readOnlyGitEnv still strips every GIT_* and sets GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL=/dev/null (NUL on win32), so system and global stay masked. The -c args from readOnlyGitArgs (protocol.allow, safe.directory) do not match the regexp. The error text is unchanged and echoes only the key name. Tests: +9 in cachedPlanPaths.test.ts (argv deep-equal pin, no --local) and a new cachedPlanPaths.git.test.ts of 62 lines with 6 real-Git rows: plain repo; worktree promisor; worktree core.worktree; include.path via config.worktree; control with the extension off (resolves, as Git does); and HOME .gitconfig masked. Total commit code/test diff is about 75 LOC, well under 400. Re-ran the verification myself in a fresh Linux snapshot (git archive 5f497451, npm ci, node v24.21.0, env -i, NO_COLOR=1): `npx vitest run cachedPlanPaths requiredChecks planReuse repositorySource` gave 9 files / 559 tests passed, exit 0, with the three owned files cmp-identical to the worktree. Mutation probe: restoring '--local' in the scratch copy fails the argv pin and the 3 worktree rows (promisor, core.worktree, include.path) and leaves the plain, off-extension and HOME-masked rows green, so the tests bite. DoD 1 and DoD 2 are both met. Not verified: Windows runtime (NUL global mask path) and Git older than 2.43 (the sandbox has 2.43.0). The commit's Moe-Contested note on cachedPlanPaths.ts (task-3e5c59e3) did not leak any peer hunk into this diff. No ponytail-level complexity findings.",
+  "requiredCheckAtDone": null
+}

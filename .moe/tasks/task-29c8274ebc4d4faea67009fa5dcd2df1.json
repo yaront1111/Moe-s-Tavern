@@ -1,0 +1,243 @@
+{
+  "id": "task-29c8274ebc4d4faea67009fa5dcd2df1",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M01e] Profile readiness admission",
+  "description": "Objective: Apply one fail-closed effective-profile admission rule consistently to explicit claims, ranked work and waiters.\n\nDeliverable: Reuse resolveTaskExecutionProfile and assertExecutionProfileReady for explicit task claims, ranked candidate pools, own-seat resumes and wait_for_task matching. An unavailable strict task must not be assigned or have its existing attempt closed; explicit calls return a concrete refusal, and ranked/wait pools must not produce wake-claim-refuse spin. Read stored strict snapshots even when current project selection rolls back. Coordinate with the task-store progression backstop from M01c; no environment, missing-identity compatibility branch or direct project-file setting may silently launch strict work through native/legacy execution.\n\nExisting implementation surfaces / proposed focused tests (maximum five files): packages/moe-daemon/src/delivery/executionProfile.ts; packages/moe-daemon/src/delivery/executionProfile.test.ts; packages/moe-daemon/src/tools/claimNextTask.ts; packages/moe-daemon/src/tools/waitForTask.ts; proposed new packages/moe-daemon/src/tools/executionProfileAdmission.test.ts.\n\nNOT in scope: Certifying/starting VMs, changing existing legacy assignment/finalizing/reconciliation semantics, implementing session receipts, approved revision proof, or weakening old held-out delivery tests. Verification (fresh, exit 0): cd packages/moe-daemon && npm test -- --maxWorkers=4. Run in a synchronized isolated copy with native Linux dependencies and Linux-only PATH; preserve the original Windows node_modules and unchanged package-lock.json. Each slice owns its behavior tests, one final verification/adversarial review, and no production activation. This breakdown defines deliverables, not per-task implementation steps.",
+  "definitionOfDone": [
+    "Explicit unavailable-profile claims fail with concrete readiness reasons before assignment, attempt closure/open, worker changes or other side effects.",
+    "Ranked claim and waiter integration tests agree on eligibility, preventing wake/refuse loops for unavailable strict work.",
+    "Own-seat resume and project rollback cannot bypass a stored strict profile; malformed profile/snapshot records fail closed.",
+    "Absent/legacy/observe task admission and existing finalizing/reconciliation holds remain compatible.",
+    "No environment/caller readiness label or native execution fallback can make verified-local available; cleanup/read-only diagnostics remain accessible.",
+    "Fresh `cd packages/moe-daemon && npm test -- --maxWorkers=4` exits 0 in the synchronized native-Linux copy, with actual pass/skip counts and output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Do not enable verified-local or claim approval, runner trust, hardware/isolation certification, or verified completion from a configuration snapshot.",
+    "Do not edit packages/moe-daemon/src/delivery/acceptance.test.ts or weaken existing held-out delivery assertions; add focused tests for new behavior.",
+    "No direct .moe edits or Git writes; wrappers own landing. Keep each implementation plan within five source/test files and normal sizing limits."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Preconditions, then TDD red. Load test-driven-development.\n\n**Preconditions**\n- Confirm CQ-M01c (task-0f7df75f…) and CQ-M01d (task-80dfde45…) are DONE.\n- Read what they landed:\n  - the taskStore progression backstop: strict = resolveTaskExecutionProfile(settings, task.executionPolicySnapshot) then assertExecutionProfileReady, and releases are never refused;\n  - the attempt executionPolicySnapshot captured at claim (detached copies, resume-first adoption).\n- This task adds claim admission that must agree with both.\n- Do NOT edit any of these: delivery/acceptance.test.ts, the leaf delivery/executionProfile.ts or its test, policy.ts, taskStore.ts, attemptStore.ts.\n\n**Create packages/moe-daemon/src/tools/executionProfileAdmission.test.ts (LF).**\n\nHarness: the real ToolTestHarness, the real claimNextTaskTool and waitForTaskTool handlers, and the real attemptStore.\n\nHelpers:\n- `seed(settings, tasks, attempts?)`: writes raw JSON, then calls state.load(). verified-local settings exist only as such a hand edit, because update_settings refuses them.\n- `STRICT = {version:2, profile:'verified-local', planRevision:1, deliveryPolicy:'local-branch'}`; also a v1 verified-local snapshot and a legacy snapshot.\n- `noSideEffects(fn, codeName)`: snapshot the tasks and attempts directory bytes plus the worker map, spy state.writeEntity, subscribe to events; then require the MoeError codeName and that nothing changed. This includes no auto-registered worker record for a new workerId.\n\nCases:\n\n**E: explicit claims (DoD 1)**\n- E1. Strict comes from three sources:\n  - settings hand-edited to verified-local with no snapshot;\n  - stored STRICT under legacy settings (a rollback);\n  - stored v1 verified-local.\n  For each, an explicit taskId claim is refused by noSideEffects(EXECUTION_PROFILE_NOT_READY, with the leaf's missingCapabilities). Do this:\n  - with a workerId;\n  - WITHOUT a workerId (the missing-identity branch opens no attempt but must still be refused);\n  - without processStartedAt/host.\n- E2. replaceExisting:true on a strict row held by a live other worker is refused. No WORKER_REPLACED happens, and that worker's attempt stays open.\n- E3. A strict row with a leftover running attempt from a released seat is refused. The leftover is NOT closed.\n- E4. Each of these is refused INVALID_INPUT naming the field, with no side effects:\n  - a malformed task snapshot: null, version 3, or an extra key;\n  - a malformed settings.executionProfile, 'VERIFIED-LOCAL'.\n- E5. Precedence stays as it is today:\n  - a strict row held by reconciliation gets the existing reconciliation refusal;\n  - a strict row with a foreign finalizing attempt gets ATTEMPT_FINALIZING.\n\n**R: resume (DoD 3)**\n- R1. Own-seat resume (an explicit claim of the caller's own assigned WORKING row) where the task snapshot is STRICT and settings are rolled back to legacy. Refused. The open attempt is unchanged (same id, phase and bytes) and the seat is kept.\n- R2. Legacy task snapshot, but the caller's own OPEN attempt snapshot is verified-local: refused.\n  - A malformed own-attempt snapshot is refused INVALID_INPUT.\n  - An own attempt without a snapshot plus a legacy task resumes exactly as before.\n- R3. The seat's ranked claim while it holds a strict task returns the existing alreadyAssigned hold answer, with its shape unchanged and no write.\n\n**P: ranked/waiter agreement (DoD 2)**\n- P1. A CRITICAL strict-by-snapshot WORKING task and a LOW legacy one. wait_for_task for W2 returns the LOW task immediately; W2's ranked claim then claims that same task. The strict row stays unassigned with no attempt.\n- P2. Only strict or malformed candidates.\n  - The ranked claim returns hasNext:false without throwing and writes nothing.\n  - wait_for_task (timeoutMs 1000, the floor) times out with no match, even though a metadata write on the strict task fires TASK_UPDATED during the wait.\n- P3. Settings verified-local: both tools skip every PLANNING, WORKING and REVIEW candidate. Then updateSettings to legacy: legacy-snapshot rows become claimable again, while STRICT rows stay skipped by both.\n- P4. Own-task waiter.\n  - W holds a strict WORKING row: wait_for_task(W, ['WORKING']) does not wake and times out, so there is no wake-refuse spin.\n  - W holds a legacy row: it still wakes immediately.\n\n**C: compatibility (DoD 4)**\n- C1. Absent, legacy and observe snapshots under legacy and observe settings. The explicit claim, ranked claim, own-seat resume and waiter wake all succeed exactly as before, with an attempt opened.\n- C2. The finalizing skip and the reconciliation refusal are unchanged for legacy tasks.\n\n**N: no fallback; cleanup stays usable (DoD 5)**\n- N1. None of these admit a strict task (the explicit claim is refused, the ranked claim skips it):\n  - vi.stubEnv('MOE_EXECUTION_PROFILE_READY', '1');\n  - injected claim args: ready:true, executionProfile:'legacy', executionPolicySnapshot set to a legacy snapshot.\n- N2. On strict rows these succeed: getContextTool, listTasksTool, and releasing the holding seat via releaseWorkerTasks or the release_task tool.\n\n**Scratch runner.** The shared node_modules is a Windows install: never touch it or package-lock.json.\n1. `D=$(mktemp -d /tmp/moe-m01e-test.XXXXXX)`\n2. `git -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar -x -C \"$D\"`\n3. `ln -s \"$(cat /tmp/moe-linux-test-root.latest)/repo/packages/moe-daemon/node_modules\" \"$D/packages/moe-daemon/node_modules\"`\n4. Copy the owned files in before each run.\n5. Run with MOE_* unset and the Linux-only PATH (exact env in step 5).\n\nConfirm the red is the missing admission, not a typo or harness error.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/executionProfileAdmission.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/executionProfileAdmission.test.ts"
+      ],
+      "note": "Preconditions: M01c (803a38d) and M01d (71c7dbe) landed on moe/work-2026-10-24. Read the taskStore backstop (assertProgressionReady = assertExecutionProfileReady(resolveTaskExecutionProfile(settings, task.executionPolicySnapshot)); a release is never a progression) and M01d's attempt capture (resume adopted first, detached copies).\n\nNew file src/tools/executionProfileAdmission.test.ts (LF), 39 cases:\n- E1 x9: 3 strict sources x 3 callers (new workerId, no workerId, workerId with identity);\n- E2, E3; E4 x4 (null, v3, extra key, upper-case setting);\n- E5/C2 x4: reconciliation and finalizing precedence, strict and legacy;\n- R1, R2 x4 (strict own attempt, malformed own attempt, no-snapshot resume, non-own strict leftover not consulted), R3;\n- P1-P4; C1 x6 (absent/legacy/observe x legacy/observe settings); N1, N2 x3.\n\nThe unchanged()/noSideEffects() helpers snapshot the tasks/, attempts/ and workers/ bytes plus the worker map, spy on writeEntity, and capture events.\n\nRED in isolated /tmp/moe-m01e-test.nvznOB (HEAD a3f1aeb archive, Linux node_modules, MOE_* unset, Linux PATH): 23 failed / 16 passed. Every failure is the missing admission: the claim assigned (TASK_UPDATED events) or the waiter matched the strict row. The 16 passes are the compatibility and precedence cases (E5/C2, R2 resume and non-own leftover, R3, C1, N2), which already hold at HEAD.\n\nShared tree: the 3 owned source files show as M but have no content diff (stat-only). They are LF in the working copy (git ls-files --eol w/lf), not CRLF as the plan assumed, so I keep LF. The shared tree has 441 other dirty paths that are not mine; I left them untouched.",
+      "startedAt": "2026-10-24T15:15:41.335Z",
+      "completedAt": "2026-10-24T15:21:39.715Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Shared predicate in packages/moe-daemon/src/util/claimEligibility.ts.\n\nThis file is where claim_next_task and wait_for_task already share their eligibility predicates: dependsOn, the finalizing hold and blockingHold. Its working copy is CRLF over an LF index, so edit in place, keep CRLF, and check with `git diff --ignore-cr-at-eol`.\n\nImports:\n- resolveTaskExecutionProfile, assertExecutionProfileReady and readExecutionPolicySnapshot from '../delivery/executionProfile.js' (the leaf, so no cycle);\n- currentAttempt beside the existing listAttempts import.\n\nExport `executionAdmissionRefusal(state, task, workerId?): MoeError | null`.\n1. **Task level.** Call `assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot))`. This is the live profile, floored by a stored verified-local task snapshot, so a project rollback cannot lower it. A stale snapshot revision does not matter.\n2. **Own-seat resume only.** This applies when `workerId` is given and `task.assignedWorkerId === workerId`. If `currentAttempt(state, task.id)` belongs to that worker, decode its executionPolicySnapshot with readExecutionPolicySnapshot. If one is present, assert its profile is ready too.\n   - Resuming an execution whose recorded identity is verified-local is refused.\n   - A successor claim records a fresh identity (CQ-M01d), so a non-own leftover attempt is never consulted.\n3. **Return and error handling.** Return null when admitted. Otherwise return the caught MoeError:\n   - EXECUTION_PROFILE_NOT_READY with missingCapabilities, or\n   - INVALID_INPUT naming executionPolicySnapshot / executionProfile for a malformed record or setting.\n   Re-throw anything that is not a MoeError. It never throws a MoeError and never writes.\n\nDoc comment covers:\n- why one predicate: a wait-visible but claim-ineligible row is the measured wake-claim-refuse spin;\n- explicit callers throw the result, while pools skip on non-null;\n- it agrees with the CQ-M01c store backstop, which uses the same task-level rule;\n- it grants nothing: passing it is not approval, readiness or trust;\n- no env var or caller label is consulted: the leaf's assertExecutionProfileReady stays the only readiness authority.\n\nGreen in $D: the E4/R2 decode expectations are reachable once steps 3 and 4 wire the predicate in. Run the file to see progress.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claimEligibility.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/claimEligibility.ts"
+      ],
+      "note": "Added `executionAdmissionRefusal(state, task, workerId?): MoeError | null` to util/claimEligibility.ts (+44/-1, LF kept; the working copy is LF, not CRLF).\n- Task level: assertExecutionProfileReady(resolveTaskExecutionProfile(settings, task.executionPolicySnapshot)), the same rule as the M01c backstop.\n- Own-seat resume only (workerId given and task.assignedWorkerId === workerId): the caller's own currentAttempt snapshot is decoded with readExecutionPolicySnapshot and its profile asserted. Non-own leftovers are never read.\n- Returns a caught MoeError (EXECUTION_PROFILE_NOT_READY or INVALID_INPUT naming the field) and re-throws anything that is not a MoeError. It never writes.\n- Imports come from the leaf delivery/executionProfile.js and currentAttempt from attemptStore (already imported there), so there is no cycle.\n- The doc comment covers the single predicate, throw vs skip, agreement with M01c, that admission grants nothing, and that no env var or caller label is read.\ntsc --noEmit (TS 7.0.2, isolated copy) exit 0, and a deliberate type-error probe was caught (exit 1). Behavior goes green once steps 3 and 4 wire it in.",
+      "startedAt": "2026-10-24T15:21:40.677Z",
+      "completedAt": "2026-10-24T15:22:15.378Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire claim_next_task in packages/moe-daemon/src/tools/claimNextTask.ts (CRLF working copy; keep CRLF).\n\n**1. Explicit taskId path.**\n- Insert `const admission = executionAdmissionRefusal(state, requested, params.workerId); if (admission) throw admission;` right AFTER the foreign-finalizing refusal.\n- It must come BEFORE `ownedBySelf`, the dependsOn gate, the isTaskClaimable / replaceExisting check, `tasks = [requested]` and therefore before every eviction write, the assignment write, openClaimAttempt, attempt closes and worker auto-registration.\n- It sits outside any `if (params.workerId)` block, so a workerId-less claim is refused too.\n- Own-seat resume gets no exemption. The predicate's own-attempt arm covers resume.\n- The existing reconciliation and finalizing refusals keep precedence.\n\n**2. Ranked pool.**\n- Add `.filter((t) => !executionAdmissionRefusal(state, t, params.workerId))` after the finalizing filter.\n- Comment: SKIPPED, never refused, for the same reason as the finalizing hold. The wrappers claim only through this pool, and a thrown refusal reads to the sh wrapper as a dead daemon. The filter must mirror wait_for_task's matcher, using the same predicate.\n\n**3. Unchanged:**\n- the held-task (alreadyAssigned) answer;\n- the response shapes;\n- the input schema (additionalProperties stays false, no new params);\n- CQ-M01d's attempt capture.\n\nError handling: the explicit refusal is the predicate's concrete MoeError, thrown before any write. The ranked path never throws for admission.\n\nGreen in $D: the E, R, N and C1 explicit/ranked cases. Also keep these green: src/tools/claimNextTask.test.ts, claimNextTask.contract.test.ts, claimNextTask.race.test.ts and src/state/attemptHandback.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/executionProfileAdmission.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "note": "claimNextTask.ts (+14, LF kept). It imports executionAdmissionRefusal.\n- Explicit path: `const admission = executionAdmissionRefusal(state, requested, params.workerId); if (admission) throw admission;` right after the foreign-finalizing refusal and before ownedBySelf, dependsOn, the replaceExisting/eviction branches, the assignment write, openClaimAttempt and worker registration. It is not inside any workerId block and has no own-seat exemption.\n- Ranked pool: `.filter((t) => !executionAdmissionRefusal(state, t, params.workerId))` after the finalizing filter, with a skip-never-refuse comment.\n- The held-task answer, response shapes, input schema and M01d capture are unchanged.\n\nIsolated run (MOE_* unset, Linux PATH) over the new file plus claimNextTask.test.ts, claimNextTask.contract.test.ts, claimNextTask.race.test.ts and state/attemptHandback.test.ts: 199 passed / 4 failed.\n- The 4 failures are exactly the waiter cases P1-P4 (wait_for_task still matches strict rows), which step 4 covers.\n- All E, R, N and C1 cases are green, and the 4 existing suites are fully green.",
+      "startedAt": "2026-10-24T15:22:16.380Z",
+      "completedAt": "2026-10-24T15:22:42.833Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Wire wait_for_task in packages/moe-daemon/src/tools/waitForTask.ts (CRLF working copy; keep CRLF). All edits are inside findMatchingTask.\n\n**(a) The caller's own-task match.** Add `&& !executionAdmissionRefusal(state, t, workerId)`.\n- A held strict row no longer wakes its waiter.\n- The existing `blockingHold(state, workerId)` line then returns NO_MATCH for that seat. That is the intended park: claim answers alreadyAssigned and the resume is refused concretely, so waking would only spin.\n\n**(b) The eligible pool.** Add `.filter((t) => !executionAdmissionRefusal(state, t, workerId))` after the finalizing filter.\n- Comment: the SAME predicate as claim_next_task's ranked pool. A drift here re-creates the wake-claim-refuse spin.\n\n**Performance.** Keep the cheap filters first: the predicate runs per candidate per waiter per task event. It builds an Error only for strict or malformed rows. Note that in a comment.\n\nError handling: the matcher never throws for admission. A malformed setting simply matches nothing, and the explicit claim reports the concrete reason.\n\nGreen in $D:\n- the P and C waiter cases, which completes the new file;\n- src/tools/waitForTask.test.ts;\n- src/tools/claimNextTask.contract.test.ts (it imports both tools);\n- src/state/stateModules.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/executionProfileAdmission.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "note": "waitForTask.ts (+14/-2, LF kept). All edits are inside findMatchingTask.\n- (a) The own-task match gains `&& !executionAdmissionRefusal(state, t, workerId)` as its last condition. A held strict row no longer wakes its waiter: blockingHold then answers NO_MATCH and the timeout returns the heldTaskRefusal payload.\n- (b) The eligible pool gains the same predicate as the last filter, after the finalizing one, so the cheap filters run first. Its comment covers per-event cost, Error construction only for strict or malformed rows, and never throwing.\n\nIsolated run (MOE_* unset, Linux PATH) over executionProfileAdmission.test.ts, waitForTask.test.ts, claimNextTask.contract.test.ts and state/stateModules.test.ts: 4 files, 101/101 passed. The new file is fully green (39/39).",
+      "startedAt": "2026-10-24T15:22:43.413Z",
+      "completedAt": "2026-10-24T15:23:07.898Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "The one verification gate. Run it in a fresh, synchronized native-Linux copy. Never use the Windows node_modules, and keep package-lock.json unchanged.\n\nSet up the copy:\n```\nD=$(mktemp -d /tmp/moe-m01e-gate.XXXXXX)\ngit -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar -x -C \"$D\"\nfor f in packages/moe-daemon/src/util/claimEligibility.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/waitForTask.ts packages/moe-daemon/src/tools/executionProfileAdmission.test.ts; do cp \"/mnt/d/projexts/moes/$f\" \"$D/$f\"; done\nNM=\"$(cat /tmp/moe-linux-test-root.latest)/repo/packages/moe-daemon\"\nLPATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nPATH=$LPATH node -e 'const [a,b]=process.argv.slice(1).map(p=>JSON.stringify(require(p)));process.exit(a===b?0:1)' \"$NM/package-lock.json\" \"$D/packages/moe-daemon/package-lock.json\" && ln -s \"$NM/node_modules\" \"$D/packages/moe-daemon/node_modules\"\n```\nIf the lockfiles differ, run `npm ci` in `$D/packages/moe-daemon` with the same env instead of linking.\n\nRun the suite:\n```\ncd \"$D/packages/moe-daemon\" && UNSET=$(env | grep -oE '^MOE_[A-Z_]+' | sed 's/^/-u /' | tr '\\n' ' ') && env $UNSET PATH=$LPATH npm test -- --maxWorkers=4\n```\nThen run `npx tsc --noEmit --incremental false` with the same env. Both must exit 0.\n\nAfter the run:\n- Record files, passed and skipped, against the full count CQ-M01d reported.\n- If anything goes red outside the owned files, re-run this recipe on a pristine HEAD copy to classify it before touching anything. Never weaken or skip a test.\n- Type-check the new test file once: `npx tsc --noEmit --ignoreConfig --target ES2022 --module ESNext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --resolveJsonModule src/tools/executionProfileAdmission.test.ts`.\n- Keep the npm test command line, exit code and output tail for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate in a fresh copy, /tmp/moe-m01e-gate.4eo10h:\n- built from a git archive of HEAD a3f1aeb plus the 4 owned files;\n- the lockfile is JSON-equal to the Linux root, and its node_modules are symlinked (the Windows node_modules are untouched);\n- every MOE_* is unset and PATH is Linux-only.\n\nResults:\n- `npm test -- --maxWorkers=4`: exit 0, Test Files 152 passed (152), Tests 3284 passed | 9 skipped (3293), 59.3s. That compares with M01d's 150 files and 3223/9: +39 are this task's new cases, and the rest are files that landed since.\n- `npx tsc --noEmit --incremental false`: exit 0.\n- Strict standalone tsc of src/tools/executionProfileAdmission.test.ts (--ignoreConfig ... --strict): exit 0.\n\nNothing went red, so no classification run was needed. The full log is at /tmp/moe-m01e-gate.log.",
+      "startedAt": "2026-10-24T15:23:08.392Z",
+      "completedAt": "2026-10-24T15:24:33.476Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Exactly one adversarial self-review of the four-file diff. Load adversarial-self-review and use `git diff --ignore-cr-at-eol`.\n\n**Mutation probes.** Run each alone in $D and record its red count:\n1. Drop the explicit-path refusal: the E cases go red. The ranked filter must not mask this.\n2. Move the refusal inside `if (params.workerId)`: only the E1 workerId-less case goes red.\n3. Move it after the assignment write: noSideEffects goes red.\n4. Drop the ranked filter: P1 and P3 go red.\n5. Drop the waiter pool filter: P2 goes red, with the waiter matching a strict row.\n6. Drop the own-task waiter filter: P4 goes red.\n7. Drop the own-attempt arm: R2 goes red.\n8. Consult a non-own leftover attempt: E3 or C1 goes red.\n9. Swallow malformed as admitted: E4 goes red.\n10. Put the refusal before the reconciliation/finalizing refusals: E5 goes red.\n\n**Then challenge:**\n- concurrent claims and waiters under the mutex;\n- many waiters times many strict rows: per-event cost, and Error construction only on strict rows;\n- a strict hold's alreadyAssigned answer leading to a refused resume. This is bounded by the wrapper resume cap. Note it for the CQ-M01 docs task rather than changing wrapper or claim response shapes here.\n- that no path consults env, caller args or a missing identity as readiness;\n- that legacy and observe behaviour is unchanged;\n- that cleanup and diagnostics stay usable;\n- that error handling leaks nothing beyond the existing refusal texts.\n\n**Confirm:**\n- CRLF is preserved;\n- acceptance.test.ts, the leaf, policy.ts, taskStore.ts and attemptStore.ts are byte-unchanged;\n- no .moe or Git writes;\n- no substring from the project's global forbiddenPatterns (project.globalRails).\n\nFix findings with tests. If any byte changed after step 5, rerun the step-5 command fresh and use that output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claimEligibility.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/executionProfileAdmission.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/claimEligibility.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/executionProfileAdmission.test.ts"
+      ],
+      "note": "Adversarial self-review of the 4-file diff: +72/-3 in production (ignore-cr) plus a new 452-line test file of plan-mandated case tables.\n\n**Mutation probes** (/tmp/moe-m01e-probes/probe.py: each applied alone in the scratch copy, then restored and cmp-verified). Every probe goes red:\n1. Drop the explicit refusal: 20 red (E1-E4, R1, R2, N1, P3). The ranked filter does not mask it.\n2. Refusal only when a workerId is given: 7 red, exactly the workerId-less callers (E1 x3, E4 x4).\n3. Refusal moved after the assignment write: 20 red (noSideEffects).\n4. Drop the ranked filter: 4 red (P1, P2, P3, N1).\n5. Drop the waiter pool filter: 3 red (P1, P2, P3).\n6. Drop the own-task waiter filter: 1 red (P4).\n7. Drop the own-attempt assert: 1 red (R2).\n8. Consult a non-own leftover: 1 red (R2 non-own case).\n9. Swallow INVALID_INPUT as admitted: 6 red (E4, P2, R2).\n10. Refusal placed before the reconciliation check: 2 red (E5).\n\n**Challenge results**\n- Concurrency: the claim runs under runExclusive. The predicate is a pure read and the matcher runs synchronously in the subscriber, so there is no new check-then-act.\n- Mirrors: grep shows the only claim-pool mirrors are these two tools. get_next_task is out of scope per the plan.\n- No env var, caller arg or missing identity is consulted; N1 proves it.\n- Legacy and observe behaviour is unchanged: C1 x6 and the full suite pass.\n- Cleanup and diagnostics stay usable (N2 x3).\n- Refusal texts are the existing leaf texts, so nothing new leaks.\n- CRLF: the working copies were LF and stay LF.\n- acceptance.test.ts, executionProfile.ts and its test, policy.ts and taskStore.ts are byte-unchanged. attemptStore.ts shows M but has no content diff (stat-only, not mine).\n- No .moe or Git writes, and no forbiddenPatterns substrings.\n\n**Theoretical (no change)**\n- Under verified-local settings, every candidate builds one MoeError (with its stack) per waiter per task event. That is about µs each, so a few ms for hundreds of rows × waiters. A non-throwing leaf probe is the upgrade path if it ever shows in a profile.\n- currentAttempt is O(attempts) and runs only for the caller's own assigned row.\n- For the CQ-M01 docs task: a seat whose held task turns strict gets alreadyAssigned. Its RESUME session is not refused at start_step; it is bounded by the M01c progression backstop (complete_task is refused) and the resume cap. Release frees it.\n\nNo bytes changed after the step-5 gate (the gate copy cmp-equals the shared tree), so that run stands as the evidence.",
+      "startedAt": "2026-10-24T15:24:33.863Z",
+      "completedAt": "2026-10-24T15:26:52.923Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-ad95cb270e9e46df8672eb094d0c1e74",
+  "dependsOn": [
+    "task-80dfde45cbd04e72a460c1ee867ae62c"
+  ],
+  "priority": "HIGH",
+  "order": 217.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T00:01:37.335Z",
+  "updatedAt": "2026-10-24T15:45:27.493Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T13:48:29.153Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-24T15:44:25.337Z",
+    "wallClockMs": 6956184
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "worker-07cd2c56",
+    "qa-b0c1741e"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T13:52:43.021Z",
+  "planningNotes": {
+    "approachesConsidered": "- **Where the shared predicate lives.** One predicate in util/claimEligibility.ts, not a new leaf helper. That file is documented as the single source both tools share for dependsOn, the finalizing hold and blockingHold, and it can read attempts. The leaf must stay pure and has no state.\n- **Description files skipped.** The leaf (executionProfile.ts) and its test are left unedited: its primitives are reused as-is, which keeps the plan at 4 files.\n- **Placement in the explicit path.** The refusal goes after the reconciliation and finalizing refusals, so the existing retryable holds keep their exact answers, and before ownedBySelf, dependsOn, eviction, assignment, the attempt open/close and worker registration. It is not inside `if (workerId)`; see gotcha-backstop-masks-untested-prewrite-guard.\n- **Ranked pool and waiter skip; they never throw.** A thrown refusal in the pool reads as a dead daemon to the sh wrapper. Explicit calls throw the concrete MoeError.\n- **Own-seat resume also checks the caller's own open attempt snapshot.** A resume continues the same execution, so its recorded identity matters. A successor records a fresh identity (CQ-M01d), so non-own leftover attempts are ignored and stay unclosed while the task is strict.\n- **Rejected: changing heldTaskRefusal or the wrappers for strict holds.** The alreadyAssigned answer plus a concrete resume refusal is bounded by the wrapper resume cap; this is noted for the docs task.",
+    "codebaseInsights": "- **claimNextTask.ts handler, in order:**\n  1. Governor redirect.\n  2. assertAgentClaimableStatuses.\n  3. blockingHold (alreadyAssigned) and the worker's own finalizing refusal.\n  4. Explicit path: notFound, assertNotHeldByReconciliation, status/epic, needsHumanReview, foreign finalizing, ownedBySelf, dependsOn, isTaskClaimable/replaceExisting, then `tasks = [requested]`.\n  5. Ranked filters: isTaskClaimable, needsHumanReview, dependsOn, finalizing.\n  6. The loop does eviction and the assignment write, then openClaimAttempt and worker auto-registration.\n- **waitForTask.findMatchingTask:**\n  - The own held task in a requested status wakes first.\n  - Then `blockingHold`, and NO_MATCH for any other active hold.\n  - Then the eligible pool mirrors the ranked filters, then the solo rule.\n  - It re-runs for every waiter on every task event.\n- **claimEligibility.ts** imports listAttempts and unmetDependsOn. All three files are CRLF working copies over LF indexes.\n- **Settings source:** verified-local settings come only from hand edits, because validators.ts refuses them in update_settings.\n- **wait_for_task** has a timeoutMs floor of 1000.\n- **get_next_task** does not mirror the claim pool and the wrappers do not use it, so it is out of scope.",
+    "risks": "- **Hot paths.** The claim and waiter matchers stay a no-op for legacy/observe projects, which the full suite plus C1 prove. Per-candidate cost is a decode, plus an Error build only for strict or malformed rows.\n- **Malformed settings** make every pool match nothing (fail closed). Only an explicit claim names the reason, so the docs task should surface it in doctor/diagnostics.\n- **A seat already holding a task that became strict** gets alreadyAssigned and then a refused resume, bounded by MOE_RESUME_MAX_ATTEMPTS. Release (cleanup) frees it, and CQ-M01c guarantees releases are never refused.\n- **Ordering.** The plan relies on CQ-M01c/M01d landing first; dependsOn gates the WORKING claim. The worker reads the landed code first.\n- **Test runs.** Use the isolated Linux copy, and unset MOE_* variables.\n- **Out of bounds:**\n  - no edits to acceptance.test.ts, the leaf, policy.ts, taskStore.ts or attemptStore.ts;\n  - no MCP surface;\n  - no activation;\n  - no .moe or Git writes.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/waitForTask.ts",
+      "packages/moe-daemon/src/delivery/executionProfile.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T13:52:43.104Z",
+  "workStartedAt": "2026-10-24T15:15:41.335Z",
+  "reviewStartedAt": "2026-10-24T15:27:14.622Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test -- --maxWorkers=4 (fresh isolated native-Linux copy /tmp/moe-m01e-gate.4eo10h: git archive HEAD a3f1aeb + the 4 owned files, cmp-equal to the shared tree; lockfile JSON-equal, Linux node_modules symlinked; every MOE_* unset; Linux-only PATH)",
+    "exitCode": 0,
+    "outputTail": " Test Files  152 passed (152)\n      Tests  3284 passed | 9 skipped (3293)\n   Start at  18:23:17\n   Duration  59.32s (tests 93%, import 4%, transform 2%)\n\nSame env: npx tsc --noEmit --incremental false -> exit 0; strict standalone tsc (--ignoreConfig --strict ...) of src/tools/executionProfileAdmission.test.ts -> exit 0.",
+    "reportedAt": "2026-10-24T15:27:14.622Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/executionProfileAdmission.test.ts",
+    "packages/moe-daemon/src/util/claimEligibility.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    ".moe/tasks/task-29c8274ebc4d4faea67009fa5dcd2df1.json",
+    ".moe/tasks/task-cfa74f1b01df4647b57a923bdd961b2a.json",
+    ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json",
+    ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json"
+  ],
+  "completionSummary": "CQ-M01e: one fail-closed execution-profile admission rule for every claim path.\n\nutil/claimEligibility.ts:\n- New `executionAdmissionRefusal(state, task, workerId?) -> MoeError | null`.\n- Task level: assertExecutionProfileReady(resolveTaskExecutionProfile(settings, task.executionPolicySnapshot)), the same rule as the M01c backstop, so a rollback cannot lower a stored verified-local floor.\n- Own-seat resume: also asserts the caller's own open attempt snapshot. Non-own leftovers are never read.\n- Returns EXECUTION_PROFILE_NOT_READY (missingCapabilities) or INVALID_INPUT naming the field. Never writes; no env var or caller label is read.\n\nclaimNextTask.ts:\n- Explicit taskId path throws the refusal after the reconciliation and foreign-finalizing refusals (precedence kept). That is before dependsOn, eviction/replaceExisting, the assignment write, attempt open/close and worker registration.\n- Not inside a workerId block, with no own-seat exemption.\n- The ranked pool SKIPS refused rows.\n\nwaitForTask.ts:\n- The same predicate on the own-task match and the eligible pool.\n- A held strict row parks through blockingHold rather than spinning.\n\nResponse shapes, input schema and M01d capture are unchanged.\n\nTests: new src/tools/executionProfileAdmission.test.ts, 39 cases: E1-E5, R1-R3, P1-P4, C1/C2, N1/N2. Before the change: 23 red / 16 green, and the 16 were compatibility cases.\n\nAll 10 mutation probes from the plan go red:\n- explicit drop: 20\n- workerId-gated: 7\n- after-assign: 20\n- ranked: 4\n- waiter pool: 3\n- own-waiter: 1\n- own-attempt: 1\n- non-own leftover: 1\n- swallow-malformed: 6\n- before-recon: 2\n\nGate: 152 files, 3284 passed / 9 skipped (M01d had 150 files and 3223/9). tsc exit 0.\n\nSize: production +72/-3. The test file is 452 lines of plan-mandated tables.\n\nUntouched: acceptance.test.ts, executionProfile.ts and its test, policy.ts, taskStore.ts, attemptStore.ts. No .moe or Git writes.\n\nThe working copies were LF, not CRLF as the plan said; LF was kept.\n\nTheoretical:\n- Und",
+  "commits": [
+    {
+      "sha": "a20baef3182b56ae9ab842614cc6f797dd110a2a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-24T15:14:22Z",
+      "paths": [
+        ".moe/tasks/task-29c8274ebc4d4faea67009fa5dcd2df1.json",
+        ".moe/tasks/task-cfa74f1b01df4647b57a923bdd961b2a.json",
+        ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/executionProfileAdmission.test.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/util/claimEligibility.ts"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-24T15:27:58.855Z",
+      "treeId": "b32077807d6ae19d55b068382bad7e5fded2e603",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "f81a2c34618e54084e51c43a507c763568804d4d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T15:40:10Z",
+      "paths": [
+        ".moe/tasks/task-29c8274ebc4d4faea67009fa5dcd2df1.json",
+        ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+        ".moe/tasks/task-cfa74f1b01df4647b57a923bdd961b2a.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T15:45:27.493Z",
+      "treeId": "47abeedb926d15a72adcb2ab23a1b1dd7c3ef37c",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/executionProfileAdmission.test.ts"
+  ],
+  "unattributedPaths": [
+    "2026-10-24-ai-code-quality-and-context.md"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T15:40:10Z",
+    "at": "2026-10-24T15:45:27.493Z"
+  },
+  "completedAt": "2026-10-24T15:44:25.337Z",
+  "reviewCompletedAt": "2026-10-24T15:44:25.337Z",
+  "reviewSummary": "Approved CQ-M01e. Reviewed completion a20baef (on moe/work-2026-10-24) with --ignore-cr-at-eol.\n\nGate re-run in a fresh isolated Linux copy: git archive a20baef; lockfile JSON-equal, Linux node_modules symlinked; env -i, no MOE_*, Linux-only PATH.\n- `npm test -- --maxWorkers=4`: exit 0. 152/152 files, 3293 passed / 9 skipped; the gain over the worker's 3284 is CQ-M03's tests. New file 39/39.\n- `tsc --noEmit`: exit 0.\n\nMy mutation probes all went red: explicit throw dropped 20, waiter pool filter 3, own-attempt assert 1. Restored, baseline 39/39.\n\nDoD:\n1. Refusal comes after the reconciliation/finalizing checks and before dependsOn, eviction, assignment, attempt open and worker registration. Not workerId-gated. E1-E4 use a byte and event no-side-effects check.\n2. One predicate covers the ranked pool and both waiter arms. P1-P4 show waiter and claim agree, with no strict wake.\n3. R1/R2: rollback and own-attempt snapshots fail closed, and malformed records give INVALID_INPUT (E4).\n4. C1/E5/C2: legacy and observe behaviour is unchanged.\n5. N1: env and injected args do not admit. N2: get_context, list_tasks and both release paths work on strict rows.\n6. Evidence reproduced.\n\nRails: acceptance.test.ts, executionProfile.ts and its test, policy.ts, taskStore.ts and attemptStore.ts are untouched. No forbidden patterns, no CRLF flip, nothing enables verified-local.\n\nSize: production +72/-3. The 452-line plan-mandated test file is not counted, following CQ-M precedent.\n\nNon-blocking:\n- The commit also carried peers' board records (cfa74f1b, deba1a56); that is wrapper behaviour.\n- For CQ-M01 docs: get_next_task does not mirror the pool.\n- A held-strict seat gets alreadyAssigned, and the M01c backstop and resume cap bound it.\n- Malformed settings empty pools silently; surface that in doctor.\n\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
+}

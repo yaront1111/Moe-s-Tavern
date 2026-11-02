@@ -1,0 +1,293 @@
+{
+  "id": "task-692a12df337c43edacb59fd0599ecff2",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-18a] Docs: worker role docs mode-aware for the landed worktree path (WT-04..WT-09)",
+  "description": "Split from WT-18 (task-1b2e6fe3ba1343c8ab02271510131155) at the governor's request. The human approved switching this project to worktree mode early (#general msg-717a48e0; human: \"cant we use worktrees and lets few coders runs?\", then \"lets dop it\"). The shape follows architect-0fcb7226 in #architects msg-ba081c4f.\n\nObjective: in worktree mode the wrapper starts the worker CLI inside .worktrees/<taskId> on moe/task/<taskId>; WT-04..WT-09 are all DONE. But docs/roles/worker.md lines 12-13 still tell workers to work in the project root and never in a .worktrees/ checkout. That would pull a worktree seat out into the control checkout. Make the worker role docs mode-aware, covering only behaviour that is already on HEAD.\n\nFiles:\n- docs/roles/worker.md, lines 12-13.\n- docs/roles/worker.reference.md: the using-git-worktrees row, the attribution paragraph, and where checkpoints and completions land.\n- packages/moe-daemon/src/generated/initFiles.ts, regenerated from a `git clone --shared` snapshot. WT-18's checkRefs[1] has the recipe, and the GLOBAL no-in-place-build rail applies.\n\nLine 12 (\"worktree mode gates every completion\") belongs here only if the planner confirms that HEAD's worktree path already ignores the gate scope. HEAD already runs `run_frozen_gate worktree` on the merged tree. Anything WT-10 still changes belongs to WT-18c.\n\nNOT in scope:\n- the unlanded route and the LANDING-CONFLICT:/LANDING-RETRY: resume (WT-11 has not landed; this goes to WT-18c);\n- CLAUDE.md, scripts/CLAUDE.md and docs/ARCHITECTURE.md (WT-18);\n- the .moe/roles copies, which are synced.\n\nThis row has no dependencies: no open row plans these files, and the behaviour it describes is on HEAD. It must land before this project's worktree switch.",
+  "definitionOfDone": [
+    "worker.md's landing rule is mode-aware. Shared mode keeps today's text about landing from the project root. Worktree mode says the wrapper already started you in .worktrees/<taskId> on moe/task/<taskId> and lands from there. Human-directed .worktrees/ checkouts are not forbidden outright, per the 10-30 WT-S note on WT-18.",
+    "worker.reference.md is mode-aware only as far as HEAD's wrappers go, and presents no WT-10 or WT-11 behaviour as shipped.",
+    "`npm run lint` passes (40-line cap); worker.md contains no concrete task id and keeps its test sentinels.",
+    "packages/moe-daemon/src/generated/initFiles.ts equals the generator output from the snapshot and changes only the worker-doc entries; the targetedContextGuidance, qaCommitPolicy and initFiles vitest files pass there.",
+    "The verification command exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "docs/roles/worker.md, line 13 only: make the landing rule mode-aware. Edit in place and add NO line. Lint caps the file at 40 lines, and it sits in every worker turn's stable system prefix, so stay terse.\n\nLeave line 12 (the qualityGate rule) byte-identical; the verification compares it with HEAD's. HEAD's worktree gate (run_frozen_gate worktree on the merged tree, the land lease) exists only in WT-10's still-WORKING checkpoint d3441bf3. The landed WT-08 path instead refuses every worktree completion while a qualityGate is set. WT-18c (task-cfa129252343438d903de1e67ae6073c) owns that wording; a comment there says so.\n\nLine 13 keeps these verbatim: 'Report EVERY path you created or modified in `complete_step.modifiedFiles`', the every-exit clause, the isolated-clone sentence, the never-revert sentence and the prerequisite sentence. Change only this:\n- 'that list is what the wrapper commits' applies to shared mode only.\n- 'it commits FROM THE PROJECT ROOT, so work in the project root by default (never a `.worktrees/` checkout)' becomes mode-aware:\n  - shared mode keeps 'FROM THE PROJECT ROOT, so work in the project root';\n  - worktree mode (`get_context.workspace.mode`): the wrapper has already started you in your task worktree, `.worktrees/<taskId>` on branch `moe/task/<taskId>`, and lands every dirty path there except DENY, so work only there and keep scratch files out of it.\n- Drop the outright ban (WT-S comment-ce2c4ee6 on WT-18): any other `.worktrees/` checkout is for a human's explicit request only and is never landed.\n\nSuggested text for the changed span: '— in shared mode that list is what the wrapper commits. It lands a commit on every exit (completion on REVIEW, a `wip(...)` checkpoint otherwise); where you work depends on your task's mode (`get_context.workspace.mode`). In shared mode it commits FROM THE PROJECT ROOT, so work in the project root. In worktree mode the wrapper has already started you in your task worktree, `.worktrees/<taskId>` on branch `moe/task/<taskId>`, and lands every dirty path there except DENY: work only there and keep scratch files out of it. Any other `.worktrees/` checkout is for a human's explicit request only and is never landed (`worker.reference.md`).'\n\nHard constraints (the verification checks them):\n- spell `moe/task/<taskId>` and `.worktrees/<taskId>` exactly so;\n- no concrete task id (`task-<32 hex>`) and no 'PREFLIGHT_';\n- no phrase matching /never (?:runs|executes|touches) git|runs no git|does not run git/i (daemonGitDocs.test.ts scans this file);\n- keep every sentinel: 'what Moe supplied', 'truncated, omitted or missing', 'a navigation aid, never a reason to skip a read', 'once per session', 'advance `contextEpoch` after every compaction', 'isolated-clone delivery', 'moe.record_commit', 'fresh remote fetch', 'sessionId';\n- none of LANDING-CONFLICT, LANDING-RETRY, landingRetry, unlanded, land lease, git-land-, refs/moe/board.\n\nEdit with the Edit tool only, never a shell write (GLOBAL rail; mem:gotcha-contested-path-needs-edit-tool-to-land). WT-18 and WT-18c declare this file, so an unwitnessed edit is held at landing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/worker.md"
+      ],
+      "modifiedFiles": [
+        "docs/roles/worker.md"
+      ],
+      "note": "Line 13 made mode-aware via Edit; line 12 untouched. 17 pre-existing dirty paths from other sessions untouched.",
+      "startedAt": "2026-11-02T08:37:41.749Z",
+      "completedAt": "2026-11-02T08:37:51.151Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/roles/worker.reference.md: make it mode-aware, only as far as the landed wrappers (WT-04..WT-09) and daemon (WT-01/WT-02) go. Use the Edit tool only.\n\n(a) Line 28, the using-git-worktrees row:\n- Keep 'Only when a human explicitly asks for a worktree.'\n- Then: the post-flight lands only the project root (shared mode) or your task worktree (worktree mode). Edits in any other `.worktrees/` checkout are invisible to it; merge them back by hand.\n- Never name one `task-*`: those are the wrapper's task worktrees.\n\n(b) 'Commits, checkpoints and rescue refs':\n- End the intro sentence with a period, then add: where the work lands depends on `get_context.workspace.mode`, `shared` (the default) or `worktree`.\n- Put a '**Shared mode:**' label before the table.\n- Keep the 3 table rows and the ASSERTED/PLANNED/TOOL/MEASURED paragraph byte-identical.\n\n(c) After that paragraph, add a '**Worktree mode**' block.\n\nLead paragraph:\n- A WORKING claim while `settings.worktreeMode` is `'on'`: the wrapper starts your CLI in `.worktrees/<taskId>` on branch `moe/task/<taskId>`, cut from the target (the literal `consolidationBranch`, else `main`).\n- `MOE_WORKTREE_PATH`, `MOE_TASK_BRANCH` and `MOE_LAND_TARGET` name the three. `MOE_PROJECT_PATH` still names the control checkout, so build no write path from it.\n- Later sessions of the task reuse the worktree. Dirt a crashed session left there is committed to the task branch before your CLI starts (`MOE_CHECKPOINT_RECOVERED`).\n\nA 3-row Exit | What lands | Where table:\n1. REVIEW (or DONE): your worktree's dirty paths are committed to `moe/task/<taskId>`, then the branch's net change lands as ONE squash completion commit, `feat(task-<id>): <title>` (or `fix(…)`), on the target. Without a git remote it lands by a compare-and-swap ref update; with one, by a non-forced push to origin's target.\n2. Any other exit: a `wip(task-<id>): …` checkpoint on `moe/task/<taskId>` only, pushed per `checkpointPush`. The target and the control checkout never move.\n3. A completion that cannot reach the target (for example a conflict with it, or the target moving under every round): nothing lands on the target, your bytes stay on `moe/task/<taskId>`, and a failed round also parks a rescue ref at that branch's tip.\n\nAttribution paragraph:\n- There is no baseline and no tier: every dirty path in the worktree lands, untracked ones included (gitignored files never show), so keep scratch files out.\n- DENY still holds: the paths listed above, with no exception for your task record (a worktree has no `.moe/`), plus `.claude/skills/**`.\n- An edit written into the control checkout is never landed or reverted. Post-flight reports it once as `MOE_WORKTREE_STRAY_EDIT`, in a task comment naming the paths, and a human decides.\n- If you pass `currentBranch` to `moe.complete_task`, it must be `moe/task/<taskId>`; otherwise the call fails with `BRANCH-POLICY-FAIL:`.\n\n(d) Practical rules: prefix bullet 1 with 'In shared mode,'. Change no other bullet.\n\nSource anchors at HEAD e4e122cd (sh name, ps1 twin): provision_worktree/Initialize-MoeWorktree, prepare_worktree_launch/Initialize-MoeWorktreeLaunch, worktree_preflight, denied_wt/Test-MoeDenyPathWorktree, land_worktree_checkpoint/Invoke-MoeWorktreeCheckpoint, land_worktree_completion/Invoke-MoeWorktreeCompletion, worktree_stray_check; docs/MCP_SERVER.md 'Worktree branch rule (WT-02)'. Code beats the design doc.\n\nWT-18c adds the unlanded-route row and the LANDING-CONFLICT:/LANDING-RETRY: rule; don't pre-empt them, and use none of the step-1 banned words (phrase failures as 'cannot reach the target'). Keep sentinels: 'memory-name inventory', 'once per session', 'sessionHandoff', 'END_SESSION', 'fresh wrapper preflight', 'Resource blocks (`resourceId`) keep the seat parked', 'isolated-clone delivery', 'moe.record_commit', 'fresh remote fetch', 'sessionId'. Never write '`nextAction` → `claim_next_task`' or 'are wrapper-called — do not call them yourself'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/worker.reference.md"
+      ],
+      "modifiedFiles": [
+        "docs/roles/worker.reference.md"
+      ],
+      "note": "Reference doc made mode-aware via Edit only. Names grepped against moe-agent.sh and completeTask.ts.",
+      "startedAt": "2026-11-02T08:37:51.858Z",
+      "completedAt": "2026-11-02T08:38:14.259Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Regenerate the daemon's vendored copy of the two docs. Read mem:convention-role-doc-edits-regenerate-initfiles, mem:gotcha-moe-doc-generated-artifacts and mem:gotcha-daemon-linux-snapshot-gate first. The planner checked HEAD e4e122cd: its initFiles.ts was byte-identical to the generator output, so only the two worker entries should change.\n\n1. Snapshot with history:\n   `H=$(git rev-parse HEAD); S=$(mktemp -d); git clone -q --shared --no-checkout . \"$S/repo\"; git -C \"$S/repo\" checkout -q --detach \"$H\"`\n   Copy ONLY the two edited docs into `$S/repo/docs/roles/`. Then, in `$S/repo/packages/moe-daemon`:\n   `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund --loglevel=error && npm run generate-init-files'`\n   Expect `Generated … (8 role docs + 3 subagents, sha-stamped)`.\n2. `diff -u packages/moe-daemon/src/generated/initFiles.ts \"$S/repo/packages/moe-daemon/src/generated/initFiles.ts\"`. Expected hunks:\n   - the 'worker.md' and 'worker.reference.md' ROLE_DOCS entries: the `<!-- moe-generated: sha=… -->` marker plus the edited or added lines. They sit inside a template literal, where `\\` becomes `\\\\`, a backtick becomes `\\`` and `${` becomes `\\${`;\n   - one new sha in each of those two SHIPPED_ROLE_BODY_SHAS lists, in sorted position.\n3. Apply each hunk to the tree's initFiles.ts with the Edit tool.\n   - NEVER cp, mv or redirect the generated file into the tree. A shell write leaves no TOOL witness, and WT-18 and WT-18c declare this path, so the landing would hold it (GLOBAL rail 3).\n   - The Edit tool trims a trailing space in new_string: end every substring on a non-space character.\n   - The memory's difflib pair recipe helps if there are many hunks.\n4. `cmp` the tree's file with the clone's output; they must be equal.\n\nIf the diff shows a hunk for any other doc, HEAD went stale after e4e122cd. Apply that hunk too so cmp passes, and in the completion summary name the doc and the commit that changed it.\n\nError handling: if the clone, npm ci or the generator fails, rerun once. If it fails again, report_blocked with the error tail and blockedOnTaskIds []. Never run npm in the shared checkout's packages (GLOBAL rail 1).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Regenerated in a git clone --shared snapshot (/tmp/wt18a-snap). Diff held only the two worker entries and their sha lists. Applied via Edit, cmp-equal. No foreign hunks.",
+      "startedAt": "2026-11-02T08:38:15.057Z",
+      "completedAt": "2026-11-02T08:38:56.403Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run ONCE, fresh, from the repo root, as ONE command: `<checkRefs[0]> && <checkRefs[1]>`, both exactly as written in the executionContract. Submit that joined command, its exit code and the output tail to complete_task.\n\n- checkRefs[0]:\n  - runs npm run lint (the 40-line cap);\n  - greps the new content (these greps fail on today's docs);\n  - checks that line 12 equals HEAD's, that there is no concrete task id, and that no WT-10..WT-12 vocabulary is present.\n- checkRefs[1] takes a `git clone --shared` of this checkout's HEAD with the three files copied in, then:\n  - runs parity-check.sh on HEAD's wrappers (epic rail 2; WT-S comment-2f5b6786);\n  - runs npm ci and the generator under env -i with nvm node v24.21.0;\n  - `cmp`s your initFiles.ts against the fresh output;\n  - runs 5 vitest test files: targetedContextGuidance, qaCommitPolicy, initFiles, blockedSeatGuidance and daemonGitDocs.\n\nPlanner baseline at HEAD e4e122cd: about 15 s; 5 files and 44 tests passed; parity PASS.\n\nA parity failure on wrapper bytes this task never touched comes from a peer's checkpoint (mem:gotcha-snapshot-gate-peer-wip-checkpoint). Comment on that task with the output, then report_blocked with its id. Never edit a wrapper.\n\nRun everything in the foreground; a one-shot session kills background jobs.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Joined checkRefs[0] && checkRefs[1] exit 0: lint OK (worker.md 30 lines), parity PASS, cmp equal, 5 files / 44 tests passed.",
+      "startedAt": "2026-11-02T08:38:57.151Z",
+      "completedAt": "2026-11-02T08:39:26.655Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review: one pass over the whole diff, then complete_task.\n\n(a) Accuracy. Grep every name the docs now present as shipped against HEAD's wrappers and the daemon:\n- `.worktrees/<taskId>`, `moe/task/<taskId>`\n- MOE_WORKTREE_PATH, MOE_TASK_BRANCH, MOE_LAND_TARGET, MOE_PROJECT_PATH\n- MOE_WORKTREE_STRAY_EDIT, MOE_CHECKPOINT_RECOVERED, BRANCH-POLICY-FAIL:\n- `.claude/skills/**` in DENY\n- the squash completion, the CAS or non-forced push, and the rescue ref at the branch tip\nNothing from these may appear as shipped: WT-10 (gate, lease, round counts), WT-11 (unlanded route, LANDING-CONFLICT/LANDING-RETRY), WT-12 (refs/moe/board), WT-13 (control follow, QA on landed bytes), WT-14 (worktree removal, sweep).\n\n(b) Safety negatives intact:\n- the push is never forced;\n- the target never moves on a failed landing;\n- stray edits are never landed or reverted;\n- human worktrees are allowed but never landed.\n\n(c) Shared-mode text is unchanged apart from the mode labels. Line 12 is identical, worker.md has at most 40 lines, every sentinel is kept, and there is no task id.\n\n(d) `git diff -U0 -- packages/moe-daemon/src/generated/initFiles.ts` touches only the two worker entries and their sha lists.\n\n(e) Every changed path was written by the Edit tool and is listed in complete_step.modifiedFiles.\n\nFix anything found, rerun step 4's command fresh, and submit THAT output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Self-review: names grepped against moe-agent.sh and completeTask.ts. Non-forced push and rescue ref at branch tip confirmed. No WT-10..WT-14 vocabulary. Line 12 identical. All edits via the Edit tool.",
+      "startedAt": "2026-11-02T08:39:27.390Z",
+      "completedAt": "2026-11-02T08:39:36.553Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 25.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T07:58:38.125Z",
+  "updatedAt": "2026-11-02T09:22:11.599Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T08:10:49.265Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T09:02:18.462Z",
+    "wallClockMs": 3089197
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-b49a5155",
+    "qa-564d8bce"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T08:37:13.540Z",
+  "executionContract": {
+    "intendedBehavior": "A worker reading docs/roles/worker.md and worker.reference.md learns where it works and what lands, in each mode, only as far as the landed wrappers (WT-04..WT-09, WT-10G) and daemon (WT-01/WT-02) go. Shared mode is unchanged. In worktree mode the CLI starts in .worktrees/<taskId> on moe/task/<taskId>. Every non-DENY dirty path there lands: checkpoints go to the task branch, completions go to the target as one squash commit, and edits written to the control checkout are MOE_WORKTREE_STRAY_EDIT. The daemon's vendored ROLE_DOCS copy matches the edited docs. Worker.md line 12 (the qualityGate rule) is unchanged, because the worktree gate exists only in WT-10's WIP and belongs to WT-18c.",
+    "acceptanceCriteria": [
+      "DoD 1: worker.md line 13 is mode-aware. Shared mode keeps 'FROM THE PROJECT ROOT, so work in the project root'. Worktree mode says the wrapper already started you in `.worktrees/<taskId>` on `moe/task/<taskId>` and lands from there. Other `.worktrees/` checkouts are human-directed and never landed, not forbidden outright. No line is added.",
+      "DoD 2: in worker.reference.md, the using-git-worktrees row is mode-aware, the shared table and the attribution paragraph are labelled shared mode and kept byte-identical, and a Worktree mode block (lead paragraph, 3-row table, attribution paragraph) describes only landed behaviour. No WT-10..WT-14 vocabulary appears.",
+      "DoD 3: npm run lint passes; worker.md has no task-<32 hex> id and keeps every sentinel that targetedContextGuidance, qaCommitPolicy and blockedSeatGuidance pin.",
+      "DoD 4: packages/moe-daemon/src/generated/initFiles.ts cmp-equals the generator output of a git clone --shared snapshot holding the edited docs, and differs from HEAD only in the two worker entries and their shipped-sha lists. The five named vitest test files pass there.",
+      "DoD 5: `<checkRefs[0]> && <checkRefs[1]>` exits 0, fresh."
+    ],
+    "invariants": [
+      "worker.md line 12 is byte-identical to HEAD's.",
+      "The shared-mode table rows, the ASSERTED/PLANNED/TOOL/MEASURED paragraph and every other shared-mode sentence are unchanged, except for added mode labels.",
+      "Every name presented as shipped exists in HEAD's landed wrapper or daemon code. Where code and the design doc differ, the code wins.",
+      "The safety negatives stay: the push is never forced, the target never moves on a failed landing, and stray edits are never landed or reverted.",
+      "All three files are written with the Edit tool (TOOL witness), never a shell write.",
+      "No npm command runs in the shared checkout's packages."
+    ],
+    "compatibility": [
+      "No code, schema or tool-contract change.",
+      "CLAUDE.md, scripts/CLAUDE.md and docs/ARCHITECTURE.md belong to WT-18. The unlanded route, LANDING-CONFLICT/RETRY and the WT-10 gate wording belong to WT-18c. The .moe/roles copies are synced by the plugin and daemon.",
+      "The ROLE_DOCS keys 'worker.md' and 'worker.reference.md' and the marker scheme are unchanged; only their values and shipped-sha lists change."
+    ],
+    "approvedScope": [
+      "docs/roles/worker.md: line 13 only",
+      "docs/roles/worker.reference.md: the using-git-worktrees row (line 28); the 'Commits, checkpoints and rescue refs' intro and a 'Shared mode' label; one new 'Worktree mode' block (paragraph, 3-row table, paragraph); an 'In shared mode,' prefix on practical-rules bullet 1",
+      "packages/moe-daemon/src/generated/initFiles.ts: the ROLE_DOCS 'worker.md'/'worker.reference.md' values and their SHIPPED_ROLE_BODY_SHAS entries, generator output only"
+    ],
+    "reuse": [
+      "packages/moe-daemon/scripts/generate-init-files.ts (`npm run generate-init-files`) run in a git clone --shared with history; Edit-tool hunk application per mem:convention-role-doc-edits-regenerate-initfiles.",
+      "Existing doc guards: targetedContextGuidance, qaCommitPolicy, initFiles, blockedSeatGuidance, daemonGitDocs."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh provision_worktree (ps1 Initialize-MoeWorktree): only a claim/get_context workspace.mode 'worktree' gets W=<top>/.worktrees/<taskId> on moe/task/<taskId>, cut from the target (origin's in remote mode); W is locked, sparse '/*' '!/.moe/', and reused.",
+      "prepare_worktree_launch (ps1 Initialize-MoeWorktreeLaunch): CLI_ROOT=W; exports MOE_WORKTREE_PATH, MOE_TASK_BRANCH and MOE_LAND_TARGET; MOE_PROJECT_PATH stays the control checkout; ps1 Push-Location to W for the launch.",
+      "worktree_preflight: dirt left in W becomes a recovery checkpoint (MOE_CHECKPOINT_RECOVERED); worktree_stray_check prints MOE_WORKTREE_STRAY_EDIT plus one task comment, and never lands or reverts.",
+      "resolve_attribution worktree mode / denied_wt (ps1 Test-MoeDenyPathWorktree): no baseline or tiers; every dirty path (status --untracked-files=all) lands except denied() plus .claude/skills/**; .moe/** has no BOARD exception.",
+      "land_worktree_checkpoint (ps1 Invoke-MoeWorktreeCheckpoint) commits to refs/heads/moe/task/<taskId> and pushes per checkpointPush; the target and the control checkout are untouched.",
+      "land_worktree_completion (ps1 Invoke-MoeWorktreeCompletion): L0-L2 to the task branch, then ONE squash commit on the target (a literal consolidationBranch, else main), by local CAS without a remote, else a non-forced push. A failed land round gets rescue_ref_from_commit at the task-branch tip; the target does not move.",
+      "WT-10's WIP checkpoint d3441bf3 is the only open-row change to the wrappers (gate, lease, rounds). d3441bf3^ refused worktree completions with a qualityGate set.",
+      "docs/MCP_SERVER.md 'Worktree branch rule (WT-02)': complete_task currentBranch must be moe/task/<taskId>, else BRANCH-POLICY-FAIL:.",
+      "At HEAD e4e122cd, initFiles.ts equals the generator output (planner cmp); parity-check passes; the 5 vitest files run 44 tests and pass."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && npm run lint && grep -qi 'worktree mode' docs/roles/worker.md && grep -qF 'moe/task/<taskId>' docs/roles/worker.md && ! grep -qF 'never a `.worktrees/` checkout' docs/roles/worker.md && ! grep -Eq 'task-[0-9a-f]{32}' docs/roles/worker.md && [ \"$(git show HEAD:docs/roles/worker.md | sed -n 12p)\" = \"$(sed -n 12p docs/roles/worker.md)\" ] && grep -qF 'MOE_WORKTREE_STRAY_EDIT' docs/roles/worker.reference.md && grep -qF 'moe/task/<taskId>' docs/roles/worker.reference.md && grep -qF '.claude/skills/' docs/roles/worker.reference.md && ! grep -Eq 'LANDING-CONFLICT|LANDING-RETRY|landingRetry|[Uu]nlanded|land lease|LAND_LEASE|git-land-|refs/moe/board' docs/roles/worker.md docs/roles/worker.reference.md",
+      "cd \"$(git rev-parse --show-toplevel)\" && H=$(git rev-parse HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$H\" && for f in docs/roles/worker.md docs/roles/worker.reference.md packages/moe-daemon/src/generated/initFiles.ts; do cp \"$f\" \"$S/repo/$f\" || exit 1; done && (cd \"$S/repo\" && bash scripts/tests/parity-check.sh) && cp packages/moe-daemon/src/generated/initFiles.ts \"$S/initFiles.candidate\" && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 C=\"$S/initFiles.candidate\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund --loglevel=error && npm run generate-init-files && cmp src/generated/initFiles.ts \"$C\" && npx vitest run src/util/targetedContextGuidance.test.ts src/util/qaCommitPolicy.test.ts src/util/initFiles.test.ts src/util/blockedSeatGuidance.test.ts src/util/daemonGitDocs.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Adding a worktree gate clause to line 12 (\"worktree mode gates every completion\"): rejected. HEAD's merged-tree gate, scope bypass and land lease come only from WT-10's WIP checkpoint d3441bf3, and WT-10 is still WORKING. The landed WT-08 path refuses gated worktree completions instead. This goes to WT-18c (comment-9ccc2f59 on it).\n- Interleaving mode qualifiers into every shared-mode sentence of the reference: rejected. A separate Worktree mode block with its own table keeps the shared text byte-identical, and gives WT-18c an obvious slot for its unlanded row.\n- Copying the generated initFiles.ts back with cp: rejected. A shell write leaves no TOOL witness, and WT-18/WT-18c declare the path, so it would be held. Hunks are applied with Edit, then cmp.\n- `npm run build` in the clone (WT-18's recipe): `npm run generate-init-files` gives byte-identical output and is faster. vitest imports the file, so a syntax slip still fails.\n- git clone --shared of '.' without a detached checkout: replaced by an explicit HEAD sha, so the snapshot is exactly this checkout's HEAD in either mode.",
+    "codebaseInsights": "- Role docs reach agents through the plugin bundle and through the daemon's ROLE_DOCS. ROLE_DOCS holds initFiles.ts template literals (`\\`, backtick and `${` escaped) and upgrades .moe/roles by marker sha.\n- Daemon tests pin sentinel phrases in both the source and the generated copies (targetedContextGuidance, qaCommitPolicy, blockedSeatGuidance). daemonGitDocs bans \"never runs/touches git\"-style phrases in docs/roles/worker.md.\n- Worktree mode is pinned per attempt: only a WORKING claim with settings.worktreeMode 'on' gets get_context.workspace.mode 'worktree'.\n- The landed worktree path in moe-agent.sh is provision_worktree → prepare_worktree_launch → worktree_preflight → land_worktree_checkpoint / land_worktree_completion → worktree_stray_check. Its ps1 twins are named in the step-2 anchors.",
+    "risks": "- Presenting WT-10/WT-11 behaviour as shipped. The verification bans their vocabulary and pins line 12.\n- Shell writes leave no TOOL witness, and WT-18/WT-18c declare the same three files, so the landing would hold them (MOE_ATTR_CONTESTED_UNTOUCHED). Use the Edit tool for all three.\n- The Edit tool trims trailing spaces in new_string, so cmp fails unless every substring ends on a non-space character.\n- HEAD's initFiles.ts can go stale before execution if a peer lands a role-doc edit. The regen then carries a foreign hunk: include it so cmp passes, and report it.\n- daemonGitDocs regex: avoid 'never touches git', 'runs no git' and 'does not run git' wording.\n- 'unlanded' is WT-11 vocabulary: phrase failures as 'cannot reach the target'.\n- Never run npm ci/build/test in the shared checkout's packages. The env -i clone with nvm node v24.21.0 is the only place.",
+    "keyFiles": [
+      "docs/roles/worker.md",
+      "docs/roles/worker.reference.md",
+      "packages/moe-daemon/src/generated/initFiles.ts",
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "packages/moe-daemon/src/util/targetedContextGuidance.test.ts",
+      "packages/moe-daemon/src/util/qaCommitPolicy.test.ts",
+      "packages/moe-daemon/src/util/blockedSeatGuidance.test.ts",
+      "packages/moe-daemon/src/util/daemonGitDocs.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "53b646f8cc644110ba422529081e6ef1c554d488",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T08:37:13.565Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T08:37:41.749Z",
+  "reviewStartedAt": "2026-11-02T08:39:43.750Z",
+  "verification": {
+    "command": "bash /tmp/wt18a-verify.sh  # = checkRefs[0] && checkRefs[1] verbatim from the executionContract (lint + greps + line-12 check; then git clone --shared HEAD snapshot, parity-check, npm ci, generate-init-files, cmp, 5 vitest files)",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/worker.md has 30 lines (max 40)\nPASS parity-check.sh\nGenerated .../initFiles.ts (8 role docs + 3 subagents, sha-stamped)\n ✓ src/util/blockedSeatGuidance.test.ts (1 test)\n ✓ src/util/targetedContextGuidance.test.ts (6 tests)\n ✓ src/util/qaCommitPolicy.test.ts (10 tests)\n ✓ src/util/initFiles.test.ts (23 tests)\n ✓ src/util/daemonGitDocs.test.ts (4 tests)\n Test Files  5 passed (5)\n      Tests  44 passed (44)\nEXIT=0",
+    "reportedAt": "2026-11-02T08:39:43.750Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/roles/worker.md",
+    "docs/roles/worker.reference.md",
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    ".moe/tasks/task-692a12df337c43edacb59fd0599ecff2.json",
+    ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+    ".moe/tasks/task-a3e414a3dce848e6939081e5cbf941ce.json",
+    ".moe/tasks/task-cfa129252343438d903de1e67ae6073c.json",
+    ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
+    ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+    ".moe/tasks/task-c7ca56e6511b4d9bb8dcb9fe482e2fa8.json"
+  ],
+  "completionSummary": "Worker role docs are mode-aware for the landed worktree path (WT-04..WT-09). worker.md line 13 only: shared mode keeps \"FROM THE PROJECT ROOT\"; worktree mode says the wrapper starts you in .worktrees/<taskId> on moe/task/<taskId> and lands every dirty path there except DENY; other .worktrees/ checkouts are human-directed and never landed. Line 12 is byte-identical to HEAD, with no line added (30 lines). worker.reference.md: the using-git-worktrees row is mode-aware; the shared table and attribution paragraph are labelled and kept; a new Worktree mode block (lead paragraph, 3-row table, attribution paragraph) covers MOE_WORKTREE_PATH/MOE_TASK_BRANCH/MOE_LAND_TARGET, MOE_CHECKPOINT_RECOVERED, squash completion by CAS or non-forced push, the rescue ref at the branch tip, MOE_WORKTREE_STRAY_EDIT, .claude/skills/** in DENY and BRANCH-POLICY-FAIL:; practical bullet 1 is prefixed \"In shared mode,\". No WT-10..WT-14 vocabulary. initFiles.ts was regenerated in a git clone --shared snapshot; the diff held only the two worker entries and their sha lists (no foreign hunks); applied with the Edit tool and cmp-equal to the generator output. All three files were written with the Edit tool.",
+  "commits": [
+    {
+      "sha": "204cacb85223641f1dd58a3d86bd62f75e93cc89",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T08:37:15Z",
+      "paths": [
+        ".moe/tasks/task-692a12df337c43edacb59fd0599ecff2.json",
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T08:40:07.162Z",
+      "treeId": "7fc9e228afa102b65cbae8eab3cf1c74c06ea2dd",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "f0387559b04d162932dbbb31c3d17c35ac6819a2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T08:59:42Z",
+      "paths": [
+        ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+        ".moe/tasks/task-692a12df337c43edacb59fd0599ecff2.json",
+        ".moe/tasks/task-a3e414a3dce848e6939081e5cbf941ce.json",
+        ".moe/tasks/task-cfa129252343438d903de1e67ae6073c.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T09:03:00.054Z",
+      "treeId": "bf90928fe38f11cd938a06602167a1b26338739b",
+      "status": "DONE",
+      "pushed": true
+    },
+    {
+      "sha": "241ac770be3859cafc51f7f34ff0c18daf0101d1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-0fcb7226@2026-11-02T08:10:47Z",
+      "paths": [
+        ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
+        ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+        ".moe/tasks/task-c7ca56e6511b4d9bb8dcb9fe482e2fa8.json"
+      ],
+      "recordedBy": "architect-0fcb7226",
+      "recordedAt": "2026-11-02T09:22:11.599Z",
+      "treeId": "a0c9a8fb7ed478412047f7107a8d1d4bc6faa189",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/roles/worker.md",
+    "docs/roles/worker.reference.md",
+    "packages/moe-daemon/src/generated/initFiles.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-0fcb7226@2026-11-02T08:10:47Z",
+    "at": "2026-11-02T09:22:11.599Z"
+  },
+  "completedAt": "2026-11-02T09:02:18.462Z",
+  "reviewCompletedAt": "2026-11-02T09:02:18.462Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 204cacb8 (on moe/work-2026-10-24, pushed): 3 files, ~30 changed doc lines plus generated text.\n\nRe-ran checkRefs[0] && checkRefs[1] verbatim, foreground, exit 0: lint OK (worker.md 30 lines); all greps pass (line 12 equals HEAD's, no task id, no WT-10/11/12 vocabulary); in a git clone --shared snapshot parity-check PASS, generate-init-files output cmp-equals the committed initFiles.ts, 5 vitest files / 44 tests pass.\n\nDoD1: worker.md line 13 only; shared keeps \"FROM THE PROJECT ROOT\", worktree mode names .worktrees/<taskId> on moe/task/<taskId>, other .worktrees/ are human-directed and never landed. No line added.\nDoD2: worker.reference.md changes only the worktrees row, Shared-mode label (shared table and paragraph byte-identical), one Worktree mode block, and the bullet-1 prefix. Matches approvedScope.\nAccuracy: I checked each shipped name against the sh/ps1 wrappers and completeTask.ts (env vars, denied_wt with .claude/skills/** and no BOARD exception, REVIEW/DONE completion exit, feat|fix(task-<id>) squash commit, CAS or non-forced push, rescue ref at the task-branch tip on a failed round, BRANCH-POLICY-FAIL). Safety negatives intact.\nDoD4: initFiles.ts diff holds only the two worker entries plus one new sha each; no foreign hunk.\nDoD5: joined command exit 0 fresh.\n\nNon-blocking: worker.md line 12 stays unchanged by contract. WT-10 has since landed (53b646f8), so WT-18c (task-cfa129252343438d903de1e67ae6073c) should update it. The 24 dirty paths in the shared tree belong to other sessions and were not touched.",
+  "requiredCheckAtDone": null
+}

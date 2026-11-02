@@ -1,0 +1,76 @@
+{
+  "id": "task-41aa8b45",
+  "epicId": "epic-daemon",
+  "title": "Add structured logging to daemon",
+  "description": "Replace console.log with proper logging framework.\n\n**Requirements:**\n- Log levels: DEBUG, INFO, WARN, ERROR\n- JSON structured output option\n- Log rotation support\n- Configurable via environment variable (LOG_LEVEL)\n- Include context (requestId, taskId, workerId)\n\n**Options:** pino, winston, or simple custom logger",
+  "definitionOfDone": [
+    "Logging framework integrated",
+    "All console.log replaced",
+    "LOG_LEVEL env var works",
+    "Logs include context/correlation IDs"
+  ],
+  "taskRails": [
+    "Use pino for performance"
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Verify pino installed and logger.ts exists. Use pino for performance. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/package.json",
+        "packages/moe-daemon/src/util/logger.ts"
+      ],
+      "startedAt": "2026-02-05T13:14:14.565Z",
+      "completedAt": "2026-02-05T13:14:26.336Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify console.* replaced in index.ts and StateManager.ts. Log all auto-approval actions to activity.log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-05T13:14:37.958Z",
+      "completedAt": "2026-02-05T13:14:47.563Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify console.* replaced in WebSocketServer.ts and McpAdapter.ts. Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/McpAdapter.ts"
+      ],
+      "startedAt": "2026-02-05T13:14:48.423Z",
+      "completedAt": "2026-02-05T13:15:00.630Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify LOG_LEVEL documentation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-02-05T13:15:01.461Z",
+      "completedAt": "2026-02-05T13:15:09.068Z"
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 8,
+  "createdAt": "2026-02-04T14:21:02.880Z",
+  "updatedAt": "2026-06-09T10:59:58.470Z",
+  "priority": "MEDIUM",
+  "comments": [],
+  "metrics": {
+    "firstClaimAt": "2026-02-04T14:42:57.755Z"
+  }
+}

@@ -1,0 +1,383 @@
+{
+  "id": "task-48aafb880ede4b22a3e26115c07f8470",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-19b] Test: pre-flip worktree dry run on a branch target (parallel landings, conflict resume, candidate gate)",
+  "description": "Replaces WT-19a (task-5ac436aa967740d89c440d0f6f120547, archived). That row's DoD assumed main as the target and a post-WT-10M snapshot. On 11-02 the human decided \"keep main PR-only, land on a branch\". This project therefore switches to worktree mode with consolidationBranch 'moe/work-2026-10-24'. It does not run the migration landing, so WT-10M is no longer a prerequisite of the switch. This row is split from WT-19 (task-b1ca54f2716442be889a14623eb59983) DoD 5; its shape is architect-0fcb7226's #architects msg-27859513, adapted to that decision. The human's go on the early switch is #general msg-717a48e0.\n\nGoal: before this project switches, prove three things on the post-WT-13 wrapper bytes, in the production shape (a slash-named, non-main target with main left alone):\n- two parallel tasks and one conflict-resumed task land on the target with fast-forward-only history;\n- the control checkout follows;\n- the candidate qualityGate passes in the sparse gate worktree.\nIf the run fails, the switch waits.\n\nOne new file: scripts/tests/worktree-e2e.cjs, modelled on postflight-worktree.cjs.\n- It keeps WT-19 step 2's CLI: `<sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>`.\n- It runs the real wrappers against the shared fake proxy, with no real daemon.\n- Fixture under <parent-tmp>:\n  - a `git init` repo whose first commit is this repo's HEAD tree, so the gate's scripts exist;\n  - a local bare origin;\n  - a `main` branch;\n  - a slash-named target branch, e.g. moe/work-e2e, cut from main;\n  - the control checkout on moe/control, created at the target's tip;\n  - settings: worktreeMode 'on', consolidationBranch set to the target, qualityGate set to the candidate `bash scripts/tests/parity-check.sh && npm run lint`.\n- Scenarios: (a) parallel and (b) conflict-resume, as WT-19 step 2 defines them, landing on the target.\n- The slash in the target also exercises the target-name paths: the land-lease id sanitizer, the L10 mirror, the control follow and the checked-out-target check.\n\nWT-19 step 2 already planned this file under the same name and CLI, and WT-19's step 6 gate line runs it. WT-19 extends it later with its main-target and ps1 legs.\n\nDependency: WT-13 (task-fbe8e3880ddf47dfa8546f220acea770). Its chain WT-13 → WT-12 → WT-11 → WT-10 puts the LANDING-CONFLICT resume and the control follow on HEAD before this row can be claimed. postflight-fake-proxy.js and postflight-worktree.cjs are lane files, so this row edits no existing file.\n\nNOT in scope:\n- any edit to an existing file;\n- this repo's main, moe/control, settings or GitHub origin;\n- the ps1 engine leg and scenario (c), the remote race. Both stay with WT-19.\n\nVerification: `node scripts/tests/worktree-e2e.cjs sh scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js \"$(mktemp -d -p /mnt/d/moe-scratch wt-e2e.XXXXXX)\" \"$(command -v bash)\"`. Widen MOE_POSTFLIGHT_TIMEOUT_SEC if drvfs is slow.",
+  "definitionOfDone": [
+    "scripts/tests/worktree-e2e.cjs is the only changed file. It has WT-19 step 2's CLI and a `cli` fake-CLI mode, prints one ok/FAILED line per scenario, exits 1 on any failure, and never prints SKIP.",
+    "Parallel: with consolidationBranch set to a slash-named non-main target, two seats launched at once land task-a and task-b. The target gains exactly two commits, `git log --first-parent <target>` is linear, every refs/heads/<target> reflog entry is a fast-forward, the local target equals the bare origin's, main never moves, and neither worktree holds .moe.",
+    "Conflict-resume: task-c's first attempt ends unlanded (the target does not move; finalize_attempt records outcome 'unlanded'). Its second session gets the LANDING-CONFLICT prompt, resolves it and lands on the target. History stays linear and fast-forward only, and main never moves.",
+    "Control follows: after every landing, moe/control's HEAD equals the target and `git status` is clean, MOE_CONTROL_ADVANCED is printed, and none of MOE_CONTROL_NOT_FOLLOWING, MOE_CONTROL_CHECKOUT_BEHIND or MOE_CONTROL_CHECKOUT_DIVERGED appears.",
+    "Gate: every landing runs `bash scripts/tests/parity-check.sh && npm run lint` in the wrapper's gate workspace and prints the wrapper's gate-pass line. The gate string is prefixed with a probe proving the workspace holds no .moe/.",
+    "The verification command exits 0 with <parent-tmp> under /mnt/d/moe-scratch, run from a HEAD snapshot that contains WT-13's landing. The summary records that sha, the output tail and each scenario's wall time."
+  ],
+  "taskRails": [
+    "Run from a HEAD snapshot with the new file copied in and cmp-checked (Serena gotcha-gate-hermetic-snapshot-from-wsl). This keeps in-flight lane edits (31187ec1, WT-10M) out.",
+    "Handle any missing fake-proxy behaviour inside the new file.",
+    "Clean up only <parent-tmp>.",
+    "A wrapper defect becomes a bug: row in this epic, with the output. Never weaken an assertion."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create scripts/tests/worktree-e2e.cjs with its two helper modes, both checked before any argv parsing.\n\nThe shared fake proxy is single-seat at HEAD 204cacb8 (planner research), and this row may not edit it (task rails):\n- task id is always 'task-postflight' (:448);\n- attempt is always 'attempt-postflight' with generation 7 (:71);\n- .moe/context-count is project-wide;\n- the lease grants everyone (:285);\n- finalize_attempt refuses 'unlanded' (:141).\nRe-read the landed fake after WT-11/WT-12/WT-13 before relying on any of these; their tests may have added knobs.\n\n(1) `cli` mode, the fake CLI (`node worktree-e2e.cjs cli …`). Model it on postflight-worktree.cjs :22-36.\n- `--version` prints a fake version.\n- Write one JSON record to $E2E_CLI_RECORD: cwd, argv, the prompt/context the wrapper passed, MERGE_HEAD present in cwd (`git rev-parse -q --verify MERGE_HEAD`), and conflict markers per path listed in $E2E_CLI_EXPECT_MARKERS.\n- Then apply $E2E_CLI_WRITE ({relpath: content}) under cwd.\n- Exit 0. Run no git write.\n- Launch it through a forwarding `claude` type shim (postflight-worktree.cjs typeShim :161), never cliShim. cliShim drops argv, which leaves the prompt empty (mem:gotcha-postflight-worktree-clishim-drops-argv).\n\n(2) Seat interposer: proxy mode, active when $E2E_SEAT_STATE is set. MOE_PROXY_PATH points at this file, and the wrapper runs `node $MOE_PROXY_PATH` with the request on stdin.\n- Land-lease tools (acquire_resource, wait_for_resource, release_resource): handled here with an EXCLUSIVE, task-keyed lock file under the e2e root, created with O_EXCL.\n  - Reply shapes exactly as HEAD's acquire_land_lease/land_lease_read/release_land_lease parse them.\n  - wait polls until granted or timeoutMs runs out.\n  - Log each hold interval.\n- Every other tool: in the raw request text, translate the seat's ids to the fake's ('task-<s>' to 'task-postflight', 'attempt-<s><n>' to 'attempt-postflight').\n  - Spawn `node $E2E_FAKE` with MOE_PROJECT_PATH=<seat state dir> and GIT_CEILING_DIRECTORIES=<e2e root>, so each seat's fake state is private.\n  - Reverse-translate the reply.\n  - Then mirror the seat's fake attempt record, with ids translated, to <control>/.moe/attempts/attempt-<s><n>.json via tmp+rename. The wrapper reads attempts there (moe_attempt_read: exactly one open attempt per task).\n- record_check_run: re-apply the fake's 'CheckRun must persist before CAS' check against the CONTROL repo. The fake skips it because a state dir is not a repo. On mismatch, fail the call as the fake fails an assertion.\n- If the landed fake still refuses finalize_attempt 'unlanded' or serves no landingRetry, implement them here as WT-03 does (docs/MCP_SERVER.md moe.finalize_attempt):\n  - validate the call;\n  - close the attempt;\n  - store {reason, paths, rescueRef, targetTip, count, at};\n  - reply with taskStatus and landingRetry;\n  - inject task.landingRetry into that seat's get_context.\n- Append {session, tool, args, reply or error, start, end}, in the seat's own ids, to <seat dir>/rpcs.jsonl.\n\nError handling: a malformed request, a fake that exits non-zero, or a translation that cannot apply fails the call with its reason; nothing is ever answered 'success' blindly. Never embed the fake's request-parsing line (parity-check guards it; mem:gotcha-parity-check-fake-proxy-derived-copies).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "note": "Wrote the new scripts/tests/worktree-e2e.cjs (373 lines, test-only, no existing file edited, fake marker line not embedded). Step 1 covers its two helper modes. (1) `cli` is the fake CLI: per launch it records cwd, argv, the prompt or its context file, MERGE_HEAD and conflict markers in W at start, then writes E2E_CLI_WRITE under W and makes no git write. (2) The E2E_SEAT_STATE interposer is the seat's MOE_PROXY_PATH. It translates task-<s>/attempt-<s><n> to the fake's fixed ids and back (boundary regex), and runs each seat's fake in a private state dir. It owns the land lease as a capacity-1 O_EXCL lock file under the e2e root (the fake grants everyone), logging grants and releases to lease.jsonl. It re-runs the CheckRun-before-CAS check against the control repo, mirrors the seat's attempt into <control>/.moe/attempts (moe_attempt_read) before each reply, and logs every RPC to <seat>/rpcs.jsonl. The fake's 'unlanded' and task.landingRetry are handled only while the fake lacks them (static probe). WT-11's in-flight fake edit is uncommitted, so the resume session re-reads the landed fake per the governor ruling and drops this fallback if the fake covers it. A direct probe against a /tmp snapshot found: 'unlanded' closes and stores, the ids round-trip, a bad reason or foreign rescueRef is refused, and get_context serves landingRetry. Other sessions' dirty paths (postflight-fake-proxy.js, postflight-worktree.cjs, .moe/roles, skills) are untouched.",
+      "startedAt": "2026-11-02T09:17:06.976Z",
+      "completedAt": "2026-11-02T09:39:32.643Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "worktree-e2e.cjs main CLI: `<sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>` (WT-19 step 2).\n- `ps1` exits 2 with a clear message: the ps1 leg is WT-19's. Never print a line starting with SKIP.\n- Resolve paths absolutely. Root = mkdtemp(<parent-tmp>/wt-e2e-), with no space.\n- Print the wrapper checkout's `git rev-parse HEAD` first.\n\nFixture, built once:\n(a) Bare origin.git.\n(b) control = `git init -b main`.\n- Commit 1's tree is EXACTLY the wrapper checkout's HEAD^{tree}, for example via `git fetch -q --depth=1 file://<root> HEAD` plus read-tree or commit-tree. Assert the tree equality.\n- Set repo-local user Moe Test / moe@test.local and core.autocrlf=false.\n(c) Commit 2 on main:\n- .moe/project.json with settings {worktreeMode:'on', consolidationBranch:'moe/work-e2e', autoCommit:true, qualityGate: GATE};\n- e2e/shared.txt with 10 numbered lines.\n(d) Branches and remote:\n- `git branch moe/work-e2e main`;\n- `git branch moe/task/task-c moe/work-e2e`, so task-c's W is cut before task-a lands;\n- `git switch -c moe/control moe/work-e2e`;\n- remote origin with main and moe/work-e2e pushed.\nDo NOT pre-set extensions.worktreeConfig: task-c7ca56e6 fixes that race, and pre-setting it would hide it.\n(e) Per seat s in a, b, c: a state dir holding .moe/project.json plus tasks/task-postflight.json, shaped like postflight-worktree.cjs repo() :91.\n\nGATE = `test ! -e .moe && test ! -L .moe && printf '%s\\n' \"$PWD\" >> '<root>/gate-runs.log' && bash scripts/tests/parity-check.sh && npm run lint`.\n\nlaunch(seat, session, opts) spawns `<engine> <wrapper> --project <control> --worker-id worker-e2e-<s> --role worker --team E2E --no-start-daemon --command <claude shim> --no-loop --poll-interval 0`, detached.\n- Env: postflight-worktree.cjs inherited() :45, which strips MOE_/FAKE_/WT_/CLAUDE*/GIT_*, also strips E2E_, then adds:\n  - MOE_PROXY_PATH=this file, MOE_NODE_COMMAND, MOE_DISABLE_HEARTBEAT=1, MOE_ACCOUNT_ROTATION=off;\n  - a per-seat HOME and TMPDIR (seats share ~/.config writes otherwise);\n  - FAKE_TASK_STATUS=REVIEW;\n  - FAKE_CLAIM_WORKSPACE and FAKE_CTX_WORKSPACE = {mode:'worktree', path:<control>/.worktrees/task-<s>, branch:'moe/task/task-<s>', target:'moe/work-e2e'};\n  - E2E_* for the interposer and the CLI.\n- Timeout: MOE_POSTFLIGHT_TIMEOUT_SEC, default 900. Kill only the process group of the wrapper this file spawned, by recorded PID (GLOBAL rail; killTree :195). Save each session's VT-stripped log.\n\nReporting:\n- `[worktree-e2e] <scenario> ok (<secs> s)`, or `… FAILED: <reason>` followed by `  | ` tails of the failing session logs.\n- Then `[worktree-e2e] N ok, M failed`; exit 1 on any failure.\n\nCleanup: remove only the root under <parent-tmp>, on every exit path including SIGINT/SIGTERM. MOE_KEEP_E2E_FIXTURE=1 keeps it and prints the path.\n\nError handling: a fixture command that fails throws its stderr into that scenario's FAILED line; it never passes vacuously.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "note": "Main CLI `<sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>`. ps1 exits 2 and names WT-19 (task-b1ca54f2); a usage error exits 2; nothing prints SKIP. The fixture is built once under mkdtemp(<parent>/wt-e2e-), with a whitespace root refused as a FAILED line. It prints the wrapper checkout's HEAD. Commit 1 is commit-tree of a depth-1 fetch, asserted equal to HEAD^{tree}; commit 2 is the e2e settings plus e2e/shared.txt. It then creates moe/work-e2e, cuts moe/task/task-c before any landing, switches to moe/control, and pushes main and the target to a bare origin. extensions.worktreeConfig=true is set after (d), before any seat, and asserted to read back (governor ruling: task-c7ca56e6 lands after the switch). Per-seat state dirs, HOME and TMPDIR live under the root. GATE is the .moe-probe-prefixed parity-check plus lint, appending $PWD to gate-runs.log. launch() spawns the real wrapper detached through a forwarding claude shim; env is inherited() minus E2E_ plus the interposer, the workspace JSON and E2E_*; a MOE_POSTFLIGHT_TIMEOUT_SEC (default 900) timer kills only that recorded process group; the log is VT-stripped and saved. Output is one ok/FAILED line per scenario with `  | ` log tails, then the N ok / M failed total and exit 1 on any failure. Cleanup removes only the root, also on SIGINT/SIGTERM; MOE_KEEP_E2E_FIXTURE=1 keeps it. Deviation, with bug row task-b6a3d41e (WORKER, BACKLOG): the fixture pre-seeds <control>/.claude/agents, which is the live checkout's ignored state. Without it, two moe-agent.sh seats starting at once race the subagent mirror (`cp: ... File exists` under set -e killed seat b in pre-flight in trial 1). No assertion is weakened.",
+      "startedAt": "2026-11-02T09:39:41.136Z",
+      "completedAt": "2026-11-02T09:40:01.975Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "worktree-e2e.cjs main CLI: `<sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>` (WT-19 step 2).\n- `ps1` exits 2 with a clear message: the ps1 leg is WT-19's. Never print a line starting with SKIP.\n- Resolve paths absolutely. Root = mkdtemp(<parent-tmp>/wt-e2e-), with no space.\n- Print the wrapper checkout's `git rev-parse HEAD` first.\n\nFixture, built once:\n(a) Bare origin.git.\n(b) control = `git init -b main`.\n- Commit 1's tree is EXACTLY the wrapper checkout's HEAD^{tree}, for example via `git fetch -q --depth=1 file://<root> HEAD` plus read-tree or commit-tree. Assert the tree equality.\n- Set repo-local user Moe Test / moe@test.local and core.autocrlf=false.\n(c) Commit 2 on main:\n- .moe/project.json with settings {worktreeMode:'on', consolidationBranch:'moe/work-e2e', autoCommit:true, qualityGate: GATE};\n- e2e/shared.txt with 10 numbered lines.\n(d) Branches and remote:\n- `git branch moe/work-e2e main`;\n- `git branch moe/task/task-c moe/work-e2e`, so task-c's W is cut before task-a lands;\n- `git switch -c moe/control moe/work-e2e`;\n- remote origin with main and moe/work-e2e pushed.\nAfter (d), and before any seat starts, run `git -C <control> config extensions.worktreeConfig true` and assert it reads back `true`. This mirrors the live switch checklist (gate task-6519ed9127ad4c359fd64b71f1a08be5, governor ruling 09:15Z). task-c7ca56e6 lands after the switch, and its own forced-collision cases keep covering the unset-key race.\n(e) Per seat s in a, b, c: a state dir holding .moe/project.json plus tasks/task-postflight.json, shaped like postflight-worktree.cjs repo() :91.\n\nGATE = `test ! -e .moe && test ! -L .moe && printf '%s\\n' \"$PWD\" >> '<root>/gate-runs.log' && bash scripts/tests/parity-check.sh && npm run lint`.\n\nlaunch(seat, session, opts) spawns `<engine> <wrapper> --project <control> --worker-id worker-e2e-<s> --role worker --team E2E --no-start-daemon --command <claude shim> --no-loop --poll-interval 0`, detached.\n- Env: postflight-worktree.cjs inherited() :45, which strips MOE_/FAKE_/WT_/CLAUDE*/GIT_*, also strips E2E_, then adds:\n  - MOE_PROXY_PATH=this file, MOE_NODE_COMMAND, MOE_DISABLE_HEARTBEAT=1, MOE_ACCOUNT_ROTATION=off;\n  - a per-seat HOME and TMPDIR (seats share ~/.config writes otherwise);\n  - FAKE_TASK_STATUS=REVIEW;\n  - FAKE_CLAIM_WORKSPACE and FAKE_CTX_WORKSPACE = {mode:'worktree', path:<control>/.worktrees/task-<s>, branch:'moe/task/task-<s>', target:'moe/work-e2e'};\n  - E2E_* for the interposer and the CLI.\n- Timeout: MOE_POSTFLIGHT_TIMEOUT_SEC, default 900. Kill only the process group of the wrapper this file spawned, by recorded PID (GLOBAL rail; killTree :195). Save each session's VT-stripped log.\n\nReporting:\n- `[worktree-e2e] <scenario> ok (<secs> s)`, or `… FAILED: <reason>` followed by `  | ` tails of the failing session logs.\n- Then `[worktree-e2e] N ok, M failed`; exit 1 on any failure.\n\nCleanup: remove only the root under <parent-tmp>, on every exit path including SIGINT/SIGTERM. MOE_KEEP_E2E_FIXTURE=1 keeps it and prints the path.\n\nError handling: a fixture command that fails throws its stderr into that scenario's FAILED line; it never passes vacuously.",
+          "reason": "Governor ruling, 09:15Z: task-c7ca56e6 now lands after this project's worktree switch, and the switch sets extensions.worktreeConfig before seats relaunch. The fixture mirrors that by pre-setting the key, which reverses the old \"do NOT pre-set\" line. This is the only change. Planner architect-0fcb7226 concurs (comment-cac81e8f).",
+          "amendedBy": "governor-e6b40560",
+          "amendedAt": "2026-11-02T09:30:09.198Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Scenario (a) `parallel`, plus the per-landing checks both scenarios reuse.\n\nLaunch seats a and b at once (spawn both, then await both). CLI writes:\n- a: e2e/a.txt, plus shared.txt line 2 changed to `line 2: task-a`;\n- b: e2e/b.txt, plus shared.txt line 8 changed to `line 8: task-b`.\nThese are non-adjacent hunks of ONE file, which proves same-file parallel landing.\n\nAssert:\n- Both exit 0. No report_blocked appears in either seat's rpcs.jsonl. Each log shows `[worktree] created <control>/.worktrees/task-<s> on moe/task/task-<s>`.\n- The target gained exactly 2 commits (`rev-list --count` from the fixture tip), with no merges (`rev-list --merges` empty), so `git log --first-parent moe/work-e2e` is linear.\n- Every `git log -g --format=%H refs/heads/moe/work-e2e` entry descends from the one before it (fast-forward only).\n- `git -C origin.git rev-parse refs/heads/moe/work-e2e` equals the local target.\n- main is unchanged, locally and in origin.\n- The target tree holds a.txt, b.txt and both shared.txt edits.\n- Each seat recorded finalize_attempt 'landed' with landedRevision equal to one of the two new commits, plus a committed completion record_commit.\n- Neither W has .moe (no file, dir or link).\n- The interposer's two lease hold intervals are disjoint: the gated landings serialized.\n\nafterLanding(sessionLogs), run after every landing session:\n- control: `symbolic-ref HEAD` == refs/heads/moe/control, HEAD == the target tip, `git status --porcelain` empty;\n- MOE_CONTROL_ADVANCED in each landing session's log;\n- none of MOE_CONTROL_NOT_FOLLOWING, MOE_CONTROL_CHECKOUT_BEHIND or MOE_CONTROL_CHECKOUT_DIVERGED in ANY log;\n- `[OK] qualityGate passed.` at least once per landing session;\n- gate-runs.log gained one line per gate run, each a directory that is neither the control nor any W (the wrapper's gate workspace).\nSpell codes as HEAD's landed WT-13 wrappers do (grep them first). If a spelling differs from this plan, the code wins; note it in the summary.\n\nAny failure here that is a wrapper defect becomes a `bug:` row in this epic with the session log (task rail). Never weaken an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "note": "Scenario (a) `parallel()` plus the shared checks. Seats a and b are spawned together and awaited together. a writes e2e/a.txt and edits shared.txt line 2; b writes e2e/b.txt and edits line 8.\nAssertions:\n- both exit 0, no report_blocked, each logs `[worktree] created <W> on moe/task/task-<s>`, and no .moe (lstat) in either W;\n- exactly +2 commits; linear() checks no merges since the fixture tip, every reflog entry a fast-forward of the one before, origin's target == local, and main unchanged locally and in origin;\n- the target's tree holds a.txt, b.txt and the two-hunk shared.txt;\n- each seat's single finalize_attempt is 'landed' on one of the two new commits, with a committed completion record_commit;\n- the interposer's lease holds are one per task and disjoint.\nafterLanding(runs, g0), in order:\n- `[OK] qualityGate passed.` per landing session;\n- gate-runs.log lines since g0 == the logged \"Post-flight: quality gate:\" count, each a <tmp>/moe-gate.*/tree path that is neither the control nor any W;\n- no MOE_CONTROL_NOT_FOLLOWING, CHECKOUT_BEHIND or CHECKOUT_DIVERGED in any log;\n- MOE_CONTROL_ADVANCED per landing session;\n- control on refs/heads/moe/control, HEAD == the target, porcelain clean.\nTrial 2 (HEAD 241ac770 snapshot, no verification) passed everything up to MOE_CONTROL_ADVANCED, the expected pre-WT-13 failure. Both landed through the lease and the gate in about 73 s. With the two WT-13 follow assertions removed in a /tmp scratch copy only, parallel printed ok (72.7 s).\nCode spellings come from the plan and design §6, because WT-13 has not landed; the resume session greps WT-13's landed wrapper first, and the code wins.",
+      "startedAt": "2026-11-02T09:40:02.738Z",
+      "completedAt": "2026-11-02T09:40:20.067Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Scenario (b) `conflict-resume`. It needs (a) to pass; otherwise print FAILED 'needs parallel', never SKIP.\n\nSession c1 (task-c, worker-e2e-c). The CLI writes e2e/c.txt and shared.txt line 2 as `line 2: task-c`, which conflicts with task-a's landed line 2. task-c's branch was cut before (a). Assert:\n- the log has MOE_COMMIT_FAILED_CONFLICT;\n- the target sha is unchanged and main is unchanged;\n- seat c's rpcs show finalize_attempt outcome 'unlanded' with unlandedReason 'conflict', conflictPaths containing e2e/shared.txt, and a rescueRef under refs/moe/rescue/task-c/ that resolves to moe/task/task-c's tip;\n- there is a failed completion record_commit with that code, and no 'landed' finalize.\n\nBetween sessions: delete seat c's fake attempts/ and context-count so the next claim opens a new attempt (session 2's ids). Keep the stored landingRetry.\n\nSession c2: E2E_CLI_EXPECT_MARKERS=e2e/shared.txt, and the CLI writes the resolved shared.txt (line 2 `line 2: task-a + task-c`, line 8 task-b's, no markers). Assert:\n- the recorded prompt or context contains 'LANDING-CONFLICT:' and e2e/shared.txt;\n- at CLI start MERGE_HEAD existed and shared.txt held markers (the wrapper merged the target into W);\n- the target gained exactly one more commit, with the resolved content;\n- every reflog entry is still a fast-forward, local equals origin, and main is unchanged;\n- seat c's session-2 finalize is 'landed' with C;\n- MERGE_HEAD is gone from W afterwards;\n- afterLanding passes.\n\nUse HEAD's WT-11 spellings: the prompt prefix, MOE_WORKTREE_UNRESOLVED_CONFLICT, and how get_context serves landingRetry. Read them from the landed wrappers and fake, not from this plan.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "note": "Scenario (b) `conflictResume()`. It throws 'needs parallel' when (a) failed, as a FAILED line, never SKIP.\nc1: e2e/c.txt plus shared.txt line 2 `line 2: task-c` on task-c's pre-(a) branch. Assertions:\n- MOE_COMMIT_FAILED_CONFLICT is logged;\n- the target is unchanged and linear() holds (main unchanged, origin == local);\n- exactly one finalize_attempt, 'unlanded', with reason conflict, conflictPaths including e2e/shared.txt, null landedRevision, and a rescueRef under refs/moe/rescue/task-c/ resolving to moe/task/task-c's tip;\n- a failed completion record_commit whose `code` (the moe-agent.sh:5864 field) is MOE_COMMIT_FAILED_CONFLICT.\nBetween sessions, seat c's fake attempts/ and context-count are deleted; the stored landingRetry is kept.\nc2: E2E_CLI_EXPECT_MARKERS=e2e/shared.txt, and the CLI writes the resolved file (`line 2: task-a + task-c`, line 8 task-b). Assertions:\n- exit 0, and no MOE_WORKTREE_UNRESOLVED_CONFLICT;\n- one CLI launch, whose prompt, context or argv carries 'LANDING-CONFLICT:' and e2e/shared.txt;\n- MERGE_HEAD and markers were present at CLI start;\n- exactly +1 commit on the target, holding the resolved shared.txt and c.txt;\n- linear() still holds;\n- the c2 finalize is 'landed' on that commit;\n- MERGE_HEAD is gone from W;\n- afterLanding([c2]).\nTrial 3 (/tmp scratch copy without the WT-13 follow assertions; not verification): c1 passed MOE_COMMIT_FAILED_CONFLICT, the unchanged target and linear(), then failed on HEAD's pre-WT-11 'rescued' finalize as expected; c2 could not run yet. The interposer's 'unlanded' and landingRetry fallback was probed directly and works. The WT-11 spellings (the prompt prefix, MOE_WORKTREE_UNRESOLVED_CONFLICT, landingRetry serving) come from the WT-11 plan and the in-flight fake; the resume session re-reads them from the landed wrapper and fake.",
+      "startedAt": "2026-11-02T09:40:20.802Z",
+      "completedAt": "2026-11-02T09:40:45.943Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification. Run ONCE, fresh, from the repo root, as ONE command: `<checkRefs[0]> && <checkRefs[1]>`, exactly as in the executionContract.\n- [0] requires WT-13's completion in HEAD, prints the snapshot sha, makes a `git clone --shared` snapshot at HEAD, and copies the new file in with cmp (task rail; mem:gotcha-gate-hermetic-snapshot-from-wsl).\n- [1] runs the e2e from that snapshot with <parent-tmp> under /mnt/d/moe-scratch.\n\nThe run can take longer than one 10-minute tool call (drvfs checkouts of about 976 files per worktree and per gate workspace). In that case run the joined command under nohup with a log and an .exit file, and poll it in the foreground until it finishes (mem:gotcha-daemon-linux-snapshot-gate polling recipe). Never leave it running in the background past your turn.\n\nThe summary records:\n- the snapshot sha;\n- each scenario's wall time;\n- the output tail.\n\nIf HEAD's wrapper bytes carry a wip checkpoint of a still-open lane row (31187ec1, WT-10M or WT-14) and the run fails because of it:\n- re-run at the newest commit that contains WT-13's and task-c7ca56e6's completions but not that wip (mem:gotcha-snapshot-gate-peer-wip-checkpoint);\n- disclose it;\n- never edit a wrapper.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "note": "Resume adjustment first. The landed fake (HEAD 072dd78c, WT-11) now accepts finalize 'unlanded', stores .moe/landing-retry.json and serves task.landingRetry. The interposer's fallback was therefore dead code, so I removed it: unlandedReply, the fakeRetry probe and the get_context injection, -34 lines, leaving 342. WT-11 and WT-13 code spellings were grepped in scripts/moe-agent.sh and match the assertions: MOE_CONTROL_ADVANCED, NOT_FOLLOWING, CHECKOUT_BEHIND, CHECKOUT_DIVERGED, LANDING-CONFLICT:, MOE_WORKTREE_UNRESOLVED_CONFLICT, MOE_COMMIT_FAILED_CONFLICT, `[OK] qualityGate passed.`.\nVerification run 1 was `<checkRefs[0]> && <checkRefs[1]>` verbatim (via /tmp/wt19b/verify.sh under nohup, polled in the foreground), 17:23:35Z to 17:35:45Z. Snapshot 072dd78cf81c87ba529598f90aa21f3a3aae6821 holds WT-11 7cd8e423 and WT-13 072dd78c, and no lane wip since 7cd8e423 touches the wrappers or the fake. Output: parallel ok (294.6 s), conflict-resume ok (325.0 s), 2 ok, 0 failed, exit 0. <parent-tmp> /mnt/d/moe-scratch/wt-e2e.DJFlvW is left empty: the e2e root was removed. Other sessions' dirty paths (.moe/roles, .moe/skills, peers' task json) are untouched.",
+      "startedAt": "2026-11-02T17:22:41.843Z",
+      "completedAt": "2026-11-02T17:36:07.657Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Verification. Run ONCE, fresh, from the repo root, as ONE command: `<checkRefs[0]> && <checkRefs[1]>`, exactly as in the executionContract.\n- [0] requires WT-13's completion in HEAD, prints the snapshot sha, makes a `git clone --shared` snapshot at HEAD, and copies the new file in with cmp (task rail; mem:gotcha-gate-hermetic-snapshot-from-wsl).\n- [1] runs the e2e from that snapshot with <parent-tmp> under /mnt/d/moe-scratch.\n\nThe run can take longer than one 10-minute tool call (drvfs checkouts of about 976 files per worktree and per gate workspace). In that case run the joined command under nohup with a log and an .exit file, and poll it in the foreground until it finishes (mem:gotcha-daemon-linux-snapshot-gate polling recipe). Never leave it running in the background past your turn.\n\nThe summary records:\n- the snapshot sha;\n- each scenario's wall time;\n- the output tail.\n\nIf HEAD's wrapper bytes carry a wip checkpoint of a still-open lane row (31187ec1, WT-10M or WT-14) and the run fails because of it:\n- re-run at the newest commit that contains WT-13's completion but not that wip (task-c7ca56e6 lands after the switch, so no usable snapshot contains it) (mem:gotcha-snapshot-gate-peer-wip-checkpoint);\n- disclose it;\n- never edit a wrapper.",
+          "reason": "Governor ruling, 09:15Z: task-c7ca56e6 sits behind the switch gate, and that gate waits on this row. The fallback snapshot therefore can never contain c7ca56e6, so the fallback now requires only WT-13's completion. This is the only change. Planner architect-0fcb7226 concurs (comment-cac81e8f).",
+          "amendedBy": "governor-e6b40560",
+          "amendedAt": "2026-11-02T09:30:09.230Z"
+        },
+        {
+          "amendmentId": "amend-2",
+          "description": "Verification. Run ONCE, fresh, from the repo root, as ONE command: `<checkRefs[0]> && <checkRefs[1]>`, exactly as in the executionContract.\n- [0] requires WT-13's completion in HEAD, prints the snapshot sha, makes a `git clone --shared` snapshot at HEAD, and copies the new file in with cmp (task rail; mem:gotcha-gate-hermetic-snapshot-from-wsl).\n- [1] runs the e2e from that snapshot with <parent-tmp> under /mnt/d/moe-scratch.\nThe governor resumes this row only once HEAD holds both WT-11's (task-dd1ee586b90d4fc785434454b1423e76) and WT-13's (task-fbe8e3880ddf47dfa8546f220acea770) completion commits (comment-56b2a0e5), so HEAD always carries WT-11. Check for WT-11's `Moe-Task: task-dd1ee586b90d4fc785434454b1423e76` + `Moe-Kind: completion` trailer before trusting any c1/c2 failure.\n\nThe run can take longer than one 10-minute tool call (drvfs checkouts of about 976 files per worktree and per gate workspace). In that case run the joined command under nohup with a log and an .exit file, and poll it in the foreground until it finishes (mem:gotcha-daemon-linux-snapshot-gate polling recipe). Never leave it running in the background past your turn.\n\nThe summary records:\n- the snapshot sha;\n- each scenario's wall time;\n- the output tail.\n\nIf HEAD's wrapper bytes carry a wip checkpoint of a still-open lane row (31187ec1, WT-10M or WT-14) and the run fails because of it:\n- re-run at the newest commit that contains BOTH WT-11's and WT-13's completion trailers but not that wip. task-c7ca56e6 lands after the switch, so no usable snapshot contains it (mem:gotcha-snapshot-gate-peer-wip-checkpoint).\n- If no such commit exists, do NOT verify on a snapshot without WT-11. Call moe.report_blocked with blockedOnTaskIds [] and a reason naming the wip sha and the failing c1/c2 output, then post the same in #governors. Never name the wip's row as the blocker: 31187ec1, WT-10M and WT-14 all wait on the switch gate, which waits on this row, so the daemon drops that id as a cycle.\n- disclose it;\n- never edit a wrapper.",
+          "reason": "Governor ruling 10:31Z, answering worker-b49a5155's 09:52Z ask (msg-e7435153). The fallback snapshot must also carry WT-11's completion, because c1 ('unlanded') and c2 (the LANDING-CONFLICT resume) are WT-11 behaviour; this is the same risk comment-4803785f cites. With no such commit, report_blocked with [] instead of naming a wip row, which would close a cycle through the gate. This is the only change.",
+          "amendedBy": "governor-e6b40560",
+          "amendedAt": "2026-11-02T10:28:22.826Z"
+        }
+      ],
+      "activeAmendmentId": "amend-2"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Negative controls, then one adversarial self-review.\n\nNegative controls: run them in scratch copies OUTSIDE the repo (copy the snapshot; never edit tracked wrappers). Each must print FAILED with the expected reason, and an unmutated control run must pass:\n(i) a GATE whose probe fails (for example, create .moe in the gate cwd first, or make the gate `false && …`): parallel FAILED;\n(ii) a c2 CLI that leaves the markers in place: conflict-resume FAILED (the wrapper's unresolved-conflict code, no landing);\n(iii) the control left on another branch before (a): FAILED, with MOE_CONTROL_NOT_FOLLOWING seen or no landing.\nRecord the three results in the summary.\n\nSelf-review checklist:\n- concurrency: the lease lock and attempt mirroring under two seats; atomic writes;\n- no vacuous pass: every assertion has a positive counterpart, and an empty record fails;\n- hermetic env: no MOE_* or session ids leak in;\n- cleanup touches only the root, and only own PIDs are killed;\n- no SKIP line;\n- no existing file changed (`git status --short` shows only the new file);\n- the request-parsing line is not embedded.\n\nThe file is test-only. Keep it at or under about 450 lines by copying only the helpers it needs. If it exceeds 400 net lines, say so and why in the summary.\n\nFix anything found, rerun step 5's command fresh, and submit THAT output to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "note": "Negative controls ran on mutant copies in /tmp/wt19b (outside the repo; no tracked wrapper edited), with an ext4 parent, against snapshot wrappers 072dd78c/754dfb35, whose scripts are identical. They were run before and after the fix below, with the same results both times:\n(i) GATE prefixed `mkdir .moe &&`: parallel FAILED \"the target gained 0 commits, expected 2\". The wrapper printed `qualityGate failed (exit 1)` and MOE_COMMIT_FAILED_GATE, and rescued both seats.\n(ii) c2 CLI writes nothing, so the markers stay: conflict-resume FAILED \"c2: the marker scan refused a clean resolution\", with MOE_WORKTREE_UNRESOLVED_CONFLICT and no landing.\n(iii) the control switched to e2e-off before (a): parallel FAILED \"a1: exit code 1\", with `[ERROR] MOE_CONTROL_NOT_FOLLOWING` and no landing.\nEvery fixture root was removed.\n\nSelf-review found one real defect, in THIS file (not a wrapper). It surfaced in fresh run 2 (snapshot 754dfb35): parallel FAILED \"the target gained 1 commits, expected 2\", because b1 got MOE_COMMIT_FAILED_LAND_LEASE, \"wait_for_resource ... refused, cancelled, unanswered or malformed\".\n- Cause: the interposer's lease holder() did a check-then-read (lstat, then readFileSync). Seat a's release unlinked the lock in between, so ENOENT came back as an error reply.\n- RED, a two-seat lease stress probe on drvfs (/tmp/wt19b/lease-probe.cjs, 300 calls): 10 ENOENT errors.\n- Fix: holder() treats ENOENT as no holder and retries a half-written lock; take() answers \"not granted\" when the lock changed hands on all 3 tries.\n- GREEN: 0 errors, 267 grants, 0 overlapping holds.\n- Three unmutated runs on ext4 then all passed: 2 ok each.\nChecklist results:\n- Concurrency: the O_EXCL lock plus the race fix; the attempt mirror is written tmp+rename.\n- No vacuous pass: every list is length-checked (rpcs, holds, gate lines, reflog > 1).\n- Hermetic env: MOE_/CLAUDE/E2E_/FAKE_/GIT_ dir vars are stripped. GIT_CONFIG_* passes through, the same as postflight-worktree.cjs; it is the session's includeIf overlay for the live checkout only.\n- Cleanup: only the root is removed, and only recorded wrapper process groups are killed.\n- No SKIP; the fake's request-parsing line is not embedded; parity-check PASS in place.\nThe file is 350 lines (under 400). Final fresh run 3: exit 0 (see complete_task).",
+      "startedAt": "2026-11-02T17:36:09.706Z",
+      "completedAt": "2026-11-02T18:01:44.204Z"
+    }
+  ],
+  "planRevision": 4,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Review-overlap protocol (msg-711d3413), step 3: WT-13's completion 072dd78c is on HEAD and origin (17:20Z), and WT-11's (7cd8e423) landed earlier. Steps 1-4 stay COMPLETED, so resume at step 5, whose checkRefs[0] needed WT-13's completion in HEAD. WT-13 is in REVIEW. If QA rejects it with a byte change, re-run step 5 on the fixed commit.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [],
+  "priority": "HIGH",
+  "order": 26.8,
+  "comments": [
+    {
+      "id": "comment-57f735bcd9a046778d2e18de641c32e9",
+      "author": "governor-e6b40560",
+      "content": "@architect-0fcb7226: a request from the governor. If you're still early in this row, please release it (moe.release_task with a handoff note) and claim VSC-0 (task-a3e414a3dce848e6939081e5cbf941ce, now CRITICAL) instead.\n\nThis row can't run before WT-13 lands, which is about 3-4 hours away. VSC-0 is the epic breakdown that 3 idle coders are waiting on, and the human just asked to \"make sure we get our coders to work\". If you're already deep into this plan, finish it, and VSC-0 is your next claim.",
+      "timestamp": "2026-11-02T09:03:50.513Z"
+    },
+    {
+      "id": "comment-5874a0cb2edd4591bd4d1d0d4eb8ccfc",
+      "author": "governor-e6b40560",
+      "content": "@architect-0fcb7226: request withdrawn. A third architect seat, architect-93e0e956, claimed VSC-0. Keep this row and plan it as normal.",
+      "timestamp": "2026-11-02T09:07:09.547Z"
+    },
+    {
+      "id": "comment-4803785f28a8441f85c312fbf3755782",
+      "author": "governor-e6b40560",
+      "content": "GOVERNOR RULING, partial early run. The human asked to bring the switch forward (\"7-9 houres?\"). This row's dependsOn edges on WT-13 and c7ca56e6 were removed so a coder can start now.\n1. **Do steps 1-4 now:** write scripts/tests/worktree-e2e.cjs, the fixture and scenarios (a) and (b), against the design's codes and prompts plus whatever WT-11, WT-12 and WT-13 have landed by then. Step 1's \"re-read the landed fake after WT-11/WT-12/WT-13\" happens when you resume.\n2. **Before step 5,** if HEAD does not yet contain WT-13's completion (task-fbe8e3880ddf47dfa8546f220acea770): call `moe.report_blocked {blockedOnTaskIds:[\"task-fbe8e3880ddf47dfa8546f220acea770\"]}` and end the session. The task auto-unblocks when WT-13 is DONE. The next session re-reads the landed fake, adjusts, then runs steps 5-6 exactly as planned. DoD 6's WT-13 snapshot requirement is unchanged.\n3. **The c7ca56e6 race fix now lands AFTER the switch.** In step 2's fixture, run `git -C <control> config extensions.worktreeConfig true` before any seat starts. This mirrors the live switch checklist (gate task-6519ed91), which sets the same key before seats relaunch, so the fixture is faithful to production rather than hiding the defect. c7ca56e6 keeps its own forced-collision test cases.\n\nPlanner architect-0fcb7226 offered this route itself: drop the dependency and rely on the workaround (#architects msg-d30fd02c).",
+      "timestamp": "2026-11-02T09:15:40.295Z"
+    },
+    {
+      "id": "comment-cac81e8f50bd45488cfc766294b674bc",
+      "author": "architect-0fcb7226",
+      "content": "Planner note from architect-0fcb7226, who wrote this plan, for @worker-b49a5155 and for QA.\n\nGovernor ruling #3 above (09:15Z) supersedes three lines of the approved plan, because c7ca56e6 now lands after the switch:\n1. **Step 2(d):** ignore \"Do NOT pre-set extensions.worktreeConfig …\". Instead, after (d) and before any seat starts, run `git -C <control> config extensions.worktreeConfig true`. This matches the switch checklist on gate task-6519ed9127ad4c359fd64b71f1a08be5.\n2. **executionContract:** two invariants no longer hold. \"extensions.worktreeConfig is not pre-set in the fixture\" is reversed: the key MUST be pre-set. \"task-c7ca56e6 fixes it and is a dependency\" is also void.\n3. **Step 5 fallback:** re-run at the newest commit that contains WT-13's completion but not that wip. Do not require \"WT-13's and task-c7ca56e6's completions\". c7ca56e6 sits behind the gate, and the gate waits on this row, so no snapshot this row can use will ever contain it.\n\nEverything else stands: the DoD, the checkRefs (they already require only WT-13), scenarios (a) and (b), the negative controls, and report_blocked on WT-13 before step 5.\n\nQA: the pre-set key is required by the ruling. Don't count it as a deviation. c7ca56e6's own forced-collision cases still cover the unset-key race.",
+      "timestamp": "2026-11-02T09:29:03.579Z"
+    },
+    {
+      "id": "comment-56b2a0e5f29345fa97ea8f8f4a4daa03",
+      "author": "governor-e6b40560",
+      "content": "Governor: the block is correct, and so is your point about WT-11. Under the review-overlap protocol the human approved, WT-13 being DONE no longer implies WT-11 is DONE.\n\n**Unblock rule:** the governor sets this row back to WORKING once HEAD contains **both** WT-11's and WT-13's completion commits, even while they are still in QA. That way steps 5-6 run on the landed bytes. The daemon would otherwise wait for both to be DONE.\n\nThe harness trial (parallel failing only on MOE_CONTROL_ADVANCED, c1 only on 'rescued' vs 'unlanded') is the expected pre-WT-11/13 state. Thanks also for filing b6a3d41e. It's now promoted to PLANNING behind the switch gate, and the live checkout's .claude/agents is already populated, so the switch relaunch can't hit it.",
+      "timestamp": "2026-11-02T09:42:10.138Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T08:48:03.279Z",
+  "updatedAt": "2026-11-02T18:24:34.812Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T09:02:47.206Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-02T18:23:02.067Z",
+    "wallClockMs": 33614861
+  },
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T09:12:56.584Z",
+  "executionContract": {
+    "intendedBehavior": "A one-command dry run proves, on the post-WT-13 wrapper bytes and against a slash-named non-main target, that worktree mode is ready for this project's switch:\n- two seats running at once land parallel tasks with fast-forward-only history;\n- a conflicting task ends unlanded, then resumes via LANDING-CONFLICT and lands;\n- the control checkout follows every landing;\n- the candidate qualityGate passes in a .moe-free gate workspace.\nIt changes no existing file. The one new file supplies the per-seat isolation the single-seat shared fake lacks.",
+    "acceptanceCriteria": [
+      "DoD 1: scripts/tests/worktree-e2e.cjs is the only changed file. It has the `<sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>` CLI and a `cli` mode, prints one ok/FAILED line per scenario, exits 1 on any failure, and never prints SKIP.",
+      "DoD 2 (parallel): seats a and b, launched at once, both land on moe/work-e2e.\n- exactly +2 commits, no merges, a linear first-parent history;\n- every reflog entry is a fast-forward;\n- local equals origin;\n- main is unchanged;\n- no .moe in either W.",
+      "DoD 3 (conflict-resume):\n- c1: MOE_COMMIT_FAILED_CONFLICT, target unchanged, finalize_attempt 'unlanded' (conflict, path, rescue ref);\n- c2: the prompt carries LANDING-CONFLICT:, MERGE_HEAD and markers are present at CLI start, the resolution lands as +1 commit;\n- history stays linear and fast-forward only, and main is unchanged.",
+      "DoD 4: after every landing, moe/control's HEAD equals the target with a clean `git status`. MOE_CONTROL_ADVANCED is printed, and NOT_FOLLOWING, CHECKOUT_BEHIND and CHECKOUT_DIVERGED are never printed.",
+      "DoD 5: every landing ran the .moe-probe-prefixed `bash scripts/tests/parity-check.sh && npm run lint` in a gate workspace (gate-runs.log), and printed `[OK] qualityGate passed.`.",
+      "DoD 6: `<checkRefs[0]> && <checkRefs[1]>` exits 0 from a HEAD snapshot containing WT-13's completion, with <parent-tmp> under /mnt/d/moe-scratch. The summary records the sha, the tail and per-scenario wall times."
+    ],
+    "invariants": [
+      "No existing file is edited, including postflight-fake-proxy.js, postflight-worktree.cjs and the wrappers. Missing fake behaviour lives in the new file's interposer.",
+      "The fake's request-parsing line is never embedded. The fake is always delegated to, never re-implemented, except for the land lease and any 'unlanded'/landingRetry gap.",
+      "extensions.worktreeConfig is not pre-set in the fixture.",
+      "Cleanup removes only the e2e root under <parent-tmp>. Only wrapper process groups this file spawned are killed, by recorded PID.",
+      "A wrapper defect becomes a bug: row with output. No assertion is weakened to pass."
+    ],
+    "compatibility": [
+      "This file is WT-19 step 2's file under the same name and CLI. WT-19 later adds the ps1 engine leg, scenario (c) and a main-target leg, so keep a scenario table that can be extended.",
+      "The shared fake's default answers are untouched, because it is never edited."
+    ],
+    "approvedScope": [
+      "scripts/tests/worktree-e2e.cjs (new): the cli mode, the seat interposer (proxy mode), the fixture, launch and reporting, and the parallel and conflict-resume scenarios"
+    ],
+    "reuse": [
+      "postflight-worktree.cjs: the helper patterns inherited(), git()/probe(), typeShim(), killTree()/launch() and repo() (copied, since that file is CLI-only).",
+      "postflight-fake-proxy.js, delegated per seat.",
+      "HEAD's lease client shapes (acquire_land_lease, land_lease_read, release_land_lease).",
+      "docs/MCP_SERVER.md moe.finalize_attempt 'unlanded' (WT-03) for any gap."
+    ],
+    "sourceAssumptions": [
+      "The fake at HEAD 204cacb8 is single-seat:\n- fixed task 'task-postflight' and attempt 'attempt-postflight'/7;\n- a project-wide context-count;\n- a lease that grants every caller;\n- finalize refuses 'unlanded' and serves no landingRetry.\nIts state root is MOE_PROJECT_PATH/.moe. checkReply skips its CheckRun-before-CAS check when `git -C <project> rev-parse` fails.",
+      "The wrapper pipes each RPC into `node $MOE_PROXY_PATH` with its own env and MOE_PROJECT_PATH=<control> (moe_rpc). moe_attempt_read requires exactly one open attempt per task in <control>/.moe/attempts, whose workerId matches.",
+      "W = <top>/.worktrees/<taskId> on moe/task/<taskId>, derived from the claim's task id. A pre-existing moe/task/<id> branch is re-added.",
+      "Gate pass prints `[OK] qualityGate passed.`; conflicts print MOE_COMMIT_FAILED_CONFLICT. WT-11 and WT-13 add LANDING-CONFLICT: and MOE_CONTROL_ADVANCED (verify in landed code).",
+      "HEAD's ignore rules cover .moe/attempts, .worktrees/ and .mcp.json, so the control stays clean. The fake's unignored files live in per-seat state dirs.",
+      "A concurrent first sparse-checkout races on .git/config (2/40 reproduced). task-c7ca56e6 fixes it and is a dependency."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && H=$(git rev-parse HEAD) && [ -n \"$(git log -1 --format=%H --all-match --grep='Moe-Task: task-fbe8e3880ddf47dfa8546f220acea770' --grep='Moe-Kind: completion' \"$H\")\" ] && echo \"snapshot $H\" && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$H\" && cp scripts/tests/worktree-e2e.cjs \"$S/repo/scripts/tests/worktree-e2e.cjs\" && cmp scripts/tests/worktree-e2e.cjs \"$S/repo/scripts/tests/worktree-e2e.cjs\"",
+      "cd \"$S/repo\" && MOE_POSTFLIGHT_TIMEOUT_SEC=1200 node scripts/tests/worktree-e2e.cjs sh scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js \"$(mktemp -d -p /mnt/d/moe-scratch wt-e2e.XXXXXX)\" \"$(command -v bash)\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Editing postflight-fake-proxy.js to add per-seat ids: forbidden. This row edits no existing file, and the rail says 'handle any missing fake-proxy behaviour inside the new file'. The plan uses a per-seat interposer that delegates every tool to the shared fake in a private state dir, with id translation.\n- A private full fake inside the new file: rejected. It would duplicate about 750 lines and drift, and the description requires the shared fake.\n- Delegating the land lease per seat: rejected. Per-seat fakes grant every caller, so two gated landings would gate the same B. The interposer's O_EXCL lock models the daemon's capacity-1 lease.\n- Running a WORKING checkpoint session first to give task-c an older base: replaced by `git branch moe/task/task-c` at the fixture tip. The DoD's 'first attempt ends unlanded' then means the first session.\n- Pre-setting extensions.worktreeConfig: rejected, because it hides a real race. Filed as task-c7ca56e6 and added as a dependency.",
+    "codebaseInsights": "- postflight-worktree.cjs is CLI-only (no exports), so its helpers are copied, not required.\n- Its launch() wipes project-wide logs and uses one worker id.\n- The wrapper runs the proxy per RPC with MOE_PROJECT_PATH=<control>, reads attempt records directly from <control>/.moe/attempts, and derives W from the claim's task id.\n- The fake's CheckRun check uses git on MOE_PROJECT_PATH and is skipped outside a repo, so the interposer re-checks it against the control.\n- The target is read from settings.consolidationBranch; the workspace mode comes from the claim/context workspace knobs.",
+    "risks": "- WT-11/WT-12/WT-13 may land different spellings or fake knobs than their plans say. Read the landed code first; the code wins.\n- drvfs makes each worktree or gate checkout slow (about 976 files). Use a 1200 s per-run timeout, and nohup plus a foreground poll past the 10-min tool limit.\n- Two seats' L13 control follows can race on the one control checkout. If that surfaces BEHIND or a lock error, it is a wrapper bug: file it, do not soften the test.\n- Shared HOME writes (mcp_servers.json) are avoided with a per-seat HOME.\n- The lease reply shape must match land_lease_read exactly (granted:true plus lease.taskId plus acquiredAt).\n- The test file may exceed 400 net lines; keep it dense and say so in the summary.\n- Never kill by pattern; kill only spawned process groups.",
+    "keyFiles": [
+      "scripts/tests/postflight-worktree.cjs",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/worktree-landing.sh",
+      "scripts/moe-agent.sh",
+      "scripts/tests/parity-check.sh",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "882a4c39f618e61ca6159c360e236e88dd925ee4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T09:12:56.614Z",
+  "approvedPlanRevision": 1,
+  "contextFetchedBy": [
+    "worker-b49a5155",
+    "worker-13a877ad",
+    "qa-1106e678"
+  ],
+  "workStartedAt": "2026-11-02T09:17:06.976Z",
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "aacc03ad51cc488a26f15e0575fb0d39cfd73b0a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T09:15:47Z",
+      "paths": [
+        ".moe/tasks/task-065e4812d96247cc8394b3cd0416475d.json",
+        ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json",
+        ".moe/tasks/task-06dda5c1df29433ab4eb5c4230b38581.json",
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-185f728fd79c4658a86b8a0b40a66595.json",
+        ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+        ".moe/tasks/task-692a12df337c43edacb59fd0599ecff2.json",
+        ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json",
+        ".moe/tasks/task-6fbd08111de142508fb0402d06f24e3f.json",
+        ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+        ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
+        ".moe/tasks/task-a5f39d5535404f6e9e59f762c046f5e0.json",
+        ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+        ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json",
+        ".moe/tasks/task-db97dacb7b3843b4a6f747c154123501.json",
+        ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json",
+        ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T09:41:53.241Z",
+      "treeId": "9cccdccc70a04206edd569675f3c2a947fce0003",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "a3269a28b2705ec8e2b71ee0f232cd3c5827bc36",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T17:20:41Z",
+      "paths": [
+        ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+        ".moe/tasks/task-86d66093b2c5417488d583c040c909e2.json",
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T18:03:26.326Z",
+      "treeId": "435bd6fe373b8cd4d6ced361e088b4070cc39451",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "96e76f0c249a157204f92bbd4edb684703ccae2e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T18:03:27Z",
+      "paths": [
+        ".moe/tasks/task-0cadb4f66d3545debd72b8991368d526.json",
+        ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+        ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T18:24:34.812Z",
+      "treeId": "8e466bed2b9590f51bdb866bac7c494053775db8",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/worktree-e2e.cjs",
+    ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+    ".moe/tasks/task-86d66093b2c5417488d583c040c909e2.json",
+    ".moe/tasks/task-0cadb4f66d3545debd72b8991368d526.json",
+    ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json"
+  ],
+  "touchedFiles": [
+    "scripts/tests/worktree-e2e.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T18:03:27Z",
+    "at": "2026-11-02T18:24:34.812Z"
+  },
+  "priorBlockedReason": "Governor ruling comment-4803785f: steps 1-4 are done (scripts/tests/worktree-e2e.cjs, 376 lines), and step 5's checkRefs[0] requires WT-13's completion in HEAD. HEAD 241ac770 lacks it (WT-13 is WORKING with all steps pending). The block also waits on WT-11 (task-dd1ee586, WORKING): DoD c1 ('unlanded') and c2 (the LANDING-CONFLICT resume) are WT-11 wrapper behaviour, and WT-13 does not depend on WT-11, so a WT-13-only unblock could run verification on a snapshot without WT-11 and fail c1. Trial runs against HEAD (not verification) show the harness works: parallel passes every landing assertion and fails only on MOE_CONTROL_ADVANCED (pre-WT-13); c1 passes up to finalize 'rescued' vs 'unlanded' (pre-WT-11). Separately, a wrapper defect found and filed as task-b6a3d41e (sh subagent-mirror cp race when two seats start at once); the fixture pre-seeds .claude/agents meanwhile. The resume checklist is in Serena task-task-48aafb880ede4b22a3e26115c07f8470-handoff.",
+  "reviewStartedAt": "2026-11-02T18:02:28.912Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && H=$(git rev-parse HEAD) && [ -n \"$(git log -1 --format=%H --all-match --grep='Moe-Task: task-fbe8e3880ddf47dfa8546f220acea770' --grep='Moe-Kind: completion' \"$H\")\" ] && echo \"snapshot $H\" && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$H\" && cp scripts/tests/worktree-e2e.cjs \"$S/repo/scripts/tests/worktree-e2e.cjs\" && cmp scripts/tests/worktree-e2e.cjs \"$S/repo/scripts/tests/worktree-e2e.cjs\" && cd \"$S/repo\" && MOE_POSTFLIGHT_TIMEOUT_SEC=1200 node scripts/tests/worktree-e2e.cjs sh scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js \"$(mktemp -d -p /mnt/d/moe-scratch wt-e2e.XXXXXX)\" \"$(command -v bash)\"",
+    "exitCode": 0,
+    "outputTail": "snapshot 2bb683f84cc876b7ac8f6e563584094e825899fe\n[worktree-e2e] wrapper checkout /tmp/tmp.qm4OKzvSaS/repo at HEAD 2bb683f84cc876b7ac8f6e563584094e825899fe\n[worktree-e2e] parallel ok (327.3 s)\n[worktree-e2e] conflict-resume ok (552.6 s)\n[worktree-e2e] 2 ok, 0 failed",
+    "reportedAt": "2026-11-02T18:02:28.912Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "WT-19b: scripts/tests/worktree-e2e.cjs (new, 350 lines, test-only) is the only non-board path; no existing file was edited.\nVerification is checkRefs[0] && checkRefs[1] verbatim, run fresh from the repo root, 17:44:34Z to 18:01:16Z. Snapshot 2bb683f84cc876b7ac8f6e563584094e825899fe contains WT-13 072dd78c and WT-11 7cd8e423, and no lane wip touches the wrappers or the fake. Output: parallel ok (327.3 s), conflict-resume ok (552.6 s), 2 ok, 0 failed, exit 0. <parent-tmp> is under /mnt/d/moe-scratch, and its root was removed. drvfs is slow, so expect about 15 min; it does not fit one 10-min tool call.\nSession-2 changes:\n(1) The landed fake (WT-11) now handles finalize 'unlanded' and task.landingRetry itself, so the interposer's fallback is gone (-34 lines).\n(2) Fixed a race in this file's lease interposer. holder() did lstat-then-read, so a peer's release could unlink the lock in between and ENOENT came back as an error reply.\n- It surfaced as fresh run 2 (754dfb35) FAILED: b1 hit MOE_COMMIT_FAILED_LAND_LEASE and the target gained 1 commit. Not a wrapper defect.\n- RED: a two-seat stress probe of 300 lease calls on drvfs gave 10 ENOENTs. GREEN: 0 errors, 267 grants, 0 overlapping holds.\n- Three unmutated ext4 runs then passed.\nRun 1 (072dd78c, before the fix) also passed: 294.6 s and 325.0 s.\nNegative controls on /tmp mutants, before and after the fix:\n(i) the GATE prefixed `mkdir .moe &&` gave MOE_COMMIT_FAILED_GATE; parallel FAILED \"target gained 0 commits\";\n(ii) c2 left the markers, giving MOE_WORKTREE_UNRESOLVED_CONFLICT; conflict-resume FAILED;\n(iii) the control on another branch gave [ERROR] MOE_CONTROL_NOT_FOLLOWING; parallel FAILED \"a1: exit code 1\".\nCode spellings follow the landed wrappers and match the plan. parity-check PASS in place. extensions.worktreeConfig is pre-set per governor amend-1. The fixture pre-seeds .claude/agents because of bug task-b6a3d41e.",
+  "completedAt": "2026-11-02T18:23:02.067Z",
+  "reviewCompletedAt": "2026-11-02T18:23:02.067Z",
+  "reviewSummary": "APPROVED WT-19b. Completion a3269a28 (plus checkpoint aacc03ad) is on moe/work-2026-10-24 and origin. The only non-board path is the new scripts/tests/worktree-e2e.cjs, 350 lines, test-only. No existing file was edited.\n\nRe-ran task.verification verbatim, 18:06-18:20Z: snapshot a3269a28 (has WT-13 072dd78c and WT-11 7cd8e423), cmp OK. Output: parallel ok (286.1 s), conflict-resume ok (414.1 s), 2 ok, 0 failed, exit 0. <parent-tmp> was under /mnt/d/moe-scratch; the root was removed.\n\nMy negative control (ext4 clone at a3269a28): a wrapper without '!/.moe/' in sparse-checkout gave MOE_WORKTREE_MOE_PRESENT and both scenarios FAILED, rc=1. The unmutated run passed (8.7/9.7 s).\n\nDoD, read against the landed wrapper strings:\n1. CLI and cli mode; ps1 exits 2; no SKIP.\n2. Parallel: +2 commits, no merges, every reflog entry a fast-forward, origin == local, main unchanged, finalize 'landed', disjoint leases, no .moe in W (W persists, so not vacuous).\n3. c1 unlanded with conflict and a rescue ref; c2 LANDING-CONFLICT with MERGE_HEAD and markers, +1 commit.\n4. Control follows (ADVANCED; no BAD codes).\n5. Gate probe, and gate-runs.log == the gate runs, each in moe-gate.*/tree.\n6. Above.\n\nRails: parity-check and lint pass inside the fixture gate; the fake marker is not embedded; root-only cleanup; only recorded pgids killed.\n\nAccepted: worktreeConfig pre-set (governor comment-4803785f, planner cac81e8f); the .claude/agents pre-seed for bug b6a3d41e.\n\nCaveat: WT-13 is still in REVIEW. If its QA changes wrapper bytes, re-run this e2e before the switch.",
+  "requiredCheckAtDone": null
+}

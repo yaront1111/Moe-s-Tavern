@@ -1,0 +1,327 @@
+{
+  "id": "task-b439d7fb2c3443789fe91971cad4ed04",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF05] daemon.json binding threat-model decision",
+  "description": "Objective: decide, in writing, whether same-user host processes stay outside the protected profile's threat model. Two open points depend on it:\n- CQ-R01 follow-up 5: daemon.json's port↔pid binding is not portably verifiable.\n- CQ-R08's handoff on CQ-R13, point 3: the per-request daemon.json re-check before a forward has a theoretical TOCTOU window.\n\nCreated by architect-e4b7eee0 on 2026-10-30, when the human moved the non-gating R01 follow-ups out of CQ-R13. This is a spike: its deliverable is a decision, not code.\n\nDeliverable: one decision document under docs/, linked from docs/ARCHITECTURE.md's security notes. It contains:\n- the threat-model statement;\n- both open points, with references to the code (readDaemonInfo, the guest-session forward path);\n- the options considered, each with its reason:\n  - a per-platform OS lookup of the port's owner;\n  - a daemon-issued nonce over /health;\n  - accepting and documenting the gap;\n- the decision;\n- the follow-up rows to create, if the decision changes behavior.\n\nOut of scope:\n- implementing any option;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): npm run lint (repo root), and the decision document exists with those sections.",
+  "definitionOfDone": [
+    "A decision document under docs/ states whether same-user host processes are in the protected profile's threat model. It covers both the daemon.json port↔pid binding and the CQ-R08 per-request TOCTOU window.",
+    "It lists the options considered with reasons, records the decision, and names every follow-up row the decision requires. docs/ARCHITECTURE.md links it.",
+    "npm run lint exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "PREMISE RE-CHECK, read-only (Serena find_symbol or grep; no edits, no Git writes, no scratch-repo reproduction). This is a re-plan: the first plan's step 1 failed, and comment-4bef8984 holds that evidence. The decision in step 2 already accounts for every fact below. Re-confirm each one and record the exact path:line plus symbol name the record will cite. Line numbers drift while peers land, so cite what you read.\n\nF1. moe-jetbrains MoeDaemonSupervisor.readDaemonInfo (~:47) reads <project>/.moe/daemon.json. MoeProjectService.doConnect (~:247-264) connects to ws://127.0.0.1:<port>/ws. Under PROTECTED, activationRefusal → RuntimeSelectionPolicy.verifyProvenance (~:251) checks only the pid (start instant, or its direct parent). Nothing binds the port to that pid.\nF2. scripts/local-runner/guest-session.mjs daemonRefusal (~:78-97):\n- it runs before the spawn (~:66) and before every forward (~:173);\n- it admits an absent bindHost or a literal loopback one (~:96).\nIts header (~:1-8) says the guest gets no daemon address, port or token.\nF3. packages/moe-daemon/src/server/WebSocketServer.ts: the WSS has no verifyClient (~:227). onConnection (~:289-310) attaches /mcp unauthenticated, authenticates only /runner, and treats every other path as a plugin client. No Origin handling exists in packages/moe-daemon/src unless task-801272c4 has landed; check its status.\nF4. packages/moe-daemon/src/index.ts:\n- probeDaemonHealth (~:302) trusts /health's self-reported pid, and picks its probe host from daemon.json's bindHost (~:314);\n- validateDaemonInfoForProject is at ~:355;\n- the host comes from --host or MOE_BIND_HOST (~:64);\n- /health (~:669) reports no bind;\n- daemon.json records bindHost only when it is not the default (~:769).\nF5. A guest's loopback is its own. The guest path forwards no ports: bridgeArgv (scripts/local-runner/guest-bridge.mjs ~:204-207) is `multipass exec ... sudo -n <supervisor> bridge` over stdio. CQ-R13e (task-d00dafdf, not landed) is the row that certifies, on real hardware, that no guest reaches the host's daemon ports.\nF6. Same-user host processes can already change the user-writable installed plugin and runtime, the owner-only IDE store (CQ-RF01), the IDE JVM and the daemon process (debugging, ptrace or OpenProcess), and node.\nF7. .moe/daemon.json is gitignored (.gitignore:63). Git overwrites an ignored file when an upstream commit adds it: cite comment-4bef8984's reproduction and Serena memory gotcha-gitignored-moe-files-overwritten-by-pull, and do not re-run it.\nF8. The same daemon.json bindHost admission sits in runner-client.mjs (~:48-50, RUNNER_DAEMON_NOT_LOOPBACK; it dials 127.0.0.1:<port>/runner at ~:107) and vm-control.mjs readDaemonInfo (~:116-131, with a /mcp dial at ~:140).\nF9. packages/moe-daemon/src/server/runnerChannel.ts authenticateRunner admits only a loopback peer (isLoopback on remoteAddress) that presents the owner-only key from runnerKeyPath. A wide bind therefore does not expose /runner.\nF10. Pending rows, by their task status (get_context or search_tasks): task-724e31fa, plus its slices task-801272c4 (Origin rule), task-2f2484b4 ('wsl' bind: loopback plus the WSL adapter) and task-0c72d59a (JetBrains passes --host wsl). Also task-2cf1c6be, this decision's new follow-up.\nF11. WSL agent mode adds `--host 0.0.0.0` at protectedDaemonCommand (MoeDaemonSupervisor.kt ~:222) and at both legacy builders (~:322, ~:336-337), unless task-0c72d59a has landed. TerminalAgentLauncher.isWslAgentsEnabled's doc (~:191-199) says the mode needs a bind beyond loopback.\nF12. Under PROTECTED, TerminalAgentLauncher.resolveContext (~:267-268) still passes project.json's settings.agentCommand to the wrapper as --command, and moe-agent.sh runs it (parse_command_into_argv). This is R01's known gap; no open row covers it.\n\nThe following are already decided and are NOT stop conditions: the daemon.json overwrite, the wide WSL bind, the missing Origin check, F12, and the daemon CLI's probe host.\n\nStop rule: add a task comment with the evidence, then moe.report_blocked, ONLY if a fact contradicts the decision itself. That means:\n- a guest can reach a host loopback port, or the guest path forwards a port;\n- /runner admits a non-loopback peer or a keyless client;\n- repository content alone, as data, can make the IDE's protected connect pass provenance for a listener it chose;\n- the daemon already serves a trusted bind report that the local runner uses, which would make task-2cf1c6be moot.\n\nError handling: a reference you cannot confirm is left out of the record, never guessed.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Premise re-check, read-only. No stop condition hit; the decision stands. Refs as read (moe/work-2026-10-24 + working tree):\nF1 MoeDaemonSupervisor.kt:47 readDaemonInfo, :172 activationRefusal; MoeProjectService.kt:247 doConnect, :250 activationRefusal, :264 ws://127.0.0.1:<port>/ws; RuntimeSelectionPolicy.kt:281 verifyProvenance (drifted from ~251 after RF01). pid and port both come from the file; only the pid is verified.\nF2 guest-session.mjs:78 daemonRefusal, :66 pre-spawn, :173 pre-forward, :96 admission, :181 forward, header :1-8.\nF3 CHANGED: task-801272c4 has LANDED (82c97980, status REVIEW). WebSocketServer.ts:249 verifyClient -> verifyUpgradeOrigin :258; ALLOWED_WS_ORIGINS empty :207; absent Origin allowed :213. onConnection :339, /mcp unauth :345, /runner authenticateRunner :349-351. The record describes the Origin check as landed.\nF4 index.ts:64 host, :69 DEFAULT_BIND_HOST, :302/:314 probeDaemonHealth, :355 validateDaemonInfoForProject, :669 /health (pid, projectPath, no bind, no Host check), :769 bindHost only non-default, :773 single writeDaemonInfo at start.\nF5 guest-bridge.mjs:204 bridgeArgv; no port forward/mounts in local-runner. CQ-R13e task-d00dafdf WORKING.\nF7 .gitignore:63. F8 runner-client.mjs:46 discover/:50 RUNNER_DAEMON_NOT_LOOPBACK/:107 dial; vm-control.mjs:117 readDaemonInfo/:129/:140.\nF9 runnerChannel.ts:86 isLoopback, :97 authenticateRunner, :99, :104-106.\nF10 724e31fa WORKING, 2f2484b4 WORKING, 0c72d59a WORKING (both not landed), 2cf1c6be PLANNING.\nF11 MoeDaemonSupervisor.kt:220/:230 protectedDaemonCommand --host 0.0.0.0; legacy :331, :346; TerminalAgentLauncher.kt:191-198.\nF12 TerminalAgentLauncher.kt:224 resolveContext, :267-268 agentCommand; moe-agent.sh:366 parse_command_into_argv.\nRefinements, not stop conditions: (R1) because pid and port share the file, a file naming the live daemon's pid can point the IDE at another host listener. Static bytes don't know the live pid, and the listener is always a host process, so point 1 stays accepted; the record says this. (R2) /health has no Host check, so a DNS-rebinding page can read pid and projectPath. Browser pages are in the model, so I'm filing a LOW bug row. ARCHITECTURE.md is clean. 864 peer dirty paths untouched.",
+      "startedAt": "2026-10-30T07:48:32.901Z",
+      "completedAt": "2026-10-30T07:52:25.216Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create docs/design/protected-profile-threat-model.md, the decision record.\n\nFormat:\n- Exactly these six level-2 headings, in this order: Status, Threat model, Open points, Options considered, Decision, Follow-up rows. Level-3 subheadings are allowed inside them.\n- About 170 lines at most, in plain sentences.\n- Cite code as `path:line` (symbol) from step 1. Every 'cannot', 'never' or 'only' needs a code reference or a certifying row.\n- Write each gap at the problem-class level: which check trusts which input, and who can write that input. No step sequence, commands or payloads: docs/ is committed and pushed.\n\n## Status\nDecided 2026-10-30 by CQ-RF05 (task-b439d7fb, epic CQ-RF). This is the second decision. The first plan's premise check failed (task comment comment-4bef8984), and this record replaces that plan's decision. A human may revise it. It applies to the protected profile (settings.executionProfile verified-local, which the IDE maps to PROTECTED) and its guest path. Legacy behavior is unchanged.\n\n## Threat model\nScope: Moe's host components (the IDE's runtime selection and daemon connection, the daemon's network surface, the local runner) and the guest path.\nIN the model:\n- repository content, as data those components read: every byte a clone, pull, merge or checkout can place under the project, including ignored runtime files (F7). No host component may treat .moe/daemon.json as written by the daemon;\n- code running in Moe-provisioned guests (agent and check jobs);\n- web pages in a local browser: a page can open a WebSocket to a loopback port, and browsers apply no CORS to WebSocket upgrades;\n- network peers: any host that can reach an interface the daemon listens on beyond loopback.\nOUT of the model:\n- same-user host processes (F6). This includes repository code that runs on the host: a build, a test, a git hook, and whatever a host-launched agent seat runs, including the executable named by settings.agentCommand (F12). The protected profile contains repository code on the guest path only; host seats are outside it;\n- other local OS users. /ws and /mcp take loopback clients without authentication (F3), so a single-user host is assumed, and shared multi-user hosts are unsupported until those channels authenticate;\n- operator configuration. An explicit --host or MOE_BIND_HOST beyond loopback is the operator's choice to expose those endpoints to that network.\n\n## Open points\n### The daemon.json port↔pid binding (CQ-R01 follow-up 5)\nCode: F1, plus the local runner's own dial of the file's port (F8). Who could exploit it: only a process listening on that loopback port.\n- Repository content, as data, starts no listener.\n- A guest's loopback is its own, and the guest path forwards no ports (F5).\n- A web page cannot listen.\n- A network peer cannot bind on the host.\nThat leaves host processes, which are out of the model. Result: accepted, with no code change.\n### The per-request daemon.json re-check (CQ-R08 handoff point 3)\nCode: F2, and the same rule in F8. The window between the check and the forward is not the gap; the check's input is. The bind comes from daemon.json, which repository content can supply, and an absent bindHost counts as loopback. When the daemon listens beyond loopback (WSL agent mode, F11, or an operator's wide bind), that input can disable the check. The unauthenticated /ws and /mcp may then be reachable from the guest network through a host interface, and none of this needs a host process.\nOnce the input comes from the daemon (task-2cf1c6be), the remaining window is a bind change during a session. Only an operator action can cause it (turning on WSL agents restarts the daemon), or a host process. Result: the window is accepted; the input is not.\n### Found while deciding\n- /ws and /mcp do no Origin check (F3): task-801272c4.\n- WSL agent mode listens on every interface (F11): task-2f2484b4 and task-0c72d59a.\nDescribe each as of the commit read, and say so if its row has landed.\n\n## Options considered\nFor the port↔pid binding:\n- Per-platform OS lookup of the port's owner: rejected. There is no portable Java or Node API: Windows needs GetExtendedTcpTable, Linux needs /proc/net/tcp plus an fd scan that cannot see other users' sockets, and macOS needs libproc. It needs native code or PATH tools, and the protected selection never runs tools by bare name and filters PATH (MoeDaemonSupervisor nodeOnProtectedPath). It is brittle, and it defends only against host listeners, which are out of the model.\n- A daemon-issued nonce over /health or the /ws handshake: deferred. The IDE generates it at spawn, passes it through the daemon's environment, keeps it in the CQ-RF01 store, and checks a challenge-response. It is the right mechanism once other local users are in the model. Alone, though, it changes nothing while /ws and /mcp stay open to them.\n- An owner-only daemon record outside the repository, next to the runner key (F9): deferred with the nonce, for the same reason.\n- Accept and document the gap: chosen.\nFor the per-request re-check, options (a)-(d) of comment-4bef8984 plus the window:\n- (a) Refuse guest sessions when the IDE started the daemon with --host: rejected. The local runner is not the IDE and has no channel to its spawn records. The IDE's argv also misses a MOE_BIND_HOST bind and any daemon the IDE did not start.\n- (b) Take the bind from the daemon itself (its loopback /health report matched on this project, or the owner-only record): chosen, as task-2cf1c6be.\n  - A loopback answer can come only from a host process, and the project match rules out another project's daemon.\n  - This is not provenance: which binary runs stays with R01's spawn records.\n- (c) Forbid any bind beyond loopback under PROTECTED: not chosen.\n  - The 'wsl' bind rows remove the every-interface exposure.\n  - A trusted check keeps guest sessions off whenever the bind is not loopback.\n  - Forbidding the wide bind would drop a supported R01 configuration only to close the operator-action window.\n- (d) Keep the first decision and document a WSL exception: rejected, because it accepts an in-model attacker chain.\n- Accept the window itself: chosen, once (b) lands.\n\n## Decision\nNumbered:\n1. Same-user host processes stay outside the protected profile's threat model, and so do other local OS users. A single-user host is assumed. Host-launched agent seats are outside the profile's containment.\n2. Repository content, guest code, browser pages and network peers are inside it.\n3. A file under the project, .moe/daemon.json included, may add a refusal but never an admission. Trust in the live daemon comes from the daemon itself or from owner-only state outside the repository.\n4. Open point 1 is accepted and documented, with no code change.\n5. Open point 2: the window is accepted, and the check's input moves to the daemon (task-2cf1c6be). That row must land before verified-local is enabled. Whether it also gates CQ-R13 certification is a human call.\n6. Under the protected profile, guest sessions and a bind beyond loopback are mutually exclusive: guest-session refuses every non-loopback bind, 'wsl' included. A guest-to-daemon certification (CQ-R13e) applies to a loopback-only daemon.\n\n## Follow-up rows\n- Required, new: task-2cf1c6be (Stability & Hardening, MEDIUM). The local runner's loopback checks take the bind from the daemon.\n- Required and already filed from the same finding: task-724e31fa (HIGH) with task-801272c4, task-2f2484b4 and task-0c72d59a.\n- Not required; for multi-user hosts: authenticate /ws and /mcp, and bind daemon.json with the spawn nonce or the owner-only record.\n- Outside this decision, flagged to the governor on 2026-10-30: host seats under the protected profile, including settings.agentCommand (F12).\n- Revisit this record if:\n  - CQ-R13e's guest probe fails;\n  - verified-local is enabled before task-2cf1c6be lands;\n  - guest sessions are ever allowed with a bind beyond loopback.\n- CQ-RF06/06b (VS Code parity) and CQ-RF07 (integration) cite this record.\n\nError handling: none at runtime. Steps 4 and 5 check the record.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "docs/design/protected-profile-threat-model.md"
+      ],
+      "modifiedFiles": [
+        "docs/design/protected-profile-threat-model.md"
+      ],
+      "note": "Created docs/design/protected-profile-threat-model.md with the six H2 headings in order. The decision is as planned. The record runs 197 lines, against the plan's \"about 170\", because it documents three facts step 1 surfaced:\n(1) task-801272c4's Origin rule has landed, so it is described as landed;\n(2) the pid-guess redirect refinement under open point 1, plus the runner key going to the file's port;\n(3) /health has no Host check (DNS rebinding). I filed this as new row task-80930ce6 (LOW, BACKLOG, this epic) and named it in Follow-up rows as required by decision 2.\nDecision 3 is scoped to the live daemon's identity, bind and reachability, so it does not overclaim against the profile read (RF02's area) or agentCommand. Everything is at the problem-class level, with no walkthrough.",
+      "startedAt": "2026-10-30T07:52:31.638Z",
+      "completedAt": "2026-10-30T07:56:06.557Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/ARCHITECTURE.md: link the record from a new security section. It has none today; this was verified, and the headings run System Overview … Data Flow Examples, Error Handling (Current), Performance Notes.\n\nFirst run a read-only `git status --short docs/ARCHITECTURE.md`. If it is dirty with bytes this task did not write (CQ-V12 task-b621ddc9 and CQ-R13 task-f4811a72 also plan edits, though both are gated on unmet dependencies), do not edit. Comment and moe.report_blocked naming that task instead.\n\nInsert `## Security Notes` immediately before `## Error Handling (Current)`. Follow the file's existing pattern: the section's bullets, a blank line, `---`, then a blank line. It gets three short bullets:\n1. The protected profile's threat model, linked as [design/protected-profile-threat-model.md](design/protected-profile-threat-model.md).\n   - Inside: repository content (including ignored .moe/ runtime files that a pull can overwrite), guest code, browser pages and network peers.\n   - Outside: same-user host processes, host-launched agent seats and other local users. A single-user host is assumed.\n2. A file under the project, .moe/daemon.json included, may add a refusal but never an admission. Trust in the live daemon comes from the daemon itself, or from owner-only state outside the repository.\n3. Accepted gaps: the daemon.json port↔pid binding and the CQ-R08 per-request re-check window. Open follow-ups are listed in the record (no task ids in ARCHITECTURE.md, which outlives them).\n\nChange no other line.\n\nError handling: none at runtime. This is a docs-only change, checked by step 4.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "docs/ARCHITECTURE.md had no changes before the edit (git status --short printed nothing). I inserted `## Security Notes` immediately before `## Error Handling (Current)`, following the file's pattern of bullets, a blank line, `---` and a blank line. It has three bullets:\n1. the link to design/protected-profile-threat-model.md, with what is inside and outside the model and the single-user-host assumption;\n2. the refusal-not-admission rule for the live daemon;\n3. the accepted gaps.\nIt carries no task ids. The diff is 14 insertions, no other line changed, and git diff --check is clean.",
+      "startedAt": "2026-10-30T07:56:10.188Z",
+      "completedAt": "2026-10-30T07:56:28.422Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh, from the repo root (bash on WSL). A docs-only decision record has no unit test, so this structural check is its test:\n\nnpm run lint && f=docs/design/protected-profile-threat-model.md && for h in 'Status' 'Threat model' 'Open points' 'Options considered' 'Decision' 'Follow-up rows'; do grep -qx \"## $h\" \"$f\" || { echo \"missing heading: $h\"; exit 1; }; done && for r in task-2cf1c6be task-724e31fa task-801272c4 task-2f2484b4 task-0c72d59a comment-4bef8984; do grep -q \"$r\" \"$f\" || { echo \"missing ref: $r\"; exit 1; }; done && grep -qx '## Security Notes' docs/ARCHITECTURE.md && grep -q 'design/protected-profile-threat-model.md' docs/ARCHITECTURE.md && echo VERIFY-OK\n\nIt must exit 0 and print VERIFY-OK. Its fresh command, exit code and output tail are complete_task's verification evidence. npm run lint passed at planning time (exit 0).\n\nThen, read-only:\n- `git diff --check -- docs/ARCHITECTURE.md` prints nothing;\n- `grep -nE '[[:space:]]$' docs/design/protected-profile-threat-model.md` finds nothing;\n- `git status --short` shows docs/ARCHITECTURE.md and the new record as this task's only changes.\nReport both paths in complete_step modifiedFiles.\n\nNever revert, stash, `git add -A` or commit a peer's or a pre-existing dirty path. Error handling: if lint fails on a file this task did not touch, report it with the output. Never edit a peer's file to make it pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/design/protected-profile-threat-model.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Ran the verification command fresh from the repo root. npm run lint passed (architect.md 39, worker.md 30 and qa.md 32 lines, all under the 40-line cap). The six headings, the six refs and the ARCHITECTURE link and heading checks all passed. Output: VERIFY-OK, exit 0.\nRead-only checks: git diff --check on ARCHITECTURE.md is clean, and the record has no trailing whitespace.\ngit status -- docs/ shows my two paths, plus docs/MCP_SERVER.md, which was already dirty at session start (a peer's) and which I left untouched. I made no Git writes.",
+      "startedAt": "2026-10-30T07:56:30.255Z",
+      "completedAt": "2026-10-30T07:56:47.377Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read the record as a security reviewer who wants it to be wrong.\n\nCheck these:\n- Every 'cannot', 'never' and 'only' has a code reference or a certifying row, and nothing is claimed that the code does not do.\n- Re-test each in-model class against both open points:\n  - repository content: a pulled daemon.json, project.json settings including agentCommand and commitHooks (Git runs hooks from .git/hooks or core.hooksPath, which repository content cannot set);\n  - guest code: host loopback, and the guest network's gateway interface;\n  - browser pages: /ws, /mcp, /health;\n  - network peers.\n  Any in-model path to a host listener or to an admission the record accepts is a finding.\n- The record never says the protected profile contains host seats, or that guests cannot reach host interfaces beyond loopback.\n- The single-user-host assumption and the host-seat scope appear in Threat model, Decision and ARCHITECTURE's notes.\n- There is no exploit walkthrough.\n- The options' reasons are accurate: the platform APIs, and the PATH rule.\n- Each cited row's status is as you last read it.\n- Would I be embarrassed if a reviewer found a counterexample?\n\nFix any finding inside the two files, then re-run step 4's command fresh before complete_task. If a finding contradicts the decision itself (step 1's stop rule), comment with the evidence and moe.report_blocked instead of rewriting the decision.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "newFiles": [
+        "docs/design/protected-profile-threat-model.md"
+      ],
+      "modifiedFiles": [
+        "docs/design/protected-profile-threat-model.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Adversarial self-review done. Nothing contradicted the decision. I fixed six findings in the record:\n(1) \"the guest path reaches the host only over one constant argv\" was wrong: snapshot-transfer and check mode also use constant `multipass exec` argvs. Reworded.\n(2) \"browsers give a page no way to accept connections\" is now \"no way to listen on a TCP port it chooses\", since WebRTC exists.\n(3) \"repository bytes do not hold the pid\" is now \"can match it only by guessing\", in both places.\n(4) \"a non-browser client sends no Origin\" is now \"need not send\".\n(5) Decision 3's \"one accepted exception\" is scoped to the IDE's connection and the local runner, and it now says host seats (proxy, wrappers) also read the file and are out.\n(6) The record now notes that the profile setting is also repository content, owned by R01's session pin and RF02's persistent pin (not landed).\nRe-tested each in-model class:\n- Repository content: a pulled daemon.json makes provenance refuse unless the pid is guessed. agentCommand and qualityGate belong to host seats, which are out. With commitHooks, hooks come from .git/hooks or core.hooksPath, which tracked content cannot set.\n- Guest code: guests have their own loopback; the gateway path is CQ-R13e plus decision 6.\n- Browser pages: /ws and /mcp are refused by Origin (landed). /health is the new row task-80930ce6.\n- Network peers: covered by 724e31fa's slices, plus the operator-config exclusion.\nEvery cannot/never/only claim cites code or is a platform fact. Row statuses were re-read this session. There is no walkthrough. The fresh verification printed VERIFY-OK with exit 0, diff --check is clean, and there is no trailing whitespace.",
+      "startedAt": "2026-10-30T07:56:49.527Z",
+      "completedAt": "2026-10-30T07:59:00.224Z"
+    }
+  ],
+  "planRevision": 2,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human-approved re-plan (governor REPL, 2026-10-30). The worker's step-1 premise check (comment-4bef8984) disproved the planned Open Point 2 claim with a reproduced counterexample. Under PROTECTED with WSL agents on, the daemon binds 0.0.0.0 (MoeDaemonSupervisor.kt:222). guest-session.mjs daemonRefusal trusts bindHost from .moe/daemon.json, and repository content can replace that file on a pull. The plan also missed browser origins as an attacker class: /ws and /mcp have no Origin check. Re-decide using options (a)-(d) in comment-4bef8984. The Origin and wildcard-bind exposure itself is now a separate HIGH bug row.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 278.5,
+  "comments": [
+    {
+      "id": "comment-4bef89841e674c1dac21be7b54c90284",
+      "author": "worker-0062feec",
+      "content": "Step-1 premise check: BLOCKING per the plan's stop rule. No document written, no files changed.\n\nCONFIRMED: F1 (MoeDaemonSupervisor.kt:47 readDaemonInfo; MoeProjectService.kt:247/250/264 doConnect→activationRefusal→ws://127.0.0.1:<port>/ws; RuntimeSelectionPolicy.kt:251 verifyProvenance checks only pid+start or the supervisor parent, nothing binds the port). F2 (guest-session.mjs:66 and :173 daemonRefusal, defined at :78; O_NOFOLLOW at :83, MAX_DAEMON_INFO_BYTES=16_384 at :18, LOOPBACK set at :23, forward at :181; header :3-5 says the guest gets no address, port or token). F3 (WebSocketServer.ts:227 has no verifyClient; onConnection :289-310: /mcp attaches with no auth, only /runner calls authenticateRunner at :301, everything else is a plugin client). F4 (index.ts:302 probeDaemonHealth accepts the /health self-report of pid; :355 validateDaemonInfoForProject). F6: general.\n\nCOUNTEREXAMPLE to the planned Open Point 2 claim (\"changing daemon.json needs a host writer, a same-user process; guest code cannot\"):\n1. Repository content can rewrite daemon.json. .moe/daemon.json is gitignored (.gitignore:63), and git treats ignored files as expendable. An upstream commit that force-adds .moe/daemon.json silently overwrites the daemon's live file on `git pull`. Reproduced in a scratch repo: the local {\"bindHost\":\"0.0.0.0\"} became the repo's {\"port\":9876,\"pid\":1}, pull exit 0, no conflict.\n2. PROTECTED can bind a wildcard. MoeDaemonSupervisor.kt:222 protectedDaemonCommand appends `--host 0.0.0.0` when wslAgentsEnabled().\n3. The chain: an operator has WSL agents on, so the daemon is on 0.0.0.0 and daemonRefusal would refuse with SESSION_DAEMON_NOT_LOOPBACK. A pulled daemon.json without bindHost then makes daemonRefusal pass, so guest sessions spawn and forward. The guest's network can reach the host's non-loopback interfaces, where an unauthenticated /mcp listens (F3). Guest code can probe the default port 9876 with no address handed to it.\nSo in-model attackers (repository content, then guest code) defeat the only tripwire. It needs an operator setting, but no same-user attacker. The bug is not the TOCTOU window. It is that the tripwire trusts repository-writable bytes about the daemon's bind. Point 1 (port↔pid) still holds: a pulled file cannot start a listener.\n\nALSO for the re-decision: /ws and /mcp do no Origin check (there is no Origin handling in packages/moe-daemon/src). Any web page in a local browser can open ws://127.0.0.1:9876/mcp. That attacker class is neither repository content, guest code nor a host process, and the planned \"Threat model\" section does not name it.\n\nOptions the architect may weigh:\n(a) Under PROTECTED, refuse guest sessions when the IDE launched the daemon with --host (a trusted source, not daemon.json).\n(b) Take bindHost from the daemon's /health self-report over loopback, or from the controller's own spawn config, instead of the file.\n(c) Forbid the WSL-agents wildcard under PROTECTED.\n(d) Keep the decision but state the WSL-mode exception and file a follow-up row.",
+      "timestamp": "2026-10-30T07:21:44.240Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:06:45.773Z",
+  "updatedAt": "2026-10-30T08:12:29.153Z",
+  "planningEntry": {
+    "from": "BLOCKED",
+    "at": "2026-10-30T07:25:12.923Z",
+    "seq": 2
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:13:22.778Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T08:09:59.845Z",
+    "wallClockMs": 3397067
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-0062feec",
+    "governor-693b7073",
+    "worker-fe18a9a9",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:47:19.130Z",
+  "planningNotes": {
+    "approachesConsidered": "First decision (rev 1): accept both open points, on the premise that only host processes can change daemon.json. The worker's premise check disproved it. Repository content can supply .moe/daemon.json, because git overwrites ignored files, and in WSL agent mode the daemon listens beyond loopback. Re-decided with comment-4bef8984's options:\n- (a) IDE spawn config as the bind source: rejected. The local runner has no channel to it, and it misses MOE_BIND_HOST and daemons the IDE did not start.\n- (b) Take the bind from the daemon itself, via /health or an owner-only out-of-repo record: chosen, filed as task-2cf1c6be.\n- (c) Forbid any non-loopback bind under PROTECTED: not chosen. The governor's HIGH row already narrows WSL to a 'wsl' bind (loopback plus the WSL adapter, task-2f2484b4/0c72d59a), and a trusted check keeps guest sessions off any non-loopback bind.\n- (d) Document a WSL exception: rejected, because it accepts an in-model chain.\nPort↔pid stays accepted: no in-model attacker can create a loopback listener. The nonce and an out-of-repo record are deferred to a multi-user scope.\nBrowser origins and network peers move INTO the model; their fixes are the HIGH row's slices.\nI did NOT file a row for agentCommand or host seats under strong (R01's known gap; no open row). It is a pre-existing policy question, flagged to the governor instead, to avoid board inflation.",
+    "codebaseInsights": "- Three local-runner modules admit a daemon on daemon.json's bindHost alone: guest-session.mjs daemonRefusal, runner-client.mjs open, and vm-control.mjs readDaemonInfo. All three dial 127.0.0.1, never the bindHost.\n- runnerChannel.ts authenticateRunner admits only loopback peers with the owner-only key (~/.moe/runner-keys), so /runner is not exposed by a wide bind. /ws and /mcp are.\n- /health (index.ts startDaemon) reports status, version, pid, uptime, projectPath, stats and checks, but no bind. daemon.json records bindHost only when it is not the default.\n- The daemon CLI's probeDaemonHealth also takes its probe host from daemon.json. It is a legacy operator tool; the protected IDE stops daemons only through stopDaemonForRestart with provenance.\n- Under PROTECTED, TerminalAgentLauncher still passes project.json agentCommand to the wrapper's --command.\n- ARCHITECTURE.md has no markdown links and separates sections with `---`.\n- The HIGH row task-724e31fa was split into 801272c4 (Origin, WORKING), 2f2484b4 ('wsl' bind, WORKING) and 0c72d59a (JetBrains --host wsl, PLANNING).",
+    "risks": "- Line numbers drift while 801272c4, 2f2484b4 and 0c72d59a land. The worker cites what it reads and states each gap as of that read.\n- docs/ARCHITECTURE.md is also planned by CQ-V12 and CQ-R13. Both have unmet dependencies, so neither is editing it now. The worker checks the file is clean first. RF07 depends on this row, so it is serialized after it.\n- Don't re-block on facts the decision already covers. The stop rule is narrowed to facts that contradict the decision itself.\n- Security docs are pushed, so the record stays at the problem-class level, with no walkthrough.\n- npm run lint covers only role docs. The heading and reference greps in step 4 are what prove the record's structure.",
+    "keyFiles": [
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/runner-client.mjs",
+      "scripts/local-runner/vm-control.mjs",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/server/runnerChannel.ts",
+      "packages/moe-daemon/src/index.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "docs/ARCHITECTURE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 2,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:47:19.155Z",
+  "approvedPlanRevision": 2,
+  "workStartedAt": "2026-10-30T07:18:39.191Z",
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "a1e77438c523cc6b8d403b074a8c98c091d9111b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T07:18:09Z",
+      "paths": [
+        ".moe/tasks/task-032c973941bc41d9b051eedacb7de0b6.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+        ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T07:22:33.346Z",
+      "treeId": "52acd28721d6b36a95fbb1594c8305d1b5b2dd81",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "4fee627223944067ca31d61963f167898e3f8f24",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T07:47:20Z",
+      "paths": [
+        ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+        ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+        ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+        ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json",
+        ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json",
+        "docs/ARCHITECTURE.md",
+        "docs/design/protected-profile-threat-model.md"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T08:00:09.616Z",
+      "treeId": "68b69ca91d7a230bf19352ced546ffa894726f94",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-b621ddc99fe44d50ab700b2aa51c84fc"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "e22517140c07d80410e2ffd0128ac3ad52c3a8f6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T08:06:43Z",
+      "paths": [
+        ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
+        ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-c61311dc98424120be5775ce91c50ed0.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T08:10:28.362Z",
+      "treeId": "5121dbbbaf6df3771e4e766aad00300b7feccbe9",
+      "status": "DONE",
+      "pushed": true
+    },
+    {
+      "sha": "fa0404957e5f07b53067d388453aca399d79c4ca",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-4ae016fb@2026-10-30T07:26:14Z",
+      "paths": [
+        ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+        ".moe/tasks/task-a4ad3fdb6fbc4f48934aae0daffe853d.json",
+        ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json"
+      ],
+      "recordedBy": "architect-4ae016fb",
+      "recordedAt": "2026-10-30T08:12:29.152Z",
+      "treeId": "be88e0928872aeccdf0242b6ea8935f064cae5c3",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/design/protected-profile-threat-model.md",
+    "docs/ARCHITECTURE.md",
+    ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+    ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+    ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+    ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+    ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+    ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json",
+    ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json",
+    ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+    ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json",
+    ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
+    ".moe/tasks/task-c61311dc98424120be5775ce91c50ed0.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+    ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+    ".moe/tasks/task-a4ad3fdb6fbc4f48934aae0daffe853d.json",
+    ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-4ae016fb@2026-10-30T07:26:14Z",
+    "at": "2026-10-30T08:12:29.152Z"
+  },
+  "priorBlockedReason": "Step-1 premise check failed, so per the plan's stop rule the planned decision was not written. In-model repository content can rewrite .moe/daemon.json: it is gitignored, and `git pull` silently overwrites an ignored file that upstream force-added (reproduced). Under PROTECTED with WSL agents on, the daemon binds 0.0.0.0 (MoeDaemonSupervisor.kt:222). A pulled daemon.json without bindHost then defeats guest-session.mjs daemonRefusal, and guest code could reach the unauthenticated /mcp through the host interface. This contradicts Open Point 2's claim that only a same-user host writer can change daemon.json. Also, /ws and /mcp have no Origin check, so browser pages are an unlisted attacker class. The architect must re-decide; the options are in comment-4bef8984.",
+  "blockedOnTaskIds": null,
+  "executionContract": {
+    "intendedBehavior": "A new decision record, docs/design/protected-profile-threat-model.md, states the protected profile's threat model with code references.\n- OUT: same-user host processes, host-launched seats and other local users. A single-user host is assumed.\n- IN: repository content (including ignored .moe runtime files a pull can overwrite), guest code, browser pages and network peers.\nIt accepts the daemon.json port↔pid binding. It accepts the CQ-R08 per-request window, but moves that check's input to the daemon (task-2cf1c6be). It names every follow-up row. docs/ARCHITECTURE.md links it from a new Security Notes section. No code changes.",
+    "acceptanceCriteria": [
+      "The record has exactly the H2 headings Status, Threat model, Open points, Options considered, Decision, Follow-up rows, in that order.",
+      "It covers both open points with code references, lists the OS-lookup, nonce and accept options for point 1 and options (a)-(d) for point 2, each with a reason, and records the decision.",
+      "It names task-2cf1c6be as the required new follow-up, and task-724e31fa with its slices task-801272c4, task-2f2484b4 and task-0c72d59a as the already-filed ones.",
+      "docs/ARCHITECTURE.md gains only a Security Notes section, placed before Error Handling (Current), that links design/protected-profile-threat-model.md."
+    ],
+    "invariants": [
+      "No code, .moe or other docs change, and agents make no Git writes.",
+      "Every impossibility claim cites code or a certifying row, and every gap is described at the problem-class level, with no exploit walkthrough."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/guest-session.mjs daemonRefusal, runner-client.mjs (RUNNER_DAEMON_NOT_LOOPBACK) and vm-control.mjs readDaemonInfo each admit an absent or loopback daemon.json bindHost.",
+      "packages/moe-daemon/src/server/WebSocketServer.ts onConnection authenticates only /runner. runnerChannel.ts authenticateRunner requires a loopback peer and the owner-only key.",
+      "MoeDaemonSupervisor.protectedDaemonCommand adds --host 0.0.0.0 when WSL agents are on, until task-0c72d59a lands.",
+      ".moe/daemon.json is gitignored (.gitignore:63), and a pull can overwrite it (comment-4bef8984)."
+    ],
+    "checkRefs": [
+      "npm run lint && f=docs/design/protected-profile-threat-model.md && for h in 'Status' 'Threat model' 'Open points' 'Options considered' 'Decision' 'Follow-up rows'; do grep -qx \"## $h\" \"$f\" || { echo \"missing heading: $h\"; exit 1; }; done && for r in task-2cf1c6be task-724e31fa task-801272c4 task-2f2484b4 task-0c72d59a comment-4bef8984; do grep -q \"$r\" \"$f\" || { echo \"missing ref: $r\"; exit 1; }; done && grep -qx '## Security Notes' docs/ARCHITECTURE.md && grep -q 'design/protected-profile-threat-model.md' docs/ARCHITECTURE.md && echo VERIFY-OK"
+    ]
+  },
+  "reviewStartedAt": "2026-10-30T07:59:33.025Z",
+  "verification": {
+    "command": "npm run lint && f=docs/design/protected-profile-threat-model.md && for h in 'Status' 'Threat model' 'Open points' 'Options considered' 'Decision' 'Follow-up rows'; do grep -qx \"## $h\" \"$f\" || { echo \"missing heading: $h\"; exit 1; }; done && for r in task-2cf1c6be task-724e31fa task-801272c4 task-2f2484b4 task-0c72d59a comment-4bef8984; do grep -q \"$r\" \"$f\" || { echo \"missing ref: $r\"; exit 1; }; done && grep -qx '## Security Notes' docs/ARCHITECTURE.md && grep -q 'design/protected-profile-threat-model.md' docs/ARCHITECTURE.md && echo VERIFY-OK",
+    "exitCode": 0,
+    "outputTail": "npm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 32 lines (max 40)\nVERIFY-OK\nexit=0",
+    "reportedAt": "2026-10-30T07:59:33.025Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Delivered the CQ-RF05 decision record, docs/design/protected-profile-threat-model.md. It has the six H2 headings Status, Threat model, Open points, Options considered, Decision and Follow-up rows, in that order. docs/ARCHITECTURE.md gains a `## Security Notes` section before `## Error Handling (Current)` that links the record (14 insertions, nothing else changed). No code or .moe edits.\n\nThe decision:\n- OUT of the model: same-user host processes, host-launched seats (the agentCommand gap stays flagged), other local users (a single-user host is assumed), and operator bind configuration.\n- IN the model: repository content (including ignored .moe files a pull can overwrite), guest code, browser pages and network peers.\n- On the live daemon, a project file may add a refusal but never an admission.\n- Point 1 (port↔pid binding) is accepted.\n- Point 2: the window is accepted, and its input moves to the daemon (task-2cf1c6be).\n- Guest sessions and a bind beyond loopback are mutually exclusive.\n\nOptions are listed with reasons: the OS lookup, the nonce, the owner-only record and accepting the gap for point 1, and (a)-(d) for point 2. The record names task-2cf1c6be as the new follow-up, and task-724e31fa with task-801272c4, task-2f2484b4 and task-0c72d59a as the already-filed ones.\n\nFacts that differ from the plan, as read this session:\n- task-801272c4's Origin rule has LANDED (82c97980, in review), so the record calls it landed.\n- The IDE takes the pid and the port from the same file, so the record documents a pid-guess redirect case under point 1. It stays accepted, because the listener is always a host process.\n- /health has no Host check. I filed this as a NEW row, task-80930ce6 (LOW), and the record names it as required.\n\nThe adversarial review fixed six over-broad claims. Verification was re-run fresh after the last edit: npm run lint plus the checkRefs grep chain, VERIFY-OK, exit 0.",
+  "touchedFiles": [
+    "docs/design/protected-profile-threat-model.md",
+    "docs/ARCHITECTURE.md"
+  ],
+  "completedAt": "2026-10-30T08:09:59.845Z",
+  "reviewCompletedAt": "2026-10-30T08:09:59.845Z",
+  "reviewSummary": "Approved CQ-RF05 (docs-only decision record).\nDelivery: completion 4fee6272 is on moe/work-2026-10-24 and pushed. The tree matches the commit. Non-board diff +216 lines (record 202, ARCHITECTURE 14), under the size cap. The Moe-Contested trailer names task-b621ddc9 for ARCHITECTURE.md, but the commit has only this task's single hunk; no peer bytes were swept in.\nVerification: I re-ran task.verification fresh (npm run lint plus the heading/ref/ARCHITECTURE grep chain): VERIFY-OK, exit 0.\nDoD 1: the threat model is stated. OUT: same-user host processes, host seats, other local users (single-user host assumed). IN: repository content (ignored .moe included), guests, browser pages, network peers. Both open points are covered: port↔pid binding accepted; for the CQ-R08 window, the window is accepted and its input moves to the daemon.\nDoD 2: options with reasons (point 1: OS lookup, nonce, owner-only record, accept; point 2: (a)-(d) plus the window); the decision has 6 items. Follow-ups: task-2cf1c6be (new), task-724e31fa with 801272c4/2f2484b4/0c72d59a, plus the new task-80930ce6. All rows exist. ARCHITECTURE.md gains only `## Security Notes`, directly before Error Handling, linking the record, with no task ids.\nDoD 3: lint exit 0 is in the evidence. The six H2 headings are present in order.\nCode refs: I checked about 40 path:line citations against the commit (MoeDaemonSupervisor, MoeProjectService, RuntimeSelectionPolicy, TerminalAgentLauncher, WebSocketServer, daemon index.ts, runnerChannel, guest-session, runner-client, vm-control, guest-bridge, snapshot-transfer, .gitignore:63). All match their symbols.\nInvariants: no code or other docs changes. The commit's .moe/tasks files are wrapper-staged board paths. No exploit walkthrough. Impossibility claims cite code, a certifying row (CQ-R13e) or a platform fact.\nNon-blocking: row statuses are dated \"as of the commit read\" (801272c4 is now DONE). The record runs 202 lines vs the plan's ~170, with the reason explained.",
+  "requiredCheckAtDone": null
+}

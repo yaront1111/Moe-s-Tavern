@@ -1,0 +1,313 @@
+{
+  "id": "task-a60a1616ec5c414fa1ed8d13c1e0ae95",
+  "epicId": "epic-be924fb8",
+  "title": "bug: `moe-daemon status` run from WSL against a Windows-owned daemon deletes the live .moe/daemon.json",
+  "description": "Observed 2026-10-29 16:45Z. The live daemon was running on Windows (supervisor spawned by PyCharm, `D:/projexts/moes`, bindHost 0.0.0.0). From WSL I ran `node packages/moe-daemon/dist/index.js status --project /mnt/d/projexts/moes`. It logged \"Daemon not running (stale daemon.json removed: pid dead)\" and \"Cleaning up stale daemon lifecycle files, reason: projectPath mismatch\", then deleted the running daemon's .moe/daemon.json. New seats lost discovery until the daemon was restarted about 60s later.\n\nRoot cause, in packages/moe-daemon/src/index.ts:\n1. `isSameProjectPath` / `canonicalProjectPath` has no `/mnt/<drive>/…` ↔ `<DRIVE>:/…` mapping. moe-proxy and the moe-agent.sh pre-flight already treat those as the same project.\n2. `isProcessAlive` cannot see a Windows pid from inside WSL.\n3. `statusDaemon` calls `cleanupStaleDaemonFiles` on ANY failed validation, so a status query is destructive.\n\nThe sh wrapper already avoids this: it detects a Windows-owned daemon.json, probes /health over loopback and then the WSL gateway, and refuses to delete. The daemon CLI should be at least as careful, especially `status`.",
+  "definitionOfDone": [
+    "`status` (and any other non-stop CLI path) never deletes .moe/daemon.json or other lifecycle files unless the recorded daemon is proven gone by a check that is valid on this platform. A daemon.json owned by the other side of WSL/Windows is reported, not removed.",
+    "`isSameProjectPath` treats `/mnt/<d>/x` and `<D>:/x` (including backslash and drive-case variants) as the same project, matching moe-proxy's rule. Unit tests cover both directions.",
+    "Regression test: `status` against a daemon.json whose pid is not visible but whose /health answers leaves the file in place and exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nIn packages/moe-daemon/src/index.test.ts, add describe('daemon.json across the WSL boundary'). Import the new exports beside the existing ones: isSameProjectPath, isForeignDaemonInfo, statusDaemon and existingDaemonBlocksStart. Reuse healthServer(projectPath, pid), unusedPort(), daemonInfo() and the testDir lifecycle; move the helpers to file scope or duplicate them minimally.\n\nHelpers:\n- DEAD_PID = 2147483646, a pid that is never live locally. Assert the precondition once: process.kill(DEAD_PID, 0) throws ESRCH.\n- otherSide(fn): save Object.getOwnPropertyDescriptor(process, 'platform'). Redefine process.platform as 'linux' when it is 'win32', else 'win32', so testDir's own path form now looks like the OTHER side's daemon.json. Run fn, and restore the descriptor in finally.\n- Save and restore process.exitCode in afterEach.\n\nRows:\n\nX1. isSameProjectPath, asserted in BOTH argument orders. Equal pairs:\n- ['/mnt/d/projexts/app', 'D:\\\\projexts\\\\app']\n- ['/mnt/d/projexts/app', 'd:/projexts/app/']\n- ['/mnt/D/projexts/app', 'D:/projexts/app']\n- ['/mnt/d/', 'D:\\\\']\nUnequal pairs:\n- ['/mnt/d/x', 'E:/x']\n- ['/mnt/d/x', 'D:/y']\n- ['/mnt/dd/x', 'D:/x']\n- ['/mnt/d/x/y', 'D:/x']\nPOSIX behavior is unchanged: '/tmp/a' equals '/tmp/a/', and on non-win32 '/tmp/A' differs from '/tmp/a'.\n\nX2. isForeignDaemonInfo(info, platform):\n- 'D:\\\\p', 'd:/p' and the UNC '\\\\\\\\srv\\\\share\\\\p' are foreign on 'linux' and 'darwin', and local on 'win32'.\n- '/mnt/d/p' and '/home/u/p' are foreign on 'win32' and local elsewhere.\n\nX3. validateDaemonInfoForProject:\n- Natively, {pid: DEAD_PID, projectPath: testDir, port: healthy} gives reason 'pid not alive'.\n- Under otherSide, with a healthServer(testDir, DEAD_PID) port, the same info gives {valid: true, foreign: true}: the pid check is skipped and /health decides.\n- With an unusedPort() it gives {valid: false, reason: 'foreign daemon unreachable', foreign: true}.\n\nX4 (DoD 3). statusDaemon under otherSide. Write .moe/daemon.json as {port: healthServer(testDir, DEAD_PID), pid: DEAD_PID, projectPath: testDir} and write a .moe/daemon.lock. After await statusDaemon(testDir):\n- daemon.json bytes are unchanged and daemon.lock still exists;\n- process.exitCode is not set to a non-zero value.\nRepeat with an unusedPort(): both files still exist.\n\nX5. statusDaemon natively:\n(a) pid DEAD_PID: daemon.json IS removed. Proven gone on this platform, this is the one deletion status may make.\n(b) pid process.pid (alive) with an unusedPort(): daemon.json is KEPT. Health failing is not proof that the daemon is gone, and status is only a query.\n\nX6. stopDaemon under otherSide, both with a healthy port and with an unused one. Spy on process.kill:\n- it is never called with 'SIGTERM';\n- daemon.json is kept;\n- no .moe/daemon.stop sentinel is written.\nNever signal a pid from another pid namespace.\n\nX7. existingDaemonBlocksStart(testDir):\n- otherSide + healthy: resolves true, the file is kept, and process.exitCode is not 1.\n- otherSide + unused port: resolves true, the file is kept, and process.exitCode === 1.\n- native DEAD_PID: resolves false and daemon.json is removed. Stale recovery is unchanged.\n- no daemon.json: resolves false.\n\nRun only this file in step 3's snapshot: the X rows must be red against today's code. Vitest does not type-check, so a missing export shows as a TypeError; that is fine. Every existing row is unchanged and still passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "QA round 1 fix, red first. X1-X8 unchanged. Added to describe('daemon.json across the WSL boundary'):\n- X9 (skipIf win32, cwd spied to /mnt/d/projexts/app): isSameProjectPath in both orders. Equal: '.' vs '/mnt/d/projexts/app', '.' vs 'D:\\\\projexts\\\\app', 'sub/..' vs 'd:/projexts/app/', '/mnt/d/projexts/app/sub/..' vs 'D:/projexts/app', '/mnt/d/projexts/app/./' vs '/mnt/d/projexts/app', '/mnt/d//projexts/app' vs '/mnt/d/projexts/app'. Unequal: 'sub' and '..'.\n- X10 (win32 branch; flips platform to win32 off Windows, native on Windows): a raw /mnt path is posix-normalized before mapping. '/mnt/d/projexts/app/sub/..' and '/mnt/d/projexts/app/./' equal D:, '/mnt/d/projexts/app/sub/../..' does not.\n- X11 (skipIf win32, QA's row b): validateDaemonInfoForProject('.', live + healthy info at /mnt/d/projexts/app) toEqual {valid:true, info}.\nRED in snapshot /tmp/moe-a60a-r2.14rKl0 (git archive HEAD cadaaaa; index.ts cmp-equal to HEAD = 65e4866's): 3 failed, 28 passed. X9: '.' vs '/mnt/d/projexts/app' got [false,false]; X10: [false,false]; X11: {valid:false, reason:'projectPath mismatch'}.\nNo row writes files through the spied cwd: fs ignores the spy, so a '.'-relative existingDaemonBlocksStart/stopDaemon row would touch the real cwd. X11 covers the shared root, validateDaemonInfoForProject. Shared checkout has many peer-dirty paths; untouched.",
+      "startedAt": "2026-10-29T23:54:31.111Z",
+      "completedAt": "2026-10-29T23:57:48.787Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "packages/moe-daemon/src/index.ts.\n\nCQ-V10 (task-db328cda) now dependsOn this task and later adds a case to main(). Keep this diff to the lifecycle helpers, statusDaemon, stopDaemon, the start paths and the export list.\n\n1. comparableProjectPath(p): a copy of moe-proxy's rule (packages/moe-proxy/src/utils.ts comparableProjectPath with normalizeWindowsDrivePath), with a comment naming that source:\n   - A drive form ^[a-zA-Z]:[\\\\/] is win32-normalized, slashes become '/', the trailing '/' is stripped, and the result is lowercased.\n   - /mnt/<letter>[/rest] becomes '<letter>:/rest' in lowercase.\n   - Anything else is path.resolve, lowercased only on win32.\n   isSameProjectPath(a, b) becomes comparableProjectPath(a) === comparableProjectPath(b).\n   canonicalProjectPath is UNCHANGED. It is the form written into daemon.json and daemon.lock, and clients parse that form.\n2. export function isForeignDaemonInfo(info: DaemonInfo, platform: NodeJS.Platform = process.platform): boolean.\n   - windowsOwned = /^(?:[A-Za-z]:[\\\\/]|[\\\\/]{2}[^\\\\/])/.test(info.projectPath), a drive or UNC path.\n   - Return platform === 'win32' ? !windowsOwned : windowsOwned.\n   Its JSDoc explains that the writer's pid lives in another pid namespace, so process.kill(pid, 0) proves nothing either way. It mirrors moe-agent.sh's pre-flight, which detects a Windows-owned daemon.json by its drive-letter projectPath.\n3. wslGatewayHost(): string | null. Read /proc/net/route and take the first row whose Destination is 00000000 with a non-zero Gateway. Convert the little-endian hex to a dotted quad. Return null on any error. It reads a file and never spawns. It is the Node twin of moe-agent.sh wsl_gateway_host (`ip route show default`).\n4. probeDaemonHealth gains an optional last parameter, host?: string. hostname is host ?? today's expression. Existing calls are unchanged.\n5. validateDaemonInfoForProject: after the shape and project checks, when isForeignDaemonInfo(info):\n   - Probe the hosts in order: today's host (probeHostFor(bindHost), or loopback), then wslGatewayHost() when process.platform === 'linux'. Deduplicate and skip null.\n   - The first healthy answer gives {valid: true, info, foreign: true}. None gives {valid: false, reason: 'foreign daemon unreachable', foreign: true}.\n   The native path is unchanged: the pid check, then health. DaemonValidationResult gains foreign?: boolean.\n6. statusDaemon removes files ONLY when the info has the right shape, is NOT foreign, and !isProcessAlive(pid). In that case it logs 'Daemon not running (stale daemon.json removed: pid dead)' and calls cleanupStaleDaemonFiles.\n   Otherwise it logs 'Daemon status' with:\n   - status: 'running' when valid, else 'unknown' when foreign, else 'stopped';\n   - owner: 'other side of the WSL boundary' or 'local';\n   - reason, port, pid and projectPath.\n   It never deletes in that branch. The exit code stays 0.\n7. stopDaemon: right after validation, if validation.foreign, log that the daemon.json belongs to a daemon on the other side of the WSL boundary and must be stopped from there. Then return, with no stop sentinel, no signal and no deletion. Everything else is unchanged.\n8. export async function existingDaemonBlocksStart(projectPath): Promise<boolean>. It replaces the duplicated first blocks of startDaemon and superviseDaemon:\n   - A valid daemon (native or foreign): log 'Moe daemon already running' and return true.\n   - validation.foreign: logger.error that a daemon.json from the other side of the WSL boundary did not answer /health, so it is not removed and no second daemon starts. Set process.exitCode = 1 and return true.\n   - Otherwise, when a daemon.json exists: keep the existing pid-dead log plus cleanupStaleDaemonFiles. Return false.\n   In startDaemon's lock-wait block, guard the cleanup with !validation.foreign.\n9. Add isForeignDaemonInfo, statusDaemon (already exported) and existingDaemonBlocksStart to the export list.\n\nError handling:\n- /proc/net/route and health-probe failures degrade to 'unreachable'. They never throw and never delete.\n- The only new non-zero exit is the refused start.\n- No path deletes a foreign daemon.json or daemon.lock, or signals a foreign pid.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "QA round 1 fix (index.ts:98 regression): comparableProjectPath now maps /mnt/<d> AFTER normalizing instead of on the raw string. Order:\n1. A raw drive form (^[a-zA-Z]:[\\\\/]) is win32-normalized, as before.\n2. On non-win32, path.resolve(raw), then the /mnt/<letter> mapping on the resolved path. So '.', 'sub/..', '/mnt/d/x/./' and '/mnt/d//x' match '/mnt/d/x' again.\n3. On win32, path.posix.normalize(raw) is matched instead, because path.resolve would prefix the cwd drive. A non-match falls back to path.resolve, as before.\nEverything else is unchanged: canonicalProjectPath (the written form), isForeignDaemonInfo, the foreign branches, statusDaemon, stopDaemon, existingDaemonBlocksStart and main(). The JSDoc now says \"Follows\" moe-proxy's rule, not \"A copy of\". +7/-6 lines.\n\nGREEN in snapshot /tmp/moe-a60a-r2.14rKl0: tsc --noEmit clean; index.test.ts 31/31 (X1-X8 plus the new X9-X11).\n\nReplayed QA's repro with a throwaway tsx script (/tmp/moe-a60a-repro/repro.mts, not committed). Real cwd is a temp project; process.cwd is patched to /mnt/d/qa-a60a-fake; a live, healthy native daemon is recorded there; process.kill is stubbed.\n- HEAD 65e4866: validation {valid:false, reason:'projectPath mismatch'}. existingDaemonBlocksStart('.') returned false and deleted daemon.json and daemon.lock. stopDaemon('.') deleted both with no signal.\n- Fixed: {valid:true}. Start is blocked (\"already running\") and both files are kept. Stop SIGTERMs the native pid with the sentinel, as on parent ddce8a3.",
+      "startedAt": "2026-10-29T23:57:50.825Z",
+      "completedAt": "2026-10-30T00:00:44.144Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh. The shared checkout's node_modules are Windows builds, so run in a Linux snapshot per Serena memory gotcha-linux-vitest-reuse-native-node-modules:\n- git archive HEAD (packages/moe-daemon, scripts, docs, CLAUDE.md, .gitignore, package.json) into a mktemp dir;\n- symlink the native Linux node_modules DIRECTORY;\n- cp this task's two files over the archive, and cmp them against the worktree.\n\n1. From <snap>/packages/moe-daemon, run env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin sh -c 'npx tsc --noEmit && npx vitest run src/index.test.ts && npm test'.\n   - It must exit 0, with X1-X7 run and every existing index.test.ts row green.\n   - The full daemon suite is included because isSameProjectPath also gates the lock and health logic.\n   - Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. NEVER run status, start or stop against the shared checkout's LIVE daemon. That is the bug's own repro, and it would strand the fleet if the fix were wrong. Any manual smoke uses a throwaway temp project.\n3. `git diff --check` is clean on both files, and a read-only `git status --short` shows this task changed only those two. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix code, never an existing row. If the native node_modules tree is gone, `npm ci` in a separate scratch copy, never in the shared checkout.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh gate, exit 0. Snapshot /tmp/moe-a60a-gate.YLZnGk is git archive HEAD 45a4ac0 plus this task's two files, cmp-equal to the worktree. node_modules is a native Linux tree (cp -al), and its package-lock md5 matches HEAD.\nCommand: from packages/moe-daemon, env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin sh -c 'npx tsc --noEmit && npx vitest run src/index.test.ts && npm test'\n- tsc --noEmit: clean.\n- index.test.ts: 31/31 passed (X1-X8 unchanged, plus X9-X11).\n- npm test: 187 files, 5253 passed, 16 skipped (5269), 22.69s.\ngit diff --check is clean on both files. Against HEAD the task diff is index.ts +9/-6 and index.test.ts +38. No status, start or stop was run against the live daemon; the only replay used a throwaway temp project.",
+      "startedAt": "2026-10-30T00:00:48.238Z",
+      "completedAt": "2026-10-30T00:02:21.476Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review and read the diff as an attacker:\n- Is there ANY remaining path (status, start, _run, init, stop, the lock-wait block, or removeStaleLock reached from them) that deletes a foreign daemon.json or daemon.lock, or signals a foreign pid?\n- Can a repository-supplied daemon.json abuse the foreign branch, for example a forged drive-letter projectPath or a hostile bindHost? Check that it only ever causes a refusal or a report, never a deletion, a kill or a duplicate daemon.\n- Is what gets written (canonicalProjectPath) byte-for-byte unchanged, so the proxy, the IDE plugins and the sh pre-flight still parse it?\n- Do native stale-file recovery (pid dead) and pid-reuse recovery in start still work?\n- Does every test restore process.platform and process.exitCode on every path?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 3's command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Adversarial self-review of this round's diff (index.ts +9/-6, index.test.ts +43). One finding, fixed:\n- FIXED, test strength: off Windows, X10 could not tell path.posix.normalize from path.resolve in the win32 branch, because posix resolve of an absolute /mnt path is already normalized. X10 now also stands in win32 path.resolve (path.win32.resolve('C:\\\\work', ...)) off Windows. The spy is scoped to the call and restored in finally.\n\nMutation probes, index.test.ts only (copy /tmp/moe-a60a-mut.QweMrB). Baseline is 31/31 and every mutant fails at least one row:\n- M1, map the raw string (round 1): X9, X10, X11.\n- M2, win32 uses path.resolve: X10.\n- M3, always posix-normalize: X9, X11.\n- M4, drop the trailing-slash strip: X10.\n- M5, lowercase on POSIX: X1.\n\nProperty fuzz (/tmp/moe-a60a-repro/fuzz.mts): 240k random relative and absolute pairs under 6 cwds (/mnt/d/projexts/app, /mnt/d, /mnt/c/x, /home/u/app, /, /mnt). 0 failures:\n- every ddce8a3-equal pair and every 65e4866-equal pair is still equal;\n- the rule is symmetric;\n- the only new equalities are paths that resolve under /mnt/<d> (e.g. '.' vs 'd:/', '.' vs '/mnt/D/').\n\nChecklist:\n- Concurrency: none; the function is pure.\n- Inputs: the regex is linear. Absolute inputs never call cwd (posix resolve stops at the first absolute arg).\n- Writes: canonicalProjectPath, the written form, is untouched. So are the foreign guards, statusDaemon, stopDaemon, existingDaemonBlocksStart and main().\n- Restores: the cwd spies are restored by afterEach restoreAllMocks, process.platform by otherSide's finally, and the path.resolve spy in finally. exitCode is untouched.\n- Native recovery: X5a, X7 and the PID-reuse lock row stay green.\n\nTheoretical, not fixed:\n- On Windows, a POSIX-form '/mnt/<d>/x' --project now names drive <d>. It no longer matches a literal C:\\mnt\\<d>\\x project, as it did on ddce8a3. That is moe-proxy's rule (DoD 2) and was already true in round 1; the literal layout is contrived.\n- The case-insensitive match under /mnt/<d> is DrvFs semantics, as in moe-proxy.\n\nFollow-up filed: task-ea57601db42448dabefbbbe6557a0b9d (LOW, BACKLOG). moe-proxy has the same raw-string /mnt mapping; I reproduced it with tsx ('.' maps to '/mnt/d/projexts/app', not 'd:/projexts/app'). The proxy is not edited here.\n\nFresh gate after the X10 change, exit 0. Snapshot /tmp/moe-a60a-gate2.DFNZ9g is HEAD 400bd50 plus both files, cmp-equal. tsc clean; index.test.ts 31/31; suite 187 files, 5253 passed, 16 skipped. git diff --check is clean.",
+      "startedAt": "2026-10-30T00:02:24.070Z",
+      "completedAt": "2026-10-30T00:08:59.450Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Reviewed completion 65e4866 on moe/work-2026-10-24: 291 net non-board LOC (index.ts +134/-37, index.test.ts +194). I re-ran the gate in a fresh Linux snapshot of 65e4866, whose daemon tree equals HEAD's (374be44): tsc clean, index.test.ts 28/28, suite 187 files / 5246 passed / 16 skipped, EXIT 0. The foreign-file handling looks right: X1-X8 hold and every deleter is guarded.\n\nREJECT for one regression in the NATIVE path. It breaks DoD 1 and the contract's compatibility clause \"Native start, stop and stale recovery behave as before\".\n\nThe new comparableProjectPath (index.ts:98-109) applies the /mnt/<d> → <d>: mapping only to the RAW string. A relative or non-normalized path goes through path.resolve, and nothing maps it afterwards. On WSL with cwd /mnt/d/x, comparable('.') is '/mnt/d/x' but comparable('/mnt/d/x') is 'd:/x', so isSameProjectPath('.', '/mnt/d/x') === false; it was true before. '/mnt/d/x/sub/..' vs '/mnt/d/x' is also false now.\n\nReproduced in my snapshot with process.cwd spied to /mnt/d/qa-a60a-fake, a live pid and a healthy /health:\n- Landed code: validateDaemonInfoForProject('.') returns {valid:false, reason:'projectPath mismatch'}. existingDaemonBlocksStart('.') returns false and deletes BOTH daemon.json and daemon.lock of the live daemon.\n- Parent ddce8a3: the same validation returns {valid:true}.\n\nSo `start --project .` from /mnt/d/proj in WSL now wipes a running daemon's discovery files and starts a second daemon. `stop --project .` deletes daemon.json without SIGTERM, leaving an orphaned live daemon. That is the bug class this task removes, moved into the native path. The launchers absolutize PROJECT, so seats don't hit it, but a human running the CLI by hand does, which is how the original incident happened.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 259.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T16:47:48.719Z",
+  "updatedAt": "2026-10-30T01:16:18.194Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-29T17:00:24.524Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-29T23:26:49.962Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T01:14:49.624Z",
+    "wallClockMs": 6479662
+  },
+  "contextFetchedBy": [
+    "worker-0062feec",
+    "qa-952969be"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [
+    {
+      "item": "`status` (and any other non-stop CLI path) never deletes .moe/daemon.json or other lifecycle files unless the recorded daemon is proven gone by a check that is valid on this platform. A daemon.json owned by the other side of WSL/Windows is reported, not removed.",
+      "rejectedAt": "2026-10-29T23:51:26.650Z",
+      "rejectedBy": "qa-952969be"
+    }
+  ],
+  "planSubmittedAt": "2026-10-29T23:32:08.568Z",
+  "executionContract": {
+    "intendedBehavior": "A daemon.json written on the other side of the WSL/Windows boundary is judged only by /health, probed over loopback and then the WSL gateway, never by a pid check from the wrong namespace. status, start, _run and init never delete it, and stop never signals its pid. Project paths match across /mnt/<d>/x and <D>:/x, as moe-proxy's do. Local stale recovery (pid dead) is unchanged. status is otherwise read-only.",
+    "acceptanceCriteria": [
+      "X1-X7 pass in index.test.ts.",
+      "statusDaemon leaves a foreign daemon.json that answers /health (DoD 3) and also one that does not, and exits 0.",
+      "The full daemon suite and tsc are green."
+    ],
+    "invariants": [
+      "What canonicalProjectPath writes is unchanged.",
+      "No foreign pid is ever signalled.",
+      "No foreign daemon.json or daemon.lock is deleted.",
+      "No MCP tool contract changes."
+    ],
+    "compatibility": [
+      "Native start, stop and stale recovery behave as before.",
+      "Existing index.test.ts rows are unchanged."
+    ],
+    "approvedScope": [
+      "comparableProjectPath, isSameProjectPath, isForeignDaemonInfo, wslGatewayHost, the probeDaemonHealth host parameter, validateDaemonInfoForProject, statusDaemon, the stopDaemon foreign guard, existingDaemonBlocksStart, and the exports in packages/moe-daemon/src/index.ts",
+      "X1-X7 in packages/moe-daemon/src/index.test.ts"
+    ],
+    "checkRefs": [
+      "(Linux snapshot, packages/moe-daemon) npx tsc --noEmit && npx vitest run src/index.test.ts && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected alternatives:\n- Changing canonicalProjectPath itself. That would change the projectPath WRITTEN to daemon.json and daemon.lock, which clients parse. Only the comparison changes.\n- Spawning `ip route` like the sh wrapper. /proc/net/route is a plain file read, with no child process.\n- Making status strictly non-destructive even for a local pid that is dead. That case is proven gone and DoD 1 allows it; X5a keeps that recovery.\n- Leaving stop as it is. The cross-side health validation this task adds would make stop SIGTERM a pid from another namespace, so stop needs a foreign guard even though DoD 1 only covers non-stop paths.\n- Keeping start's duplicated validation blocks. They are folded into one exported existingDaemonBlocksStart so the foreign refusal is tested without spawning a supervisor or starting a daemon.\n- Faking WSL paths in tests. They cannot exist on CI. The tests flip process.platform to the other side instead, which makes testDir's own path form the foreign one; this works on all three CI OSes.",
+    "codebaseInsights": "Lifecycle code in packages/moe-daemon/src/index.ts, approximately:\n- canonicalProjectPath at line 87 is path.resolve; isSameProjectPath at 91 lowercases only on win32. The lock's staleLockReason at 154 uses both.\n- probeDaemonHealth at 242 requires status healthy, a matching projectPath and pid === info.pid.\n- validateDaemonInfoForProject is at 290; isProcessAlive at 349 is ESRCH-only death.\n- cleanupStaleDaemonFiles at 435 removes daemon.json and the stale lock.\n- startDaemon at 497 and superviseDaemon at 780 duplicate the validate-then-cleanup block.\n- stopDaemon is at 905. statusDaemon at 936 calls cleanup on ANY invalid result: that is the bug.\n- main's switch is at about 1063, and the exports at 1098.\n\nmoe-proxy's comparableProjectPath (packages/moe-proxy/src/utils.ts) is the rule to match. moe-agent.sh wsl_gateway_host is at line 1461.\n\nindex.test.ts helpers: healthServer(projectPath, pid), unusedPort() and daemonInfo(). It has no statusDaemon tests yet.\n\nCQ-V10 (task-db328cda) now dependsOn this task, because of its own small main() edit.",
+    "risks": "- On Windows, process.kill(2147483646, 0) must give ESRCH, so assert the precondition.\n- Restoring process.platform must use the saved descriptor. vitest workers are isolated per file, but restore in finally anyway.\n- A lingering process.exitCode = 1 from X7 could fail the vitest run, so restore it in afterEach.\n- A foreign healthy daemon makes start return true ('already running') with exit 0. That is intended: never start a second daemon for the same project.\n- A hostile repository daemon.json naming a foreign drive path now leads to a refusal or a report rather than a deletion, which is the safe direction.\n- Do not touch main()'s cases. CQ-V10 edits main() after this task.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/index.test.ts",
+      "packages/moe-proxy/src/utils.ts",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T23:32:08.655Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T23:33:54.844Z",
+  "reviewStartedAt": "2026-10-30T00:10:06.139Z",
+  "verification": {
+    "command": "(Linux snapshot /tmp/moe-a60a-gate2.DFNZ9g = git archive HEAD 400bd50 + this task's two files, cmp-equal; native node_modules, package-lock md5 = HEAD) cd packages/moe-daemon && env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin sh -c 'npx tsc --noEmit && npx vitest run src/index.test.ts && npm test'",
+    "exitCode": 0,
+    "outputTail": "npx tsc --noEmit: clean\n ✓ src/index.test.ts (31 tests) 115ms\n Test Files  1 passed (1)\n      Tests  31 passed (31)\n npm test:\n ✓ src/index.test.ts (31 tests) 110ms\n ✓ src/util/qaCommitPolicy.test.ts (8 tests) 4ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n Test Files  187 passed (187)\n      Tests  5253 passed | 16 skipped (5269)\n   Start at  02:08:13\n   Duration  26.50s (tests 90%, transform 6%, import 4%)\nEXIT=0; git diff --check clean on both files",
+    "reportedAt": "2026-10-30T00:10:06.139Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/index.ts",
+    ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json",
+    ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
+    ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+    ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json"
+  ],
+  "completionSummary": "QA round 1 fix. Relative and non-normalized project paths under /mnt/<d> match a native daemon again, and the WSL/Windows foreign-file handling from 65e4866 is unchanged.\n- index.ts comparableProjectPath (+9/-6) maps /mnt/<letter> only after normalizing:\n  - A raw drive form is win32-normalized, as before.\n  - Off win32, the match runs on path.resolve(raw). '.', 'sub/..', '/mnt/d/x/./' and '/mnt/d//x' all match '/mnt/d/x' and 'D:\\x' again.\n  - On win32, the match runs on path.posix.normalize(raw), since path.resolve would prefix the cwd drive.\n  - A non-match falls back to path.resolve, as before.\n  - canonicalProjectPath (the written form), the foreign guards, statusDaemon, stopDaemon, existingDaemonBlocksStart and main() are untouched. No MCP contract change.\n- index.test.ts (+43). X1-X8 are unchanged. New rows, all red on 65e4866:\n  - X9 (skipIf win32, cwd spied to /mnt/d/projexts/app): QA's four pairs in both orders, plus 'sub/..', '/mnt/d//…' and unequal 'sub' and '..'.\n  - X10: the win32 branch. Off Windows it flips the platform and stands in path.win32.resolve.\n  - X11: QA's row (b), validateDaemonInfoForProject('.', a live healthy info at /mnt/d/projexts/app) toEqual {valid:true, info}.\n- Evidence:\n  - A tsx replay of QA's repro (real temp cwd, patched process.cwd, stubbed kill): on 65e4866, start '.' deleted daemon.json and daemon.lock, and stop '.' deleted them unsignalled. Now start reports \"already running\" and keeps both files, and stop SIGTERMs the native pid.\n  - A fuzz over 240k relative/absolute pairs and 6 cwds found 0 ddce8a3-equal or 65e4866-equal pairs lost. The rule is symmetric, and the only new matches resolve under /mnt/<d>.\n  - Mutants M1-M5 (raw match, resolve on win32, always posix-normalize, no trailing strip, POSIX lowercase) are each caught.\n- Gate, fresh: HEAD 400bd50 plus both files, Linux snapshot, exit 0. tsc clean; index.test.ts 31/31; suite 187 files, 5253 passed, 16 skipped.\n- Follow-up: task-ea57601db42448dabefbbbe6557a0b9d (LO",
+  "commits": [
+    {
+      "sha": "65e48668b9a6c5cce36cfe41d7f0d54aa7908308",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-29T23:32:12Z",
+      "paths": [
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+        ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-29T23:41:56.916Z",
+      "treeId": "71b4f6c8a851ee19fd6086bbd7fb70ab8dd73980",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "1d13729fd10a49a5354fb48f1a7ab5639dd55fcd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T23:51:35Z",
+      "paths": [
+        ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json",
+        ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
+        ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T00:10:29.181Z",
+      "treeId": "fcdcba6d259f816c73992d2d964c2486c8581817",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "9a28b0fb7fd557c044ec157e915625de690cbf36",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T01:02:41Z",
+      "paths": [
+        ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
+        ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T01:16:18.193Z",
+      "treeId": "32d348ddb34b4ac15f99f72ca8656f4615bcc7ec",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/index.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T01:02:41Z",
+    "at": "2026-10-30T01:16:18.193Z"
+  },
+  "reviewCompletedAt": "2026-10-30T01:14:49.624Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "`status` (and any other non-stop CLI path) never deletes .moe/daemon.json or other lifecycle files unless the recorded daemon is proven gone by a check that is valid on this platform. A daemon.json owned by the other side of WSL/Windows is reported, not removed."
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "packages/moe-daemon/src/index.ts",
+        "line": 98,
+        "description": "comparableProjectPath maps /mnt/<d> only on the RAW string, so a resolved '.', 'sub' or '/mnt/d/x/sub/..' stays '/mnt/d/x' unmapped and differs from an absolute '/mnt/d/x' ('d:/x'). Fix: on non-win32, path.resolve first, then apply the /mnt/<letter> mapping to the resolved path. On win32, still detect a raw '/mnt/<d>' (resolve would prefix the drive) and path.posix.normalize it before mapping. canonicalProjectPath stays unchanged."
+      },
+      {
+        "type": "regression",
+        "file": "packages/moe-daemon/src/index.ts",
+        "line": 580,
+        "description": "Effect: existingDaemonBlocksStart('.') under cwd /mnt/d/x, with a live, healthy native daemon recorded as '/mnt/d/x', gets 'projectPath mismatch', calls cleanupStaleDaemonFiles and deletes daemon.json and daemon.lock, so start/init/_run spawns a second daemon. stopDaemon('.') deletes daemon.json and writes the sentinel without SIGTERM. Reproduced with vi.spyOn(process,'cwd') and a real health server: landed code deleted both files, parent ddce8a3 validated {valid:true}."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/index.test.ts",
+        "description": "Add rows that are red on 65e4866 (non-win32, cwd spied to '/mnt/d/projexts/app'). (a) isSameProjectPath is true in both orders for '.' vs '/mnt/d/projexts/app', '.' vs 'D:\\\\projexts\\\\app', '/mnt/d/projexts/app/sub/..' vs 'D:/projexts/app', and '/mnt/d/projexts/app/./' vs '/mnt/d/projexts/app'. (b) validateDaemonInfoForProject('.', a live, healthy info at '/mnt/d/projexts/app') gives {valid:true}. Keep X1-X8 unchanged and re-run the plan's gate fresh."
+      },
+      {
+        "type": "other",
+        "file": "packages/moe-proxy/src/utils.ts",
+        "line": 24,
+        "description": "FYI, not in this task's scope: moe-proxy's comparableProjectPath has the same resolve-then-no-map gap, but it is non-destructive there (the proxy exits on mismatch). Mention it in completionSummary so the architect can file a follow-up; do not edit the proxy here."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Reviewed completion 65e4866 on moe/work-2026-10-24: 291 net non-board LOC (index.ts +134/-37, index.test.ts +194). I re-ran the gate in a fresh Linux snapshot of 65e4866, whose daemon tree equals HEAD's (374be44): tsc clean, index.test.ts 28/28, suite 187 files / 5246 passed / 16 skipped, EXIT 0. The foreign-file handling looks right: X1-X8 hold and every deleter is guarded.\n\nREJECT for one regression in the NATIVE path. It breaks DoD 1 and the contract's compatibility clause \"Native start, stop and stale recovery behave as before\".\n\nThe new comparableProjectPath (index.ts:98-109) applies the /mnt/<d> → <d>: mapping only to the RAW string. A relative or non-normalized path goes through path.resolve, and nothing maps it afterwards. On WSL with cwd /mnt/d/x, comparable('.') is '/mnt/d/x' but comparable('/mnt/d/x') is 'd:/x', so isSameProjectPath('.', '/mnt/d/x') === false; it was true before. '/mnt/d/x/sub/..' vs '/mnt/d/x' is also false now.\n\nReproduced in my snapshot with process.cwd spied to /mnt/d/qa-a60a-fake, a live pid and a healthy /health:\n- Landed code: validateDaemonInfoForProject('.') returns {valid:false, reason:'projectPath mismatch'}. existingDaemonBlocksStart('.') returns false and deletes BOTH daemon.json and daemon.lock of the live daemon.\n- Parent ddce8a3: the same validation returns {valid:true}.\n\nSo `start --project .` from /mnt/d/proj in WSL now wipes a running daemon's discovery files and starts a second daemon. `stop --project .` deletes daemon.json without SIGTERM, leaving an orphaned live daemon. That is the bug class this task removes, moved into the native path. The launchers absolutize PROJECT, so seats don't hit it, but a human running the CLI by hand does, which is how the original incident happened.",
+      "rejectedAt": "2026-10-29T23:51:26.650Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "`status` (and any other non-stop CLI path) never deletes .moe/daemon.json or other lifecycle files unless the recorded daemon is proven gone by a check that is valid on this platform. A daemon.json owned by the other side of WSL/Windows is reported, not removed."
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "packages/moe-daemon/src/index.ts",
+          "line": 98,
+          "description": "comparableProjectPath maps /mnt/<d> only on the RAW string, so a resolved '.', 'sub' or '/mnt/d/x/sub/..' stays '/mnt/d/x' unmapped and differs from an absolute '/mnt/d/x' ('d:/x'). Fix: on non-win32, path.resolve first, then apply the /mnt/<letter> mapping to the resolved path. On win32, still detect a raw '/mnt/<d>' (resolve would prefix the drive) and path.posix.normalize it before mapping. canonicalProjectPath stays unchanged."
+        },
+        {
+          "type": "regression",
+          "file": "packages/moe-daemon/src/index.ts",
+          "line": 580,
+          "description": "Effect: existingDaemonBlocksStart('.') under cwd /mnt/d/x, with a live, healthy native daemon recorded as '/mnt/d/x', gets 'projectPath mismatch', calls cleanupStaleDaemonFiles and deletes daemon.json and daemon.lock, so start/init/_run spawns a second daemon. stopDaemon('.') deletes daemon.json and writes the sentinel without SIGTERM. Reproduced with vi.spyOn(process,'cwd') and a real health server: landed code deleted both files, parent ddce8a3 validated {valid:true}."
+        },
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/index.test.ts",
+          "description": "Add rows that are red on 65e4866 (non-win32, cwd spied to '/mnt/d/projexts/app'). (a) isSameProjectPath is true in both orders for '.' vs '/mnt/d/projexts/app', '.' vs 'D:\\\\projexts\\\\app', '/mnt/d/projexts/app/sub/..' vs 'D:/projexts/app', and '/mnt/d/projexts/app/./' vs '/mnt/d/projexts/app'. (b) validateDaemonInfoForProject('.', a live, healthy info at '/mnt/d/projexts/app') gives {valid:true}. Keep X1-X8 unchanged and re-run the plan's gate fresh."
+        },
+        {
+          "type": "other",
+          "file": "packages/moe-proxy/src/utils.ts",
+          "line": 24,
+          "description": "FYI, not in this task's scope: moe-proxy's comparableProjectPath has the same resolve-then-no-map gap, but it is non-destructive there (the proxy exits on mismatch). Mention it in completionSummary so the architect can file a follow-up; do not edit the proxy here."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-30T01:14:49.624Z",
+  "reviewSummary": "QA r2 APPROVE. Reviewed 1d13729 on moe/work-2026-10-24 (tree fcdcba6d, in origin). Round 2: index.ts +9/-6, test +43 (adds only; X1-X8 unchanged). Task total vs ddce8a3: 337 net LOC.\n\nGate, fresh Linux snapshot of HEAD b9ea011 (task files cmp-equal), EXIT 0:\n- tsc clean; index 31/31; suite 189 files, 5276 passed, 16 skipped.\n- Native Windows node 24.16: index 28 passed, 3 skipped (X9 and X11 by design, plus /dev/zero). X10 passes.\n\nFix, checked by my tsx replay (cwd=/mnt/d/fake, live pid, real /health):\n- HEAD: validate('.') valid. start blocked, files kept. status keeps them. stop sends SIGTERM.\n- 65e4866 control: start and stop delete both files.\n\nTest strength: X9-X11 fail on 65e4866, and my two win32/resolve mutants are caught.\n\nDoD:\n1. All deleters guarded (status, stop, start/_run/init, lock-wait, staleLockReason); doctor is read-only.\n2. X1 both orders, plus X9 and X10.\n3. X4 keeps the foreign file and lock, exit 0.\n\nRails hold: no MCP change; canonicalProjectPath unchanged.\n\nNon-blocking: isForeignDaemonInfo calls a Linux '//home/x' path foreign. That is conservative, never deletes, and launchers never pass '//'.",
+  "requiredCheckAtDone": null
+}

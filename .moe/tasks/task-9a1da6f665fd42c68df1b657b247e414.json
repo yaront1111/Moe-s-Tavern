@@ -1,0 +1,281 @@
+{
+  "id": "task-9a1da6f665fd42c68df1b657b247e414",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: JetBrains protected profile record is keyed by the project's real-path spelling, so opening a PROTECTED project through an alias spelling (UNC, subst, mapped) reads ABSENT and can run LEGACY with no downgrade prompt",
+  "description": "This is a known residual of the protected-profile Windows alias work. It tracks a finding under RF07 (f3f364a6) DoD 3 (\"files a row for each finding\"), so the epic's adversarial review can cite it instead of rediscovering it.\n\nSource: code reading by architect-4ae016fb (msg-98faf485, 16:40Z, 2026-10-30), triaged by 52fb6178's planner architect-6fc3dd5c (msg-521369be, 17:03Z). Neither ran a probe.\n- RuntimeSelectionPolicy projectKey (about :169) keys RF02's stored profile record off the project's real path.\n- Open a project that has a stored PROTECTED record through an alias spelling: a UNC loopback share, or a subst or mapped drive (Java toRealPath keeps those letters). The record lookup then reads ABSENT.\n- If project.json no longer declares verified-local, profile() returns LEGACY with no downgrade prompt, so none of the protected refusals run.\n- It needs a human to open the project through the alias spelling.\n\nWhy there is no fix yet: there is no robust key without native file identity, and on Windows NIO's fileKey is null. It is the same class as 1c2bfeca's subst residual. 52fb6178 makes a share-opened project's protected state session-only (ProtectedStateStore.usableFor = false), but it does not key the record by identity.\n\nOptions for whoever plans this (the planner decides): key the record by a native identity (volume serial + file index through JNA/JNI, or a probe-backed helper). Or refuse to downgrade when any stored record matches the project by isSameFile. Or detect a non-plain-local base and refuse with a prompt instead of falling back to LEGACY. Probe natively first. It dependsOn 52fb6178, the last open row on RuntimeSelectionPolicy.kt.",
+  "definitionOfDone": [
+    "On a Windows host, a project whose PROTECTED record was stored under its local spelling, opened through a UNC loopback, subst or mapped-drive spelling, never silently resolves to LEGACY. It resolves to PROTECTED, or the user gets the downgrade prompt. Shown by JetBrains tests that need no network (fake or temporary subst where possible).",
+    "Plain local opens, POSIX hosts and the legacy profile behave as before. The existing RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest rows pass unchanged.",
+    "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" exits 0 from WSL, with the output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "ProtectedStateStore listing API and its test. Files: ProtectedStateStore.kt and RuntimeSelectionPolicyTest.kt.\nThis row is claimable only after task-1c2bfeca (reopen) and task-52fb6178 (rev 3) are DONE. Re-read both files as they landed first. Those rows change only selection code (isOutsideProject, select, isPlainLocalPath, outsideByIdentity) and N/S test rows. The checkout is shared: never revert, stash or stage a peer's dirty path.\n(a) Add `fun names(): List<String>` next to read(). It returns the names in the root that match NAME (64 lowercase hex digits + .json), sorted.\n- It applies the same root rules as read(). A missing root below a directory gives emptyList() through requireDirectoryAbove, and the root is never created.\n- Otherwise it calls requireOwnerOnly(root, directory = true) first, then `Files.newDirectoryStream(root).use { … }`.\n- It reads no file. The root check already refuses a link or junction root.\n- Error handling: every failure throws, as the class contract says. That is Untrusted for a root the IDE would not have made, or the IOException otherwise. The caller decides what a failure means. The KDoc states this in one sentence.\n(b) Test PS8, placed after the last PS row as landed:\n- newStore().names() is [], and store.root does not exist afterwards.\n- store.write(NAME_B), then store.write(NAME_A). Then create stray files directly in the root: 'notes.txt', 'state-1.tmp', and the upper-case form of a valid name. names() is exactly [NAME_A, NAME_B].\n- ProtectedStateStore(<a regular file>.toPath()).names() throws ProtectedStateStore.Untrusted (assertThrows).\n- Last, because it may skip: assumeTrue(loosen(root, directory = true)), then names() throws Untrusted.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "ProtectedStateStore.names(): read()'s root rules (missing root below a directory -> [] via requireDirectoryAbove, never created; else requireOwnerOnly(root, directory=true)), then newDirectoryStream filtered by NAME, sorted; reads no file; throws Untrusted/IOException. PS8 added after PS7: [] + root absent; NAME_B then NAME_A written plus strays notes.txt, state-1.tmp and NAME_C.uppercase() (NAME_C, not NAME_A, because an upper-case NAME_A would fold onto the real file on NTFS) -> exactly [NAME_A, NAME_B]; regular-file root -> Untrusted; loosened root (assumeTrue) -> Untrusted. Run batched into the step-3 RED run and the step-4 gate (Gradle needs the jetbrains-gradle lease). Peer dirty paths: only .moe/tasks/*.json and .moe/decisions/, untouched.",
+      "startedAt": "2026-10-30T22:21:28.235Z",
+      "completedAt": "2026-10-30T22:21:53.067Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Production change, RuntimeSelectionPolicy.kt only: honor a PROTECTED record stored under another spelling of the same folder. Change only the profile side: projectKey, profile, askDowngrade, resetForTest, and the new functions below. Leave the selection code that 1c2bfeca and 52fb6178 own exactly as it landed.\n(a) Extract `private fun projectPath(basePath: String): Path?` from projectKey. It returns realPathOrNull(basePath), else Paths.get(basePath).toAbsolutePath().normalize(), else null, with the same Exception/IOError catches. projectKey becomes comparablePath(projectPath(basePath)?.toString() ?: basePath, defaultFoldCase). No behavior change.\n(b) Add a seam next to confirmer and store: `@Volatile internal var sameDirectory: (Path, Path) -> Boolean = { a, b -> Files.isSameFile(a, b) }`. resetForTest restores it; forgetSessionForTest does not.\n(c) Add `private fun protectedAliases(basePath: String, key: String): List<String>`. It returns emptyList() unless windowsHost, so POSIX behavior is unchanged.\n- It reads store(), not usableStore(basePath). A share, device or mapped base is not provably outside, so usableFor is false for it, and that is exactly the open this row must catch. A stored PROTECTED record can only make the answer stricter, and the lookup never writes.\n- base = projectPath(basePath). name = base.fileName folded with comparablePath(it.toString(), defaultFoldCase), or null when the base is a root (Z:\\ or \\\\srv\\share\\).\n- It collects aliasOrNull(...) for each store.names() entry.\n(d) `private fun aliasOrNull(store, file, key, name, base): String?` runs these cheap checks before opening anything, in this order:\n- store.read(file), then parseStrict(text, \"the profile record\").fields(PROFILE_FIELDS, …);\n- version exactLong() == 1L;\n- profile == \"protected\";\n- project is a string, and project != key;\n- isPlainLocalPath(project), checked on the string BEFORE any Paths.get, so a share, device or relative spelling from the store is never opened;\n- recordsFile(\"profile:$project\") == file, so a record copied under another name is not its project's record;\n- Paths.get(project).fileName is non-null, so a root-keyed record is never compared;\n- when name != null, the folded fileName == name.\nOnly then call sameDirectory(Paths.get(project), base); true returns project.\nError handling:\n- Per record, any Exception or IOError gives null: that record matches nothing, which is today's answer.\n- Around the whole lookup (no store, an unlistable or untrusted root, an unresolvable base), the answer is emptyList() plus one log.warn through describe(ex).\n- It never throws and never writes.\n(e) profile(), in the branch that is not verified-local: `val aliases = if (stored == StoredProfile.ABSENT || stored == StoredProfile.LEGACY) protectedAliases(basePath, key) else emptyList()`. The early return becomes `if (aliases.isEmpty() && (stored == ABSENT || stored == LEGACY)) return if (key in pinned) PROTECTED else LEGACY`, keeping the existing comment. Otherwise it runs `if (pinned.add(key)) askDowngrade(basePath, key, aliases)`, plus one log.warn line when aliases is non-empty (no UI change).\n- Scan on LEGACY too. A stale legacy record under a subst or mapped letter that now names another folder must not hide that folder's protected record (DoD 1 says 'never').\n(f) askDowngrade(basePath, key, aliases): on the first confirmed allow, persist(basePath, key, LEGACY) as today, then `aliases.forEach { persist(it, it, RuntimeProfile.LEGACY) }`. The record's key is its own plain local path, so usableStore(it) still refuses a store inside that project. A decline or failure writes nothing, as now.\n(g) Add one KDoc sentence on the object: on Windows, a confirmed-protected folder is recognized under another spelling (subst, mapped, share, device) by file identity.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "note": "RuntimeSelectionPolicy.kt, profile side only (selection code of 1c2bfeca/52fb6178/dd545bf1 byte-for-byte untouched): (a) projectPath extracted, projectKey = comparablePath(projectPath(..)?.toString() ?: basePath, defaultFoldCase), same catches. (b) @Volatile internal var sameDirectory: (Path, Path) -> Boolean = Files::isSameFile (method ref, same as the plan's lambda); resetForTest restores it, forgetSessionForTest does not. (c) protectedAliases: windowsHost only; reads store() (not usableStore); base = projectPath; name = folded fileName or null for a root; mapNotNull over store.names(); any Exception -> [] + one log.warn via describe, IOError -> [] + log.warn. (d) aliasOrNull, in plan order: read+parseStrict+fields(PROFILE_FIELDS) -> version 1 -> profile 'protected' -> project string != key -> isPlainLocalPath(string) -> recordsFile('profile:'+project)==file -> Paths.get only then -> fileName non-null -> folded name match (any when base is root) -> sameDirectory; Exception/IOError -> null. (e) profile(): weaker = ABSENT||LEGACY; aliases looked up only when weaker; early return when weaker && aliases empty (comment kept); one log.warn with the alias count (no paths); pinned.add -> askDowngrade(basePath, key, aliases). (f) confirmed allow persists LEGACY under key and then persist(it, it, LEGACY) for each alias (through usableStore). (g) one KDoc sentence on the object. Tests in step 3; compile/run in the step-3 RED run.",
+      "startedAt": "2026-10-30T22:21:55.056Z",
+      "completedAt": "2026-10-30T22:23:42.009Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Tests, in RuntimeSelectionPolicyTest.kt only. Change no existing row; use the next free D numbers as landed (D7, D8 today). Add helpers next to profileJson:\n- key(dir) = comparable(realFile(dir).path, defaultFoldCase);\n- recordName(key) = sha-256 hex of \"profile:$key\" + \".json\" (java.security.MessageDigest, java.util.HexFormat). Pin it once: recordName(key(dir)) == profileRecordName(dir.path).\n\nD7 `on Windows a protected record stored under the local spelling also pins its subst and device spellings`. It uses withProfileStore and starts with assumeTrue(\"Windows path forms\", windowsHost).\n- profileOf(dir) is PROTECTED, and store.read(profileRecordName(dir.path)) == profileJson(dir, \"protected\").\n- writeProfile(dir, \"legacy\"). Add stranger = a legacy project, and twin = File(newFolder(), dir.name), also legacy (same folder name, different folder).\n- Inside withSubst(dir) { root -> withSubst(dir.parentFile) { parent -> … } }, let aliases = listOfNotNull(\"$root\\\\\", \"$parent\\\\${dir.name}\", volumeSpelling(dir)). The volume-GUID spelling is the local, no-network stand-in for a share base.\n- For each alias: forgetSessionForTest(), profile(alias) is PROTECTED, and asks.paths.last() == alias.\n- Controls: profile(\"$parent\\\\${stranger.name}\") and profileOf(twin) are LEGACY, and asks.paths.size == aliases.size.\n- asks.answers.last()(true), then store.read(local name) == profileJson(dir, \"legacy\").\n- After forgetSessionForTest(), every alias and dir.path is LEGACY, with no new ask.\n- Do not assert on records under alias keys: whether one is written depends on usableFor, which the dependencies own.\n\nD8 `another spelling matches only a protected, plain, same-named record of the same folder, and only on Windows`. It runs on every host and uses withProfileStore.\n- base = File(newFolder(\"b\"), \"proj\"), legacy. local = File(newFolder(\"a\"), \"proj\"), stands in for the folder a share or mapped spelling reaches. elsewhere = File(newFolder(\"c\"), \"other\").\n- sameDirectory = { stored, _ -> asked += stored; identity(stored) }, with identity initially { it == Paths.get(key(local)) }.\n- Store these records: local legacy under its own name; profileJson(local, \"protected\") under NAME_A; elsewhere protected; and protected records for \"//srv/sh/proj\" and \"volume{00000000-0000-0000-0000-000000000000}/b/proj\" under recordName.\n- Then profileOf(base) is LEGACY, and asked is empty: nothing was opened, no share was touched.\n- Rewrite local's own record to protected, then forgetSessionForTest(). On a non-Windows host: LEGACY, asked empty, no ask; stop here.\n- On Windows:\n  - PROTECTED; asked == [Paths.get(key(local))]; asks.paths == [base.path].\n  - Confirm: local's record and base's record both read profileJson(…, \"legacy\"); after a restart, base is LEGACY.\n  - Rewrite local to protected: base, whose own record is now legacy, is PROTECTED again, with a second ask.\n  - For identity throwing IOException, IllegalStateException and IOError: restart, LEGACY, no new ask.\n  - store = { ProtectedStateStore(<a regular file>.toPath()) }: LEGACY, and nothing escapes.\n\nRED, once, on Windows, under the jetbrains-gradle lease: in a scratch edit that is never committed, make protectedAliases return emptyList(). Run cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\". D7 and D8 must fail on their alias assertions. Restore and rerun green. Put both results in the step note.\nError handling in tests: subst cleanup stays in withSubst's finally, and no test touches a real share.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Tests added (no existing row changed): helpers key(dir) and recordName(key) next to profileJson (imports java.io.IOError, java.security.MessageDigest, java.util.HexFormat); recordName pinned against profileRecordName in D8. D7 (Windows, real subst of dir and of its parent + volume-GUID spelling; stranger + same-named twin controls; confirm via the last alias rewrites the local record to legacy; after restart every alias and dir.path LEGACY, no new ask). D8 (every host): fake sameDirectory; legacy, NAME_A copy, other-name, //srv/sh and volume{0..} records never reach identity; POSIX stops LEGACY/no ask; Windows: PROTECTED with asked==[Paths.get(key(local))], confirm rewrites both, restart LEGACY, legacy-own record does not hide a protected other, IOException/IllegalStateException/IOError identity -> LEGACY no ask.\nDEVIATION (plan's last D8 bullet): a regular-file store via `store = { ProtectedStateStore(file) }` makes storedProfile itself read UNTRUSTED (requireKind throws) -> PROTECTED + ask, so the plan's 'LEGACY' assertion could not hold for that fixture (it is today's fail-closed read, not the lookup). I placed the regular-file root INSIDE base (File(base,'state')): storedProfile skips a provably-inside store (ABSENT) while protectedAliases lists it and gets Untrusted -> LEGACY, nothing escapes, no ask. Same acceptance ('an unlistable store gives LEGACY without escaping').\nRED (lease held, scratch edit `if (!windowsHost || true) return emptyList()` in protectedAliases, never committed; backup outside repo): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\" -> exit 1, 73 tests, 2 failed: D7 at :317 'Z:\\ expected:<PROTECTED> but was:<LEGACY>' (alias loop), D8 at :358 'expected:<PROTECTED> but was:<LEGACY>' (after local rewritten protected); PS8 passed. Restored (sha256 d85da141… identical to pre-RED), same command -> exit 0, 73 tests, 0 skipped/failed/errors; PS8, D7, D8 pass; D11 ran unskipped so mountvol resolves volumes here (D7's volume alias included). subst list empty before and after. One compile fix on the way: `asked += stored` in a lambda resolved to val reassignment under K2 -> asked.add(stored).",
+      "startedAt": "2026-10-30T22:23:42.792Z",
+      "completedAt": "2026-10-30T22:29:13.075Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once.\n- Take the `jetbrains-gradle` lease with moe.acquire_resource, and release it right after.\n- WSL has no JDK. From a /mnt/d cwd, run exactly: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n- It must exit 0 (DoD 3), and :test must execute.\n- In moe-jetbrains/build/test-results/test/TEST-*.xml, confirm:\n  - failures=0 and errors=0;\n  - this run stamped the RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest XML;\n  - PS8, D7 and D8 ran with no <skipped/>.\n- DoD 2: every existing row passes unchanged, D1-D6, P1-P4, PS1-PS7, PP*, N*, S*, and all of MoeDaemonSupervisorTest.\n- Give complete_task the command, the exit code, the output tail and the test count. Label it as Windows evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Windows evidence, under the jetbrains-gradle lease (acquired 22:25:55Z, released after the gate). From /mnt/d/projexts/moes: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> exit 0, BUILD SUCCESSFUL in 24s, '> Task :test' executed (not UP-TO-DATE). WSL start 22:29:52Z; Windows clock lags WSL ~3.6s (powershell UtcNow 22:30:28.98 vs date 22:30:32), so every one of the 28 TEST-*.xml (stamps 22:29:51.2-22:30:12.1Z) is from this run. Totals: 499 tests, 0 skipped, 0 failures, 0 errors (496 before this row + PS8, D7, D8). RuntimeSelectionPolicyTest 73 (was 70), MoeDaemonSupervisorTest 79 (unchanged). PS8, D7, D8 ran with no <skipped/>. DoD 2: every existing row (D1-D6, D9-D12, P*, PS1-PS7, PP*, N1-N15, S*, V*, L*, G*, R*, all MDST) passes unchanged; no existing row edited. subst list empty before and after.",
+      "startedAt": "2026-10-30T22:29:13.860Z",
+      "completedAt": "2026-10-30T22:30:38.431Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this row's diff only: git diff on the three files. Check:\n- Order. In aliasOrNull, no Paths.get or filesystem call happens before the version, profile, key, plain-local, file-name and folder-name checks. A share or device spelling from the store is never opened (D8's asked list proves it).\n- Scope.\n  - The lookup runs only on Windows, only when project.json does not declare verified-local, and only when this spelling's own record is ABSENT or LEGACY.\n  - PROTECTED and UNTRUSTED direct reads are unchanged.\n  - A match only moves the answer toward PROTECTED.\n- Writes go only through persist/usableStore.\n- Error handling. profile() and protectedAliases never throw, and a failing comparison matches nothing.\n- Concurrency. Two readers that both match still ask once (pinned.add). D6's delayed-reader flow still holds with the extra store() call.\n- Regressions.\n  - Existing rows are untouched.\n  - 1c2bfeca's and 52fb6178's selection code is untouched.\n  - Peer dirty paths are untouched.\n  - The project's global forbiddenPatterns are absent from the diff.\n- The completion summary lists, for RF07 (task-f3f364a6):\n  - the behavior;\n  - the residuals:\n    - a root-keyed stored record, or a project at a volume root, is never compared;\n    - non-ASCII case folds can change a stored key's spelling;\n    - POSIX bind mounts are unchanged;\n    - a root-spelled open opens every same-filtered stored local path, and a stale mapped drive there can delay it;\n    - a ReFS or FAT id collision gives a false PROTECTED (fail closed);\n  - a TROUBLESHOOTING line: a confirmed downgrade made through an alias also downgrades the local spelling.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Self-review of git diff on the 3 files (+180/-11, net 169; test file 106/0 so no existing row touched). Order: aliasOrNull does read/parse/fields -> version -> profile -> project string, != key -> isPlainLocalPath(string) -> recordsFile==file before the only Paths.get, then fileName/name, then sameDirectory; D8's asked list proves //srv and volume{} keys never reach it. Scope: windowsHost-only, non-verified-local branch only, only when own record ABSENT/LEGACY; PROTECTED/UNTRUSTED paths byte-identical; a match only adds PROTECTED. Writes: only persist -> usableStore (alias key used as its own basePath, so a store inside that project is refused). Errors: protectedAliases catches Exception (+describe log) and IOError; aliasOrNull per-record catch; askDowngrade catch unchanged -> profile() never throws. Concurrency: pinned.add still gates one ask; D6 green. TOCTOU: a record deleted between names() and read() reads null -> no match. Selection code of 1c2bfeca/52fb6178/dd545bf1 untouched (only a new call to isPlainLocalPath). No forbidden patterns. Peer dirty paths (.moe/tasks/*.json, .moe/decisions/, new task-c7ee939a json) untouched.\nConsidered and NOT added: an unprovableDrive(project) check before sameDirectory (would stop a stale mapped network letter in an old stored key from being contacted). The plan accepted that residual. A test seam that throws an AssertionError (an Error, not caught by resolveWindowsDrivePath) could also escape profile() through it. Left as a residual.\nExtra residual found: a PROTECTED record stored under a subst or mapped letter that is later re-pointed at another same-named folder makes that folder ask (false PROTECTED, fail closed).",
+      "startedAt": "2026-10-30T22:30:40.787Z",
+      "completedAt": "2026-10-30T22:32:00.839Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-52fb6178b3684db89d6e8a5a351c63ea",
+    "task-dd545bf1cc1843208e23de1d8c2d1756"
+  ],
+  "priority": "LOW",
+  "order": 313.6,
+  "comments": [
+    {
+      "id": "comment-fb24ba8ada634f1390d37b183f9a50d7",
+      "author": "architect-4ae016fb",
+      "content": "Planner correction (architect-4ae016fb, 2026-10-30, after msg-6ffe22ad). This supersedes the description's \"52fb6178, the last open row on RuntimeSelectionPolicy.kt\" and step-1's \"claimable only after 1c2bfeca and 52fb6178\".\n\nThe board now has 9a1da6f6 dependsOn 52fb6178 AND dd545bf1. dd545bf1 itself dependsOn 1c2bfeca, 52fb6178, 032c9739 and dcde1ed4, so dd545bf1 lands on both files after 52fb6178 and before this row. When you claim this row:\n- Re-read RuntimeSelectionPolicy.kt and RuntimeSelectionPolicyTest.kt as 1c2bfeca, 52fb6178 AND dd545bf1 landed them.\n- Keep dd545bf1's code byte-for-byte, the same as the other two rows' selection code. That is the last conjunct of the internal isOutsideProject overload, the private ancestorOutside helper, and its N<k> test row. Step-2 still changes only the profile side.\n- dd545bf1 can turn ProtectedStateStore.usableFor false for a store root that does not exist yet when its nearest existing ancestor is inside the project. The plan already avoids depending on this: protectedAliases reads store(), and D7 makes no assertion on alias-key records. If PS8, D7 or D8 still trips on usableFor, report it as an interaction. Do not edit dd545bf1's code.\n- The step-4 gate is unchanged. Its \"N* pass unchanged\" clause covers dd545bf1's new N row.",
+      "timestamp": "2026-10-30T17:59:02.819Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T17:03:38.016Z",
+  "updatedAt": "2026-10-30T22:37:58.699Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T17:23:39.043Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T17:26:41.727Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T22:37:25.993Z",
+    "wallClockMs": 18644266
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-c75a6f39",
+    "qa-b29f7b3d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T17:48:51.947Z",
+  "executionContract": {
+    "intendedBehavior": "On a Windows host, RuntimeSelectionPolicy.profile(basePath) also honors a PROTECTED profile record that was stored under another spelling of the same folder: a local spelling, opened later through a subst or mapped drive letter, a share or a device path.\nThe lookup runs when project.json does not declare verified-local and this spelling's own record is ABSENT or LEGACY. It lists the IDE store's records. A record counts when all of these hold:\n- it is a strict version-1 'protected' record under its own file name;\n- its project is a plain local drive path;\n- that path has this folder's name (any name when this spelling is a root);\n- Files.isSameFile says it is this folder.\nA match pins PROTECTED for the session and asks the downgrade question. A confirmed downgrade writes 'legacy' under this spelling and under every matched record.\nThese behave as before: POSIX hosts, verified-local reads, and spellings whose own record is PROTECTED or UNTRUSTED. Any failure in the lookup matches nothing.",
+    "acceptanceCriteria": [
+      "D7 (Windows, real subst and volume-GUID, no network): a folder whose PROTECTED record was stored under its local spelling resolves PROTECTED, with a prompt naming the alias, when opened as its subst root, under a subst of its parent, and as its \\\\.\\Volume{GUID}\\ spelling. An unrelated legacy project and a same-named other folder stay LEGACY with no prompt. A downgrade confirmed through an alias rewrites the local record to legacy, and after a restart every spelling is LEGACY with no prompt.",
+      "D8 (fake identity, every host): only a protected, plain, same-named record under its own name reaches the identity check. A UNC or device key from the store is never opened. On POSIX nothing is looked up and the answer stays LEGACY. On Windows a match prompts, a confirmed downgrade rewrites both records, a legacy record under this spelling does not hide a protected one under another, and a throwing identity check or an unlistable store gives LEGACY without escaping.",
+      "PS8: ProtectedStateStore.names() lists only the valid record names, sorted. It gives [] for a missing root without creating it, and throws Untrusted for a root that is a file or that is loosened.",
+      "The existing RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest rows pass unchanged. The Windows Gradle gate exits 0."
+    ],
+    "invariants": [
+      "The lookup never runs on a non-Windows host, never for a verified-local read, and never when this spelling's own record is PROTECTED or UNTRUSTED.",
+      "A stored project spelling that is not plain local is never turned into a Path or opened.",
+      "The lookup never writes. A match only moves the answer toward PROTECTED.",
+      "Profile records are written only through persist/usableStore, so never to a store inside the project they name.",
+      "profile() never throws, and a failing comparison matches nothing."
+    ],
+    "compatibility": [
+      "The record format is unchanged: version 1, with exactly version, project and profile. File naming is unchanged: sha-256 of 'profile:'+key, plus .json.",
+      "These public signatures are unchanged: profile(basePath), and ProtectedStateStore's read/write/delete/usableFor. names() is additive.",
+      "The selection code and test rows landed by task-1c2bfeca and task-52fb6178 stay as they landed."
+    ],
+    "approvedScope": [
+      "ProtectedStateStore.names()",
+      "RuntimeSelectionPolicy: projectPath (extracted from projectKey), the sameDirectory test seam (restored by resetForTest), protectedAliases, aliasOrNull, the profile() alias branch, askDowngrade(basePath, key, aliases), one KDoc sentence",
+      "RuntimeSelectionPolicyTest: PS8, D7, D8, and the key(dir) and recordName(key) helpers"
+    ],
+    "reuse": [
+      "Files.isSameFile, the identity outsideByIdentity already trusts",
+      "parseStrict, fields, exactLong, stringOrNull, recordsFile, isPlainLocalPath, comparablePath, persist, usableStore, describe",
+      "Test helpers: withProfileStore, RecordingConfirmer, profileJson, withSubst, volumeSpelling, loosen, newStore"
+    ],
+    "sourceAssumptions": [
+      "RuntimeSelectionPolicy.projectKey (about :169) keys profile records off realPathOrNull(basePath), and storedProfile (about :75) reads through usableStore(basePath).",
+      "On Windows, toRealPath keeps subst, mapped, UNC and device spellings (mem gotcha-java-torealpath-windows-aliases). Native probe D:\\arch-9a1d-probe (2026-10-30): Files.isSameFile is true between the folded stored key and the subst root, the subst parent, the \\\\.\\Volume{GUID}\\ and the \\\\localhost\\C$\\ spellings.",
+      "ProtectedStateStore names files with a 64-hex sha-256 plus .json. Profile and provenance records share the root and differ by field set.",
+      "RuntimeSelectionPolicyTest already has withProfileStore, RecordingConfirmer, profileJson, writeProfile, withSubst, volumeSpelling, loosen and newStore."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Options from the task description:\n(a) Native identity key (volume serial + file index through JNA GetFileInformationByHandle). Rejected:\n- IDEA 2026.2.3 ships JNA in lib/util-8.jar, but jnidispatch.dll only in lib/jna/amd64, which the IDE finds through -Djna.boot.library.path. build.gradle.kts's test doFirst strips IntelliJPlatformArgumentProvider, so unit tests would need a build change.\n- Records written before the upgrade have no identity twin, so DoD 1's 'stored under its local spelling' would still read ABSENT until the project is reopened locally.\n(b) CHOSEN: Files.isSameFile against stored PROTECTED records.\n- Pure NIO, with no format change.\n- It covers pre-existing records.\n- It matches the identity Java already trusts (1c2bfeca's outsideByIdentity).\n(c) Refusing or prompting for every non-plain base. Rejected:\n- It breaks DoD 2. Legacy UNC opens would prompt every session, because the store is unusable for them and the downgrade can never persist.\n- It cannot see subst or mapped letters at all.\n(d) Canonicalizing the base with GetFinalPathNameByHandle. Rejected: it resolves subst only, and shares and mapped drives stay UNC.",
+    "codebaseInsights": "- profile() keys the record off projectKey = the comparable real path. toRealPath keeps subst, mapped, UNC and device spellings, so each spelling has its own record file, sha-256(\"profile:\"+key).\n- storedProfile reads through usableStore(basePath). After 52fb6178, that store is null for a share or device base (usableFor false), so such an open reads ABSENT today.\n- Profile and provenance records share the store root, and they differ only by field set.\n- Native probe D:\\arch-9a1d-probe\\AliasProbe.java, log probe.log, JDK 17.0.20, 2026-10-30:\n  - Paths.get(<folded stored key>) resolves.\n  - isSameFile is true for subst root Z:\\, for subst parent Y:\\proj, for \\\\.\\Volume{GUID}\\…\\proj and for \\\\localhost\\C$\\…\\proj.\n  - isSameFile is false for a sibling folder and for the parent.\n  - A removed drive throws NoSuchFileException in 0 ms.\n  - toRealPath keeps every alias form. The fileName is null for Z:\\ and for a share root, and the folder name otherwise.\n  - A subst root reports the same volume:vsn as C:.",
+    "risks": "- The dependencies are in flux. 1c2bfeca (reopen 1) may change how realPathOrNull or selection resolves aliases, and 52fb6178 (rev 3) changes isPlainLocalPath, isOutsideProject and select. Re-read the landed code and keep this row on the profile side. D7 holds either way: if a dependency makes the subst key resolve locally, the direct record answers PROTECTED instead.\n- In D7, do not assert on alias-key records; usableFor decides those.\n- The name prefilter is sound only on the real path's name. Use projectPath(), not the raw spelling (8.3 names and links). A null fileName (a root) compares every named record.\n- Never Paths.get a stored key before isPlainLocalPath. A UNC key would contact a remote host and could leak NTLM credentials.\n- Reading store() while usableFor is false is deliberate, and safe only because a match can only make the answer stricter. Keep the lookup write-free.\n- withSubst needs two free letters. It skips otherwise; note that in the evidence.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T17:48:51.980Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "4871006b6b33262f6d8a10ab11f00a4d7ad0a73c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-4ae016fb@2026-10-30T17:26:42Z",
+      "paths": [
+        ".moe/tasks/task-9a1da6f665fd42c68df1b657b247e414.json"
+      ],
+      "recordedBy": "architect-4ae016fb",
+      "recordedAt": "2026-10-30T17:49:55.900Z",
+      "treeId": "c60efb29eef7df93947790d05547fadac54341b4",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "bdb623adba539385d53e4381b6042c4d00f19a7c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c75a6f39@2026-10-30T22:18:55Z",
+      "paths": [
+        ".moe/tasks/task-6bc91f38c840496c894434404760f3a3.json",
+        ".moe/tasks/task-9a1da6f665fd42c68df1b657b247e414.json",
+        ".moe/tasks/task-c7ee939a460641eab87eb799a38e6ff9.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-c75a6f39",
+      "recordedAt": "2026-10-30T22:33:41.072Z",
+      "treeId": "73dac7800e892e22e8a020e41819a337b4a01ec2",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "60b19ce44a50c928f225a20dd973c2599a4e1f4a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-30T22:33:44Z",
+      "paths": [
+        ".moe/tasks/task-9a1da6f665fd42c68df1b657b247e414.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-30T22:37:58.698Z",
+      "treeId": "fb8b77ec3c3a53089c6f1605503c78f4a96419cc",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    ".moe/tasks/task-6bc91f38c840496c894434404760f3a3.json",
+    ".moe/tasks/task-9a1da6f665fd42c68df1b657b247e414.json",
+    ".moe/tasks/task-c7ee939a460641eab87eb799a38e6ff9.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-30T22:33:44Z",
+    "at": "2026-10-30T22:37:58.698Z"
+  },
+  "workStartedAt": "2026-10-30T22:21:28.235Z",
+  "reviewStartedAt": "2026-10-30T22:33:20.897Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "Windows evidence (WSL -> cmd.exe gradlew.bat, jetbrains-gradle lease held then released). Run started 22:29:52Z WSL (Windows clock ~3.6s behind).\n> Task :prepareTest\nWARNING: A restricted method in java.lang.System has been called\nWARNING: java.lang.System::load has been called by com.sun.jna.Native in an unnamed module (...idea-2026.2.3-win/lib/util-8.jar)\n\n> Task :test\n\nBUILD SUCCESSFUL in 24s\n11 actionable tasks: 2 executed, 9 up-to-date\n\nTEST-*.xml (all 28 stamped 22:29:51.2Z-22:30:12.1Z, i.e. this run): 499 tests, 0 skipped, 0 failures, 0 errors. RuntimeSelectionPolicyTest 73 (70 + PS8, D7, D8, all ran, none skipped), MoeDaemonSupervisorTest 79 (unchanged). subst list empty before and after.",
+    "reportedAt": "2026-10-30T22:33:20.897Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "On a Windows host, JetBrains profile() now honors a PROTECTED record stored under another spelling of the same folder (subst root, subst parent, \\\\.\\Volume{GUID}\\, share or mapped letter), by file identity. POSIX, verified-local reads, and PROTECTED/UNTRUSTED own records are unchanged. 3 files, +180/-11; no existing test line changed; the selection code of 1c2bfeca, 52fb6178 and dd545bf1 is untouched.\n- ProtectedStateStore.names(): read()'s root rules (never creates the root), valid names only, sorted, no file read.\n- RuntimeSelectionPolicy: projectPath extracted from projectKey. sameDirectory seam (Files::isSameFile, restored by resetForTest). protectedAliases reads store() and returns [] on any failure, with one warn. aliasOrNull checks strict v1 'protected', project != key, isPlainLocalPath(string) and that the file name matches, all before the only Paths.get; then it checks the folder name and calls sameDirectory. The lookup runs only when the own record is ABSENT or LEGACY. A confirmed downgrade persists LEGACY under the key and every alias key, through usableStore.\n- Tests: PS8; D7 (real subst plus volume GUID; stranger and twin controls; a downgrade through an alias rewrites the local record); D8 (fake identity: UNC, device, copied-name and other-name records are never opened; POSIX looks up nothing; a legacy own record does not hide a protected one; a throwing identity or an unlistable store gives LEGACY).\n- RED: protectedAliases forced to []: D7 fails at Z:\\, D8 at PROTECTED. Restored and green.\n- Deviation: D8's unlistable store sits inside the project. A regular-file store passed to storedProfile reads UNTRUSTED (PROTECTED) before the lookup runs.\nResiduals for RF07 (task-f3f364a6):\n- A root-keyed record, or a project at a volume root, is never compared.\n- Non-ASCII case folds can change a stored key.\n- POSIX bind mounts are unchanged.\n- A root-spelled open opens every named stored local path; a stale mapped letter can delay it.\n- A ReFS or FAT id collisi",
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+  ],
+  "completedAt": "2026-10-30T22:37:25.993Z",
+  "reviewCompletedAt": "2026-10-30T22:37:25.993Z",
+  "reviewSummary": "Reviewed completion bdb623ad (pushed, on moe/work-2026-10-24; moe-jetbrains tree clean vs it). Non-board +180/-11, net 169: ProtectedStateStore.kt +13, RuntimeSelectionPolicy.kt +61/-11, RuntimeSelectionPolicyTest.kt +106/-0.\nGate re-run by QA under the jetbrains-gradle lease (released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> exit 0, :test executed; 28 XML from this run: 499 tests, 0 skip/fail/err; RSPT 73 (PS8, D7, D8 ran), MDST 79.\nDoD1: alias branch runs protectedAliases (Windows only, store() not usableStore, failure -> []); aliasOrNull checks v1/protected/project!=key/isPlainLocalPath/recordsFile==file before Paths.get, then name, then sameDirectory. D7: real subst root, subst parent and volume GUID resolve PROTECTED with a prompt; stranger/twin LEGACY; alias downgrade rewrites the local record; all LEGACY after restart. D8: //srv, volume{}, copied-name, other-name and legacy records never reach identity; throwing identity or unlistable store -> LEGACY.\nDoD2: lookup only for own ABSENT/LEGACY and not verified-local; POSIX []; selection code of 1c2bfeca/52fb6178/dd545bf1 untouched; 0 existing test lines changed; prior rows green.\nDoD3: verification matches checkRef, reproduced exit 0.\nRails: writes only via persist/usableStore; no forbidden patterns; profile() callers are not per-frame.\nNon-blocking (in RF07 residuals): a stale mapped letter in a same-named stored key can delay isSameFile; root-keyed records never compared; D8 unlistable fixture is inside the project (documented deviation).",
+  "requiredCheckAtDone": null
+}

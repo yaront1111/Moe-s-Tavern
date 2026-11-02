@@ -1,0 +1,322 @@
+{
+  "id": "task-4e2ab1584c3140019be709b94c71f1cc",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13f1] Certify check-containment runs",
+  "description": "Objective: add the 'check-containment' certify check. It shows, on real hardware, that the check identity stays contained. This covers CQ-R13f DoD item 2.\n\nSplit out of CQ-R13f (task-d45d52c0) by architect-899a90d6 on 2026-10-30, approved by the human in the architect REPL: R13f's three checks measured about 470 changed lines. R13f keeps 'writer-containment' and 'controller-replacement', depends on this task, and re-verifies all three at its own QA.\n\nDeliverable:\n- scripts/local-runner/certify-containment.mjs (new) exports CONTAINMENT_CHECKS = [check-containment], spliced into certify.mjs BODY after BRIDGE_CHECKS. R13f later adds its two checks around it in the same module.\n- The certify context gains platform (the observed platform), cacheDir and supervisor (the real bytes): the names R13h and R13g already expect.\n\n'check-containment' runs runCheckJob three times on one generated snapshot (a probe script, one protected file, one tracked unprotected file). Each run gets its own fresh VM, and the check stops at the first failing run.\n1. Probe run. The approved command runs the probe script, which exits 0 only when every refusal holds: no network interface but lo and no route out of the private netns; reading the supervisor credential is refused with a permission error; writing the protected file fails with EROFS; RLIMIT_NPROC and RLIMIT_FSIZE equal CHECK_BOUNDARIES and cannot be raised, and a write at the FSIZE limit fails with EFBIG. The run must resolve 'passed' with workspace 'intact'.\n2. Integrity run (human decision, 2026-10-30). The command tries to overwrite the protected file, which the read-only mount refuses, then waits for the file to change. Once the session has started (its first stdout bytes), the certify host changes the protected file as root in the guest's own mount namespace. The supervisor's after-run hash check must catch it, so the run must resolve 'inconclusive'. On a correct guest the job alone can never change a protected file, so this is the only native way to exercise the after-run check and the exit-80 path.\n3. Edit run. The command edits the tracked unprotected file. The run must resolve 'passed' with workspace 'changed'.\nEvery run must end with vm 'deleted' and failure null. Each outcome maps to a fixed code; a runCheckJob rejection keeps its own stable code.\n\nTests in scripts/tests/local-runner.test.mjs use fake runCheckJob results through a test-only deps.containment seam. The native behavior is certified only by the operator run.\n\nOut of scope:\n- writer-containment and controller-replacement (CQ-R13f);\n- cancellation and recovery (CQ-R13h); the canary toolchain check (CQ-R13g);\n- enabling verified-local;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+  "definitionOfDone": [
+    "'check-containment' passes only when the probe run resolves 'passed' with workspace 'intact', the integrity run resolves 'inconclusive', and the edit run resolves 'passed' with workspace 'changed', each with vm 'deleted' and failure null. Any other outcome fails with a fixed code and starts no later run. Shown by tests with fake runCheckJob results.",
+    "Each run gets the generated snapshot, its exact check frame (one protected entry carrying the file's git blob oid), dependencies [], a fresh synthetic owner and credential, and the certify context's platform, base ledger, cacheDir, supervisor and provider. The integrity run changes the protected file only after its session's first stdout bytes, through one fixed root argv. Shown by tests.",
+    "The certify context carries platform, cacheDir and supervisor. CERTIFY_CHECKS lists 'check-containment' after 'guest-network' with teardown last, and the updated CF rows, including the all-pass CF1, pass.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red), part 1: the harness and pinned lists. Load test-driven-development.\n\nYou edit LANDED bytes: R13d's certify.mjs and CF rows, and R13e1/R13e's certify-bridge.mjs and CB/GN rows (fb47f668). First re-read certifyHarness, bridgeRouter/checkFake, BRIDGE_SCRIPTS, CF1-CF3, CB1, CB6, networkFailed and GN1-GN6.\n\nThe architect's full, green prototype of every hunk in steps 1-4 is in Serena memory task-task-4e2ab1584c3140019be709b94c71f1cc-prototype. Reuse it.\n\nSHARED-FILE RULES\n- Before editing, cp scripts/tests/local-runner.test.mjs to a scratch dir, and measure your own delta against that copy (peers may add hunks).\n- Edit local-runner.test.mjs ONLY with the Edit tool (the contested-path TOOL witness, mem gotcha-local-runner-size-rails). Never write it from Bash, sed or python.\n\nHARNESS. Declare everything next to CERTIFY_IDS, BEFORE certifyHarness. A filtered run (--test-name-pattern '^CF' or '^CC') starts its first test during module evaluation, so nothing certifyHarness reads synchronously may be a const declared later in the file (TDZ).\n- CERTIFY_IDS gains 'check-containment' before 'teardown'. BRIDGE_NOT_RUN gains ['check-containment', 'not-run'].\n- CHANGE_ARGV = ['sudo', '-n', 'truncate', '-s', '0', '/var/lib/moe/workspace/moe-certify/protected.txt'], spelled out literally.\n- isChange = args => args[0] === 'exec' && args[4] === 'sudo' && args[6] === 'truncate'.\n- function containmentRig(runs = []) returns { calls, containment: { runCheckJob } }. Its fake runCheckJob(input, given):\n  - records { input, given } (call index at: 0 probe, 1 integrity, 2 edit);\n  - reads { session = at === 1, reject, ...result } = { workspace: ['intact', 'unverified', 'changed'][at], ...runs[at] };\n  - when reject is set, throws Object.assign(new Error('/private/path'), { code: reject });\n  - when session is set, observed = await given.session({ name: nameAt(7 + at), check: input.check, provider: input.provider, budgetMs: input.budgetMs, timeoutMs: 1_000 }). That is the REAL runCheckSession, through the check's wrapper, over the harness router, exactly as runCheckJob calls its session step;\n  - resolves Object.freeze({ outcome: 'passed', exitCode: 0, signal: null, outputTail: '', ...observed, environment: null, instance: nameAt(7 + at), vm: 'deleted', failure: null, executionReady: false, ...result }).\n- certifyHarness gains two options: `containment` (the rig's runs) and `change` (the answer for the change argv; default answering('')).\n  - Its run records an isChange call with changes.push([[...args], options]) and answers it BEFORE delegating to fake.run, because fakeGuest throws on a foreign instance.\n  - Never record it in `probes`: GN1 and GN3 pin probes exactly.\n  - deps gains containment: rig.containment; the return value gains changes and rig.\n- BRIDGE_SCRIPTS gains 'certify-integrity': proc => { proc.send(CB_HELLO); setImmediate(() => { proc.send(cbExit(0)); proc.exit(80); }); }. That is hello, the job's exit-0 observation, then the supervisor's PROTECTED_CHANGED 80, which runCheckSession classifies as 'inconclusive'.\n- Every pinned id list or not-run tail gains the new id:\n  - CF3 `undeleted` gets ['check-containment', 'passed'] before the failed teardown;\n  - CB1's literal CERTIFY_CHECKS list;\n  - CB6 failedBridge and networkFailed get ['check-containment', 'not-run'];\n  - GN5's checks list, and its `.slice(-5)` deep-equals ['bridge-framing', 'bridge-eof', 'guest-network', 'check-containment', 'teardown'].\n\nBUNDLE. scripts/tests/local-runner-bundle.test.mjs: `shipped` gains 'certify-containment.mjs'. It does NOT go in `required`, which the onboarding refusal row walks. Name CQ-R13f1 in the comment above it.\n\nError handling in the harness:\n- the rig rejects only with a fixed code;\n- the change answer is injectable for the failure rows;\n- nothing reaches a real provider, the network or a VM.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "Harness and pinned lists applied via the Edit tool from the architect prototype (anchors matched a8ef4404 line numbers). Added CERTIFY_IDS/BRIDGE_NOT_RUN check-containment, CHANGE_ARGV, isChange and containmentRig before certifyHarness. certifyHarness gained the containment/change options and returns changes/rig. BRIDGE_SCRIPTS gained 'certify-integrity'. CF3 undeleted, CB1, CB6, networkFailed and GN5 (slice -5) were updated. Bundle: shipped gains certify-containment.mjs, with CQ-R13f1 named in the comment. Snapshots are in /tmp/cqr13f1/*.orig. Pre-existing dirty .moe/daemon paths are untouched.",
+      "startedAt": "2026-10-30T18:43:53.262Z",
+      "completedAt": "2026-10-30T18:45:21.760Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "TESTS FIRST (red), part 2: rows CC1-CC6. Put them after GN6 and before the `import { validateImport }` section. Edit with the Edit tool only.\n\nImport containmentSnapshot from '../local-runner/certify-containment.mjs'. Spell out these literals; never import them from the module:\n- CC_ENTRY = { path: 'moe-certify/protected.txt', oid: 'c847a247be38418490fff92ebf0fa678d21f99da' }. The architect checked the oid with: printf 'moe-certify-protected-v1\\n' | git hash-object --stdin.\n- CC_IDS = ['certify-probe', 'certify-integrity', 'certify-edit'].\n- CC_COMMANDS: step 3's three commands, byte for byte.\n- ccFailed(code): certification() with check-containment failed with code, the earlier checks passed, later body checks not-run, and teardown passed. Derive the positions from CERTIFY_IDS, so that later R13f/R13h/R13g appends stay correct.\n\nCC1, the snapshot (DoD 2):\n- workspaceEntries(containmentSnapshot()).entries is exactly [['moe-certify/probe.py', false], ['moe-certify/protected.txt', false], ['moe-certify/tracked.txt', false]] as (path, executable).\n- The protected bytes are 'moe-certify-protected-v1\\n', and the sha1 of `blob <length>\\0` plus those bytes equals CC_ENTRY.oid. The tracked bytes are 'moe-certify-tracked-v1\\n'.\n- The probe's first 3 lines equal exactly:\n  - 'import errno, resource, socket, sys, tempfile'\n  - 'INTERFACES, CREDENTIAL, PROTECTED = [\"lo\"], \"/etc/moe/supervisor.credential\", \"moe-certify/protected.txt\"'\n  - 'NPROC, FSIZE = 2048, 1073741824'\n- containmentSnapshot() !== containmentSnapshot().\n- guest-supervisor.py matches /^WORKSPACE = '\\/var\\/lib\\/moe\\/workspace'$/m. This is a drift pin for the change argv's absolute path.\n\nCC2, the probe's decision logic. It is POSIX-only, with the INLINE option { skip: process.platform === 'win32' && 'python3 and sh are POSIX-only here' }. NOT_POSIX is declared ~150 lines later, so referencing it here is a TDZ error.\n- PROBE_STUB is python run as spawnSync('python3', ['-I', '-B', '-c', PROBE_STUB, JSON.stringify(scenario)], { input: <probe bytes>, encoding: 'utf8' }).\n- It replaces socket.if_nameindex, socket.socket (a context manager whose connect_ex returns the scenario errno, or 0), builtins.open, resource.getrlimit/setrlimit and tempfile.TemporaryFile. Then it runs exec(compile(stdin, 'probe.py', 'exec'), {'__name__': '__main__'}).\n- open is keyed by `${path}:${mode}`, so only an 'rb' credential read and a 'wb' protected open are answered. Any other mode raises KeyError (exit 1).\n- Limits are keyed by name (RLIMIT_NPROC, RLIMIT_FSIZE), because the numeric values differ on macOS. A scenario names errno constants; null means the call succeeds.\n- The held scenario is: interfaces ['lo'], route ENETUNREACH, credential rb EACCES, protected wb EROFS, NPROC [2048, 2048], FSIZE [G, G] with G = 1073741824, raisable false, write EFBIG.\n- Each row breaks exactly ONE rule:\n  - {} gives 0;\n  - interfaces ['lo','eth0'], route null and route ECONNREFUSED give 10;\n  - credential null and credential ENOENT give 11;\n  - protected EACCES and protected null give 12;\n  - NPROC [2048, 4096], FSIZE [G-1, G-1] and raisable true give 13;\n  - write null and write ENOSPC give 14.\n- spawnSync('sh', ['-n', '-c', command]).status is 0 for the integrity and edit commands.\n\nCC3, the inputs (DoD 2). h = certifyHarness(t); set h.deps.bounds = { sessionMs: 60_000 }; pass your own platform = onWindows() to h.certify(platform). Assert:\n- the report deep-equals certification(), and h.deletes is only [['delete', '--purge', GUEST]];\n- there are 3 calls, and each input's Object.keys are exactly [platform, ledger, owner, cacheDir, supervisor, credential, snapshot, check, budgetMs, onReady, dependencies, provider];\n- check deep-equals { id: CC_IDS[i], command: CC_COMMANDS[i], protected: [CC_ENTRY] }; dependencies deep-equals []; budgetMs === 60_000;\n- each owner passes validOwner, with taskId 'task-certify' and generation 1;\n- the 3 attemptIds plus the main VM record's attemptId (createLedger(<workDir>/ledger).read(GUEST)) are 4 distinct values;\n- the credentials are 3 distinct 32-byte Buffers, and onReady() resolves undefined;\n- platform, ledger, supervisor, provider and snapshot are each ONE object across the 3 calls;\n- platform !== the passed onWindows() object, and its id is 'win32';\n- cacheDir === path.join(h.workDir, 'images');\n- supervisor equals readFileSync of guest-supervisor.py;\n- provider.run === h.deps.provider.run and provider.spawn === h.router.spawn;\n- the snapshot's (path, bytes) pairs equal containmentSnapshot()'s;\n- the givens are [undefined, ['session'] (its keys), undefined].\n\nCC4, the change trigger (DoD 2). log = []. The 'certify-integrity' script pushes 'stdout' 20 ms later and then runs the default script. change pushes 'change' and resolves { stdout: '', stderr: '' }.\n- Assert the report deep-equals certification() and log is ['stdout', 'change'].\n- h.changes is exactly [[['exec', '--no-map-working-directory', nameAt(8), '--', ...CHANGE_ARGV], lifecycleOptions(QUERY_TIMEOUT_MS)]].\n- The integrity router call's args[1] is checkArgv(nameAt(8)), and its frame is { kind: 'check', version: 1, id: 'certify-integrity', command: CC_COMMANDS[1], protected: [CC_ENTRY] }.\n- Each of these gives CERTIFY_CONTAINMENT_CHANGE_FAILED with exactly 2 runCheckJob calls:\n  - a script that exits 74 with no stdout (no change call);\n  - change: probeExit(1, '') (1 change call);\n  - containment runs [, { session: false, outcome: 'inconclusive' }] (no change call).\n\nCC5, the fail mapping (DoD 1). Table-driven, one certifyHarness per row; assert [report, h.rig.calls.length, h.deletes] deep-equals [ccFailed(code), calls, [['delete', '--purge', GUEST]]]. leak = { vm: 'delete-failed', failure: 'CHECK_VM_DELETE_FAILED' }. Rows (runs gives code, calls):\n- [leak] and [{vm:'none'}] give VM_NOT_DELETED, 1;\n- [{outcome:'infra-failure', exitCode:null, failure:'CHECK_PROVISION_UNAVAILABLE', vm:'not-launched'}] and [{outcome:'infra-failure', exitCode:null, failure:'TOOLCHAIN_DOWNLOAD_FAILED'}] give their own codes, 1;\n- code-failure exits 10/11/12/13/14 give NETWORK/CREDENTIAL/PROTECTED/RLIMIT/FSIZE, 1;\n- code-failure exits 1 and 15, {workspace:'changed'}, {outcome:'inconclusive', workspace:'unverified'} and {outcome:'timeout', exitCode:null, workspace:'unverified'} give PROBE_FAILED, 1;\n- [, {outcome:'passed'}], [, {exitCode:3}] and [, {outcome:'code-failure', exitCode:1}] give INTEGRITY_FAILED, 2;\n- [, leak] gives VM_NOT_DELETED, 2. An undeleted pass is 'inconclusive' and must never count as detection;\n- [, , {workspace:'intact'}] and [, , {outcome:'code-failure', exitCode:1, workspace:'unverified'}] give EDIT_FAILED, 3; [, , leak] gives VM_NOT_DELETED, 3;\n- [{reject:'CHECK_JOB_INPUT_INVALID'}] gives that code, 1; [, , {reject:'CHECK_READY_TIMEOUT'}] gives that code, 3; [{reject:'not stable'}] gives CERTIFY_CHECK_FAILED, 1.\nShort names carry the CERTIFY_CONTAINMENT_ prefix.\n\nCC6, the wiring (DoD 3).\n- Wrap h.deps.containment so that each call first runs `await input.ledger.reserve(input.owner)` and then delegates. The report must still be certification(), h.deletes only [['delete', '--purge', GUEST]], and GUEST's record phase 'deleted'. A capturing ledger would retarget teardown.\n- certifyHarness(t, { network: { agent: probeExit(2, '') } }) must give networkFailed('CERTIFY_GUEST_NETWORK_UNKNOWN'), 0 rig calls and no change.\n\nRED: run the step-5 command once. The file fails to load (ERR_MODULE_NOT_FOUND, certify-containment.mjs), and the bundle row fails for the missing file. Record it.\n\nSize: steps 1-2 take at most 190 changed lines (prototype +169/-12, bundle +1/-1).\n\nError handling in the tests:\n- assert fixed codes, never messages;\n- no row reaches a real provider, the network or a VM;\n- scratch dirs come from scratch(t);\n- every fake session settles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Inserted CC1-CC6 (from the architect prototype, verbatim) after GN6 and before the CQ-R09c section, using the Edit tool only. RED is confirmed with the step-5 command, exit 1. The file fails to load with ERR_MODULE_NOT_FOUND for certify-containment.mjs. The bundle row fails with \"Missing copied provider asset certify-containment.mjs\". The log is /tmp/cqr13f1/red.log. Pre-existing dirty .moe/tasks/* paths belong to other sessions and are untouched.",
+      "startedAt": "2026-10-30T18:47:16.282Z",
+      "completedAt": "2026-10-30T18:49:02.718Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create scripts/local-runner/certify-containment.mjs, the 'check-containment' check (DoD 1, 2). Write EXACTLY the 131-line source in Serena memory task-task-4e2ab1584c3140019be709b94c71f1cc-prototype (section certify-containment.mjs).\n\nThe architect proved it on a git archive of a8ef4404, with the rows of steps 1-2:\n- the step-5 command exits 0: 339 tests, 338 pass, 1 skip;\n- 13 scratch mutants are killed by AssertionErrors (step 6);\n- 329 changed lines across the 4 files.\nThe literals and the logic are restated here so the plan stands alone.\n\nEXPORTS, only these: containmentSnapshot() and CONTAINMENT_CHECKS = Object.freeze([Object.freeze({ id: 'check-containment', run: checkContainment })]).\n\nIMPORTS:\n- spawn from node:child_process;\n- createHash and randomBytes from node:crypto;\n- CHECK_BOUNDARIES from ./check-evidence.mjs;\n- runCheckJob from ./check-lifecycle.mjs;\n- runCheckSession from ./check-session.mjs;\n- invoker and QUERY_TIMEOUT_MS from ./lifecycle.mjs;\n- validateImport from ./source-snapshot.mjs.\n\nLITERALS (the tests pin them)\n- PROTECTED = 'moe-certify/protected.txt', whose bytes are 'moe-certify-protected-v1\\n'.\n- PROTECTED_ENTRY = frozen { path: PROTECTED, oid: sha1 of `blob ${length}\\0` plus the bytes }, i.e. c847a247be38418490fff92ebf0fa678d21f99da.\n- containmentSnapshot() returns Object.freeze({ version: 1, overlay: validateImport([]), base: validateImport([...]) }). The base holds three files, none executable:\n  - moe-certify/probe.py: Buffer.from(PROBE);\n  - PROTECTED;\n  - moe-certify/tracked.txt: 'moe-certify-tracked-v1\\n'.\n  It is fresh on every call.\n- CHANGE_ARGV = frozen ['sudo', '-n', 'truncate', '-s', '0', `/var/lib/moe/workspace/${PROTECTED}`]. The prefix is guest-supervisor.py's WORKSPACE.\n- RUNS, as [id, approved command]:\n  - ['certify-probe', 'python3 -I -B moe-certify/probe.py'];\n  - ['certify-integrity', 'printf x 2>/dev/null >moe-certify/protected.txt && exit 3; i=0; while [ -s moe-certify/protected.txt ] && [ \"$i\" -lt 60 ]; do sleep 1; i=$((i+1)); done; [ ! -s moe-certify/protected.txt ]'] (built with ${PROTECTED});\n  - ['certify-edit', 'echo edited >>moe-certify/tracked.txt'].\n- REFUSALS = new Map: 10 CERTIFY_CONTAINMENT_NETWORK, 11 CERTIFY_CONTAINMENT_CREDENTIAL, 12 CERTIFY_CONTAINMENT_PROTECTED, 13 CERTIFY_CONTAINMENT_RLIMIT, 14 CERTIFY_CONTAINMENT_FSIZE.\n- PROBE is a template literal. Its line 2 is INTERFACES, CREDENTIAL, PROTECTED = <JSON.stringify of CHECK_BOUNDARIES.network.interfaces, filesystem.supervisorCredential.path, PROTECTED>. Its line 3 is NPROC, FSIZE = <resources.rlimits.RLIMIT_NPROC>, <RLIMIT_FSIZE>. Line 1 is the import. Then:\n  - held(code, ok) exits code unless ok;\n  - refused(code, attempt, number) runs attempt and passes only on an OSError whose errno == number; a success or any other errno exits code;\n  - then, in order:\n    - held(10, [name for _, name in socket.if_nameindex()] == INTERFACES);\n    - a UDP socket.socket(AF_INET, SOCK_DGRAM) held(10, connect_ex(('192.0.2.1', 9)) == errno.ENETUNREACH);\n    - refused(11, lambda: open(CREDENTIAL, 'rb').close(), errno.EACCES);\n    - refused(12, lambda: open(PROTECTED, 'wb').close(), errno.EROFS);\n    - for RLIMIT_NPROC and RLIMIT_FSIZE: held(13, getrlimit == (value, value)), then setrlimit to (value + 1, value + 1) must raise ValueError, else sys.exit(13);\n    - with tempfile.TemporaryFile(buffering=0): seek(FSIZE), then refused(14, write(b'x'), errno.EFBIG).\n\nBEHAVIOR\n- changeProtected(name, provider) = Promise.resolve().then(() => invoker(name, provider)(['exec', '--no-map-working-directory', name, '--', ...CHANGE_ARGV], QUERY_TIMEOUT_MS)).then(() => true, () => false). It never rejects.\n- changingSession(seen) = async input => { let change = null }. Its spawn(...args) calls (input.provider?.spawn ?? spawn)(...args), then child?.stdout?.once?.('data', () => { change ??= changeProtected(input.name, input.provider) }), and returns the child. The body is try { return await runCheckSession({ ...input, provider: { ...input.provider, spawn } }) } finally { seen.changed = await change }.\n- RULES, per run:\n  - probe: passed with workspace 'intact' is null; else code-failure with a REFUSALS exit gives that code; else PROBE_FAILED;\n  - integrity: changed !== true gives CHANGE_FAILED; inconclusive with exitCode 0 is null; else INTEGRITY_FAILED;\n  - edit: passed with workspace 'changed' is null; else EDIT_FAILED.\n- verdict(at, result, changed):\n  1. result?.vm === 'delete-failed' gives VM_NOT_DELETED;\n  2. result?.failure !== null returns result?.failure: runCheckJob's own fixed code, which certify's runCheck admits through stable(), else CERTIFY_CHECK_FAILED;\n  3. result.vm !== 'deleted' gives VM_NOT_DELETED;\n  4. otherwise RULES[at].\n- checkContainment(c):\n  - job = c.deps?.containment?.runCheckJob ?? runCheckJob; one snapshot for all runs;\n  - per run in order: seen = { changed: null }, then await job({ platform: c.platform, ledger: c.ledger, owner: { taskId: 'task-certify', attemptId: `attempt-${randomBytes(16).toString('hex')}`, generation: 1 }, cacheDir: c.cacheDir, supervisor: c.supervisor, credential: randomBytes(32), snapshot, check: { id, command, protected: [PROTECTED_ENTRY] }, budgetMs: c.bounds.sessionMs, onReady: async () => {}, dependencies: [], provider: c.provider }, at === 1 ? { session: changingSession(seen) } : undefined);\n  - the first non-null verdict returns frozen { result: 'failed', code };\n  - else frozen { result: 'passed', code: null }.\n\nWHY\n- On this WSL2 kernel, under unshare -r -m -n with capabilities dropped, the architect checked:\n  - the generated probe exits 0 with every refusal in place, and 10/11/12/13 when the netns, the 0000 credential, the read-only bind or the rlimits are removed;\n  - open(path, 'wb') on a read-only bind is EROFS, while 'ab' and 'r+b' are EACCES. O_TRUNC makes the kernel take mnt_want_write before the permission check, so only 'wb' shows the mount rather than the root-owned file's mode;\n  - raising an rlimit is ValueError, and a write at the FSIZE limit is EFBIG (CPython ignores SIGXFSZ).\n- The integrity command was run with real sh: a writable protected file exits 3 at once; a 0444 file that another process truncates after 2 s exits 0.\n- The change fires on the session spawn's FIRST stdout bytes: the supervisor's hello. run_bridge writes hello after read_check, holds() (79), reown, protect_mounts and any dependency install, and before GUARD starts the job. The change therefore lands after the before-run check and during the session. This is R13h's cancellation idiom.\n- Root `truncate -s 0` in the guest's own mount namespace keeps the inode, so the job's read-only bind and the supervisor's after-run unchanged() both see it.\n- check_job returns 80 for ANY changed protected path once relay returned 0, whatever the job's exit. So the job exits 3 when its own overwrite succeeds, the run requires exitCode 0, and the change witness stops a result that never ran a session, or a failed change, from passing.\n- Probe exits 10-14 get their own codes, so the operator sees which boundary failed.\n- deps.containment is a test-only seam. Natively deps is {}, so the job is runCheckJob and the session base is runCheckSession.\n- Bounds: the integrity job waits at most 60 s, the change call 30 s (QUERY_TIMEOUT_MS) and the session c.bounds.sessionMs (120 s natively).\n\nError handling\n- changeProtected never rejects: invoker's synchronous refusal and every provider failure become false.\n- The spawn wrapper uses optional chaining, and the session settles only after the change does, so runCheckJob's delete never races it.\n- A malformed result fails closed, and a runCheckJob rejection propagates its own code.\n- No guest byte, path or credential reaches a code or the report.\n\nCross-platform: on the host the change goes through multipass exec on win32, darwin and linux; the guest paths are POSIX literals for the Linux guest.\n\nThe header comment says what the check certifies, that the operator run needs host network for the toolchain, that executionReady stays false and verified-local unavailable, and that CQ-R13f adds 'writer-containment' and 'controller-replacement' around it.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/certify-containment.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/certify-containment.mjs"
+      ],
+      "note": "Created scripts/local-runner/certify-containment.mjs: the prototype's 131-line source, verbatim. Before writing it I checked the imports: invoker/QUERY_TIMEOUT_MS (lifecycle.mjs), runCheckSession, runCheckJob, validateImport, and CHECK_BOUNDARIES (network.interfaces, resources.rlimits, filesystem.supervisorCredential). CC1 and CC2 now pass (2/2) under the env -i Node v24.21.0 command filtered to ^CC[12]. CC3-CC6 need step-4's certify.mjs wiring.",
+      "startedAt": "2026-10-30T18:49:03.579Z",
+      "completedAt": "2026-10-30T18:49:45.272Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "scripts/local-runner/certify.mjs: wire in 'check-containment' and give the context the names R13h and R13g already expect (DoD 3). Edit the landed bytes; the prototype measured +9/-6.\n\n1. Import { CONTAINMENT_CHECKS } from './certify-containment.mjs', after the certify-bridge import.\n2. BODY's last entry becomes ...[...BRIDGE_CHECKS, ...CONTAINMENT_CHECKS].map(({ id, run }) => [id, run]). 'teardown' stays last.\n3. In certify():\n   - the context literal gains cacheDir: path.join(workDir, 'images') and supervisor: null;\n   - c.observed is renamed c.platform. It is the same observed wrapper, which records c.arch; its comment notes that the check-containment runs use it too.\n4. In 'provision':\n   - set [c.supervisor, c.supervisorSha256] = [supervisor, <its sha256 hex>], so the real bytes are read once;\n   - call provisionGuest with platform: c.platform and cacheDir: c.cacheDir.\n   It is the same directory as before, so every check run reuses the cached image, and runCheckJob's pinned toolchain lands beside it (<sha256>.tar.xz next to <sha256>.img).\n5. Add one header line: CQ-R13f1 adds 'check-containment' (certify-containment.mjs) after them; its runs read c.platform, c.cacheDir and c.supervisor.\n\nUnchanged:\n- c.ledger stays the BASE ledger (only provisioning gets c.capturing; CC6 pins this).\n- The native entry still passes deps {}.\n- validateCertificationReport derives its ids from CERTIFY_CHECKS.\n- executionReady stays false: no verified-local and no support claim.\n\nThe error handling is unchanged: a read failure is still CERTIFY_SUPERVISOR_UNAVAILABLE in 'provision', and every later check is then not-run.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/certify.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/certify.mjs"
+      ],
+      "note": "certify.mjs is +9/-6, as in the prototype: a header line, the CONTAINMENT_CHECKS import, the BODY splice after BRIDGE_CHECKS (teardown stays last), and the context gaining cacheDir/supervisor. c.observed was renamed c.platform with no references left, and provision sets c.supervisor. c.ledger is still the base ledger, and the native deps are unchanged. A focused run with --test-name-pattern '^(CF|CB|GN|CC)' gives 32/32 pass, exit 0 (/tmp/cqr13f1/focused.log).",
+      "startedAt": "2026-10-30T18:49:46.476Z",
+      "completedAt": "2026-10-30T18:50:16.410Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE, fresh, after steps 1-4. This is a mid-epic slice, so run only the narrow two-file suite; CQ-R13f and CQ-R13 own the broader passes.\n\n1. Run exactly: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs\n   - It must exit 0. The prototype gave 339 tests: 338 pass, 1 existing skip.\n   - Its command, exit code and output tail are the complete_task verification evidence.\n2. git diff --check over the 4 files is clean.\n3. Size: additions plus deletions (numstat) over the 4 files stay at or under 380 (prototype 329). Measure the test file against your step-1 snapshot copy, so peer hunks are not counted.\n4. A read-only git status --short shows only your 4 paths as this task's.\n   - Never revert, stash, `git add -A` or commit a peer's or a pre-existing dirty path.\n   - No agent Git writes: the wrapper lands the work.\n\nOptional, not the gate: Windows Node from the repo root, \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/local-runner.test.mjs. CC2 skips there; the other CC rows are pure Node, like the CF/CB/GN rows that Windows CI already runs.\n\nThe native certify run (real Multipass, host network for the Node toolchain, two VMs at once) is operator-only and is NOT part of this verification.\n\nError handling: fix a failing row in code, never by weakening an assertion or deleting a row.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/local-runner/certify.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/certify-containment.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/local-runner/certify.mjs",
+        "scripts/local-runner/certify-containment.mjs"
+      ],
+      "note": "Fresh verification: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs exited 0. 339 tests: 338 pass, 0 fail, 1 existing skip (the macOS native smoke). Log: /tmp/cqr13f1/verify.log.\nWhitespace: git diff --check against e92e3616 is clean for the 3 tracked files and for the new module.\nSize: 331 changed lines, under the 380 cap. local-runner.test.mjs +169/-12; bundle +2/-2 (one more comment line than the prototype); certify.mjs +9/-6; certify-containment.mjs +131 new. The test file measures the same against the step-1 snapshot and against e92e3616, so no peer hunks are counted.\ngit status: the dirty peer paths (.moe/tasks/*, packages/moe-daemon/*, scripts/moe-agent.sh, scripts/tests/{postflight.*,importee-guard-bash,usage-attribution}.test.*) are not this task's and are untouched. No agent Git writes.",
+      "startedAt": "2026-10-30T18:50:17.707Z",
+      "completedAt": "2026-10-30T18:51:29.045Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, and read the 4-file diff as an attacker.\n\nMUTATION PROBES, in a scratch copy only:\n- Build it with git archive HEAD scripts .github/workflows/ci.yml packages/moe-daemon/src/state/resourceStore.ts packages/moe-daemon/package-lock.json packages/moe-daemon/tsconfig.json moe-jetbrains/build.gradle.kts moe-vscode/scripts/bundle-assets.mjs, then overlay your 4 files (mem gotcha-local-runner-qa-archive-inputs).\n- Run each mutant with --test-name-pattern='^(CF|CB|GN|CC)' and require an AssertionError, not merely exit 1 (mem gotcha-local-runner-certify-bridge-fakes).\n- The architect killed all 13 of these:\n  1. the change fires at spawn instead of on the first stdout bytes;\n  2. the change witness is dropped;\n  3. exitCode === 0 is dropped;\n  4. failure is checked before the delete-failed leak;\n  5. the probe opens with 'ab';\n  6. the errno comparison is inverted;\n  7. certify passes the capturing ledger as c.ledger;\n  8. the CREDENTIAL and PROTECTED exits are swapped;\n  9. each run gets a fresh snapshot;\n  10. budgetMs is a literal 120_000;\n  11. the raw platform is passed;\n  12. the change is not awaited;\n  13. the probe skips sys.exit(13) after a raised limit.\n- Restore the copy and cmp-check it afterwards.\n\nCHECKLIST:\n- Can check-containment pass vacuously? Try a fake result with missing fields, a session that never ran, a failed change, a VM-delete failure that turns a pass 'inconclusive', and an outcome matched while failure is non-null.\n- Can a run reuse an owner, a credential or the main VM? Can a run's reservation retarget teardown?\n- Can any guest byte (outputTail, stdout), path or credential reach a code, a message or the report?\n- Is the native path still runCheckJob and runCheckSession unchanged (deps {} natively)?\n- Is every run's VM deleted before the next run starts, and does the first failure stop the later runs?\n- What if the change hangs (30 s bound) or the job's 60 s wait ends first? The run must fail closed, never pass.\n- With two VMs at once (main plus one check VM), a host without headroom must fail closed with runCheckJob's provisioning code.\n- Would I be embarrassed if this certified a broken boundary?\n\nFix any finding, then re-run step 5's command fresh before complete_task. Then update the Serena note task-task-4e2ab1584c3140019be709b94c71f1cc-handoff (outcome, size, evidence), and record a gotcha for any new trap.\n\nNo agent Git writes and no .moe edits. executionReady stays false and verified-local stays unavailable.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/local-runner/certify.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/certify-containment.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/local-runner/certify.mjs",
+        "scripts/local-runner/certify-containment.mjs"
+      ],
+      "note": "Adversarial self-review: no defects found, no code changed.\n\nMutation probes: 13/13 planned mutants were killed by AssertionErrors, with no setup errors. The scratch archive was HEAD plus the cross-tree inputs plus my 4 files overlaid, run with --test-name-pattern '^(CF|CB|GN|CC)'. The killing rows: CC4 (change at spawn, witness dropped), CC5 (exitCode dropped, failure before leak), CC2 (probe 'ab', errno inverted, exits 11/12 swapped, raised limit passes), CC6 (capturing ledger), CC3 (fresh snapshot per run, literal budget, raw platform) and CF1/CF3/GN/CC (change not awaited). The scratch copy was restored and cmp-identical, and its baseline was 32/32. Log: /tmp/cqr13f1/mutants.log.\n\nChecklist:\n- Missing or null result fields resolve failed and stabilize to CERTIFY_CHECK_FAILED, so there is no vacuous pass.\n- A session that never ran, or a failed change, gives CHANGE_FAILED. A delete-failed leak is checked before failure. A non-null failure is checked before outcome.\n- Each run gets a fresh owner and credential and a base ledger (CC6), so teardown cannot be retargeted.\n- Guest bytes are never read; codes go through stable().\n- The native entry passes deps {}, so it uses runCheckJob and runCheckSession unchanged.\n- check-lifecycle.mjs confirms that an inconclusive session keeps failure null when the VM is deleted, timeoutMs defaults to 30 s, and dependencies [] means no lockfiles.\n- A hung change is bounded at 30 s and gives false. A 60 s job timeout gives exit 1, so INTEGRITY_FAILED.\n\nNon-blocking:\n- The certifyCore doc comment does not list the test-only containment seam (outside the approved hunks).\n- A non-function provider.spawn becomes infra-failure rather than CHECK_SESSION_FAILED. Both fail closed.\n\nOptional Windows node.exe v24.16 run: 31 pass, CC2 skipped by design. The fresh final verification exits 0: 339/338/1 skip. Serena handoff updated.",
+      "startedAt": "2026-10-30T18:51:30.182Z",
+      "completedAt": "2026-10-30T18:56:43.788Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-d00dafdf2dde4a41bf5983b1f7d495de",
+    "task-001d8ab383ef41088e045b2e41ed0e1e"
+  ],
+  "priority": "HIGH",
+  "order": 254.38,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T18:02:39.016Z",
+  "updatedAt": "2026-10-30T19:08:19.373Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T18:02:59.654Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T19:07:47.860Z",
+    "wallClockMs": 3888206
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-fe18a9a9",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T18:43:15.360Z",
+  "executionContract": {
+    "intendedBehavior": "certify gains 'check-containment' after 'guest-network' (teardown stays last). It runs runCheckJob three times on one generated snapshot: moe-certify/probe.py, the protected moe-certify/protected.txt and the tracked moe-certify/tracked.txt. Each run is in its own fresh VM, with a fresh synthetic owner and credential, dependencies [], budgetMs c.bounds.sessionMs, and the context's platform (observed), base ledger, cacheDir, supervisor bytes and provider.\n\n- Probe run: `python3 -I -B moe-certify/probe.py` must resolve passed/intact. It exits 10-14 for the first refusal that does not hold.\n- Integrity run: at the session's first stdout bytes, the host runs a root `truncate -s 0` of the protected file in the guest's own mount namespace, once. The run must resolve inconclusive with exitCode 0 and the change witnessed.\n- Edit run: must resolve passed/changed.\n\nEvery run needs vm 'deleted' and failure null. The first failing run stops the check with one fixed code; runCheckJob's own failure or rejection code is kept. The certify context gains platform, cacheDir and supervisor. Native evidence is operator-only; executionReady stays false.",
+    "acceptanceCriteria": [
+      "check-containment passes only when probe=passed/intact, integrity=inconclusive with exitCode 0 and a successful change, and edit=passed/changed, each with vm 'deleted' and failure null (CC3, CC5).",
+      "Failures use fixed codes: CERTIFY_CONTAINMENT_VM_NOT_DELETED; runCheckJob's own non-null failure code; CERTIFY_CONTAINMENT_NETWORK/CREDENTIAL/PROTECTED/RLIMIT/FSIZE for probe exits 10-14; CERTIFY_CONTAINMENT_PROBE_FAILED, _CHANGE_FAILED, _INTEGRITY_FAILED and _EDIT_FAILED. A rejection keeps its stable code, and no later run starts (CC4, CC5).",
+      "Each run's input keys are exactly platform, ledger, owner, cacheDir, supervisor, credential, snapshot, check, budgetMs, onReady, dependencies and provider. check = {id, command, protected:[{path:'moe-certify/protected.txt', oid:'c847a247be38418490fff92ebf0fa678d21f99da'}]} (CC3).",
+      "The change argv is exactly ['exec','--no-map-working-directory',<run instance>,'--','sudo','-n','truncate','-s','0','/var/lib/moe/workspace/moe-certify/protected.txt'] with QUERY_TIMEOUT_MS. It is invoked once, and only after the integrity session's first stdout bytes (CC4).",
+      "The probe exits 0 only when every refusal holds, else 10-14 (CC2, stubbed). CERTIFY_CHECKS ends ['guest-network','check-containment','teardown'], and the updated CF1-CF3, CB1, CB6 and GN5 rows pass. The verification command exits 0 and its output is supplied to complete_task."
+    ],
+    "invariants": [
+      "executionReady stays false and verified-local unavailable. certifyCore's transport is 'injected' and never certifies. The native entry passes deps {}, so deps.containment cannot be injected natively.",
+      "teardown stays last and deletes only certify's main VM by its owned name. The runs get the base ledger, never the capturing wrapper.",
+      "No guest byte, host path or credential reaches a code, a message or the report. The native runCheckJob and runCheckSession behave unchanged: the only wrapper is the integrity session's spawn tee, which passes its argument and result through."
+    ],
+    "compatibility": [
+      "Existing CF/CB/GN rows keep their meaning: only the new id is inserted into pinned lists and not-run tails, and GN1/GN3's exact probes lists are untouched. provision keeps cacheDir <workDir>/images and the same supervisor bytes, and the report schema is unchanged.",
+      "The R13h and R13g plans read context.platform, ledger, cacheDir, supervisor and provider. R13f later adds writer-containment and controller-replacement to CONTAINMENT_CHECKS."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/certify-containment.mjs (new): CONTAINMENT_CHECKS and containmentSnapshot(). certify.mjs: import, BODY splice after BRIDGE_CHECKS, context cacheDir/supervisor/platform (c.observed renamed), and one header line.",
+      "Tests: containmentRig, CHANGE_ARGV/isChange, certifyHarness containment/change options plus changes/rig, BRIDGE_SCRIPTS 'certify-integrity', pinned id-list updates and CC1-CC6. The bundle test's shipped list gains certify-containment.mjs."
+    ],
+    "reuse": [
+      "Reuses runCheckJob, runCheckSession, invoker/QUERY_TIMEOUT_MS, validateImport and CHECK_BOUNDARIES unchanged, plus R13h's first-stdout spawn idiom. The tests reuse certifyHarness, bridgeRouter/checkFake, BRIDGE_SCRIPTS, certification()/checksOf, networkFailed, probeExit, answering, lifecycleOptions and nameAt."
+    ],
+    "sourceAssumptions": [
+      "check-lifecycle.mjs runCheckJob(input, {session,...}): it calls session({name, check, provider, budgetMs, timeoutMs, signal}) and resolves {outcome, exitCode, signal, outputTail, environment, workspace, instance, vm, failure, executionReady}. A pass without a verified delete becomes 'inconclusive'. check-session.mjs maps exit 80 after hello and one observation to 'inconclusive'.",
+      "guest-supervisor.py: run_bridge writes hello before GUARD starts the job. check_job runs holds(), reown and protect_mounts (RO file binds) before relay, and returns 80 when relay returned 0 and unchanged() is false. WORKSPACE = '/var/lib/moe/workspace'.",
+      "check-evidence.mjs CHECK_BOUNDARIES: interfaces ['lo'], RLIMIT_NPROC 2048, RLIMIT_FSIZE 1073741824, credential '/etc/moe/supervisor.credential'. lifecycle.mjs invoker uses provider.run and refuses a non-owned name; QUERY_TIMEOUT_MS is 30000. certify.mjs runCheck turns a throw into failed with stable(code)."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Trigger the change on the job's first decoded stdout frame, or on the session's first raw stdout bytes (hello)? Chose hello, R13h's cancellation idiom. run_bridge writes hello after the before-run hash check and protect_mounts, so the change lands during the session and the after-run check must catch it. (2) Change with a shell append, or with a fixed `sudo -n truncate -s 0 <abs path>`? Chose truncate: no shell, and it keeps the inode, so the job's RO bind and the supervisor's view both see the change. (3) Pass the integrity run on outcome alone, or also require exitCode 0 and a change witness? Both added. check_job returns 80 for ANY changed protected path, so outcome alone would pass a job that overwrote the file itself, or a result that never ran a session. Single-rule rows pin both guards. (4) One code per run, or one per probe refusal? Probe exits 10-14 map to their own codes (4 lines), so the operator sees which boundary failed. (5) Remap runCheckJob infra failures, or keep them? Keep them, as bridge-framing and guest-network propagate TRANSFER_ and PROVIDER_ codes. (6) Test the probe through an unshare simulation, or through stubbed primitives? Stubbed: CI runners restrict unprivileged user namespaces. The architect ran the simulation once by hand. (7) Record the change in `probes`, or in a separate `changes` list? Separate, because GN1 and GN3 pin probes exactly. (8) One big tests step, or two? Two, because a step description is capped at 10000 chars.",
+    "codebaseInsights": "- guest-supervisor.py check_job returns PROTECTED_CHANGED 80 whenever relay returned 0 and unchanged() is false, whatever the job's own exit. runCheckSession maps 80 after hello and one observation to 'inconclusive', with the observation's exitCode.\n- runCheckJob turns a pass without a verified delete into 'inconclusive' with failure CHECK_VM_DELETE_FAILED. That is why the verdict checks the leak first.\n- Linux open with O_TRUNC takes mnt_want_write before the permission check. 'wb' on a RO bind is EROFS; 'ab' and 'r+b' are EACCES (verified under unshare).\n- Windows CI runs local-runner.test.mjs, so POSIX-only rows need an inline skip. NOT_POSIX is declared later in the file (TDZ).\n- A filtered run starts its first test during module evaluation, so certifyHarness may read only consts declared before it.\n- Pinned id lists: CERTIFY_IDS, BRIDGE_NOT_RUN, CF3 undeleted, CB1, CB6 failedBridge, networkFailed, GN5.\n- The full prototype is Serena memory task-task-4e2ab1584c3140019be709b94c71f1cc-prototype.",
+    "risks": "- Native runs: the operator run now launches three more VMs, one at a time, beside certify's main VM. It also fetches the pinned Node toolchain, so it needs host network. A host without headroom fails closed with runCheckJob's provisioning code.\n- Timing: the integrity job waits at most 60 s, the change call 30 s, the session 120 s.\n- Shared test file: it may carry peer hunks. Snapshot it first, and edit it only with the Edit tool.\n- Size: QA caps a task at 400 changed lines, and no rail exempts this one. The prototype measured 329; keep it at or under 380.\n- Later edits: R13f, R13h and R13g edit the same registry and test lists after this lands. ccFailed derives positions from CERTIFY_IDS for them.\n- No agent runs native certification.",
+    "keyFiles": [
+      "scripts/local-runner/certify.mjs",
+      "scripts/local-runner/certify-bridge.mjs",
+      "scripts/local-runner/check-lifecycle.mjs",
+      "scripts/local-runner/check-session.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/local-runner/check-evidence.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T18:43:15.380Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T18:43:53.262Z",
+  "commits": [
+    {
+      "sha": "5e885d02389aadf08ce4ebae79520aff14c23703",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T18:43:18Z",
+      "paths": [
+        ".moe/tasks/task-4e2ab1584c3140019be709b94c71f1cc.json",
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T18:45:58.257Z",
+      "treeId": "1d2ed51dada937f806dcc506eb14f696d32da96d",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "5934a58db8e377f4735c2758c1ed82740c0c7f28",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T18:46:32Z",
+      "paths": [
+        ".moe/tasks/task-4e2ab1584c3140019be709b94c71f1cc.json",
+        ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+        ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+        "scripts/local-runner/certify-containment.mjs",
+        "scripts/local-runner/certify.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T18:57:22.314Z",
+      "treeId": "e8daee893003ac3d30421d02a267162b0613c58b",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "e74cdc14e1a03d6adc1d1d6ec09a4eabb291b296",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T19:01:10Z",
+      "paths": [
+        ".moe/project.json",
+        ".moe/tasks/task-2359daf0dc5241c3a160be293bbd5877.json",
+        ".moe/tasks/task-4e2ab1584c3140019be709b94c71f1cc.json",
+        ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T19:08:19.373Z",
+      "treeId": "46fb62acdcd9d6b62843fa9409ceb89984c480c5",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    "scripts/local-runner/certify-containment.mjs",
+    "scripts/local-runner/certify.mjs",
+    ".moe/tasks/task-4e2ab1584c3140019be709b94c71f1cc.json",
+    ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+    ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+    ".moe/project.json",
+    ".moe/tasks/task-2359daf0dc5241c3a160be293bbd5877.json",
+    ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json"
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    "scripts/local-runner/certify-containment.mjs",
+    "scripts/local-runner/certify.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T19:01:10Z",
+    "at": "2026-10-30T19:08:19.373Z"
+  },
+  "reviewStartedAt": "2026-10-30T18:56:59.642Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ AH1 a clean install streams both cache-verified binaries between two mount checks and resolves the frozen result (37.552381ms)\n✔ AH2 every refusal is a fixed code, input errors touch neither provider nor cache, and a cache file that drifts after verification is never completed (207.727395ms)\n✔ AH3 end to end, installAgents installs both stand-ins as 0555 through the real supervisor (90.749872ms)\n✔ RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, from the installed pins only (25.926926ms)\nℹ tests 339\nℹ suites 0\nℹ pass 338\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 45480.862827",
+    "reportedAt": "2026-10-30T18:56:59.642Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-R13f1 adds the 'check-containment' certify check, applying the architect prototype verbatim.\n\nThe new scripts/local-runner/certify-containment.mjs (131 lines) exports containmentSnapshot() and CONTAINMENT_CHECKS. It runs runCheckJob three times on one generated snapshot, each run with a fresh owner, credential and VM:\n- probe: must be passed/intact; probe exits 10-14 map to NETWORK/CREDENTIAL/PROTECTED/RLIMIT/FSIZE;\n- integrity: a root truncate of the protected file through one fixed argv, fired on the session's first stdout bytes; must be inconclusive with exitCode 0 and the change witnessed;\n- edit: must be passed/changed.\nA VM-delete leak is checked first, then runCheckJob's own failure code, then each run's rule. The first failure stops the later runs. A rejection keeps its stable code.\n\ncertify.mjs (+9/-6): BODY splices the check after BRIDGE_CHECKS and teardown stays last. The context gains cacheDir and supervisor, and c.observed is renamed c.platform. c.ledger stays the base ledger and the native deps stay {}.\n\nTests (+169/-12): containmentRig, CHANGE_ARGV and the certifyHarness containment/change options, the 'certify-integrity' bridge script, the pinned id lists, and CC1-CC6. CC2 is POSIX-only. The bundle shipped list gains the new module (+2/-2). Total 331 changed lines, under the 380 cap, with no peer hunks.\n\nEvidence:\n- RED first: ERR_MODULE_NOT_FOUND plus the bundle's missing-asset failure.\n- Fresh verification: exit 0, 339 tests, 338 pass, 1 existing macOS-native skip.\n- 13/13 planned mutants were killed by AssertionErrors in a scratch archive, which was restored cmp-identical.\n- Windows node v24.16 run of the CF/CB/GN/CC rows: 31 pass, CC2 skipped.\n- diff --check is clean.\n\nNon-blocking:\n- certifyCore's doc comment does not list the test-only containment seam (outside the approved hunks).\n- A non-function provider.spawn becomes infra-failure, not CHECK_SESSION_FAILED. Both fail closed.\n\nNative certify was not run; it is operator-only. executionRead",
+  "completedAt": "2026-10-30T19:07:47.860Z",
+  "reviewCompletedAt": "2026-10-30T19:07:47.860Z",
+  "reviewSummary": "QA verified CQ-R13f1 against completion 5934a58d and checkpoint 5e885d02, both on moe/work-2026-10-24.\n\nVerification re-run, fresh: env -i node v24.21.0 --test local-runner + bundle -> exit 0, 339 tests, 338 pass, 1 existing skip. CF1-8, CB1, CB6, GN5 and CC1-6 pass.\n\nDoD:\n1. verdict order: leak, then failure, then vm, then RULES; the first failure stops (CC5, 23 rows with call counts).\n2. Input keys exact, shared snapshot/platform/ledger/supervisor/provider, fresh owner and credential, deps [], budget from bounds (CC3). oid c847a247 re-derived. Change argv fixed, once, on first stdout (CC4). Base ledger (CC6).\n3. Context platform/cacheDir/supervisor; order guest-network, check-containment, teardown (CB1, GN5, CF1).\n4. Exit 0.\n\nSource checks: hello is written after holds, reown and protect_mounts; exit 80 on relay=0 with changed paths; runCheckSession attaches its stdout listener in the spawn tick, so the tee loses no bytes; `sudo -n` exec precedent exists; rlimits soft=hard; native deps {}.\n\nMy own mutants, in a scratch archive (baseline 32/32): 11/11 killed by AssertionErrors (vm check dropped, change guard, edit accepts intact, route check dropped, generation, change timeout, splice order, no stop-on-first-failure, credential reuse, dependencies, FSIZE errno). Restored cmp-identical.\n\nSize: 331 changed lines (311 net) across the 4 approved files. No scope drift and no weakened tests.\n\nNon-blocking: the certifyCore doc does not name the deps.containment test seam. Native certify is operator-only and was not run. executionReady false.",
+  "requiredCheckAtDone": null
+}

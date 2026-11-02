@@ -1,0 +1,90 @@
+{
+  "id": "task-73fbedaa",
+  "epicId": "epic-7e26d221",
+  "title": "Fix missing mutex on createChannel/deleteChannel/createDecision",
+  "description": "**Found during QA deep audit of B8/B16 fixes.**\n\n`createChannel()` (line ~665), `deleteChannel()` (line ~886), and `createDecision()` (line ~1026) perform read-check-write sequences without holding `this.mutex`.\n\n**Race scenario for createChannel:**\n1. Two concurrent calls with same channel name\n2. Both pass the duplicate name check at line ~681\n3. Both write the channel — duplicate created\n\n**Fix:** Wrap these methods in `this.mutex.runExclusive()` like `pinMessage`/`unpinMessage` already are.\n\nAlso document the lock ordering constraint: `this.mutex` → `channelMutex` (never reverse). `claimNextTask` holds `this.mutex` and calls `sendMessage` which acquires `channelMutex` — this ordering must be preserved.",
+  "definitionOfDone": [
+    "createChannel, deleteChannel, createDecision wrapped in mutex.runExclusive",
+    "Lock ordering documented in code comment",
+    "No concurrent createChannel can create duplicates",
+    "Existing tests pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "P0: Wrap createChannel (line 705), deleteChannel (line 933), and createDecision (line 1073) in this.mutex.runExclusive(). Each method performs read-check-write without holding the mutex. The duplicate name check in createChannel and the file operations in deleteChannel must be atomic. Note: createDecision calls sendMessage (acquires channelMutex) — safe because lock order is mutex then channelMutex. Add explicit error handling in each wrapper to log and re-throw.\n\nValidate: npx tsc --noEmit",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "Wrapped all three methods in this.mutex.runExclusive(). createDecision includes lock ordering comment since it calls sendMessage (acquires channelMutex).",
+      "startedAt": "2026-03-20T23:15:19.586Z",
+      "completedAt": "2026-03-20T23:18:01.073Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "P1: Add lock ordering comment near mutex declarations in StateManager.ts documenting: this.mutex must be acquired before channelMutex. Methods like claimNextTask hold mutex and call sendMessage which acquires channelMutex — never reverse. This prevents deadlocks.\n\nValidate: npx tsc --noEmit",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-20T23:18:01.340Z",
+      "completedAt": "2026-03-20T23:19:11.857Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "P1: Add concurrency test for createChannel. Two concurrent createChannel calls with same name via Promise.allSettled — exactly one should succeed, the other should throw 'already exists'. Test verifies no duplicate channels created and error handling works correctly.\n\nValidate: npm run test",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/__tests__/channel-mutex.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "note": "Added concurrency test to existing StateManager.test.ts. Test fires two concurrent createChannel with same name, verifies exactly one succeeds and one throws 'already exists'.",
+      "startedAt": "2026-03-20T23:19:17.247Z",
+      "completedAt": "2026-03-20T23:21:48.855Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "P2: Run full validation: npx tsc --noEmit && npm run test && npm run build",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-20T23:21:48.987Z",
+      "completedAt": "2026-03-20T23:22:35.283Z"
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 12,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T23:23:12.239Z",
+  "updatedAt": "2026-10-24T15:19:04.556Z",
+  "planSubmittedAt": "2026-03-20T23:14:41.789Z",
+  "planApprovedAt": "2026-03-20T23:14:41.791Z",
+  "workStartedAt": "2026-03-20T23:15:19.586Z",
+  "completedAt": "2026-03-20T23:22:36.934Z",
+  "reviewStartedAt": "2026-03-20T23:22:36.934Z",
+  "reviewCompletedAt": "2026-03-20T23:34:34.229Z",
+  "metrics": {
+    "firstClaimAt": "2026-03-04T00:25:31.694Z",
+    "doneAt": "2026-03-20T23:34:34.231Z",
+    "wallClockMs": 1465742537
+  },
+  "planRevision": 0
+}

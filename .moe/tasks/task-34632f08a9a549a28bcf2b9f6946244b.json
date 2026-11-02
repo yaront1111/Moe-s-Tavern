@@ -1,0 +1,305 @@
+{
+  "id": "task-34632f08a9a549a28bcf2b9f6946244b",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C10] Targeted context guidance",
+  "description": "Objective: Update role/skill source guidance and prompt transports to reuse supplied verified references and expand only when needed.\n\nDeliverable: Targeted context guidance. This is task C10 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): npm run lint\n\nDependency aliases (wired by Moe task ids after import): C06, C09.",
+  "definitionOfDone": [
+    "Stable role prefix remains separate from dynamic packets.",
+    "Mandatory broad rereads do not negate packet benefit.",
+    "Role docs remain within line cap; bundled source sync remains generated.",
+    "Fresh verification `npm run lint` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Guard test first, and prove it is RED on today's docs. Create packages/moe-daemon/src/util/targetedContextGuidance.test.ts modeled exactly on src/util/qaCommitPolicy.test.ts: import ROLE_DOCS from '../generated/initFiles.js' and SKILL_FILES from '../generated/skillFiles.js'; resolve docsRoot repo-relatively with path.dirname(fileURLToPath(import.meta.url)) then '..','..','..','..','docs'; hasDocs = fs.existsSync(docsRoot); lf() strips CRLF; readDoc() throws a named error when a source doc is missing or empty (a guard that passes without its input is worse than none); on-disk cases use it.skipIf(!hasDocs) for the Docker context.\nConstants (assert them verbatim, case-sensitive):\n- ROLE_SENTINELS for worker.md and architect.md: 'what Moe supplied', 'truncated, omitted or missing', 'a navigation aid, never a reason to skip a read', 'once per session'.\n- REFERENCE_SENTINELS for worker.reference.md and architect.reference.md: 'memory-name inventory', 'once per session'.\n- SKILL_SENTINELS for explore-before-assume/SKILL.md: '## Reuse what was already verified', 'a navigation aid, never a reason to skip a read', and the landed C01 limitation code that means no source was served (today 'no-repository-source'; read buildPacketManifest's limitations in packages/moe-daemon/src/context/contextPacket.ts at implementation time and use the code it actually emits).\n- QA_SENTINEL for qa.md (which this task does NOT edit): 'that is the complete QA read'.\n- FORBIDDEN in all six subjects: 'On task start, `list_memories`' and 'Skills evolve. Read the current version.'\n- PREFIX_HYGIENE for worker.md, qa.md and architect.md (the docs the launchers put into the stable system prefix): none of '<claimed_task_context>', '<inbox>', '<routed_mentions>', '<pending_questions>', 'PREFLIGHT_', and no match for /task-[0-9a-f]{32}/.\nTest cases (each failure message names the subject and the phrase):\n- G1: every subject key exists in the generated bundle and is a non-empty string: ROLE_DOCS 'worker.md', 'architect.md', 'qa.md', 'worker.reference.md', 'architect.reference.md'; SKILL_FILES 'explore-before-assume/SKILL.md'. This stops a renamed key from turning the rest into vacuous passes on undefined.\n- G2: FORBIDDEN is absent from the generated copies. G3: the same on the source docs.\n- G4: the sentinels are present in the generated copies. This doubles as the staleness guard: doc edits alone stay red until regeneration. G5: the same on the source docs.\n- G6: PREFIX_HYGIENE holds on the generated and source copies of the three capped role docs.\nRun it in a Linux-native snapshot, never in the shared tree (recipe: mem gotcha-daemon-linux-snapshot-gate):\n1. git archive HEAD of the WHOLE repo into a mktemp dir.\n2. Overlay ONLY this task's files.\n3. Symlink a native packages/moe-daemon/node_modules, after checking that package-lock.json is equal modulo CR.\n4. Run under env -i with the nvm node bin on PATH and NO_COLOR=1: `npx vitest run src/util/targetedContextGuidance.test.ts`.\nIt MUST be red on the unedited docs: G2/G3 hit the two forbidden phrases, and G4/G5 miss the sentinels. Record the failing case names in the step note as the red proof. G1 and G6 must already pass. If G6 fails on today's docs, report the offending line in the note; never weaken the check to make it pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/util/targetedContextGuidance.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/targetedContextGuidance.test.ts"
+      ],
+      "note": "Guard test G1-G6 written, modeled on qaCommitPolicy.test.ts. The limitation code is 'no-repository-source' (contextPacket.ts:133, buildPacketManifest). RED proof in the Linux snapshot /tmp/moe-c10-gate.hsc5FT (git archive HEAD a46ce43 + this test only, native npm ci, env -i, node v24.21.0, NO_COLOR=1): 4 failed | 2 passed. G1 and G6 pass. G2 is red on ROLE_DOCS['worker.reference.md'], which still carries \"On task start, `list_memories`\"; G3 is red on the same phrase in docs/roles/worker.reference.md. G4 is red on ROLE_DOCS['worker.md'], which is missing \"what Moe supplied\"; G5 is red on the same in docs/roles/worker.md. No dirty bytes in docs/roles, docs/skills, src/generated or the launcher test. 767 peer dirty paths elsewhere are untouched.",
+      "startedAt": "2026-10-30T05:04:41.715Z",
+      "completedAt": "2026-10-30T05:07:11.189Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Role docs: the stable prefix every launcher sends. Edit docs/roles/worker.md and docs/roles/architect.md only; qa.md stays unchanged.\nworker.md:\n(a) Line 23 now reads 'Follow `nextAction` on every Moe tool response. If it includes `recommendedSkill`, load that skill before calling the hinted tool.' Append: ' — once per session: a skill this session already loaded, and still holds after any compaction, is not reloaded.'\n(b) Insert exactly ONE new line in '## Runtime-driven workflow', directly before the 'Memory lives in Serena.' line. Keep every sentinel verbatim. Wording may be tightened but never weakened:\n'Reuse what Moe supplied instead of re-reading it: the claimed context and every section its `packetManifest` lists as served, landed prerequisite evidence in `epicSiblings`, the approved plan\\'s verified file scope and symbol names, and the preloaded memory and skill inventories. Expand only for what the manifest marks truncated, omitted or missing, a listed `limitations` entry, a stale or changed reference, or a slice that cannot support the change: a supplied slice is a navigation aid, never a reason to skip a read the change needs. Re-fetch `moe.get_context` only when a Moe response asks for it, the task\\'s status or plan revision changed, or you no longer hold what you need (a new process, compaction, an uncertain handoff); pass `view:\"full\"` only for a section listed in `omitted`.'\narchitect.md:\n(a) Append to line 12 (Plan-mode heuristics, 'Invoke deeper exploration before planning when ...'):\n' Otherwise reuse what Moe supplied instead of re-reading it — the claimed context and every section its `packetManifest` lists as served, landed prerequisite evidence, the preloaded memory inventory, and only the sections of a reference document that the task cites — and expand only for what the manifest marks truncated, omitted or missing, a listed `limitations` entry, a stale or changed reference, or a slice that cannot support a correct plan: a supplied slice is a navigation aid, never a reason to skip a read the plan needs.'\n(b) Line 30: append the same skill rule right after 'load that skill before calling the hinted tool', i.e. ' — once per session: a skill this session already loaded, and still holds after any compaction, is not reloaded.' The rest of the line stays as it is.\nBounded prerequisite adaptation. Before writing, read the landed get_context contract: the docs/MCP_SERVER.md get_context section, tools/getContext.ts, and the C04/C05/C06/C07 completionSummary on this task's get_context epicSiblings entries.\n- If a landed prerequisite REQUIRES an explicit agent action that this generic wording does not cover, add exactly ONE sentence naming that landed field. Example: C06 makes the session present an acknowledged base packet id, or request a full snapshot after compaction. Put the sentence in the worker.md rule and in architect.md line 12, and add that field name to ROLE_SENTINELS.\n- Otherwise add no delta, cache or reuse-specific text. The generic 'stale or changed reference' and 'no longer hold' clauses already cover them.\n- Never invent a field name. Record what you found in the step note.\nCaps: worker.md goes from 29 to 30 lines. architect.md stays at 39, because both edits are appends with no new line. Run `npm run lint` to confirm. Use ASCII apostrophes only; the \\' above is a plain ASCII apostrophe. Keep each file's LF endings: `git diff --stat` must equal `git diff --ignore-cr-at-eol --stat` for each file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/worker.md",
+        "docs/roles/architect.md"
+      ],
+      "modifiedFiles": [
+        "docs/roles/worker.md",
+        "docs/roles/architect.md",
+        "packages/moe-daemon/src/util/targetedContextGuidance.test.ts"
+      ],
+      "note": "worker.md: line 23 gains the once-per-session skill rule, and ONE new line goes before 'Memory lives in Serena.' with all sentinels verbatim; 29 -> 30 lines. architect.md: line 12 and line 30 are appends only and it stays at 39. qa.md is unchanged.\n\nPrerequisite adaptation: landed C06 (b41494e, getContext.ts plus the docs/MCP_SERVER.md 'Acknowledged deltas' paragraph) requires a seat that presents basePacketId+contextEpoch to advance contextEpoch on every compaction. The generic wording does not cover that, so I added exactly ONE sentence, in the worker rule and in architect line 12: 'If you present `basePacketId` and `contextEpoch` to get a `delta`, advance `contextEpoch` after every compaction and name only a base packet you still hold.' ROLE_SENTINELS now has 'advance `contextEpoch` after every compaction' (test edited).\n\nOther landed contracts need no agent action, so they get no text. C07 planReuse is a recorded assessment and never approval; its withholding and resume are daemon-side. C04 and C05 add no agent-facing field in get_context.\n\nChecks: LF kept (diff --stat equals --ignore-cr-at-eol), no typographic quotes, `npm run lint` exit 0 (architect 39, worker 30, qa 32).",
+      "startedAt": "2026-10-30T05:07:16.338Z",
+      "completedAt": "2026-10-30T05:08:28.732Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Reference docs and the explore-before-assume skill (on-demand guidance that mandates broad rereads today).\ndocs/roles/worker.reference.md:\n- Line 10: the row '| \"I already know what this skill says\" | Skills evolve. Read the current version. |' becomes '| \"I already know what this skill says\" | Skills evolve. Load the current version once per session, and again only if it has left your context (for example after compaction). |'.\n- Line 105: the memory paragraph becomes 'Cross-session memory lives in the Serena MCP server (a flat per-name markdown store, `.serena/memories/`), not in Moe. On task start, use the memory-name inventory your launch supplied (`memory_this_task` / `memory_recent`) when it covers your task or area, else `list_memories`; then `read_memory` the relevant ones. Before you finish, `write_memory` so the next agent benefits.'\ndocs/roles/architect.reference.md:\n- Line 13: the same 'once per session' row, keeping its own thought text '\"I already know what the skill says\"'.\n- Line 89: replace only the sentence 'On task start, `list_memories` / `read_memory` to pick up prior constraints and decisions.' with 'On task start, use the memory-name inventory your launch supplied (`memory_this_task` / `memory_recent`) when it covers your task or area, else `list_memories`; then `read_memory` the relevant ones for prior constraints and decisions.' The rest of the paragraph stays as it is.\ndocs/skills/explore-before-assume/SKILL.md: insert a section directly after '## The rule' (before '## Why this matters'):\n'## Reuse what was already verified\n\nMoe may already have checked a reference for you: the approved plan names a symbol with its file, `moe.get_context` serves a section, or a landed prerequisite carries its evidence. Start from that instead of searching again: a supplied location needs no fresh grep. Still read a definition before you depend on its signature, and verify anything the context marks truncated, omitted, missing or stale, anything a listed limitation leaves out (`no-repository-source`: no source was served), and anything the supplied slice does not cover. A supplied slice is a navigation aid, never a reason to skip a read the change needs.'\n- Use the limitation code that step 1 found in contextPacket.ts.\n- Leave the frontmatter untouched: the generator puts its marker inside it.\n- Leave 'The rule', 'The minimum check' and 'When to skip' unchanged. They still govern every symbol that was not supplied.\nUse ASCII quotes and apostrophes only, and keep LF endings (same diff --stat check as step 2).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/worker.reference.md",
+        "docs/roles/architect.reference.md",
+        "docs/skills/explore-before-assume/SKILL.md"
+      ],
+      "modifiedFiles": [
+        "docs/roles/worker.reference.md",
+        "docs/roles/architect.reference.md",
+        "docs/skills/explore-before-assume/SKILL.md"
+      ],
+      "note": "Applied verbatim with a script that requires exactly one match per replacement.\n- worker.reference.md: the line-10 red-flag row now says 'once per session'; the line-105 memory paragraph is inventory-first.\n- architect.reference.md: same edits on line 13 (keeping its own thought text) and line 89 (only that sentence changed).\n- SKILL.md: new section '## Reuse what was already verified' between 'The rule' and 'Why this matters', citing `no-repository-source` (contextPacket.ts:133). Frontmatter and the other sections are untouched.\n- All three files are LF (diff --stat equals --ignore-cr-at-eol) with ASCII quotes and apostrophes.\n- I did not load ponytail: this is a prose-only step and the skill excludes prose.",
+      "startedAt": "2026-10-30T05:08:31.115Z",
+      "completedAt": "2026-10-30T05:09:13.753Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Regenerate the bundled copies (DoD: bundled source sync remains generated). IDE users only ever see these generated constants.\n1. Pre-check: `git status --short -- docs/roles docs/agents docs/skills` must list only this task's five docs. If a peer has dirty bytes there, stop and report: the generators read the whole tree and would sweep those bytes into the bundle.\n2. Never run `npm run build` or `npm run prebuild` on the shared checkout: both run clean, which deletes dist/ under other sessions.\n3. Run both generators in the real checkout through Windows Git Bash. WSL's tsx is the Windows build, and generate-init-files needs git history for its shipped-body sha list (mem gotcha-moe-doc-generated-artifacts):\n`\"/mnt/c/Program Files/Git/bin/bash.exe\" -lc 'cd /d/projexts/moes/packages/moe-daemon && npm run generate-init-files'`\n`\"/mnt/c/Program Files/Git/bin/bash.exe\" -lc 'cd /d/projexts/moes/packages/moe-daemon && npm run generate-skill-files'`\nError handling: each run must print 'Generated <path> (...)'. A 'skipped' line that exits 0 is a FAILED step, not success.\n4. Diff check:\n- The initFiles.ts diff must be exactly the four edited role-doc entries: the marker sha, the body lines, and one new shipped-body sha per edited doc.\n- The skillFiles.ts diff must be exactly the explore-before-assume entry, plus the manifest's moeGeneratedSha if that is derived from it.\n- Anything else (a peer's doc, CRLF churn) means stop and report.\n5. Refresh the step 1 snapshot by overlaying the five docs, the two generated files and the test. Run there:\n`npx vitest run src/util/targetedContextGuidance.test.ts src/util/initFiles.test.ts src/util/skillFiles.test.ts src/util/qaCommitPolicy.test.ts src/util/executionContractDocs.test.ts`\nand `npx tsc --noEmit`. G1 to G6 and the existing doc and bundle tests must all be green, and tsc must exit 0.\n6. Mutation proof, on a scratch copy of the snapshot only:\n- (m1) restore the old worker.reference.md memory sentence: G2/G3 red;\n- (m2) delete 'a navigation aid, never a reason to skip a read' from the source worker.md only: G5 red;\n- (m3) edit a source sentinel without regenerating: G4 red (stale bundle);\n- (m4) insert '<claimed_task_context>' into the source architect.md: G6 red;\n- (m5) point G1 at a renamed SKILL_FILES key: G1 red.\nRecord each red result. The unmutated run stays green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "note": "Pre-check: `git status --short -- docs/roles docs/agents docs/skills` listed only this task's 5 docs, so no peer bytes.\n\nGenerators: ran both through Windows Git Bash in the real checkout.\n- 'Generated ...initFiles.ts (8 role docs + 3 subagents, sha-stamped)', exit 0.\n- 'Generated ...skillFiles.ts (65 skill files across 17 skills)', exit 0.\n\nDiff check:\n- initFiles.ts: exactly the 4 edited role-doc entries (marker sha plus body lines). Each shipped-body sha list gained exactly one sha and lost none: architect.md b0c0bbe4188c, architect.reference.md 1d66722f1763, worker.md a936b3d0bc20, worker.reference.md 2345e537ca85.\n- skillFiles.ts: only the explore-before-assume marker sha (9f64d49809db->2d705d327503) and the new section, +4/-1 lines in total.\n- The manifest moeGeneratedSha did not change. There is no CRLF churn: diff --stat equals --ignore-cr-at-eol.\n\nSnapshot /tmp/moe-c10-gate.hsc5FT, 8 owned files overlaid and cmp-equal:\n- vitest targetedContextGuidance, initFiles, skillFiles, qaCommitPolicy, executionContractDocs: 5 files, 55/55 passed.\n- `npx tsc --noEmit`: exit 0.\n- Test-file tsc via a scratch tsconfig: exit 0. It needs \"types\":[\"node\"]; without it TS2591 appears on every node import.\n\nMutants on a scratch copy; each line is the red result, and the unmutated run is 6/6 green:\n- m1, old memory sentence in source and bundle: G2 and G3 red. G4 and G5 are also red because the 'memory-name inventory' sentinel is gone.\n- m2, navigation-aid sentinel dropped from source worker.md: G5 red only.\n- m3, new source sentinel without regeneration: G4 red (stale bundle). G5 is also red, on architect.md, which shares ROLE_SENTINELS.\n- m4, '<claimed_task_context>' in source architect.md: G6 red only.\n- m5, renamed SKILL_FILES key: G1 red. G2 and G4 throw the named missing-bundle error.",
+      "startedAt": "2026-10-30T05:09:16.039Z",
+      "completedAt": "2026-10-30T05:12:45.316Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Transport regression for DoD 'stable role prefix remains separate from dynamic packets'. The launcher SOURCES stay untouched: scripts/moe-agent.{sh,ps1} are read-only in this task.\nExtend scripts/tests/prompt-cache-launcher.test.mjs with one test per engine, named `${engine}: stable role prefix carries the role doc and never the claimed packet`. Reuse the file's engines, read, between and quote helpers and its spawnSync pattern.\nFor each of the roles worker, architect and qa:\n- Make a mkdtempSync project dir, cleaned up in t.after. Write .moe/roles/<role>.md there with the repo's docs/roles/<role>.md bytes.\n- Render twice, with packets A and B: scopedContext-like objects carrying a packetManifest, with distinct task ids and a unique nonce string each.\n- bash:\n  - Slice the real `load_role_doc() {` function.\n  - Slice the block from `    SYSTEM_APPEND=\"Role: $ROLE. $ROLE_STATUS_DESC Always use Moe MCP tools.\"` up to `    # Team identity and live issue context are not part of the reusable prefix.`.\n  - Slice the existing pre-flight inject block, from `        DYNAMIC_CONTEXT=\"# Pre-flight Complete` to `        # JIT reminder:`.\n  - Under `set -eu`, set every variable those slices read: MOE_DIR, ROOT_DIR, ROLE, ROLE_STATUS_DESC, AUTO_CLAIM=true, CLI_TYPE=claude, APPROVAL_MODE=TURBO, WORKER_ID, the PREFLIGHT_* counts, ids and pending values, MEM_*, and PREFLIGHT_CONTEXT set to the packet JSON.\n  - Print SYSTEM_APPEND, a \\x1e separator, then DYNAMIC_CONTEXT.\n- ps1 (Windows engines only, as the file already does):\n  - Slice `$systemAppendPre = \"Role: $Role. Always use Moe MCP tools. \"` through the approval-mode block, ending before `# The daemon surfaces a phase-recommended skill via nextAction.recommendedSkill`.\n  - Slice `function Get-RoleDoc {` through its closing brace.\n  - Slice `    $roleDoc = Get-RoleDoc` through `    $dynamicContext = \"\"`.\n  - Slice the existing inject block.\n  - Start the script with \ufeff, like the file's other ps1 renders.\n  - Set $moeDir, $pluginRoot, $Role, $AutoClaim, $cliType, $approvalMode, $WorkerId, $preflightTaskId, the counts and mem lines, $pendingJson, and $ctxJson read from the fixture file.\nAssertions. Normalize CRLF to LF and trim trailing newlines on both sides first.\n- T1: SYSTEM(A) equals SYSTEM(B) byte for byte. The stable prefix must not vary with the packet: that is prompt-cache stability.\n- T2: SYSTEM contains the role doc text exactly, on every engine including powershell.exe. That needs the UTF-8 role-doc read fix from task-5dc76be6, a declared dependency.\n- T3: for worker and architect, SYSTEM contains 'what Moe supplied', so the new guidance reaches the stable prefix.\n- T4: SYSTEM contains neither packet's task id or nonce, nor '<claimed_task_context>'. Do NOT assert that the word packetManifest is absent: the role doc itself names it.\n- T5: DYNAMIC(A) carries packet A. JSON.parse of the <claimed_task_context> body must deep-equal packet A, and DYNAMIC(A) must contain no packet-B nonce.\n- T6: DYNAMIC contains the transport's targeted directives verbatim: 're-fetch it if it is missing or stale', 'only if you need a section listed in omitted', and 'call list_memories only if they don' + ASCII apostrophe + 't cover your area'.\n- T7: DYNAMIC does not contain the role doc's opening paragraph. Stable guidance must not be duplicated into the per-task part.\nError handling: as in the neighbouring tests, assert no result.error and a status of 0, with stdout+stderr in the message. between() already throws on a missing marker: that is the intended loud failure if a launcher block moves.\nMutation proof, in a scratch tree only, never the shared launchers or docs. Copy scripts/moe-agent.sh, scripts/moe-agent.ps1, this test and docs/roles into a mktemp dir with the same relative layout (the test resolves the root as ../../ of its own URL). Then:\n- (t1) append \"$PREFLIGHT_CONTEXT\" to SYSTEM_APPEND: T1/T4 red;\n- (t2) remove the role-doc append: T2/T3 red;\n- (t3) drop the new rule from the scratch worker.md: T3 red;\n- (t4) prepend $ROLE_DOC to DYNAMIC_CONTEXT: T7 red.\nThe unmutated tree stays green.\nRun `node --test scripts/tests/prompt-cache-launcher.test.mjs` on Linux (bash engine). Run it on Windows through interop with Windows node, from the repo on D: (`cmd.exe /c` then `node --test scripts\\\\tests\\\\prompt-cache-launcher.test.mjs`), covering powershell.exe, pwsh and Git Bash. Record the per-engine results. If an engine is unavailable, say so explicitly; never report an unrun engine as passing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "note": "Added one test per engine, `${engine}: stable role prefix carries the role doc and never the claimed packet`, to prompt-cache-launcher.test.mjs (+85 lines). It reuses between/quote/read/runSh/runPs. For each of worker/architect/qa it gets a mkdtemp project with .moe/roles/<role>.md = the repo's docs/roles bytes, then renders packets A and B. They are scopedContext-based, with task ids task-(a1|b2)x16 and distinct nonces, and pass through the real slices:\n- bash: load_role_doc, then the SYSTEM_APPEND block, then the DYNAMIC_CONTEXT inject.\n- ps1: $systemAppendPre through the approval block, Get-RoleDoc, the $roleDoc assembly, then the inject.\n- Output is written to a file as SYSTEM \\x1e DYNAMIC.\nT1-T7 are implemented as planned.\n\nLauncher sources untouched.\n\nResults:\n- Linux, worktree: 31 tests, 29 pass, 0 fail, 2 skipped (PS-only on linux).\n- Windows node via interop, on a fresh `git archive HEAD scripts docs/roles` copy in Windows temp plus my test and role docs (cmp-equal; removed after): 99 tests, 99 pass, 0 fail, 0 skipped. That covers powershell.exe 5.1, pwsh.exe and Git Bash. T2 is green on powershell.exe thanks to landed 5dc76be6.\n\nMutants, in scratch trees with HEAD launchers; the unmutated run is green:\n- t1, $PREFLIGHT_CONTEXT in SYSTEM_APPEND: T1 red.\n- t1b, '<claimed_task_context>' in SYSTEM_APPEND: T4 red.\n- t2, role-doc append removed: T2 red.\n- t3, rule dropped from scratch worker.md: T3 red.\n- t4, $ROLE_DOC in DYNAMIC_CONTEXT: T7 red.\n- ps1, $ctxJson in $systemAppend: T1 red on powershell.exe and pwsh.exe.",
+      "startedAt": "2026-10-30T05:12:48.825Z",
+      "completedAt": "2026-10-30T05:19:33.065Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification, once, fresh.\n1. From the repo root run `npm run lint`. From WSL use `env -i HOME=$HOME PATH=<nvm node bin>:/usr/local/bin:/usr/bin:/bin npm run lint`. It must exit 0 and print OK lines for architect.md (at most 40 lines), worker.md and qa.md. Supply exactly this result as the complete_task verification {command: 'npm run lint', exitCode, outputTail}.\n2. Re-run the focused suites fresh on the final bytes, and put their counts in the completion summary:\n- the snapshot daemon run: the guard, initFiles, skillFiles, qaCommitPolicy and executionContractDocs tests, plus `npx tsc --noEmit`;\n- the launcher test on Linux and on the Windows engines.\n3. cmp the overlaid files against the worktree before citing the snapshot run.\nNo other test or regression scope is required: this is a mid-epic docs and test slice. The epic-final C11 owns the full regression.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh verification on the final bytes; all 9 owned files are cmp-equal to the worktree in every overlay.\n1. `npm run lint` from the repo root (env -i, nvm node v24.21.0): exit 0. OK lines: architect.md 39, worker.md 30, qa.md 32 (max 40).\n2. Daemon snapshot /tmp/moe-c10-gate.hsc5FT (git archive HEAD a46ce43 plus the owned files, native npm ci):\n   - vitest over the guard, initFiles, skillFiles, qaCommitPolicy and executionContractDocs tests: 5 files, 55/55 passed.\n   - `tsc --noEmit`: 0. Test-file tsc: 0.\n3. Launcher test:\n   - Linux snapshot with HEAD launchers: 31 tests, 29 pass, 0 fail, 2 skipped (PS-only).\n   - Windows node on a fresh archive copy: 99/99 pass, 0 skipped. That covers powershell.exe 5.1, pwsh.exe and Git Bash.",
+      "startedAt": "2026-10-30T05:19:37.827Z",
+      "completedAt": "2026-10-30T05:21:13.379Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review: load adversarial-self-review and walk this task's own diff as an attacker. This is the last step.\n- Could any new sentence be read as permission to skip a read the change needs, to skip verification or evidence, or to treat a packet or packetId as approval? CQ-TOKEN-SAFETY-v1 forbids weakening behavior, scope, freshness, approval, tests or evidence. QA's verification duties stay untouched, because qa.md is unchanged.\n- Does 'once per session' still force loading a skill this session never loaded, and reloading after compaction?\n- Does any stable-prefix doc now carry per-task or per-session content?\n- Re-run both generators: is there zero further diff? Are the line counts at most 40? Are the LF endings and ASCII apostrophes preserved?\n- Did the whole-tree generators sweep a peer's doc bytes into the bundle?\n- Does the launcher test pass on every engine without being vacuous (mutants from step 5 red)?\n- Is any forbidden token from the project's global forbiddenPatterns present in the new test or the docs?\nReport EVERY path in complete_step.modifiedFiles:\n- the five docs;\n- initFiles.ts and skillFiles.ts;\n- packages/moe-daemon/src/util/targetedContextGuidance.test.ts;\n- scripts/tests/prompt-cache-launcher.test.mjs.\nWrite the task handoff memory before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/roles/worker.md",
+        "docs/roles/architect.md",
+        "docs/roles/worker.reference.md",
+        "docs/roles/architect.reference.md",
+        "docs/skills/explore-before-assume/SKILL.md",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts",
+        "packages/moe-daemon/src/util/targetedContextGuidance.test.ts",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "note": "Adversarial self-review of this task's own diff:\n- Safety: every reuse sentence keeps 'a slice that cannot support the change' and 'never a reason to skip a read the change needs'. Expansion stays mandatory for anything marked truncated/omitted/missing, for listed limitations, and for stale or changed references. No sentence touches verification, evidence or approval. The C06 sentence only constrains delta readers (advance contextEpoch, name only a held base); it never treats a packet as approval. qa.md is unchanged, so QA duties are untouched.\n- 'Once per session' still requires loading a recommended skill the session never loaded, and reloading one that left context after compaction.\n- Stable prefix: G6 and T4 hold. No per-task tags or task ids appear in the stable-prefix role docs.\n- Generators: rerun with zero further diff (sha256 equal). No peer docs are dirty under docs/roles|agents|skills.\n- Format: line counts 39/30/32. No CRLF in any owned doc or generated file. No typographic quotes.\n- Forbidden patterns (eval(, innerHTML, dangerouslySetInnerHTML, __proto__): none in any owned file. The daemonGitDocs phrase scan is clean.\n- Launcher test: green on bash, powershell.exe, pwsh and Git Bash; every mutant goes red.\n- Size: about +264/-25 non-board. The launcher test file was already 502 lines, a pre-existing structure; the new helper is about 38 lines.\n- Theoretical only: if a launcher row moves a slice marker, the test fails loudly by design.\n\nHandoff memory written: task-task-34632f08a9a549a28bcf2b9f6946244b-handoff. gotcha-daemon-linux-snapshot-gate is updated with the scratch-tsconfig types note.",
+      "startedAt": "2026-10-30T05:21:15.774Z",
+      "completedAt": "2026-10-30T05:22:32.002Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 5,
+  "comments": [
+    {
+      "id": "comment-445319ee11b241f2bf225c270ca0f337",
+      "author": "architect-e4b7eee0",
+      "content": "Architect note (architect-e4b7eee0, plan rev 1).\n\n**Size warning.** submit_plan counts 9 files, but only 5 carry hand-written edits: worker.md, architect.md, worker.reference.md, architect.reference.md and explore-before-assume/SKILL.md. The other four are:\n- 2 regenerated bundles (initFiles.ts, skillFiles.ts);\n- 2 tests (the new targetedContextGuidance.test.ts, and an extension of prompt-cache-launcher.test.mjs).\n\nThe estimate is about +240/-12, under the 400 cap. The launcher sources stay read-only: five WORKING rows hold them.\n\n**Dependencies changed:**\n- Before: [C06 task-d75f71d7, C09 task-f9abfd2d].\n- Added task-bdf6db6f, which also plans prompt-cache-launcher.test.mjs.\n- Added task-5dc76be6, a new bug I filed in the Stability epic. Windows PowerShell 5.1 Get-RoleDoc reads the BOM-less UTF-8 role doc as ANSI, so native PS 5.1 seats get a garbled stable prefix. I reproduced it on PS 5.1.26100. Step 5's T2 needs that fix.\n- Undo: set_task_dependencies back to the C06/C09 pair.\n- C09 is kept per the plan-don't-park directive but not consumed (file-disjoint), so a governor may relax that edge.",
+      "timestamp": "2026-10-29T14:35:30.576Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:50.895Z",
+  "updatedAt": "2026-10-30T05:41:12.286Z",
+  "dependsOn": [
+    "task-d75f71d7664848fd859a3f877e74ba43",
+    "task-f9abfd2d170246549e01fa1bcbff4238",
+    "task-bdf6db6f65b04a009c88c1e49aed3848",
+    "task-5dc76be6e63f47a58f30e9f7a6923511"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T14:10:55.653Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 9,
+    "executedStepCount": 7,
+    "doneAt": "2026-10-30T05:40:28.322Z",
+    "wallClockMs": 55772669
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0",
+    "worker-5ebbf433",
+    "qa-952969be"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T14:35:19.300Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Edit the launchers' PROMPT_BODY and DYNAMIC_CONTEXT. Rejected:\n- Five WORKING rows hold scripts/moe-agent.{sh,ps1}, and both are dirty now: 6aa460bb, ad0dc2e7, bc8410af, bdf6db6f, c2a900aa.\n- CQ-01 already landed the targeted transport directives: an inventory-first memory read ('call list_memories only if they don't cover your area'), re-fetch only when missing or stale, view:\"full\" only for omitted sections, and full comments only when absent or truncated.\n- Generic guidance belongs in the stable prefix (the role docs the launchers load), not duplicated into per-task text.\n- So C10 updates the role/skill sources the transports deliver, and pins the transport directives plus the prefix/packet boundary with a regression.\n2. Activate C02's source provider in the packet. C01's notes say 'no-repository-source until C10'. Rejected: C10's own scope line puts later activation out of scope. The guidance handles both served and unserved source.\n3. Name C04/C05/C06/C07 agent-facing fields. Rejected: none is landed or final. The guidance uses generic 'stale or changed reference' and 'no longer hold' clauses, plus a bounded one-sentence adaptation only if a landed contract requires agent action (step 2).\n4. Edit qa.md. Not needed:\n- qa.md already limits QA to the default read ('that is the complete QA read'); the guard pins that phrase.\n- QA sessions are one-shot, so the skill-once rule changes nothing for QA.\n5. Fold the PS 5.1 role-doc encoding fix into C10. Rejected:\n- It is a live bug for every native Windows PowerShell 5.1 seat, and C10 is gated far out.\n- It needs scripts/moe-agent.ps1, which is contested.\n- Filed instead as task-5dc76be6 (Stability epic), which depends on the five launcher rows. C10 depends on it.",
+    "codebaseInsights": "Mandatory broad rereads found (DoD2):\n(a) worker.reference.md:105 and architect.reference.md:89 say 'On task start, list_memories'. On this 560-plus memory store that is a large listing the launcher's memory inventory (memory_this_task / memory_recent) makes unnecessary. worker.md:27 is already inventory-first.\n(b) Repeated skill-body reloads inside one session. complete_step recommends test-driven-development for EVERY test-touching next step (completeStep.ts isTestStep), and get_context recommends moe-planning for every PLANNING task an interactive architect claims. The role docs say to load the recommendedSkill before the hinted tool, and the reference red-flag rows say 'Skills evolve. Read the current version.', so the same body reloads again and again.\n(c) explore-before-assume makes a worker re-grep symbols the approved plan already verified. The skill itself tells architects to bake verified names into steps 'so the worker doesn't re-derive them'.\n(d) 'Stale' is undefined in the transport text, which invites defensive full re-fetches.\n\nStable prefix (DoD1):\n- bash: SYSTEM_APPEND = role line + tool naming + approval mode + the role doc from load_role_doc. The role doc is read from .moe/roles/<role>.md, falling back to docs/roles.\n- ps1: $systemAppendPre + Get-RoleDoc.\n- The per-task part is DYNAMIC_CONTEXT / $dynamicContext: claimed_task_context, inbox, pending questions, the skill JIT reminder and mentions.\n- Today's tests pin the boundary only for Codex (both engines) and Claude on ps1, each with a literal stand-in prefix. None runs the real prefix assembly with a real role doc.\n\nRole docs reach IDE users only through the generated bundle: initFiles.ts ROLE_DOCS, which includes *.reference.md, and skillFiles.ts SKILL_FILES. A doc-only edit is inert until regenerated.\n\nThe PS 5.1 Get-RoleDoc read (Get-Content -Raw, no -Encoding) garbles BOM-less UTF-8 role docs. Verified on this machine with PS 5.1.26100; tracked as task-5dc76be6.\n\nInterfaces this plan relies on:\n- Landed: the C01 packetManifest statuses (served, truncated, omitted, missing), its limitations and the 'no-repository-source' code; F06 servedContext; the CQ-01 directive strings; the inbox memory keys.\n- NOT landed: the C04/C05/C06/C07 agent-facing contracts. Handled by the step 2 adaptation rule.\n- C09 is not consumed: file-disjoint, and recipes have no agent-facing activation per C08. Its edge is kept under the plan-don't-park directive, so a governor may relax it.",
+    "risks": "Overlap:\n- prompt-cache-launcher.test.mjs is also planned by bdf6db6f and by the new task-5dc76be6. Both are in dependsOn, so neither is a live peer when this lands, and there is no contested path.\n- No open row touches the five docs or the two generated files (scanned 2026-10-29).\n\nGenerators:\n- They regenerate from the WHOLE docs tree, so stop if a peer has dirty docs.\n- A 'skipped' line that exits 0 is a failure.\n- Never run build or prebuild in the shared tree.\n\nDocs:\n- They are LF (repo-local autocrlf=false) and use ASCII apostrophes.\n- architect.md is at 39 of 40 lines, so its edits must be appends.\n\nTest pitfalls:\n- T4 must not assert that the word packetManifest is absent, because the role doc names it.\n- The G6 hygiene regex must not over-match: worker.md legitimately mentions $MOE_SESSION_ID and task-<id>.\n- PS 5.1 needs task-5dc76be6 landed for T2.\n- Read a node test's per-engine results. A skipped Windows leg is not a pass.\n\nWSL: the daemon vitest runs only in a Linux-native snapshot (the in-tree node_modules is Windows). Run npm run lint under env -i with nvm node.\n\nRails: never weaken QA duties or treat a packet as approval (CQ-TOKEN-SAFETY-v1); generic wording only, no invented field names. QA's 400 net-LOC cap holds, and the estimate is about +240/-12.",
+    "keyFiles": [
+      "docs/roles/worker.md",
+      "docs/roles/architect.md",
+      "docs/roles/worker.reference.md",
+      "docs/roles/architect.reference.md",
+      "docs/skills/explore-before-assume/SKILL.md",
+      "packages/moe-daemon/src/util/qaCommitPolicy.test.ts",
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "packages/moe-daemon/scripts/generate-skill-files.ts",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "packages/moe-daemon/src/context/contextPacket.ts",
+      "packages/moe-daemon/src/tools/completeStep.ts",
+      "scripts/lint-role-docs.sh"
+    ]
+  },
+  "planApprovedAt": "2026-10-29T14:35:19.398Z",
+  "commits": [
+    {
+      "sha": "ac47dbd92cf2ece899dd4d0a16dbdbc771f91020",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-e4b7eee0@2026-10-29T14:13:28Z",
+      "paths": [
+        ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json"
+      ],
+      "recordedBy": "architect-e4b7eee0",
+      "recordedAt": "2026-10-29T15:06:59.261Z",
+      "treeId": "d491e4e048f738115da392b84582620d4e9e872c",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "01ce4781b1efb3d37c92f64815ddab5805fd87e9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T05:04:06Z",
+      "paths": [
+        ".moe/tasks/task-34632f08a9a549a28bcf2b9f6946244b.json",
+        "docs/roles/architect.md",
+        "docs/roles/architect.reference.md",
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md",
+        "docs/skills/explore-before-assume/SKILL.md",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts",
+        "packages/moe-daemon/src/util/targetedContextGuidance.test.ts",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T05:23:43.440Z",
+      "treeId": "27127f4e778c3acacf2aebf021c63c5668482fce",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "f7867a250cdcc2cc4f8c51b29c5fd57df5e2ef65",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T05:32:05Z",
+      "paths": [
+        ".moe/tasks/task-34632f08a9a549a28bcf2b9f6946244b.json",
+        ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T05:41:12.286Z",
+      "treeId": "00448e71865e09d705574173a6d865a1dcbaea03",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/util/targetedContextGuidance.test.ts",
+    "docs/roles/worker.md",
+    "docs/roles/architect.md",
+    "docs/roles/worker.reference.md",
+    "docs/roles/architect.reference.md",
+    "docs/skills/explore-before-assume/SKILL.md",
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    "packages/moe-daemon/src/generated/skillFiles.ts",
+    "scripts/tests/prompt-cache-launcher.test.mjs",
+    ".moe/tasks/task-34632f08a9a549a28bcf2b9f6946244b.json",
+    ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T05:32:05Z",
+    "at": "2026-10-30T05:41:12.286Z"
+  },
+  "workStartedAt": "2026-10-30T05:04:41.715Z",
+  "reviewStartedAt": "2026-10-30T05:23:12.881Z",
+  "verification": {
+    "command": "npm run lint",
+    "exitCode": 0,
+    "outputTail": "> lint\n> npm run docs:lint\n> docs:lint\n> bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 32 lines (max 40)\n(run from repo root under env -i with nvm node v24.21.0, exit 0)",
+    "reportedAt": "2026-10-30T05:23:12.881Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-C10 targeted context guidance. Docs and tests only; the launcher sources are untouched. About +264/-25 non-board lines.\n\nDocs:\n- worker.md, new line before the memory paragraph: reuse what Moe supplied; expand only for what the manifest marks truncated, omitted or missing, for a listed limitation, for a stale or changed reference, or for a slice that cannot support the change. 'A supplied slice is a navigation aid, never a reason to skip a read the change needs.' Re-fetch get_context only on request, on a status or plan-revision change, or when you no longer hold the context.\n- worker.md line 23 and architect.md line 30: load a recommended skill once per session, reloading only after it leaves context.\n- architect.md line 12: the same reuse rule, as appends only.\n- C06 adaptation, one sentence in worker.md and architect.md: a seat presenting basePacketId+contextEpoch advances contextEpoch after every compaction.\n- Reference docs: the unconditional list_memories is now inventory-first, and the skill rows say 'once per session'.\n- explore-before-assume: new '## Reuse what was already verified' section, citing `no-repository-source`.\n- Line counts: architect 39, worker 30, qa unchanged.\n\nBundles: initFiles.ts and skillFiles.ts regenerated via Windows Git Bash. The diff is exactly the 4 role-doc entries plus one new shipped sha each, and the skill entry. A rerun gives zero diff.\n\nTests:\n- targetedContextGuidance.test.ts, G1-G6: bundle keys, forbidden broad-reread phrases absent, sentinels present, stable-prefix hygiene. Red on the unedited docs (4 failed).\n- prompt-cache-launcher.test.mjs, T1-T7 per engine, using the real launcher slices and role docs. The stable prefix is identical across packets A and B, carries the exact role doc and the new rule, and holds no packet id, nonce or tag. The packet is intact in the dynamic part, which keeps the transport directives and never duplicates the role doc.\n\nResults:\n- Snapshot of HEAD a46ce43 plus the owned files: 5 daemon ",
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/targetedContextGuidance.test.ts",
+    "docs/roles/worker.md",
+    "docs/roles/architect.md"
+  ],
+  "completedAt": "2026-10-30T05:40:28.322Z",
+  "reviewCompletedAt": "2026-10-30T05:40:28.322Z",
+  "reviewSummary": "CQ-C10 approved. Reviewed completion 01ce478 (on moe/work-2026-10-24): 9 files plus the board record, +260/-23 non-board (net 237). Scope matches the plan; launchers untouched.\n\nFresh re-runs in a git archive of HEAD 5f2660c. That includes peer commit 263a198, which changed moe-agent.{sh,ps1} after the worker's base. Owned files are blob-equal to 01ce478.\n- `npm run lint` (env -i, node v24.21.0): exit 0, at 39/30/32 lines. Also exit 0 in the real tree.\n- Full daemon vitest: 194 files, 5456 passed, 16 skipped, 0 failed. G1-G6 are green.\n- tsc --noEmit: 0. Test-file tsc: 0.\n- Launcher test, Linux bash: 29 pass, 0 fail, 2 skipped.\n- Windows node: 99/99 pass across powershell.exe 5.1, pwsh and Git Bash, against the HEAD launchers.\n\nDoD:\n1. On every engine T1, T2, T4 and T5-T7 hold, and G6 holds.\n2. list_memories is inventory-first and skills load once per session. The reuse rule keeps the mandatory-read clauses, no verification or approval duty is weakened, and qa.md is unchanged. The C06 fields (basePacketId/contextEpoch) and the 'no-repository-source' code exist in source.\n3. Line caps hold. I recomputed the generator stamp from the source docs: ROLE_DOCS (6 docs) and SKILL_FILES explore-before-assume match the bundles byte for byte. The shipped-sha lists only gained entries.\n4. The verification reproduces.\n\nMy mutants go red: the old memory sentence turns G3/G5 red, the packet in SYSTEM_APPEND turns T1 red, and the role doc in DYNAMIC_CONTEXT turns T7 red. There are no forbidden patterns, CRLF or smart quotes, and no rail breaches.\n\nNon-blocking: worker.md's new line has no blank line before 'Memory lives in Serena.', so it renders as one paragraph. Ponytail: no material findings.",
+  "requiredCheckAtDone": null
+}

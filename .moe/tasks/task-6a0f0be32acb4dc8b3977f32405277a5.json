@@ -1,0 +1,282 @@
+{
+  "id": "task-6a0f0be32acb4dc8b3977f32405277a5",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-17] CI: package the VS Code extension on every PR and smoke-test its bundle",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-16 (task-6fbd08111de142508fb0402d06f24e3f): the smoke checks the packaged .vsix against the scripts/bundle-manifest.json that VSC-16 creates.\n\nObjective: pull requests never package the VS Code extension. In .github/workflows/ci.yml, job build-all-platforms, the step \"Test VS Code daemon startup\" runs only npm ci, lint, compile and test; `npm run package` runs only in release.yml, so a packaging break surfaces at release time. The JetBrains job already packages and runs `node scripts/tests/onboarding.mjs` on the unzipped plugin.\n\nDeliverable:\n- .github/workflows/ci.yml: in build-all-platforms on ubuntu-latest only (the job builds daemon and proxy earlier), after the VS Code tests: `npm run package` in moe-vscode, unzip the .vsix to \"$RUNNER_TEMP/moe-vscode-smoke\", run `node scripts/tests/onboarding.mjs \"$RUNNER_TEMP/moe-vscode-smoke/extension/bundled\"`, and fail when any file the bundle manifest lists is missing from the vsix.\n- moe-vscode/.vscodeignore: stop shipping the tsc output that `npm run compile` leaves in dist/ beside esbuild's dist/extension.js (exclude dist/** except dist/extension.js), and eslint.config.mjs. At 882a4c39, packaging after a compile shipped dist/panels, dist/providers, dist/services and the rest.\n\nShared file: .github/workflows/ci.yml is also planned by open rows outside this epic (task-3ad573a7, task-4fdc7590, task-f6228433 when this row was cut). In shared-checkout mode do not run concurrently with them; after the worktree switch non-overlapping hunks merge on their own.\n\nNot in scope: release.yml, the Windows and macOS legs (Linux is enough for a packaging smoke), any other CI step.\n\nVerification: in a git-archive snapshot outside the checkout whose absolute path has NO UUID-shaped segment (npm 12 redacts UUIDs in `npm list` output and vsce then packages nothing; see VSC-16), e.g. /mnt/d/moe-scratch/vsc17-<sha>: build daemon and proxy, run `cd moe-vscode && npm ci && npm run compile`, then the new CI step's commands verbatim from the snapshot root; show `unzip -Z1 <vsix> | grep '^extension/dist/'` lists only extension.js; and `python3 -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))'` exits 0 (PyYAML 6.0.1 is installed).",
+  "definitionOfDone": [
+    ".github/workflows/ci.yml's build-all-platforms job runs, on ubuntu-latest only, `npm run package` in moe-vscode after the existing VS Code tests, then the onboarding smoke on the unzipped vsix's extension/bundled dir and a check that every file scripts/bundle-manifest.json lists is in the vsix.",
+    "moe-vscode/.vscodeignore excludes dist/** except dist/extension.js, and eslint.config.mjs; in a snapshot, `npm run compile && npm run package` yields a vsix whose only extension/dist/ entry is extension.js (listing in the summary).",
+    "The new CI commands, run verbatim in a UUID-free git-archive snapshot after the daemon and proxy builds, exit 0 (output tail in the summary).",
+    "`python3 -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))'` exits 0.",
+    "The diff touches only .github/workflows/ci.yml and moe-vscode/.vscodeignore."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "moe-vscode/.vscodeignore (DoD 2): stop shipping the tsc output that `npm run compile` leaves in dist/ beside esbuild's dist/extension.js, and the top-level eslint.config.mjs. Use the Edit tool (GLOBAL rail: no shell writes to tracked files). Append exactly these four lines after the last line (`scripts/**`), LF, final newline, no other line touched:\n\n# `npm run compile` leaves tsc output in dist/ beside the esbuild bundle; ship only dist/extension.js (VSC-17).\ndist/**\n!dist/extension.js\neslint.config.mjs\n\nWhy this works (mem:gotcha-vsce-vscodeignore-negations-win): vsce 4.0.0 (node_modules/@vscode/vsce/out/package.js, collectFiles ~1360-1378) splits the patterns into an ignore list and a negate list. A file ships when it matches NO ignore pattern or ANY negate pattern, so line order is irrelevant: `!dist/extension.js` keeps the bundle wherever it sits. Keep `!bundled/**` and `!bundled/**/*` exactly as they are. They are why every staged bundle file ships despite `**/*.ts`, `**/*.map` and `**/*.log`. dist/extension.js.map stays out through the existing `**/*.map`. `eslint.config.mjs` has no leading `**/`, so it is anchored at the extension root. The 8 dependency eslint.config.js files under bundled/daemon/node_modules keep shipping, which is expected. Planning run at ff56d4ff: this exact change removes 21 tsc dist/*.js files and eslint.config.mjs from `vsce ls` and nothing else (checkRef 5). Error handling: none applies in an ignore file. The proof is the step 3 tests (checkRefs 3 and 5).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/.vscodeignore"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/.vscodeignore"
+      ],
+      "note": "Appended the comment, dist/**, !dist/extension.js and eslint.config.mjs to moe-vscode/.vscodeignore with the Edit tool. All existing lines untouched, including !bundled/** and !bundled/**/*. Proof is in step 3 (checkRefs 3 and 5). Dirty peer paths in the shared checkout (.moe/roles, .moe/skills, board json) left alone.",
+      "startedAt": "2026-11-02T14:57:29.055Z",
+      "completedAt": "2026-11-02T14:57:37.878Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the PR packaging smoke to .github/workflows/ci.yml with the Edit tool (DoD 1). Insert the step immediately after the step \"Test VS Code daemon startup\". At ff56d4ff that is the last step of job build-all-platforms and the last lines of the file (316-324). Re-read the file end at start_step and plan against HEAD as it stands. The governor dropped the old ci.yml peer edges, so there is nothing to wait for. Add one blank line, then this text verbatim: list items at 6 spaces, keys at 8, the run block at 10.\n\n      - name: Package the VS Code extension and smoke-test its bundle\n        # One OS is enough for a packaging smoke. vsce's prepublish re-bundles the daemon and proxy built above, so a\n        # .vscodeignore or bundle-manifest.json regression fails the pull request instead of the release.\n        if: matrix.os == 'ubuntu-latest'\n        shell: bash\n        run: |\n          set -euo pipefail\n          vsix=\"$RUNNER_TEMP/moe-vscode.vsix\"\n          (cd moe-vscode && npm run package -- --out \"$vsix\")\n          unzip -Z1 \"$vsix\" > \"$RUNNER_TEMP/moe-vscode.files\"\n          # Every bundle-manifest.json target must ship: a file target itself, a directory target every file that\n          # bundle-assets.mjs staged under it. Reading the staged copy keeps the exclude rules in the bundler alone.\n          node --input-type=module - scripts/bundle-manifest.json \"$RUNNER_TEMP/moe-vscode.files\" moe-vscode/bundled <<'CHECK'\n          import fs from 'node:fs';\n          import path from 'node:path';\n          const [manifestFile, listingFile, stagedRoot] = process.argv.slice(2);\n          const shipped = new Set(fs.readFileSync(listingFile, 'utf8').split('\\n').filter(Boolean));\n          // As bundle-assets.mjs reads a copy: with `files`, each <into>/<name> is a target; without, the whole <into> directory.\n          const { copies } = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));\n          const targets = (Array.isArray(copies) ? copies : []).flatMap(copy => Array.isArray(copy?.files) && copy.files.length > 0\n            ? copy.files.map(name => path.posix.join(String(copy.into), String(name))) : [copy?.into]);\n          if (shipped.size === 0 || targets.length === 0) {\n            console.error(`Nothing to compare: ${shipped.size} vsix entries, ${targets.length} targets in ${manifestFile}`);\n            process.exit(1);\n          }\n          const missing = [];\n          for (const to of targets) {\n            if (typeof to !== 'string' || !to || path.isAbsolute(to) || to.split('/').includes('..')) { missing.push(`${to} (not bundle-relative)`); continue; }\n            const staged = path.join(stagedRoot, to);\n            if (!fs.statSync(staged, { throwIfNoEntry: false })?.isDirectory()) {\n              if (!shipped.has(`extension/bundled/${to}`)) missing.push(to);\n              continue;\n            }\n            const files = fs.readdirSync(staged, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile())\n              .map(entry => path.relative(stagedRoot, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'));\n            if (files.length === 0) missing.push(`${to}/ (nothing staged)`);\n            for (const file of files) if (!shipped.has(`extension/bundled/${file}`)) missing.push(file);\n          }\n          for (const item of new Set(missing)) console.error(`Missing from the vsix: extension/bundled/${item}`);\n          if (missing.length > 0) process.exit(1);\n          console.log(`All ${targets.length} bundle-manifest.json targets are in the vsix`);\n          CHECK\n          smoke=\"$RUNNER_TEMP/moe-vscode-smoke\"\n          unzip -oq \"$vsix\" -d \"$smoke\"\n          node scripts/tests/onboarding.mjs \"$smoke/extension/bundled\"\n\nDesign notes, not code:\n- No npm ci here. The previous step ran `npm ci` and `npm run compile` in moe-vscode, and the job's \"Build daemon\" and \"Build proxy\" steps installed and built both packages, as bundle-assets.mjs's fresh-dist check needs. `npm run package` is `vsce package`, whose vscode:prepublish runs bundle-assets.mjs (stages moe-vscode/bundled) and esbuild.\n- Targets follow the manifest VSC-16 landed (84536308): `copies[]` of {from, into, files?, required?, exclude?}. They are derived exactly as architect-0fcb7226 fixed in task-6fbd0811's comment: `files ? files.map(n => into + '/' + n) : [into]`. As in bundle-assets.mjs, an empty `files` is a directory copy. Do not add fields to the manifest. Reading the staged copy, not re-applying `exclude`, keeps the Ant exclude rules in the two builds only.\n- Order is package, listing, check, unzip, onboarding. The cheap check fails first with a named path. Onboarding is the same command release.yml's \"Verify packaged onboarding\" and the JetBrains job run.\n- Error handling: the check fails closed. It exits 1 with `Nothing to compare:` on an empty listing or no targets; on a target that is not bundle-relative; on a missing file target; and on an empty staged directory or any staged file missing from the vsix. Each such path is printed once as `Missing from the vsix: extension/bundled/<path>`; checkRef 3 greps that exact text, so keep it. An unreadable or malformed manifest throws, Node prints the error and exits 1. bundle-assets.mjs has already refused a malformed manifest before packaging.\n- Actions interpolates only `${{ }}`, so the JS `${...}` template literals pass through. The quoted heredoc `<<'CHECK'` stops bash expansion. YAML strips the 10-space block indent, so `CHECK` lands at column 0. Keep every line at the block indent or deeper, with no tabs. Node 24 (setup-node '24') has `readdirSync({ recursive, withFileTypes })` and `Dirent.parentPath`. Write no forbidden token.\n- No new script file: DoD 5 limits the diff to the two files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "modifiedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Inserted the step \"Package the VS Code extension and smoke-test its bundle\" after \"Test VS Code daemon startup\" in build-all-platforms, via the Edit tool, verbatim from the plan (if: matrix.os == 'ubuntu-latest', shell: bash, quoted CHECK heredoc). yaml.safe_load exit 0; checkRef 2 printed \"step 20 ok\"; no tabs; ci.yml +46/-0. Full end-to-end proof is step 3.",
+      "startedAt": "2026-11-02T14:57:38.780Z",
+      "completedAt": "2026-11-02T14:58:06.973Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, after steps 1-2 (DoD 2, 3, 4 and 5). Run the checkRefs in order from the checkout root, exactly as written: 1 and 2 (YAML parse; placement right after \"Test VS Code daemon startup\" and `if: matrix.os == 'ubuntu-latest'`), 3 (end-to-end snapshot), 4 (negative control), 5 (vsce ls diff), 6 (diff scope).\n- GLOBAL rail: never build, install or test in the checkout. checkRef 3 runs `git archive HEAD`, overlays your two edited files (cp --parents), and runs everything in $HOME/moe-scratch/vsc17-<sha>-<epoch>. That is ext4 and UUID-free. Under a Claude scratchpad path npm 12 redacts the UUID segment and vsce packs nothing (mem:gotcha-vsce-package-uuid-path). It also records the path in $HOME/moe-scratch/vsc17-last for checkRefs 4 and 5.\n- Planning runs at ff56d4ff on this host: checkRef 3 took 42 s and printed `All 16 bundle-manifest.json targets are in the vsix` (12 file targets, 4 directory targets), the onboarding PASS line, and exactly `extension/dist/extension.js`. checkRef 4 failed the step as intended (8.9 s) with 3 `Missing from the vsix` lines: two scripts/mods/*/hooks/register.ts files, which `**/*.ts` drops once the negations are gone, and docs/roles/qa.md. Appending an ignore line alone cannot work, because vsce lets `!bundled/**/*` re-include the file. checkRef 5 showed only 21 `< dist/...js` lines and `< eslint.config.mjs`.\n- On drvfs /mnt/d the same run took 8m45s and once timed out onboarding's 20 s restart-health deadline (onboarding.mjs:227). If that still happens on a busy host, re-run checkRef 3 once and report both runs. Never edit onboarding.mjs.\n- A real failure is a finding, never something to filter. Example: the check names a manifest target that the bundler never stages or vsce drops. Fix it if the cause is in the two task files; otherwise comment on this row naming the path and stop. Never weaken the check, the negative control or the manifest.\n- Never pattern-kill. Onboarding stops only its own daemon and proxy. The snapshot is about 0.8 GB: remove it only by its exact recorded path if your harness allows, else name it in the summary.\n- complete_task evidence: checkRef 3's command, exit code and output tail. Summary: the dist/eslint lines (DoD 2), the `All 16 ...` and PASS lines (DoD 3), checkRef 4's three lines, checkRef 5's diff, the yaml exit 0 (DoD 4), and the git diff --stat of the two files (DoD 5, about +50 lines).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".github/workflows/ci.yml",
+        "moe-vscode/.vscodeignore"
+      ],
+      "modifiedFiles": [
+        ".github/workflows/ci.yml",
+        "moe-vscode/.vscodeignore"
+      ],
+      "note": "All checkRefs run fresh, snapshot /home/sysadmin/moe-scratch/vsc17-ff56d4ff-1793631499 (ext4, UUID-free). ref1/2: yaml exit 0, \"step 20 ok\". ref3: step exit 0 in about 1 min; vsix 4094 files, 61.36 MB; \"All 16 bundle-manifest.json targets are in the vsix\"; \"PASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence\"; only dist/eslint entry is extension/dist/extension.js. ref4: step exit 1 with 3 Missing lines (scripts/mods/moe-account-switch/hooks/register.ts, scripts/mods/moe-compaction-keeper/hooks/register.ts, docs/roles/qa.md), .vscodeignore restored. ref5: vsce ls diff is exactly 21 removed dist/*.js tsc files plus eslint.config.mjs. ref6: exit 0 (no landed commits yet, so vacuous until landing). git diff --stat: ci.yml +46, .vscodeignore +4. Snapshot (~0.8 GB) not removed (no rm -rf). No pkill used.",
+      "startedAt": "2026-11-02T14:58:07.626Z",
+      "completedAt": "2026-11-02T14:59:15.587Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff, with the adversarial-self-review skill. Answer each point in the step note:\n(a) vsce semantics: name every pattern you added, and say why `!bundled/**` and `!bundled/**/*` stay. checkRef 5 must show only removals of dist/ tsc output and eslint.config.mjs.\n(b) Fail-closed paths, each one tested in checkRef 4 or by reasoning against the code: empty listing, manifest with no copies, `into` with a trailing slash (posix join), a `files` copy whose file never staged, an empty staged directory, malformed JSON. Is any reachable path an exit 0 on a missing file?\n(c) CI mechanics: the step runs only on ubuntu-latest; RUNNER_TEMP is per job; `set -euo pipefail` with `unzip -Z1 > file`; the heredoc terminator at column 0 after YAML strips the indent; no `${{` inside the JS; the job's earlier `npm install` (daemon, proxy) and `npm ci` (moe-vscode) cover what vscode:prepublish needs.\n(d) Cross-platform: Windows and macOS legs skip the step; nothing else in the job changes. Size: git diff --numstat of the two files (about +50; the QA cap is 400). Scope: you touched only ci.yml and .vscodeignore (git status --short -- <the two paths>). Never revert, stash, git add -A or commit a peer's dirty path in this shared checkout.\nError handling: a finding gets a fix in the two task files plus a fresh re-run of the affected checkRef. It is never waved through.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".github/workflows/ci.yml",
+        "moe-vscode/.vscodeignore"
+      ],
+      "modifiedFiles": [
+        ".github/workflows/ci.yml",
+        "moe-vscode/.vscodeignore"
+      ],
+      "note": "Adversarial self-review of the two-file diff (ci.yml +46, .vscodeignore +4, no other path touched by me).\n(a) vsce: added `dist/**`, `!dist/extension.js`, `eslint.config.mjs` (plus one comment line). `!bundled/**` and `!bundled/**/*` stay untouched: they are why every staged bundle file ships despite `**/*.ts`, `**/*.map`, `**/*.log`, and the check depends on that. checkRef 5 (fresh): only 21 removed dist/*.js tsc files and eslint.config.mjs; nothing added, nothing else removed.\n(b) Fail-closed, probed fresh by running the extracted CHECK script (scratch, outside the checkout) on hostile inputs: empty listing -> `Nothing to compare: 0 vsix entries`, exit 1; `{\"copies\":[]}` and `{}` -> `Nothing to compare ... 0 targets`, exit 1; malformed JSON -> Node throws, exit 1; `into` \"scripts/\" (trailing slash) -> resolves as the staged dir, exit 0 only because all its files ship (correct); a `files` copy whose file never staged -> `Missing from the vsix: extension/bundled/scripts/neverstaged.mjs`, exit 1; empty staged dir -> `(nothing staged)`, exit 1; `..` into -> `(not bundle-relative)`, exit 1; missing `into` -> `undefined (not bundle-relative)`, exit 1; one shipped file (docs/roles/qa.md) dropped from the listing -> named, exit 1; good input -> `All 16 ...`, exit 0. No reachable path exits 0 with a manifest target missing. Residual by design: a file the bundler never staged and that is not a `files` target is invisible to the check; bundle-assets.mjs refuses that before packaging, and the `required` flag stays the bundler's job.\n(c) CI mechanics: step is ubuntu-only (`if: matrix.os == 'ubuntu-latest'`); explicit `shell: bash` gives -eo pipefail; RUNNER_TEMP is set by the runner; `unzip -Z1 > file` fails the step on error; the heredoc terminator CHECK lands at column 0 (the step.sh extracted through yaml.safe_load ran green); no `${{` in the JS (grep empty), so Actions interpolates nothing; earlier steps Build daemon/Build proxy (npm install + build) and Test VS Code daemon startup (npm ci + compile) cover vscode:prepublish, same chain release.yml uses.\n(d) Windows and macOS legs skip the step; no other step or job changed. Size +50 lines against the 400 cap. git status --short on the two paths: ` M` each. Dirty peer paths (.moe/roles, .moe/skills, board json) were not touched, reverted, stashed or staged. Theoretical only: onboarding's 20 s restart-health deadline can trip on a very slow disk (CI runners are ext4; I did not edit onboarding.mjs); a future vsce upgrade changing ignore semantics would make checkRefs 4 and 5 fail loudly. No findings required a fix.",
+      "startedAt": "2026-11-02T14:59:16.466Z",
+      "completedAt": "2026-11-02T15:00:00.065Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-6fbd08111de142508fb0402d06f24e3f"
+  ],
+  "priority": "MEDIUM",
+  "order": 18,
+  "comments": [
+    {
+      "id": "comment-3dc7cbf0f3c04454b6bdee2b0e94df82",
+      "author": "governor-e6b40560",
+      "content": "Governor, about 11:58Z, for the planner (@architect-d54b05fd).\n\nI removed this row's dependsOn on task-3ad573a7, task-4fdc7590 and task-f6228433. dependsOn is now VSC-16 (task-6fbd0811) only.\n\n**Why:** your description calls those three file-only edges for .github/workflows/ci.yml in shared-checkout mode. All three sit deep in the wrapper lane, behind the worktree-switch gate (task-6519ed91), so they can't go live before the switch, and after it non-overlapping hunks merge on their own. The gate's drain also lands any in-flight VSC slice first. So this row never runs alongside them, and it no longer has to wait hours for them. task-b6a3d41e also plans ci.yml, and it is gate-held as well.\n\n**Effect on the plan:** none. Plan the ci.yml step against the file as it stands at HEAD with the Edit tool, and drop any \"wait for those rows\" wording.",
+      "timestamp": "2026-11-02T11:58:06.522Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:41:18.459Z",
+  "updatedAt": "2026-11-02T15:04:18.890Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:41:02.986Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T15:03:39.626Z",
+    "wallClockMs": 15756640
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T14:56:44.489Z",
+  "executionContract": {
+    "intendedBehavior": "On every pull request, the ubuntu-latest leg of build-all-platforms packages moe-vscode with `npm run package`. The leg fails with a named path when any scripts/bundle-manifest.json target is missing from the .vsix: for a files copy each <into>/<name>, for a directory copy every file bundle-assets.mjs staged under <into>. The leg then runs scripts/tests/onboarding.mjs against the packaged extension/bundled. The vsix ships dist/extension.js as its only dist/ entry and no top-level eslint.config.mjs, and every other file it shipped before still ships.",
+    "acceptanceCriteria": [
+      "build-all-platforms has a step named exactly \"Package the VS Code extension and smoke-test its bundle\", immediately after \"Test VS Code daemon startup\", with `if: matrix.os == 'ubuntu-latest'` and `shell: bash` (checkRef 2).",
+      "The step runs `npm run package -- --out \"$RUNNER_TEMP/moe-vscode.vsix\"` in moe-vscode, then the inline manifest check, then unzips to \"$RUNNER_TEMP/moe-vscode-smoke\" and runs `node scripts/tests/onboarding.mjs \"$RUNNER_TEMP/moe-vscode-smoke/extension/bundled\"`; run verbatim in a UUID-free snapshot it exits 0 (checkRef 3).",
+      "The check prints `Missing from the vsix: extension/bundled/<path>` once per missing path and exits 1. It exits 1 with `Nothing to compare:` on an empty listing or when there are no targets. On success it prints `All <n> bundle-manifest.json targets are in the vsix` (n = 16 at 84536308).",
+      "The packaged vsix's only entries matching ^extension/(dist/|eslint) are exactly extension/dist/extension.js (checkRef 3).",
+      "Dropping the !bundled negations and excluding bundled/docs/roles/qa.md makes the step exit non-zero, naming extension/bundled/docs/roles/qa.md (checkRef 4).",
+      "`vsce ls` under the new .vscodeignore differs from the base only by removed dist/ tsc files and eslint.config.mjs (checkRef 5).",
+      "python3 yaml.safe_load of ci.yml exits 0 (checkRef 1), and the task's commits touch only the two files plus board JSON (checkRef 6)."
+    ],
+    "invariants": [
+      "The check never re-implements the Ant exclude rules: directory targets are compared against the staged copy in moe-vscode/bundled.",
+      "The check fails closed: no reachable path exits 0 while a manifest target is missing from the vsix.",
+      "No build, install or test runs in the shared checkout; tracked files are written only with the Edit tool; no process is pattern-killed."
+    ],
+    "compatibility": [
+      "release.yml, every other ci.yml step and job, and the windows-latest and macos-latest legs stay byte-identical in behaviour.",
+      "Every existing .vscodeignore line stays, including `!bundled/**` and `!bundled/**/*`. The vsix keeps every file it shipped before except dist/ tsc output and eslint.config.mjs.",
+      "scripts/bundle-manifest.json is read as VSC-16 landed it (copies/from/into/files/required/exclude) and is never edited."
+    ],
+    "approvedScope": [
+      "The one new CI step as written in step 2: name, if, shell, and the run block with its inline ESM check. The check's CLI is: manifest path, listing file, staged root.",
+      "Four appended .vscodeignore lines: one comment, then dist/**, !dist/extension.js and eslint.config.mjs."
+    ],
+    "reuse": [
+      "scripts/tests/onboarding.mjs, invoked exactly as release.yml's \"Verify packaged onboarding\" and the JetBrains job invoke it.",
+      "moe-vscode's `npm run package` (vsce package, whose vscode:prepublish runs bundle-assets.mjs and esbuild), with vsce's --out flag.",
+      "VSC-16's bundle-assets.mjs staging as the source of truth for directory targets; Node 24 fs.readdirSync({recursive, withFileTypes}); unzip -Z1."
+    ],
+    "sourceAssumptions": [
+      "vsce 4.0.0 node_modules/@vscode/vsce/out/package.js collectFiles (~1360-1378): ignore and negate lists; a file ships when it matches no ignore or any negate; minimatch {dot:true}.",
+      "moe-vscode/package.json: package = `vsce package`; vscode:prepublish = `npm run bundle && npm run esbuild`; esbuild writes dist/extension.js with --sourcemap.",
+      "ci.yml at ff56d4ff: build-all-platforms (line 199) has matrix os [ubuntu-latest, windows-latest, macos-latest] and setup-node '24'. \"Build daemon\" and \"Build proxy\" run npm install and npm run build. \"Test VS Code daemon startup\" (316-324, last in the file) runs npm ci, lint, compile and test in moe-vscode.",
+      "scripts/bundle-manifest.json (84536308) has 5 copies. The scripts copy has 12 files. local-runner, mods, docs/roles and docs/skills are directory copies. bundle-assets.mjs treats an empty `files` as a directory copy and validates the manifest before copying.",
+      "docs/agent-context.md was purged in f5b00437, and VSC-16 dropped it from the manifest (task-6fbd0811 comments)."
+    ],
+    "checkRefs": [
+      "python3 -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))'",
+      "python3 -c 'import yaml;s=yaml.safe_load(open(\".github/workflows/ci.yml\"))[\"jobs\"][\"build-all-platforms\"][\"steps\"];n=[x.get(\"name\") for x in s];i=n.index(\"Package the VS Code extension and smoke-test its bundle\");assert n[i-1]==\"Test VS Code daemon startup\",n[i-1];assert s[i].get(\"if\")==\"matrix.os == \\x27ubuntu-latest\\x27\",s[i].get(\"if\");print(\"step\",i,\"ok\")'",
+      "S=$HOME/moe-scratch/vsc17-$(git rev-parse --short HEAD)-$(date -u +%s) && mkdir -p \"$S/.rt\" && echo \"$S\" > $HOME/moe-scratch/vsc17-last && git archive HEAD | tar -x -C \"$S\" && cp --parents .github/workflows/ci.yml moe-vscode/.vscodeignore \"$S\"/ && cd \"$S\" && python3 -c 'import yaml;s=yaml.safe_load(open(\".github/workflows/ci.yml\"))[\"jobs\"][\"build-all-platforms\"][\"steps\"];print(next(x[\"run\"] for x in s if x.get(\"name\")==\"Package the VS Code extension and smoke-test its bundle\"))' > .rt/step.sh && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" RUNNER_TEMP=\"$S/.rt\" bash -c 'set -e; for p in packages/moe-daemon packages/moe-proxy; do (cd $p && npm ci && npm run build); done; (cd moe-vscode && npm ci && npm run compile); bash .rt/step.sh' && unzip -Z1 .rt/moe-vscode.vsix | grep -E '^extension/(dist/|eslint)' | tee .rt/top.txt && [ \"$(cat .rt/top.txt)\" = extension/dist/extension.js ]",
+      "S=$(cat $HOME/moe-scratch/vsc17-last) && cd \"$S\" && cp moe-vscode/.vscodeignore .rt/vi.bak && { grep -v '^!bundled' .rt/vi.bak; echo bundled/docs/roles/qa.md; } > moe-vscode/.vscodeignore && mkdir -p .rt/neg && { env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" RUNNER_TEMP=\"$S/.rt/neg\" bash .rt/step.sh > .rt/neg.log 2>&1; r=$?; }; cp .rt/vi.bak moe-vscode/.vscodeignore; grep 'Missing from the vsix' .rt/neg.log | head -5; [ \"$r\" -ne 0 ] && grep -q 'Missing from the vsix: extension/bundled/docs/roles/qa.md' .rt/neg.log",
+      "S=$(cat $HOME/moe-scratch/vsc17-last) && cd \"$S/moe-vscode\" && cp .vscodeignore ../.rt/vi.new && { env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'set -eo pipefail; npx vsce ls | sort > ../.rt/ls.new; grep -vxF -e \"dist/**\" -e \"!dist/extension.js\" -e eslint.config.mjs ../.rt/vi.new > .vscodeignore; npx vsce ls | sort > ../.rt/ls.base'; r=$?; }; cp ../.rt/vi.new .vscodeignore; diff ../.rt/ls.base ../.rt/ls.new | grep '^[<>]' > ../.rt/ls.diff; cat ../.rt/ls.diff; [ \"$r\" -eq 0 ] && grep -q '^< dist/' ../.rt/ls.diff && grep -qx '< eslint.config.mjs' ../.rt/ls.diff && ! grep -v -e '^< dist/' -e '^< eslint.config.mjs$' ../.rt/ls.diff",
+      "! git log --format= --name-only --grep 'Moe-Task: task-6a0f0be32acb4dc8b3977f32405277a5' HEAD | grep -v '^$' | grep -vE '^(\\.github/workflows/ci\\.yml|moe-vscode/\\.vscodeignore|\\.moe/(tasks|epics)/[^/]+\\.json|\\.moe/project\\.json)$'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) A committed scripts/tests/ check file was rejected: DoD 5 limits the diff to ci.yml and .vscodeignore, so the check lives inline as a quoted heredoc. (2) Re-applying the manifest `exclude` globs to the source dirs was rejected: it would be a third copy of the Ant rules (bundle-assets.mjs antPattern, Gradle exclude()) that can drift. Comparing against the staged moe-vscode/bundled copy needs none. (3) A negative control that only appends an ignore line was rejected: vsce lets `!bundled/**/*` re-include the file whatever the order, so the control also drops the !bundled lines. (4) `runner.os == 'Linux'`, which the neighbouring steps use, is equivalent today, but the DoD names ubuntu-latest. (5) Running onboarding before the check was rejected: the check first fails in seconds with a named path.",
+    "codebaseInsights": "vsce 4.0.0 ignore semantics are order-insensitive, and negations win (mem:gotcha-vsce-vscodeignore-negations-win). release.yml already runs this onboarding on the vsix, but only at release. VSC-16's bundler fails before packaging on any missing manifest source, so the CI check guards the vsce/.vscodeignore side and the staged-vs-shipped gap. Planning dry runs: 4089 files and 61.3 MB at 3cfc3c78; at ff56d4ff all 16 targets are present, the only dist/ entry is extension.js, and 8 dependency eslint.config.js files under bundled/daemon/node_modules are expected and unaffected.",
+    "risks": "Onboarding's 20 s restart-health deadline can trip on slow disks (seen once on drvfs; ext4 is fine, and the CI runner is ext4). A future vsce upgrade could change ignore semantics: checkRefs 4 and 5 would then fail loudly, not silently. The snapshot needs npm registry access and about 0.8 GB per run. ci.yml may later be edited by gate-held rows (task-b6a3d41e and others); in worktree mode non-overlapping hunks merge.",
+    "keyFiles": [
+      ".github/workflows/ci.yml",
+      "moe-vscode/.vscodeignore",
+      "moe-vscode/scripts/bundle-assets.mjs",
+      "scripts/bundle-manifest.json",
+      "scripts/tests/onboarding.mjs",
+      ".github/workflows/release.yml",
+      "moe-vscode/package.json"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ff56d4ff90b2b2c4b1d5f6e1e0c25cbc79c4b689",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T14:56:44.516Z",
+  "approvedPlanRevision": 1,
+  "contextFetchedBy": [
+    "worker-b49a5155",
+    "qa-564d8bce"
+  ],
+  "workStartedAt": "2026-11-02T14:57:29.055Z",
+  "reviewStartedAt": "2026-11-02T15:00:23.441Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=$HOME/moe-scratch/vsc17-$(git rev-parse --short HEAD)-$(date -u +%s) && mkdir -p \"$S/.rt\" && echo \"$S\" > $HOME/moe-scratch/vsc17-last && git archive HEAD | tar -x -C \"$S\" && cp --parents .github/workflows/ci.yml moe-vscode/.vscodeignore \"$S\"/ && cd \"$S\" && python3 -c 'import yaml;s=yaml.safe_load(open(\".github/workflows/ci.yml\"))[\"jobs\"][\"build-all-platforms\"][\"steps\"];print(next(x[\"run\"] for x in s if x.get(\"name\")==\"Package the VS Code extension and smoke-test its bundle\"))' > .rt/step.sh && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" RUNNER_TEMP=\"$S/.rt\" bash -c 'set -e; for p in packages/moe-daemon packages/moe-proxy; do (cd $p && npm ci && npm run build); done; (cd moe-vscode && npm ci && npm run compile); bash .rt/step.sh' > .rt/ref3.log 2>&1; r=$?; echo \"ref3-steps-exit=$r\"; tail -n 25 .rt/ref3.log; [ $r -eq 0 ] && unzip -Z1 .rt/moe-vscode.vsix | grep -E '^extension/(dist/|eslint)' | tee .rt/top.txt && [ \"$(cat .rt/top.txt)\" = extension/dist/extension.js ]; echo \"ref3-final-exit=$?\"",
+    "exitCode": 0,
+    "outputTail": "ref3-steps-exit=0\n   |- dist/ extension.js [431.84 KB]\n   |- media/ (board.js, chat.js, epicDetail.js, planReview.js, settings.js, taskCreate.js, taskDetail.js)\n   |- resources/moe-icon.svg\n DONE  Packaged: /home/sysadmin/moe-scratch/vsc17-ff56d4ff-1793631499/.rt/moe-vscode.vsix (4094 files, 61.36 MB)\nAll 16 bundle-manifest.json targets are in the vsix\nPASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence\nextension/dist/extension.js\nref3-final-exit=0\n(also fresh: checkRef 1 yaml.safe_load exit 0; checkRef 2 'step 20 ok'; checkRef 4 step exit 1 with Missing lines for scripts/mods/moe-account-switch/hooks/register.ts, scripts/mods/moe-compaction-keeper/hooks/register.ts, docs/roles/qa.md; checkRef 5 diff = 21 '< dist/*.js' + '< eslint.config.mjs' only; checkRef 6 exit 0)",
+    "reportedAt": "2026-11-02T15:00:23.441Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/.vscodeignore",
+    ".github/workflows/ci.yml",
+    ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json",
+    ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json"
+  ],
+  "completionSummary": "VSC-17: PRs now package the VS Code extension and smoke-test its bundle.\\n- moe-vscode/.vscodeignore +4 lines: comment, `dist/**`, `!dist/extension.js`, `eslint.config.mjs`. Existing lines untouched, including `!bundled/**` and `!bundled/**/*`.\\n- .github/workflows/ci.yml +46: new last step \\\"Package the VS Code extension and smoke-test its bundle\\\" in build-all-platforms, right after \\\"Test VS Code daemon startup\\\", `if: matrix.os == 'ubuntu-latest'`, `shell: bash`. It runs `npm run package -- --out \\\"$RUNNER_TEMP/moe-vscode.vsix\\\"`, then an inline ESM check (quoted CHECK heredoc), then unzip and `node scripts/tests/onboarding.mjs \\\"$RUNNER_TEMP/moe-vscode-smoke/extension/bundled\\\"`.\\n- The check reads scripts/bundle-manifest.json: a files target is <into>/<name>, a directory target is every file staged under it in moe-vscode/bundled (the Ant excludes stay in the bundlers). It prints `Missing from the vsix: extension/bundled/<path>` once per path and exits 1. It exits 1 with `Nothing to compare:` on an empty listing or no targets, and fails closed on a non-relative target.\\nEvidence (snapshot $HOME/moe-scratch/vsc17-ff56d4ff-1793631499, ext4, UUID-free, fresh):\\n- DoD 2: `unzip -Z1 | grep -E '^extension/(dist/|eslint)'` lists exactly `extension/dist/extension.js`. vsix 4094 files, 61.36 MB.\\n- DoD 3: the step ran verbatim, exit 0: `All 16 bundle-manifest.json targets are in the vsix` and `PASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence`.\\n- Negative control (checkRef 4): without the !bundled lines plus an exclude of bundled/docs/roles/qa.md the step exits 1 with 3 lines: scripts/mods/moe-account-switch/hooks/register.ts, scripts/mods/moe-compaction-keeper/hooks/register.ts, docs/roles/qa.md.\\n- checkRef 5: `vsce ls` differs from the base only by 21 removed dist/*.js tsc files and eslint.config.mjs.\\n- DoD 4: yaml.safe_load exit 0; step placement and `if` verified (step 20).\\n- DoD 5: git diff --stat c",
+  "commits": [
+    {
+      "sha": "f534cc061c69ec12cec9e3fd836ec5c32a5d75fd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T14:56:51Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json",
+        "moe-vscode/.vscodeignore"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T15:00:44.109Z",
+      "treeId": "e8bd4a326f5a2d6b51021658fc756e84fc3ba2ca",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-3ad573a754574dfd92083b2e813c0bff"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-4fdc7590cd054a45a379c477ffe45ac7"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-b6a3d41e365445629f73ff17bd379f13"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-f622843305224cf49ca24478b26c3351"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "7925df59224700dce0387f90ec8dab17b3691966",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T15:01:20Z",
+      "paths": [
+        ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+        ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T15:04:18.890Z",
+      "treeId": "c0ff1f22a861bb631715a040b8beeb7a46bd42c5",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/.vscodeignore",
+    ".github/workflows/ci.yml"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-564d8bce@2026-11-02T15:01:20Z",
+    "at": "2026-11-02T15:04:18.890Z"
+  },
+  "completedAt": "2026-11-02T15:03:39.626Z",
+  "reviewCompletedAt": "2026-11-02T15:03:39.626Z",
+  "reviewSummary": "QA approve VSC-17, completion f534cc06 (on moe/work-2026-10-24, pushed). git show: ci.yml +46 (one new last step in build-all-platforms), .vscodeignore +4, plus board json. About +50 net, under the 400 cap; no other file touched.\n\nRe-ran fresh in a UUID-free ext4 git-archive snapshot of HEAD (/home/sysadmin/moe-scratch/vsc17-f534cc06-1793631734); nothing built in the shared checkout:\n- checkRef 3 (task.verification verbatim): daemon+proxy build, moe-vscode npm ci+compile, then the new step run verbatim. Exit 0: 'Packaged (4094 files, 61.36 MB)', 'All 16 bundle-manifest.json targets are in the vsix', 'PASS onboarding: ... restart persistence'.\n- DoD 2: extension/(dist/|eslint) entries in the vsix = exactly extension/dist/extension.js.\n- DoD 1/checkRef 2: step 20, exact name, right after 'Test VS Code daemon startup', if matrix.os == 'ubuntu-latest', shell bash.\n- DoD 4/checkRef 1: yaml.safe_load exit 0.\n- checkRef 4 negative control: step exits 1, 'Missing from the vsix:' for the two scripts/mods/*/hooks/register.ts and docs/roles/qa.md. Fails closed with named paths.\n- checkRef 5: vsce ls base vs new differs by exactly 21 removed dist/*.js tsc files plus eslint.config.mjs; !bundled lines untouched.\n- DoD 5/checkRef 6: exit 0; commit touches only ci.yml, .vscodeignore, board json.\n\nRead the inline check: directory targets compared against the staged copy (Ant excludes not re-implemented); empty listing/no targets gives 'Nothing to compare:' exit 1; non-relative targets flagged; missing paths deduped, exit 1. release.yml, other steps/jobs and Windows/macOS legs unchanged.\n\nResidual, not blocking: onboarding's 20 s restart-health deadline could trip on a very slow disk (ext4/CI ~1 min). Snapshots (~0.8 GB each) remain under $HOME/moe-scratch (rm -rf blocked). No findings.",
+  "requiredCheckAtDone": null
+}

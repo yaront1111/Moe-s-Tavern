@@ -1,0 +1,398 @@
+{
+  "id": "task-adbab50d16f048bd9e55fa43d8870927",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: a candidate-edited package-lock.json still sends the check's offline npm ci to candidate bytes through entries host admission skips (lock root specs, root-level inBundle)",
+  "description": "dependency-cache.mjs admission skips packages[''] and every inBundle entry. The guest preflight (task-5ed445ca) only compares package.json with the workspace lock root and never compares the lock with the bytes admission saw. Repro (npm 11.19.1, guest-supervisor.py 83a1f964, real run_install): (1) lock root and package.json both declare dependencies {a: 'file:stub/a-1.0.0.tgz'}, while node_modules/a stays a cached registry entry; (2) unchanged root, plus node_modules/a = {version '1.0.0', resolved 'file:stub/a-1.0.0.tgz', integrity of the stub, inBundle: true}. Both pass buildDependencyCache and the preflight, and npm ci installs the stub's stub.txt (status 42). Scratch: /tmp/moe-5ed-red8.giHYXx/kir.test.mjs (KIR). The route needs a candidate that can change package-lock.json. CQ-R11e3a treats lockfiles as untrusted, but task-5ed445ca's plan assumed the admitted lockfile is protected.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (use test-driven-development), in scripts/tests/local-runner-check.test.mjs only. Before any edit: (1) use the landed 5ed445ca bytes. This row keeps its dependsOn on task-5ed445ca; confirm it landed (epicSiblings landing.merged, or `git log moe/work-2026-10-24 --grep 'Moe-Task: task-5ed445ca50f24cafbe6e42fbcba686fb'`) and never copy a peer's uncommitted overlay. (2) task-a80f46db and task-42e9990c also declare this file. Edit it only once the governors' slot for this row is in force (each of them landed, or ordered after this row by dependsOn), and build on whatever landed first. Keep every carried hunk (CQ-R13's held step-3 hunks, 5ed445ca's KI rows). Change no existing row (E*, K*, KI1-KI8, C*, DA1-DA5, TC*, DC1-DC5), and never edit scripts/tests/local-runner.test.mjs (CQ-R13's).\n\nRight after DA5, add one comment block (task-adbab50d: the shapes that passed admission yet made the pinned npm 11.19.1's offline npm ci install workspace bytes, and why) and rows DA6-DA8. Reuse DA1's helpers (sri, regUrl, ok, lock, admit, refused) and the file's module-level DEPENDENCY_MAPS (5ed445ca's KI rows declare ['dependencies','devDependencies','optionalDependencies','peerDependencies']; declare it only if the landed file lacks it). Module-level lists:\nNON_REGISTRY = ['file:stub/a-1.0.0.tgz','FILE:a','./a','../a','.','.a','/a','~/a','C:a','stub/a','a-1.0.0.tgz','1.0.0-x.TAR','a.tar.gz','github:x/a','git+file:///ws/a.git','https://registry.npmjs.org/a/-/a-1.0.0.tgz','link:a','workspace:*','x@y','a#b','%41','NPM:a@1.0.0','\\t1.0.0','a\\\\b']\nREGISTRY = ['','*','latest','1.0.0','^1.2.3','~1.2.3','>=1 <2','1.2.3 - 2.3.4','^1 || ^2','1.x','v1.0.0','=1.0.0','1.0.0-beta.1+build.5',' 1.0.0','npm:a@^1.0.0','npm:@s/a@1.0.0','npm:a']\nunsupported(packages, label) = refused(() => admit([{ dir: 'secret-dir', bytes: lock(packages) }]), 'DEPENDENCY_SOURCE_UNSUPPORTED', JSON.stringify(label), 'secret-dir'). Pass JSON labels, never a bare spec, as refused()'s secrets: a secret like '.' or 'a' occurs inside the fixed message and would fail the no-echo check.\n\nDA6, the spec rule. For where in ['', 'node_modules/a'] and each map: every NON_REGISTRY spec, and every malformed map value [null, [], 'b', 5, {b:5}, {b:null}, {b:['1.0.0']}, {b:{}}], refuses with DEPENDENCY_SOURCE_UNSUPPORTED. Root rows put the value on packages[''] = {name:'fixture', [map]: value} beside node_modules/a = ok('a'). Entry rows put it on node_modules/a = ok('a', {[map]: value}) beside node_modules/b = ok('b'). A root that is not an object (5, null, [], 'x') refuses with DEPENDENCY_LOCKFILE_INVALID.\n\nDA7, compat controls (green before and after the fix). plain = {node_modules/a: ok('a'), node_modules/b: ok('b'), node_modules/a/node_modules/c: {version:'1.0.0', inBundle:true, integrity: sri('c'), dependencies:{d:'^1.0.0'}}}; want = admit(plain), whose sorted urls are exactly [regUrl('a'), regUrl('b')]. For each map x REGISTRY spec, the lock with packages[''] = {name:'fixture', [map]:{a: spec}} and node_modules/a = ok('a', {[map]:{b: spec}}) admits deep-equal to want. hasShrinkwrap or _hasShrinkwrap set to each falsy JSON value (false, 0, '', null) on node_modules/b also admits deep-equal to want.\n\nDA8, bundled and shrinkwrap refusals (async t). bundled(extra) = {version:'1.0.0', integrity: sri('stub'), inBundle:true, ...extra}; parent = {node_modules/a: ok('a', {dependencies:{e:'1.0.0'}})}. Rows: for key in ['node_modules/e' (bundled by the root, so npm fetches it), 'node_modules/a/node_modules/e' (npm fetches it when a's tarball lacks it)] x extra in [{resolved:'file:stub/e-1.0.0.tgz'}, {resolved: regUrl('e')}, {resolved:null}, {resolved:''}, {_resolved:'file:stub/e-1.0.0.tgz'}, {_resolved: regUrl('e')}, {resolved:'file:stub/e-1.0.0.tgz', optional:true, os:['darwin']}]. Then for flag in [hasShrinkwrap, _hasShrinkwrap] x truthy value in [true, 1, 'yes', {}, []]: on ok('a'), on a bundled nested e, and on a platform-skipped ok('o', {optional:true, os:['darwin']}). Plus the two routes as filed (KIR): {'': {name:'moe-kir', version:'1.0.0', dependencies:{a:'file:stub/a-1.0.0.tgz'}}, node_modules/a: ok('a')} and {'': {name:'moe-kir', version:'1.0.0', dependencies:{a:'1.0.0'}}, node_modules/a: bundled({resolved:'file:stub/a-1.0.0.tgz'})}. Every row refuses with DEPENDENCY_SOURCE_UNSUPPORTED. For both KIR rows, buildDependencyCache over fixtureFetch(servedBy({a: tarball('a')})) rejects with dependencyRefusal('DEPENDENCY_SOURCE_UNSUPPORTED'), server.calls stays [], and the scratchDir(t) cacheDir does not exist (DC1's pattern).\n\nThe full prototype text of these rows and step 2's (+108 lines; green on the fix, red on the old admission) is /mnt/d/moe-scratch/adbab50d-plan/prototype-tests.diff (sha256 98ac5748441c0ead...). Apply it by content, never by line, and never write the prototype-pollution key literal (a forbidden pattern).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "QA reject #1 rework, tests only (dependency-cache.mjs untouched, still 21f0cd0c). scripts/tests/local-runner-check.test.mjs +55/-7, sha256 345980eb:\n- Module-level PLACES/placed(): one dependency map on the root, node_modules/a, a nested bundled e, a root-bundled e, an os-skipped optional o and a cpu-skipped optional p, beside registry a and b.\n- DA6: every placement x map x (NON_REGISTRY + 5, true, null, ['1.0.0'], {}) as {b:bad}, {a:'1.0.0',b:bad} and {b:bad,a:'1.0.0'}, plus malformed maps, refuses (QA issues 1, 3, 4).\n- DA7: every placement x map with no map, {}, {a:'^1.0.0',b:'latest',c:'npm:x@1.0.0'} and an all-REGISTRY multi-key map admits deep-equal to want (QA issue 2, and the control that DA6's placements are otherwise admitted).\n- DA12 (new, after DA11): QA's three real-npm routes (mixed root map, bundled e with deps f:file:, os-skipped o with deps f:file:) run through buildDependencyCache: rejects SOURCE_UNSUPPORTED with server.calls [] and no cacheDir, and the same lock with the file: spec set to '1.0.0' builds a tree that fetches 2/2/1 tarballs (QA issue 5).\nRED: the old test file (cf5fdff2) lets X1, X27 and X28 survive all 11 DA rows. With the new file, all 12 DA rows pass on the landed admission, and all 33 mutants are killed: M1-M18, QA's X1-X12 (mutants.py) and X27-X29 (mutants2.py). X1 is killed by DA6, DA7 and DA12; X27 and X28 by DA6 and DA12. Driver: /tmp/moe-adbab-r2-tools/mutate2.py; outputs red-old.out and green-new.out.\nAdded lines are ASCII-only and contain no forbidden patterns. Dirty paths belonging to other sessions (scripts/moe-agent.{ps1,sh}, scripts/tests/postflight-worktree.cjs, .moe/tasks/*, .moe/decisions/) were left untouched.",
+      "startedAt": "2026-10-31T09:38:16.269Z",
+      "completedAt": "2026-10-31T09:42:56.582Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add DA9 and DA10 at the END of scripts/tests/local-runner-check.test.mjs, after KI8. They need NPM_CLI, NO_NPM, INSTALLS_RUN, busy, tgz, manifestOf, entryOf, servedBy, fixtureFetch, scratchDir, installRun, pyFiles and bytesOf, which the file declares below DA5.\n\nDA9, the npm-package-arg oracle. Add `import { createRequire } from 'node:module'` beside it (the file already imports mid-file). npa = createRequire(NPM_CLI)('npm-package-arg') inside try/catch, null when absent; skip only then, with reason 'the host npm has no npm-package-arg'. accepted(spec): admit of lock({'': {name:'fixture', dependencies:{a: spec}}}) returns. registry(spec): npa.resolve('a', spec, '/ws').registry === true, or npa throws (a spec npm refuses installs nothing). Spread: 4000 specs from a seeded xorshift32 (state 0x9e3779b9; state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return state >>> 0) over the alphabet \"abvxX019.-_+*^~<>=| !'()tgzr/:@#%\\\\\". Each spec has length next() % 12, with '.tgz' appended when next() % 16 === 0. Assert all three: every REGISTRY spec is accepted and no NON_REGISTRY spec is; no spec of REGISTRY + NON_REGISTRY + spread is accepted but not registry; and more than 1000 of the spread are accepted, so the oracle is not vacuous. No clock or Math.random input.\n\nDA10, real npm: the positive control for the one bundled shape admission keeps. Options { skip: INSTALLS_RUN || NO_NPM, timeout: 180_000 }, and `if (busy(t)) return;` as in KI8. a = 'moe-fixture-a', whose tgz bundles e = 'moe-fixture-e': package/package.json {name:a, version:'1.0.0', dependencies:{[e]:'^1.0.0'}, bundleDependencies:[e]}, package/node_modules/<e>/package.json = manifestOf(e), and package/node_modules/<e>/bundled.txt = 'inside a\\n'. Lock: '' = project {name:'moe-da10', version:'1.0.0', dependencies:{[a]:'1.0.0'}}; node_modules/<a> = entryOf(a, bundler, {dependencies:{[e]:'^1.0.0'}, bundleDependencies:[e]}); node_modules/<a>/node_modules/<e> = {version:'1.0.0', inBundle:true}. Build the tree with buildDependencyCache over fixtureFetch(servedBy({[a]: bundler})). Plant it, plus package.json and package-lock.json, through installRun exactly as KI8 does (toolchain JSON.stringify(dirname(dirname(process.execPath))), timeout 25). Assert [status, relays.length, tree.entries.length, the installed node_modules/<a>/node_modules/<e>/bundled.txt text] deep-equals [42, 1, 2, 'inside a\\n'], with stderr as the message.\n\nThen run the five new rows on the landed admission. DA6, DA8 and DA9 must fail (RED); DA7 and DA10 must pass. The prototype showed exactly that. Record it in the step note. No production code in steps 1-2.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Rework round 2: no change needed. DA9 (npa 13.0.2 oracle) and DA10 (real-npm bundled control), landed in 9257b233 after KI8, are byte-identical to HEAD (checked by diffing the block from the \"task-adbab50d's oracle\" comment to EOF). QA asked for no change to them. Both pass in the snapshot run with pinned node v24.22.2 / npm 11.19.1 (DA9 113 ms, DA10 239 ms). DA9 still kills M1, M2, M8-M11, M14-M16 and X4-X8, X11 in the 33-mutant sweep recorded in step-1.",
+      "startedAt": "2026-10-31T09:43:00.797Z",
+      "completedAt": "2026-10-31T09:43:28.265Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "In scripts/local-runner/dependency-cache.mjs only, make admitEntries refuse every lockfile field npm ci trusts that admission skipped. Error handling stays the module's own: one fixed code per refusal kind through dependencyError; no message carries a spec, path, URL or lockfile byte; the refusal comes before any fetch or mkdir; admitLockfiles stays pure and never returns a partial result.\n\n1. After isRecord/hasExactKeys (they are consts, so not above them), add:\n```js\n// The dependency maps npm ci builds an entry's edges from, and the specs npm-package-arg resolves only from the registry\n// or refuses: an npm: alias, whose target it requires to be a registry spec, or a version, range or tag. Those hold no\n// ':', '/', '\\\\', '@', '#' or '%', start with no '.' and end in no tarball suffix, which it reads as a URL, git or a path.\nconst DEPENDENCY_MAPS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];\nconst RANGE_OR_TAG = /^(?!\\.)[\\w !'()*+.<=>^|~-]*$/;\nconst TARBALL = /[.](?:tgz|tar\\.gz|tar)$/i;\nconst registrySpec = spec => typeof spec === 'string' && (spec.startsWith('npm:') || (RANGE_OR_TAG.test(spec) && !TARBALL.test(spec)));\nconst registrySpecs = entry => DEPENDENCY_MAPS.every(key => entry[key] === undefined\n  || (isRecord(entry[key]) && Object.values(entry[key]).every(registrySpec)));\n```\n2. In admitEntries' loop, replace the root skip and the inBundle skip:\n```js\n    const location = key === '' ? null : LOCATION.exec(key);\n    if (key !== '' && location === null) throw dependencyError('DEPENDENCY_LOCATION_INVALID');\n    if (!isRecord(entry)) throw dependencyError('DEPENDENCY_LOCKFILE_INVALID');\n    // The root's edges too: npm ci re-resolves an edge its locked node does not satisfy from that edge's spec.\n    if (!registrySpecs(entry)) throw dependencyError('DEPENDENCY_SOURCE_UNSUPPORTED');\n    if (key === '') continue;\n    // (the existing link comment and `entry.link === true` refusal stay here, unchanged)\n    // npm installs what a truthy hasShrinkwrap or legacy _hasShrinkwrap entry's own npm-shrinkwrap.json names.\n    if (entry.hasShrinkwrap || entry._hasShrinkwrap) throw dependencyError('DEPENDENCY_SOURCE_UNSUPPORTED');\n    // npm fetches a bundled entry from its own resolved (or legacy _resolved) when the root bundles it or its bundler's\n    // tarball lacks it, so only one naming neither ships solely inside a verified tarball.\n    if (entry.inBundle === true) {\n      if (entry.resolved !== undefined || entry._resolved !== undefined) throw dependencyError('DEPENDENCY_SOURCE_UNSUPPORTED');\n      continue;\n    }\n```\nThe platform-skip line and everything after it stay unchanged. The order matters and is tested: specs before the root continue, shrinkwrap before both skips, the bundled check before the optional skip. Truthiness for the shrinkwrap flags mirrors npm, whose Node takes hasShrinkwrap || pkg._hasShrinkwrap. Keep `=== true` for inBundle, optional and link: a truthy non-true value there already gets the stricter registry checks.\n3. Update the header's Rules list. Every entry, the root included, is an object whose four maps hold only registry specs (npm re-resolves unmet edges from their specs). No entry is shrinkwrapped (npm installs what the tarball's own shrinkwrap names). A bundled entry is skipped only when it names no resolved or _resolved (npm fetches a root-bundled or bundle-missing entry from it).\n\nNo new error code, export, dependency or file. The prototype measured +23/-4 runtime lines before the header edit. It turned DA6-DA10 green and kept DA1-DA5, DC1-DC5, KI1-KI8 and CY1-CY4 green; the five repository lockfiles (git ls-files '*package-lock.json') admit the same package counts as before (214, 0, 43, 76, 46).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/dependency-cache.mjs"
+      ],
+      "note": "Rework round 2: no runtime change, as QA instructed (\"The runtime in 9257b233 is correct; do not change dependency-cache.mjs\"). scripts/local-runner/dependency-cache.mjs is byte-identical to HEAD (sha256 21f0cd0c, last changed in this task's completion 9257b233), and guest-supervisor.py is unchanged too (supervisorSha256 b82e4369). The new DA6/DA7/DA12 rows pin the existing order: registrySpecs runs at :149, before the root continue (:150), the bundled skip (:159) and the platform skip (:163), and every value of each map must be a registry spec (`.every` at :94). Nothing is left in the working tree for this path, so the affectedFiles fallback commits nothing.",
+      "startedAt": "2026-10-31T09:43:34.151Z",
+      "completedAt": "2026-10-31T09:43:40.410Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification: one gate, and its fresh output is complete_task's evidence. Work from the root of a FULL `git archive` (or clone) snapshot outside /mnt/d/projexts/moes, based on the landed branch with every row ordered ahead of this one, and overlay only this task's two files. Run with the pinned Node 24.22.2 toolchain first on a Linux-only PATH, so NPM_CLI is its npm 11.19.1 and DC5, KI8, DA9 and DA10 execute:\n\n`node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs`\n\nUse an external verified copy of the toolchain, never one installed in the checkout. For example /tmp/moe-5ed-tc/node-v24.22.2-linux-x64, whose tarball sha256 48cc0e21e048790e... equals scripts/local-runner/toolchain.json x64. Record node -v, the npm version, the snapshot base sha, the two overlay sha256s, the exit code and the outputTail. Required: 0 failed, and every DA, DC and KI row executes on the Linux/WSL lane rather than skipping. The only skips are K9 (needs root) and the opt-in macOS native smoke. The architect prototype measured 410 tests: 408 pass, 2 skip, 93 s. No npm build/clean/install/test in the live packages, no pattern kills; signal only PIDs this session started. This is a mid-epic gate, not certification: this row leaves supervisorSha256 and every admitted tree unchanged. If a failing row sits outside this task's import graph and belongs to an unlanded peer, rerun on a pristine archive to attribute it before calling it a regression of this task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate (fresh), run from a full `git archive` of HEAD 181d1ca8 (the moe/work-2026-10-24 tip, containing 5ed445ca's 92d96620 and this task's 9257b233) in /tmp/moe-adbab-gate3.SmrazN, outside the repo. Overlaid only this task's two files: dependency-cache.mjs 21f0cd0c (identical to HEAD) and local-runner-check.test.mjs 345980eb. guest-supervisor.py b82e4369 is unchanged.\nToolchain: the external pinned copy /tmp/moe-5ed-tc. Its tarball sha256 48cc0e21e048790e equals toolchain.json x64; node v24.22.2, npm 11.19.1, npa 13.0.2.\nCommand, under env -i HOME PATH=<tc>/bin:/usr/local/bin:/usr/bin:/bin: `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs`\nResult: exit 0 at 2026-10-31T09:45:57Z. 412 tests: 410 pass, 0 fail, 2 skipped (K9 needs root; the opt-in macOS smoke), 78 s.\nEvery row of DA (12, including the new DA12), DC (5), KI (8) and CY (4) executed and passed.\nThe worktree sha256 of both paths equals the gated overlays. Output: /tmp/moe-adbab-gate3.out and .out.run.",
+      "startedAt": "2026-10-31T09:44:06.655Z",
+      "completedAt": "2026-10-31T09:46:27.229Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review (adversarial-self-review, once, scoped to the two files). Mutation proof, in a scratch copy only. Apply each mutant, confirm at least one new row turns red, then restore:\n(M1) drop the registrySpecs check; (M2) skip it for the root; (M3) drop the shrinkwrap refusal; (M4) check hasShrinkwrap only; (M5) `=== true` for both shrinkwrap flags; (M6) drop the bundled resolved refusal; (M7) check resolved only; (M8) drop TARBALL; (M9) drop the leading-dot lookahead; (M10) make the npm: prefix case-insensitive; (M11) allow '/' in RANGE_OR_TAG; (M12) accept a non-record map; (M13) move the bundled check after the optional skip.\nThe prototype's kills: M1 and M2 by DA6, DA8, DA9; M8-M11 by DA6, DA9; M12 by DA6; the rest by DA8.\n\nThen attack it:\n- A spec npm reads as a path, URL or git that RANGE_OR_TAG accepts. DA9 is the oracle: extend its corpus, never loosen it.\n- A legit shape now refused. The five repository lockfiles must keep admitting; DA5 covers the daemon's.\n- A field npm's Node constructor or loadVirtual reads that can still redirect a fetch. Link truthiness is not one: snapshot paths forbid ':', so the canonical URL never exists as a link target.\n- Unbounded work: there is one linear pass under the 16 MiB bound.\n- Message echo.\nIf anything changes after the gate, rerun the same gate for fresh evidence.\n\nHandoff in the completion summary: the two modified paths, and that admission now refuses, as DEPENDENCY_SOURCE_UNSUPPORTED, lockfiles with a non-registry spec in any entry, a bundled entry naming resolved/_resolved, or a shrinkwrapped dependency (e.g. a CLI that publishes npm-shrinkwrap.json); supervisorSha256 is unchanged. Post CQ-R13 (task-f4811a72, which holds docs/TROUBLESHOOTING.md's uncommitted Local Runner Issues table) the added cause text for its DEPENDENCY_SOURCE_UNSUPPORTED row; do not edit that doc. Finish through complete_task for QA; Git landing is the wrapper's.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Adversarial self-review of the two paths. dependency-cache.mjs is unchanged (21f0cd0c); the test file is +55/-7, final sha256 489ad914.\n1. Real-npm check of DA12's claims, using my own probe (/tmp/moe-adbab-r2-tools/probe-routes.mjs, pinned npm 11.19.1, mutant copies built with QA's mutants.py and mutants2.py). For each route (a mixed root map under X1, a bundled e under X27, an os-skipped o under X28):\n   - The current admission refuses it as SOURCE_UNSUPPORTED.\n   - The mutant's own buildDependencyCache admits it with a tree of 2, 2 and 1 tarballs (DA12's counts), and offline npm ci then installs the stub into node_modules/f (CANDIDATE-BYTES).\n   - The honest twin, with the file: spec set to '1.0.0', is admitted and installs registry bytes.\n2. Fixed DA12's comment after the first gate. It said \"single-key rows missed\", which is wrong for X27 and X28 (no row put a spec on a bundled or skipped entry). It now reads \"the earlier rows missed ... once a mutant admission let it through\". This is comment-only, so I re-ran the full gate and the sweep on the final bytes.\n3. Mutation sweep on the final file (final-sweep.out): 33 of 33 killed.\n   - M1-M18 are still killed.\n   - X1 by DA6, DA7 and DA12; X27 and X28 by DA6 and DA12; X2-X12 and X29 by the rows QA saw.\n   - Extra mutants, run on 345980eb, which differs only in that comment: the outer every to some (O1), a falsy map treated as absent (O3), checking only the first value (O4) and checking only the last value (O5). Each is killed by DA6, so both key orders matter.\n4. Checklist:\n   - No shared state: placed() spreads PLACES and never mutates it.\n   - No timing or network: the fetch is injected.\n   - scratchDir registers t.after cleanup before any assertion.\n   - DC2 and DC3 already run buildDependencyCache on every CI lane.\n   - Added lines are ASCII-only with no forbidden pattern.\n   - No message echo: unsupported() checks the JSON labels, and dependencyRefusal checks the exact [code, message, keys].\n5. Step 4's gate is superseded by the re-run on the final bytes. It ran in /tmp/moe-adbab-gate4.MjZTQm, a full archive of 181d1ca8 plus the two overlays, with node v24.22.2, npm 11.19.1 and npa 13.0.2: exit 0, 412 tests, 410 pass, 0 fail, 2 skipped (K9, macOS smoke). DA 12, DC 5, KI 8 and CY 4 all executed.\n6. CQ-R13's cause text (comment-8de6aa6e) is unchanged, since runtime behaviour is unchanged.\n7. packages/moe-daemon/tsconfig.json became dirty during this session. It is another session's edit; I left it untouched.",
+      "startedAt": "2026-10-31T09:46:29.451Z",
+      "completedAt": "2026-10-31T09:53:07.571Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "TESTS ONLY. The runtime in 9257b233 is correct; do not change dependency-cache.mjs. The tests leave three of the fix's own refusals unpinned. Each survives every DA/DC row as a mutant, and each mutant reopens a candidate-bytes route I confirmed with the real pinned npm. The step-5 \"0 survivors\" holds for M1-M18 only.\n\nVerified green:\n- Gate from a fresh archive of 9257b233, node v24.22.2 / npm 11.19.1, env -i: exit 0, 411 tests, 409 pass, 0 fail, 2 skipped. All DA/DC/KI/CY rows executed.\n- Repo lockfiles keep 214/0/43/76/46 with identical package sets. 54-lockfile sweep: 0 newly refused.\n- My mutants X2-X12 are killed.\n- The step-5 scope growth is accepted. With real npm, the optional os '' route and the bundled '1.0.0-x.tgz' route installed stub bytes under the old admission and are refused now.\n\nGaps (arborist 9.9.1's buildIdealTree re-resolves an invalid edge from ANY node, bundled and optional ones included):\n1. X1: `.some` for `.every` (dependency-cache.mjs:94) survives, because DA6 maps have one key. Real npm: root {f:'file:stub/f-1.0.0.tgz', x:'1.0.0'} is admitted under X1 and installs CANDIDATE BYTES.\n2. X27: skipping the spec check for inBundle entries survives. Real npm: a bundled e with dependencies {f:'file:../../../../stub/f-1.0.0.tgz'} and a hoisted registry f installs CANDIDATE BYTES.\n3. X28: skipping the spec check for platform-skipped optional entries survives. Real npm: o {optional, os ['darwin'], dependencies {f:'file:../../stub/f-1.0.0.tgz'}} installs CANDIDATE BYTES.\n\nTo pass: add the rows in the issues, show X1/X27/X28 killed (M1-M18 still killed), rerun the step-4 gate from a fresh archive, and refresh verification.\n\nProbes: /tmp/moe-qa-adbab-scr.zkP1ZA/probe/{edges,mixed}.mjs. Mutants: /tmp/moe-qa-adbab-mut.nUuYQk/mutants{,2}.py.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-5ed445ca50f24cafbe6e42fbcba686fb"
+  ],
+  "priority": "HIGH",
+  "order": 313.6,
+  "comments": [
+    {
+      "id": "comment-372de9f7062f43b08ac2b79149e55e7b",
+      "author": "governor-693b7073",
+      "content": "Governor note for the planner, 07:28Z. I promoted this row before its prerequisite landed, because two architects are idle. task-5ed445ca (HIGH, worker-3a9b4568, step 4 of 5) is still in flight on guest-supervisor.py and local-runner-check.test.mjs.\n1. Plan on top of 5ed445ca's approved plan and its current working-tree diff. Keep the dependsOn on 5ed445ca, so no worker starts before it lands. Write \"use the landed 5ed445ca bytes\" in step 1.\n2. Those two files also carry CQ-R13's held step-3 hunks, which 5ed445ca is carrying (see 5ed445ca comment f1383f14). Never revert them.\n3. If the plan touches scripts/local-runner/guest-supervisor.py, order it against the same-file chain: a80f46db → 42e9990c → a4a729dd → 97341ad5. Post the overlap in #governors, and the governors will slot it.\n4. CQ-R13's operator certification now also waits on this row, since it changes the check dependency install that certification exercises.",
+      "timestamp": "2026-10-31T07:26:35.576Z"
+    },
+    {
+      "id": "comment-238b2fe35bd24127abe466b723b9cce7",
+      "author": "worker-3a9b4568",
+      "content": "Filer's note for the planner (worker-3a9b4568). A lead, unverified: npm ci also builds every non-root node's edges from its lock entry's own `dependencies`. A same-version `file:` spec there, e.g. node_modules/a {dependencies: {b: 'file:../../stub/b-1.0.0.tgz'}}, may replace a locked node the same way, if host admission doesn't check entries' dependency specs. Treat the class as \"lockfile fields npm ci trusts that admission skips\", not just the two verified routes. The other fix is making package-lock.json a protected path whose approved blob the guest checks. The scratch KIR harness in the description is the quickest place to try it.",
+      "timestamp": "2026-10-31T07:46:15.128Z"
+    },
+    {
+      "id": "comment-3112f031f36d4b6fa43f12f71334aac6",
+      "author": "architect-66fd8127",
+      "content": "Planner note (architect-66fd8127). Governor rulings from governor-693b7073 at 08:18Z (msg-9547f434), for the worker and QA:\n1. The slot is in force. a80f46db now dependsOn this row, and 42e9990c dependsOn a80f46db. Order on scripts/tests/local-runner-check.test.mjs: 5ed445ca (landed, 92d96620) → adbab50d → a80f46db → 42e9990c. Step 1's precondition is met.\n2. The 7 extra lockfile shapes in step 3 are in scope by governor ruling. They are: root devDependencies file:; file: specs in a locked package's own dependencies, optionalDependencies or peerDependencies; a bundled entry naming its own resolved or _resolved; a truthy hasShrinkwrap or _hasShrinkwrap. All of them fall under this row's title (a candidate-edited package-lock.json still sends offline npm ci to candidate bytes), so they are not scope creep under the generic DoD. Probe evidence: /mnt/d/moe-scratch/adbab50d-plan/.\n3. Size: if the net diff passes 400 LOC, file the size waiver pre-emptively at complete_task; governor-693b7073 approves it under the delegation. The prototype was about 121 net LOC, so this is unlikely.\n4. Step 5's hand-off is unchanged: post the DEPENDENCY_SOURCE_UNSUPPORTED cause text on CQ-R13 (task-f4811a72), and do not edit docs/TROUBLESHOOTING.md. FYI: the held Local Runner Issues hunk currently rides with task-7cc959e9 (in REVIEW), so it may be committed under that row before R13 applies the text.\n5. The host-side follow-up (a host admission refusal is reported as infra-failure) is filed separately as task-0e149912, BACKLOG. It is not this row's scope.",
+      "timestamp": "2026-10-31T08:26:58.346Z"
+    },
+    {
+      "id": "comment-2252bfa85ebe412c942e28c5536ca370",
+      "author": "governor-4764040b",
+      "content": "Governor note for the reopen-1 fix (09:35Z). QA's reject is TESTS ONLY, and its rows are spelled out exactly. Two things to know before you start:\n1. This row's DoD has ONE item (\"Task completed as described\"). A second reject on it moves the row to PLANNING automatically, and that costs the CQ-R13 chain (a80f46db → 42e9990c → …) a re-plan cycle. Before complete_task, show that QA's named mutants are all killed by named rows: X1, X27, X28 and M1-M18, from the scripts in /tmp/moe-qa-adbab-mut.nUuYQk. Then refresh task.verification as QA asked.\n2. Other open rows also declare scripts/tests/local-runner-check.test.mjs (a80f46db, and 42e9990c downstream). Edit it only with this session's Edit tool (GLOBAL rule 2), not a shell write and not a subagent, so the landing has a TOOL witness and the file isn't held as CONTESTED_UNTOUCHED. dependency-cache.mjs stays untouched, per QA.",
+      "timestamp": "2026-10-31T09:33:55.230Z"
+    },
+    {
+      "id": "comment-d9eea38c796645dc942173bee29a16de",
+      "author": "qa-b29f7b3d",
+      "content": "QA round-2 evidence (qa-b29f7b3d): APPROVE.\n\nReviewed: completion commit 8af7b332 (tree 7733b018 = recorded treeId; parent 181d1ca8; on moe/work-2026-10-24). It changes only scripts/tests/local-runner-check.test.mjs (+55/-7, sha256 489ad914; worktree, commit and task.verification agree). dependency-cache.mjs is unchanged since 9257b233 (21f0cd0c), and guest-supervisor.py is b82e4369, so supervisorSha256 is unchanged.\n\nGATE (my re-run):\n- Snapshot: a fresh full `git archive 8af7b332` at /tmp/moe-qa-adbab-r2.nH5PDg/snap, with no overlays.\n- Toolchain: extracted fresh from the tarball whose sha256 48cc0e21e048790e equals toolchain.json x64. node v24.22.2, npm 11.19.1, npa 13.0.2.\n- Command: under `env -i HOME PATH=<tc>/bin:/usr/local/bin:/usr/bin:/bin`, `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs`.\n- Result: exit 0. 412 tests: 410 pass, 0 fail, 2 skipped (K9 needs root; the macOS native smoke). 82.7 s.\n- Every DA1-DA12, DC1-DC5, KI1-KI8 and CY1-CY4 row executed and passed.\n\nMUTATION SWEEP:\n- Driver: my own, /tmp/moe-qa-adbab-r2.nH5PDg/tools/mut.py. It runs the ^DA rows and checks that each mutant module still imports.\n- Baseline: 12/12 green; the original bytes were restored (21f0cd0c).\n- Result: 52/52 killed, 0 survivors, 0 invalid.\n- The mutants this reject named:\n  - X1 (every->some): killed by DA6, DA7 and DA12.\n  - X27 (no spec check for inBundle entries): killed by DA6 and DA12.\n  - X28 (no spec check for platform-skipped entries): killed by DA6 and DA12.\n  - M1-M18, X2-X12 and X29: all still killed.\n- 19 new mutants, all killed:\n  - Spec check skipped on one skip branch only: nested-bundled X30 (DA6, DA12), root-bundled X31 (DA6), cpu-skipped X32 (DA6), os-skipped X33 (DA6, DA12), every optional entry X34, root only X44, moved after both skips X45.\n  - Weaker value and map checks: first value only X35, last value only X36, null map treated as absent X37, outer every->some X38, String-coerced spec X39, keys checked instead of values X40, a dependency map dropped X41/X42/X43/X48.\n  - Stricter checks that should fail admitted controls: empty map refused X46 (DA7), multi-key map refused X47 (DA5, DA7, DA12).\n\nREJECT ISSUES:\n1. Mixed maps in both key orders at every placement x map: DA6. Closed.\n2. Empty, multi-key and all-REGISTRY maps admitted deep-equal to want at every placement x map: DA7. Closed.\n3. Bundled placements, nested and root-bundled: DA6 via PLACES. Closed.\n4. os-skipped and cpu-skipped optional placements: DA6. Closed.\n5. DA12 runs all three routes through buildDependencyCache: SOURCE_UNSUPPORTED, server.calls [], no cacheDir. Each honest twin fetches 2/2/1. Closed. These are exactly the shapes my round-1 real-npm probes installed candidate bytes from.\n\nSCOPE:\n- Size: against the pre-task base 9257b233^, the task changes 243 lines (dependency-cache.mjs +41/-8, test file +194/-0), under 400.\n- No pre-existing row was edited or removed. Round 2's 7 deletions are all this task's own DA6/DA7 lines.\n- Added lines are ASCII-only, with no forbidden patterns.\n- No edits to local-runner.test.mjs, docs or the supervisor. Dirty peer paths were left untouched.",
+      "timestamp": "2026-10-31T10:04:40.876Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T07:23:27.386Z",
+  "updatedAt": "2026-10-31T10:05:51.707Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T07:26:31.027Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T07:26:51.527Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-31T10:04:49.190Z",
+    "wallClockMs": 9477663
+  },
+  "contextFetchedBy": [
+    "worker-25da16b2",
+    "qa-b29f7b3d"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [
+    {
+      "item": "Task completed as described",
+      "rejectedAt": "2026-10-31T09:33:18.613Z",
+      "rejectedBy": "qa-b29f7b3d"
+    }
+  ],
+  "planSubmittedAt": "2026-10-31T08:17:28.368Z",
+  "executionContract": {
+    "intendedBehavior": "Host lockfile admission (admitLockfiles, so buildDependencyCache before any fetch or cache write) refuses every candidate package-lock.json shape that makes the pinned npm's offline `npm ci` install bytes other than the admitted registry tarballs. That covers a non-registry spec in any entry's dependencies, devDependencies, optionalDependencies or peerDependencies (the root included), a bundled (inBundle) entry that names its own resolved or legacy _resolved, and a truthy hasShrinkwrap or _hasShrinkwrap. Each refusal is the fixed DEPENDENCY_SOURCE_UNSUPPORTED; a non-object root is DEPENDENCY_LOCKFILE_INVALID. Every lockfile admitted today that has none of these shapes is admitted exactly as before, with the same dirs and packages.",
+    "acceptanceCriteria": [
+      "Both filed routes refuse with DEPENDENCY_SOURCE_UNSUPPORTED before any fetch or cache write: a lock root (with a matching package.json) naming a file: spec, and a root-level inBundle entry with a file: resolved. So do the further proven routes: root devDependencies; entry dependencies, optionalDependencies and peerDependencies specs; nested or hoisted bundled entries with resolved or _resolved; and hasShrinkwrap/_hasShrinkwrap truthy. The refusal text never echoes a spec, dir or path (DA6, DA8).",
+      "Every registry spec form npm writes stays admitted with an unchanged package set: version, range, x-range, hyphen and || ranges, v/= prefixes, prerelease/build, tag, '', '*', and npm: aliases including scoped ones. So do bundled entries with no resolved/_resolved (still skipped, never fetched) and falsy shrinkwrap flags (DA7).",
+      "Under the host npm's own npm-package-arg, every spec admission accepts is a registry spec or one npm refuses, over fixed lists and a seeded 4000-spec spread (DA9).",
+      "With the real pinned npm, a registry tarball that bundles its dependency installs offline from the admitted tree through the supervisor's run_install (DA10).",
+      "DA1-DA5, DC1-DC5, KI1-KI8 and CY1-CY4 stay green unedited, and the five repository lockfiles admit the same package counts. The step-4 gate passes from a full external snapshot with the pinned toolchain."
+    ],
+    "invariants": [
+      "admitLockfiles stays pure (no filesystem, network, process or npm) and runs before any fetch or mkdir. Every refusal is one fixed-code dependencyError, never partial, and never carries a URL, spec, path or lockfile byte.",
+      "No new error code, export or dependency. OFFLINE_INSTALL_ARGS, MAX_* bounds, moe-dependencies.json, the tree layout and digest, and CHECK_BOUNDARIES are unchanged.",
+      "No change to guest-supervisor.py, so supervisorSha256 is unchanged. No edits to scripts/tests/local-runner.test.mjs, docs, or any existing test row. Peer and carried hunks are preserved.",
+      "Entries with no dependency maps, shrinkwrap flag or bundled source keep today's exact admission, skip and refusal behavior."
+    ],
+    "compatibility": [
+      "Lockfiles npm writes for registry-only trees keep admitting: all five repository lockfiles (same package counts), 63 local real lockfiles, and a real npm@10.9.2 + fsevents@1.2.13 lockfile with 215 bundled entries, none carrying a resolved.",
+      "Newly refused by design, fail-closed: any non-registry spec anywhere in a lockfile, uppercase NPM: aliases, tab-padded specs, bundled entries that name a resolved or _resolved, and shrinkwrapped dependencies. A non-object packages[''] becomes DEPENDENCY_LOCKFILE_INVALID; the guest already refuses it.",
+      "Admission refusals keep surfacing through runCheckJob as infra-failure with their DEPENDENCY_* failure code, as today."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/dependency-cache.mjs: admitEntries plus new module-private DEPENDENCY_MAPS, RANGE_OR_TAG, TARBALL, registrySpec, registrySpecs, and the header Rules comment.",
+      "scripts/tests/local-runner-check.test.mjs: new rows DA6-DA8 after DA5 and DA9-DA10 after KI8, plus module-level NON_REGISTRY/REGISTRY lists and a createRequire import."
+    ],
+    "reuse": [
+      "isRecord, dependencyError and admitEntries' single loop; the existing location, link, platform-skip and registry/integrity checks are untouched.",
+      "Test helpers sri, regUrl, ok, lock, admit, refused, dependencyRefusal, fixtureFetch, servedBy, tarball, tgz, manifestOf, entryOf, scratchDir, installRun, pyFiles, bytesOf, busy, NPM_CLI, NO_NPM, INSTALLS_RUN, and 5ed445ca's module-level DEPENDENCY_MAPS."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/check-lifecycle.mjs parse() admits lockfilesOf(dependencies, workspaceEntries(snapshot).entries), and checkJob's materialize writes workspaceEntries(o.snapshot) (snapshot-transfer.mjs materializeSnapshot), so the guest installs the lockfile bytes admission read.",
+      "task-5ed445ca (landed before this row starts) makes guest-supervisor.py install_dependencies refuse a package.json whose install metadata differs from packages[''] or that sets overrides, bundle controls or workspaces. Vetting packages[''] therefore vets package.json.",
+      "Pinned Node 24.22.2 bundles npm 11.19.1 with npm-package-arg 13.0.2, whose resolve() order is isFileSpec, isAliasSpec (fromAlias requires a registry subSpec), HostedGit, isURL, hasSlashes||isFileType, then fromRegistry."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: harden host admission (dependency-cache.mjs admitEntries), the existing authority over candidate lockfiles (CQ-R11e3a treats them as untrusted), plus admission tests. Rejected: (a) duplicating the rules in the guest preflight (Python). That is two implementations of one rule; the guest installs exactly the bytes admission read; and it would change supervisorSha256 and join the guest-supervisor.py chain a80f46db -> 42e9990c -> a4a729dd -> 97341ad5. (b) The filer's alternative, a protected package-lock.json. Every legit dependency update would then need a lockfile approval, and it changes the protected-check contract. (c) Verifying node_modules/.package-lock.json after the install: the bytes are already installed, and 5ed445ca's plan rules out post-install-only detection. (d) Requiring resolved+sha512 on bundled entries and fetching them: real bundled entries carry neither (215/215 in a real npm@10.9.2 + fsevents@1.2.13 lockfile), so it would refuse every legit bundle. (e) A file:/git: prefix blacklist instead of a registry whitelist: npa also reads bare tarball names, leading-dot names, slashes and drive letters as local paths; the whitelist is checked against npa itself (DA9). (f) Refusing truthy link flags: not needed (see risks), so it stays minimal.",
+    "codebaseInsights": "Probe matrix, offline npm ci with the pinned Node 24.22.2 / npm 11.19.1 over trees built by the CURRENT buildDependencyCache (scripts: /mnt/d/moe-scratch/adbab50d-plan/probe*.mjs). Candidate stub installed for: R1 root dependencies file:; R1d root devDependencies file:; R2 root-level inBundle file: resolved; R3 nested inBundle file: missing from its admitted bundler; R3h hoisted inBundle file:; R4b entry dependencies file: (hoisted target); R6 entry peerDependencies file:; R7 entry optionalDependencies file:; R10/R10r inBundle with legacy _resolved file: and no resolved; SW1/SW2 hasShrinkwrap entry whose admitted tarball carries an npm-shrinkwrap.json naming file:; R12 _hasShrinkwrap; R12s hasShrinkwrap 'yes'. Already fail-closed: R2n/R3n bundled with no resolved (ENOTCACHED), R4a nested target (EUSAGE), R5 required dep flagged optional+darwin (EBADPLATFORM), SW3 same tarball without the flag (lock wins). Controls that install: S0 honest, R8 root npm: alias, B1 real bundle extracted from its admitted bundler. With the prototype every stub route is refused at admission (DEPENDENCY_SOURCE_UNSUPPORTED) and the controls are unchanged. npm mechanics (arborist): loadVirtual builds every node's edges from its lock entry; buildIdealTree re-resolves any node with an invalid edge from the spec; reify unpacks root-bundled and bundle-missing nodes from their own resolved; Node takes resolved || pkg._resolved and hasShrinkwrap || pkg._hasShrinkwrap. npa 13.0.2 order: isFileSpec (file:, leading . ~/ / X:), isAliasSpec (npm:, any case; fromAlias throws unless the target is a registry spec), hosted git, isURL, hasSlashes or isFileType, else fromRegistry (version/range/tag or a thrown invalid tag). The predicate agreed with npa on a corpus plus 85,542 fuzzed accepted specs. The guest installs the bytes admission read: check-lifecycle parse() runs lockfilesOf(dependencies, workspaceEntries(snapshot).entries), and materializeSnapshot writes workspaceEntries(o.snapshot). With 5ed445ca's guest equality check (package.json install metadata == packages['']), vetting packages[''] also vets package.json. Admission runs after provisioning (it needs the guest arch), and a DEPENDENCY_* code passes through runCheckJob as infra-failure.",
+    "risks": "Compatibility: a lockfile is now refused when it has any non-registry spec anywhere (even one npm would not act on, such as an optional git dependency that failed to install), an uppercase NPM: alias, a tab-padded spec, a bundled entry with a resolved, or a shrinkwrapped dependency (CLIs such as netlify-cli or firebase-tools publish npm-shrinkwrap.json). Measured: 0 of 63 locally admitted lockfiles newly refused, and the 5 repository lockfiles admit the same package counts. Peer overlap: a80f46db and 42e9990c also edit local-runner-check.test.mjs; the governors slot the order, so step 1 waits for it. 5ed445ca's sourceAssumption that the admitted lockfile is protected is false; after this row, admission is the lockfile authority. Pre-existing and out of scope: runCheckJob reports every candidate-lockfile admission refusal as infra-failure (a80f46db/42e9990c split only the guest's exit 82); flagged to the governors. Not a route, left unchanged: a truthy non-true link flag gets the registry checks, and npm would link to <ws>/https:/registry.npmjs.org/..., a path snapshots cannot create because ':' is forbidden. The evidence identity is unchanged (executionReady stays false; 5ed445ca's supervisor hash change already stales earlier evidence). Test text must avoid the forbidden prototype-pollution key literal.",
+    "keyFiles": [
+      "scripts/local-runner/dependency-cache.mjs",
+      "scripts/tests/local-runner-check.test.mjs",
+      "scripts/local-runner/check-lifecycle.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/local-runner/certify-canary.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T08:17:28.390Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T08:20:26.428Z",
+  "reviewStartedAt": "2026-10-31T09:54:55.644Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "Run from a full git archive of HEAD plus the two overlays only, outside the repo, under env -i PATH=<pinned toolchain>/bin:/usr/local/bin:/usr/bin:/bin\ngate dir /tmp/moe-adbab-gate4.MjZTQm\nbase 181d1ca8465fbfd35dc9e3374f2f4cb26fe604f5\n21f0cd0c668533ec47b9a198d840ebbe9b33e97c646eec1c1f0d26cae63cb513  scripts/local-runner/dependency-cache.mjs\n489ad914d06c6e0a6eeb0e88fc77a71e49091d46a21aedf0ac1699ce3b2148df  scripts/tests/local-runner-check.test.mjs\nb82e4369a501302ee411504c820d36be016809c5f638682b5fe2f7a52b707e03  scripts/local-runner/guest-supervisor.py\ntoolchain tarball sha256 48cc0e21e048790e = toolchain.json x64\nnode v24.22.2 npm 11.19.1 npa 13.0.2\n2026-10-31T09:50:13Z\n...\n✔ DA12 a file: spec beside a registry spec, or on a bundled or platform-skipped entry, refuses before any fetch or cache write\n✔ DA10 with the real npm, a bundled dependency inside an admitted tarball installs offline from the tree\n﹣ K9 ... # needs root\n﹣ opt-in native provider smoke on real macOS hardware establishes support # native provider smoke not run\nℹ tests 412\nℹ suites 0\nℹ pass 410\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0\nℹ duration_ms 86620.969251\nexit=0 (2026-10-31T09:51:40Z)\nDA 12/12, DC 5/5, KI 8/8, CY 4/4 executed and passed; worktree sha256 of both paths equals the gated overlays",
+    "reportedAt": "2026-10-31T09:54:55.644Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/dependency-cache.mjs",
+    ".moe/tasks/task-0e1499123bf34c428f0eccd34c8ad87b.json",
+    ".moe/tasks/task-adbab50d16f048bd9e55fa43d8870927.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "Round 2 (QA reject #1), tests only. Modified: scripts/tests/local-runner-check.test.mjs (+55/-7, sha256 489ad914). scripts/local-runner/dependency-cache.mjs is unchanged (21f0cd0c, as landed in 9257b233), and supervisorSha256 is unchanged (b82e4369).\n\nQA issues fixed:\n1-4. A new PLACES/placed() helper puts one dependency map on the root, node_modules/a, a nested bundled e, a root-bundled e, an os-skipped optional o and a cpu-skipped optional p, each beside registry entries a and b.\n   - DA6 refuses every placement x map x bad value. Each bad value (every NON_REGISTRY spec, 5, true, null, ['1.0.0'], {}) is tried alone and beside '1.0.0' in both key orders, and malformed maps are refused too.\n   - DA7 admits every placement x map, deep-equal to want, with no map, {}, {a:'^1.0.0',b:'latest',c:'npm:x@1.0.0'}, and a map of all REGISTRY specs.\n5. New row DA12 runs QA's three routes through buildDependencyCache:\n   - The routes: a mixed root map, a bundled e with deps f:file:, and an os-skipped optional o with deps f:file:.\n   - Each rejects with DEPENDENCY_SOURCE_UNSUPPORTED, with server.calls [] and no cacheDir created.\n   - The honest twin of each builds a tree from 2, 2 and 1 tarballs.\n\nProof:\n- RED: on the old test file (cf5fdff2), X1, X27 and X28 survive every DA row.\n- On the final file, 33/33 mutants are killed. M1-M18 are still killed, as are QA's X1-X12 and X27-X29. X1 is killed by DA6, DA7 and DA12; X27 and X28 by DA6 and DA12. Four extra mutants (outer some, falsy map as absent, first-only, last-only) are killed by DA6.\n- Real npm 11.19.1 probe: under each mutant, offline npm ci installs the stub into node_modules/f. The current admission refuses each route, and the honest twins install registry bytes.\n- Repository lockfiles still admit 214/0/43/76/46.\n- Driver, probe and outputs: /tmp/moe-adbab-r2-tools/.\n\nGate: a fresh full archive of HEAD 181d1ca8 plus the two overlays, run with pinned node v24.22.2, npm 11.19.1 and npa 13.0.2 under env -i. Exit 0: 412 tests",
+  "commits": [
+    {
+      "sha": "9257b2332a1bb3c932cfaf9daf85a121c37c03ae",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T08:19:00Z",
+      "paths": [
+        ".moe/tasks/task-0e1499123bf34c428f0eccd34c8ad87b.json",
+        ".moe/tasks/task-44b817f973374dffb578308278050497.json",
+        ".moe/tasks/task-adbab50d16f048bd9e55fa43d8870927.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T09:05:06.604Z",
+      "treeId": "d0dda8a9b976bba6582b94ff5d524ae1eb95eb5d",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/local-runner/dependency-cache.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "scripts/tests/local-runner-check.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "8af7b332fc13bdb42a03c4796ba6a09e55c94132",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T09:33:23Z",
+      "paths": [
+        ".moe/tasks/task-0e1499123bf34c428f0eccd34c8ad87b.json",
+        ".moe/tasks/task-adbab50d16f048bd9e55fa43d8870927.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T09:55:14.291Z",
+      "treeId": "7733b018c2a4dd2ecf072592787df2559a60ea28",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner-check.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "deb7c8a1a16edc275ed967044715f5cb99fb9e23",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-31T09:55:35Z",
+      "paths": [
+        ".moe/tasks/task-adbab50d16f048bd9e55fa43d8870927.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-31T10:05:51.707Z",
+      "treeId": "d8fcb5a8d4d9ce4ea8301e0875f7f526b7c60e05",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/dependency-cache.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-31T09:55:35Z",
+    "at": "2026-10-31T10:05:51.707Z"
+  },
+  "reviewCompletedAt": "2026-10-31T10:04:49.190Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Task completed as described"
+    ],
+    "issues": [
+      {
+        "type": "test_failure",
+        "file": "scripts/tests/local-runner-check.test.mjs",
+        "line": 1464,
+        "description": "DA6 maps all have one key ({ b: spec }), so `.some` for `.every` over a map's values (dependency-cache.mjs:94) passes every DA/DC row. Real npm: a root map with one registry spec and one file: spec is admitted under that mutant, and npm ci installs the stub. Fix: also refuse mixed maps, a registry spec beside each NON_REGISTRY spec in both key orders ({ a: '1.0.0', b: spec } and { b: spec, a: '1.0.0' }), at the root and node_modules/a, for every map."
+      },
+      {
+        "type": "test_failure",
+        "file": "scripts/tests/local-runner-check.test.mjs",
+        "line": 1476,
+        "description": "DA7 never admits a multi-key or empty map, so the admitted side of `every` is unpinned. Add controls on the root and node_modules/a, for every DEPENDENCY_MAPS key: a multi-key all-registry map (e.g. { a: '^1.0.0', b: 'latest', c: 'npm:x@1.0.0' }) and an empty map {} each admit deep-equal to want."
+      },
+      {
+        "type": "test_failure",
+        "file": "scripts/tests/local-runner-check.test.mjs",
+        "line": 1464,
+        "description": "No row puts a bad spec on a BUNDLED entry. The check at dependency-cache.mjs:149 must precede the inBundle skip (:159), yet `if (entry.inBundle !== true && !registrySpecs(entry))` survives. Real npm: bundled node_modules/a/node_modules/e with dependencies { f: 'file:../../../../stub/f-1.0.0.tgz' } and a hoisted registry f installs the stub into node_modules/f. Fix: for every map x NON_REGISTRY spec, refuse e = { version: '1.0.0', inBundle: true, [map]: { b: spec } } under ok('a')."
+      },
+      {
+        "type": "test_failure",
+        "file": "scripts/tests/local-runner-check.test.mjs",
+        "line": 1464,
+        "description": "No row puts a bad spec on a PLATFORM-SKIPPED optional entry. The check at :149 must precede the platform skip (:163), yet skipping it there survives. Real npm: node_modules/o { optional: true, os: ['darwin'], dependencies: { f: 'file:../../stub/f-1.0.0.tgz' } } with a hoisted registry f installs the stub into node_modules/f (f is not in o's optional set). Fix: for every map x NON_REGISTRY spec, refuse ok('o', { optional: true, os: ['darwin'], [map]: { b: spec } })."
+      },
+      {
+        "type": "other",
+        "file": "scripts/local-runner/dependency-cache.mjs",
+        "line": 149,
+        "description": "Run at least one bundled row and one platform-skipped row through buildDependencyCache, with server.calls [] and no cacheDir, as DA8 does. No runtime change. Show X1 (mutants.py), X27 and X28 (mutants2.py, in /tmp/moe-qa-adbab-mut.nUuYQk) killed by named rows alongside M1-M18. Then rerun the step-4 gate from a fresh full archive with the pinned toolchain and refresh task.verification with the new test-file sha256."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "TESTS ONLY. The runtime in 9257b233 is correct; do not change dependency-cache.mjs. The tests leave three of the fix's own refusals unpinned. Each survives every DA/DC row as a mutant, and each mutant reopens a candidate-bytes route I confirmed with the real pinned npm. The step-5 \"0 survivors\" holds for M1-M18 only.\n\nVerified green:\n- Gate from a fresh archive of 9257b233, node v24.22.2 / npm 11.19.1, env -i: exit 0, 411 tests, 409 pass, 0 fail, 2 skipped. All DA/DC/KI/CY rows executed.\n- Repo lockfiles keep 214/0/43/76/46 with identical package sets. 54-lockfile sweep: 0 newly refused.\n- My mutants X2-X12 are killed.\n- The step-5 scope growth is accepted. With real npm, the optional os '' route and the bundled '1.0.0-x.tgz' route installed stub bytes under the old admission and are refused now.\n\nGaps (arborist 9.9.1's buildIdealTree re-resolves an invalid edge from ANY node, bundled and optional ones included):\n1. X1: `.some` for `.every` (dependency-cache.mjs:94) survives, because DA6 maps have one key. Real npm: root {f:'file:stub/f-1.0.0.tgz', x:'1.0.0'} is admitted under X1 and installs CANDIDATE BYTES.\n2. X27: skipping the spec check for inBundle entries survives. Real npm: a bundled e with dependencies {f:'file:../../../../stub/f-1.0.0.tgz'} and a hoisted registry f installs CANDIDATE BYTES.\n3. X28: skipping the spec check for platform-skipped optional entries survives. Real npm: o {optional, os ['darwin'], dependencies {f:'file:../../stub/f-1.0.0.tgz'}} installs CANDIDATE BYTES.\n\nTo pass: add the rows in the issues, show X1/X27/X28 killed (M1-M18 still killed), rerun the step-4 gate from a fresh archive, and refresh verification.\n\nProbes: /tmp/moe-qa-adbab-scr.zkP1ZA/probe/{edges,mixed}.mjs. Mutants: /tmp/moe-qa-adbab-mut.nUuYQk/mutants{,2}.py.",
+      "rejectedAt": "2026-10-31T09:33:18.613Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Task completed as described"
+      ],
+      "issues": [
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/local-runner-check.test.mjs",
+          "line": 1464,
+          "description": "DA6 maps all have one key ({ b: spec }), so `.some` for `.every` over a map's values (dependency-cache.mjs:94) passes every DA/DC row. Real npm: a root map with one registry spec and one file: spec is admitted under that mutant, and npm ci installs the stub. Fix: also refuse mixed maps, a registry spec beside each NON_REGISTRY spec in both key orders ({ a: '1.0.0', b: spec } and { b: spec, a: '1.0.0' }), at the root and node_modules/a, for every map."
+        },
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/local-runner-check.test.mjs",
+          "line": 1476,
+          "description": "DA7 never admits a multi-key or empty map, so the admitted side of `every` is unpinned. Add controls on the root and node_modules/a, for every DEPENDENCY_MAPS key: a multi-key all-registry map (e.g. { a: '^1.0.0', b: 'latest', c: 'npm:x@1.0.0' }) and an empty map {} each admit deep-equal to want."
+        },
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/local-runner-check.test.mjs",
+          "line": 1464,
+          "description": "No row puts a bad spec on a BUNDLED entry. The check at dependency-cache.mjs:149 must precede the inBundle skip (:159), yet `if (entry.inBundle !== true && !registrySpecs(entry))` survives. Real npm: bundled node_modules/a/node_modules/e with dependencies { f: 'file:../../../../stub/f-1.0.0.tgz' } and a hoisted registry f installs the stub into node_modules/f. Fix: for every map x NON_REGISTRY spec, refuse e = { version: '1.0.0', inBundle: true, [map]: { b: spec } } under ok('a')."
+        },
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/local-runner-check.test.mjs",
+          "line": 1464,
+          "description": "No row puts a bad spec on a PLATFORM-SKIPPED optional entry. The check at :149 must precede the platform skip (:163), yet skipping it there survives. Real npm: node_modules/o { optional: true, os: ['darwin'], dependencies: { f: 'file:../../stub/f-1.0.0.tgz' } } with a hoisted registry f installs the stub into node_modules/f (f is not in o's optional set). Fix: for every map x NON_REGISTRY spec, refuse ok('o', { optional: true, os: ['darwin'], [map]: { b: spec } })."
+        },
+        {
+          "type": "other",
+          "file": "scripts/local-runner/dependency-cache.mjs",
+          "line": 149,
+          "description": "Run at least one bundled row and one platform-skipped row through buildDependencyCache, with server.calls [] and no cacheDir, as DA8 does. No runtime change. Show X1 (mutants.py), X27 and X28 (mutants2.py, in /tmp/moe-qa-adbab-mut.nUuYQk) killed by named rows alongside M1-M18. Then rerun the step-4 gate from a fresh full archive with the pinned toolchain and refresh task.verification with the new test-file sha256."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-31T10:04:49.190Z",
+  "reviewSummary": "APPROVED after reject #1 (tests only); full evidence in comment-d9eea38c.\n\nCommits: completion 8af7b332 (tree 7733b018 matches the record; on moe/work-2026-10-24) plus round-1 9257b233. Round 2 changes only scripts/tests/local-runner-check.test.mjs (+55/-7, sha256 489ad914, the same as task.verification). Runtime dependency-cache.mjs is unchanged (21f0cd0c), and guest-supervisor.py is unchanged (b82e4369), so supervisorSha256 is unchanged.\n\nGate, my re-run:\n- Fresh full git archive of 8af7b332.\n- Freshly extracted pinned toolchain: tarball sha256 48cc0e21 = toolchain.json x64; node v24.22.2, npm 11.19.1, npa 13.0.2; env -i.\n- `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs`: exit 0, 412 tests, 410 pass, 0 fail, 2 skips (K9, macOS smoke).\n- DA1-DA12, DC1-DC5, KI1-KI8 and CY1-CY4 all ran and passed.\n\nMutation sweep (my own driver, ^DA rows): 52 of 52 killed.\n- The rejection's X1 is killed by DA6/DA7/DA12; X27 and X28 by DA6/DA12.\n- M1-M18, X2-X12 and X29 are still killed.\n- 19 new mutants are killed too: each skip branch singly, first-only and last-only values, null map treated as absent, outer some, String coercion, keys instead of values, each dropped map, and stricter empty or multi-key refusals.\n\nThe DoD item \"Task completed as described\" is met. All 5 reject issues are closed:\n- Mixed maps in both key orders.\n- Empty and multi-key admitted controls.\n- Bundled and os/cpu-skipped placements at every map.\n- DA12 runs the three real-npm routes through buildDependencyCache: refused, with no fetch and no cacheDir, while their honest twins fetch 2/2/1.\n\nSize: 243 changed lines over the whole task (+235/-8), under 400. No pre-existing row was edited. Added lines are ASCII-only with no forbidden patterns. There are no edits to docs, local-runner.test.mjs or the supervisor.\n\nComplexity pass: PLACES/placed() is lean. No findings.",
+  "requiredCheckAtDone": null
+}

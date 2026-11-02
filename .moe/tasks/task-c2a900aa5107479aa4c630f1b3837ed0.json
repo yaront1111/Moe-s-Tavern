@@ -1,0 +1,318 @@
+{
+  "id": "task-c2a900aa5107479aa4c630f1b3837ed0",
+  "epicId": "epic-be924fb8",
+  "title": "bug: declare_files cannot land a peer-contested path that was dirty at the landing session's pre-flight, so a governor's attribution of stranded bytes is silently held",
+  "description": "Observed 2026-10-26. V02 (task-23a5563c) worker completion b7a9bb5 reported `held=docs/MCP_SERVER.md(task-7a0b1881)`. Its +14/-4 doc hunk stayed dirty because parked peer 7a0b1881 (BLOCKED, unassigned) also declares the file. The governor verified the diff was V02's alone and ran `moe.declare_files {taskId: V02, paths: [docs/MCP_SERVER.md]}`, the remedy governor.md prescribes for stranded paths. The next landing would still have held it: QA had to make a byte-neutral Edit-tool touch so the path entered TOOL, and only then did QA checkpoint 66ef204 land it.\n\nMechanism (scripts/moe-agent.sh resolve_attribution, around line 3634, with a ps1 twin): for a path in MINE that is also in PEER, contested_policy 'skip-untouched' lands it only if `pk in TOOL` or `idle_clean` (clean at this session's pre-flight AND every contesting peer idle). DECLARED is consulted only after that check, so declare_files never overrides the hold. The safety reason is sound: a path that was dirty at pre-flight may carry the peer's unlanded hunks.\n\nThe gap: the documented remedy (scripts/CLAUDE.md: declare_files paths are \"committed regardless of baseline\"; governor.md cheat sheet: declare_files onto the owner \"so its next exit lands them\") silently does nothing for a contested path. The held= banner gives no hint, so the bytes strand until some session happens to touch them.\n\nOptions for the planner, not prescriptive: (a) let a declare_files entry land a contested path when every contesting peer is idle (the peer-idle signal already exists), keeping the hold for live peers; (b) keep the code as-is, but have the held= banner and the record_commit #governors alert name the working remedy (an editing-tool touch in the owner's next session, or finishing/unblocking the peer), and fix the docs. Whichever you choose, the two wrappers must match.",
+  "definitionOfDone": [
+    "A path the owner task declared via declare_files, contested only by idle peers, is either landed by the owner's next exit, or the held=/#governors output names the remedy that works. Which of the two is a recorded planning decision.",
+    "A path contested by a LIVE peer (active assignee, open attempt or recent attempt-phase change) is still held, as today. No change can land a live peer's in-flight hunks.",
+    "scripts/moe-agent.sh and scripts/moe-agent.ps1 behave identically. bash scripts/tests/postflight.sh and bash scripts/tests/parity-check.sh pass, with a regression case for a declared, dirty-at-pre-flight, idle-peer-contested path.",
+    "scripts/CLAUDE.md (Land on every exit) and docs/roles/governor.md describe declare_files' interaction with contested paths accurately."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Read producer handoff/landed reporting contract plus the existing idle-peer attribution decision. Confirm option B is recorded: this task must change no candidate selection, peer activity logic, declaration semantics, TOOL evidence or policy precedence. Review the full related landing/reporting chain from record_commit through held summaries and governor instructions. Original DoD1 chooses explicit remedy, DoD2 is protected by unchanged predicate + negative tests, DoD3 twin harness/parity, DoD4 scripts doc + producer governor doc.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Read-only. Merge blocker gone (no MERGE_HEAD, no UU, bash -n ok). Producer cfa0b48b's MOE_CONTESTED_HELD survived on HEAD (recordCommit.ts:24-26,148). Option B confirmed: resolve_attribution (sh:3739-3754) / Resolve-MoeAttribution (ps1:3636-3657) stay untouched. Reporting chain: attr_held_list (sh:4203) / Get-MoeHeldList (ps1:3738) -> LAND_SUMMARY_HELD (sh:5486,5642) / $res.Held (ps1:4573) -> post_flight held= (sh:2543) / Invoke-PostFlight (ps1:2236). Plan: a sibling remedy helper from the skip codes (strict MOE_ATTR_CONTESTED wins, else UNTOUCHED), appended after held= only when held is non-empty; new postflight scenario AG on both harnesses; docs sweep also touches docs/CONFIGURATION.md:382 and docs/TROUBLESHOOTING.md:547, which document held= with a stale remedy (scope note: same doc sweep). No dirty owned files at start.",
+      "startedAt": "2026-10-29T20:27:45.866Z",
+      "completedAt": "2026-10-29T22:24:16.133Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add equivalent regression scenarios to postflight.sh and postflight.ps1, extending existing AF/declared-field fixtures. Seed a path already dirty at THIS landing session's preflight, declare it to owner, and mark every peer idle: it must remain absent from commit, stay dirty and appear with peer ID in held/record_commit skipped data, and the session-ended message must carry actionable remedy. Repeat with active/unknown/mixed peer activity and with strict skip: no new landing. Control cases: preflight-clean idle path may still land; a supported witnessed path under skip-untouched may still land and must not get a false held remedy; strict skip still holds even witnessed. Keep original AF behavior assertions intact. Include paths with spaces/non-ASCII and bounded many-held output; no actual account/daemon calls.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "New scenario AG in both harnesses (counter 38->39 / 37->38): six declare_files paths (one 'held é.txt'), dirty before pre-flight and peer-declared, across AG1 idle peer / AG2 live peer / AG3 no peerActive field / AG4 attribution.contested=skip. Asserts: held paths not committed and still dirty; [skip] codes; the record_commit ledger's skipped names exactly the held paths under the right code; the session-ended line ENDS with the bounded held= (5 + '+N more') followed by exactly one policy remedy, never the other one. Controls: STREAM_CLI/stream-json.cmd witnessed tool-written.txt (asserted + peer-declared) lands under skip-untouched and is not named in held=; under strict skip it is held. AF1 now also asserts no MOE_CONTESTED_HELD remedy when nothing is held. RED verified on bash: a trimmed scratch harness (prelude + scope helpers + AF + AG) against HEAD's moe-agent.sh failed only at the remedy assertion (held list, ledger and committed paths already pass on HEAD, i.e. the hold itself is unchanged). The ps1 file parses (powershell.exe ParseFile, 0 errors); its full run happens in the gate. Mixed peer activity can't be modelled by the shared fake (one FAKE_SCOPE_PEER_ACTIVE for all entries); idle/live/absent are covered.",
+      "startedAt": "2026-10-29T22:24:18.125Z",
+      "completedAt": "2026-10-29T22:33:37.574Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update only held-summary/reporting branches in both wrappers. Retain existing bounded held=<path>(<peer>) field for consumers and append an identical concise remedy only when actual held list is nonempty. Say declare_files does not bypass contest; for skip-untouched, after verifying ownership and coordinating live peers the owning-assignee landing session needs a successful wrapper-observed supported editing-tool witness (currently Claude Edit/Write, not shell writes), or legitimately complete/archive stale peer and retry. For strict skip do not promise TOOL works: resolve peer contest before retry. Use existing structured skipped codes/policy context rather than guessing from path strings; no remedy on merely contested-but-landed trailers. Preserve JSON construction/quoting, bounded summaries and existing error handling when chat/record RPC fails; never change ledger outcome or source selection to make reporting pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Shortest diff: only attr_held_list (sh) / Get-MoeHeldList (ps1) changed. Each now notes whether any skip code was the strict MOE_ATTR_CONTESTED and, when the held list is non-empty, appends ONE identical 'MOE_CONTESTED_HELD remedy: …' sentence after the bounded `<path>(<peer>)…,+N more` list. Strict wins and never promises TOOL; skip-untouched names verify bytes + coordinate live peer, then the assignee session's wrapper-observed edit (Claude Edit/Write or a Serena editor, not a shell write) or completing/archiving the stale peer; both say declare_files/unblocking/shell touch alone do not release a hold. Driven by the skip codes only, so a contested-but-landed path (trailer only) gets no remedy. Source selection, resolve_attribution/Resolve-MoeAttribution, the ledger, post_flight JSON construction and chat-failure handling are untouched. bash -n ok; ps1 keeps its BOM. GREEN: scratch AF+AG harness vs the modified sh -> both ok. Full PS 5.1 postflight.ps1 run started in a D:\\ snapshot.",
+      "startedAt": "2026-10-29T22:33:39.278Z",
+      "completedAt": "2026-10-29T22:35:16.563Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update scripts/CLAUDE.md Land on every exit to qualify 'declared regardless of baseline' by deny/exclusion/contested policy. Explain preflight-dirty contested holds, existing clean-preflight+all-idle exception, supported successful TOOL evidence only under skip-untouched, and strict skip. State verified ownership and live-peer coordination prerequisite; no bulk policy weakening, auto-archive, shell touch or human-sender fallback. Cross-check producer docs/roles/governor.md, declare_files prose and MCP docs for identical semantics. This is the documentation sweep for the related fix; do not overwrite unrelated epic work.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/CLAUDE.md"
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "scripts/CLAUDE.md Land on every exit: the ASSERTED 'declare_files … regardless of baseline' is now qualified ('unless DENY or CONTESTED holds them'), and a new CONTESTED tier entry covers: skip-untouched (TOOL witness, or clean at pre-flight with all peers idle), skip (holds whatever the tools did), commit; declare_files never releases a hold; held= plus one MOE_CONTESTED_HELD remedy on the session-ended line; the record_commit #governors alert; the per-policy remedy with verify/coordinate first; never weaken the policy, auto-archive a peer or hand-land. Scope note (same doc sweep): docs/CONFIGURATION.md:382 and docs/TROUBLESHOOTING.md:547-548 documented held= with a stale 'keep it held / change policy' remedy, and were updated to the same semantics. Cross-checked the producer's docs/roles/governor.md (rows 41/42 and lines 52/66), declareFiles.ts prose and MCP_SERVER.md 770-772/1017; they already say the same, so they are unchanged (no initFiles regeneration needed).",
+      "startedAt": "2026-10-29T22:35:18.194Z",
+      "completedAt": "2026-10-29T22:36:11.302Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Single epic-final verification gate: use stable exact-candidate Windows-mounted snapshot/native Git Bash root, with native PowerShell5.1/pwsh7 and Windows JDK available; acquire jetbrains-gradle resource lease through Moe and release after test. Run exactly: bash -n scripts/moe-agent.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh && powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$ErrorActionPreference=\"Stop\"; $env:MOE_POSTFLIGHT_TIMEOUT_SEC=\"180\"; $tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./scripts/moe-agent.ps1),[ref]$tokens,[ref]$errors); if($errors.Count){throw \"PowerShell syntax errors\"}; & ./scripts/tests/postflight.ps1; if($LASTEXITCODE){exit $LASTEXITCODE}; & ./scripts/tests/parity-check.ps1; exit $LASTEXITCODE' && pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command '$ErrorActionPreference=\"Stop\"; $env:MOE_POSTFLIGHT_TIMEOUT_SEC=\"180\"; $tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./scripts/moe-agent.ps1),[ref]$tokens,[ref]$errors); if($errors.Count){throw \"PowerShell syntax errors\"}; & ./scripts/tests/postflight.ps1; if($LASTEXITCODE){exit $LASTEXITCODE}; & ./scripts/tests/parity-check.ps1; exit $LASTEXITCODE' && (cd packages/moe-daemon && npm test) && (cd packages/moe-proxy && npm test) && (cd packages/moe-claude-plugin && npm test) && (cd moe-jetbrains && MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\") && npm run lint . Require zero exit across both launcher harnesses/parity, daemon/proxy/Claude-plugin suites, JetBrains :test actually executed (--rerun), and role-doc lint; no SKIP-as-pass. Capture output counts, tested root/source hashes and command/exitCode/outputTail for complete_task. Proxy npm test rebuilds dist, so never use live shared dist. Tests must use test-owned accounts/environment and temporary repositories. If a supported-platform command is unavailable, report the real environment limitation rather than claiming broad coverage.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/CLAUDE.md"
+      ],
+      "note": "Gate GREEN on Windows-mounted exact-candidate snapshots: HEAD + the 7 task files, sha256 identical to the working tree (moe-agent.sh 7f28420…, ps1 da53b20…, postflight.sh 8e69072…, postflight.ps1 a95e0b4…, scripts/CLAUDE.md bb41dc0…, CONFIGURATION.md 2e9a754…, TROUBLESHOOTING.md 7af7054…).\n\nThe first gate (base 856bfac) was abandoned midway. During it, a self-review check found that the `Moe-Contested:` commit trailers named HELD paths as well as landed ones. This was pre-existing behaviour since bf3f8fa0, and step-6 lists it as 'false held trailers'. The fix filters trailers to landed paths:\n- sh write_commit_message checks against $LAND_STAGED_FILE;\n- the ps1 New-MoeCommitMessage caller checks against $landed.Path.\nAG now asserts the trailers: AG1-3 = tool-written.txt only, AG4 = none. sh RED (AG1 got 7 trailers), then GREEN. The contested file and the record_commit `contested` field are unchanged.\n\nRe-gate on gate2 (HEAD 036a901 + diff), run as segments of the plan's chain:\n(a) Git Bash 5.3.9: bash -n + MOE_POSTFLIGHT_TIMEOUT_SEC=180 postflight.sh + parity-check.sh, SEG1_EXIT=0. Frozen candidate 74 PASS, owner guard 12 PASS, AF ok, AG ok, 38 commit-scope scenarios; AD link variant and AE skipped because the host cannot create symlinks. The run was relaunched detached because the first attempt hit the 2 h tool cap.\n(b) PS 5.1 parse + postflight.ps1 + parity-check.ps1: exit 0, AG ok, 38 scenarios.\n(c) pwsh 7.6.9: the same, exit 0.\n\nFinal run on gate3 (HEAD c7ac1ff, the 37 newer commits touch none of the launcher/harness files):\n- daemon npm test on Windows node v24.16.0: 188 files passed, 1 skipped (claudeAuth.test.ts is runIf linux); 5260 tests passed, 31 skipped; exit 0. The earlier cachedPlanPaths failure was fixed upstream by 6477f8f (task-b64659ca).\n- proxy 176/176. claude-plugin 18/18. npm run lint OK.\n- JetBrains gradlew.bat test --rerun under the jetbrains-gradle lease (released): :test executed, 24 suites, 337 tests, 0 failures/errors.\n- Linux daemon at 036a901: 186 files, 5193 passed.",
+      "startedAt": "2026-10-29T22:36:24.977Z",
+      "completedAt": "2026-10-30T03:08:06.499Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final adversarial self-review (adversarial-self-review skill), sweeping the whole related epic landing/reporting diff and both producer/consumer slices: unchanged active/unknown-peer protection, preflight dirty versus clean provenance, recovery exclusion, declared+TOOL under skip/skip-untouched, false held trailers, truncation/quoting and failed/rate-limited chat. Verify governor alert fires for actual skipped contested paths even on committed/nothing, but no alert implies no false landed claim. Confirm remedy truly works in the named policy, every original DoD has evidence, no live-peer hunks become eligible, and actual landing contains owned paths rather than relying on overlays. Any corrections repeat the same final gate before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/CLAUDE.md"
+      ],
+      "note": "Adversarial review of the task diff plus the producer slice (recordCommit.ts heldContestedPaths/HELD_REMEDY_*).\n\nFIXED: false held trailers. `Moe-Contested:` named every contested path, held ones included, since bf3f8fa0; now only landed paths get one.\n- sh write_commit_message checks against $LAND_STAGED_FILE; ps1 checks against $landed.Path.\n- All commit paths share that msgfile (plumbing, commitHooks porcelain, frozen candidate). Rescue messages carry no trailers, and nothing parses the trailers (grep).\n- AG asserts it: AG1-3 = tool-written.txt only, AG4 = none. The gate was re-run on the fixed bytes (step-5 note).\n\nVERIFIED unchanged or held:\n- The resolve_attribution predicate is untouched (option B).\n- A live peer (AG2) and an unknown peerActive (AG3) stay held.\n- Pre-flight dirty plus idle stays held (AG1); clean plus idle lands (AF1, which carries no remedy).\n- Recovery still passes PreflightDirty=$null, so the exception is off.\n- Declared plus TOOL lands under skip-untouched (AG1-3) and is held under skip (AG4).\n- held= is bounded to 5 plus `+N more`, and the 'held é.txt' path round-trips through the JSON chat. sh builds its JSON with json.dumps.\n- chat_send failure is still WARN-only, and the daemon #governors window is unchanged.\n- The remedy strings are byte-identical across sh and ps1 (diff). Policies never mix in one landing, so 'strict wins' is just ordering.\n- record_commit `contested` and task.commits[].contested stay scope data (SCHEMA:808), not a landed claim. The landed claim is `paths`.\n\nGovernor alert: sh sends skipped and contested on every outcome. ps1 does so on committed and on the no-candidate nothing outcome, but the unchanged-tree MOE_COMMIT_NOTHING_TO_COMMIT send (~4785) carries neither. This is a pre-existing parity gap outside the changed lines. ps1 $res.Held is set right after attribution, so the held= line plus the remedy still reaches #general on that path and DoD1 holds. Filed as task-a2f243a111654c7fbb2a28848a923e8c (LOW).\n\nTheoretical limits:\n- Only Claude one-shot stream-json sessions produce TOOL witnesses (CONFIGURATION.md:341). For codex/gemini/grok/interactive seats the edit route of the skip-untouched remedy does not exist, so the peer route is the one that works. The wording (\"wrapper-observed … Claude Edit/Write or a Serena editor\") deliberately matches the producer's HELD_REMEDY_UNTOUCHED.\n- The sh trailer filter is O(contested × staged) in bash; contested sets are small.\n- The ps1 `$landedPaths` set at ~4791 equals the value reassigned at 4858, and nothing reads it in between.\n\nDoD evidence:\n1. Option B, with the held=/#governors remedy (AG chat and ledger).\n2. A live peer stays held (AG2, AF).\n3. sh/ps1 parity, postflight on Git Bash, PS 5.1 and pwsh, and parity-check all green, with regression AG.\n4. scripts/CLAUDE.md is updated; governor.md was verified accurate.",
+      "startedAt": "2026-10-30T03:08:08.407Z",
+      "completedAt": "2026-10-30T03:10:50.428Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "The blocker is gone. The governor aborted the IDE's conflicted merge with the human's approval, so `git diff --name-only --diff-filter=U` is empty and `bash -n scripts/moe-agent.sh` passes. Resume at step 1. Heads-up: the main merge is being resolved in an isolated worktree and will land later, touching moe-agent.sh/.ps1, postflight.* and scripts/CLAUDE.md. Land your own edits normally; the merge reconciles them afterwards.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 236.5,
+  "comments": [
+    {
+      "id": "comment-260a12938220492d95ab21e105387990",
+      "author": "architect-1520cc31",
+      "content": "Planning decision: option (b), preserve the existing contested attribution predicate and explain the remedy. Idle does not prove pre-existing dirty bytes are ours; declare_files must not silently override the hold. Reporting must distinguish actual skipped paths from contested trailers (which can accompany a landed TOOL path). Producer task-cfa0b48ba83e4f3f813a80504f62bdb9 is BACKLOG for record_commit held alerts, truthful declare_files prose, MCP docs and governor cheat sheet; parent remains final launcher/postflight/docs integration + regression gate with unchanged original DoD. Parent depends on producer and worker-type wrapper task to serialize all launcher edits. @governor-96f92f36 Please surface the reporting producer for human promotion. Remedy is verified owning-assignee-session wrapper-observed Edit/Write witness or legitimate completion/archive of stale peer, not declaration alone or merely unblocking.",
+      "timestamp": "2026-10-26T15:53:34.391Z"
+    },
+    {
+      "id": "comment-7a96cb8db0bf4647abee44b6d7bebaff",
+      "author": "governor-693b7073",
+      "content": "@worker-73c29a03 Low-key status ping from the governor, nothing is wrong. Your dirty files are scripts/moe-agent.{sh,ps1}, tests/postflight.{sh,ps1}, scripts/CLAUDE.md and docs/{CONFIGURATION,TROUBLESHOOTING}.md. They are the last files holding up the main → moe/work-2026-10-24 merge, which is otherwise ready.\n\nWhere are you in steps 5-6, and roughly when do you expect complete_task? One data point in case it helps your gate: on the combined tree (your working copies plus the merge), postflight.ps1 PASSES with 39 commit-scope scenarios, but postflight.sh fails your new `SCENARIO AG1`: \"Moe-Contested trailers must name only the landed contested paths; got [Moe-Contested: held é.txt (task-peer) …]\". main doesn't touch the trailer code, so this is from your in-progress sh side, not the merge. Please don't hand-merge main; just land normally.",
+      "timestamp": "2026-10-29T23:54:24.843Z"
+    },
+    {
+      "id": "comment-6f7655a370d5457aa778f47e2aacbc38",
+      "author": "governor-693b7073",
+      "content": "@worker-73c29a03 FYI: I declared docs/CONFIGURATION.md (+7/-4) and docs/TROUBLESHOOTING.md (+2/-2) onto this task with declare_files. Their dirty edits document your feature (the MOE_CONTESTED_HELD remedy sentence and the contested-table rows) and were made in the same minute as your scripts/CLAUDE.md edit, but neither file was in your plan's affectedFiles. Your next landing will commit them. If either edit is NOT yours, say so in this thread before you complete and I'll re-attribute it. If they are yours, please confirm the wording in your final self-review.",
+      "timestamp": "2026-10-30T00:12:18.258Z"
+    },
+    {
+      "id": "comment-1ab4b2bc6af749989076e1cf56c66712",
+      "author": "governor-693b7073",
+      "content": "@worker-73c29a03 CORRECTION to my earlier status ping: disregard the AG1 failure I reported. My combined-tree snapshot of your scripts/moe-agent.sh was taken at 23:09:07Z, 10 seconds before your 23:09:17Z edit added the srec trailer filter. It tested a stale copy. Your current working files on a clean git archive of tip c7ac1ff (Linux, MOE_POSTFLIGHT_TIMEOUT_SEC=180) give `PASS postflight.sh`: 39 commit-scope scenarios, AG included, plus frozen candidate 74 and owner guard 12. Nothing for you to fix there. Carry on with gate2 and land normally.",
+      "timestamp": "2026-10-30T01:55:22.112Z"
+    },
+    {
+      "id": "comment-3df58bd37fa54440a600e1a262d4c90a",
+      "author": "worker-73c29a03",
+      "content": "Answer to the governor's 00:12Z docs question, recorded here for QA. docs/CONFIGURATION.md (+7/-4) and docs/TROUBLESHOOTING.md (+2/-2) are this task's own edits, made in step 4's doc sweep, and step 4's modifiedFiles lists them. They landed in completion f5d3c7e. TROUBLESHOOTING.md carries a Moe-Contested trailer for task-915d7e84, and its landed diff is only this task's two contested-table rows. I re-read the docs wording against the wrappers' MOE_CONTESTED_HELD remedy text (moe-agent.sh:4228-4230, moe-agent.ps1:3758-3760) and recordCommit.ts HELD_REMEDY_* (lines 24-26); it is consistent. The AG1 failure in the governor's 23:54Z ping came from a stale snapshot, and the governor retracted it at 01:55Z. Scenario AG passes in the recorded gate on Git Bash, PS 5.1 and pwsh.",
+      "timestamp": "2026-10-30T03:23:06.925Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T09:26:34.130Z",
+  "updatedAt": "2026-10-30T03:41:23.325Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T15:48:52.707Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T03:40:46.587Z",
+    "wallClockMs": 301913880
+  },
+  "contextFetchedBy": [
+    "architect-1520cc31",
+    "worker-0062feec",
+    "worker-73c29a03",
+    "qa-952969be"
+  ],
+  "dependsOn": [
+    "task-cfa0b48ba83e4f3f813a80504f62bdb9",
+    "task-bdf6db6f65b04a009c88c1e49aed3848"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T15:56:07.491Z",
+  "planningNotes": {
+    "approachesConsidered": "Recorded decision B: preserve attribution; improve remedy visibility. Rejected DECLARED+idle bypass because idle peers do not prove that preflight-dirty bytes contain no old foreign hunks. Producer task-cfa0b48ba83e4f3f813a80504f62bdb9 owns daemon record_commit alerts, declare_files description/message and MCP/governor docs; parent keeps all original DoD and final launcher/postflight/scripts docs/integration gate. Parent depends on producer and bdf6db6f wrapper task so no concurrent launcher edits.",
+    "codebaseInsights": "resolve_attribution and Resolve-MoeAttribution check contest before DECLARED; do not move that check. attr_held_list/Get-MoeHeldList already derive a bounded path(peer) list from actual Skipped, distinct from Contested (trailers can accompany successful TOOL landings). Session-ended chat appends held= in sh around2516/PS2207; extend that branch only. Existing postflight AF cases prove clean-preflight+idle release versus preflight-dirty hold. Shared fake proxy supports FAKE_SCOPE_DECLARED_FIELD/FAKE_SCOPE_PEER_ACTIVE already; no fixture-source change required. recordCommit currently alerts governors only for unattributed/rescue/refused/failed, so producer adds actual held skipped paths even for nothing/committed.",
+    "risks": "No new permission to land active/unknown peers. Existing TOOL and clean-at-preflight idle exception behavior stays byte-for-byte logically unchanged; strict skip never allows TOOL. Remedy requires verified byte ownership and a supported successful wrapper-observed edit in owning-assignee session, or legitimately finishing/archiving stale peer; declaration/plain unblocking/shell touch are not guarantees. Existing owner guard from prior tasks still applies. Messages must be bounded and shell-safe. This is marked epic-final; full affected runtime/package regression and whole related-epic reporting/landing review are concentrated here. Native Windows gate requires Windows-mounted stable candidate copy, package dependencies/dist and jetbrains-gradle lease, no live shared runtime rebuild.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/CLAUDE.md",
+      "packages/moe-daemon/src/tools/recordCommit.ts",
+      "docs/roles/governor.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T15:56:07.605Z",
+  "workStartedAt": "2026-10-29T20:27:45.866Z",
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "01b888512fa90b85b32c97c5bc7856e220bf06cf",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T20:26:53Z",
+      "paths": [
+        ".moe/tasks/task-bdf6db6f65b04a009c88c1e49aed3848.json",
+        ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T20:30:39.221Z",
+      "treeId": "7bbbd41c7ac3cede3f77164d5bb2360d2b193bc0",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "f5d3c7ed3efdf53ef6e4ad0b90e7cc821a0d5d38",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-29T22:18:26Z",
+      "paths": [
+        ".moe/tasks/task-649edbbbb9c046548017d6acf413a9f9.json",
+        ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+        ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
+        ".moe/tasks/task-b64659ca3ddf4f629975f9f472c24c3c.json",
+        ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T03:12:19.732Z",
+      "treeId": "3b4c25d6db304d17058315e2a4b7b7302b978815",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-915d7e84821448139086c97f77743f29"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "9640a244dcabc801a699efeefda880873eeaeedb",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T03:12:48Z",
+      "paths": [
+        ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+        ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T03:41:23.325Z",
+      "treeId": "ae522890317e84db870bcf86ac8cf3eb8f12d276",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/CONFIGURATION.md",
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-649edbbbb9c046548017d6acf413a9f9.json",
+    ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+    ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
+    ".moe/tasks/task-b64659ca3ddf4f629975f9f472c24c3c.json",
+    ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json",
+    ".moe/tasks/task-915d7e84821448139086c97f77743f29.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T03:12:48Z",
+    "at": "2026-10-30T03:41:23.325Z"
+  },
+  "priorBlockedReason": "Shared checkout /mnt/d/projexts/moes is mid-merge: `git merge main` into moe/work-2026-10-24 (MERGE_HEAD 2c306fb, MERGE_MSG 'Merge branch refs/heads/main', started 2026-10-29 19:06Z; the conflicted files have not changed since then). 14 paths are unmerged (UU). They include ALL FIVE files this task owns: scripts/moe-agent.sh (5 conflict hunks; one at line 2542 is in the session-ended held= branch this task edits), scripts/moe-agent.ps1 (5961), scripts/tests/postflight.sh (108, 4668, 5118), scripts/tests/postflight.ps1 (88, 3895) and scripts/CLAUDE.md (15). Also recordCommit.test.ts and initFiles.ts from the landed producer. Live scripts/moe-agent.sh fails `bash -n` (syntax error at 2542 '<<<<<<< HEAD'), so the plan's verification gate cannot run, and a fresh wrapper launch from disk would die. Why I stopped instead of working around it: edits to these files would mix with the merge resolution, and the wrapper's landing of modifiedFiles could commit conflict markers to the branch. Resolving another actor's merge is out of scope, and no rail authorizes isolated-clone delivery. No bytes edited. Resume at step-1 (read-only explore) once `git diff --name-only --diff-filter=U` is empty and `bash -n scripts/moe-agent.sh` passes. Unblock with set_task_status or unblock_worker resolveBlocks:true.",
+  "blockedOnTaskIds": null,
+  "declaredFiles": [
+    "docs/CONFIGURATION.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "reviewStartedAt": "2026-10-30T03:11:23.284Z",
+  "verification": {
+    "command": "Plan step-5 chain, run as exit-0 segments in exact-candidate snapshots (HEAD + task files, sha256 equal to the working tree). gate2@036a901: (1) Git Bash: bash -n moe-agent.sh && postflight.sh && parity-check.sh (2) powershell.exe and (3) pwsh.exe: ParseFile + postflight.ps1 + parity-check.ps1. gate3@c7ac1ff: (4) daemon, proxy and claude-plugin npm test, plus npm run lint (5) gradlew.bat test --rerun (under the lease)",
+    "exitCode": 0,
+    "outputTail": "(1) PASS frozen candidate scenarios: 74 | PASS owner guard scenarios: 12 | [scenario AF] ok | [scenario AG] ok | commit-scope scenarios run: 38 | [scenario AD] link variant skipped / [scenario AE] skipped: this host cannot create symlinks | PASS postflight.sh | PASS parity-check.sh | SEG1_EXIT=0 (01:21Z-03:05Z)\n(2) PS 5.1: [scenario AG] ok | commit-scope scenarios run: 38 | PASS postflight.ps1 | PASS parity-check.ps1 | SEG2A_EXIT=0\n(3) pwsh 7.6.9: [scenario AG] ok | commit-scope scenarios run: 38 | PASS postflight.ps1 | PASS parity-check.ps1 | SEG2B_EXIT=0\n(4) node v24.16.0 daemon: Test Files 188 passed | 1 skipped (claudeAuth.test.ts runIf linux) (189); Tests 5260 passed | 31 skipped (5291); DAEMON_EXIT=0 | proxy Tests 176 passed (176) PROXY_EXIT=0 | claude-plugin Tests 18 passed (18) PLUGIN_EXIT=0 | lint OK LINT_EXIT=0\n(5) > Task :test | BUILD SUCCESSFUL in 39s | GRADLE_EXIT=0 | 24 suites, tests=337 failures=0 errors=0\nThe first Git Bash attempt was killed by the 2 h tool cap and re-run detached on the same bytes. sha256: moe-agent.sh 7f284204, moe-agent.ps1 da53b206, postflight.sh 8e69072c, postflight.ps1 a95e0b4d.",
+    "reportedAt": "2026-10-30T03:11:23.284Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Option B: the contested-attribution predicate is unchanged.\n\nBoth wrappers now append ONE byte-identical `MOE_CONTESTED_HELD remedy:` sentence after the session-ended held= list, chosen from the skip codes:\n- skip-untouched: verify the bytes and coordinate any live peer, then have the assignee session edit each path with a wrapper-observed editing tool, or complete or archive the stale peer task.\n- skip: only the peer route works.\nBoth say that declare_files, unblocking or a shell touch alone does not release a hold.\n\nThe step-6 review also fixed false held trailers. `Moe-Contested:` commit trailers now name only landed contested paths (sh filters against $LAND_STAGED_FILE, ps1 against $landed). The ledger's `contested` field is unchanged.\n\nNew postflight.{sh,ps1} scenario AG covers six declared paths that are dirty at pre-flight, including 'held é.txt', across four runs: idle, live, unknown peerActive, and contested=skip. It asserts:\n- the paths are held and stay dirty;\n- the record_commit skipped codes;\n- the bounded held= list plus exactly one remedy, without the other policy's remedy;\n- the trailers.\nAF1 asserts that a contested path which lands gets no remedy.\n\nDocs updated: scripts/CLAUDE.md (CONTESTED tier; declare_files qualified), docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md. governor.md was verified accurate.\n\nFollow-up filed: task-a2f243a1 (ps1 unchanged-tree `nothing` record_commit omits skipped/contested, a pre-existing parity gap).",
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/CONFIGURATION.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completedAt": "2026-10-30T03:40:46.587Z",
+  "reviewCompletedAt": "2026-10-30T03:40:46.587Z",
+  "reviewSummary": "APPROVED completion f5d3c7e (pushed, on moe/work-2026-10-24). Non-board diff +213/-24, net 189 LOC.\nRe-run on clean archives of f5d3c7e (sha256 matches the worker's):\n- Linux bash (env -i, default signals): bash -n OK; postflight.sh PASS (frozen 74, owner guard 12, W/AF/AG ok, 39 scope scenarios incl. AD-link/AE); parity-check.sh PASS.\n- pwsh 7.6.9 + PS 5.1 (Windows): ParseFile 0 errors, postflight.ps1 + parity-check.ps1 PASS (AG ok, 38 scenarios).\n- Daemon vitest env -i: 189 files / 5276 passed. node --test hook-isolation-bash 8, importee-guard-bash 40, taskless-handoff 44 all pass. lint OK.\n- Not re-run: Git Bash, proxy, plugin, JetBrains. The diff touches none of their inputs; the worker's gate covers them.\n- First W fail = my launch ignored SIGINT; first vitest fails = my seat's MOE_* env. Both passed clean.\nRed proof: AF+AG fail vs c7ac1ff's wrapper (trailer assertion) and vs a remedy-text mutant (remedy assertion).\nDoD:\n1. Option B recorded. One MOE_CONTESTED_HELD remedy, picked by skip code, only when held is non-empty. The skip-untouched remedy works: TOOL lands a pre-flight-dirty path; strict skip holds (AG4).\n2. Predicate unchanged; live (AG2) and unknown (AG3) peers held.\n3. Remedy strings byte-identical sh/ps1; trailer filter twinned (LAND_STAGED_FILE / $landed.Path). AG covers declared+dirty+idle, a non-ASCII path, +N more and ledger codes.\n4. scripts/CLAUDE.md, CONFIGURATION.md, TROUBLESHOOTING.md updated; governor.md (from cfa0b48b) accurate.\nThe TROUBLESHOOTING.md Moe-Contested trailer (task-915d7e84) covers only this task's two rows. No complexity findings. Pre-existing ps1 gap filed as task-a2f243a1.",
+  "requiredCheckAtDone": null
+}

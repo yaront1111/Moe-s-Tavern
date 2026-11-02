@@ -1,0 +1,18 @@
+{
+  "id": "epic-d1c2cce9",
+  "projectId": "proj-3830fac7",
+  "title": "Codex Agent: Fix Role Compliance & Improve Integration",
+  "description": "Codex agents don't follow their assigned roles (architect/worker/qa) because role instructions are never actually loaded. Root cause: .codex/agent-instructions.md is configured as a project_doc_fallback but AGENTS.md at root takes priority, so fallbacks are skipped. Fix involves using developer_instructions and model_instructions_file in config.toml, strengthening the Codex prompt, and ensuring parity with Claude agent experience.",
+  "architectureNotes": "## Root Cause\nCodex discovery rule: one file per directory. AGENTS.md exists → fallback filenames never checked → role doc never loaded.\n\n## Key Codex Config Options\n- `model_instructions_file` - Path to file that provides model instructions (loaded with high authority)\n- `developer_instructions` - String injected directly into session\n- `project_doc_fallback_filenames` - Only checked when no AGENTS.md/override exists\n\n## Fix Strategy\n1. Write role instructions to `.codex/agent-instructions.md` (already done)\n2. Set `model_instructions_file = \".codex/agent-instructions.md\"` in config.toml\n3. Add short `developer_instructions` with role identity + critical directives\n4. Strengthen the CLI prompt passed to codex\n5. Keep AGENTS.md for project context (loaded separately as project docs)\n\n## Files to Modify\n- `scripts/moe-agent.sh` (Codex config generation, lines 501-585, 907-936)\n- `scripts/moe-agent.ps1` (Codex config generation, lines 370-421, 496-537)\n- `AGENTS.md` (add MCP tool usage section)\n\n## Reference Docs\n- https://developers.openai.com/codex/config-reference/\n- https://developers.openai.com/codex/guides/agents-md/\n- https://developers.openai.com/codex/cli/reference/",
+  "epicRails": [
+    "model_instructions_file must point to .codex/agent-instructions.md",
+    "developer_instructions in config.toml must include role identity and critical workflow directives",
+    "Changes must work for both bash and PowerShell scripts",
+    "Codex agents must achieve role compliance parity with Claude agents",
+    "Test with all 3 roles: architect, worker, qa"
+  ],
+  "status": "ACTIVE",
+  "order": 12,
+  "createdAt": "2026-02-14T11:40:57.578Z",
+  "updatedAt": "2026-02-14T11:40:57.578Z"
+}

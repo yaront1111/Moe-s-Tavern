@@ -1,0 +1,483 @@
+{
+  "id": "task-c20464ff64ca49fca4371dd9b5194364",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-04] Wrappers: provision the task worktree at worker pre-flight",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §1.1-§1.6, the §6.5 worker stop and the §7.2 guards.\n\nObjective: a worker seat whose claim says worktree mode gets its own locked, sparse git worktree W on moe/task/<taskId>, or stops loudly. It never falls back to the shared checkout. Shared mode is unchanged (epic rail 4).\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins, worker seats only:\n- Read `workspace` from the claim response (fresh claim) or get_context (resume), per WT-01/WT-02 (task-e27456ad67b64bc292080ea3a8b92f26). An absent field (older daemon) means shared mode.\n- In worktree mode, run the guards before any W work. Each failure calls report_blocked with its code and stops the seat:\n  - git >= 2.38: MOE_WORKTREE_UNSUPPORTED_GIT\n  - project is the git top level: MOE_WORKTREE_PROJECT_NOT_TOP\n  - control checkout HEAD is refs/heads/moe/control: MOE_CONTROL_NOT_FOLLOWING\n  - task bytes on a shared branch that the target lacks: MOE_WORKTREE_MODE_MISMATCH\n  - Windows path budget: MOE_WORKTREE_PATH_TOO_LONG\n- Create W with `git worktree add --lock --reason \"moe <taskId>\" --no-checkout -b moe/task/<taskId> W refs/heads/<target>` (cut from the LOCAL target; WT-09 adds the fetch), then `sparse-checkout set --no-cone '/*' '!/.moe/'`, then `read-tree -mu HEAD`.\n- Reuse W when `git worktree list --porcelain` shows it (D:\\ vs /mnt/d normalized), running `worktree repair` on a cross-OS reuse. Re-add W on an existing branch without -b. Warn MOE_WORKTREE_MOE_PRESENT if W/.moe exists.\n- Any git failure: MOE_WORKTREE_CREATE_FAILED. Remove only a half-made W with no commits beyond the target, report_blocked, no CLI launch.\n- In shared mode, an existing moe/task/<taskId> that is not fully landed means MOE_WORKTREE_MODE_MISMATCH and report_blocked. Add the 'fully landed' helper sh task_branch_landed / ps1 Test-MoeTaskBranchLanded (merge-tree of target and branch equals the target's tree, §1.7); WT-14 reuses it.\n- Cases in scripts/tests/postflight.sh and postflight.ps1.\n\nNOT in scope:\n- CLI cwd, env and configs (WT-05)\n- links and Serena (WT-06)\n- any landing (WT-07 onward)\n- the control follow and auto-switch (WT-13)\n- removal and sweep (WT-14)\n- docs (WT-18)\n\nChained after task-5998f871e03d4ed5ab21f214073d85b2, which edits the same wrappers.\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh (and on a Windows seat: node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "postflight case (both harnesses): a worktree-mode worker claim creates a locked worktree at .worktrees/<taskId> on moe/task/<taskId>, W/.moe does not exist, and the control checkout's HEAD, index and files are unchanged.",
+    "postflight case: a second session of the same task reuses W (no new worktree add, its dirt intact); with the branch present but W missing, W is re-added on that branch without -b.",
+    "postflight cases: each guard (git < 2.38 via a stub, project not top level, control not on moe/control, mode mismatch) prints its code, calls report_blocked and launches no CLI.",
+    "postflight case: shared mode with an unlanded moe/task/<taskId> prints MOE_WORKTREE_MODE_MISMATCH; shared mode without one behaves exactly as before (existing cases unchanged).",
+    "Both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes: diff of `grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*'` over moe-agent.sh and moe-agent.ps1 (sort -u) is empty.",
+    "node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh exits 0; postflight.ps1 passes via node scripts/tests/postflight-safe.mjs powershell."
+  ],
+  "taskRails": [
+    "WT-04 size exception (task-c20464ff). QA's reopen-1 reject (qa-b29f7b3d, 20:34Z) measured completion 5657d186 at +382/-20 = 362 net non-board LOC. It names two contract defects that reproduce in both twins: (1) reuse wipes an intentionally empty index (DoD 2), and (2) a failed path-budget probe fails open (any git failure must be MOE_WORKTREE_CREATE_FAILED, report_blocked once, no CLI). QA may approve this task at up to 560 net LOC task-wide, fix rounds included. The overage may only be those two fixes in scripts/moe-agent.{sh,ps1} plus their regression sections in scripts/tests/postflight.{sh,ps1}, which QA placed there; the held-out postflight-worktree.cjs and postflight-fake-proxy.js stay byte-identical. Every other QA criterion is unchanged, and so is the 400-net-LOC cap for every other task."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Rename the sh python bridge env names out of the MOE_LAND_ family. This is the DoD 5 enabler.\n\nAt HEAD, DoD 5's `grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*'` already differs between the twins. resolve_attribution in moe-agent.sh passes values from bash to its inline python through nine sh-only env names, 19 occurrences in all:\n- MOE_LAND_UNDECLARED, MOE_LAND_CONTESTED, MOE_LAND_EXCLUDE\n- MOE_LAND_BOARD_STATE, MOE_LAND_POLICY_OVERRIDE, MOE_LAND_BASE\n- MOE_LAND_INDEX, MOE_LAND_EVIDENCE, MOE_LAND_PREFLIGHT_DIRTY\n\nThey are internal plumbing, not codes: parity-check already exempts names of this kind, and the ps1 twin has no python bridge.\n\nRename each MOE_LAND_<X> to MOE_PY_<X> at all 19 occurrences. MOE_PY_ is unused today and outside every compared family, now and after WT-19 adds its families. The occurrences are the env prefix lines of resolve_attribution and every env.get(...) in its python. Nothing else in the file changes.\n\nApply the same mapping in the two tests that run the extracted python with these env names. A missed occurrence there silently falls back to a default:\n- scripts/tests/importee-guard-bash.test.mjs: 5 occurrences, in the env objects near lines 51-52 and 206.\n- scripts/tests/usage-attribution.test.mjs: 6 occurrences, the PowerShell snippet's $env:MOE_LAND_UNDECLARED near line 34 and the env object near lines 82-83.\n\nLeave scripts/tests/parity-check.ps1's comment that mentions MOE_LAND_* names alone. WT-19 owns parity-check.\n\nSaving moe-agent.sh: running bash seats keep reading it by byte offset (Serena gotcha-bash-hot-reload-incremental-parse).\n- Write the whole new file to a scratch path on the same filesystem, /mnt/d/moe-scratch/c20464ff/moe-agent.sh.\n- Run `bash -n` on it.\n- Replace the live file with one `mv -f`. Never write it partially in place.\n- The same rule holds for every later save of moe-agent.sh in this task.\n\nTest:\n- `grep -c 'MOE_LAND_'` prints 0 for each of the three files.\n- `node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs` passes. Both run in CI's script-test jobs.\n\nThis step's error handling: if either test fails, the cause is a missed or misspelled occurrence. Fix the mapping, never the test's assertions.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/importee-guard-bash.test.mjs",
+        "scripts/tests/usage-attribution.test.mjs"
+      ],
+      "note": "Reopen-1 round: the MOE_LAND_* -> MOE_PY_* rename already landed in completion 5657d186 and QA passed it. No bytes change in this step this round. Re-verified at HEAD 04a3e180: grep -c MOE_LAND_ is 0 in moe-agent.sh, importee-guard-bash.test.mjs and usage-attribution.test.mjs; node --test of the two tests 44/44 pass, from a git-archive snapshot at /mnt/d/moe-scratch/c20464ff-s1.*. Other sessions' dirty paths (.moe/tasks/*, packages/moe-daemon/*, packages/moe-proxy/*, scripts/tests/local-runner.test.mjs, .moe/decisions/) are untouched.",
+      "startedAt": "2026-10-30T20:51:08.908Z",
+      "completedAt": "2026-10-30T20:51:42.306Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Hook the held-out suite into both harnesses, next to the owner-guard suite it is modelled on. The suite is scripts/tests/postflight-worktree.cjs from WT-04T (task-dd5daa4b789645d29b192176390884be). This row stays unclaimable until WT-04T lands.\n\nDo NOT edit the suite or scripts/tests/postflight-fake-proxy.js. They are held-out tests, and QA rejects any change to them. If a held-out case is wrong, call moe.report_blocked with blockedOnTaskIds [\"task-dd5daa4b789645d29b192176390884be\"] and the evidence. Never work around it.\n\nscripts/tests/postflight.sh: directly after the line that runs postflight-owner-guard.cjs, add\n```\n# Worktree provisioning cases (one suite shared with postflight.ps1).\n\"$NODE_FOR_TEST\" \"$ROOT_DIR/scripts/tests/postflight-worktree.cjs\" sh \"$WRAPPER\" \"$FAKE_PROXY\" \"$TMP_DIR\" \"$(command -v bash)\"\n```\nThe harness runs under set -e, so the suite's exit 1 fails it.\n\nscripts/tests/postflight.ps1: directly after the owner-guard block, add\n```\n# Worktree provisioning cases (one suite shared with postflight.sh).\n& node (Join-Path $root 'scripts\\tests\\postflight-worktree.cjs') ps1 $wrapper $fakeProxy $tempRoot $psExe\nif ($LASTEXITCODE -ne 0) { throw 'Worktree provisioning scenarios failed' }\n```\nKeep the file's UTF-8 BOM.\n\nNo other byte of either harness changes. DoD 4 requires the existing cases unchanged.\n\nTest: run the suite directly against the current wrappers to record the red baseline:\n```\nnode scripts/tests/postflight-worktree.cjs sh scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js \"$(mktemp -d)\" \"$(command -v bash)\"\n```\nEvery case except shared-landed should fail, as WT-04T recorded. Steps 3 and 4 turn it green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Reopen-1 round: both suite hooks already landed in 5657d186 (postflight.sh:907-908, postflight.ps1:888-890; the ps1 BOM is intact). Held-out files: `git diff --exit-code e28e4886 HEAD -- scripts/tests/postflight-worktree.cjs scripts/tests/postflight-fake-proxy.js` is empty, so they are byte-identical to WT-04T's completion. No bytes change in this step. QA placed this round's regression sections in postflight.{sh,ps1} (governor comment-e609584f, task rail prop-ae80ddc8). They are added in steps 3 (sh) and 4 (ps1) next to each twin's fix, as new sections at the end of each harness, and no pre-existing case changes.",
+      "startedAt": "2026-10-30T20:51:42.933Z",
+      "completedAt": "2026-10-30T20:52:19.274Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "sh implementation in scripts/moe-agent.sh, covering DoD 1-4 on the sh engine. The contract is the one in WT-04T's description (task-dd5daa4b789645d29b192176390884be). Its suite is the arbiter and stays unchanged.\n\nAdd three functions right after git_top().\n\n1. task_branch_landed REF TASKID\n- Returns 0 only when `git -C \"$MOE_TOP\" merge-tree --write-tree \"$REF\" \"refs/heads/moe/task/$TASKID\"` exits 0 AND its first output line equals `git -C \"$MOE_TOP\" rev-parse --verify --quiet \"$REF^{tree}\"`.\n- Any failure returns 1, meaning not landed: git older than 2.38, an unknown ref, or a conflict.\n- Header comment says three things. Ancestry can't be the test, because a worktree completion lands as a squash commit (design §1.7). WT-14 reuses this with REF=refs/heads/<target>. The twin is Test-MoeTaskBranchLanded.\n\n2. worktree_stop CODE DETAIL\n- Print `echo -e \"${RED}[ERROR]${NC} $1: $2\"`.\n- Build {taskId: $PREFLIGHT_TASK_ID, workerId: $WORKER_ID, reason: \"$1: $2\"} with $PYTHON_CMD json.dumps over argv. Never splice JSON as a string.\n- Send it with `moe_rpc report_blocked`. If building or sending fails, print one `${YELLOW}[WARN]${NC} moe.report_blocked failed for $PREFLIGHT_TASK_ID; the seat stops anyway.` line.\n- Then stop_heartbeat_sidecar and `exit 1`. The EXIT trap deregisters, as it does for MOE_CLI_ARGV_REJECTED.\n- Never call it inside $(...), a pipeline or a subshell, where exit would not end the seat.\n\n3. provision_worktree\na. Parse. Run $PYTHON_CMD once, reading CLAIM_RESULT and PREFLIGHT_CONTEXT from env vars, not argv, because they can be large.\n- ws = claim['workspace'] if it is a dict, else context['workspace'] if that is a dict, else none. Unparseable JSON counts as absent.\n- Print three fields separated by \\x1f:\n  - mode: 'worktree' only when ws.mode == 'worktree', else 'shared';\n  - target: the stripped string;\n  - foreign shas, space-separated: the context's task.commits entries whose kind is checkpoint or completion, whose sha is 40-hex, and whose ref is not in {moe/task/<id>, refs/heads/moe/task/<id>, <target>, refs/heads/<target>}.\nb. Shared mode. `git_top || return 0`. If `git -C \"$MOE_TOP\" rev-parse --verify --quiet \"refs/heads/moe/task/$tid\"` finds the branch and `task_branch_landed HEAD \"$tid\"` fails, call worktree_stop MOE_WORKTREE_MODE_MISMATCH \"shared-mode claim, but moe/task/$tid holds worktree bytes HEAD lacks; land or rescue that branch first\". Otherwise return 0 and touch nothing (rail 4). The guard compares against HEAD, not the target, for two reasons: WT-01 sends target null in shared mode, and after a rollback (§7.4) HEAD is the shared branch the bytes must be in.\nc. Worktree-mode guards, in this order, each ending in worktree_stop:\n- `git --version` gives a major.minor below 2.38, or can't be parsed: MOE_WORKTREE_UNSUPPORTED_GIT \"git <version> is older than 2.38; worktree mode needs git merge-tree --write-tree\". Print the version git reported; the suite's stub prints 2.37.9.\n- git_top fails, or MOE_REL is non-empty: MOE_WORKTREE_PROJECT_NOT_TOP.\n- `git -C \"$MOE_TOP\" symbolic-ref -q HEAD` is not refs/heads/moe/control: MOE_CONTROL_NOT_FOLLOWING, naming the current HEAD. WT-13 adds the follow and the auto-switch; this task never does.\n- The target is blank, or `git check-ref-format --branch \"$target\"` fails, or `git -C \"$MOE_TOP\" rev-parse --verify --quiet \"refs/heads/$target^{commit}\"` fails: MOE_WORKTREE_CREATE_FAILED.\n- For any foreign sha, `git -C \"$MOE_TOP\" merge-base --is-ancestor \"$sha\" \"refs/heads/$target\"` is non-zero, which includes an unknown sha: MOE_WORKTREE_MODE_MISMATCH, naming the sha and its ref.\n- Only when $OSTYPE matches msys*|cygwin*: ${#W} + 1 + the longest name from `git -C \"$MOE_TOP\" ls-tree -r -z --name-only \"refs/heads/$target\"` is over 240, and `git -C \"$MOE_TOP\" config --bool core.longpaths` is not true: MOE_WORKTREE_PATH_TOO_LONG.\nd. Find or make W.\n- W=\"$MOE_TOP/.worktrees/$tid\" and branch=\"moe/task/$tid\". Derive both here, never from ws.path: a Windows daemon spells it D:\\..., and a WSL seat needs /mnt/d/....\n- Look up W by piping `git -C \"$MOE_TOP\" worktree list --porcelain -z` to python. Python finds the record whose path equals W under the comparable() rule copied from probe_daemon_health (drive and UNC paths case-folded, /mnt/<d>/x equal to <d>:/x). It prints `found\\x1f<raw path>\\x1f<branch ref or empty>`, or `absent`. If the listing fails: MOE_WORKTREE_CREATE_FAILED.\n- found:\n  - If the branch ref isn't refs/heads/$branch: CREATE_FAILED.\n  - If the raw path differs from \"$W\", run `git -C \"$MOE_TOP\" worktree repair \"$W\"` first.\n  - If `git -C \"$W\" ls-files` fails: CREATE_FAILED. If it prints nothing, a session died between add and read-tree: run the sparse and read-tree steps below.\n  - verb=reused. Never run read-tree on a non-empty index; leave its dirt untouched.\n- absent, and the branch exists (`rev-parse --verify --quiet refs/heads/$branch`): `git -C \"$MOE_TOP\" worktree add --lock --reason \"moe $tid\" --no-checkout \"$W\" \"$branch\"`, verb=re-added.\n- absent, and no branch: the same add with `--no-track -b \"$branch\" \"$W\" \"refs/heads/$target\"`, verb=created.\n- After an add, run `git -C \"$W\" sparse-checkout set --no-cone '/*' '!/.moe/'`, then `git -C \"$W\" read-tree -mu HEAD`.\ne. Error handling:\n- Capture git's stderr with 2>&1 and put its first line in the CREATE_FAILED detail.\n- A failed `worktree add` removes nothing: the directory may belong to someone else.\n- If sparse or read-tree fails after this session's own add, check `git -C \"$MOE_TOP\" rev-list --count \"refs/heads/$target..refs/heads/$branch\"`. If it prints 0, run `git -C \"$MOE_TOP\" worktree remove --force --force \"$W\"` (the worktree is locked). Otherwise keep W; the next session's empty-index finish completes it.\n- Then MOE_WORKTREE_CREATE_FAILED. Never delete a branch.\nf. If `[ -e \"$W/.moe\" ] || [ -L \"$W/.moe\" ]`: MOE_WORKTREE_MOE_PRESENT \"$W/.moe exists; a worktree never holds .moe files, so a human must inspect it\". Delete nothing. Design §1.6 fails closed here and supersedes the description's \"warn\" (rail 3).\ng. Success: set MOE_WT_MODE=worktree, MOE_WT_PATH=\"$W\", MOE_WT_BRANCH=\"$branch\" and MOE_WT_TARGET=\"$target\". Print `[worktree] $verb $W on $branch`. The CLI then launches exactly as today; WT-05 moves its cwd.\n\nPer-iteration reset: add `MOE_WT_MODE=shared; MOE_WT_PATH=\"\"; MOE_WT_BRANCH=\"\"; MOE_WT_TARGET=\"\"` next to the `MOE_TOP=\"\"` reset at the loop top.\n\nCall site, directly above `# -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------`:\n```\nif [ \"$AUTO_CLAIM\" = true ] && [ \"$PREFLIGHT_OK\" = true ] && [ -n \"$PREFLIGHT_TASK_ID\" ] && [ \"$ROLE\" = worker ]; then provision_worktree; fi\n```\nIt is not gated on autoCommit (the suite's fixtures use autoCommit:false). It runs before the pre-flight landing, so a refusal leaves no fresh baseline.\n\nset -e is on, so every git and python call sits in an if, || or && test. No bare command may fail.\n\nDoD 5: the seven codes appear in both twins. Put no other MOE_WORKTREE_, MOE_LAND_, MOE_CONTROL_ or MOE_BOARD_ token in code or comments; the grep reads comments too. Shell variables use the MOE_WT_ prefix.\n\nSave the same way as step 1.\n\nTest loop: run\n```\nMOE_WORKTREE_ONLY=<case> node scripts/tests/postflight-worktree.cjs sh scripts/moe-agent.sh scripts/tests/postflight-fake-proxy.js \"$(mktemp -d)\" \"$(command -v bash)\"\n```\nuntil every sh case prints ok.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Reopen-1 sh fixes (qa-b29f7b3d items 1 and 4, governor comment 20:35Z), scripts/moe-agent.sh +8/-5 vs HEAD:\n(1) Reuse half-made signal. Step 3's text named \"empty ls-files\"; per QA and the governor's fix direction it is now \"W has no per-worktree index file\" (`git -C W rev-parse --path-format=absolute --git-path index`, then `[ -e ]`; a rev-parse failure refuses MOE_WORKTREE_CREATE_FAILED). Measured on git 2.43: the index file is missing after `worktree add --no-checkout` and after `sparse-checkout set`, exists after `read-tree -mu HEAD`, and survives `git rm --cached --sparse -r .` (65 bytes, 0 entries). So a deliberate `git rm` can never look half-made.\n(2) Windows path-budget probe: `longest=$(set -o pipefail; git ls-tree ... | python ...) && [[ $longest =~ ^[0-9]+$ ]] || worktree_stop MOE_WORKTREE_CREATE_FAILED \"git ls-tree failed on $target; the Windows path budget cannot be checked\"`. A failure in git or python, or a non-numeric result, refuses. worktree_stop stays outside $(...).\nRegressions: a new `[worktree reuse]` section at the end of scripts/tests/postflight.sh (+77/-0, existing cases byte-identical), using write_task_record, $FAKE_CLI, $FAKE_PROXY and $WRAPPER. (b) half-made W is finished; (a) emptied index via --cached and via physical `git rm --sparse -r .` is reused as is, diff --cached unchanged, nothing restored; (c) a git stub fails ls-tree under OSTYPE=msys (bash keeps an inherited OSTYPE, so the msys-only branch runs on Linux): exit 1, one CREATE_FAILED line, exactly 1 report_blocked naming it, no CLI, no W.\nRED against the HEAD wrapper: \"WORKTREE REUSE FAILED (emptied-cached): reuse refilled the emptied index\". In separate variants, emptied-deleted gave the same failure and budget-probe gave \"exit 0, expected 1\". GREEN with the fix: `[worktree reuse] ok`. Held-out postflight-worktree.cjs (sh, Linux bash): 12 ok, 0 failed. QA probe empty-staged-index: ok, 4 D entries preserved. The inserted section is byte-identical to the scratch copy that was run. bash -n OK.",
+      "startedAt": "2026-10-30T20:52:19.961Z",
+      "completedAt": "2026-10-30T21:00:51.324Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ps1 twin in scripts/moe-agent.ps1, covering DoD 1-4 on the ps1 engine. It matches step 3's contract, guard order, codes and detail sentences, and the `[worktree] <verb> <W> on <branch>` line, character for character.\n\nFunctions:\n- Add Test-MoeTaskBranchLanded([string]$Top, [string]$Ref, [string]$TaskId), Stop-MoeWorktreeSeat([string]$Code, [string]$Detail) and Initialize-MoeWorktree after Get-MoeGitTop and Invoke-MoeGit.\n\nGit calls:\n- Make every git call through Invoke-MoeGit, with -MergeStderr where the detail needs git's message. Never run a bare `& git` while $ErrorActionPreference is Stop, because PS 5.1 turns native stderr into errors.\n- The version probe is a plain git invocation resolved through PATH, so the suite's git stub answers it.\n\nInputs:\n- Mode: $claim.workspace when $claim.PSObject.Properties['workspace'] holds an object (a fresh claim), else $preflightContext.workspace. $null or a non-object counts as absent.\n- Commits: $preflightContext.task.commits.\n- Top and Rel come from Get-MoeGitTop, whose Top uses git's D:/ spelling. W = \"$($git.Top)/.worktrees/$TaskId\".\n\nComparisons:\n- Path identity: Get-MoeComparableProjectPath on both sides, then [string]::Equals($a, $b, [StringComparison]::Ordinal) (Serena gotcha-powershell-path-comparison-culture).\n- Use -ceq and -cmatch for refs and codes.\n- Read the porcelain with `worktree list --porcelain -z` and split on \"`0\".\n\nGuards:\n- Apply the path budget whenever running on Windows: $PSVersionTable.PSVersion.Major -le 5, or $IsWindows.\n- The .moe check is `$null -ne (Get-Item -LiteralPath (Join-Path $w '.moe') -Force -ErrorAction SilentlyContinue)`. It also sees a dangling link.\n\nStop-MoeWorktreeSeat:\n- Write-Host \"[ERROR] ${Code}: $Detail\" -ForegroundColor Red.\n- Call Invoke-MoeRpc -Tool 'report_blocked' -Args @{ taskId = $preflightTaskId; workerId = $WorkerId; reason = \"${Code}: $Detail\" } inside try/catch. On failure, print the same [WARN] sentence as sh.\n- Then Stop-HeartbeatSidecar and `exit 1`. The hot-reload supervisor exits with a pass's exit code, and the pass's finally deregisters.\n\nWiring:\n- Reset $script:MoeWtMode = 'shared' and $script:MoeWtPath, $script:MoeWtBranch and $script:MoeWtTarget to '' beside `$preflightTaskId = \"\"`.\n- Directly above `# -------- Pre-flight baseline (land-on-every-exit) --------`, outside the autoCommit branch, add `if ($AutoClaim -and $preflightOk -and $preflightTaskId -and $Role -eq 'worker') { Initialize-MoeWorktree }`.\n\nError handling:\n- Check the Rc of every Invoke-MoeGit result.\n- A thrown error inside Initialize-MoeWorktree is caught and turned into MOE_WORKTREE_CREATE_FAILED. It must never become a crash that launches the CLI or leaves the seat looping. A catch block never sees `exit`, so Stop-MoeWorktreeSeat still ends the seat.\n- The removal rule matches step 3e exactly: only a W this session added whose branch has 0 commits beyond the target, and never a branch.\n\nSaving:\n- Keep the UTF-8 BOM.\n- Parse with [System.Management.Automation.Language.Parser]::ParseFile under Windows PowerShell 5.1, the fleet host, before testing.\n- An in-place save is fine for ps1, because PowerShell parses the whole file at start.\n\nTest loop from WSL. Use MOE_WORKTREE_ONLY to narrow the run, and repeat until every ps1 case prints ok:\n```\nnode.exe scripts/tests/postflight-worktree.cjs ps1 scripts/moe-agent.ps1 scripts/tests/postflight-fake-proxy.js \"$(wslpath -w \"$(mktemp -d /mnt/d/moe-scratch/wt04-ps.XXXXXX)\")\" powershell\n```\nThe path-long case runs here because the host is win32.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Reopen-1 ps1 twin fixes (qa-b29f7b3d items 2 and 3), scripts/moe-agent.ps1 +9/-5 vs HEAD, BOM kept:\n(1) Install-MoeTaskWorktree reuse uses the same signal as sh. `rev-parse --path-format=absolute --git-path index` via Invoke-MoeGit; Rc != 0 or empty output refuses CREATE_FAILED \"git rev-parse failed in $W\"; `$finish = -not (Test-Path -LiteralPath $index)`. This replaces `$finish = -not (@($r.Out) -join '')`.\n(2) Initialize-MoeWorktree path budget: `if ($ls.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' \"git ls-tree failed on $target; the Windows path budget cannot be checked\" }` runs before any W work. The sentence matches sh character for character.\nRegressions: a new `[worktree reuse]` block at the end of scripts/tests/postflight.ps1 (+90/-0, existing cases byte-identical). It uses Write-TaskRecord, Invoke-WrapperProcess, $createFileCmd, $fakeProxy and $homeDir, and its cases (b), (a1)/(a2) and (c) mirror the sh section. (c) puts a git.ps1 stub that fails `ls-tree` first on PATH.\nRED against the HEAD ps1 on PS 5.1: (a1) \"reuse refilled the emptied index\", (a2) the same, (c) \"exit 0, expected 1\".\nGREEN with the fix on PS 5.1: the full block and both variants print `[worktree reuse] ok`.\npwsh 7.6.9: the (c)-only variant is RED at HEAD (\"no CREATE_FAILED line\") and GREEN with the fix. Cases (a) and (b) launch a CLI, and under pwsh the existing agent Git guard refuses that launch (MOE_AGENT_GIT_GUARD_FAILED at moe-agent.ps1:6170, at HEAD too). That is the existing bug task-44b817f973374dffb578308278050497 (BACKLOG), so no new bug was filed.\nHeld-out postflight-worktree.cjs on PS 5.1: 13 ok, 0 failed, including path-long. QA probes extra.cjs and deleted.cjs (ls-tree-fail, empty-staged-index): ok on PS 5.1 and on native Git Bash (sh, the real msys budget branch).\nThe inserted block is byte-identical to the tested scratch copy. ParseFile is OK on PS 5.1 and pwsh 7. The DoD 5 token diff is empty, and parity-check PASSes.",
+      "startedAt": "2026-10-30T21:00:55.207Z",
+      "completedAt": "2026-10-30T21:16:07.409Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification. Run this once, fresh, from the repo root in WSL. Its output tail is the complete_task evidence. It covers DoD 5 and 6, and DoD 1-4 through the suite inside both harnesses.\n\n```\nS=$(mktemp -d /mnt/d/moe-scratch/v-c20464ff.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && bash scripts/tests/parity-check.sh && node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell\n```\n\nWhat it covers:\n- A HEAD snapshot of scripts/ on /mnt/d, with this task's six files copied over and cmp-checked, so peers' unlanded bytes can't leak in. It also holds WT-04T's suite and fake proxy, as landed.\n- DoD 5's token diff, which must be empty.\n- parity-check.\n- The two node tests that use the renamed env names.\n- postflight.sh through postflight-safe.mjs, with MOE_* and CLAUDE* scrubbed from the env. The seat's own MOE_WORKER_ID and MOE_SESSION_ID must not reach the wrappers under test.\n- postflight.ps1 through Windows node, so postflight-safe runs it on Windows PowerShell 5.1.\n\nOn a native Windows seat, run the same chain from Git Bash with `node` in place of `node.exe`.\n\nEach of the two harness runs takes tens of minutes. A one-shot session dies with its CLI, so run them in the foreground, or poll a background run until it finishes.\n\nWhen something fails:\n- Fix it inside steps 1-4's files only, and never weaken an assertion.\n- A failure that also reproduces on a clean HEAD snapshot is pre-existing: report it with that evidence.\n- In the summary, name every skipped or not-applicable case. path-long is Windows-only.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification only; this step changed no files. The four task files were reported in steps 3 and 4.\n\nI ran the step-5 chain verbatim from the repo root in WSL, fresh, from 21:16:32Z to 21:47:30Z. It exited 0.\n- Snapshot /mnt/d/moe-scratch/v-c20464ff.JN4OUf is `git archive` of HEAD 434924c5's scripts/ plus this task's six files, cmp-checked. All six still cmp equal after the run.\n- DoD 5 token diff: printed nothing.\n- PASS parity-check.sh.\n- node --test: 44 tests, 44 pass, 0 fail.\n- bash engine: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\n- powershell engine (PS 5.1 via node.exe): {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\n\nHeld-out files are byte-identical. `git diff --exit-code HEAD -- scripts/tests/postflight-worktree.cjs scripts/tests/postflight-fake-proxy.js` gave rc 0, and `git status --porcelain` lists neither file.\n\nExtra evidence: the held-out suite under native Git Bash on the sh wrapper ran 13 ok, 0 failed in 318 s, path-long included.\n\nDrift: HEAD moved 434924c5 → 81086f8a during the run. In scripts/ that changed only local-runner files and the new worktree-landing.{sh,ps1} (WT-08T). None of the six verified files changed.\n\nNot mine, left alone: an orphaned WSL interop stub from the previous worker's verification run (pid 411049, cwd v-c20464ff.N2mQ5V, started about 20:07Z). Its Windows process is already gone.",
+      "startedAt": "2026-10-30T21:16:19.865Z",
+      "completedAt": "2026-10-30T21:48:15.567Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's diff only. Load the adversarial-self-review skill, then check:\n1. Rail 4. With no workspace, a worker's pre-flight differs only by one rev-parse of refs/heads/moe/task/<id>. Architect, QA and governor seats never reach provision_worktree or Initialize-MoeWorktree.\n2. Fail closed.\n- No refusal path reaches the taskless-launch decision or a CLI launch, and each calls report_blocked exactly once.\n- worktree_stop never runs inside $(...), a pipeline or a subshell.\n- The ps1 catch can never swallow the exit.\n3. Data safety.\n- Nothing deletes a directory this session did not add, a W whose branch has commits beyond the target, any branch, or W/.moe.\n- Reuse never runs read-tree on a non-empty index.\n4. Rail 3.\n- No .moe path exists in W after create, re-add or a half-made finish.\n- The control checkout's HEAD, index and files are untouched, and `git -C <control> config core.sparseCheckout` stays unset: the sparse config lives in W's worktree config only.\n5. Concurrency: what happens if two wrappers provision the same task at once? Git's worktree add and its lock answer it, and the loser gets CREATE_FAILED. Confirm the loser can never remove the winner's W, because the removal runs only after this session's own add.\n6. Cross-OS.\n- D:\\ vs /mnt/d spellings, with repair only on a raw mismatch.\n- The msys-only path budget.\n- PS 5.1 parsing and the BOM.\n- set -e safety of every new sh line.\n- The test fixtures' paths with spaces.\n7. Parity. The seven codes, the detail sentences and the [worktree] line are identical in both twins. The DoD 5 diff is empty, and comments count toward it.\n8. Size. Report `git diff --numstat` per file and net lines against the 400-net review cap; about 240 is expected.\nIf this review changes any byte, re-run step 5's command and submit that output to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I reviewed this round's diff (`git diff HEAD --` the 4 task files) with adversarial-self-review. No byte changed, so step 5's run stays the evidence.\n\n1. Rail 4. Both wrapper hunks sit inside worktree-only code: the budget probe in provision_worktree / Initialize-MoeWorktree, and the reuse branch. Shared mode and non-worker seats never reach them.\n\n2. Fail closed.\n- sh: `longest=$(set -o pipefail; git ls-tree | python) && [[ $longest =~ ^[0-9]+$ ]] || worktree_stop` and `out=$(git rev-parse …) && [ -n \"$out\" ] || worktree_stop`. Both stops run in the main shell, never inside $(...), and both are set -e safe.\n- ps1: Stop-MoeWorktreeSeat exits, and the surrounding catch cannot swallow an exit.\n- (c) proves exactly one report_blocked, no CLI, no W and exit 1 on Linux bash and PS 5.1. The pwsh 7 (c)-only variant is RED at HEAD and GREEN with the fix.\n\n3. Data safety.\n- read-tree now runs only when W's index file is missing, so it never runs on any existing index, empty or not.\n- The finish path re-applies the sparse patterns before read-tree.\n- `read-tree -mu` refuses to overwrite untracked files, so a false \"finish\" refuses and loses nothing.\n- Git itself uses this signal: sparse-checkout's update_working_directory skips an `is_index_unborn` index (no entries and no file).\n\n4. Rail 3: unchanged. Cases (a1), (a2) and (b) assert there is no W/.moe.\n\n5. Concurrency: unchanged by this round.\n\n6. Cross-OS.\n- Measured: Git Bash's `$(...)` strips the CRLF from Windows-native python (C:\\Python314 prints 42\\r\\n, and the numeric check passes). Git Bash reports OSTYPE=cygwin, which `msys*|cygwin*` covers.\n- git.exe returns C:/ paths, which work with `[ -e ]` under msys and with Test-Path.\n- `--path-format` needs git 2.31 or later; the 2.38 guard runs first.\n- postflight.ps1 keeps its BOM, and PS 5.1 parses it (harness exit 0).\n\n7. Parity. Same code, MOE_WORKTREE_CREATE_FAILED, and the same detail sentences in both twins. The budget comments differ only because the sh twin also has a python step. The DoD 5 diff is empty.\n\n8. Size (numstat): moe-agent.sh 8/5, moe-agent.ps1 9/5, postflight.sh 77/0, postflight.ps1 90/0. This round is +184/-10, or 174 net. Task-wide that makes 362 + 174 = 536 net, within the 560 waiver (TASK rail prop-ae80ddc8).\n\nTheoretical, noted rather than fixed:\n- A corrupt but present index file used to be refused by the old ls-files probe. It is now reused as is. The wrapper writes nothing to it and the agent's git reports the corruption, so no data is lost.\n- Cygwin-proper bash with a Windows-native python would now refuse with CREATE_FAILED instead of failing open. The wrapper's other $(python) parses already need LF output there.\n\nOut of scope:\n- pwsh 7 fails the agent git guard at HEAD too (task-44b817f9). postflight-safe uses PS 5.1.\n- The resume-RPC fail-open gap belongs to task-31187ec1.",
+      "startedAt": "2026-10-30T21:48:21.494Z",
+      "completedAt": "2026-10-30T21:52:09.242Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "I reviewed completion 5657d186, which is on moe/work-2026-10-24 and pushed. The six code files are byte-identical at HEAD 920f9cca. The diff is +382/-20 = 362 net. These pass, run from a clean `git archive 5657d186 scripts` snapshot at /mnt/d/moe-scratch/qa-c2046-b29.RpLQUd: the DoD 5 token diff is empty, parity-check PASS, node --test 44/44, and the held-out postflight-worktree.cjs suite 12/12 on Linux bash (path-long n/a).\n\nTwo contract defects reproduce in BOTH twins. qa-ba3f4f35 first reported them in msg-df930e45, and its session died before it could reject. I re-ran them myself with that session's probes (the held-out suite plus two cases) at /mnt/d/moe-scratch/qa-wt04.DTUHHh/{extra,deleted}.cjs.\n\n(1) Reuse destroys an intentionally empty index, which fails DoD 2's \"its dirt intact\".\n- Setup: create W, run `git -C W rm --sparse -r .` (or `rm --cached --sparse -r .`), then resume.\n- Linux bash and PS 5.1 alike: `[worktree] reused`, exit 0, the CLI ran. The staged deletions went from 4 D entries to empty, and the deleted src/a.txt and .gitignore came back in W.\n- Cause: an empty `ls-files` is taken to mean a half-made --no-checkout W, so read-tree -mu HEAD runs.\n\n(2) A failed path-budget probe fails open. This breaks \"Any git failure is MOE_WORKTREE_CREATE_FAILED\" and \"each refusal calls report_blocked once, launches no CLI\".\n- Setup: the existing git stub with WT_GIT_FAIL=ls-tree.\n- PS 5.1 and native Git Bash alike: W is created, the CLI launches, exit 0, and report_blocked is never called.\n- ps1: `if ($ls.Rc -eq 0)` leaves $longest = 0.\n- sh: the $(...) status is python's, not git's.\n\nNot re-run: the full postflight-safe bash and powershell chain, tens of minutes per engine. The verdict rests on the reproduced defects. Next round, re-run the whole chain.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-e27456ad67b64bc292080ea3a8b92f26",
+    "task-5998f871e03d4ed5ab21f214073d85b2",
+    "task-dd5daa4b789645d29b192176390884be",
+    "task-f31d415d5185424ca5f7e375a8b15134",
+    "task-724e31fadd3e4f5cb137abe9e4147f11"
+  ],
+  "priority": "HIGH",
+  "order": 10,
+  "comments": [
+    {
+      "id": "comment-0b8270fc1a4d4707bce5635102a272f3",
+      "author": "worker-0062feec",
+      "content": "Contract correction from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win. Section numbers are unchanged. Plan against revised §1.4 and §1.6:\n1. The `.moe/` guard now FAILS CLOSED. This replaces \"Warn MOE_WORKTREE_MOE_PRESENT if W/.moe exists\", which rail 3 forbids. If `W/.moe` exists after create or reuse (a link counts):\n   - print MOE_WORKTREE_MOE_PRESENT;\n   - launch no CLI;\n   - delete nothing and commit nothing, including no §3.3 recovery checkpoint;\n   - call report_blocked with the code.\n   Required negative case in postflight.{sh,ps1}: pre-create `W/.moe/x`, then assert that no CLI launched, `W/.moe/x` is still there, moe/task/<id> has no new commit, and report_blocked carried the code.\n2. Add `--no-track` to `git worktree add … -b moe/task/<taskId>`.\n3. Cutting W from the local target is still right for this slice. WT-09 switches the remote-mode base to refs/remotes/origin/<target> after its fetch (§1.2).\nEverything else in the row is unchanged.",
+      "timestamp": "2026-10-30T13:01:46.179Z"
+    },
+    {
+      "id": "comment-c97655995abd4ff6bab7fb23ee937438",
+      "author": "worker-e60b90bd",
+      "content": "From WT-04T's worker (task-dd5daa4b), for whoever implements WT-04. The suite is scripts/tests/postflight-worktree.cjs and the fake-proxy knobs are as the contract says.\n\nWhat I measured while proving the suite passable, using a scratch bash reference of the contract (not delivered):\n1. Git Bash/MSYS rewrites the `'/*'` argument of `git -C \"$W\" sparse-checkout set --no-cone '/*' '!/.moe/'` as a POSIX path, so W keeps .moe. The suite fails that as MOE_WORKTREE_MOE_PRESENT and \"W/.moe exists\" in lifecycle, resume, half-made and others. Fix in the sh twin: prefix that one call with `MSYS2_ARG_CONV_EXCL='*'`, or feed the patterns through `sparse-checkout set --no-cone --stdin`. Linux bash and PowerShell 5.1/7 are unaffected: the `/* | !/.moe/` patterns survive.\n2. half-made expects the verb `reused`, as your step-3 plan says. The other verbs: create → `created`, reuse → `reused`, re-add → `re-added`.\n3. The `[worktree] <verb> <W> on moe/task/<id>` path is compared after realpath, forward slashes and (win32) case-folding, so either D:/ or D:\\ spelling passes.\n4. controlSame checks the control checkout's `ls-files -s -t` as well as status. A sparse-checkout run against the control checkout (S tags; it deletes the tracked .moe) fails four cases.\n5. The suite strips ANSI from the log, so `${RED}[ERROR]${NC} CODE: detail` matches.\n6. For sh engines with the git stub, the suite also sets BASH_ENV, because Git Bash's bin/bash.exe puts /mingw64/bin ahead of PATH. Don't reset PATH in the wrapper's preamble, or git-old and sparse-fail lose the stub.\n7. The fixture's .gitignore also lists .mcp.json and logs/: every wrapper run writes both into the project.\nGreen proof of the reference: Linux bash 12/12 ok (path-long n/a), win32 Git Bash 13/13 ok.",
+      "timestamp": "2026-10-30T16:34:28.940Z"
+    },
+    {
+      "id": "comment-553affb577554104b1670d1306a91bec",
+      "author": "worker-0062feec",
+      "content": "@qa-ba3f4f35 worker-0062feec's answer to msg-241f1812 is chat msg-fc55c304. The chat reply routed to no one, so this comment points you to it. In short:\n1. No architect has approved a deferral. \"absent means shared\" comes from three places: the row description, executionContract.intendedBehavior, and approved plan step 3a (\"Unparseable JSON counts as absent\"). task-31187ec1 is a bug I filed as WORKER that asks for the decision. It authorizes nothing.\n2. The window is wider than \"branch never added\". A moe/task/<id> that holds nothing HEAD lacks passes task_branch_landed (sh :2886, ps1 :2671), so that resume also runs shared. It is the same contract gap, so I added it to 31187ec1, not here.\n3. For your reject: plan step 2 makes postflight-worktree.cjs and postflight-fake-proxy.js held-out. Please name where the two regressions for msg-df930e45 should go.",
+      "timestamp": "2026-10-30T20:03:26.838Z"
+    },
+    {
+      "id": "comment-e609584ff9a04a6a864745977a22924d",
+      "author": "governor-693b7073",
+      "content": "Governor, 20:37Z, for whoever takes WT-04's reopen-1 round. The previous implementer, worker-0062feec, was closed at 20:23Z. Agreed inputs, so you don't need to re-derive them:\n1) PLACEMENT (QA's msg-f1dfd193). Put new regression sections only in scripts/tests/postflight.sh and scripts/tests/postflight.ps1, using their existing fixture helpers. Every pre-existing case stays byte-identical, and so do the held-out postflight-worktree.cjs and postflight-fake-proxy.js; cite `git diff --exit-code` for both.\n2) CASES (worker-0062feec's msg-dfc1ff0b, accepted by QA).\n- (a) An intentionally empty index, both via `git rm -r --cached .` and the physical `git rm --sparse -r .`: resume reuses W as-is, nothing is restored, and the staged deletions stay.\n- (b) A genuine half-made `--no-checkout` W still gets its checkout completed. Keep that as a separate case.\n- (c) Failed path-budget probe (WT_GIT_FAIL=ls-tree): no W, exactly one report_blocked, no CLI, exit 1. Both twins: ps1 `if ($ls.Rc -eq 0)` leaves $longest = 0, and in sh the $(...) status is python's, not git's.\n3) FIX DIRECTION. Stop treating \"index has no entries\" as the --no-checkout signal. Pick a signal a deliberate `git rm` can't produce, such as a missing per-worktree index file.\n4) SIZE. TASK rail prop-ae80ddc8 is approved: up to 560 net LOC task-wide, which means about 198 lines of headroom over 362.\n5) NOT YOURS. The resume-RPC fail-open gap belongs to task-31187ec1; QA agreed (msg-daa7d2c7).\nNext round, QA re-runs the full postflight-safe chain on both engines.",
+      "timestamp": "2026-10-30T20:35:20.042Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:49:26.469Z",
+  "updatedAt": "2026-10-30T22:39:25.943Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T12:55:59.143Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:01:05.218Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 12,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T22:38:49.028Z",
+    "wallClockMs": 34663810
+  },
+  "contextFetchedBy": [
+    "qa-b29f7b3d",
+    "worker-632cd3f0",
+    "qa-4b0c6c8e"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [
+    {
+      "item": "postflight case: a second session of the same task reuses W (no new worktree add, its dirt intact); with the branch present but W missing, W is re-added on that branch without -b.",
+      "rejectedAt": "2026-10-30T20:34:33.023Z",
+      "rejectedBy": "qa-b29f7b3d"
+    },
+    {
+      "item": "postflight cases: each guard (git < 2.38 via a stub, project not top level, control not on moe/control, mode mismatch) prints its code, calls report_blocked and launches no CLI.",
+      "rejectedAt": "2026-10-30T20:34:33.023Z",
+      "rejectedBy": "qa-b29f7b3d"
+    }
+  ],
+  "planSubmittedAt": "2026-10-30T13:34:43.325Z",
+  "executionContract": {
+    "intendedBehavior": "A worker seat reads `workspace` from the fresh claim's top level (WT-01), else from get_context's top level (WT-02); absent means shared mode. In worktree mode it provisions W = <git top>/.worktrees/<taskId> on moe/task/<taskId>. It creates W from the LOCAL refs/heads/<target> with --lock --reason 'moe <taskId>' --no-checkout --no-track -b, re-adds it on an existing branch without -b, or reuses a registered W as is (repair on a cross-OS spelling, and an empty-index W is finished). It then runs sparse '/*' '!/.moe/' and read-tree -mu HEAD, prints `[worktree] <created|reused|re-added> <W> on moe/task/<taskId>`, and launches the CLI as today. Before any W work it refuses, in this order: git < 2.38 (MOE_WORKTREE_UNSUPPORTED_GIT), project not the git top level (MOE_WORKTREE_PROJECT_NOT_TOP), control HEAD not refs/heads/moe/control (MOE_CONTROL_NOT_FOLLOWING), blank or missing target (MOE_WORKTREE_CREATE_FAILED), task commits on another ref that the target lacks (MOE_WORKTREE_MODE_MISMATCH), the Windows path budget (MOE_WORKTREE_PATH_TOO_LONG). Any git failure is MOE_WORKTREE_CREATE_FAILED, and W/.moe present is MOE_WORKTREE_MOE_PRESENT. Every refusal prints `[ERROR] <CODE>: <detail>`, calls report_blocked once, launches no CLI and exits 1. In shared mode a worker refuses with MOE_WORKTREE_MODE_MISMATCH only when refs/heads/moe/task/<taskId> exists and is not fully landed in HEAD; otherwise nothing changes.",
+    "acceptanceCriteria": [
+      "WT-04T's suite scripts/tests/postflight-worktree.cjs (task-dd5daa4b789645d29b192176390884be) passes unchanged under sh and ps1, run from both postflight harnesses.",
+      "Every pre-existing postflight case passes with its bytes unchanged.",
+      "The sorted MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ token sets of moe-agent.sh and moe-agent.ps1 are identical (empty diff)."
+    ],
+    "invariants": [
+      "Shared mode is unchanged except for the one MODE_MISMATCH guard on an unlanded task branch (epic rail 4).",
+      "No .moe path ever materializes in W, and provisioning never changes the control checkout's HEAD, index or files (rail 3).",
+      "The wrapper never deletes a directory it did not add in this session, never deletes a branch, and never removes a W whose branch has commits beyond the target.",
+      "Only worker seats provision; architect, QA and governor seats ignore workspace.",
+      "Once the claim says worktree there is no fallback to the shared checkout: provision or refuse."
+    ],
+    "compatibility": [
+      "A daemon whose claim and get_context carry no workspace is treated as shared mode; the wrapper never guesses worktree.",
+      "WT-01 claim workspace {mode, path, branch, target} on fresh claims only, with alreadyAssigned replies unchanged; WT-02 get_context top-level workspace.",
+      "WT-14 reuses task_branch_landed REF TASKID / Test-MoeTaskBranchLanded with REF = refs/heads/<target>; WT-05 reads MOE_WT_PATH/MOE_WT_BRANCH/MOE_WT_TARGET ($script:MoeWtPath and siblings)."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh: task_branch_landed, worktree_stop, provision_worktree, MOE_WT_MODE/MOE_WT_PATH/MOE_WT_BRANCH/MOE_WT_TARGET, the pre-flight call site, and the MOE_LAND_* to MOE_PY_* rename in resolve_attribution's env bridge",
+      "scripts/moe-agent.ps1: Test-MoeTaskBranchLanded, Stop-MoeWorktreeSeat, Initialize-MoeWorktree, $script:MoeWt* and the pre-flight call site",
+      "scripts/tests/postflight.{sh,ps1}: one suite invocation each",
+      "scripts/tests/importee-guard-bash.test.mjs and usage-attribution.test.mjs: the env-name rename only"
+    ],
+    "reuse": [
+      "git_top / Get-MoeGitTop for the top level and rel; the comparable() rule from probe_daemon_health / Get-MoeComparableProjectPath; moe_rpc / Invoke-MoeRpc for report_blocked; the MOE_CLI_ARGV_REJECTED seat-stop pattern; the owner-guard suite pattern (via WT-04T) for one case list run by both harnesses."
+    ],
+    "sourceAssumptions": [
+      "moe-agent.sh: set -e only; git_top sets MOE_TOP/MOE_REL/MOE_GITDIR; moe_rpc prints the tool's text payload; probe_daemon_health holds the comparable() path rule; the per-iteration reset holds MOE_TOP=\"\"; the MOE_CLI_ARGV_REJECTED stop is stop_heartbeat_sidecar then exit 1, and the EXIT trap (cleanup_temp) deregisters.",
+      "moe-agent.ps1: Get-MoeGitTop returns Top/GitDir/Rel; Invoke-MoeGit returns Out/Rc with EAP Continue; Get-MoeComparableProjectPath is the twin path rule; the hot-reload supervisor exits with a pass's exit N; $claim and $preflightContext are ConvertFrom-Json objects.",
+      "git 2.43, probed 2026-10-30: worktree add --no-checkout leaves W's index empty; sparse-checkout set alone populates nothing; read-tree -mu HEAD then materializes every path but .moe; the control's core.sparseCheckout stays unset; merge-tree --write-tree HEAD <branch at HEAD> prints HEAD's tree."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /mnt/d/moe-scratch/v-c20464ff.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && bash scripts/tests/parity-check.sh && node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. One row with the tests inline plus a prospective size waiver. Rejected: it comes to about 500 net lines, over the 400-net QA cap, and held-out tests are stronger. The tests moved to WT-04T (task-dd5daa4b789645d29b192176390884be), which this row now depends on (as does f31d415d, which edits the same files). That leaves this row at about 240 net.\n2. A node helper shared by both wrappers. Rejected: the design names twin functions (task_branch_landed / Test-MoeTaskBranchLanded, reused by WT-14), and DoD 5 wants the codes in both wrappers.\n3. Taking W from workspace.path. Rejected: a Windows daemon spells it D:\\..., while the seat derives W from its own git top.\n4. A shared-mode 'fully landed' check against the target. Impossible, because WT-01 sends target null in shared mode. HEAD is used instead.\n5. Always removing a half-made W. Rejected: the description keeps a W whose branch has commits beyond the target. Instead, the reuse path finishes an empty-index W, which also heals a crash between add and read-tree.\n6. Warning on W/.moe, as the description words it. Rejected: design §1.6, revised after QA reject 1, and rail 3 make it a refusal.",
+    "codebaseInsights": "Call sites:\n- sh: directly above the '# -------- Pre-flight landing' block, the last stop before the taskless-launch decision and the CLI launch.\n- ps1: directly above '# -------- Pre-flight baseline'.\n\nSeat-stop precedent is MOE_CLI_ARGV_REJECTED in both wrappers: stop the sidecar, exit 1, and let the EXIT trap or the pass's finally deregister.\n\nShell and environment:\n- moe-agent.sh runs set -e (no -u, no pipefail).\n- WT-01 sends workspace only on fresh claims (alreadyAssigned replies are unchanged); WT-02 adds it to get_context's top level.\n\nTest pattern: postflight-owner-guard.cjs is the model for one case list run by both harnesses.\n\nParity: the sh-only MOE_LAND_* env bridge names would fail DoD 5 on every wrapper slice (WT-04 through WT-14) and WT-19's parity families. Step 1 removes them once.",
+    "risks": "Contested paths:\n- The CQ wrapper lane also plans moe-agent.{sh,ps1} and postflight.{sh,ps1}: 01f37ac6, 9d277494, 7db14e2d, 16bbf8ff, 2720c13b, 7f82e200, c4e076cd, 6f5cf10f, aa85ff13, 4fdc7590, 724e31fa.\n- At pre-flight, check that no live (assigned) peer holds these files. If one does, call report_blocked naming it rather than editing the file.\n- The scratch-and-mv save of moe-agent.sh leaves no TOOL witness, so landing it relies on the idle-clean exception.\n\nCorrectness traps:\n- DoD 5's grep reads comments too.\n- The seat's own MOE_* env leaks into the wrappers under test unless scrubbed (step 5 does it).\n- If ps1's git invocation doesn't resolve the suite's git stub, the git-old case fails. Report that against WT-04T; never edit the suite.\n- A worktree written by one OS shows the other's spelling in porcelain. Repair only on a raw mismatch.\n- Windows PowerShell 5.1 needs the BOM.\n\nTiming: the two full harness runs take tens of minutes. Run them in the foreground or poll a background run until it finishes.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-owner-guard.cjs",
+      "scripts/tests/postflight-fake-proxy.js",
+      "docs/plans/2026-10-30-per-task-worktrees.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:34:43.349Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "6e95f624922f4158c46bc1b4f5a42973ed69152e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-4ae016fb@2026-10-30T13:01:05Z",
+      "paths": [
+        ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json"
+      ],
+      "recordedBy": "architect-4ae016fb",
+      "recordedAt": "2026-10-30T14:22:33.077Z",
+      "treeId": "29ba966e056cc3a132065a2b8305e0dce4be89a8",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "5657d18600485971d47a5f0be7d45074ba25205d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T18:47:54Z",
+      "paths": [
+        ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+        ".moe/tasks/task-a10a7f7840dc4fda9310e61789545877.json",
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/importee-guard-bash.test.mjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/usage-attribution.test.mjs"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T19:52:34.004Z",
+      "treeId": "618b0f9a75c8ee525a166736aca154b9d4c62ab3",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "45aa8fd024f91ba65613795165f7dbf1eb3e621e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-30T20:24:25Z",
+      "paths": [
+        ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-30T20:24:40.969Z",
+      "treeId": "50b0596d1977b52c67bc277b3524a54865f53557",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "8a1a1419dfb7e0e031a4fc1064aceeb8d66c5d7f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-30T20:24:25Z",
+      "paths": [
+        ".moe/tasks/task-3def080415d3495a8557b514d6a0ab2a.json",
+        ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
+        ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+        ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-30T20:35:23.632Z",
+      "treeId": "d6385b8810a1016221b18eb115e77868cb648b17",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "b3b536255740d16155e45e54c83e73410ec76b31",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-632cd3f0@2026-10-30T20:42:21Z",
+      "paths": [
+        ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-632cd3f0",
+      "recordedAt": "2026-10-30T21:53:33.486Z",
+      "treeId": "c5b0d9161c1a8f9f866b48fb6ec91decf96935e5",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "6562ae4195ffc4a20fe37e1caf1cab2f73ec89e5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-4b0c6c8e@2026-10-30T22:03:19Z",
+      "paths": [
+        ".moe/tasks/task-9a1da6f665fd42c68df1b657b247e414.json",
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json"
+      ],
+      "recordedBy": "qa-4b0c6c8e",
+      "recordedAt": "2026-10-30T22:39:25.943Z",
+      "treeId": "bc9bcbf3afc9301d2ebb4f75d4b5bc9a256445f6",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/importee-guard-bash.test.mjs",
+    "scripts/tests/usage-attribution.test.mjs",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1",
+    ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+    ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+    ".moe/tasks/task-9a1da6f665fd42c68df1b657b247e414.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-4b0c6c8e@2026-10-30T22:03:19Z",
+    "at": "2026-10-30T22:39:25.943Z"
+  },
+  "workStartedAt": "2026-10-30T18:49:58.731Z",
+  "reviewStartedAt": "2026-10-30T21:53:14.281Z",
+  "verification": {
+    "command": "S=$(mktemp -d /mnt/d/moe-scratch/v-c20464ff.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && bash scripts/tests/parity-check.sh && node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell",
+    "exitCode": 0,
+    "outputTail": "Verification snapshot: /mnt/d/moe-scratch/v-c20464ff.JN4OUf\nPASS parity-check.sh\n...\n✔ python3: nested usage receipts cannot land through solo measured attribution (103.498486ms)\n✔ python3: nested usage receipts cannot land through asserted/tool attribution (102.416109ms)\nℹ tests 44\nℹ suites 0\nℹ pass 44\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 3128.420338\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nEXIT=0\n(Run fresh 21:16:32Z to 21:47:30Z from /mnt/d/projexts/moes; the snapshot is HEAD 434924c5 plus the six cmp-checked files. The DoD 5 diff printed nothing. Held-out postflight-worktree.cjs and postflight-fake-proxy.js: `git diff --exit-code HEAD` rc 0.)",
+    "reportedAt": "2026-10-30T21:53:14.281Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "WT-04 reopen-1 fixes the two defects from QA reject qa-b29f7b3d in both twins, with regressions.\n\nFixes:\n1. Reuse treats only a missing per-worktree index FILE as half-made (`rev-parse --path-format=absolute --git-path index`, then `[ -e ]` / Test-Path). Before, an empty `ls-files` counted. A W whose agent emptied the index (`git rm --cached --sparse -r .` or a physical `git rm --sparse -r .`) is now reused as is: nothing is restored and the staged deletions stay. A real `--no-checkout` W is still finished.\n2. The Windows path-budget probe fails closed. A failed ls-tree (sh: also python or a non-numeric result, via pipefail and a numeric check) prints MOE_WORKTREE_CREATE_FAILED \"git ls-tree failed on <target>; the Windows path budget cannot be checked\", calls report_blocked once, launches no CLI and makes no W.\n\nRegressions: new `[worktree reuse]` sections at the end of postflight.sh (+77) and postflight.ps1 (+90), using their fixture helpers.\n- (b) half-made W is finished.\n- (a1) index emptied with --cached; (a2) files removed with a physical rm.\n- (c) a git stub fails ls-tree (sh with OSTYPE=msys; ps1 with git.ps1 first on PATH).\nAll are RED against the HEAD wrappers and GREEN with the fix, on Linux bash and PS 5.1; the pwsh 7 (c)-only variant too. Existing cases are untouched. postflight-worktree.cjs and postflight-fake-proxy.js are byte-identical (`git diff --exit-code HEAD` rc 0).\n\nEvidence:\n- The step-5 chain exits 0: DoD 5 diff empty, parity PASS, node 44/44, and both engines (bash, powershell) report failureClass NONE.\n- Held-out suite: Linux bash 12/12, PS 5.1 13/13, Git Bash 13/13.\n- QA's ls-tree-fail and empty-staged-index probes pass on PS 5.1 and Git Bash.\n\nSize: this round is 174 net (sh 8/5, ps1 9/5, postflight.sh 77/0, postflight.ps1 90/0). Task-wide that is 536 net, within the 560 waiver (prop-ae80ddc8).\n\nOut of scope:\n- pwsh 7 seats fail the agent git guard, at HEAD too (task-44b817f9).\n- The resume-RPC fail-open gap belongs to task-31187ec1.",
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/importee-guard-bash.test.mjs",
+    "scripts/tests/usage-attribution.test.mjs",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1"
+  ],
+  "reviewCompletedAt": "2026-10-30T22:38:49.028Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "postflight case: a second session of the same task reuses W (no new worktree add, its dirt intact); with the branch present but W missing, W is re-added on that branch without -b.",
+      "postflight cases: each guard (git < 2.38 via a stub, project not top level, control not on moe/control, mode mismatch) prints its code, calls report_blocked and launches no CLI."
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "scripts/moe-agent.sh",
+        "line": 2939,
+        "description": "Reuse reads an empty `ls-files` as a half-made W and runs read-tree -mu HEAD. A W whose agent ran `git rm --sparse -r .` gets its deleted files restored and its staged deletions erased, while the run reports `reused`. On Linux bash, 4 D entries became empty, exit 0. Fix: detect half-made with a signal a deliberate git rm can't produce, measured on git 2.43. The held-out half-made case must still pass, and an emptied index must be reused as is."
+      },
+      {
+        "type": "regression",
+        "file": "scripts/moe-agent.ps1",
+        "line": 2743,
+        "description": "The ps1 twin has the same defect: `$finish = -not (@($r.Out) -join '')` in Install-MoeTaskWorktree. On PS 5.1 via node.exe: exit 0, cliRan true, 0 blocks, staged deletions erased. Use the same signal as the sh fix, so the twins stay in parity."
+      },
+      {
+        "type": "missing_feature",
+        "file": "scripts/moe-agent.ps1",
+        "line": 2694,
+        "description": "The Windows path-budget probe ignores a git failure: with `if ($ls.Rc -eq 0)`, a failed ls-tree leaves $longest = 0 and the guard passes. On PS 5.1 with the git stub WT_GIT_FAIL=ls-tree: exit 0, cliRan true, 0 blocks, W created. A non-zero Rc must refuse with MOE_WORKTREE_CREATE_FAILED before any W work: one report_blocked, no CLI, exit 1."
+      },
+      {
+        "type": "missing_feature",
+        "file": "scripts/moe-agent.sh",
+        "line": 2914,
+        "description": "The sh twin fails open the same way: in `longest=$(git ls-tree ... | python ...) || longest=0`, the status is python's (no pipefail), so a failed ls-tree gives 0. The `|| longest=0` and the non-numeric fallback fail open too. Under native Git Bash with WT_GIT_FAIL=ls-tree: exit 0, CLI ran, 0 blocks. A failed git or python step must refuse with CREATE_FAILED, with worktree_stop outside $(...)."
+      },
+      {
+        "type": "test_failure",
+        "file": "scripts/tests/postflight.sh",
+        "description": "Add regressions as new sections in postflight.sh and postflight.ps1, using their fixture helpers. Keep pre-existing cases, postflight-worktree.cjs and the fake proxy byte-identical. Cases: (a) emptied index, both the --cached and the physical rm: reuse as is, no restored path, diff --cached unchanged; (b) a real half-made W is still finished; (c) a failed ls-tree budget probe: no W, 1 report_blocked with CREATE_FAILED, no CLI, exit 1. ps1 runs (c) on Windows; sh runs it only under msys."
+      },
+      {
+        "type": "other",
+        "description": "Size: 362 net now, which leaves about 38 lines before the 400-net cap. Keep the fix minimal. If it can't fit, get a size waiver from the governor or architect BEFORE you resubmit. A separate suite file needs an approvedScope amendment first. Then re-run the full step-5 verification chain fresh, both postflight-safe engines included, and submit that output."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "I reviewed completion 5657d186, which is on moe/work-2026-10-24 and pushed. The six code files are byte-identical at HEAD 920f9cca. The diff is +382/-20 = 362 net. These pass, run from a clean `git archive 5657d186 scripts` snapshot at /mnt/d/moe-scratch/qa-c2046-b29.RpLQUd: the DoD 5 token diff is empty, parity-check PASS, node --test 44/44, and the held-out postflight-worktree.cjs suite 12/12 on Linux bash (path-long n/a).\n\nTwo contract defects reproduce in BOTH twins. qa-ba3f4f35 first reported them in msg-df930e45, and its session died before it could reject. I re-ran them myself with that session's probes (the held-out suite plus two cases) at /mnt/d/moe-scratch/qa-wt04.DTUHHh/{extra,deleted}.cjs.\n\n(1) Reuse destroys an intentionally empty index, which fails DoD 2's \"its dirt intact\".\n- Setup: create W, run `git -C W rm --sparse -r .` (or `rm --cached --sparse -r .`), then resume.\n- Linux bash and PS 5.1 alike: `[worktree] reused`, exit 0, the CLI ran. The staged deletions went from 4 D entries to empty, and the deleted src/a.txt and .gitignore came back in W.\n- Cause: an empty `ls-files` is taken to mean a half-made --no-checkout W, so read-tree -mu HEAD runs.\n\n(2) A failed path-budget probe fails open. This breaks \"Any git failure is MOE_WORKTREE_CREATE_FAILED\" and \"each refusal calls report_blocked once, launches no CLI\".\n- Setup: the existing git stub with WT_GIT_FAIL=ls-tree.\n- PS 5.1 and native Git Bash alike: W is created, the CLI launches, exit 0, and report_blocked is never called.\n- ps1: `if ($ls.Rc -eq 0)` leaves $longest = 0.\n- sh: the $(...) status is python's, not git's.\n\nNot re-run: the full postflight-safe bash and powershell chain, tens of minutes per engine. The verdict rests on the reproduced defects. Next round, re-run the whole chain.",
+      "rejectedAt": "2026-10-30T20:34:33.023Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "postflight case: a second session of the same task reuses W (no new worktree add, its dirt intact); with the branch present but W missing, W is re-added on that branch without -b.",
+        "postflight cases: each guard (git < 2.38 via a stub, project not top level, control not on moe/control, mode mismatch) prints its code, calls report_blocked and launches no CLI."
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "scripts/moe-agent.sh",
+          "line": 2939,
+          "description": "Reuse reads an empty `ls-files` as a half-made W and runs read-tree -mu HEAD. A W whose agent ran `git rm --sparse -r .` gets its deleted files restored and its staged deletions erased, while the run reports `reused`. On Linux bash, 4 D entries became empty, exit 0. Fix: detect half-made with a signal a deliberate git rm can't produce, measured on git 2.43. The held-out half-made case must still pass, and an emptied index must be reused as is."
+        },
+        {
+          "type": "regression",
+          "file": "scripts/moe-agent.ps1",
+          "line": 2743,
+          "description": "The ps1 twin has the same defect: `$finish = -not (@($r.Out) -join '')` in Install-MoeTaskWorktree. On PS 5.1 via node.exe: exit 0, cliRan true, 0 blocks, staged deletions erased. Use the same signal as the sh fix, so the twins stay in parity."
+        },
+        {
+          "type": "missing_feature",
+          "file": "scripts/moe-agent.ps1",
+          "line": 2694,
+          "description": "The Windows path-budget probe ignores a git failure: with `if ($ls.Rc -eq 0)`, a failed ls-tree leaves $longest = 0 and the guard passes. On PS 5.1 with the git stub WT_GIT_FAIL=ls-tree: exit 0, cliRan true, 0 blocks, W created. A non-zero Rc must refuse with MOE_WORKTREE_CREATE_FAILED before any W work: one report_blocked, no CLI, exit 1."
+        },
+        {
+          "type": "missing_feature",
+          "file": "scripts/moe-agent.sh",
+          "line": 2914,
+          "description": "The sh twin fails open the same way: in `longest=$(git ls-tree ... | python ...) || longest=0`, the status is python's (no pipefail), so a failed ls-tree gives 0. The `|| longest=0` and the non-numeric fallback fail open too. Under native Git Bash with WT_GIT_FAIL=ls-tree: exit 0, CLI ran, 0 blocks. A failed git or python step must refuse with CREATE_FAILED, with worktree_stop outside $(...)."
+        },
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/postflight.sh",
+          "description": "Add regressions as new sections in postflight.sh and postflight.ps1, using their fixture helpers. Keep pre-existing cases, postflight-worktree.cjs and the fake proxy byte-identical. Cases: (a) emptied index, both the --cached and the physical rm: reuse as is, no restored path, diff --cached unchanged; (b) a real half-made W is still finished; (c) a failed ls-tree budget probe: no W, 1 report_blocked with CREATE_FAILED, no CLI, exit 1. ps1 runs (c) on Windows; sh runs it only under msys."
+        },
+        {
+          "type": "other",
+          "description": "Size: 362 net now, which leaves about 38 lines before the 400-net cap. Keep the fix minimal. If it can't fit, get a size waiver from the governor or architect BEFORE you resubmit. A separate suite file needs an approvedScope amendment first. Then re-run the full step-5 verification chain fresh, both postflight-safe engines included, and submit that output."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-30T22:38:49.028Z",
+  "reviewSummary": "Approved WT-04 reopen 1. Reviewed b3b53625 (on moe/work-2026-10-24, pushed); code files byte-identical at HEAD 3a393e4a. Both qa-b29f7b3d defects fixed in both twins:\n1. Reuse finishes W only when its index file is missing.\n2. A failed path-budget probe refuses with CREATE_FAILED.\nSize: round +184/-10; task-wide 536 net, within the 560 waiver (prop-ae80ddc8). Overage is only the fixes plus their regression sections; earlier checkpoints are board-only. Harness changes are pure additions. Held-out cjs and fake proxy identical to e28e4886.\n\nRe-ran task.verification verbatim 22:07-22:38Z (HEAD 3a393e4a, snapshot v-c20464ff.8fymjQ): EXIT 0. DoD 5 diff empty, parity PASS, node 44/44, bash and PS 5.1 engines both exit 0 with failureClass NONE.\n\nIndependent (qa-c20464ff-r2.Wnnxai):\n- Held-out suite, Linux bash: 12 ok, 0 failed (path-long n/a).\n- Prior QA probes extra.cjs and deleted.cjs pass on Git Bash and PS 5.1.\n- Mutation: reverting either hunk turns its new [worktree reuse] case RED on bash and PS 5.1; the unmodified snapshot is GREEN on both.\n\nNot blocking, not caused by this round: if W's index file was deleted, the sparse read-tree in the finish path overwrites edited tracked files and exits 0 (git 2.43 and 2.54). The wrapper prints \"reused\" and the edit is lost; 5657d186 did the same. Step 6's \"read-tree refuses to overwrite\" claim is wrong for sparse worktrees. Filed BACKLOG task-c7ee939a and corrected the Serena gotcha. No exposure before WT-05.\n\nNot run: pwsh 7 (not in DoD; task-44b817f9). Complexity pass: fixes minimal.",
+  "requiredCheckAtDone": null
+}

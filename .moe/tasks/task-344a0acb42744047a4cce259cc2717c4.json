@@ -1,0 +1,275 @@
+{
+  "id": "task-344a0acb42744047a4cce259cc2717c4",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "bug: JetBrains drops latestCheckRun.outcome, so a non-passed exit-0 check displays as passed",
+  "description": "Unowned residual found while re-planning CQ-I06 (architect-8419009e, chan-18116c9a msg-b280b4ba, 2026-10-31 16:36Z). This is V12's client hand-forward.\n\nThe daemon side is DONE. CQ-V12b (task-6339299a) projects `latestCheckRun.outcome` in deliveryProjection.\n\nThe JetBrains client never reads that field. It reads only `command`, `exitCode` and `source`:\n- `moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt`: DeliveryCheckRun has no outcome;\n- `moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt` (around :440): parses only those three fields;\n- `moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt` (around :22-29): renders from exitCode alone.\n\nSo a check that exited 0 but whose recorded outcome is timeout, infra-failure, skipped, inconclusive or code-failure renders in task detail exactly like a pass. That is misleading delivery evidence.\n\nScope: JetBrains only (it is the primary IDE). VS Code renders no latestCheckRun at all; whether it should gain a delivery-check view is a parity decision for the human, out of scope here.\n\nHistory: task-fee5e136 (2026-09, LOW, archived with its old epic on 10-24) covered the earlier, pre-`source` version of this display bug. This row is the outcome half, which landed later.\n\nOff-lane: no open row declares any of the files below, so this row needs no wrapper-lane slot.\n\nExpected files:\n- moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt\n- moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt\n- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt\n- moe-jetbrains/src/main/resources/messages/MoeBundle.properties\n- moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt (plus a MoeJson parse test if one exists)\n\nOwner record: CQ-I06 (task-4e412148) step 1 names this row as the owner of the hand-forward residual.",
+  "definitionOfDone": [
+    "DeliveryCheckRun in Models.kt carries the projected `outcome`. MoeJson parses `latestCheckRun.outcome` when present and leaves it null when absent, so an older daemon without the field still parses.",
+    "DeliveryPresentation renders a recorded non-passed outcome (timeout, infra-failure, skipped, inconclusive, code-failure) as NOT passed, even when exitCode is 0. A 'passed' outcome renders as passed. With no outcome it keeps today's exit-code rendering. User-visible strings live in MoeBundle.properties.",
+    "JUnit tests cover at least: exitCode 0 with outcome 'timeout' renders not-passed; exitCode 0 with outcome 'passed' renders passed; no outcome falls back to the existing rendering; MoeJson parses the field and tolerates its absence.",
+    "A fresh `cd moe-jetbrains && ./gradlew test` exits 0. On this host run the Windows equivalent under the jetbrains-gradle lease, labelled as such, and supply the output to complete_task. Never build in place in the shared checkout (GLOBAL rule 0).",
+    "No VS Code change. The completion summary states that VS Code has no latestCheckRun view and that parity is a human decision."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Model, parser and parser tests (DoD 1, plus the parse half of DoD 3). Write test (c) first and watch it fail, then implement.\n\n1. Models.kt:164. Append `val outcome: String? = null` as the LAST parameter of DeliveryCheckRun, so the positional 3-argument calls (MoeJson.kt:441, DeliveryPresentationTest) still compile. Give it a one-line KDoc: the REPORTED daemon CheckOutcome (passed, code-failure, infra-failure, timeout, skipped or inconclusive; packages/moe-daemon/src/types/schema.ts:1544), verbatim. It is null when the daemon predates CQ-V12b or the run was recorded without an outcome.\n\n2. MoeJson.kt:441-444 (parseDelivery). Pass `outcome = it.getStrictStringOrNull(\"outcome\")`.\n- Keep the JSON string verbatim: no trim, no case-folding, NO whitelist.\n- Absent, JSON null or a non-string (number, boolean, array including [\"timeout\"], object) gives null. So an older daemon without the field still parses.\n- Why no whitelist, unlike `source`: step 2 fails closed on every outcome except exactly \"passed\". A whitelist would turn an unknown future outcome into null, fall back to the exit-code verdict and reopen this bug.\n\n3. MoeJsonTest.kt.\n(a) The deliveryJson at line 23: add \"outcome\":\"code-failure\" to latestCheckRun (its exitCode -9 matches). This is required: serializeNulls would otherwise emit \"outcome\":null on the round trip, and that test would fail.\n(b) The wrong-kinds test at lines 56-62: input \"outcome\":[\"timeout\"], expected \"outcome\":null.\n(c) A NEW test through bothPaths(blockerTaskJson(...)), which covers both the snapshot and single-task paths:\n- absent gives null;\n- each of the six CheckOutcome values comes back verbatim;\n- \"cancelled\" gives \"cancelled\", \" timeout \" gives \" timeout \", and \"\" gives \"\";\n- 42, true, null, [\"timeout\"] and {} give null.\nRead the value via serializedDelivery(task).asJsonObject.getAsJsonObject(\"latestCheckRun\").get(\"outcome\"). That way the test compiles on the old model and is RED there (mem:pattern-jetbrains-red-for-new-model-fields). Add the older-daemon case: {\"command\":\"node gate.cjs\",\"exitCode\":0,\"source\":\"runner-observed\"} keeps all three values, with outcome null.\n\nEdit tracked files only with the Edit tool (GLOBAL rail). Error handling: parsing stays total. A malformed outcome never throws and never drops command, exitCode or source.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "DeliveryCheckRun gains trailing `outcome: String? = null` (KDoc). parseDelivery reads it via getStrictStringOrNull, verbatim, no whitelist. MoeJsonTest: fixture (a) +outcome code-failure, wrong-kinds (b) outcome [\"timeout\"] -> null, two new tests (verbatim/wrong-kind matrix over bothPaths; older-daemon payload keeps command/exitCode/source). RED in fresh HEAD snapshot /mnt/d/moe-scratch/344a-iter-Rm4PkX under jetbrains-gradle lease: 32 tests, 4 failed (all AssertionError, outcome dropped), 0 errors. GREEN: MoeJsonTest 32/0/0, DeliveryPresentationTest 9/0/0. Peer dirty paths (.moe/*, scripts/moe-agent.*, scripts/tests/postflight-worktree.cjs) untouched.",
+      "startedAt": "2026-10-31T16:52:07.266Z",
+      "completedAt": "2026-10-31T16:54:31.766Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Presentation, bundle and presentation tests (DoD 2, plus the render half of DoD 3). Write the tests first.\n\n1. DeliveryPresentation.kt:24-28. Replace the verdict that reads exitCode alone. Use a local `val run = delivery.latestCheckRun`. Mirror the daemon's gate rule from recordCheckRun.ts:51: only an outcome of passed, or a legacy report with no outcome at exit 0, can ever satisfy a gate.\n- `passed = code == 0 && (run.outcome.isNullOrEmpty() || run.outcome == \"passed\")`. The comparison is exact and case-sensitive.\n- passed gives moe.delivery.checkPassed (PASS).\n- code != 0 gives moe.delivery.checkFailed (FAIL), today's label. That includes a contradictory 'passed' at a nonzero exit, which the daemon refuses to record anyway.\n- Anything else gives the NEW key moe.delivery.checkNotPassed (FAIL): exit 0, but the recorded outcome is not passed.\nRight after the verdict row and before checkSource, call `addValue(\"moe.delivery.checkOutcome\", run?.outcome)`.\n- The value is the raw reported token, verbatim. It is data, not UI text, like source and attemptPhase.\n- addValue already skips null and \"\", so \"\" counts as absent.\n- An outcome with no exitCode yields only the outcome row.\nKeep the 'REPORTED, never proof' comment. TaskDetailDialog needs no change: it renders labelKey plus value literally via JBTextArea.\n\n2. MoeBundle.properties, delivery block at lines 257-268. Use ASCII only and the Edit tool, and preserve every other byte. Add:\n- `moe.delivery.checkNotPassed=Reported check did not pass - exit code`, after checkFailed;\n- `moe.delivery.checkOutcome=Reported check outcome`, before checkSource.\n\n3. DeliveryPresentationTest.kt. Add tests that assert exact row lists (labelKey, value and outcome):\n(1) exit 0 with each of timeout, infra-failure, skipped, inconclusive, code-failure, cancelled, Passed and \" passed\", with a command and a source, gives [checkCommand, (checkNotPassed,\"0\",FAIL), (checkOutcome, outcome), checkSource]. Also assert that no row has labelKey checkPassed or outcome PASS.\n(2) exit 0 with \"passed\" gives [checkCommand, (checkPassed,\"0\",PASS), (checkOutcome,\"passed\"), checkSource].\n(3) exit 1 and exit -9, each with null, \"passed\", \"timeout\" and \"code-failure\", give the checkFailed row with FAIL, plus the outcome row when the outcome is non-null.\n(4) No outcome: null and \"\" at exit 0 each give exactly [(checkPassed,\"0\",PASS)], today's rendering.\n(5) DeliveryCheckRun(outcome = \"timeout\") with no exitCode gives [(checkOutcome,\"timeout\")].\n(6) In 'every emitted bundle key has a translation', add rows(TaskDelivery(latestCheckRun = DeliveryCheckRun(exitCode = 0, outcome = \"timeout\"))) and change 12 to 14.\nExisting tests stay unchanged and green, because their fixtures carry no outcome. Change no VS Code, daemon or docs file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+      ],
+      "note": "DeliveryPresentation: passed = code==0 && (outcome null/empty || exactly \"passed\"); key = checkPassed (PASS) / checkFailed (code!=0, FAIL) / checkNotPassed (exit 0 non-passed, FAIL); then addValue(checkOutcome, raw outcome) before checkSource. Outcome hoisted into a local (no lambda smart-cast reliance). Bundle: +checkNotPassed after checkFailed, +checkOutcome before checkSource (ASCII, Edit only). Tests: 5 new (non-passed matrix incl. cancelled/Passed/\" passed\" with no-PASS assertion; passed; nonzero x {null,passed,timeout,code-failure}; null/\"\" fallback; outcome-only) + bundle-key count 12->14. RED: 14 tests, 5 failed (AssertionError), 0 errors. GREEN: DeliveryPresentationTest 14/0/0, MoeJsonTest 32/0/0 (snapshot /mnt/d/moe-scratch/344a-iter-Rm4PkX, jetbrains-gradle lease, released).",
+      "startedAt": "2026-10-31T16:54:32.713Z",
+      "completedAt": "2026-10-31T16:56:44.675Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "THE GATE (DoD 4). Run it once, after steps 1-2.\n- Never run gradle or npm in the shared checkout (DoD 4, GLOBAL rule 0).\n- WSL has no JDK, so gradle runs as Windows gradlew.bat via cmd.exe (mem:gotcha-jetbrains-gradle-from-wsl, mem:gotcha-jetbrains-gate-snapshot).\n\n1. Call moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId, note:\"344a gate\"}.\n- If it is queued, call moe.report_blocked {resourceId:\"jetbrains-gradle\"}. The seat is kept, and the grant unblocks the task.\n- Hold the lease only around gradle runs. Release it with moe.release_resource, even on failure.\n\n2. Run this exact command from bash:\nset -o pipefail; R=/mnt/d/projexts/moes; P=moe-jetbrains/src; S=$(mktemp -d /mnt/d/moe-scratch/344a-gate-XXXXXX) && git -C $R archive HEAD moe-jetbrains | tar -x -C $S && (for f in main/kotlin/com/moe/{model/Models,util/MoeJson,toolwindow/DeliveryPresentation}.kt main/resources/messages/MoeBundle.properties test/kotlin/com/moe/{toolwindow/DeliveryPresentationTest,util/MoeJsonTest}.kt; do cp $R/$P/$f $S/$P/$f && cmp $R/$P/$f $S/$P/$f || exit 9; done) && cd $S/moe-jetbrains && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& .\\gradlew.bat test --rerun'; GE=$?; echo GATE_EXIT=$GE SNAP=$S; T=$S/moe-jetbrains/build/test-results/test; ls $T/TEST-*.xml | wc -l; grep -lE '(failures|errors)=\"[1-9]' $T/TEST-*.xml; grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $T/TEST-com.moe.{toolwindow.DeliveryPresentationTest,util.MoeJsonTest}.xml; (exit $GE)\n\nWhat the command does:\n- builds a FRESH git-archive snapshot of HEAD's moe-jetbrains;\n- overlays this task's six files and cmp-verifies them;\n- runs the full JetBrains suite with --rerun;\n- prints GATE_EXIT, the XML count, any failing suite, and the counts for the two touched suites.\nIts own exit status is GATE_EXIT. The architect dry-ran the snapshot half: it created the snapshot, cmp passed and cmd's cwd was D:\\moe-scratch\\344a-gate-*\\moe-jetbrains.\n\nPass means all of:\n- GATE_EXIT=0;\n- the failing-suite grep prints nothing;\n- both touched suites show failures=\"0\" errors=\"0\", with test counts that include the new tests.\n\n3. Optional focused iteration before the gate, under the same lease rule. Reuse one snapshot dir, re-copy the six files, then run:\ncmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& .\\gradlew.bat test --tests com.moe.util.MoeJsonTest --tests com.moe.toolwindow.DeliveryPresentationTest'\nLeave the filters unquoted.\n\nerror handling for a red run:\n- GATE_EXIT=9 means a copy or cmp mismatch. Re-check the six paths.\n- 'Could not receive a message from the daemon' is the gradlew client running out of memory (mem:gotcha-jetbrains-gradle-client-oom). Re-run. Never clear %TEMP%.\n- A test failure means fixing steps 1-2, then re-running the WHOLE command against a fresh snapshot.\n\nOther rules:\n- Never pattern-kill processes. Kill only PIDs you started.\n- Label the evidence for complete_task as 'Windows equivalent of cd moe-jetbrains && ./gradlew test, run under the jetbrains-gradle lease in a fresh HEAD snapshot plus this task's six files'.\n- Snapshot dirs are scratch outside the checkout. Delete only your own, by recorded path.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate (Windows equivalent of cd moe-jetbrains && ./gradlew test, run under the jetbrains-gradle lease in a fresh HEAD snapshot plus this task's six files), exact plan command: BUILD SUCCESSFUL in 47s, GATE_EXIT=0, SNAP=/mnt/d/moe-scratch/344a-gate-Za7SI3 (kept for QA inspection), 28 suite XMLs, failing-suite grep empty, TOTAL tests=512 skipped=0 failures=0 errors=0; DeliveryPresentationTest tests=14 f=0 e=0, MoeJsonTest tests=32 f=0 e=0. XML mtime 2026-10-31 18:58 local (fresh). Lease released. Iteration snapshot removed by recorded path. No source bytes changed in this step.",
+      "startedAt": "2026-10-31T16:56:45.467Z",
+      "completedAt": "2026-10-31T16:58:55.537Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff, once, as the last step. Load adversarial-self-review, then check:\n(a) No code path renders checkPassed or PASS for a nonzero exit, or for any outcome other than null, \"\" or exactly \"passed\". Read the order of the when-branches.\n(b) A payload from an older daemon (no outcome) renders rows byte-identical to before. The unchanged pre-existing tests prove this.\n(c) The parser never throws on any JSON kind of outcome, and never drops command, exitCode or source.\n(d) Every new bundle key resolves: the 14-key test proves it.\n(e) `git diff --stat` touches exactly the six planned files, and nothing under moe-vscode/, packages/ or docs/. Peers' dirty paths are not yours: never revert or stage them.\nIf the review changes any byte, re-run step 3's whole command, so the evidence comes from the final bytes.\n\nThen call moe.complete_task with verification {command: step 3's command, exitCode: GATE_EXIT, outputTail: the GATE_EXIT line, the XML count and the two suites' counts}.\nThe summary must:\n- state that VS Code renders no latestCheckRun view at all, so this change gives it nothing;\n- state that whether VS Code should get a delivery-check view is a parity decision for the human ('unowned: human decision');\n- name the verdict rule and the two new bundle keys.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Adversarial self-review, no byte changes (gate evidence from step 3 is on final bytes). (a) passed requires code==0 AND outcome null/\"\"/exactly \"passed\"; PASS outcome only when passed; nonzero -> checkFailed; else checkNotPassed. (b) outcome null -> identical key/order, checkOutcome skipped by addValue; 9 pre-existing presentation tests unchanged and green. (c) getStrictStringOrNull is total over absent/JsonNull/non-primitive/non-string; tests cover 42,true,null,[\"timeout\"],{} and older-daemon payload keeps command/exitCode/source. (d) 14-key bundle test green. (e) git diff --stat = exactly the six planned files; nothing under moe-vscode/ or packages/. docs/roles/qa.md and qa.reference.md are dirty from a peer session, not mine, untouched. TaskDetailDialog.buildDeliveryPanel renders rows generically (bundle label + literal JBTextArea), so new keys need no consumer change. Pure function, no concurrency surface; outcome text rendered verbatim and literal like command/source.",
+      "startedAt": "2026-10-31T16:58:56.535Z",
+      "completedAt": "2026-10-31T16:59:21.321Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor on the human's instruction to keep coders busy. This is a CQ-I row with no deps, and its files are JetBrains Kotlin that no open row declares, so it needs no lane slot.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 263.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T16:37:23.224Z",
+  "updatedAt": "2026-10-31T17:03:45.643Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T16:37:28.526Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T16:37:34.736Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T17:03:23.811Z",
+    "wallClockMs": 1549075
+  },
+  "contextFetchedBy": [
+    "architect-8419009e",
+    "worker-c0a1ac70",
+    "qa-4398294e"
+  ],
+  "dependsOn": [],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T16:51:19.047Z",
+  "executionContract": {
+    "intendedBehavior": "JetBrains task detail shows a reported check as passed only when exitCode is 0 AND the daemon-projected latestCheckRun.outcome is absent, empty or exactly 'passed'. DeliveryCheckRun carries latestCheckRun.outcome verbatim, or null when it is absent or not a JSON string, so an older daemon still parses.\n\nA non-passed or unknown outcome at exit 0 renders the FAIL row 'Reported check did not pass - exit code', followed by a 'Reported check outcome' row with the raw token. 'passed' at exit 0 renders as passed, plus the outcome row. A nonzero exit always renders 'Reported check failed - exit code'. With no outcome, today's exit-code rendering is unchanged.",
+    "acceptanceCriteria": [
+      "exitCode 0 with outcome timeout, infra-failure, skipped, inconclusive or code-failure (or an unknown or case-variant token) renders moe.delivery.checkNotPassed (FAIL) plus moe.delivery.checkOutcome, and never moe.delivery.checkPassed or PASS.",
+      "exitCode 0 with outcome 'passed' renders moe.delivery.checkPassed (PASS) plus the outcome row.",
+      "A null or empty outcome renders exactly today's rows. A nonzero exit renders moe.delivery.checkFailed (FAIL) whatever the outcome.",
+      "MoeJson parses latestCheckRun.outcome verbatim when it is a JSON string, and as null otherwise. A payload without the field parses with command, exitCode and source intact.",
+      "The labelled Windows-equivalent full JetBrains test suite exits 0 in a fresh HEAD snapshot under the jetbrains-gradle lease.",
+      "No VS Code, daemon or docs change. The completion summary states that VS Code has no latestCheckRun view and that parity is a human decision."
+    ],
+    "invariants": [
+      "A nonzero exit never renders as passed.",
+      "An outcome other than null, empty or exactly 'passed' never renders as passed.",
+      "Reported text is shown verbatim: never trimmed, never interpreted as markup.",
+      "The requiredCheckSatisfied policy row stays independent of the reported run's verdict."
+    ],
+    "compatibility": [
+      "A daemon payload without latestCheckRun.outcome (pre-CQ-V12b) parses and renders exactly as today.",
+      "Positional DeliveryCheckRun(command, exitCode, source) calls keep compiling, because the new parameter is last and defaults to null.",
+      "Existing bundle keys, row order and the requiredCheckSatisfied rows are unchanged. There is no wire, daemon or VS Code change."
+    ],
+    "approvedScope": [
+      "com.moe.model.DeliveryCheckRun.outcome: a new trailing parameter, String? = null",
+      "com.moe.util.MoeJson.parseDelivery: latestCheckRun.outcome via getStrictStringOrNull",
+      "com.moe.toolwindow.DeliveryPresentation.rows: the outcome-aware verdict rule plus the moe.delivery.checkOutcome row",
+      "MoeBundle keys moe.delivery.checkNotPassed and moe.delivery.checkOutcome",
+      "Tests in DeliveryPresentationTest and MoeJsonTest"
+    ],
+    "reuse": [
+      "MoeJson getStrictStringOrNull (MoeJson.kt:151) reads the outcome string.",
+      "DeliveryPresentation.addValue already skips null and empty values, and renders the outcome row.",
+      "The MoeJsonTest helpers bothPaths, blockerTaskJson and serializedDelivery (serializeNulls) are reused."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/deliveryProjection.ts:20,70 projects latestCheckRun.outcome only when isCheckOutcome holds; otherwise the field is absent.",
+      "packages/moe-daemon/src/types/schema.ts:1544: CheckOutcome = passed | code-failure | infra-failure | timeout | skipped | inconclusive.",
+      "packages/moe-daemon/src/tools/recordCheckRun.ts:51,94: passed requires exit 0 and code-failure a nonzero exit. Only passed, or a legacy report with no outcome at exit 0, can satisfy a gate.",
+      "moe-jetbrains Models.kt:164 is DeliveryCheckRun(command, exitCode, source). MoeJson.kt:440-444 parses only those three. DeliveryPresentation.kt:24-28 takes its verdict from exitCode alone.",
+      "TaskDetailDialog.kt:264-287 renders each DeliveryRow as a bundle label plus a literal JBTextArea, and refreshes on every state frame.",
+      "DeliveryPresentationTest asserts 12 distinct bundle keys. The MoeJsonTest round trips use serializeNulls."
+    ],
+    "checkRefs": [
+      "set -o pipefail; R=/mnt/d/projexts/moes; P=moe-jetbrains/src; S=$(mktemp -d /mnt/d/moe-scratch/344a-gate-XXXXXX) && git -C $R archive HEAD moe-jetbrains | tar -x -C $S && (for f in main/kotlin/com/moe/{model/Models,util/MoeJson,toolwindow/DeliveryPresentation}.kt main/resources/messages/MoeBundle.properties test/kotlin/com/moe/{toolwindow/DeliveryPresentationTest,util/MoeJsonTest}.kt; do cp $R/$P/$f $S/$P/$f && cmp $R/$P/$f $S/$P/$f || exit 9; done) && cd $S/moe-jetbrains && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& .\\gradlew.bat test --rerun'; GE=$?; echo GATE_EXIT=$GE SNAP=$S; T=$S/moe-jetbrains/build/test-results/test; ls $T/TEST-*.xml | wc -l; grep -lE '(failures|errors)=\"[1-9]' $T/TEST-*.xml; grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $T/TEST-com.moe.{toolwindow.DeliveryPresentationTest,util.MoeJsonTest}.xml; (exit $GE)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Whitelist outcome the way `source` is whitelisted: REJECTED. A whitelist turns an unknown future outcome into null, the verdict then falls back to exit code, and an exit-0 non-pass reads as passed again. The fail-closed render covers unknown values instead.\n2. One bundle key per outcome value: REJECTED. source and attemptPhase are already shown as raw tokens, so two keys are enough.\n3. Reuse checkFailed for exit 0 with a non-passed outcome: REJECTED. 'failed - exit code 0' reads skipped or inconclusive as a code failure. The new checkNotPassed label is accurate.\n4. Every non-passed outcome renders checkNotPassed even at a nonzero exit: REJECTED. That changes today's 'failed' label for nonzero exits. The minimal delta touches the exit-0 rows only.\n5. Split parse and render into two tasks: REJECTED. They are one contract over six small files, and the DoD names all of them. The 6-file count floors the tier to heavy; that is accepted.",
+    "codebaseInsights": "- The daemon's projection (deliveryProjection.ts) omits an outcome that is not a CheckOutcome. recordCheckRun refuses passed at a nonzero exit and code-failure at exit 0, so the client's 'nonzero + passed' branch is purely defensive.\n- In TaskDetailDialog, DeliveryRow.outcome is semantic only. What the user sees is the bundle label plus the literal value, so the label must not say 'passed' for a non-passed run.\n- MoeJsonTest serializes with serializeNulls. Adding a model field therefore breaks the two existing delivery round-trip assertions until their JSON names the field.\n- Files are LF and UTF-8.\n- No doc describes the JetBrains delivery rows: a grep of docs/ for 'Reported check' or latestCheckRun found none, so there is no docs change.",
+    "risks": "- Forgetting to update MoeJsonTest's fully-populated and wrong-kinds fixtures turns two existing tests red, because of serializeNulls.\n- The bundle-key count assertion goes from 12 to 14.\n- Peers: I06f (426a012e) has been told not to edit these files, and no open row declares them. If a peer touches MoeBundle.properties anyway, Edit narrowly and never rewrite the file.\n- WSL has no JDK, so gradle runs only via cmd.exe gradlew.bat. Hold the jetbrains-gradle lease around every run and release it on failure. A gradlew client OOM needs GRADLE_OPTS=-Xmx512m (already in the command).\n- Never run npm, and never run gradle in the shared checkout. Never pattern-kill.\n- The shared tree has other seats' dirty paths: scripts/moe-agent.*, .moe/tasks/*. Leave them alone.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "packages/moe-daemon/src/tools/recordCheckRun.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "571a3b0a6c3987f78f246a6f0f2c3a0fce73e292",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T16:51:19.066Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T16:52:07.266Z",
+  "reviewStartedAt": "2026-10-31T17:00:08.692Z",
+  "verification": {
+    "command": "set -o pipefail; R=/mnt/d/projexts/moes; P=moe-jetbrains/src; S=$(mktemp -d /mnt/d/moe-scratch/344a-gate-XXXXXX) && git -C $R archive HEAD moe-jetbrains | tar -x -C $S && (for f in main/kotlin/com/moe/{model/Models,util/MoeJson,toolwindow/DeliveryPresentation}.kt main/resources/messages/MoeBundle.properties test/kotlin/com/moe/{toolwindow/DeliveryPresentationTest,util/MoeJsonTest}.kt; do cp $R/$P/$f $S/$P/$f && cmp $R/$P/$f $S/$P/$f || exit 9; done) && cd $S/moe-jetbrains && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& .\\\\gradlew.bat test --rerun'; GE=$?; echo GATE_EXIT=$GE SNAP=$S; T=$S/moe-jetbrains/build/test-results/test; ls $T/TEST-*.xml | wc -l; grep -lE '(failures|errors)=\\\"[1-9]' $T/TEST-*.xml; grep -o 'tests=\\\"[0-9]*\\\" skipped=\\\"[0-9]*\\\" failures=\\\"[0-9]*\\\" errors=\\\"[0-9]*\\\"' $T/TEST-com.moe.{toolwindow.DeliveryPresentationTest,util.MoeJsonTest}.xml; (exit $GE)",
+    "exitCode": 0,
+    "outputTail": "Windows equivalent of cd moe-jetbrains && ./gradlew test, run under the jetbrains-gradle lease in a fresh HEAD snapshot plus this task's six files.\n> Task :test\nBUILD SUCCESSFUL in 47s\n11 actionable tasks: 11 executed\nGATE_EXIT=0 SNAP=/mnt/d/moe-scratch/344a-gate-Za7SI3\n28\n(failing-suite grep: no output)\n.../TEST-com.moe.toolwindow.DeliveryPresentationTest.xml:tests=\"14\" skipped=\"0\" failures=\"0\" errors=\"0\"\n.../TEST-com.moe.util.MoeJsonTest.xml:tests=\"32\" skipped=\"0\" failures=\"0\" errors=\"0\"\nSum over all 28 suite XMLs: tests=512 skipped=0 failures=0 errors=0. Post-gate cmp: all six shared-tree files byte-identical to the gated snapshot.",
+    "reportedAt": "2026-10-31T17:00:08.692Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+    ".moe/tasks/task-344a0acb42744047a4cce259cc2717c4.json"
+  ],
+  "completionSummary": "JetBrains now reads latestCheckRun.outcome, so an exit-0 check whose recorded outcome is not 'passed' no longer displays as passed.\n- Models.kt: DeliveryCheckRun gains a trailing `outcome: String? = null`, so the positional 3-arg calls still compile.\n- MoeJson.parseDelivery: reads the outcome via getStrictStringOrNull. The value is kept verbatim with no whitelist. Absent, null or non-string gives null, so an older daemon still parses with command/exitCode/source intact.\n- DeliveryPresentation verdict rule: passed only when exitCode == 0 AND outcome is null, \"\" or exactly \"passed\" (case-sensitive, mirroring the daemon's recordCheckRun gate rule). A nonzero exit gives moe.delivery.checkFailed (FAIL), as today. Exit 0 with any other outcome gives the NEW moe.delivery.checkNotPassed (FAIL). The NEW moe.delivery.checkOutcome row shows the raw token after the verdict and before checkSource. With no outcome, rows are unchanged. requiredCheckSatisfied rows are untouched.\n- Tests: TDD red then green. MoeJsonTest 32 (2 new tests, 2 fixtures updated because of serializeNulls). DeliveryPresentationTest 14 (5 new tests, bundle-key count 12->14).\n- Gate: the full JetBrains suite, run as the Windows equivalent under the jetbrains-gradle lease in a fresh HEAD snapshot: GATE_EXIT=0, 28 suites, 512 tests, 0 failures.\nVS Code: no change. VS Code renders no latestCheckRun view at all, so this change gives it nothing. Whether VS Code should get a delivery-check view is a parity decision for the human (unowned: human decision).\nNo daemon, docs or VS Code files were touched. Peer-dirty docs/roles/qa*.md and scripts/* were left alone.",
+  "commits": [
+    {
+      "sha": "a0ba55f700d7fbcf9bf7e1c2a517cf6b5dae183b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T16:51:39Z",
+      "paths": [
+        ".moe/tasks/task-344a0acb42744047a4cce259cc2717c4.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T17:00:29.003Z",
+      "treeId": "8f267c744700efa01809c6fed90cd78fe797ecb9",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "6782e954e49d7fe8101ccd7b7db37eabedfa8ef3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-4398294e@2026-10-31T17:00:40Z",
+      "paths": [
+        ".moe/tasks/task-344a0acb42744047a4cce259cc2717c4.json"
+      ],
+      "recordedBy": "qa-4398294e",
+      "recordedAt": "2026-10-31T17:03:45.642Z",
+      "treeId": "943282951872ce3b48944f0a2b4c671ae2f6b834",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-4398294e@2026-10-31T17:00:40Z",
+    "at": "2026-10-31T17:03:45.642Z"
+  },
+  "completedAt": "2026-10-31T17:03:23.811Z",
+  "reviewCompletedAt": "2026-10-31T17:03:23.811Z",
+  "reviewSummary": "Reviewed completion commit a0ba55f7, on moe/work-2026-10-24. HEAD is a0ba55f7 and moe-jetbrains is clean. The diff is 6 moe-jetbrains files, about 130 net LOC, plus the task JSON. No VS Code, daemon or docs path.\n\nI re-ran task.verification exactly: a fresh HEAD snapshot plus the overlay, with gradlew.bat test --rerun via cmd.exe (the Windows equivalent) under the jetbrains-gradle lease, now released. Result: GATE_EXIT=0, 28 suite XMLs, no failing suite, 512 tests in total. DeliveryPresentationTest ran 14 tests and MoeJsonTest 32, with 0 failures and 0 errors.\n\nDoD:\n1. outcome is a trailing String? = null. It is parsed through getStrictStringOrNull, verbatim, with no whitelist; absent or a non-string gives null.\n2. A run counts as passed only when the exit is 0 and outcome is null, empty or exactly \"passed\". A nonzero exit gives checkFailed. Any other exit-0 outcome gives the new checkNotPassed (FAIL). The new checkOutcome row comes before checkSource. The requiredCheckSatisfied rows are untouched. Both new keys are in the bundle.\n3. The tests assert exact row lists across the not-passed matrix (including Passed and \" passed\"), passed, nonzero x outcome, the null/\"\" fallback, outcome-only, and the bundle-key count going from 12 to 14. MoeJson tests cover wrong kinds and an older-daemon payload. They fail under the old exit-code-only verdict.\n4. The gate is green on QA's re-run.\n5. There is no VS Code change, and the summary states the parity decision is the human's.\n\ndeliveryProjection.ts:70 projects outcome, and DeliveryPresentation is the only consumer of the verdict. No test was weakened: only the 2 fixtures that serializeNulls forced changed. The complexity pass found nothing to cut.",
+  "requiredCheckAtDone": null
+}

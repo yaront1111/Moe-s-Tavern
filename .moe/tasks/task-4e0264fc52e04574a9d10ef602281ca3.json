@@ -1,0 +1,267 @@
+{
+  "id": "task-4e0264fc52e04574a9d10ef602281ca3",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C11] Context integration and hardening",
+  "description": "Objective: Verify stale context, new helpers, incomplete semantic analysis, session deltas and recipe mismatch across roles.\n\nDeliverable: Context integration and hardening. This is task C11 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test\n\nDependency aliases (wired by Moe task ids after import): C10.",
+  "definitionOfDone": [
+    "Positive/negative/context/recipe invalidation cases pass.",
+    "Zero planner calls occur only for valid reuse/eligible recipe paths.",
+    "No approval or scope boundary is bypassed.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Inventory only; no code. This is the epic-final task. Read every prerequisite's LANDED entry points and its Serena handoff memory, then list in the step note the exact names the tests will call:\n- C02b readSnapshotSource;\n- C03 semanticSource;\n- C04 the positive cache;\n- C05 negativeSearch (recordNegative, lookupNegative, the generations);\n- C06a and C06: contextDelta, and get_context's basePacketId and contextEpoch;\n- C07 planReuseJob, with claim and get_context planReuse;\n- C08 recipe.ts: instantiateRecipe, recipeKinds, RECIPE_ACTOR and readRecipeInstance;\n- C09 docsLiteralReplace, including assessPostpatch;\n- C11a: the docs.\nWhere a landed name differs from the planned one, use the landed one. Error handling: if a prerequisite is missing an entry point the matrix needs, call moe.report_blocked naming that task; never stub it in a test.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Inventory (no code). Every prerequisite is landed and exposes what the matrix needs; nothing is missing, so no block.\n\nLanded names the tests call:\n- C02/C02b: readRepositorySource(root, commit, queries, opts) and readSnapshotSource(snapshot, {commit, base?, overlay?}, queries). Snapshots come from scripts/local-runner/source-export.mjs exportSourceSnapshot({repoDir, commit}).\n- C03: readSemanticSource(root, commit, queries, {serenaPath, ...}). A missing absolute serenaPath gives 'semantic-unavailable:analyzer-absent' + inconclusive + a C02 fallback.\n- C04: SourceCache, cachedRepositorySource, cachedSnapshotSource, cachedSemanticSource.\n- C05: recordNegative(cache, q, result, gen), lookupNegative(cache, q, gen), snapshotScopeGeneration and repositoryScopeGeneration.\n- C06/C06a: getContextTool handler {sessionId, basePacketId, contextEpoch}. servedContext.contextDelta is {served:'delta'} or {served:'full', reason}; unrecorded reads take their receiptStatus as the reason.\n- C07: claim_next_task and get_context `planReuse`; awaitingPlanReuse and ensurePlanReuseAssessment; settlePlanReuseAssessments(state).\n- C08: instantiateRecipe(state, {taskId, recipeId, inputs}), recipeKinds, readRecipeInstance and RECIPE_DEFINITIONS_PATH. RECIPE_ACTOR is exported from tools/submitPlan.ts, not recipe.ts.\n- C09: docsLiteralReplace.assessPostpatch(root, {taskId, instance, definition, postCommit}). Importing the module registers the kind.\n- C11a: docs.\n\nDeviation, landed contract wins: the plan listed C07 'refresh' (an affected file changed) as needing a planner. Landed C07 and its design (decision-cq-c07-plan-reuse-split) resume BOTH reuse and refresh to WORKING. Refresh is the approved plan reused, with changedPaths served to the worker. The planner-required cases are therefore reassess, replan (entry from WORKING/REVIEW), a DoD or contract change (planRevision advances, giving approval-not-current), and every recipe fallback. The tests assert this.\n\nDirty paths from other sessions are left untouched.",
+      "startedAt": "2026-10-30T05:41:05.973Z",
+      "completedAt": "2026-10-30T05:43:57.157Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Write packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts for DoD1. It covers positive, negative, context and recipe invalidation across roles.\n- Use real temp Git repos and ToolTestHarness, with GIT_* masked and fixed identities.\n- Snapshots come from the landed scripts/local-runner/source-export.mjs, under describe.skipIf when scripts/ is absent.\n- Assert exact statuses and reasons; table-driven.\n\nCases:\n- P (C04): a cached read is invalidated by a dirty byte change while `git status --porcelain` stays byte-identical. A relevant config or lockfile change invalidates only its slice.\n- N (C05):\n  - a recorded zero-match search goes 'stale' when an untracked helper is added in scope;\n  - deleting the helper also makes it 'stale';\n  - a truncated or incomplete enumeration is 'unknown', never 'absent';\n  - a fresh store (restart) is 'unknown'.\n- S (C03): an absent or failed analyzer is inconclusive with a literal fallback, and is never recorded as a negative.\n- D (C06):\n  - the worker session gets a delta with explicit removals;\n  - QA and architect reads with no running attempt get a full snapshot;\n  - restart, reattach, epoch change, a different session and a re-claim each give a full snapshot with their exact reasons.\n- R (C09):\n  - a doc changed after the request falls back with docs-replace-hash-mismatch, and the task stays PLANNING;\n  - a changed definition makes assessPostpatch return docs-replace-recipe-mismatch;\n  - changed inputs give docs-replace-inputs-changed;\n  - under deliveryPolicy 'local-branch', a candidate that edits .moe/recipes.json gets protected-check-changed:.moe/recipes.json.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts"
+      ],
+      "note": "New file: src/__e2e__/contextInvalidation.e2e.test.ts (223 lines, 8 tests). It uses real temp Git in the harness dir (GIT_* masked, identity pinned), the landed R09b exportSourceSnapshot (describe.skipIf when scripts/ is absent), and real claim, get_context, reattach and record_candidate handlers.\n\nTests:\n- P1: a dirty edit leaves `git status -uno` identical ('M src/a.ts') but re-keys only that slice (2 hits). A lockfile edit misses only the lockfile slice.\n- N1 (snapshot): one SourceCache holds both the positive and the negative entries. Changes outside the scope (docs/, srcx/) read absent; an untracked helper reads stale; removing it reads absent again; a deleted src/b.ts reads stale; checkout restores absent. An undecodable-only match is served truncated:undecodable-match with zero matches and refused at record time, so the lookup reads unknown. A new cache (restart) reads unknown.\n- N2 (repository): unrelated commit absent, committed helper stale, rm back to absent, committed delete stale, unknown commit unknown; restart unknown.\n- S1: an absent analyzer gives unavailable semantic-unavailable:analyzer-absent, inconclusive, with a served zero-match literal fallback. recordNegative refuses it (not-single-search), the cache stays empty, lookup reads unknown, and a 'semantic' namespace is INVALID_INPUT.\n- D1-D7: the worker gets a delta with removed ['/task/priorBlockedReason'] that applyDelta reconstructs exactly. QA and the architect get full not-attempt-owner. Other cases: epoch-changed, session-mismatch, restart before reattach (no-running-attempt), after reattach base-unavailable, in-process reattach phase-changed, re-claim attempt-mismatch (generation 2).\n- R1: a doc committed after the request gives docs-replace-hash-mismatch, and the row stays PLANNING with rev 0, no plan and no instance.\n- R2: the exact patch gives ok. A changed definition version or params gives recipe-mismatch, changed inputs give inputs-changed, and an extra doc gives extra-edits 'docs/b.md'.\n- R3: under local-branch, a real claim plus record_candidate with the edited .moe/recipes.json oid gives protected-check-changed:.moe/recipes.json; the approved oid gives none.\n\nRun: Linux snapshot /tmp/moe-c11-dev.KctIXC (archive of HEAD f7867a2, native npm ci, env -i, node v24.21.0): 8/8 pass.\n\nMutants (/tmp/moe-c11-scripts/mutant.py), 9/9 killed, sources restored and checked by sha256sum -c:\n- snapshot-read key without sha256 (P1);\n- lookup always absent (N1, N2);\n- recordNegative status/reason check removed (N1);\n- decideDelta session check removed (D), and phase check removed (D);\n- assessPostpatch definition check removed (R2), and extra-edits filter removed (R2);\n- recipe configs append removed (R3);\n- semantic failure served as an empty answer (S1).",
+      "startedAt": "2026-10-30T05:43:57.991Z",
+      "completedAt": "2026-10-30T05:49:31.498Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Write packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts for DoD2 and DoD3. A planner call is counted as an architect claim_next_task({statuses:['PLANNING']}) that returns the task.\n\nZero planner calls occur ONLY on these paths:\n- (a) C07 reuse. The plan is approved, the row re-enters PLANNING from BACKLOG, and an unrelated commit lands. The row resumes WORKING with approvedPlanRevision unchanged and never re-stamped, and the architect claim never returns it.\n- (b) An eligible C09 recipe through instantiateRecipe under TURBO. The row reaches WORKING with zero architect claims.\n\nA planner is REQUIRED (the claim returns the task, with the reason visible in planReuse or the fallback system message) for:\n- C07 refresh or reassess: an affected file changed, or an anchor or assumption changed;\n- C07 replan: entry from WORKING or REVIEW;\n- every recipe fallback.\n\nApproval and scope boundaries (DoD3):\n- A CONTROL recipe instantiation stays AWAITING_APPROVAL with no approvedPlanRevision.\n- SPEED approves only after its delay.\n- A DoD or contract change advances planRevision, so the row is not reused.\n- The 'moe-recipe' identity is NOT_ALLOWED for an MCP caller, and a forged recipeInstance is stripped.\n- assessPostpatch refuses extra edits.\n- A delta never crosses a session or attempt boundary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ],
+      "note": "New file: src/__e2e__/plannerBoundaries.e2e.test.ts (140 lines, 15 tests). Both e2e files total 363 lines, under the 400 cap.\n\nA planner call is counted by plannerCalls(): up to two ranked architect claim_next_task({statuses:['PLANNING']}) calls, each followed by settlePlanReuseAssessments. It records whether either call returned task-1.\n\nC07 (real TURBO submit_plan with an approved plan, then re-enter PLANNING):\n- Z1, 0 planner calls:\n  - an unrelated commit gives reuse;\n  - an affected file changed gives refresh, with changedPaths ['src/a.ts'] served to the worker claim.\n  - In both, planRevision, approvedPlanRevision, planApprovedAt, planSubmittedAt, the plan and the contract are unchanged; nothing is re-stamped.\n- P1, 1 planner call with the reason:\n  - assumption-changed:src/lib/b.ts (reassess);\n  - replan-requested-from-WORKING and replan-requested-from-REVIEW;\n  - DoD change and contract change, each giving approval-not-current with planRevision +1.\n  - In all of these the worker claim gets nothing.\n\nRecipes:\n- Z2: an eligible docs-literal-replace under TURBO reaches WORKING with 0 planner calls. affectedFiles and approvedScope are exactly ['docs/a.md'], and the instance is bound to this revision.\n- P2: five fallbacks (hash-mismatch, path-not-allowed, old-text-missing, recipe-not-found, definitions-missing). Each posts the notice, leaves the row untouched (rev 0, no plan, no instance, no approval) and gives 1 planner call.\n- B1: CONTROL stays AWAITING_APPROVAL with no approval, 0 planner calls and no worker claim. SPEED (300ms) is still unapproved at 50ms, then approves the same revision.\n- B2: a wire workerId 'moe-recipe' gets NOT_ALLOWED. A forged recipeInstance through updateTask is stripped (and reads null).\n\nExtra-edit refusal and delta boundaries are covered in contextInvalidation R2 and D1-D7 (named in the file header).\n\nRuns (Linux snapshot):\n- __e2e__ dir: 48/48 pass.\n- Scratch-tsconfig tsc over both test files: exit 0.\n\nMutants: 12 run, all killed after one test fix. The killed set:\n- withhold disabled; assumption made soft; refresh made reassess; REVIEW dropped from REPLAN_FROM;\n- DoD revision bump off; contract revision bump off; resume re-stamps planApprovedAt;\n- reserved guard off; recipeInstance strip off; CONTROL auto-approves; hash check off;\n- SPEED delay 0. This one first SURVIVED; I fixed B1 to observe the row mid-delay and it is now killed, while the unmutated baseline stays green.\n\nNo prerequisite defect was found, so step 4 has nothing to fix.",
+      "startedAt": "2026-10-30T05:49:32.381Z",
+      "completedAt": "2026-10-30T05:54:26.053Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Fix forward, only where the e2e tests expose a real defect in a prerequisite.\n- Make the smallest fix in the owning module. Call moe.declare_files on it first, and keep or add a regression in the e2e file.\n- Never weaken an assertion, and never work around a defect inside a test.\n- A fix over about 30 lines, or one that changes a contract, gets moe.report_blocked naming the owning task instead.\n- Error handling must stay fail-closed.\n- Record every fix, with its owning task, in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ],
+      "note": "No prerequisite defect was exposed, so no fix was made to any owning module. I did not call declare_files: there are no non-test edits.\n\nHardening added, from C07's QA hand-forward to this task: apply's assignedWorkerId clause in planReuseJob (C07, task-93dee42f) was correct but pinned by no test.\n\nNew test B3 in plannerBoundaries.e2e.test.ts (+10 lines; the file is now 150 and the two files 373, under 400):\n- The approved plan is requeued and an unrelated commit lands.\n- The assessment's Git is held, and the ranked architect claim returns hasNext:false.\n- The architect then makes an explicit claim_next_task {taskId, statuses:['PLANNING']} and gets the row.\n- On release, the late reuse result must write nothing: the row stays PLANNING, assigned to architect-1, with no planReuse.\n\nMutant: dropping `task.assignedWorkerId ||` from apply is killed. B3 receives ['WORKING', null, {record}], meaning the late result would have yanked a planner's row into WORKING. The unmutated baseline passes 16/16.\n\nThe still-pending clause stays untested. QA judged it effectively unreachable (dedupe plus a single writer).",
+      "startedAt": "2026-10-30T05:54:26.889Z",
+      "completedAt": "2026-10-30T05:56:09.611Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Full regression, once, fresh. This is the epic final, so run every affected suite in an isolated Linux snapshot of HEAD: whole-repo git archive, native deps, MOE_* unset, Linux-only PATH (mem:gotcha-daemon-linux-snapshot-gate). The suites:\n- `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`;\n- `npm run lint` at the root, because C10 changed role docs;\n- `node --test scripts/tests/prompt-cache-launcher.test.mjs`, which C10 extended;\n- `cd packages/moe-proxy && npm test`, only if any CQ-C commit touched packages/moe-proxy. Check with git log --grep 'Moe-Task' over the epic's task ids.\nEvery suite must exit 0. Supply the daemon npm test command, exit code and output tail to complete_task, and list the other results in the summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ],
+      "note": "Full regression, fresh, in a Linux snapshot /tmp/moe-c11-gate.8WUWqi. Setup:\n- git archive of HEAD eb0ebaa. Since my dev base f7867a2 only board JSON changed.\n- Plus only my 2 test files, cmp-equal to the worktree.\n- Native npm ci, with the lock equal modulo CR.\n- env -i (no MOE_*), Linux-only PATH, node v24.21.0.\n\nResults:\n- `cd packages/moe-daemon && npm test`: EXIT 0. 196 files passed; 5480 passed | 16 skipped (5496). That is C10 QA's 5456 baseline plus 24 new.\n- `npx tsc --noEmit`: EXIT 0. The scratch-tsconfig tsc over both test files was also EXIT 0 earlier.\n- Root `npm run lint`: EXIT 0 (architect 39, worker 30, qa 32 lines).\n- `node --test scripts/tests/prompt-cache-launcher.test.mjs`: EXIT 0. 31 tests: 29 pass, 0 fail, 2 skipped (no PowerShell engine on Linux).\n- Proxy tests not required: `git log --grep task-<id> --name-only` over all 20 CQ-C task ids shows 0 paths under packages/moe-proxy.",
+      "startedAt": "2026-10-30T05:56:10.373Z",
+      "completedAt": "2026-10-30T05:57:35.315Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Whole-epic adversarial review, the last step (load adversarial-self-review). Sweep the ENTIRE CQ-C diff: every epic task's commits on moe/work-2026-10-24, plus C11a's docs read against the code. Check:\n- any approval bypass, or a re-stamped approval;\n- a planner skipped outside valid reuse or an eligible recipe;\n- scope expansion past the approved plan;\n- stale context served as fresh;\n- a cache answering 'absent' on incomplete enumeration, or freshness taken from watchers or status;\n- a delta served across an incarnation;\n- recipe identity impersonation, or a definition changeable without approval;\n- forbidden-pattern tokens, .moe edits, and Git writes outside the wrappers.\nFix small issues within step 4's rules, and list the rest as findings. In the completion summary, list the activation items still deliberately open:\n- the call site for assessPostpatch;\n- seat-side contextEpoch stamping (the compaction keeper and the proxy);\n- C02/C03 providers in served packets.\nThese belong to the rollout (M05/M06), not to C11. Write the epic handoff memory.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ],
+      "note": "Whole-epic adversarial review: 63 CQ-C commits, 61 non-board paths.\n- Sweep: no `.moe/` edits other than board records. No eval(/innerHTML/dangerouslySetInnerHTML/__proto__ in added lines. Every runtime Git call is read-only (rev-parse, ls-tree, cat-file, grep, diff-tree, config --get-regexp).\n- One small fix: D1-D7 now also asserts that a legacy get_context (no delta fields) carries no contextDelta. The always-emit mutant is killed.\n- Fresh gate after the fix, run on a Linux snapshot of HEAD eb0ebaa plus both files (node v24.21.0, env -i): npm test gives 196 files, 5480 passed, 16 skipped, EXIT 0; scratch tsc --noEmit is 0.\n\nFindings, non-blocking and owned by M05/M06:\n(1) C07 plan reuse does not anchor .moe/recipes.json. A requeued recipe row whose definition changed can resume WORKING; it then fails closed at assessPostpatch (recipe-mismatch) and at the requiredCheckSnapshot (protected-check-changed).\n(2) C08 QA notes are still open: 'moe-recipe' is reserved only in submit_plan; a MoeError after the PLAN_SUBMITTED write reports as a fallback; a getter is read before the try.\n(3) C05 stale negatives are evicted only by LRU.\n\nActivation items deliberately open: the assessPostpatch call site; seat-side contextEpoch stamping (compaction keeper and proxy); C02/C03 providers in served packets.\n\nThe handoff memory task-task-4e0264fc52e04574a9d10ef602281ca3-handoff is written.",
+      "startedAt": "2026-10-30T05:57:35.964Z",
+      "completedAt": "2026-10-30T06:01:21.728Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 248.5,
+  "comments": [
+    {
+      "id": "comment-d397180323be4404b9fbc97999fe9c92",
+      "author": "architect-4c57a52b",
+      "content": "Docs and integration hand-forward from CQ-C01 (task-fef5ca57, plan rev 1). Verify against what landed before writing anything.\n\nDefault and full get_context task reads gain `packetManifest`:\n- `version`.\n- `provenance`: task {id, planRevision}, epic, project, and candidate (when one exists).\n- `sections`: entries {path, mandatory, status (C02's served|truncated|omitted|missing), reason, count}.\n  - MANDATORY_SECTIONS are never role-trimmed or truncated.\n  - Omissions are explicit: role-trim, compacted comments/chat, capped commits/siblings/rejections.\n- `complete`.\n- `limitations`, sorted. 'no-repository-source' stays until C10 serves C02's provider.\n- `budget`: {limitChars, mandatoryChars, status within|overflow, requirement expand|restructure}.\n\nThere is also a new optional `packetBudgetChars` input (1000..250000, default 100000), refused when invalid, never clamped.\n\nThe manifest sits inside F06's packetId digest and never grants approval.\n\nFor C11, document all of this in docs/MCP_SERVER.md (get_context) and docs/SCHEMA.md. C06 (deltas) and C10 (targeted guidance) build on these section paths and codes.",
+      "timestamp": "2026-10-25T22:58:57.335Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:51.453Z",
+  "updatedAt": "2026-10-30T06:22:25.425Z",
+  "dependsOn": [
+    "task-34632f08a9a549a28bcf2b9f6946244b",
+    "task-fef5ca575850416ea1052ee1a7b8e22e",
+    "task-b23c65b0bb3548fc95d46973b9d589cb",
+    "task-8d00971692974bbdb2f8b3c3b181c46d",
+    "task-1b7b6067a95f4078bfb2c780c2a598e9",
+    "task-9ef257f58b7f4c4191f206f67bf3d865",
+    "task-d75f71d7664848fd859a3f877e74ba43",
+    "task-93dee42f71db4a6a8e47a8de052ad411",
+    "task-f12b03e83a1a491494a08e42c7a58504",
+    "task-f9abfd2d170246549e01fa1bcbff4238",
+    "task-311dbda408864b7597852e683076ca24",
+    "task-95b610e3726c4e099c84eaedf098602a"
+  ],
+  "contextFetchedBy": [
+    "architect-e4b7eee0",
+    "architect-4ae016fb",
+    "worker-b5749787",
+    "qa-952969be",
+    "worker-0062feec"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:50:59.555Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T06:21:53.657Z",
+    "wallClockMs": 48654102
+  },
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:53:36.364Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Put the docs sweep inside C11. Rejected for size: e2e tests of about 350 lines plus docs of about 120 lines would exceed the 400 net cap. The docs became C11a (task-95b610e3, order 248, docs only), which C11 dependsOn, so the final review still covers them.\n2. Wiring activation into C11 (the assessPostpatch call site, epoch stamping, providers in packets). Rejected: C11's scope line excludes later activation. They are listed as open items for the M05/M06 rollout.\n3. Per-feature e2e files. Rejected: two files grouped by DoD keep the matrix reviewable and within the cap.",
+    "codebaseInsights": "The e2e convention is src/__e2e__/*.e2e.test.ts, picked up by vitest's src/**/*.test.ts include.\n\nPlanned interfaces (all unlanded at plan time; adapt to the landed names):\n- C05: Serena task-task-9ef257f58b7f4c4191f206f67bf3d865-handoff;\n- C06 and C06a: decision-cq-c06-context-deltas;\n- C07: decision-cq-c07-plan-reuse-split;\n- C08: task-f12b03e8's plan (recipe.ts, RECIPE_ACTOR 'moe-recipe', submitRecipePlan, readRecipeInstance);\n- C09: task-task-f9abfd2d170246549e01fa1bcbff4238-handoff;\n- C03b: task-task-465fb4b958934707b311fc0e7731cc7b-handoff.\nC04 is unplanned (PLANNING, architect-e4b7eee0): read its landed module and handoff.",
+    "risks": "- Many prerequisites are unlanded: if one is missing an entry point, call report_blocked on it; never stub it.\n- Flaky timing: SPEED uses a short delay plus vi.waitFor, and Git commands use bounded timeouts.\n- WSL: run the gate only in a Linux-native snapshot.\n- Size: two test files at or under 400 net lines, plus small fixes.\n- Do not edit .moe: .moe/recipes.json exists only in temp repos.",
+    "keyFiles": [
+      "packages/moe-daemon/src/__e2e__/executionContract.e2e.test.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:53:36.472Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T05:41:05.973Z",
+  "reviewStartedAt": "2026-10-30T06:01:35.830Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Ran fresh after the final step-6 edit. Linux snapshot: git archive of HEAD eb0ebaa plus the 2 new e2e files (cmp-equal to the shared tree); native npm ci; env -i; node v24.21.0.\n ✓ src/util/gitExecutable.test.ts (12 tests | 2 skipped) 4ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n\n Test Files  196 passed (196)\n      Tests  5480 passed | 16 skipped (5496)\n   Start at  08:00:31\n   Duration  24.04s (tests 95%, import 4%, transform 1%)\n\nEXIT 0",
+    "reportedAt": "2026-10-30T06:01:35.830Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+    "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts",
+    ".moe/epics/epic-f5c1c2ea674e40bcad8ab16d7657ccc0.json",
+    ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+    ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+    ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json",
+    ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json",
+    ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+    ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json"
+  ],
+  "completionSummary": "CQ-C11 (epic-final). Two new e2e files, no production change.\n\ncontextInvalidation.e2e.test.ts (8 tests, DoD1):\n- r09b dirty-snapshot positives.\n- Snapshot/repository negatives: absent/stale/unknown; an undecodable hit is refused.\n- Semantic analyzer-absent refused as a negative.\n- D1-D7: real claims through every C06 delta/full reason, incl. a legacy read having no contextDelta.\n- Recipes: hash fallback; assessPostpatch mismatch/inputs/extra-edits; recipes.json as protected-check-changed.\n\nplannerBoundaries.e2e.test.ts (16 tests, DoD2/3):\n- 0 planner calls only for C07 reuse/refresh and an eligible TURBO recipe.\n- 1 call each for reassess, replan WORKING/REVIEW, DoD change, contract change and 5 recipe fallbacks.\n- CONTROL/SPEED gates hold.\n- RECIPE_ACTOR refused; forged recipeInstance stripped.\n- An explicit planner claim during an assessment keeps the row.\n\nGate (Linux snapshot, HEAD eb0ebaa + files):\n- daemon npm test: 196 files, 5480 pass, 16 skip.\n- tsc 0.\n- root lint 0.\n- prompt-cache-launcher: 29 pass, 0 fail, 2 skip.\n- Proxy untouched.\n\nMutants killed: SPEED delay→0; the C07 assignedWorkerId guard; always-emit contextDelta.\n\nDeviation: the plan said refresh needs a planner, but the landed C07 resumes reuse and refresh to WORKING; tests assert that.\n\nSweep of 63 epic commits: no .moe hand edits, no forbidden tokens, all runtime git reads only.\n\nFindings (M05/M06):\n1. C07 reuse does not anchor .moe/recipes.json. A changed definition can resume WORKING, then fails closed downstream.\n2. C08 QA notes still open.\n3. C05 stale negatives are evicted only by LRU.\n\nOpen on purpose:\n- the assessPostpatch call site;\n- seat-side contextEpoch stamping;\n- C02/C03 providers in served packets.\nVerified-local and claim isolation stay off.",
+  "commits": [
+    {
+      "sha": "4f75feb33890ca112600b1f5e58508c9477caf05",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T05:40:35Z",
+      "paths": [
+        ".moe/epics/epic-f5c1c2ea674e40bcad8ab16d7657ccc0.json",
+        ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+        ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+        ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json",
+        ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json",
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T06:02:11.949Z",
+      "treeId": "41d062aaf260c68a12024dae6a7b7de74d25cd51",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "2b1b487160a9a3d1ccb962c0db0c3ee38cdf0f62",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T06:15:53Z",
+      "paths": [
+        ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+        ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+        ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
+        ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T06:22:25.425Z",
+      "treeId": "9bc071e0d0c2ede909fb326f1d43188ea8452f6e",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+    "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T06:15:53Z",
+    "at": "2026-10-30T06:22:25.425Z"
+  },
+  "completedAt": "2026-10-30T06:21:53.657Z",
+  "reviewCompletedAt": "2026-10-30T06:21:53.657Z",
+  "reviewSummary": "CQ-C11 (epic-final) approved. Commit 4f75feb is on moe/work-2026-10-24. It adds 375 net LOC, all tests (2 e2e files), with no production code; the 5 .moe files are wrapper board staging.\n\nQA gate re-run in a fresh Linux snapshot of 4f75feb (native npm ci, env -i, node v24.21.0):\n- daemon npm test: EXIT 0, 196 files, 5480 passed, 16 skipped. This matches the worker's numbers.\n- tsc --noEmit: 0.\n- Both e2e files: 24/24 pass, none skipped.\n\nDoD:\n1. Invalidation cases pass: positive P1, negatives N1/N2, semantic S1, delta D1-D7 (every full reason) and recipes R1-R3.\n2. Zero planner calls only for C07 reuse/refresh (Z1) and the eligible TURBO recipe (Z2). Exactly 1 call for reassess, replan from WORKING/REVIEW, DoD and contract changes (P1), and the 5 recipe fallbacks (P2).\n3. No bypass:\n   - CONTROL holds, and SPEED is checked mid-delay (B1).\n   - RECIPE_ACTOR gets NOT_ALLOWED and a forged instance is stripped (B2).\n   - A late assessment does not take back a row claimed explicitly in the meantime (B3).\n   - No approval is re-stamped (Z1).\n4. Verification evidence reproduces.\n\nQA mutants, 4/4 killed, sources restored and sha-checked:\n- lookupNegative miss returning absent (N1/N2/S1);\n- refresh treated as reuse (Z1);\n- RECIPE_ACTOR guard off (B2);\n- getContext owner check weakened (D1-D7).\n\nThe refresh deviation is legitimate: per decision-cq-c07-plan-reuse-split, landed C07 resumes refresh to WORKING.\n\nEpic sweep (63 commits): no forbidden tokens, no proxy paths, and runtime git reads only.\n\nNon-blocking, for M05/M06:\n(a) C07 reuse does not anchor .moe/recipes.json. This fails closed: the instance stays bound to the old digest.\n(b) C08 QA notes are still open.\n(c) C05 stale negatives are evicted only by LRU.\n\nStill open: the assessPostpatch call site, contextEpoch stamping, and C02/C03 in packets. Verified-local stays off.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,295 @@
+{
+  "id": "task-ec64165c85f246088a7224cf70b04670",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF03] Replace an unverified running daemon",
+  "description": "Objective: when a protected project finds a running daemon whose provenance does not verify, the IDE can stop it with the INSTALLED CLI's `stop` and start its own installed daemon, rather than only refusing. A daemon that VS Code shares is never stopped without asking. This is CQ-R01 follow-up 3.\n\nCreated by architect-e4b7eee0 on 2026-10-30, when the human moved the non-gating R01 follow-ups out of CQ-R13. It edits MoeDaemonSupervisor.kt after CQ-RF01.\n\nDeliverable: MoeDaemonSupervisor.kt.\n- On an unverified daemon, run the installed daemon CLI's `stop --project <path>`, never a repository binary.\n- Wait, within a fixed bound, for the daemon to exit and daemon.json to clear.\n- Then spawn the installed daemon with fresh provenance.\n- If another client is registered on that daemon, ask first through an injectable confirmer.\n- A failed or timed-out stop keeps today's refusal.\n- Tests in MoeDaemonSupervisorTest use an injected process runner.\n\nOut of scope:\n- CQ-RF01, RF02 and RF04;\n- VS Code changes;\n- .moe edits;\n- enabling verified-local.\n\nVerification command (fresh, exit 0 required): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+  "definitionOfDone": [
+    "An unverified running daemon is stopped only through the installed CLI's stop command, and the installed daemon is then started with fresh provenance. Shown by tests with an injected process runner.",
+    "A daemon with another registered client is never stopped without explicit confirmation, and a failed or timed-out stop leaves today's refusal in place. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. CQ-RF01 (task-fd653cfb) lands first. It changes MoeDaemonSupervisor.kt (recordProtectedSpawn with the installed daemon, and activationRefusal passing installedDaemon to verifyProvenance) and adds rows to MoeDaemonSupervisorTest.kt. Re-read both files, plus RuntimeSelectionPolicy.verifyProvenance, before writing anything.\n\nHARNESS, in moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt:\n- A temp project with .moe initialized and daemon.json {port, pid: 4242, startedAt, projectPath}.\n- An installed layout outside the project: <root>/daemon/index.js and a regular file standing in for node.\n- A project-local daemon copy at <project>/packages/moe-daemon/dist/index.js, which must never appear in any command.\n- A protected supervisor (profile = { PROTECTED }, installedRoot and nodeExecutable pointing at the layout) with these probes:\n  - processAliveProbe and portProbe say pid 4242 is alive and listening;\n  - processLookup returns a fake ProcessHandle (java.lang.reflect.Proxy) whose isAlive and parent() the row controls. Its parent is a second fake handle, standing in for the old supervisor.\n- The new seams, added in steps 2-4:\n  - replaceConfirmer, a recording fake that answers true, false, or throws;\n  - runStop, a recording fake for the stop process: it gets the ProcessBuilder and returns an exit code, or null for 'did not finish within its bound'. Its default side effect simulates a real stop: target and parent stop being alive, and daemon.json is deleted;\n  - onDispatchThread = { false };\n  - sleep, a no-op that counts polls;\n  - small bounds.\n- processStarter records the ProcessBuilder of the installed daemon's start.\n\nROWS (prefix RP):\n- RP1, replacement (DoD 1). The confirmer answers true, and ensureDaemonRunning() returns true.\n  - The confirmer was asked exactly once, with the project name and pid 4242.\n  - runStop ran exactly once, with:\n    - command exactly [node, <installed>/daemon/index.js, 'stop', '--project', basePath];\n    - directory: the installed daemon's directory;\n    - an environment without NODE_OPTIONS or NODE_PATH, whose PATH holds no project entry.\n  - processStarter then ran once with [node, <installed daemon>, 'start', '--project', basePath]. With wslAgentsEnabled, that start keeps '--host 0.0.0.0', and the stop never carries it.\n  - No command anywhere contains the project-local daemon copy.\n- RP2, no stop without an explicit confirmation (DoD 2). Each row gives:\n  - ensureDaemonRunning() false;\n  - runStop and processStarter never called;\n  - daemon.json byte-identical;\n  - activationRefusal(info) exactly verifyProvenance's refusal, which is today's text.\n  The rows:\n  - the confirmer answers false;\n  - the confirmer throws;\n  - onDispatchThread answers true, and the confirmer was never asked: the EDT never prompts or waits.\n- RP3, a failed or timed-out stop keeps today's refusal (DoD 2). For each row: ensureDaemonRunning() false, processStarter never called, and the refusal stays:\n  - runStop returns 1;\n  - runStop returns null (timed out);\n  - runStop returns 0 but the target never exits. The poll count stops at the bound;\n  - the target exits but its parent stays alive past the bound;\n  - the target and parent exit, but daemon.json now names another live pid.\n  When the stop deleted daemon.json while the target still lives, selectionRefusal() carries the same refusal, so connect() shows it instead of 'Daemon not running'.\n- RP4, unchanged paths:\n  - LEGACY with a live daemon: no confirmer, no runStop, returns false.\n  - PROTECTED with a daemon this IDE verifies (a recorded spawn): no confirmer, no runStop.\n  - PROTECTED with the installed runtime unresolvable (installedRoot null): the confirmer is never asked, and the refusal stays.\n  - A second ensureDaemonRunning() while a replacement is in progress returns false without asking.\n- RP5, the production confirmer: with no IntelliJ Application (plain JUnit), it answers false and shows nothing.\n\nRED proof: run the step-5 command. The RP rows fail to compile, or fail for the expected reason; every other row passes. Record it.\n\nSize budget: 200 test lines or fewer, table-driven where possible.\n\nError handling in the tests:\n- No row starts a real process.\n- Every fake records its calls, and the assertions name the exact commands and refusal texts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "Added RP1-RP5 and amended RP-S tests first (+183 lines including harness/imports), including Windows retained-dead-pid metadata, bounded parent/target wait, corrupt metadata and retry/reentry safety. RED: exact planned Windows Gradle command exited 1 at compileTestKotlin solely on missing new seams/stopCommandOrNull and resulting inference diagnostics; production compile succeeded, existing test execution not reached. jetbrains-gradle released. RF01, WSL host and legacy test prerequisites confirmed landed in context. Root checkout used per rails; unrelated pre-existing dirty paths preserved.",
+      "startedAt": "2026-10-30T09:34:22.325Z",
+      "completedAt": "2026-10-30T09:36:37.449Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "MoeDaemonSupervisor.kt: the installed stop command and the seams. EDIT the bytes CQ-R01 and CQ-RF01 landed.\n\n1. protectedDaemonCommand(basePath, root, node, subcommand = \"start\") builds [node, daemon, subcommand, '--project', basePath] from the same installedArtifact and installedExecutable selection. '--host 0.0.0.0' is added only for 'start'. The existing callers and tests keep compiling.\n2. Constructor seams. Each defaults to production behaviour, so MoeProjectService needs no edit:\n   - replaceConfirmer: (projectName: String, pid: Int) -> Boolean = the production dialog (step 4);\n   - runStop: (ProcessBuilder) -> Int? = start it through processStarter, then waitFor(STOP_TIMEOUT_MS). On timeout, destroyForcibly it and answer null;\n   - onDispatchThread: () -> Boolean = { ApplicationManager.getApplication()?.isDispatchThread == true };\n   - sleep: (Long) -> Unit = Thread::sleep.\n   Bounds: STOP_TIMEOUT_MS = 20_000, EXIT_TIMEOUT_MS = 15_000, POLL_MS = 250. Group the seams in one small internal holder if the parameter list gets unwieldy.\n3. stopCommandOrNull(basePath) reuses the protected node lookup that protectedCommandOrRefuse uses, with subcommand 'stop'. A Refused selection answers null and leaves the refusal in place; nothing is ever looked up on PATH or in the project.\n4. The stop ProcessBuilder:\n   - its directory is the installed daemon's directory;\n   - its environment goes through applyDaemonPath, then protectedDaemonEnvironment;\n   - redirectErrorStream(true) and redirectOutput(DISCARD), so no pipe can fill and block it.\n\nError handling: building the command never throws. A refusal is logged at warn level with the reason; the path goes to the log only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Added installed stop selector, shared protected-node resolution, start-only --host wsl, injected confirmer/stop runner/EDT/sleep/exit bound, bounded production CLI runner with owned-process cleanup, and sanitized DISCARD stop builder. stopCommandOrNull has no status/refusal side effects per both architect amendments. Default confirmer fails closed until step 4; full GREEN verification batched at step 5 per plan.",
+      "startedAt": "2026-10-30T09:36:37.468Z",
+      "completedAt": "2026-10-30T09:37:10.186Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "MoeDaemonSupervisor.kt: replace an unverified daemon inside ensureDaemonRunning().\n\nIn the branch where daemon.json's daemon is alive and listening, call replacedUnverified(info) before the early return. A false answer returns false exactly as today. A true answer falls through to the existing stale-file cleanup and spawn.\n\nreplacedUnverified(info) answers false, and does nothing, unless ALL of these hold, checked in order:\n1. The profile is PROTECTED, activationRefusal(info) is non-null, and the caller is not on the EDT (onDispatchThread false). The EDT never prompts or waits: project open connects there, and the tool window's pooled connect() makes the attempt.\n2. No other replacement is in flight: an AtomicBoolean, compareAndSet.\n3. stopCommandOrNull(basePath) is non-null.\n4. Before anything is stopped, capture target = processLookup(info.pid) and parent = target.parent(). A null target means false.\n5. replaceConfirmer(projectName, info.pid) answers true. A throw is false.\n   - The confirmer is ALWAYS asked. The IDE cannot learn whether another client (VS Code, a terminal agent) shares an unverified daemon from anything it can trust. That daemon's own report would be caller-minted evidence, which the epic rails forbid using to skip a human check.\n6. runStop(stopBuilder) answers exactly 0. A null (timed out) or non-zero answer is false.\n7. Within EXIT_TIMEOUT_MS, polling every POLL_MS through sleep, all of these become true:\n   - target is not alive;\n   - parent is null or not alive;\n   - daemon.json is absent, or names a pid that isProcessAlive denies.\n   Waiting for the parent closes the old-supervisor race: a new supervisor consumes the stop sentinel when it starts, so an old supervisor that is still alive could respawn its child. If the bound runs out, the answer is false.\n\nOn true: log at info level, resetSpawnBackoff() so the cooldown cannot strand the project, and fall through. The installed daemon then starts with fresh provenance (recordProtectedSpawn, persisted by RF01).\n\nOn any false after the confirmation:\n- Keep today's refusal, with its exact text.\n- If the stop removed daemon.json while target is still alive, set selectionRefusal to that same refusal text, so connect() shows it instead of 'Daemon not running', and spawn nothing while that captured target lives.\n- Log the failing condition at warn level.\n\nError handling:\n- replacedUnverified never throws: any exception is false, and is logged.\n- The flag is released in finally.\n- No process is signalled except through the installed CLI's stop.\n- Restart Daemon (stopDaemonForRestart) is unchanged; RF04 owns it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Integrated confirmed installed-CLI stop, captured target/parent, bounded wait and fresh provenance spawn. Safety adjustment within same scope: the AtomicBoolean protects the entire protected ensure call through fall-through spawn (not only replacedUnverified), closing concurrent missing-metadata duplicate-start races. Retained captured target AND parent across retries prevents bypass after stop removes metadata. Pure bounded metadata reread avoids readDaemonInfo's known deleting/null-on-error semantics; malformed/unreadable metadata is not clearance. LEGACY body and stopDaemonForRestart unchanged. GREEN remains step 5.",
+      "startedAt": "2026-10-30T09:37:10.206Z",
+      "completedAt": "2026-10-30T09:39:05.672Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "MoeDaemonSupervisor.kt: the production replaceConfirmer, a small private function in the same file.\n\n- With ApplicationManager.getApplication() null, in unit-test mode or headless: answer false and show nothing.\n- Otherwise, on the calling (pooled) thread, run invokeAndWait on the EDT with Messages.showDialog:\n  - options [\"Keep It\", \"Stop and Replace\"], with \"Keep It\" (0) as the default;\n  - title \"Moe: Unverified Daemon\";\n  - the message: \"The daemon that .moe/daemon.json names for <projectName> (pid N) was not started by this IDE from the installed Moe runtime. Another client, such as VS Code or a terminal agent, may be using it, and stopping it disconnects them. Stop it with the installed Moe CLI and start the installed daemon?\"\n  It answers true only for choice 1. Escape or closing the dialog returns -1, which answers false.\n- The pid comes from repository content, so the text never asserts that the process IS a Moe daemon. The installed CLI's stop validates it (pid and project through /health) before signalling anything.\n\nError handling: any exception (an interrupted invokeAndWait, a disposed application) is logged and answers false.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Production confirmation now invokes the exact safe-default Keep It / Stop and Replace dialog on EDT from pooled callers; only choice 1 consents. Null application, unit-test/headless mode, direct EDT calls, exceptions and interruption fail closed (interrupt status restored). RP5 exercises default no-application behavior; dialog copy avoids trusting repository pid. No restart behavior touched.",
+      "startedAt": "2026-10-30T09:39:05.694Z",
+      "completedAt": "2026-10-30T09:39:20.836Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE, fresh.\n\n1. Hold the jetbrains-gradle shared resource while Gradle runs. Take it with moe.acquire_resource {resourceId: 'jetbrains-gradle'}; when it is busy, queue with moe.report_blocked and that resourceId. Release it afterwards, even on failure.\n2. Run the task's command from WSL: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\".\n   - This WSL host has no Linux JDK, and this Windows run is the accepted gate. Report it as Windows evidence.\n   - It must exit 0. Count the tests from build/test-results/test/TEST-com.moe.services.MoeDaemonSupervisorTest.xml, not from the console. Its fresh command, exit code and output tail are complete_task's verification evidence.\n3. `git diff --check` over the two files is clean.\n4. A read-only `git status --short` shows only those files changed by this task. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code, never by weakening an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh exact Windows command `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exited 0 (BUILD SUCCESSFUL in 11s), held jetbrains-gradle and released. Fresh XML: 391 tests, 0 failures/errors/skips across 26 classes; supervisor 29 tests including all six RP methods. Scoped diff --check clean; git status under moe-jetbrains shows only the two scoped files. Unrelated dirty paths untouched. Diff +337/-11 (test addition 179 lines).",
+      "startedAt": "2026-10-30T09:39:20.900Z",
+      "completedAt": "2026-10-30T09:39:51.206Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the two-file diff as an attacker:\n- Can any process be signalled without an explicit 'Stop and Replace': a throw, Escape, a headless IDE, or the EDT?\n- Can the stop ever run a repository or PATH binary, or inherit NODE_OPTIONS or NODE_PATH, or the project as its working directory?\n- After a failed or timed-out stop, can anything start a daemon while the old target lives, or show a weaker message than today's refusal?\n- Can the wait run unbounded, or block the EDT? Can two replacements overlap?\n- Can a respawn by the old supervisor race the new start? (The parent wait.)\n- Is LEGACY byte-for-byte unchanged? Is a verified daemon still activated without a prompt?\n- daemon.json is repository content: does its pid reach anything but the confirmer's text and the captured handle?\n- Would I be embarrassed if this shipped?\n\nFix any finding, then re-run step 5's command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        ".serena/memories/task-task-ec64165c85f246088a7224cf70b04670-handoff.md",
+        ".serena/memories/gotcha-jetbrains-replacement-retry-guard.md"
+      ],
+      "note": "Adversarial pass completed over scoped diff: consent/EDT, installed argv/env/cwd, bounded CLI and target/parent wait, guard release/reentry/retries, provenance, unchanged restart and legacy paths. Added RP6 production runner coverage and explicit guard-release assertions. Five mutants assertion-killed (RP-S Refused/Ready side effects, omitted parent, ignored consent, leaked stop CLI), then restored production bytes. Found and fixed pending-retry bypass of metadata clearance; new RP3 assertions failed on both another-live-pid repeated stop and malformed-metadata auto-spawn before one-line fix. Final exact Windows gate exited 0: 392/392 across 26 XML classes, supervisor 30/30 at 2026-10-30T09:44:37.796Z; no failures/errors/skips. Lease released. Scoped diff check clean. Source/test diff +356/-11, test growth 198 lines. Handoff/gotcha saved via Serena (declared ignored metadata paths); no direct .moe or Git writes, peers preserved. Interactive GUI and Linux execution not claimed.",
+      "startedAt": "2026-10-30T09:39:51.227Z",
+      "completedAt": "2026-10-30T09:45:56.390Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 276.5,
+  "comments": [
+    {
+      "id": "comment-c036df1a0f494ead81117a33412e9762",
+      "author": "architect-4ae016fb",
+      "content": "architect-4ae016fb, 2026-10-30: I added CQ-RF02 (task-f3485ac9) to this row's dependsOn. RF02 edits RuntimeSelectionPolicy.kt and RuntimeSelectionPolicyTest.kt (the D1-D5 rows) and adds ProfileDowngradeDialog.kt. This row will almost certainly touch the same test file (the G rows for an unverified daemon), and both rows previously depended only on RF01, so nothing serialized them. If your plan turns out not to overlap with RF02's files, drop the edge with moe.set_task_dependencies.",
+      "timestamp": "2026-10-30T07:04:18.573Z"
+    },
+    {
+      "id": "comment-10c9b24ca94c4a7b9f611e9fa91e87de",
+      "author": "architect-4ae016fb",
+      "content": "architect-4ae016fb, 2026-10-30: I planned this row and removed the CQ-RF02 dependency I added earlier.\n\nThe plan touches only MoeDaemonSupervisor.kt and MoeDaemonSupervisorTest.kt (the RP1-RP5 rows). RF02's files are RuntimeSelectionPolicy.kt, RuntimeSelectionPolicyTest.kt and ProfileDowngradeDialog.kt, so the two rows share no file and can run in parallel after RF01. dependsOn is back to [RF01].",
+      "timestamp": "2026-10-30T07:13:09.584Z"
+    },
+    {
+      "id": "comment-08300e6714524aa39f21dbe2857b1f0e",
+      "author": "architect-4ae016fb",
+      "content": "architect-4ae016fb, 2026-10-30: three notes for this row's worker. I agreed them in #architects with RF04's architect (architect-e4b7eee0).\n\n1. `--host` once task-0c72d59a lands. This row now dependsOn 0c72d59a, a HIGH security fix: JetBrains WSL agent mode starts the daemon with `--host wsl` instead of `--host 0.0.0.0`.\n   - Where steps 1 and 2 say \"--host 0.0.0.0\", read it as \"the WSL host that protectedDaemonCommand produces in the landed bytes\".\n   - Keep 0c72d59a's constant, and never write 0.0.0.0 back.\n   - RP1 asserts the landed value on 'start'. 'stop' never carries --host.\n\n2. On Windows, the stop leaves daemon.json behind. There, Node's process.kill(pid, 'SIGTERM') is TerminateProcess, so `_run`'s shutdown cleanup never runs. After a successful stop, daemon.json usually still names the now-dead pid.\n   - Step 3's condition \"daemon.json absent, or names a pid that isProcessAlive denies\" is deliberate. Do not narrow it to \"absent\".\n   - RP1's fake stop deletes the file, so add one RP1 variant that pins the Windows shape. runStop returns 0; target and parent die, processAliveProbe included; daemon.json stays in place, naming 4242.\n   - Expected: the replacement proceeds, the existing stale cleanup removes the file, and processStarter runs the installed start once.\n\n3. stopCommandOrNull has no side effect apart from its warn log. RF04 (task-de91373a) also calls it from the Windows Restart Daemon path under LEGACY, and treats null as a failed stop.\n   - On a Refused selection it neither calls onStatus nor sets selectionRefusal; those stay with protectedCommandOrRefuse.\n   - Node resolves exactly as in protectedCommandOrRefuse: the nodeExecutable seam, else resolveNodeExecutable with nodeOnProtectedPath. Share that resolution rather than copying it.\n   - RF04's plan cites stopCommandOrNull, runStop, sleep, EXIT_TIMEOUT_MS and POLL_MS by name, so keep those names.",
+      "timestamp": "2026-10-30T08:21:37.632Z"
+    },
+    {
+      "id": "comment-192b859c350d403f9e6c91367f518f14",
+      "author": "architect-4ae016fb",
+      "content": "Amendment to comment-08300e67, point 3 (architect-4ae016fb, 2026-10-30). Agreed in #architects with RF04's architect (architect-e4b7eee0, msg-4599ebde). Point 3 covered only the Refused case. This is the full contract.\n\nstopCommandOrNull(basePath)'s only side effect is the warn log on a refusal.\n- It never sets selectionRefusal, never clears it, and never calls onStatus, on Refused and on Ready alike.\n- Step 2.3's 'leaves the refusal in place' means the field keeps what it already holds. It does not store the new refusal.\n- Share only the node resolution with protectedCommandOrRefuse: the nodeExecutable seam, else resolveNodeExecutable with nodeOnProtectedPath. Never call protectedCommandOrRefuse itself. It clears the field on Ready (MoeDaemonSupervisor.kt:243), and on Refused it sets the field and calls onStatus (:246-248).\n- Unchanged: step 3's own write in replacedUnverified, when the stop removed daemon.json while the captured target lives, stays as planned. Condition 1 makes it PROTECTED-only.\n\nWhy:\n- RF04 (task-de91373a) calls stopCommandOrNull on the LEGACY Windows restart path, where null means a failed stop.\n- A stored refusal there would publish a 'Protected execution profile: …' status under LEGACY. It would also come back once the project switched to PROTECTED, because only selectionRefusal()'s PROTECTED filter (:166) hides it.\n- If it cleared the field on Ready, a live refusal would be erased, and connect() would show 'Daemon not running' instead.\n\nAdd one row to step 1, RP-S, so a violation fails here and not later in RF04's W4(d). Call stopCommandOrNull directly; `internal` visibility, like protectedDaemonEnvironment, is fine.\n- (a) LEGACY, node unresolvable (nodeExecutable answers null). Expect: it returns null, onStatus records no call, and selectionRefusal() is null. It must stay null after the test flips its profile seam to PROTECTED.\n- (b) PROTECTED with a refusal already stored by a refused start, e.g. ensureDaemonRunning() with daemon.json absent and node unresolvable. Then make node resolve. Expect: stopCommandOrNull returns the installed `stop --project <basePath>` command (no --host), selectionRefusal() still returns the earlier refusal, and onStatus gains no call.\n- Mutant for the adversarial pass: routing stopCommandOrNull through protectedCommandOrRefuse must fail (a) and (b).",
+      "timestamp": "2026-10-30T08:53:47.447Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:06:32.776Z",
+  "updatedAt": "2026-10-30T10:18:16.181Z",
+  "dependsOn": [
+    "task-fd653cfbaea541c39569dfed9452cf5c",
+    "task-0c72d59aad37467fb49e5ad699692d78",
+    "task-f23c4464c8f24efeb8d62973111839ce"
+  ],
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T06:52:08.415Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:04:20.658Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T10:17:36.854Z",
+    "wallClockMs": 11596196
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-c2da129d",
+    "qa-ba3f4f35"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:12:44.576Z",
+  "planningNotes": {
+    "approachesConsidered": "- Asking only when the daemon reports other clients. Rejected:\n  - /health has no client count, and adding one is a daemon protocol change outside this row.\n  - More importantly, anything an unverified daemon reports is caller-minted. Using it to skip the human check is what the epic rail forbids.\n  - So the confirmer is always asked. That satisfies DoD 2 as a superset, and the replacement still beats today's refuse-only behaviour.\n- Replacing on the EDT. Rejected: projectOpened runs connect() on the EDT, and a confirm-stop-wait sequence of up to ~35 s would freeze the UI. The tool window's pooled connect() does it instead.\n- Signalling the pid from the IDE. Rejected: the task requires the installed CLI's stop, which validates pid and project through /health and writes the stop sentinel.\n- Waiting only for the daemon. Rejected, because of the old-supervisor race: superviseDaemon consumes the stop sentinel at startup, so an old supervisor that is still alive could respawn. The wait also covers the daemon's direct parent.\n- Remembering declines. Rejected: every explicit connect may ask again, so the user can change their mind. The in-flight flag stops overlapping prompts.\n- An async confirmer like RF02's. Rejected: the stop needs the answer first, and a pooled thread may block on invokeAndWait.",
+    "codebaseInsights": "- MoeProjectService.connect() calls ensureDaemonRunning() and then doConnect(), which publishes activationRefusal with no retry.\n  - MoeProjectOpenListener.projectOpened calls connect() on the EDT.\n  - MoeToolWindowPanel:360 calls it through executeOnPooledThread.\n- ensureDaemonRunning returns false early for a live daemon. Below that branch it cleans stale files and spawns under the spawn-attempt cap and the 10 s cooldown (resetSpawnBackoff resets both).\n- protectedDaemonCommand builds [node, daemon, 'start', '--project', basePath] from installedArtifact and installedExecutable, plus --host for WSL agents. protectedDaemonEnvironment strips NODE_OPTIONS and NODE_PATH and filters PATH.\n- The daemon CLI's stopDaemon (packages/moe-daemon/src/index.ts:996):\n  - it validates daemon.json through validateDaemonInfoForProject (pid alive plus probeDaemonHealth);\n  - it writes the stop sentinel, then sends SIGTERM;\n  - an invalid file is cleaned up without any signal, still with exit 0.\n- superviseDaemon consumes the sentinel at startup (index.ts:885) and on child exit (index.ts:918).\n- processLookup's ProcessHandle checks the start time, so a captured handle is immune to pid reuse.",
+    "risks": "- Assumed interface: RF01's recordProtectedSpawn(basePath, process, installedDaemon) and activationRefusal(info) passing installedDaemon to verifyProvenance. Adapt to the landed signatures.\n- If the tool window never initializes, the EDT connect keeps today's refusal until the user opens the tool window.\n- The installed CLI's stop exits 0 even when it only cleaned up an invalid daemon.json without signalling. The bounded wait then fails, and selectionRefusal keeps the refusal visible while the captured target lives.\n- On Windows, SIGTERM is TerminateProcess, so daemon.json can outlive its pid. A file that names a dead pid counts as clear, and the existing stale cleanup removes it.\n- Restart Daemon (stopDaemonForRestart) is unchanged; CQ-RF04 (task-de91373a) owns the restart race and depends on this row.\n- This plan touches only MoeDaemonSupervisor.kt and MoeDaemonSupervisorTest.kt, which are file-disjoint from RF02, so RF02 is dropped from dependsOn.\n- Kotlin gate: Windows gradlew.bat through cmd.exe, under the jetbrains-gradle lease.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:12:44.600Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T09:34:22.325Z",
+  "reviewStartedAt": "2026-10-30T09:46:11.344Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :compileKotlin\r\n> Task :compileJava NO-SOURCE\r\n> Task :classes UP-TO-DATE\r\n> Task :jar\r\n> Task :compileTestKotlin UP-TO-DATE\r\n> Task :compileTestJava NO-SOURCE\r\n> Task :testClasses UP-TO-DATE\r\n> Task :instrumentTestCode SKIPPED\r\n> Task :composedJar\r\n> Task :prepareTestSandbox\r\n> Task :prepareTest\r\n> Task :test\r\n\r\nBUILD SUCCESSFUL in 11s\r\n11 actionable tasks: 6 executed, 5 up-to-date\r\nConsider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html\r\n\nFresh XML: 26 classes, 392 tests, 0 failures/errors/skips; MoeDaemonSupervisorTest 30 tests, timestamp 2026-10-30T09:44:37.796Z. Windows evidence under jetbrains-gradle lease; released.",
+    "reportedAt": "2026-10-30T09:46:11.344Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    ".serena/memories/task-task-ec64165c85f246088a7224cf70b04670-handoff.md",
+    ".serena/memories/gotcha-jetbrains-replacement-retry-guard.md",
+    ".moe/tasks/task-9eaa4c4e4ef74d43ab2538e0010b098e.json",
+    ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json",
+    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+    ".moe/tasks/task-b294377dde9e4ab6b1d422163b941115.json",
+    ".moe/tasks/task-007c0ea856e546d2a619e012815cd89f.json",
+    ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+    ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json"
+  ],
+  "completionSummary": "Implemented protected unverified-daemon replacement with explicit safe-default confirmation, installed CLI stop, sanitized environment/cwd, bounded stop and captured target/parent exit wait, and installed restart with fresh persisted provenance. Start retains --host wsl; stop has no --host. Side-effect-free stopCommandOrNull shares only protected node resolution, preserving RF04 contract. Restart method untouched; legacy behavior preserved.\nAtomic guard covers protected ensure through spawn. Failed replacement retains original refusal and captured identities across retries; both processes and bounded nondeleting metadata clearance must succeed before retry can spawn. Adversarial testing caught and fixed retry bypass with malformed/new-live-pid metadata.\nTests-first RED on missing seams; seven RP methods cover confirmed/declined/thrown/EDT/headless, stop failures/timeouts, target/parent/newpid/malformed metadata, Windows retained dead-pid metadata, reentry/retries, provenance, selector side effects and default CLI cleanup. Five mutants assertion-killed then restored. FINAL exact Windows Gradle command exited 0: 392 tests, zero failures/errors/skips, supervisor 30/30. Lease released; diff --check clean. Source/test +356/-11, 198 added test lines. Serena handoff/gotcha written. Only two scoped source/test files plus ignored Serena metadata modified; peer bytes preserved, no agent Git writes. Interactive UI, Linux execution and epic-final certification not claimed.",
+  "commits": [
+    {
+      "sha": "d6c6d6e04c6c3bf841be40d0a89681f248176fd7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T09:33:36Z",
+      "paths": [
+        ".moe/tasks/task-9eaa4c4e4ef74d43ab2538e0010b098e.json",
+        ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T09:46:36.956Z",
+      "treeId": "ab67d9d0004ef94c4f4b251877c4312b7f15239b",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "c7493fb28721d429d20b6c6ad8c4f53db85fc218",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T09:52:34Z",
+      "paths": [
+        ".moe/tasks/task-9eaa4c4e4ef74d43ab2538e0010b098e.json",
+        ".moe/tasks/task-b294377dde9e4ab6b1d422163b941115.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T09:55:56.274Z",
+      "treeId": "4170e31d96aeac73fc6f7da8acd9b9e314a4423f",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "3838998516dde19238966ed28ab2166a367b8af5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T10:13:47Z",
+      "paths": [
+        ".moe/tasks/task-007c0ea856e546d2a619e012815cd89f.json",
+        ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+        ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T10:18:16.181Z",
+      "treeId": "078f692743d79d4399b1474bc1ca5577b7908ad1",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T10:13:47Z",
+    "at": "2026-10-30T10:18:16.181Z"
+  },
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-30T10:17:36.854Z",
+  "reviewCompletedAt": "2026-10-30T10:17:36.854Z",
+  "reviewSummary": "Resumed QA independently reviewed current rails/comments and git show d6c6d6e04c6c3bf841be40d0a89681f248176fd7 (tree ab67d9d0004ef94c4f4b251877c4312b7f15239b); git branch --contains confirms moe/work-2026-10-24. Checkpoint c7493fb is board-only. Non-board +356/-11, net 345 (367 changed lines), tests +198. Scoped git diff --check passed; no weakened tests, missing required docs/config or blocking complexity issue.\n\nReran exact verification: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" => exit 0, BUILD SUCCESSFUL in 16s; fresh XML 26 classes/398 tests, zero failures/errors/skips; supervisor 30/30 at 2026-10-30T10:14:56.597Z.\nBecause peer Kotlin files are dirty, also git-archived the recorded commit and ran cmd.exe /d /c \"cd /d D:\\moe-scratch\\qa-rf03-d6c6d6e-UoQfYw\\moe-jetbrains && .\\gradlew.bat test --rerun\" => exit 0, BUILD SUCCESSFUL in 34s, all 11 tasks executed; 26 classes/392 tests, zero failures/errors/skips; supervisor 30/30 at 10:16:20.676Z. Snapshot source/test bytes match commit. jetbrains-gradle held and released.\n\nDoD1: RP1 verifies installed stop/start argv, sanitized env/cwd, start-only --host wsl, Windows dead-pid metadata and fresh persisted provenance. DoD2: RP2-RP6 cover explicit consent, decline/throw/EDT/no-app refusal, failed/timed-out stop, bounded target+parent/metadata wait, retries/reentry and CLI cleanup. RP-S pins side-effect-free selector. Reviewed CLI stop/sentinel and connect callers; legacy/verified paths preserved, Restart unchanged. DoD3 independently reproduced above.\n\nNo QA source/Git writes; peer bytes preserved. Windows unit evidence only, not interactive UI/Linux/epic-final certification; verified-local remains unavailable. Reusable gotcha retained; handoff will be updated and archived.",
+  "requiredCheckAtDone": null
+}

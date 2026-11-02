@@ -1,0 +1,84 @@
+{
+  "id": "task-f7850cde",
+  "epicId": "epic-93811519",
+  "title": "task search",
+  "description": "add task search across all columns",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add search text field to MoeToolWindowPanel header toolbar. Add a JTextField (or SearchTextField from IntelliJ platform) next to the existing epic filter dropdown in the right panel. Add a searchQuery state variable (private var searchQuery: String = \"\"). Wire an ActionListener/DocumentListener so that typing updates searchQuery and calls updateBoard(lastState). Include error handling: guard against null lastState when triggering re-render. Add a \"Search:\" label using MoeBundle.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-02-08T22:19:10.694Z",
+      "completedAt": "2026-02-08T22:19:32.971Z",
+      "note": "Added searchQuery state variable, JTextField with DocumentListener in header before epic filter. Typing triggers updateBoard re-render.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add search filtering logic to updateBoard(). After the existing epic filter (line 268-272), add a second filter step: if searchQuery is not blank, filter tasks where title or description contains the query (case-insensitive). This ensures search works across ALL columns since filtering happens before tasks are distributed to columns. Include error handling for empty/whitespace-only queries (treat as no filter).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-02-08T22:20:50.047Z",
+      "completedAt": "2026-02-08T22:21:10.671Z",
+      "note": "Added search filtering after epic filter. Renamed intermediate variable to epicFiltered, then applied case-insensitive search on title and description.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add bundle messages for search UI. Add keys: moe.panel.searchLabel=Search: and moe.panel.searchPlaceholder=Search tasks... to MoeBundle.properties for the search text field label and placeholder text.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-02-08T22:21:14.645Z",
+      "completedAt": "2026-02-08T22:21:26.693Z",
+      "note": "Added moe.panel.searchLabel and moe.panel.searchPlaceholder bundle keys under new Search section.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Test the search feature. Build the plugin with ./gradlew buildPlugin to verify compilation. Verify that: (1) search field appears in the header bar, (2) typing filters tasks across all 6 columns in real-time, (3) clearing the field restores all tasks, (4) search works in combination with epic filter (both filters apply), (5) empty/whitespace queries show all tasks. Since this is Swing UI, test via runIde sandbox.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-02-08T22:21:30.192Z",
+      "completedAt": "2026-02-08T22:23:35.347Z",
+      "note": "Plugin builds successfully. All 221 daemon tests pass."
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 1,
+  "createdAt": "2026-02-08T21:57:32.087Z",
+  "updatedAt": "2026-02-08T23:39:36.682Z",
+  "planSubmittedAt": "2026-02-08T22:01:20.873Z",
+  "planApprovedAt": "2026-02-08T22:18:43.857Z",
+  "workStartedAt": "2026-02-08T22:19:10.694Z",
+  "completedAt": "2026-02-08T22:23:42.236Z",
+  "reviewStartedAt": "2026-02-08T22:23:42.236Z",
+  "reviewCompletedAt": "2026-02-08T22:41:16.644Z",
+  "comments": []
+}

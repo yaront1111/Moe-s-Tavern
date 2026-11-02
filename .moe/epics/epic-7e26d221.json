@@ -1,0 +1,17 @@
+{
+  "id": "epic-7e26d221",
+  "projectId": "proj-3830fac7",
+  "title": "Fix critical bugs found in codebase audit",
+  "description": "Comprehensive bug sweep found 23 bugs across daemon, chat system, JetBrains plugin, VS Code extension, proxy, and scripts. 6 critical, 8 high, 9 medium severity. Key themes: race conditions in state management, WebSocket reconnection issues, chat system reliability, and missing error handling.",
+  "architectureNotes": "## Key Patterns for Fixes\n- StateManager mutex: use `this.writeMutex.runExclusive()` for all file writes\n- JetBrains EDT: wrap UI updates in `ApplicationManager.getApplication().invokeLater()`\n- Chat JSONL: add per-channel write queues to prevent concurrent append corruption\n- Cursor updates: add atomic cursor update method to StateManager\n\n## Priority Order\n1. State corruption bugs (B1, B2) — data loss risk\n2. Chat reliability (B3, B8, B9, B10, B11) — affects all agent communication\n3. Plugin stability (B4, B5, B6, B12, B13) — user-facing crashes\n4. Everything else",
+  "epicRails": [
+    "All fixes must include regression tests where possible",
+    "Never break existing API contracts — fixes should be backward compatible",
+    "JetBrains fixes must be tested FIRST, VS Code second",
+    "Run full test suite after each task completion"
+  ],
+  "status": "ACTIVE",
+  "order": 17,
+  "createdAt": "2026-03-03T22:16:05.670Z",
+  "updatedAt": "2026-03-03T22:16:05.670Z"
+}

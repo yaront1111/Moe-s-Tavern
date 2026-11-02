@@ -1,0 +1,242 @@
+{
+  "id": "task-72efb0b663ec4b3da35a685ebb30ed34",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V01a] Protected check definition shape",
+  "description": "Objective: define the structured, approval-bound shape of a protected required check: the definition an architect approves. It is consumed by CQ-V01b (task-db57e0148a9d47839c4159aab8a8c16d) and by CQ-V01 (task-bde8654052f648f9b209174c3708322b), which was split by SPIDR because a single slice would exceed QA's 400-line cap. This task supersedes task-80f76f99cca64dc1909765af71977e46, archived before any work because its DoD contradicted the code.\n\nDeliverable: a producer contract. Later slices consume these exact names.\n\ntypes/schema.ts:\n- `ProtectedCheckDefinition = { id: string; command: string; configs?: string[]; scripts?: string[]; assertionRoots?: string[] }`.\n- `TaskExecutionContract.requiredChecks?: ProtectedCheckDefinition[]`, appended after checkRefs in the canonical F03 key order. checkRefs stays as it is.\n\nstate/validators.ts: validateExecutionContract validates requiredChecks strictly and losslessly (no truncation). It refuses with INVALID_INPUT naming the exact field.\n- At most 20 definitions.\n- id: 1-64 chars of [A-Za-z0-9._-], starting alphanumeric, unique.\n- command: non-blank, single line, at most 1000 chars, kept exactly as given (the command as the runner will run it).\n- Every path list: at most 50 entries, each through normalizeAffectedFile (no globs, traversal or absolute paths), deduplicated in first-seen order.\n- Unknown keys are refused; empty lists are omitted.\n- The contract is already approval-material. A non-submission write that changes requiredChecks advances planRevision through the existing F03 derivation, unchanged. Every PLAN_SUBMITTED advances it anyway.\n\nNew pure module packages/moe-daemon/src/delivery/requiredChecks.ts:\n- definitionDigest(defs): lowercase sha256 hex of the canonical JSON of validated definitions. Key order is id, command, configs, scripts, assertionRoots; lists stay as stored.\n- protectedPaths(defs): the sorted, deduplicated union of every path list, each path with its kind.\n\ntools/submitPlan.ts: the inputSchema declares requiredChecks inside executionContract.\n\nNOT in scope:\n- measuring file content, or any Git read (CQ-V01b);\n- candidate protected entries, the delivery predicate and get_context (CQ-V01);\n- running checks;\n- docs (held for CQ-V12);\n- verified-local.\nContracts without requiredChecks behave exactly as today.\n\nVerification (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "validateExecutionContract accepts valid requiredChecks losslessly: paths normalized, deduplicated first-seen, empty lists omitted. It refuses each invalid shape with INVALID_INPUT naming the exact field: over 20 definitions; a bad or duplicate id; a blank, multiline or oversized command; an unnormalized, glob, absolute or traversal path; over 50 paths; an unknown key. Proven by new vitest cases.",
+    "submit_plan accepts executionContract.requiredChecks through its inputSchema and persists it. An updateTask write that changes only requiredChecks advances planRevision. One that writes equal definitions (same values, keys in another order) does not. Proven by new vitest cases.",
+    "definitionDigest is deterministic: equal definitions give the same digest, and any changed id, command or path gives a different one. protectedPaths returns the sorted, deduplicated union with each path's kind. Proven by unit tests.",
+    "Contracts without requiredChecks behave exactly as before, and every existing F03 contract test still passes. The only edits to those tests extend the two pinned allowlists (the FIELDS constant and the submit_plan schema parity check) with requiredChecks. No assertion is removed or weakened.",
+    "Fresh `cd packages/moe-daemon && npm test` exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Load test-driven-development.\n\nCreate packages/moe-daemon/src/delivery/requiredChecks.test.ts with ToolTestHarness. Follow state/executionContract.test.ts for submit/updateTask helpers and its exact `invalid(field)` matcher (INVALID_INPUT with context.field).\n\nCases:\n(a) Validator acceptance:\n- valid definitions round-trip losslessly, with canonical key order id, command, configs, scripts, assertionRoots;\n- exact duplicate paths are deduplicated first-seen;\n- empty or null lists are omitted;\n- an empty requiredChecks array leaves no key.\n(b) Validator refusals, each naming the exact field (e.g. executionContract.requiredChecks[1].configs[0]):\n- a non-array, or 21 definitions;\n- a non-object definition;\n- an unknown definition key, refused at its full dotted field;\n- an id that is missing, empty, 65 chars long, starts with '.', or contains a space; a duplicate id;\n- a command that is missing, blank, multi-line, 1001 chars long, or contains a control char;\n- a path that is not a string, './a', 'a//b', 'a\\\\b' (a backslash), '/abs', 'C:/x', 'a/../b', 'a/*.ts', 'a?', '[x]' or ':(glob)x';\n- 51 paths in one list.\n(c) definitionDigest: equal definitions built with different key insertion order give the same 64-hex lowercase digest. Changing an id, a command, any path, or a path's list changes it.\n(d) protectedPaths: the sorted, unique {path, kind} pairs across definitions.\n(e) submit_plan persists requiredChecks through its inputSchema.\n(f) Materiality: an updateTask that changes only requiredChecks advances planRevision by exactly 1. Equal definitions written with other key order do not advance it.\n(g) A forbidden pattern appearing only in a requiredChecks command or path is refused with CONSTRAINT_VIOLATION, and the task bytes are unchanged.\n\nOne edit in state/executionContract.test.ts: the pinned allowlist assertion (~155) expects `[...FIELDS, 'requiredChecks']`.\n- Do NOT add requiredChecks to the FIELDS constant. It drives the per-field string cases at ~62, ~128 and ~196, which must stay byte-identical.\n- The schema parity check (~216) needs no edit.\n\nRun `cd packages/moe-daemon && npx vitest run src/delivery/requiredChecks.test.ts src/state/executionContract.test.ts` and record that it fails.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/executionContract.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.test.ts",
+        "packages/moe-daemon/src/state/executionContract.test.ts"
+      ],
+      "note": "RED: focused named vitest command exit 1, 119 failed/70 passed (118 new tests plus F03 allowlist). Expected absent requiredChecks validator/schema/helper and rail handling. Snapshot 87313508 + exact two owned test overlays; log /tmp/moe-v01a-red.u2t41w2z/verification.log. Existing F03 test changed on exactly one pinned allowlist line. LF preserved; task files initially clean; unrelated dirty paths untouched. Separate native Linux dependencies, lockfile-equivalent and source byte-checked; no shared install or Git writes.",
+      "startedAt": "2026-10-24T23:19:10.730Z",
+      "completedAt": "2026-10-24T23:20:15.981Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Schema and validator. Keep each file's current line endings; task-709f6691 renormalizes them before this task. Verify that `git diff --stat` matches `git diff --ignore-cr-at-eol --stat`.\n\ntypes/schema.ts:\n- Add `export interface ProtectedCheckDefinition { id: string; command: string; configs?: string[]; scripts?: string[]; assertionRoots?: string[] }`. JSDoc: an approved check definition, i.e. the files whose bytes define it (configs, scripts) and its protected assertion roots. It is approval material, never evidence.\n- Add `requiredChecks?: ProtectedCheckDefinition[]` to TaskExecutionContract, after checkRefs.\n\nstate/validators.ts:\n- CONTRACT_FIELD_KINDS gains `requiredChecks: 'checks'`, so EXECUTION_CONTRACT_FIELDS ends with it.\n- validateExecutionContract delegates that kind to a new validateRequiredChecks(value, field).\n- Export bounds MAX_REQUIRED_CHECKS = 20, MAX_REQUIRED_CHECK_PATHS = 50 and MAX_REQUIRED_CHECK_COMMAND_CHARS = 1000.\n\nRules. Refuse, never coerce, with INVALID_INPUT naming the exact dotted field:\n- an array of at most 20 plain objects;\n- unknown keys are named at `<field>[i].<key>` (not rejectUnknownFields' bare-key error);\n- id matches /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/ and is unique;\n- command goes through validateStringValue with maxLength 1000, no newlines and no trim, so it is kept exactly;\n- each path is a string equal to its normalizeAffectedFile form (refused with 'must be normalized: <expected>'), and contains no glob or pathspec magic: none of * ? [ ] and no leading ':';\n- exact duplicates are dropped first-seen;\n- at most 50 paths per list, and an empty list is omitted;\n- each definition is a fresh object in canonical key order;\n- an empty requiredChecks array clears the key, as F03 does for empty lists.\n\nError handling: every refusal happens before any write, because validateExecutionContract already runs on every updateTask writer and in submit_plan.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.test.ts"
+      ],
+      "note": "Schema and strict validators implemented; focused validation green: 102 passed/16 filtered, exit 0. Pure schema addition after checkRefs; every-writer F03 path reused unchanged. Extra local control-character refusal prevents NUL/control paths reaching later Git and rejects all command controls; legacy validateStringValue unchanged. Corrected our boundary fixture: i>=10 originally produced 65-char IDs; padEnd(64) now tests intended bound. No assertion weakened. Stats match ignore-cr-at-eol. Log /tmp/moe-v01a-validator (latest manifest at /tmp/moe-v01a-validator.json); no Git writes/shared installs.",
+      "startedAt": "2026-10-24T23:20:16.079Z",
+      "completedAt": "2026-10-24T23:21:06.526Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "New pure module packages/moe-daemon/src/delivery/requiredChecks.ts. Its only imports are node:crypto and types: no state, no I/O.\n\n- `export function definitionDigest(defs: readonly ProtectedCheckDefinition[]): string` returns the lowercase sha256 hex of `JSON.stringify(defs.map(d => [d.id, d.command, d.configs ?? [], d.scripts ?? [], d.assertionRoots ?? []]))`. Tuples make key order irrelevant. The input is the VALIDATED contract value.\n- `export type ProtectedPathKind = 'configs' | 'scripts' | 'assertionRoots'`.\n- `export function protectedPaths(defs): { path: string; kind: ProtectedPathKind }[]` returns unique (path, kind) pairs, sorted by path and then by kind in that order.\n- The header comment says that V01b (snapshot measurement) and V01 (the delivery predicate) consume these, and that a digest is never accepted from a caller as evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.ts"
+      ],
+      "note": "Pure helpers implemented in 22 lines using node:crypto, Set and deterministic code-unit sort only; no state/I/O dependencies or evidence acceptance. Approved tuple digest encoding pinned by test. Helper tests: 8 passed/110 filtered, exit 0; /tmp/moe-v01a-helpers.fdropbve/verification.log. Digest binds each field, kind and stored list order; path union preserves distinct (path,kind) pairs. Ponytail loaded; stdlib covers requested scope.",
+      "startedAt": "2026-10-24T23:21:13.811Z",
+      "completedAt": "2026-10-24T23:21:31.762Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "submit_plan, in packages/moe-daemon/src/tools/submitPlan.ts.\n\n1. inputSchema: add requiredChecks to `executionContract.properties`, after checkRefs, so the parity check's key order matches EXECUTION_CONTRACT_FIELDS.\n   - Shape: `{ type: 'array', maxItems: MAX_REQUIRED_CHECKS, items: { type: 'object', additionalProperties: false, required: ['id', 'command'], properties: { id (maxLength 64), command (maxLength MAX_REQUIRED_CHECK_COMMAND_CHARS), configs, scripts and assertionRoots (each an array, maxItems MAX_REQUIRED_CHECK_PATHS, string items) } }, description: 'Protected required checks: approved commands plus the config/script files and assertion roots whose content defines them; changes advance planRevision.' }`.\n2. Rail scan (~350): today it builds contract text with `Object.values(executionContract).flat().join(' ')`. That turns definition objects into '[object Object]' and skips their text.\n   - Collect strings instead: every text and list value, plus each requiredChecks id, command and path.\n   - Required patterns still come only from the steps (the F03 decision).\n   - Error handling is unchanged: assertPlanRails throws before any write.\n\nRun the focused tests from step 1 until they pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "submit_plan declares structured requiredChecks after checkRefs with bounded schema, refuses unknown definition properties, and scans every nested id/command/path for forbidden rails before writes. Required-pattern behavior stays step-only. Focused suite now GREEN: 189/189, exit 0 (/tmp/moe-v01a-focused.frku2os2/verification.log). All 71 F03 cases intact except single permitted allowlist extension.",
+      "startedAt": "2026-10-24T23:21:34.264Z",
+      "completedAt": "2026-10-24T23:22:00.000Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification gate. Run it once, fresh. A shared type and the validator changed, so run the full suite.\n\n- NAMED COMMAND: `cd packages/moe-daemon && npm test`, plus `npx tsc --noEmit`.\n- Run both where node_modules matches the OS, per the epic note: on Linux use a separate native dependency install with unchanged lockfile and source hashes, never overwrite the Windows node_modules, and use a Linux-only PATH with MOE_* unset.\n- Supply the npm test output to complete_task.\n- Confirm that `git diff` on state/executionContract.test.ts shows only the single allowlist line.\n\nA failure outside this task's files counts as pre-existing only after it is shown to fail on a clean `git archive HEAD` snapshot.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh broad gate exit 0: cd packages/moe-daemon && npm test (157 files; 3652 passed, 15 pre-existing skipped), then npx tsc --noEmit exit 0. /tmp/moe-v01a-gate.ne6ne2x6/verification.log; manifest /tmp/moe-v01a-gate.json pins base 87313508 and all six owned SHA256s. Linux-only PATH, MOE_*/CLAUDE_* unset; separate native dependencies with matching lock data, archive lock/source hashes checked; no shared install. Confirmed F03 test diff is exactly the one allowlist assertion. No source edits in this step.",
+      "startedAt": "2026-10-24T23:22:06.434Z",
+      "completedAt": "2026-10-24T23:22:42.865Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review with mutation proof (load adversarial-self-review), then complete_task.\n\nAttack:\n- Can any input be silently changed: truncated, trimmed, coerced, or reordered beyond the documented dedupe?\n- Can a glob or pathspec reach a later git command? V01b uses literal pathspecs; check anyway, as defense in depth.\n- Unicode or NUL in ids and paths.\n- 20x50 paths: performance must stay fine.\n- Do the error fields name the exact element?\n- Legacy stays untouched: no requiredChecks key, and F03's tests unchanged except the allowlist line.\n\nMutation proof, in a scratch copy. Each mutation must turn a step-1 case red:\n(1) truncate an oversized command;\n(2) coerce an unnormalized path;\n(3) drop the glob check;\n(4) drop the dedupe;\n(5) drop assertionRoots from the digest tuple;\n(6) scan contract rails without the requiredChecks text;\n(7) omit requiredChecks from EXECUTION_CONTRACT_FIELDS (the parity check goes red).\nFor any survivor, add a test case. If any byte changed, rerun step 5's named command and submit THAT output.\n\nReport modifiedFiles: the six plan files. No Git writes; no .moe edits.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.test.ts",
+        "packages/moe-daemon/src/state/executionContract.test.ts"
+      ],
+      "note": "Adversarial diff review complete: bounded strict inputs/dotted errors, no silent trimming/coercion, no new state/I/O, atomic F03 validation/revision retained, first-seen dedupe, deterministic digest/path pairs, legacy preserved. All 7 planned scratch mutations killed individually: truncate 2 red, coerce16, glob15, dedupe5, assertionRoots digest2, nested rail scan5, allowlist112 incl parity. Evidence /tmp/moe-v01a-mutations.wgzy2zko; new test-file tsc exit0. No production/test bytes changed since step5 full gate (3652 passed/15 skipped; tsc0), final SHA256/HEAD audit confirmed; no redundant rerun needed. Exactly six paths, 295 additions/6 deletions; F03 only one allowlist line. LF/stat/diff-check clean. Handoff and gotcha saved to Serena. Unrelated dirty paths untouched; no Git writes; wrapper owns landing.",
+      "startedAt": "2026-10-24T23:22:45.822Z",
+      "completedAt": "2026-10-24T23:24:17.588Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-bf86954dc6bc43279d96d77cf0ebff88",
+    "task-709f669139764663926c04ed72cdae5d"
+  ],
+  "priority": "HIGH",
+  "order": 227.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T22:42:49.126Z",
+  "updatedAt": "2026-10-24T23:55:17.768Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T22:43:23.404Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-24T23:54:35.217Z",
+    "wallClockMs": 4271813
+  },
+  "contextFetchedBy": [
+    "architect-6e3edf85",
+    "worker-9cda703c",
+    "qa-b0c1741e"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T22:46:31.489Z",
+  "planningNotes": {
+    "approachesConsidered": "requiredChecks becomes a ninth executionContract key. Approval materiality, every-writer validation and get_context exposure then come from the F03 machinery for free, with no new revision authority. Rejected: a top-level Task field, which would need its own planRevision term in derivePlanRevision plus a second submit_plan parameter, duplicating F03. Rejected: adding requiredChecks to the F03 test's FIELDS constant, which drives string-only per-field cases. The digest uses positional tuples, so key order can never change it.",
+    "codebaseInsights": "- validators.ts: CONTRACT_FIELD_KINDS drives EXECUTION_CONTRACT_FIELDS, which drives unknown-key refusal and iteration. rejectUnknownFields reports the bare key, so nested definitions need their own dotted field.\n- normalizeAffectedFile collapses ./, // and backslashes but allows globs, hence the extra glob/pathspec check.\n- taskStore derivePlanRevision deep-compares the contract (sameSanitizedSurface, key-order-insensitive). Every PLAN_SUBMITTED bumps the revision, so materiality is proven through updateTask.\n- submitPlan: the executionContract inputSchema has additionalProperties false, and the rail scan flattens values with .flat().join(' '), which breaks for objects.\n- state/executionContract.test.ts: FIELDS (lines 11-12) feeds the it.each cases at 62/128/196; the allowlist assertion is at 155 and the schema parity check at 216.\n- schema.ts and validators.ts are CRLF today; dependency task-709f6691 renormalizes them.",
+    "risks": "- The allowlist test edit must be exactly one line (~155). Touching FIELDS breaks F03's string cases and violates DoD 4.\n- The rail scan bug would let forbidden text hide in a check command if the flatten is left as is.\n- V01b (snapshot) and V01 (predicate) consume definitionDigest and protectedPaths under these exact names. Renaming them breaks the split contract.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/state/executionContract.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T22:46:31.564Z",
+  "workStartedAt": "2026-10-24T23:19:10.730Z",
+  "reviewStartedAt": "2026-10-24T23:24:26.639Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh native-Linux archive 87313508d9b538bef85d0de99143435108d81b88 + exact six owned overlays; source SHA256s and HEAD unchanged at final audit. Log: /tmp/moe-v01a-gate.ne6ne2x6/verification.log\n Test Files  157 passed (157)\n      Tests  3652 passed | 15 skipped (3667)\n   Start at  01:22:12\n   Duration  19.84s\nnpm test exit 0; subsequent npx tsc --noEmit exit 0. New test-file explicit tsc also exit 0. Linux-only PATH; MOE_*/CLAUDE_* unset; native dependencies with matching lockfile; original Windows node_modules untouched.",
+    "reportedAt": "2026-10-24T23:24:26.639Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/requiredChecks.test.ts",
+    "packages/moe-daemon/src/state/executionContract.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/delivery/requiredChecks.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    ".moe/tasks/task-709f669139764663926c04ed72cdae5d.json",
+    ".moe/tasks/task-72efb0b663ec4b3da35a685ebb30ed34.json",
+    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
+  ],
+  "completionSummary": "Delivered protected required-check producer contract across six files: typed schema, strict lossless/dotted validation with bounds and first-seen path dedupe, submit_plan schema and nested rail scanning, pure deterministic tuple digest and sorted (path,kind) union. Existing F03 every-writer persistence/revision remains unchanged. F03 tests changed on exactly one allowed allowlist assertion; FIELDS untouched. 118 new tests; focused 189/189. Full daemon 3652 passed/15 pre-existing skipped, both source and explicit new-test typechecks exit0. Seven required isolated mutations killed individually (2/16/15/5/2/5/112 failures). Evidence manifests/logs under /tmp/moe-v01a-gate.json and /tmp/moe-v01a-mutations.json; final source hashes and base unchanged. Adversarial review complete; 295 additions/6 deletions, LF preserved. Handoff/gotcha saved to Serena. No shared installs, unrelated dirty-path changes, Git writes or direct .moe edits; wrapper owns completion landing. Definitions are approval material only; no snapshot/content measurement, evidence acceptance or verified-local enablement.",
+  "commits": [
+    {
+      "sha": "a2819d2d76708068bc3e21c46b23b8a887f7f7dc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-9cda703c@2026-10-24T23:18:30Z",
+      "paths": [
+        ".moe/tasks/task-709f669139764663926c04ed72cdae5d.json",
+        ".moe/tasks/task-72efb0b663ec4b3da35a685ebb30ed34.json",
+        "packages/moe-daemon/src/delivery/requiredChecks.test.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.ts",
+        "packages/moe-daemon/src/state/executionContract.test.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-9cda703c",
+      "recordedAt": "2026-10-24T23:24:47.962Z",
+      "treeId": "998291a7e209e5a3acbdbb7c7fa753d6ba1aa34a",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "e7730a70d791b515c55a80437d43be70d975f33c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T23:51:16Z",
+      "paths": [
+        ".moe/tasks/task-72efb0b663ec4b3da35a685ebb30ed34.json",
+        ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T23:55:17.768Z",
+      "treeId": "5593d7e0c90d0622caf57301e48bceed0131edb6",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T23:51:16Z",
+    "at": "2026-10-24T23:55:17.768Z"
+  },
+  "completedAt": "2026-10-24T23:54:35.217Z",
+  "reviewCompletedAt": "2026-10-24T23:54:35.217Z",
+  "reviewSummary": "Reviewed completion commit a2819d2 (on moe/work-2026-10-24). Source+test diff: 295 added / 6 deleted (~301 LOC, under 400). diff --check clean, no forbidden patterns.\n\nRe-ran on a fresh `git archive a2819d2` snapshot with native Linux deps (lock JSON equal), Linux-only PATH, no MOE_* or CLAUDE_* variables:\n- `cd packages/moe-daemon && npm test`: exit 0, 157 files, 3652 passed / 15 skipped (matches task.verification).\n- `npx tsc --noEmit`: exit 0.\n- Focused requiredChecks + executionContract tests: 189/189.\n\nDoD:\n(1) Strict bounded validator: bounds 20/50/1000; id regex and uniqueness; command blank/multiline/control/oversize refusal, kept exact; paths must already be normalized, no glob/pathspec/control chars; first-seen dedupe; empty lists omitted; unknown keys refused at the dotted field. Exact-field tests cover each case.\n(2) submit_plan schema and persist/reload are tested. An updateTask that changes requiredChecks advances planRevision by +1. Reordered keys or duplicate paths do not advance it.\n(3) The digest and protectedPaths are pinned by tests.\n(4) The only F03 test edit is the line-155 allowlist extension, as the plan required. FIELDS is untouched, and the parity check auto-extends. No assertion weakened.\n(5) Reproduced.\n\nMy own 5 scratch mutations were all killed: unique-id check, prototype check, empty-list omit, path dedupe, id length.\n\nLean code, no scope creep.",
+  "requiredCheckAtDone": null
+}

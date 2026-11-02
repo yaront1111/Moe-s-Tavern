@@ -1,0 +1,221 @@
+{
+  "id": "task-c83d78475cf443688b571d4d508fde8e",
+  "epicId": "epic-be924fb8",
+  "title": "bug: staleLockReason compares the lock's resolved projectPath with the raw --project, so `--project //x` (Linux) or `/x` (native Windows) reads a live lock as 'projectPath mismatch'",
+  "description": "After task-25ba449a, comparableProjectPath reads raw `//x` as UNC (Linux) and raw `/x` as POSIX (win32). The lock records path.resolve(projectPath) instead ('/x', 'C:\\x'), so staleLockReason (packages/moe-daemon/src/index.ts) says 'projectPath mismatch' and removeStaleLock may delete a LIVE lock. This is reachable only in a start race before daemon.json exists; a daemon.json carrying those raw spellings is already foreign under isForeignDaemonInfo. Likely fix: compare against canonicalProjectPath(projectPath) in staleLockReason, with a regression row for each spelling.",
+  "definitionOfDone": [
+    "staleLockReason never reports 'projectPath mismatch' for a lock written by the same --project spelling (raw //x on Linux, /x on native Windows, relative paths).",
+    "A regression test covers each spelling without touching the live .moe."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS ONLY. Load test-driven-development first.\n\nPrerequisite: task-25ba449a is DONE (dependsOn).\n- Confirm it landed: `git log moe/work-2026-10-24 --grep 'Moe-Task: task-25ba449ab87d4039a283426f07302cbc'`.\n- Confirm staleLockReason in packages/moe-daemon/src/index.ts compares against `canonicalProjectPath(projectPath)`. If that line is absent, stop and call moe.request_replan naming it. This plan never edits index.ts.\n- If 25ba449a's landed tests already assert staleLockReason's reason for every spelling below plus the mismatch control, add only the rows that are missing.\n\nIn packages/moe-daemon/src/index.test.ts:\n- Add `staleLockReason` to the `./index.js` import list.\n- Add X15 right after X14, inside `describe('native aliases of --project')`, and reuse that block's fixture:\n  - beforeEach chdirs to path.dirname(testDir) and builds `alias`: POSIX `/${testDir}` (raw //x), or on win32 testDir without its drive, with / separators (/x on the cwd's drive);\n  - afterEach restores the cwd;\n  - the enclosing block supplies DEAD_PID and lockPath().\n  If 25ba449a reshaped that block, put X15 wherever the alias/cwd fixture lives.\n- Spellings: canonical testDir, alias, relative path.basename(testDir), and dotted `./${base}/`.\n- For each WRITER spelling:\n  (1) acquireLock(writer) is true.\n  (2) Every READER spelling gets staleLockReason(reader) === null. The owner is this live process and the lock is fresh.\n  (3) Rewrite only the lock JSON's pid to DEAD_PID, keeping acquireLock's projectPath and createdAt. Every reader then gets exactly 'lock owner not alive'. The mismatch check runs before the liveness check, so this proves the path comparison passed.\n  (4) fs.rmSync(lockPath()) before the next writer.\n- Compare [writer, reader, reason] tuples, so a failure names the spelling pair.\n- Control: write a fresh lock with a live pid, recorded for path.join(testDir, 'moved'). Every reader gets 'projectPath mismatch'. This pins that branch, so 'never mismatch' can't be met by deleting the check.\n- Error handling in the test: failures must surface, never be swallowed.\n  - No try/catch around assertions or fs calls.\n  - Clean up with fs.rmSync WITHOUT force, so a lock at the wrong path throws.\n  - Never use releaseLock for this: it ignores unlink errors and would hide a wrong path.\n  - JSON.parse of the lock lets a malformed lock throw.\n- Rules:\n  - mkdtemp testDir only, never the live .moe;\n  - no process.platform or path spies (the alias is native on each OS);\n  - no child process (X14 owns contention);\n  - no new helper or file;\n  - X1-X14 stay unchanged.\n\nMutation proof, only in your scratch snapshot copy (never the shared tree, never committed):\n(a) staleLockReason compares the raw projectPath: every tuple with an alias reader must fail by assertion.\n(b) Delete the mismatch line: the control must fail.\nKeep both outputs.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Added only import + X15 (+27 lines). Prerequisite 25ba449a DONE/landed per epicSiblings (aeeca045); canonicalProjectPath comparison verified. Scratch HEAD d02883e snapshot overlays only index.test.ts. RED: raw-path mutant fails all 8 alias-reader comparisons (4 writers × live/dead); removing mismatch check fails control. Logs /tmp/moe-c83-mutant-{raw,no-mismatch}.log, both rc1 assertion failures. GREEN X15 1 passed/36 filtered, rc0 (/tmp/moe-c83-green.log). Existing dirty peer paths left untouched. No runtime changes.",
+      "startedAt": "2026-10-30T14:47:55.255Z",
+      "completedAt": "2026-10-30T14:48:40.192Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "VERIFY, once, after step 1. The shared checkout's packages/moe-daemon/node_modules is win32, and Linux vitest can't load rolldown from it, so run both legs in snapshots.\n\nLinux:\n- Follow mem:gotcha-daemon-linux-snapshot-gate and mem:gotcha-linux-vitest-reuse-native-node-modules:\n  - git archive HEAD of the whole repo;\n  - overlay ONLY packages/moe-daemon/src/index.test.ts and cmp it against the worktree;\n  - link a Linux node_modules whose package-lock matches;\n  - run under env -i, so MOE_* is unset, with NO_COLOR=1.\n- Run exactly `cd packages/moe-daemon && npm test` (the full daemon package suite, about 20s). Its exitCode and outputTail are the complete_task verification.\n\nNative Windows:\n- Use the same single-file overlay in a Windows temp snapshot (mem:gotcha-gate-hermetic-snapshot-from-wsl, mem:gotcha-windows-fixture-cwd-cleanup).\n- Run `cd packages/moe-daemon && npx vitest run src/index.test.ts`. X15 must RUN, not skip, with the drive-less /x alias. Cite the counts and the log path.\n\nIf anything unrelated fails:\n- reproduce it at the same HEAD without the overlay;\n- file a bug row;\n- cite both runs, and don't fix it here.\n\nDelete only your own mktemp dirs, guarded by exact path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Fresh gates on whole-repo HEAD d02883e archives with only index.test.ts overlay (cmp equal), matching-lock native deps and MOE_*/CLAUDE* absent. Linux exact `cd packages/moe-daemon && npm test`: rc0, 208 files passed, 6041 passed/19 existing skipped (6060), /tmp/moe-c83-linux-gate.log. Native Windows `cd packages/moe-daemon && npx vitest run src/index.test.ts`: rc0, 34 passed/3 existing skipped (37), /tmp/moe-c83-windows-gate.log. Additional X15-only verbose run confirms X15 actually runs on Windows (/tmp/moe-c83-windows-x15.log). No unrelated failures.",
+      "startedAt": "2026-10-30T14:48:40.216Z",
+      "completedAt": "2026-10-30T14:49:28.616Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Check:\n- Isolation: no lock survives between writers. A failing assertion still restores the cwd (afterEach), and the outer afterEach removes testDir. Nothing depends on X14's child or on test order.\n- Spellings:\n  - DEAD_PID is ESRCH on both OSes (the existing 'DEAD_PID is not a live pid here' row);\n  - the Windows alias needs the cwd on testDir's drive (the fixture asserts this);\n  - dotted and trailing-separator forms;\n  - 8.3 short tmp names.\n- Expectations are exact strings and tuples, never toBeFalsy or toBeTruthy.\n- Diff: only index.test.ts, about 40 net lines or fewer:\n  - the import plus X15;\n  - no index.ts or runtime change;\n  - no new skip or todo;\n  - X1-X14 untouched.\nFix any finding and rerun the step-2 gate.\n\nThen call complete_task with:\n- the Linux verification;\n- the Windows counts;\n- both mutant results;\n- one line per DoD item:\n  - DoD1: the fix landed in 25ba449a, and X15 asserts it for raw //x (Linux), /x (native Windows), relative and dotted spellings;\n  - DoD2: temp testDir only, never the live .moe.\nName the residual non-goals: symlinks/junctions, 8.3 short names, \\\\?\\ prefixes, and case-insensitive macOS volumes. path.resolve never folded these, so they are pre-existing and not this row.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "note": "Adversarial self-review complete: exact diff is import + X15, +27 lines, X1-X14 untouched, no runtime edits/new skip/todo. Every writer lock removed without force; hard acquisition/fs/parse failures surface; soft reason assertions allow all four writers/live+dead cases while still failing the test. Nested afterEach restores cwd and outer cleanup removes mkdtemp fixture on assertion failure; no owned children added or order dependency. Existing DEAD_PID ESRCH and same-drive alias checks passed on Linux/Windows. Inputs are bounded native fixture paths; null/malformed/injection inputs aren't newly introduced behavior. Symlinks/junctions, 8.3 short names, \\\\?\\ prefixes and case-insensitive macOS volumes remain pre-existing non-goals. No findings; gate rerun unnecessary. Fresh gates 6041 Linux passes, 34 Windows passes; Windows X15 verbose 1/1. cmp matches both snapshots and current daemon baseline unchanged from d02883e; diff --check clean.",
+      "startedAt": "2026-10-30T14:49:28.643Z",
+      "completedAt": "2026-10-30T14:50:07.443Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Parked as superseded. qa-ba3f4f35's 13:49Z reject of task-25ba449a (issue 2: staleLockReason vs raw --project, live-lock deletion) puts this row's whole scope into 25ba449a's rework as release-blocking, and explicitly says this LOW follow-up is not an authorized deferral. Planning it in parallel would duplicate the work on packages/moe-daemon/src/index.ts while 25ba449a's fixer edits it. Archive it once 25ba449a is DONE, or re-promote it if anything is left over.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-25ba449ab87d4039a283426f07302cbc"
+  ],
+  "priority": "LOW",
+  "order": 305.6,
+  "comments": [
+    {
+      "id": "comment-39e15fe006ba415abafad801c645eddd",
+      "author": "worker-5ebbf433",
+      "content": "Correction from the filer (worker-5ebbf433), 2026-10-30: this description understates the reach. This is a regression introduced by task-25ba449a (86a5dca9), not a LOW edge case.\n\n1. Same-spelling start race: QA (qa-ba3f4f35) confirmed it with two real processes. The repro is /tmp/qa25ba-lock-race.mjs, with logs in /tmp/qa25ba-race-{candidate,parent}.log. On the candidate, B replaces live A's lock for raw //tmp/x. On the parent, reason=null and acquireLock=false.\n\n2. Mixed spellings against a fully running daemon (from source, not run): A runs with `--project /tmp/x`, so daemon.json and the lock both record '/tmp/x'. B then starts with `--project //tmp/x` on Linux. The native-Windows equivalent is A on `C:\\x` and B on `/x` from a C: cwd. validateDaemonInfoForProject returns a non-foreign 'projectPath mismatch', so existingDaemonBlocksStart calls cleanupStaleDaemonFiles. That deletes A's live daemon.json, and staleLockReason's mismatch unlinks A's lock. B then starts a second state writer on the next port. On the parent, both spellings compare equal.\n\nFix direction: compare against canonicalProjectPath(projectPath) (native path.resolve of our own --project) in staleLockReason and validateDaemonInfoForProject, and add regression rows for both cases on Linux and native Windows. This belongs in the 25ba449a reopen. Once that lands, this row is a duplicate.",
+      "timestamp": "2026-10-30T13:50:46.440Z"
+    },
+    {
+      "id": "comment-5eaa611bd3dd4c02b410db307a2cf78e",
+      "author": "worker-093a65d0",
+      "content": "@architect-899a90d6 task-25ba449a's reopen (rev2, worker-093a65d0) supersedes this row; it is not a deferral. The fix:\n- staleLockReason compares the lock's recorded path with canonicalProjectPath(--project). probeDaemonHealth and validateDaemonInfoForProject resolve only the caller's own path; recorded and reported paths are still compared as written.\n- Tests: X12 (alias start, status and stop keep a healthy daemon.json and lock), X13 (probe), and X14, a two-process lock-contention test for canonical/alias and alias/alias. All pass on Linux and native Windows.\n\nOnce task-25ba449a is DONE, this row can be archived without planning. The adjacent pre-existing issues are filed separately: task-eea78d1d (symlink spelling) and task-4ca62c89 (empty-lock window).",
+      "timestamp": "2026-10-30T14:30:00.971Z"
+    },
+    {
+      "id": "comment-787e79b7177642d8afe88ad3a8e02079",
+      "author": "architect-899a90d6",
+      "content": "Planner note on comment-5eaa611b, for QA: this row was deliberately kept, not archived. It was re-promoted to PLANNING at 14:24Z. Its DoD needs a direct staleLockReason guarantee for each spelling, including relative x and ./x/. 25ba449a's X12–X14 never call staleLockReason and never use a relative spelling. Plan rev 1 is tests-only: X15 in index.test.ts, with no index.ts edit. It depends on 25ba449a's landed canonicalProjectPath comparison (aeeca045). Review it as regression coverage of that fix, not as a duplicate of it.",
+      "timestamp": "2026-10-30T14:51:41.428Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:41:08.564Z",
+  "updatedAt": "2026-10-30T14:59:55.433Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T14:24:51.983Z",
+    "seq": 2
+  },
+  "contextFetchedBy": [
+    "qa-ba3f4f35",
+    "architect-899a90d6",
+    "worker-c2da129d",
+    "qa-952969be"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:24:54.415Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-10-30T14:59:34.048Z",
+    "wallClockMs": 2079633
+  },
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:34:23.329Z",
+  "executionContract": {
+    "intendedBehavior": "Regression coverage only; no runtime change. staleLockReason judges a lock written by acquireLock under any spelling of the project's own directory by its owner, never as 'projectPath mismatch'. The spellings are canonical absolute, the native alias (raw //x on Linux, drive-less /x on native Windows), relative x and ./x/. The owner verdicts are: null when the owner is live and the lock fresh, 'lock owner not alive' when the owner is dead. A lock recorded for another directory still reads 'projectPath mismatch'.",
+    "acceptanceCriteria": [
+      "X15 in packages/moe-daemon/src/index.test.ts asserts exact [writer, reader, reason] tuples for every writer x reader over the four spellings: null with a live owner, 'lock owner not alive' with a dead owner.",
+      "A control asserts 'projectPath mismatch' for a live, fresh lock recorded for another directory, for every reader spelling.",
+      "A scratch mutant comparing the raw projectPath fails every alias-reader tuple, and a mutant without the mismatch line fails the control.",
+      "The full daemon suite passes in a Linux-native snapshot, and src/index.test.ts passes natively on Windows with X15 run, not skipped."
+    ],
+    "invariants": [
+      "packages/moe-daemon/src/index.ts is not modified by this task.",
+      "Existing X1-X14 rows are unchanged; no new skip or todo.",
+      "Tests touch only mkdtemp directories, never the live .moe.",
+      "No try/catch swallows a test failure; cleanup uses fs.rmSync without force."
+    ],
+    "compatibility": [
+      "No MCP, daemon.json or daemon.lock shape change."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/index.test.ts: add staleLockReason to the ./index.js import list, and one X15 row inside describe('native aliases of --project'), reusing its alias/cwd fixture plus DEAD_PID and lockPath()."
+    ],
+    "reuse": [
+      "task-25ba449a's native-alias fixture (cwd and alias), DEAD_PID, lockPath(), acquireLock and staleLockReason from index.ts named exports."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/index.ts staleLockReason checks in order: malformed, foreign (null), projectPath mismatch, owner not alive, timeout.",
+      "packages/moe-daemon/src/index.ts acquireLock writes {pid, projectPath: canonicalProjectPath(projectPath), createdAt} with O_EXCL.",
+      "task-25ba449a lands staleLockReason comparing against canonicalProjectPath(projectPath), and describe('native aliases of --project') with X12-X14 in index.test.ts."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test",
+      "cd packages/moe-daemon && npx vitest run src/index.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Archive as a duplicate of 25ba449a. Rejected: the human re-promoted the row at 14:24Z, and its DoD names relative spellings plus a direct staleLockReason guarantee that 25ba449a's X12-X14 never assert.\n2. Fold the rows into 25ba449a. Rejected: that task is in its final self-review under a size budget, and both would edit the same file at once.\n3. Re-implement the source fix. Rejected: 25ba449a owns index.ts, and the fix (canonicalProjectPath in staleLockReason) is already in its working tree.\n4. A real-process contention matrix. Rejected: X14 already has one. An in-process owner (this live pid) tests the reason function deterministically and cheaply.",
+    "codebaseInsights": "- staleLockReason (index.ts ~220) checks in this order: malformed, foreign (null), projectPath mismatch, owner not alive, timeout. So a dead-owner lock's reason shows whether the path check passed.\n- acquireLock records canonicalProjectPath(projectPath), which is path.resolve.\n- comparableProjectPath resolves only relative input. An absolute //x is read as UNC on every OS, and /x as POSIX. That is why raw aliases mismatched while relative spellings always matched, so the relative rows are a regression guard, not a red test.\n- 25ba449a's describe('native aliases of --project') is nested in 'daemon.json across the WSL boundary', so DEAD_PID, lockPath() and jsonPath() are in scope.\n- staleLockReason is already in index.ts's named exports.\n- tsconfig excludes *.test.ts, and vitest transpiles with esbuild, so neither the build nor vitest typechecks the test file. Keep types simple.",
+    "risks": "- 25ba449a's QA loop may reshape the native-aliases block. This row is claimable only after 25ba449a is DONE, so adapt the placement rather than waiting or editing its rows.\n- isEpicFinal:true here is only highest-order drift: the epic is a perpetual bucket with no finalTaskId (mem:decision-epic-final-designation). The regression scope is the full daemon package suite, not a whole-epic pass.\n- The Windows leg needs a Windows snapshot.\n- Residual aliases that path.resolve can't fold (symlinks/junctions, 8.3 names, \\\\?\\, case-insensitive macOS volumes) are pre-existing and out of scope.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/index.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:34:23.360Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T14:47:55.256Z",
+  "reviewStartedAt": "2026-10-30T14:50:37.393Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh isolated whole-repo HEAD d02883e snapshot; only packages/moe-daemon/src/index.test.ts overlay, cmp equal; matching-lock Linux dependencies; env -i, NO_COLOR=1.\n Test Files  208 passed (208)\n      Tests  6041 passed | 19 skipped (6060)\n   Start at  16:48:43\n   Duration  37.84s (tests 93%, import 4%, transform 2%)\nLog: /tmp/moe-c83-linux-gate.log",
+    "reportedAt": "2026-10-30T14:50:37.393Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/index.test.ts",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+    ".moe/tasks/task-e27456ad67b64bc292080ea3a8b92f26.json"
+  ],
+  "completionSummary": "Tests-only: index.test.ts +27 lines, staleLockReason import + X15. X1-X14/runtime unchanged; self-review and diff --check clean.\nDoD1: prerequisite 25ba449a aeeca045 landed the canonicalProjectPath fix; X15 directly asserts exact live/dead reason tuples for every writer×reader across canonical, raw //x (Linux), drive-less /x (native Windows), relative and dotted/trailing spellings, plus wrong-directory mismatch control.\nDoD2: uses only existing mkdtemp testDir/cwd fixture, never live .moe; rmSync without force; no swallowed errors.\nLinux whole-repo HEAD d02883e snapshot with only owned file overlaid/cmp verified, matching-lock native deps and clean env: 208 files, 6041 passed/19 existing skips, rc0. /tmp/moe-c83-linux-gate.log.\nNative Windows same snapshot/overlay: 34 passed/3 existing skips, rc0 (/tmp/moe-c83-windows-gate.log). Verbose X15-only confirms run/pass: /tmp/moe-c83-windows-x15.log.\nScratch raw-path mutant rc1 with 8 alias-reader assertion failures (4 writers×live/dead); no-mismatch mutant rc1 at mismatch control. Logs /tmp/moe-c83-mutant-raw.log and /tmp/moe-c83-mutant-no-mismatch.log. Restored X15 passed. Both snapshots cleaned, logs kept; Serena handoff saved.\nResidual pre-existing non-goals (path.resolve never folded): symlinks/junctions, 8.3 short names, \\\\?\\ prefixes, case-insensitive macOS volumes.",
+  "commits": [
+    {
+      "sha": "0dc350fb7775729c8f2c6512560cc98844cfb28f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T14:47:11Z",
+      "paths": [
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+        ".moe/tasks/task-e27456ad67b64bc292080ea3a8b92f26.json",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T14:50:55.838Z",
+      "treeId": "537751ce44230a8bf8a2efffd2db1b15d05a03a8",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-952969be@2026-10-30T14:56:36Z",
+    "at": "2026-10-30T14:59:55.433Z"
+  },
+  "completedAt": "2026-10-30T14:59:34.048Z",
+  "reviewCompletedAt": "2026-10-30T14:59:34.048Z",
+  "reviewSummary": "Reviewed completion 0dc350fb (on moe/work-2026-10-24, pushed). Non-board diff: packages/moe-daemon/src/index.test.ts +27/-0, i.e. the staleLockReason import and X15. index.ts is untouched (invariant). X1-X14 are unchanged, there is no new skip or todo, no try/catch, and cleanup uses fs.rmSync without force. Size is far under the cap.\n\nRe-ran independently in a fresh Linux snapshot of the whole repo at HEAD b44951dd, with a lock-matching npm ci, env -i, NO_COLOR=1. The worktree index.ts and index.test.ts equal HEAD.\n- `cd packages/moe-daemon && npm test`: rc0, 208 files passed, 6047 passed / 19 skipped (6066). Log /tmp/moe-c83qa-linux-full.log.\n- X15 alone: 1 passed, 36 filtered.\n\nMutants in the scratch index.ts, restored and cmp'd afterwards:\n- Raw projectPath compare in staleLockReason: rc1, 8 AssertionErrors, one per live/dead array for each of the 4 writers, so every alias-reader tuple fails (/tmp/moe-c83qa-mut-raw.log).\n- Mismatch line deleted: rc1, the foreign-directory control fails (/tmp/moe-c83qa-mut-nomm.log).\n\nNative Windows node v24 in a Windows temp snapshot of HEAD, robocopied node_modules with vitest 5.0.5 equal to the lock: `npx vitest run src/index.test.ts` rc0, 34 passed / 3 existing skips. Verbose output shows X15 RAN and passed with the drive-less /x alias (/tmp/moe-c83qa-win.log). X12-X14 also pass.\n\nDoD1: X15 asserts exact [writer, reader, reason] tuples across the canonical, alias (//x on Linux, /x on Windows), relative and ./base/ spellings. Live owner gives null, dead pid gives 'lock owner not alive', and a lock for another directory gives 'projectPath mismatch'. The fix itself is prerequisite 25ba449a, which staleLockReason now uses (canonicalProjectPath at index.ts:228). DoD2: mkdtemp testDir only, never the live .moe.\n\nSecond-pass complexity review: no findings. Residual non-goals: symlinks/junctions (task-eea78d1d), 8.3 names, \\\\?\\ prefixes, case-insensitive macOS volumes. Scratch snapshots deleted.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,338 @@
+{
+  "id": "task-efbf1742544b44cb81d6057eb4d2884f",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: check-architecture run from the candidate's own packages/moe-daemon/dist trusts every module index.ts imports, but requiredChecks scripts protect only the files they name",
+  "description": "In Moe's own repo, the CQ-V10 check `node packages/moe-daemon/dist/index.js check-architecture --rules arch.json` runs code built from the candidate. V01 protected drift covers only the listed scripts (checkArchitecture.ts, architectureRules.ts). A candidate can still change the verdict with no protected-check-changed token by editing context/repositorySource.ts, util/cachedPlanPaths.ts, util/logger.ts, or any other module dist/index.js loads, for example by serving '' content or by overriding stdout/exitCode.\nFix (at activation, V12): run the check from a runner-provisioned trusted install built at the base revision, or protect the import closure. This is not exploitable today, because nothing dispatches the check and verified-local is off.",
+  "definitionOfDone": [
+    "A candidate that edits a non-listed module the checker imports cannot turn a failing architecture check into a delivered pass.",
+    "Legacy/observe behavior unchanged; tests pin the refusal."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. task-43088e9b (verified-local under deliveryPolicy legacy) and CQ-V06 (task-6a5d5a13) both edit policy.ts, and 43088e9b also edits requiredChecks.strong.test.ts. Both land before this row through dependsOn. Re-read policy.ts (evaluateDeliveryEvidence, protectedCheckShortfall, TOKEN_REASONS, describeMissingEvidence), requiredChecks.ts and the verified-local fixture in requiredChecks.strong.test.ts first.\n\nIn packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts, reuse its verified-local fixture: an approved snapshot, a candidate whose protectedEntries equal it, and a runner-observed exit-0 run of each approved command on the candidate's tree in an approved environment.\n\nROWS (prefix UC):\n- UC1, the classifier untrustedArchitectureChecks(defs), table-driven. Each case expects exactly the listed ids.\n  - Accepted (no id):\n    - 'moe-daemon check-architecture --rules arch.json';\n    - the same with --base <40-hex> --tree HEAD;\n    - the same with surrounding whitespace, which is trimmed;\n    - 'npm test', which neither mentions the checker nor protects its sources.\n  - Refused (its id). The command mentions check-architecture (case-insensitive), or its scripts include a path ending 'src/commands/checkArchitecture.ts' or 'src/delivery/architectureRules.ts', and it is not exactly the installed form:\n    - 'node packages/moe-daemon/dist/index.js check-architecture --rules arch.json';\n    - 'npx moe-daemon check-architecture ...';\n    - './node_modules/.bin/moe-daemon check-architecture';\n    - 'MOE_X=1 moe-daemon check-architecture';\n    - the installed form followed by '; true', '&& node x.js', '| cat', '$(id)', a backtick, or a newline;\n    - a quoted argument;\n    - two spaces between words;\n    - 'npm run arch' whose scripts list packages/moe-daemon/src/commands/checkArchitecture.ts.\n- UC2, delivery under verified-local (DoD 1). An approved def running 'node packages/moe-daemon/dist/index.js check-architecture --rules arch.json' has every other piece of evidence satisfied, including a passing runner run and equal protectedEntries. evaluateDeliveryEvidence answers satisfied false, and missingEvidence is exactly ['required-check-untrusted-checker:<id>']. This is the case of a candidate-built checker that passes because the candidate edited a module it imports: it can never deliver.\n- UC3: the same fixture with the installed form answers satisfied true.\n- UC4, legacy and observe unchanged (DoD 2): the UC2 definitions under the legacy profile, and under observe with a strict deliveryPolicy, give byte-identical results with and without the new rule. No new token appears.\n- UC5: describeMissingEvidence('required-check-untrusted-checker:<id>') names the id and the installed form, and quotes nothing from candidate data.\n\nRED proof: run the step-4 command. The UC rows fail for the expected reason; every other row passes. Record it.\n\nSize budget: 120 test lines or fewer, table-driven.\n\nError handling in the tests: assertions name fixed tokens, never messages, and no row spawns a process or reaches the network.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
+      ],
+      "note": "QA reject #1 round, issue 2 (qualityGate route). These rows are added to requiredChecks.strong.test.ts:\n- UC6 x3:\n  - gate-only BUILT never delivers;\n  - BUILT gate beside passing definitions never delivers;\n  - the installed gate, padded, delivers.\n  Each asserts missingEvidence before and after a passing authenticated run, the projection, dependencyShortfall and unmetDependsOn once DONE.\n- UC7: a DONE task's requiredCheckAtDone=BUILT with the live gate cleared is refused. This pins the owedGate snapshot route.\n- UC4 widened to the 2x2 {legacy,observe} x {definition,gate}. No untrusted token appears and verdicts are unchanged.\n- UC5: the gate reason text.\nToken: required-check-untrusted-checker:(qualityGate). No definition id can take the label: ids match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.\n\nRED (Windows, `npx vitest run src/delivery/requiredChecks.strong.test.ts`), EXIT 1, 4 failed | 72 passed (76):\n- UC5: gate wording missing.\n- UC6 BUILT x2: missing [required-check:BUILT] only, the untrusted token absent.\n- UC7: {satisfied:true, missingEvidence:[]}, which is QA's bypass.\nThe guard rows (UC6 installed, UC4 x4) pass.\n\nIssue 1 (the opaque wrapper) is not changed here. Architect-4ae016fb ruled it a V12 pre-activation item (chat msg-b2345781; V12 comment-bde17873). Reasoning is in comment-708a213d.\n\nShared checkout: 55 peer/pre-existing dirty paths were left untouched.",
+      "startedAt": "2026-10-30T08:38:32.552Z",
+      "completedAt": "2026-10-30T08:41:04.734Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "packages/moe-daemon/src/delivery/requiredChecks.ts: the installed-checker classifier. It is pure: no I/O and no state.\n\n- `export const INSTALLED_ARCHITECTURE_CHECK = /^moe-daemon check-architecture(?: [A-Za-z0-9._\\/=:@+^~-]+)*$/;`\n  - Single spaces between words.\n  - No quote, operator, variable, redirection or newline can appear, so nothing else can run before or after it, or change it.\n- `export function untrustedArchitectureChecks(defs: readonly ProtectedCheckDefinition[]): string[]` returns, in definition order, the ids of the defs that are architecture checks but whose trimmed command fails INSTALLED_ARCHITECTURE_CHECK.\n  - A def is an architecture check when its command matches /check-architecture/i, or when its scripts include a path ending 'src/commands/checkArchitecture.ts' or 'src/delivery/architectureRules.ts'.\n  - The second signal catches an npm-script wrapper whose approver listed the checker's sources.\n- The doc comment states why. `node packages/moe-daemon/dist/index.js check-architecture` is code the candidate builds: index.ts loads every module the daemon imports, and requiredChecks protects only the files it names. So any of those modules (repositorySource, cachedPlanPaths, logger, ...) could serve '' content or override stdout and exitCode. The installed form is the checker that the runner provisions from a trusted install built at the base revision (activation, CQ-V12).\n\nError handling: defs come from an approved snapshot that is already validated. Read command and scripts defensively anyway (typeof checks), so that a malformed def counts as an architecture check that is not in the installed form (refused) and never throws.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.ts"
+      ],
+      "note": "Round 2: the classifier logic is unchanged and reused. The landed untrustedArchitectureChecks already encodes the rule: the mention signal, the source signal, and the installed-form regex. policy.ts now passes the owed gate through it as a pseudo-definition {id:'(qualityGate)', command} that protects no files, so the gate and definitions share one rule. The only edit in requiredChecks.ts is one doc-comment sentence (+2/-1) recording that dependency. No new export, no behaviour change.",
+      "startedAt": "2026-10-30T08:41:06.918Z",
+      "completedAt": "2026-10-30T08:41:19.254Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "packages/moe-daemon/src/delivery/policy.ts: refuse a candidate-built architecture checker under verified-local only. EDIT the bytes 43088e9b and V06 landed.\n\n- `export const UNTRUSTED_CHECKER_PREFIX = 'required-check-untrusted-checker:'`, together with a token helper beside protectedCheckChangedToken.\n- In protectedCheckShortfall, when `trusted !== null` (the verified-local branch) and defs is a non-empty approved list, put one token per id from untrustedArchitectureChecks(defs) first in the result, then the existing drift and owed tokens.\n  - Every other branch is unchanged.\n  - Legacy still returns before this point in evaluateDeliveryEvidence, and observe (trusted === null) never sees the token.\n- describeMissingEvidence: a token with that prefix reads \"required check <id> runs the architecture checker from code the candidate builds; under verified-local its command must be exactly the installed `moe-daemon check-architecture ...`, which the runner provisions from the base revision\". The id comes from the approved snapshot, never from candidate data.\n- A short comment cites task-efbf1742. Every consumer of evaluateDeliveryEvidence (qa_approve, dependency satisfaction, the delivery projection) already reads a missing token as not satisfied, so no other edit is needed.\n\nNo submit_plan change. A plan-time refusal would mean editing the shared submitPlan.ts; the delivery refusal is the gate that matters, and V12's integration can add the plan-time message.\n\nError handling: the classifier never throws. If it did, the existing try/catch in protectedCheckShortfall already reports protected-checks-unmeasured, which fails closed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "note": "Round 2 fix for QA issue 2 (gate-only bypass), in delivery/policy.ts:\n- Adds private `QUALITY_GATE_CHECK_ID = '(qualityGate)'`. No definition id can take it, since ids match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.\n- checkShortfall, under verified-local only (`trusted` non-null; an empty env list counts as strict, like protectedCheckShortfall), judges the owed gate through untrustedArchitectureChecks([{id, command}]):\n  - \"Owed gate\" is owedGate: the live qualityGate, or requiredCheckAtDone once DONE.\n  - An untrusted form gives `required-check-untrusted-checker:(qualityGate)`. It comes FIRST, then `required-check:<gate>` if no pass, so a passing run never clears it.\n  - A null gate still returns [] before any lookup.\n- describeMissingEvidence names \"the quality gate (settings.qualityGate)\" for that id.\n- The header doc is updated.\nNo projection change is needed: the token shares UNTRUSTED_CHECKER_PREFIX, which requiredCheckSatisfiedFor already enumerates. Legacy keeps its early return, and observe has trusted === null.\n\nGREEN (Windows strong file): 76/76, EXIT 0.\n\nMutants, each restored cmp-identical:\n- M4 drop the gate token: 3 failed (UC6 x2, UC7).\n- M5 token outside verified-local: 2 failed (UC4 gate legacy/observe).\n- M6 classify the live gate instead of owedGate: 1 failed (UC7).\n- M7 a pass clears the token: 3 failed (UC6 x2, UC7).",
+      "startedAt": "2026-10-30T08:41:21.317Z",
+      "completedAt": "2026-10-30T08:46:41.307Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh.\n\nThe in-place packages/moe-daemon/node_modules holds only the win32 rolldown binding, so run on Windows through cmd.exe against the working tree:\n\ncmd.exe /d /c \"cd /d D:\\projexts\\moes\\packages\\moe-daemon && npx vitest run src/delivery && npx tsc --noEmit\"\n\nIt must exit 0. Its fresh command, exit code, counts and output tail are complete_task's verification evidence; label it Windows.\n\nIf Windows node is unavailable, use this fallback instead and say so:\n- git archive HEAD into a scratch dir;\n- copy the three changed files over it;\n- `npm ci && npx vitest run src/delivery && npx tsc --noEmit` there, under env -i with the nvm Node 24 PATH.\nNever npm install or npm ci inside the shared checkout.\n\nThen run `git diff --check` over the three files. A read-only `git status --short` must show only these three paths changed by this task. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code, never by weakening an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
+      ],
+      "note": "Fresh Windows verification against the working tree. It is a superset of the plan's `npx vitest run src/delivery && npx tsc --noEmit`, adding every evaluateDeliveryEvidence/deliveryProjection consumer suite:\n`cmd.exe /d /c \"cd /d D:\\projexts\\moes\\packages\\moe-daemon && npx vitest run src/delivery src/state src/commands src/tools/qaApprove.test.ts src/tools/qaReject.test.ts src/tools/claimNextTask src/server/WebSocketServer src/context/recipes src/__e2e__/contextInvalidation.e2e.test.ts && npx tsc --noEmit\"`\n- Result: EXIT 0; Test Files 57 passed (57); Tests 2577 passed | 1 skipped (2578); Duration 52.62s; tsc clean.\n- src/__acceptance__/ was excluded: it is a peer's untracked work in progress (V12a).\n- Test-file tsc, through a scratch tsconfig in %TEMP% that extends the daemon tsconfig (which excludes *.test.ts): EXIT 0. `--listFilesOnly` confirms requiredChecks.strong.test.ts is included.\n- `git diff --check` over the 3 files: EXIT 0.\n- `git status --short -- packages/moe-daemon/src` shows only my 3 paths plus the peer's untracked __acceptance__/.\n- This round: policy.ts +17/-6, strong test +35/-4, requiredChecks.ts +2/-1, about 43 net. The task total is about 157 net non-board LOC.",
+      "startedAt": "2026-10-30T08:46:43.620Z",
+      "completedAt": "2026-10-30T08:49:25.740Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker who controls the candidate:\n- Can a verified-local candidate still deliver a pass produced by code it built?\n  - Check the indirect forms: an npm script, a shell wrapper file, `node -e`, an env prefix, a chained operator, a quoted path.\n  - Every command that mentions the checker, and every def that protects the checker's sources, must be the exact installed form.\n- Can the regex be bypassed with a tab, a newline, Unicode whitespace, a trailing operator or a glob?\n- Is legacy or observe affected anywhere? Check evaluateDeliveryEvidence's early return and the `trusted` branch.\n- Does the token or its reason ever echo candidate bytes?\n- Is there a false refusal of an innocent check (for example 'npm test') that would block every verified-local task?\n- Note for V12, without implementing it: the installed form is trusted only if the check guest's PATH resolves moe-daemon to a trusted install built at the base revision, with no workspace or '.' entries.\n- Would I be embarrassed if this shipped?\n\nFix any finding, then re-run step 4's command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.ts",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.ts",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
+      ],
+      "note": "Adversarial self-review of the round-2 diff found one REAL gap under the architect's blocking condition, \"a def protecting the checker sources that slips past\". The fix:\n- A directory root. `{command:'npm run arch', scripts:['pkg/src/commands']}` covers checkArchitecture.ts, but the source signal only matched listed paths ending in the file. untrustedArchitectureChecks(defs, entries = []) now also reads the approved snapshot's measured entries that lie under each def's own roots, using the existing `covers`. protectedCheckShortfall passes snapshot.entries. The entries are daemon-measured at the approved revision, never candidate data.\n- Also, the mention signal names the engine, /check-?architecture|architecture-?rules/i, matching CHECKER_SOURCES. A command like `node -e import(...dist/delivery/architectureRules.js)` was a recognizable miss.\n- Tests added:\n  - UC1 directory table x5: covered sub-dir, covered ancestor, installed form accepted, uncovered sibling, partial segment 'pkg/src/comm', plus a malformed entry that never throws;\n  - UC1 engine row;\n  - UC8 delivery row through a real approved snapshot, asserting the projection is false.\n- Mutants, all killed and restored cmp-identical:\n  - M8 call site drops entries: UC8;\n  - M9 naive startsWith: the comm row;\n  - M10 unattributed entries: 2 rows;\n  - M11 no engine mention: the engine row;\n  - M12 no directory signal: 3 rows.\nConsidered and NOT changed:\n- Shell-quoting splits (check-arch'itecture') are deliberate approver obfuscation, and a partial unquote would be whack-a-mole.\n- The rules file of the installed form needs configs protection (general V01). The gate protects no files at all.\n- Known fail-closed false refusal: unit-test commands naming checkArchitecture or architectureRules, or a def whose directory covers the checker sources, are refused under verified-local. This is consistent with the round-1 widening.\nLegacy and observe are untouched (the classifier runs only when trusted is non-null). Tokens echo only def ids or the fixed (qualityGate) label.\nFresh re-run of the step-4 command: EXIT 0, 57 files, 2584 passed | 1 skipped. tsc is clean, test-file tsc EXIT 0, diff --check clean. This round is +82/-18.",
+      "startedAt": "2026-10-30T08:49:28.033Z",
+      "completedAt": "2026-10-30T09:00:08.735Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD 1 fails on two supplemental policy tests: opaque approved wrappers and qualityGate still accept candidate-built checker passes. Reviewed completion 8d977add on moe/work-2026-10-24 (+121/-7 = 114 net source/test LOC). Exact reported Windows command: 47 files, 2228 passed/1 skipped, tsc 0. Same suites on immutable Linux commit archive: 47 files, 2229 passed; production and changed-test tsc 0. DoD 2 and planned direct-form tests pass. Counterexamples use the same authenticated-observation fixture as UC2; no actual checker-process exploit or activation is claimed, and verified-local remains disabled. Detailed reproduction and logs are in task comments. V12 comment-ebcd81103f2f452e8e104891357860c2 owns trusted base-install PATH and token docs, but no current rail defers these bypasses or narrows DoD 1. Asked worker/architects about this boundary before deciding. Preserve the landed bytes; address the uncovered routes in the worker/architect QA loop.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-db328cda8c094df3a4551f0015679fed",
+    "task-43088e9b504b49a5ae59c562fcc0c784",
+    "task-6a5d5a13257b48c9940ae3b22347ff7d"
+  ],
+  "priority": "MEDIUM",
+  "order": 281.5,
+  "comments": [
+    {
+      "id": "comment-c6b761b456ce44efba0f23fb15454543",
+      "author": "qa-ba3f4f35",
+      "content": "QA evidence on completion 8d977add: reported Windows command freshly passes 47 files / 2228 passed + 1 skipped, tsc exit 0. Immutable Linux archive (Node 24, native deps with identical lockfile, no MOE_* env) passes 47 files / 2229 tests, production and changed-test tsc exit 0. Four source files +121/-7 = 114 net LOC; completion contained in moe/work-2026-10-24.\n\nSupplemental policy counterexample (not a real checker process exploit): reuse requiredChecks.strong.test.ts fixture; commit scripts/lint.sh containing `node packages/moe-daemon/dist/index.js check-architecture --rules arch.json`, plus an unprotected packages/moe-daemon/src/context/repositorySource.ts. Approve def `{id:'arch', command:'bash scripts/lint.sh', scripts:['scripts/lint.sh']}`. Commit only a change to repositorySource.ts; create current candidate on that tree with unchanged protected entries; `await pass(command,'arch')` supplies an authenticated passing observation. Expected a refusal; actual evaluateDeliveryEvidence is `{policy:'local-branch', satisfied:true, missingEvidence:[]}`. One supplementary test failed (70 existing rows filtered), log /tmp/qa-efbf-opaque.log; original archive source restored afterward. The classifier at requiredChecks.ts:49 only examines command text/source path suffixes, never wrapper content, so it misses this form. Implementation handoff acknowledges the gap but the current V12 comments only explicitly own trusted base-install PATH and token docs. Asked worker and architects whether this DoD-1 residual has an authorized pre-activation owner; no activation certification is claimed.",
+      "timestamp": "2026-10-30T08:29:38.635Z"
+    },
+    {
+      "id": "comment-6897055bd6bf40709f0d80da62a83b8d",
+      "author": "qa-ba3f4f35",
+      "content": "Second supplemental policy failure: in the existing requiredChecks.strong.test.ts fixture, `settings({qualityGate: BUILT, qualityGateScope:'everyTask'}); await approve({}, []); await pass(BUILT); expect(evaluateDeliveryEvidence(h.state,task()).satisfied).toBe(false)` fails: actual true. BUILT is the exact original `node packages/moe-daemon/dist/index.js check-architecture --rules arch.json` command. checkShortfall (policy.ts:446) only calls hasPassingCheck; no checker-origin refusal is applied to qualityGate. /tmp/qa-efbf-qualitygate.log records exit 1. Both supplemental tests ran only in /tmp/moe-efbf-qa.b6RYoZ; source was restored byte-identical after each. Readiness was mocked as in the existing UC2 fixture; this is not a live exploitation claim. Fix all owed architecture-check routes (gate-only and gate alongside definitions), retain legacy/observe compatibility, and add exact-token plus projection/dependency regressions.\n\nLinux archive setup note: the first extra Linux run failed only because I initially omitted scripts/moe-agent.sh from the archive. I then extracted scripts/docs/root test assets from the same commit; the unchanged 47-file suite passed 2229/2229. That initial fixture-assembly failure is not a product defect.",
+      "timestamp": "2026-10-30T08:32:09.634Z"
+    },
+    {
+      "id": "comment-708a213ddd3b411196f8510c95e7107e",
+      "author": "worker-093a65d0",
+      "content": "Response to qa_reject #1 (worker-093a65d0).\n\nIssue 2, the qualityGate route (policy.ts:446): accepted. A gate command that names the checker is a recognizable form, and it slips past the classifier.\nFix: under verified-local, checkShortfall judges the gate the task owes, through the same untrustedArchitectureChecks, as a definition that protects no files. \"The gate it owes\" means the live qualityGate, or requiredCheckAtDone once the task is DONE.\n- An untrusted form gets `required-check-untrusted-checker:(qualityGate)`. No definition id can take that label: ids start alphanumeric and contain no parentheses.\n- The token is listed before `required-check:<gate>`, and a passing run never clears it.\n- Rows: a gate-only task, a gate alongside passing definitions, the installed gate (delivers), and the DONE requiredCheckAtDone route. Each row checks the projection and dependents too. Legacy and observe stay unchanged.\n\nIssue 1, the opaque wrapper `bash scripts/lint.sh`: this row leaves it as is. Architect-4ae016fb ruled on it in this channel (chat msg-b2345781, 08:32:51) and added an addendum on V12 (task-b621ddc9 comment-bde17873, 08:33:02). It is a pre-activation V12 requirement and does not block DoD 1 here.\nTechnical reason: the def's command and protected paths name neither the checker nor its sources. Only lint.sh's bytes do, and the classifier reads only approved definition text. evaluateDeliveryEvidence is synchronous and reads no blobs. The same def could run an unprotected helper.sh with no checker at all. That is the general V01 limit: protection covers only what the approver names.\nThe binding fix is V12's trusted check guest, in which moe-daemon resolves only to the base-revision install. An approval-time scan of the protected wrapper bytes would be optional defense in depth.",
+      "timestamp": "2026-10-30T08:38:30.307Z"
+    },
+    {
+      "id": "comment-2200a711d44f43d6b43e2b50e8753524",
+      "author": "architect-4ae016fb",
+      "content": "Architect scope ruling for DoD 1 (architect-4ae016fb, efbf1742's planner, 2026-10-30). This is a durable copy of chat msg-b2345781 (08:32:51Z). qa-ba3f4f35 acknowledged it in msg-9da6fb19.\n\nIn scope, and blocking if missed: DoD 1 covers every required check the daemon can recognize as an architecture check. That means:\n- its approved command mentions the checker (/check-?architecture/i), or\n- its protected scripts include commands/checkArchitecture.ts or delivery/architectureRules.ts.\nUnder verified-local, each such check must be exactly the installed `moe-daemon check-architecture [args]`, or the gate refuses it with `required-check-untrusted-checker:<id>`. The same holds for the owed qualityGate route (QA comment-6897055b; the worker accepted it in comment-708a213d). A recognizable form that slips past the classifier still blocks this row.\n\nOut of scope here: the opaque protected wrapper from QA comment-c6b761b4.\n- Example: `{id:'arch', command:'bash scripts/lint.sh', scripts:['scripts/lint.sh']}`, where lint.sh's bytes run the candidate-built dist checker.\n- Neither its command nor its protected paths name the checker, and the classifier is pure: it never reads blob content.\n- This is the general V01 limit, where a protected entry executes unprotected candidate code. The same def could run an unprotected helper and exit 0 with no checker at all.\n- V12 (task-b621ddc9, comment-bde17873) owns it as a pre-activation requirement: a trusted check guest in which `moe-daemon` resolves only to the base-revision install, plus an optional approval-time scan of the protected wrapper bytes.\n\nQA's approval should record this residual and its owner. It is not reachable today: verified-local is off and nothing dispatches checks.",
+      "timestamp": "2026-10-30T08:53:40.942Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:10:57.855Z",
+  "updatedAt": "2026-10-30T09:23:21.287Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T07:15:35.745Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:19:23.865Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T09:22:42.290Z",
+    "wallClockMs": 7398425
+  },
+  "contextFetchedBy": [
+    "worker-093a65d0",
+    "qa-ba3f4f35",
+    "qa-952969be"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [
+    {
+      "item": "A candidate that edits a non-listed module the checker imports cannot turn a failing architecture check into a delivered pass.",
+      "rejectedAt": "2026-10-30T08:32:09.646Z",
+      "rejectedBy": "qa-ba3f4f35"
+    }
+  ],
+  "planSubmittedAt": "2026-10-30T07:24:31.518Z",
+  "planningNotes": {
+    "approachesConsidered": "- Protecting the import closure. Rejected for Moe's own repo: dist/index.js statically loads the whole daemon. Its closure, plus the build inputs (package.json, package-lock.json, tsconfig and the prebuild scripts), would make nearly every daemon task a protected-check-changed refusal. A dedicated minimal entry still leaves the runner building dist from candidate inputs.\n- Running the checker from a trusted install built at the base revision. Chosen as the trust model, but the provisioning is activation work for V12 and the R epic. This row makes the delivery gate demand it: under verified-local, an architecture check must be the exact installed command, and anything else is refused.\n- A self-check inside the checker. Rejected: the candidate controls that code.\n- A plan-time refusal in submit_plan. Deferred: it means editing the shared submitPlan.ts, and the delivery gate is the binding control.",
+    "codebaseInsights": "- evaluateDeliveryEvidence (policy.ts) returns early for legacy when trusted === null. trusted is non-null only for verified-local tasks, which read approvedCheckEnvironments.\n- protectedCheckShortfall reads definitions only from the approved snapshot (readRequiredCheckSnapshot), never from candidate data. Its try/catch reports protected-checks-unmeasured.\n- The daemon's package.json bin is `moe-daemon` → ./dist/index.js, and the CLI usage line already prints `moe-daemon check-architecture --rules <repo path> [--base <rev>] [--tree <rev>]`.\n- checkArchitecture.ts imports architectureRules, repositorySource, cachedPlanPaths and errors. The bug is the index.ts entry, which loads everything.\n- Evidence tokens are documented in TOKEN_REASONS only, not in docs/, so V12's docs sweep can add the new one.",
+    "risks": "- File overlap: policy.ts is shared with task-43088e9b (REVIEW) and CQ-V06 task-6a5d5a13 (WORKING), and 43088e9b also shares requiredChecks.strong.test.ts. Both are added to dependsOn so the rows serialize.\n- The installed form is only as trusted as the guest's PATH. That is the activation requirement handed to CQ-V12 in a comment.\n- A false refusal is possible only for a def that mentions check-architecture or protects the checker's sources, and it fails closed.\n- Verified-local is unavailable today, so this is not exploitable now. The tests pin the refusal for when it becomes available.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+      "packages/moe-daemon/src/commands/checkArchitecture.ts",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:24:31.539Z",
+  "approvedPlanRevision": 1,
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "eee420832def7ca5bb1b4937fdf661d4f03d6374",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T07:24:45Z",
+      "paths": [
+        ".moe/epics/epic-5f4acf0ae5d3427facd63346f125aec5.json",
+        ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+        ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T07:26:29.500Z",
+      "treeId": "2d14fb6cd9f5f1fa0c562492fdd20f63fd0b2aa6",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "8d977add40bf6c33c54b7cf80952152b946fed96",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T08:04:20Z",
+      "paths": [
+        ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T08:21:44.804Z",
+      "treeId": "5948d5216d877abcf56228f7e0afb8dd54c2fcf2",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/state/deliveryProjection.ts",
+          "taskId": "task-6339299aa3b743d1948ffbd880a5c34a"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "591ec520f04784a83857f857a94282f16b44df00",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T08:32:18Z",
+      "paths": [
+        ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T09:01:39.743Z",
+      "treeId": "99874f913f8715b97312f7b94ba37478af29898f",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+    "packages/moe-daemon/src/delivery/requiredChecks.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-952969be@2026-10-30T09:06:05Z",
+    "at": "2026-10-30T09:23:21.287Z"
+  },
+  "workStartedAt": "2026-10-30T08:05:54.747Z",
+  "reviewStartedAt": "2026-10-30T09:01:03.654Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\packages\\moe-daemon && npx vitest run src/delivery src/state src/commands src/tools/qaApprove.test.ts src/tools/qaReject.test.ts src/tools/claimNextTask src/server/WebSocketServer src/context/recipes src/__e2e__/contextInvalidation.e2e.test.ts && npx tsc --noEmit\"",
+    "exitCode": 0,
+    "outputTail": "Windows, against the working tree, run fresh after the last code change. It is a superset of the plan's `npx vitest run src/delivery && npx tsc --noEmit`, plus every evaluateDeliveryEvidence/deliveryProjection consumer suite. src/__acceptance__ is a peer's untracked WIP and was not run.\n Test Files  57 passed (57)\n      Tests  2584 passed | 1 skipped (2585)\n   Start at  10:58:58\n   Duration  50.55s (tests 97%, import 2%, transform 1%)\ntsc --noEmit: no output (clean). Overall EXIT 0. Test-file tsc through a scratch tsconfig in %TEMP%: EXIT 0. git diff --check: clean.",
+    "reportedAt": "2026-10-30T09:01:03.654Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Round 2 after qa_reject #1; completion 8d977add is kept. Under verified-local, no owed architecture check delivers on a candidate-built checker, whether a definition or the qualityGate owes it. 3 files; this round +82/-18 (64 net), about 178 net non-board LOC for the task.\n\nQA issue 2, the gate route: FIXED.\n- policy.ts checkShortfall judges the owed gate through untrustedArchitectureChecks([{id:'(qualityGate)', command}]). The owed gate is the live qualityGate, or requiredCheckAtDone once DONE.\n- The result is `required-check-untrusted-checker:(qualityGate)`, a label no definition id can take. It comes first and survives a passing run.\n- The reason names \"the quality gate (settings.qualityGate)\". Legacy and observe are untouched (trusted === null).\n\nFound in self-review: FIXED, under the architect's \"recognizable form\" condition.\n- A def whose listed DIRECTORY covers checkArchitecture.ts or architectureRules.ts slipped past, because only path suffixes matched.\n- untrustedArchitectureChecks(defs, entries) now also reads the approved snapshot's measured entries under each def's own roots.\n- The mention regex also names the engine: /check-?architecture|architecture-?rules/i.\n\nQA issue 1, the opaque wrapper: unchanged. Architect-4ae016fb ruled it a V12 pre-activation item that does not block DoD 1 (chat msg-b2345781; V12 comment-bde17873). Reasoning is in comment-708a213d.\n\nTests (requiredChecks.strong.test.ts, 83):\n- UC6: gate-only and gate-beside-passing-defs are refused, and the installed gate delivers. Rows assert exact tokens, the projection, dependencyShortfall and unmetDependsOn.\n- UC7: the DONE requiredCheckAtDone route.\n- UC4: legacy/observe x definition/gate, unchanged.\n- UC5: the gate reason.\n- UC1: 5 directory rows and an engine row.\n- UC8: a directory root through a real snapshot.\nRED: 4 failed. Mutants M4-M12 were all killed, and the sources restored cmp-identical.\n\nKnown false refusals, failing closed: unit-test commands that name checkArchitecture or ar",
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/requiredChecks.ts",
+    "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+    "packages/moe-daemon/src/delivery/policy.ts"
+  ],
+  "reviewCompletedAt": "2026-10-30T09:22:42.290Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "A candidate that edits a non-listed module the checker imports cannot turn a failing architecture check into a delivered pass."
+    ],
+    "issues": [
+      {
+        "type": "security",
+        "file": "packages/moe-daemon/src/delivery/requiredChecks.ts",
+        "line": 50,
+        "description": "Approve bash scripts/lint.sh with only that wrapper protected; it invokes candidate-built dist/index.js. Changing only repositorySource.ts and recording an authenticated pass still yields satisfied:true, missingEvidence:[]. The name heuristic misses this indirect form. Close it via trusted checker provenance/base install or protected closure, and add refusal/projection/dependency regressions. Full fixture: comment-c6b761b456ce44efba0f23fb15454543; log /tmp/qa-efbf-opaque.log."
+      },
+      {
+        "type": "security",
+        "file": "packages/moe-daemon/src/delivery/policy.ts",
+        "line": 446,
+        "description": "Gate-only bypass: set qualityGate=BUILT (the original dist command), qualityGateScope='everyTask'; await approve({}, []); await pass(BUILT). satisfied is true. checkShortfall never applies the checker-origin refusal. Enforce it for every owed architecture-check route, including qualityGate alone/alongside definitions; pin refusal and legacy/observe compatibility. Repro in task comments; /tmp/qa-efbf-qualitygate.log (expected false, got true)."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 1 fails on two supplemental policy tests: opaque approved wrappers and qualityGate still accept candidate-built checker passes. Reviewed completion 8d977add on moe/work-2026-10-24 (+121/-7 = 114 net source/test LOC). Exact reported Windows command: 47 files, 2228 passed/1 skipped, tsc 0. Same suites on immutable Linux commit archive: 47 files, 2229 passed; production and changed-test tsc 0. DoD 2 and planned direct-form tests pass. Counterexamples use the same authenticated-observation fixture as UC2; no actual checker-process exploit or activation is claimed, and verified-local remains disabled. Detailed reproduction and logs are in task comments. V12 comment-ebcd81103f2f452e8e104891357860c2 owns trusted base-install PATH and token docs, but no current rail defers these bypasses or narrows DoD 1. Asked worker/architects about this boundary before deciding. Preserve the landed bytes; address the uncovered routes in the worker/architect QA loop.",
+      "rejectedAt": "2026-10-30T08:32:09.646Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "A candidate that edits a non-listed module the checker imports cannot turn a failing architecture check into a delivered pass."
+      ],
+      "issues": [
+        {
+          "type": "security",
+          "file": "packages/moe-daemon/src/delivery/requiredChecks.ts",
+          "line": 50,
+          "description": "Approve bash scripts/lint.sh with only that wrapper protected; it invokes candidate-built dist/index.js. Changing only repositorySource.ts and recording an authenticated pass still yields satisfied:true, missingEvidence:[]. The name heuristic misses this indirect form. Close it via trusted checker provenance/base install or protected closure, and add refusal/projection/dependency regressions. Full fixture: comment-c6b761b456ce44efba0f23fb15454543; log /tmp/qa-efbf-opaque.log."
+        },
+        {
+          "type": "security",
+          "file": "packages/moe-daemon/src/delivery/policy.ts",
+          "line": 446,
+          "description": "Gate-only bypass: set qualityGate=BUILT (the original dist command), qualityGateScope='everyTask'; await approve({}, []); await pass(BUILT). satisfied is true. checkShortfall never applies the checker-origin refusal. Enforce it for every owed architecture-check route, including qualityGate alone/alongside definitions; pin refusal and legacy/observe compatibility. Repro in task comments; /tmp/qa-efbf-qualitygate.log (expected false, got true)."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-30T09:22:42.290Z",
+  "reviewSummary": "APPROVE round 2. Reviewed completion 591ec520 (tree 99874f91) on moe/work-2026-10-24, on top of 8d977add. Owned diff +203/-25 (178 net LOC; this round +82/-18). HEAD equals 591ec520 for these files.\n\nRe-ran:\n- Exact task.verification Windows cmd: EXIT 0, 57 files, 2584 passed / 1 skipped, tsc clean.\n- Linux archive of 591ec520 with a fresh npm ci (lock unchanged), env -i, Node 24: FULL daemon vitest 206 files, 5839 passed / 16 skipped, exit 0. tsc 0; test-file tsc 0; strong file 83/83. diff --check clean; no forbidden patterns.\n\nDoD1 (per architect ruling comment-2200a711): met.\n- Under verified-local the owed gate (live qualityGate, or requiredCheckAtDone) yields required-check-untrusted-checker:(qualityGate). It comes first and survives a pass.\n- UC6/UC7 assert evaluateDeliveryEvidence, projection, dependencyShortfall and unmetDependsOn. qa_approve refuses on any token.\n- Directory-root and engine gaps closed (UC1, UC8).\n- My scratch probes pass: the BUILT gate is refused under the legacy deliveryPolicy and under epic-final scope; a BUILT def beside an installed gate is refused; assertionRoots are covered.\n\nDoD2: met. UC4 legacy/observe x def/gate unchanged; the classifier runs only when trusted is non-null.\n\n11 independent mutants were all killed (sources restored cmp-identical).\n\nResiduals, owned by V12 task-b621ddc9 (comments bde17873, 9087830c, 5381881a), not reachable today: opaque wrappers, trusted PATH, --rules configs protection, token docs, and the guest committing the candidate on its baseRevision when --base is absent.\n\nponytail: lean, net -0.",
+  "requiredCheckAtDone": null
+}

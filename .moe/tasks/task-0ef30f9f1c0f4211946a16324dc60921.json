@@ -1,0 +1,254 @@
+{
+  "id": "task-0ef30f9f1c0f4211946a16324dc60921",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: JetBrains protected PATH filter keeps entries as written, so an edge-quoted or space-padded entry escapes the project check",
+  "description": "MoeDaemonSupervisor.protectedPathEntries validates unquoted(entry) (trim plus surrounding \") but keeps the as-written entry.\n- Windows: libuv's PATH search strips one leading or trailing ' or \". Verified on node v24.16.0: PATH=C:\\Windows\\System32' still runs whoami. So `<project>'` passes isOutsideProject (realpath ENOENT, and the normalized form differs from the project), and the daemon's bare-name spawns then search the project.\n- POSIX: ` /x` survives as a relative execvp entry.\nVS Code fixed this in RF06b reopen 1 (task-032c973941bc41d9b051eedacb7de0b6): keep the validated spelling and drop entries ending in a quote.",
+  "definitionOfDone": [
+    "JetBrains protectedPathEntries/protectedDaemonEnvironment keep only validated spellings (trimmed, surrounding quotes removed) and drop any entry that still starts or ends with ' or \". A test shows `<project>'` dropped and a space-padded outside entry kept unpadded.",
+    "cd moe-jetbrains && ./gradlew test passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Edit ONLY test `S4 the protected daemon environment cannot reach repository code` (RuntimeSelectionPolicyTest.kt:838-871). Keep its existing entries, alias sub-case and nodeOnProtectedPath tail. Changes:\n(a) Split `quotedOutside` into the raw folder `val spaced = temporaryFolder.newFolder(\"path c\").path` and its entry `\"\\\"$spaced\\\"\"`. The expected kept spelling is `spaced`, without quotes. Today the test asserts the quoted as-written spelling, which is the bug.\n(b) Add `val padded = temporaryFolder.newFolder(\"path-d\").path` and the entry `\"  $padded  \"`, padded on both sides. Expected kept spelling: `padded`, unpadded. This is the DoD case.\n(c) Add edge-quoted entries that must be DROPPED: `\"${project.path}'\"` (the DoD case: on Windows libuv strips the trailing quote and searches the project), `\"'${project.path}\"`, `\"$outsideA'\"` and `\"$outsideA\\\"\"` (outside but edge-quoted, so they fail closed).\n(d) Keep the exact whole-map assertion style: `assertEquals(mapOf(\"HOME\" to \"home\", \"PATH\" to listOf(...kept spellings in entry order...).joinToString(File.pathSeparator)), env)`. The kept list is outsideA, padded, spaced and outsideB, in whatever order you insert the entries. Do not weaken it to contains/all-outside checks.\nRun the focused class under the `jetbrains-gradle` lease (moe.acquire_resource, then release): `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\"`. S4 must FAIL against the unchanged supervisor: the quoted outside entry keeps its quotes, `<project>'` is kept, and padded is kept padded. Record the RED in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "RED recorded. Edited only S4 in RuntimeSelectionPolicyTest: split spaced/padded, added `  <padded>  `, `<project>'`, `'<project>`, `<outsideA>'`, `<outsideA>\"` entries; whole-map assertEquals now expects outsideA, padded, spaced, outsideB (unpadded, unquoted). Focused run (cmd.exe gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --rerun, under the jetbrains-gradle lease): 49 tests, 1 failed = S4 at the whole-map assert. Actual PATH from the XML: `path-a;  ...\\path-d  ;...\\work\\proj';...\\path-a';\"...` i.e. padded kept padded, `<project>'` and `<outsideA>'` kept, quoted entry kept with quotes. Dirty peer paths (task JSON, .moe/decisions, scripts/mods tsconfig) left untouched.",
+      "startedAt": "2026-10-30T15:49:47.500Z",
+      "completedAt": "2026-10-30T15:50:19.344Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX (GREEN) in MoeDaemonSupervisor.kt:575-584. Change nothing else in the file.\n(1) `protectedPathEntries`: map each `split(File.pathSeparator)` entry through `unquoted` FIRST, then filter, so the list it returns holds the validated spellings. Drop an entry whose validated spelling still starts or ends with ' or \", then require `RuntimeSelectionPolicy.isOutsideProject(entry, basePath)`. Suggested shape: `path.split(File.pathSeparator).map { unquoted(it) }.filter { entry -> \"'\\\"\".none { entry.startsWith(it) || entry.endsWith(it) } && RuntimeSelectionPolicy.isOutsideProject(entry, basePath) }`.\n(2) `nodeOnProtectedPath`: the entries are already unquoted, so use `.map { File(it, if (windows) \"node.exe\" else \"node\") }` and remove the second `unquoted(...)`.\n(3) `unquoted` keeps exactly `entry.trim().removeSurrounding(\"\\\"\")`. That matches VS Code's `entry.trim().replace(/^\"(.*)\"$/, '$1')`. Do not add a second trim or single-quote stripping: a dropped entry is the fail-closed answer.\n(4) Update the one-line comment above protectedPathEntries to give the why. libuv's Windows PATH search strips one leading or trailing ' or \", so `<project>'` searches the project. execvp reads a space-padded entry as relative. So each kept entry is exactly the spelling that was validated. Keep the file's terse comment density.\nError handling: add no new IO or throwing call. isOutsideProject already catches Exception and IOError and returns false, so a malformed entry (NUL, an illegal Windows char such as `\"`, a trailing space) is dropped, never kept. nodeOnProtectedPath keeps its `isFile` probe, which returns false on any error.\nprotectedDaemonEnvironment, the spawn and stop builders, and ManagedVmPanel.kt:122/137 inherit the fix with no edit. The LEGACY profile never calls these functions, so it is unchanged.\nRe-run the focused class command from step 1 (under the lease): RuntimeSelectionPolicyTest must be all green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "GREEN. protectedPathEntries now maps through unquoted FIRST, then drops any entry whose validated spelling starts/ends with ' or \", then requires isOutsideProject(entry). nodeOnProtectedPath no longer unquotes a second time. unquoted unchanged. Comment above protectedPathEntries gives the libuv/execvp why. No new IO. Focused RuntimeSelectionPolicyTest (jetbrains-gradle lease held): BUILD SUCCESSFUL, :test executed (not UP-TO-DATE).",
+      "startedAt": "2026-10-30T15:50:20.405Z",
+      "completedAt": "2026-10-30T15:50:39.133Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY, once, fresh. This is the complete_task evidence. Take the `jetbrains-gradle` lease (moe.acquire_resource; if it is queued, report_blocked with that resourceId) and release it afterwards, even on failure. Run the Windows equivalent of the DoD's `cd moe-jetbrains && ./gradlew test` (WSL has no JDK; see mem:gotcha-jetbrains-gradle-from-wsl):\n`cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`\nIt must exit 0. Confirm that :test actually executed (it must not be UP-TO-DATE) by summing moe-jetbrains/build/test-results/test/TEST-*.xml counts with the grep/awk from mem:gotcha-gradle-jetbrains-shared-box, and quote total, skipped, failures and errors in the step note. A red exit with no failing testcase may be the Gradle daemon IPC flake: check ~/.gradle/daemon/<ver>/daemon-*.out.log before believing it, then re-run. In complete_task, report the command exactly as run; do not label it as the POSIX command.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Fresh full run, exit 0: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> BUILD SUCCESSFUL in 21s, :test executed (not UP-TO-DATE). XML sums (28 TEST-*.xml, RuntimeSelectionPolicyTest xml stamped 15:51Z, i.e. this run): total=469 skipped=0 failures=0 errors=0. Windows equivalent of the DoD's ./gradlew test (WSL has no JDK). jetbrains-gradle lease released.",
+      "startedAt": "2026-10-30T15:50:40.088Z",
+      "completedAt": "2026-10-30T15:51:10.660Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's diff only (load adversarial-self-review). Check each item and record the answer in the step note:\n(1) Every PATH string that reaches a child process or File lookup under PROTECTED is exactly the string isOutsideProject validated. That covers protectedPathEntries, nodeOnProtectedPath, protectedDaemonEnvironment and ManagedVmPanel, with no as-written spelling left.\n(2) Windows: `<project>'`, `'<project>'`, `\"<project>\"'` and `<project>\"` are dropped. A legit quoted entry such as `\"C:\\Program Files\\Git\\cmd\"` is kept unquoted and still works, because libuv and cmd accept spaces in an unquoted entry.\n(3) POSIX: ` /x` is kept as `/x`, and `\"/x\"` is kept as `/x`, no longer a relative `\"/x\"` resolved under a daemon child's cwd.\n(4) Padding inside the quotes (`\" /x\"`) leaves ` /x`, which isOutsideProject rejects (relative on POSIX, InvalidPathException on Windows), so it is dropped and never kept padded.\n(5) A quoted entry containing the separator is split by File.pathSeparator into edge-quoted halves, so both halves are dropped (fail closed).\n(6) No new IO, LEGACY untouched, and `git diff --stat` touches exactly the two planned files.\nWindows trailing-dot spellings are OUT OF SCOPE: JetBrains already refuses them through toRealPath/GetFullPathName (mem:gotcha-windows-node-namespaced-realpath). Do not change them. Fix anything the review finds within these two files and re-run step 3's command if code changed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Self-review, no code change so step 3's run stands. (1) Every consumer (spawn @180, stopBuilder @562, nodeOnProtectedPath @544/@576, ManagedVmPanel @122/@137) goes through protectedPathEntries, which now returns exactly the string isOutsideProject validated; nodeOnProtectedPath no longer re-unquotes. (2) Windows: `<project>'` and `<project>\"` end in a quote -> dropped; `'<project>'` and `\"<project>\"'` (removeSurrounding needs BOTH edges, so it is left as-is) start/end with a quote -> dropped; `\"C:\\Program Files\\Git\\cmd\"` -> kept unquoted (libuv/cmd accept spaces unquoted). (3) POSIX: ` /x` -> `/x`, `\"/x\"` -> `/x`. (4) `\" /x\"` -> ` /x` -> isOutsideProject rejects (relative on POSIX, not absolute/invalid on Windows) -> dropped, never kept padded. (5) A quoted entry containing the separator splits into `\"a` and `b\"`; both edge-quoted -> dropped. Edge cases: lone `\"` (removeSurrounding no-op, starts with quote) and `\"\"` (-> empty, not absolute) are dropped; `\"C:\\x \"` trailing space -> InvalidPathException -> dropped. (6) Pure function, no new IO, no shared state, LEGACY never calls these; `git diff --stat -- moe-jetbrains` = exactly the 2 planned files, +13/-5. Out of scope and untouched: Windows trailing-dot spellings (already refused via toRealPath). Dirty peer paths (task JSONs, .moe/decisions, scripts/mods tsconfigs) not touched.",
+      "startedAt": "2026-10-30T15:51:11.866Z",
+      "completedAt": "2026-10-30T15:51:28.057Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's 2026-10-30 13:00Z delegation of pending decisions. worker-0062feec filed this at 15:22Z as RF06b's JetBrains twin: protectedPathEntries keeps the as-written entry, so on Windows `<project>'` escapes the project check. It is a security fix for the primary IDE. No task rails, no deps. No open row plans MoeDaemonSupervisor.kt or its test, so it needs no lane edge. RF07 f3f364a6 (the epic's integration row) now dependsOn it.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 295.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T15:22:33.524Z",
+  "updatedAt": "2026-10-30T16:00:35.114Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T15:40:19.659Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T15:40:41.818Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T16:00:14.864Z",
+    "wallClockMs": 1173046
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-73c29a03",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T15:49:24.323Z",
+  "executionContract": {
+    "intendedBehavior": "Under the PROTECTED profile, the JetBrains PATH filter (MoeDaemonSupervisor.protectedPathEntries, used by protectedDaemonEnvironment, nodeOnProtectedPath and ManagedVmPanel) returns each kept entry in the exact spelling it validated: trimmed, with one surrounding pair of double quotes removed. It drops every entry whose validated spelling still starts or ends with ' or \". So `<project>'` (which libuv on Windows reads as `<project>`) never reaches the daemon PATH. A space-padded or double-quoted outside entry is kept unpadded and unquoted, so execvp never sees it as a relative entry.",
+    "acceptanceCriteria": [
+      "protectedDaemonEnvironment keeps outside entries in input order as their validated spelling: `\"<outside>\"` becomes `<outside>` and `  <outside>  ` becomes `<outside>`.",
+      "`<project>'`, `'<project>`, `<outside>'` and `<outside>\"` are dropped from the protected PATH.",
+      "The existing S4 drops are unchanged: blank, relative, `.`, project, project subdir, quoted project, NUL path, link alias and case-folded unbuilt. NODE_OPTIONS and NODE_PATH removal is unchanged.",
+      "nodeOnProtectedPath returns the first `<validated entry>/node(.exe)` that is a file.",
+      "The full JetBrains suite is green on the recorded Windows gradle command."
+    ],
+    "invariants": [
+      "Every PATH entry kept under PROTECTED is byte-identical to the string passed to RuntimeSelectionPolicy.isOutsideProject.",
+      "No kept entry starts or ends with ' or \".",
+      "Fail closed: an entry in doubt is dropped, never rewritten into something other than its validated spelling.",
+      "The LEGACY profile environment and PATH are untouched.",
+      "RuntimeSelectionPolicy.isOutsideProject is unchanged."
+    ],
+    "compatibility": [
+      "A legitimately quoted Windows PATH entry (e.g. `\"C:\\Program Files\\Git\\cmd\"`) stays usable: it is now kept unquoted, which libuv, cmd.exe and CreateProcess accept.",
+      "The protectedDaemonEnvironment signature and its callers (spawn, stopBuilder, ManagedVmPanel) are unchanged.",
+      "The Windows single-`Path`-key handling after applyDaemonPath is unchanged."
+    ],
+    "approvedScope": [
+      "MoeDaemonSupervisor.protectedPathEntries (returns validated spellings; drops edge-quoted spellings)",
+      "MoeDaemonSupervisor.nodeOnProtectedPath (no second unquote)",
+      "MoeDaemonSupervisor.unquoted (semantics unchanged: trim, then removeSurrounding(\"\\\"\"))",
+      "RuntimeSelectionPolicyTest `S4 the protected daemon environment cannot reach repository code` (expectations and new entries)"
+    ],
+    "reuse": [
+      "Mirrors the VS Code RF06b reopen-1 fix: moe-vscode/src/services/MoeDaemonClient.ts:276-287 maps `unquoted` before filtering and drops entries ending in a quote. JetBrains also drops a leading quote, per this task's DoD.",
+      "RuntimeSelectionPolicy.isOutsideProject is reused unchanged as the single project-boundary check."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:581-582: protectedPathEntries filters on `isOutsideProject(unquoted(it), basePath)` but returns the as-written `it`.",
+      "MoeDaemonSupervisor.kt:575-578: nodeOnProtectedPath maps `File(unquoted(it), node)` over protectedPathEntries.",
+      "MoeDaemonSupervisor.kt:566-572: protectedDaemonEnvironment joins protectedPathEntries with File.pathSeparator into whichever PATH key the map kept.",
+      "MoeDaemonSupervisor.kt:584: `unquoted(entry) = entry.trim().removeSurrounding(\"\\\"\")`.",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt:122,137 call protectedDaemonEnvironment and nodeOnProtectedPath under PROTECTED.",
+      "RuntimeSelectionPolicy.kt:247 isOutsideProject requires an absolute path, compares normalize() and toRealPath() forms against the project, and returns false on any exception (including a Windows InvalidPathException for `\"` or a trailing space).",
+      "RuntimeSelectionPolicyTest.kt:838-871 (S4) currently asserts that the quoted outside entry is kept WITH its quotes."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Mirror VS Code exactly: drop only a trailing quote. Rejected because the DoD says starts OR ends. A leading quote already fails isAbsolute on every OS, so the extra check is defense in depth and costs nothing. (2) Strip single quotes as well, the way libuv does, and keep the result. Rejected: a rewrite widens what is accepted, while dropping fails closed and only an unusual PATH loses an entry. (3) Dedupe kept entries, as VS Code's protectedDaemonEnvironment does. Rejected as scope creep: duplicates are harmless.",
+    "codebaseInsights": "protectedPathEntries is the single choke point. protectedDaemonEnvironment (spawn and stopBuilder) and ManagedVmPanel both go through it, so a two-function edit fixes all of them. Both functions run only under PROTECTED, so LEGACY cannot regress. Kotlin tests cannot run in WSL (no JDK): use cmd.exe with gradlew.bat under the `jetbrains-gradle` lease, plus --rerun and the counts check from the test-results XML.",
+    "risks": [
+      "Do not keep the second `unquoted` in nodeOnProtectedPath. Double-unquoting is harmless today, but it hides which spelling was validated.",
+      "The test must keep the exact whole-map assertEquals. Without it, an implementation that still returns `it` passes an all-outside check.",
+      "On Windows, `<outside>\"` is already dropped by InvalidPathException, so the `<project>'` and padded cases carry the Windows RED. On Linux all four new cases go RED.",
+      "A 5s BUILD SUCCESSFUL with `:test UP-TO-DATE` ran zero tests. Always use --rerun and confirm the XML counts.",
+      "Trailing-dot Windows spellings are out of scope. JetBrains already refuses them through toRealPath (mem:gotcha-windows-node-namespaced-realpath)."
+    ],
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+      "moe-vscode/src/services/MoeDaemonClient.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T15:49:24.342Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T15:49:47.500Z",
+  "reviewStartedAt": "2026-10-30T15:51:41.973Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 21s\n11 actionable tasks: 2 executed, 9 up-to-date\n--- test-results XML sums (28 TEST-*.xml, RuntimeSelectionPolicyTest xml stamped 15:51Z = this run): total=469 skipped=0 failures=0 errors=0\n(Windows cmd.exe gradlew.bat equivalent of the DoD's ./gradlew test; WSL has no JDK. :test executed, not UP-TO-DATE. jetbrains-gradle lease held for the run and released afterwards.)",
+    "reportedAt": "2026-10-30T15:51:41.973Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+    ".moe/tasks/task-0ef30f9f1c0f4211946a16324dc60921.json"
+  ],
+  "completionSummary": "JetBrains protected PATH filter now keeps only validated spellings. MoeDaemonSupervisor.protectedPathEntries maps each entry through unquoted (trim + one surrounding pair of \") first, drops any entry that still starts or ends with ' or \", then requires RuntimeSelectionPolicy.isOutsideProject on that same string. nodeOnProtectedPath no longer unquotes a second time. protectedDaemonEnvironment, the spawn/stop builders and ManagedVmPanel inherit the fix; LEGACY is untouched and isOutsideProject is unchanged. S4 in RuntimeSelectionPolicyTest keeps its whole-map assertEquals: kept = outsideA, padded (unpadded), spaced (unquoted), outsideB; dropped = `<project>'`, `'<project>`, `<outsideA>'`, `<outsideA>\"` plus the existing S4 drops. RED first (S4 failed: padded kept padded, `proj'` and `path-a'` kept, quoted kept with quotes), then GREEN. Full suite: 28 result files, 469 tests, 0 skipped, 0 failures, 0 errors. Run via the Windows cmd.exe gradlew.bat equivalent of ./gradlew test (WSL has no JDK). Diff is exactly the two planned files (+13/-5).",
+  "commits": [
+    {
+      "sha": "2b0d3deec87f31e1597a111a68b6d0a158705b11",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T15:49:26Z",
+      "paths": [
+        ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+        ".moe/tasks/task-0ef30f9f1c0f4211946a16324dc60921.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T15:52:04.066Z",
+      "treeId": "074ccd20c2b3099ef0840f098cac0476705ba8de",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "d444ea1d47755289cc5c53e207c0608866ef8017",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T15:59:04Z",
+      "paths": [
+        ".moe/tasks/task-0ef30f9f1c0f4211946a16324dc60921.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T16:00:35.114Z",
+      "treeId": "fe6718f5547eb3ba8bdc6794f4fc187cd8794494",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T15:59:04Z",
+    "at": "2026-10-30T16:00:35.114Z"
+  },
+  "completedAt": "2026-10-30T16:00:14.864Z",
+  "reviewCompletedAt": "2026-10-30T16:00:14.864Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 2b0d3dee (on moe/work-2026-10-24, pushed) via git show: code diff = 2 files, +13/-5 (MoeDaemonSupervisor.kt, RuntimeSelectionPolicyTest.kt) plus board JSON. DoD1: protectedPathEntries maps each entry through unquoted (trim + one surrounding \") first, drops any entry still starting/ending with ' or \", then requires isOutsideProject on that same string, so kept entries are byte-identical to the validated spelling; nodeOnProtectedPath no longer double-unquotes; unquoted/isOutsideProject untouched; LEGACY never calls these. Consumers (protectedDaemonEnvironment, nodeOnProtectedPath, ManagedVmPanel:137) inherit the fix, signatures unchanged. S4 keeps its whole-map assertEquals (not weakened): kept = outsideA, padded (unpadded), spaced (unquoted), outsideB; dropped = <project>', '<project>, <outsideA>', <outsideA>\" plus all pre-existing S4 drops; NODE_OPTIONS/NODE_PATH removal unchanged. Worker recorded RED first, then GREEN. DoD2: I re-ran the verification command under the jetbrains-gradle lease (released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> exit 0, BUILD SUCCESSFUL 21s, :test executed (not UP-TO-DATE); 28 TEST-*.xml (RuntimeSelectionPolicyTest stamped 15:59:50Z = my run): total=469 skipped=0 failures=0 errors=0. Windows equivalent of ./gradlew test (WSL has no JDK). Small diff, no size rail. Note: on Windows `<outside>\"` (InvalidPathException) and `'<project>` (not absolute) were already dropped, so the Windows RED rests on `<project>'`, `<outside>'` and padded; the quote-edge guard covers the rest on POSIX. Peer dirty paths untouched.",
+  "requiredCheckAtDone": null
+}

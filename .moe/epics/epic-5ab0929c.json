@@ -1,0 +1,17 @@
+{
+  "id": "epic-5ab0929c",
+  "projectId": "proj-3830fac7",
+  "title": "Memory Hardening & Resource Cleanup",
+  "description": "A JVM OOM crash occurred in PyCharm (JBR-21.0.8, -Xmx2048m). While the crash was in the C2 compiler thread (not directly in plugin code), a deep audit of the Moe JetBrains plugin and daemon revealed multiple memory management issues that could contribute to JVM memory pressure under sustained use. The plugin sends GET_STATE every 3 seconds and recreates the entire UI board on each update - amplifying any leak. This epic addresses all identified memory leaks, unbounded data structures, and resource cleanup issues across both the plugin and daemon.",
+  "architectureNotes": "Key areas: (1) Plugin WebSocket lifecycle - close old clients before creating new ones, cancel pending futures. (2) Plugin UI - reduce component churn on 3-second refresh cycle. (3) Daemon data bounds - cap comments, purge old proposals, stream large files. (4) Plugin caches - bound reflection caches, guard process references. Verification: heap snapshots before/after sustained use, 50+ tasks stress test for 30+ minutes.",
+  "epicRails": [
+    "All memory fixes must include before/after verification methodology",
+    "No unbounded data structures - every collection must have a max size or cleanup policy",
+    "Plugin changes must not break existing WebSocket reconnect behavior",
+    "Daemon changes must be backward-compatible with existing .moe/ data files"
+  ],
+  "status": "ACTIVE",
+  "order": 14,
+  "createdAt": "2026-02-18T22:21:16.019Z",
+  "updatedAt": "2026-02-18T22:21:16.019Z"
+}

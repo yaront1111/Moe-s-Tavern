@@ -1,0 +1,256 @@
+{
+  "id": "task-a10a7f7840dc4fda9310e61789545877",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-proxy `npm test` (pretest → build → clean) deletes the shared proxy dist before tsc can start, so one WSL test run breaks every new seat's MCP bridge",
+  "description": "Found 2026-10-30 19:05Z. architect-bc59d28a flagged it while planning task-f9789178 (comment-e121954d), and the governor verified it read-only. This is the same class of bug as f9789178, but in packages/moe-proxy and packages/moe-claude-plugin, and the proxy trigger is more routine.\n\nMechanism:\n- packages/moe-proxy/package.json: `pretest` = `npm run build`, `prebuild` = `npm run clean` (rmSync dist), `build` = `tsc`.\n- So a plain `npm test` in packages/moe-proxy deletes dist first. CLAUDE.md lists that as a routine command.\n- In the shared checkout, node_modules is a Windows install. From WSL, tsc then throws \"Unable to resolve @typescript/typescript-linux-x64\" (the TypeScript 7 native build). The run ends with no proxy dist at all.\n- scripts/moe-agent.sh:722/1779 (and the .ps1 twin) launch `$ROOT_DIR/packages/moe-proxy/dist/index.js` for every seat. Proxies already running keep their loaded code. But workers and QA respawn a fresh CLI per task, so within minutes every new seat would fail to bridge MCP to the daemon.\n- packages/moe-claude-plugin has the same clean-first `prebuild`. Its dist is not committed and its hook fails open, so the impact is lower. Fix it the same way for consistency.\n\nFix (mirror f9789178's landed shape): a build that cannot compile must leave an existing dist alone. Minimum: `prebuild` runs `tsc --version && npm run clean`. TypeScript 7's bin/tsc resolves its native platform package first, so it exits non-zero before clean when the compiler cannot start. A stronger variant is allowed if it stays small: tsc into a temp outDir, then rename. tsc emits despite type errors (noEmitOnError unset), so a type error still rebuilds dist.",
+  "definitionOfDone": [
+    "packages/moe-proxy/package.json and packages/moe-claude-plugin/package.json: when the compiler cannot start, `npm run build` (and therefore the proxy's `npm test` via pretest) exits non-zero and leaves an existing dist/ untouched; `clean` (or any rm of dist) runs only after a compiler start check succeeds. Windows `npm run build` in a clean clone still produces a complete dist for both packages, with git status --porcelain empty afterwards.",
+    "A vitest test in packages/moe-proxy reads both package.json files and fails if `clean` or any rm of dist can run before the compiler start check. A scratch mutant that restores the old clean-first order proves it RED.",
+    "Evidence that the failure mode is gone: in a scratch COPY outside the shared checkout, with a marker at packages/moe-proxy/dist/.keep, a WSL `npm test` against Windows-native node_modules exits non-zero AND dist/.keep still exists. `npm test` exits 0 for both packages in a fresh snapshot (Linux snapshot with its own npm ci, or native Windows clone)."
+  ],
+  "taskRails": [
+    "Never run `npm test`, `npm run build`, `npm run clean`, `npm ci` or `npm install` in the shared checkout D:\\projexts\\moes (or /mnt/d/projexts/moes) for ANY package. Every seat launches packages/moe-proxy/dist and the live daemon runs from packages/moe-daemon/dist. Use a git archive or clone snapshot outside the repo for every build or verification step.",
+    "Scope: packages/moe-proxy/package.json, packages/moe-claude-plugin/package.json, plus one small test file in packages/moe-proxy. No daemon, launcher or CI change."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TEST FIRST (RED). Create packages/moe-proxy/src/buildScriptOrder.test.ts (about 100 lines). Helpers stay inside the test file: no production module, no other file. Header comment: every seat's MCP bridge runs packages/moe-proxy/dist, so a build must not delete dist unless the compiler can start. task-a10a7f78: from WSL, the shared checkout's Windows-native node_modules has no linux tsc, so the proxy's `npm test` (pretest -> build -> clean) deleted dist before tsc failed.\nManifests: read both the way packages/moe-daemon/src/server/McpAdapter.test.ts:109 reads its manifest. Use JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).scripts, and the same for '../../moe-claude-plugin/package.json'. Key them 'moe-proxy' and 'moe-claude-plugin'.\nHelpers: copy splitSteps and runOrder verbatim from the landed packages/moe-daemon/src/util/buildScriptOrder.test.ts. That is task-f9789178, which must be DONE before this row can be claimed. Make one change: the nested-script regex becomes /^npm (?:run|run-script) ([\\w:-]+)$/, so colon names such as test:coverage expand too. If f9789178's QA loop changed the helpers or its remover/probe regexes, mirror the landed version and say so in the step note.\nClassifiers:\n- isProbe: exactly `tsc --version` or `tsc -v`.\n- isEmit: `tsc` or `tsc <args>` that is not a probe.\n- removesDist: the daemon test's case-insensitive whole-word remover regex (rmSync|rmdirSync|rimraf|rm|rmdir|del|rd|Remove-Item) AND its `dist` path-token regex.\norderViolations(scripts): string[]\n(a) Every script name except `clean` is an entry point; skip keys whose value is undefined. For each entry, leaves = runOrder(scripts, name). Every removal leaf with no probe leaf before it yields `\"<name>\" runs \"<leaf>\" before tsc --version`. Only `clean` is exempt, because running it is a deliberate delete.\n(b) On runOrder(scripts, 'build'):\n- 'build never removes dist' when there is no removal. Clean must still run, so outputs of deleted sources do not linger, and so the check cannot pass vacuously if the remover regex ever misses.\n- 'build never emits with tsc' when there is no emit.\n- 'build emits with tsc before dist is removed' when an emit precedes the last removal.\nError handling: splitSteps and runOrder throw descriptive errors: the script name and operator, or recursion depth 8. orderViolations catches any error and returns its message as the single violation, so the suite does not crash. An unreadable or invalid package.json fails the test with the fs or JSON error.\nType-check constraint: the proxy tsconfig compiles all of src, tests included, into dist at target ES2022, and pretest runs that build. A type error therefore fails `npm test`. Use no ES2023+ API: no findLastIndex, findLast or toSorted (the daemon test's findLastIndex does not type-check here). .at(), lastIndexOf and flatMap are fine.\nCases:\n(1) it.each(Object.entries(manifests)) '%s probes tsc before anything removes dist' -> toEqual([]).\n(2) it.each rows over { ...proxyScripts, prebuild: 'tsc --version && npm run clean', ...override }. Each asserts toContainEqual(expect.stringContaining(needle)):\n- {prebuild:'npm run clean'} -> '\"test\" runs' (proves the pretest path)\n- {pretest:'npm run clean && npm run build'} -> '\"pretest\" runs'\n- {prestart:'rimraf dist'} -> '\"start\" runs \"rimraf dist\"'\n- {prebuild:'tsc --version'} -> 'build never removes dist'\n- {build:undefined} -> 'build never emits'\n- {prebuild:'tsc --version', build:'tsc && npm run clean'} -> 'emits with tsc before'\n- {prebuild:'npm run-script clean && tsc --version && npm run clean'} -> 'before tsc --version'\n- {clean:'npm run clean'} -> 'recursion depth 8'\n- prebuild 'tsc --version <op> npm run clean', for each op in ; | || & -> 'chains steps with \"<op>\"'\n- clean = each of: rm -rf ./dist/, rimraf \"dist\", rmdir /s /q dist, del dist\\* (the TS literal doubles the backslash), rd dist, Remove-Item -Recurse dist, and a node -e rmdirSync('dist') one-liner. Each with prebuild 'npm run clean' -> 'before tsc --version'.\n(3) Accepts prebuild 'tsc -v && npm run clean' plus postbuild `node -e \"console.log('a;b|c&d')\"` -> toEqual([]).\nI prototyped exactly this in a scratch archive: 22 cases. On HEAD's manifests only the two real-manifest cases fail. The proxy lists prebuild, build, pretest, test, pretest:coverage, test:coverage and prepublishOnly; the plugin lists prebuild, build and prepublishOnly. Every row passes, and `npx tsc --noEmit -p .` returns rc 0. The project's globalRails forbiddenPatterns apply to this file, comments and strings included.\nRED evidence, in a Linux snapshot (never /mnt/d/projexts/moes):\n- `SNAP=$(mktemp -d /tmp/moe-a10a-gate.XXXXXX) || exit 1; mkdir \"$SNAP/repo\" || exit 1; git -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon packages/moe-proxy packages/moe-claude-plugin | tar -x -C \"$SNAP/repo\"`. The daemon is included because src/workerType.integration.test.ts imports its source.\n- For each of moe-daemon, moe-proxy and moe-claude-plugin, open a subshell that starts with `cd \"$SNAP/repo/packages/<pkg>\" || exit 1`, then run `env -i HOME=$HOME PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm ci --no-audit --no-fund`.\n- Overlay ONLY the new test (cp + cmp).\n- From $SNAP/repo/packages/moe-proxy, with the same env -i prefix plus NO_COLOR=1, run `npx tsc --noEmit -p .` -> rc 0. Then run `npx vitest run src/buildScriptOrder.test.ts` -> rc 1. Exactly the two real-manifest cases fail, and every row passes.\nRecord both results in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-proxy/src/buildScriptOrder.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/buildScriptOrder.test.ts"
+      ],
+      "note": "Added 109-line lifecycle regression guard; copied landed daemon splitSteps/runOrder verbatim except nested script names now include colon. Probe/remover regexes mirror landed version; ES2022 lastIndexOf avoids findLastIndex. Prerequisite context reports DONE/landed 7f393bc4. Linux archive outside live checkout, fresh sanitized npm ci for daemon/proxy/plugin. npx tsc --noEmit -p . rc=0. npx vitest run src/buildScriptOrder.test.ts rc=1: exactly two real-manifest failures, 20 rows pass (22 total); proxy received includes pretest/test/pretest:coverage/test:coverage, plugin prebuild/build/prepublishOnly. Logs /tmp/moe-a10a-evidence/red-{typecheck,test}.log. Existing dirty board/scripts paths belong to peers and were neither copied nor modified. No npm/npx in shared checkout.",
+      "startedAt": "2026-10-30T19:27:24.732Z",
+      "completedAt": "2026-10-30T19:29:29.924Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX. In packages/moe-proxy/package.json and packages/moe-claude-plugin/package.json, change ONLY scripts.prebuild from `npm run clean` to `tsc --version && npm run clean`. Every other byte stays: clean, build = tsc, pretest, pretest:coverage, prepublishOnly, 2-space JSON, LF and the final newline. `git diff` shows exactly one -/+ line pair per file.\nWhy (repeat this in the step note): TypeScript 7.0.2's bin/tsc imports lib/tsc.js, and that calls getExePath() (lib/getExePath.js) before anything else.\n- When the native platform package is missing, getExePath() throws 'Unable to resolve @typescript/typescript-<platform>-<arch>'.\n- Otherwise tsc.js execs the native binary for every argv, --version included. So the probe starts the same executable that build's `tsc` uses, through the same node_modules/.bin resolution.\nI checked this read-only in the shared checkout on 2026-10-30. From WSL, `node_modules/.bin/tsc --version` gives rc=1 with that error in both packages. On Windows, `node_modules\\.bin\\tsc --version` prints 'Version 7.0.2', rc=0.\nClean stays right before build's tsc. Stale outputs of deleted sources are still removed, and a type error still rebuilds dist (noEmitOnError is unset). The proxy's pretest and pretest:coverage reach the fixed prebuild through `npm run build`; leave them alone.\nDo not touch packages/moe-daemon (task-f9789178's), launchers, CI, docs or the IDE-bundled copies.\nOverlay both edited manifests into $SNAP (cp + cmp) and rerun step 1's vitest command: every case passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/package.json",
+        "packages/moe-claude-plugin/package.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/package.json",
+        "packages/moe-claude-plugin/package.json"
+      ],
+      "note": "Only scripts.prebuild changed in each manifest: exactly one -/+ line pair, byte-preserving replacement. Reused landed daemon's minimal tsc --version && clean pattern; no dependency or abstraction. Read TypeScript 7.0.2 bin/tsc -> lib/tsc.js -> getExePath(): native platform package resolution throws Unable to resolve @typescript/typescript-<platform>-<arch> before clean; successful resolution execs the same native binary even for --version through the same node_modules/.bin as emit. Clean remains immediately before tsc, stale outputs removed, noEmitOnError remains unset; pretest/pretest:coverage unchanged. cp+cmp overlays of both manifests into Linux snapshot; focused vitest rc=0, 22/22 pass (/tmp/moe-a10a-evidence/green-test.log). No daemon/launcher/CI/docs/IDE edits.",
+      "startedAt": "2026-10-30T19:29:29.943Z",
+      "completedAt": "2026-10-30T19:29:48.883Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "REAL-BUILD EVIDENCE, Windows clean clone (DoD 1 and the first half of DoD 3). Every command runs outside /mnt/d/projexts/moes. Every cd is `cd <dir> || exit 1`, or a subshell that starts with it. Call cmd.exe only from a /mnt/d cwd, because it inherits the translated cwd. Strip carriage returns from its output (`| tr -d '\\r'`).\n(a) Clone and overlay.\n- `W=$(mktemp -d /mnt/d/projexts/moe-a10a-win.XXXXXX) || exit 1; cd \"$W\" || exit 1; cmd.exe /d /c \"git clone --quiet --no-hardlinks --branch moe/work-2026-10-24 D:\\projexts\\moes repo\"`.\n- If Windows git refuses the source for dubious ownership, clone from WSL with `git clone --no-hardlinks` (never --shared) and add `-c safe.directory=*` to each Windows git call.\n- Copy the three owned files from the worktree into $W/repo (cp + cmp).\n- In $W/repo, run `cmd.exe /d /c \"git add packages/moe-proxy/package.json packages/moe-claude-plugin/package.json packages/moe-proxy/src/buildScriptOrder.test.ts && git -c user.name=moe-scratch -c user.email=scratch@example.invalid commit -q -m scratch-overlay\"`. This is a separate repository, so the agent Git guard does not apply.\n- `cmd.exe /d /c \"git status --porcelain\"` prints nothing.\n(b) Windows build, for each package P (moe-proxy, moe-claude-plugin).\n- In $W/repo/packages/P, run `cmd.exe /d /c \"npm ci --no-audit --no-fund && npm run build\" > \"$W/win-P.log\" 2>&1; echo rc=$?`.\n- Expect rc=0, with the log showing 'Version 7.0.2' before clean and tsc.\n- Afterwards, `git status --porcelain` in $W/repo (via cmd.exe) prints nothing.\n(c) Complete dist, per package.\n- Run `cp -r dist \"$W/P-dist.new\"`.\n- Set the old prebuild with `sed -i 's/\"prebuild\": \"tsc --version && npm run clean\",/\"prebuild\": \"npm run clean\",/' package.json`. There is no & in the replacement.\n- Confirm with `grep -n '\"prebuild\": \"npm run clean\",' package.json`.\n- Run `cmd.exe /d /c \"npm run build\"` -> rc=0.\n- `diff -r \"$W/P-dist.new\" dist` -> no output.\n- Run `cmd.exe /d /c \"git checkout -- package.json\"`. Porcelain is empty again.\nThe proxy dist also holds compiled *.test.js files, as it does today.\n(d) Failure mode gone. These node_modules are Windows-native, exactly like the shared checkout's. Let E = `env -i HOME=$HOME PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin`.\n- Proxy: `touch dist/.keep`, then `$E npm test > \"$W/wsl-proxy-test.log\" 2>&1; echo rc=$?`. Expect rc != 0, and a log that shows 'Unable to resolve @typescript/typescript-linux-x64' and never reaches clean. `ls dist/.keep dist/index.js` lists both.\n- Plugin: `touch dist/.keep`, then `$E npm run build` (log it the same way). Expect rc != 0, and `ls dist/.keep dist/index.js` lists both.\n- Contrast, once: apply the (c) sed to both manifests and rerun both WSL commands. Both exit non-zero AND `ls dist` reports No such file or directory. Restore with `git checkout -- package.json`.\nPut the rc values, log tails, porcelain output and ls lines in the step note. Copy the logs to /tmp/moe-a10a-evidence. Then remove $W (`rm -rf`, or python3 shutil.rmtree if a guard refuses rm -rf). Confirm `ls -d /mnt/d/projexts/moe-a10a-win.*` finds nothing.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Real Windows --no-hardlinks clean clone /mnt/d/projexts/moe-a10a-win.Z3HZ78, cp+cmp ONLY 3 owned files, scratch-only commit rc=0; status --porcelain empty before/after builds and each restore. Both packages Windows npm ci && npm run build rc=0: logs show prebuild tsc --version && npm run clean, Version 7.0.2, clean, then build tsc. Both old-order Windows builds rc=0; diff -r saved-new-dist dist rc=0/no output (complete identical artifacts); proxy includes compiled buildScriptOrder.test.js. Both direct node_modules\\.bin\\tsc.cmd --version rc=0/Version 7.0.2; stub invokes ../typescript/bin/tsc with argv. WSL sanitized npm test (proxy) and npm run build (plugin) rc=1: getExePath.js:53 Unable to resolve @typescript/typescript-linux-x64, lib/tsc.js:6; never reaches clean. ls lists dist/.keep and dist/index.js for both, SHA256 check both OK. Old-order contrast: both WSL commands rc=1 same compiler error, ls: cannot access 'dist': No such file or directory. Restored manifests/empty porcelain. Logs copied to /tmp/moe-a10a-evidence (win-*.log, old-win-*.log, wsl-*-{new,old}.log, *before.sha256, tsc-resolution-*). Cleanup via python shutil after rm guard refusal (no command executed on refusal); ls -d /mnt/d/projexts/moe-a10a-win.* reports no such file. Scratch commit is evidence only, not task delivery; root three-file changes remain for wrapper landing.",
+      "startedAt": "2026-10-30T19:29:48.908Z",
+      "completedAt": "2026-10-30T19:30:52.090Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "GATE (completion evidence) and RED mutants (DoD 2 and the second half of DoD 3). Reuse the step 1 snapshot. If it is gone, or HEAD moved since, recreate it per step 1, npm ci included. Re-overlay all three owned files from the worktree (cp + cmp). Never overlay peers' dirt.\n(i) RED mutants, from $SNAP/repo/packages/moe-proxy, with `env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin`.\n- Apply step 3(c)'s sed to $SNAP/repo/packages/moe-proxy/package.json and confirm it with grep.\n- `npx vitest run src/buildScriptOrder.test.ts` -> rc 1. Only 'moe-proxy probes tsc before anything removes dist' fails, and its received list names \"test\" and \"test:coverage\".\n- Restore (cp + cmp) -> passes.\n- Repeat with $SNAP/repo/packages/moe-claude-plugin/package.json. Only the moe-claude-plugin case fails. Restore (cp + cmp).\n(ii) Then run the verification command, fresh and LAST. Submit its exit code and output tail to complete_task:\n`cd \"$SNAP/repo/packages/moe-proxy\" && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm test && cd ../moe-claude-plugin && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm run build && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm test`\n- Expect exit 0. My prototype got proxy 7 files / 312 tests, then the plugin build and 2 files / 18 tests. Read the summaries with grep -a.\n- The proxy's npm test runs pretest -> build -> `tsc --version` -> clean -> tsc, so it also proves that the new test type-checks.\n- If it fails, run the same command on a plain `git archive HEAD` snapshot with no overlay. Failures that reproduce there belong to peers: name the files and the owning row, and call moe.report_blocked with blockedOnTaskIds on that row. Never edit their files.\nRemove $SNAP afterwards.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Both independent old-order mutants rc=1 with exactly 1 failed/21 passed: proxy mutant fails only moe-proxy real-manifest case, received list includes test and test:coverage; plugin mutant fails only plugin case. cp+cmp restored each and reran: rc=0, 22/22. Then fresh LAST verification ran in a newly archived HEAD snapshot with ONLY the 3 cp+cmp owned overlays and own sanitized npm ci for daemon/proxy/plugin. Plan's npm test (proxy) && plugin build && plugin npm test rc=0: proxy 7 files/312 tests, plugin 2 files/18 tests. Proxy pretest compiled new regression test under ES2022 and logs show Version 7.0.2 before clean; plugin likewise. Full run /tmp/moe-a10a-evidence/verification.log, rc file=0. Expected plugin fail-open refusal stderr (ECONNREFUSED 127.0.0.1:1) accompanies a passing test. All gate snapshots removed via shutil (both gate.AUfwfG and verify.fkTRS8). No verification prohibited or deferred, no shared builds, no new project file changes in evidence-only step.",
+      "startedAt": "2026-10-30T19:30:52.115Z",
+      "completedAt": "2026-10-30T19:32:29.794Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's three-file diff. Record each answer in the step note.\n- Order. In both manifests, does `tsc --version` run before every dist removal on every entry point (build, test and test:coverage via pretest, prepublishOnly), with && as the only joiner? Does the probe resolve through the same node_modules/.bin as the emit (tsc.cmd on Windows, per the step 3 log)?\n- Other build paths: CI test-typescript (plugin npm ci/build/test; proxy npm install/build/test:coverage), the 3-OS build matrix, JetBrains buildPlugin (it only requires the proxy's dist and node_modules), scripts/install-all.ps1, and release prepublishOnly. Each install carries its platform's native TypeScript package, so the probe passes. npm's default script shell runs && on every OS. The daemon's prebuild already chains with && at HEAD, so this adds no new shell requirement.\n- Residual risks to state, not fix:\n  (1) A tsc crash mid-emit after clean still leaves a partial dist. The temp-outDir + rename variant was rejected because Windows has no atomic directory swap.\n  (2) A Windows in-place build of the shared checkout still succeeds and compiles peers' WIP into the live dist. The global customRule against building the shared checkout stands.\n- Test. Could it pass vacuously? No: build must still remove dist and emit with tsc, and each row shows its violation firing. Its strictness is deliberate: any ; | || or lone & in any script fails it, with that script's name. `clean` is the only exempt entry. The file type-checks at ES2022 (the gate's pretest build compiled it) and lands in dist like the other proxy tests.\n- Hygiene. The diff is one -/+ line pair per manifest plus the new test, and the test holds none of the globalRails forbiddenPatterns. `ls -d /mnt/d/projexts/moe-a10a-win.*` finds nothing. Nothing ran npm or npx in /mnt/d/projexts/moes.\nReport modifiedFiles: packages/moe-proxy/package.json, packages/moe-claude-plugin/package.json, packages/moe-proxy/src/buildScriptOrder.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/package.json",
+        "packages/moe-claude-plugin/package.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/package.json",
+        "packages/moe-claude-plugin/package.json",
+        "packages/moe-proxy/src/buildScriptOrder.test.ts"
+      ],
+      "note": "Adversarial review of owned manifest diff + full new test: (1) ORDER: yes, every current non-clean entry reaches tsc --version before each removal, && only; test and test:coverage expand lifecycle through colon-aware nested regex. Probe and emit resolve same npm node_modules/.bin/tsc (Windows tsc.cmd, direct invocation/stub log rc=0). (2) OTHER PATHS: read CI test-typescript plugin ci/build/test and proxy install/build/test:coverage, ubuntu/windows/macos build matrix, JetBrains bundledProxyDir/Modules freshness checks/excludes compiled tests, scripts/install-all.ps1 Install-NodePackage, manifest prepublishOnly. Native install provides compiler; default script shells support &&; daemon HEAD already uses &&. No new shell requirement. (3) RESIDUALS: simultaneous builds still race; compiler crash after clean can leave partial dist; no atomic Windows directory swap. Successful Windows shared builds still compile peers WIP into live dist, so shared-build ban remains. No new production shared state/handles/retries added. (4) TEST: not vacuous, requires removal + tsc emit after last removal; all 19 rejection rows assert specific diagnostics, two real manifests and positive quoted-op/-v case =22. Recursion bounded 8, errors returned as violations; invalid/unreadable JSON fails directly. Trusted repo scripts only, bounded static shell-form guard (not general shell parser). Undefined scripts handled, no new network/untrusted-input boundary; test IO read-only. Strict operator rejection outside quotes deliberate. ES2022 typecheck rc=0 and final pretest compiles test into dist. (5) HYGIENE: byte-checked only one -/+ manifest line each plus 109-line test, forbidden scan and scoped diff --check clean. All scratch win/gate/verify directories gone; no npm/npx in shared checkout, peers dirt untouched. Fresh final gate rc=0: proxy 7 files/312 tests, plugin build +2 files/18 tests. No required checks skipped, no extra source scope.",
+      "startedAt": "2026-10-30T19:32:29.815Z",
+      "completedAt": "2026-10-30T19:33:23.710Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-f9789178469f499ca3268fc4b392bd0c"
+  ],
+  "priority": "HIGH",
+  "order": 314.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T19:06:04.745Z",
+  "updatedAt": "2026-10-30T19:38:22.431Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T19:06:06.718Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T19:37:39.977Z",
+    "wallClockMs": 1893259
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-6e57c4f8",
+    "qa-ba3f4f35"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T19:26:29.530Z",
+  "executionContract": {
+    "intendedBehavior": "`npm run build` in packages/moe-proxy and in packages/moe-claude-plugin runs a `tsc --version` compiler probe before `clean` removes dist/. If the compiler cannot start (WSL against the shared checkout's Windows-native node_modules), the build exits non-zero and leaves the existing dist/ untouched. The same holds for the proxy's `npm test` and `npm run test:coverage`, which build through pretest. A working build still deletes the old dist and emits a complete one.",
+    "acceptanceCriteria": [
+      "In both manifests, scripts.prebuild is exactly `tsc --version && npm run clean`. No other package.json byte changes.",
+      "packages/moe-proxy/src/buildScriptOrder.test.ts reads both manifests and fails when: any script other than clean can remove dist before `tsc --version`; any script chains steps with ; | || or &; build stops removing dist or stops emitting with tsc; or tsc emits before the last removal. A per-package scratch mutant that restores the old `npm run clean` prebuild makes only that package's case fail.",
+      "Windows clean clone with a scratch commit of the three files: for both packages, npm ci + npm run build exits rc 0, git status --porcelain is empty afterwards, and dist is identical (diff -r) to an old-order build.",
+      "In that clone (Windows-native node_modules), with dist/.keep markers: a WSL proxy `npm test` and a WSL plugin `npm run build` both exit non-zero and keep dist/.keep and dist/index.js. With the old order, both exit non-zero and dist is gone.",
+      "In a Linux snapshot with its own npm ci, proxy `npm test` and plugin `npm run build && npm test` exit 0."
+    ],
+    "invariants": [
+      "clean still runs, after the probe and before build's tsc emits.",
+      "clean, build, pretest, pretest:coverage, prepublishOnly and every other script stay unchanged.",
+      "No npm or npx command ever runs in /mnt/d/projexts/moes. No daemon, launcher, CI or docs change."
+    ],
+    "compatibility": [
+      "These keep working: CI test-typescript (plugin npm ci/build/test; proxy npm install/build/test:coverage), the 3-OS build matrix, JetBrains buildPlugin (it needs only the proxy's dist and node_modules), scripts/install-all.ps1 and release prepublishOnly. Each install has its platform's native TypeScript package, so the probe passes; on Windows it prints 'Version 7.0.2'.",
+      "The proxy tsconfig includes src with no exclude, so the proxy dist keeps its compiled *.test.js files as today, and the new test compiles there too."
+    ],
+    "approvedScope": [
+      "packages/moe-proxy/package.json scripts.prebuild",
+      "packages/moe-claude-plugin/package.json scripts.prebuild",
+      "New packages/moe-proxy/src/buildScriptOrder.test.ts with test-local splitSteps, runOrder, isProbe, isEmit, removesDist and orderViolations."
+    ],
+    "reuse": [
+      "splitSteps and runOrder, plus the remover and probe regexes, from task-f9789178's packages/moe-daemon/src/util/buildScriptOrder.test.ts. They are copied into the test because the scope rail forbids a shared helper; the nested-name regex is widened to also match colon names.",
+      "The manifest read in packages/moe-daemon/src/server/McpAdapter.test.ts:109.",
+      "f9789178's evidence recipes: the Windows clean clone and the Linux snapshot."
+    ],
+    "sourceAssumptions": [
+      "node_modules/typescript/lib/tsc.js (TypeScript 7.0.2, both packages) calls getExePath() before anything else. lib/getExePath.js throws 'Unable to resolve @typescript/typescript-<platform>-<arch>' when the platform package is missing; otherwise tsc.js execs the native binary for every argv, --version included.",
+      "packages/moe-proxy/tsconfig.json includes src with no exclude, targets ES2022 and leaves noEmitOnError unset. vitest.config.ts includes src/**/*.test.ts.",
+      "In packages/moe-proxy/package.json, pretest, pretest:coverage and prepublishOnly are each `npm run build`. In packages/moe-claude-plugin/package.json, prepublishOnly is `npm run build && npm test`; the plugin's dist is gitignored.",
+      "scripts/moe-agent.sh (and its .ps1 twin) launches $ROOT_DIR/packages/moe-proxy/dist/index.js for every seat."
+    ],
+    "checkRefs": [
+      "cd \"$SNAP/repo/packages/moe-proxy\" && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm test && cd ../moe-claude-plugin && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm run build && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm test",
+      "cd \"$SNAP/repo/packages/moe-proxy\" && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npx vitest run src/buildScriptOrder.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Chosen: prebuild = `tsc --version && npm run clean` in both packages. This is the shape task-f9789178 landed for the daemon, minus its generators: one line each, with no new failure mode.\n(2) tsc into a temp outDir, then rename. Rejected for f9789178's reasons: Windows has no atomic directory swap, so it is still rm + rename, and renaming freshly written trees fails with EPERM/EBUSY under AV or indexers. It is also more moving parts than the scope rail allows.\n(3) Drop clean. Rejected: outputs of deleted sources would linger in dist, the npm tarball and the IDE bundles.\n(4) Drop the proxy's `pretest: npm run build`. Rejected: it changes what `npm test` proves, and the DoD keeps the build in the test path.\n(5) Pin only the build lifecycle, as the daemon test does. Rejected: the proxy's routine trigger is `npm test` or `test:coverage` through pretest. Checking every script except `clean` covers every entry point, and the RED output names each one.",
+    "codebaseInsights": "Both packages install TypeScript 7.0.2; the shared checkout has only @typescript/typescript-win32-x64. bin/tsc imports lib/tsc.js, which resolves the native platform package through lib/getExePath.js before doing anything. It then execs the native binary even for --version, so `tsc --version` starts the same executable the emit uses. I checked this read-only on 2026-10-30: from WSL, rc=1 with 'Unable to resolve @typescript/typescript-linux-x64' in both packages; on Windows, 'Version 7.0.2', rc=0.\nnpm runs pre/post hooks for any script name, colon names included (pretest:coverage), and also for a nested `npm run x`.\nThe proxy's tsconfig compiles all of src, *.test.ts included, into dist at target ES2022, and pretest runs that build. The new test must therefore type-check without ES2023 APIs: the daemon test's findLastIndex would fail here.\nThe plugin's dist is gitignored and absent from the shared checkout, and its hook fails open.\nMy prototype, in a scratch archive outside the repo:\n- The described test has 22 cases. It is RED on HEAD's manifests (the two real-manifest cases fail; every row passes) and GREEN after the one-line fixes.\n- Proxy `npm test` passes 7 files / 312 tests. The plugin builds and passes 2 files / 18 tests.\n- With the Linux TypeScript package moved aside, new-order `npm test` exits rc=1 and keeps dist/.keep and dist/index.js. The old order also exits rc=1, but deletes dist.",
+    "risks": "- Any npm or npx command in /mnt/d/projexts/moes can delete the live proxy or daemon dist. Run every build and test in $SNAP or $W, behind `cd <dir> || exit 1` or a subshell that starts with it.\n- Call cmd.exe only from a /mnt/d cwd, and strip carriage returns before diffing.\n- sed: & in a replacement means the whole match. Edit only in the new->old direction, and restore with cp + cmp or git checkout.\n- f9789178's helpers may change during its QA loop. Mirror what landed.\n- Peer WIP can turn the proxy or plugin suite red at HEAD. Prove it on a plain HEAD archive and block on the owning row; never edit their files.\n- Residual, to state but not fix: a tsc crash mid-emit after clean still leaves a partial dist. A Windows in-place build of the shared checkout still succeeds and compiles peers' WIP into the live dist, so the global customRule against building the shared checkout stands.",
+    "keyFiles": [
+      "packages/moe-proxy/package.json",
+      "packages/moe-claude-plugin/package.json",
+      "packages/moe-proxy/tsconfig.json",
+      "packages/moe-proxy/vitest.config.ts",
+      "packages/moe-daemon/src/util/buildScriptOrder.test.ts (task-f9789178, the helper source)",
+      "packages/moe-proxy/src/workerType.integration.test.ts (why the snapshot needs the daemon)",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T19:26:29.555Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T19:27:24.732Z",
+  "reviewStartedAt": "2026-10-30T19:33:30.942Z",
+  "verification": {
+    "command": "set -o pipefail; SNAP=$(mktemp -d /tmp/moe-a10a-verify.XXXXXX) && mkdir \"$SNAP/repo\" && git -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon packages/moe-proxy packages/moe-claude-plugin | tar -x -C \"$SNAP/repo\" && for P in packages/moe-proxy/package.json packages/moe-claude-plugin/package.json packages/moe-proxy/src/buildScriptOrder.test.ts; do cp \"/mnt/d/projexts/moes/$P\" \"$SNAP/repo/$P\" && cmp \"/mnt/d/projexts/moes/$P\" \"$SNAP/repo/$P\" || exit 1; done && for P in moe-daemon moe-proxy moe-claude-plugin; do (cd \"$SNAP/repo/packages/$P\" || exit 1; env -i HOME=$HOME PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm ci --no-audit --no-fund) || exit 1; done && cd \"$SNAP/repo/packages/moe-proxy\" && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm test && cd ../moe-claude-plugin && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm run build && env -i HOME=$HOME NO_COLOR=1 PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin npm test",
+    "exitCode": 0,
+    "outputTail": "Proxy npm test: pretest -> npm run build -> tsc --version (Version 7.0.2) -> clean -> tsc -> vitest; 7 files / 312 tests passed, duration 42.60s. Plugin npm run build: tsc --version (Version 7.0.2), clean, tsc; then npm test: 2 files / 18 tests passed, duration 397ms. Expected fail-open test stderr: Cannot reach daemon at 127.0.0.1:1 (ECONNREFUSED). Full command exitCode=0. Logs: /tmp/moe-a10a-evidence/verification.log and verification.rc.",
+    "reportedAt": "2026-10-30T19:33:30.942Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-proxy/src/buildScriptOrder.test.ts",
+    "packages/moe-proxy/package.json",
+    "packages/moe-claude-plugin/package.json",
+    ".moe/tasks/task-1c2bfeca0ec34589b8cb498abc082549.json",
+    ".moe/tasks/task-a10a7f7840dc4fda9310e61789545877.json",
+    ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
+  ],
+  "completionSummary": "Both proxy/plugin prebuild now probe tsc before clean; only one manifest line changed each plus a 109-line/22-case lifecycle regression test. Initial RED (2 failures), GREEN, and independent per-package old-order RED mutants verified. Fresh isolated Linux gate rc0: proxy 7 files/312 tests, plugin build +2 files/18 tests. Real Windows clean clone builds both packages rc0, empty porcelain; old/new dist byte-identical. WSL against Windows-native dependencies rc1 now preserves dist/.keep and index.js SHA256; old order destroys dist. All checks outside shared live checkout; scratch directories removed, logs /tmp/moe-a10a-evidence. All required checks run; no deferrals. Adversarial review and Serena handoff/gotcha saved. Concurrent builds and mid-emit failures remain outside scope; shared-build ban stands.",
+  "commits": [
+    {
+      "sha": "429b38eef58fff539162fa2aea6b27de3dbc489d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-6e57c4f8@2026-10-30T19:26:31Z",
+      "paths": [
+        ".moe/tasks/task-1c2bfeca0ec34589b8cb498abc082549.json",
+        ".moe/tasks/task-a10a7f7840dc4fda9310e61789545877.json",
+        "packages/moe-claude-plugin/package.json",
+        "packages/moe-proxy/package.json",
+        "packages/moe-proxy/src/buildScriptOrder.test.ts"
+      ],
+      "recordedBy": "worker-6e57c4f8",
+      "recordedAt": "2026-10-30T19:33:46.643Z",
+      "treeId": "314202aa68005a6226846a3998dcf5e52913303e",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "d1d1fef1fe0bf0714309a737e926dc56912489a5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T19:34:05Z",
+      "paths": [
+        ".moe/tasks/task-a10a7f7840dc4fda9310e61789545877.json",
+        ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T19:38:22.431Z",
+      "treeId": "dc23befb8603c0c95d35e0a3db1130e97ef5c28a",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T19:34:05Z",
+    "at": "2026-10-30T19:38:22.431Z"
+  },
+  "completedAt": "2026-10-30T19:37:39.977Z",
+  "reviewCompletedAt": "2026-10-30T19:37:39.977Z",
+  "reviewSummary": "Verified recorded completion 429b38eef58fff539162fa2aea6b27de3dbc489d (tree 314202aa68005a6226846a3998dcf5e52913303e), git show and branch --contains confirm delivery on moe/work-2026-10-24. Source scope +111/-2, net109 LOC: exactly one prebuild-line change per manifest and 109-line regression test; accompanying board metadata reviewed, total commit +333/-7, net326. No daemon/launcher/CI/docs changes. Read current rails and full comments (none). Re-ran task.verification.command verbatim outside live checkout: fresh sanitized npm ci for daemon/proxy/plugin, proxy npm test rc0 (7 files/312 tests), plugin npm run build && npm test rc0 (2 files/18 tests). Compared all 453 snapshot package blobs with pinned completion SHA. Independent per-package old-order mutants: npx vitest run src/buildScriptOrder.test.ts rc1 each, exactly respective manifest case failed /21 passed; proxy diagnostics include test and test:coverage; restored run rc0, 22/22. Native Windows independent clean --no-hardlinks clone pinned to commit: npm ci && npm run build rc0 for both packages; porcelain empty before/after builds/restores. Native old-order builds also rc0; diff -r new/old dist identical for both. WSL using those real Windows-native dependencies: proxy npm test and plugin npm run build each rc1 for missing Linux TypeScript before clean, SHA256 of entire existing dist unchanged (31 proxy/10 plugin files, including .keep and index.js); old-order contrast rc1 deletes dist for both. No required checks skipped/deferred. All npm/npx ran only in snapshots; peer dirty paths untouched, scratch copies removed. Evidence /tmp/moe-a10a-qa-evidence. No API/state compatibility or documentation/migration gaps; concurrent-build/mid-emit failures remain explicitly out of scope and shared-build ban remains. Ponytail: Lean already. Ship; net -0 lines.",
+  "requiredCheckAtDone": null
+}

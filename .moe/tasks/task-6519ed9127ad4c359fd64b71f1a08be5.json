@@ -1,0 +1,60 @@
+{
+  "id": "task-6519ed9127ad4c359fd64b71f1a08be5",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-flip gate] Human-run switch of this project to worktree mode — governor-closed, never plan or claim",
+  "description": "This is a tracking row, not work. No architect plans it and no seat claims it. It exists to hold the shared wrapper lane while this project switches to worktree mode. WT-10M depends on it, so once 31187ec1 lands, no new lane row starts in shared mode, and the checkout drains for the §7.3 stop-the-world switch. The governor checks the DoD with git and the daemon, then ARCHIVES the row. That releases WT-10M and the rest of the lane to run in worktree mode.\n\nDecisions:\n- The human said go on the early switch (\"lets dop it\"; #general msg-717a48e0).\n- On 11-02 the human decided \"keep main PR-only, land on a branch\". The target is therefore consolidationBranch 'moe/work-2026-10-24', with no migration landing. The human keeps merging that branch into main by pull request.\n\nPrerequisites (dependsOn):\n- 31187ec1, the resume fail-closed fix;\n- WT-18a and WT-18c, the mode-aware worker role docs;\n- WT-19b, the dry run on a slash-named target.\nIf 31187ec1 lands wrapper bytes after WT-19b ran, the governor re-runs WT-19b's command on the switch commit first.\n\nThe switch, adapted from docs/plans/2026-10-30-per-task-worktrees.md §7.3 and run by the human with the governor:\n1. Drain: no task is WORKING or REVIEW with an open attempt.\n2. Check `git for-each-ref refs/moe/rescue`: no live task is waiting on a shared-mode rescue.\n3. Settings:\n   - qualityGate `bash scripts/tests/parity-check.sh && npm run lint`;\n   - resources `git-land-moe-work-2026-10-24` with capacity 1, maxLeaseMs 7200000 and releaseOnDeregister true (the wrapper's sanitized lease id).\n4. Skip the migration landing.\n5. In the control checkout: `git switch -c moe/control` at the moe/work-2026-10-24 tip.\n6. Settings: worktreeMode 'on' and consolidationBranch 'moe/work-2026-10-24'.\n7. Rebuild the live daemon from HEAD and restart it (needs the human's yes), then run `node packages/moe-daemon/dist/index.js doctor --project <path>`; it must exit 0.\n8. Relaunch the seats.\n\nRollback is §7.4: set worktreeMode 'off', unset consolidationBranch, then `git switch moe/work-2026-10-24`.",
+  "definitionOfDone": [
+    "The control checkout's HEAD is refs/heads/moe/control, at a commit contained in moe/work-2026-10-24.",
+    ".moe/project.json settings have worktreeMode 'on', consolidationBranch 'moe/work-2026-10-24' and a non-blank qualityGate.",
+    "doctor on the rebuilt live daemon exits 0 with the worktree probes as hard checks.",
+    "A WORKING claim's get_context shows workspace.mode 'worktree' with target moe/work-2026-10-24, and that task's first landing reaches origin/moe/work-2026-10-24 fast-forward-only while main does not move."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor gate, not work. It holds WT-10M until this project's worktree switch, and the governor archives it once the switch is done. Architects: do not plan or claim this row.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-692a12df337c43edacb59fd0599ecff2",
+    "task-cfa129252343438d903de1e67ae6073c",
+    "task-48aafb880ede4b22a3e26115c07f8470",
+    "task-fbe8e3880ddf47dfa8546f220acea770",
+    "task-3c4be1254a4b43d0b5e72e0fd8cd0604"
+  ],
+  "priority": "LOW",
+  "order": 27.8,
+  "comments": [
+    {
+      "id": "comment-8acb09b654ae459cb0b0690a610f8963",
+      "author": "governor-e6b40560",
+      "content": "Addition to the switch checklist. Insert it between step 6 (worktreeMode on) and step 8 (relaunch the seats): run `git -C <control checkout> config extensions.worktreeConfig true`, then confirm with `git config --get extensions.worktreeConfig` that it prints `true`.\n\nWhy: bug task-c7ca56e6. With the extension unset, the first sparse-checkout in a fresh worktree writes the common .git/config under a lock. Two seats provisioning at the same moment then race on that lock, and one refuses with MOE_WORKTREE_CREATE_FAILED. Seats relaunching all together right after the switch is exactly that moment. Once the extension is set, it becomes per-worktree config and the race is gone. The row itself depends on this gate and lands after the switch.",
+      "timestamp": "2026-11-02T09:10:13.803Z"
+    },
+    {
+      "id": "comment-3e464d79ac964e0ba19b6e72589b8511",
+      "author": "governor-e6b40560",
+      "content": "HUMAN DELEGATION (11-02, about 09:52Z), recorded by the governor. The human replied **\"do all\"** to the governor's note that the next session would ask before the daemon rebuild and walk them through the switch.\n\nThe governor therefore runs every step of this checklist itself, without asking first: the drain, the settings, `git switch -c moe/control`, `git config extensions.worktreeConfig true`, the live daemon rebuild and restart, doctor, the seat relaunch and archiving this gate.\n\nThe preconditions still hold:\n- WT-13 and WT-19b are DONE;\n- the drain is complete;\n- the rescue refs are checked.\n\nA step that auto mode denies is reported and asked for, never worked around.",
+      "timestamp": "2026-11-02T09:52:17.970Z"
+    },
+    {
+      "id": "comment-df6dbc2722fc428393c849a95017e4eb",
+      "author": "governor-e6b40560",
+      "content": "Governor, about 15:16Z: I added a new prerequisite, task-3c4be125. The full title is \"bug: MOE_WRAPPER_IN_WORKTREE refuses the wrapper test harnesses when a worker runs them inside its task worktree\". It is HIGH, in PLANNING, and depends on WT-13.\n\n**Why it gates the switch:**\n- WT-13's §6.1 guard refuses any moe-agent.{sh,ps1} whose path is under <repo>/.worktrees/task-*.\n- After the switch, every wrapper-lane row, WT-10M first, runs `bash scripts/tests/postflight.sh`, worktree-landing and the ps1 twins from its own task worktree. Those harnesses launch W's wrapper copy, so every wrapper case fails with MOE_WRAPPER_IN_WORKTREE and none of those rows can verify.\n- The fix is a harness-only opt-out, or a ruling, and it must land in shared mode before the gate opens.\n\nThe gate's prerequisites are now WT-13, WT-19b and 3c4be125; WT-18a and WT-18c are DONE.\n\n**Runbook addendum:** if 3c4be125 lands wrapper bytes after WT-19b's verification ran, re-run WT-19b's command on the switch commit first. This is the same rule as for 31187ec1.",
+      "timestamp": "2026-11-02T15:15:54.668Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T08:48:44.700Z",
+  "updatedAt": "2026-11-02T19:13:46.810Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T08:49:58.314Z",
+    "seq": 1
+  }
+}

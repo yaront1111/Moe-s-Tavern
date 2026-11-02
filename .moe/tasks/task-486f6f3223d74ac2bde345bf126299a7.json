@@ -1,0 +1,300 @@
+{
+  "id": "task-486f6f3223d74ac2bde345bf126299a7",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-21a] VS Code: remember seat shell pids so a reload or extension restart never deregisters a live seat",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse). Carved out of VSC-21 (task-7e7bd0ec91ca488da2858f70cff32f65) by its architect on 2026-11-02 as a prerequisite. VSC-21 dependsOn this row and wires it into extension.ts. Nothing else depends on it.\n\nWhy: VS Code terminals can outlive the extension session that launched their seats.\n- A window reload keeps persistent terminal sessions running. terminal.integrated.enablePersistentSessions is on by default, and extension-created terminals persist unless they are created with isTransient.\n- \"Restart Extensions\" after an extension update restarts only the extension host, and every terminal keeps running.\nJetBrains tabs die with the IDE. That is why AgentSeatTracker (VSC-20, moe-vscode/src/util/AgentSeatTracker.ts) counts every saved seat as gone at startup and deregisters it at the first connect. Wired in as-is, VSC-21 would therefore deregister live seats after every reload or Moe update, and the daemon would release tasks that their agents are still working on.\nThe fix: remember each seat's shell pid (vscode Terminal.processId). At activation, before the first connect, mark launched() every saved seat whose shell is still alive.\n\nDeliverable 1: new moe-vscode/src/util/SeatSurvival.ts. It is pure like AgentSeatTracker.ts: no import, no 'vscode' text and no 'require(' text; every dependency is a parameter.\n- `isProcessAlive(pid: number, kill = (p, s) => process.kill(p, s)): boolean` probes with signal 0. A positive safe-integer pid is alive when the probe succeeds or throws EPERM, and dead on ESRCH or any other throw. Any other pid is never probed and counts as dead, because process.kill(0 or a negative pid) addresses process groups.\n- `class SeatPids(load: () => unknown, save: (pids: Record<string, number>) => void)`, with these methods:\n  - `record(workerId, pid: number | undefined)`;\n  - `keep(workerIds)`;\n  - `seatOf(pid): string | undefined`;\n  - `surviving(workerIds, isAlive): string[]`.\n  Pids live in a Map, never in an object keyed by worker id. load() is untyped workspace JSON.\nVSC-21 consumes it as follows: it persists the map under context.workspaceState key moe.agentSeatPids, calls keep() with every list the tracker saves, calls record() when a launched terminal's processId resolves, calls surviving() at activation, and uses seatOf() to map a surviving or reconnected terminal back to its worker.\n\nDeliverable 2: new moe-vscode/tests/seat-survival.test.cjs. It loads the source under node:vm with a require map that throws on every name, as tests/agent-seat-tracker.test.cjs does.\n\nNot in scope:\n- extension.ts, AgentLauncher.ts and MoeDaemonClient.ts (all VSC-21).\n- AgentSeatTracker.ts and moe-jetbrains/src/test/resources/client-seat-tracker.json. They stay unchanged: survival is a VS Code adaptation outside the tracker, and the tracker still matches JetBrains on every corpus row.\n- Any moe-jetbrains file. JetBrains' analogue, a dynamic plugin reload that keeps tabs alive, is a note for VSC-18, not a fix here.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout and overlay this task's files. Then, in <snapshot>/moe-vscode, run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "New moe-vscode/src/util/SeatSurvival.ts exports isProcessAlive(pid, kill?) and class SeatPids(load, save) with record(workerId, pid), keep(workerIds), seatOf(pid) and surviving(workerIds, isAlive). The file has no import and no 'require(' or 'vscode' text, and it loads under a require map that throws on every module name.",
+    "isProcessAlive probes a positive safe-integer pid with signal 0. It returns true when the probe succeeds or throws EPERM, and false on ESRCH or any other throw. For 0, negative, fractional, NaN, non-number or undefined pids it returns false without probing. This is proven with a recording kill stub, plus one real probe of process.pid that returns true.",
+    "SeatPids loads only positive safe-integer pids under non-blank worker ids from a plain object; an array, string, number, null or undefined loads nothing. record keeps one worker per pid, so a reused pid moves to the new worker, and an invalid pid records nothing. keep drops every worker not in the list, and a non-array list keeps none. save runs only when the map changed and receives a fresh object each time.",
+    "surviving returns exactly the given worker ids whose recorded pid isAlive confirms, in the order given and once each. It never calls isAlive for an id without a recorded pid, and it returns [] for a non-array.",
+    "New moe-vscode/tests/seat-survival.test.cjs proves items 1-4 with exact-value assertions. A scratch-copy mutant in which surviving ignores isAlive makes it fail; the mutant is discarded afterwards.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first. Create moe-vscode/tests/seat-survival.test.cjs with the Write tool, modelled on tests/agent-seat-tracker.test.cjs (VSC-20, landed at 161c058c).\n\nHarness: transpile src/util/SeatSurvival.ts with ts.transpileModule (CommonJS, ES2020). Run it through vm.runInThisContext('(function (exports, module, require) {...})') with a require that throws on every name. Returned objects then stay in the test realm, so strict deepEqual works (mem:gotcha-vscode-vm-test-harness). Every stub records its call first and only then acts; a stub that replaces the recorder makes its assertion vacuous. All assertions are exact-value.\n\nRows:\n- S1, purity (DoD 1): the source text has no 'vscode' in any case (the same regex as P1 there), no import line and no 'require(' text. Object.keys(exports).sort() deep-equals ['SeatPids', 'isProcessAlive'].\n- S2, isProcessAlive with a recording kill stub (DoD 2):\n  - pid 4242 with a stub that returns gives true, and the stub log is exactly [[4242, 0]];\n  - a stub that throws an error with code 'EPERM' gives true;\n  - 'ESRCH' gives false; so do 'EINVAL', a thrown string and a thrown null;\n  - 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, '42', undefined and null each give false with zero stub calls;\n  - one real probe: isProcessAlive(process.pid) is true with the default kill.\n- S3, SeatPids load (DoD 3), with a recording save:\n  - load returning an array, a string, a number, null or undefined: seatOf finds nothing and save is never called;\n  - a plain object {w1: 11, '  ': 12, w2: 0, w3: 1.5, w4: '13', w5: 14} keeps exactly w1 to 11 and w5 to 14 (seatOf(11) is 'w1', seatOf(14) is 'w5', seatOf(12) and seatOf(13) are undefined);\n  - construction never calls save;\n  - worker ids 'constructor' and 'hasOwnProperty' load and round-trip as plain data.\n- S4, record:\n  - a valid pair makes one save whose argument deep-equals the whole map; the same pair again makes no save;\n  - an invalid pid (undefined, 0, -3, 2.5) or a blank or non-string worker id changes nothing and saves nothing;\n  - a reused pid moves: record('w1', 11) then record('w2', 11) leaves seatOf(11) as 'w2', and the save no longer holds w1;\n  - a worker re-recorded with a new pid drops its old pid: seatOf(old) is undefined;\n  - two saves are never the same object, and mutating a saved object changes nothing inside SeatPids.\n- S5, keep: keep(['w1']) drops every other worker, with exactly one save; a keep that drops nothing does not save; keep(undefined), keep('w1') and keep(null) keep none, with one save if anything was recorded.\n- S6, surviving (DoD 4): with w1 to 11 (alive), w2 to 12 (dead) and w3 unrecorded:\n  - surviving(['w2', 'w1', 'w3', 'w1'], isAlive) returns ['w1'];\n  - isAlive is called only with 11 and 12: never for w3, never twice for w1;\n  - a truthy result that is not true (1, 'yes') does not confirm;\n  - a non-array (undefined, 'w1', {}) returns [] without calling isAlive.\n\nRun `node --test moe-vscode/tests/seat-survival.test.cjs` in place (plain node, read-only; never npm in the shared checkout). It is RED, because the module does not exist yet.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/seat-survival.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/seat-survival.test.cjs"
+      ],
+      "note": "Reopen 1 (QA size-only reject, 424 > 400). Compacted tests/seat-survival.test.cjs 300 -> 285 lines (+13/-28 vs HEAD) with no test row and no assertion dropped:\n- header comment 3 -> 2 lines;\n- S2a: the separate edge-pid loop (1, MAX_SAFE_INTEGER) folded into the outcome table as an inner pid loop [4242, 1, MAX_SAFE_INTEGER], so every outcome row now also runs at the edge pids (a superset);\n- S2c and S6a: comment lines folded into an assertion message or shortened;\n- S3d: the single-use `stored` variable was inlined;\n- S4a, S4d, S5a: runs of consecutive seatOf asserts became one-line [pid, seat] loops. These run the same assert.equal calls, in the same order, with the same values, now with a pid message.\nProof that nothing was dropped: a scratch harness (/tmp/vsc21a-count, outside the checkout) proxies node:assert/strict and node:test and counts the assert calls each test executes. HEAD file vs new file, same source: every test is identical (S1 6, S2b 30, S2c 5, S3a 36, S3b 11, S3c 4, S3d 6, S3e 3, S4a 7, S4b 5, S4c 8, S4d 7, S5a 10, S5b 29, S6a 3, S6b 4, S6c 2, S6d 18) except S2a, 26 -> 66 (superset).\nIn place, plain node with nvm v24.21.0 under env -i, no npm: `node --test tests/seat-survival.test.cjs` gives 19/19 pass. The file is ASCII-only with LF endings, and the '\\t\\n' literal in S4b is intact.\nThe 27 dirty paths of other sessions (.moe/roles, .moe/skills, peer task json, MoeJson.kt, scripts/*) were not touched.",
+      "startedAt": "2026-11-02T10:39:54.467Z",
+      "completedAt": "2026-11-02T10:44:48.523Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Write moe-vscode/src/util/SeatSurvival.ts with the Write tool. No import, no 'require(' text, and no 'vscode' text in any case, comments included (say 'the editor's Terminal.processId'). Every dependency is a parameter, as in AgentSeatTracker.ts.\n\n- Private isPid(value: unknown): value is number: typeof number, Number.isSafeInteger, and greater than 0.\n- `export function isProcessAlive(pid: unknown, kill: (pid: number, signal: number) => unknown = (p, s) => process.kill(p, s)): boolean`:\n  - return false before probing unless isPid(pid), because process.kill on 0 or a negative pid addresses process groups;\n  - probe kill(pid, 0);\n  - true when the probe returns, or throws an error whose code is 'EPERM' (the process exists but belongs to another user);\n  - false on 'ESRCH' and on any other throw, non-objects included. Read the code as (err as { code?: unknown } | null)?.code; no any.\n- `export class SeatPids`, holding a private Map<string, number> (never an object keyed by worker id):\n  - constructor(load: () => unknown, save: (pids: Record<string, number>) => void) loads only from a plain object (non-null, not an array), applying record's rule entry by entry, without saving;\n  - record(workerId: string, pid: number | undefined) ignores a non-string or blank worker id and an invalid pid. Otherwise it deletes any other worker that holds the pid, sets the pair, and saves only if the map changed;\n  - keep(workerIds: unknown) drops every worker not in the array (a non-array keeps none) and saves only if something was dropped;\n  - seatOf(pid) returns the worker id or undefined;\n  - surviving(workerIds: unknown, isAlive: (pid: number) => boolean): string[] walks the array once, skips duplicates and ids without a recorded pid, and keeps an id only when isAlive(pid) === true;\n  - save always receives Object.fromEntries(map), a fresh object.\n- JSDoc on the module explains why it exists: terminals outlive a window reload and Restart Extensions, so VSC-21 marks the surviving seats launched() before the first connect. Each method gets its own JSDoc.\n\nError handling:\n- Exceptions from load and save propagate unchanged; the callbacks VSC-21 injects own their catching, as in AgentSeatTracker.ts.\n- isProcessAlive never throws.\n- A recycled pid can make a dead seat look alive. That only delays its deregistration, which is the safe direction; record it as a note for VSC-21.\n\nRe-run `node --test moe-vscode/tests/seat-survival.test.cjs`: every row passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/src/util/SeatSurvival.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/SeatSurvival.ts"
+      ],
+      "note": "Reopen 1: comments-only trim of src/util/SeatSurvival.ts, 124 -> 101 lines (+12/-35 vs HEAD).\nJSDoc changes:\n- module doc 18 -> 9 lines;\n- isProcessAlive 6 -> 1;\n- class 5 -> 1;\n- record 5 -> 1;\n- surviving 5 -> 4.\nKept: the why (terminals outlive a reload and Restart Extensions; the tracker would deregister them at the first connect), the VSC-21 wiring notes (the Terminal.processId pid is kept and surviving seats are marked launched() before the first connect; a recycled pid only delays deregistration; processId is undefined until the shell starts; isAlive gets the pid alone, so isProcessAlive can be passed as it is), and one JSDoc per function and method.\nProof of no behaviour change:\n- ts.transpileModule with removeComments:true emits byte-identical JS for the HEAD and new sources (2522 bytes, sha256 bd7676342dd2585a… both);\n- the non-comment source lines are identical (diff empty).\nCross-matrix (scratch /tmp/vsc21a-count, plain node v24.21 under env -i, node_modules symlinked read-only): HEAD test x HEAD src, HEAD test x new src, new test x HEAD src and new test x new src each pass 19/19. Per-test assert counts are identical, except S2a 26 -> 66 for the new test.\nPurity, re-grepped on the new text: vscode 0, import lines 0, require( 0. The project's forbidden tokens: 0 in both files. ASCII only, LF line endings.\nTask footprint now (git diff --numstat 644ce882^): SeatSurvival.ts +101, seat-survival.test.cjs +285, 386 net, under the 400 cap by 14. In place, `node --test tests/seat-survival.test.cjs` gives 19/19.",
+      "startedAt": "2026-11-02T10:44:50.761Z",
+      "completedAt": "2026-11-02T10:46:38.808Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Gate and mutation proof, run once (DoD 5 and 6; mem:gotcha-vscode-gate-from-wsl).\n\n1. Run exactly executionContract.checkRefs[0]. It builds the snapshot /tmp/vsc21a-gate from `git archive HEAD` of the whole repo plus this task's two files, then runs npm ci, lint, compile and the full npm test under env -i with nvm Node 24. Expect exit 0 and 0 failures. The baseline at 9ea87aa6 was 416 tests, 412 pass, 4 skip, before later landings and the new rows.\n2. Then, in that snapshot only: make surviving ignore isAlive in the SNAPSHOT copy of src/util/SeatSurvival.ts with one exact replacement (assert the count is 1). Run `node --test tests/seat-survival.test.cjs` there and confirm that S6 fails by assertion. Then delete the snapshot.\n\nSubmit the gate command, its exit code and the output tail as the complete_task verification.\n\nError handling for a red gate: read the first failing assertion. A failure in another suite is a real regression. A MODULE_NOT_FOUND before any assertion is a snapshot mistake (wrong cwd or missing overlay).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/src/util/SeatSurvival.ts",
+        "moe-vscode/tests/seat-survival.test.cjs"
+      ],
+      "note": "Gate: ran executionContract.checkRefs[0] verbatim on the FINAL bytes, from a script file (/tmp/vsc21a-run-gate.sh) with its output logged to /tmp/vsc21a-gate.log. HEAD was 3cfc3c78, plus the overlay of the two files; the overlay was cmp-identical to the working tree.\n- Exit 0, 10:47:45Z-10:47:55Z. The log shows `npm ci` (added 215 packages), `npm run lint` (eslint src --ext ts), `npm run compile` (tsc -p ./) and `npm test` (node --test tests/*.test.cjs).\n- Result: 473 tests, 469 pass, 0 fail, 4 skip; 0 lines starting with ✖ and 0 `not ok`. All 19 seat-survival rows passed.\n- Test count went 470 -> 473 since round 1 because VSC-9's completion 89062f86 (tests/blocker-corpus.test.cjs, +157 lines) landed after the round-1 gate. No other moe-vscode test changed (`git diff --stat 644ce882 3cfc3c78 -- moe-vscode/tests`).\nMutation proof (DoD 5), in the snapshot copy only. Runner /tmp/vsc21a-mut/mutate.cjs applies one exact replacement per mutant, asserts the replace count is 1, counts a kill only when every failing row failed by ERR_ASSERTION in the TAP output, and restores the source after each mutant. It ran QA's 8 round-1 mutants against the new test file AND the 644ce882 test file:\n- M1 surviving ignores isAlive (DoD 5): S2c S6a S6b S6c S6d;\n- M2 EPERM dead: S2a;\n- M3 pid 0 probed: S2b S3b S4b;\n- M4 dup probed twice: S6a S6b;\n- M5 keep(non-array) keeps all: S5b;\n- M6 record saves always: S4a S4b;\n- M7 reused pid not moved: S3c S4c;\n- M8 keep saves always: S5a S5b.\nThe kill sets are identical for both test files and equal QA's round-1 list. After the run the source was restored (cmp equals the working tree) and both files passed again. Snapshot /tmp/vsc21a-gate deleted.",
+      "startedAt": "2026-11-02T10:47:24.804Z",
+      "completedAt": "2026-11-02T10:48:49.411Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Self-review of the diff, which is two new files only:\n(1) purity holds: no import, no 'require(' text and no 'vscode' text;\n(2) nothing throws except the injected callbacks;\n(3) one worker per pid and one pid per worker hold after every operation, load included;\n(4) save never fires without a change, and always receives a fresh object;\n(5) prototype-named worker ids stay plain data (the Map);\n(6) every DoD item has an exact-value assertion, and every recording stub records before acting;\n(7) nothing outside the two files changed: AgentSeatTracker.ts, client-seat-tracker.json and extension.ts are untouched.\nPut the findings in the step note, and fix any real defect before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/src/util/SeatSurvival.ts"
+      ],
+      "note": "Adversarial self-review of this task's own diff (git diff HEAD on the two files only).\nOne real finding, fixed: my new module-doc line said \"Only load and save errors propagate\". That is false for surviving, because an injected isAlive that throws propagates too; round 1's \"Nothing else here throws\" had the same gap. The line now reads \"Errors from the injected load, save and isAlive propagate unchanged: their owners catch them\". The kill probe's own throws are still caught. The fix is comment-only.\nRe-verified on the FINAL bytes:\n- comments-removed transpile is byte-identical to HEAD (sha bd7676342dd2585a…);\n- purity greps: vscode, import lines, require( and the forbidden tokens all 0; ASCII only, LF line endings;\n- checkRefs[0] verbatim at HEAD 96e0d7c2: exit 0, 473 tests, 469 pass, 0 fail, 4 skip, overlay cmp-identical;\n- all 8 mutants killed by assertion, with the same kill sets for the new and the 644ce882 test files; snapshot deleted.\nChecklist:\n(1) Purity holds: no import, no require( text, no vscode text.\n(2) Nothing throws except the injected callbacks (load, save, isAlive). isProcessAlive never throws, since its catch covers any thrown value.\n(3) One worker per pid and one pid per worker: the code is unchanged, and S3c/S4c kill M7.\n(4) save fires only on a change and always gets a fresh object: S4a/S4b kill M6, S5a/S5b kill M8, S4d covers the fresh object.\n(5) Prototype-named ids are plain data (Map): S3d is unchanged apart from inlining one variable.\n(6) Every DoD item keeps exact-value assertions. Per-test assert counts are equal to round 1, except S2a 26 -> 66 (superset). Every recording stub still records before it acts (killStub and aliveTable are unchanged).\n(7) Scope: git diff --stat HEAD of AgentSeatTracker.ts, client-seat-tracker.json, extension.ts, util/AgentLauncher.ts and MoeDaemonClient.ts is empty; 644ce882 touched only the two files.\nConcurrency, I/O and cleanup: not applicable (comment and test edits only).\nTheoretical, unchanged: a recycled pid only delays deregistration. The constructor doc's \"plain object\" means a non-null non-array object, the same as round 1.\nSize: 101 + 285 = 386 net (git diff --numstat 644ce882^), 14 under the 400 cap.",
+      "startedAt": "2026-11-02T10:48:53.459Z",
+      "completedAt": "2026-11-02T10:50:08.213Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Rejected ONLY for size; DoD 1-6 and the code verified good. Completion 644ce882 adds 424 net changed LOC under moe-vscode/ (git show --numstat: SeatSurvival.ts +124, tests/seat-survival.test.cjs +300, board json excluded) against the 400-line QA cap. No rail waives size for this row: the project has none, and the epic's only exception is VSC-6's own bytes. The 24 lines over is the whole defect. Verified: fresh git-archive snapshot of 644ce882 (both files cmp-identical), env -i nvm Node 24.21: npm ci 0, lint 0, compile 0, npm test 470 tests / 466 pass / 4 skip / 0 fail. DoD 1-4 confirmed in source (no import/require(/editor-name text; positive-safe-integer-only probe, EPERM alive, ESRCH dead; one worker per pid, save only on change with a fresh object; surviving ordered, deduped, strict true, no probe of unrecorded ids). DoD 5: 8 mutants on a scratch copy, all killed by assertion (surviving ignores isAlive: S2c S6a-d; EPERM dead: S2a; pid 0 probed: S2b S3b S4b; duplicate probed twice: S6a S6b; keep(non-array) keeps all: S5b; save always: S4a S4b; pid not moved: S3c S4c; keep saves always: S5a S5b). Untouched: AgentSeatTracker.ts, client-seat-tracker.json, extension.ts, AgentLauncher.ts, MoeDaemonClient.ts. Fix is mechanical, no re-slice: trim at least 24 net lines from the two files with no behaviour change and no dropped test row or assertion (SeatSurvival.ts has about 45 lines of JSDoc, much of it restating the DoD; keep the VSC-21 wiring notes), re-run checkRefs[0] on the final bytes, complete_task. Alternative: file an EPIC ADD_RAIL size exception for 644ce882 per mem:decision-size-only-reject-of-landed-bytes (two files, +124/+300, waives size only, under 1000 chars), ping #governors; I approve once the human approves it.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 12.4,
+  "comments": [
+    {
+      "id": "comment-af0068fc2e2c444494ebb98a215f3783",
+      "author": "architect-d54b05fd",
+      "content": "@architect-0fcb7226 I created this row while planning VSC-21 (task-7e7bd0ec, now WORKING and gated on this row). VSC-21's plan already codes against this API, so please keep these exact shapes:\n- `export function isProcessAlive(pid: number, kill?: ...): boolean`. The second parameter must be optional, because extension.ts passes isProcessAlive directly where `(pid: number) => boolean` is expected.\n- `export class SeatPids`, constructed as `new SeatPids(() => context.workspaceState.get('moe.agentSeatPids'), pids => persist(...))`, so load returns unknown.\n- `record(workerId: string, pid: number | undefined)`. VSC-21 passes Terminal.processId's result, which can be undefined.\n- `keep(workerIds)`, called with every list AgentSeatTracker saves.\n- `seatOf(pid: number | undefined): string | undefined`, called with processId results.\n- `surviving(workerIds, isAlive): string[]`, called with `context.workspaceState.get<string[]>('moe.agentSeats', [])`, which may be any JSON at runtime.\nPurity: same as AgentSeatTracker.ts (no import, no 'require(' or 'vscode' text). Copy the tests/agent-seat-tracker.test.cjs harness. Background is in mem:gotcha-vscode-terminals-outlive-extension-host and mem:task-task-7e7bd0ec91ca488da2858f70cff32f65-handoff. For the DoD-5 mutant, the recipe in mem:convention-vscode-port-mutant-checkref works: append an override such as `SeatPids.prototype.surviving = function (ids) { ... }` to a scratch copy, which is deterministic whatever the formatting.",
+      "timestamp": "2026-11-02T10:27:08.560Z"
+    },
+    {
+      "id": "comment-835a01ac97d4409fb64589f2138fbcb6",
+      "author": "architect-0fcb7226",
+      "content": "Architect note on size, for QA and for whoever takes a reopen. The diff is 424 net LOC: src/util/SeatSurvival.ts 124 plus tests/seat-survival.test.cjs 300. That is just over the 400 cap. My plan's per-case row list drove the test size, so this is a sizing miss in the plan, not scope creep.\n\nIf QA rejects on size, the intended fix is to compact tests/seat-survival.test.cjs to about 270 lines or fewer, with no assertion dropped. Table-drive:\n- S2's invalid-pid list (0, -1, 1.5, NaN, Infinity, MAX_SAFE_INTEGER+1, '42', undefined, null) as one loop over [input, label] pairs, with one shared zero-calls check;\n- S2's thrown-code cases (EPERM, ESRCH, EINVAL, a string, null) as one loop over [throwValue, expected];\n- S3's non-object loads (array, string, number, null, undefined) as one loop;\n- S5's non-array keeps (undefined, 'w1', null) as one loop.\n\nNo re-slice and no product change are needed. Every DoD item stays covered, and the surviving-ignores-isAlive mutant must still fail S6.",
+      "timestamp": "2026-11-02T10:33:49.796Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T10:23:08.353Z",
+  "updatedAt": "2026-11-02T10:59:12.911Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:24:56.835Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-11-02T10:58:02.823Z",
+    "wallClockMs": 1985988
+  },
+  "contextFetchedBy": [
+    "qa-1106e678",
+    "worker-4c1da905"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:27:19.825Z",
+  "executionContract": {
+    "intendedBehavior": "A pure module remembers each launched seat's shell pid and answers which saved seats still have a live shell. VSC-21 can then keep those seats instead of deregistering them after a window reload or an extension-host restart.",
+    "acceptanceCriteria": [
+      "isProcessAlive probes only positive safe-integer pids with signal 0: alive on success or EPERM, dead on ESRCH or any other throw.",
+      "SeatPids keeps one worker per pid in a Map, loads only valid entries from a plain object, saves a fresh object only on change, and keep with a non-array keeps none.",
+      "surviving returns, in input order and once each, the ids whose recorded pid isAlive confirms with true, and never calls isAlive for an unrecorded id."
+    ],
+    "invariants": [
+      "SeatSurvival.ts has no import, no 'require(' text and no 'vscode' text.",
+      "AgentSeatTracker.ts, moe-jetbrains/src/test/resources/client-seat-tracker.json, extension.ts, AgentLauncher.ts and MoeDaemonClient.ts are unchanged.",
+      "No method throws except by propagating an injected load or save error."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/util/AgentSeatTracker.ts is pure and lets injected callbacks own their errors; tests/agent-seat-tracker.test.cjs loads it through vm.runInThisContext with a throwing require.",
+      "process.kill(pid, 0) throws ESRCH for a missing process and EPERM for one owned by another user, and returns true otherwise."
+    ],
+    "checkRefs": [
+      "S=/tmp/vsc21a-gate && rm -rf \"$S\" && mkdir -p \"$S\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/src/util/SeatSurvival.ts moe-vscode/tests/seat-survival.test.cjs \"$S\"/) && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "The module goes straight to the description's API; no alternatives are needed, since the row was carved out with a fixed interface for VSC-21. Decisions made explicit:\n- surviving treats only a strict `true` as confirmation.\n- load applies record's one-worker-per-pid rule, so the invariant holds from construction.\n- keep with a non-array clears the map.\n- Construction never saves, even when load filtered entries out.",
+    "codebaseInsights": "- AgentSeatTracker.ts (VSC-20, 161c058c) is the template: pure, no imports, and the callbacks own their errors.\n- tests/agent-seat-tracker.test.cjs loads its module with vm.runInThisContext and a throwing require, and its purity row uses /vscode/i (case-insensitive), so comments must avoid the word too.\n- moe-vscode tsconfig is lib ES2020 and strict with no types restriction, so Object.fromEntries and the process global compile; eslint flat/recommended applies.\n- Gate baseline at 9ea87aa6: 416 tests / 412 pass / 4 skip.",
+    "risks": "- Pid reuse can make a dead seat look alive. That direction is safe (deregistration is only delayed), and VSC-21 may add a launch-time check.\n- A test that uses a kill stub throwing a plain object instead of an Error must still read .code.\n- Never spell the prototype-pollution key in the source or the test (project forbiddenPatterns); 'constructor' and 'hasOwnProperty' cover the Map choice.\n- Do not touch AgentSeatTracker.ts or the shared corpus.",
+    "keyFiles": [
+      "moe-vscode/src/util/AgentSeatTracker.ts",
+      "moe-vscode/tests/agent-seat-tracker.test.cjs",
+      "moe-vscode/tsconfig.json"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ac66db4cbe4b22894453bddc71b48e3aca33acf9",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:27:19.853Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T10:28:38.379Z",
+  "reviewStartedAt": "2026-11-02T10:51:22.634Z",
+  "verification": {
+    "command": "S=/tmp/vsc21a-gate && rm -rf \"$S\" && mkdir -p \"$S\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/src/util/SeatSurvival.ts moe-vscode/tests/seat-survival.test.cjs \"$S\"/) && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "added 215 packages in 5s\nnpm notice run moe-vscode@0.8.0 lint\nnpm notice run eslint src --ext ts\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./\nnpm notice run moe-vscode@0.8.0 test\nnpm notice run node --test tests/*.test.cjs\n...\n✔ C4: an updateChannels message with no list degrades to the no-channel state instead of throwing (0.576204ms)\n✔ files.watcherExclude keeps per-task worktrees out of the file watcher (0.911876ms)\n✔ search.exclude keeps per-task worktrees out of search and quick open (0.231432ms)\n✔ files.exclude is not contributed, so the Explorer still lists .worktrees (0.135091ms)\nℹ tests 473\nℹ suites 0\nℹ pass 469\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 1114.933737\n(exit=0 at HEAD 96e0d7c2 + the two final files, overlay cmp-identical to the working tree; zero lines starting with ✖ or 'not ok' in the full 494-line log)",
+    "reportedAt": "2026-11-02T10:51:22.634Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/seat-survival.test.cjs",
+    "moe-vscode/src/util/SeatSurvival.ts",
+    ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+    ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+    ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json",
+    ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json"
+  ],
+  "completionSummary": "Round 2 (QA size-only reject 424>400): trimmed in place; no behaviour change, no test row or assertion dropped. Footprint 386 net (git diff --numstat 644ce882^: SeatSurvival.ts +101, seat-survival.test.cjs +285), 14 under the cap.\n- SeatSurvival.ts: comments only (module JSDoc 18->9, isProcessAlive 6->1, class 5->1, record 5->1, surviving 5->4); kept the why, the VSC-21 wiring notes and a JSDoc per method; fixed one inaccuracy (an injected isAlive's errors propagate too). Proof: transpile with removeComments gives byte-identical JS for 644ce882 and final (sha256 bd7676342dd2585a).\n- Test: S2a's edge-pid loop became an inner pid loop over every outcome row (superset, 26->66 assert calls); seatOf runs in S4a/S4d/S5a became [pid, seat] loops (same calls, same order); comments shortened. Proof: a harness counting executed asserts per test shows identical counts for all 19 tests except S2a; old/new test x old/new source all 19/19.\n- DoD 5: QA's 8 round-1 mutants re-run in the gate snapshot against the new AND the 644ce882 test file: all killed by ERR_ASSERTION with identical kill sets (surviving ignores isAlive: S2c S6a-d; EPERM dead: S2a; pid 0 probed: S2b S3b S4b; dup probed twice: S6a S6b; keep(non-array) keeps all: S5b; record saves always: S4a S4b; pid not moved: S3c S4c; keep saves always: S5a S5b). Source restored, snapshot deleted.\n- DoD 6: checkRefs[0] verbatim on the final bytes at HEAD 96e0d7c2: exit 0, 473 tests/469 pass/4 skip/0 fail (+3 since round 1 = VSC-9 89062f86 blocker-corpus test). AgentSeatTracker.ts, client-seat-tracker.json, extension.ts, AgentLauncher.ts, MoeDaemonClient.ts untouched. Scripts: /tmp/vsc21a-count/{count,strip}.cjs, /tmp/vsc21a-mut/mutate.cjs.",
+  "commits": [
+    {
+      "sha": "644ce88216eaebf9bb5ca186b8a8cb0cf4ea5726",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T10:27:55Z",
+      "paths": [
+        ".moe/epics/epic-aabc654d.json",
+        ".moe/tasks/task-06dda5c1df29433ab4eb5c4230b38581.json",
+        ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+        ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json",
+        ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json",
+        "moe-vscode/src/util/SeatSurvival.ts",
+        "moe-vscode/tests/seat-survival.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T10:33:28.960Z",
+      "treeId": "7036064018f227094edd4cc07a8516a8f4d121bf",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "e800263041814e78efe322423479ee1bac78f40a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T10:33:34Z",
+      "paths": [
+        ".moe/tasks/task-06dda5c1df29433ab4eb5c4230b38581.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T10:36:30.511Z",
+      "treeId": "3e73ac75f4839426029dd0cc7a787e9406dc86a5",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "fb3e0721d84dde5b69d72d8fe25df48a81d179a2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T10:36:19Z",
+      "paths": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+        "moe-vscode/src/util/SeatSurvival.ts",
+        "moe-vscode/tests/seat-survival.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T10:51:46.922Z",
+      "treeId": "b4fada8b1fc25d285de5bc65b896188b38483825",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "4b32dd78aa3c9469eb19dade5e44d05dac3bca13",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T10:52:04Z",
+      "paths": [
+        ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+        ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json",
+        ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T10:59:12.910Z",
+      "treeId": "d5d1856c85e646654f8a212becb28892b3b2a1ec",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/seat-survival.test.cjs",
+    "moe-vscode/src/util/SeatSurvival.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T10:52:04Z",
+    "at": "2026-11-02T10:59:12.910Z"
+  },
+  "reviewCompletedAt": "2026-11-02T10:58:02.823Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "description": "Oversized: 424 net changed LOC under moe-vscode/ (SeatSurvival.ts +124, seat-survival.test.cjs +300, by git show --numstat 644ce882) vs the 400-line QA cap; no rail waives size for this row. Cut at least 24 net lines in place (redundant JSDoc, or merged test rows with no assertion dropped), re-run checkRefs[0] on the final bytes; or get a size-exception EPIC ADD_RAIL approved. Do not re-slice: the module is correct and fully covered.",
+        "file": "moe-vscode/src/util/SeatSurvival.ts"
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Rejected ONLY for size; DoD 1-6 and the code verified good. Completion 644ce882 adds 424 net changed LOC under moe-vscode/ (git show --numstat: SeatSurvival.ts +124, tests/seat-survival.test.cjs +300, board json excluded) against the 400-line QA cap. No rail waives size for this row: the project has none, and the epic's only exception is VSC-6's own bytes. The 24 lines over is the whole defect. Verified: fresh git-archive snapshot of 644ce882 (both files cmp-identical), env -i nvm Node 24.21: npm ci 0, lint 0, compile 0, npm test 470 tests / 466 pass / 4 skip / 0 fail. DoD 1-4 confirmed in source (no import/require(/editor-name text; positive-safe-integer-only probe, EPERM alive, ESRCH dead; one worker per pid, save only on change with a fresh object; surviving ordered, deduped, strict true, no probe of unrecorded ids). DoD 5: 8 mutants on a scratch copy, all killed by assertion (surviving ignores isAlive: S2c S6a-d; EPERM dead: S2a; pid 0 probed: S2b S3b S4b; duplicate probed twice: S6a S6b; keep(non-array) keeps all: S5b; save always: S4a S4b; pid not moved: S3c S4c; keep saves always: S5a S5b). Untouched: AgentSeatTracker.ts, client-seat-tracker.json, extension.ts, AgentLauncher.ts, MoeDaemonClient.ts. Fix is mechanical, no re-slice: trim at least 24 net lines from the two files with no behaviour change and no dropped test row or assertion (SeatSurvival.ts has about 45 lines of JSDoc, much of it restating the DoD; keep the VSC-21 wiring notes), re-run checkRefs[0] on the final bytes, complete_task. Alternative: file an EPIC ADD_RAIL size exception for 644ce882 per mem:decision-size-only-reject-of-landed-bytes (two files, +124/+300, waives size only, under 1000 chars), ping #governors; I approve once the human approves it.",
+      "rejectedAt": "2026-11-02T10:35:52.178Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "description": "Oversized: 424 net changed LOC under moe-vscode/ (SeatSurvival.ts +124, seat-survival.test.cjs +300, by git show --numstat 644ce882) vs the 400-line QA cap; no rail waives size for this row. Cut at least 24 net lines in place (redundant JSDoc, or merged test rows with no assertion dropped), re-run checkRefs[0] on the final bytes; or get a size-exception EPIC ADD_RAIL approved. Do not re-slice: the module is correct and fully covered.",
+          "file": "moe-vscode/src/util/SeatSurvival.ts"
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-11-02T10:58:02.823Z",
+  "reviewSummary": "Round 2 approved. Completion fb3e0721 (pushed; on moe/work-2026-10-24 and origin) trims 644ce882 in place per QA's size-only reject. Footprint, git diff --numstat 644ce882^ fb3e0721 on the 2 owned files: SeatSurvival.ts +101, seat-survival.test.cjs +285 = 386 net, under the 400 cap. Task commits touch no avoid-list path, no moe-jetbrains file, and none of AgentSeatTracker.ts, client-seat-tracker.json, extension.ts, AgentLauncher.ts, MoeDaemonClient.ts.\nGate: checkRefs[0] verbatim at HEAD e71520cd (overlay cmp-identical to fb3e0721): npm ci, lint, compile, test exit 0; 485 tests, 481 pass, 4 skip, 0 fail (+12 vs the worker's run = VSC-11 task-release.test.cjs); all 19 S-rows pass.\nNo behaviour change: every changed .ts line is a comment, and transpile with removeComments is byte-identical for 644ce882 and fb3e0721 (sha bd7676342dd2585a). Test hunks: S4a/S4d/S5a seatOf loops keep the same values and order, S2a is a superset (edge pids x every outcome), and no assertion was dropped.\nDoD 1-5: 16 of my own snapshot-copy mutants, run against the new AND the round-1 test file, all killed by ERR_ASSERTION with identical kill sets. They include: surviving ignores isAlive (S2c S6a-d), EPERM dead, pid 0 probed, dup probed twice, keep(non-array) keeps all, record/keep/load always save, pid not moved, pid 1 or MAX_SAFE unprobed (S2a), seatOf(undefined) answers (S4a), keep never deletes, one shared save object (S4a S4c S4d), array load, blank id. Source restored; snapshot deleted. Purity: no vscode, import or require( text; 0 forbidden patterns. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
+}

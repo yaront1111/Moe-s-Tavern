@@ -1,0 +1,243 @@
+{
+  "id": "task-a4ad3fdb6fbc4f48934aae0daffe853d",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V06a] Proxy stamps QA decision execution identity",
+  "description": "Objective: a QA seat's own execution identity reaches moe.qa_approve and moe.qa_reject the same way it reaches moe.complete_task: moe-proxy stamps it from the session env, so the seat's CLI can never present another attempt's identity. This is the package-seam follow-up of CQ-V06 (task-6a5d5a13), split out by architect-e4b7eee0 on 2026-10-29.\n\nCQ-V06 makes the daemon require QA's attemptId, generation and sessionId under verified-local. Without this stamping, a strict QA seat could not supply sessionId at all, because only the wrapper knows MOE_SESSION_ID.\n\nDeliverable, in packages/moe-proxy:\n- src/utils.ts: EXECUTION_IDENTITY_TOOLS gains `['qa_approve', ['attempt', 'session']]` and `['qa_reject', ['attempt', 'session']]`, covering all three spellings: moe.x, moe_x and bare x, through the existing loop.\n- The stamping, substitution refusal (EXECUTION_IDENTITY_SUBSTITUTED) and malformed-env refusal (EXECUTION_IDENTITY_INVALID) are the existing ones, reused unchanged.\n- src/utils.test.ts: cases for both tools.\n- README.md: add the two tools to the stamped-tool table, next to `moe.start_step`, `moe.complete_step` and `moe.complete_task`.\n\nCompatibility: with no MOE_ATTEMPT_* or MOE_SESSION_ID in the env, nothing is stamped and the call is byte-identical. The daemon's legacy and observe paths accept the optional params (CQ-V06).\n\nScope boundaries:\n- No daemon change (that is CQ-V06).\n- No R08 guest bridge change: stamping attemptId, generation and sessionId for QA seats in VMs belongs to the R-series (scripts/local-runner/guest-bridge.mjs).\n- No launcher change: the wrappers already export the identity for every claimed seat.\n- The root CLAUDE.md and scripts/CLAUDE.md sentences listing the stamped tools are updated in CQ-V12's docs sweep.\n- Never edit .moe directly.\n\nVerification command (fresh, exit 0 required): cd packages/moe-proxy && npm test",
+  "definitionOfDone": [
+    "moe.qa_approve and moe.qa_reject, under all three spellings, get attemptId, generation and sessionId stamped from MOE_ATTEMPT_ID, MOE_ATTEMPT_GENERATION and MOE_SESSION_ID exactly as moe.complete_task does, proven by new utils.test.ts cases.",
+    "A caller-substituted identity on either tool is refused with EXECUTION_IDENTITY_SUBSTITUTED. A partial or malformed env group is refused with EXECUTION_IDENTITY_INVALID. With no identity env, the call passes through unchanged.",
+    "The existing stampExecutionIdentity tests for the other tools pass unchanged, and README.md's stamped-tool table lists both QA tools.",
+    "Fresh verification `cd packages/moe-proxy && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red), in packages/moe-proxy/src/utils.test.ts. Reuse the stampExecutionIdentity describe block's SESSION, FULL, IDENTITY, call() and refusal() helpers.\n\nAdd `describe('QA decision stamping')` with these cases:\n- (a) Each of moe.qa_approve, moe_qa_approve, qa_approve, moe.qa_reject, moe_qa_reject and qa_reject, called with { taskId: 't1', candidateId: 'cand-1', summary: 's' }, returns true. The arguments become exactly { taskId, candidateId, summary, ...IDENTITY }, with generation as a number.\n- (b) Presented values equal to the env complete the rest.\n- (c) A substituted attemptId, generation ('7' as a string, or 8) or sessionId on either tool is refused with refusal(-32003, 'EXECUTION_IDENTITY_SUBSTITUTED'), and the arguments are not mutated.\n- (d) A partial attempt env group (MOE_ATTEMPT_ID without MOE_ATTEMPT_GENERATION) gives refusal(-32602, 'EXECUTION_IDENTITY_INVALID') for both tools.\n- (e) An empty env returns false, with the arguments unchanged.\n\nThe ONLY edit to an existing test: in 'touches no other tool and no other method' (around line 784), replace the 'moe.qa_approve' entry of the not-stamped list with 'moe.add_comment'. This behavior change makes that one entry false. Every other existing assertion stays byte-identical.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.test.ts"
+      ],
+      "note": "Added 'QA decision stamping' describe.each (qa_approve, qa_reject; 5 cases each), swapped moe.qa_approve -> moe.add_comment in the not-stamped list. Red in Linux snapshot: 8 failed (the 4 behavior cases per tool; passthrough cases pass). Shared checkout has Windows node_modules, so vitest not run there. 874 other dirty paths are peers'/pre-existing; untouched.",
+      "startedAt": "2026-10-30T08:04:41.046Z",
+      "completedAt": "2026-10-30T08:05:14.526Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implementation, packages/moe-proxy/src/utils.ts.\n- In the EXECUTION_IDENTITY_TOOLS initializer list, add `['qa_approve', ['attempt', 'session']]` and `['qa_reject', ['attempt', 'session']]` after complete_task. The existing loop registers all three spellings.\n- Update the doc comment above stampExecutionIdentity, which names the stamped tools (CQ-F09, CQ-F12a), to add moe.qa_approve and moe.qa_reject, citing CQ-V06a.\n- No other change. The env reading, the === comparison, the refusal codes and the fail-closed handling are reused as they are.\n\nError handling is unchanged by construction: a malformed or partial env refuses only the tools that carry that group, and a substituted value is refused before the call is forwarded.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "note": "Two table entries + doc comment (CQ-V06a). No other change.",
+      "startedAt": "2026-10-30T08:05:16.169Z",
+      "completedAt": "2026-10-30T08:05:20.927Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs, packages/moe-proxy/README.md.\n- In the stamped-tool table, add a row: `moe.qa_approve`, `moe.qa_reject` | `attemptId`, `generation`, `sessionId`.\n- Add one sentence after the table: under verified-local the daemon requires QA's own identity on these decisions (CQ-V06). Under legacy and observe, a presented attempt still gets the daemon's ATTEMPT_SUPERSEDED freshness check, as complete_task does.\n- Keep the 'covers no other tool' sentence; with the table updated it stays true.\n- The root CLAUDE.md and scripts/CLAUDE.md sentences are left for CQ-V12's docs sweep.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/README.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/README.md"
+      ],
+      "note": "Table row + one sentence added.",
+      "startedAt": "2026-10-30T08:05:22.987Z",
+      "completedAt": "2026-10-30T08:05:28.510Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE.\n\nNEVER run `npm test` for moe-proxy in the shared checkout: its pretest runs `npm run build`, which cleans and rebuilds packages/moe-proxy/dist, the proxy live agent seats execute.\n\n1. Mutants, on a scratch copy inside the snapshot, each restored and `cmp`'d afterwards:\n   1. Drop the qa_reject entry: case (a) fails.\n   2. Register qa_approve with ['session'] only: (a) fails.\n2. The GATE runs in an isolated Linux snapshot.\n   - Take `git archive HEAD` of the WHOLE repo into a scratch directory.\n   - Overlay ONLY this task's 3 files.\n   - Check that package.json and package-lock.json match the tree modulo CR, then run `npm ci --no-audit --no-fund` in packages/moe-proxy.\n   - Use `env -i` with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH, with no MOE_* variables.\n   - Run `cd packages/moe-proxy && npm test` fresh; it must exit 0.\n   - `cmp` the overlay against the worktree.\n3. Supply that command, its exit code and the output tail (the Test Files and Tests lines) to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Mutants killed (drop qa_reject: 4 failed; qa_approve session-only: 4 failed), restored and cmp'd. Gate in Linux snapshot: npm test EXIT 0, 5 files / 188 tests passed. Needed `npm ci --ignore-scripts` of moe-daemon in the snapshot only, because workerType.integration.test.ts imports daemon source (first attempt failed on missing pino). Overlay cmp'd same as worktree. Shared dist/node_modules untouched. Peer-dirty packages/moe-proxy/src/index.ts, daemonIdentity*.ts are not mine.",
+      "startedAt": "2026-10-30T08:05:29.393Z",
+      "completedAt": "2026-10-30T08:06:19.614Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Check:\n\n1. The batch path: index.ts runs stampExecutionIdentity per batch element, so a batch holding qa_approve is stamped too.\n2. Aliases: grok's underscore names (moe_qa_approve) are covered.\n3. A legacy QA seat with a stale MOE_ATTEMPT_ID now gets ATTEMPT_SUPERSEDED from the daemon. This is the same F07 freshness rule as complete_task, and the wrapper refreshes the pair on resume. Record it as the accepted consequence in the step note.\n4. No other tool newly stamped.\n5. No dist/ or node_modules touched in the shared tree.\n6. Rails: no forbidden-pattern tokens, no .moe edits, no Git writes.\n\nWrite the Serena handoff memory 'task-task-a4ad3fdb6fbc4f48934aae0daffe853d-handoff' for CQ-V12 (task-b621ddc9): list the CLAUDE.md sentences to sweep, and note that the R08 bridge stamping for QA seats in VMs is still R-series work.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review: (1) index.ts:131 runs stampExecutionIdentity per batch element, so batches are covered. (2) moe_qa_* and bare spellings covered and tested. (3) Accepted consequence: a legacy QA seat with a stale MOE_ATTEMPT_ID now gets ATTEMPT_SUPERSEDED from the daemon, same F07 rule as complete_task. (4) No other tool newly stamped; the not-stamped list test still passes. (5) No dist/node_modules touched in shared tree. (6) No forbidden tokens, no .moe edits, no Git writes. Handoff memory written.",
+      "startedAt": "2026-10-30T08:06:20.435Z",
+      "completedAt": "2026-10-30T08:06:29.520Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-6a5d5a13257b48c9940ae3b22347ff7d",
+  "dependsOn": [
+    "task-6a5d5a13257b48c9940ae3b22347ff7d"
+  ],
+  "priority": "HIGH",
+  "order": 244.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T17:56:02.151Z",
+  "updatedAt": "2026-10-30T08:12:33.095Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T17:56:15.773Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T08:12:14.244Z",
+    "wallClockMs": 51358471
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0",
+    "worker-0062feec",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T17:57:29.462Z",
+  "executionContract": {
+    "intendedBehavior": "moe-proxy stamps the session's attemptId, generation and sessionId onto moe.qa_approve and moe.qa_reject, under every spelling, exactly as it does onto moe.complete_task. A substituted value is refused (EXECUTION_IDENTITY_SUBSTITUTED), a malformed or partial env group is refused (EXECUTION_IDENTITY_INVALID), and an env without identity leaves the call unchanged.",
+    "acceptanceCriteria": [
+      "Both QA tools under all three spellings are stamped with all three fields from the env, and generation is a number.",
+      "Substituted and malformed cases are refused with the existing codes, and arguments are never mutated.",
+      "No other tool's stamping changes. The only edited existing assertion is the qa_approve entry in the not-stamped list.",
+      "README's stamped-tool table lists both tools.",
+      "`cd packages/moe-proxy && npm test` exits 0 in a fresh Linux snapshot."
+    ],
+    "invariants": [
+      "The env validation, the === comparison, the refusal codes and the fail-closed behavior are unchanged.",
+      "Calls without identity env are byte-identical.",
+      "No daemon, launcher or bridge change."
+    ],
+    "compatibility": [
+      "The daemon accepts the optional params on both tools (CQ-V06, a dependency). Under legacy and observe, the presented attempt gets the existing ATTEMPT_SUPERSEDED freshness check, as complete_task does."
+    ],
+    "approvedScope": [
+      "EXECUTION_IDENTITY_TOOLS entries for qa_approve and qa_reject in packages/moe-proxy/src/utils.ts, plus its doc comment.",
+      "New test cases in packages/moe-proxy/src/utils.test.ts, and the single negative-list entry swapped.",
+      "The stamped-tool table row and one sentence in packages/moe-proxy/README.md."
+    ],
+    "reuse": [
+      "stampExecutionIdentity and EXECUTION_IDENTITY_TOOLS in packages/moe-proxy/src/utils.ts are reused unchanged, apart from the two table entries."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-proxy/src/utils.ts: EXECUTION_IDENTITY_TOOLS is built from a [tool, groups] list, and its loop adds the moe.x, moe_x and bare spellings.",
+      "packages/moe-proxy/src/utils.test.ts: 'touches no other tool and no other method' lists 'moe.qa_approve' among the not-stamped tools.",
+      "packages/moe-proxy/package.json: pretest runs npm run build, which cleans and rebuilds dist."
+    ],
+    "checkRefs": [
+      "cd packages/moe-proxy && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Let QA pass the identity explicitly. Rejected: a QA CLI cannot know MOE_SESSION_ID, and caller-supplied identity is exactly what F09's stamping exists to prevent.\n2. Stamp in the daemon. Rejected: the daemon cannot see the seat's env.\n3. CHOSEN: two entries in the proxy's existing EXECUTION_IDENTITY_TOOLS table, reusing every validation and refusal path.",
+    "codebaseInsights": "- packages/moe-proxy/src/utils.ts EXECUTION_IDENTITY_TOOLS (around line 319) maps a tool to identity groups. Its loop registers the moe.x, moe_x and bare spellings.\n- stampExecutionIdentity enforces presented === env and refuses EXECUTION_IDENTITY_SUBSTITUTED (-32003) or EXECUTION_IDENTITY_INVALID (-32602).\n- src/utils.test.ts around line 784 lists 'moe.qa_approve' as NOT stamped. That single entry must change.\n- package.json pretest runs `npm run build` (clean plus tsc), so tests rebuild dist/. Run them only in a snapshot.\n- The README stamped-tool table is around line 66.",
+    "risks": "- The negative test entry has to move. QA should accept that one edit, since the behavior requires it.\n- Legacy QA seats now present identity, so a stale attempt is refused with ATTEMPT_SUPERSEDED. That is the same accepted rule as worker completion.\n- WORKING waits for CQ-V06, where the daemon accepts the params.\n- Never rebuild the shared proxy dist.",
+    "keyFiles": [
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-proxy/src/utils.test.ts",
+      "packages/moe-proxy/README.md",
+      "packages/moe-proxy/src/index.ts",
+      "packages/moe-proxy/package.json"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T17:57:29.543Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T08:04:41.046Z",
+  "reviewStartedAt": "2026-10-30T08:06:34.430Z",
+  "verification": {
+    "command": "cd packages/moe-proxy && npm test",
+    "exitCode": 0,
+    "outputTail": "Test Files  5 passed (5)\n      Tests  188 passed (188)\n(run in isolated Linux snapshot of git archive HEAD + overlay of the 3 task files; env -i, node v24.21.0)",
+    "reportedAt": "2026-10-30T08:06:34.430Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-proxy/src/utils.test.ts",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-proxy/README.md",
+    ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+    ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+    ".moe/tasks/task-a4ad3fdb6fbc4f48934aae0daffe853d.json",
+    ".moe/tasks/task-afe6838d58874da58a2d4c1e0956c799.json",
+    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json"
+  ],
+  "completionSummary": "CQ-V06a: moe-proxy now stamps attemptId, generation and sessionId onto moe.qa_approve / moe.qa_reject (moe.x, moe_x, bare x) via two EXECUTION_IDENTITY_TOOLS entries in utils.ts; stamping, EXECUTION_IDENTITY_SUBSTITUTED and EXECUTION_IDENTITY_INVALID paths reused unchanged; no-identity env stays byte-identical. Tests: new 'QA decision stamping' describe.each (5 cases x 2 tools); the only edited existing assertion is moe.qa_approve -> moe.add_comment in the not-stamped list. README table row + sentence. Red first (8 failed); 2 mutants killed. Files: packages/moe-proxy/src/utils.ts, src/utils.test.ts, README.md. Verified in an isolated Linux snapshot (git archive HEAD + overlay of the 3 files, native npm ci in proxy plus npm ci --ignore-scripts in daemon because workerType.integration.test.ts imports daemon source); shared dist/node_modules untouched.",
+  "commits": [
+    {
+      "sha": "93423c1b76421590b5e74e417a4aa2b6b486bb54",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T08:04:14Z",
+      "paths": [
+        ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+        ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+        ".moe/tasks/task-a4ad3fdb6fbc4f48934aae0daffe853d.json",
+        ".moe/tasks/task-afe6838d58874da58a2d4c1e0956c799.json",
+        ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json",
+        "packages/moe-proxy/README.md",
+        "packages/moe-proxy/src/utils.test.ts",
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T08:06:55.150Z",
+      "treeId": "de4045a9495550f31fc009f9cc5ce8aa99e7d03d",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-proxy/src/utils.ts",
+          "taskId": "task-724e31fadd3e4f5cb137abe9e4147f11"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-proxy/src/utils.test.ts",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-proxy/README.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-952969be@2026-10-30T08:11:01Z",
+    "at": "2026-10-30T08:12:33.095Z"
+  },
+  "completedAt": "2026-10-30T08:12:14.244Z",
+  "reviewCompletedAt": "2026-10-30T08:12:14.244Z",
+  "reviewSummary": "Reviewed recorded completion 93423c1b (tree de4045a9, on moe/work-2026-10-24, pushed) via git show: utils.ts +4/-2, utils.test.ts +54/-1, README.md +2/-1 plus 5 board JSONs; ~60 net non-board LOC. No daemon/launcher/bridge change (empty diff stat for scripts/, moe-daemon/, moe-jetbrains/). Re-ran `cd packages/moe-proxy && npm test` in an isolated Linux snapshot of `git archive 93423c1b` (native npm ci in proxy + npm ci --ignore-scripts in daemon, env -i, node v24.21.0; not the shared checkout, whose pretest rebuilds live dist): exit 0, 5 files / 188 tests passed, matching the worker. Mutant: dropping the qa_reject entry fails 4 new 'QA decision stamping' tests; restored and cmp'd. DoD: (1) qa_approve and qa_reject added to EXECUTION_IDENTITY_TOOLS with attempt+session groups; existing loop covers moe.x, moe_x, bare x; tests assert exact args with numeric generation. (2) Substituted attemptId/generation ('7', 8)/sessionId refused with EXECUTION_IDENTITY_SUBSTITUTED (-32003) without mutation; partial attempt env gives EXECUTION_IDENTITY_INVALID (-32602); empty env returns false, args unchanged; validation, === compare and codes untouched. (3) Only edited existing assertion is moe.qa_approve -> moe.add_comment in the not-stamped list (required by the behavior change); other stamp tests unchanged; README row + sentence present. (4) Verification reproduced. Rails: no .moe hand edits, no forbidden tokens; the Moe-Contested note on utils.ts names a peer task but the commit carries only this task's 6-line hunk. Not verified here: daemon-side QA identity requirement (CQ-V06, separate dependency) and R08 guest-bridge stamping for VM QA seats (R-series). Accepted consequence: a legacy QA seat with a stale MOE_ATTEMPT_ID now gets ATTEMPT_SUPERSEDED (same F07 rule as complete_task). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

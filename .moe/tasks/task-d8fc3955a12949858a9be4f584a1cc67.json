@@ -1,0 +1,231 @@
+{
+  "id": "task-d8fc3955a12949858a9be4f584a1cc67",
+  "epicId": "epic-be924fb8",
+  "title": "bug: local-runner vm-control canonicalProjectPath matches /mnt/<d> on the raw string, so a relative or non-normalized WSL project path gets a different VM ledger dir and readDaemonInfo refuses its live daemon",
+  "description": "Found by architect-4ae016fb while planning task-ea57601d (the moe-proxy comparableProjectPath fix). scripts/local-runner/vm-control.mjs canonicalProjectPath (about line 31) is a port of moe-proxy's comparableProjectPath, added by CQ-I03a (task-c0b0775f), and it has the same flaw. It detects the drive-letter and /mnt/<d> forms on the raw trimmed string only.\n\nOn WSL that gives two wrong results:\n- A relative path, e.g. \".\" run from /mnt/d/projexts/moes, misses both raw regexes. It goes through path.resolve, and the result \"/mnt/d/projexts/moes\" is returned unconverted instead of \"d:/projexts/moes\".\n- A non-normalized /mnt path keeps its raw rest, e.g. \"/mnt/d/projexts/../projexts/moes\" or \"/mnt/d//projexts/moes\".\n\nEffects:\n- ownedLedgerDir (about line 44) hashes the canonical string, so the same project gets a different ~/.moe/runner-state/<hash>/vms ledger dir.\n- readDaemonInfo (line 126) compares canonicalProjectPath(info.projectPath) with canonicalProjectPath(projectPath), so it throws unreachable for the project's own live daemon.\n\nFix shape: mirror whatever rule task-ea57601d lands: resolve or normalize before detecting the special forms, and POSIX-normalize the /mnt rest. That way the proxy and its port agree; ideally a shared test table pins both.\n\nCompatibility, the reason this is its own row: changing the canonical form changes ownedLedgerDir's hash for the inputs that were mis-keyed. An input that is already canonical (an absolute, normalized D:/x, D:\\x, /mnt/d/x or POSIX path) must hash to the byte-identical ledger dir it does today, so no existing VM ledger is orphaned.",
+  "definitionOfDone": [
+    "canonicalProjectPath maps a relative path that resolves under /mnt/<d>/..., and a non-normalized /mnt/<d> path (\"..\" or \".\" segments, doubled or trailing slashes), to the same key as the normalized absolute form. Each case is a test in scripts/tests/local-runner-vm-control.test.mjs.",
+    "For already-canonical inputs (D:/x, D:\\x, /mnt/d/x and a POSIX absolute path), canonicalProjectPath and ownedLedgerDir return results byte-identical to the pre-fix code, pinned as literal expected values in a test.",
+    "readDaemonInfo accepts a daemon.json whose projectPath differs from the caller's only by those forms, and still throws unreachable for a different project. Both cases are tested."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED TESTS FIRST in scripts/tests/local-runner-vm-control.test.mjs (node:test). Reuse its helpers: scratch(t), hash(), rejectsWith(), and VC-L1's env save/restore of MOE_RUNNER_STATE_DIR/HOME/USERPROFILE. Mirror the proxy fix's rows (packages/moe-proxy/src/utils.test.ts T1/T2, commit e504a57) so both ports are pinned by the same table.\n\nBEFORE touching vm-control.mjs, compute the compatibility literals from the PRISTINE code. Import scripts/local-runner/vm-control.mjs from a node one-liner and print:\n- canonicalProjectPath for 'D:/x', 'D:\\\\x', '/mnt/d/x' and '/home/u/x';\n- the 32-hex directory name ownedLedgerDir uses for each.\nPaste them into the test as STRING LITERALS. Never compute them with createHash at runtime: that tracks the code instead of pinning it.\n\nTests to add:\n- VC-L2 'canonical spellings keep their pre-fix keys and ledger dirs' (DoD 2). With MOE_RUNNER_STATE_DIR set to a scratch dir:\n  - canonicalProjectPath('D:/x'), ('D:\\\\x') and ('/mnt/d/x') each equal the literal 'd:/x';\n  - each ownedLedgerDir equals path.join(state, '<literal hex>', 'vms');\n  - off win32 only (its pre-fix value depends on the cwd drive): '/home/u/x' maps to '/home/u/x' and to its own literal-hex dir.\n  - This passes on the pristine code by construction, and must still pass after the fix.\n- VC-L3 'relative and non-normalized /mnt spellings map to the normalized key' (DoD 1). Skip on win32 with the reason 'a Windows process never has a /mnt cwd'. Use `t.mock.method(process, 'cwd', () => '/mnt/d/x')`; node:path's resolve reads process.cwd() at call time.\n  - Each of ['.', '/mnt/d/x/.', '/mnt/d/x/sub/..', '/mnt/d//x', 'sub/..', '/mnt/d/x/./', '/mnt/d/x/', '/mnt/d/x', 'D:\\\\x'] maps to 'd:/x'. Assert the [input, output] pairs, so a failure names the input.\n  - 'sub' maps to 'd:/x/sub' and '..' to 'd:'.\n  - ownedLedgerDir('.') and ownedLedgerDir('/mnt/d//x') both equal ownedLedgerDir('D:/x'): the same ledger dir.\n- VC-L4 'on win32 a raw /mnt path is posix-normalized before mapping' (DoD 1). Use a stand-in when not on win32, exactly as the proxy's onWin32 helper does:\n  - set process.platform to 'win32' with Object.defineProperty({ value: 'win32', configurable: true }) and restore the saved descriptor in finally/t.after;\n  - `t.mock.method(path, 'resolve', (...p) => path.win32.resolve('C:\\\\work', ...p))`. vm-control imports the same node:path default object.\n  - On real win32, run it directly.\n  - Rows ['/mnt/d/x/sub/..', '/mnt/d/x/./', '/mnt/d//x', 'D:\\\\x'] map to 'd:/x', and '/mnt/d/x/sub/../..' maps to 'd:'.\n- VC-M2 'readDaemonInfo accepts this project's daemon.json in another spelling and still refuses another project' (DoD 3). Skip on win32, as VC-L3 does.\n  - Fixture: a scratch dir T holding .moe/daemon.json. Run `process.chdir(T)` and restore the original cwd in t.after; the relative caller path '.' then reads T's file through the OS cwd. THEN mock process.cwd to '/mnt/d/x', so canonicalization sees the WSL spelling.\n  - For projectPath in ['/mnt/d/x', 'D:\\\\x', '/mnt/d//x/', '/mnt/d/x/sub/..'], with good = { port: 9876, pid: 1, startedAt: 'x', projectPath }: readDaemonInfo('.') deep-equals { port: 9876 }.\n  - For '/mnt/d/y' and '/mnt/c/x': rejectsWith(readDaemonInfo('.'), 'DAEMON_UNREACHABLE').\n\nRun `node --test scripts/tests/local-runner-vm-control.test.mjs`. VC-L3, VC-L4 and VC-M2's accept rows must FAIL on the pristine code: '.' stays '/mnt/d/x', '/mnt/d//x' becomes 'd://x', and '/mnt/d/x/sub/..' keeps its '..'. VC-L2 and every existing test must pass. Paste the red output into the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "Added VC-L2/L3/L4/M2. Pre-fix literals from pristine code: d:/x -> e11c306f14173b564d02903d983005d9; /home/u/x -> 323c3dfd5c9093fc987bfa6f5abd6e59. Red on pristine: VC-L3 ('.'->'/mnt/d/x', '/mnt/d//x'->'d://x', '/mnt/d/x/sub/..' keeps '..'), VC-L4, VC-M2; VC-L2 and existing tests pass. Shared checkout has ~812 other dirty paths, untouched.",
+      "startedAt": "2026-10-30T06:53:45.999Z",
+      "completedAt": "2026-10-30T06:54:08.819Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX canonicalProjectPath in scripts/local-runner/vm-control.mjs (~line 31) by porting the landed proxy rule (packages/moe-proxy/src/utils.ts comparableProjectPath, task-ea57601d). The daemon's own copy (packages/moe-daemon/src/index.ts ~99) already follows it. The body becomes:\n\n```js\n  const raw = projectPath.trim();\n  if (/^[a-zA-Z]:[\\\\/]/.test(raw)) return windowsDrive(raw);\n  const resolved = path.resolve(raw);\n  const wsl = /^\\/mnt\\/([a-zA-Z])(?:\\/(.*))?$/.exec(process.platform === 'win32' ? path.posix.normalize(raw) : resolved);\n  if (wsl) {\n    const rest = (wsl[2] ?? '').replace(/\\/+$/, '');\n    return `${wsl[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();\n  }\n  return /^[a-zA-Z]:[\\\\/]/.test(resolved) ? windowsDrive(resolved) : process.platform === 'win32' ? resolved.toLowerCase() : resolved;\n```\n\nReplace the stale comment 'Both special forms are matched on the raw string...'. The new comment says:\n- a drive path is matched raw, because path.resolve treats it as relative off Windows;\n- /mnt/<d> is matched only after normalizing: path.resolve on POSIX, path.posix.normalize of the raw string on win32, where path.resolve would prefix the cwd drive.\nAlso point the doc line at the fixed proxy rule (and the daemon's index.ts twin).\n\nNo import changes. local-runner-bundle.test.mjs checks the import closure, and path is already imported.\n\nError handling and compatibility:\n- ownedLedgerDir's validation (blank, control characters) and the state-dir-inside-project refusal are unchanged.\n- Every already-canonical input keeps its key and ledger hash: VC-L2's literals prove it.\n- Only mis-keyed inputs (relative, or non-normalized /mnt) change key, which is the fix.\n\nRun `node --test scripts/tests/local-runner-vm-control.test.mjs`: all green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/vm-control.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/vm-control.mjs"
+      ],
+      "note": "Ported proxy rule into canonicalProjectPath; vm-control suite 12/12 pass.",
+      "startedAt": "2026-10-30T06:54:09.399Z",
+      "completedAt": "2026-10-30T06:54:21.791Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE. This command is complete_task's evidence. Run it from the repo root with MOE_*/CLAUDE* unset:\n\n`node --test scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs`\n\nThat is the whole local-runner set: CI's 'Test local runner prerequisite bundles' list plus the vm-control suite, which CI does not list. It must show 0 failed.\n\nThis row reads isEpicFinal only through the highest-order fallback; the rolling bug epic designates no final task. So the gate is this task's whole affected package, not the whole repo.\n\nAlso run the vm-control suite once with the Windows node (`node.exe --test <Windows path of the file>` from WSL, or natively). That exercises VC-L4 on real win32. Report its pass/skip counts in the summary.\n\nMutation proof, on a scratch copy of vm-control.mjs (never the live file). Each mutant must turn the named test red; record which:\n- M1: restore raw-string /mnt matching. VC-L3, VC-L4 and VC-M2 go red.\n- M2: use path.resolve on win32 too. VC-L4 goes red.\n- M3: posix.normalize everywhere, with no resolve. VC-L3 goes red ('.', 'sub/..').\n- M4: drop the trailing-slash strip. VC-L3 or VC-L4 goes red.\n- M5: lowercase the POSIX branch. VC-L2 goes red.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "Full local-runner set: 442 tests, 440 pass, 0 fail, 2 skipped (exit 0). Windows node.exe on vm-control: 12 tests, 10 pass, 2 skipped (VC-L3/M2 need /mnt cwd), VC-L4 ran on real win32. Mutants on scratch copy: M1 kills L3/L4/M2; M2 kills L4; M3 kills L3/M2; M4 kills L4; M5 initially SURVIVED (lowercase path) so I added a '/home/U/X' row to VC-L2, which now kills it.",
+      "startedAt": "2026-10-30T06:54:22.483Z",
+      "completedAt": "2026-10-30T06:56:02.944Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW of this diff. Check and note each item:\n- Diff vm-control's canonicalProjectPath against the proxy's comparableProjectPath and the daemon's index.ts twin line by line. They must agree on every branch, including '/mnt/d' with no rest, and '/mnt/D/x', which lowercases to 'd:/x'.\n- Hostile input: '  ' (ownedLedgerDir refuses it first); control characters; a 64 KiB string; and '/mnt/d/../../etc', which resolve maps to '/etc', not a drive key.\n- Does any caller compare a canonical key against a STORED one that was computed by the old code? Grep canonicalProjectPath and ownedLedgerDir callers.\n- A ledger dir written under an old mis-keyed hash is now orphaned for that spelling only; the canonical spelling's dir is untouched (VC-L2). Note that residual.\n- The tests restore process.platform, cwd and the mocks on every path, including a throw.\n- The suite is still not in CI. task-b8b8faba lists it as a residual; say so in the summary.\n- The diff stays far under the 400 net-LOC review cap.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review: body is the proxy/daemon rule verbatim; '/mnt/d' -> 'd:', '/mnt/D/x' -> 'd:/x', '/mnt/d/../../etc' -> '/etc', 64 KiB input is fine (ownedLedgerDir refuses blank/control first). Callers of canonicalProjectPath/ownedLedgerDir are only inside vm-control.mjs (daemon has its own twin); no stored key is compared against an old-code key. Residual: a ledger written under an old mis-keyed hash is orphaned for that spelling only; canonical spellings untouched (VC-L2 literals). Suite still not in CI (task-b8b8faba residual). Diff +75/-5 total, far under the 400 cap.",
+      "startedAt": "2026-10-30T06:56:03.704Z",
+      "completedAt": "2026-10-30T06:56:11.065Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ea57601db42448dabefbbbe6557a0b9d"
+  ],
+  "priority": "LOW",
+  "order": 267.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:11:11.654Z",
+  "updatedAt": "2026-10-30T07:45:15.364Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:30:34.132Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T07:44:28.723Z",
+    "wallClockMs": 4434591
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555",
+    "worker-73c29a03",
+    "qa-ba3f4f35"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:33:42.785Z",
+  "executionContract": {
+    "intendedBehavior": "canonicalProjectPath in scripts/local-runner/vm-control.mjs follows moe-proxy's fixed rule. A relative path that resolves under /mnt/<d>/, and a non-normalized /mnt/<d> path, map to the same key as the normalized absolute form, so ownedLedgerDir picks one ledger dir and readDaemonInfo accepts the project's own live daemon. Every already-canonical spelling keeps its byte-identical key and ledger dir.",
+    "acceptanceCriteria": [
+      "VC-L3: '.', '/mnt/d/x/.', '/mnt/d/x/sub/..', '/mnt/d//x', 'sub/..', '/mnt/d/x/./', '/mnt/d/x/', '/mnt/d/x' and 'D:\\x' all map to 'd:/x' with cwd '/mnt/d/x'; 'sub' maps to 'd:/x/sub' and '..' to 'd:'; ownedLedgerDir of '.' and '/mnt/d//x' equals that of 'D:/x'",
+      "VC-L4 (win32 or stand-in): '/mnt/d/x/sub/..', '/mnt/d/x/./', '/mnt/d//x' and 'D:\\x' map to 'd:/x'; '/mnt/d/x/sub/../..' maps to 'd:'",
+      "VC-L2: literal pre-fix canonical keys and ledger dirs for D:/x, D:\\x, /mnt/d/x, and /home/u/x off win32, are unchanged",
+      "VC-M2: readDaemonInfo('.') accepts daemon.json projectPath '/mnt/d/x', 'D:\\x', '/mnt/d//x/' and '/mnt/d/x/sub/..', and refuses '/mnt/d/y' and '/mnt/c/x' with DAEMON_UNREACHABLE",
+      "The local-runner suite set passes; mutants M1-M5 are each killed"
+    ],
+    "invariants": [
+      "ownedLedgerDir still refuses blank or control-character input and a state dir inside the project",
+      "readDaemonInfo still refuses any other project, oversize, non-loopback or malformed daemon.json"
+    ],
+    "compatibility": [
+      "Canonical spellings hash to byte-identical ledger dirs, so no existing VM ledger is orphaned",
+      "No vm-control CLI, report schema or import change"
+    ],
+    "approvedScope": [
+      "canonicalProjectPath body and its comment in scripts/local-runner/vm-control.mjs",
+      "Tests VC-L2, VC-L3, VC-L4 and VC-M2 in scripts/tests/local-runner-vm-control.test.mjs"
+    ],
+    "reuse": [
+      "The proxy's landed rule, verbatim in JS",
+      "The proxy tests' rows and win32 stand-in technique, via node:test t.mock.method"
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/vm-control.mjs:31 canonicalProjectPath matches /mnt on the raw trimmed string; ~44 ownedLedgerDir hashes it; ~126 readDaemonInfo compares canonical forms",
+      "packages/moe-proxy/src/utils.ts:31-49 comparableProjectPath (fixed): raw drive check, path.resolve, then the /mnt regex on resolved (POSIX) or path.posix.normalize(raw) (win32)",
+      "packages/moe-daemon/src/index.ts ~99 comparableProjectPath already follows that rule",
+      "scripts/tests/local-runner-vm-control.test.mjs: helpers scratch/hash/rejectsWith; VC-L1 and VC-M1 patterns"
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "CHOSEN: port the exact landed proxy rule (task-ea57601d, e504a57), which the daemon's index.ts already uses, into vm-control.mjs, and pin compatibility with literal pre-fix values.\n\nREJECTED:\n- A shared test-table file consumed by the TS/vitest proxy suite and this node:test suite: cross-package coupling for an 'ideally'. The same rows are mirrored instead.\n- Resolving only: on win32, path.resolve('/mnt/d/x') becomes C:\\mnt\\d\\x, which is why the proxy posix-normalizes there.",
+    "codebaseInsights": "There are three copies of the project-path canonicalizer:\n- daemon packages/moe-daemon/src/index.ts comparableProjectPath (fixed: normalize first);\n- proxy packages/moe-proxy/src/utils.ts (fixed by ea57601d);\n- scripts/local-runner/vm-control.mjs canonicalProjectPath (raw-string /mnt; this task).\n\nownedLedgerDir hashes the canonical string: sha256, first 32 hex, under MOE_RUNNER_STATE_DIR or ~/.moe/runner-state. readDaemonInfo compares canonical forms of daemon.json projectPath and the caller's path.\n\nThe proxy fix's tests emulate win32 by flipping process.platform and stubbing path.resolve with path.win32.resolve('C:\\\\work', ...). node:test's t.mock.method can do the same to node:path's default export and to process.cwd.",
+    "risks": "- Depends on task-ea57601d, which is in REVIEW. The WORKING claim is withheld until it is DONE.\n- Mocking process.cwd while node:test runs: keep each mock inside its test (t.mock auto-restores), and restore process.chdir and the process.platform descriptor in t.after.\n- The VC-L2 literals must come from the PRISTINE file, before step 2's edit.\n- scripts/tests/local-runner-vm-control.test.mjs is not in CI, so its pins only bite in local and gate runs. Noted as a residual, which task-b8b8faba also lists.",
+    "keyFiles": [
+      "scripts/local-runner/vm-control.mjs",
+      "scripts/tests/local-runner-vm-control.test.mjs",
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-proxy/src/utils.test.ts",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:33:42.806Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:53:45.999Z",
+  "reviewStartedAt": "2026-10-30T06:56:15.206Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 442\nℹ suites 4\nℹ pass 440\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0",
+    "reportedAt": "2026-10-30T06:56:15.206Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-vm-control.test.mjs",
+    "scripts/local-runner/vm-control.mjs",
+    ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+    ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+    ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
+    ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json",
+    ".moe/tasks/task-7e39a63f6b024acf9f5f06c92bfafd59.json"
+  ],
+  "completionSummary": "vm-control canonicalProjectPath now ports the proxy/daemon rule: drive paths matched raw, then path.resolve (POSIX) or path.posix.normalize(raw) (win32) before the /mnt/<d> match. Relative and non-normalized /mnt spellings now share one key, so ownedLedgerDir picks one ledger dir and readDaemonInfo accepts the project's own daemon. Canonical spellings are byte-identical, pinned as literals taken from the pristine code (VC-L2). Tests VC-L2/L3/L4/M2 added, and the first three were red on the pristine file. Full local-runner set: 442 tests, 440 pass, 0 fail, 2 skipped. Windows node.exe on the vm-control suite: 10 pass, 2 skipped (VC-L3/M2 need a /mnt cwd), VC-L4 ran on real win32. Mutants M1-M5 are killed; M5 initially survived, so I added a '/home/U/X' row to VC-L2. Residual: a ledger under an old mis-keyed hash is orphaned for that spelling only. The suite is still not in CI (task-b8b8faba).",
+  "commits": [
+    {
+      "sha": "19a310c2b72da6f8352e92e5b8a0e56550e03d4e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T06:53:14Z",
+      "paths": [
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+        ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
+        ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json",
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T06:56:52.539Z",
+      "treeId": "f558b7d9e2d545d59b2f38bb6a96fbfa2a756083",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "e6d1b4b8e9d5bf28142367e505df84a8943e5671",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T07:40:49Z",
+      "paths": [
+        ".moe/tasks/task-7e39a63f6b024acf9f5f06c92bfafd59.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T07:45:15.364Z",
+      "treeId": "b28805f223902fd57860c2a93eda0f67253979c0",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/vm-control.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T07:40:49Z",
+    "at": "2026-10-30T07:45:15.364Z"
+  },
+  "completedAt": "2026-10-30T07:44:28.723Z",
+  "reviewCompletedAt": "2026-10-30T07:44:28.723Z",
+  "reviewSummary": "Reviewed completion 19a310c2b72da6f8352e92e5b8a0e56550e03d4e (tree f558b7d9e2d545d59b2f38bb6a96fbfa2a756083); git show/branch --contains and fresh origin fetch confirm delivery on moe/work-2026-10-24. Diff +75/-5 source/tests (net 70); including daemon board state +175/-10 (net 165). Tested exact archived commit, not shared dirt; npm ci --ignore-scripts and npm run build in snapshot passed. Re-ran node --test scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs: exit 0, 442 tests/440 pass/2 existing platform skips (root mount and native macOS); neither establishes native isolation/support. Windows node.exe --test <snapshot>\\scripts\\tests\\local-runner-vm-control.test.mjs: 10 pass/2 WSL-only skips, VC-L4 ran natively. Linux focused suite 12/12. Pristine fails VC-L3/L4/M2; M1-M5 all killed on scratch copies. VC-L2 literal compatibility passes pristine/fixed; normalized/relative ledger equality and daemon accept/refuse rows cover all DoD. Proxy/daemon parity, blank/control/inside-project refusals, case and mount-root boundaries checked; diff --check clean. No API/import/config changes. Residuals: old mis-keyed ledgers remain spelling-specific; vm-control CI inclusion tracked by task-b8b8faba. Complexity: Lean already. Ship; net 0 lines to cut.",
+  "requiredCheckAtDone": null
+}

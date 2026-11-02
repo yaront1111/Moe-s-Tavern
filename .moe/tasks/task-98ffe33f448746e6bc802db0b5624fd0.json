@@ -1,0 +1,290 @@
+{
+  "id": "task-98ffe33f448746e6bc802db0b5624fd0",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF06] VS Code protected runtime parity",
+  "description": "Objective: under the protected profile, the VS Code extension applies the same runtime-selection rules as JetBrains:\n- a strict, fail-closed profile read;\n- installed-only daemon, proxy and wrapper selection;\n- MOE_DAEMON_PATH, MOE_PROXY_PATH and MOE_RUNTIME_PROTECTED=1 (CQ-R13c1's marker) passed to agent launches;\n- refusal instead of fallback.\nThis is CQ-R01 follow-up 7. JetBrains stays primary, so this row follows CQ-RF01..RF04 and CQ-R13c1, and mirrors their final behavior.\n\nCreated by architect-e4b7eee0 on 2026-10-30, when the human moved the non-gating R01 follow-ups out of CQ-R13.\n\nDeliverable:\n- The moe-vscode daemon spawn and agent launch paths implement the rules above under the protected profile.\n- The legacy profile is unchanged.\n- Add a unit test for the selection, and keep the startup regression tests passing.\n\nOut of scope:\n- JetBrains changes;\n- persistent provenance for VS Code, unless CQ-RF01's store is shareable as-is (note it if so);\n- .moe edits;\n- enabling verified-local.\n\nVerification command (fresh, exit 0 required): cd moe-vscode && npm test && npm run compile",
+  "definitionOfDone": [
+    "Under the protected profile, VS Code launches agents only with installed daemon and proxy paths plus MOE_RUNTIME_PROTECTED=1, and refuses when an installed artifact is missing. Shown by tests.",
+    "The legacy profile behaves exactly as before. Shown by the existing startup tests passing.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST: create moe-vscode/tests/protected-runtime.test.cjs (node:test, run by `npm test`).\n\nHarness, copying the vm pattern of tests/daemon-start.test.cjs:\n- loadClient() transpiles src/services/MoeDaemonClient.ts (same ts.transpileModule options) into a vm context with real fs/path, the real process, and a fake vscode: { EventEmitter, window: { createOutputChannel: () => ({ appendLine: l => logs.push(l) }), showErrorMessage } }.\n- loadLauncher(clientExports, projectPath) transpiles src/util/AgentLauncher.ts into a second context. Its require maps 'vscode' to a fake with workspace.workspaceFolders = [{ uri: { fsPath: projectPath } }] and window.createTerminal (records options plus every sendText) / showErrorMessage (records messages). It maps '../services/MoeDaemonClient' to clientExports; any other name goes to the real require.\n- Load fresh modules in every test, so session pins never leak, and use fresh fs.mkdtempSync dirs.\n- Compare against fs.realpathSync values, because the macOS tmpdir is a symlink.\n\nCases, all with exact assertions:\n\nP1 runtimeProfile table, one row each:\n- no .moe/project.json, '{}', '{\"settings\":{}}', executionProfile 'legacy' or 'observe', and a blank basePath '': 'legacy';\n- 'verified-local', 'strong', 123, null, settings null, settings [], root [], '{', a U+FEFF prefix before '{}', '{} {}', a valid object padded past 1 MiB (1048577 bytes), project.json as a directory, and project.json as a dangling symlink: 'protected'. Skip the symlink row on EPERM.\n\nP2 session pin:\n- after a 'verified-local' read, rewriting the file to 'legacy' still gives 'protected', including for basePath + path.sep;\n- after a 'strong' read, rewriting to 'legacy' gives 'legacy' (an untrusted read never pins).\n\nP3 path forms:\n- comparablePath('\\\\\\\\?\\\\C:\\\\Moe\\\\', true) === 'c:/moe';\n- comparablePath('\\\\\\\\?\\\\UNC\\\\srv\\\\share\\\\x', false) === '//srv/share/x';\n- comparablePath('C:\\\\', false) === 'C:/';\n- isWithin('/a/b','/a') is true, isWithin('/ab','/a') is false, isWithin('/a','/a') is true.\n\nP4 installedArtifact(root, relative, project):\n- a file inside root gives { accepted: <real path> };\n- missing gives { rejected: 'installed proxy/index.js not found' };\n- a directory gives 'installed daemon/index.js is not a regular file';\n- root inside the project gives '... resolves inside the project';\n- a symlink inside root pointing outside gives '... resolves outside the installed Moe runtime' (skip on EPERM);\n- a missing root gives 'installed Moe runtime not found'.\n\nL1 protected launch:\n- Setup: a verified-local project with decoy scripts/moe-agent.sh and .ps1, and an extension dir with bundled/scripts/moe-agent.{sh,ps1}, bundled/daemon/index.js and bundled/proxy/index.js. Call launchAgent('worker','claude', extDir).\n- Exactly one terminal is created and nothing is shown as an error.\n- Its text holds the quoted real installed platform wrapper, never the decoy. On win32, decode the -EncodedCommand UTF-16LE base64 payload to find the wrapper.\n- It holds MOE_DAEMON_PATH and MOE_PROXY_PATH set to the quoted real installed files, and the marker rendered as `MOE_RUNTIME_PROTECTED='1' ` (bash) or `$env:MOE_RUNTIME_PROTECTED='1'; ` (win32).\n\nL2 missing bundled/proxy/index.js: no terminal, and the errors deep-equal ['Protected execution profile: installed proxy/index.js not found. Agents only use the wrapper, daemon and proxy installed with the Moe extension.'].\n\nL3 missing bundled platform wrapper: the same shape naming scripts/moe-agent.sh (or .ps1 on win32), and no terminal.\n\nL4 legacy (no project.json): the decoy project script is used and the text has no MOE_RUNTIME_PROTECTED (today's order is unchanged).\n\nRun `node --test tests/protected-runtime.test.cjs`: it must fail only on the missing exports.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/protected-runtime.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-runtime.test.cjs"
+      ],
+      "note": "Created tests/protected-runtime.test.cjs: 29 node:test rows (P1 legacy x6 incl exactly-1MiB boundary + blank basePath; P1 protected x10 + verified-local + dir/dangling-symlink; P2 pin/no-pin; P3 path forms; P4 installedArtifact incl symlink-outside and unresolvable project; selectProtectedAgentRuntime platform-only + marker order; L1-L4). RED: `node --test tests/protected-runtime.test.cjs` -> 29 tests, 1 pass (L4 legacy), 28 fail: 24 TypeError on missing exports (runtimeProfile/comparablePath/installedArtifact), select/L1-L3 on missing protected behaviour. Deviation: real paths compared via fs.realpathSync.native (not plain realpathSync) since production will use .native so a Windows 8.3 tmpdir canonicalises the same on both sides. Shared tree: 15 peer/pre-existing dirty paths (.moe/tasks/*, StateManager.test.ts, .moe/pins, scripts/mods tsconfigs) left untouched.",
+      "startedAt": "2026-10-30T13:30:07.433Z",
+      "completedAt": "2026-10-30T13:34:23.329Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "In moe-vscode/src/services/MoeDaemonClient.ts, add an exported section 'Protected runtime selection', a mirror of JetBrains RuntimeSelectionPolicy (CQ-R01). It lives here, not in a new module, because five harnesses transpile this file alone with a closed require shim: daemon-start, daemon-json-cap, approval-paths, plan-approval-client and settings-wire. A new local import would break them. CQ-RF06b (task-032c9739) consumes the same exports for the daemon spawn.\n\nAdd:\n- `export type RuntimeProfile = 'legacy' | 'protected'`.\n- A module-level pinned Set<string>.\n- `export const defaultFoldCase = process.platform === 'win32' || process.platform === 'darwin'`.\n- `export function comparablePath(p, foldCase)`:\n  - '\\\\' becomes '/';\n  - a leading `//?/` or `//./` goes, with `//?/UNC/x` becoming `//x`;\n  - trailing '/' goes, except on '/' or `X:/`;\n  - folding is toUpperCase().toLowerCase().\n- `export function isWithin(child, parent)`: true for equality, or a prefix that ends on a segment boundary.\n- `export function installedRoot(extensionPath)` = path.join(extensionPath, 'bundled').\n- `export function runtimeProfile(basePath): RuntimeProfile`, which never throws:\n  - a blank basePath is 'legacy';\n  - the key is comparablePath(realpath, else path.resolve, defaultFoldCase), and a pinned key is 'protected';\n  - fs.lstatSync on <basePath>/.moe/project.json: only ENOENT means absent, which is 'legacy';\n  - read through one descriptor with a 1 MiB + 1 cap (the readDaemonJsonText pattern, with the fd closed in finally); oversize is untrusted;\n  - decode UTF-8; a first char U+FEFF is untrusted, since Buffer#toString keeps it;\n  - JSON.parse;\n  - a root that is not a plain non-array object is untrusted;\n  - an own property 'settings' that is absent is 'legacy'; present but not a plain object is untrusted;\n  - an own property 'executionProfile' that is absent is 'legacy'; 'legacy' and 'observe' are 'legacy'; 'verified-local' adds the key to pinned and returns 'protected'; anything else, null included, is untrusted;\n  - untrusted means 'protected', unpinned, with one log line 'Moe runtime selection fails closed to the protected profile: <reason>'.\n- `export function installedArtifact(root, relative, basePath, foldCase = defaultFoldCase): { accepted: string } | { rejected: string }`, with label `installed ${relative}`:\n  - realpath(root) fails: 'installed Moe runtime not found';\n  - realpath(basePath) fails: 'the project directory cannot be resolved';\n  - realpath(join) gives ENOENT: '<label> not found'; any other error: '<label> cannot be resolved';\n  - not statSync().isFile(): '<label> is not a regular file';\n  - not isWithin the real root, compared EXACT and unfolded: '<label> resolves outside the installed Moe runtime';\n  - isWithin the real project, compared folded: '<label> resolves inside the project';\n  - otherwise { accepted: real }.\n\nError handling: every fs or parse failure is caught and becomes 'protected' or a rejection; nothing throws to callers. A reason reaches the UI; the absolute path goes only to log(). No existing behaviour of this file changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Added the 'Protected runtime selection' export section to MoeDaemonClient.ts (no new imports): RuntimeProfile, ArtifactSelection, defaultFoldCase, comparablePath, isWithin, installedRoot, runtimeProfile (lstat-first, ENOENT-only absent, 1 MiB capped single-fd read, BOM untrusted, JSON.parse, own-property checks, verified-local pins a module-level Set; any throw logs one 'fails closed' line and answers protected), installedArtifact (real root exact, project folded, reasons to UI, paths to log). readDaemonJsonText now delegates to a private readCappedText(path, cap, tooLarge) with identical bytes/behaviour (daemon-json-cap rows still pass). Real paths use fs.realpathSync.native so Windows 8.3/canonical case compare consistently; errors compared by code (cross-realm safe). Evidence: protected-runtime P1-P4 rows 25/25 green under WSL (select/L1-L3 pending step 3); the five MoeDaemonClient harnesses 71/71 pass; Windows `npx tsc -p ./ --noEmit` exit 0. Gotcha: shared moe-vscode/node_modules has only @typescript/typescript-win32-x64, so `npm run compile` (TS7 native tsc) cannot run under WSL - the gate runs via cmd.exe.",
+      "startedAt": "2026-10-30T13:34:25.210Z",
+      "completedAt": "2026-10-30T13:35:32.865Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "In moe-vscode/src/util/AgentLauncher.ts:\n- Import runtimeProfile, installedRoot and installedArtifact from '../services/MoeDaemonClient'. extension.ts already imports both modules, and esbuild bundles them.\n- Add `export const PROTECTED_RUNTIME_MARKER = 'MOE_RUNTIME_PROTECTED'`. Its comment is the contract with scripts/moe-agent.{sh,ps1} (CQ-R13c2): exactly '1', set only here under protected. A marker already inherited from VS Code's environment is not stripped, because that fails closed.\n- Add `export function selectProtectedAgentRuntime(basePath, root, windows = process.platform === 'win32'): { scriptPath: string; envOverrides: Record<string,string> } | { refused: string }`:\n  - The wrapper is ONLY the platform one: windows takes 'scripts/moe-agent.ps1', anything else 'scripts/moe-agent.sh'. VS Code builds a PowerShell command on win32 and bash elsewhere, and has no WSL toggle.\n  - Then MOE_DAEMON_PATH from 'daemon/index.js' and MOE_PROXY_PATH from 'proxy/index.js', each through installedArtifact. The first rejection returns { refused: reason }.\n  - Only after all three are accepted, set envOverrides[PROTECTED_RUNTIME_MARKER] = '1'.\n- launchAgent: after workspacePath, when runtimeProfile(workspacePath) === 'protected', call selectProtectedAgentRuntime(workspacePath, installedRoot(extensionPath)).\n  - On refused, show `Protected execution profile: ${reason}. Agents only use the wrapper, daemon and proxy installed with the Moe extension.` and return with no terminal.\n  - Otherwise use it as the resolved script. The project's scripts/ and ~/.moe/config.json installPath are never consulted under protected.\n  - The legacy branch calls resolveAgentScript exactly as today.\n- buildPowerShellCommand and buildBashCommand are unchanged. They already render env overrides, and assertSafeArg still guards PowerShell values.\n\nError handling: the existing try/catch in launchAgent stays. A refusal is a normal return, not an exception. launchAllAgents is unchanged: each role refuses on its own. Step 1's tests must now pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts"
+      ],
+      "note": "AgentLauncher.ts: imports runtimeProfile/installedRoot/installedArtifact from '../services/MoeDaemonClient'; adds PROTECTED_RUNTIME_MARKER and selectProtectedAgentRuntime (platform wrapper only, then daemon, then proxy; first rejection refuses; marker '1' set last); launchAgent picks selectProtectedAgentRuntime under protected, shows the exact refusal and returns with no terminal, else calls resolveAgentScript unchanged. buildPowerShellCommand/buildBashCommand/launchAllAgents untouched. Evidence: WSL `node --test tests/protected-runtime.test.cjs` 29/29 pass; Windows node v24.16 same file 27 pass + 2 symlink rows skipped (EPERM; P1 directory assertion runs before the skip), win32 L1-L3 (-EncodedCommand decode, $env: marker) green; Windows `npx tsc -p ./ --noEmit` exit 0.",
+      "startedAt": "2026-10-30T13:35:35.035Z",
+      "completedAt": "2026-10-30T13:36:02.782Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate. Run it once, fresh, from the repo checkout: `cd moe-vscode && npm test && npm run compile`. Record the node:test pass and fail counts and tsc's exit status.\n- typescript and ws are pure JS, so the checked-in moe-vscode/node_modules run under WSL Linux. compile writes only to the gitignored dist/.\n- The existing startup tests (daemon-start, daemon-json-cap, approval-paths, plan-approval-client, settings-wire) must pass unchanged. That is the legacy-unchanged evidence for DoD 2.\n- CI's 3-OS matrix covers the win32 branch of L1 to L3.\n\nFresh output of this exact command is the complete_task verification evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/protected-runtime.test.cjs",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/util/AgentLauncher.ts"
+      ],
+      "note": "Gate run fresh at 2026-10-30T13:36:14Z. The exact `cd moe-vscode && npm test && npm run compile`, run through Windows cmd.exe (`cmd.exe /d /c \"cd /d D:\\projexts\\moes && cd moe-vscode && npm test && npm run compile\"`, node v24.16): exit 0, node:test 268 tests / 266 pass / 0 fail / 2 skipped (the two symlink rows, EPERM), then tsc -p ./ exit 0. WSL Linux `npm test`: 268/268 pass, 0 skipped. The 239 pre-existing tests (daemon-start, daemon-json-cap, approval-paths, plan-approval-client, settings-wire and the rest) all pass unchanged, which is the legacy-unchanged evidence for DoD 2. Plan deviation: the plan assumed typescript is pure JS, but `tsc` is now @typescript/native (TS7) with only the win32-x64 binary in the shared node_modules. `npm run compile` therefore cannot run under WSL, so the gate ran via cmd.exe, which also exercises the win32 L1-L3 branch locally. compile emitted only to the gitignored dist/. No files modified in this step.",
+      "startedAt": "2026-10-30T13:36:03.664Z",
+      "completedAt": "2026-10-30T13:36:49.711Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff only (load the adversarial-self-review skill). Check that:\n\n(a) Every path to 'legacy' is a confirmed-absent file, a missing settings or executionProfile key, 'legacy' or 'observe', or a blank basePath. Every other outcome is 'protected', and only 'verified-local' pins.\n(b) No refusal reason leaks an absolute path. Paths go to log() only.\n(c) The marker is set only after all three artifacts are accepted, and never on the legacy branch.\n(d) Comparisons: the root comparison is exact, and the project comparison is folded on win32/darwin with segment-boundary checks.\n(e) A symlinked bundled artifact resolving outside the root is refused.\n(f) No new local import was added to MoeDaemonClient.ts, so the five harnesses are untouched.\n(g) Legacy launch command bytes are identical.\n\nReport in the completion summary:\n- the net LOC (target about 300, under 400);\n- that RF06b (task-032c9739) owns the daemon spawn;\n- the VS Code running-daemon provenance gap noted for RF07.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/util/AgentLauncher.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/protected-runtime.test.cjs"
+      ],
+      "note": "Adversarial self-review of this task's diff, checks (a)-(g):\n(a) Legacy comes only from a blank basePath, lstat ENOENT, an absent own settings/executionProfile, or legacy/observe. Everything else answers protected, and only verified-local pins.\n(b) Refusal reasons are fixed texts plus constant relative labels. Paths go to log() only.\n(c) The marker is set after all three artifacts are accepted. The legacy branch never sets it.\n(d) The root comparison is exact; the project comparison is folded, both with segment boundaries.\n(e) A symlink resolving outside the root is refused.\n(f) No new import in MoeDaemonClient.ts; the five harnesses pass.\n(g) Legacy bytes are unchanged (L4 exact).\n\nFixes made in this step:\n- A regular-file stat before opening project.json, so a FIFO or device cannot block the extension host.\n- Exact fail-closed reason assertions, which make the BOM check killable.\n- A non-ENOENT lstat row.\n- A literal U+FEFF the edit tool wrote into the source is now the escape.\n- Compacted to fit the QA 400 cap.\n\nMutation: 22 scratch mutants, all assertion-killed.\n\nFresh gate at 13:43:35Z, Windows cmd.exe exact command: exit 0, 267 tests, 264 pass, 3 skipped (2 symlink EPERM, 1 lstat row that reports ENOENT on Windows), tsc exit 0. Linux npm test: 267/267.\n\nNet LOC: +400/-4 = 396.\n\nTheoretical risks:\n- A stat→open swap to a FIFO needs a local racer.\n- realpathSync.native may fail on exotic Windows volumes, which fails closed (refusal).",
+      "startedAt": "2026-10-30T13:36:50.644Z",
+      "completedAt": "2026-10-30T13:44:07.959Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 279.5,
+  "comments": [
+    {
+      "id": "comment-b9d3d385b0c047a984abbbf39b810cc1",
+      "author": "architect-bd1eb82d",
+      "content": "architect-bd1eb82d, a note for step 1. Objects returned from the vm context, such as installedArtifact's { accepted } / { rejected } and selectProtectedAgentRuntime's result, carry the vm realm's Object prototype, so assert.deepStrictEqual against a test-realm literal fails even when they look identical. Compare `({ ...result })` or a JSON round-trip, or assert the fields one at a time (Serena mem gotcha-vscode-vm-test-harnesses). String arrays the fake vscode collects in the test realm (errors, sendText) are safe to deep-equal.",
+      "timestamp": "2026-10-30T07:23:36.196Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:06:52.423Z",
+  "updatedAt": "2026-10-30T14:26:11.512Z",
+  "dependsOn": [
+    "task-f3485ac9d4384664870d88db876ddd54",
+    "task-de91373a5ed84530b29fc4cfbcee974a",
+    "task-10af73355e1b4748b1e07491a7a891cb"
+  ],
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T06:52:13.290Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:14:48.323Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T14:25:18.139Z",
+    "wallClockMs": 25829816
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-fe18a9a9",
+    "qa-ba3f4f35"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:23:22.999Z",
+  "executionContract": {
+    "intendedBehavior": "Under the protected execution profile, the VS Code extension launches Moe agents only with the wrapper, daemon and proxy installed with the extension (<extensionPath>/bundled), plus MOE_RUNTIME_PROTECTED=1. It refuses with an error message, and no terminal, when any installed artifact is missing or resolves outside the installed root or inside the project. The profile read mirrors JetBrains RuntimeSelectionPolicy: strict, fail-closed, with a session pin only for an explicit verified-local read. The legacy profile launches exactly as before. The daemon spawn under protected is task-032c973941bc41d9b051eedacb7de0b6 (CQ-RF06b).",
+    "acceptanceCriteria": [
+      "The P1 profile table, P2 pin, P3 path-form and P4 installedArtifact cases in tests/protected-runtime.test.cjs pass with exact assertions",
+      "L1: the protected launch uses only the installed wrapper, daemon and proxy real paths, plus the marker rendered for the platform",
+      "L2 and L3: a missing installed artifact shows the exact refusal text and creates no terminal",
+      "L4 and the existing startup harnesses: the legacy launch and daemon startup are unchanged",
+      "`cd moe-vscode && npm test && npm run compile` exits 0"
+    ],
+    "invariants": [
+      "runtimeProfile never throws; only a confirmed-absent file or key, legacy, observe or a blank basePath gives legacy",
+      "Only an explicit verified-local read pins a project for the extension-host session",
+      "Every rejection is a refusal: no fallback to project or global-config copies under protected",
+      "UI messages carry reasons only; absolute paths go to the log"
+    ],
+    "compatibility": [
+      "The legacy profile (no project.json, settings or executionProfile; legacy; observe) keeps resolveAgentScript's order (workspace scripts/, bundled, ~/.moe/config.json installPath) and today's command bytes",
+      "No new local runtime import in MoeDaemonClient.ts: five existing harnesses transpile it alone",
+      "The env contract matches JetBrains selectProtectedAgentRuntime and CQ-R13c1: MOE_DAEMON_PATH, MOE_PROXY_PATH, and MOE_RUNTIME_PROTECTED exactly '1'",
+      "No persistent state: RF01's ProtectedStateStore lives in the JetBrains IDE system directory (PathManager) and is not shareable as-is, so VS Code keeps R01's session-only pin"
+    ],
+    "approvedScope": [
+      "MoeDaemonClient.ts exports: RuntimeProfile, runtimeProfile, comparablePath, isWithin, defaultFoldCase, installedRoot, installedArtifact, and a module-level session pin set",
+      "AgentLauncher.ts: PROTECTED_RUNTIME_MARKER, selectProtectedAgentRuntime, and the protected branch in launchAgent",
+      "New test file moe-vscode/tests/protected-runtime.test.cjs"
+    ],
+    "reuse": [
+      "The readDaemonJsonText capped-read pattern and the module log() in MoeDaemonClient.ts",
+      "The vm/transpile harness pattern from tests/daemon-start.test.cjs",
+      "The existing buildPowerShellCommand/buildBashCommand env-override rendering"
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt: profile, declaresVerifiedLocal, parseStrict, comparablePath, isWithin, installedArtifact, select (the semantics mirrored here)",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt: selectProtectedAgentRuntime and PROTECTED_RUNTIME_MARKER (set after all artifacts are accepted)",
+      "moe-vscode/src/util/AgentLauncher.ts: resolveAgentScript, buildPowerShellCommand, buildBashCommand, launchAgent",
+      "moe-vscode/src/services/MoeDaemonClient.ts: log(), readDaemonJsonText (a single-descriptor capped read pattern)",
+      "moe-vscode/scripts/bundle-assets.mjs writes bundled/{daemon,proxy,scripts}; bundled/ and dist/ are gitignored",
+      "tests/daemon-start.test.cjs vm harness pattern: ts.transpileModule plus a vm context with a require shim"
+    ],
+    "checkRefs": [
+      "cd moe-vscode && npm test && npm run compile"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) One task for the whole of RF06: profile read, agent launch and daemon spawn. Rejected: about 450 LOC is over the 400 review cap. The daemon spawn moved to task-032c9739 (CQ-RF06b, BACKLOG, depends on this task); RF07 (task-f3f364a6) now depends on both. (2) A new src/util/RuntimeSelectionPolicy.ts module. Rejected: MoeDaemonClient.ts must consume it in RF06b, and five vm harnesses transpile MoeDaemonClient.ts alone with a closed require shim, so the import would break all five. The policy therefore lives as exports in MoeDaemonClient.ts, and AgentLauncher imports it. (3) Injecting the policy into MoeDaemonClient from extension.ts. Rejected: unwired clients would fail open. (4) Persistent pin or provenance for VS Code. Out of scope: RF01's store lives in the JetBrains PathManager system directory, so it cannot be shared as-is.",
+    "codebaseInsights": "VS Code's bundled runtime root is <extensionPath>/bundled/{scripts,daemon,proxy} (bundle-assets.mjs). Today's legacy resolveAgentScript order is: workspace scripts/, then bundled (setting MOE_DAEMON_PATH and MOE_PROXY_PATH when present), then ~/.moe/config.json installPath. VS Code builds a PowerShell -EncodedCommand on win32 and a bash command elsewhere, and has no WSL or preferBash toggle. In the JetBrains source of truth, a protected selection refuses on the first rejected artifact and sets MOE_RUNTIME_PROTECTED='1' only after all are accepted.",
+    "risks": "- Path forms: on macOS the tmpdir is /var but resolves to /private/var, so tests must compare realpaths. Windows has device prefixes and case folding. Symlink rows are skipped on EPERM.\n- On Windows, opening a directory as project.json throws, which is fine because it fails closed.\n- A dangling project.json symlink must be 'protected': lstat first, so only ENOENT on the link itself means absent.\n- The VS Code extension-dev host (F5) runs with extensionPath inside the repo, so bundled artifacts resolve inside the project and are refused when the repo is the project. JetBrains' runIde sandbox behaves the same way, as intended.\n- Known gap, recorded on RF07: VS Code has no running-daemon provenance (activationRefusal parity).",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/util/AgentLauncher.ts",
+      "moe-vscode/tests/daemon-start.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-vscode/scripts/bundle-assets.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:23:23.018Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T13:30:07.433Z",
+  "reviewStartedAt": "2026-10-30T13:44:45.452Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes && cd moe-vscode && npm test && npm run compile\"",
+    "exitCode": 0,
+    "outputTail": "> moe-vscode@0.8.0 test\n> node --test tests/*.test.cjs\n✔ provider: a token-free AWAITING_APPROVAL -> WORKING status update sends nothing and warns (43.2815ms)\n﹣ P1 an lstat failure other than ENOENT (.moe is a file) fails closed (0.1555ms) # Windows reports ENOENT here\n﹣ P1 a project.json directory or dangling symlink fails closed to protected (14.1499ms) # creating symlinks needs a privilege here\n﹣ P4 a symlink inside the root that resolves outside it is refused (9.5458ms) # creating symlinks needs a privilege here\nℹ tests 267\nℹ suites 0\nℹ pass 264\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 1358.6277\n\n> moe-vscode@0.8.0 compile\n> tsc -p ./\n(exit 0, started 2026-10-30T13:43:35Z; WSL Linux `cd moe-vscode && npm test` same tree: 267 tests, 267 pass, 0 fail, 0 skipped)",
+    "reportedAt": "2026-10-30T13:44:45.452Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/protected-runtime.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/src/util/AgentLauncher.ts",
+    ".moe/tasks/task-6f3f7fe97a91434c9143e52e57c6f302.json",
+    ".moe/tasks/task-98ffe33f448746e6bc802db0b5624fd0.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+    ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json",
+    ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+    ".moe/tasks/task-da1d95742d6f48de9f40269e637b986c.json"
+  ],
+  "completionSummary": "Under the protected profile, VS Code now launches agents only from <extensionPath>/bundled: the platform wrapper (ps1 on win32, sh elsewhere), daemon/index.js and proxy/index.js. Each must be a real regular file inside the real installed root (exact comparison) and outside the project (folded comparison). MOE_RUNTIME_PROTECTED=1 is set last, after all three are accepted. The first rejection shows \"Protected execution profile: <reason>. Agents only use the wrapper, daemon and proxy installed with the Moe extension.\" and creates no terminal. Legacy keeps resolveAgentScript and identical command bytes.\nruntimeProfile mirrors JetBrains: lstat (only ENOENT is absent), a regular-file check, a 1 MiB capped read, BOM untrusted, own-property checks. Only verified-local pins, for the session. Any failure logs one fail-closed line and answers protected.\nFiles: MoeDaemonClient.ts +116/-3 (exports, no new imports; readDaemonJsonText delegates to readCappedText, same behaviour); AgentLauncher.ts +33/-1; new tests/protected-runtime.test.cjs, 251 lines, 28 rows. Net LOC 396 (+400/-4).\nDoD1: L1-L3 plus the select row. DoD2: the 238 pre-existing tests pass unchanged, plus L4 exact legacy bytes. DoD3: Windows exact gate exit 0, 267 tests (264 pass, 3 skips: 2 symlink EPERM, 1 lstat row Windows reports as ENOENT), tsc exit 0. Linux npm test 267/267.\n22 scratch mutants, all assertion-killed.\nDeviations:\n- TS7 native tsc has only the win32 binary in the shared node_modules, so the gate ran through cmd.exe, which also covers the win32 L1-L3 branch.\n- realpathSync.native instead of plain realpathSync, so Windows 8.3 names canonicalise on both sides.\nRF06b (task-032c9739) owns the daemon spawn and should reuse these exports. Gap noted for RF07: VS Code has no running-daemon provenance (no activationRefusal/RF03 parity), and the pin is session-only because RF01's store is not shareable.\nNo .moe edits or Git writes; peer dirty paths untouched; verified-local not enabled.",
+  "commits": [
+    {
+      "sha": "edfd7f9ae19daa8343d4d3e8d9de4492fd729a44",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T13:29:16Z",
+      "paths": [
+        ".moe/tasks/task-6f3f7fe97a91434c9143e52e57c6f302.json",
+        ".moe/tasks/task-98ffe33f448746e6bc802db0b5624fd0.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/protected-runtime.test.cjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T13:45:11.890Z",
+      "treeId": "956ef39503bb44871485762aae98aeaf8a6e1419",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "921f81a6f92b0ce87402ba0af8b0c2c9afebf142",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T14:21:24Z",
+      "paths": [
+        ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+        ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json",
+        ".moe/tasks/task-98ffe33f448746e6bc802db0b5624fd0.json",
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+        ".moe/tasks/task-da1d95742d6f48de9f40269e637b986c.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T14:26:11.512Z",
+      "treeId": "604cafd502493791818ae7759d2f4590f6bd9886",
+      "status": "DONE",
+      "pushed": false
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/protected-runtime.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T14:21:24Z",
+    "at": "2026-10-30T14:26:11.512Z"
+  },
+  "completedAt": "2026-10-30T14:25:18.139Z",
+  "reviewCompletedAt": "2026-10-30T14:25:18.139Z",
+  "reviewSummary": "Reviewed completion edfd7f9ae19daa8343d4d3e8d9de4492fd729a44, tree 956ef39503bb44871485762aae98aeaf8a6e1419; git show and git branch --contains confirm moe/work-2026-10-24 delivery. Approved scope: three files, +400/-4 (net 396 LOC); other commit paths are daemon-owned board updates. No existing tests weakened. Verification inputs (moe-vscode and shared client-verdicts fixture) match the commit.\nRe-ran exact evidence command: cmd.exe /d /c \"cd /d D:\\projexts\\moes && cd moe-vscode && npm test && npm run compile\" -> exit 0; 267 tests, 264 passed, 0 failed, 3 platform skips; tsc passed. Linux `cd moe-vscode && npm test` -> exit 0, 267/267 passed, no skips, including Windows-skipped symlink/non-ENOENT cases. Logs: /tmp/qa-rf06-{windows,linux}.log.\nDoD1: P1-P4, L1-L3 verify strict fail-closed profile parsing, explicit-only session pin, canonical containment, installed-only wrapper/daemon/proxy paths, exact protected marker and refusal without terminals. Extra QA harness using git-show source passed alias/deleted-profile pin, missing-daemon refusal, FIFO artifact and symlinked-FIFO profile rejection. Initial scratch-only ws resolution error was fixed by package cwd; no product change.\nDoD2: unchanged legacy resolver/builders, L4 exact bytes and all startup regressions pass. DoD3: reported gate reproduced. No additional docs/migrations required. RF06b owns daemon spawning; persistent provenance/session limitations remain later scope, not verified here. No verified-local enablement or isolation claim. Same-user racers are outside documented threat model. No Git writes/direct .moe edits; peer bytes preserved. Complexity: lean already, net 0 lines recommended. Retaining requested session handoff.",
+  "requiredCheckAtDone": null
+}

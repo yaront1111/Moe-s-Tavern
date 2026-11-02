@@ -1,0 +1,382 @@
+{
+  "id": "task-357ed3ae786b4477a39840a7b86a88a6",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-15] VS Code: account actions in the Accounts view, matching JetBrains",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-14 (task-720f81a6917d4490ab3b5a58c2217ccb: AccountsTreeProvider and the moe.accounts view), and through it on VSC-12's client senders and VSC-13's AccountPresentation port.\n\nObjective: the actions of JetBrains' Accounts tab (moe-jetbrains AccountsPanel.kt, enabled by AccountPresentation.actions): add an account (label checked with isValidLabel; ADD_ACCOUNT, then sign it in), sign in an existing account, remove (after a confirmation), move up and down, rename, and set the switch percent. Sign-in runs the daemon's `accounts login <id>` in a terminal the way JetBrains does (TerminalAgentLauncher.accountsCommandLine and runAccountsCommand, with --accounts-file); in VS Code that is an integrated terminal (vscode.window.createTerminal plus sendText) running the bundled daemon (bundled/daemon/index.js, resolved the way AgentLauncher.ts resolves it). Enablement follows AccountPresentation.actions exactly, through context keys used in `when` clauses.\n\nDeliverable: the commands, view/item/context menu entries and context keys in moe-vscode/package.json; their handlers in moe-vscode/src/providers/AccountsTreeProvider.ts, calling VSC-12's client senders; new moe-vscode/tests/accounts-actions.test.cjs. If the terminal command needs shell quoting, reuse the quoting moe-vscode/src/util/AgentLauncher.ts already has (it may become the fourth file).\n\nNot in scope: VM token actions (AccountPresentation.vmTokenArgs; verified-local stays refused in this project), any moe-jetbrains file, the daemon.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/accounts-actions.test.cjs asserts each action (add, sign in, remove, move up, move down, rename, switch percent) calls the matching client sender exactly once with the expected arguments after its input or confirmation, and zero times when the input is cancelled or isValidLabel rejects it.",
+    "For every rotation row in moe-jetbrains/src/test/resources/client-accounts.json, the context keys the provider sets match AccountPresentation.actions' enabled flags.",
+    "Sign-in opens one integrated terminal whose command runs the bundled daemon's `accounts login <id>` with the --accounts-file argument JetBrains passes, and the test proves an id or path containing spaces or quotes is quoted.",
+    "package.json declares every action command with view/item/context entries scoped to the moe.accounts view, asserted by the test.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Read the landed prerequisites FIRST and adapt names. VSC-15 can be claimed only once VSC-14 (task-720f81a6) is DONE, and with it VSC-13 (task-065e4812) and VSC-12 (task-daf5abdd).\nThis plan assumes the following, posted in #architects as msg-a53702b5. Where the landed code differs, use the landed names; the BEHAVIOUR below is the contract.\n- VSC-12 client: addAccount(label?), removeAccount(accountId), moveAccount(accountId, -1|1), renameAccount(accountId, label) and setAccountSwitchPercent(percent), each returning boolean (false = not connected). Also an accountRotation getter, onAccountsChanged, and onAccountAdded (the new account id from ACCOUNT_ADDED).\n- Existing client members: connectionState and onConnectionChanged.\n- VSC-13: moe-vscode/src/util/AccountPresentation.ts exports parseAccountRotation(unknown), actions(rotation, selectedId, connected), isValidLabel and resolveAccountText.\n- VSC-14: moe-vscode/src/providers/AccountsTreeProvider.ts, with account elements that carry the account id, a require map in tests/accounts-view.test.cjs, and registrations in extension.ts.\nThen write moe-vscode/tests/accounts-actions.test.cjs with the Write tool.\n- Harness: load the provider under node:vm with VSC-14's require map (the real AccountPresentation.ts transpiled and loaded with a throwing require, plus a fake vscode), and put Buffer and console in the context.\n- Fake vscode: recorders for window.showInputBox (queued answers), showWarningMessage (queued answers), showInformationMessage, showErrorMessage, createTerminal (a fake terminal recording sendText and show), commands.registerCommand (id to callback), commands.executeCommand (records setContext) and env.clipboard.writeText, plus whatever VSC-14's provider already uses (EventEmitter, TreeItem, ...).\n- Fake client: recorder senders with per-test return values, and EventEmitters.\n- Compare vm-realm values through JSON or field by field (mem:gotcha-vscode-vm-test-harness).\nIts error handling: an unreadable corpus, bundle or package.json fails naming the path, and the per-row corpus checks report every failing id at once.\nTests:\n1. package.json and registration:\n   - contributes.commands declares moe.accounts.add, .signIn, .remove, .moveUp, .moveDown, .rename and .setSwitchPercent. The titles of the first six equal the bundle's moe.accounts.button.add/signIn/remove/moveUp/moveDown/rename;\n   - menus view/title holds add and setSwitchPercent with `view == moe.accounts && moe.accounts.canAdd` / `... && moe.accounts.canSwitchAt`;\n   - menus view/item/context holds the other five with `view == moe.accounts && viewItem =~ /\\bcanX\\b/` (canSignIn, canRemove, canMoveUp, canMoveDown, canRename);\n   - provider.registerCommands() registers exactly those seven ids.\n2. Context keys over every rotation row of moe-jetbrains/src/test/resources/client-accounts.json:\n   - set the fake client's accountRotation and connection state from the row and refresh;\n   - the last setContext values of moe.accounts.canAdd and moe.accounts.canSwitchAt equal expectActions.add and .switchAt;\n   - the element whose id is row.selectedId has contextValue tokens equal to {canRename: rename, canMoveUp: moveUp, canMoveDown: moveDown, canRemove: removeOnly || signOutAndRemove, canSignIn: signIn} from expectActions;\n   - every element's tokens equal the same mapping of AccountPresentation.actions for its own id.\n3. Actions, each through the registered callback with an element:\n   - add: 'Work Max' sends addAccount('Work Max') once; a cancel or a 65-char label sends nothing; onAccountAdded('acct-new') after a sent add opens exactly one terminal running `login acct-new`, and without a pending add it opens none;\n   - signIn opens one terminal with `login <id>`;\n   - remove: 'Remove only' sends removeAccount(id) once; 'Sign out and remove' runs `remove <id> --sign-out` in a terminal and sends nothing; a dismiss does nothing;\n   - moveUp and moveDown send moveAccount(id, -1) and moveAccount(id, 1);\n   - rename sends renameAccount(id, label) for a new label, and nothing for a cancel, an invalid label or the unchanged label;\n   - switch percent: '75' sends setAccountSwitchPercent(75); a cancel, the current value, '0', '101', '7.5' and 'x' send nothing;\n   - every sender returning false shows exactly 'Not connected to Moe daemon \\u2014 the account change was not sent.'\n4. Quoting, through the exported accountsCommandLine with node '/opt/my node/node', script \"/opt/moe's/cli.js\", registryFile 'C:\\\\Users\\\\A B\\\\claude accounts.json' and id 'acct-\"q\" 1':\n   - bash: every word is single-quoted with the '\\\\'' idiom;\n   - windows: base64-decode (utf16le) the -EncodedCommand and find `& '...'` with single quotes doubled;\n   - a CR, LF or NUL in any word throws, and the signIn handler then shows an error and opens no terminal.\n5. Strings: every dialog text equals its MoeBundle.properties value, read as UTF-8 with `\\n` decoded and args substituted. That covers add.title/prompt, rename.title/prompt, remove.confirm ({0} = label), remove.signOut, remove.only, terminal.tab and terminal.unavailable.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/accounts-actions.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/accounts-actions.test.cjs"
+      ],
+      "note": "Read landed VSC-12 (client senders/events match msg-a53702b5; moveAccount/setAccountSwitchPercent throw RangeError), VSC-13 AccountPresentation, VSC-14 provider (row contextValue 'moe.account', V1 pins it) and JetBrains AccountsPanel/TerminalAgentLauncher. Adaptations: tokens appended to VSC-14's 'moe.account' (not 'moeAccount') only once registerCommands() ran, so VSC-14's V1 stays valid untouched; onAccountAdded subscribed in registerCommands (VSC-14's fake client has no onAccountAdded); public contextFor(id) lets K2 check the selected id for every corpus row, including C09 where VSC-14 lists no rows while disconnected. New tests/accounts-actions.test.cjs (12 tests). RED in a HEAD snapshot (/tmp/vsc15-red-*): every test fails with 'provider.registerCommands is not a function'. 22 peer dirty paths untouched.",
+      "startedAt": "2026-11-02T12:10:32.579Z",
+      "completedAt": "2026-11-02T12:16:10.030Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Terminal plumbing in moe-vscode/src/providers/AccountsTreeProvider.ts.\nNOTE: this file is CREATED BY VSC-14 (task-720f81a6), which must be DONE before this row can be claimed. It sits under newFiles only because it did not exist at plan time. EDIT the landed file; never recreate or overwrite it.\nKeep every new helper inside this file: no new value import, because the provider loads under strict require maps (epic notes; mem:gotcha-vscode-panel-strict-require-map).\n- Copy psQuote, shQuote and assertSafeArg from moe-vscode/src/util/AgentLauncher.ts as private functions, with a comment naming that source.\n- Export `accountsCommandLine(cli: {node: string; script: string}, registryFile: string, args: string[], windows: boolean): string`:\n  - the words are [cli.node, cli.script, '--accounts-file', registryFile, ...args], as in JetBrains TerminalAgentLauncher.buildAccountsCommand;\n  - every word passes assertSafeArg;\n  - windows: inner = '& ' + words.map(psQuote).join(' ') and return `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(inner, 'utf16le').toString('base64')}`, AgentLauncher's injection-safe form;\n  - otherwise words.map(shQuote).join(' ').\n- The CLI is the daemon's own (rotation.cli: its node binary and dist/accounts/cli.js, inside bundled/daemon when VS Code spawned the daemon) with --accounts-file rotation.registryFile, as JetBrains passes them.\n- `private runCli(args)`: parse the client's rotation; do nothing without one or without its cli. Build the line with process.platform === 'win32', then `vscode.window.createTerminal({ name: TERMINAL_TAB })`, sendText(line) and show().\n- Error handling: an assertSafeArg throw shows vscode.window.showErrorMessage and opens no terminal. A createTerminal throw copies the line with vscode.env.clipboard.writeText and shows a warning with TERMINAL_UNAVAILABLE ({0} = line), as JetBrains does.\n- Text constants copied exactly from moe-jetbrains/src/main/resources/messages/MoeBundle.properties: ADD_TITLE, ADD_PROMPT, RENAME_TITLE, RENAME_PROMPT, REMOVE_CONFIRM ({0}), REMOVE_SIGN_OUT, REMOVE_ONLY, TERMINAL_TAB, TERMINAL_UNAVAILABLE (with its newline), SWITCH_AT and SWITCH_AT_UNIT. Format them with a one-pass `/\\{(\\d+)\\}/g` function replace.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts"
+      ],
+      "note": "Edited VSC-14's landed AccountsTreeProvider.ts with the Edit tool (not recreated). Copied psQuote/shQuote/assertSafeArg from AgentLauncher.ts (comment names the source); exported accountsCommandLine(cli, registryFile, args, windows) in TerminalAgentLauncher.buildAccountsCommand word order (bash single quotes; Windows `& '...'` in -EncodedCommand utf16le base64). Private runCli uses rotation.cli + registryFile, process.platform === 'win32', createTerminal({name: TERMINAL_TAB}) + sendText + show; a createTerminal throw copies the line to the clipboard and warns with terminal.unavailable; an assertSafeArg throw reaches the handler guard -> showErrorMessage, no terminal. Exported ACCOUNT_ACTION_TEXT holds the 11 bundle values; `say` formats with one-pass /\\{(\\d+)\\}/g. No new value import: only actions and isValidLabel were added to the existing AccountPresentation import (+ an import type for AccountActions).",
+      "startedAt": "2026-11-02T12:16:10.946Z",
+      "completedAt": "2026-11-02T12:18:28.709Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Action handlers in moe-vscode/src/providers/AccountsTreeProvider.ts, as public methods taking the element.\n- Every handler re-reads FRESH state: rotation = parseAccountRotation(client.accountRotation), connected = client.connectionState === 'connected' and allowed = actions(rotation, accountId, connected). It returns quietly when its flag is false, because a menu can be stale.\n- NOT_CONNECTED = 'Not connected to Moe daemon — the account change was not sent.' is shown whenever a sender returns false.\n- add():\n  - showInputBox({title: ADD_TITLE, prompt: ADD_PROMPT, value: '', validateInput: v => isValidLabel(v) ? undefined : 'Use at most 64 characters and no control characters.'});\n  - a cancel or an invalid label sends nothing;\n  - otherwise set awaitingAdd = true and call client.addAccount(label); on false, reset awaitingAdd and warn;\n  - subscribe once in the constructor to client.onAccountAdded: when awaitingAdd, reset it and runCli(['login', id]), as JetBrains AccountsPanel.onAccountAdded does. Dispose that subscription in dispose().\n- signIn(element): runCli(['login', id]).\n- remove(element):\n  - choices = ['Sign out and remove' if allowed.signOutAndRemove] + ['Remove only' if allowed.removeOnly];\n  - showWarningMessage(REMOVE_CONFIRM with the account label, {modal: true}, ...choices);\n  - 'Remove only' calls client.removeAccount(id); 'Sign out and remove' calls runCli(['remove', id, '--sign-out']); a dismiss does nothing.\n- moveUp/moveDown(element): client.moveAccount(id, -1 / 1).\n- rename(element): showInputBox({title: RENAME_TITLE, prompt: RENAME_PROMPT, value: current label, validateInput as above}). A cancel, an invalid label or trimmed === current label sends nothing; otherwise client.renameAccount(id, label).\n- setSwitchPercent(): showInputBox({title: SWITCH_AT, prompt: '1-100' + SWITCH_AT_UNIT, value: String(rotation.switchAtPercent), validateInput: /^\\d+$/ and 1..100, else 'Enter a whole number from 1 to 100.'}). A cancel, an invalid value or the current value sends nothing; otherwise client.setAccountSwitchPercent(n).\n- Error handling: wrap each handler body in try/catch and call showErrorMessage(`Account action failed: ${message}`) on an unexpected throw.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts"
+      ],
+      "note": "Handlers add/signIn/remove/move(-1|1)/rename/setSwitchPercent, each inside guard() (try/catch -> showErrorMessage 'Account action failed: <msg>'). Every handler re-reads fresh actions() before asking AND again after the input/confirm, before it sends. NOT_CONNECTED warning whenever a sender returns false; add sets awaitingAdd = the sender's result. remove offers Sign out and remove / Remove only per allowed flags in a modal showWarningMessage (C11, with no CLI, offers Remove only). rename skips cancel/invalid/trimmed-unchanged and sends '' (architect note 2). setSwitchPercent: whole 1..100, skips the current value. Deviations: (1) handlers are private and reached through the registered command callbacks, which is what the tests drive, rather than public methods; (2) the onAccountAdded subscription is made in registerCommands(), not the constructor, because VSC-14's accounts-view fake client has no onAccountAdded. It is still disposed in dispose(), through the same subscriptions array. ACCOUNT_ADDED runs login directly under awaitingAdd, without the signIn gate (architect note 4).",
+      "startedAt": "2026-11-02T12:18:29.743Z",
+      "completedAt": "2026-11-02T12:18:37.078Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Enablement and registration.\n- In moe-vscode/src/providers/AccountsTreeProvider.ts:\n  - give every account element `contextValue = ['moeAccount', ...tokens].join(' ')`. The tokens canRename, canMoveUp, canMoveDown, canRemove (removeOnly || signOutAndRemove) and canSignIn come from actions(rotation, element id, connected), computed wherever VSC-14 builds the elements;\n  - add `registerCommands(): vscode.Disposable[]`. It registers moe.accounts.add, .signIn, .remove, .moveUp, .moveDown, .rename and .setSwitchPercent to the handlers, and installs a hook so every refresh (onAccountsChanged, onConnectionChanged, construction) runs `vscode.commands.executeCommand('setContext', 'moe.accounts.canAdd', a.add)` and the same for 'moe.accounts.canSwitchAt', where a = actions(rotation, null, connected);\n  - before registerCommands() runs, the provider never touches vscode.commands, so VSC-14's accounts-view.test.cjs fake stays valid.\n- In moe-vscode/src/extension.ts, next to VSC-14's provider registration: `context.subscriptions.push(...accounts.registerCommands());`, using the landed variable name.\n- Error handling: a rejected setContext promise is caught and ignored (it is cosmetic). registerCommands may run only once; a second call throws an Error naming the provider.\n- If VSC-14's accounts-view.test.cjs pins the full element shape and breaks on contextValue, set contextValue where that test does not look. Edit that test only if it is unavoidable, minimally, and say so in the summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "note": "Element contextValue = contextFor(row.id): 'moe.account' (VSC-14's landed value, not the plan's 'moeAccount') plus the tokens canSignIn/canRename/canMoveUp/canMoveDown/canRemove(removeOnly||signOutAndRemove) from fresh actions(rotation, id, connected). Tokens are added only after registerCommands() ran, so VSC-14's V1 (`contextValue === 'moe.account'`) holds and accounts-view.test.cjs is NOT edited. registerCommands() registers exactly the seven ids, subscribes onAccountAdded, then refresh(). refresh() now also runs publish(), which setContexts moe.accounts.canAdd and canSwitchAt from actions(rotation, null, connected) when registered, on every client event. A rejected setContext is caught and ignored. A second call, or a call after dispose, throws an Error naming AccountsTreeProvider. extension.ts gets one line after VSC-14's push: `context.subscriptions.push(...accountsProvider.registerCommands());` (VSC-14's X1 regex still matches its own line). Snapshot run: accounts-actions 12/12, accounts-view 9/9, accounts-corpus 5/5; lint 0, compile 0.",
+      "startedAt": "2026-11-02T12:18:38.064Z",
+      "completedAt": "2026-11-02T12:18:47.577Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "moe-vscode/package.json contributions:\n- contributes.commands: moe.accounts.add (title 'Add...', icon '$(add)'), moe.accounts.signIn ('Sign in'), moe.accounts.remove ('Remove...'), moe.accounts.moveUp ('Move up'), moe.accounts.moveDown ('Move down'), moe.accounts.rename ('Rename...') and moe.accounts.setSwitchPercent ('Set Switch Percent...', icon '$(settings-gear)'). Every one has category 'Moe Accounts'. The first six titles equal the bundle's moe.accounts.button.* labels; the switch percent has no bundle key.\n- menus.view/title: add with `view == moe.accounts && moe.accounts.canAdd` and setSwitchPercent with `view == moe.accounts && moe.accounts.canSwitchAt`, both in group 'navigation'.\n- menus.view/item/context: signIn, rename, moveUp, moveDown and remove, each with `view == moe.accounts && viewItem =~ /\\bcanSignIn\\b/` and so on (the regex backslashes are doubled in JSON), in group '1_accounts@N'.\n- menus.commandPalette: hide all seven (`when: false`), because they need an element or the view.\nKeep JSON validity and the existing formatting. Change nothing else: VSC-14's view and refresh entries stay as landed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "note": "package.json: 7 commands (category 'Moe Accounts'; first six titles = MoeBundle moe.accounts.button.*; add $(add), setSwitchPercent $(settings-gear)); view/title add (navigation@2, `view == moe.accounts && moe.accounts.canAdd`) and setSwitchPercent (navigation@3, `... && moe.accounts.canSwitchAt`) after VSC-14's refresh (navigation@1); new view/item/context with signIn/rename/moveUp/moveDown/remove, each `view == moe.accounts && viewItem =~ /\\\\bcanX\\\\b/`, groups 1_accounts@1..5; new commandPalette hiding all seven (`when: false`). VSC-14's view and refresh entries are unchanged. JSON is valid, and the P2 test and VSC-14's P1 both pass.",
+      "startedAt": "2026-11-02T12:18:48.514Z",
+      "completedAt": "2026-11-02T12:18:53.200Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Gate in fresh Linux-native snapshots. Never run npm or node tests in the shared checkout (GLOBAL rail; mem:gotcha-vscode-gate-from-wsl). Use the checkRef's env -i PATH for every node and npm call.\n1) Red/green: build a snapshot as the checkRef does, but overlay only tests/accounts-actions.test.cjs. Run `npm ci --no-audit --no-fund`, then `node --test tests/accounts-actions.test.cjs`. It must FAIL. Then overlay the other three files and rerun: it passes.\n2) Mutant, in that snapshot copy only: always add the canMoveUp token, with an exact-string replace asserted to hit once. The corpus context-key test must fail naming C04, C06, C11 and C13 (a selected first account). Then discard the snapshot.\n3) Run the checkRef verbatim (a new snapshot). Confirm exit 0 and 0 failures, that VSC-12/13/14's suites (accounts-wire, accounts-corpus, accounts-view) pass, and report the test count.\nError handling for a red run:\n- A corpus row the provider cannot meet is a wiring slip: the flags come from VSC-13's port, which already passes the corpus. Never edit the corpus.\n- A failure tied to a peer's wip checkpoint follows mem:gotcha-snapshot-gate-peer-wip-checkpoint.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/accounts-actions.test.cjs",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/accounts-actions.test.cjs"
+      ],
+      "note": "Gate evidence (all in Linux snapshots under /tmp; no npm or node in the shared checkout).\n1) RED: HEAD archive plus only the test overlaid, then npm ci; node --test fails every test ('provider.registerCommands is not a function'). GREEN after overlaying the other 3 files: accounts-actions, accounts-view (9) and accounts-corpus (5) all pass; lint 0, compile 0.\n2) Mutants: scratch driver /tmp/vsc15-mutants/mutate.cjs, exact-replace asserted at 1 hit, file restored and cmp-identical. The first sweep had 2 survivors: dropping the before-dialog check, and canAdd taken from switchAt (the corpus never reaches the 32-account cap). I added K3 (32 accounts: canAdd false, canSwitchAt true, no add dialog) and the stale-menu half of A8 (a stale menu opens no dialog), plus A8's drop-while-dialog-open rows and the A2 no-CLI ACCOUNT_ADDED case. Final sweep: 44/44 killed, 0 survived, 0 harness errors. The planned 'always canMoveUp' mutant fails K2 on selected rows C01, C02, C03, C04, C06, C09, C10, C11, C12 and C13. That includes the planned C04, C06, C11 and C13; the rest are null, missing or first selections, or disconnected.\n3) checkRef verbatim in a fresh mktemp snapshot: EXIT=0, lint 0, compile 0. npm test: 550 tests, 546 pass, 4 skip (Windows-only), 0 fail. accounts-wire, accounts-corpus, accounts-view and accounts-actions (14) all pass. The test file grew in this step (K3 and A8 added).",
+      "startedAt": "2026-11-02T12:18:54.135Z",
+      "completedAt": "2026-11-02T12:23:42.147Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this task's diff, the only review step.\n- Would a test fail if:\n  - add skipped isValidLabel;\n  - onAccountAdded signed in an account nobody added here;\n  - remove sent on dismiss;\n  - rename sent an unchanged label;\n  - the switch percent accepted 7.5;\n  - a stale menu bypassed the fresh actions check;\n  - quoting used double quotes;\n  - a CR in an id reached the terminal;\n  - setContext ran before registerCommands?\n- Is every user-visible string either bundle-equal or pinned by the test?\n- Any value import added to the provider?\n- Confirm with `git status --porcelain` that the task touched only moe-vscode/package.json, moe-vscode/src/providers/AccountsTreeProvider.ts (edited, not recreated), moe-vscode/src/extension.ts and moe-vscode/tests/accounts-actions.test.cjs, plus accounts-view.test.cjs only if step 4's fallback was unavoidable, and named.\n- Peers own every other dirty path: never revert, stage or commit them.\n- Report every touched file in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/accounts-actions.test.cjs",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/tests/accounts-actions.test.cjs"
+      ],
+      "note": "Self-review of own diff. Every checklist mutant is killed: add without isValidLabel, a foreign ACCOUNT_ADDED, remove on dismiss, rename unchanged, 7.5%, stale-menu bypass, double quotes, CR to the terminal, setContext before register (44/44). Strings: every dialog text is ACCOUNT_ACTION_TEXT, which S1 holds bundle-equal. NOT_CONNECTED, LABEL_HINT and PERCENT_HINT are pinned by the tests. No new value import: the AccountPresentation import only grew, plus one `import type`.\nFIX from review: sendText types each character into the shell's line editor, so Ctrl-U or Ctrl-W in a word could erase the quoting already typed. assertSafeArg now refuses every C0 control and DEL, a superset of CR/LF/NUL. Q1 adds Ctrl-U, Ctrl-W and DEL, and 2 new mutants for it are killed. Account ids are already daemon-validated (ACCOUNT_ID_RE), so this is defence in depth.\nFiled out-of-scope bug task-26a3dacde03c4195bfcd3e01e3c59efd (BACKLOG): AgentLauncher's bash path has no control-character check, and the team name comes from project.name.\nTheoretical, not fixed: on a Windows host whose default VS Code terminal is a WSL shell, `powershell` (without .exe) may not resolve. AgentLauncher has the same limit.\nFresh checkRef on the final bytes at HEAD 95ab5ba8 (VSC-14 is now DONE): EXIT=0, 550 tests / 546 pass / 4 skip / 0 fail. git status: only my 4 moe-vscode paths. accounts-view.test.cjs untouched. The 22 peer dirty paths were not touched. Size waiver prop-8f3527c6 filed (PENDING).",
+      "startedAt": "2026-11-02T12:23:42.917Z",
+      "completedAt": "2026-11-02T12:26:41.192Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Size waiver prop-8f3527c6 APPROVED by the human at 14:17:29Z. The VSC-15 size-exception rail is on epic-aabc654d once. QA: follow qa-564d8bce's checklist (msg-aa9f4203): check the live rail via get_context; confirm VSC-15's owned paths are unchanged since 5e972820, attributing any AccountsTreeProvider.ts diff to task-2f4b224f per comment-c91ca56e; re-run the checkRef; approve with the 589 net noted.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-065e4812d96247cc8394b3cd0416475d"
+  ],
+  "priority": "MEDIUM",
+  "order": 16,
+  "comments": [
+    {
+      "id": "comment-7b783c0cf1ea4cc7beac6d23c8cee031",
+      "author": "architect-0fcb7226",
+      "content": "From architect-0fcb7226, planner of VSC-12. Interface check for step 1. This changes no plan step.\n\nVSC-12 landed in fbc38d15. It matches msg-a53702b5 by name and type, so use the names as written. Four details:\n\n1. Two senders throw RangeError before sending instead of returning false. moveAccount does it on any offset other than ±1. setAccountSwitchPercent does it on a non-integer or a value outside 1..100. Keep the validateInput checks and the literal ±1, and don't test for false on these two.\n2. renameAccount sends a cleared label as ''. That is JetBrains parity: isValidLabel accepts empty, which means \"show the id\". Don't add a blank refusal.\n3. onAccountsChanged fires on every STATE_SNAPSHOT, including unchanged or undefined ones, and on every accepted ACCOUNTS_UPDATED. Keep the setContext refresh idempotent.\n4. The daemon sends ACCOUNTS_UPDATED, already listing the new account, BEFORE ACCOUNT_ADDED. The comment at MoeDaemonClient.ts:1590 states that order backwards, but the file is outside this row's files, so leave it alone. Call runCli(['login', id]) directly from onAccountAdded under awaitingAdd, as step 3 says. Don't route it through the signIn actions() gate.\n\nFull notes are in the #architects reply to msg-a53702b5 (msg-68634ee8).",
+      "timestamp": "2026-11-02T11:06:36.700Z"
+    },
+    {
+      "id": "comment-f65c9f1f554a4d3cbaa405451365a531",
+      "author": "governor-e6b40560",
+      "content": "Governor review-overlap ruling, 12:10Z: this row is claimable now.\n\nI removed its dependsOn on two rows:\n- **VSC-14 (task-720f81a6):** in REVIEW, completion 21464c5d is on moe/work-2026-10-24.\n- **VSC-7 (task-93729f32):** its corpus bytes are landed (7df999be/d13c97f5) and QA-verified. It is parked only on size waiver prop-30f48e34, which needs a human click. VSC-18 keeps the formal VSC-7 gate for the epic.\n\n1. **Build on HEAD as it is.** AccountsTreeProvider.ts, extension.ts and package.json are VSC-14's bytes, so edit them with the Edit tool, never Write. The tool witness lets your landing carry them while VSC-14 is still in review.\n2. **The corpus is client-accounts.json at HEAD**, sha256 e08b58c8...95fc per QA. Pass it unchanged.\n3. **If QA rejects VSC-14,** its rework waits for this row to land (the governor adds that edge) and then rebases onto your changes. If VSC-7's corpus bytes ever change before you land, the governor posts here, and you re-run DoD 2 against the new HEAD before complete_task.",
+      "timestamp": "2026-11-02T12:09:51.290Z"
+    },
+    {
+      "id": "comment-0777922127674a9bb9731a6d291c9957",
+      "author": "governor-e6b40560",
+      "content": "Governor note for whichever QA reviews this row (raised by @qa-564d8bce at 12:17Z, msg-34b762b0).\n\n**The concern:** VSC-14's moe-vscode/tests/accounts-view.test.cjs:129 (V1) asserts `item.contextValue === 'moe.account'` with strict equality. Appending row tokens would break it.\n\n**The worker's live edit already handles it.** `contextFor(id)` in AccountsTreeProvider.ts returns the bare landed base 'moe.account' until registerCommands() has run, and only then `['moe.account', ...tokens]`. V1 never registers, so it stays green unedited. This is step 4's own fallback (\"set contextValue where that test does not look\"), and the base is the landed 'moe.account', not the plan's 'moeAccount'.\n\n**Review checks:**\n1. V1 passes with accounts-view.test.cjs unchanged.\n2. accounts-actions.test.cjs covers the registered path: tokens present per actions() for the corpus rows (DoD 2).\n3. extension.ts calls registerCommands() at activation, so the real view gets the tokens.\n\nIf the worker did edit accounts-view.test.cjs after all, QA pre-accepted a minimal, declared change to that one assertion only.",
+      "timestamp": "2026-11-02T12:18:34.496Z"
+    },
+    {
+      "id": "comment-f6941f56ec50429997d59ac9ab38b9f2",
+      "author": "worker-4c1da905",
+      "content": "Worker note for QA and the governor. Size: this row lands +594/-5 (589 net) under moe-vscode/, over the 400 default. I filed EPIC size waiver prop-8f3527c671aa4070801a0cc13383b818 (PENDING) before complete_task, following VSC-6 and VSC-7. Runtime is 230 net (AccountsTreeProvider.ts +207/-3, package.json +27/-2, extension.ts +1) and the test is 359. Two deviations from the plan, both named: (1) contextValue keeps VSC-14's 'moe.account' prefix and gets its tokens only after registerCommands(), so VSC-14's accounts-view.test.cjs is unedited; (2) the onAccountAdded subscription is made in registerCommands(), not the constructor, because VSC-14's fake client lacks it. Inherited divergence: VSC-14 lists no account rows while disconnected, so corpus C09's CLI-only Sign in is unreachable in VS Code then. JetBrains keeps stale rows. contextFor(id) still matches C09. Out-of-scope bug filed: task-26a3dacde03c4195bfcd3e01e3c59efd (AgentLauncher sendText control characters).",
+      "timestamp": "2026-11-02T12:26:29.913Z"
+    },
+    {
+      "id": "comment-7a3dca1f04c94acd8e7e119e470fac55",
+      "author": "governor-e6b40560",
+      "content": "Governor, 12:27Z, for the QA who claims this row. Size waiver prop-8f3527c6 (EPIC ADD_RAIL, 589 net: runtime 230 + test 359) is PENDING, and the ask is in #general (msg-eeba6d86). Do NOT size-reject, because that only spends the reopen cap.\n\n1. **Review substance now, in parallel with the human's click.** Use a snapshot of this row's completion commit, plus the V1/registerCommands checks in comment-07779221.\n2. **Substance fails:** reject on substance only, with failedDodItems.\n3. **Substance is green and the proposal is still PENDING when you finish:** park verdict-less with report_blocked (blockedOnTaskIds: []), naming the waiver, as VSC-7's round 2 did. The governor sets REVIEW the moment the proposal reads APPROVED.\n4. **The proposal is APPROVED by then:** check that the rail text matches `git diff --numstat` of the completion commit, then approve.",
+      "timestamp": "2026-11-02T12:28:04.308Z"
+    },
+    {
+      "id": "comment-c91ca56e1e6a45c99732f6c5d67a2cb5",
+      "author": "governor-e6b40560",
+      "content": "Governor, 14:11Z, an addendum for the QA who approves this row after waiver prop-8f3527c6.\n\nBug row task-2f4b224f (the curly-quote fix) is now claimable, overlapped with this park. Its step 3 edits moe-vscode/src/providers/AccountsTreeProvider.ts, changing only psQuote's character set. So by the time you re-check, `git diff --stat 5e972820 HEAD -- <VSC-15 paths>` may show that file.\n\nThat diff is not a byte change by this row. Attribute it with `git log --format='%h %s' 5e972820..HEAD -- moe-vscode/src/providers/AccountsTreeProvider.ts`: every commit listed must be task-2f4b224f's, or board-only checkpoints of this row. Then verify this row in a snapshot of 5e972820, as qa-564d8bce already did, and approve under the rail.",
+      "timestamp": "2026-11-02T14:10:23.395Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:41:56.596Z",
+  "updatedAt": "2026-11-02T14:21:46.812Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:34:22.475Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 7,
+    "doneAt": "2026-11-02T14:21:11.218Z",
+    "wallClockMs": 13608743
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956",
+    "worker-4c1da905",
+    "qa-564d8bce"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:41:10.319Z",
+  "executionContract": {
+    "intendedBehavior": "The VS Code Accounts view gains JetBrains' account actions: add (label checked by isValidLabel, then sign-in of the new account from ACCOUNT_ADDED), sign in, remove (Remove only, or Sign out and remove through the CLI, after a modal confirmation), move up and down, rename, and set the switch percent. Sign-in and sign-out-remove run the daemon's own accounts CLI in an integrated terminal with --accounts-file, with every word shell-quoted. Enablement follows AccountPresentation.actions through the setContext keys moe.accounts.canAdd and canSwitchAt and per-item contextValue tokens.",
+    "acceptanceCriteria": [
+      "Each action calls its client sender exactly once with JetBrains' arguments after input or confirmation, and zero times on a cancel, an invalid label, an unchanged value or a dismiss; a false return shows the pinned not-connected warning.",
+      "For every client-accounts.json row, canAdd/canSwitchAt equal expectActions.add/switchAt, and the selected element's tokens equal the mapped expectActions flags.",
+      "Sign-in opens one terminal running `<node> <cli.js> --accounts-file <file> login <id>`; spaces and quotes are quoted for bash and PowerShell (-EncodedCommand); CR, LF or NUL is refused.",
+      "package.json declares the seven commands with view/title and view/item/context entries scoped to moe.accounts, asserted by the test, and registerCommands registers exactly those ids.",
+      "The checkRef exits 0 with 0 failures."
+    ],
+    "invariants": [
+      "No new value import in AccountsTreeProvider.ts; quoting helpers are copied locally from AgentLauncher.ts.",
+      "No vscode.commands call before registerCommands(); VSC-14's accounts-view.test.cjs stays valid (an edit only as a named, minimal fallback).",
+      "Senders run only after explicit input or confirmation and a fresh actions() check.",
+      "MoeDaemonClient.ts, AccountPresentation.ts, every moe-jetbrains file and the corpus are unchanged; VM token actions stay out of scope.",
+      "No npm or node test command runs in the shared checkout."
+    ],
+    "compatibility": [
+      "Without a rotation, cli or connection, the actions stay hidden or disabled exactly as AccountPresentation.actions says; VSC-14's read-only view behaviour is unchanged."
+    ],
+    "approvedScope": [
+      "AccountsTreeProvider.ts (VSC-14's file, edited): accountsCommandLine (exported), runCli, the handlers add/signIn/remove/moveUp/moveDown/rename/setSwitchPercent, element contextValue tokens, registerCommands with the setContext hook, and the copied bundle text constants.",
+      "extension.ts: one line pushing registerCommands() disposables.",
+      "package.json: seven commands, view/title, view/item/context and commandPalette entries."
+    ],
+    "reuse": [
+      "VSC-13 AccountPresentation.parseAccountRotation/actions/isValidLabel for enablement and validation.",
+      "AgentLauncher.ts psQuote/shQuote/assertSafeArg and its -EncodedCommand form (copied).",
+      "JetBrains AccountsPanel.kt flows and TerminalAgentLauncher.buildAccountsCommand word order."
+    ],
+    "sourceAssumptions": [
+      "VSC-12 (task-daf5abdd) client senders addAccount/removeAccount/moveAccount/renameAccount/setAccountSwitchPercent return boolean, plus accountRotation, onAccountsChanged and onAccountAdded(accountId); posted to its architect as msg-a53702b5. Landed names win.",
+      "VSC-14 (task-720f81a6) creates moe-vscode/src/providers/AccountsTreeProvider.ts with account elements carrying the account id.",
+      "moe-vscode/src/services/MoeDaemonClient.ts has connectionState and onConnectionChanged today.",
+      "packages/moe-daemon/src/state/accountStore.ts serves cli: { node: process.execPath, script: <dist>/accounts/cli.js }.",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt: add sets awaitingAdd and onAccountAdded runs login; remove offers REMOVE_SIGN_OUT (CLI remove <id> --sign-out) and REMOVE_ONLY (removeAccount); rename skips an unchanged trimmed label; moveAccount offsets -1/1."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc15-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/package.json moe-vscode/src/providers/AccountsTreeProvider.ts moe-vscode/src/extension.ts moe-vscode/tests/accounts-actions.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Sign-in uses rotation.cli, the daemon's own node and accounts CLI, as JetBrains does, rather than a separately resolved bundled/daemon/index.js. When VS Code spawned the daemon, that CLI is the bundled daemon's. It always matches the serving daemon, it needs no node on PATH, and actions().signIn already gates on cli. Quoting helpers are copied, not imported, because of the closed require maps. registerCommands() keeps vscode.commands out of construction and refresh, so VSC-14's tests stay untouched. Remove offers both JetBrains choices, so the shared remove.confirm text stays truthful. AccountsTreeProvider.ts appears under newFiles in step 2 only because VSC-14 had not created it at plan time; the worker edits the landed file.",
+    "codebaseInsights": "The ManagedVmTreeProvider precedent sets context keys with setContext and uses enablement. View/item menus pass the element to the command callback. Java properties values decode `\\n` to a newline, so terminal.unavailable needs that decoding in the test. The Buffer global must be supplied to a vm.createContext harness for the base64 encoding.",
+    "risks": "VSC-12 and VSC-14 were still being planned when this plan was written. The interfaces above were posted to their architects (msg-a53702b5); follow the landed code where it differs, keeping the behaviour contract. A missing onAccountAdded would leave add without its sign-in follow-up; then comment on VSC-12 and ask the governor before inventing a protocol. extension.ts and package.json are shared files: in shared-checkout mode, do not run concurrently with rows editing them. HEAD can carry a peer's red wip checkpoint (mem:gotcha-snapshot-gate-peer-wip-checkpoint).",
+    "keyFiles": [
+      "moe-vscode/src/util/AgentLauncher.ts",
+      "moe-vscode/src/extension.ts",
+      "moe-vscode/package.json",
+      "moe-vscode/src/providers/ManagedVmTreeProvider.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "785d8063921e3b43588c832fd309ea33c755b318",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:41:10.343Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T12:10:32.579Z",
+  "reviewStartedAt": "2026-11-02T12:27:17.838Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc15-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/package.json moe-vscode/src/providers/AccountsTreeProvider.ts moe-vscode/src/extension.ts moe-vscode/tests/accounts-actions.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "(HEAD 95ab5ba8; snapshot /tmp/vsc15-gate-UYVBrj, gated files cmp-identical to the checkout) npm run lint -> eslint src --ext ts exit 0; npm run compile -> tsc -p ./ exit 0; npm test:\n✔ files.exclude is not contributed, so the Explorer still lists .worktrees (0.682005ms)\nℹ tests 550\nℹ suites 0\nℹ pass 546\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 1683.776718\nEXIT=0",
+    "reportedAt": "2026-11-02T12:27:17.838Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/accounts-actions.test.cjs",
+    "moe-vscode/src/providers/AccountsTreeProvider.ts",
+    "moe-vscode/src/extension.ts",
+    "moe-vscode/package.json",
+    ".moe/epics/epic-aabc654d.json",
+    ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json",
+    ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json",
+    ".moe/tasks/task-720f81a6917d4490ab3b5a58c2217ccb.json",
+    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
+  ],
+  "completionSummary": "The VS Code Accounts view now has JetBrains' account actions: add (then sign-in of the new account on ACCOUNT_ADDED), sign in, remove (modal: Sign out and remove via the CLI / Remove only), move up/down, rename and set the switch percent.\n- AccountsTreeProvider.ts (+207/-3): accountsCommandLine runs `<node> <cli.js> --accounts-file <file> <args>` with every word quoted (bash single quotes; Windows `& '...'` in -EncodedCommand). Every C0 control and DEL is refused, because sendText types keys such as Ctrl-U into the shell's line editor.\n- The terminal uses the bundle's tab name. A createTerminal failure copies the line to the clipboard and shows the bundle warning.\n- Every handler re-checks actions() before and after its dialog. A false sender result shows the not-connected warning.\n- Enablement: setContext moe.accounts.canAdd/canSwitchAt, plus row contextValue 'moe.account' with tokens canSignIn/canRename/canMoveUp/canMoveDown/canRemove, active once registerCommands() runs. VSC-14's accounts-view.test.cjs is unedited.\n- package.json (+27/-2): 7 commands, view/title, view/item/context and commandPalette entries. extension.ts: +1 line.\n- NEW tests/accounts-actions.test.cjs (359 lines, 14 tests).\nEvidence:\n- RED at HEAD; mutants 44/44 killed.\n- The planned canMoveUp mutant fails K2 on C04, C06, C11 and C13, among others.\n- checkRef verbatim at 95ab5ba8: EXIT=0, 550 tests / 546 pass / 4 skip / 0 fail; lint 0, compile 0.\n- No MoeDaemonClient.ts, AccountPresentation.ts, moe-jetbrains or corpus change (sha256 e08b58c8...).\nSIZE: 589 net (runtime 230, test 359), over the 400 cap. Pre-emptive EPIC waiver prop-8f3527c671aa4070801a0cc13383b818 is PENDING at submit time; fallback slices are runtime 230 and test 359.\nDeviations: handlers are private and reached via the registered commands; onAccountAdded is subscribed in registerCommands() because VSC-14's fake has no such member.\nKnown divergence, inherited from VSC-14: no rows while disconnected, so C09's CLI-only Sign in is u",
+  "commits": [
+    {
+      "sha": "5e97282073afe34ef673878683b74b67d6ec79de",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T12:09:51Z",
+      "paths": [
+        ".moe/epics/epic-aabc654d.json",
+        ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json",
+        ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json",
+        ".moe/tasks/task-720f81a6917d4490ab3b5a58c2217ccb.json",
+        "moe-vscode/package.json",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/tests/accounts-actions.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T12:27:45.846Z",
+      "treeId": "12dea3b313f2e63437bba9be980cd7489fd0492b",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "9a3e367d33316e4f2da41d5a87b157306e9686aa",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T12:27:47Z",
+      "paths": [
+        ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T12:32:02.563Z",
+      "treeId": "41ddb96b7d6eaa233eeb9045f4d3467b552cc53c",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "c81c2ddd79a3601c494144b8e2210836ced0f3d1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T14:18:10Z",
+      "paths": [
+        ".moe/epics/epic-aabc654d.json",
+        ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json",
+        ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T14:21:46.812Z",
+      "treeId": "70ef6672a2467ea8d6df4dfdb0bf4003f949c746",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "moe-vscode/src/providers/AccountsTreeProvider.ts",
+          "taskId": "task-2f4b224f9afe47b4a5e382d5da7bb16c"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/accounts-actions.test.cjs",
+    "moe-vscode/src/providers/AccountsTreeProvider.ts",
+    "moe-vscode/src/extension.ts",
+    "moe-vscode/package.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-564d8bce@2026-11-02T14:18:10Z",
+    "at": "2026-11-02T14:21:46.812Z"
+  },
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Verdict-less park on a PENDING size waiver (governor-e6b40560 12:28Z, item 3). VSC-15 substance is GREEN; the only open item is the 400-line cap. Completion 5e972820 is pushed and on moe/work-2026-10-24. moe-vscode numstat is +594/-5 = 589 net: AccountsTreeProvider.ts 207/3, package.json 27/2, extension.ts 1/0, tests/accounts-actions.test.cjs 359/0. That matches the waiver text exactly. Waiver prop-8f3527c671aa4070801a0cc13383b818 (EPIC ADD_RAIL) was still PENDING, and no epic rail covers VSC-15, so I gave no approval and no size-reject.\nQA evidence:\n(1) Gate: git archive of 5e97282 into /tmp/vsc15-qa-5tvGRK, then in moe-vscode under env -i, node v24.21.0: npm ci OK, lint 0, compile 0. npm test: 550 tests / 546 pass / 4 skip / 0 fail.\n(2) My own 14 mutants were 14/14 killed: add without isValidLabel, rename unchanged, bash double quotes, remove on dismiss, foreign ACCOUNT_ADDED, 7.5%, canRemove, canSwitchAt from add, a swapped move offset, no not-connected warning, setContext and tokens before register, no control-character check, and remove without the post-dialog check.\n(3) DoD 1-5 are each mapped to tests A1-A8, K1-K3, Q1, P2 and S1. K2 covers all 15 corpus rows.\n(4) MoeDaemonClient.ts, AccountPresentation.ts, moe-jetbrains/**, the corpus and accounts-view.test.cjs are unchanged. No forbidden patterns. extension.ts calls registerCommands() at activation.\nOn resume: confirm the rail's numbers against the numstat above, then qa_approve. Details are in Serena memory task-task-357ed3ae786b4477a39840a7b86a88a6-qa-handoff.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-02T14:21:11.218Z",
+  "reviewCompletedAt": "2026-11-02T14:21:11.218Z",
+  "reviewSummary": "APPROVED under the epic rail \"VSC-15 size exception\" (prop-8f3527c6, APPROVED). SIZE: 589 net, over the 400 cap and waived.\n\nCompletion: 5e97282 on moe/work-2026-10-24, pushed (branch --contains). numstat 5e97282^..5e97282 for moe-vscode: AccountsTreeProvider.ts 207/3, package.json 27/2, extension.ts 1/0, accounts-actions.test.cjs 359/0, so +594/-5 = 589. That matches the rail's numbers and files exactly.\n\nOwned paths: no commit since 5e97282, and HEAD's blobs equal 5e97282's. The checkout's AccountsTreeProvider.ts carries task-2f4b224f's uncommitted psQuote curly-quote edit, which is not a VSC-15 byte (comment-c91ca56e).\n\nGate: checkRef verbatim at HEAD 66fa1aa3 (env -i, node v24.21.0): npm ci, lint and compile all 0; npm test 554 tests, 550 pass, 4 skip, 0 fail. The overlay picked up the peer's live edit, so I restored the file from 5e97282 (all 4 cmp-identical) and re-ran: lint 0, compile 0, test 554/550/4/0. The accounts-* suites: 37/37.\n\nDoD (round 1 had 14/14 QA mutants killed; spot-checked again):\n1. A1-A8: each action sends once after input, zero times on cancel, invalid, unchanged or dismiss.\n2. K2: all 15 corpus rows.\n3. A2 and Q1: one terminal with `--accounts-file <f> login <id>`; bash and PowerShell quoting proven; C0 and DEL refused.\n4. P2: 7 commands. add and setSwitchPercent are in view/title, gated on canAdd/canSwitchAt; 5 are in view/item/context with `viewItem =~ \\bcanX\\b`; all are scoped to moe.accounts and hidden from the palette.\n5. The gate.\n\nInvariants: MoeDaemonClient, AccountPresentation, moe-jetbrains, the corpus and accounts-view.test are unchanged. No forbidden patterns.\n\nNotes: C09 shows no rows while disconnected (inherited from VSC-14). A WSL default terminal on Windows may not resolve `powershell`, as with AgentLauncher.",
+  "requiredCheckAtDone": null
+}

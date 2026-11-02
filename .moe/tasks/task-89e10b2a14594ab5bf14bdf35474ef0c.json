@@ -1,0 +1,223 @@
+{
+  "id": "task-89e10b2a14594ab5bf14bdf35474ef0c",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: source-export accepts a bare or in-repository git binary",
+  "description": "scripts/local-runner/source-export.mjs (R09b exportSourceSnapshot, openCommit/openRepository) accepts `git: 'git'` and an absolute git inside repoDir. On Windows, a bare 'git' resolves against the repository cwd (task-d72fe292), so repository code can run during export. admission.mjs (CQ-R12, task-44a9e97b) already refuses both before any spawn (see admitCandidate and row A1); export should apply the same guard. Evidence: export with git:'git' and cwd=repoDir runs.",
+  "definitionOfDone": [
+    "exportSourceSnapshot refuses a non-absolute git, and an absolute git whose realpath is inside repoDir, with a fixed EXPORT_* code before any process spawns",
+    "A row in scripts/tests/local-runner-snapshot.test.mjs covers the bare, relative and in-repo git cases",
+    "Fresh `node --test scripts/tests/local-runner-snapshot.test.mjs` exits 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nIn scripts/tests/local-runner-snapshot.test.mjs, add row E9 after E8: 'E9 a bare, relative or in-repository git is refused before any process spawns, and an omitted git comes only from a fully qualified PATH entry outside the repository'. Grep `test('E9` first.\nReuse repo(), tempDir(), put(), exportAt() and failsWith(). Add `delimiter` and `symlinkSync`/`spawnSync` to the existing imports if needed.\n\nThe global forbidden patterns apply to test strings too, so never write an eval call.\n\nSetup:\n- { dir, head } = repo(t, { a: 'a' }).\n- marker = join(tempDir(t, 'moe-ran-'), 'ran').\n- The planted git is named 'git.exe' on win32 and 'git' elsewhere. On win32 it is an EMPTY file, which is never executed. On POSIX it is the mode-0755 script '#!/bin/sh\\ntouch <marker>\\nexit 1\\n'. It must not exec a real git: '.' on PATH would make it call itself.\n- Plant it at <dir>/<name>, at <dir>/bin/<name> and at <dir>/tools/<name>.\n\n(a) Explicit refusals, on every OS, each failsWith EXPORT_INPUT_INVALID:\n- git 'git', 'git.exe', './git', 'bin/git', '..\\\\git', '\\\\git.exe' (root-relative on win32) and 'C:git.exe' (drive-relative);\n- the absolute join(dir, 'tools', name);\n- an absolute git that does not exist, join(tempDir(t, 'moe-nogit-'), name).\nThe old code reported EXPORT_GIT_FAILED for the last one, after a spawn.\n\n(b) PATH cases. Save process.env.PATH and register a t.after restore BEFORE mutating it; t.after runs FIFO.\n1. PATH = `.${delimiter}${delimiter}${saved}`: a relative entry and an empty entry first.\n   - exportAt(dir, head, { git: 'git' }) gives EXPORT_INPUT_INVALID.\n   - exportAt(dir, head), with git omitted, RESOLVES: its base entries are ['a'], because the resolver skipped both entries and used the real absolute git.\n2. PATH = `${join(dir, 'bin')}${delimiter}${saved}`: exportAt(dir, head) with git omitted gives EXPORT_INPUT_INVALID, because the first git on PATH lies inside the repository.\n\n(c) POSIX only, guarded `if (!win32)`:\n- A symlink outside the repository, join(tempDir(t, 'moe-link-'), 'git'), pointing to <dir>/tools/git, passed as git, gives EXPORT_INPUT_INVALID.\n- After every case, existsSync(marker) === false.\n- Positive control: spawnSync(join(dir, 'git')) creates the marker, so its absence above is not vacuous.\n\nRun the file. E9 must fail against today's code: (a) resolves or reports EXPORT_GIT_FAILED, and (b1) runs ./git. Every other row is unchanged and still passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "note": "Added row E9 (+ delimiter/spawnSync imports). RED verified: 22 pass, E9 fails 'git' resolved instead of EXPORT_INPUT_INVALID. Shared checkout has many peer-dirty paths; touched only the snapshot test file.",
+      "startedAt": "2026-10-29T23:25:19.848Z",
+      "completedAt": "2026-10-29T23:26:24.867Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/local-runner/source-export.mjs: apply CQ-R12 admission's git guard to the export, before any spawn.\n\n1. readInput:\n   - Drop the `git = 'git'` default.\n   - Accept git when it is undefined, or when text(git) holds and fullyQualified(git) holds. Anything else is EXPORT_INPUT_INVALID, as today.\n   - fullyQualified(p): on win32, the daemon's FULLY_QUALIFIED rule (packages/moe-daemon/src/util/gitExecutable.ts): /^(?:[A-Za-z]:[\\\\/]|[\\\\/]{2}[^\\\\/])/, a drive-absolute or UNC path. Elsewhere, path.isAbsolute(p).\n2. New async helper pathGit(). It returns the first regular file named git.com then git.exe (win32), or git (elsewhere), in a fully qualified PATH entry, in PATH order:\n   - Split process.env.PATH ?? '' on path.delimiter.\n   - On win32 only, trim each entry and strip one pair of surrounding quotes, as the daemon does.\n   - Skip empty, relative, drive-relative and root-relative entries.\n   - On POSIX the file must also pass access(X_OK).\n   - Return null on a miss, and never fall back to a bare name.\n   - It only stats; it never spawns.\n3. New exported async helper exportGit(repoDir, git):\n   - candidate = git ?? await pathGit(). null is EXPORT_GIT_FAILED: no git, which is what a spawn ENOENT gave before.\n   - binary = realpath(candidate). A failure is EXPORT_INPUT_INVALID.\n   - root = realpath(repoDir), or null when that fails. openRepository then reports EXPORT_REPOSITORY_UNSUPPORTED as today, which keeps E7's codes.\n   - Compare with the module's pathKey, which case-folds on win32 and darwin: below = path.relative(pathKey(root), pathKey(binary)). The binary is outside when root is null, below === '..', below starts with '..' + path.sep, or path.isAbsolute(below).\n   - Inside the repository is EXPORT_INPUT_INVALID.\n   - Return binary, the realpath with its case NOT folded. Running the resolved file closes a symlink re-pointed between the check and the spawn.\n4. exportSourceSnapshot: right after readInput, options.git = await exportGit(options.repoDir, options.git), then openCommit(options). No process is spawned before this guard.\n5. Header comment: git is absolute, or omitted and resolved by the rule above, and its realpath lies outside the repository. Windows libuv searches the spawn cwd for a bare name (task-d72fe292), so a bare or in-repository git would run repository code as the controller. This mirrors admission.mjs admitCandidate.\n\nadmission.mjs is NOT changed. It keeps its own guard, and openRepository and gitRunner are untouched.\n\nError handling: every refusal stays a fixed EXPORT_* code with fixed text, re-minted by fixedError. The helpers only stat and realpath, and never echo a path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/source-export.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/source-export.mjs"
+      ],
+      "note": "Added fullyQualified, pathGit, exported exportGit; readInput drops the 'git' default; exportSourceSnapshot runs exportGit before openCommit. Snapshot suite 23/23 green (E9 red->green). admission.mjs/openRepository/gitRunner untouched.",
+      "startedAt": "2026-10-29T23:26:26.149Z",
+      "completedAt": "2026-10-29T23:27:06.777Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, after green. Set E='env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin'.\n\n1. The DoD gate: $E node --test scripts/tests/local-runner-snapshot.test.mjs. It must exit 0, with E9 run and not skipped, and every S and E row still passing. Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. Other callers that omit git, which now take the default path:\n   - $E node --test --test-name-pattern='^X7 ' scripts/tests/local-runner.test.mjs must exit 0. Its X7 calls exportSourceSnapshot with no git.\n   - The four daemon test files that load source-export.mjs with no git: src/context/negativeSearch.test.ts, snapshotSource.test.ts, snapshotManifest.test.ts and sourceCache.test.ts. Run them with vitest in a Linux git-archive snapshot that has this task's source-export.mjs copied in, following Serena memory gotcha-linux-vitest-reuse-native-node-modules. Never npm install in the shared checkout. They must pass.\n3. Best effort, reported honestly: run the snapshot test under Windows Node from a git-archive copy in the Windows %TEMP%, via cmd.exe /d /c \"cd /d <copy> && node --test scripts\\tests\\local-runner-snapshot.test.mjs\". E9's (a) and (b) run there and (c) is skipped. Say so if it could not run.\n4. `git diff --check` is clean on both files, and a read-only `git status --short` shows this task changed only those two. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix failures in code. Never weaken an S, E, X or daemon row.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verified fresh: snapshot suite 23/23 (E9 ran); X7 passes; four daemon context tests 244/244 in Linux git-archive snapshot (reused /tmp/moe-c06a-gate.mfxita native node_modules; package.json/lock equal HEAD) with this task's source-export.mjs copied in; Windows Node via cmd.exe from a git-archive copy in %TEMP%: 22 pass, 1 skip (E6 POSIX-only by design), E9 (a)/(b) ran, (c) skipped. git diff --check clean. No other path touched by this task; peers' dirty paths left alone.",
+      "startedAt": "2026-10-29T23:27:08.964Z",
+      "completedAt": "2026-10-29T23:27:47.903Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review and read the diff as an attacker:\n- Is there ANY path from exportSourceSnapshot to execFile with a git that is not fully qualified, or whose realpath is inside the repository? Check the default path, an explicit path, a symlink, a case variant on win32 or darwin, a UNC path, and a drive-relative path.\n- Can PATH inject the repository? Consider a '.', empty, relative or quoted entry, an entry inside the repository, and node_modules/.bin.\n- Is the binary that was checked the binary that runs, or can a symlink be re-pointed in between? Is the case-folded key used only for the comparison?\n- Do E7's EXPORT_REPOSITORY_UNSUPPORTED cases and E2's EXPORT_INPUT_INVALID cases keep their codes?\n- Do the callers that omit git still work on Linux, macOS and Windows CI? Think of /usr/bin/git, Homebrew and Git for Windows' cmd\\git.exe.\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 3's commands fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "note": "Adversarial review. Path to execFile: exportSourceSnapshot -> readInput (git undefined or fully qualified) -> exportGit (realpath, absolute, outside repo, case-fold only in the comparison) -> openCommit; the realpath is what runs, so a re-pointed symlink cannot swap the binary. A win32 UNC, \\\\?\\ or case variant resolves to the same realpath as root and is refused inside; drive-/root-relative refused by readInput. PATH: '.', empty, relative, quoted entries skipped/stripped; an in-repo entry holding git is refused (fail closed); never a bare-name fallback. E7 (root unreadable falls through to REPOSITORY_UNSUPPORTED) and E2 codes unchanged. Finding fixed: E9's planted git sat only in the repo, so a relative git or relative PATH entry was refused by the realpath failure rather than the fullyQualified rule; added a planted git in a chdir'd cwd outside the repo. Mutation probes (scratch copy): 6/6 killed (drop in-repo check, keep relative PATH entries, drop fullyQualified, bare-name fallback, realpath-failure passthrough, guard removed); unmutated green. Residual (theoretical, same as admission.mjs): repoDir is realpath'd twice (exportGit, openRepository), so a concurrent re-point of repoDir's own path between them is not closed. Final fresh: snapshot suite 23/23 exit 0; X7 pass; daemon context tests 244/244 earlier on identical source-export bytes; Windows Node 22 pass/1 skip (E6).",
+      "startedAt": "2026-10-29T23:27:49.800Z",
+      "completedAt": "2026-10-29T23:29:11.889Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-44a9e97be68a4166822b64416cea7ab5"
+  ],
+  "priority": "HIGH",
+  "order": 260.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T17:33:41.147Z",
+  "updatedAt": "2026-10-29T23:41:15.465Z",
+  "contextFetchedBy": [
+    "worker-b5749787",
+    "qa-952969be",
+    "architect-4ae016fb",
+    "worker-5ebbf433"
+  ],
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-29T17:59:53.410Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-29T23:20:00.150Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T23:40:47.025Z",
+    "wallClockMs": 1246875
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T23:24:31.718Z",
+  "executionContract": {
+    "intendedBehavior": "exportSourceSnapshot never spawns a git that is not fully qualified, or whose realpath lies inside repoDir. An explicit bare, relative, root-relative, drive-relative, missing or in-repository git is refused with EXPORT_INPUT_INVALID before any process runs. An omitted git resolves to the first git in a fully qualified PATH entry and is held to the same outside-the-repository rule, so existing callers keep working.",
+    "acceptanceCriteria": [
+      "E9 refuses every case and proves that no planted git ran.",
+      "Callers that omit git (the E rows, X7 and the four daemon context tests) still pass."
+    ],
+    "invariants": [
+      "No spawn happens before the git guard.",
+      "Errors are fixed EXPORT_* text only.",
+      "admission.mjs, openRepository and gitRunner are unchanged."
+    ],
+    "compatibility": [
+      "Omitting git still works.",
+      "An explicit absolute git outside the repository, such as the wrapGit logger, still works.",
+      "E2 and E7 keep their codes."
+    ],
+    "approvedScope": [
+      "source-export.mjs: readInput, pathGit, the exported exportGit, the exportSourceSnapshot wiring, and the header comment",
+      "Row E9 in scripts/tests/local-runner-snapshot.test.mjs"
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner-snapshot.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected alternatives:\n- Making git required with no default. Five callers omit git: the snapshot E rows through exportAt, local-runner.test.mjs X7, and four daemon context tests. They would all break, and the four daemon test files would widen the task into a daemon change.\n- A safe absolute default, resolved like the daemon's resolveGitExecutable, which keeps every caller working. Note that the daemon's version returns the bare 'git' on POSIX; here POSIX also resolves to an absolute path, which skips '.' and empty PATH entries that execvp would honor.\n- Moving the guard into openRepository, shared with admission. It would change landed CQ-R12 bytes and admission's error codes; admission keeps its own guard.\n- Refactoring admission.mjs to use exportGit. Out of scope, and it would pull the A rows into the gate.",
+    "codebaseInsights": "admission.mjs readInput requires git and path.isAbsolute. admitCandidate then realpaths repoDir and git (foldCase on darwin, with path.win32.relative folding on Windows), and refuses a binary that is null or not outside the repository with ADMISSION_INPUT_INVALID.\n\nsource-export.mjs:\n- pathKey already lowercases on win32 and darwin.\n- readInput currently defaults git to 'git'.\n- gitRunner calls execFile(git, ..., {cwd: root}); a bare name is looked up through PATH, or the cwd on Windows.\n- fixedError re-mints refusals.\n\nThe snapshot test file:\n- defines win32, fixtureEnv (captured at load, so a later PATH change does not affect the git() helper), and wrapGit (POSIX logging wrapper);\n- E2 already refuses git '' / 'g\\nit' / 7;\n- E7's nonRoots are temp dirs plus a missing path, all expecting EXPORT_REPOSITORY_UNSUPPORTED.",
+    "risks": "- A planted POSIX git must NOT exec git, or it recurses through '.' on PATH.\n- Restore PATH through t.after, registered before mutating it.\n- On win32, the planted files are empty and are never executed: an empty git.exe that a buggy resolver picks fails as GIT_FAILED or INPUT_INVALID, never as a success.\n- realpath(repoDir) failing must not turn into EXPORT_INPUT_INVALID, which would break E7.\n- Never run the case-folded path, because case-sensitive APFS volumes exist.\n- The daemon vitest files need the Linux node_modules snapshot recipe, since the shared checkout's node_modules are Windows builds.",
+    "keyFiles": [
+      "scripts/local-runner/source-export.mjs",
+      "scripts/local-runner/admission.mjs",
+      "packages/moe-daemon/src/util/gitExecutable.ts",
+      "scripts/tests/local-runner-snapshot.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T23:24:31.821Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T23:25:19.848Z",
+  "reviewStartedAt": "2026-10-29T23:29:31.905Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner-snapshot.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ E7 Git runs in the read-only envelope: no replace objects, no inherited GIT_* state, toplevel repositories only (146ms)\n✔ E8 an export writes nothing to the repository and runs no fsmonitor hook (51ms)\n✔ E9 a bare, relative or in-repository git is refused before any process spawns, and an omitted git comes only from a fully qualified PATH entry outside the repository (43ms)\nℹ tests 23\nℹ suites 0\nℹ pass 23\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1709",
+    "reportedAt": "2026-10-29T23:29:31.905Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-snapshot.test.mjs",
+    "scripts/local-runner/source-export.mjs",
+    ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+    ".moe/tasks/task-e40ad69f14194e2c89b43727588c2b25.json"
+  ],
+  "completionSummary": "exportSourceSnapshot now refuses a bare, relative, root-/drive-relative, missing or in-repository git with EXPORT_INPUT_INVALID before any process spawns, and an omitted git resolves only to the first git in a fully qualified PATH entry (EXPORT_GIT_FAILED if none).\n\nsource-export.mjs (+38/-3): readInput drops the 'git' default and requires an omitted or fully qualified git (win32: drive-absolute or UNC, as the daemon's gitExecutable; else path.isAbsolute). New pathGit stats only, skipping empty/relative entries, with no bare-name fallback. New exported exportGit realpaths the git (not case-folded) and refuses one inside realpath(repoDir) (pathKey-folded compare). It returns the realpath, so the checked file is the one that runs. An unreadable repoDir still falls through to EXPORT_REPOSITORY_UNSUPPORTED (E7 unchanged). admission.mjs, openRepository and gitRunner are untouched.\\n\\nTests: new row E9 (+39 lines) covers bare/relative/root-relative/drive-relative/in-repo/missing/symlink-into-repo git and the PATH cases ('.' and empty entries skipped, repo-bin first refused, PATH='.' gives GIT_GIT_FAILED), with planted marker gits in the repo and in the chdir'd cwd and a positive control. RED first (bare git resolved), then green.\\n\\nEvidence: snapshot suite 23/23, exit 0. X7 passes. The four daemon context tests that omit git pass 244/244 in a Linux git-archive snapshot with this source-export.mjs. Windows Node via cmd.exe: 22 pass, 1 skip (E6, POSIX-only). Mutation probes: 6/6 killed (drop in-repo check, keep relative PATH entries, drop fullyQualified, bare-name fallback, realpath-failure passthrough, guard removed).\\n\\nResidual (theoretical, same as admission.mjs): repoDir is realpath'd twice (exportGit then openRepository), so a concurrent re-point of repoDir's own path between them is not closed.",
+  "commits": [
+    {
+      "sha": "9b5897b9b5b447d6ac96412aad25fd85a36ceacc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T23:24:51Z",
+      "paths": [
+        ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+        ".moe/tasks/task-e40ad69f14194e2c89b43727588c2b25.json",
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T23:30:12.285Z",
+      "treeId": "38c723efe2a1ff264a653731a229d53432080f4a",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ddce8a323fceb6bed01eb5f03f522a2a30cab7e6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T23:39:26Z",
+      "paths": [
+        ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+        ".moe/tasks/task-e40ad69f14194e2c89b43727588c2b25.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T23:41:15.465Z",
+      "treeId": "e7134921a1d62fbc2edfd5e4a8693cc7126dc6a2",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-snapshot.test.mjs",
+    "scripts/local-runner/source-export.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T23:39:26Z",
+    "at": "2026-10-29T23:41:15.465Z"
+  },
+  "completedAt": "2026-10-29T23:40:47.025Z",
+  "reviewCompletedAt": "2026-10-29T23:40:47.025Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 9b5897b9 (on moe/work-2026-10-24): source-export.mjs +35/-3, snapshot test +42/-2, far under 400; diff --check clean. Re-ran DoD gate fresh: `env -i ... node --test scripts/tests/local-runner-snapshot.test.mjs` exit 0, 23/23, E9 ran, S/E rows unchanged. Also X7 + admission A1-A6 in local-runner.test.mjs 7/7 (admission.mjs untouched), and the four daemon context tests that omit git (negativeSearch, snapshotSource, snapshotManifest, sourceCache) in a fresh Linux git-archive snapshot: 244/244. DoD: (1) readInput drops the 'git' default, allows only undefined or fully-qualified git; exportGit realpaths the binary, refuses one inside realpath(repoDir) with EXPORT_INPUT_INVALID, runs before openCommit so nothing spawns earlier; omitted git resolves via stat-only pathGit (skips empty/relative entries, no bare-name fallback; none -> EXPORT_GIT_FAILED); the realpath that was checked is what runs. (2) E9 covers bare, relative, root/drive-relative, missing, in-repo and symlink-into-repo git plus PATH cases, with planted marker gits in repo and in a chdir'd outside cwd, and a positive control. (3) Gate green. My mutation probes on a scratch copy: dropping the in-repo check and dropping fullyQualified in readInput each make E9 fail. E2/E7 codes unchanged. Notes: worker's summary typo 'GIT_GIT_FAILED' should read EXPORT_GIT_FAILED (code/test correct). Not reproduced: Windows-native node (worker reported 22 pass/1 skip). Residual, theoretical, same as admission.mjs: repoDir is realpath'd twice (exportGit, openRepository), so a concurrent re-point of repoDir itself between them is not closed; out of approved scope.",
+  "requiredCheckAtDone": null
+}

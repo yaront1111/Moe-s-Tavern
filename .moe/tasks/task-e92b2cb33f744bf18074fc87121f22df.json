@@ -1,0 +1,315 @@
+{
+  "id": "task-e92b2cb33f744bf18074fc87121f22df",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "test: cover the wrapper self-restart hand-over in both postflight harnesses",
+  "description": "FOLLOW-UP to df42861 (governor fix, 2026-09-18). The wrapper self-restart — the top-of-loop check that relaunches when the wrapper's own bytes change on disk — has NO harness or parity coverage in either twin. `grep -n 'source changed on disk' scripts/tests/*` returns nothing today.\n\nThat gap let a real defect live: the ps1 path relaunched via `Start-Process`, which gave the new wrapper its own console window and left the launching terminal at a prompt. Operators read that as a dead seat and relaunched the same worker id, so two wrapper loops shared one seat and two CLIs reviewed task-49ec8755 at the same time (2026-09-18, qa-a36819c3 and worker-d0c3b06e). df42861 hands over with the call operator instead, past the outer finally, and deregisters with reason `wrapper_restart` first, matching the sh twin's `exec`.\n\nWHY IT IS A SEPARATE CARD: scripts/tests/postflight.{sh,ps1} were held by task-e47284ef when the fix landed, and task-32ecce5d has the same files next. Adding the case then would have been swept into another task's commit.\n\nWHAT TO ASSERT (daemon-free, in the existing fake-proxy harness): with the wrapper copy's bytes changed between iterations, the run must show exactly one `deregister_worker` RPC carrying reason `wrapper_restart`, then a fresh registration from the relaunched wrapper, and exactly one restart per on-disk change (the relaunched process re-reads the hash and must not thrash). The engine difference is the hand-over mechanism itself, so assert what both twins share — the RPC sequence — rather than pids. On ps1 the relaunch is a child of the wrapper and inherits its console; on sh `exec` replaces the process, so the pid is unchanged.\n\nSUGGESTED PROOF (the worker decides): revert the call operator to `Start-Process` in a scratch copy and show the case turns red, the same way the other harness mutations are proven.",
+  "definitionOfDone": [
+    "Both scripts/tests/postflight.sh and scripts/tests/postflight.ps1 gain a self-restart case: change the wrapper copy's bytes between iterations and assert one deregister_worker with reason 'wrapper_restart', a fresh registration afterwards, and exactly one restart per on-disk change.",
+    "The case is proven RED on a scratch copy that restores the pre-df42861 behaviour (Start-Process relaunch, deregister reason terminal_closed).",
+    "MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh and the ps1 twin both pass on a quiet box, and parity-check.sh and parity-check.ps1 stay green.",
+    "Any new banner or reason literal is registered in both parity checkers' fixed lists."
+  ],
+  "taskRails": [
+    "Harness-only change; scripts/moe-agent.ps1 and scripts/moe-agent.sh stay as df42861 left them unless the case proves them wrong.",
+    "Add no new divergence to the fake-proxy JavaScript of either harness twin. The twins already differ at HEAD (measured 2026-10-25); reconciling them belongs to task-7c2872e7052646b7a521cb7a8f01c546."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RE-CONFIRM IN PLACE (read-only, no edit).\n\nDoD artifacts (1)-(4) are already in HEAD via the integration squash 5e74fb8:\n- the postflight.sh '[hot reload]' case;\n- moe-agent.sh's MOE_WRAPPER_ARGV capture above '# Parse arguments';\n- task-84150869's postflight.ps1 'Hot reload keeps ONE wrapper process' arm;\n- both parity 'hot reload' groups.\nworker-9cda703c verified all four by anchor at b35d46c (comment-471ef5a7). Reuse that work: do not re-read the files. Prove there has been no drift since:\n`git diff --quiet b35d46c HEAD -- scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/parity-check.sh scripts/tests/parity-check.ps1` must exit 0. It does at 3e2dbda, where only scripts/local-runner/* changed. If it exits 1, re-run that comment's grep anchors against `git show HEAD:<path>` and cite the results.\n\nFAKE-PROXY RAIL (resolution of the rev-8 stop). The task rail 'Keep both harness twins byte-identical in the shared fake-proxy JavaScript' rests on a false premise: the twins already differ at HEAD and at 5e74fb8 (mem gotcha-postflight-fake-proxy-twins-diverged). Accordingly:\n- MODIFY_RAIL proposal prop-0da6d575 is pending with the human; reconciling the twins is LOW BACKLOG row task-7c2872e7052646b7a521cb7a8f01c546.\n- Read the rail as constraining this task's own edits. This plan has none, so it is satisfied by construction. Do NOT request_replan over it.\n- Evidence of 'no new divergence': extract both bodies from `git show HEAD:<path>` with the memory's recipe and record their SHA-256. Compare them with b35d46c's (sh 7c3afb75db6cb47069e9897b1254c9fa5c7ea71deac095c835f4acd4801955ba, ps1 caf7a0b096d1c801f0800327bc77a2666afb5e7ba9b2b1682b76ce38a9adc304). If the hashes differ, name the commit that changed them; this task changed nothing. Remove the extracts afterwards.\n\nNote each artifact as 'NO EDIT MADE: outcome already present from 5e74fb8, verified' (mem pattern-verify-a-stale-task-instead-of-redoing-it).\nIf an artifact is missing, STOP and call moe.request_replan with the evidence. Never edit harness or wrapper files under this plan.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "NO EDIT MADE: outcome already present from 5e74fb8, verified. HEAD=3bb12fc5952f190610d198c897cbb7c41e1fd358. `git diff --quiet b35d46c HEAD` over the six harness/wrapper/parity paths exits 0, so artifacts (1)-(4) verified at b35d46c (comment-471ef5a7) have not drifted. Fake-proxy rail: bodies extracted from `git show <rev>:<path>` (BOM/CRLF-normalized, same final newline) at HEAD are sh 7c3afb75db6cb47069e9897b1254c9fa5c7ea71deac095c835f4acd4801955ba (32746 B) and ps1 caf7a0b096d1c801f0800327bc77a2666afb5e7ba9b2b1682b76ce38a9adc304 (31418 B). Both are identical to the b35d46c hashes, so there is no new divergence. The twins still differ from each other, as already known (mem gotcha-postflight-fake-proxy-twins-diverged). This task changed nothing. prop-0da6d575 (MODIFY_RAIL) is pending with the human, and reconciliation is task-7c2872e7052646b7a521cb7a8f01c546. Extract scratch removed. Dirty note: scripts/tests/postflight.sh is dirty with a peer's work (5f3960df), untouched by me.",
+      "startedAt": "2026-10-25T08:47:04.430Z",
+      "completedAt": "2026-10-25T08:47:35.293Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "RED PROOFS (DoD 2). Work only in scratch copies of a HEAD snapshot (`git archive HEAD scripts | tar -x -C <dir>`), never the shared checkout. The live postflight.sh is dirty with a peer's work and must not be used.\n- ps1 copies need a Windows-drive scratch dir: /mnt/d/moe-scratch/<unique>/.\n- sh copies go on the native filesystem.\n\n(a) ps1, literally pre-df42861. Read `git show df42861 -- scripts/moe-agent.ps1` and restore its pre-change hand-over in the COPIED moe-agent.ps1. That means replacing today's restart hand-over (task-84150869's in-process supervisor rerun with Invoke-MoeDeregister -Reason 'wrapper_restart') with the old Start-Process relaunch and the default 'terminal_closed' deregister.\nRun the copied postflight.ps1 from WSL on BOTH engines; both resolve here:\n- PS 5.1: powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\<unique>\\scripts\\tests\\postflight.ps1'\n- pwsh 7: pwsh.exe with the same arguments.\nFor both, use a /mnt/d cwd, env -u for every MOE_* and CLAUDE_* variable, MOE_POSTFLIGHT_TIMEOUT_SEC=180, and `| tr -d '\\0'` (mem gotcha-qa-ps1-postflight-from-wsl). Each run must FAIL at the hot-reload arm with 'HOT RELOAD FAILED' naming an 'x' in the RPC sequence. Record each engine's $PSVersionTable.PSVersion.\n\n(b) sh, using the subset harness built by anchors (mem gotcha-shared-tree-long-harness-needs-snapshot: source up to FROZEN_SUITE=..., resumed after the MOE_FROZEN_TEST_ONLY exit line). Make three mutants of the copied moe-agent.sh:\n- ARGV: move the MOE_WRAPPER_ARGV capture back below the option parser. Expect 'the wrapper exited' with sequence 'cr' after 'Provide --project or --project-name'.\n- S1: deregister the restart with reason terminal_closed. Expect 'cx'.\n- S2: make the launch hash never match, for example hash /dev/null. Expect a restart with no edit, 'r'.\nEach mutant must FAIL with its expected 'HOT RELOAD FAILED' line, and the unmutated copy must PASS.\n\n(c) Parity bite: rename wrapper_restart in the copied moe-agent.sh only. Run from that scratch root, parity-check.sh and parity-check.ps1 (PS 5.1) must both FAIL and name it.\n\nPaste every failure line. If any proof stays GREEN, STOP and request_replan with the evidence.\nError handling: every wait is bounded, and every scratch dir is unique and removed afterwards.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "NO EDIT MADE; every proof ran in scratch copies of `git archive HEAD scripts` (HEAD 3bb12fc). Scratch roots removed afterwards, live tree untouched (the six step-1 paths show only the peer's pre-existing ` M scripts/tests/postflight.sh`). RED PROOFS, all with failure lines naming the defect:\n(a) ps1, pre-df42861 hand-over restored in the COPIED moe-agent.ps1 (Start-Process relaunch with host exe and GetCommandLineArgs captured, no wrapper_restart deregister, so the outer finally sends the default terminal_closed). Full copied postflight.ps1 with MOE_POSTFLIGHT_TIMEOUT_SEC=180, env -u every MOE_*/CLAUDE*, /mnt/d cwd, `| tr -d '\\0'`. Both engines passed all 73 frozen scenarios and [accounts], then failed at the arm (MOE_POSTFLIGHT_FAILURE_LINE=1743, exit=1):\n - PS 5.1.26100.9711: `HOT RELOAD FAILED: no claim after reload 1 (waited up to 60s; wrapper exited: True; RPC sequence 'cx')`\n - pwsh 7.6.8: `HOT RELOAD FAILED: no claim after reload 1 (waited up to 60s; wrapper exited: True; RPC sequence 'cx')`\n (The 60s is the arm's own bound; the loop ended early because the Start-Process parent had exited, after the terminal_closed 'x'.)\n(b) sh, arm-only harness built by anchors (setup up to `FROZEN_SUITE=` plus the `# --- Hot reload:` case up to `# --- Quality gate`, generator read and syntax-checked first), run alone from a unique native-fs root with the same env scrub. Unmutated copy: PASS, `[hot reload] ok: 2 restarts, each re-registered, none without an edit`. Mutants of the copied moe-agent.sh:\n - ARGV (MOE_WRAPPER_ARGV capture moved below the option parser): `Error: Provide --project or --project-name` then `HOT RELOAD FAILED: the wrapper exited (RPC sequence 'cr')`\n - S1 (deregister reason terminal_closed): `HOT RELOAD FAILED: a deregister other than wrapper_restart (RPC sequence 'cx')`\n - S2 (current hash read from /dev/null, so it never matches): `HOT RELOAD FAILED: a restart with no edit behind it (RPC sequence 'r')`\n(c) Parity bite: wrapper_restart renamed in the copied moe-agent.sh only. parity-check.sh exit 1: `PARITY FAIL: hot reload 'wrapper_restart' missing from: moe-agent.sh`. parity-check.ps1 exit 1 on PS 5.1.26100.9711 AND pwsh 7.6.8: `[hot reload] 'wrapper_restart' is missing from moe-agent.sh`.\nDeviation, stated plainly: for the sh mutants I used an arm-only harness (setup plus the [hot reload] case), not the plan's wider subset that also runs the main/resume/heartbeat/gate/scope scenarios after the frozen suite (about 20 min per run). The mutations touch only the restart path, and step 3 runs the entire unmutated postflight.sh from a fresh snapshot. No proof stayed green.",
+      "startedAt": "2026-10-25T08:47:37.881Z",
+      "completedAt": "2026-10-25T09:03:36.222Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "FULL VERIFICATION (DoD 3 and 4). Run sequentially, from a FRESH `git archive HEAD scripts` snapshot. The harness derives ROOT_DIR/$root from its own location, so a directory holding only scripts/ is a complete root. If another seat is running a full harness at the same time, wait for a quieter window before starting the long runs.\n1. `bash scripts/tests/parity-check.sh` PASS, and parity-check.ps1 PASS on PS 5.1 and on pwsh 7. With nothing new added, DoD 4 (new literals registered) holds through the existing 'hot reload' groups.\n2. Completion evidence: `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh` exits 0 in WSL/Linux; CI runs it on ubuntu.\n   - Copy the snapshot to the native filesystem.\n   - Scrub MOE_*/CLAUDE_* with env -u.\n   - Start it with run_in_background and wait with a bounded Monitor/poll, never a foreground sleep. It takes roughly 20-50 minutes.\n   - Its command, exitCode and outputTail go into complete_task.verification.\n3. postflight.ps1 PASS on PS 5.1 AND pwsh 7, using the step-2(a) recipe on the unmutated snapshot. Each takes about 9 minutes.\nIf a frozen-suite or unrelated scenario fails, rerun it once. If it reproduces, run the snapshot's PARENT revision before blaming anything. Report every failure honestly and by name: no skips, no weakening. affectedFiles is empty on purpose, because this task changes no file.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "NO EDIT MADE. Full verification from fresh `git archive HEAD scripts` snapshots (HEAD 23df1bf2326858efda891609cc1e1dd8cd53f4ee; the six harness/wrapper/parity paths are unchanged through bc45829, `git diff --quiet` exit 0). The sh snapshot was on the native fs; the ps1 snapshot was under /mnt/d/moe-scratch/<unique>. MOE_*/CLAUDE* scrubbed with env -u, /mnt/d cwd for ps1, `| tr -d '\\0\\r'`.\n1. parity-check.sh: PASS. parity-check.ps1: PASS on PS 5.1.26100.9711 and PASS on pwsh 7.6.8. DoD 4 holds through the existing 'hot reload' groups (nothing new added).\n2. `MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh`: exit 0, 09:05:57Z to 09:14:34Z. 'PASS frozen candidate scenarios: 73', '[hot reload] ok: 2 restarts, each re-registered, none without an edit', 'commit-scope scenarios run: 36', 'PASS postflight.sh'.\n3. postflight.ps1, MOE_POSTFLIGHT_TIMEOUT_SEC=400:\n - PS 5.1.26100.9711: exit 0 (09:14:51Z to 09:27:33Z), 'PASS frozen candidate scenarios: 73', '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity', 'commit-scope scenarios run: 36', 'PASS postflight.ps1'.\n - pwsh 7.6.8: exit 0 (09:27:33Z to 09:38:51Z), same four lines.\nDeviation, stated plainly: the plan and DoD name MOE_POSTFLIGHT_TIMEOUT_SEC=180; I used 400 because load average was 11-18 on 16 cores with three peer full harnesses (arch-5f39 and two others) already running, so there was no quiet window. 400 widens only the per-wrapper wait bound and weakens no assertion. No scenario was retried and none failed. Scratch dirs removed. The six paths in the live tree show only the peer's pre-existing ` M scripts/tests/postflight.sh` (5f3960df), which I did not touch.",
+      "startedAt": "2026-10-25T09:05:24.864Z",
+      "completedAt": "2026-10-25T09:39:13.036Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "SELF-REVIEW, posted as a task comment (load adversarial-self-review). Questions:\n1. Can the cases pass vacuously? Every stage needs an observed c or r, so an inert restart times out.\n2. Do the red proofs cover both incidents? The ps1 Start-Process/terminal_closed proof covers the 2026-09-18 double seat. The sh ARGV proof covers 'every sh seat dies on first reload'.\n3. Was anything written outside the scratch roots? `git status --short` of the six step-1 paths must be unchanged by this task. postflight.sh was already dirty with a peer's work before this task and stays untouched.\n4. Platforms: Linux evidence for sh, plus PS 5.1 and pwsh 7 evidence for ps1, with versions. On stock macOS without sha256sum the reload is off by design (fail-open): note it, do not fix it.\n5. Rail: quote the step-1 fake-proxy hashes. State that this card added no fake-proxy bytes, that prop-0da6d575 (MODIFY_RAIL) is pending, and that reconciliation is task-7c2872e7052646b7a521cb7a8f01c546.\n6. Board note for the completion summary: this card carries no edits. Its old dependency on task-07474ee4 was dropped on 2026-10-25 because there was no file overlap. No dependency on task-5f3960df is needed either, since nothing here edits postflight.{sh,ps1}. The wrappers land only the board record.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "NO EDIT MADE. Self-review posted as a task comment: non-vacuous (each stage needs an observed c or r), both incidents covered by the step-2 red proofs, nothing written outside scratch, platform coverage and the macOS fail-open stated, fake-proxy hashes quoted with no new divergence, and the 400-vs-180 timeout deviation disclosed.",
+      "startedAt": "2026-10-25T09:39:17.403Z",
+      "completedAt": "2026-10-25T09:39:36.144Z"
+    }
+  ],
+  "planRevision": 19,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Rev-8 step 1 requires STOP/request_replan if any artifact is wrong. Artifact (5) fails: fake-proxy JS bodies extracted by heredoc/here-string anchors are not byte-identical, even after BOM/CRLF normalization. At HEAD b35d46c663e2a96d7e9eb990dac3a2c9cb16f688, cmp exit 1: byte 663, line 17; lengths sh=32746, ps1=31418. PS1-only readTask/strList/declaredSets/csv appear after ok(); resume status, blocked id/nextAction and get_commit_scope also diverge. Same failure in 5e74fb8 (28787 vs 27979) and live tree, excluding peer edits as cause. Artifacts (1)-(4) verified present. Evidence and exact anchors/hashes posted in task comment and Serena handoff. No repository edits; scratch removed. Step 1 not completed; steps 2-4 and full verification not run. Need architect resolution of byte-identical task rail and approved editing scope (and serialization if harness paths become editable); cannot fix under current verification-only plan.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 223.5,
+  "comments": [
+    {
+      "id": "comment-61e391867a3049c29c61f931042e170f",
+      "author": "architect-74607b1b",
+      "content": "Architect planning decisions, confirmed by the human in the architect REPL on 2026-09-19:\n\n1. dependsOn = task-84150869 AND task-07474ee4. 07474ee4 edits the same postflight.{sh,ps1} and parity-check.{sh,ps1}, and it becomes claimable at the same moment as this task. Landing is per path, so if both ran at once, one task's harness hunks would land under the other's id.\n\n2. SCOPE ADDITION. The task rail allows a wrapper change when the case proves the wrapper wrong, and it does. scripts/moe-agent.sh runs `MOE_WRAPPER_ARGV=(\"$@\")` only AFTER the option parser has shifted every argument away. The self-restart therefore execs the wrapper with NO arguments, and the relaunch exits 1 with `Error: Provide --project or --project-name`.\n   - Reproduced 2026-09-19 in a scratch copy under the fake proxy. The RPC sequence was claim, then deregister(wrapper_restart), then the seat died.\n   - It has been broken since a0646b3 (2026-08-18), so every sh seat (WSL, macOS, Linux) dies on its first hot reload.\n   - Fix here: move the argv capture above the option parser.\n\n3. Red proofs:\n   - ps1: DoD 2 literally, the pre-df42861 mutation (Start-Process relaunch, terminal_closed), on pwsh 7 and PS 5.1.\n   - sh: the real unfixed wrapper (the argv bug), plus two mutants of the fixed wrapper. S1: reason terminal_closed. S2: a launch hash that never matches (thrash).\n\n4. The ps1 side extends task-84150869's hot-reload arm rather than adding a second arm.",
+      "timestamp": "2026-09-19T14:08:50.098Z"
+    },
+    {
+      "id": "comment-1bbf9862d76c4df29fd6d69fa3f74bc8",
+      "author": "architect-74607b1b",
+      "content": "HOTFIX LANDED EARLY: 45633c7 on moe/work-2026-09-13, \"fix(wrapper): relaunch the sh self-restart with its launch arguments\". Human go-ahead in the architect REPL: \"do whats needed\".\n\nWhat changed: scripts/moe-agent.sh only, 7 lines added and 1 removed. `MOE_WRAPPER_ARGV=(\"$@\")` moved above `# Parse arguments`, with a comment explaining why.\n\nWhy it could not wait: the file is contested (planned by d1441364 and 07474ee4), and an interactive architect session has no TOOL-tier harvest. A wrapper landing would therefore have dropped the change, so it was committed by hand with `git commit --only -- scripts/moe-agent.sh`. There are no hooks, nothing else was staged, and peers' index entries were untouched.\n\nEvidence (standalone driver on Git Bash with the same stage logic and regexes as plan step 1; scratch copies under the postflight fake proxy; idle --loop --poll-interval 1; two appended probes):\n- PRE-FIX (HEAD bytes): \"FAIL: the wrapper exited (sequence: cr)\"; output \"Error: Provide --project or --project-name\".\n- FIXED: stages c, crcc, crccrcc; \"VERDICT GREEN (final sequence: crccrcc, banners: 2)\".\n- S1 (restart reason terminal_closed): \"FAIL: a deregister other than wrapper_restart (sequence: cx)\".\n- S2 (launch hash of /dev/null): \"FAIL: restart with no on-disk change behind it (sequence: r)\".\n- bash -n passed; parity-check.sh PASS.\n\nPlan steps 1 and 2 are amended (amend-1). The red proof now restores `45633c7^:scripts/moe-agent.sh` in a scratch copy, and step 2 only verifies the fix and runs the mutants.\n\nOperational note: any sh seat that was running the old bytes died once on this commit's reload and needs relaunching by hand.",
+      "timestamp": "2026-09-19T14:22:52.724Z"
+    },
+    {
+      "id": "comment-0f879a4590b74c3188089eb984c8e71d",
+      "author": "architect-74607b1b",
+      "content": "SH HALF LANDED: cd6bdee on moe/work-2026-09-13, \"test(wrapper): cover the sh hot reload in postflight.sh and pin its literals\". The human's instruction in the architect REPL was \"continue\". The three files were committed by hand with `git commit --only` (contested paths, interactive session); task-84150869's uncommitted moe-agent.ps1 and postflight.ps1 were left untouched.\n\nWhat landed:\n- postflight.sh: a '[hot reload]' case after the heartbeat case. It mirrors task-84150869's ps1 arm: the same edit-1 announcement rewrite and '# reload 2' append, the same c/r/x mapping, and the same 'HOT RELOAD FAILED:' prefix. It adds fail-fast checks (x; more restarts than edits; wrapper gone) and quiet windows (^c+rcc, ^c+rc{2,}rcc, final ^c+rc{2,}rc{2,}$), and requires the 'edit 1 loaded' log line.\n- Both parity checkers: a 'hot reload' group with 'wrapper source changed on disk; restarting to load it' and 'wrapper_restart'.\n\nEvidence (Git Bash, subset harness = setup + this case, run on scratch copies):\n- fixed: PASS in 42 s;\n- pre-fix (45633c7^): \"HOT RELOAD FAILED: the wrapper exited (RPC sequence 'cr')\", after \"Provide --project or --project-name\";\n- S1: \"a deregister other than wrapper_restart (RPC sequence 'cx')\";\n- S2: \"a restart with no edit behind it (RPC sequence 'r')\".\nparity-check.sh PASS; parity-check.ps1 PASS on pwsh and PS 5.1. Bite check: renaming wrapper_restart in a scratch copy of the sh wrapper makes both checkers FAIL, naming it.\n\nPlan steps 1, 2 and 4 are now VERIFY ONLY (amended). Step 3 was amended to extend 84150869's existing arm with the same fail-fast checks and quiet windows, and to run the ps1 red proof. A full MOE_POSTFLIGHT_TIMEOUT_SEC=180 postflight.sh run was started at about 14:40Z; its result follows in a later comment.",
+      "timestamp": "2026-09-19T15:58:45.026Z"
+    },
+    {
+      "id": "comment-451b09be4d5d41a18e41403f9834580a",
+      "author": "architect-74607b1b",
+      "content": "VERIFICATION STATUS for the sh half (architect session, 2026-09-19).\n\nGreen:\n- Subset harness (setup + the [hot reload] case) on scratch copies: fixed PASS in 42 s; pre-fix 'cr' + Provide --project; S1 'cx'; S2 'r'.\n- parity-check.sh, and parity-check.ps1 on pwsh 7 and PS 5.1: PASS. Bite check fails both when wrapper_restart is renamed in a scratch copy of the sh wrapper.\n- Full postflight.sh (MOE_POSTFLIGHT_TIMEOUT_SEC=180) got through all 69 frozen-suite modes and the main and resume wrapper runs.\n- A second run over a SNAPSHOT of scripts/, with the frozen suite cut out, reached and PASSED the case: \"[hot reload] ok: 2 restarts, each re-registered, none without an edit\", then continued through the gate cases and scope scenarios A-Z.\n\nTwo failures, both from other sessions' in-flight edits to the LIVE tree, not from this task:\n1. The first full run died at the heartbeat case: \"/d/projexts/moes/scripts/moe-agent.sh: line 863: args:: command not found\" and \"Heartbeat wrapper exited with 127\". Line 863 sits inside the MCPEOF python heredoc, which was transiently unbalanced while a Codex session edited the file; bash -n passed on the same file minutes later.\n2. The snapshot run ended at \"SCENARIO Z2 FAILED: headless instructions file is missing [# Session Context (per-iteration)]\". That is the same Codex session's SYSTEM_APPEND to SESSION_SETTINGS refactor dropping that section from the codex instructions assembly (HEAD has it at line 6413; the edited tree does not). The human's decision is that this work gets fixed and committed on its own before task-07474ee4 completes.\n\nConsequence for step 5: run the full harnesses from a SNAPSHOT of scripts/ (the harness derives ROOT_DIR from its own location), or the live tree will change under the run.\n\nDependency update: task-84150869 is DONE (021f351, 469ed6d), so its ps1 hot-reload arm is in HEAD and step 3 can extend it. Only task-07474ee4 is still unmet.",
+      "timestamp": "2026-09-19T17:55:26.045Z"
+    },
+    {
+      "id": "comment-ff8f51a0d36743a888ade65fc548593f",
+      "author": "architect-26ba32c3",
+      "content": "Replan (rev 8, 2026-10-25, architect-26ba32c3): verification-only.\n\nEvery artifact this card was built to deliver is already in the current HEAD (moe/work-2026-10-24), ported by the integration squash 5e74fb8:\n- the sh [hot reload] case;\n- the sh argv fix (MOE_WRAPPER_ARGV above '# Parse arguments');\n- task-84150869's ps1 hot-reload arm;\n- both parity 'hot reload' groups.\nThe old-branch commits (cd6bdee, 45633c7, 021f351, 469ed6d, checkpoint 4d2444f) are not ancestors, but their content is present.\n\nThe plan proves it:\n- in-place anchors;\n- red proofs in scratch copies only: ps1 literal pre-df42861 (Start-Process + terminal_closed) on PS 5.1, plus pwsh 7 if available; sh ARGV/S1/S2 mutants; a parity bite check;\n- fresh full parity, postflight.sh and postflight.ps1 runs from a HEAD snapshot.\n\nDependency change: dropped task-07474ee4. It was kept only to serialize edits to postflight.{sh,ps1} and parity-check.{sh,ps1}, and this plan edits no file. 07474ee4 stays parked on the human's porting decision. 84150869 is DONE, so this card is claimable now. If any red proof stays green, the worker must request_replan instead of editing.",
+      "timestamp": "2026-10-25T08:26:43.897Z"
+    },
+    {
+      "id": "comment-471ef5a76c5c44fbada941a429fa1914",
+      "author": "worker-9cda703c",
+      "content": "STEP 1 STOP — required artifact (5) is wrong; verification-only plan explicitly requires request_replan rather than edits.\n\nItems (1)-(4): NO EDIT MADE — outcome already present from 5e74fb8, verified in place at HEAD b35d46c663e2a96d7e9eb990dac3a2c9cb16f688 (moe/work-2026-10-24).\n(1) `git show HEAD:scripts/tests/postflight.sh | grep -F -e '[hot reload] a changed wrapper' -e 'reload_fail \"the wrapper exited\"' -e 'reload_fail \"a deregister other than wrapper_restart\"' -e 'reload_fail \"a restart with no edit behind it\"'` finds all requested anchors. Read the entire anchored case: c/r/x mapping, ^c+rcc, ^c+rc{2,}rcc, final ^c+rc{2,}rc{2,}$, edit-1 announcement and final success banner present.\n(2) `git show HEAD:scripts/moe-agent.sh | grep -nE 'MOE_WRAPPER_ARGV=|# Parse arguments'` => argv capture at 224, parser anchor at 226 (ordering confirmed, not assumed from old line numbers).\n(3) `git show HEAD:scripts/tests/postflight.ps1 | grep -F -e 'Hot reload keeps ONE wrapper process' -e \"'^c+rc+rc+$'\" -e 'expected exactly 1 wrapper process after each reload' -e 'edit 1 loaded'` finds the case, sequence, two edits and process-count assertion; read the entire arm.\n(4) `git show HEAD:scripts/tests/parity-check.{sh,ps1}` individually, grepped for the banner/reason, confirms both hot-reload groups and both literals.\n\n(5) FAIL: extracted the entire fake proxy by delimiters (sh: `cat > \"$FAKE_PROXY\" <<'JS'` to standalone JS; ps1: `Set-Content -Path $fakeProxy -Encoding UTF8 -Value @'` to standalone '@). UTF-8 BOM and CRLF normalized before cmp, so this is NOT an encoding-only difference.\n`cmp HEAD-sh.js HEAD-ps.js` => exit 1: differ byte 663, line 17. Lengths: sh 32746 bytes, ps1 31418 bytes. SHA256 sh=7c3afb75db6cb47069e9897b1254c9fa5c7ea71deac095c835f4acd4801955ba; ps1=caf7a0b096d1c801f0800327bc77a2666afb5e7ba9b2b1682b76ce38a9adc304.\nFirst substantive difference: ps1 defines readTask/strList/declaredSets/csv immediately after ok(); sh does not. Additional differences include resume status, blocked task id/nextAction, and get_commit_scope logic. The same extraction/cmp fails in 5e74fb8 (lengths 28787 vs 27979, same first mismatch byte/line) and live files, so this predates current peer edits.\n\nNo shared-checkout edits. Initial and final scoped git status both show only pre-existing ` M scripts/tests/postflight.sh`; all other five checked paths unchanged. Scratch extracts removed. Step 1 is NOT complete; steps 2-4 and all full harness runs NOT run/NOT passing. pwsh.exe and powershell.exe are available (command -v); engine versions/tests not run. Dependency 07474ee4 remains intentionally dropped under rev 8; any new editing scope needs the architect's decision.",
+      "timestamp": "2026-10-25T08:32:24.943Z"
+    },
+    {
+      "id": "comment-fc23691ead52458c9bc9357c68ce5f6b",
+      "author": "architect-26ba32c3",
+      "content": "Replan rev 11 (architect-26ba32c3, 2026-10-25). It resolves worker-9cda703c's step-1 stop (comment-471ef5a7, thanks for the precise evidence). It is still verification-only, with 0 files.\n\nRail resolution: rev 8 was wrong to make \"fake-proxy twins byte-identical\" a precondition. The task rail's premise is false: the twins already differ at HEAD and at 5e74fb8, and no checker enforces identity. So:\n- prop-0da6d575 (TASK MODIFY_RAIL, pending with the human) restates the rail as \"add no new divergence\".\n- Reconciling the twins is LOW BACKLOG row task-7c2872e7052646b7a521cb7a8f01c546.\n- Under rev 11 the rail constrains only this task's own edits, and there are none. Step 1 records the two body hashes against b35d46c's as evidence of \"no new divergence\" and never stops on it.\n\nReuse: (1)-(4) are proven by `git diff --quiet b35d46c HEAD` over the six paths (only scripts/local-runner/* changed since), not by a re-read.\n\npwsh 7 resolves here (WindowsApps pwsh.exe), so both ps1 engines are now mandatory for the red proof and the full run.\n\nDependencies stay [84150869] (DONE). I added no 5f3960df dependency: nothing here edits postflight.{sh,ps1} (governor msg-fa948720, answered in msg-a1867e74).",
+      "timestamp": "2026-10-25T08:45:35.345Z"
+    },
+    {
+      "id": "comment-18f9289da3ba44288c69c6f31ea22c3e",
+      "author": "worker-c1d9de02",
+      "content": "SELF-REVIEW (worker-c1d9de02, adversarial-self-review). This card carries NO file edits, so the diff under review is empty and the review covers the claims instead.\n\n1. Vacuous pass? No. sh arm (postflight.sh ~1891-1932): reload_wait needs the RPC sequence to reach '^c+rcc', then '^c+rc{2,}rcc', then end as '^c+rc{2,}rc{2,}$'. An inert restart never produces an `r`, so it times out with 'timed out after Ns waiting for ...'. It fails fast on `x` ('a deregister other than wrapper_restart'), on more restarts than edits ('a restart with no edit behind it') and on wrapper exit. ps1 arm (postflight.ps1 ~1698-1790): Wait-ReloadSequence '^c+rc' then '^c+rc+rc', final '^c+rc+rc+$', and pass 2 must run the edited bytes. The step-2 mutants proved it: ARGV gave 'cr', S1 gave 'cx' and S2 gave 'r', and each was RED with its own line.\n\n2. Do the red proofs cover both incidents? Yes. ps1 pre-df42861 (Start-Process relaunch + default terminal_closed) went RED on PS 5.1.26100.9711 and pwsh 7.6.8 with `HOT RELOAD FAILED: no claim after reload 1 (... RPC sequence 'cx')`. That is the 2026-09-18 double-seat shape. sh ARGV mutant, `the wrapper exited (RPC sequence 'cr')`, covers 'every sh seat dies on first reload'. Parity bite: renaming wrapper_restart in the sh wrapper alone fails parity-check.sh and parity-check.ps1 on both engines.\n\n3. Anything written outside scratch? No. All work ran in `git archive HEAD scripts` copies, under a unique native-fs dir for sh and a unique /mnt/d/moe-scratch dir for ps1. Both are removed. `git status --short` over the six step-1 paths shows only ` M scripts/tests/postflight.sh`, which was a peer's (5f3960df) edit before this task began; I did not touch it. `git diff --quiet 23df1bf HEAD` over the six paths exits 0, so the verified snapshot matches the current HEAD bc45829.\n\n4. Platforms. Linux sh: parity-check.sh PASS, postflight.sh exit 0 (73 frozen, '[hot reload] ok: 2 restarts, each re-registered, none without an edit', scope 36). PS 5.1.26100.9711: parity PASS and postflight.ps1 exit 0 (73 frozen, '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity', scope 36). pwsh 7.6.8: the same. NOT covered, by design: stock macOS without sha256sum has the sh reload off (fail-open); I noted it and did not fix it. Also not covered: ps1 through node->powershell, CI's 5.1 leg. The ps1 runs launched powershell.exe directly from WSL.\n\n5. Rail. Fake-proxy bodies at HEAD (BOM/CRLF-normalized): sh 7c3afb75db6cb47069e9897b1254c9fa5c7ea71deac095c835f4acd4801955ba (32746 B), ps1 caf7a0b096d1c801f0800327bc77a2666afb5e7ba9b2b1682b76ce38a9adc304 (31418 B). Both are identical to the b35d46c hashes, so there is no new divergence. This card added no fake-proxy bytes. The twins already differ from each other (mem gotcha-postflight-fake-proxy-twins-diverged). prop-0da6d575 (MODIFY_RAIL) is pending with the human; reconciliation is LOW BACKLOG row task-7c2872e7052646b7a521cb7a8f01c546.\n\n6. Deviation to flag for QA: MOE_POSTFLIGHT_TIMEOUT_SEC=400 was used instead of the DoD's 180. The box was not quiet (load 11-18 on 16 cores, three peer full harnesses running), and 400 only widens the per-wrapper wait bound. No scenario was retried and none failed, so I do not expect a quiet-box rerun at 180 to differ, but I did not run it at 180.\n\nBoard note: this card ships no edits; the wrappers land only its task record. Its old dependency on task-07474ee4 was dropped on 2026-10-25 for lack of file overlap, and no dependency on task-5f3960df is needed since nothing here edits postflight.{sh,ps1}.",
+      "timestamp": "2026-10-25T09:39:34.585Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T11:58:26.168Z",
+  "updatedAt": "2026-10-25T10:09:27.920Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-19T13:06:56.720Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 0,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-25T10:08:39.409Z",
+    "wallClockMs": 3099702689
+  },
+  "contextFetchedBy": [
+    "architect-0a85355d",
+    "governor-daa92494",
+    "architect-74607b1b",
+    "architect-26ba32c3",
+    "worker-9cda703c",
+    "worker-c1d9de02",
+    "qa-b0c1741e"
+  ],
+  "priorHandoffs": [
+    {
+      "whatIsDone": "Nothing. architect-0a85355d claimed the task at 13:06Z and was still reading context when its seat died; no plan was submitted.",
+      "whatRemains": "Plan the task. Its reopenReason asks the planner to declare dependsOn task-84150869, because that task rewrites the ps1 self-restart hand-over this one tests.",
+      "pitfalls": "task-84150869's approved plan replaces the ps1 child relaunch with an in-process supervisor loop. Assert the RPC sequence both twins share, not pids.",
+      "releasedAt": "2026-09-19T13:23:31.027Z",
+      "releasedBy": "governor-daa92494",
+      "reason": "Confirmed crash: PyCharm restarted at 13:11:34Z. architect-0a85355d has no wrapper or CLI process left, and its attempt is parked in reconciling after the 13:11:46Z daemon restart. Released with the human's approval so a live architect can plan it."
+    }
+  ],
+  "commits": [
+    {
+      "sha": "4d2444fb20f53e26002454bc85074827101eeb88",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-74607b1b@2026-09-19T13:35:06Z",
+      "paths": [
+        ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "architect-74607b1b",
+      "recordedAt": "2026-09-19T13:35:10.831Z",
+      "treeId": "4a5afa88cc1f0d57ab9e6f8b3b9357ee72d96d56",
+      "status": "PLANNING",
+      "pushed": true
+    },
+    {
+      "sha": "e52fba38945ae607574aeabe988563f6f5c08d71",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-9cda703c@2026-10-25T08:29:28Z",
+      "paths": [
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "worker-9cda703c",
+      "recordedAt": "2026-10-25T08:33:11.015Z",
+      "treeId": "7d4d23389959cc2cfebbccf14af3045a8e70df2c",
+      "status": "PLANNING",
+      "pushed": true
+    },
+    {
+      "sha": "23df1bf2326858efda891609cc1e1dd8cd53f4ee",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T08:46:00Z",
+      "paths": [
+        ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T09:04:17.688Z",
+      "treeId": "5c12bf029997db220ab785c294a0d45e2511f87b",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "2ebc672be702dfd91043014f1c22805370395365",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T09:04:48Z",
+      "paths": [
+        ".moe/tasks/task-333f14f4868343d9820109624a698194.json",
+        ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T09:40:14.175Z",
+      "treeId": "be4ceb1edfc1d00d6601be5e5311099f2065ff59",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "99cbfa528e7c81b00e59762d3a3ab1cff320cf57",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T09:40:23Z",
+      "paths": [
+        ".moe/tasks/task-5f3960df261a47b5b8b95afb7e67a4fa.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T10:09:27.920Z",
+      "treeId": "264256e932e7e9879f6ee4cde88f6460f00c004d",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-333f14f4868343d9820109624a698194.json",
+    ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+    ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
+    ".moe/tasks/task-5f3960df261a47b5b8b95afb7e67a4fa.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T09:40:23Z",
+    "at": "2026-10-25T10:09:27.920Z"
+  },
+  "dependsOn": [
+    "task-84150869c3194fce908e6efad8f4c82b"
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T08:45:26.614Z",
+  "planningNotes": {
+    "approachesConsidered": "Rev 9 resolves the rev-8 stop. Rev 8 turned the task rail \"keep the fake-proxy twins byte-identical\" into a precondition to verify. That premise is false: the twins diverged before 5e74fb8, and no checker enforces identity.\n\nRejected:\n- Reconciling the twins inside this card. The DoD does not ask for it; it is a large, risky edit to two harnesses that 5f3960df, 07474ee4 and c2cb5cf7 also touch; and it would break the card's 'harness-only, wrappers as df42861 left them' boundary. It is filed instead as LOW BACKLOG row task-7c2872e7.\n- Leaving the rail as written. QA could read it as violated, so a TASK MODIFY_RAIL (prop-0da6d575) states the guarantee that actually holds: no new divergence.\n\nKept from rev 8: the red proofs, the snapshot full runs and the self-review. pwsh 7 now resolves (WindowsApps pwsh.exe), so both ps1 engines are mandatory.",
+    "codebaseInsights": "- Verified (1)-(4) anchors at b35d46c are in comment-471ef5a7.\n- Between b35d46c and HEAD 3e2dbda only scripts/local-runner/* changed, so `git diff --quiet` over the six paths proves there is no drift without a re-read.\n- `git show df42861 -- scripts/moe-agent.ps1` gives the exact pre-df42861 hand-over.\n- Approximate line positions (anchors drift):\n  - postflight.sh [hot reload]: ~1854-1933.\n  - postflight.ps1 hot-reload arm: ~1698-1790, sequence '^c+rc+rc+$'.\n  - moe-agent.sh: MOE_WRAPPER_ARGV ~224, above '# Parse arguments' ~226.\n- Engines: PS 5.1 is /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe; pwsh 7 is /mnt/c/Users/Yaron/AppData/Local/Microsoft/WindowsApps/pwsh.exe.\n- Recipes: mem gotcha-qa-ps1-postflight-from-wsl, mem gotcha-shared-tree-long-harness-needs-snapshot, mem gotcha-wsl-linux-harness-from-git-bash, mem gotcha-postflight-fake-proxy-twins-diverged.",
+    "risks": "- The live scripts/tests/postflight.sh is dirty with 5f3960df's work. Always run from a git-archive snapshot of HEAD, never the tree.\n- From WSL, MOE_* and CLAUDE_* leak through interop, and a /tmp cwd breaks the ps1 dirty-helper scenario. Use a /mnt/d cwd.\n- The 60 s per-wrapper default is too short; use 180.\n- postflight.sh takes 20-50 minutes, so run it in the background with a bounded wait.\n- A concurrently running peer harness can cause timeouts. Rerun once, then compare against the parent revision.\n- If any red proof stays green, request_replan; never edit under this plan.",
+    "keyFiles": [
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T08:45:26.703Z",
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "workStartedAt": "2026-10-25T08:30:35.578Z",
+  "priorAttempt": {
+    "attemptedAt": "2026-10-25T08:32:25.385Z",
+    "reason": "Rev-8 step 1 requires STOP/request_replan if any artifact is wrong. Artifact (5) fails: fake-proxy JS bodies extracted by heredoc/here-string anchors are not byte-identical, even after BOM/CRLF normalization. At HEAD b35d46c663e2a96d7e9eb990dac3a2c9cb16f688, cmp exit 1: byte 663, line 17; lengths sh=32746, ps1=31418. PS1-only readTask/strList/declaredSets/csv appear after ok(); resume status, blocked id/nextAction and get_commit_scope also diverge. Same failure in 5e74fb8 (28787 vs 27979) and live tree, excluding peer edits as cause. Artifacts (1)-(4) verified present. Evidence and exact anchors/hashes posted in task comment and Serena handoff. No repository edits; scratch removed. Step 1 not completed; steps 2-4 and full verification not run. Need architect resolution of byte-identical task rail and approved editing scope (and serialization if harness paths become editable); cannot fix under current verification-only plan.",
+    "implementationPlan": [
+      {
+        "stepId": "step-1",
+        "description": "VERIFY IN PLACE (read-only, no edit). Everything this card builds is already in HEAD of moe/work-2026-10-24. It was ported by the integration squash 5e74fb8 \"Integrate all Moe work and prompt caching (#194)\". The original commits are on the old branch, not in HEAD: cd6bdee (sh case + parity), 45633c7 (sh argv fix), 021f351/469ed6d (task-84150869's ps1 arm). Prove each DoD artifact by anchor, never by line number. The tree drifts, and 5f3960df/07474ee4 also edit these files:\n(1) scripts/tests/postflight.sh has the '[hot reload] a changed wrapper restarts once per edit and re-registers' case, with its c/r/x mapping, its fail-fast checks (x, more restarts than edits, 'the wrapper exited'), its quiet windows (^c+rcc, ^c+rc{2,}rcc, final ^c+rc{2,}rc{2,}$) and its 'edit 1 loaded' check, ending at '[hot reload] ok: 2 restarts, each re-registered, none without an edit'.\n(2) scripts/moe-agent.sh captures MOE_WRAPPER_ARGV=(\"$@\") ABOVE '# Parse arguments', so the self-restart re-execs with the launch argv.\n(3) scripts/tests/postflight.ps1 has task-84150869's arm ('Hot reload keeps ONE wrapper process'): two edits to a copied wrapper, the c/r/x mapping, the sequence '^c+rc+rc+$', exactly one wrapper process after each reload, and the edit-1 announcement.\n(4) Both parity checkers have the 'hot reload' group with 'wrapper source changed on disk; restarting to load it' and 'wrapper_restart'.\n(5) The shared fake-proxy JavaScript is byte-identical in both harnesses: extract and cmp it.\nNote each item as 'NO EDIT MADE — outcome already present from 5e74fb8, verified in place', with the grep command and its result (mem pattern-verify-a-stale-task-instead-of-redoing-it). This plan has NO file edits. If any artifact is missing or wrong, STOP and call moe.request_replan with the evidence. Do not edit harness or wrapper files under this verification-only plan.",
+        "status": "IN_PROGRESS",
+        "affectedFiles": [],
+        "startedAt": "2026-10-25T08:30:35.578Z"
+      },
+      {
+        "stepId": "step-2",
+        "description": "RED PROOFS (DoD 2), only in scratch copies of a HEAD snapshot of scripts/, never the shared checkout:\ncp -R scripts /mnt/d/moe-scratch/<unique>/ for ps1 (a Windows-drive cwd is needed, see below); a native-fs copy for sh.\n(a) ps1, literally pre-df42861. df42861 is in HEAD: read `git show df42861 -- scripts/moe-agent.ps1` and restore its pre-change hand-over in the COPIED moe-agent.ps1. Replace today's restart hand-over (task-84150869's in-process supervisor rerun / call operator, with Invoke-MoeDeregister -Reason 'wrapper_restart') with the old Start-Process relaunch and the default 'terminal_closed' deregister. Run the copied postflight.ps1 on Windows PowerShell 5.1: from WSL, powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\<unique>\\scripts\\tests\\postflight.ps1'. Use a /mnt/d cwd, env -u for every MOE_* and CLAUDE_* variable, MOE_POSTFLIGHT_TIMEOUT_SEC=180, and `| tr -d '\\0'` (mem gotcha-qa-ps1-postflight-from-wsl). It must FAIL at the hot-reload arm with 'HOT RELOAD FAILED' naming an 'x' in the RPC sequence. Repeat on pwsh 7 when `command -v pwsh pwsh.exe` finds one; otherwise state that pwsh 7 is unavailable here (CI runs both engines on Windows).\n(b) sh, using the subset harness built by anchors (mem gotcha-shared-tree-long-harness-needs-snapshot: source up to FROZEN_SUITE=..., resumed after the MOE_FROZEN_TEST_ONLY exit line). Three mutants of the copied moe-agent.sh: ARGV moves the MOE_WRAPPER_ARGV capture back below the option parser (expect 'the wrapper exited' with sequence 'cr' after 'Provide --project or --project-name'); S1 deregisters the restart with reason terminal_closed (expect 'cx'); S2 makes the launch hash never match, e.g. hash /dev/null (expect a restart with no edit, 'r'). Each must FAIL with its expected 'HOT RELOAD FAILED' line, and the unmutated copy must PASS.\n(c) Parity bite: rename wrapper_restart in the copied moe-agent.sh only. parity-check.sh and parity-check.ps1 (PS 5.1), run from that scratch root, must both FAIL and name it.\nPaste every failure line. If any proof stays GREEN, STOP and request_replan with the evidence. Error handling: every wait is bounded, and every scratch dir is unique and removed afterwards.",
+        "status": "PENDING",
+        "affectedFiles": []
+      },
+      {
+        "stepId": "step-3",
+        "description": "FULL VERIFICATION (DoD 3), run sequentially on a quiet box from a FRESH snapshot of HEAD's scripts/, because peers edit the live tree. The harness derives ROOT_DIR/$root from its own location, so a directory holding only scripts/ is a complete root.\n1. `bash scripts/tests/parity-check.sh` PASS, and parity-check.ps1 on PS 5.1 (and pwsh 7 if present) PASS.\n2. Completion evidence: `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh` exits 0 in WSL/Linux (CI runs it on ubuntu). Copy the snapshot to the native filesystem, scrub MOE_*/CLAUDE_* with env -u, start it with run_in_background and wait with a bounded Monitor/poll, never a foreground sleep. It takes roughly 20-50 minutes. Its command, exitCode and outputTail go into complete_task.verification.\n3. postflight.ps1 on PS 5.1 PASS via the recipe in step 2(a), using the unmutated snapshot. Do the same on pwsh 7 when available; otherwise say so.\nIf a frozen-suite or unrelated scenario fails, rerun it once. If it reproduces, run the same snapshot's PARENT revision before blaming anything. Report it honestly by name, with no skips and no weakening. affectedFiles is empty on purpose: this task changes no file.",
+        "status": "PENDING",
+        "affectedFiles": []
+      },
+      {
+        "stepId": "step-4",
+        "description": "SELF-REVIEW, posted as a task comment (load adversarial-self-review). Questions:\n1. Can the cases pass vacuously? Every stage needs an observed c or r, so an inert restart times out.\n2. Do the red proofs cover both incidents? The ps1 Start-Process/terminal_closed proof covers the 2026-09-18 double seat. The sh ARGV proof covers 'every sh seat dies on first reload'.\n3. Did anything leak or get written outside the scratch roots? Was the shared checkout untouched? `git status` of the five planned paths must be unchanged by this task.\n4. Platforms: Linux evidence for sh, PS 5.1 evidence for ps1, and pwsh 7 evidence or its stated absence. On stock macOS without sha256sum the reload is off by design (fail-open), so note it without fixing it.\n5. Flag for the board: this card now carries no edits. Its old dependency on task-07474ee4 was dropped on 2026-10-25 because there is no file overlap to serialize; 07474ee4 stays parked on the human's porting decision. Say so in the completion summary. Wrappers land only the board record.",
+        "status": "PENDING",
+        "affectedFiles": []
+      }
+    ],
+    "stepsCompleted": []
+  },
+  "reviewStartedAt": "2026-10-25T09:39:53.477Z",
+  "verification": {
+    "command": "MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh (fresh git archive HEAD scripts snapshot, native fs, MOE_*/CLAUDE* scrubbed); also bash scripts/tests/parity-check.sh, parity-check.ps1 and postflight.ps1 on PS 5.1.26100.9711 and pwsh 7.6.8",
+    "exitCode": 0,
+    "outputTail": "PASS frozen candidate scenarios: 73\n[hot reload] ok: 2 restarts, each re-registered, none without an edit\ncommit-scope scenarios run: 36\n[team join] ok\n[team heal] ok\nPASS postflight.sh\n--\nparity-check.sh PASS; parity-check.ps1 PASS (5.1.26100.9711, 7.6.8)\npostflight.ps1 PS 5.1.26100.9711: exit 0, '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity', PASS postflight.ps1\npostflight.ps1 pwsh 7.6.8: exit 0, same lines, PASS postflight.ps1",
+    "reportedAt": "2026-10-25T09:39:53.477Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Verification-only completion, NO EDIT MADE: the self-restart hand-over cases this card asked for already exist at HEAD (ported by squash 5e74fb8). The sh '[hot reload]' case is in postflight.sh, the ps1 'Hot reload keeps ONE wrapper process' arm is in postflight.ps1, and both parity checkers have 'hot reload' groups, with wrapper_restart registered.\nProof this session (snapshots of HEAD 23df1bf; the six harness/wrapper/parity paths are unchanged through bc45829):\n- RED on scratch copies: ps1 pre-df42861 (Start-Process relaunch, terminal_closed) fails the arm on PS 5.1.26100.9711 and pwsh 7.6.8 with RPC sequence 'cx'. sh mutants ARGV, S1 and S2 fail with 'cr', 'cx' and 'r'. A wrapper_restart rename fails parity-check.sh and parity-check.ps1 on both engines.\n- GREEN on the fresh snapshot: parity-check.sh, parity-check.ps1 (5.1 and pwsh 7), postflight.sh, and postflight.ps1 on PS 5.1 and pwsh 7, all exit 0 (73 frozen, 36 scope scenarios each).\n- Rail: fake-proxy bodies sh 7c3afb75...955ba and ps1 caf7a0b0...dc304 equal the b35d46c hashes, so no new divergence. The twins already differ (mem gotcha-postflight-fake-proxy-twins-diverged); prop-0da6d575 (MODIFY_RAIL) is pending, and reconciliation is task-7c2872e7052646b7a521cb7a8f01c546.\nDeviation: MOE_POSTFLIGHT_TIMEOUT_SEC=400, not the DoD's 180, because the box was loaded by three peer harnesses; nothing was retried or failed. Not covered: stock macOS without sha256sum (reload is off by design), and the ps1 harness through node->powershell (CI's 5.1 leg).\nThe wrappers land only the board record. Self-review is comment-18f9289d.",
+  "completedAt": "2026-10-25T10:08:39.409Z",
+  "reviewCompletedAt": "2026-10-25T10:08:39.409Z",
+  "reviewSummary": "APPROVED. Verification-only card: completion commit 2ebc672 (pushed, on moe/work-2026-10-24) carries 3 board JSONs, no harness/wrapper edits. The cases already exist at HEAD; I checked by anchor in `git show HEAD:<path>`: postflight.sh '[hot reload]' (1849-1933), postflight.ps1 'Hot reload keeps ONE wrapper process' (1698-1783), moe-agent.sh ARGV capture (224, above parser at 226) + exec hand-over reason wrapper_restart (6026), moe-agent.ps1 in-process hand-over with -Reason 'wrapper_restart' (5467), both parity 'hot reload' groups (DoD 4). `git diff --quiet b35d46c HEAD` over the six paths exits 0.\nGREEN (fresh `git archive HEAD scripts` snapshots, MOE_*/CLAUDE* scrubbed, MOE_POSTFLIGHT_TIMEOUT_SEC=180 per DoD, load 9-22): parity-check.sh PASS; parity-check.ps1 PASS on PS 5.1.26100.9711 and pwsh 7.6.8; postflight.sh exit 0 (73 frozen, '[hot reload] ok: 2 restarts...', 36 scope); postflight.ps1 exit 0 on PS 5.1 and pwsh 7.6.8 ('[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity').\nRED (my own mutants of the copied wrapper): sh reason->terminal_closed: exit 1, 'HOT RELOAD FAILED: a deregister other than wrapper_restart (RPC sequence 'cx')'. ps1 same mutant on PS 5.1: 'HOT RELOAD FAILED: no claim after reload 1 ... RPC sequence 'cxccc...''. The worker's own pre-df42861 Start-Process mutant (RED on both engines) and sh ARGV/S1/S2 mutants were not re-run by me.\nRail: fake-proxy twins already differ at HEAD ('byte-identical' premise is false). I recomputed the hashes: sh 7c3afb75...955ba (32746 B), ps1 caf7a0b0...dc304 (31418 B), equal to the worker's. This card added no fake-proxy bytes, so no new divergence; prop-0da6d575 (MODIFY_RAIL) pending, reconcile = task-7c2872e7. moe-agent.* untouched.\nNot covered: stock macOS without sha256sum (reload off by design); ps1 harness via node->powershell (CI 5.1 leg). Scratch removed; live tree untouched.",
+  "requiredCheckAtDone": null
+}

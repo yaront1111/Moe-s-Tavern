@@ -1,0 +1,381 @@
+{
+  "id": "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-10] Wrappers: quality gate on the merged tree under the land lease",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §2.2 (L3, L6, L14) and §2.3.\n\nObjective: when settings.qualityGate applies, main is updated only after the gate passes on the exact merged tree that will land (epic rail 1). Seats of this project serialize through one daemon lease, so the gate rarely re-runs under contention.\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins:\n- L3, only when a gate will run: acquire_resource on `git-land-<target>` (every character outside [A-Za-z0-9._-] replaced by '-', at most 64 chars), then wait_for_resource until granted, bounded by MOE_LAND_LEASE_WAIT_SEC (default 1800). A timeout or RPC failure gives MOE_COMMIT_FAILED_LAND_LEASE and lands nothing (record failed; WT-11 adds the route with reason contention).\n- L6: the existing freeze_candidate B M + run_frozen_gate (New-MoeFrozenCandidate / Invoke-MoeFrozenGate), fed the merged tree M with parent B. Failure gives the existing MOE_COMMIT_FAILED_GATE and lands nothing (WT-11 adds the route with reason gate).\n- Under the lease at most 2 L4-L10 attempts, each re-running the gate on the new merge.\n- L14: release_resource on every path, including failures and the exit trap.\n- Cases in scripts/tests/postflight.sh and postflight.ps1. Depends on WT-09 (task-0921d6d76a6b40a685077245b19ac639).\n\nNOT in scope: declaring the resource in settings (the §7.3 runbook); the unlanded route (WT-11); shared-mode gate behaviour, which stays unchanged; docs (WT-17/WT-18).\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh (and on a Windows seat: node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "postflight case (both harnesses): with a qualityGate, the gate's frozen commit has tree M (the merge of B and T) and parent B; a passing gate lands C, a failing gate prints MOE_COMMIT_FAILED_GATE and leaves main unchanged.",
+    "postflight case: the fake proxy sees acquire_resource for git-land-main before the gate and release_resource after, on both the pass and the fail path; with no qualityGate no lease call is made.",
+    "postflight case: a lease wait past MOE_LAND_LEASE_WAIT_SEC prints MOE_COMMIT_FAILED_LAND_LEASE and lands nothing.",
+    "bash scripts/tests/worktree-landing.sh still passes unchanged; existing shared-mode gate cases pass unchanged.",
+    "Both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes; the verification command exits 0 and postflight.ps1 passes on a Windows seat."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Bind the landed producer interfaces and add deterministic lease fixtures. Re-read WT-S comments, WT-09 landing rounds, WT-10G and WT-10P source/hand-offs after their structural dependencies are satisfied; do not write a second landing engine or emulate missing prerequisites. G's declared contract is `run_frozen_gate worktree` / `Invoke-MoeFrozenGate ... -WorktreeMode`; P's new wrapper-only contract is absolute Unix-ms MOE_PROXY_ONESHOT_DEADLINE_MS bounding the entire one-shot proxy call, including connect/EOF. Confirm the selected built proxy contains that fix before testing a queued wait. Preserve shared-mode default call signatures. In the existing fake proxy, add narrowly opt-in worktree lease scenarios and log acquire_resource/wait_for_resource/release_resource in order together with existing candidate/check/ledger events. Model granted with lease identity, queued then granted, repeated timedOut, daemon refusal/malformed response, withheld reply until proxy deadline, and release failure once then success. Validate caller taskId/workerId and exact resource id; default fixture modes must not change. No test may pretend granted:false is success. Use persisted fixture counters per temp project, not process-local counters (every RPC gets a fresh process).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "Fake proxy now models acquire_resource/wait_for_resource/release_resource (daemon reply shapes from tools/acquireResource.ts, waitForResource.ts, releaseResource.ts). Every call is logged to evidence-rpcs.jsonl in order, with the MOE_PROXY_ONESHOT_DEADLINE_MS it carried. Checks: caller task and worker must match the claimed attempt, resource must equal FAKE_LEASE_RESOURCE (default git-land-main), timeoutMs must be 1000..600000, no force, and ifAcquiredAt must name the held grant. Grants persist in .moe/resources/<id>.json. FAKE_LEASE_MODE values: unset (grant), queued, timeout, late, withheld (honours the proxy deadline, then exits 1), refuse, malformed (granted:\"true\"), release-fail-once (counted from the RPC log). The default mode only adds handlers: no wrapper called these tools before. Smoke-tested each mode directly against a temp project. Pre-existing dirty .moe/roles, .moe/skills and .moe/tasks paths belong to other sessions and were left alone.",
+      "startedAt": "2026-11-01T22:47:24.320Z",
+      "completedAt": "2026-11-01T23:00:53.236Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Implement L3 acquire/wait in both worktree completion arms, with tests first (DoD 2–3). Separate raw configured qualityGate from the scope-filtered command. A configured gate means take the lease even on a mid-epic/scope-skipped completion; absent/blank gate means no lease RPC. Checkpoints/shared mode make no new lease calls. Introduce acquire_land_lease / Acquire-MoeLandLease (new helpers) and per-landing resource/attempted/granted/lease-generation state. Resource identity is the complete `git-land-` + target string with every character outside ASCII [A-Za-z0-9._-] replaced by '-', then truncated to 64 total characters; test slash, Unicode and long targets. Parse MOE_LAND_LEASE_WAIT_SEC as a positive bounded numeric duration, default 1800 when unset; invalid/zero/negative/overflow input fails closed with MOE_COMMIT_FAILED_LAND_LEASE before a resource RPC. Establish one overall deadline before acquire. Supply the actual landing task and worker, never create a synthetic task or use report_blocked during finalization. Call acquire_resource; only literal granted:true admits L4. For granted:false, call wait_for_resource repeatedly with timeoutMs=min(600000, remaining budget), never request below its 1000ms minimum (expire instead). Continue only a genuine timedOut response while budget remains; cancelled/error/malformed/RPC failure fails closed. Set P's one-shot deadline env to the same overall deadline for each call and restore it afterward (PS try/finally, Bash per-call env), so a hung/not-connected proxy cannot exceed the configured bound. A grant returned after the deadline is not admission: release it and fail. Example invariant:\n```text\nif !configuredGate: return admitted_without_lease\nattempted = true\nreply = acquire(resource, realTask, realWorker, absoluteDeadline)\nwhile reply.granted !== true and reply is queued/timedOut and remaining >= 1000ms:\n    reply = wait(resource, realTask, realWorker, min(600000, remaining), absoluteDeadline)\nif reply.granted !== true or deadline_expired: LAND_CODE=MOE_COMMIT_FAILED_LAND_LEASE; fail\n```\nBoth postflight harnesses must show acquire before any gate/publication, queued grant after a delay greater than the old two-second proxy cutoff, scope-skipped gate still acquires, no configured gate makes no lease call, timeout/non-answer/refusal prints the code with main unchanged and no candidate/gate/push, and no successful completion row is recorded. Use short test budgets and fake replies, not a real 30-minute wait.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "L3 in both wrappers. sh: land_lease_id/land_lease_budget/land_lease_rpc/land_lease_read/acquire_land_lease. ps1: Get-MoeLandLeaseId/Get-MoeLandLeaseBudget/Invoke-MoeLandLeaseRpc/Request-MoeLandLease. Only a configured qualityGate takes the lease: sh CS_QUALITY_GATE no longer blanked by MOE_DISABLE_QUALITY_GATE, ps1 Settings.configuredGate added; the shared gate keeps its opt-out. One deadline; each RPC gets MOE_PROXY_ONESHOT_DEADLINE_MS as a per-call prefix (sh) or set/restore (ps1), never exported. Wait timeoutMs=min(600000,left), loop only while left>=1000 and the reply is a literal queued; only literal granted:true with lease.taskId==task admits; a late grant fails and is released. Bad MOE_LAND_LEASE_WAIT_SEC refused before any RPC. Tests first (RED seen: 'no function land_lease_id', and old MOE_COMMIT_FAILED instead of MOE_COMMIT_FAILED_LAND_LEASE): lease-units (slash/Unicode/astral/long ids, budget parser), wt-lease-fails (timeout/withheld/late/refuse/malformed/budget/disabled), no-lease asserts added to wt-completion and wt-fails; the fake's queued grant now comes after 2.5s. The release call sites (step-3) and L6 (step-4) went in during this step too, because the step-2 tests assert the queue-entry release; they are tested and reported under their own steps. GREEN, sh: lease-units, wt-lease-fails, wt-completion, wt-fails, wt-gate, wt-lease-signal, codes ok; bash -n ok; parity-check PASS. ps1 natively on Windows (cmd.exe -> Windows node, PS 5.1 and pwsh 7.6.9): wt-completion, wt-fails, wt-lease-fails, wt-gate, lease-units ok; ParseFile ok under both engines; BOM kept. Mutation check (scratch copy outside the checkout) caught each broken line, including the dropped per-call deadline, an accepted late grant and a lease taken without a gate. 17 dirty paths from other sessions/debris left untouched.",
+      "startedAt": "2026-11-01T23:02:19.162Z",
+      "completedAt": "2026-11-01T23:52:10.124Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Implement L14 cleanup and failure-safe resource ownership (DoD 2–3). Introduce idempotent release_land_lease / Release-MoeLandLease and invoke it after every worktree completion return path plus cleanup_temp/PowerShell outer finally, before deregistration and before clearing the landing identity. Mark acquisition attempted before sending the RPC so an ambiguous reply still cancels this task's queue/lease. Release only this resource + original task + worker, never force and never another task; when the granted lease's acquiredAt is known, use the existing release preconditions to avoid releasing a later lease generation. Queue-only cleanup uses the existing task-scoped release behavior. Give cleanup its own short bounded proxy deadline (5 seconds), restoring the environment afterward. Clear ownership state only after an acknowledged release; a failed release warns MOE_LAND_LEASE_RELEASE_FAILED and remains eligible for one exit-trap retry. Cleanup failure must not overwrite a known published/failed landing outcome or rerun a publication; daemon lease expiry/releaseOnDeregister remains a backstop, not a successful-release claim. Preserve existing signal deferral across publication/recording from WT-08/09; a handled exit before publication releases and preserves T. Mirrored tests assert release after passing and failing gate, after lease timeout/ambiguous acquire, after merge/publication failure, and on a handled exit while queued/gating; never publish on a missing grant. Test release failure then cleanup retry without a duplicate committed ledger row. SIGKILL cannot run a trap: do not claim otherwise.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "L14 in both wrappers. release_land_lease / Release-MoeLandLease: the ps1 helpers are renamed to the plan's Acquire-/Release-MoeLandLease (they were Request-/Clear-MoeLandLease in the step-2 note). The in-band release is one call that every return path reaches: sh after the outcome block, ps1 in the finally. It runs after the completion row/finalize and before the summary and the loop's identity reset. cleanup_temp and the ps1 outer finally retry it once before deregister. The lease state is set before the acquire RPC, so an ambiguous or late reply still releases. Each release names the stored resource+task+worker (never the current task) and never forces. It is pinned with ifAcquiredAt when the grant's acquiredAt is a string, else task-scoped. It has its own 5s per-call deadline: sh uses a per-call prefix, ps1 sets and restores it in try/finally. State clears only on an answered release. A failure warns MOE_LAND_LEASE_RELEASE_FAILED, keeps the state and never rewrites the outcome. NEW: before a new acquire replaces the state, an earlier landing's failed release gets its one retry. Without it, a looping wrapper's next landing would drop that retry. Tests (postflight-worktree.cjs, run by postflight.sh and .ps1): wt-gate covers release after a pass, a failing gate and a .moe-writing gate. In wt-gate's release-fail-once run, the in-band release fails, the exit retry succeeds, there is exactly one committed row and holders are []. wt-lease-fails covers timeout/withheld/late/refuse/malformed plus a NEW merge-tree failure row; each releases with main unchanged and no gate. wt-lease-signal (sh only) covers queued plus a NEW gating variant: a SIGTERM while the gate runs means one gate run, main unchanged, T keeps its bytes, and acquire then release. NEW lease-retry case (both engines): the old task's pinned release comes before the new acquire, and a failed retry warns while the new lease proceeds. RED, on scratch copies outside the checkout: lease-retry fails without the retry line (bash and PS 5.1). The merge row and the gating variant fail with both release sites removed. GREEN on bash: lease-units, lease-retry, wt-lease-fails, wt-lease-signal, wt-gate, wt-completion, wt-fails, codes all ok; bash -n ok; parity PASS. Native Windows (cmd.exe -> Windows node, launched from WSL), PS 5.1: lease-units, lease-retry, wt-lease-fails, wt-gate, wt-completion, wt-fails, codes ok; wt-lease-signal n/a (no signal on Windows). pwsh 7: lease-units, lease-retry, wt-lease-fails, wt-gate ok. BOM kept, LF kept. Not claimed: SIGKILL runs no trap, and the sh hot-reload exec skips it, so a pending failed release is lost there; lease expiry or the task leaving active status is the backstop. Net task diff is now 390 LOC. The 17 other-session dirty paths are untouched.",
+      "startedAt": "2026-11-01T23:54:05.157Z",
+      "completedAt": "2026-11-02T00:17:59.128Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Insert L6 on each fresh merged candidate and enforce round budgets (DoD 1,4). Consume WT-09's existing round after L5/L5b and before L7/L8/L9. Keep T fixed, derive fresh B/M each round, and call `freeze_candidate \"$B\" \"$M\"` then `run_frozen_gate worktree`; PS uses `New-MoeFrozenCandidate $Git $M $B`, existing Send-MoeCandidate, then `Invoke-MoeFrozenGate $Git $Frozen $command -WorktreeMode`. Candidate/check and journal must name this exact M and parent B, never pre-merge task T or control HEAD. Preserve evidence-refusal error handling: freeze/evidence/gate/sparse/integrity failure is MOE_COMMIT_FAILED_GATE, retains the existing failed+rescue path, releases, and never publishes. WT-11 later adds outcome unlanded/reason gate/contention; do not implement it here. If the effective gate runs, allow at most TWO L4-L9 rounds under one lease and rerun the gate for the new merged pair on every retry, with no stale result reuse. If scope skips the gate, preserve THREE ungated rounds but still lease when a gate is configured; if none is configured preserve the existing no-lease three-round behavior. Keep remote unknown-outcome/journal and non-forced push rules unchanged. Do not let MOE_DISABLE_QUALITY_GATE bypass an applicable worktree-mode configured gate: refuse safely before publication; shared-mode opt-out is unchanged. Twin tests use non-overlapping peer/task hunks to prove frozen HEAD^{tree}=M and HEAD^=B, published C^{tree}=M and C^=B; a gate reads both hunks and no .moe. A failing gate and a gate creating .moe/x leave main unchanged and release; the latter includes MOE_WORKTREE_GATE_INTEGRITY. Force one target race: second gate sees new B/M, then succeeds; force two losses: contention failure with exactly two gate runs and no task publication. Existing shared gate and WT-08T tests remain unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "L6 + round budgets. The bytes were written by worker-152f84fc alongside step 2 (checkpoint d3441bf3); this session re-verified them and changed nothing.\nCode:\n- sh wt_land_rounds: `freeze_candidate \"$b\" \"$m\" && run_frozen_gate worktree`.\n- ps1 Invoke-MoeWorktreeRounds: `New-MoeFrozenCandidate $Git $m $b`, then Send-MoeCandidate, then `Invoke-MoeFrozenGate ... $Settings.configuredGate -WorktreeMode`.\n- Both run after merge-tree, the .moe guard and the nothing/journal checks, and before diff-tree, commit-tree, the journal and the CAS/push. B and M are fresh each round; T is fixed.\n- Rounds: 2 with a configured gate, else 3. A failure gives MOE_COMMIT_FAILED_GATE, the failed row plus rescue, then release, and nothing published.\n- MOE_DISABLE_QUALITY_GATE=1 with a configured gate is refused as MOE_COMMIT_FAILED_GATE before any lease call.\nScope: the plan's \"scope skips, 3 rounds\" clause is superseded by comment 22c8f880 and architect comment 2af648bc. Worktree mode gates every completion while a gate is configured. Shared mode is unchanged: sh reads QUALITY_GATE in the main loop, ps1 reads $Settings.qualityGate with its scope check. Only the worktree path reads CS_QUALITY_GATE / configuredGate.\nTests: postflight-worktree.cjs (the one suite postflight.sh and .ps1 both run), case wt-gate. The fixture is mid-epic with scope epicFinal.\n- Race: 2 gate runs on [M0,B] then [M1,peer]. The second run reads both hunks, with no .moe. C^{tree}=M1 and C^=peer.\n- fail and moe: main unchanged, the MOE_WORKTREE_GATE_INTEGRITY case, release.\n- exhausted: 2 gate runs, then \"all 2 rounds\" contention.\nFresh runs 07:29-07:42Z:\n- bash: wt-gate, wt-lease-fails, lease-units, lease-retry, codes, wt-completion, wt-fails, wt-contention, wt-hooks, wt-replay, wt-replay-remote, wt-sync, wt-lease-signal and wt-push all ok.\n- Native Windows: the same 5 WT-10 cases ok on PS 5.1 and on pwsh 7. The 8 landing cases ok on PS 5.1.\nMutants (scratch git-archive copies outside the checkout): gate on T's tree, always 3 rounds, no worktree arm, parent T, gate only in round 1, and the dropped DISABLE refusal. All 6 are KILLED on bash and on PS 5.1; the controls pass.\nHeld-out worktree-landing.{sh,ps1}: `git diff 8ad04de7` is empty. postflight.sh/.ps1 are untouched by this task. 14 dirty .moe paths belong to other sessions; I left them alone.",
+      "startedAt": "2026-11-02T00:21:56.295Z",
+      "completedAt": "2026-11-02T07:48:56.441Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "5. Single final verification gate. From root run exactly `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh`. Require safe-harness failureClass NONE, held-out landing cases green, parity PASS and exit 0. On a native Windows seat additionally run `node scripts/tests/postflight-safe.mjs powershell` against the same revision (PS5.1, not a skipped or substituted Linux pwsh result). Compare the sorted grep -oE `MOE_(WORKTREE|LAND|CONTROL|BOARD|MIGRATION)_[A-Z0-9_]+` sets of the two wrappers; sets must match, including introduced lease/integrity codes. Permanent parity-script expansion stays with WT-19. Verify held-out scripts against their WT-08T landed version with a read-only diff; never edit them to make this gate pass. Load regression-check/verification-before-completion. Capture fresh command, exitCode and safe outputTail for complete_task, plus native Windows evidence. Keep raw postflight fixture output out of chat/artifacts; postflight-safe exists for that reason. If dependencies' files or native Windows evidence are unavailable, report that honestly rather than fabricate green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "Final gate, fresh, from the checkout root at HEAD e4e122cd (scripts/ = checkpoint d3441bf3; scripts/ clean, so nothing was overlaid).\nRun setup: `env -i HOME PATH(nvm node 24) LANG=C.UTF-8`, with job control (SigIgn 0x5, SIGINT not ignored).\n- Command: `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh`. 07:50:46-08:10:17Z, EXIT=0.\n- postflight-safe bash: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}. This includes the frozen, owner-guard and worktree suites and every shared-mode gate scenario.\n- worktree-landing.sh: 18 passed, 0 failed, 0 errors.\n- parity-check.sh: PASS.\nNative Windows, same bytes: `cmd.exe /d /c` ran `cd /d D:\\projexts\\moes` and then Windows node `node scripts\\tests\\postflight-safe.mjs powershell`, i.e. Windows PowerShell 5.1. 07:51:18-08:17:50Z, EXIT=0: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}.\n- The two runs overlapped.\n- The sha256 of all 151 tracked scripts/ files was identical before, after the bash run and after the Windows run.\nCode families: `grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|MIGRATION)_[A-Z0-9_]+'` gives equal sorted sets, 23 codes in each wrapper. They include MOE_LAND_LEASE_RELEASE_FAILED, MOE_LAND_LEASE_WAIT_SEC and MOE_WORKTREE_GATE_INTEGRITY. MOE_COMMIT_FAILED_LAND_LEASE and MOE_COMMIT_FAILED_GATE are in both wrappers.\nHeld-out: `git diff 8ad04de7 -- scripts/tests/worktree-landing.sh scripts/tests/worktree-landing.ps1` is empty (the WT-08T version, read-only).\nNot run: pwsh 7 full postflight.ps1. Its WT-10 cases (wt-gate, wt-lease-fails, lease-units, lease-retry, codes) passed natively at 07:39Z (step 4). Scratch was removed afterwards: /tmp/wt10 runs and this task's Windows temp dirs.",
+      "startedAt": "2026-11-02T07:49:47.736Z",
+      "completedAt": "2026-11-02T08:19:45.662Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "6. Final adversarial self-review, once, task-scoped. Load adversarial-self-review and inspect literal grant checks, a lease granted just as the deadline expires, lost acquire/release replies, a waiter becoming holder before cleanup, signal/exception before and after publication, release retries, and scoped-but-configured gates. Confirm a no-answer proxy cannot wait past the caller deadline, no global env leaks, no other task's lease is released, and no cleanup rewrites a confirmed remote publication as failure. Check exactly M/B are frozen/gated/journaled/published, two gated versus three ungated rounds, re-gating after contention, .moe never materialized by the selected gate runner, no shared-mode changes and no held-out test weakening. Preserve BOM/line endings and owned-only atomic Bash saves; don't stage peer dirt. Keep source/test diff <=400 net LOC through prerequisite reuse, not by omitting cases. Refresh the same verification gate after any fix, complete through Moe with accurate modifiedFiles and fresh evidence; wrappers own Git writes. Documentation/resource declaration and migration flags remain their named later tasks.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "I ran the adversarial self-review once, over this task's own diff (d3441bf3 vs its parent, 4 files, +425/-35, 390 net, under the 400 cap). It found no defect and changed no code, so the step-5 gate stands as the fresh evidence. The scripts/ bytes (151 files) are identical to the pre-gate snapshot, and HEAD e4e122cd only touched the task JSON. The modifiedFiles above are the task's files from the earlier steps, all already in checkpoint d3441bf3; nothing changed in this step.\n\nWhat I checked:\n- Grant checks: only a literal granted:true for this task's lease is accepted. granted:\"true\", a refusal, a cancellation, a missing answer or a malformed reply all give MOE_COMMIT_FAILED_LAND_LEASE (wt-lease-fails covers refuse, malformed and withheld).\n- Grant at the deadline: a grant that arrives after the single deadline fails, and the lease is released pinned to its acquiredAt (case \"late\"). Wait timeouts use timeoutMs = min(600000, time left), and the loop stops when less than 1s is left.\n- No-answer proxy: every proxy call carries MOE_PROXY_ONESHOT_DEADLINE_MS, an absolute deadline, so no call can wait past the caller's deadline (case \"withheld\").\n- Lost acquire reply: fails closed, followed by a release scoped to this task.\n- Lost release reply: prints the warning MOE_LAND_LEASE_RELEASE_FAILED and keeps its state for one retry. The retry happens at the next acquire, or else in the sh exit trap or the ps1 outer finally (lease-retry, release-fail-once).\n- Waiter that became the holder before cleanup: covered by the release scoped to this task.\n- Another task's lease: never released, since the release requires both the precondition and the taskId and never uses force.\n- Env leaks: none. sh sets the deadline per call; ps1 sets and restores it in a finally block.\n- Cleanup: the release never changes the landing outcome, so it can't turn a confirmed remote publication into a failure.\n- Exact M/B: the frozen and gated commit has tree M and parent B, and C = commit-tree M -p B is what gets journaled and published (wt-gate race: the gate ran [M0,B] and then [M1,peer]; C^ = peer and C^{tree} = M1).\n- Rounds: 2 with a gate, 3 without, and every merge after contention is gated again.\n- .moe: the worktree runner never materializes it; the integrity case gives MOE_WORKTREE_GATE_INTEGRITY.\n- Scoped-but-configured gates: CS_QUALITY_GATE / configuredGate apply only in worktree landing. There, MOE_DISABLE_QUALITY_GATE=1 is refused with MOE_COMMIT_FAILED_GATE instead of skipping the gate.\n- Shared mode: unchanged.\n- Held-out tests: worktree-landing.{sh,ps1} are unchanged versus 8ad04de7.\n- Encoding: the ps1 BOM and LF line endings are kept, and bash -n passes.\n- No peer dirt was staged.\n\nMutants: I tried 6 on bash and 6 on PS 5.1 (gate on T's tree, always 3 rounds, no worktree arm, parent T, gate only in round 1, DISABLE refusal dropped). All 12 were killed, and the unmutated controls passed.\n\nTheoretical notes for QA, no fix needed:\n1. A SIGTERM sent only to the wrapper (not its process group) during a long wait_for_resource is handled after the RPC returns. That takes at most 600s and is bounded by the deadline. A terminal Ctrl+C also hits the proxy, which exits within 2s.\n2. The sh hot-reload exec and SIGKILL lose a pending failed release. Lease expiry is the backstop.\n3. A pinned retry of a release whose reply was lost warns twice, which is harmless.\n4. On a Linux seat with a non-UTF-8 locale, land_lease_id may compute a different id for a non-ASCII target name.\n\nThe documentation and resource declaration, and the migration flags, stay with their named later tasks.",
+      "startedAt": "2026-11-02T08:22:43.707Z",
+      "completedAt": "2026-11-02T08:23:11.573Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-0921d6d76a6b40a685077245b19ac639",
+    "task-19cbba2272ee4a1c9f0a9c933f339f59",
+    "task-b5a176355a7c443d98952466b409f941",
+    "task-c4e076cd306f4f84a4aa08bf2a4682b2",
+    "task-954ec3f9f856417e96e6cbc4bd880a35",
+    "task-7b23ea0f39424ca4ae09dc1cba5a8018"
+  ],
+  "priority": "HIGH",
+  "order": 17,
+  "comments": [
+    {
+      "id": "comment-1970f7d8521f495dafdff5b7ca1e8144",
+      "author": "worker-0062feec",
+      "content": "Contract correction from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win. Plan against revised §2.2 (L3/L6/L14), §2.3 and §7.3.\n\n1. Take the lease on EVERY completion landing, not \"only when a gate will run\".\n   - Acquire, wait, release and the bounds are unchanged.\n   - Rounds are L4-L9: at most 3 without a gate, 2 with one.\n\n2. Gate worktree arm (rail 3):\n   - Add the gate worktree with `--no-checkout`. Never pass `core.sparseCheckout=false`.\n   - Then run `sparse-checkout set --no-cone '/*' '!/.moe/'` and `read-tree -mu HEAD`.\n   - The integrity helper is gate_integrity_wt / Test-MoeGateIntegrityWorktree:\n     - keep the HEAD and write-tree checks;\n     - clear assume-unchanged and skip-worktree bits only outside `.moe/`;\n     - require a clean diff-files;\n     - fail with MOE_WORKTREE_GATE_INTEGRITY when `<gate>/.moe` exists, before or after the command. That makes the landing unlanded `gate`.\n   - Shared mode keeps today's run_frozen_gate / gate_integrity unchanged (rail 4).\n   - Cases:\n     - a gate command that creates `.moe/x` → integrity failure, nothing published;\n     - `.moe` is absent while the command runs;\n     - the shared-mode gate behaves as before.\n\n3. Migration landing `--land-branch <branch>` / `-LandBranch <branch>` (§7.3):\n   - Sequence: L3, then rounds of:\n     - L4;\n     - L5 `merge-tree --write-tree B <branch>`;\n     - L6 on exactly M;\n     - L7 C = `commit-tree M -p B -p <branch tip>`;\n     - L9 and L10.\n     Then L14.\n   - L6 always runs settings.qualityGate, whatever qualityGateScope says. With no gate set, refuse with MOE_MIGRATION_NO_GATE before any fetch.\n   - Skip L0-L2, L5b, L8 and L11-L13. Record no Candidate, CheckRun or ledger row.\n   - These publish nothing: a conflict, a failed gate, a lease timeout, 2 exhausted rounds.\n   - An unknown outcome stops. Once main contains the branch, a re-run exits 0 with MOE_COMMIT_NOTHING_TO_COMMIT.\n   - Cases: clean landing, conflict, no-gate refusal, re-run idempotence.\n\nIf this exceeds taskSizing at plan time, split item 3 into its own row (SPIDR, Interface) and make WT-16 depend on it.",
+      "timestamp": "2026-10-30T13:02:15.983Z"
+    },
+    {
+      "id": "comment-f814768d909d4514a99f1b6eedd8cca0",
+      "author": "worker-0062feec",
+      "content": "Follow-up to the WT-S revision comment above. It narrows that comment's item 1 so it matches this row's DoD2 (definitionOfDone is human-owned). Revised §2.2 L3 and §2.3 now say the same:\n- While `settings.qualityGate` is set, take the land lease on every completion landing, whether or not this landing's `qualityGateScope` runs the gate. This stops an ungated peer from publishing while a gated landing is gating.\n- With no `qualityGate` set, make no lease call, exactly as DoD2 says.\n- Safety never depends on the lease. The local CAS or the non-forced push decides, and WT-08T's race case runs with no gate.\nAdd a case: when the qualityGate is scoped so this landing does not run it, the landing still takes the lease and releases it.\nAlso extend your parity grep to cover `MOE_MIGRATION_`.",
+      "timestamp": "2026-10-30T13:12:00.126Z"
+    },
+    {
+      "id": "comment-4894f327869a4d3c9a1ef8e30df5119f",
+      "author": "architect-76a2c8bb",
+      "content": "SPIDR Interface sizing after the revised comments: WT-10 remains the task-bound L3/L6/L14 integration, exact merged-tree gate and bounded rounds, with its existing 5 DoD items unchanged. Created prerequisite WT-10G task-19cbba2272ee4a1c9f0a9c933f339f59 for the sparse frozen-gate callable arm, and WT-10P task-b5a176355a7c443d98952466b409f941 for a verified source defect: both wrappers close one-shot stdin and proxy gracefulShutdown cancels queued wait_for_resource after 2 seconds. Both are structural dependencies. Created downstream WT-10M task-253884005a59471fb7c59ef38e1f3cc1 for comment item 3 (--land-branch migration), as explicitly permitted; WT-16 now depends on it, so WT-19 covers all new slices transitively without exceeding its 20-direct-dependency cap. Migration's taskless lease identity requires a WT-S decision before that child is planned (asked in #architects). New rows are BACKLOG, human-gated. The create_task 'gate/hardening' warnings are lexical false positives: G and M each add production behavior, not separate audit/evidence passes; WT-19 remains the sole full-epic hardening row.",
+      "timestamp": "2026-10-30T13:35:43.842Z"
+    },
+    {
+      "id": "comment-d635eea502c3410dbaec4c5c716ba0e7",
+      "author": "architect-899a90d6",
+      "content": "The proxy contract from WT-10P (task-b5a176355a7c443d98952466b409f941, plan rev 1, now WORKING). Build against these exact semantics; read the landed proxy bytes before relying on the text.\n\n1. `MOE_PROXY_ONESHOT_DEADLINE_MS` is an absolute Unix epoch in ms, plain decimal digits forming a safe integer.\n   - Unset or blank means no bound, so a PS restore can blank it.\n   - Any other invalid value fails closed: one JSON-RPC error with id null, 'Invalid MOE_PROXY_ONESHOT_DEADLINE_MS: <reason>', then exit 1 without connecting.\n2. When the deadline expires (during connect, queued, sent or the EOF drain):\n   - One error per known pending id: 'Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)'. A null-id error is written when no id is known yet (the proxy never connected).\n   - Then exit 1, with no late success and no reconnect.\n3. The long EOF drain applies only to a session that never sent MCP `initialize`. moe_rpc and Invoke-MoeRpc must keep piping one bare tools/call.\n   - A pending wait_for_resource then drains until its daemon reply or sentAt + MOE_BLOCKING_TIMEOUT_MS (default 660000).\n   - Keep timeoutMs at 600000 or less, so the daemon's own timedOut reply wins.\n4. A daemon socket lost mid-drain errors at once with 'Connection to daemon lost before response received'.\n   - That path, and the 2s grace paths, still exit 0 with an error line, exactly as today. Decide on the reply's result or error, never on the exit code alone.\n   - SIGINT/SIGTERM cap any drain at 2s.",
+      "timestamp": "2026-10-30T13:50:02.472Z"
+    },
+    {
+      "id": "comment-22c8f88059a54b299d1ce3275b5795ad",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L3/L6, §7.3 migration landing; section numbers unchanged). Where this differs from the description or comments 1970f7d8/f814768d, this comment wins.\n\n1. Rail 1: in worktree mode, L6 runs on EVERY completion landing while settings.qualityGate is set, and qualityGateScope is ignored. Under epicFinal, every mid-epic landing would otherwise move main ungated.\n   - The `qualityGate deferred` scope check gets a worktree-mode exception: in sh it is in the post-flight main loop, in ps1 in Invoke-MoeLanding.\n   - Shared mode keeps that check (rail 4).\n   - Add a case: a worktree landing of a mid-epic task with scope epicFinal runs the gate.\n2. L3 therefore takes the lease on every completion landing while a qualityGate is set, since all of them gate. With no qualityGate, no lease call is made, exactly as your DoD item 2 says.\n3. --land-branch / -LandBranch:\n   - It takes NO lease: acquire_resource needs a task the caller owns, and the drain leaves no lander to wait for.\n   - It runs L6 in the .moe-free gate worktree arm whatever worktreeMode says, and records no Candidate, CheckRun or ledger row.\n   - It builds C = commit-tree M -p B -p <branch tip> with no commit hooks: the hooked-commit helper refuses a second parent, and the gate on M stands in for the hooks.\n   - It skips L0-L3, L5b, L8 and L11-L14.\n   - Drop MOE_COMMIT_FAILED_LAND_LEASE from its failure list.",
+      "timestamp": "2026-10-30T13:53:03.436Z"
+    },
+    {
+      "id": "comment-2af648bcad364734a49e75d8f586d02e",
+      "author": "architect-76a2c8bb",
+      "content": "Planning follow-up: the current WT-S design §2 L6 now says qualityGateScope is ignored in worktree mode and EVERY configured-qualityGate completion runs the gate (not just acquires lease). This differs from the earlier scoped-gate comment consumed by my plan. Dependency WT-S is still unsettled. At start, use its FINAL approved/landed F1-F3 contract: if this current wording survives, worktree mode must preserve configured QUALITY_GATE and run it regardless of scope (2 rounds); only no configured gate gets 3 ungated rounds. Shared-mode qualityGateScope remains unchanged. Do not implement the older scope-skip branch against the revised design. This correction keeps same files/scope/tests; gate-skip test becomes configured+epicFinal still gates.",
+      "timestamp": "2026-10-30T13:59:58.817Z"
+    },
+    {
+      "id": "comment-225eb3c37c1946338e7e944bd2864890",
+      "author": "worker-81a7999f",
+      "content": "QA note on filesModified: it lists scripts/tests/postflight.sh and scripts/tests/postflight.ps1, but this task did not touch them.\n\nThey appear only because complete_step step-5 (the verification gate, which made no edits) sent `modifiedFiles: []`, so the daemon used that step's planned affectedFiles instead.\n\nProof:\n- `git hash-object` gives the same value for the working tree, HEAD and the pre-task base `d3441bf3^`:\n  - postflight.sh: f3e4c8c8\n  - postflight.ps1: ffba644e\n- `git diff d3441bf3^ HEAD` on both paths is empty.\n\nThe task's real change set is 4 files (d3441bf3, +425/-35):\n- scripts/moe-agent.sh\n- scripts/moe-agent.ps1\n- scripts/tests/postflight-worktree.cjs\n- scripts/tests/postflight-fake-proxy.js",
+      "timestamp": "2026-11-02T08:24:48.461Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:53:57.865Z",
+  "updatedAt": "2026-11-02T09:03:25.423Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:03:03.609Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:27:46.029Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-02T09:02:01.508Z",
+    "wallClockMs": 243255479
+  },
+  "contextFetchedBy": [
+    "architect-76a2c8bb",
+    "architect-4ae016fb",
+    "worker-152f84fc",
+    "worker-81a7999f",
+    "qa-1106e678"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:41:42.089Z",
+  "planningNotes": {
+    "approachesConsidered": "# WT-10 task-bound lease and merged-tree gate\nGoal: gate exactly the merged candidate that may publish, while serializing this daemon's configured-gate landers and releasing the lease on all exits. Architecture: extend the prerequisite WT-09 worktree completion round; use daemon resource APIs for L3/L14 and the existing frozen candidate/evidence flow for L6. Shared checkout behavior stays byte-for-byte equivalent. Tech: Bash/Python, Windows PowerShell 5.1, Node proxy, Git plumbing.\nSPIDR Interface splits are explicit structural prerequisites: WT-10G task-19cbba2272ee4a1c9f0a9c933f339f59 produces the optional sparse gate runner; WT-10P task-b5a176355a7c443d98952466b409f941 fixes one-shot EOF drain and produces MOE_PROXY_ONESHOT_DEADLINE_MS. Migration comment item 3 moved to WT-10M task-253884005a59471fb7c59ef38e1f3cc1, on which WT-16 now depends. This parent retains all five original DoD items. WT-19 remains the only full-epic hardening task and covers new slices transitively.",
+    "codebaseInsights": "Verified current shared functions: run_landing, freeze_candidate(old,tree), run_frozen_gate, gate_integrity, cleanup_temp/cleanup_gate_workspace; PS Invoke-MoeLanding, New-MoeFrozenCandidate(Git,Tree,Base), Send-MoeCandidate, Invoke-MoeFrozenGate, Remove-MoeGateWorkspace. Bash QUALITY_GATE is cleared when scope defers it, so preserve a separate configured-gate flag before that clearing. Current gate runner materializes .moe and current proxy EOF ends waits at 2s: do not reuse either unchanged in worktree mode; producers G/P fix them. wait_for_resource timeoutMs clamps to 1000..600000 and replies granted or timedOut; resource APIs require real task/worker identity. release_resource can remove both owned lease and queue. WT-08 plan owns local round/publication/journal and WT-09 owns remote round/reconciliation; neither landed at planning time. Their code must be read once dependencies land, not guessed or reimplemented. Held-out worktree-landing scripts will be created by WT-08T; they do not exist in current checkout and are verification inputs only.",
+    "risks": "Main publication and failure classification are data-loss-critical: heavy/max. After splitting, this parent is one integration slice, five files, target <=60 min and <=400 net non-board LOC; reuse prerequisite helpers and compact twin tests. No new file, no daemon/proxy edits here, no held-out edits. Respect native PS5.1 BOM/CRLF, explicit native exit-code checks and env restoration. Save Bash through a syntax-checked same-filesystem temporary file plus atomic rename because older running seats may read stale offsets. Use safe postflight output filtering. Read mem:gotcha-worktree-gate-runtime-exclusion, mem:gotcha-worktree-push-first-offline-divergence, mem:gotcha-resource-acquire-conditional-exec and mem:gotcha-moe-proxy-oneshot-kills-blocking-longpolls. New G/M creation warnings on 'gate' were lexical false positives, not evidence-only tasks.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight-fake-proxy.js"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:41:42.129Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T22:47:24.320Z",
+  "commits": [
+    {
+      "sha": "d3441bf3afdaa92b6d9bd91c80c83e78fed04111",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-152f84fc@2026-11-01T22:40:06Z",
+      "paths": [
+        ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+        ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+        ".moe/tasks/task-b712ce096fc743328b8baac69acb4d07.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-152f84fc",
+      "recordedAt": "2026-11-02T00:19:43.907Z",
+      "treeId": "00fea8471c55017b809b6c9c21b7366089a6ed0a",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "e4e122cd76aa107647aea919b76e1e7cf5efa1d4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T07:24:49Z",
+      "paths": [
+        ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T07:25:14.447Z",
+      "treeId": "cf93ac9c3812a32021dd5765d2d3b56e8980270e",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "53b646f8cc644110ba422529081e6ef1c554d488",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T07:24:49Z",
+      "paths": [
+        ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
+        ".moe/tasks/task-253884005a59471fb7c59ef38e1f3cc1.json",
+        ".moe/tasks/task-3def080415d3495a8557b514d6a0ab2a.json",
+        ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
+        ".moe/tasks/task-5ac436aa967740d89c440d0f6f120547.json",
+        ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-befdddf7e1f047a0ba4f71dd900c9b8f.json",
+        ".moe/tasks/task-cfa129252343438d903de1e67ae6073c.json"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T08:25:08.306Z",
+      "treeId": "f60598fc63e028b6d5cf6133d4b8eca79f48c877",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "882a4c39f618e61ca6159c360e236e88dd925ee4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T08:25:36Z",
+      "paths": [
+        ".moe/tasks/task-253884005a59471fb7c59ef38e1f3cc1.json",
+        ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+        ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
+        ".moe/tasks/task-5ac436aa967740d89c440d0f6f120547.json",
+        ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+        ".moe/tasks/task-6519ed9127ad4c359fd64b71f1a08be5.json",
+        ".moe/tasks/task-a3e414a3dce848e6939081e5cbf941ce.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-cfa129252343438d903de1e67ae6073c.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T09:03:25.423Z",
+      "treeId": "2ebec72c0395a71a79707f1adfffafc1de342cd4",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
+    ".moe/tasks/task-253884005a59471fb7c59ef38e1f3cc1.json",
+    ".moe/tasks/task-3def080415d3495a8557b514d6a0ab2a.json",
+    ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
+    ".moe/tasks/task-5ac436aa967740d89c440d0f6f120547.json",
+    ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-befdddf7e1f047a0ba4f71dd900c9b8f.json",
+    ".moe/tasks/task-cfa129252343438d903de1e67ae6073c.json",
+    ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+    ".moe/tasks/task-6519ed9127ad4c359fd64b71f1a08be5.json",
+    ".moe/tasks/task-a3e414a3dce848e6939081e5cbf941ce.json"
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T08:25:36Z",
+    "at": "2026-11-02T09:03:25.423Z"
+  },
+  "reviewStartedAt": "2026-11-02T08:23:39.831Z",
+  "verification": {
+    "command": "node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "START=07:50:46Z\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\nPASS parity-check.sh\nEXIT=0\nEND=08:10:17Z\n--- native Windows (cmd.exe, Windows node, PS 5.1): node scripts\\tests\\postflight-safe.mjs powershell 07:51:18Z-08:17:50Z\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nEXIT=0",
+    "reportedAt": "2026-11-02T08:23:39.831Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "WT-10, worktree-mode completion landing in both wrappers.\n\nWhat changed:\n- L3: if a qualityGate is configured, the landing first takes a git-land-<target> lease through acquire_resource and then wait_for_resource. One deadline, MOE_LAND_LEASE_WAIT_SEC (default 1800), bounds every proxy call via MOE_PROXY_ONESHOT_DEADLINE_MS. Only a literal granted:true for this task's lease counts as a grant. A late grant is released, pinned to its acquiredAt. Every lease failure gives MOE_COMMIT_FAILED_LAND_LEASE and lands nothing. With no gate, no lease call is made.\n- L6: the merged tree M is frozen with parent B, and the frozen gate runs on that M in worktree mode. A failure gives MOE_COMMIT_FAILED_GATE and leaves the target ref unchanged.\n- Rounds: 2 with a gate, 3 without. Every merge after contention is gated again, and the commit that gets published is commit-tree M -p B.\n- L14: the lease is released on every path: after the outcome, in the sh exit trap and in the ps1 outer finally. A release that fails prints the warning MOE_LAND_LEASE_RELEASE_FAILED and gets one retry. The release never changes the outcome.\n\nDeviation from the plan: per the task comments, a configured gate runs on every worktree landing, whatever its scope. This replaces the plan's clause that skipped the gate by scope. In worktree mode, MOE_DISABLE_QUALITY_GATE=1 is refused with MOE_COMMIT_FAILED_GATE. Shared mode is unchanged.\n\nTests:\n- postflight-worktree.cjs adds the cases wt-gate, wt-lease-fails, wt-lease-signal (sh only), lease-units, lease-retry and codes, plus no-lease checks in wt-completion and wt-fails.\n- postflight-fake-proxy.js models the lease with these modes: queued, timeout, late, withheld, refuse, malformed and release-fail-once.\n\nEvidence:\n- The bash gate (command above) exited 0.\n- worktree-landing: 18 passed, 0 failed.\n- parity-check: PASS.\n- Native Windows PS 5.1 `postflight-safe.mjs powershell` exited 0.\n- The held-out worktree-landing.{sh,ps1} are unchanged versus 8ad04de7.\n- Both w",
+  "completedAt": "2026-11-02T09:02:01.508Z",
+  "reviewCompletedAt": "2026-11-02T09:02:01.508Z",
+  "reviewSummary": "APPROVED WT-10 (mid-epic).\nDiff: d3441bf3, 4 files, +425/-35 (390 net). Completion 53b646f8 is on origin/moe/work-2026-10-24. postflight.sh/.ps1 unchanged.\nRe-run on my git-archive snapshots of 53b646f8:\n- bash: the verification cmd EXIT=0 (safe line NONE/Z, worktree-landing 18/0/0, parity PASS).\n- Native PS 5.1: postflight-safe powershell exit 0, NONE; worktree-landing.ps1 18/0/0.\n- pwsh 7: postflight-safe exit 0; worktree-landing.ps1 18/0/0; parity-check.ps1 PASS.\n- Held-out tests: diff vs 8ad04de7 empty.\n- Code sets equal (23 each); BOM kept.\n- My mutant (no in-band release) killed by wt-gate; control passes.\nDoD:\n1. Gate frozen tree=M, parent=B, re-gated after a lost CAS; C=M on B. A failing gate gives MOE_COMMIT_FAILED_GATE and main is unchanged. OK.\n2. acquire git-land-main precedes candidate/check; release follows; no-gate makes no lease call. OK.\n3. timeout, withheld and late give MOE_COMMIT_FAILED_LAND_LEASE, nothing landed, released. OK.\n4. Held-out and shared gate cases pass. OK.\n5. Codes match and Windows passes. OK.\nReview: shared mode untouched; lease semantics checked against the daemon (owner check, release scope, literal grant).\nNon-blocking:\n(a) the leased() order ignores record_commit;\n(b) no ps1 signal test;\n(c) disclosed residuals accepted.\nponytail-review: lean, net -0.",
+  "requiredCheckAtDone": null
+}

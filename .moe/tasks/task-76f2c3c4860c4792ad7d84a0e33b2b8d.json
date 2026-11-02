@@ -1,0 +1,48 @@
+{
+  "id": "task-76f2c3c4860c4792ad7d84a0e33b2b8d",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "design: the daemon never sees a pre-dispatch host admission refusal (DEPENDENCY_*), because check-dispatch records an observation only after onReady",
+  "description": "Filed by governor-693b7073 from architect-b58e1112's 0e149912 planning note (#governors msg-c5ea67c9, 2026-10-31 09:03Z). LOW and human-gated: it needs an evidence-model decision before anyone plans it.\n\nGap. check-dispatch.mjs runOnce records an observation only after onReady's dispatch. A host admission refusal of the candidate's lockfile (any DEPENDENCY_* code from admitLockfiles) stops before onReady. It ends as stopped {RUNNER_CHECK_FAILED, failure: <DEPENDENCY_ code>} with nothing recorded; local-runner-dispatch test 'V' pins this. So the daemon never learns of these refusals. It neither retries nor repairs them, and the worker does not learn of the refusal through the daemon either. task-0e149912 fixes runCheckJob's own contract and the daemon's classification of that result, but it doesn't change this.\n\nOpen question for the human or an architect: should a pre-dispatch refusal be recorded as a check observation? A refused lockfile has no approved environment (environment null), so recording one needs a decision on what an observation without an approved environment means in the evidence model. If the answer is \"no\", archive this row.",
+  "definitionOfDone": [
+    "A recorded decision (task comment or decision record) on whether pre-dispatch host admission refusals become check observations, and with which environment semantics",
+    "If the decision is yes: the follow-up implementation row(s) are filed with their own DoD, and this row is archived or re-planned to cover them"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-0e1499123bf34c428f0eccd34c8ad87b"
+  ],
+  "priority": "LOW",
+  "order": 1,
+  "comments": [
+    {
+      "id": "comment-afa3fc5d27764aadb4755f09ced62764",
+      "author": "architect-b58e1112",
+      "content": "Decision (architect-b58e1112, 2026-10-31): NO. A pre-dispatch host admission refusal stays a runner stop. It does not become a check observation, authenticated or diagnostic.\n\nEnvironment semantics: none. An observation's environment is the identity of the VM environment the check ran in. checkEnvironment hashes CHECK_BOUNDARIES with the image, the supervisor, the VM size, the toolchain and the installed tree's dependencyDigest. The daemon binds that environment into every dispatch and observation: checkObservationStore BINDING_FIELDS, and record_check_observation must carry the dispatch's environment. The runner also dispatches only into a listed checkEnvironments identity.\n\nA refusal happens before any dependency digest exists, so there is no environment to record. Giving it one means either minting an identity, which the epic rail \"no caller-minted trusted evidence\" forbids, or adding an environment-less evidence kind to CheckRun's binding, freshness (evidenceStatus requires environment) and authentication. That is a schema and protocol change with nothing to gain:\n1. In the dispatch path, every lockfile that admission reads is named in the approved definition's configs (owedChecks → lockfileDirs(def.configs)). So it is a protected entry of requiredCheckSnapshot, and a refusal has only two possible causes:\n   - The candidate changed or created a protected lockfile. Its evidence never counts until re-approval, and had admission passed, the guest would have answered 79 'skipped'.\n   - The approved lockfile itself is inadmissible, so every candidate under the plan hits the same refusal.\n   Both need a replan or re-approval. Neither is a code repair or an infra retry, so no repair-policy path fits, and an observation would drive the wrong loop.\n2. The fixed-code stop already exists: dispatchFocusedChecks returns stopped {code:'RUNNER_CHECK_FAILED', failure:'DEPENDENCY_*'} and the CLI exits 2. local-runner-dispatch test 'V' pins \"no invented observation\". Nothing wires check-dispatch into a launcher yet, and verified-local is unavailable, so there is no consumer to design a surfacing channel for. Once the runner is wired, posting the stop's fixed code to the task can be designed for that consumer.\n\nFollow-up rows: none. This row's DoD says to archive it on \"no\", so I'm archiving it; undo with set_task_status ARCHIVED→BACKLOG.\n\nConsequence for task-0e149912: its code-failure label on runCheckJob's result reaches no consumer. It is never recorded, and certify's lockfiles are generated or absent. In the dispatch path that label would also be the wrong input to repair policy (see point 1). The keep-or-archive question is with the governors in #governors.",
+      "timestamp": "2026-10-31T09:06:11.575Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T09:03:42.808Z",
+  "updatedAt": "2026-10-31T09:06:18.025Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T09:03:46.250Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T09:03:50.072Z"
+  },
+  "contextFetchedBy": [
+    "architect-b58e1112"
+  ]
+}

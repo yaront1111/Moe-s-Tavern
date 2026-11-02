@@ -1,0 +1,260 @@
+{
+  "id": "task-120b6a11e9db4012964e865974696e59",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R04] Linux VM provisioning",
+  "description": "Objective: Automatically provision owned Linux VMs on certified Linux using the same provider protocol.\n\nDeliverable: Linux VM provisioning. This is task R04 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/local-runner.test.mjs\n\nDependency aliases (wired by Moe task ids after import): R02, R06, R07.",
+  "definitionOfDone": [
+    "Validate snap/provider permissions and certified backend.",
+    "Use pinned images and no host mounts.",
+    "Insufficient resources and unsupported capability block rather than host fallback.",
+    "Fresh verification `node --test scripts/tests/local-runner.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test-first (RED). Append ONE new section, `// CQ-R04 Linux VM provisioning`, to the END of scripts/tests/local-runner.test.mjs, after the R03 section (R04 depends on R03).\n\n**Fixture rules**\n- Keep every existing byte (LF). Add only new imports: platform-linux.mjs and the landed provision, cli, lifecycle, guest-bootstrap, guest-readiness and image-cache modules.\n- Reuse R03, R06 and R07 fakes. No real snap, Multipass, network or paid calls.\n- Every probe of linuxPlatform.prerequisites is injectable: run transport, snapExecutable, statDevice, statfs, cpus, freemem, homedir.\n\nEnumerate these groups. Mutation-resistant assertions only.\n\n**Snap and provider checks (DoD 1: snap and provider permissions, certified backend)**\n- **N1. `snap list`.**\n  - argv is exactly [snapExecutable, ['list', 'multipass', '--unicode=never', '--color=never']], with shell:false, a bounded buffer and SIGKILL.\n  - Satisfied only for a single row 'multipass 1.17.0 <rev> <tracking> canonical** -'.\n  - Each of these gives 'multipass-snap' false: version 1.16.1; publisher 'canonical' (unverified) or 'someone**'; notes devmode, classic, jailmode, disabled or try.\n  - Each of these gives null: no row; two rows; malformed columns; a non-ENOENT error.\n  - ENOENT gives false with an install action (requiresElevation true).\n- **N2. `snap connections multipass`.**\n  - argv is exactly [snapExecutable, ['connections', 'multipass']].\n  - Satisfied when all REQUIRED multipassd plugs are connected (Slot not '-'): multipass:all-home, multipass:kvm, multipass:multipass-support, multipass:network-bind, multipass:network-control, multipass:firewall-control.\n  - Each required plug disconnected or missing gives 'snap-interfaces' false. The action names exactly the missing `sudo snap connect multipass:<plug>` commands, sorted. requiresElevation is true.\n  - Unparsable output gives null.\n- **N3. Doctor mapping for linux.**\n  - doctor is called with host {platform:'linux', arch:'x64'} and executable '/snap/bin/multipass' by default.\n  - PROVIDER_NOT_FOUND or VERSION_* gives 'multipass-installed' false.\n  - PROVIDER_ACCESS_DENIED gives 'multipass-authenticated' false; the action says an administrator sets local.passphrase and the user runs `multipass authenticate`.\n  - DRIVER_UNSUPPORTED gives 'driver-qemu' false; the action says Moe never changes local.driver.\n  - HOST_UNSUPPORTED gives 'host-linux-x64' false.\n\n**Capability and resources (DoD 3)**\n- **N4. KVM.**\n  - statDevice('/dev/kvm') returning a character device gives 'kvm-available' true.\n  - ENOENT or a non-character device gives false, with requiresElevation true and an action covering firmware virtualization and the kvm module, and saying Moe never falls back to emulation or host execution.\n  - Any other error gives null.\n- **N5. Resources, with exact boundaries** (equal passes; one less fails):\n  - cpus() >= GUEST_RESOURCES.cpus gives 'host-cpus';\n  - freemem() >= GUEST_RESOURCES.memoryBytes gives 'host-memory';\n  - statfs('/var/snap/multipass/common') available bytes (bavail*bsize) >= GUEST_RESOURCES.diskBytes + HOST_DISK_HEADROOM_BYTES (2 GiB) gives 'host-disk'.\n  - A statfs error gives null.\n  - Every item has requiresElevation false and an action saying to free resources or use a larger host.\n\n**Pinned images (DoD 2)**\n- **N6. Image cache location** (the snap's all-home is `home` with read: all; hidden paths are not readable):\n  - '/home/u/moe-images' with homedir '/home/u' gives 'image-cache-location' true;\n  - each of these gives false: '/home/u/.cache/moe', '/home/u/moe/.x', '/var/tmp/x', a relative path, and '/home/u/moe/../.x' (normalized first).\n  - requiresElevation is false, and the action says to choose a non-hidden directory under home.\n\n**Aggregate and composition**\n- **N7. Aggregate.**\n  - Items are in a FIXED order, each EXACTLY {id, satisfied, requiresElevation, action}.\n  - ready is true only when EVERY item is true. Any false or null gives ready:false.\n  - primaryName is passed through from the doctor.\n- **N8 (DoD: block, no host fallback).** provisionGuest(linuxPlatform) with each single unsatisfied or unknown item returns {provisioned:false, bootstrapReady:false, executionReady:false, prerequisites}. Every time:\n  - zero fetch, zero ledger records, zero launch, exec or delete;\n  - no result key suggesting host execution.\n- **N9 (DoD: pinned image, no host mounts). Happy path** with all probes satisfied:\n  - EVERY multipass call uses '/snap/bin/multipass' (the platform default executable);\n  - the image arg is 'file:///home/u/moe-images/<pin>.img';\n  - no '--mount' and no 'set';\n  - R07 readiness passes with zero mounts, and exactly one owned ledger record holds the image identity.\n- **N10. R03 regression.**\n  - The R03 section passes unchanged.\n  - windowsPlatform.prerequisites tolerates the extra cacheDir argument.\n  - The Windows default executable stays 'multipass'.\n\n**CLI**\n- **N11.**\n  - platformFor('linux') === linuxPlatform, platformFor('win32') === windowsPlatform, and platformFor('darwin') === null (until R05).\n  - The `prerequisites` command with an injected linux report prints one JSON line, exits 0 or 2 as R03 defines, and passes `--executable`.\n\n**Real process (POSIX only, `{ skip: process.platform === 'win32' }`)**\n- **N12.**\n  - Write fake `snap` and `multipass` executables (`#!${process.execPath}`) in a mkdtemp dir whose path has a space.\n  - Run linuxPlatform.prerequisites with snapExecutable and provider.executable set to them, and the device, statfs, cpus, freemem and homedir probes injected as satisfied.\n  - Expect ready true through genuine process output.\n  - A devmode variant gives ready false.\n  - The violations file is absent.\n\nRun the file: the new tests are RED and the earlier sections are green. Note this in the step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "RED. Appended the `// CQ-R04 Linux VM provisioning` section (N1-N12, 11 tests, +262 lines). It reuses the R02/R03/R06/R07 fakes (fakeVm, provisionHarness, doctorReport, lifecycleOptions, T/F/U).\n- In the repo, the file fails to load with ERR_MODULE_NOT_FOUND for platform-linux.mjs, as expected for static ESM imports.\n- In a /tmp snapshot with placeholder platform-linux exports and a platformFor stub (/tmp/cq-r04-red.3fSf, log /tmp/cq-r04-red-stub.log): 181 tests, 171 pass, 10 fail. The 10 failures are exactly the R04 tests, as TypeError or assertion failures. The earlier sections stay green.\n- The new 'Windows keeps its own multipass client' test passes already. It is a regression guard for the step-4 executable wiring.\n- **Required deviation:** the R03 test 'CLI prerequisites refuse a host without a platform module' was `skip: win32` and so ran on Linux, assuming Linux has no platform module. R04 adds that module, which makes the test's premise false on Linux. I changed it in place (+6/-2) to stub process.platform='sunos', with no skip, so PLATFORM_UNSUPPORTED is now covered on every OS.\n- The rest of the R03 bytes are unchanged.\n- 490 peer/pre-existing dirty paths were left untouched.",
+      "startedAt": "2026-10-25T10:45:23.022Z",
+      "completedAt": "2026-10-25T10:50:00.739Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create scripts/local-runner/platform-linux.mjs, part 1: the certified snap provider and its permissions. Read-only probes only. Moe surfaces operator actions and NEVER performs them: no sudo, snap install, snap connect or `multipass set`.\n\n**Export `linuxPlatform`**, frozen: {id:'linux', arch:'x64', executable:'/snap/bin/multipass', prerequisites}.\n- The client is pinned to the snap path, so a different `multipass` earlier on PATH cannot stand in for the certified backend.\n- Also export `REQUIRED_SNAP_PLUGS`, frozen: ['all-home', 'firewall-control', 'kvm', 'multipass-support', 'network-bind', 'network-control'].\n- Source: canonical/multipass v1.17.0 snap/snapcraft.yaml. confinement is strict; plug all-home is interface home with read: all; the multipassd plugs include those listed. network-manager, network-observe, removable-media and system-observe are not needed: no bridges, cache in home.\n\n**Probe 1: `snapList({ run, snapExecutable = '/usr/bin/snap' })`**\n- argv: ['list', 'multipass', '--unicode=never', '--color=never'], with options {encoding:'utf8', shell:false, windowsHide:true, timeout:10_000, maxBuffer:MAX_PROBE_BUFFER, killSignal:'SIGKILL'}.\n- Parse: a header plus EXACTLY one row, split on /\\s+/ into 6 columns.\n- Satisfied when name === 'multipass', version === '1.17.0', publisher === 'canonical**' (verified, in --unicode=never rendering) and notes === '-'. Any other notes value (devmode, classic, jailmode, disabled, try, broken) means unconfined or inactive.\n- ENOENT gives false. Malformed output or other errors give null.\n\n**Probe 2: `snapConnections({ run, snapExecutable })`**\n- argv: ['connections', 'multipass'].\n- Parse rows of 4 whitespace-separated columns (Interface, Plug, Slot, Notes).\n- Connected means Plug === `multipass:<plug>` and Slot !== '-'.\n- Return {satisfied, missing:[sorted]}. Unparsable output gives null.\n\n**Provider: R02 runDoctor**, with host {platform:'linux', arch:'x64'} (injectable for tests), executable provider.executable ?? linuxPlatform.executable, and run.\n\n**Item mapping.** Each item is EXACTLY {id, satisfied, requiresElevation, action}.\n- **host-linux-x64:** false on HOST_UNSUPPORTED; requiresElevation false.\n- **multipass-snap:** requiresElevation true; action 'Install the Multipass 1.17.0 snap from the verified Canonical publisher with strict confinement (requires sudo).'\n- **snap-interfaces:** requiresElevation true; the action lists exactly the missing `sudo snap connect multipass:<plug>` commands.\n- **multipass-installed:** requiresElevation true; false on PROVIDER_NOT_FOUND or VERSION_*.\n- **multipass-authenticated:** requiresElevation true, because an administrator sets local.passphrase; false on PROVIDER_ACCESS_DENIED.\n- **driver-qemu:** requiresElevation true; action 'Moe never changes local.driver'; false on DRIVER_UNSUPPORTED.\n- Items a failing doctor code cannot speak to are null, never true.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) probes never throw; failures map to false (ENOENT) or null (unknown). Output text never enters a report.\n\nMake N1-N3 green.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/platform-linux.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/platform-linux.mjs"
+      ],
+      "note": "Created platform-linux.mjs, part 1.\n- linuxPlatform is frozen as {id:'linux', arch:'x64', executable:'/snap/bin/multipass', prerequisites}. REQUIRED_SNAP_PLUGS is frozen.\n- I re-checked v1.17.0 snap/snapcraft.yaml this session. Confinement is strict, and plug all-home is the home interface with read: all. The multipassd plugs match the plan.\n- One private snapTable reader serves both snap probes:\n  - fixed argv, shell:false, a 10s timeout, MAX_PROBE_BUFFER and SIGKILL;\n  - the byte bound is checked BEFORE trim;\n  - the header must match exactly and every row must have exactly the header's width;\n  - ENOENT gives false and any other failure gives null.\n- probeSnap is satisfied only by exactly one row: multipass, 1.17.0, canonical**, notes '-'.\n- missingPlugs returns the required plugs with Slot '-' or no row, in sorted order (REQUIRED order is sorted); unknown gives null.\n- The doctor items use the same code→item mapping as Windows. The doctor runs on provider.executable ?? the snap client, and its errors are settled to null.\n- Deviation: the default host is the real {process.platform, process.arch}, as on Windows, not a hard-coded linux/x64. Linux arm64 therefore fails closed as HOST_UNSUPPORTED. Tests inject LINUX_HOST.\n- The probes are module-private, since tests go through prerequisites().\n- A smoke check passed (one disconnected plug gives false, with the exact connect action; devmode gives false).\n- N1-N3 assert the full 11-item report and the export names from part 2, so they turn green in step 3.",
+      "startedAt": "2026-10-25T10:50:57.772Z",
+      "completedAt": "2026-10-25T10:51:37.895Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "platform-linux.mjs, part 2: capability, resources and image location, then the aggregate.\n\n**Constants**\n- `HOST_DISK_HEADROOM_BYTES = 2 * 2**30`.\n- `MULTIPASS_STORAGE = '/var/snap/multipass/common'`, the snap daemon's storage root.\n\n**Items.** Each is EXACTLY {id, satisfied, requiresElevation, action}.\n- **kvm-available:**\n  - `await statDevice('/dev/kvm')`, defaulting to fs.promises.stat. isCharacterDevice() gives true; ENOENT or another file type gives false; any other error gives null.\n  - requiresElevation true.\n  - Action: 'Enable hardware virtualization in firmware and load the kvm module (requires administrator); Moe never falls back to emulation or host execution.'\n- **host-cpus:** cpus() >= GUEST_RESOURCES.cpus. Default os.availableParallelism.\n- **host-memory:** freemem() >= GUEST_RESOURCES.memoryBytes. Default os.freemem, which reads MemAvailable on Linux.\n- **host-disk:**\n  - `await statfs(MULTIPASS_STORAGE)` (default fs.promises.statfs).\n  - Available = bavail * bsize, compared with BigInt-safe arithmetic.\n  - Available must be >= GUEST_RESOURCES.diskBytes + HOST_DISK_HEADROOM_BYTES. An error gives null.\n- **Resource items** have requiresElevation false and the action 'Free host CPU, memory or disk, or use a larger host; Moe never runs jobs on the host instead.'\n- **image-cache-location:**\n  - Normalize cacheDir with path.posix.resolve.\n  - Satisfied only if it is strictly under homedir() + '/' and NO path segment below homedir starts with '.'.\n  - The snap's all-home is `home` with read: all, which excludes hidden paths.\n  - cacheDir absent gives null. requiresElevation false. Action: 'Use a non-hidden directory under your home directory for the image cache.'\n\n**`prerequisites({ provider = {}, cacheDir, doctor = runDoctor, snapExecutable, statDevice, statfs, cpus, freemem, homedir, host } = {})`**\n- Run every probe. They are independent, so run them concurrently with Promise.all, each wrapped so one failure cannot reject the batch.\n- Return {platform:'linux', ready: every item satisfied === true, prerequisites:[fixed order: host-linux-x64, multipass-snap, snap-interfaces, multipass-installed, multipass-authenticated, driver-qemu, kvm-available, host-cpus, host-memory, host-disk, image-cache-location], primaryName: doctor.primaryName ?? null}.\n\n**No host fallback.** No branch returns ready:true while any item is not true, and nothing in this module starts a VM or runs a job.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) every probe error is mapped to false or null; no throw escapes prerequisites().\n\nMake N4-N7 and N12 green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/platform-linux.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/platform-linux.mjs"
+      ],
+      "note": "Part 2 is in, and platform-linux.mjs is 131 lines.\n- New exports: HOST_DISK_HEADROOM_BYTES = 2 GiB and MULTIPASS_STORAGE = '/var/snap/multipass/common'.\n- kvmDevice: stat('/dev/kvm').isCharacterDevice() === true. ENOENT or a non-character device gives false; anything else gives null.\n- cpus (os.availableParallelism) and freemem (os.freemem) are checked with `atLeast`, which uses BigInt, so NaN, undefined or a non-integer throws and becomes null.\n- disk: BigInt(bavail) * BigInt(bsize) >= diskBytes + 2 GiB, measured on MULTIPASS_STORAGE.\n- cacheReadable uses path.posix.relative (normalized). '' (home itself) is false, and any segment starting with '.' is false, which covers both hidden paths and '..'. A non-string or relative cacheDir is false; an absent cacheDir or an invalid homedir is null.\n- All 11 checks run in one Promise.all. Each is wrapped (settle/known, or self-catching), so nothing rejects.\n- Fixed item order, as planned. ready is every item === true.\n\nEvidence: the step-4 cli export is not in the repo yet, so I ran the snapshot /tmp/cq-r04-red.3fSf (stubbed platformFor) with the real platform-linux.mjs. Result: 181 tests, 178 pass, 3 fail. N1-N7 and N12 (real-process) are green.\nThe 3 remaining failures are the step-4 wiring tests, failing for the expected reasons:\n- the two provisionGuest tests (provision.mjs does not pass cacheDir yet, so the fixture's out-of-home cacheDir gives image-cache-location false);\n- the CLI test (platformFor stub).\nLog: /tmp/cq-r04-step3.log.",
+      "startedAt": "2026-10-25T10:51:38.916Z",
+      "completedAt": "2026-10-25T10:52:47.347Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Wire Linux into the shared composition and the CLI.\n\n**1. provision.mjs.** R03 created it, and R04 depends on R03. It is listed under newFiles ONLY because it does not exist at plan time; R04 MODIFIES it.\n- (a) provisionGuest calls `platform.prerequisites({ provider: effective, cacheDir })`, so the platform can check the cache location.\n- (b) Compute `effective = { ...provider, executable: provider.executable ?? platform.executable }` ONCE. Use it for prerequisites, provisionOwned, launchInstance and waitForGuestReady, so EVERY Multipass call goes to the platform's certified client.\n  - windowsPlatform has no `executable`, so its behavior is unchanged ('multipass').\n- Keep everything else byte-identical. R03's tests must pass unchanged.\n\n**2. cli.mjs.**\n- Add `linux: linuxPlatform` to PLATFORMS.\n- Export `platformFor(id)`, which returns PLATFORMS[id] ?? null and is used by the default `prerequisites` dependency.\n- The R02 and R03 CLI behavior is otherwise unchanged.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) unchanged R03 and R06/R07 propagation. A platform that reports not ready still means zero mutation.\n\nMake N8-N11 green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/cli.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/provision.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/provision.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/platform-linux.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Wired Linux in.\n- **provision.mjs (+3/-1).** After input validation it reassigns `provider = {...provider, executable: provider.executable ?? platform.executable}` once. That provider is used for prerequisites, launchInstance, provisionOwned and waitForGuestReady. It also passes `cacheDir` to platform.prerequisites. windowsPlatform has no executable, so all its calls still default to 'multipass'; a new test asserts that set is exactly ['multipass'].\n- **cli.mjs (+7/-3).** PLATFORMS gains linux. It exports `platformFor(id)`, an own-key lookup (so `__proto__` and `toString` give null), which hostPrerequisites uses.\n- **Fresh full file run (Linux-only PATH, env -i, Node 24.21.0):** 181 tests, 181 pass, 0 fail, 0 skip, exit 0. Log: /tmp/cq-r04-step4.log.\n- **Size trim, to keep the whole task under QA's 400 changed-LOC default (the R04 rails grant no size exception):**\n  - I removed a redundant override-executable block (the N12 real process covers overrides).\n  - I removed a real-host CLI routing block that ran /usr/bin/snap on the test machine (not deterministic). platformFor plus the sunos-stubbed R03 test cover routing.\n  - I compressed the module header and tightened the happy-path transport assertion to full argv.\n- **Current total:** +387/-6 = 393 changed lines (platform-linux 126, tests +251/-2, cli +7/-3, provision +3/-1).\n- Peer dirty paths seen (scripts/moe-agent.sh, postflight.sh, importee-guard-bash.test.mjs, untracked scripts/local-runner/guest-bridge.mjs) were left untouched.",
+      "startedAt": "2026-10-25T10:52:48.351Z",
+      "completedAt": "2026-10-25T10:55:10.084Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "The one verification gate. Use the Linux-only PATH (PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin) and unset every MOE_* variable.\n\n**1. The DoD command, fresh, from the repository root:**\n```\nnode --test scripts/tests/local-runner.test.mjs\n```\nIt must exit 0 with 0 failed and 0 cancelled. On Linux, N12 and the earlier real-process tests must RUN. Record the pass, fail and skip counts.\n\n**2. Packaging regression.**\n```\nnode --test scripts/tests/local-runner-bundle.test.mjs\n```\nIt must exit 0.\n\n**3. Snapshot check.** Peers share this checkout, so rerun command 1 in a fresh tree:\n```\nD=$(mktemp -d)\ngit -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src/state/resourceStore.ts package.json | tar -x -C \"$D\"\n```\nOverlay the four changed files' working-tree bytes, then run it from $D. It must exit 0.\n\n**4. Byte checks.**\n- `git diff --check` is clean.\n- The earlier test sections are byte-identical apart from new imports.\n- `git diff` of provision.mjs shows only the two wiring changes.\n\nKeep command 1's command, exit code and output tail for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/platform-linux.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/provision.mjs"
+      ],
+      "note": "Verification gate. Run with env -i, HOME preserved, the Linux-only PATH, no MOE_* variables, Node v24.21.0.\n\n1. **DoD command** `node --test scripts/tests/local-runner.test.mjs` (repo root): exit 0. 181 tests, 181 pass, 0 fail, 0 cancelled, 0 skipped. All 9 real-process tests ran, including R04's N12 (genuine fake-snap and fake-multipass processes in a dir whose path has a space). Log: /tmp/cq-r04-verify.log.\n2. **Bundle** `node --test scripts/tests/local-runner-bundle.test.mjs`: exit 0, 7/7. Log: /tmp/cq-r04-bundle.log.\n3. **Snapshot.** git archive HEAD (scripts, resourceStore.ts, package.json), with the 4 working-tree files overlaid, in /tmp/cq-r04-snap.Jct6: exit 0, 181/181, 0 skip. Log: /tmp/cq-r04-snapshot.log.\n4. **Byte checks:**\n   - `git diff --check` is clean; no CRLF.\n   - The test file has only 3 hunks: the R03 CLI test edit from step 1 (needed because Linux now has a platform module) and the appended R04 section.\n   - provision.mjs shows only the two wiring changes.\n   - Every other local-runner module hash is unchanged from session start (/tmp/cq-r04-pre-hashes.txt vs /tmp/cq-r04-final-hashes.txt).\n\nNo files were modified in this step.",
+      "startedAt": "2026-10-25T10:55:11.045Z",
+      "completedAt": "2026-10-25T10:56:20.821Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Exactly one adversarial self-review. Load adversarial-self-review and read the diff as an attacker.\n\n**Permissions and backend (DoD 1).**\n- Can a devmode or classic snap, an unverified publisher, a wrong version or a PATH-shadowed multipass pass?\n- Can a disconnected required plug pass?\n- Is a parse failure ever true?\n\n**Pinned image and no mounts (DoD 2).**\n- Can a hidden or out-of-home cache path pass, including through `..`?\n- Does any argv carry --mount or `set`?\n- Does every multipass call use /snap/bin/multipass?\n\n**Block, never fall back (DoD 3).**\n- Is there any path that returns ready, provisions, or executes on the host when kvm, cpus, memory or disk is false or null?\n- Is the BigInt statfs math right at the exact boundaries?\n\n**Robustness.**\n- Concurrent probe failures, huge or odd snap output, the injected probe defaults, and Windows CI (pure parsing tests run; real-process tests are skipped).\n\n**Scope.**\n- executionReady stays false; no isolation or certification claim.\n- No sudo or elevation, no .moe edits, no Git writes, no daemon or launcher changes.\n- R03's tests are unchanged and green.\n- No forbidden pattern from the global rails in new code.\n\nFix the findings and rerun the step-5 commands fresh. Use the fresh output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/platform-linux.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/provision.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/platform-linux.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/provision.mjs"
+      ],
+      "note": "One adversarial self-review, scoped to the 4-file diff.\n\n**Fixed**\n1. The two Linux provisionGuest tests compose POSIX host paths. On Windows CI, the cacheDir under tmpdir is a drive path, so location would be null and the tests would fail. They now skip on win32 (comment added). The pure parsing tests still run on Windows.\n2. The test literal platformFor('__proto__') matched the global forbiddenPattern `__proto__`. It is now 'constructor'. New code has no eval(, innerHTML or __proto__.\n3. A mutation probe showed the relative-cacheDir guard survived (path.posix.relative resolves against cwd). I added the row {cacheDir:'moe-images', homedir:'/'} → F, and the mutant is now killed.\n\n**Mutation probes** (harness /tmp/cq-r04-mut-harness/mut.py, on snapshot copies): 24/24 killed, after the first run's one survivor was fixed. Mutants covered: notes/publisher/version/row-count/byte-bound/slot/header/width, kvm file-type and ENOENT, snap ENOENT, `>=`→`>`, the headroom, Number math, the dotdot/home-itself/relative-cache guards, ready `!== false`, the doctor PATH client, plugs-unknown, provision with no cacheDir or no executable, cli without the linux entry, and the proto lookup.\n\n**Checked, no change needed**\n- devmode, classic, unverified, starred, wrong-version, two-row and malformed snap tables never give true.\n- A disconnected or absent plug gives false, and the action names exactly the sorted missing connects.\n- '..', hidden, out-of-home and home-itself cache paths give false.\n- The launch argv is unchanged R03 (no --mount, no set), and every Multipass call in provisionGuest uses /snap/bin/multipass (tested).\n- ready requires all 11 items === true. Anything else returns before download or reserve, and no code path runs a job on the host.\n- The BigInt boundaries are exact (equal passes; minus one block or byte fails). Real fs.statfs returns numbers (verified).\n\n**Residuals** (fail closed, or out of scope)\n- Notes must be exactly '-'. If snapd renders a refresh-held snap as 'held', it is refused. I could not fetch the snapd source (404), so R13 must confirm on a real host.\n- The cache check is lexical. A symlink into a hidden path, or a $HOME outside the snap's HOMEDIRS, fails later at launch (bounded R06 retries, record kept), never on the host.\n- `cli.mjs prerequisites` has no --cache-dir, so on Linux image-cache-location is null and the CLI exits 2. provisionGuest supplies cacheDir.\n- Callers of R06 reconcileOwned and cleanupOwned outside provisionGuest must pass executable: platform.executable. That is caller-integration scope.\n- An explicit provider.executable override is trusted caller input.\n\n**Fresh reruns of the step-5 commands**\n\n| Run | Result | Log / location |\n|---|---|---|\n| DoD command | exit 0, 181/181, 0 skip, all 9 real-process tests ran | /tmp/cq-r04-final.log |\n| Bundle test | 7/7 | — |\n| Fresh HEAD snapshot | 181/181 | /tmp/cq-r04-final-snap.Bjyg |\n| Windows Node 24.16 | 171 pass, 10 win32 skips, 0 fail | — |\n\n- `git diff --check` is clean.\n- Size: +388/-6, 394 changed lines (platform-linux 126, tests +252/-2, cli +7/-3, provision +3/-1).\n- Delivered hashes: /tmp/cq-r04-delivered.sha256.",
+      "startedAt": "2026-10-25T10:56:21.779Z",
+      "completedAt": "2026-10-25T11:00:42.910Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human asked to move more tasks to planning by order. Prerequisites: R02 DONE, R06 WORKING, R07 being planned (claimed).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 40,
+  "comments": [
+    {
+      "id": "comment-1d48bb2a5ce14e17b2d2c3fa7946a65d",
+      "author": "architect-26ba32c3",
+      "content": "Architect sequencing note (2026-10-24): R04 now also depends on R03 (task-8ef993cf26ec4708bae7f510af545eb0), per the epic rail on serializing overlapping files.\n\nR03's plan creates the shared modules R04 should REUSE rather than copy:\n- scripts/local-runner/provision.mjs: fileImageUrl, launchInstance, which writes user-data over stdin (`--cloud-init -`), and the platform-neutral provisionGuest composition;\n- scripts/local-runner/image-cache.mjs: ensurePinnedImage.\n\nR04 should add only:\n- scripts/local-runner/platform-linux.mjs, exporting `{id:'linux', arch:'x64', prerequisites}` and returning items {id, satisfied, requiresElevation, action};\n- a `linux` entry in cli.mjs PLATFORMS;\n- its own appended test section.\n\nLinux-specific facts to plan for:\n- The snap-confined multipassd can only read image files from snap-permitted locations, for example non-hidden dirs under home or /media. Place the cache dir there, or surface it as an operator prerequisite.\n- KVM must be accessible to the snap.\n- The R02/R06/R07 Multipass facts are in Serena `decision-multipass-owned-instance-protocol`.",
+      "timestamp": "2026-10-24T15:20:14.909Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:33:55.825Z",
+  "updatedAt": "2026-10-25T11:15:13.191Z",
+  "dependsOn": [
+    "task-3ab82a8016514240b53d295792daebe1",
+    "task-deba1a56a8104786ae25b84c58c363b4",
+    "task-84c2da018ce74995b609805dab4fe7da",
+    "task-8ef993cf26ec4708bae7f510af545eb0"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-24T15:20:30.851Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-25T11:14:37.031Z",
+    "wallClockMs": 71646180
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "worker-3617ccf7",
+    "qa-b0c1741e"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T15:24:39.155Z",
+  "planningNotes": {
+    "approachesConsidered": "**Chosen: reuse R03's platform-neutral provisionGuest and image cache, and add platform-linux.mjs.**\n- Read-only probes check the snap: verified Canonical publisher, version 1.17.0 and strict confinement (no devmode or classic).\n- Required multipassd plugs must be connected, from v1.17.0 snapcraft.yaml.\n- R02 doctor runs against the pinned /snap/bin/multipass client: version, qemu driver, authentication.\n- KVM capability and host CPU, memory and disk bounds are checked.\n- The image cache must sit in a non-hidden home path, readable by the snap's all-home plug.\n- Every unmet or unknown item blocks with an explicit operator action and requiresElevation flag. There is never emulation or host fallback.\n\nTwo small wiring changes go into R03's provision.mjs (pass cacheDir and the platform default executable), and cli.mjs gains a PLATFORMS linux entry and platformFor.\n\n**Rejected.**\n- **sudo, `snap connect` or `multipass set` automation.** Operator-only, surfaced as actions.\n- **Trusting `multipass` on PATH.** The certified client is the snap path.\n- **Copying the composition.** It is reused from R03.\n- **Removable-media cache locations.** Not needed; home-only keeps it simple.\n- **Parsing `snap info`.** `snap list` and `snap connections` suffice.\n\nUnder TURBO these choices are recorded here, not held for a REPL answer.\n\nprovision.mjs is in newFiles only because R03 creates it after this plan was written.",
+    "codebaseInsights": "**canonical/multipass v1.17.0 snap/snapcraft.yaml:**\n- confinement strict;\n- top-level plug all-home is interface home with read: all;\n- multipassd plugs: all-home, firewall-control, kvm, multipass-support, network-bind, network-control, network-manager (bridges), network-observe, removable-media, system-observe;\n- the daemon storage is under /var/snap/multipass/common.\n\n**R02 manifest** for linux/x64 is driver qemu with versionSuffix '' (exact '1.17.0').\n\n**R03 (plan rev 1):**\n- provision.mjs provisionGuest({platform, ...}) calls platform.prerequisites({provider});\n- launchInstance and fileImageUrl;\n- cli.mjs PLATFORMS = {win32: windowsPlatform} plus a `prerequisites` command.\n\n**R07:** GUEST_RESOURCES {cpus 2, memoryBytes 4 GiB, diskBytes 20 GiB}.\n\n**Node:** os.freemem reads MemAvailable on Linux (libuv), and fs.promises.statfs exists in Node 24.",
+    "risks": "**R03, R06 and R07 are unlanded at plan time.** Follow their LANDED names and note any differences.\n\n**snap CLI output formats** (`--unicode=never` verified marker '**', the connections columns) are pinned from snapd behavior, not a live host. Parsing fails closed (null blocks). Real-host evidence is R13.\n\n**The snap home interface** only excludes top-level hidden dirs. The plan is stricter, requiring no hidden segment at all, which is safe.\n\n**WSL hosts** may lack /dev/kvm or the snap and are blocked, correctly.\n\n**Shared dirty checkout.** Touch only the four files.",
+    "keyFiles": [
+      "scripts/local-runner/cli.mjs",
+      "scripts/local-runner/doctor.mjs",
+      "scripts/local-runner/certified-provider.json",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T15:24:39.238Z",
+  "workStartedAt": "2026-10-25T10:45:23.022Z",
+  "reviewStartedAt": "2026-10-25T11:01:21.478Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ Linux prerequisites pin the snap client and the required plugs of the v1.17.0 snap\n✔ only the strictly confined Canonical-verified Multipass 1.17.0 snap satisfies multipass-snap\n✔ every required multipassd plug must be connected; the action names exactly the missing connects\n✔ a failed provider check marks only its own Linux prerequisite; the doctor runs against the snap client\n✔ missing KVM, short resources or an unreadable cache location block without a fallback\n✔ Linux checks are isolated: a throwing check is unknown, never ready, and nothing rejects\n✔ Linux provisioning does nothing until every prerequisite is satisfied: there is no host fallback\n✔ Linux provisioning launches the pinned image through the snap client without mounts or settings\n✔ Windows provisioning keeps its own multipass client and ignores the cache location argument\n✔ the CLI selects the Linux platform module and no other host gains one\n✔ real snap and Multipass processes: Linux prerequisites read genuine output and refuse a devmode snap (152.696159ms)\nℹ tests 181\nℹ suites 0\nℹ pass 181\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 16822.420421",
+    "reportedAt": "2026-10-25T11:01:21.478Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/platform-linux.mjs",
+    "scripts/local-runner/provision.mjs",
+    "scripts/local-runner/cli.mjs",
+    ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+    ".moe/tasks/task-8ef993cf26ec4708bae7f510af545eb0.json",
+    ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json",
+    ".moe/tasks/task-23e0b6af6c7e4e0987be0591db1ba517.json",
+    ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json"
+  ],
+  "completionSummary": "CQ-R04 adds Linux VM provisioning in 4 files: +388/-6, 394 changed lines, under QA's 400 default. executionReady stays false; nothing is certified as isolated.\n- New platform-linux.mjs: read-only, operator-action-only prerequisites. Moe never runs sudo, snap install/connect or multipass set/authenticate.\n  - Client pinned to /snap/bin/multipass, never a PATH lookup.\n  - The snap must be exactly one row: multipass, 1.17.0, publisher canonical**, notes '-'. devmode, classic, jailmode, try, disabled and broken are refused.\n  - The six required multipassd plugs must be connected. I re-checked them against v1.17.0 snapcraft.yaml.\n  - The R02 doctor runs against the snap client.\n  - /dev/kvm must be a character device.\n  - CPUs, MemAvailable and statfs of /var/snap/multipass/common must cover GUEST_RESOURCES, plus 2 GiB of disk headroom.\n  - The image cache must be strictly under home with no hidden or '..' segment (all-home is home with read: all).\n  - A missing or unknown item blocks before any download, reserve or launch. There is no host or emulation fallback.\n- provision.mjs (+3/-1) passes cacheDir and uses the platform's executable for every Multipass call. Windows stays on 'multipass' (tested).\n- cli.mjs (+7/-3) adds a linux entry and exports platformFor, an own-key lookup.\n- Deviations:\n  - The default host is the real process.platform/arch, so arm64 fails closed.\n  - The probes are private.\n  - I edited one R03 test in place. It assumed Linux had no platform module; it now stubs process.platform='sunos' and runs on every OS.\n  - The two host-path provisioning tests skip on win32.\n- Fresh results:\n\n  | Run | Result |\n  |---|---|\n  | DoD command, Linux Node 24.21.0 | exit 0, 181/181, 0 skip, all 9 real-process tests ran |\n  | Bundle test | 7/7 |\n  | HEAD snapshot | 181/181 |\n  | Windows Node 24.16 | 171 pass, 10 win32 skips |\n  | Mutation probes | 24/24 killed |\n\n  RED was shown first: 10 R04 failures while the earlier sections stayed green. diff --check is clean, ",
+  "commits": [
+    {
+      "sha": "b129cfb53e3c602287275ee817a9e25b1bfba052",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3617ccf7@2026-10-25T10:39:35Z",
+      "paths": [
+        ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+        ".moe/tasks/task-8ef993cf26ec4708bae7f510af545eb0.json",
+        ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/platform-linux.mjs",
+        "scripts/local-runner/provision.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-3617ccf7",
+      "recordedAt": "2026-10-25T11:02:02.974Z",
+      "treeId": "e1e33851fae05ab0dcafdb090c839286f3f4808b",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "7df01eddbcb134258722a77cc581a3b5f0cb0afb",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T11:07:17Z",
+      "paths": [
+        ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+        ".moe/tasks/task-23e0b6af6c7e4e0987be0591db1ba517.json",
+        ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T11:15:13.191Z",
+      "treeId": "01d6d819c088a6bdbcde40e2ff51de1d9273c0f3",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/platform-linux.mjs",
+    "scripts/local-runner/provision.mjs",
+    "scripts/local-runner/cli.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T11:07:17Z",
+    "at": "2026-10-25T11:15:13.191Z"
+  },
+  "completedAt": "2026-10-25T11:14:37.031Z",
+  "reviewCompletedAt": "2026-10-25T11:14:37.031Z",
+  "reviewSummary": "APPROVED CQ-R04, reviewing completion commit b129cfb (on moe/work-2026-10-24; no later edit to the 4 source paths).\n\nSize: +388/-6 = 394 changed source lines, under 400. platform-linux +126, cli +7/-3, provision +3/-1, tests +252/-2.\n\nRe-ran:\n- DoD `node --test scripts/tests/local-runner.test.mjs`, Linux Node 24.21.0, env -i:\n  - fresh git-archive snapshot: exit 0, 181/181, 0 skip, real-process tests ran;\n  - repo root: 181/181.\n- Windows Node 24.16: exit 0, 171 pass, 10 win32 skips.\n- Bundle test: 7/7.\n- diff --check clean; no forbidden patterns; no sudo, snap or `multipass set` is executed.\n\nDoD:\n1. Snap client pinned to /snap/bin/multipass. One row multipass/1.17.0/canonical**/notes '-'. All 6 multipassd plugs connected; I checked them against upstream v1.17.0 snapcraft.yaml (strict; all-home is home read:all).\n2. The pinned image launches with exact R03 argv via the snap client; no `set`; R07 readiness sees zero mounts.\n3. KVM, CPU, memory, disk (+2 GiB, exact boundaries) and the home-only cache location each block when false or unknown, with zero download, ledger or VM commands.\n4. Fresh output supplied.\n\nMy mutation sweep: 25/28 killed.\n- Two survivors are equivalent.\n- One is a test gap: provisionGuest's explicit provider.executable precedence is untested.\n\nThe R03 test edit (sunos stub, all OSes) is stronger. executionReady stays false; no isolation claim.\n\nNon-blocking: on Linux the CLI `prerequisites` passes no cacheDir, so it can never exit 0 (fails closed; caller-integration scope). The cache check is lexical. R13 should confirm 'held' notes on real hardware.",
+  "requiredCheckAtDone": null
+}

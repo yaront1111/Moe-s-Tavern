@@ -1,0 +1,222 @@
+{
+  "id": "task-24a5ad5bb5d74180bb71f5cbff76225a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: repositorySource.test.ts 'only keeps complete records at the search byte cap' fails on native Windows with EPERM in afterEach rmSync",
+  "description": "Native Windows `npm test` (full suite) fails src/context/repositorySource.test.ts:112 afterEach: fs.rmSync(root) -> EPERM on C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-source-*. Deterministic in the full run (2/2 plus unmodified-HEAD baseline); passes when the file runs alone. Found 2026-10-30 verifying task-cf7f4708.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests-first: use the existing repositorySource fixture and a small local cleanup helper to add deterministic native-Windows teardown coverage. Spawn ONLY an owned Node child with cwd equal to a fresh temp root; wait for an explicit stdout readiness signal, then have it release the cwd/exit after a short bounded delay. The cleanup under test must remove that root after the hold ends and await child close; replacing it with original rmSync must fail EPERM. Add a held-beyond-retry-budget case asserting cleanup rejects rather than silently succeeding, with child release/kill-and-await and final cleanup in finally. Use startup/exit deadlines and error/early-exit handlers; no PID guessed from the machine or unbounded wait. Windows-only lock semantics test may skip off Windows with explicit reason; existing repositorySource tests run everywhere. Do not change the search-byte-cap test's actual Git call or match expectations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.test.ts"
+      ],
+      "note": "Added owned-child cwd-hold regressions with explicit ready signal, bounded spawn/start deadlines, and kill/close/remove in finally. RED confirmed on native Windows Node: 1 failed/134 passed; transient test fails EPERM at original rmSync (log /tmp/moe-24a5-red.log); persistent-hold and unchanged capped-search assertions pass. Work stays in project root; isolated snapshots are verification-only. Pre-existing peer dirty paths left untouched.",
+      "startedAt": "2026-10-30T14:10:32.903Z",
+      "completedAt": "2026-10-30T14:12:21.020Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Replace the fixture afterEach's immediate fs.rmSync with awaited native fs.promises.rm using recursive:true, force:true, maxRetries:5 and retryDelay:100. Share this small test-local helper with the regression; no hand-rolled retry loop or arbitrary unconditional sleep. Snapshot roots.splice(0), await cleanup of every recorded root, and surface any failure after all attempts (allSettled plus aggregate error or equivalent bounded cleanup), so one refusal cannot strand later fixture roots. Preserve mock/timer restoration and ensure cleanup uses real timers. Error handling: force ignores only absence, exhausted EPERM/EBUSY and unexpected errors still fail. Assert deleted roots absent in regression. Add concise comment explaining Windows transient directory holds; runtime execFile already waits for close, so do not assume a production Git-runner bug or alter production files without evidence/replan.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.test.ts"
+      ],
+      "note": "Awaited fs.promises.rm(recursive:true,force:true,maxRetries:5,retryDelay:100); snapshot roots via splice and allSettled, aggregate failures only after every attempt; mocks/real timers restored first. Added multi-root/idempotence/error aggregation and assertion-failure owned-child cleanup coverage. Focused native Windows: 138/138 pass (/tmp/moe-24a5-green2-win.log); Linux: 135 pass/3 Windows-only skipped. Native async persistent cwd hold returns EBUSY rather than sync EPERM, so test explicitly accepts either access/hold error. Diff remains tests-only, 80 net lines.",
+      "startedAt": "2026-10-30T14:12:21.041Z",
+      "completedAt": "2026-10-30T14:13:58.318Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Single concentrated verification phase: in isolated snapshots with platform-native locked dependencies and inherited MOE_* scrubbed, run exact `(cd packages/moe-daemon && npm test && npm test)`; record fresh command/exitCode/outputTail and both pass counts. Execute that same two-run gate with NATIVE Windows Node/npm (cmd.exe from a Windows temp snapshot) as well as Linux; the native hold/retry test must run on Windows, not skip, and focused-file-only green is insufficient because the original failure is full-suite-only. Confirm zero leftover owned processes/fixture roots and the old capped-search assertions still pass. Preserve logs for each run, compare failures against unchanged snapshot before attributing peer regressions, and never claim a failing full gate is passing. No build/deploy in shared globally-linked dist.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.test.ts"
+      ],
+      "note": "Fresh exact (cd packages/moe-daemon && npm test && npm test), MOE_* scrubbed, frozen HEAD 63f336a8 + owned test overlay, locked platform-native dependency copies. Linux: both runs exit0, 208 files, 5963 passed/19 skipped each (34.57s/28.85s). Native Windows Node24.16/npm via cmd.exe: both exit0, 207 files passed/1 skipped, 5934 tests passed/47 skipped each (74.77s/69.42s). repositorySource: 138/138 including cwd-hold tests and unchanged capped-search test on BOTH native runs. New fixture roots after either platform gate: []. Logs /tmp/moe-24a5-full-{linux,win}.log; source SHA256 c02fbb394abf58950ad49a1e5e97c0f29a078de61c1876b42f006f6f7c5e6e5b matches shared file/both snapshots. No dist builds or shared dependency installs.",
+      "startedAt": "2026-10-30T14:13:58.342Z",
+      "completedAt": "2026-10-30T14:18:34.653Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review: bounded transient vs persistent access errors, child readiness failure/early exit, teardown after failed assertion, multiple roots and already-removed directories, real vs fake timer ordering and native-Windows path quoting. Ensure cleanup errors are not swallowed, tests await all handles/processes, no full-suite serialization or search-bound relaxation, and no production/user-directory side effects. Keep test-only diff compact (target <100 net lines); fix findings and rerun the named gate before complete_task/QA.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.test.ts"
+      ],
+      "note": "Adversarial review complete: owned unique temp roots/child handles only; bounded startup+spawn deadlines and early error/exit handlers; finally kills/awaits close then removes root on assertion failure. allSettled preserves persistent/unexpected failures after all roots; force covers absence; real timers restored before teardown. Native process query confirms zero remaining cwd-holder children; both platform gates added zero fixture roots. Original capped-search test compared byte-for-byte unchanged. No production changes, sleeps outside controlled child release, global timeout/concurrency changes, dependency additions, or user-state writes. Diff +83/-3 (80 net); git diff --check clean. No post-gate source edits/findings requiring rerun. Both consecutive full native/Linux gates passed as recorded in step 3.",
+      "startedAt": "2026-10-30T14:18:34.673Z",
+      "completedAt": "2026-10-30T14:19:11.817Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 303.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:48:43.431Z",
+  "updatedAt": "2026-10-30T14:33:40.977Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:49:12.702Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:04:39.055Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T14:33:15.574Z",
+    "wallClockMs": 1716519
+  },
+  "contextFetchedBy": [
+    "architect-eb7de546",
+    "worker-6e57c4f8",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:09:11.651Z",
+  "executionContract": {
+    "intendedBehavior": "The repositorySource test fixture fully and reliably removes its own temp repositories after bounded transient Windows directory holds without suppressing real cleanup failures or changing source-search behavior.",
+    "acceptanceCriteria": [
+      "The existing capped-search test retains its exact truncated/search-byte-cap/complete-first-match assertion and is not skipped or weakened.",
+      "Fixture teardown awaits fs.promises.rm with recursive:true, force:true, maxRetries:5, retryDelay:100; temp roots are absent after successful cleanup, persistent/unexpected failures remain test failures.",
+      "A native-Windows owned-child cwd-hold regression fails with the original immediate rmSync and passes with bounded async cleanup; child/process/temp cleanup completes on success and assertion failure.",
+      "Two consecutive full daemon suite runs pass in isolated native-Windows snapshot and Linux snapshot; native regression runs on Windows, not only emulation."
+    ],
+    "invariants": [
+      "No production Git-runner/repositorySource changes, no new dependency, no global timeout/parallelism reduction, no swallowed EPERM, no blanket sleeps, and no source-query assertions removed.",
+      "All temporary files/processes belong to the test; no live project .moe or broad process-kill operations.",
+      "If native evidence shows a persistent leaked Git descendant beyond the bounded retry budget, stop and request replan with evidence instead of increasing retries or masking it."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/context/repositorySource.test.ts only; local fixture cleanup helper, cleanup regression and concise rationale comment."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Use Node's asynchronous rm built-in bounded retry rather than broader Git child supervisor changes or sleeps. Crucially rmSync retry flags alone did NOT work in an actual native Node24.16 probe.",
+    "codebaseInsights": "repoSource afterEach line112 uses rmSync without retries. Search-byte-cap intentionally overflows execFile maxBuffer; Node child_process local source wires completion to close. /tmp/cf7f-win.log shows root-directory EPERM at teardown, with search assertion intact. Architect native Windows controlled cwd-hold probe: rmSync no retries EPERM, rmSync maxRetries5/retryDelay100 EPERM in0ms, fs.promises.rm same flags removed root in617ms. This proves the cleanup mechanism, not that the full-suite fix already passes. Test context and readOnlyGitEnv are otherwise correct.",
+    "risks": "Generic original DoD clarified via executionContract without weakening it. One file/tests-only, standard/high; native Windows two full runs required. EPERM can also indicate persistent leaks; fail/replan on exhausted budget, don't increase retries blindly. fs.promises.rm API verified official https://nodejs.org/api/fs.html#fspromisesrmpath-options. No user-facing docs needed; inline fixture rationale only.",
+    "keyFiles": [
+      "packages/moe-daemon/src/context/repositorySource.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:09:11.679Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T14:10:32.903Z",
+  "reviewStartedAt": "2026-10-30T14:19:40.817Z",
+  "verification": {
+    "command": "(cd packages/moe-daemon && npm test && npm test)",
+    "exitCode": 0,
+    "outputTail": "Linux snapshot /tmp/moe-24a5-linux.K6rJaX, Node v24.21.0, MOE_* scrubbed:\nRun1: Test Files 208 passed (208); Tests 5963 passed | 19 skipped (5982); Duration 34.57s\nRun2: Test Files 208 passed (208); Tests 5963 passed | 19 skipped (5982); Duration 28.85s\nNative Windows snapshot C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-24a5-win.9GaK29, Node v24.16.0 win32, npm via cmd.exe, MOE_* scrubbed:\nRun1: Test Files 207 passed | 1 skipped (208); Tests 5934 passed | 47 skipped (5981); Duration 74.77s\nRun2: Test Files 207 passed | 1 skipped (208); Tests 5934 passed | 47 skipped (5981); Duration 69.42s\nNative Windows two-run gate exit: 0\nrepositorySource.test.ts (138 tests) passed on both native runs, including bounded transient hold, beyond-retry-budget rejection, assertion-failure cleanup and unchanged complete-record search cap.\nNew repository-source fixture leftovers: [] (both platforms)\nOwned cwd-holder processes remaining: 0\nPer-run logs /tmp/moe-24a5-{linux,win}-run{1,2}.log",
+    "reportedAt": "2026-10-30T14:19:40.817Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/context/repositorySource.test.ts",
+    ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
+    ".moe/tasks/task-24a5ad5bb5d74180bb71f5cbff76225a.json",
+    ".moe/tasks/task-41fc271bec774d0b910c88691b18a2ea.json",
+    ".moe/tasks/task-a4ca766a67184630842d4a6d12338cf8.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json",
+    ".moe/tasks/task-b5a176355a7c443d98952466b409f941.json",
+    ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
+    ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json"
+  ],
+  "completionSummary": "Test-only Windows fixture cleanup fix (+80 net lines). Await bounded fs.promises.rm; attempt all roots and aggregate failures after restoring real timers/mocks. Native owned-child regressions cover transient and persistent cwd holds and assertion-failure cleanup; multi-root/idempotence/error tests added. Original capped-search test is byte-for-byte unchanged; production untouched. RED: original rmSync fails native transient regression EPERM. Fresh full gate twice per isolated platform (HEAD63f336a8 + owned file, MOE_* scrubbed, locked native dependencies): Linux 208 files/5963 tests passed each,19 skipped; native Windows 207 files/5934 tests passed each,47 skipped. All138 repositorySource tests run/pass on both native full runs, including cwd holds/cap assertion. Zero new fixture roots or owned cwd-holder processes. Logs /tmp/moe-24a5-{linux,win}-run{1,2}.log. Handoff mem:task-task-24a5ad5bb5d74180bb71f5cbff76225a-handoff. File SHA256 c02fbb394abf58950ad49a1e5e97c0f29a078de61c1876b42f006f6f7c5e6e5b matches both gated snapshots. Adversarial review and diff --check clean; no source edits after gates.",
+  "commits": [
+    {
+      "sha": "51a62457c1ae5398154a2d14e4bb4e59dda137af",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-6e57c4f8@2026-10-30T14:09:29Z",
+      "paths": [
+        ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
+        ".moe/tasks/task-24a5ad5bb5d74180bb71f5cbff76225a.json",
+        ".moe/tasks/task-41fc271bec774d0b910c88691b18a2ea.json",
+        ".moe/tasks/task-a4ca766a67184630842d4a6d12338cf8.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json",
+        ".moe/tasks/task-b5a176355a7c443d98952466b409f941.json",
+        ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
+        "packages/moe-daemon/src/context/repositorySource.test.ts"
+      ],
+      "recordedBy": "worker-6e57c4f8",
+      "recordedAt": "2026-10-30T14:19:57.013Z",
+      "treeId": "e04b2bcc1e93df1dce93d8d9908363ca4b5510fe",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "aff856d3d760e9557ea0522c52d1cc07b5ef7cc7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T14:26:32Z",
+      "paths": [
+        ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
+        ".moe/tasks/task-24a5ad5bb5d74180bb71f5cbff76225a.json",
+        ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T14:33:40.977Z",
+      "treeId": "a0881a733461657aaa3cddcc5977d564442282d2",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T14:26:32Z",
+    "at": "2026-10-30T14:33:40.977Z"
+  },
+  "completedAt": "2026-10-30T14:33:15.574Z",
+  "reviewCompletedAt": "2026-10-30T14:33:15.574Z",
+  "reviewSummary": "Reviewed completion 51a62457 (on moe/work-2026-10-24, pushed). Only non-board file: repositorySource.test.ts, +83/-3 (80 net), under the 400 cap; other 8 paths are daemon .moe/tasks board JSON. No production, dependency or timeout changes.\n\nDoD:\n1. Capped-search test untouched (its hunk is absent from the diff), not skipped.\n2. Teardown awaits fs.promises.rm({recursive,force,maxRetries:5,retryDelay:100}). The afterEach restores mocks and real timers, then removeRoots uses allSettled and throws an AggregateError after all roots are attempted, so EPERM, EBUSY and unexpected errors still fail. Unit tests cover the rm options, every root attempted, aggregation, and idempotence.\n3. Native-Windows owned-child cwd-hold regressions (ready signal, deadlines, kill+await close+rm in finally) cover transient hold, persistent hold rejecting EPERM or EBUSY, and assertion-failure cleanup.\n4. My mutation check on native Windows (Node 24.16, isolated snapshot of HEAD 921f81a6): swapping removeRoot to sync rmSync gave 2 failed, 136 passed. The transient-hold and rm-options tests both failed.\n\nRe-ran `(cd packages/moe-daemon && npm test && npm test)` myself in isolated snapshots with platform-native npm ci, no MOE_* env:\n- Linux Node 24.21: both runs exit 0, 208 files, 5963 passed, 19 skipped.\n- Native Windows: both runs exit 0, 207 files passed, 1 skipped, 5934 passed, 47 skipped. repositorySource.test.ts passed 138/138 on both runs.\n- No leaked holder processes; moe-source-* roots went from 7 to 7. EBUSY log lines are unrelated workerType WARNs.\n- Logs: /tmp/moe-qa-24a5-{linux,win}-gate.log.\n\nComplexity: withHeldRoot is about 30 lines, justified by the DoD. Not a defect.",
+  "requiredCheckAtDone": null
+}

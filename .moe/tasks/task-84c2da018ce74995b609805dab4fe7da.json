@@ -1,0 +1,401 @@
+{
+  "id": "task-84c2da018ce74995b609805dab4fe7da",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R07] Pinned guest bootstrap",
+  "description": "Objective: Verify source image checksums and install protected supervisor plus locked unprivileged job identities.\n\nDeliverable: Pinned guest bootstrap. This is task R07 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/local-runner.test.mjs\n\nDependency aliases (wired by Moe task ids after import): R06.",
+  "definitionOfDone": [
+    "Source SHA and provider-converted image identity are recorded separately.",
+    "Wait for cloud-init plus boundary probes; running alone is not ready.",
+    "Zero mounts, protected binaries/credentials and bounded resources are verified.",
+    "Fresh verification `node --test scripts/tests/local-runner.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "GATE FIRST: make no edit before the human's rail decision is known.\nThis is a size-only reopen. QA found no failed DoD item in e587474 and offered two options:\n- (b) an explicit R07 size exception on the epic rail, which is the R06 precedent;\n- (a) a re-slice.\nThe architect filed (b) as rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (MODIFY_RAIL, EPIC).\n\n1. Read allRails.epic from moe.get_context.\n   - If the size-exception rail contains 'CQ-R07: the pinned guest bootstrap as landed in e587474', continue with step 2.\n   - Otherwise read the decision READ-ONLY from .moe/proposals/prop-d3ccceade25f4af19518ce0e930e4123.json (field status):\n     - PENDING: call moe.report_blocked { reason: 'awaiting the human decision on rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (CQ-R07 size exception, QA option b); governor: set_task_status WORKING once it is approved; if it is rejected, set PLANNING so the architect re-slices R07 per QA option (a)' } with no blockedOnTaskIds, then end the session.\n     - REJECTED: call moe.request_replan { reason: 'R07 size exception rejected (prop-d3ccceade25f4af19518ce0e930e4123): re-slice R07 per QA option (a), the A/B/C/D1/D2 cut in rejectionDetails' }, then end the session.\n2. Confirm the landed bytes are untouched: `git diff --stat e587474 -- scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/lifecycle.mjs scripts/tests/local-runner.test.mjs` prints nothing. If a peer changed them, stop and report_blocked with the diff summary.\n\nThe four files are not contested: R03, R04 and R05 depend on this task, so their plan paths do not count against it. Any editor works.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Resumed persisted IN_PROGRESS step (start_step refused expected PENDING; no account switch). Gate phrase is present in fresh allRails.epic; proposal prop-d3ccceade25f4af19518ce0e930e4123 is APPROVED by HUMAN at 2026-10-25T07:43:43.055Z. git diff --stat e587474 -- the four R07 paths is empty on moe/work-2026-10-24 HEAD 21ea64b. R06 prerequisite is DONE and landed per epicSiblings. No edits/Git writes; shared pre-existing/peer dirty paths untouched. Separate out-of-scope bug filed as task-ab6aac94d9424653bb45d6db4fa3fe67: applied rail is silently cut at 1000 chars, losing the approved tail; governors asked to restore approved clause through Moe. Full approved proposal explicitly permits the planned combined-cloud-config QA fix; all its constraints retained.",
+      "startedAt": "2026-10-24T22:30:42.319Z",
+      "completedAt": "2026-10-25T07:49:59.718Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "QA's carried-forward hardening note, test first. These are the only bytes this task adds on top of e587474.\n\n1. RED, in scripts/tests/local-runner.test.mjs (LF):\n   - In the DENIALS table (~914-924), right after the readInstanceData row, add `['readCombinedConfig', '-r', '/run/cloud-init/combined-cloud-config.json', 'CREDENTIAL_EXPOSED']`.\n   - EXPECTED_PROBES (~937), the healthy answers (~982) and the exposure loop (~1346) all derive from DENIALS. So the probe is asserted in the frozen argv table and as an exit-0 exposure without further test code.\n   - Run `node --test scripts/tests/local-runner.test.mjs` and record the failure: the source does not run the probe yet.\n2. GREEN, in scripts/local-runner/guest-readiness.mjs:\n   - Add the identical row at the same index of DENIED (~34-44).\n   - Extend the comment above DENIED with cloud-init's combined config: the internal_files docs describe it as a root-readable, unredacted merged config with user-data overrides applied, so it can carry the write_files credential. Its mode on the pinned image is R13 real-guest certification.\n   - Error handling stays as it is: deny() treats only exit 1 as a denial, exit 0 is CREDENTIAL_EXPOSED and any other code is PROBE_UNKNOWN. A missing file reads as denied, because `test -r` exits 1.\n   - Run again and confirm it passes.\n\nNo other source or test change. The rail allows growth only by fixes QA requires.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "note": "TDD completed under env -i HOME/Linux-only PATH, Node v24.21.0. Added DENIALS row first: named suite exit 1, 135/139 pass, 4 expected failures; exposure assertion readCombinedConfig:moe-agent exit 0 incorrectly returned bootstrapReady:true (red log /tmp/cq-r07-worker-e8965f51-red.log). Added matching DENIED row and accurate comment, leaving deny() unchanged. First green run exposed a plan omission: the frozen-table test also hard-codes 14 probes/identity, not all counts derive from DENIALS. Minimal in-scope QA-fix adjustment changed 14 to 15; no assertion removed. Final step-2 run exit 0, 139/139, 0 skipped; real-provider-process test ran (/tmp/cq-r07-worker-e8965f51-green-fixed.log). Comment verified against https://docs.cloud-init.io/en/latest/development/internal_files.html; no pinned-image mode/isolation claim. Only these two project files edited; no Git writes/manual .moe edits.",
+      "startedAt": "2026-10-25T07:50:06.895Z",
+      "completedAt": "2026-10-25T07:52:00.638Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run each command once, fresh.\n\n1. NAMED COMMAND (DoD 4, the complete_task evidence): `node --test scripts/tests/local-runner.test.mjs` from the repo root, on Linux/WSL with a Linux Node 24.\n   - Use `env -i HOME=\"$HOME\" PATH=<Linux node bin + /usr/local/bin:/usr/bin:/bin>`, with no MOE_* vars.\n   - It must exit 0 with 0 failed and 0 skipped: 139 tests on Linux, and the real-provider-process test must run.\n2. `node --test scripts/tests/local-runner-bundle.test.mjs` exits 0.\n3. `git diff --check` is clean.\n4. Prove the growth: `git diff --numstat e587474 -- scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/lifecycle.mjs scripts/tests/local-runner.test.mjs` lists only guest-readiness.mjs (the row plus its comment lines) and local-runner.test.mjs (one row).\n\nA failure outside these files must be reproduced on a clean `git archive HEAD scripts` snapshot before you call it pre-existing.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh required `node --test scripts/tests/local-runner.test.mjs`: exit 0, 139/139 pass, 0 failed/skipped/cancelled, real provider readiness fixture executed (15449.795375 ms). Linux Node v24.21.0; env -i with only HOME and /home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin PATH, no MOE_* vars. Log /tmp/cq-r07-worker-e8965f51-verification.log. Bundle command exit 0, 7/7; git diff --check exit 0. Exact growth vs e587474: guest-readiness +4/-1 (row/comment), tests +2/-1 (row plus necessary 14→15 probe-count correction noted in step 2); guest-bootstrap/lifecycle unchanged. All nine direct/fixture input SHA256s unchanged across gate (/tmp/cq-r07-worker-e8965f51-inputs.sha256). No edits in this step. Governor confirmed the independent rail-truncation bug and instructed continuing under full approved proposal while an exact-clause restoration awaits human approval.",
+      "startedAt": "2026-10-25T07:52:22.951Z",
+      "completedAt": "2026-10-25T07:53:06.297Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review with mutation proof (load adversarial-self-review), then complete_task. QA ran no independent mutation probes on R07, so this evidence is part of the deliverable.\n\nScratch tree: build it read-only with `git archive HEAD scripts | tar -x -C <scratch>`, overlay this session's two files, and run the named command there. Never mutate the live tree.\n\nEach mutation must turn the command red:\n(1) remove the new DENIED row;\n(2) make deny() treat exit 2 as a denial;\n(3) accept a Multipass 'Running' guest as ready without the cloud-init wait;\n(4) accept cloud-init 'degraded done' (exit 2) as done;\n(5) make recordImage overwrite a different stored image instead of answering IMAGE_IDENTITY_CHANGED;\n(6) make waitForGuestReady accept a caller sourceImage whose sha256 differs from the manifest pin.\n\nFor any survivor, add the smallest test that kills it. That counts as a QA-required fix inside the rail; say so.\n\nIn complete_step's note, list each mutation with the test name that went red, so QA can re-run them.\n\nAlso attack:\n- Is the new probe's argv fixed, with no caller data?\n- Is the comment accurate, claiming no mode?\n- executionReady stays false, and nothing claims verified-local.\n\nIf any byte changed after step 3, rerun step 3's named command and submit that output.\n\nmodifiedFiles: scripts/local-runner/guest-readiness.mjs, scripts/tests/local-runner.test.mjs. No Git writes; no .moe edits.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        ".serena/memories/gotcha-cloud-init-credential-copies.md",
+        ".serena/memories/task-task-84c2da018ce74995b609805dab4fe7da-handoff.md"
+      ],
+      "note": "Scoped adversarial diff review completed (concurrency, invalid inputs/injection, environment/TOCTOU, error side effects, cold review). Fixed argv/path only, no caller-controlled command data; frozen independent expectations cover both identities. Only exit 1 denies; 0 exposes; 2/3/126 unknown. No new state/concurrency operations; failures preserve ledger and sanitize diagnostics. Comment is sourced, not a pinned-image mode assertion. Existing point-in-time/non-locking CAS/per-call timeout residuals unchanged; executionReady:false and verified-local unavailable.\nScratch: /tmp/cq-r07-worker-e8965f51-mutations.xswap205; harness /tmp/cq-r07-worker-e8965f51-mutations.py. Read-only git archive 21ea64b scripts plus resourceStore.ts (L1 read-only fixture; required expansion of archive inputs), overlay only the two session files. Baseline full named command exit 0, 139/139. Each mutation ran the same full command separately, exit 1, 139 tests/zero skips; six killed, no survivors or new tests:\n1 remove DENIED row (4 failures): `the supervisor and credential must be root-only files under root-owned unwritable directories` (also frozen argv test).\n2 allow exit-2 denial (2 failures): `the supervisor and credential must be root-only files under root-owned unwritable directories`.\n3 Running without cloud-init wait (4 failures): `a Running guest whose cloud-init never finishes is not ready and times out after bounded polls`.\n4 allow degraded-done exit 2 (1 failure): `cloud-init error, degradation, disablement or a stopped guest fails bootstrap without boundary probes`.\n5 overwrite image identity (1 failure): `the source checksum and provider image identity are recorded separately and never overwritten`.\n6 accept caller SHA mismatch (1 failure): `a malformed source image or supervisor digest is refused before any provider call`.\nsummary.json, each .patch/.log preserve exact mutations and assertion evidence (not syntax failures). All nine live input hashes still equal step 3 and snapshot; no production/test byte changed after verification. Final scoped diff check clean. Required Serena handoff/gotcha updated; metadata paths listed in addition to cumulative source/test paths for complete attribution. Temporary evidence stays outside project; no Git/manual .moe writes. Independent rail truncation bug task-ab6aac94d9424653bb45d6db4fa3fe67 and pending restoration prop-307362ea handed to QA/governor; governor confirmed continue under full HUMAN-approved prop-d3ccceade.",
+      "startedAt": "2026-10-25T07:53:28.311Z",
+      "completedAt": "2026-10-25T07:58:22.521Z"
+    }
+  ],
+  "planRevision": 26,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "The human APPROVED prop-d3ccceade (CQ-R07 size exception) at 2026-10-25T07:43:43Z. Per this task's blockedReason, restored to WORKING. The next worker runs the verification-only steps against the landed e587474 bytes, and QA confirms the rail covers them.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 70,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:05.514Z",
+  "updatedAt": "2026-10-25T08:12:55.272Z",
+  "dependsOn": [
+    "task-deba1a56a8104786ae25b84c58c363b4"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-24T15:03:07.413Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 11,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-25T08:10:53.479Z",
+    "wallClockMs": 61666066
+  },
+  "contextFetchedBy": [
+    "worker-07cd2c56",
+    "qa-b0c1741e",
+    "architect-6e3edf85",
+    "worker-e8965f51"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T22:28:42.981Z",
+  "planningNotes": {
+    "approachesConsidered": "Option (b), an explicit epic-rail size exception, was filed as prop-d3ccceade25f4af19518ce0e930e4123, mirroring R06's approved prop-1256842e. It edits the existing 'ONLY size exceptions' rail in place. Option (a), QA's A/B/C/D1/D2 re-slice, was not chosen as the default: the bytes are already landed and pushed (e587474), so each slice would be a plan+work+QA cycle over committed bytes with no behaviour change. That runs against CQ-TOKEN-v1, and R03, R04 and R05 all wait on R07. A rejection of the proposal routes back to planning through step 1's request_replan, and (a) is planned then. The architect did not call report_blocked: an assignee block would end this planning session. The worker's step-1 gate is a cheap claim-read-block when the decision is still pending.",
+    "codebaseInsights": "guest-readiness.mjs: DENIED (~34-44) holds [kind, test flag, path, failure] rows; deny() makes only exit 1 a denial. Test file: DENIALS (~914-924) mirrors DENIED, and EXPECTED_PROBES (~937), the healthy answers (~982) and the exposure loop (~1346) derive from it, so one row in each table covers argv, health and exposure. R07's tests are the '// CQ-R07 pinned guest bootstrap' section (~896-1611); the real-process test skips on win32. Working-tree bytes equal e587474 at plan time. The four files are uncontested: R03-R05 dependOn R07, so the waitsOnThis rule counts only their asserted paths, and they have none.",
+    "risks": "The proposal may stay PENDING. A claim before the human decides only reads and blocks (step 1); the governor unblocks after approval. A survivor mutation forces a small extra test, which is allowed as a QA-required fix but must be called out. combined-cloud-config.json may not exist on the pinned image; `test -r` exits 1 for a missing file, which is treated as denied, the correct fail-closed reading. Run on Linux, where the real-process test runs; a Windows-only run skips it and is not acceptable evidence.",
+    "keyFiles": [
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/local-runner/lifecycle.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T22:28:43.082Z",
+  "workStartedAt": "2026-10-24T21:35:20.520Z",
+  "reviewStartedAt": "2026-10-25T07:58:57.708Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ ledger refuses a record with a short source checksum and never acts on it (11.090735ms)\n✔ ledger refuses a record with an extra image key and never acts on it (9.921775ms)\n✔ ledger refuses a record with a missing provider hash and never acts on it (10.242604ms)\n✔ ledger refuses a record with an uppercase provider hash and never acts on it (10.366423ms)\n✔ ledger refuses a record with a numeric checksum and never acts on it (9.558397ms)\n✔ ledger refuses a record with a null image and never acts on it (10.650629ms)\n✔ ledger refuses a record with a string image and never acts on it (11.267661ms)\n✔ real provider process: readiness uses only info and the fixed exec probes (1467.225452ms)\nℹ tests 139\nℹ suites 0\nℹ pass 139\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 15449.795375\nLinux/WSL Node v24.21.0, repository root, env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin; no MOE_* variables. All nine verification inputs unchanged after run.",
+    "reportedAt": "2026-10-25T07:58:57.708Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-readiness.mjs",
+    ".serena/memories/gotcha-cloud-init-credential-copies.md",
+    ".serena/memories/task-task-84c2da018ce74995b609805dab4fe7da-handoff.md",
+    ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+    ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+    ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+    ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
+    ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json",
+    ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json",
+    ".moe/tasks/task-076a0bd3f09e4ce4ae4bbc6bb122d2ed.json",
+    ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+    ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+    ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+    ".moe/tasks/task-ab6aac94d9424653bb45d6db4fa3fe67.json",
+    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
+  ],
+  "completionSummary": "Reused landed e587474 after HUMAN approval of size-exception prop-d3ccceade25f4af19518ce0e930e4123. Added only QA's combined-cloud-config credential-copy denial probe and sourced comment, plus independent test row and necessary fixed probe-count correction 14→15. Growth: guest-readiness.mjs +4/-1, local-runner.test.mjs +2/-1; guest-bootstrap/lifecycle unchanged. Required Serena handoff/gotcha updated and paths reported. No Git writes or manual .moe edits; wrapper owns landing.\nDoD preserved: source SHA and provider-converted identity remain separate/set-once; Running alone is not ready; cloud-init and boundary/resource checks fail closed. Both identities now deny-read /run/cloud-init/combined-cloud-config.json: only exit 1 counts as denied. executionReady remains false; no live-VM/isolation/verified-local certification claimed.\nFresh named Linux Node 24.21.0 command: exit 0, 139/139, zero failed/skipped/cancelled; real-process tests ran. Bundle 7/7; diff --check clean. Test-first RED demonstrated exposed combined config incorrectly ready; GREEN corrected it. Archive snapshot 139/139 and six independent mutations killed (remove probe, exit-2 denial, Running-only, degraded done, overwrite image, caller SHA). Nine live/snapshot input hashes match and remain unchanged after the gate.\nEvidence: /tmp/cq-r07-worker-e8965f51-verification.log, -bundle.log, -inputs.sha256; /tmp/cq-r07-worker-e8965f51-mutations.xswap205/{summary.json,*.patch,*.log}; full test names in step 4.\nOut-of-scope rail persistence truncates approved text at 1000 chars: filed task-ab6aac94d9424653bb45d6db4fa3fe67. Governor confirmed continuation under full approved proposal, including count correction; restoration prop-307362ea pending human click. QA should use full approved text, not missing truncated clauses.",
+  "commits": [
+    {
+      "sha": "e587474b1f6908bdf4e11a1d6ee4dd55787a25dd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-24T21:23:44Z",
+      "paths": [
+        ".moe/tasks/task-709f669139764663926c04ed72cdae5d.json",
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
+        ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json",
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-24T21:58:03.477Z",
+      "treeId": "ede8e172166c63b5ef3bbc0fb21396485ec97388",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "1152985d411d17a1f9357e7ad05fbc44a9344cc5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T21:58:24Z",
+      "paths": [
+        ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T22:03:36.512Z",
+      "treeId": "c5565daad4f14c0e08347e9e4fe8be0ce77a56ec",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "e98af8ac7c5c581c0418e006aa31aa032d419aa2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-24T22:02:49Z",
+      "paths": [
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
+        ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-24T22:05:33.057Z",
+      "treeId": "1becf9ca6fe8c4835ea3bf830a0a51d9f1bf4990",
+      "status": "PLANNING",
+      "pushed": true
+    },
+    {
+      "sha": "60f69fd8017154502ca59b7edf81033b8a79fa5a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-24T22:29:15Z",
+      "paths": [
+        ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-24T22:31:38.428Z",
+      "treeId": "dafb0c6237387b0c67f9d28b8b494364bf78468a",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "759cc61b65dc94cff68b557fb6647dc70c289495",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e8965f51@2026-10-25T07:47:33Z",
+      "paths": [
+        ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+        ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+        ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
+        ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json",
+        ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json",
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-e8965f51",
+      "recordedAt": "2026-10-25T07:59:39.986Z",
+      "treeId": "88edd289e7b438134b9541dd7a8bea058b5d3816",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "1e70fad2a8e68cf54fefdc16fecf9c59bc207fab",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T08:00:12Z",
+      "paths": [
+        ".moe/tasks/task-076a0bd3f09e4ce4ae4bbc6bb122d2ed.json",
+        ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
+        ".moe/tasks/task-ab6aac94d9424653bb45d6db4fa3fe67.json",
+        ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T08:12:55.272Z",
+      "treeId": "18ae93cb9791a9c1d3f59d645374d3fd0b4b8d43",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/guest-bootstrap.mjs",
+    "scripts/local-runner/guest-readiness.mjs",
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "unattributedPaths": [
+    "2026-10-24-ai-code-quality-and-context.md",
+    "packages/moe-daemon/src/server/planApproval.test.ts"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T08:00:12Z",
+    "at": "2026-10-25T08:12:55.272Z"
+  },
+  "reviewCompletedAt": "2026-10-25T08:10:53.479Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "file": "scripts/tests/local-runner.test.mjs",
+        "line": 896,
+        "description": "Oversized: e587474 changes 1131 code lines (+1122/-9) against the 400 net-LOC QA cap, and the epic rail keeps normal sizing for every task except R02/R06. Fix: request_replan, so the architect splits R07 into slices of 400 lines or less that reuse e587474 (see the suggested A/B/C/D1/D2 cut in the reason), or the human adds an explicit epic-rail exception naming this exact slice, as for R06. No code change is needed for correctness."
+      },
+      {
+        "type": "other",
+        "file": "scripts/local-runner/guest-readiness.mjs",
+        "line": 34,
+        "description": "Non-blocking hardening note: DENIED enumerates cloud-init's copies of user-data. On the pinned 24.04 image, check whether newer cloud-init writes another copy of the merged config, e.g. /run/cloud-init/combined-cloud-config.json. If it does, add the same exit-1-only deny probe. The other disclosed residuals are acceptable: wall time can exceed maxWaitMs by the per-call timeouts, and /opt and /etc are trusted via the pin."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "OVERSIZED — rail violation, not a code defect. Completion commit e587474 (on moe/work-2026-10-24) changes 1131 code lines: guest-bootstrap.mjs +113, guest-readiness.mjs +253, lifecycle.mjs +39/-9, local-runner.test.mjs +717. The QA cap is 400 net changed LOC. The epic rail says \"CQ-R02 and CQ-R06 are the ONLY size exceptions ... Other tasks retain normal sizing limits\", so R07 has no waiver. R06 went through the same size reject before its rail exception.\n\nSubstance (no failed DoD item):\n- Fresh `node --test scripts/tests/local-runner.test.mjs` (env -i, Node 24.21.0): exit 0, 139/139, 0 skipped. G19 and R06's real-process tests ran.\n- Bundle test 7/7; `git diff --check` clean; no forbidden patterns; working-tree bytes = e587474.\n- A read-through found all three DoD behaviors present and failing closed:\n  - the source pin and the provider hash are kept separate, and recordImage is a set-once CAS;\n  - cloud-init must report done/done/clean, and Running alone is never ready;\n  - the boundary probes treat only exit 1 as a denial.\n- I ran no independent mutation probes.\n\nWORKER: do not edit code. Call moe.request_replan citing this rejection, so the architect either:\n(a) re-slices R07 into slices of 400 LOC or less that reuse the landed bytes, or\n(b) asks the human for an explicit R07 size exception on the epic rail naming the exact e587474 slice, as was done for R06.\n\nSuggested cut (test-file line numbers):\n- A: guest-bootstrap.mjs + G1-G4 (1048-1145), about 230 lines.\n- B: the lifecycle.mjs image diff + recordImage tests (1419-1444) + reconcile/cleanup (1529-1571), about 150 lines.\n- C: readGuestInfo/runGuestProbe/probe table + G5/G6 (1146-1233) + fakeGuest, about 250 lines.\n- D1: waitForGuestReady inputs, fence and cloud-init wait + G7-G9, G15-G16.\n- D2: boundary evaluation and recording + G10-G14, G17, G19.",
+      "rejectedAt": "2026-10-24T22:02:45.781Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "line": 896,
+          "description": "Oversized: e587474 changes 1131 code lines (+1122/-9) against the 400 net-LOC QA cap, and the epic rail keeps normal sizing for every task except R02/R06. Fix: request_replan, so the architect splits R07 into slices of 400 lines or less that reuse e587474 (see the suggested A/B/C/D1/D2 cut in the reason), or the human adds an explicit epic-rail exception naming this exact slice, as for R06. No code change is needed for correctness."
+        },
+        {
+          "type": "other",
+          "file": "scripts/local-runner/guest-readiness.mjs",
+          "line": 34,
+          "description": "Non-blocking hardening note: DENIED enumerates cloud-init's copies of user-data. On the pinned 24.04 image, check whether newer cloud-init writes another copy of the merged config, e.g. /run/cloud-init/combined-cloud-config.json. If it does, add the same exit-1-only deny probe. The other disclosed residuals are acceptable: wall time can exceed maxWaitMs by the per-call timeouts, and /opt and /etc are trusted via the pin."
+        }
+      ]
+    }
+  ],
+  "priorAttempt": {
+    "attemptedAt": "2026-10-24T22:04:41.001Z",
+    "reason": "Size-only QA reject (qa-b0c1741e, 2026-10-24T22:02Z). QA directed: no code edits, request_replan. Verified: e587474 numstat = guest-bootstrap.mjs +113, guest-readiness.mjs +253, lifecycle.mjs +39/-9, local-runner.test.mjs +717 = 1131 changed lines vs the 400 net-LOC cap; epic rail grants size exceptions only to R02/R06. Working-tree bytes of those 4 files == e587474 (git diff empty). No DoD item failed (QA fresh run exit 0, 139/139).\n\nNeed one of:\n(a) Re-slice R07 into <=400-LOC tasks reusing landed e587474 bytes. QA's cut: A guest-bootstrap.mjs+G1-G4 (~230); B lifecycle image/recordImage CAS+tests (~150); C readGuestInfo/runGuestProbe/probe table+G5/G6+fakeGuest (~250); D1 waitForGuestReady inputs/fence/cloud-init wait+G7-G9,G15-G16; D2 boundary eval/recording+G10-G14,G17,G19.\n(b) Human adds an explicit R07 epic-rail size exception naming the exact e587474 slice (4 files, +1122/-9), as done for R06 (cf7de94); a size-only reopen then reuses the bytes with fresh focused verification.\n\nWorker recommendation: (b). The bytes are already landed and passed QA's substantive read-through; under (a) every slice's diff is already on the branch, so slices become reviews of landed line ranges, not new delivery.\n\nCarry forward QA's non-blocking hardening note to whichever plan owns the probe table (slice C/D2, or the only growth under (b)): cloud-init docs (development/internal_files) list /run/cloud-init/combined-cloud-config.json as a root-readable UNREDACTED merged config with user-data overrides applied, so it likely carries the write_files b64 credential. Add the same exit-1-only deny probe (sudo -n -u <id> test -r /run/cloud-init/combined-cloud-config.json) plus a G11 row. Its octal mode is undocumented; real-guest stat stays R13 certification.\n\nThis session: no source/test/docs edits, no Git writes, no .moe edits.",
+    "implementationPlan": [
+      {
+        "stepId": "step-1",
+        "description": "Test-first (RED). Append ONE new section, `// CQ-R07 pinned guest bootstrap`, to the END of scripts/tests/local-runner.test.mjs. It goes AFTER R06's section, which landed first (R07 depends on R06).\n\n**Fixture rules**\n- Keep every existing byte. The file is LF; R02's 51 tests and R06's section stay unchanged.\n- Imports come from '../local-runner/guest-bootstrap.mjs', '../local-runner/guest-readiness.mjs' and the landed '../local-runner/lifecycle.mjs'.\n- No real Multipass, no network, no paid calls.\n- Reuse R06's fake-provider helper if its shape fits. Otherwise add `fakeGuest({ info, probes })`, an execFile-compatible `run` that:\n  - answers `['info', n, '--format', 'json']` with a v1.17.0-shaped detail object;\n  - answers `['exec', '--no-map-working-directory', n, '--', ...argv]` by looking up the argv in a map of { code, stdout };\n  - records every call;\n  - FAILS the test on any other argv.\n- A v1.17.0 info fixture holds {zone:null, state, image_hash (64 hex), image_release, release, cpu_count:'2', load:[], disks:{sda1:{used:'1', total:'<bytes>'}}, memory:{used:n, total:n}, ipv4:[], mounts:{}}.\n\nEnumerate these groups. Mutation-resistant assertions only: exact codes, argv, strings and counts.\n\n**Bootstrap inputs**\n- **G1. hashFile.** It streams sha256 equal to crypto.createHash over the same bytes for a temp file (path with a space). It refuses:\n  - a symlink;\n  - a directory;\n  - a relative path;\n  - a file larger than an injected smaller maxBytes;\n  each with IMAGE_INPUT_INVALID or IMAGE_UNREADABLE, and no path in the message.\n- **G2. verifySourceImage({file, arch}).**\n  - Unknown arch throws IMAGE_INPUT_INVALID.\n  - A real temp file (real hashing) throws IMAGE_CHECKSUM_MISMATCH.\n  - The success path, with an injected `digest` returning the pinned sha from loadCertifiedProvider(), returns a frozen {arch, url, sha256} equal to the manifest pin for 'x64' and for 'arm64'.\n- **G3. buildUserData({supervisor, credential}) golden.**\n  - Fixed Buffers give byte-exact deterministic text, compared against an expected string built in the test.\n  - It contains:\n    - '#cloud-config' as the first line;\n    - 'ssh_pwauth: false' and 'mounts: []';\n    - users starting with '- default', then moe-agent and moe-check with 'lock_passwd: true' and NO groups or sudo keys;\n    - write_files for /opt/moe/bin/moe-supervisor (owner root:root, permissions '0500', encoding b64) and /etc/moe/supervisor.credential (root:root, '0400', b64).\n  - supervisorSha256 equals the sha256 of the supervisor bytes.\n  - The credential bytes never appear raw.\n  - Empty, oversized (beyond MAX_SUPERVISOR_BYTES or MAX_CREDENTIAL_BYTES) or non-Buffer input throws BOOTSTRAP_INPUT_INVALID.\n- **G4.** launchResourceArgs() deep-equals ['--cpus', '2', '--memory', '4G', '--disk', '20G'], and GUEST_RESOURCES is frozen.\n\n**Provider reads**\n- **G5. readGuestInfo.**\n  - argv is exactly ['info', name, '--format', 'json'], with R06's execFile options (shell:false, windowsHide, bounded maxBuffer, SIGKILL).\n  - The fixture parses into {state, providerImageHash, imageRelease, cpuCount, memoryTotal, diskTotal, mountCount}.\n  - Each malformed variant gives PROVIDER_INFO_INVALID: missing image_hash, non-hex image_hash, cpu_count 'two', memory.total as a string, mounts as an array.\n- **G6. runGuestProbe.**\n  - argv is exactly ['exec', '--no-map-working-directory', name, '--', ...GUEST_PROBES[id]].\n  - An unknown probe id makes zero calls and throws BOOTSTRAP_INPUT_INVALID.\n  - Every argv element in GUEST_PROBES matches /^[A-Za-z0-9_.:\\/%=+-]+$/ (no spaces or shell metacharacters), checked over the whole frozen table.\n  - A non-zero remote exit returns {code, stdout}.\n  - A timeout, ENOENT or maxBuffer throws a sanitized code.\n\n**Readiness (DoD 2)**\n- **G7. Happy path.**\n  - info goes Starting, then Running.\n  - cloud-init answers {status:'running'} twice, then exit 0 {status:'done', extended_status:'done', errors:[], recoverable_errors:{}}.\n  - The exact number of sleep calls is asserted.\n  - All boundary probes pass, so bootstrapReady is true and executionReady is false.\n- **G8. Running alone is NOT ready.** State is Running, but cloud-init stays 'running' for maxWaitMs/pollMs polls. The result is {bootstrapReady:false, failures:['BOOTSTRAP_TIMEOUT']}: no boundary probe runs and no ledger write happens.\n- **G9. cloud-init failures.** Each fails with BOOTSTRAP_FAILED, bootstrapReady false and no ledger write:\n  - exit 1 'error';\n  - exit 2 'degraded done' with recoverable errors;\n  - exit 0 but extended_status 'degraded done';\n  - status 'disabled';\n  - non-JSON stdout;\n  - a state of Stopped or Deleted while waiting.\n\n**Boundary probes (DoD 3)**\n- **G10. Mounts.**\n  - info.mounts non-empty gives MOUNTS_PRESENT.\n  - Each mountinfo variant gives MOUNTS_PRESENT: a 9p, virtiofs, fuse.sshfs, cifs or nfs4 line.\n  - A benign mountinfo passes (ext4 /, vfat /boot/efi, squashfs /snap/x, tmpfs, proc, sysfs, cgroup2).\n  - An unparsable line gives MOUNTS_UNKNOWN.\n- **G11. Protected binaries and credentials.**\n  - The exact expected stat lines pass.\n  - Each of these fails with LAYOUT_INVALID: the supervisor owned by ubuntu; supervisor mode 555 or 755; a symlink type; credential mode 440; a group- or other-writable /opt/moe or /etc/moe.\n  - A sha256sum mismatch gives SUPERVISOR_HASH_MISMATCH.\n  - For each job identity, these deny probes must exit EXACTLY 1: test -r credential, test -r /var/lib/cloud/instance/user-data.txt, test -r /dev/sr0, test -w supervisor, test -w /opt/moe/bin. Exit 0 gives the matching *_EXPOSED code; exit 2 or 3 gives PROBE_UNKNOWN.\n- **G12. Identities.**\n  - passwd status 'P' or 'NP' gives IDENTITY_NOT_LOCKED.\n  - id groups 'moe-agent sudo' gives IDENTITY_PRIVILEGED.\n  - `sudo -n true` as the identity exiting 0 gives IDENTITY_PRIVILEGED.\n  - authorized_keys existing (test -e exits 0) gives IDENTITY_LOGIN_ENABLED.\n- **G13. Resources.**\n  - Each of these gives RESOURCES_UNBOUNDED: cpu_count '4'; memory.total above 4 GiB; disk total above 20 GiB.\n  - A missing memory or disk total gives RESOURCES_UNKNOWN.\n  - Values within bounds pass.\n\n**Identity recording (DoD 1)**\n- **G14.** All probes pass with a provider image_hash DIFFERENT from the source sha (a converted image):\n  - result.image deep-equals {source:{arch, url, sha256:<pin>}, provider:{imageHash, imageRelease}};\n  - re-reading through a NEW createLedger shows the record's image as {sourceSha256, providerImageHash}, two distinct fields;\n  - an equal-hash case still stores both fields;\n  - a second run whose provider hash differs throws IMAGE_IDENTITY_CHANGED, leaves the ledger bytes unchanged, and reports bootstrapReady false.\n- **G15.** A sourceImage whose sha256 or url differs from the manifest pin for its arch throws BOOTSTRAP_INPUT_INVALID before any provider call.\n- **G16. Fence.** A record not in phase 'owned', or an owner mismatch, is refused before any provider call.\n- **G17.** Every result has executionReady === false. A failing probe's stdout containing 'secret-diagnostic' never appears in the result or the ledger.\n- **G18. R06 compatibility.** R06's section passes unchanged. A record carrying a valid image still reconciles and cleans up. A record with a malformed image ({sourceSha256:'x'} or an extra key) is listed invalid and gets zero provider calls.\n\n**Real process (POSIX only, `{ skip: process.platform === 'win32' }`)**\n- **G19.**\n  - Write a fake multipass executable (a `#!${process.execPath}` script in a mkdtemp dir whose path has a space). It reads a JSON scenario file and implements info and exec for the probe table. It appends any other argv to a violations file and exits 64.\n  - waitForGuestReady through the DEFAULT execFile transport gives bootstrapReady true. A 9p-mount scenario gives false with MOUNTS_PRESENT.\n  - The violations file is absent.\n\nRun the file: the new tests are RED, and the R02 and R06 sections are green. Note this in the step.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "scripts/tests/local-runner.test.mjs"
+        ]
+      },
+      {
+        "stepId": "step-2",
+        "description": "Create scripts/local-runner/guest-bootstrap.mjs: pinned source image verification and the cloud-init user-data that installs the protected supervisor and the locked job identities.\n\n**Header comment**\n- This is guest bootstrap only. It makes no execution readiness or isolation claim (verified-local stays unavailable).\n- Launch MUST use the verified LOCAL file (file://), because Multipass v1.17.0 src/daemon/default_vm_image_vault.cpp derives an HTTP image's id from the URL string, not its content. For a local image it records compute_file_hash of the PREPARED (provider-converted) image, so the source sha and provider identity differ and are recorded separately.\n\n**Exports**\n- `GUEST_LAYOUT`, frozen: supervisor '/opt/moe/bin/moe-supervisor', supervisorDirs ['/opt/moe', '/opt/moe/bin'], credential '/etc/moe/supervisor.credential', credentialDir '/etc/moe'.\n- `JOB_IDENTITIES`, frozen: ['moe-agent', 'moe-check'].\n- `GUEST_RESOURCES`, frozen: {cpus:2, memoryBytes:4*2**30, diskBytes:20*2**30}.\n- `launchResourceArgs()` returns ['--cpus', '2', '--memory', '4G', '--disk', '20G'], for R03-R05.\n- `MAX_SUPERVISOR_BYTES = 262_144`, `MAX_CREDENTIAL_BYTES = 4096`, `MAX_IMAGE_BYTES = 4*2**30`.\n\n**`hashFile({ file, maxBytes = MAX_IMAGE_BYTES })`**\n- The path must be an absolute string without control characters, otherwise IMAGE_INPUT_INVALID.\n- lstat it. It must be a regular file (no symlink) with size at most maxBytes, otherwise IMAGE_INPUT_INVALID.\n- Stream it with createReadStream through createHash('sha256').\n- Abort if the bytes read exceed maxBytes, since the file could grow mid-read.\n- Return lowercase hex. Read errors throw IMAGE_UNREADABLE.\n\n**`verifySourceImage({ file, arch }, { digest = hashFile } = {})`**\n- arch must be 'x64' or 'arm64'.\n- manifest = await loadCertifiedProvider() from R02's doctor.mjs. The manifest is NEVER caller-selectable, consistent with R02.\n- If the digest is not the pin for that arch, throw IMAGE_CHECKSUM_MISMATCH.\n- Return a frozen {arch, url, sha256} taken from the manifest.\n- The digest injection exists only for tests, like R02's `run`.\n\n**`buildUserData({ supervisor, credential })`**\n- Both must be non-empty Buffers within their max sizes, otherwise BOOTSTRAP_INPUT_INVALID.\n- Return a frozen {userData, supervisorSha256}. userData is DETERMINISTIC text built only from constants plus base64 strings, so no YAML injection is possible:\n```\n#cloud-config\nssh_pwauth: false\ndisable_root: true\nmounts: []\nusers:\n  - default\n  - name: moe-agent\n    lock_passwd: true\n    shell: /bin/bash\n  - name: moe-check\n    lock_passwd: true\n    shell: /bin/bash\nwrite_files:\n  - path: /opt/moe/bin/moe-supervisor\n    owner: root:root\n    permissions: '0500'\n    encoding: b64\n    content: <base64>\n  - path: /etc/moe/supervisor.credential\n    owner: root:root\n    permissions: '0400'\n    encoding: b64\n    content: <base64>\n```\n- Keep '- default': Multipass execs as the default user and injects its key through its own cloud-init data.\n- The users have no groups and no sudo key.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) stable code and message pairs only, through a MESSAGES map like R02's. No path, digest of an untrusted file, or input bytes in errors.",
+        "status": "PENDING",
+        "affectedFiles": [],
+        "newFiles": [
+          "scripts/local-runner/guest-bootstrap.mjs"
+        ]
+      },
+      {
+        "stepId": "step-3",
+        "description": "Durable image identity on R06's ledger, in scripts/local-runner/lifecycle.mjs.\n\nR06 CREATES this file and lands it before R07 can start (dependsOn). It is listed under newFiles ONLY because it does not exist at plan time. R07 MODIFIES it, and R06's tests must stay green unchanged.\n\n**1. Decoder.** Extend R06's strict record decoder with ONE optional key, `image`. Absent is valid, as for every R06 record. When present, it must be EXACTLY {sourceSha256, providerImageHash}, each /^[0-9a-f]{64}$/. Anything else (an extra key, a wrong type, uppercase) makes the record invalid. Invalid records are never acted on, as R06 already guarantees.\n\n**2. `ledger.recordImage(expected, image)`.**\n- Re-read the record.\n- Apply R06's compare-and-swap on phase and launchTries.\n- The phase must be 'owned', otherwise LIFECYCLE_PHASE_INVALID.\n- The same image already present returns the record with NO write (idempotent).\n- A DIFFERENT image already present throws IMAGE_IDENTITY_CHANGED with no write. A changed environment identity needs new evidence (CQ-R11), never a silent overwrite.\n- Otherwise write through R06's atomic writer, with updatedAt.\n- Reuse R06's existing helpers. If its atomic writer is not exported, call it from inside the module; never duplicate it.\n\n**3. update().** R06's update() must keep `image` when it changes phase, for example cleanup moving a record to 'deleted'. Fix only if R06 merges from the re-read record in a way that drops it, and test it.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) LEDGER_*, LIFECYCLE_* and IMAGE_IDENTITY_CHANGED codes only, with no paths.\n\nMake G14, G16 and G18 green.",
+        "status": "PENDING",
+        "affectedFiles": [],
+        "newFiles": [
+          "scripts/local-runner/lifecycle.mjs"
+        ]
+      },
+      {
+        "stepId": "step-4",
+        "description": "Create scripts/local-runner/guest-readiness.mjs, part 1: provider reads with fixed argv.\n\n**Import, never re-implement:**\n- providerError and classifyFailure (R02's multipass.mjs; R06 exported classifyFailure);\n- isOwnedInstanceName and lifecycleError if they fit (lifecycle.mjs);\n- GUEST_LAYOUT and JOB_IDENTITIES (guest-bootstrap.mjs).\n\n**1. `readGuestInfo(name, { executable = 'multipass', run } = {})`**\n- argv ['info', name, '--format', 'json'], with options {encoding:'utf8', shell:false, windowsHide:true, timeout:30_000, maxBuffer:MAX_PROBE_BUFFER, killSignal:'SIGKILL'}.\n- Parse STRICTLY against the v1.17.0 formatter (src/client/cli/formatter/json_formatter.cpp generate_instance_details):\n  - info has exactly the one key, name;\n  - state is one of the ten strings;\n  - image_hash matches /^[0-9a-fA-F]{64}$/ and is normalized to lowercase (vault compute_file_hash is sha256 hex);\n  - image_release is a string of at most 128 characters with no control characters;\n  - cpu_count is a decimal string;\n  - memory.total is a finite non-negative number when present;\n  - disks.sda1.total is a decimal string when present;\n  - mounts is a plain object.\n- Return {state, providerImageHash, imageRelease, cpuCount, memoryTotal|null, diskTotal|null, mountCount}.\n- Anything malformed throws PROVIDER_INFO_INVALID.\n\n**2. `GUEST_PROBES`**, a frozen table of fixed argv built once from constants and JOB_IDENTITIES:\n- cloudInit: ['cloud-init', 'status', '--format', 'json'];\n- mountinfo: ['cat', '/proc/self/mountinfo'];\n- layout: ['sudo', '-n', 'stat', '--format=%U:%G:%a:%A:%n', '/opt/moe', '/opt/moe/bin', '/opt/moe/bin/moe-supervisor', '/etc/moe', '/etc/moe/supervisor.credential'];\n- supervisorHash: ['sudo', '-n', 'sha256sum', '/opt/moe/bin/moe-supervisor'];\n- per identity <id>:\n  - `status:<id>` ['sudo', '-n', 'passwd', '--status', id];\n  - `groups:<id>` ['id', '--groups', '--name', id];\n  - deny probes ['sudo', '-n', '-u', id, 'test', '-r', X] for X in /etc/moe/supervisor.credential, /var/lib/cloud/instance/user-data.txt and /dev/sr0;\n  - deny probes ['sudo', '-n', '-u', id, 'test', '-w', X] for X in /opt/moe/bin/moe-supervisor and /opt/moe/bin;\n  - `sudo:<id>` ['sudo', '-n', '-u', id, 'sudo', '-n', 'true'];\n  - `keys:<id>` ['sudo', '-n', 'test', '-e', '/home/<id>/.ssh/authorized_keys'].\n- Never include caller data. Multipass exec quotes every argument (src/ssh/ssh_client.cpp utils::to_cmd quote_every_arg), but the table still avoids spaces and metacharacters as defense in depth.\n\n**3. `runGuestProbe(name, id, provider)`**\n- argv ['exec', '--no-map-working-directory', name, '--', ...GUEST_PROBES[id]]. The flag avoids exec's host-cwd mount mapping (src/client/cli/cmd/exec.cpp).\n- A non-zero remote exit (an execFile rejection with a numeric code and string stdout) returns {code, stdout}; it is not thrown.\n- A timeout, ENOENT, EACCES or maxBuffer throws providerError(classifyFailure(error)).\n- An unknown id throws BOOTSTRAP_INPUT_INVALID with zero calls.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) stdout is parsed but never echoed into errors.\n\nMake G5 and G6 green.",
+        "status": "PENDING",
+        "affectedFiles": [],
+        "newFiles": [
+          "scripts/local-runner/guest-readiness.mjs"
+        ]
+      },
+      {
+        "stepId": "step-5",
+        "description": "guest-readiness.mjs, part 2:\n`waitForGuestReady({ ledger, name, owner, sourceImage, bootstrap, provider = {}, sleep = timers/promises setTimeout, pollMs = 5_000, maxWaitMs = 900_000 })`.\n\n**1. Inputs, before any provider call.**\n- record = ledger.read(name). The phase must be 'owned' and the owner fence (taskId, attemptId, generation) must match, otherwise LIFECYCLE_NOT_OWNER or LIFECYCLE_PHASE_INVALID.\n- sourceImage must equal the loadCertifiedProvider() pin for its arch (url and sha256).\n- bootstrap.supervisorSha256 must be 64 hex.\n- Otherwise throw BOOTSTRAP_INPUT_INVALID.\n\n**2. Wait.** Poll at most Math.ceil(maxWaitMs / pollMs) times, deterministically, with no clock reads.\n- readGuestInfo:\n  - Starting or Restarting: sleep and poll again;\n  - Running: continue;\n  - any other state: BOOTSTRAP_FAILED.\n- Then the cloudInit probe:\n  - exit 0 with status 'running' or 'not started': sleep and poll again;\n  - READY only for exit 0, status 'done', extended_status 'done', errors [] and recoverable_errors {};\n  - anything else (exit 1 error, exit 2 degraded, 'disabled', degraded extended_status, unparsable JSON): BOOTSTRAP_FAILED.\n  These semantics come from cloud-init cmd/status.py: translate_status, and exit codes 1 for error and 2 for degraded.\n- Exhausting the polls gives BOOTSTRAP_TIMEOUT.\n- A Running state alone NEVER yields readiness.\n\n**3. Boundary probes.** Run them all and collect every failure code. Do not stop at the first.\n- **Mounts:**\n  - info.mountCount must be 0;\n  - every /proc/self/mountinfo line must parse (fstype is the token after ' - ');\n  - no fstype may be in {9p, virtiofs, nfs, nfs4, cifs, smb3, smbfs, vboxsf, drvfs, fuse} or start with 'fuse.'.\n  - Failures: MOUNTS_PRESENT, or MOUNTS_UNKNOWN.\n- **Layout** (stat lines in argv order):\n  - each dir is root:root, type 'd', with no group or other write bit;\n  - the supervisor is exactly root:root:500 with type '-';\n  - the credential is exactly root:root:400 with type '-';\n  - otherwise LAYOUT_INVALID.\n- **supervisorHash:** sha256sum must equal bootstrap.supervisorSha256, otherwise SUPERVISOR_HASH_MISMATCH.\n- **Per identity:**\n  - passwd status: the second field is 'L', otherwise IDENTITY_NOT_LOCKED;\n  - groups: exactly the identity name, otherwise IDENTITY_PRIVILEGED;\n  - each deny probe and the sudo probe must exit EXACTLY 1. Exit 0 gives CREDENTIAL_EXPOSED, SUPERVISOR_WRITABLE or IDENTITY_PRIVILEGED; any other code gives PROBE_UNKNOWN;\n  - the keys probe must exit exactly 1, otherwise IDENTITY_LOGIN_ENABLED (0) or PROBE_UNKNOWN.\n- **Resources:** cpuCount <= GUEST_RESOURCES.cpus, memoryTotal <= memoryBytes and diskTotal <= diskBytes, otherwise RESOURCES_UNBOUNDED. A null total gives RESOURCES_UNKNOWN.\n\n**4. Result:** {instance, bootstrapReady, executionReady:false, image:{source:{arch, url, sha256}, provider:{imageHash, imageRelease}}, supervisorSha256, failures:[codes]}.\n- Only when there are NO failures, call ledger.recordImage(record, {sourceSha256: sourceImage.sha256, providerImageHash}) and return bootstrapReady true.\n- IMAGE_IDENTITY_CHANGED from that call gives bootstrapReady false with that failure.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) provider throws during a probe are mapped to stable failure codes. Reports carry codes only, never stdout or paths.\n\nMake G7-G17 and G19 green.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "scripts/local-runner/guest-readiness.mjs"
+        ]
+      },
+      {
+        "stepId": "step-6",
+        "description": "The one verification gate. Use the Linux-only PATH (PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin) and unset every MOE_* variable.\n\n**1. The DoD command, fresh, from the repository root:**\n```\nnode --test scripts/tests/local-runner.test.mjs\n```\nIt must exit 0 with 0 failed and 0 cancelled. On Linux, G19 and R06's real-process test must RUN, not skip. Record the pass, fail and skip counts; R02's 51 and R06's tests are included.\n\n**2. Packaging regression.**\n```\nnode --test scripts/tests/local-runner-bundle.test.mjs\n```\nIt must exit 0: both new modules are bundled as production code.\n\n**3. Snapshot check.** Peers share this checkout, so rerun command 1 in a fresh tree:\n```\nD=$(mktemp -d)\ngit -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src/state/resourceStore.ts package.json | tar -x -C \"$D\"\n```\nOverlay the four changed files' working-tree bytes, then run it from $D. It must exit 0.\n\n**4. Byte checks.**\n- `git diff --check` is clean for the four files.\n- The R02 and R06 test sections are byte-identical apart from new imports.\n- multipass.mjs is unchanged by R07.\n\nKeep command 1's command, exit code and output tail for complete_task.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "scripts/tests/local-runner.test.mjs",
+          "scripts/local-runner/guest-bootstrap.mjs",
+          "scripts/local-runner/guest-readiness.mjs",
+          "scripts/local-runner/lifecycle.mjs"
+        ]
+      },
+      {
+        "stepId": "step-7",
+        "description": "Exactly one adversarial self-review. Load adversarial-self-review and read the diff as an attacker.\n\n**Readiness (DoD 2).**\n- Can any route report bootstrapReady while cloud-init is running, degraded, errored or unknown, or while ANY probe failed or was unknown?\n- Is 'Running' ever treated as ready?\n- Can the polls exceed their bound?\n\n**Protection (DoD 3).**\n- Can a job identity read the credential through user-data.txt, /dev/sr0 or the credential file?\n- Can it write the supervisor or its dir, sudo, or log in?\n- Can a mount slip past the fstype rule, for example a fuse.* variant?\n- Are the resource checks upper bounds that fail closed on missing data?\n- Could exit codes 2 or 3 from Multipass itself be mistaken for a probe's expected 1? They must not.\n\n**Identity (DoD 1).**\n- Are the source sha (the pinned manifest only, never caller-minted) and the provider image hash always separate fields?\n- Is a changed identity refused and never overwritten?\n- Is the ledger byte-identical after every refusal?\n\n**Injection.**\n- Can any caller input reach a guest argv or the YAML? Only constants and base64 may.\n\n**Compatibility and platforms.**\n- R06's tests are unchanged and green.\n- Old records without image stay valid.\n- win32 skips only the real-process test.\n\n**Scope.**\n- executionReady stays false; no isolation or certification claim.\n- No .moe edits, no Git writes, no daemon or launcher changes.\n- No forbidden pattern from the global rails in new code.\n\nFix the findings and rerun the step-6 commands fresh. Use the fresh output for complete_task.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "scripts/tests/local-runner.test.mjs",
+          "scripts/local-runner/guest-bootstrap.mjs",
+          "scripts/local-runner/guest-readiness.mjs",
+          "scripts/local-runner/lifecycle.mjs"
+        ]
+      }
+    ],
+    "stepsCompleted": []
+  },
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "awaiting the human decision on rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (CQ-R07 size exception, QA option b); governor: set_task_status WORKING once it is approved; if it is rejected, set PLANNING so the architect re-slices R07 per QA option (a). Gate evidence at 2026-10-24T22:30Z (worker-07cd2c56, read-only): the epic rail has no 'CQ-R07: the pinned guest bootstrap as landed in e587474' clause (grep count 0; the epic record has not changed since 16:37Z); the proposal status is PENDING with resolvedAt null; the four R07 files have an empty git diff against e587474, which is an ancestor of HEAD e5b63b8. This session made no source/test/docs/.moe edits and no Git writes.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-25T08:10:53.479Z",
+  "reviewSummary": "APPROVED. Delivery: completion commit 759cc61 (wrapper-made) is HEAD of moe/work-2026-10-24 and pushed; the R07 files in the working tree match HEAD.\nRail: the human APPROVED prop-d3ccceade. The CQ-R07 epic rail is present, as rails 5 and 10 (identical copies).\nSize: e587474 matches the rail exactly. 759cc61 adds +6/-2: the DENIED row with a sourced comment, the DENIALS row, and the 14->15 frozen-count fix that the new row forces. QA accepts the comment and the count fix as part of the requested probe. No R07 test was removed.\nRe-run (env -i, Linux Node v24.21.0):\n- named command: exit 0, 139/139, 0 skipped; the real-process test ran.\n- bundle: 7/7.\n- diff --check: clean. No forbidden patterns.\n- executionReady is always false; no verified-local claim.\nDoD:\n1. recordImage, a set-once CAS, stores the manifest sourceSha256 and the provider imageHash separately.\n2. A Running guest needs cloud-init exit 0 with done/done and no errors. Otherwise it waits, fails or times out. Boundary probes run only after that.\n3. Every check fails on an unknown result:\n   - mounts, from info and mountinfo;\n   - root-only layout, modes and the supervisor sha;\n   - 15 deny probes per identity, where only exit 1 counts as denied;\n   - locked identities with no groups, sudo or keys;\n   - resources within 2 CPU / 4 GiB / 20 GiB.\n4. The fresh output was supplied.\nThe new comment matches cloud-init's internal_files docs.\nQA mutation probes (30 mutants on a git-archive snapshot): 26 killed. They covered mounts, fuse, mountinfo parsing, directory modes, ownership, digest, resource bounds, passwd, whoami, groups, killed probe, source url, generation, degraded/stopped, record on failure, the combined-config path, CAS, the poll bound and the image shape.\nFour non-blocking survivors:\n- the cloud-init exit-code check (the content checks still require clean done);\n- the single-line passwd check;\n- two hashFile TOCTOU guards.\nR13 must confirm that strict clean status passes on a real pinned guest.",
+  "requiredCheckAtDone": null
+}

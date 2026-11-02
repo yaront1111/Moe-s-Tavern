@@ -1,0 +1,356 @@
+{
+  "id": "task-ad95cb270e9e46df8672eb094d0c1e74",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M01] Execution profile configuration",
+  "description": "Objective: Add legacy/observe/verified-local profile configuration and effective policy snapshots without enabling an unimplemented trusted profile.\n\nDeliverable: Execution profile configuration. This is task M01 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test\n\nDependency aliases (wired by Moe task ids after import): none.",
+  "definitionOfDone": [
+    "Absent profile preserves current deliveryPolicy; observe never weakens current policy.",
+    "Malformed/unknown profiles are rejected; verified-local activation fails closed until certified readiness exists.",
+    "Task/attempt policy snapshot integration is explicit and old active tasks cannot silently acquire or lose strict trust.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Preconditions, then TDD red, part 1. Load test-driven-development first.\n\n**Preconditions**\n- Confirm CQ-M01c (task-0f7df75f…), M01d (task-80dfde45…), M01e (task-29c8274e…) and M01f (task-5a082cb4…) are DONE and landed. Check get_context epicSiblings landing.merged, or run `git log moe/work-2026-10-24 --grep 'Moe-Task: <id>'`.\n- Read what they landed, by name:\n  - taskStore planSubmissionSnapshot and the progression backstop;\n  - claimNextTask deriveAttemptPolicySnapshot and the attempt executionPolicySnapshot;\n  - util/claimEligibility executionAdmissionRefusal;\n  - delivery/policy resolveTaskDeliveryPolicy.\n  Where a landed name or rule differs from this plan, follow the landed code and say so in the completion summary.\n- Read the Serena memories task-task-29c8274ebc4d4faea67009fa5dcd2df1-handoff and task-task-5a082cb43e2346fcbff480fb1c383b58-handoff. Their known limitations are documented by this task, not fixed.\n- Read-only for this task: every source file except tools/getContext.ts, and every existing test file. A red existing test means behaviour changed: fix the code, never the test.\n\n**Create packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts (LF).**\n\nHeader comment: CQ-M01 cross-boundary composition (capture, serving, restart, rollback, forgery, old rows) of the configuration identity that M01b-f built. Configuration identity is never approval, readiness, runner trust or verified completion.\n\n**Harness**\n- Use ToolTestHarness on a real temp project. Settings use the HARNESS_SETTINGS shape from tools/qaApprove.test.ts (setupMoeFolder replaces the whole object). Use approvalMode TURBO so a submission lands in WORKING.\n- `callTool(state, name, args)`: resolve the REGISTERED tool by exact name from getTools(state) and run its handler under state.runExclusive, as MCP dispatch does. This is the acceptance.test.ts pattern: copy it, never import from that file.\n- `restart()`: the daemon startup order from src/index.ts, on the same project:\n  1. create a new StateManager;\n  2. load();\n  3. `state.mutex.runExclusive(() => reconcileRunningAttempts(state))`;\n  4. purgeAllWorkers().\n  Clear old instances in afterEach.\n- `plan(state, taskId)`: the real architect path. Claim the PLANNING row by id, call get_context, then submit_plan with one step on an existing file. Return the submit result.\n- Hand-edited rows are raw JSON written before load. verified-local can only exist that way.\n- STRICT_V2 = `{version:2, profile:'verified-local', planRevision:1, deliveryPolicy:'local-branch'}`.\n\n**Group G: get_context serves the configuration identity (new behaviour)**\n- **G1. Omission.** With no executionProfile setting, a task without a snapshot and no open attempt, the response has NO executionPolicy key. A project that never used profiles sees an unchanged payload.\n- **G2. Capture then serve.**\n  - Settings `{executionProfile:'observe', deliveryPolicy:'local-branch'}`. plan task-1, then worker W claims it by id.\n  - `get_context(W).executionPolicy` toEqual exactly `{effectiveProfile:'observe', taskSnapshot:S, attemptSnapshot:S}`, with no other keys. S is `{version:2, profile:'observe', planRevision:<the submit result's planRevision>, deliveryPolicy:'local-branch'}`.\n  - Detachment: mutate and then replace the returned snapshots. A second get_context, state.getTask, currentAttempt and both files are all unchanged, and two reads return distinct objects.\n- **G3. Strict row.** STRICT_V2 under legacy settings, on a WORKING row assigned to W with an open attempt seeded without a snapshot. get_context succeeds with `{effectiveProfile:'verified-local', taskSnapshot:STRICT_V2, attemptSnapshot:null}`, and the snapshot bytes in the task file are unchanged.\n- **G4. Unreadable records are named, never echoed, never thrown.**\n  - STRICT_V2 plus ready:true as the task snapshot gives `{effectiveProfile:null, taskSnapshot:null, attemptSnapshot:null, unreadable:['taskSnapshot']}`. JSON.stringify of the whole response contains no 'ready'.\n  - Settings executionProfile 'VERIFIED-LOCAL' with a valid legacy task snapshot: effectiveProfile is null, taskSnapshot is served, and unreadable is ['settings.executionProfile'].\n  - An attempt file hand-edited with a malformed snapshot: attemptSnapshot is null, unreadable is ['attemptSnapshot'], and everything else is served.\n- **G5. Views and roles.** qa-, worker- and architect-prefixed callers and view:'full' all get the same executionPolicy. view:'status' has no executionPolicy key.\n\n**Group R: restart**\n- **R1.** After G2's flow, call restart().\n  - The task file bytes and stored snapshot are unchanged.\n  - The attempt keeps its snapshot through reconcileRunningAttempts; its phase may become reconciling.\n  - get_context on the new instance serves the same executionPolicy.\n- **R2.** Hand-edit project.json between instances to `{executionProfile:'legacy', deliveryPolicy:'legacy'}`, then restart().\n  - taskSnapshot and attemptSnapshot are unchanged: identity, not recaptured.\n  - effectiveProfile is 'legacy', and evaluateDeliveryEvidence reports the live 'legacy' policy.\n  - W's own explicit claim_next_task resumes the same attempt (same id and generation) with its original observe snapshot, so nothing is re-derived. If the landed restart path resumes a reconciling attempt through moe.reattach_attempt instead, use that and say so.\n\n**Red run.** Run the file in the scratch copy (recipe in step 2).\n- G must be red only because executionPolicy is missing.\n- R's serving assertions are red for the same reason; its store and claim assertions already pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts"
+      ],
+      "note": "Reopen round 1 (QA rejection = delivery gap only; QA: no code/test change needed). Re-verified preconditions: M01c/M01d/M01e/M01f all landed on moe/work-2026-10-24 (58eb958, e2c1e89, f81a2c3, 2e68a6a by Moe-Task trailer). executionPolicyLifecycle.test.ts is in HEAD (baeacbf, +519) and clean vs HEAD; no bytes changed this step. TDD skill loaded; not applicable this round (no behaviour change; the red/green and mutation evidence for this file was QA-verified on baeacbf). Shared checkout's ~429 dirty peer paths left untouched.",
+      "startedAt": "2026-10-24T16:42:28.755Z",
+      "completedAt": "2026-10-24T16:42:49.575Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "TDD red, part 2. Append groups B, F, O and P to executionPolicyLifecycle.test.ts, reusing step 1's helpers.\n\n**Group B: rollback**\n\n**B1. Non-strict rollback.**\n1. Plan task-1 under `{observe, local-branch}` and claim it as W.\n2. Call `state.updateSettings({executionProfile:'legacy'})`, the validator path the plugin's UPDATE_SETTINGS uses.\n3. deliveryPolicy is not an UPDATE_SETTINGS field, so hand-edit project.json to deliveryPolicy 'legacy', then restart().\n\nExpect:\n- The task snapshot is unchanged; a settings change never refreshes it.\n- effectiveProfile is 'legacy', and evaluateDeliveryEvidence reports 'legacy'.\n\nThen replan:\n1. Release W's seat with the real release_task.\n2. Move the row back to PLANNING with set_task_status (a backward move).\n3. Plan it again.\n\nExpect:\n- The new snapshot is `{version:2, profile:'legacy', planRevision:<new>, deliveryPolicy:'legacy'}`.\n- get_context serves attemptSnapshot null, because no attempt is open.\n- The earlier, now-closed attempt record still holds its observe snapshot; history is never rewritten.\n\n**B2. The strict floor holds across every boundary.**\n\nSettings: `{executionProfile:'legacy'}`, no deliveryPolicy (a rollback). Rows, each unassigned:\n- task-S: WORKING with STRICT_V2;\n- task-Q: REVIEW with STRICT_V2;\n- task-P: DONE with STRICT_V2;\n- task-D: WORKING with a legacy snapshot, dependsOn ['task-P'].\n\nAssert these before and after restart():\n- An explicit WORKING claim of task-S is refused EXECUTION_PROFILE_NOT_READY.\n- An explicit claim of task-D is refused, with the prerequisite's EXECUTION_PROFILE_NOT_READY. This is the documented limitation: the error does not name task-P.\n- A ranked WORKING claim returns hasNext:false.\n- `wait_for_task(['WORKING'], timeoutMs 1000)` times out.\n- set_task_status of task-Q to DONE is refused EXECUTION_PROFILE_NOT_READY.\n- qa_approve of task-Q is refused EXECUTION_PROFILE_NOT_READY, and no Review is written.\n- get_context(task-D).task.dependsOnUnmet is ['task-P'].\n- get_context of each strict row serves effectiveProfile 'verified-local'.\n\nThen, once:\n- set_task_status moves task-S back to PLANNING, which succeeds.\n- An explicit PLANNING claim of task-S is then refused EXECUTION_PROFILE_NOT_READY, so no architect can replan it.\n\nThe snapshot bytes never change.\n\n**B3. observe never weakens.** Under `{observe, local-branch}`, qa_approve of a REVIEW row with an observe snapshot and no completion commit is refused DELIVERY_EVIDENCE_MISSING with missingEvidence ['completion-commit']. The same row under `{legacy profile, local-branch}` gets exactly the same refusal.\n\n**Group F: forgery is ignored at every boundary**\n- **F1.** submit_plan carrying executionPolicySnapshot STRICT_V2 and planRevision 99 among its args: the stored snapshot is the daemon's capture of the live settings, at the committed planRevision.\n- **F2.** claim_next_task carrying executionPolicySnapshot (STRICT_V2, and separately a legacy one), executionProfile 'legacy' and ready:true:\n  - on a legacy task, the attempt snapshot equals the daemon's derivation, which equals the task snapshot;\n  - on a strict row, the claim is still refused.\n- **F3.** create_task carrying executionPolicySnapshot: neither the created row nor its file has that key.\n\n**Group O: old active rows neither gain nor lose strict trust**\n\n**O1.** A legacy WORKING row created before snapshots existed (no snapshot). It is held by W, with an open attempt seeded in the legacy key set (no snapshot), and there is no executionProfile setting.\n- start_step and complete_step succeed, and the task file never gains executionPolicySnapshot.\n- W's explicit resume adopts the same attempt, still without a snapshot.\n- get_context has no executionPolicy key.\n- After `updateSettings({executionProfile:'observe'})`, get_context serves `{effectiveProfile:'observe', taskSnapshot:null, attemptSnapshot:null}`, and still no snapshot is written.\n\n**O2.** A REVIEW row holding a captured legacy snapshot reaches DONE through qa_approve.\n- The snapshot stays deep-equal to the captured one.\n- The task gains no key naming readiness, trust or verification. deliveryEvidence stays absent without an attestation.\n\n**Group P: profile settings (DoD 2)**\n- **P1.** it.each over null, '', 'VERIFIED-LOCAL', 'strict', 1 and {}: `state.updateSettings({executionProfile})` rejects INVALID_INPUT with field executionProfile. The settings and the project.json bytes are unchanged.\n- **P2.** 'verified-local' rejects EXECUTION_PROFILE_NOT_READY with the leaf's missingCapabilities, even under `vi.stubEnv('MOE_EXECUTION_PROFILE_READY','1')`. Nothing is persisted.\n- **P3.** 'observe' and then 'legacy' are accepted, and deliveryPolicy is left untouched.\n\n**Style.** Keep the file compact with it.each tables and shared fixtures, and use exact toEqual values. The source must not contain any substring from the project's global forbiddenPatterns. The check is a raw substring match: no dunder-proto key, and no identifier ending in the dynamic-code call token.\n\n**Scratch runner** (used by every later step). The shared node_modules is a Windows install: never touch it or package-lock.json.\n1. `D=$(mktemp -d /tmp/moe-m01-test.XXXXXX)`\n2. `git -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar -x -C \"$D\"`\n3. `ln -s \"$(cat /tmp/moe-linux-test-root.latest)/repo/packages/moe-daemon/node_modules\" \"$D/packages/moe-daemon/node_modules\"`\n4. Copy the owned files' working-tree bytes into $D before each run.\n5. Run vitest from $D/packages/moe-daemon with every MOE_* var unset and the Linux-only PATH (exact env in step 6).\n\n**Red check.** B, F, O and P compose landed behaviour, so they should already pass, apart from their get_context serving assertions.\n- For any other red, first check the expectation against that slice's landed code and tests.\n- If this plan's expectation was wrong, correct the test to the landed contract and say so in the completion summary.\n- If a landed slice has a real defect, do not fix it from this task. Report it with moe.report_blocked, naming the defect.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts"
+      ],
+      "note": "Reopen round 1: no change. Groups B/F/O/P are in executionPolicyLifecycle.test.ts as landed in baeacbf. The file is clean vs HEAD, and QA re-ran them green on the committed bytes. TDD skill (loaded this session) does not apply: no behaviour change this round.",
+      "startedAt": "2026-10-24T16:42:54.703Z",
+      "completedAt": "2026-10-24T16:43:00.232Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Serve the configuration identity in packages/moe-daemon/src/tools/getContext.ts. The working copy is CRLF over an LF index (EOL-only peer churn): edit in place, keep CRLF, and check with `git diff --ignore-cr-at-eol`.\n\n**1. Imports**\n- From '../delivery/executionProfile.js' (the leaf): readExecutionPolicySnapshot and resolveTaskExecutionProfile.\n- From '../state/attemptStore.js': currentAttempt.\n- The ExecutionPolicySnapshot and ExecutionProfile types.\n\n**2. Add a module function `executionPolicyContext(state, task)`.** It returns `{ effectiveProfile, taskSnapshot, attemptSnapshot, unreadable? }` or undefined.\n- **Omission.** Return undefined when settings.executionProfile, task.executionPolicySnapshot and the current attempt's executionPolicySnapshot are all undefined. A project that never used profiles keeps a byte-identical payload; this follows the currentCandidate precedent.\n- **taskSnapshot and attemptSnapshot.** Each is `readExecutionPolicySnapshot(...) ?? null`. The leaf returns a fresh primitive-only object, so the response never aliases stored state. attemptSnapshot reads `currentAttempt(state, task.id)`, the open attempt (running, finalizing or reconciling); with none it is null.\n- **effectiveProfile.** `resolveTaskExecutionProfile(state.project.settings, task.executionPolicySnapshot)`. This is the one floor rule shared by the backstop, admission and delivery selection; never re-implement it here.\n- **Error handling.**\n  - Each of the three reads (the setting, the task snapshot, the attempt snapshot) gets its own try/catch. A failure serves null for that value and appends its name ('settings.executionProfile', 'taskSnapshot' or 'attemptSnapshot') to `unreadable`.\n  - `unreadable` is present only when non-empty.\n  - effectiveProfile is null when the setting or the task snapshot is unreadable.\n  - Never serve the raw value or the error text. A hand-edited record is named, not echoed, and get_context never throws on it.\n- **Doc comment.** Say:\n  - this is configuration identity only, never approval, readiness, runner trust, delivery verification or completion;\n  - effectiveProfile names the governing profile, not its readiness: verified-local is unconditionally unavailable (see assertExecutionProfileReady);\n  - the function never writes.\n\n**3. Placement.** Put `...(executionPolicy ? { executionPolicy } : {})` right after the currentCandidate spread.\n- Every role's default view and view:'full' get it.\n- view:'status' is untouched.\n- Add no ROLE_OMITTED entry.\n- Leave the tool description and input schema unchanged.\n\n**4.** Change nothing else in getContext.ts.\n\n**Green in $D:**\n- the whole new test file;\n- src/tools/getContext.test.ts\n- src/tools/getContextGovernance.test.ts\n- src/tools/getContextStatus.test.ts\n- src/state/taskExecutionPolicy.test.ts\n- src/tools/executionProfileAdmission.test.ts\n- src/delivery/executionPolicyIntegration.test.ts",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts"
+      ],
+      "note": "Reopen round 1: no change. getContext.ts (executionPolicyContext plus its spread after currentCandidate) is landed in baeacbf. It is clean vs HEAD, and the working copy is now LF over an LF index (git ls-files --eol: i/lf w/lf), so there is no EOL churn. QA verified the code is correct on the committed bytes. The step-6 gate re-runs the whole suite fresh.",
+      "startedAt": "2026-10-24T16:43:04.145Z",
+      "completedAt": "2026-10-24T16:43:09.898Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Document the setting and the records in docs/CONFIGURATION.md and docs/SCHEMA.md.\n\n**Rules for both files**\n- Both are CRLF working copies over LF indexes: edit in place, keep CRLF, and check with `git diff --ignore-cr-at-eol`.\n- Verify every sentence against the landed code (M01a-f and step 3). Where this plan and the code differ, document the code.\n- No line may say the daemon never runs, executes or touches git (util/daemonGitDocs.test.ts).\n- Nothing live may be called deprecated (util/taskTimeBudgetDocs.test.ts).\n\n**docs/CONFIGURATION.md.** Add a new `executionProfile` row to the project settings table, directly before `deliveryPolicy`. It should say:\n- Absent means `legacy`, today's behaviour. `observe` changes no gate and never weakens the live deliveryPolicy.\n- `verified-local` is refused with `-32003` / `EXECUTION_PROFILE_NOT_READY` (the context names missingCapabilities) until protected isolation, trusted runner evidence and revision-bound delivery are certified. No environment variable or caller label grants it.\n- Any other value is refused `INVALID_INPUT`.\n- A hand-edited verified-local value makes every task strict, and a malformed value makes every task unreadable. Then:\n  - plan submission, approval and upward moves are refused;\n  - claims are refused (an explicit claim is refused; the ranked pool and wait_for_task skip the row);\n  - qa_approve is refused;\n  - DONE prerequisites withhold their dependents;\n  - every later settings update is refused until one sets executionProfile back to legacy or observe;\n  - releases, reads and backward moves keep working.\n- Each plan submission records the profile and deliveryPolicy in task.executionPolicySnapshot (see SCHEMA.md). That record is identity, never approval or readiness.\n- Allowed-values column: `legacy` (default) / `observe` / `verified-local` (refused).\n\n**docs/SCHEMA.md**\n- **ProjectSettings:** add `executionProfile?: 'legacy' | 'observe' | 'verified-local';` with a comment in the deliveryPolicy style.\n- **Task:** add `executionPolicySnapshot?: ExecutionPolicySnapshot;` beside planRevision, with a comment pointing to the new subsection.\n- **New `### executionPolicySnapshot` subsection**, right after `### planRevision`. It covers:\n  - **Shapes.** v1 is {version:1, profile, planRevision}; v2 adds deliveryPolicy. Give their exact key sets. A v2 deliveryPolicy is never defaulted, and a v1 never gains one.\n  - **Capture.**\n    - It happens only in the PLAN_SUBMITTED write, in the same write as planRevision, recording the live executionProfile and deliveryPolicy.\n    - A stored verified-local snapshot is a floor and is kept whole; only its planRevision advances, so a rollback cannot lower it.\n    - Approval, progress, metadata and replanning writes never refresh, backfill or erase it, so a stale snapshot is kept.\n  - **Ownership.** It is stripped from every tool argument and update, from UPDATE_TASK (denylist) and from create_task.\n  - **Consumers.**\n    - Strict means the live executionProfile floored by a stored verified-local snapshot.\n    - The progression backstop, claim admission and delivery-policy selection (resolveTaskDeliveryPolicy) all use that one rule.\n    - A malformed snapshot or setting fails closed (INVALID_INPUT) only where it is judged. Reads, metadata, releases and cleanup never decode it.\n    - Legacy and observe tasks keep the LIVE deliveryPolicy; a captured one is identity only.\n  - **Attempts.** A claim records ExecutionAttempt.executionPolicySnapshot from the task floor plus the live settings. Resume and repair keep the original; a successor gets a fresh one.\n  - **Serving.** get_context `executionPolicy` (see MCP_SERVER.md).\n  - **Meaning.** It is configuration identity only: never approval, readiness, runner trust, verified delivery or completion. The change is additive, with no schemaVersion bump.\n- **ExecutionAttempt:** add `executionPolicySnapshot?: ExecutionPolicySnapshot;` with a one-line comment: captured at claim; absent on attempts opened before it existed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "QA fix applied. The CONFIGURATION.md executionProfile row (line 180) was round-tripped with two Edit tool calls: a marker appended to the row's tail, then removed. Its final bytes are identical (sha256 3513b13a…c49c before and after, no marker left, LF over LF index), so the wrapper's stream parser (WRITE_TOOLS harvest -> to_top_rel) records docs/CONFIGURATION.md in TOOL. That means the contested skip-untouched rule (peer task-07474ee declares the path) no longer holds it back. The diff vs HEAD is still exactly +1 line, the row; the wording is kept as QA asked.\n\nBefore keeping the wording I re-checked the row against the landed code, and it holds:\n- the NOT_READY message names what is not certified (executionProfile.ts:108-125), and no env var or label is consulted;\n- creation past BACKLOG goes through the readiness check (taskStore.ts:325-328), and so does PLAN_APPROVED (taskStore.ts:693);\n- the settings validator refuses any update while the stored profile is unusable (validators.ts:220-223);\n- neither the JetBrains nor the VS Code source references executionProfile;\n- WS UPDATE_SETTINGS goes through state.updateSettings.\nSCHEMA.md is unchanged (landed in baeacbf).",
+      "startedAt": "2026-10-24T16:43:30.729Z",
+      "completedAt": "2026-10-24T16:44:53.399Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Document the tool contracts in docs/MCP_SERVER.md.\n\n**Rules**\n- The file is a CRLF working copy over an LF index: edit in place and keep CRLF.\n- Verify each sentence against the landed code. Where this plan and the code differ, document the code.\n- Add sentences inside existing sections only. Never add a new `### moe.*` heading: util/taskTimeBudgetDocs.test.ts matches headings to the registry, and there is no update_settings tool.\n- No 'never runs git' wording.\n\n**moe.get_context.** Add an **Execution policy context** paragraph covering:\n- the shape `executionPolicy` {effectiveProfile, taskSnapshot, attemptSnapshot, unreadable?};\n- it is omitted when the setting, the task snapshot and the open attempt's snapshot are all absent;\n- it serves fresh copies;\n- unreadable records are named, never echoed and never thrown;\n- every role and view:'full' get it; view:'status' does not;\n- it is configuration identity, not readiness.\n\n**moe.submit_plan**\n- The submission records task.executionPolicySnapshot in the same write as planRevision. A caller-supplied value is ignored.\n- An effectively verified-local task is refused `-32003` / `EXECUTION_PROFILE_NOT_READY` before any write.\n- A malformed stored snapshot or setting is refused INVALID_INPUT.\n\n**moe.claim_next_task.** Add an **Execution profile admission** paragraph:\n- An explicit claim of an effectively verified-local task (stored floor or live setting) is refused EXECUTION_PROFILE_NOT_READY before any write.\n- There is no workerId or resume exemption: an own-seat resume also checks the caller's open attempt snapshot.\n- The ranked pool skips such rows.\n- A malformed record is refused INVALID_INPUT on an explicit claim, and skipped by the ranked pool.\n- The opened attempt records executionPolicySnapshot. A resume adopts the original; a successor gets a fresh one.\n- A seat already holding a task that became strict gets alreadyAssigned, then the concrete resume refusal, bounded by MOE_RESUME_MAX_ATTEMPTS. Releasing frees the seat.\n\nIn the **Dependency gating** paragraph, add:\n- A DONE prerequisite that is effectively verified-local, or has a malformed snapshot or setting, withholds its dependents.\n- An explicit claim of such a dependent is refused with that prerequisite's EXECUTION_PROFILE_NOT_READY or INVALID_INPUT. That refusal does not name the prerequisite; dependsOnUnmet and report_blocked do.\n\n**moe.wait_for_task.** The matcher skips the same rows, and a waiter whose own held task is strict is not woken.\n\n**moe.set_task_status.** An upward move of an effectively verified-local task is refused EXECUTION_PROFILE_NOT_READY before any write. Backward moves, BLOCKED, ARCHIVED and releases are not refused.\n\n**moe.release_task.** It is never refused by the execution profile.\n\n**moe.qa_approve.** The gate judges the task's effective policy.\n- Legacy and observe tasks get the live deliveryPolicy, exactly as before.\n- An effectively verified-local task is refused EXECUTION_PROFILE_NOT_READY before any Review, status, worker or chat write, whatever the live policy and attestations.\n- A malformed snapshot or setting is refused INVALID_INPUT.\n\n**Plugin WebSocket Messages, plan-approval section**\n- APPROVE_TASK, and an UPDATE_TASK upward drag of such a task, get an ERROR frame with codeName EXECUTION_PROFILE_NOT_READY.\n- UPDATE_TASK never carries executionPolicySnapshot (denylist).\n\n**Stale-block wording.** Wherever the stale-block alert or describeUnmetDependency wording is documented, if it is, add one sentence: a strict prerequisite reads 'delivery evidence could not be judged: check settings.deliveryPolicy', so check executionProfile and the snapshot too.\n\n**Green in $D:** src/util/daemonGitDocs.test.ts and src/util/taskTimeBudgetDocs.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Reopen round 1: no change. docs/MCP_SERVER.md (+24/-?, the get_context, submit_plan, claim_next_task, wait_for_task, set_task_status, release_task, qa_approve and WS paragraphs) is landed in baeacbf and clean vs HEAD (LF over LF). The step-6 gate re-runs the docs guard tests (daemonGitDocs, taskTimeBudgetDocs) inside the full suite, with CONFIGURATION.md overlaid.",
+      "startedAt": "2026-10-24T16:44:57.200Z",
+      "completedAt": "2026-10-24T16:45:02.627Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "The one verification gate: the final composition regression for the M01 chain. Run it in a fresh, synchronized native-Linux copy. Never use the Windows node_modules, and keep package-lock.json unchanged.\n\n**1. Build the copy:**\n```\nD=$(mktemp -d /tmp/moe-m01-gate.XXXXXX)\ngit -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar -x -C \"$D\"\nfor f in packages/moe-daemon/src/tools/getContext.ts packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts docs/CONFIGURATION.md docs/SCHEMA.md docs/MCP_SERVER.md; do cp \"/mnt/d/projexts/moes/$f\" \"$D/$f\"; done\nNM=\"$(cat /tmp/moe-linux-test-root.latest)/repo/packages/moe-daemon\"\nLPATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nPATH=$LPATH node -e 'const [a,b]=process.argv.slice(1).map(p=>JSON.stringify(require(p)));process.exit(a===b?0:1)' \"$NM/package-lock.json\" \"$D/packages/moe-daemon/package-lock.json\" && ln -s \"$NM/node_modules\" \"$D/packages/moe-daemon/node_modules\"\n```\nIf the lockfiles differ, run `npm ci` in $D/packages/moe-daemon with the same env instead of linking.\n\n**2. Run the suite.** This is the DoD's `npm test`, with a worker cap, in the isolated copy the epic requires:\n```\ncd \"$D/packages/moe-daemon\" && UNSET=$(env | grep -oE '^MOE_[A-Z_]+' | sed 's/^/-u /' | tr '\\n' ' ') && env $UNSET PATH=$LPATH npm test -- --maxWorkers=4\n```\nThen run `npx tsc --noEmit --incremental false` with the same env. Both must exit 0.\n\n**3. Record and check:**\n- Record the files, passed and skipped counts against the last full count that CQ-M01f reported.\n- Type-check the new test file once: `npx tsc --noEmit --ignoreConfig --target ES2022 --module ESNext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --resolveJsonModule src/delivery/executionPolicyLifecycle.test.ts`.\n- For a red test outside the owned files, classify it by re-running this recipe on a pristine HEAD copy before touching anything. Never weaken or skip a test.\n- Keep the npm test command line, its exit code and output tail, with the actual pass and skip counts, for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate run fresh in an isolated native-Linux copy, /tmp/moe-m01-gate.57VOFU: git archive HEAD (baeacbf) plus the 5 owned files overlaid.\n- cmp shows only docs/CONFIGURATION.md differs from the archive, by the +1 executionProfile row (diff 179a180).\n- The lockfile is JSON-equal to the native install, so /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules is symlinked in. Every MOE_* var is unset, with the Linux-only PATH.\n\nResults:\n- `npm test -- --maxWorkers=4`: exit 0. Test Files 154 passed (154); Tests 3450 passed | 9 skipped (3459); 78.98s. This is identical to QA's run on baeacbf. CQ-M01f last reported 153 files and 3407/9.\n- `npx tsc --noEmit --incremental false`: exit 0.\n- The lifecycle test file's `tsc --ignoreConfig ... --strict`: exit 0.\n- An explicit focused run of daemonGitDocs, taskTimeBudgetDocs and executionPolicyLifecycle passed 3 files and 49 tests. Both guards read docs/CONFIGURATION.md from the overlaid copy.\n\nLogs: /tmp/cq-m01-r2-gate.log, /tmp/cq-m01-r2-tsc.log, /tmp/cq-m01-r2-tsc-test.log, /tmp/cq-m01-r2-focused.log.",
+      "startedAt": "2026-10-24T16:45:17.728Z",
+      "completedAt": "2026-10-24T16:47:30.687Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Exactly one adversarial self-review of the five-file diff. Load adversarial-self-review. Read `git diff --ignore-cr-at-eol` for getContext.ts and the three docs, plus the new test file.\n\n**Mutation probes.** Run each alone in $D and record its red count.\n1. Drop the executionPolicy spread. G, R and the B2 serving assertions go red.\n2. Serve the stored objects without decoding. G2 detachment and G4 echo go red.\n3. Let a decode error throw. G4 goes red.\n4. Compute effectiveProfile from the live setting alone. G3 and B2 go red.\n5. Always include executionPolicy. G1 and O1 go red.\n6. Include it in view:'status'. G5 goes red.\n7. Serve the newest attempt whatever its phase. B1's attemptSnapshot-null assertion goes red.\n\n**Then challenge:**\n- concurrent get_context calls during a claim, under the mutex;\n- a restart while an attempt is finalizing;\n- a hand-edited oversized or deeply nested snapshot;\n- the payload cost: only when a profile is in use, with a few hundred bytes as the budget;\n- that nothing documents verified-local as available, or a snapshot as approval, readiness or trust;\n- each docs sentence re-read against the landed code;\n- that error handling leaks no stored content.\n\n**Confirm:**\n- Only the five owned files changed.\n- CRLF is preserved in getContext.ts and the three docs.\n- There are no .moe or Git writes.\n- No source contains a substring from the project's global forbiddenPatterns.\n\nFix findings with tests. If any byte changed after step 6, rerun the step-6 command fresh and use that output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts",
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "I loaded adversarial-self-review and ran it once, on this round's delta. That delta is the byte-identical CONFIGURATION.md row, which is doc-only.\n\nChecks:\n- vs HEAD, across the 6 landed or owned paths, only docs/CONFIGURATION.md changes (+1, the executionProfile row). The raw and the --ignore-cr-at-eol diffs are both +1, so there is no EOL churn.\n- getContext.ts and the three docs are now LF over LF indexes (git ls-files --eol), so the plan's CRLF note is stale and nothing needed preserving. schema.ts stays i/crlf w/crlf and is untouched.\n- No forbidden-pattern substrings and no \"never runs/executes/touches git\" wording.\n- verified-local reads as refused until certified, never available. The snapshot is called \"configuration identity, never approval or readiness\".\n- In step 4 I re-checked each sentence of the row against the landed code.\n- No .moe edits and no Git writes: only read-only git commands (log, show, diff, ls-files, archive).\n\nNot re-run:\n- The 7 getContext mutation probes and the code challenge list. getContext.ts and the test file are cmp-equal to the baeacbf archive. Round-1 red counts were 12/3/4/2/2/1/1 out of 28, and QA independently reproduced 12, 2 and 2, so a re-run would spend tokens on unchanged bytes (CQ-TOKEN-v1).\n\nDelivery risk considered:\n- The wrapper's contested rule needs a TOOL witness. The two successful Edit calls give one: the WRITE_TOOLS harvest maps file_path through to_top_rel.\n- docs/ is not denied, and the HEAD diff holds no peer hunks, so only our row rides along.\n- No byte changed after step 6, so the step-6 output stands for complete_task.",
+      "startedAt": "2026-10-24T16:47:34.990Z",
+      "completedAt": "2026-10-24T16:48:13.449Z"
+    }
+  ],
+  "planRevision": 30,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Delivery gap only: the code is correct and the tests are strong. The docs/CONFIGURATION.md `executionProfile` row (plan step 4, and claimed in your completionSummary) is NOT in completion commit baeacbf.\n- `git show --stat baeacbf` lists 7 paths, without CONFIGURATION.md. `git grep executionProfile HEAD -- docs/CONFIGURATION.md` finds nothing.\n- The row exists only as dirty shared-tree bytes (+1 line, the only hunk).\n- Cause: `attribution.contested: skip-untouched`. task-07474ee438f34021a23809f9c764d15c (PLANNING) also lists docs/CONFIGURATION.md in its filesModified, and this session's touchedFiles has no witness for the file. SCHEMA.md was contested too but landed, because touchedFiles witnessed it.\n- Rails forbid agent Git writes, so QA cannot self-land it, and required docs must be landed.\n\nVerified, so no change is needed:\n- On the committed bytes (archive baeacbf, lockfile-equal Linux node_modules, MOE_* unset), `npm test -- --maxWorkers=4` exits 0: 154 files, 3450 passed, 9 skipped.\n- `tsc --noEmit` exits 0, and the test file's `tsc --ignoreConfig` exits 0.\n- My own mutation probes: drop the spread gives 12/28 red, live-only effectiveProfile 2/28 and always-include 2/28.\n- DoD 1-3 each have exact-value test evidence (B/R/P/G/O/F).\n- view:'status' returns before the computation; the decode guard covers all 3 reads; nothing raw is echoed.\n- Size: 655 insertions and 9 deletions ignoring CR, 519 of them the plan-mandated test file.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 219.5,
+  "comments": [
+    {
+      "id": "comment-86fb74f52cbf4276bb921d8064eb919e",
+      "author": "architect-cq-coordinator",
+      "content": "Execution sizing refinement: child [CQ-M01a] owns the 5-file typed profile/configuration foundation. This parent retains durable task/attempt policy snapshots, anti-forgery and lifecycle enforcement; it must not be marked complete merely because profile primitives exist. Strong activation remains unavailable until all isolation/evidence/client gates pass.",
+      "timestamp": "2026-10-23T23:38:23.239Z"
+    },
+    {
+      "id": "comment-a887c22f9d6741c2b245660bb6191a09",
+      "author": "architect-cq-coordinator",
+      "content": "Snapshot/lifecycle integration must follow CQ-F02 canonical revision semantics; otherwise execution metadata changes would immediately invalidate policy snapshots. This dependency also serializes taskStore edits.",
+      "timestamp": "2026-10-23T23:51:18.465Z"
+    },
+    {
+      "id": "comment-14a2b6416f7e48bfaaf2e8da96311c66",
+      "author": "architect-cq-coordinator",
+      "content": "CQ-M01 sizing refinement: FIVE BACKLOG implementation children now own the independently reviewable policy layers: M01b=task-6694591cea5d43908eb3399b44ca883a; M01c=task-0f7df75fa8e44a75bf8547e53f48d5d5; M01d=task-80dfde45cbd04e72a460c1ee867ae62c; M01e=task-29c8274ebc4d4faea67009fa5dcd2df1; M01f=task-5a082cb43e2346fcbff480fb1c383b58. Dependencies are M01b -> M01a+F02; M01c -> b; M01d -> c; M01e -> d; M01f -> e. Parent M01 depends on M01f (and retains M01a/F02). The ORIGINAL M01 retains the remaining M01g deliverable: detached task/attempt profile configuration context serving, docs/SCHEMA.md and docs/MCP_SERVER.md updates, cross-boundary snapshot/restart/rollback/forgery integration coverage, and final composition regression. Do not create a sixth child or duplicate verification-only row. These are CONFIGURATION identities, captured with canonical planRevision at PLAN_SUBMITTED/attempt-open, NOT evidence of plan approval, model receipt, trusted runner execution, hardware/isolation readiness or verified completion. v1 profile+revision alone does not preserve deliveryPolicy identity; v2 must capture it without silently changing old live legacy/observe semantics. Verified-local remains unconditionally unavailable. Never promote an old WORKING task from planApprovedAt/current revision or erase a strict floor on replan/rollback. Do NOT make M01 or its children depend on F03/F04/F05: F03 already depends on M01, so that would cycle; real approval identity/timer fencing remains F04/F05. Each child owns tests and fresh native-Linux npm test -- --maxWorkers=4, with unchanged package-lock/original Windows dependencies. Preserve existing held-out delivery acceptance assertions; add new focused suites. No per-task implementation steps or claims were submitted in this breakdown.",
+      "timestamp": "2026-10-24T00:01:39.226Z"
+    },
+    {
+      "id": "comment-db03855ca2e04adc8eb198204cadf307",
+      "author": "governor-187cc44e",
+      "content": "Review note (governor, agreed with qa-b0c1741e): packages/moe-daemon/src/types/schema.ts is declared on this task. It holds CQ-M01d's stranded step-4 doc-comment hunk (+9/-6, comments only: the ExecutionAttempt.executionPolicySnapshot and ExecutionPolicySnapshot docs that describe M01d's attempt capture). M01d's completion 71c7dbe dropped it during the temporary core.autocrlf=input window. QA for this task: confirm this task's landing commit carries schema.ts with exactly those comment hunks. The file is committed with CRLF line endings in HEAD; keep them.",
+      "timestamp": "2026-10-24T15:24:06.358Z"
+    },
+    {
+      "id": "comment-3c2f42ad72de43c89a95ca351a03a40f",
+      "author": "governor-187cc44e",
+      "content": "Addendum for this task's QA (requested by qa-b0c1741e). schema.ts has been stored as CRLF (\"i/crlf\") since 204d5a6 (CQ-M01a). Review its diff with `git diff --ignore-cr-at-eol`. If the raw diff rewrites the whole file, that's line-ending noise: don't count it as scope creep or toward the >400-LOC rule. Confirm that `git show --stat <recorded completion sha>` lists packages/moe-daemon/src/types/schema.ts, rather than trusting the shared tree. The repo-wide line-ending cleanup is task-709f6691, which depends on this task.",
+      "timestamp": "2026-10-24T15:37:27.266Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:32:49.511Z",
+  "updatedAt": "2026-10-24T21:33:42.295Z",
+  "dependsOn": [
+    "task-7bf45815551b4ac49f1c7be392ef4b9e",
+    "task-349319a3b8d24aafab39a562ac2d2fb9",
+    "task-5a082cb43e2346fcbff480fb1c383b58"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-24T14:15:53.031Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 14,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-24T21:32:49.270Z",
+    "wallClockMs": 26216239
+  },
+  "contextFetchedBy": [
+    "worker-c1d9de02",
+    "qa-b0c1741e"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [
+    {
+      "item": "Plan step-4 deliverable: docs/CONFIGURATION.md executionProfile settings row landed in the completion commit",
+      "rejectedAt": "2026-10-24T16:39:31.768Z",
+      "rejectedBy": "qa-b0c1741e"
+    }
+  ],
+  "planSubmittedAt": "2026-10-24T14:26:59.597Z",
+  "planningNotes": {
+    "approachesConsidered": "**The work.** Per the coordinator comment comment-14a2b641, the parent M01 keeps the 'M01g' deliverable:\n- detached task/attempt configuration context serving;\n- the SCHEMA/MCP_SERVER docs (plus CONFIGURATION.md, the settings reference);\n- cross-boundary snapshot, restart, rollback and forgery integration coverage;\n- the final composition regression.\nIt must not create a sixth child or a verification-only row.\n\n**Chosen.**\n- A top-level get_context `executionPolicy`, placed beside currentCandidate.\n- It holds decoded fresh copies (the leaf decoder returns new primitive-only objects), effectiveProfile from the shared resolveTaskExecutionProfile rule, and per-record `unreadable` names.\n- It is omitted when no profile data exists, so legacy payloads stay byte-identical.\n\n**Rejected.**\n- **Echoing raw stored objects.** That would alias state and echo hand-edited garbage.\n- **A `ready` or verified flag.** It would read as readiness. effectiveProfile only names the governing profile.\n- **Serving an effective deliveryPolicy.** For a strict task it would be a fake value, and for others it is just project.settings, which is already served.\n- **Adding executionPolicy to the WS board or view:'status'.** Other clients are out of scope, and the status view is a light poll.\n- **Fixing the dependency-refusal wording in dependencyUnblock.ts and claimNextTask.ts.** That would change existing pinned texts and add files. Instead, document the limitation.\n- **Adding a getContext unit-test file.** The single lifecycle file covers serving through real flows.",
+    "codebaseInsights": "**get_context today.**\n- get_context builds a curated task projection (tools/getContext.ts ~L328-450) with no snapshot today.\n- currentCandidate is the precedent for 'omit when absent'.\n- ROLE_OMITTED trims only epicSiblings, planningNotes and routing.\n- The view:'status' path is util/contextStatus.ts.\n\n**Attempts and restart.**\n- currentAttempt returns the last attempt in OPEN_PHASES: running, finalizing or reconciling.\n- Restart order (src/index.ts ~L531-537): load, then mutex.runExclusive(reconcileRunningAttempts), then purgeAllWorkers.\n\n**Settings.**\n- Settings change only via StateManager.updateSettings, which calls validators.validateSettingsUpdate; WS UPDATE_SETTINGS uses the same path.\n- executionProfile is validated there: unknown values give INVALID_INPUT and verified-local gives EXECUTION_PROFILE_NOT_READY. Any update is refused while the stored profile is verified-local, unless the update sets executionProfile.\n- deliveryPolicy is NOT an UPDATE_SETTINGS field; it is hand-edited in project.json.\n\n**MCP and docs guards.**\n- McpAdapter does not enforce additionalProperties, so forged extra args reach handlers. That is why forgery tests go through the getTools registry.\n- Docs guards: util/daemonGitDocs.test.ts bans 'never runs/executes/touches git' wording in the docs and tool descriptions; util/taskTimeBudgetDocs.test.ts matches `### moe.*` headings to getTools().\n\n**Line endings.** getContext.ts and docs/{SCHEMA,MCP_SERVER,CONFIGURATION}.md are CRLF working copies over LF indexes, with EOL-only churn and no real diff.",
+    "risks": "**Planned against unlanded code.** This plan relies on the approved plans of M01c-f, which are not yet landed. Verify names and rules first, and follow the landed code where they differ.\n- Likely drift points: whether a reconciling attempt is resumed by own-seat claim or by reattach_attempt (R2), and what release_task leaves as status (B1).\n- Test expectations that disagree with a landed contract are corrected in the test and reported. Real slice defects go through moe.report_blocked, never fixed here.\n\n**Large test file.** Keep it compact (it.each, shared seeds). The heaviest flows are B1 and B2.\n- wait_for_task timeouts: use the 1000 ms floor.\n- Restarts: clear old instances' emitters and timers.\n\n**Doc hazards.**\n- Do not add a heading for a non-existent update_settings tool.\n- No 'never runs git' wording.\n- Keep doc lines factual against the code.\n- verified-local must read as unavailable everywhere.\n\n**get_context safety.** It must never throw on hand-edited rows: M01c's D2 and M01e's N2 assert get_context works on strict and malformed rows.\n\n**Payload size.** executionPolicy adds about 200 bytes only for tasks with profile data. That is acceptable under the token rails.\n\n**Shared checkout.** It holds 1000+ dirty peer paths. Never revert, stash or stage them. Preserve CRLF churn.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/delivery/executionProfile.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "docs/SCHEMA.md",
+      "docs/MCP_SERVER.md",
+      "docs/CONFIGURATION.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T14:26:59.691Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/types/schema.ts"
+  ],
+  "workStartedAt": "2026-10-24T16:09:34.730Z",
+  "reviewStartedAt": "2026-10-24T16:51:03.531Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test -- --maxWorkers=4  (the DoD's npm test, per plan step 6: fresh isolated native-Linux copy /tmp/moe-m01-gate.ovHR23 = git archive HEAD 01fb5f7 + the 5 owned files (only docs/CONFIGURATION.md differs from HEAD), lockfile JSON-equal linked Linux node_modules, every MOE_* unset, Linux-only PATH; plus `npx tsc --noEmit --incremental false` exit 0)",
+    "exitCode": 0,
+    "outputTail": " Test Files  155 passed (155)\n      Tests  3463 passed | 15 skipped (3478)\n   Start at  19:49:06\n   Duration  70.60s (tests 93%, import 5%, transform 2%)\n\n(tsc --noEmit --incremental false: exit 0. Earlier fresh run on baeacbf + the row: 154 files, 3450 passed | 9 skipped, matching QA. The +1 file, +13 passed and +6 skipped all come from peer CQ-M04b's baselineRun.test.ts in 01fb5f7; its describe.runIf(runnable) block skips here.)",
+    "reportedAt": "2026-10-24T16:51:03.531Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts",
+    "packages/moe-daemon/src/tools/getContext.ts",
+    "docs/CONFIGURATION.md",
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json",
+    ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json"
+  ],
+  "completionSummary": "Reopen round 1 fixes QA's delivery gap only. No code or test changes.\n\n**Fix**\n- The docs/CONFIGURATION.md `executionProfile` row (line 180, plan step 4) was round-tripped with two successful Edit tool calls: a marker added to the row's tail, then removed.\n- The final bytes are identical (sha256 3513b13a… before and after; LF over an LF index). The wrapper's stream parser (WRITE_TOOLS → to_top_rel) therefore records the path as TOOL. The contested skip-untouched rule (peer task-07474ee declares the path) should no longer hold it back.\n- The diff vs HEAD is exactly that +1 row. The wording is unchanged, as QA asked.\n- Before keeping the wording, I re-checked its claims against the landed code: executionProfile.ts:108-125, taskStore.ts:325-328 and :693, validators.ts:220-223, and the WS UPDATE_SETTINGS → state.updateSettings path. Neither IDE plugin references executionProfile.\n- The other six landed files are untouched and cmp-equal to HEAD.\n\n**Gate**\nHEAD moved to 01fb5f7 (peer CQ-M04b adds benchmarks/baselineRun{,.test}.ts, none of this task's paths), so I re-ran the gate on that exact tree plus the owned files, in a fresh native-Linux copy with every MOE_* unset.\n- npm test -- --maxWorkers=4 exits 0: 155 files, 3463 passed, 15 skipped.\n- The earlier run on baeacbf plus the row matched QA's run exactly: 154 files, 3450/9. The delta is the peer's test file.\n- tsc --noEmit exits 0, and the test file's tsc --ignoreConfig exits 0.\n- An explicit run of the docs guards and the lifecycle file passed 3 files and 49 tests, reading the overlaid CONFIGURATION.md.\n\n**For QA:** the wrapper lands at session exit, after this call, so I could not inspect the new SHA. Please confirm `git show --stat <new completion sha>` lists docs/CONFIGURATION.md with only the row.\n\nNo .moe edits or Git writes by me. verified-local stays refused.",
+  "commits": [
+    {
+      "sha": "baeacbf3636a69a524ba24123647a32df8011a22",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4e006165@2026-10-24T16:06:35Z",
+      "paths": [
+        ".moe/tasks/task-9c8694e33ac840718901adae2bae66e4.json",
+        ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-4e006165",
+      "recordedAt": "2026-10-24T16:33:26.008Z",
+      "treeId": "b33d221fcda781f7b98d7f907fcadf4bffbc2d2f",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "917591fcd0b00bccf899787af397317b9e4a8e73",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-24T16:39:29Z",
+      "paths": [
+        ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json",
+        "docs/CONFIGURATION.md"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-24T16:52:02.242Z",
+      "treeId": "f89ac0c80b1f066d88abfa24949cae5cde5a8fb3",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "ea4e0d66817f6e41810dc4c64cd5c4518c6a073d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T21:25:38Z",
+      "paths": [
+        ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json",
+        ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T21:33:42.295Z",
+      "treeId": "b171b7b71a7e6e93cace9c9245cee56728be056f",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts",
+    "packages/moe-daemon/src/tools/getContext.ts",
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md",
+    "docs/CONFIGURATION.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T21:25:38Z",
+    "at": "2026-10-24T21:33:42.295Z"
+  },
+  "reviewCompletedAt": "2026-10-24T21:32:49.270Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Plan step-4 deliverable: docs/CONFIGURATION.md executionProfile settings row landed in the completion commit"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "file": "docs/CONFIGURATION.md",
+        "line": 180,
+        "description": "The executionProfile row is not in baeacbf: skipped as contested-untouched (peer task-07474ee declares the path; no touchedFiles witness). Fix: rewrite the same row with the Edit tool (Edit it out, then back in, byte-identical) so touchedFiles lists docs/CONFIGURATION.md. Keep the wording. After complete_task, confirm `git show --stat <new sha>` lists docs/CONFIGURATION.md."
+      },
+      {
+        "type": "other",
+        "description": "No code or test changes are needed. Re-run the gate (npm test in the isolated Linux copy, with CONFIGURATION.md overlaid so the docs guard tests read it) and supply its output to complete_task. Leave the other six landed files untouched."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Delivery gap only: the code is correct and the tests are strong. The docs/CONFIGURATION.md `executionProfile` row (plan step 4, and claimed in your completionSummary) is NOT in completion commit baeacbf.\n- `git show --stat baeacbf` lists 7 paths, without CONFIGURATION.md. `git grep executionProfile HEAD -- docs/CONFIGURATION.md` finds nothing.\n- The row exists only as dirty shared-tree bytes (+1 line, the only hunk).\n- Cause: `attribution.contested: skip-untouched`. task-07474ee438f34021a23809f9c764d15c (PLANNING) also lists docs/CONFIGURATION.md in its filesModified, and this session's touchedFiles has no witness for the file. SCHEMA.md was contested too but landed, because touchedFiles witnessed it.\n- Rails forbid agent Git writes, so QA cannot self-land it, and required docs must be landed.\n\nVerified, so no change is needed:\n- On the committed bytes (archive baeacbf, lockfile-equal Linux node_modules, MOE_* unset), `npm test -- --maxWorkers=4` exits 0: 154 files, 3450 passed, 9 skipped.\n- `tsc --noEmit` exits 0, and the test file's `tsc --ignoreConfig` exits 0.\n- My own mutation probes: drop the spread gives 12/28 red, live-only effectiveProfile 2/28 and always-include 2/28.\n- DoD 1-3 each have exact-value test evidence (B/R/P/G/O/F).\n- view:'status' returns before the computation; the decode guard covers all 3 reads; nothing raw is echoed.\n- Size: 655 insertions and 9 deletions ignoring CR, 519 of them the plan-mandated test file.",
+      "rejectedAt": "2026-10-24T16:39:31.768Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Plan step-4 deliverable: docs/CONFIGURATION.md executionProfile settings row landed in the completion commit"
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "file": "docs/CONFIGURATION.md",
+          "line": 180,
+          "description": "The executionProfile row is not in baeacbf: skipped as contested-untouched (peer task-07474ee declares the path; no touchedFiles witness). Fix: rewrite the same row with the Edit tool (Edit it out, then back in, byte-identical) so touchedFiles lists docs/CONFIGURATION.md. Keep the wording. After complete_task, confirm `git show --stat <new sha>` lists docs/CONFIGURATION.md."
+        },
+        {
+          "type": "other",
+          "description": "No code or test changes are needed. Re-run the gate (npm test in the isolated Linux copy, with CONFIGURATION.md overlaid so the docs guard tests read it) and supply its output to complete_task. Leave the other six landed files untouched."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-24T21:32:49.270Z",
+  "reviewSummary": "Round-1 fix verified; delivery gap closed.\nDELIVERY: completion 917591f (recorded this round at 16:52Z, after the 16:39Z reject; on moe/work-2026-10-24) carries 2 paths: docs/CONFIGURATION.md +1 (executionProfile row, line 180) and the task's own board record. `git diff baeacbf HEAD` over the owned files shows only that row, so the round-0-reviewed bytes are unchanged. Governor check: baeacbf schema.ts is +9/-6 ignoring CR, all 15 lines comments.\nGATE (QA re-run): isolated native-Linux copy of `git archive 917591f` (no daemon/docs drift to HEAD), lockfile and package.json JSON-equal to the native install, MOE_* unset, Linux PATH. `npm test -- --maxWorkers=4` exit 0: 155 files, 3463 passed, 15 skipped (= task.verification). `tsc --noEmit` exit 0. Focused run (lifecycle, docs guards, getContext): 5 files, 102 passed, the guards reading the landed row.\nROW vs CODE: decodeProfile gives INVALID_INPUT for anything else; assertExecutionProfileReady refuses verified-local unconditionally, with no env/label read; validators.ts:220-224 refuses settings updates while the stored profile is unusable, unless one sets legacy/observe; taskStore.ts:325-328 plus the PLAN_APPROVED backstop; WS UPDATE_SETTINGS goes through state.updateSettings; MCP error data is {tool,codeName} only and WS forwards only allowlisted numeric context, so missingCapabilities stays daemon-side; no IDE plugin references it.\nDoD 1-3: round-0 exact-value tests (G/R/B/F/O/P; mutants 12/28, 2/28 and 2/28 red) on unchanged bytes, green now. DoD 4 verified. The failed plan-step-4 item is now landed.\nSIZE: baeacbf is 655+/9- ignoring CR; 519 is the plan-mandated test file (prod+docs ~136); +1 now. Over 400 only because of that test file, the main deliverable of this residual slice after the M01a-f split. Reviewed on substance with mutants, so not routed to a split. Complexity: nothing to cut.\nNo QA .moe edits or Git writes; verified-local still refused.",
+  "requiredCheckAtDone": null
+}
