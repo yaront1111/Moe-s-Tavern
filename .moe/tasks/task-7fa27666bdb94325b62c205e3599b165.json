@@ -11,9 +11,74 @@
     "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Port the tracker and the wiring. Create moe-vscode/src/util/AgentSeatTracker.ts with the Write tool (rail: no shell writes to tracked files). It is a pure port of moe-jetbrains/src/main/kotlin/com/moe/services/AgentSeatTracker.kt: read that file and keep its doc comment's why, worded for terminals. The file has NO import, and never contains the text 'vscode' in any casing or 'require(' anywhere, comments included, because step 2's test greps the source. Export exactly:\n- `interface SeatDisposable { dispose(): void }` and `type SeatEvent<T> = (listener: (value: T) => void) => SeatDisposable` (the editor's Event shape, so vscode.Event values plug straight in);\n- `class AgentSeatTracker`, constructor `(load: () => readonly string[], private readonly save: (workerIds: string[]) => void, private readonly deregister: (workerId: string) => void)`, with TS-private fields named exactly `known: Set<string>` and `open: Set<string>` (no # fields: checkRef 2's mutant patches `this.known`), and methods launched/closed/resendGone/acked(workerId: string): void;\n- `type SeatSink = Pick<AgentSeatTracker, 'closed' | 'resendGone' | 'acked'>`;\n- `function wireAgentSeats<T>(seats: { tracker: SeatSink; onDidCloseTerminal: SeatEvent<T>; workerIdOf: (terminal: T) => string | undefined; onConnected: SeatEvent<string>; onAcked: SeatEvent<string> }): SeatDisposable`.\nTracker semantics. The corpus is the spec, and JS Set insertion order equals Kotlin LinkedHashSet order. launched: open.add(id); if the id is new to known, add it and save([...known]). closed: if open.delete(id), deregister(id). resendGone: first compute `[...known].filter(id => !open.has(id))`, then deregister each. This is Kotlin's filter-then-forEach, so a callback that re-enters the tracker cannot change the pass. acked: if known.delete(id), save([...known]). save always receives a fresh array.\nWiring: one `disposed` flag plus a subscriptions array.\n- Close listener: return if disposed; id = workerIdOf(terminal); call tracker.closed(id) only for a non-empty id.\n- Connection listener: call tracker.resendGone() only when the value === 'connected'. onConnected takes MoeDaemonClient.onConnectionChanged as-is, and that event also fires 'connecting' and 'disconnected'; say so in the function's doc comment.\n- Ack listener: tracker.acked(id).\n- dispose(): idempotent; it sets disposed first, then disposes every subscription once.\nError handling:\n(a) VSC-21 feeds load() from untyped workspace JSON. The constructor keeps only the non-blank string entries of an array result (`typeof id === 'string' && id.trim() !== ''`, as Kotlin readAgentSeats filters isNotBlank), each first occurrence once. Any non-array value loads no seat: a stored string must not iterate as characters, and a number must not throw.\n(b) If subscribing any source throws, dispose the subscriptions already made, then rethrow, so a half-wired tracker leaks no listener.\n(c) Every listener returns early once disposed, so a late or leaky source reaches neither workerIdOf nor the tracker.\n(d) Errors from load, save and deregister propagate unchanged, as in Kotlin, whose injected readAgentSeats and writeAgentSeats do their own catching; VSC-21's callbacks own that.\nAdd no other try/catch, no logger and no lock (the extension host is single-threaded). Keep the file eslint-clean (no any, no unused vars) and strict-tsc clean.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/src/util/AgentSeatTracker.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AgentSeatTracker.ts"
+      ],
+      "note": "Created AgentSeatTracker.ts via Write: pure port of the Kotlin tracker (TS-private known/open Sets, fresh array copies to save, resendGone computes the gone list before deregistering, load filtered to non-blank strings via storedIds with error handling for non-array values) plus wireAgentSeats (disposed flag, rollback on subscribe failure, 'connected'-only resend). Source grep: 0 matches for vscode/require(/import/non-ASCII. Shared checkout has 25 other dirty paths from other sessions; none touched.",
+      "startedAt": "2026-11-02T10:12:51.449Z",
+      "completedAt": "2026-11-02T10:13:20.954Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Test the corpus replay, purity and wiring. Create moe-vscode/tests/agent-seat-tracker.test.cjs with the Write tool. Use 'use strict', node:test and node:assert/strict. Load the source exactly as tests/managed-vm.test.cjs loads ManagedVm.ts: read the file text, run ts.transpileModule (CommonJS, ES2020), then vm.runInThisContext of the (exports, module, require) wrapper, passing a require that throws `AgentSeatTracker.ts must not require ${name}` for every name. Copy the harness (tests share no helper module). Name the source-text variable so it cannot clash with an event-source helper: the planning dry run hit a duplicate-identifier SyntaxError. Every test uses exact-value assertions:\nP1 purity: the source matches none of /vscode/i, /^\\s*import\\b/m and /\\brequire\\s*\\(/; AgentSeatTracker and wireAgentSeats are functions.\nC1 corpus (mem:task-task-b3daad343a474830a6bd243991d5353d-handoff):\n- Read path.join(__dirname, '../../moe-jetbrains/src/test/resources/client-seat-tracker.json'). Assert version 1, at least 10 rows and unique ids.\n- Replay each row as SeatTrackerCorpusTest.kt does. store = persisted. The tracker uses load () => store, save ids => { store = ids }, and a deregister that pushes to one log. launched, closed and acked call the tracker with workerId; connect calls resendGone(); restart builds a new tracker over the current store; the log spans restarts.\n- Each of these is that row's failure, never a skip: an unknown op, a launched/closed/acked without a non-empty workerId, a connect/restart carrying a workerId key, a thrown error.\n- Compare with util.isDeepStrictEqual, first against expectDeregistered, then expectPersisted, and record `${id}: expected deregistered|persisted <json>, got <json>`.\n- End with ONE assert.deepEqual(failures, []), so every failing id is reported together.\nL1 load: stored ['worker-aaaa1111', '', '  ', 7, null, {}, 'qa-bbbb2222', 'worker-aaaa1111'] makes resendGone() deregister exactly ['worker-aaaa1111', 'qa-bbbb2222'], and save is never called. undefined, null, 'worker-aaaa1111', 42 and { 0: 'worker-aaaa1111', length: 1 } each deregister [].\nWiring tests use three fixtures:\n- fake sources that count subscriptions and disposals and really unsubscribe, plus a leaky variant whose dispose() keeps the listener and a variant that throws on subscribe;\n- a recording tracker fake;\n- two terminal objects: the seat maps to 'worker-aaaa1111' and a user shell maps to undefined.\nW1: closing the shell records nothing; closing the seat records exactly [['closed', 'worker-aaaa1111']]; workerIdOf saw both objects.\nW2: firing 'connecting', 'connected', 'disconnected', 'connecting', 'connected', undefined records exactly two resendGone calls.\nW3: two acks record acked with each id, in order.\nW4: call dispose() twice. Every source shows 1 subscription, 1 disposal and 0 listeners, and firing all three afterwards records nothing.\nW5: with leaky sources, firing all three after dispose() reaches neither the tracker nor workerIdOf.\nW6: onAcked throws on subscribe. wireAgentSeats rethrows that error, and the close and connection sources each show 1 disposal and 0 listeners.\nW7: wire in a real AgentSeatTracker. launched(seat id), then close the seat, close the shell, fire 'connected', ack the seat id, fire 'connected'. The log ends as [seat id, seat id] and the saved list as [].\nWhile iterating, run `cd moe-vscode && node --test tests/agent-seat-tracker.test.cjs`. Plain node resolves the TS6 typescript from WSL. Never run npm in the shared checkout.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/agent-seat-tracker.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/agent-seat-tracker.test.cjs"
+      ],
+      "note": "Created tests/agent-seat-tracker.test.cjs via Write: P1 purity, C1 corpus replay (12 rows, one deepEqual on failures), L1 load sanitation, T1-T3 (order parity, save copy, re-entrancy; extra to plan, same file), W1-W7 wiring. In-place run `node --test tests/agent-seat-tracker.test.cjs`: 13 tests, 13 pass, 0 fail.",
+      "startedAt": "2026-11-02T10:13:22.672Z",
+      "completedAt": "2026-11-02T10:14:13.189Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once from the checkout root. Run each executionContract checkRef exactly as written, in this order.\n(1) checkRef 2, the mutant. It copies the two new files and the corpus into a mktemp dir and appends `AgentSeatTracker.prototype.acked = function (id) { this.known.delete(id); };`, so acked forgets without saving. It runs the test there with NODE_PATH pointing at the checkout's moe-vscode/node_modules. It exits 0 only when that run FAILED with S06, S10 and S12 reported as `expected persisted`. It prints those lines and deletes the copy, which discards the mutant. Put the printed lines in the step note.\n(2) checkRef 3. It checks that the corpus at HEAD and in the working tree equals VSC-19's 25e70ba1 bytes, and that no commit carrying this task's Moe-Task trailer touches moe-jetbrains/. Also confirm that `git status --porcelain -- moe-jetbrains` lists nothing this task wrote.\n(3) checkRef 1, the gate. It takes a git-archive snapshot of HEAD in a mktemp dir, overlays the two files, then runs `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under env -i with the nvm Node 24.21 PATH (mem:gotcha-vscode-gate-from-wsl). Expect clean lint and compile and 0 failed tests; 4 Windows-only skips are normal. Its fresh command, exit code and output tail are the moe.complete_task verification evidence.\nError handling for a red run:\n- Fix only inside the two new files, re-run the failing check, then run the gate again.\n- Never edit the corpus, skip a row or add a VS Code-only expectation. A row where the port and the Kotlin tracker truly disagree is filed with a task comment plus a #general post (mem:decision-vscode-plugin-reuse).\n- Retry an npm ci network failure once, then report its npm error.\n- Never run npm in the shared checkout. A subagent that runs the gate gets this rail in its brief: kill only PIDs it started, never by name or pattern.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/src/util/AgentSeatTracker.ts",
+        "moe-vscode/tests/agent-seat-tracker.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AgentSeatTracker.ts",
+        "moe-vscode/tests/agent-seat-tracker.test.cjs"
+      ],
+      "note": "checkRef 2 (mutant: acked without save, scratch copy, discarded): exit 0, run failed with 'S06: expected persisted [], got [\"worker-aaaa1111\"]', 'S10: expected persisted [\"architect-cccc3333\"], got [\"worker-aaaa1111\",\"qa-bbbb2222\",\"architect-cccc3333\"]', 'S12: expected persisted [], got [\"worker-aaaa1111\"]'. checkRef 3: exit 0; git status --porcelain -- moe-jetbrains is empty and moe-vscode lists only the two new files; corpus equals 25e70ba1. checkRef 1 (git-archive snapshot of HEAD + the 2 files, env -i Node 24.21): npm ci, lint 0, compile 0, npm test 429 tests / 425 pass / 4 skip / 0 fail, exit 0; snapshot deleted.",
+      "startedAt": "2026-11-02T10:14:14.008Z",
+      "completedAt": "2026-11-02T10:14:45.526Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final step: load adversarial-self-review and read this task's diff as an attacker. Check:\n(1) Order parity: a seat that is acked and then relaunched moves to the end in both a Set and a LinkedHashSet.\n(2) Aliasing: mutating the array that save received leaves the tracker unchanged.\n(3) Re-entrancy: a deregister callback that calls launched or acked during resendGone cannot change that pass.\n(4) Disposal: dispose twice, events after dispose, a source that throws on subscribe.\n(5) Load fed undefined, null, a string, a number, or an array with blanks, duplicates or non-strings.\n(6) Each test still fails on its mutant. The planning dry run killed every one of these: no disposed guard (W5), resend on every state (W2), no rollback (W6), no unsubscribe (W4 and W6), no load filter (L1), and an unconditional closed() (the corpus test).\n(7) The source still has no import, no 'require(' and no 'vscode' text.\n(8) The diff is exactly the two new files: no moe-jetbrains path, no package.json or tsconfig change.\nFix findings inside the two files. If anything changed, re-run checkRef 1 and use that fresh result in moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/src/util/AgentSeatTracker.ts",
+        "moe-vscode/tests/agent-seat-tracker.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AgentSeatTracker.ts",
+        "moe-vscode/tests/agent-seat-tracker.test.cjs"
+      ],
+      "note": "Adversarial review done. Checked: order parity (T1), save copy (T2), re-entrant deregister (T3), disposal twice / after dispose / throwing subscribe (W4-W6), load fed undefined/null/string/number/blank/dup/non-string (L1), purity greps (0 hits), diff = exactly the 2 new files (git status shows no moe-jetbrains path; other dirty moe-vscode paths media/chat.js, MoeDaemonClient.ts, tests/wire-parity.test.cjs belong to VSC-6 and were not touched). A 17-mutant scratch sweep surfaced 2 survivors: (a) 'acked always saves' -> added assertions to T4 (a new test, T4, covers launched/acked/closed/resendGone save counts); (b) 'dispose not idempotent' was an equivalent mutant (dead guard) -> removed the redundant `if (disposed) return;` in dispose(), splice(0) makes it idempotent; re-sweep: 17/17 killed. Theoretical, not fixed (plan forbids extra try/catch): a source whose dispose() throws would skip later subscriptions and mask the original error in rollback. Re-ran all three checkRefs after the edits: checkRef 1 exit 0 (430 tests, 426 pass, 4 skip, 0 fail, lint 0, compile 0), checkRef 2 exit 0 (S06/S10/S12 expected persisted), checkRef 3 exit 0.",
+      "startedAt": "2026-11-02T10:14:46.447Z",
+      "completedAt": "2026-11-02T10:16:25.961Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -29,5 +94,113 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:45:11.915Z",
-  "updatedAt": "2026-11-02T09:45:11.915Z"
+  "updatedAt": "2026-11-02T10:16:37.610Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T09:57:48.182Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-d54b05fd",
+    "worker-13a877ad"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:11:59.885Z",
+  "executionContract": {
+    "intendedBehavior": "moe-vscode gains a pure TypeScript port of the JetBrains AgentSeatTracker. It replays every row of the shared seat corpus (moe-jetbrains/src/test/resources/client-seat-tracker.json) to the same deregistration log and saved list as the Kotlin tracker. The port also adds wireAgentSeats, which subscribes a tracker to three injected event sources (terminal close, connection state, deregistration ack) and returns one disposable that unsubscribes all three. Nothing calls either yet. VSC-21 (task-7e7bd0ec) will plug in vscode.window.onDidCloseTerminal, MoeDaemonClient.onConnectionChanged unchanged, and its new onWorkerDeregistered event.",
+    "acceptanceCriteria": [
+      "tests/agent-seat-tracker.test.cjs replays every corpus row against the transpiled AgentSeatTracker.ts. Every diverging row is reported in one assertion as '<id>: <problem>'. A thrown error, an unknown op or a missing workerId is a row failure, never a skipped row.",
+      "wireAgentSeats calls closed(id) once per close of a terminal that workerIdOf maps to a non-empty id, and nothing for an unmapped terminal. It calls resendGone() once per 'connected' state and never for 'connecting', 'disconnected' or undefined, and acked(id) once per ack, in order.",
+      "After dispose(), which is idempotent, every subscription has been disposed exactly once, and no event reaches workerIdOf or the tracker, even from a source that keeps calling.",
+      "A subscription that throws while wiring disposes the subscriptions already made and rethrows.",
+      "The tracker loads only the non-blank string entries of an array, each first occurrence once; any other stored value loads no seat.",
+      "AgentSeatTracker.ts loads under a require that throws for every name, and contains no import, no 'require(' and no 'vscode' text in any casing.",
+      "The acked-without-save mutant fails S06, S10 and S12 (checkRef 2). The corpus and every moe-jetbrains file are untouched (checkRef 3).",
+      "The snapshot gate (checkRef 1) exits 0 with 0 failed tests."
+    ],
+    "invariants": [
+      "Only acked() removes a seat from the saved list. closed() deregisters only a seat that is open in this window, and only once. launched() saves only when the id is new.",
+      "save always receives a fresh array copy; the tracker never hands out its own Set.",
+      "AgentSeatTracker.ts has no import and no runtime dependency: every dependency is a parameter.",
+      "After dispose() the wiring never calls workerIdOf or the tracker again."
+    ],
+    "compatibility": [
+      "client-seat-tracker.json (version 1, rows S01-S12, landed by VSC-19 in 25e70ba1) is consumed unchanged, with no client-specific expectation.",
+      "No moe-jetbrains file and no existing moe-vscode file changes, including package.json, tsconfig.json and eslint.config.mjs, so the epic's JetBrains gradle rail does not apply.",
+      "Kotlin parity: the same callbacks and operations. JS Set insertion order equals LinkedHashSet order. resendGone fixes the gone ids before deregistering, as Kotlin's filter then forEach does."
+    ],
+    "approvedScope": [
+      "moe-vscode/src/util/AgentSeatTracker.ts exports: interface SeatDisposable { dispose(): void }; type SeatEvent<T> = (listener: (value: T) => void) => SeatDisposable; class AgentSeatTracker(load: () => readonly string[], save: (workerIds: string[]) => void, deregister: (workerId: string) => void) with launched/closed/resendGone/acked(workerId); type SeatSink = Pick<AgentSeatTracker, 'closed' | 'resendGone' | 'acked'>; function wireAgentSeats<T>({ tracker, onDidCloseTerminal, workerIdOf, onConnected, onAcked }): SeatDisposable.",
+      "moe-vscode/tests/agent-seat-tracker.test.cjs, a node:test file that the existing `node --test tests/*.test.cjs` script picks up.",
+      "Surface for VSC-21: onConnected takes MoeDaemonClient.onConnectionChanged unchanged; onAcked takes the acked worker id string; the returned SeatDisposable goes into context.subscriptions."
+    ],
+    "reuse": [
+      "The tests/managed-vm.test.cjs harness (ts.transpileModule, then vm.runInThisContext with a require that throws), copied into the new test file because tests share no helper module.",
+      "SeatTrackerCorpusTest.kt's replay semantics: the store starts as persisted, save overwrites it, restart builds a new tracker over the store, connect calls resendGone, and the log spans restarts.",
+      "No new dependency: typescript is already the devDependency the existing tests load."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/AgentSeatTracker.kt: class AgentSeatTracker(load, save, deregister); known = LinkedHashSet(load()) and open = HashSet; launched, closed, resendGone and acked exactly as ported in step 1.",
+      "moe-jetbrains/src/test/resources/client-seat-tracker.json: {version:1, rows:[{id, note, persisted, events:[{op, workerId?}], expectDeregistered, expectPersisted}]}. ops are launched|closed|connect|acked|restart; 12 rows S01-S12 (VSC-19, DONE).",
+      "moe-vscode/src/services/MoeDaemonClient.ts: onConnectionChanged is a vscode.Event<ConnectionState> ('disconnected'|'connecting'|'connected', src/types/moe.ts:58), fired by setConnectionState for every state; 'connected' fires once per handshake, after CLIENT_HELLO.",
+      "moe-vscode/package.json: test = node --test tests/*.test.cjs; lint = eslint src --ext ts (eslint.config.mjs lints src/**/*.ts only); compile = tsc -p ./ (strict, rootDir src).",
+      "JetBrains wiring, for reference: MoeProjectService.agentSeats (deregister reason terminal_closed), resendGone() in the WebSocket onOpen, WORKER_DEREGISTERED handled into onWorkerDeregistered (MoeMessageDispatcher), and TerminalAgentLauncher.trackSeat."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && V=$R/moe-vscode && S=$(mktemp -d -t vsc20-gate-XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$V/src/util/AgentSeatTracker.ts\" \"$S/moe-vscode/src/util/\" && cp \"$V/tests/agent-seat-tracker.test.cjs\" \"$S/moe-vscode/tests/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+      "R=$(git rev-parse --show-toplevel) && M=$(mktemp -d -t vsc20-mutant-XXXXXX) && cd \"$R\" && cp --parents moe-vscode/src/util/AgentSeatTracker.ts moe-vscode/tests/agent-seat-tracker.test.cjs moe-jetbrains/src/test/resources/client-seat-tracker.json \"$M/\" && printf '\\nAgentSeatTracker.prototype.acked = function (id) { this.known.delete(id); };\\n' >> \"$M/moe-vscode/src/util/AgentSeatTracker.ts\" && O=$(NODE_PATH=\"$R/moe-vscode/node_modules\" node --test \"$M/moe-vscode/tests/agent-seat-tracker.test.cjs\" 2>&1); C=$?; rm -rf \"$M\"; printf '%s\\n' \"$O\" | grep -E \"^ +[+] +'S[0-9]{2}: \"; [ \"$C\" -ne 0 ] && printf '%s' \"$O\" | grep -q \"'S06: expected persisted\" && printf '%s' \"$O\" | grep -q \"'S10: expected persisted\" && printf '%s' \"$O\" | grep -q \"'S12: expected persisted\"",
+      "git diff --quiet 25e70ba1ef1b271fb0868013ffe48bb1941e046d HEAD -- moe-jetbrains/src/test/resources/client-seat-tracker.json && git diff --quiet HEAD -- moe-jetbrains/src/test/resources/client-seat-tracker.json && ! git log --format= --name-only --grep 'Moe-Task: task-7fa27666bdb94325b62c205e3599b165' HEAD | grep '^moe-jetbrains/'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "onConnected:\n- Typing it as a void event that fires only on connect was rejected. VSC-21 would have to adapt the client event, and passing client.onConnectionChanged where a `() => void` listener is expected compiles silently (a zero-argument listener is assignable), so it would resend on every state.\n- Chosen: take the connection state and filter 'connected' inside the wiring, so VSC-21 plugs the client event in as-is.\nError catching:\n- Catching load/save/deregister errors inside the tracker was rejected for Kotlin parity. JetBrains catches inside the injected readAgentSeats/writeAgentSeats, and VSC-21's callbacks own that.\n- Load sanitation is kept, because it is a JS-only hazard: a stored string would iterate as characters.\n- A per-seat try/catch in resendGone was rejected. Kotlin aborts too, and the seat is retried at the next connect.\nMutant:\n- A test-only env var pointing the test at a mutant source was rejected.\n- Instead, checkRef 2 copies the files and appends a prototype override, which is deterministic whatever the formatting.",
+    "codebaseInsights": "Planning dry run (scratch prototype of both files, outside the checkout):\n- the snapshot gate gave lint 0, compile 0 (TS 7 native), 418 tests, 414 pass, 4 skip, 0 fail;\n- corpus 12/12;\n- the acked mutant failed exactly S06, S10 and S12, reported together;\n- each wiring mutant was killed by its intended test: W2, W4, W5, W6, L1 and the corpus test.\nOther facts:\n- eslint covers src/**/*.ts only; tests are .cjs and are not linted.\n- In place under WSL, tsc (@typescript/native) has only a win32 binary, so compile runs only in the snapshot. `cd moe-vscode && node --test tests/agent-seat-tracker.test.cjs` does run in place (TS6 JS typescript).\n- MoeDaemonClient.setConnectionState fires every state, including repeated 'disconnected'.\n- VSC-19 handoff: the store cannot see a resendGone that re-saves an identical list. Here resendGone never saves.",
+    "risks": "Risks for this task:\n- A #private field breaks checkRef 2's mutant. It then exits 1 and never passes falsely.\n- The word 'vscode' in a comment fails P1.\n- A `const source` text variable clashes with a `source()` event helper and gives a SyntaxError at load; the dry run hit this.\n- Do not add a ts-only construct that transpileModule cannot handle alone (e.g. const enum across files); there is none here.\nNotes for VSC-21 (not this task):\n- Wire before the first client.connect(), or the startup resend of the previous session's seats waits for the next reconnect.\n- load and save must catch, as Kotlin readAgentSeats and writeAgentSeats do.\n- workspaceState.update returns a Thenable, so handle its rejection.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/AgentSeatTracker.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/SeatTrackerCorpusTest.kt",
+      "moe-jetbrains/src/test/resources/client-seat-tracker.json",
+      "moe-vscode/tests/managed-vm.test.cjs",
+      "moe-vscode/src/util/ManagedVm.ts",
+      "moe-vscode/src/services/MoeDaemonClient.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9ea87aa6ffc7f846a4f00e2b3e51dcd87ead823d",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:11:59.909Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T10:12:51.449Z",
+  "reviewStartedAt": "2026-11-02T10:16:37.608Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && V=$R/moe-vscode && S=$(mktemp -d -t vsc20-gate-XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$V/src/util/AgentSeatTracker.ts\" \"$S/moe-vscode/src/util/\" && cp \"$V/tests/agent-seat-tracker.test.cjs\" \"$S/moe-vscode/tests/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "✔ files.watcherExclude keeps per-task worktrees out of the file watcher\n✔ search.exclude keeps per-task worktrees out of search and quick open\n✔ files.exclude is not contributed, so the Explorer still lists .worktrees\nℹ tests 430\nℹ suites 0\nℹ pass 426\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\n(lint: 0 problems; compile: tsc -p ./ exit 0; npm ci added 215 packages)",
+    "reportedAt": "2026-11-02T10:16:37.608Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/src/util/AgentSeatTracker.ts",
+    "moe-vscode/tests/agent-seat-tracker.test.cjs"
+  ],
+  "completionSummary": "Added moe-vscode/src/util/AgentSeatTracker.ts (pure port of the JetBrains AgentSeatTracker: launched/closed/resendGone/acked over load/save/deregister callbacks, load keeps only non-blank strings of an array once each, plus wireAgentSeats({tracker,onDidCloseTerminal,workerIdOf,onConnected,onAcked}) returning an idempotent SeatDisposable, rollback on a throwing subscribe, resend only on 'connected') and moe-vscode/tests/agent-seat-tracker.test.cjs (14 tests: P1 purity under a throwing require map, C1 replay of all 12 rows of client-seat-tracker.json with failing ids reported together, L1 load, T1-T4 tracker invariants, W1-W7 wiring with fake event sources). Gate in a git-archive snapshot of HEAD + the 2 files (env -i Node 24.21): npm ci, lint 0, compile 0, npm test 430 tests / 426 pass / 4 skip / 0 fail, exit 0. Acked-without-save mutant (scratch copy, discarded) fails S06, S10 and S12 as 'expected persisted'. A 17-mutant scratch sweep killed all 17 (2 initial survivors fixed: T4 now asserts acked saves only on change; a dead dispose guard removed). Corpus and every moe-jetbrains file untouched (git diff vs 25e70ba1 empty; git status lists only the 2 new files under my scope). Not wired anywhere yet: VSC-21 plugs in vscode onDidCloseTerminal, MoeDaemonClient.onConnectionChanged as-is, and its new deregistered event. Theoretical, unhandled by plan: a source whose dispose() throws would skip later subscriptions."
 }
