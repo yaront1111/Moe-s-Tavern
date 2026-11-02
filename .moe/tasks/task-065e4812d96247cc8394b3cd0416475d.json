@@ -89,7 +89,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,20 +108,29 @@
       "author": "governor-e6b40560",
       "content": "Governor review-overlap ruling, 11:53Z (the human said \"go faster\" and \"keep the board moving\"; 3 coders are idle). I am dropping this row's dependsOn edge on VSC-7 (task-93729f32) so it can be claimed now.\n\n**Why it is safe:**\n- VSC-7's bytes are landed on moe/work-2026-10-24: checkpoint 7df999be, completion d13c97f5, then 00c1ac96 (board json only).\n- QA round 2 re-verified them green at 11:27Z.\n- VSC-7 is parked BLOCKED only on size waiver prop-30f48e34, which waits for a human click.\n- If that waiver is rejected, QA's fallback is a review-scope split with no byte change.\n\n**What this means for the claimer:**\n- The corpus you must pass unchanged is moe-jetbrains/src/test/resources/client-accounts.json as it stands at HEAD. QA recorded its sha256 as e08b58c8...95fc.\n- DoD 4 (client-accounts.json and every moe-jetbrains file unchanged by this task's diff) is untouched.\n- **If VSC-7's corpus bytes change before this row lands**, the governor re-adds the edge and posts here. Re-run your corpus test against the new HEAD before complete_task.\n- VSC-15 now depends directly on VSC-7, so that consumer keeps its gate.",
       "timestamp": "2026-11-02T11:53:35.276Z"
+    },
+    {
+      "id": "comment-0900f001c6404243917208a5aea5ef86",
+      "author": "governor-e6b40560",
+      "content": "Governor, 12:03Z, for QA. This review is overlapped: I removed VSC-14's (task-720f81a6) dependsOn on this row so an idle coder can start it now, under the human's \"go faster\" / \"keep the board moving\".\n\n1. **Verify in a snapshot of b863458a, not HEAD or the working tree.** VSC-14's step 1 edits moe-vscode/src/util/AccountPresentation.ts, adding 11 keys to ACCOUNT_TEXT. Its live edits and any checkpoint must not leak into this verdict. b863458a is this row's completion: AccountPresentation.ts +248 and tests/accounts-corpus.test.cjs +148, so 396 net without board json.\n2. **If you reject with a change to AccountPresentation.ts,** say so in the reject. The governor then adds this row's dependsOn on VSC-14, so the rework waits for VSC-14 to land and the two never edit the file at once.\n3. **Substance-only notes,** with no byte change: approve as usual.",
+      "timestamp": "2026-11-02T12:02:44.619Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:33.390Z",
-  "updatedAt": "2026-11-02T12:01:52.729Z",
+  "updatedAt": "2026-11-02T12:04:13.217Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:31:41.158Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T12:04:13.216Z",
+    "wallClockMs": 5552058
   },
   "contextFetchedBy": [
     "architect-93e0e956",
-    "worker-81a7999f"
+    "worker-81a7999f",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -243,5 +252,9 @@
     "kind": "completion",
     "sessionId": "worker-81a7999f@2026-11-02T11:53:38Z",
     "at": "2026-11-02T12:01:52.729Z"
-  }
+  },
+  "completedAt": "2026-11-02T12:04:13.216Z",
+  "reviewCompletedAt": "2026-11-02T12:04:13.216Z",
+  "reviewSummary": "Approved. Reviewed completion commit b863458a (on moe/work-2026-10-24, pushed): +248/+148 = 396 net code lines (under the 400 cap). Re-ran the task.verification checkRef verbatim in a fresh git-archive snapshot (env -i, Node 24.21.0): npm ci, lint, compile, npm test all exit 0 -> 527 tests / 523 pass / 4 skip / 0 fail; accounts-corpus 5/5. DoD1: all 15 rotation rows and 14 label cases pass, failing ids collected together. DoD2: resolveAccountText and all 23 ACCOUNT_TEXT templates equal MoeBundle.properties. DoD3: module loads under a throwing require; no import, no /\\bvscode\\b/. DoD4: no moe-jetbrains file in the diff; client-accounts.json sha256 e08b58c8...95fc unchanged. DoD5: the gate. My own mutant (moveUp index>0 -> >=0, in the snapshot copy, restored) fails exactly C04, C06, C11, C13. Read AccountPresentation.kt and MoeJson.parseAccountRotation against the port: rows/chips/actions/status/shorten/percent, first-duplicate-id-wins, switchAtPercent whole 1..100 else 90, strict typing, vmToken only a real boolean, windows in a Map all match. The 5th test pins parse rules and never-throws behaviour the corpus does not. Non-blocking notes: (a) time() formats seconds-less ISO such as 2026-10-20T12:00Z where Java Instant.parse would show it as sent; the daemon always sends seconds and the corpus does not pin it; (b) corpus zone is UTC-only, and the Kotlin U+001C..1F vs JS U+FEFF edge trim is documented by VSC-7; (c) the test holds the literal \"__proto__\" as an attack fixture, the module has none, and getSeatLiveness.test.ts has the same precedent; (d) the commit also carries peer row task-6fbd0811's board json (a board path). Scratch work stayed under /tmp; no npm or node test ran in the shared checkout.",
+  "requiredCheckAtDone": null
 }

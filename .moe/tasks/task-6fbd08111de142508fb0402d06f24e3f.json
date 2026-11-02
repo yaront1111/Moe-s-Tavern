@@ -136,7 +136,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:40:05.382Z",
-  "updatedAt": "2026-11-02T12:01:25.531Z",
+  "updatedAt": "2026-11-02T12:02:19.803Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:37:49.892Z",
     "plannedStepCount": 6,
@@ -258,7 +258,9 @@
     "scripts/tests/local-runner-bundle.test.mjs",
     "docs/DEVELOPMENT.md",
     ".moe/tasks/task-6fbd08111de142508fb0402d06f24e3f.json",
-    ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json"
+    ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json",
+    ".moe/tasks/task-065e4812d96247cc8394b3cd0416475d.json",
+    ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json"
   ],
   "completionSummary": "VSC-16: one bundle manifest for both IDE plugin builds.\n- New scripts/bundle-manifest.json has 5 copies: the 12 scripts files; scripts/local-runner (5 required, 6 Ant excludes); scripts/mods; docs/roles; docs/skills.\n- moe-jetbrains/build.gradle.kts (JsonSlurper, lazy bundleCopies) and moe-vscode/scripts/bundle-assets.mjs (readManifest + Ant matcher) both read and validate the manifest. Each checks every source before copying, refuses a malformed manifest or an absolute/.. path with a message naming the manifest or the missing path, and LF-normalises .sh. No duplicated list is left in either file.\n- Deviation from step 1: I dropped the planned docs/agent-context.md entry. f5b00437 deleted that file and neither bundle shipped it, so the listings are unchanged (comment 3afc12e5).\nEvidence (BASE 2ab627c2, snapshots /mnt/d/moe-scratch/vsc16-base and vsc16-new):\n- The zip listing is identical (4553 entries; every non-lib CRC is equal too).\n- The vsix gains only the 5 docs/roles files the zip already ships (architect.reference, governor, governor.reference, qa.reference, worker.reference) and loses nothing.\n- onboarding passes on both bundles.\n- `gradlew.bat test buildPlugin --rerun`: BUILD SUCCESSFUL, 558 JUnit tests, 0 failures.\n- `npm run package` exits 0.\n- The bundle tests go from 13 to 15, all passing. That count includes the planned refusal table, the role-doc parity check and the dot-dir exclude rows, plus an LF/exec-bit check I added after a mutant survived.\nGradle negative runs (missing vm-control.mjs, `..` into, empty copies, CRLF .sh) behave as expected.\nSize: +251/-138 (net +113). docs/DEVELOPMENT.md is updated, and so is Serena gotcha-packaged-bundle-test-artifacts.",
   "commits": [
@@ -282,6 +284,22 @@
       "treeId": "055eac4e4eea84bd20c50c900b462abad0f2a9f1",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "7c19b38b0e940fca544d1279a3a4fc24b7ea2568",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T11:41:55Z",
+      "paths": [
+        ".moe/tasks/task-065e4812d96247cc8394b3cd0416475d.json",
+        ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T12:02:19.802Z",
+      "treeId": "9ad6d44ebe3585eb5106912687458c574225c803",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -294,9 +312,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-81a7999f@2026-11-02T11:11:27Z",
-    "at": "2026-11-02T11:41:51.278Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-564d8bce@2026-11-02T11:41:55Z",
+    "at": "2026-11-02T12:02:19.802Z"
   },
   "completedAt": "2026-11-02T12:01:25.531Z",
   "reviewCompletedAt": "2026-11-02T12:01:25.531Z",
