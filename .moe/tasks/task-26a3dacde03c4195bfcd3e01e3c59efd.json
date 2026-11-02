@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -106,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T12:24:44.503Z",
-  "updatedAt": "2026-11-02T12:57:30.652Z",
+  "updatedAt": "2026-11-02T13:05:36.617Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T12:27:28.185Z",
@@ -116,11 +116,14 @@
     "firstClaimAt": "2026-11-02T12:27:28.748Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T13:05:36.617Z",
+    "wallClockMs": 2287869
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -213,7 +216,48 @@
     "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt",
     "moe-vscode/src/util/AgentLauncher.ts",
+    "moe-vscode/tests/agent-launcher-controls.test.cjs",
+    ".moe/tasks/task-26a3dacde03c4195bfcd3e01e3c59efd.json"
+  ],
+  "completionSummary": "Both plugins now refuse any value holding a C0 control (U+0000..U+001F) or DEL (U+007F) before typing it into a terminal.\n\nVS Code, moe-vscode/src/util/AgentLauncher.ts:\n- assertSafeArg is widened from CR/LF/NUL to `code < 0x20 || code === 0x7f`.\n- A new private assertSafeLaunchArgs (script path, workspace path, worker id, command, team name, env <key>) is the first line of buildPowerShellCommand and of buildBashCommand. The bash path had no check before.\n- A refusal shows one 'Failed to launch <role> agent: Invalid <label>: contains control characters'. No terminal opens and onLaunched is never called.\n\nJetBrains:\n- TerminalAgentLauncher's PowerShell and bash builders, including both WSL routes, and buildAccountsCommand throw IllegalArgumentException('Invalid <label>: contains control characters').\n- launchRole now builds the command before openSeat. A Refused decision still builds nothing.\n- runAccountsCommand builds the line before it creates a tab.\n- AccountsPanel.runCli catches only IllegalArgumentException and shows 'Account action failed: <msg>'. A refused line is never copied.\n\nTests:\n- New tests/agent-launcher-controls.test.cjs: B1 (linux) and P1 (win32, platform overridden in the vm), E1 (script path) and OK1 (boundary).\n- 3 Kotlin tests: 10 codes across 4 agent routes x 6 carriers and 3 accounts shells x 4 carriers, plus the U+0020/U+007E/U+00E9 boundary.\n\nEvidence:\n- RED at HEAD: B1, P1 and E1 fail; OK1 passes.\n- Mutants: VS Code 8/8 killed, Kotlin 5/5 killed.\n- checkRef exit 0: VS Code 554 tests, 0 failing; Gradle :test executed, 567 JUnit, 0 failures.\n\nSize: 333 changed lines across 5 files. The curly-quote and backtick classes stay in task-2f4b224f.",
+  "commits": [
+    {
+      "sha": "519720ca3e0f255433b04c12ff0c4674fc656848",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T12:44:22Z",
+      "paths": [
+        ".moe/tasks/task-26a3dacde03c4195bfcd3e01e3c59efd.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/agent-launcher-controls.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T12:57:54.267Z",
+      "treeId": "7a137a572ad8a42bd62ccdb9499ec44729fc972f",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt",
+    "moe-vscode/src/util/AgentLauncher.ts",
     "moe-vscode/tests/agent-launcher-controls.test.cjs"
   ],
-  "completionSummary": "Both plugins now refuse any value holding a C0 control (U+0000..U+001F) or DEL (U+007F) before typing it into a terminal.\n\nVS Code, moe-vscode/src/util/AgentLauncher.ts:\n- assertSafeArg is widened from CR/LF/NUL to `code < 0x20 || code === 0x7f`.\n- A new private assertSafeLaunchArgs (script path, workspace path, worker id, command, team name, env <key>) is the first line of buildPowerShellCommand and of buildBashCommand. The bash path had no check before.\n- A refusal shows one 'Failed to launch <role> agent: Invalid <label>: contains control characters'. No terminal opens and onLaunched is never called.\n\nJetBrains:\n- TerminalAgentLauncher's PowerShell and bash builders, including both WSL routes, and buildAccountsCommand throw IllegalArgumentException('Invalid <label>: contains control characters').\n- launchRole now builds the command before openSeat. A Refused decision still builds nothing.\n- runAccountsCommand builds the line before it creates a tab.\n- AccountsPanel.runCli catches only IllegalArgumentException and shows 'Account action failed: <msg>'. A refused line is never copied.\n\nTests:\n- New tests/agent-launcher-controls.test.cjs: B1 (linux) and P1 (win32, platform overridden in the vm), E1 (script path) and OK1 (boundary).\n- 3 Kotlin tests: 10 codes across 4 agent routes x 6 carriers and 3 accounts shells x 4 carriers, plus the U+0020/U+007E/U+00E9 boundary.\n\nEvidence:\n- RED at HEAD: B1, P1 and E1 fail; OK1 passes.\n- Mutants: VS Code 8/8 killed, Kotlin 5/5 killed.\n- checkRef exit 0: VS Code 554 tests, 0 failing; Gradle :test executed, 567 JUnit, 0 failures.\n\nSize: 333 changed lines across 5 files. The curly-quote and backtick classes stay in task-2f4b224f."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T12:44:22Z",
+    "at": "2026-11-02T12:57:54.267Z"
+  },
+  "completedAt": "2026-11-02T13:05:36.617Z",
+  "reviewCompletedAt": "2026-11-02T13:05:36.617Z",
+  "reviewSummary": "Completion 519720ca is pushed and on moe/work-2026-10-24. Size: 333 changed lines (+307/-26) across 5 files, under the 400 cap.\n\nRe-ran the checkRef pinned to 519720ca, under the jetbrains-gradle lease:\n- VS Code: lint, compile and test exit 0. 554 tests: 550 pass, 0 fail, 4 skip.\n- JetBrains: `gradlew.bat test --rerun` BUILD SUCCESSFUL, with :test executed. TerminalAgentLauncherTest XML: 40 tests, 0 failures, 0 errors, the 3 new tests listed. 567 JUnit total, 0 failures.\n\nDoD 1:\n- RED: the new test against the parent's AgentLauncher.ts fails B1 (linux 0x00), P1 (win32 0x01) and E1; OK1 passes.\n- My mutants were both caught: removing the bash assertSafeLaunchArgs call fails B1 and E1; dropping DEL fails B1, P1 and E1.\n- The rule `code < 0x20 || code === 0x7f` matches AccountsTreeProvider:58.\n- Both builders check before createTerminal. No export was added.\n\nDoD 2, JetBrains, fixed:\n- requireSafeArg (`it < ' ' || it == '\\u007f'`, U+0020 confirmed by cat -A) runs first in both builders, so the WSL routes inherit it, and on every raw accounts word.\n- launchRole builds before openSeat; a Refused decision builds nothing.\n- runAccountsCommand builds before it creates a tab.\n- runCli catches only IllegalArgumentException and copies nothing.\n- The only typing sites are sendCommand at lines 350 and 519.\n- Tests cover 10 codes × 4 routes × 6 carriers, 3 shells × 4 carriers, and the boundary with the team argument verbatim. The pinned tests are unchanged and green.\n\nNon-blocking note: on the WSL bash route, toWslPath's `(.*)$` drops a trailing line terminator from a drive path, so that case is rewritten, not refused. Nothing unsafe is typed; the plan already accepts this.\n\nNo complexity findings. Mid-epic row, scope matches the plan, and no test was weakened.",
+  "requiredCheckAtDone": null
 }
