@@ -57,15 +57,24 @@
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh, on the finished code. The launcher harnesses may run in place (GLOBAL rule).\n1. The completion evidence, which are CI's Linux wrapper legs:\n`bash -n scripts/moe-agent.sh && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh`\n   Run it in the Bash tool's foreground, never under nohup or setsid. A detached launch starts with SIGINT ignored, and scenario W then fails (Serena gotcha-qa-session-env-and-signals-leak-into-harness). If it must run detached, use that memory's sigreset shim.\n2. The ps1 legs, in a separate call from any Linux run, under Windows Node from D:\\projexts\\moes: `node scripts\\tests\\postflight-safe.mjs powershell`, then `node scripts\\tests\\postflight-safe.mjs pwsh` and `pwsh -NoProfile -File scripts\\tests\\parity-check.ps1`. Write them into a run.cmd in a fresh scratch dir under %TEMP%, invoke it as `cmd.exe /d /c '<windows path>\\run.cmd'`, and delete the dir afterwards. If pwsh is missing, run the Windows PowerShell 5.1 leg alone and say so.\n3. `git diff --check` over the four files.\nRecord each leg's pass and fail outcome in the step note.\nError handling:\n- compare any failing arm or scenario against a run at HEAD before calling it pre-existing, and name both runs;\n- never weaken a test;\n- never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path;\n- kill only PIDs this session recorded (GLOBAL rule).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-02T20:52:38.956Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "All 3 full harness engines passed: final named Linux command (bash -n && env -i ... node scripts/tests/postflight-safe.mjs bash && parity-check.sh) exited 0 with lastScenario Z/failureClass NONE and PASS parity-check.sh; native Windows Node postflight-safe.mjs powershell and pwsh each returned exit0/lastScenario Z/failureClass NONE, followed by PASS parity-check.ps1/exit0. Windows ran via a scratch %TEMP% run.cmd from the bound task worktree, not the live checkout, to test these bytes. qualityGate `bash scripts/tests/parity-check.sh && npm run lint` passed; four-path git diff --check passed. In-scope verification finding hardened idle_wait's diagnostic with || true: closed stderr previously caused set-e exit1. Added normal/closed-stderr variants only to the new arm; RED then GREEN observed; repeated full Linux gate after this final Bash change passed. PS code/test bytes stayed unchanged throughout their full runs. Initial full Linux gate also passed. No pre-existing arms edited (byte-identical after removing new blocks). Supplemental probes: idle SIGINT and mid-CLI SIGTERM exit0/terminal_closed; a terminating PS error exits1/unexpected_exit:1. HEAD RED rerun confirms killed sleep makes old wrapper exit143/terminal_closed.",
+      "startedAt": "2026-11-02T20:52:38.956Z",
+      "completedAt": "2026-11-02T22:22:56.866Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW of this row's diff. Load adversarial-self-review.\n- Ctrl+C, SIGINT and SIGTERM to the wrapper still give exit 0, 'Agent stopped.' and terminal_closed, both in an idle wait and during a CLI run.\n- A killed wait does not skip the hot-reload check or reset the account relaunch flag, because the loop goes on from the same point. A sleep killed again and again makes the seat iterate once per kill, bounded by the killer; it never spins on its own.\n- exit_status is captured before anything else in the trap.\n- No idle or backoff `sleep \"$…\"` is left bare. Grep the main loop and the account lease loop.\n- The reason is `unexpected_exit:` plus an integer, with no quote or space, so the JSON that cleanup_temp builds by hand stays valid.\n- The test kills only PIDs it recorded or whose PPID is its recorded wrapper, and it restores LIVE_PIDS.\n- ps1: the catch rethrows, PipelineStoppedException is excluded, the BOM is intact and the spelling matches sh.\n- Docs: none required. In the summary, say that a non-zero exit now reads unexpected_exit:<N> in the activity log, so a deregister wave tagged terminal_closed means an operator close or Ctrl+C again.\nError handling: fix in-scope findings here, with a test. Route out-of-scope findings to the governor with moe.add_comment on this row.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review completed on all four paths (178 additions/8 deletions, net170). Checked concurrency (no new shared state), trusted numeric inputs/reason construction, error paths, owned-PID cleanup and LIVE_PIDS restoration. The one concrete finding—diagnostic write failure re-triggering set-e—was fixed with a RED/GREEN closed-stderr regression and the final full Linux gate rerun. Automated review invariants pass: both existing INT/TERM trap strings unchanged, exit status captured first, all five intended waits guarded, wrapper_restart unchanged in both twins, PS catch excludes PipelineStoppedException and rethrows, BOMs intact, original harness arms byte-identical. Direct signals prove idle SIGINT/TERM and CLI SIGTERM exit0/terminal_closed; full Linux scenario W covers CLI SIGINT. No new findings. PS uses in-process Start-Sleep; approved residual post-finally teamless exit1 remains terminal_closed. Full Bash/PS5.1/pwsh gates, both parity checks, qualityGate and whitespace checks all passed. No tracked paths changed in this review-only step.",
+      "startedAt": "2026-11-02T22:22:56.891Z",
+      "completedAt": "2026-11-02T22:23:27.001Z"
     }
   ],
   "planRevision": 1,
@@ -109,11 +118,23 @@
       "author": "worker-26483323",
       "content": "Final Linux gate is green on the final Bash code/tests: postflight-safe bash exit=0, lastScenario=Z, failureClass=NONE; parity PASS. Full native PS5.1 also green; only full pwsh + Windows parity remain running. Additional direct probes confirmed idle SIGINT and active-CLI SIGTERM both retain exit0/terminal_closed, and an in-process terminating PowerShell CLI error retains exit1 and now reports unexpected_exit:1. No further source changes planned.",
       "timestamp": "2026-11-02T22:02:22.439Z"
+    },
+    {
+      "id": "comment-e5c21bc1758a4cae9a3d693b86c14be9",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-02T22:24:33.792Z",
+      "content": "Landing unlanded (conflict) 1 time(s) in a row; attempt attempt-b17c1b6f70da40798c2c7b500ae5619c (generation 2); paths: scripts/moe-agent.ps1; rescue ref: refs/moe/rescue/task-faa4d9ef330f4ef7900a00bd2b7dc049/20261102T222432Z; target tip: d958f21d6cf221ffef84d3129e91b119f0ab3242; task WORKING."
+    },
+    {
+      "id": "comment-bc4aed3ab9ec4b7c995751d4598e963e",
+      "author": "worker-26483323",
+      "content": "Landing recovery: resolved the sole scripts/moe-agent.ps1 conflict by retaining target's `$script:MoeDeregistered = $moeMigration` (migration sends no registration/deregistration RPC) plus this task's `$script:MoeExitStatus = $null`. No step reopened, no new plan or Git commands; only apply_patch on the declared PS file. BOM intact and all four task paths are conflict-marker-free. Fresh exact Linux completion gate and both native Windows full harness engines are running in the bound worktree; quality gate also rerun. Existing regression arms cover clean/error reasons; reviewing merged context for preservation.",
+      "timestamp": "2026-11-02T22:27:15.005Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T04:54:29.471Z",
-  "updatedAt": "2026-11-02T22:02:22.439Z",
+  "updatedAt": "2026-11-02T22:27:15.005Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:42:11.681Z",
@@ -123,7 +144,7 @@
     "firstClaimAt": "2026-10-31T06:15:58.877Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-66fd8127",
@@ -137,7 +158,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T06:34:04.147Z",
@@ -183,5 +206,53 @@
   },
   "planApprovedAt": "2026-10-31T06:34:04.169Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T20:48:41.907Z"
+  "workStartedAt": "2026-11-02T20:48:41.907Z",
+  "reviewStartedAt": "2026-11-02T22:24:04.014Z",
+  "verification": {
+    "command": "bash -n scripts/moe-agent.sh && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS parity-check.sh",
+    "reportedAt": "2026-11-02T22:24:04.014Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.ps1"
+  ],
+  "completionSummary": "Implemented resilient Bash idle/backoff waits across all five sites, logging interrupted status without ending the seat (including closed-stderr robustness). Unexpected Bash exits now deregister unexpected_exit:N; PS terminating errors/in-loop exit1 report unexpected_exit:1. Own INT/TERM exit0/terminal_closed and wrapper_restart preserved. Added new regression arms; existing arms byte-identical. RED reproduced HEAD sleep exit143/terminal_closed and argv refusal's wrong reason; GREEN checks child TERM/KILL re-polls, wrapper signals and distinct exit reasons. All 3 full harness engines passed (Bash, Windows PS5.1, pwsh; lastScenario Z/failureClass NONE); both parity checks, qualityGate parity+lint and diff-check passed. PS waits are in-process Start-Sleep, so no child-kill fix applies. Approved residual: PS post-finally one-shot MOE_SEAT_UNREGISTERED exit1 still reports terminal_closed. Four files, net170 LOC. Handoff and diagnostic gotcha saved in Serena.",
+  "commits": [
+    {
+      "sha": "6407171fb44d3e7adc0cf5431a542adacb7039fe",
+      "ref": "refs/moe/rescue/task-faa4d9ef330f4ef7900a00bd2b7dc049/20261102T222432Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-02T20:47:03Z",
+      "paths": [],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-02T22:24:32.518Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-faa4d9ef330f4ef7900a00bd2b7dc049 ref=refs/moe/rescue/task-faa4d9ef330f4ef7900a00bd2b7dc049/20261102T222432Z sha=6407171fb44d3e7adc0cf5431a542adacb7039fe reason=conflict"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "failed",
+    "kind": "completion",
+    "code": "MOE_COMMIT_FAILED_CONFLICT",
+    "sessionId": "worker-26483323@2026-11-02T20:47:03Z",
+    "at": "2026-11-02T22:24:33.145Z"
+  },
+  "landingRetry": {
+    "reason": "conflict",
+    "rescueRef": "refs/moe/rescue/task-faa4d9ef330f4ef7900a00bd2b7dc049/20261102T222432Z",
+    "targetTip": "d958f21d6cf221ffef84d3129e91b119f0ab3242",
+    "paths": [
+      "scripts/moe-agent.ps1"
+    ],
+    "count": 1,
+    "at": "2026-11-02T22:24:33.792Z"
+  }
 }

@@ -57,13 +57,20 @@
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff of the 3 files as an attacker. Check:\n- Only the exact path .serena/project.yml is new DENY, never .serena/** tracked.\n- Shared-mode denied() and Test-MoeDenyPath are byte-identical.\n- Case folding: key() and Get-MoePathKey lowercase on case-insensitive hosts, and the literal is lowercase.\n- The nested-project roots loop covers both the rel and the bare root.\n- Both comments say why. The ps1 BOM is intact, and parity-check passes.\n- The new case: its premise asserts would catch a WT-06 that stopped copying; the checkpoint and completion asserts would catch the renamed name on the task branch or the target; and it would not pass on the old wrappers (the step-1 RED).\n- The hunks are small next to WT-14's edits to the same files.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 3's primary command if anything changed, then call complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-02T22:16:55.927Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Adversarial self-review of the 3-file diff, no new edits. Only the exact key .serena/project.yml is new DENY, never .serena/**. denied() and Test-MoeDenyPath are untouched (no hunk in them). The literal is lowercase and key()/Get-MoePathKey fold case. The roots loop covers the rel and the bare root, same as the .claude/skills form. A task that deleted the file would also be held, which is intended since the next launch overwrites it anyway. Both comments say why. ps1 BOM intact (efbbbf). No forbidden patterns. Hunks are 3 small ones in the twins, so little conflict surface against WT-14. The case's premise asserts (W holds the renamed copy, ' M') fail if WT-06 stops copying, the checkpoint/completion asserts fail on a landed rename, and RED was seen on the unchanged wrapper. The tree is unchanged since the step-3 run; the primary command was re-run fresh just now: 61 ok, 0 failed, parity PASS, lint OK, rc=0.",
+      "startedAt": "2026-11-02T22:16:55.927Z",
+      "completedAt": "2026-11-02T22:27:45.626Z"
     }
   ],
   "planRevision": 1,
@@ -80,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:13:15.876Z",
-  "updatedAt": "2026-11-02T22:16:55.927Z",
+  "updatedAt": "2026-11-02T22:27:45.626Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:02:44.261Z",
@@ -90,7 +97,7 @@
     "firstClaimAt": "2026-11-02T21:46:48.237Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -103,7 +110,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T21:51:59.093Z",

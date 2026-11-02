@@ -85,8 +85,18 @@
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW of your own diff.\n(1) `git diff -U0 -- scripts/moe-agent.ps1 scripts/moe-team.ps1` touches only path-binding parameters, the two comments and the Start-Process -WorkingDirectory arguments. Check: no reordered logic; no dropped -ErrorAction, -Encoding, -Raw, -NoNewline, -Force, -Recurse or -PathType; no converted Env: or New-Item calls.\n(2) moe-agent.ps1 still starts with the BOM and is LF only; moe-team.ps1 is still ASCII.\n(3) Relative -Project, `~`, -ProjectName, and paths with spaces, é, $ or ' behave as before. -LiteralPath still resolves relative paths, `..` and `~` (probed). Test-Path -LiteralPath reports illegal path characters exactly as -Path does (probed), so Resolve-CommandParts is unchanged for non-path -Command strings.\n(4) Mutation proof, in a /mnt/d/moe-scratch snapshot and never in the shared tree:\n- Revert all four of these at once: Resolve-Path $Project, Test-Path $moeDir, the daemon Start-Process -WorkingDirectory, and the GEMINI.md Set-Content. The Linux static test must fail, naming all four lines.\n- Then revert only Resolve-Path $Project. The Windows-native run must fail the PS 5.1 cases with 'Project path not found'.\n(5) The scanner self-test pins every rule branch: comment, command position, nesting, Env: and G2.\n(6) The test always cleans its temp roots and kills its fake daemon, even on assertion failure. There are no sleeps except the fake daemon's lifetime, and timeouts are generous for CI.\n(7) .github/workflows/ci.yml is also planned by task-4e412148 (CQ-I06, unassigned). Before completing, check moe.get_commit_scope peerDeclared. If the landing holds ci.yml as contested, follow the MOE_CONTESTED_HELD remedy; never hand-land it.\nFix anything you find, and rerun step 5 if code changed.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-team.ps1",
+        "scripts/tests/literal-project-path.test.mjs",
+        "scripts/tests/daemon-json-cap.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Self-review found nothing to fix. No bytes changed in this step: the listed paths are the task's own files from steps 1-5, re-reported for attribution. Worktree == checkpoint 4fb85a5c; MERGE_HEAD 96c4ee19 still pending for the two-parent landing.\n\n(1) `git diff -U0 MERGE_HEAD`:\n- moe-agent.ps1 +72/-70: 70 -LiteralPath conversions, 2 comments, and the daemon Start-Process escaped -WorkingDirectory. It keeps the target's $script:MoeNode and ConvertTo-MoeArgumentLine.\n- moe-team.ps1 +7/-7: 4 path conversions and 3 escaped -WorkingDirectory.\n- The flag multiset (-Raw, -Encoding, -NoNewline, -Force, -Filter, -File, -ErrorAction…) is identical between removed and added lines; the only additions are -WorkingDirectory/-PSProvider. New-Item -Path and Env: are untouched.\n\n(2) BOM ef bb bf, 0 CR; moe-team.ps1 is ASCII.\n\n(3) Relative paths and ~ were covered by plan probes; no other path forms changed.\n\n(4) Mutants, from the prior session:\n- A (4 reverts): static fails naming exactly those 4 lines.\n- B (Resolve-Path only): Windows fails 5/5 with 'Project path not found'.\n- C (no -WorkingDirectory): only the PS 5.1 claude case fails, with \"wildcard path\".\n\n(5) The self-test pins exact set [0,2,3,7,8] across comment, block comment, quoted prose, nesting, Env: x2 and G2 x2.\n\n(6) t.after is registered before any throwing op. It kills the recorded fake daemon PID (ESRCH tolerated), then rmSync with maxRetries 5 in finally. The only sleep is the fake daemon's 8 s; spawnSync timeout is 180 s.\n\n(7) Target moved 9 commits past 96c4ee19, touching moe-agent.ps1 and ci.yml. Checked against that tip:\n- `git merge-tree --write-tree --merge-base 96c4ee19 HEAD origin/moe/work-2026-10-24` is clean (cb5789e0).\n- The static guard passes 3/3 on that merged tree; parity PASS.\n- daemon-json-cap fail set equals the pristine tip's: 22/10/68, all env (no dist/named-host).\n- get_commit_scope is not exposed to worker seats. ci.yml is one new step, landed only through the wrapper merge; never hand-landed.\n\nTheoretical scanner limits, all fail-closed or N/A in the launchers:\n- A cmdlet inside \"$(...)\" in a double-quoted string is masked.\n- A backtick continuation puts -LiteralPath on the next line, so it is flagged.",
+      "startedAt": "2026-11-02T22:22:34.618Z",
+      "completedAt": "2026-11-02T22:26:35.291Z"
     }
   ],
   "planRevision": 1,
@@ -116,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:21:50.469Z",
-  "updatedAt": "2026-11-02T22:20:47.095Z",
+  "updatedAt": "2026-11-02T22:26:35.292Z",
   "dependsOn": [
     "task-92307adc30884fc4861348ed3c8ead4a",
     "task-86431c315e524b3b89af3bb3d2e7c98d"
@@ -130,7 +140,7 @@
     "firstClaimAt": "2026-10-30T16:38:29.657Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-bc59d28a",
@@ -146,7 +156,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T17:13:20.376Z",
