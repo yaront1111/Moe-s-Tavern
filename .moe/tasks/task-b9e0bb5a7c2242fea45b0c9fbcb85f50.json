@@ -92,7 +92,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:46:08.162Z",
-  "updatedAt": "2026-11-02T18:09:33.253Z",
+  "updatedAt": "2026-11-02T18:10:20.764Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:46:49.242Z",
@@ -193,7 +193,38 @@
   },
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+    ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json"
+  ],
+  "completionSummary": "MoeMessageDispatcher now routes PINS_UPDATED through the PINS branch (\"PINS\", \"PINS_UPDATED\"), so the daemon's broadcast after every pin write reaches ChatPanel.onPins; the warn text names the frame type. New MoeMessageDispatcherPinsTest has 3 cases: two pins in order plus parity with PINS, an empty list that clears the panel, and 14 malformed frames that publish nothing and never throw. RED against the unchanged dispatcher: \"PINS_UPDATED with two pins ... FAILED: expected:<[(chan-1, [PinEntry(messageId=msg-1, ...), PinEntry(messageId=msg-2, ...)])]> but was:<[]>\" and \"PINS_UPDATED with an empty list clears the channel FAILED: expected:<[(chan-1, [])]> but was:<[]>\" (/mnt/d/moe-scratch/b9e0bb5a/red.txt). Gate was run in place under the jetbrains-gradle lease (since released), and only my two files were dirty under moe-jetbrains/. 574 tests, 0 skipped, 0 failures, 0 errors.",
+  "commits": [
+    {
+      "sha": "1f4078c9cd6a6b56d64142ab18c1ce463bf30146",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T18:05:32Z",
+      "paths": [
+        ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T18:10:20.764Z",
+      "treeId": "2decf48ba11ce4a8e417abc3c3b4a7ab4bdb105a",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
   ],
-  "completionSummary": "MoeMessageDispatcher now routes PINS_UPDATED through the PINS branch (\"PINS\", \"PINS_UPDATED\"), so the daemon's broadcast after every pin write reaches ChatPanel.onPins; the warn text names the frame type. New MoeMessageDispatcherPinsTest has 3 cases: two pins in order plus parity with PINS, an empty list that clears the panel, and 14 malformed frames that publish nothing and never throw. RED against the unchanged dispatcher: \"PINS_UPDATED with two pins ... FAILED: expected:<[(chan-1, [PinEntry(messageId=msg-1, ...), PinEntry(messageId=msg-2, ...)])]> but was:<[]>\" and \"PINS_UPDATED with an empty list clears the channel FAILED: expected:<[(chan-1, [])]> but was:<[]>\" (/mnt/d/moe-scratch/b9e0bb5a/red.txt). Gate was run in place under the jetbrains-gradle lease (since released), and only my two files were dirty under moe-jetbrains/. 574 tests, 0 skipped, 0 failures, 0 errors."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T18:05:32Z",
+    "at": "2026-11-02T18:10:20.764Z"
+  }
 }

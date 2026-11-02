@@ -283,7 +283,8 @@ async function seat(c,run,o={}){
   const args=win?['-NoProfile','-ExecutionPolicy','Bypass','-File',WRAPPER,'-Project',c.P,'-WorkerId',WID,'-Role','worker','-Team','Smoke',
     '-NoStartDaemon','-Command',cli,'-NoLoop','-PollInterval','0']
     :[WRAPPER,'--project',c.P,'--worker-id',WID,'--role','worker','--team','Smoke','--no-start-daemon','--command',cli,'--no-loop','--poll-interval','0'];
-  const env={...inherited,MOE_PROXY_PATH:PROXY,MOE_NODE_COMMAND:process.execPath,MOE_DISABLE_HEARTBEAT:'1',MOE_ACCOUNT_ROTATION:'off',
+  // WT-13's harness seam (task-3c4be125): a worker may run this suite from its task worktree; `inherited` scrubs MOE_*.
+  const env={...inherited,MOE_PROXY_PATH:PROXY,MOE_NODE_COMMAND:process.execPath,MOE_DISABLE_HEARTBEAT:'1',MOE_ACCOUNT_ROTATION:'off',MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:'1',
     HOME:c.home,USERPROFILE:c.home,TMPDIR:c.tmp,TMP:c.tmp,TEMP:c.tmp,FAKE_TASK_STATUS:'REVIEW',FAKE_CLAIM_WORKSPACE:ws,FAKE_CTX_WORKSPACE:ws,
     ...(c.O?shimEnv(c):{}),...o.env};
   if(o.hook){

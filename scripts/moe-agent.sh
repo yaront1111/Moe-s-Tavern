@@ -29,7 +29,11 @@ moe_wrapper_in_worktree() {
     rest=${top#"$main/.worktrees/"}
     [ -n "$main" ] && [ "$rest" != "$top" ] && [[ $rest == task-* && $rest != */* ]]
 }
-if moe_wrapper_in_worktree "$SCRIPT_DIR"; then
+# Test seam only (task-3c4be125): the launcher harnesses (postflight.{sh,ps1},
+# postflight-worktree.cjs, worktree-landing.{sh,ps1}) set it so a worktree-mode worker
+# can run them from its own task worktree. Exactly '1' skips this one refusal and
+# nothing else reads it; no launch path (IDE plugins, moe-team, operators, runbooks) sets it.
+if [ "${MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:-}" != 1 ] && moe_wrapper_in_worktree "$SCRIPT_DIR"; then
     echo -e "${RED}[ERROR] MOE_WRAPPER_IN_WORKTREE: ${BASH_SOURCE[0]} is inside a task worktree; launch the control checkout's scripts/moe-agent.sh${NC}" >&2
     exit 1
 fi

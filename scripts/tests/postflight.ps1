@@ -2,6 +2,9 @@
 $ErrorActionPreference = 'Stop'
 # Claude account rotation stays off unless the [accounts] scenario turns it on.
 $env:MOE_ACCOUNT_ROTATION = 'off'
+# A worktree-mode worker runs this harness from its own task worktree, where WT-13's guard refuses the wrapper
+# copy (task-3c4be125); postflight-worktree.cjs re-adds the seam for its own wrapper only, so its refusals stay real.
+$env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'
 # A protected launch's marker never reaches the legacy rows; [protected runtime] sets it per row.
 Remove-Item Env:MOE_RUNTIME_PROTECTED -ErrorAction SilentlyContinue
 

@@ -133,7 +133,11 @@ $moeInWorktree = & {
         return ($rest.StartsWith('task-', $cmp) -and $rest.IndexOf('/') -lt 0)
     } catch { return $false }
 }
-if ($moeInWorktree) {
+# Test seam only (task-3c4be125), twin of moe-agent.sh: the launcher harnesses (postflight.{sh,ps1},
+# postflight-worktree.cjs, worktree-landing.{sh,ps1}) set it so a worktree-mode worker can run them
+# from its own task worktree. Exactly '1' (-cne: case-sensitive) skips this one refusal and nothing
+# else reads it; no launch path (IDE plugins, moe-team, operators, runbooks) sets it.
+if ($moeInWorktree -and $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER -cne '1') {
     [Console]::Error.WriteLine("[ERROR] MOE_WRAPPER_IN_WORKTREE: $PSCommandPath is inside a task worktree; launch the control checkout's scripts/moe-agent.ps1")
     exit 1
 }

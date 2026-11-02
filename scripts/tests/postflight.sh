@@ -7,6 +7,9 @@ POSTFLIGHT_TIMEOUT_SEC=60
 case "${MOE_POSTFLIGHT_TIMEOUT_SEC:-}" in ''|*[!0-9]*) : ;; *) POSTFLIGHT_TIMEOUT_SEC="$MOE_POSTFLIGHT_TIMEOUT_SEC" ;; esac
 # Claude account rotation stays off unless the [accounts] scenario turns it on.
 export MOE_ACCOUNT_ROTATION=off
+# A worktree-mode worker runs this harness from its own task worktree, where WT-13's guard refuses the wrapper
+# copy (task-3c4be125); postflight-worktree.cjs re-adds the seam for its own wrapper only, so its refusals stay real.
+export MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1
 # A protected launch's marker never reaches the legacy rows; [protected runtime] sets it per row.
 unset MOE_RUNTIME_PROTECTED
 

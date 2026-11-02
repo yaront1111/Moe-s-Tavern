@@ -237,9 +237,11 @@ async function launch(p,run,knobs={},opts={}){
   const args=win?['-NoProfile','-ExecutionPolicy','Bypass','-File',w,'-Project',p.dir,'-WorkerId',WID,'-Role',role,'-Team','Smoke','-NoStartDaemon','-Command',cli,'-NoLoop','-PollInterval','0']
     :[w,'--project',p.dir,'--worker-id',WID,'--role',role,'--team','Smoke','--no-start-daemon','--command',cli,'--no-loop','--poll-interval','0'];
   args.push(...(opts.args||[]));
+  // The suite's own wrapper gets WT-13's harness seam (a worker may run this suite from its task worktree, and
+  // `inherited` scrubs MOE_*); an opts.wrapper copy never does, so wt-guard's refusals stay real (task-3c4be125).
   const env={...inherited,MOE_PROXY_PATH:proxy,MOE_NODE_COMMAND:process.execPath,MOE_DISABLE_HEARTBEAT:'1',
     HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),TMPDIR:wrapperTmp,TMP:wrapperTmp,TEMP:wrapperTmp,
-    FAKE_TASK_STATUS:'WORKING',FAKE_CLAIM_WORKSPACE:p.ws(),...knobs};
+    FAKE_TASK_STATUS:'WORKING',FAKE_CLAIM_WORKSPACE:p.ws(),MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:opts.wrapper?null:'1',...knobs};
   for(const k of Object.keys(env))if(env[k]==null)delete env[k];
   if(env.WT_GIT_VERSION||env.WT_GIT_FAIL||env.WT_GIT_SWAP||env.WT_GIT_HOLD){
     env[pathKey]=stub()+path.delimiter+(inherited[pathKey]||'');
@@ -1177,6 +1179,8 @@ async function wtBoard(){
 // WT-13 §6.1: a wrapper copy in a registered task worktree, or reached through a link to one, refuses with
 // MOE_WRAPPER_IN_WORKTREE before any RPC or CLI, though --project names the control checkout and the cwd is
 // outside W. A copy under .worktrees-other/task-* and a non-Git (bundled) copy launch. The root holds a space.
+// Copies never get the harness seam MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER (task-3c4be125): exactly '1'
+// lets the registered-W copy launch; 'true', ' 1' and '0' keep the refusal.
 async function wtGuard(){
   const p=repo('wt-guard'),g=p.top+'/.worktrees/task-guard',src=path.dirname(wrapper),alias=path.join(root,'wt-guard alias');
   const copy=d=>{
@@ -1193,6 +1197,14 @@ async function wtGuard(){
   for(const [run,d] of [['wt-guard-other',p.top+'/.worktrees-other/task-guard/scripts'],['wt-guard-bundled',path.join(root,'wt-guard bundled','scripts')]]){
     const r=await launch(p,run,{FAKE_CLAIM_WORKSPACE:null},{wrapper:copy(d)});
     assert.ok(r.code===0&&r.cliRan&&!r.log.includes('MOE_WRAPPER_IN_WORKTREE'),`${run}: exit ${r.code}, or the copy did not launch`+tail(r.log));
+  }
+  const inW=g+'/scripts/'+path.basename(wrapper),seam=v=>({FAKE_CLAIM_WORKSPACE:null,MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:v});
+  let r=await launch(p,'wt-guard-optout',seam('1'),{wrapper:inW});
+  assert.ok(r.code===0&&r.cliRan&&!r.log.includes('MOE_WRAPPER_IN_WORKTREE'),`wt-guard-optout: seam '1', exit ${r.code}, or the W copy did not launch`+tail(r.log));
+  for(const v of ['true',' 1','0']){
+    r=await launch(p,'wt-guard-optout-strict',seam(v),{wrapper:inW});
+    assert.ok(r.code===1&&r.log.includes('[ERROR] MOE_WRAPPER_IN_WORKTREE:'),`wt-guard-optout-strict: seam '${v}', exit ${r.code}, no MOE_WRAPPER_IN_WORKTREE refusal`+tail(r.log));
+    assert.ok(!r.cliRan&&!present(path.join(p.dir,'.moe','evidence-rpcs.jsonl')),`wt-guard-optout-strict: seam '${v}', an RPC or the CLI ran`+tail(r.log));
   }
 }
 
