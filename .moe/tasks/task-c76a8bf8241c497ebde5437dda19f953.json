@@ -1,0 +1,38 @@
+{
+  "id": "task-c76a8bf8241c497ebde5437dda19f953",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the VS Code vsix ships the daemon's and proxy's devDependencies; bundle only the lockfile's production packages (the VS Code half of task-864103f3)",
+  "description": "Files: moe-vscode/scripts/bundle-assets.mjs (the asset table at :16 and :23, and `copyDir(asset.deps, depsOut, { excludeBin: true })` at :153), plus one node:test under moe-vscode/tests. No open row declares either. I checked all 38 open rows at 2026-11-02 17:53Z.\n\nOrigin: VSC-0 (task-a3e414a3) row D8 (docs/plans/2026-11-02-vscode-reuse.md:74), which VSC-16 (task-6fbd0811) left out of scope. The vsix was 61 MB at 882a4c39. This row depends on task-864103f3, the JetBrains half, which goes first. Use the same selection rule and guard it lands, so the two builds ship the same node_modules set.\n\nDefect, read at HEAD 2bb683f8: bundle-assets.mjs copies packages/moe-daemon/node_modules and packages/moe-proxy/node_modules whole (only .bin is excluded) into bundled/daemon and bundled/proxy. Measured from the lockfiles: 83.8 MB of dev-only packages per tree, against 3.3 MB (daemon) and 0.2 MB (proxy) of production packages. task-864103f3 has the full measurement.\n\nFix: copy only the lockfile's production packages. That means every packages[\"node_modules/…\"] entry, nested paths included, that lacks \"dev\": true. Keep \"devOptional\" and \"optional\" entries. Then scan the copied dist .js files (after excludeTests) for bare specifiers, the same scan as task-864103f3, and throw naming any specifier whose package was not copied.\nError handling: the script throws, naming the file or package, when package-lock.json is missing or unparseable, when it has no packages map, or when a production entry is missing on disk. bundle-assets.mjs then exits non-zero, as it already does for a stale dist. It never falls back to copying the whole tree.\nTest: a node:test drives the selection rule and the guard against fixture lockfiles and fixture dist files: dev and nested entries, devOptional, a missing lockfile, no packages map, and a dist file importing a pruned package. Export the helpers without running the bundle on import.\n\nOut of scope: JetBrains (task-864103f3), .github/workflows/ci.yml (held by other rows), and the daemon's and proxy's package.json.",
+  "definitionOfDone": [
+    "A vsix built from this row holds, under extension/bundled/daemon/node_modules and extension/bundled/proxy/node_modules, exactly the lockfile's production packages. No \"dev\": true entry ships, including typescript, vitest, tsx and @types/*. Every production entry ships. The completion evidence compares an `unzip -Z1` listing against both lockfiles and shows the same node_modules set as task-864103f3's zip.",
+    "bundle-assets.mjs exits non-zero, naming the specifier, when a copied dist .js file imports a package missing from the copied node_modules. It also exits non-zero, naming the file, when package-lock.json is missing, unparseable or has no packages map. It never copies the whole tree as a fallback.",
+    "A node:test under moe-vscode/tests covers the selection rule and the guard with fixtures: dev and nested entries, devOptional, a missing lockfile, no packages map, and an import of a pruned package. RED first: it fails on the unchanged script, and the completion evidence quotes that output.",
+    "The bundled daemon loads from the unpacked vsix. `node <unpacked>/extension/bundled/daemon/dist/index.js doctor --project <empty temp dir>` reaches its checklist output with no ERR_MODULE_NOT_FOUND.",
+    "In a git-archive snapshot, with daemon and proxy installed and built there first, moe-vscode `npm ci && npm run lint && npm run compile && npm test && npm run package` exits 0. The evidence reports the vsix size before and after. Never run npm in the shared checkout (GLOBAL rule 0)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote: fleet-filed, off-lane (VSC-0 D8, VS Code half). It plans now, and its dependsOn on task-864103f3 (the JetBrains half) holds the WORKING claim until that row is DONE, as filed. Overlap check at 17:54Z: no open row declares moe-vscode/scripts/bundle-assets.mjs. Put the new test in a new file under moe-vscode/tests, not wire-parity.test.cjs (task-550847ba).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-864103f3a772481f8e6bed3051a820ea"
+  ],
+  "priority": "LOW",
+  "order": 334.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T17:52:48.048Z",
+  "updatedAt": "2026-11-02T17:53:50.978Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T17:53:50.978Z",
+    "seq": 1
+  }
+}

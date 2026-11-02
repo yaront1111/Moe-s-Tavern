@@ -1,0 +1,35 @@
+{
+  "id": "task-864103f3a772481f8e6bed3051a820ea",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the JetBrains plugin ships the daemon's and proxy's devDependencies (about 168 MB uncompressed) beside 3.5 MB of runtime modules; bundle only the lockfile's production packages",
+  "description": "Files: moe-jetbrains/build.gradle.kts only: the prepareSandbox node_modules copies (:189-199) and a check beside requireBundledAssets (:89). No open row declares it. I checked all 38 open rows at 2026-11-02 17:53Z. .github/workflows/ci.yml is held by two WORKING rows and stays out of scope.\n\nOrigin: DONE rows promised this follow-up and nobody filed it. VSC-0 (task-a3e414a3) row D8, docs/plans/2026-11-02-vscode-reuse.md:74, reads: \"Bundled node_modules ship devDependencies (vitest, typescript, rolldown) in both plugins | A follow-up to VSC-16\". VSC-16 (task-6fbd0811, DONE) put it out of scope: \"both plugins ship vitest and typescript today; the vsix was 61 MB at 882a4c39\". This is the JetBrains half, done first. The VS Code half is a separate row that depends on this one.\n\nMeasured at HEAD 2bb683f8, from each package-lock.json (lockfileVersion 3) plus `du` of the checkout's installs:\n- packages/moe-daemon/node_modules: 43 dev-only top-level packages (83.8 MB) and 30 production packages (3.3 MB).\n- packages/moe-proxy/node_modules: 43 dev-only packages (83.8 MB) and 1 production package, ws (0.2 MB).\n- build.gradle.kts copies both trees whole into <plugin>/daemon/node_modules and <plugin>/proxy/node_modules, excluding only **/.bin/**.\n- The production dependencies are chokidar, pino, pino-pretty and ws. The devDependencies are @types/node, @types/ws, tsx, typescript and vitest. In the shipped dist, the only devDependency imports (vitest) are in compiled *.test.js files, which the dist copy already excludes.\n\nFix: copy only the lockfile's production packages. That means every packages[\"node_modules/…\"] entry, nested paths included, that lacks \"dev\": true. Keep \"devOptional\" and \"optional\" entries. Read the lockfile with the JsonSlurper the manifest code already uses.\nGuard: pruning adds a new risk. A future runtime import of a dev-only package would fail only when a user starts the daemon. So the build must scan the dist .js files it actually copies (after the test exclusion) for bare specifiers: static `from '…'`, dynamic `import('…')` and `require('…')`, skipping node: builtins and relative paths. It fails, naming the specifier, when that package is not in the copied node_modules.\nError handling: the build fails with a GradleException that names the file or package when package-lock.json is missing or unparseable, when it has no packages map (lockfileVersion below 2), or when a production entry is missing on disk. It never falls back to copying the whole tree.\n\nOut of scope:\n- VS Code (moe-vscode/scripts/bundle-assets.mjs): separate row.\n- .github/workflows/ci.yml: held by other rows.\n- The daemon's and proxy's package.json, and any npm install change.",
+  "definitionOfDone": [
+    "The buildPlugin zip's daemon/node_modules and proxy/node_modules hold exactly the lockfile's production packages. No entry marked \"dev\": true ships, including typescript, vitest, tsx and @types/*. Every production entry ships: chokidar, pino, pino-pretty, ws and their production dependencies. The completion evidence compares an `unzip -Z1` listing against the lockfile.",
+    "The build fails, naming the specifier, when a bare import in a copied daemon/dist or proxy/dist .js file names a package missing from the copied node_modules. Prove it with a negative control in a scratch copy of the repo, never by editing the shared checkout's dist: add a non-test dist file that imports 'typescript', and buildPlugin must fail with that name.",
+    "A missing or unparseable package-lock.json, or one with no packages map, fails the build with a GradleException naming the file. Nothing falls back to copying the whole tree.",
+    "The bundled daemon loads from the unzipped plugin. `node <unzipped>/…/daemon/dist/index.js doctor --project <empty temp dir>` reaches its checklist output with no ERR_MODULE_NOT_FOUND. It may exit 1 because .moe is missing.",
+    "`cd moe-jetbrains && ./gradlew buildPlugin test` exits 0 under the jetbrains-gradle lease. The evidence reports the zip size before and after. The shipped file set outside the two node_modules trees is unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote: fleet-filed, off-lane work for idle workers (VSC-0 D8, JetBrains half). Overlap check at 17:54Z: no open row declares moe-jetbrains/build.gradle.kts. It serializes only on the jetbrains-gradle lease with b9e0bb5a, not on files. Keep .github/workflows/ci.yml out of scope as filed, since WORKING rows hold it.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 333.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T17:52:29.881Z",
+  "updatedAt": "2026-11-02T17:53:48.921Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T17:53:48.921Z",
+    "seq": 1
+  }
+}
