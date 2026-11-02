@@ -178,6 +178,37 @@ function writeIdentityRefusal(parsed: unknown, element: unknown, refusal: Execut
   safeStdoutWrite(JSON.stringify(ids.map((id) => ({ jsonrpc: '2.0', id, error: { code: refusal.code, message, data } }))) + '\n');
 }
 
+// A reader that stopped reading gets this long before exitAfterStdoutDrain gives up.
+const STDOUT_DRAIN_GUARD_MS = 2000;
+
+/**
+ * Exit 0 once every byte already written to stdout has reached the OS. On
+ * POSIX a piped stdout is asynchronous: past what the pipe takes at once
+ * (~64 KiB on Linux) libuv queues the rest, and process.exit() drops that
+ * queue, so a large one-shot reply arrived cut short. An empty write's
+ * callback runs only after every earlier write has flushed. A write error
+ * (EPIPE: the reader closed) exits 1, as the stdout 'error' handler does; the
+ * callback receives it before that event fires, so it must exit non-zero
+ * itself. A reader that never drains gets STDOUT_DRAIN_GUARD_MS, then exit 1,
+ * because the reply may be incomplete and moe_rpc treats non-zero as failure.
+ * Windows pipes are synchronous: no wait there.
+ */
+function exitAfterStdoutDrain(): void {
+  setTimeout(() => {
+    writeLog(`stdout did not drain within ${STDOUT_DRAIN_GUARD_MS}ms, exiting`);
+    process.exit(1);
+  }, STDOUT_DRAIN_GUARD_MS).unref();
+  try {
+    process.stdout.write('', (err) => {
+      if (err) writeLog(`stdout write failed: ${err.message}`);
+      process.exit(err ? 1 : 0);
+    });
+  } catch (err) {
+    writeLog(`stdout write failed: ${err instanceof Error ? err.message : 'Unknown stdout write error'}`);
+    process.exit(1);
+  }
+}
+
 function writeLog(message: string) {
   // Log to stderr so it doesn't interfere with JSON-RPC on stdout
   process.stderr.write(`[moe-proxy] ${message}\n`);
@@ -349,7 +380,8 @@ function closeWebSocket(): void {
 }
 
 /**
- * Stop reading work and drain what is in flight, then exit 0. Every request
+ * Stop reading work and drain what is in flight, then exit 0 once stdout has
+ * drained (exitAfterStdoutDrain). Every request
  * gets the flat 2s grace, except a blocking long-poll after stdin EOF in a
  * session that never sent `initialize` (a wrapper one-shot RPC): it drains to
  * its own recorded deadline, or fails at once when its socket is gone. A
@@ -367,7 +399,7 @@ function gracefulShutdown(cause: ShutdownCause): void {
 
   if (pendingRequestIds.size === 0 && pendingMessages.length === 0) {
     closeWebSocket();
-    process.exit(0);
+    exitAfterStdoutDrain();
     return;
   }
 
@@ -416,7 +448,7 @@ function drainTick(): void {
   if (drainTimer) clearInterval(drainTimer);
   drainTimer = null;
   closeWebSocket();
-  process.exit(0);
+  exitAfterStdoutDrain();
 }
 
 /**
