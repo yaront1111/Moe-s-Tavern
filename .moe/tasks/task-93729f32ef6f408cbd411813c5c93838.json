@@ -60,28 +60,43 @@
     {
       "stepId": "step-4",
       "description": "Gate under the jetbrains-gradle lease in snapshots, never in the shared tree (mem:convention-jetbrains-gradle-lease, mem:gotcha-jetbrains-snapshot-gradle-test, mem:gotcha-jetbrains-gradle-from-wsl: from bash, single-quote the whole cmd string and pass --tests unquoted).\n- Lease: moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId, note}. If it is busy, call moe.report_blocked {resourceId:\"jetbrains-gradle\"}. Hold it only around the gradle runs, and release it even on failure.\n- Run everything from the repo root.\n1) Red: build the snapshot as the checkRef does, but copy only the two new files and keep HEAD's AccountPresentation.kt. Run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc7-gate\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.AccountsCorpusTest --rerun'`. It must FAIL in the labels test, naming exactly L08, while the other three tests pass.\n2) Green: copy the fixed AccountPresentation.kt into that snapshot and rerun. All 4 tests pass.\n3) Mutant, in that snapshot copy only: `sed -i 's/selected && index > 0,/selected \\&\\& index >= 0,/' /mnt/d/moe-scratch/vsc7-gate/moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt`. The architect dry-ran it: one replacement; confirm with diff. The focused run must FAIL, naming C04, C06, C11 and C13 and no other row.\n4) Run the checkRef verbatim (a clean snapshot with the fixed file, full suite). Confirm BUILD SUCCESSFUL and that :test executed. Then cmp the three copied files with the shared tree, and sum the JUnit totals from TEST-*.xml for the summary.\nError handling for a red run:\n- A red row other than L08 before the fix means the oracle and the code disagree: re-derive it from AccountPresentation.kt.\n- Change AccountPresentation.kt beyond step 3 only for another genuine bug, named in the summary.\n- \"Could not receive a message from the daemon\" is mem:gotcha-jetbrains-gradle-client-oom: rerun.\n- A failure tied to a peer's wip checkpoint follows mem:gotcha-snapshot-gate-peer-wip-checkpoint.\n- Never stop Gradle daemons or kill processes by name.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/resources/client-accounts.json",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
       ],
-      "startedAt": "2026-11-02T10:34:23.865Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-accounts.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
+      ],
+      "note": "Gate in /mnt/d/moe-scratch/vsc7-gate under the jetbrains-gradle lease (released). Red (HEAD~ AccountPresentation, 2 new files): AccountsCorpusTest 4 run, 1 failed = labels, message names exactly L08 (isValidLabel(\"a\\u0085b\") expected true, got false); other 3 pass. Green (fixed file): 4/4 pass. Mutant (sed selected && index > 0 -> index >= 0 in the snapshot copy only, diff confirmed one line, line 205): fails exactly C04, C06, C11, C13. checkRef verbatim (clean snapshot, 3 files, gradlew.bat test --rerun): BUILD SUCCESSFUL in 45s, :test executed; 34 suites, 557 tests, 0 failures, 0 errors, 0 skipped; AccountsCorpusTest 4/4, AccountPresentationTest 19/19. cmp: the 3 files are byte-identical to the shared tree. The files were already in checkpoint 7df999be, so git archive HEAD carried them; red used `git show 7df999be^:` for the pre-fix AccountPresentation.kt. No process killed, no gradle in the shared checkout.",
+      "startedAt": "2026-11-02T10:34:23.865Z",
+      "completedAt": "2026-11-02T10:47:54.361Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff, the only review step.\n- Would the test still pass if:\n  - the weekly column took the first seven_day window instead of the busiest (C05);\n  - percents were rounded instead of floored (C12's 89.6);\n  - chips counted non-subscription accounts (C05, C12, C15);\n  - +N more counted all accounts (C12);\n  - spent did not win over active (C13);\n  - times ignored the zone or the day (C12, C13);\n  - check did not need the cli (C11);\n  - the VM token actions treated an absent flag as false (C08)?\n- Does the args type check really separate an Int from a String?\n- Is every DoD case mapped to a named row (step 1's coverage list)?\n- Is the corpus plain JSON with \\u escapes, so VSC-13 replays it unchanged?\n- Does the step 3 fix leave AccountPresentationTest green, and is it named in the summary?\n- Run `git status --porcelain -- moe-jetbrains` and confirm the task touched only the two new files and AccountPresentation.kt.\n- Peers own every other dirty path: never revert, stage or commit them.\n- Report all three files in complete_step.modifiedFiles. Deleting /mnt/d/moe-scratch/vsc7-gate afterwards is fine; leave vsc7-architect for QA's audit.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/resources/client-accounts.json",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-accounts.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
+      ],
+      "note": "Adversarial self-review. Ran the plan's mutants against the gate snapshot's AccountPresentation.kt (lease re-held, restored after, snapshot since deleted): all KILLED, each by the row the plan named. M1 weekly=first seven_day: C05. M2 round not floor: C05,C12. M3 chips count non-subscription: C05,C12,C15. M4 +N more counts all accounts: C05,C12. M5a/M5b active beats spent (status/chip): C13. M6a time always HH:mm: C12,C13. M6b always MM-dd HH:mm: C05,C14. M6c ignore passed zone (hard-coded Tokyo): C05,C12,C13,C14. M7 check without cli: C11. M8 absent vmToken as false: C08. Plus the step-4 move-up mutant: C04,C06,C11,C13, and HEAD's isValidLabel: L08 only. Args type check: arg() maps a JSON string to String and an integer to Int, the data-class List equals is element-wise, so 92 vs \"92\" fails (M2 shows percents are asserted as Int). Corpus is ASCII only (0 non-ASCII bytes), \\u escapes, sha256 e08b58c8...95fc; rows C01..C15, labels L01..L14, version 1, now 2026-10-20T12:00:00.000Z, zone UTC. Known limits, left as is on purpose: zone is only UTC in the corpus, so a mutant hard-coding UTC is equivalent by contract; edge whitespace (U+001C..U+001F, U+FEFF trim divergence Kotlin vs JS) and the 32-account limit stay unpinned (AccountPresentationTest pins the limit). Concurrency/IO: the test is pure and read-only; the only prod change is a pure predicate. Scope: the task touched exactly the 2 new files + AccountPresentation.kt (git status shows none of the three dirty; they are in checkpoint 7df999be, byte-identical to the gate snapshot per cmp). Peers own all other dirty paths; untouched.",
+      "startedAt": "2026-11-02T10:47:56.151Z",
+      "completedAt": "2026-11-02T10:49:53.662Z"
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
-  "assignedWorkerId": "worker-13a877ad",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -93,12 +108,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:54.745Z",
-  "updatedAt": "2026-11-02T10:35:07.609Z",
+  "updatedAt": "2026-11-02T10:51:22.523Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:20:12.809Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-93e0e956",
@@ -111,7 +126,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T10:28:12.892Z",
@@ -177,8 +194,57 @@
   "planApprovedAt": "2026-11-02T10:28:12.919Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-02T10:30:07.616Z",
-  "blockedReason": "Waiting for shared resource jetbrains-gradle (held by VSC-5, task-0f2cc6eb). Steps 1-3 done; step 4 (gradle gate) has not run yet. Progress note: mem:task-task-93729f32ef6f408cbd411813c5c93838-worker-progress.",
-  "blockedResourceId": "jetbrains-gradle",
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-11-02T10:35:07.609Z"
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "7df999be7c754a07ef9cd11a88d65a9d6e5d2d57",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T10:29:37Z",
+      "paths": [
+        ".moe/tasks/task-065e4812d96247cc8394b3cd0416475d.json",
+        ".moe/tasks/task-743e577af8204d6aa48d11fab01c979d.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
+        "moe-jetbrains/src/test/resources/client-accounts.json"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T10:35:32.625Z",
+      "treeId": "19c29334eb6410a35971715950fbea10e56ed5e7",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-jetbrains/src/test/resources/client-accounts.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/resources/client-accounts.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-13a877ad@2026-11-02T10:29:37Z",
+    "at": "2026-11-02T10:35:32.625Z"
+  },
+  "blockedOnTaskIds": null,
+  "reviewStartedAt": "2026-11-02T10:51:22.521Z",
+  "verification": {
+    "command": "S=/mnt/d/moe-scratch/vsc7-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents moe-jetbrains/src/test/resources/client-accounts.json moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt $S/ && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc7-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'",
+    "exitCode": 0,
+    "outputTail": "> Task :test\n\n[Incubating] Problems report is available at: file:///D:/moe-scratch/vsc7-gate/moe-jetbrains/build/reports/problems/problems-report.html\n\nBUILD SUCCESSFUL in 44s\n11 actionable tasks: 11 executed\n\nJUnit XML sum: suites 34 tests 557 skipped 0 failures 0 errors 0 (AccountsCorpusTest 4/4, AccountPresentationTest 19/19)",
+    "reportedAt": "2026-11-02T10:51:22.521Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "VSC-7 delivered. New moe-jetbrains/src/test/resources/client-accounts.json (sha256 e08b58c8...95fc, 36335 bytes, byte-identical to the architect oracle; version 1, now 2026-10-20T12:00:00.000Z, zone UTC, 15 rotation rows C01..C15, 14 label rows L01..L14, ASCII with \\u escapes) and new AccountsCorpusTest.kt (4 JUnit4 tests: corpus well formed; rows/chips/actions through MoeJson.parseAccountRotation AND parseState which must agree, args compared as Int vs String, all failing ids reported at once; labels; corpus key set == the 23 MoeBundle account presentation keys with arg counts == placeholders). JetBrains bug fixed: isValidLabel refused C1 control characters the daemon accepts (corpus L08); AccountPresentation.isValidLabel now `label.none { it < ' ' || it == '\\u007F' }` (daemon CONTROL_CHARS_RE) with KDoc updated; nothing else changed in that file. Evidence (Windows gradlew.bat in a git-archive snapshot under the jetbrains-gradle lease, released each time): red with the pre-fix AccountPresentation fails exactly L08 (other 3 tests pass); green 4/4; move-up mutant (index > 0 -> >= 0 in the snapshot copy) fails exactly C04, C06, C11, C13; 11 self-review mutants (weekly first window, round vs floor, chips count non-subscription, +N more counts all, active beats spent in status and chip, time always HH:mm / always MM-dd, ignore zone, check without cli, absent vmToken as false) all killed by the rows the plan named. Full suite, checkRef verbatim, fresh at HEAD 96e0d7c2: BUILD SUCCESSFUL in 44s, 34 suites, 557 tests, 0 failures, 0 errors, 0 skipped; AccountsCorpusTest 4/4, AccountPresentationTest 19/19. The 3 files are cmp-identical to the shared tree; diff is only the two new files + AccountPresentation.kt. Known unpinned by design: zone is UTC only; U+001C..U+001F/U+FEFF edge trim divergence Kotlin vs JS; 32-account limit (AccountPresentationTest). Consumers VSC-13/VSC-15 replay the same bytes."
 }
