@@ -45,18 +45,25 @@
     {
       "stepId": "step-3",
       "description": "DoD 3: pin the row count on the AJ2 shape in BOTH harnesses.\n\nIn scripts/tests/postflight.sh (scenario AJ, $scope_aj_check) and scripts/tests/postflight.ps1 (scenario AJ, the scope-aj-check.cjs here-string), remove these two lines:\n- `assert.ok(rows.length>=expected.length,\"missing ledger rows\");`\n- `rows.slice(-expected.length).forEach(...)`\nReplace them with one exact assertion: `assert.deepStrictEqual(rows.map(r=>[r.outcome,r.code,r.kind]),expected,\"ledger rows: exactly one failed row per landing\");`\n\nKeep these unchanged:\n- the expected arrays: AJ1 [committed/peel-failed/rescue, failed/MOE_COMMIT_FAILED_PEEL/completion]; AJ2 [failed/MOE_COMMIT_FAILED_PEEL/completion];\n- the every-row held-field test loop;\n- the fixtures;\n- the ps1 MOE_COMMIT_REFUSED_NO_OWNED_PATHS grep;\n- the scenario counts.\n\nReword the AJ comments in both files: the ledger must hold exactly these rows on both wrappers; ps1's finally used to add a second failed row (task-4fdc7590).\n\nThe architect ran sh AJ on HEAD's scripts: AJ1 holds exactly 2 rows and AJ2 exactly 1, so sh passes unchanged (the parity pin). HEAD's ps1 AJ2 holds 2 rows (see /mnt/d/moe-scratch/dfbda1-Rkml/red-ps51-aj2.log), so the new check is RED there and GREEN after step 2. If any run shows an extra row, investigate it; never fall back to a tail check.\n\nEdit both files with the Claude Edit tool; postflight.ps1 must keep its UTF-8 BOM.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
       ],
-      "startedAt": "2026-11-02T19:37:21.287Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Scenario AJ in both harnesses: the tail-slice assertion (rows.length>=expected.length plus rows.slice(-n)) is replaced by one exact `assert.deepStrictEqual(rows.map(r=>[r.outcome,r.code,r.kind]),expected,\"ledger rows: exactly one failed row per landing\")`. Expected arrays, the every-row held-field loop, fixtures, the ps1 NO_OWNED_PATHS grep and scenario counts unchanged; AJ comments reworded in both files (Edit tool only; postflight.ps1 BOM kept). Fast AJ-only scratch harnesses (trimmed from each file, under /mnt/d/moe-scratch/t4fdc-aj-*): sh AJ1+AJ2 ok with exact rows (the parity pin: sh already recorded exactly 2 and 1 rows). ps1, HEAD's wrapper + new check: AJ1 ok, AJ2 FAILS on both PS 5.1 and pwsh 7 (log shows the second 'nothing to rescue ... reason=commit-failed'); with the step-2 wrapper: AJ1 and AJ2 ok on both engines.",
+      "startedAt": "2026-11-02T19:37:21.287Z",
+      "completedAt": "2026-11-02T19:40:03.405Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification gate. Run the ONE verification command below exactly once, after the last edit, with run_in_background. Its fresh output is the complete_task evidence, and QA re-runs it verbatim. It takes about 40 minutes: postflight.sh, then postflight.ps1 on PS 5.1 and on pwsh 7.\n\nWhat the command does:\n- snapshots HEAD's scripts/ into /mnt/d/moe-scratch/t4fdc-XXXX and copies the 4 changed scripts over, cmp-verified;\n- unsets leaked MOE_/CLAUDE/FAKE_ env and checks that ci.yml parses;\n- runs bash -n;\n- on both engines: ParseFile of moe-agent.ps1 and landing-ledger.ps1, then landing-ledger.ps1 itself;\n- runs parity-check.sh and parity-check.ps1 (PS 5.1);\n- runs the three postflight test runs with MOE_POSTFLIGHT_TIMEOUT_SEC=180;\n- writes <dir>.log, ending in GATE_EXIT=<n>.\n\nPoll with `until grep -q '^GATE_EXIT=' \"$(cat /tmp/t4fdc-dir).log\"; do sleep 20; done`. The foreground cap is 600 s, so re-poll.\n\nPass means all of:\n- GATE_EXIT=0;\n- '[landing-ledger powershell.exe] ok' and '[landing-ledger pwsh.exe] ok';\n- '[scenario AJ1] ok' and '[scenario AJ2] ok' in all three postflight runs;\n- the same scope counts as before: sh 42, ps1 41, or one fewer or one more as symlink support differs.\n\nDo not edit any file while the gate runs. If a ps1 failure looks environmental, rerun the parent revision's scripts the same way before blaming the change (Serena gotcha-qa-ps1-postflight-from-wsl).\n\nFull postflight regression is warranted on this mid-epic task because the change touches every ps1 landing's ledger path.\n\nCOMMAND:\ncd /mnt/d/projexts/moes && W=$(mktemp -d /mnt/d/moe-scratch/t4fdc-XXXX) && echo \"$W\" > /tmp/t4fdc-dir && ( for v in $(compgen -e | grep -E '^(MOE_|CLAUDE|FAKE_)'); do unset \"$v\"; done; git rev-parse HEAD && python3 -I -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))' && echo \"[ci.yml] ok\" && git archive HEAD scripts | tar -x -C \"$W\" && for f in scripts/moe-agent.ps1 scripts/tests/landing-ledger.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$W/$f\" && cmp \"$f\" \"$W/$f\" || exit 1; done && cd \"$W\" && bash -n scripts/moe-agent.sh && echo \"[bash -n] ok\" && for eng in powershell.exe pwsh.exe; do for s in scripts/moe-agent.ps1 scripts/tests/landing-ledger.ps1; do P=\"$(wslpath -w \"$W/$s\")\"; $eng -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$P',[ref]\\$null,[ref]\\$e); exit \\$e.Count\" && echo \"[ParseFile $eng $s] ok\" || exit 1; done; $eng -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/landing-ledger.ps1\")\" && echo \"[landing-ledger $eng] ok\" || exit 1; done && bash scripts/tests/parity-check.sh && echo \"[parity-check.sh] ok\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/parity-check.ps1\")\" && echo \"[parity-check.ps1 PS5.1] ok\" && echo \"=== Linux bash postflight.sh ===\" && MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && echo \"=== Windows PowerShell 5.1 postflight.ps1 ===\" && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/postflight.ps1\")\" && echo \"=== pwsh 7 postflight.ps1 ===\" && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/postflight.ps1\")\" ) > \"$W.log\" 2>&1; echo \"GATE_EXIT=$?\" >> \"$W.log\"; echo \"$W\"",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-02T19:40:04.465Z"
     },
     {
       "stepId": "step-5",
@@ -107,7 +114,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:04:11.016Z",
-  "updatedAt": "2026-11-02T19:37:21.287Z",
+  "updatedAt": "2026-11-02T19:40:04.465Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:40.801Z",
@@ -117,7 +124,7 @@
     "firstClaimAt": "2026-10-30T09:55:16.013Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
@@ -129,7 +136,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T10:16:48.897Z",
