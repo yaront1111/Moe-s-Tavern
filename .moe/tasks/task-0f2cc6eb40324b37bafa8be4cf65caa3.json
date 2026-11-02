@@ -95,7 +95,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,18 +121,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:29.201Z",
-  "updatedAt": "2026-11-02T11:19:34.371Z",
+  "updatedAt": "2026-11-02T11:33:00.498Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:19:00.472Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-02T11:33:00.498Z",
+    "wallClockMs": 4440026
   },
   "contextFetchedBy": [
     "qa-1106e678",
-    "worker-13a877ad"
+    "worker-13a877ad",
+    "qa-564d8bce"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -213,7 +216,9 @@
   "filesModified": [
     "moe-jetbrains/src/test/resources/client-settings-policy.json",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt",
-    ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json"
+    ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+    ".moe/tasks/task-7e7bd0ec91ca488da2858f70cff32f65.json",
+    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
   ],
   "completionSummary": "VSC-5 round 2 fixes QA's size reject with the architect's 10-row merge (comment-49aeed67). Net vs 3cfc3c78^ is +366/-9 = 357 LOC (was 508): client-settings-policy.json 175 (new), SettingsPolicyCorpusTest.kt 148 (new), MoeJson.kt +43/-9 (identical to 3cfc3c78, untouched).\nRows: P01 null; P02 {}; P03 = old P03+P04+P07+P11; P04 = old P05+P08+P09+P12; P05 = old P06+P10+P13+P15; P06 = old P14+P16; P07-P09 = old P17-P19 verbatim; P10 new {attribution:\"never\", taskSizing:[12]}, expecting all defaults. A node check against HEAD's 19-row corpus: every expect entry is copied from the one merged old row that differs at that line (no new strings), and the settings are key-disjoint unions.\nTest: unknownMembers accepts a non-object attribution/taskSizing; the typo guard for unknown names stays. KDoc now says 'Rows P07 to P10'.\nJetBrains bugs (fixed in round 1, display-only) are pinned by bug rows P08 (taskSizing \"9\"/7.5 read as 9/7) and P09 (qualityGate 42 / consolidationBranch true shown as \"42\" / branch \"true\").\nEvidence (Windows gradle snapshots, jetbrains-gradle lease held only around runs):\n- RED (HEAD + new tests + MoeJson from 3cfc3c78^, --tests SettingsPolicyCorpusTest): well-formed PASSED; render FAILED naming exactly P08 (row 9) and P09 (rows 5, 6).\n- Mutant (Commit board state ON/OFF swapped in a snapshot copy, 1 replacement): AssertionError on all 10 rows at row 3; discarded.\n- Gate: checkRefs[0] verbatim at HEAD 0006fafa on the final bytes: BUILD SUCCESSFUL, JUnit total 558 (34 suites, 0 failures; 557 in round 1, before peer tests landed).\nRED and the mutant ran before a P10 note-only reword (the wrappers never read taskSizing). Notes are only checked for being non-empty.\nThe executionContract's 'P01 to P19 / only P18 and P19 fail' is superseded by the reject: the rows are now P01-P10, and RED fails P08 and P09.\nMoeSettingsDialog.kt, MoeJsonTest.kt and MoeSettingsDialogTest.kt are unchanged. The old->new id map is posted on VSC-10 (comment-38c37ff7).",
   "commits": [
@@ -269,6 +274,25 @@
       "treeId": "bcd793d0841079bcc136680ccb17728d4e83f837",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "2e63e0fd6fa44af3706d83900e8c3d11e25e3254",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T10:58:06Z",
+      "paths": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-7e7bd0ec91ca488da2858f70cff32f65.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt",
+        "moe-jetbrains/src/test/resources/client-settings-policy.json"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T11:20:01.001Z",
+      "treeId": "fc47e149397c7db974c01374d5a8fc7c4a931dc9",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -279,11 +303,11 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-13a877ad@2026-11-02T10:52:15Z",
-    "at": "2026-11-02T10:57:34.752Z"
+    "kind": "completion",
+    "sessionId": "worker-13a877ad@2026-11-02T10:58:06Z",
+    "at": "2026-11-02T11:20:01.001Z"
   },
-  "reviewCompletedAt": "2026-11-02T10:47:31.430Z",
+  "reviewCompletedAt": "2026-11-02T11:33:00.498Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -326,5 +350,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-11-02T11:33:00.498Z",
+  "reviewSummary": "VSC-5 round 2 approved at completion 2e63e0fd (pushed; on moe/work-2026-10-24 and origin). Size: 357 net (+366/-9, git diff --numstat 3cfc3c78^ 2e63e0fd on the 3 owned paths: corpus 175, test 148, MoeJson +43/-9), under 400, so the round-1 size reject is fixed. MoeJson.kt is byte-identical to 3cfc3c78. MoeSettingsDialog.kt, MoeJsonTest.kt, MoeSettingsDialogTest.kt and MoeCommandSender.kt are unchanged.\nDoD1: version 1, P01-P10 unique. My node merge proof against the 19-row corpus: each expect line comes from the one merged old row that differs at that line, settings are key-disjoint unions, there are no new strings, P07-P09 equal old P17-P19 and P10 is all defaults. Every description case is covered.\nDoD2: replay goes through MoeJson.parseState (null stays null), compares the exact PolicyRow order with a per-row catch, and reports all failing ids at once.\nDoD3 + QA mutants (focused runs, archive of 2e63e0fd, lease held):\n- board-state ON/OFF swap failed P01-P10;\n- pre-fix MoeJson (3cfc3c78^) failed only P08 and P09;\n- strict-string reverts failed P09;\n- positiveInt accepting \"9\", truncating 7.5 or accepting 0 failed P08;\n- string attribution and array taskSizing failed P10;\n- two corpus typos failed well-formedness.\nDoD4: re-ran task.verification verbatim at HEAD d2a55eb5: exit 0, BUILD SUCCESSFUL in 54s, JUnit total 564 (35 suites, 0 fail/error/skip; the +6 over 558 is VSC-22's tests).\nDoD5: the 2 new files plus MoeJson.kt. The bugs are pinned by P08 (taskSizing) and P09 (qualityGate/consolidationBranch). No forbidden patterns.\nNote (non-blocking): the 4 default-true booleans flip only together (P03), so a cross-wired Auto-commit read of checkpointCommits survives; the corpus cannot catch that in VS Code. Ponytail: the MAX_VALUE check in getPositiveIntOrNull duplicates intValueExact. net: -1 lines possible.",
+  "requiredCheckAtDone": null
 }
