@@ -25,7 +25,7 @@ Deep-dive material trimmed out of `worker.md`. Read this on demand; it is not lo
 | Before `complete_task` | `regression-check` | Run the broader suite; capture counts in your summary |
 | Before `complete_task` | `verification-before-completion` | No completion claim without fresh verification evidence |
 | Reopened (`reopenCount > 0`) | `receiving-code-review` | Verify each `rejectionDetails` item against the diff before fixing |
-| Human-directed only | `using-git-worktrees` | Only when a human explicitly asks for a worktree. The post-flight commits from the project root only — edits inside `.worktrees/` are invisible to it and you must merge them back by hand |
+| Human-directed only | `using-git-worktrees` | Only when a human explicitly asks for a worktree. The post-flight lands only the project root (shared mode) or your task worktree (worktree mode) — edits in any other `.worktrees/` checkout are invisible to it and you must merge them back by hand. Never name one `task-*`: those are the wrapper's task worktrees |
 
 ## Rail Proposals (escape hatch)
 
@@ -63,7 +63,9 @@ Include `dependsOn` only when the fix must land after your task; otherwise omit 
 
 ## Commits, checkpoints and rescue refs
 
-You never run `git commit` for a task. The wrapper lands your work after the CLI exits — on **every** exit, not only on success:
+You never run `git commit` for a task. The wrapper lands your work after the CLI exits — on **every** exit, not only on success. Where the work lands depends on `get_context.workspace.mode`, `shared` (the default) or `worktree`.
+
+**Shared mode:**
 
 | Exit | What lands | Where |
 |---|---|---|
@@ -73,9 +75,19 @@ You never run `git commit` for a task. The wrapper lands your work after the CLI
 
 What gets staged is decided per path, never `git add -A`: **ASSERTED** (every completed step's `modifiedFiles`, `moe.declare_files`, paths you already landed) is committed no matter what; **PLANNED** (the plan's `affectedFiles`/`newFiles` you did not report) only if it changed since your session's baseline; **TOOL** (files your Edit/Write tool calls touched — claude only) always; **MEASURED** (undeclared, changed) only when no other worker is live. A peer's declared path, a path that was already dirty before your task, and anything under `.moe/` (except your own task record), `.mcp.json`, `.codex/`, `.gemini/`, `.grok/`, `.claude/agents/`, `.worktrees/` are skipped with a `[skip] <path> MOE_ATTR_*` line. Undeclared edits with peers active are reported as `MOE_ATTRIBUTION_UNRESOLVED` and never staged — the next session sees them in `get_context.unattributedPaths` with a `moe.declare_files` hint.
 
+**Worktree mode:** on a WORKING claim while `settings.worktreeMode` is `'on'`, the wrapper starts your CLI in `.worktrees/<taskId>` on branch `moe/task/<taskId>`, cut from the target (the literal `consolidationBranch`, else `main`). `MOE_WORKTREE_PATH`, `MOE_TASK_BRANCH` and `MOE_LAND_TARGET` name the three. `MOE_PROJECT_PATH` still names the control checkout, so build no write path from it. Later sessions of the task reuse the worktree. Dirt a crashed session left there is committed to the task branch before your CLI starts (`MOE_CHECKPOINT_RECOVERED`).
+
+| Exit | What lands | Where |
+|---|---|---|
+| Task reached REVIEW (or DONE) | your worktree's dirty paths are committed to `moe/task/<taskId>`, then the branch's net change lands as ONE squash completion commit, `feat(task-<id>): <title>` (or `fix(…)`) | the target. Without a git remote, by a compare-and-swap ref update; with one, by a non-forced push to origin's target |
+| Any other exit | `wip(task-<id>): …` checkpoint, pushed per `checkpointPush` | `moe/task/<taskId>` only; the target and the control checkout never move |
+| A completion that cannot reach the target (for example a conflict with it, or the target moving under every round) | nothing lands on the target; your bytes stay on `moe/task/<taskId>`, and a failed round also parks a rescue ref | the rescue ref sits at that branch's tip |
+
+There is no baseline and no tier: every dirty path in the worktree lands, untracked ones included (gitignored files never show), so keep scratch files out. DENY still holds: the paths listed above, with no exception for your task record (a worktree has no `.moe/`), plus `.claude/skills/**`. An edit written into the control checkout is never landed or reverted. Post-flight reports it once as `MOE_WORKTREE_STRAY_EDIT`, in a task comment naming the paths, and a human decides. If you pass `currentBranch` to `moe.complete_task`, it must be `moe/task/<taskId>`; otherwise the call fails with `BRANCH-POLICY-FAIL:`.
+
 Practical rules:
 
-- `modifiedFiles` on every `complete_step` is the whole game. Omitting it draws a `warning`, and with another worker registered an unreported, non-tool-written edit does not land.
+- In shared mode, `modifiedFiles` on every `complete_step` is the whole game. Omitting it draws a `warning`, and with another worker registered an unreported, non-tool-written edit does not land.
 - The shared checkout is dirty by design. `[attribution] <K> pre-session dirty path(s) untouched` is informational; never revert, stash or commit those paths, and never stop because of them — note them in your step note and continue.
 - A prerequisite has landed iff `get_context.epicSiblings[*].landed` is true (or `git log <branch> --grep 'Moe-Task: <sibling>'` finds it) — and its evidence (`verification { command, exitCode }`, `reviewSummary`, `completionSummary`) rides on the same `epicSiblings` entry, so read what it delivered from the board, never via HEAD greps. Your task's `dependsOn` targets appear there too, regardless of order. Uncommitted files in a peer's checkout are not a prerequisite; always pass `blockedOnTaskIds` explicitly on `report_blocked` (only the real blocker ids, or `[]` for no task dependencies): the list wins, so informational ids in `reason` (for example, a separately filed bug) are not parsed. Only omission enables legacy reason parsing. Repeats preserve stored ids and union the selected new ids; `[]` does not clear an earlier hold. `suppliedBlockedOnTaskIds` / `parsedBlockedOnTaskIds` report unique input candidates before filtering, not the recorded `blockedOnTaskIds` wait. The daemon auto-unblocks the task the moment its recorded dependencies are all DONE/ARCHIVED. A non-resource block you report on your own task frees your seat (worker → IDLE, `seatFreed: true`) and answers with no `nextAction`: it carries `sessionHandoff { action: "END_SESSION" }` plus a `blockResolution` saying how the block clears. End the turn so the wrapper checkpoints the task it launched you on; never call `moe.claim_next_task` or `moe.wait_for_task` in that session (a new turn is not a new preflight). Your next task comes from a fresh wrapper preflight: a one-shot seat is relaunched, and an interactive TUI hands control back to its operator. If every selected dependency is ALREADY DONE/ARCHIVED the task is not blocked at all (`dependenciesSatisfied:true`, `nextAction` → `get_context`): read their evidence from `epicSiblings` and continue — re-file only if something else blocks you, with an explicit list of only the real task dependencies (`[]` for a non-task blocker). An id that already waits on your task (a dependency cycle) is dropped with a `DEPENDENCY_CYCLE` warning — page the architect, one side needs a re-plan. Resource blocks (`resourceId`) keep the seat parked — the grant path returns the task to you by design.
 - Banners you may see in `#general`: `PUSH-BLOCKED:` (gate failed or status lookup failed — your bytes are in a rescue ref / `status=UNKNOWN` checkpoint; on a gate failure the loop stopped), `PUSH FAILED … do not review until pushed` (committed locally only), `CHECKPOINT-UNPUSHED task=<id>` (checkpoint local only), `MOE_RESCUE_REF task=<id> ref=… reason=…`. Refusals: `MOE_COMMIT_REFUSED_NO_OWNED_PATHS` (nothing attributable — declare paths), `MOE_COMMIT_REFUSED_OWNED_PATH_MISSING` (asserted paths gone from disk and HEAD), `MOE_COMMIT_NOTHING_TO_COMMIT` (already in HEAD; harmless).
