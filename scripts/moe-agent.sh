@@ -3048,6 +3048,44 @@ worktree_stop() {
     exit 1
 }
 
+# enable_worktree_config -- before W's first sparse-checkout, make sure the common
+# config has extensions.worktreeConfig=true (task-c7ca56e6). Otherwise git's
+# sparse-checkout sets it itself under the shared .git/config.lock, and of two seats
+# provisioning at once one fails with `could not lock config file`. Once it is set,
+# sparse-checkout writes only W's own config.worktree. No write when it is already
+# true. A common config with core.worktree or core.bare=true keeps git's own upgrade
+# (init_worktree_config moves those two into config.worktree; a plain write would
+# not). Only a lock collision is retried, 5 attempts, and another seat's write counts
+# as success. Any other failure returns 1 with MOE_WT_CONFIG_ERR set. The gate arm's
+# and the hooked scratch's sparse-checkouts need no call: this worker pre-flight runs
+# first in the same repository. Call it from the main shell. Twin: Enable-MoeWorktreeConfig.
+enable_worktree_config() {
+    local n=1 out
+    MOE_WT_CONFIG_ERR=""
+    if git -C "$MOE_TOP" config --local --get core.worktree > /dev/null 2>&1 \
+        || [ "$(git -C "$MOE_TOP" config --local --get --type=bool core.bare 2>/dev/null)" = true ]; then
+        return 0
+    fi
+    while :; do
+        [ "$(git -C "$MOE_TOP" config --local --get --type=bool extensions.worktreeConfig 2>/dev/null)" = true ] && return 0
+        [ "$n" -le 5 ] || break
+        # LC_ALL=C: git's message stays matchable under any locale (its exit code, 255, is generic).
+        out=$(LC_ALL=C git -C "$MOE_TOP" config --local extensions.worktreeConfig true 2>&1) && return 0
+        case "$out" in
+            # Only EEXIST is a collision; any other errno (EACCES, ...) refuses at once.
+            *'could not lock config file'*': File exists'*) ;;
+            *) MOE_WT_CONFIG_ERR="git config extensions.worktreeConfig true failed: ${out##*$'\n'}"; return 1 ;;
+        esac
+        if [ "$n" -lt 5 ]; then
+            echo -e "${BLUE}[info]${NC} MOE_WORKTREE_CONFIG_RETRY attempt=$n/5: .git/config is locked by another git process"
+            sleep "0.$(( RANDOM % 5 + 2 ))"
+        fi
+        n=$((n + 1))
+    done
+    MOE_WT_CONFIG_ERR="git config extensions.worktreeConfig true failed 5 times: .git/config stayed locked by another git process"
+    return 1
+}
+
 # provision_worktree -- worker pre-flight, design §1.1-§1.6. The fresh claim's
 # workspace (WT-01), else get_context's (WT-02), names the mode; none is shared.
 # Shared mode refuses only an unlanded moe/task/<id> branch and touches nothing
@@ -3057,7 +3095,7 @@ worktree_stop() {
 # the shared checkout. It never deletes a branch, W/.moe, or a W it did not add
 # in this session. Sets MOE_WT_MODE/PATH/BRANCH/TARGET. Twin: Initialize-MoeWorktree.
 provision_worktree() {
-    local tid="$PREFLIGHT_TASK_ID" parsed mode target foreign ver head w branch base found raw ref out verb longest sha fref
+    local tid="$PREFLIGHT_TASK_ID" parsed mode target foreign ver head w branch base found raw ref out verb longest sha fref fail
     local added=false finish=false
     local -a rows=()
     # The claim and context travel on stdin: one env string is capped at 128 KiB.
@@ -3186,13 +3224,19 @@ sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
             || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree add failed: ${out##*$'\n'}"
     fi
     if [ "$added" = true ] || [ "$finish" = true ]; then
+        fail=""
+        if ! enable_worktree_config; then
+            fail="$MOE_WT_CONFIG_ERR"
         # MSYS would rewrite '/*' into a Windows path under Git Bash.
-        if ! out=$(MSYS2_ARG_CONV_EXCL='*' git -C "$w" sparse-checkout set --no-cone '/*' '!/.moe/' 2>&1) \
+        elif ! out=$(MSYS2_ARG_CONV_EXCL='*' git -C "$w" sparse-checkout set --no-cone '/*' '!/.moe/' 2>&1) \
             || ! out=$(git -C "$w" read-tree -mu HEAD 2>&1); then
+            fail="git sparse-checkout or read-tree failed in $w: ${out##*$'\n'}"
+        fi
+        if [ -n "$fail" ]; then
             if [ "$added" = true ] && [ "$(git -C "$MOE_TOP" rev-list --count "$base..refs/heads/$branch" 2>/dev/null)" = 0 ]; then
                 git -C "$MOE_TOP" worktree remove --force --force "$w" > /dev/null 2>&1 || true
             fi
-            worktree_stop MOE_WORKTREE_CREATE_FAILED "git sparse-checkout or read-tree failed in $w: ${out##*$'\n'}"
+            worktree_stop MOE_WORKTREE_CREATE_FAILED "$fail"
         fi
     fi
     if [ -e "$w/.moe" ] || [ -L "$w/.moe" ]; then

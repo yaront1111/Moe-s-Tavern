@@ -3027,6 +3027,49 @@ function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {
     }
 }
 
+# Before W's first sparse-checkout, make sure the common config has
+# extensions.worktreeConfig=true (task-c7ca56e6). Otherwise git's sparse-checkout
+# sets it itself under the shared .git/config.lock, and of two seats provisioning at
+# once one fails with `could not lock config file`. Once it is set, sparse-checkout
+# writes only W's own config.worktree. No write when it is already true. A common
+# config with core.worktree or core.bare=true keeps git's own upgrade
+# (init_worktree_config moves those two into config.worktree; a plain write would
+# not). Only a lock collision is retried, 5 attempts, and another seat's write counts
+# as success. Returns '' on success, else the refusal detail. The gate arm's and the
+# hooked scratch's sparse-checkouts need no call: this worker pre-flight runs first
+# in the same repository. Twin: enable_worktree_config.
+function Enable-MoeWorktreeConfig([string]$Top) {
+    $first = { param($r) "$(@($r.Out) | Select-Object -First 1)".Trim() }
+    if ((Invoke-MoeGit -Top $Top -GitArgs @('config', '--local', '--get', 'core.worktree')).Rc -eq 0 -or
+        (& $first (Invoke-MoeGit -Top $Top -GitArgs @('config', '--local', '--get', '--type=bool', 'core.bare'))) -ceq 'true') {
+        return ''
+    }
+    $n = 1
+    while ($true) {
+        if ((& $first (Invoke-MoeGit -Top $Top -GitArgs @('config', '--local', '--get', '--type=bool', 'extensions.worktreeConfig'))) -ceq 'true') { return '' }
+        if ($n -gt 5) { break }
+        # LC_ALL=C: git's message stays matchable under any locale (its exit code, 255, is generic).
+        $lc = $env:LC_ALL
+        try {
+            $env:LC_ALL = 'C'
+            $r = Invoke-MoeGit -Top $Top -GitArgs @('config', '--local', 'extensions.worktreeConfig', 'true') -MergeStderr
+        } finally {
+            if ($null -ne $lc) { $env:LC_ALL = $lc } else { Remove-Item Env:\LC_ALL -ErrorAction SilentlyContinue }
+        }
+        if ($r.Rc -eq 0) { return '' }
+        # Only EEXIST is a collision; any other errno (EACCES, ...) refuses at once.
+        if (($r.Out -join "`n") -cnotmatch 'could not lock config file.*: File exists') {
+            return "git config extensions.worktreeConfig true failed: $(@($r.Out) | Select-Object -Last 1)"
+        }
+        if ($n -lt 5) {
+            Write-Host "[info] MOE_WORKTREE_CONFIG_RETRY attempt=$n/5: .git/config is locked by another git process" -ForegroundColor Cyan
+            Start-Sleep -Milliseconds (Get-Random -Minimum 200 -Maximum 601)
+        }
+        $n++
+    }
+    return 'git config extensions.worktreeConfig true failed 5 times: .git/config stayed locked by another git process'
+}
+
 # Reuse, re-add or create the locked sparse worktree $W on $Branch, cut from the
 # target (origin's in remote mode), then refuse a W holding .moe. It never deletes
 # a branch, W/.moe, or a W it did not add in this session. Sets
@@ -3088,14 +3131,18 @@ function Install-MoeTaskWorktree([string]$Top, [string]$W, [string]$Branch, [str
         if ($r.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git worktree add failed: $(& $last $r)" }
     }
     if ($added -or $finish) {
-        $r = Invoke-MoeGit -Top $W -GitArgs @('sparse-checkout', 'set', '--no-cone', '/*', '!/.moe/') -MergeStderr
-        if ($r.Rc -eq 0) { $r = Invoke-MoeGit -Top $W -GitArgs @('read-tree', '-mu', 'HEAD') -MergeStderr }
-        if ($r.Rc -ne 0) {
+        $fail = Enable-MoeWorktreeConfig $Top
+        if (-not $fail) {
+            $r = Invoke-MoeGit -Top $W -GitArgs @('sparse-checkout', 'set', '--no-cone', '/*', '!/.moe/') -MergeStderr
+            if ($r.Rc -eq 0) { $r = Invoke-MoeGit -Top $W -GitArgs @('read-tree', '-mu', 'HEAD') -MergeStderr }
+            if ($r.Rc -ne 0) { $fail = "git sparse-checkout or read-tree failed in ${W}: $(& $last $r)" }
+        }
+        if ($fail) {
             if ($added) {
                 $ahead = Invoke-MoeGit -Top $Top -GitArgs @('rev-list', '--count', "$base..refs/heads/$Branch")
                 if ($ahead.Rc -eq 0 -and "$(@($ahead.Out) | Select-Object -First 1)".Trim() -ceq '0') { $null = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'remove', '--force', '--force', $W) }
             }
-            Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git sparse-checkout or read-tree failed in ${W}: $(& $last $r)"
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' $fail
         }
     }
     $dotMoe = Join-Path $W '.moe'

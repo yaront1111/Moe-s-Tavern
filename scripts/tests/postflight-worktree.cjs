@@ -120,12 +120,23 @@ function commitOn(p,ref,files,base='HEAD'){
 // PATH-first git stub: WT_GIT_VERSION answers a version probe at any argv position,
 // WT_GIT_FAIL fails any call with that argv element, the first fetch moves WT_GIT_SWAP over
 // WT_GIT_SWAP_TO, and the first call with the argv element WT_GIT_HOLD writes WT_GIT_HOLD_FILE,
-// then waits (at most 120s) for <WT_GIT_HOLD_FILE>.sent before it runs; the rest runs the real git. sh
+// then waits (at most 120s) for <WT_GIT_HOLD_FILE>.sent before it runs. While the count in the file
+// WT_GIT_CONFIG_LOCK is above 0, a config write of extensions.worktreeConfig (no --get) takes one and fails
+// as git's config-lock collision does. The rest runs the real git. sh
 // engines find `git`; PowerShell finds git.ps1 (a .cmd would mangle `%` in --format).
 function stub(){
   const dir=path.join(root,'git-stub');
   if(present(dir))return dir;
   write(path.join(dir,'git'),`#!/bin/sh
+if [ -n "$WT_GIT_CONFIG_LOCK" ]; then
+  c=; k=; g=
+  for a in "$@"; do case "$a" in config) c=c ;; extensions.worktreeConfig) k=k ;; --get) g=g ;; esac; done
+  n=$(cat "$WT_GIT_CONFIG_LOCK" 2>/dev/null)
+  case "$c$k$g:$n" in
+    ck:[1-9]*) w=$WT_GIT_CONFIG_LOCK_WHY; [ -n "$w" ] || w='File exists'
+      echo $((n - 1)) > "$WT_GIT_CONFIG_LOCK"; echo "error: could not lock config file .git/config: $w" >&2; exit 255 ;;
+  esac
+fi
 for a in "$@"; do
   if [ -n "$WT_GIT_VERSION" ] && { [ "$a" = --version ] || [ "$a" = version ]; }; then echo "git version $WT_GIT_VERSION"; exit 0; fi
   if [ -n "$WT_GIT_FAIL" ] && [ "$a" = "$WT_GIT_FAIL" ]; then echo "fatal: wt stub fails $a" >&2; exit 1; fi
@@ -144,7 +155,19 @@ exec "${realGit.replace(/\\/g,'/')}" "$@"
   const real=`'${realGit.replace(/'/g,"''")}'`;
   // No [CmdletBinding()]: -C must bind as a plain arg. Piped input (hash-object
   // --stdin-paths) is forwarded; exit carries git's code to $LASTEXITCODE.
+  // The collision goes through Write-Error: the wrapper's 2>&1 captures the error stream of an in-process script,
+  // never a [Console]::Error line.
   write(path.join(dir,'git.ps1'),`$ErrorActionPreference = 'Continue'
+if ($env:WT_GIT_CONFIG_LOCK -and $args -ccontains 'config' -and $args -ccontains 'extensions.worktreeConfig' -and $args -cnotcontains '--get') {
+  $n = 0
+  if ([int]::TryParse([IO.File]::ReadAllText($env:WT_GIT_CONFIG_LOCK).Trim(), [ref]$n) -and $n -gt 0) {
+    $why = 'File exists'
+    if ($env:WT_GIT_CONFIG_LOCK_WHY) { $why = $env:WT_GIT_CONFIG_LOCK_WHY }
+    [IO.File]::WriteAllText($env:WT_GIT_CONFIG_LOCK, [string]($n - 1))
+    Write-Error "error: could not lock config file .git/config: $why"
+    exit 255
+  }
+}
 foreach ($a in $args) {
   if ($env:WT_GIT_VERSION -and ($a -ceq '--version' -or $a -ceq 'version')) { "git version $env:WT_GIT_VERSION"; exit 0 }
   if ($env:WT_GIT_FAIL -and $a -ceq $env:WT_GIT_FAIL) { [Console]::Error.WriteLine("fatal: wt stub fails $a"); exit 1 }
@@ -243,7 +266,7 @@ async function launch(p,run,knobs={},opts={}){
     HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),TMPDIR:wrapperTmp,TMP:wrapperTmp,TEMP:wrapperTmp,
     FAKE_TASK_STATUS:'WORKING',FAKE_CLAIM_WORKSPACE:p.ws(),MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:opts.wrapper?null:'1',...knobs};
   for(const k of Object.keys(env))if(env[k]==null)delete env[k];
-  if(env.WT_GIT_VERSION||env.WT_GIT_FAIL||env.WT_GIT_SWAP||env.WT_GIT_HOLD){
+  if(env.WT_GIT_VERSION||env.WT_GIT_FAIL||env.WT_GIT_SWAP||env.WT_GIT_HOLD||env.WT_GIT_CONFIG_LOCK){
     env[pathKey]=stub()+path.delimiter+(inherited[pathKey]||'');
     if(!win)env.BASH_ENV=path.join(stub(),'env.sh');
   }
@@ -386,6 +409,58 @@ async function sharedLanded(){
   assert.ok(same(serenaOf(win?rec.mcpConfig.replace(/^﻿/,''):cfgText(path.join(p.dir,'.mcp.json'))),p.dir),'shared mode no longer roots Serena at the project');
   controlSame(p,before);
   assert.equal(r.code,0,`exit code ${r.code}`+tail(r.log));
+}
+
+// task-c7ca56e6: before W's first sparse-checkout the seat sets extensions.worktreeConfig in the common
+// config itself, retrying only a config-lock collision (5 attempts), so two seats provisioning at once never
+// race on .git/config.lock. WT_GIT_CONFIG_LOCK=<count file> forces that many collisions.
+const RETRY=/^\[info\] MOE_WORKTREE_CONFIG_RETRY attempt=[1-4]\/5: \.git\/config is locked by another git process\r?$/gm;
+const retries=log=>(log.match(RETRY)||[]).length;
+const extOn=p=>probe(p.top,'config','--local','--get','extensions.worktreeConfig');
+const lockCount=(p,n)=>{const f=path.join(root,p.name+'.config-lock');write(f,String(n));return f;};
+const unprovisioned=(p,before)=>{controlSame(p,before);assert.ok(!entry(p),'W is registered');assert.ok(!present(p.W),'W exists');};
+async function wtConfigLock(){
+  const p=repo('wt-config-lock'),before=control(p.top),f=lockCount(p,1);
+  if(extOn(p)!=='1:')throw new Error('fixture: the extension is already set');
+  const r=await launch(p,'wt-config-lock',{WT_GIT_CONFIG_LOCK:f});
+  provisioned(p,r,'created',before,revOf(p.top,'refs/heads/main'));
+  assert.equal(retries(r.log),1,'expected exactly one MOE_WORKTREE_CONFIG_RETRY line'+tail(r.log));
+  assert.equal(read(f).trim(),'0','the forced collision was never hit');
+  assert.equal(extOn(p),'0:true\n','extensions.worktreeConfig is not true in the common config');
+  assert.deepEqual(git(p.W,'sparse-checkout','list').trim().split(/\r?\n/),['/*','!/.moe/'],"W's sparse patterns");
+}
+async function wtConfigLockExhausted(){
+  const p=repo('wt-config-lock-exhausted'),before=control(p.top),f=lockCount(p,99);
+  const r=await launch(p,'wt-config-lock-exhausted',{WT_GIT_CONFIG_LOCK:f});
+  refused(r,'MOE_WORKTREE_CREATE_FAILED');
+  assert.match(r.blocked[0].args.reason,/^MOE_WORKTREE_CREATE_FAILED: git config extensions\.worktreeConfig true failed 5 times: \.git\/config stayed locked/,'the refusal reason');
+  assert.equal(retries(r.log),4,'expected 4 MOE_WORKTREE_CONFIG_RETRY lines (5 attempts)'+tail(r.log));
+  assert.equal(read(f).trim(),'94','expected exactly 5 config writes');
+  assert.equal(extOn(p),'1:','the extension was set anyway');
+  unprovisioned(p,before);
+}
+// Any other failure, a config-lock one with another errno (EACCES) included, refuses at once with git's own line.
+async function wtConfigOther(){
+  for(const [name,why] of [['wt-config-other',null],['wt-config-eacces','Permission denied']]){
+    const p=repo(name),before=control(p.top),f=lockCount(p,99);
+    const r=await launch(p,name,why?{WT_GIT_CONFIG_LOCK:f,WT_GIT_CONFIG_LOCK_WHY:why}:{WT_GIT_FAIL:'extensions.worktreeConfig'});
+    try{
+      refused(r,'MOE_WORKTREE_CREATE_FAILED');
+      assert.match(r.blocked[0].args.reason,/^MOE_WORKTREE_CREATE_FAILED: git config extensions\.worktreeConfig true failed: /,'the refusal reason');
+      assert.equal(retries(r.log),0,'a failure other than a config-lock collision was retried'+tail(r.log));
+      if(why)assert.deepEqual([read(f).trim(),r.blocked[0].args.reason.endsWith(': '+why)],['98',true],"expected one config write, refused with git's own line");
+      unprovisioned(p,before);
+    }catch(e){e.message=`${name}: ${e.message}`;throw e;}
+  }
+}
+// Already true: no config write at all (one would take a forced collision), so .git/config stays byte-identical.
+async function wtConfigPreset(){
+  const p=repo('wt-config-preset');git(p.top,'config','extensions.worktreeConfig','true');
+  const cfg=path.join(p.top,'.git','config'),bytes=fs.readFileSync(cfg),before=control(p.top),f=lockCount(p,99);
+  const r=await launch(p,'wt-config-preset',{WT_GIT_CONFIG_LOCK:f});
+  provisioned(p,r,'created',before,revOf(p.top,'refs/heads/main'));
+  assert.equal(retries(r.log)+'/'+read(f).trim(),'0/99','a config write was attempted'+tail(r.log));
+  assert.ok(fs.readFileSync(cfg).equals(bytes),'.git/config changed');
 }
 
 // WT-05 (design §5.1-§5.2): in worktree mode every CLI runs against W, with W's own
@@ -1356,7 +1431,8 @@ function codes(){
 }
 
 const cases={lifecycle,resume,'half-made':halfMade,
-  ...Object.fromEntries(refusals.map(c=>[c[0],()=>refusal(...c)])),'shared-landed':sharedLanded};
+  ...Object.fromEntries(refusals.map(c=>[c[0],()=>refusal(...c)])),'shared-landed':sharedLanded,
+  'wt-config-lock':wtConfigLock,'wt-config-lock-exhausted':wtConfigLockExhausted,'wt-config-other':wtConfigOther,'wt-config-preset':wtConfigPreset};
 for(const t of ['claude','codex','gemini','grok'])cases['launch-'+t]=()=>launchAs(t);
 Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link-partial':linkPartial,'project-yml':projectYml,'serena-outside':serenaOutside,
   'wt-checkpoint':wtCheckpoint,'wt-deny':wtDeny,'wt-recover':wtRecover,'wt-recover-moe':wtRecoverMoe,'wt-control-seats':wtControlSeats,
