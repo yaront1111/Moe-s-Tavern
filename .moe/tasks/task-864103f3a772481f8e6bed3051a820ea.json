@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:52:29.881Z",
-  "updatedAt": "2026-11-02T19:13:53.713Z",
+  "updatedAt": "2026-11-02T19:28:38.663Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:53:48.921Z",
@@ -109,11 +109,14 @@
     "firstClaimAt": "2026-11-02T18:06:32.142Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T19:27:38.246Z",
+    "wallClockMs": 4866104
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-b49a5155"
+    "worker-b49a5155",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -230,15 +233,20 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b49a5155@2026-11-02T18:20:15Z",
-    "at": "2026-11-02T18:32:57.506Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-02T19:17:30Z",
+    "at": "2026-11-02T19:28:38.663Z"
   },
   "blockedFromStatus": null,
   "blockedAt": null,
   "blockedReason": null,
   "priorBlockedReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion 30d483e9 has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode.",
   "blockedResourceId": null,
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-02T19:27:38.246Z",
+  "reviewCompletedAt": "2026-11-02T19:27:38.246Z",
+  "reviewSummary": "Reviewed landed completion 30d483e9 (pushed). Own diff: build.gradle.kts only, +112/-10 (net 102). All runs were in my snapshot D:\\moe-scratch\\q864\\r (git archive 30d483e9, Windows npm ci + build, both rc 0), under the jetbrains-gradle lease (released).\nBEFORE (parent build file): buildPlugin rc 0, zip 64,546,287 bytes.\nGATE `prepareSandbox --rerun buildPlugin --rerun test --rerun`: rc 0, all 3 executed. 36 fresh TEST-*.xml: 574 tests, 0 failures, 0 errors, 0 skipped. AFTER zip 4,742,186 bytes.\nDoD1: own comparator vs the lockfiles.\n- daemon: 31 = 31 prod, nested pino-pretty/node_modules/sonic-boom included; missing [], 0 dev, no file outside a prod dir.\n- proxy: 1 = 1 (ws).\n- typescript/vitest/tsx/@types lines: 0, down from 1424.\nDoD2 N1: rc 1. Names 'typescript' :1, 'tsx' :3, 'vitest' :4 (daemon) and 'vitest' :1 (proxy). node:module and .test.js not reported. Extras: multi-line '@types/node' reported at its specifier line; a CRLF file's line is right; Array.from and bare 'fs' are not flagged.\nDoD3: N2 missing, N3 '{', N4 lockfileVersion 1: each rc 1, a GradleException naming the lockfile. N5 missing nested sonic-boom: rc 1, names it. No failing run produced a zip, so there is no whole-tree fallback. Inputs restored, sha256 OK.\nDoD4: `node <unzip>/moe-jetbrains/daemon/index.js doctor --project <empty>` (path per the architect's comment) gave rc 1 at '[FAIL] .moe/ presence', 0 MODULE_NOT_FOUND. pino, pino-pretty, chokidar and ws import from the unzipped tree.\nDoD5: the 807 listing lines outside node_modules are identical.\nRail note: no JUnit/TestKit test. The approved invariant limits the change to this one file. The guard runs on every CI buildPlugin, with N1-N5 as evidence.\nNon-blocking: the static-import regex is line-anchored and misses minified mid-line imports, which tsc never emits. nodeBuiltins needs upkeep when Node adds a builtin.",
+  "requiredCheckAtDone": null
 }

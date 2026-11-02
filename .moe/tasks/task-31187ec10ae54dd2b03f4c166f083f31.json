@@ -11,11 +11,12 @@
     {
       "stepId": "step-1",
       "description": "Tests first (RED). Two shared fixtures that other WT rows also extend, so edit ADD-ONLY: with the new knob value unset, every fake answer stays byte-identical, and every existing suite case, helper and launch() default stays unchanged.\n\n(a) scripts/tests/postflight-fake-proxy.js, get_context handler. Beside the existing `if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }` (it only covers calls with a taskId, after the adoption-probe branch), add the value 'error': write the JSON-RPC error line `{jsonrpc:'2.0',id:req.id||1,error:{code:-32603,message:'fixture: get_context failed'}}` + '\\n', then break. This is how moe-proxy answers when the daemon is down, restarting or times out. sh moe_rpc and ps1 Invoke-MoeRpc turn it into an empty / $null context, as they do a transport failure. 'empty' is NOT that path: it is a successful '{}'. Add one line for it to the handler's comment block: `'error' => the read fails (a JSON-RPC error)`.\n\n(b) scripts/tests/postflight-worktree.cjs: four new cases, each with a one-line comment in the suite's terse style naming what it proves (task-31187ec1). Use the existing helpers: repo, launch, refused, provisioned, refusal table, controlSame, entry, revOf, readOr, present.\n 1. 'resume-unread' (shape 1: no branch, no W).\n    - Setup: p=repo('resume-unread',{task:'task-resume'}); before=control(p.top).\n    - For each fail of ['error','empty','mismatch']: r=await launch(p,'resume-unread-'+fail,{FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null,FAKE_GET_CONTEXT_FAIL:fail}).\n    - Then: refused(r,'MOE_WORKTREE_CONTEXT_FAILED','task-resume'); controlSame(p,before); W absent and unregistered; revOf(p.top,p.branch)===null.\n    - Prefix each message with fail.\n 2. 'resume-dirty' (shape 2, comment-c800e6b9).\n    - Setup: p=repo('resume-dirty',{task:'task-resume'}), before, main=revOf(p.top,'refs/heads/main').\n    - Run 1 provisions W by a normal resume: provisioned(p, await launch(p,'resume-dirty-add',{FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null,FAKE_CTX_WORKSPACE:p.ws()}),'created',before,main).\n    - Make W dirty, uncommitted: write W/dirt.txt and change W/src/a.txt.\n    - Fixture check, throwing Error: `git rev-list --count HEAD..refs/heads/moe/task/task-resume` is '0'. That proves the branch counts as landed, so today's shared-mode refusal would not fire.\n    - Run 2: launch(p,'resume-dirty-unread',{FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null,FAKE_GET_CONTEXT_FAIL:'error'}).\n    - Then: refused(..,'task-resume'); entry(p) is still registered and locked 'moe task-resume'; both dirt files are byte-identical; the branch tip is still main; controlSame(p,before).\n 3. 'resume-shared-unread' (epic rail 4).\n    - Setup: p=repo('resume-shared-unread',{task:'task-resume'}); git(p.top,'switch','-q','-c','moe/work-2026-10-24'); take before=control(p.top) after the switch.\n    - Run: the same resume knobs with FAKE_GET_CONTEXT_FAIL:'error'.\n    - Then assert exactly what sharedLanded asserts: the CLI ran, 0 report_blocked, no 'MOE_WORKTREE_' in the log, no W, controlSame, exit 0.\n 4. 'ctx-unread', a new row in the `refusals` table (a fresh claim with the default worktree workspace): ['ctx-unread','MOE_WORKTREE_CONTEXT_FAILED',()=>({FAKE_GET_CONTEXT_FAIL:'error'}),()=>p=>assert.equal(revOf(p.top,p.branch),null,'a task branch was created')].\n\n(c) RED proof, outside the checkout. Never put a scratch file under scripts/tests/.\n    - Setup: S=$(mktemp -d /mnt/d/moe-scratch/red-31187ec1.XXXXXX) || exit 1; git archive HEAD scripts | tar -x -C \"$S\"; copy only the two edited test files into $S.\n    - Run: MOE_WORKTREE_ONLY=resume-unread,resume-dirty,resume-shared-unread,ctx-unread node \"$S/scripts/tests/postflight-worktree.cjs\" sh \"$S/scripts/moe-agent.sh\" \"$S/scripts/tests/postflight-fake-proxy.js\" \"$S\" \"$(command -v bash)\".\n    - Expected with HEAD's wrapper: resume-unread, resume-dirty and ctx-unread FAILED (the CLI ran, no report_blocked); resume-shared-unread ok.\n    - Put the lines in the step note. If resume-shared-unread fails at HEAD, the fixture is wrong: fix the test, never the expectation.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js",
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-02T19:27:07.869Z"
     },
     {
       "stepId": "step-2",
@@ -58,7 +59,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-c9368191",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -106,7 +107,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:51:26.149Z",
-  "updatedAt": "2026-11-02T19:15:39.307Z",
+  "updatedAt": "2026-11-02T19:27:07.869Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T19:53:26.719Z",
@@ -119,7 +120,8 @@
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "architect-4ff0711c"
+    "architect-4ff0711c",
+    "worker-c9368191"
   ],
   "commits": [
     {
@@ -250,5 +252,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T20:52:50.195Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T19:27:07.869Z"
 }

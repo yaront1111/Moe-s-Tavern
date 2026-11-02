@@ -13,19 +13,26 @@
     {
       "stepId": "step-1",
       "description": "Tests first using mem:gotcha-powershell-path-comparison-culture. In scripts/tests/daemon-json-cap.test.mjs turn only this task's launcher WSL-share todos into normal assertions (keep legitimate unavailable-engine skips, but require native Windows evidence). Extend WSL_SHARES with both host aliases and mixed ASCII case, share root/trailing separator, mixed separators, preserved POSIX case/Unicode, dot/parent collapse including a remainder beginning //, /mnt/d mapping and uppercase /MNT nonmapping. Add negative near-host/missing-distro rows proving generic UNC remains generic; keys must also match both built JS dists. Reuse existing childKeys/pythonKeys/powershellKeys and health/preflight fixtures instead of another harness. Add real identity cases where WSL UNC own path and POSIX served path are same, both share-host spellings are same, and case-distinct POSIX remainders are foreign; assert request count and unchanged daemon.json on refusal. Set UTF-8 output explicitly in generated PS key scripts for Unicode rows and preserve existing fixtures' BOM.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/daemon-json-cap.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "note": "Removed WSL todos; added 17 share keys, 7 negative host/missing-distro keys, and 6 real preflight identities per engine with GET count and metadata preservation. PS key fixture explicitly outputs UTF-8 and retains BOM. RED: Linux focused 3 pass/4 assertion failures; native Windows PS5.1+PS7 focused 6 pass/8 assertion failures, all missing WSL normalization. Existing cap/identity assertions untouched. Kept malformed UNC-with-empty-share-and-tail out of this scope (Python ntpath already differs from JS); filed follow-up bug separately. Work is in daemon-assigned worktree; no shared dist or manual landing.",
+      "startedAt": "2026-11-02T19:26:02.197Z",
+      "completedAt": "2026-11-02T19:27:49.602Z"
     },
     {
       "stepId": "step-2",
       "description": "Implement the minimal WSL-share branch in moe-agent.sh probe_daemon_health's comparable() and ps1 Get-MoeComparableProjectPath. After recognizing a Windows-form path and converting backslashes to slashes, match exactly //wsl$/<nonempty distro> or //wsl.localhost/<nonempty distro> with optional remainder; match host ASCII case only (Python re.IGNORECASE|re.ASCII, PS case-sensitive regex with explicit ASCII case pairs or equivalent). Extract remainder, default '/', discard distro, then use existing POSIX collapse and /mnt rules without lowercasing the POSIX tail. In Python force the extracted remainder to a SINGLE leading slash before posixpath.normpath so // remainder doesn't retain POSIX double-slash unlike JS. In PS reset the Windows/UNC classification before existing root/segment handling. Nonmatching drive/generic UNC/POSIX paths keep their current behavior; keep .Equals segment checks and final Ordinal identity equality. Error handling remains existing bounded unknown/foreign paths; no extra IO, no DNS/realpath, no native canonicalization of served values, no daemon deletion/start behavior changes. Maintain wrapper BOM, syntax and grouped-loop/reload fences.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-02T19:27:49.646Z"
     },
     {
       "stepId": "step-3",
@@ -62,7 +69,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-fdb2af60",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -92,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:16:46.649Z",
-  "updatedAt": "2026-11-02T19:15:39.445Z",
+  "updatedAt": "2026-11-02T19:27:49.646Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:18:25.856Z",
@@ -101,16 +108,21 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:58:37.998Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-eb7de546"
+    "architect-eb7de546",
+    "architect-24611a0a",
+    "worker-fdb2af60"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:01:04.508Z",
   "planningNotes": {
@@ -131,5 +143,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T14:01:04.532Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T19:26:02.197Z"
 }

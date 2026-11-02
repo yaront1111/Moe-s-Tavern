@@ -11,11 +11,12 @@
     {
       "stepId": "step-1",
       "description": "TEST FIRST, sh twin + shared knob (RED before any wrapper edit).\n(a) scripts/tests/postflight-fake-proxy.js, `case 'deregister_worker'`: add knob FAKE_RELOAD_RACE_SRC / FAKE_RELOAD_RACE_DST, documented at the handler like the other FAKE_* knobs. When `args.reason === 'wrapper_restart'` and SRC exists, BEFORE ok(): `fs.writeFileSync(DST, fs.readFileSync(SRC))` (rewrites the existing wrapper in place, no rename), then `fs.unlinkSync(SRC)` (one-shot). The deregister is synchronous in both wrappers, so this write lands after the committed check and the parse but before the hand-over loads bytes. That is the check-to-exec window, independent of which git commands the fix runs.\nError handling: let an fs error throw. The arm asserts SRC was consumed, so a swallowed deregister failure cannot pass vacuously.\n(b) scripts/tests/postflight.sh: new arm `[hot reload race] a write after the committed check is never loaded`.\n- Placement: after the deferred/unverifiable loop, before [stale offset].\n- Reuse RELOAD_DIR/RELOAD_PROJECT/RELOAD_WRAPPER and reload_repo/reload_commit/reload_wait/reload_seq/reload_fail.\n- Setup is the same as the deferred arm, plus a private RACE_TMP=$RELOAD_DIR/tmp.\n- Before launch, a node one-liner prepares two contents. Edit A = original + '# race A\\n'. $RELOAD_DIR/race.src = edit A with the single 'Agent idle, checking for tasks in' replaced by 'MOE_TEST_RACE_LOADED from ${BASH_SOURCE[0]}, checking for tasks in'. Exit non-zero unless exactly one occurrence.\n- Launch like [hot reload], adding TMPDIR=$RACE_TMP FAKE_RELOAD_RACE_SRC=$RELOAD_DIR/race.src FAKE_RELOAD_RACE_DST=$RELOAD_WRAPPER (FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 --loop --poll-interval 1).\n\nPhase A:\n- Write edit A, reload_commit 'race A', reload_wait 1 '^c+rc{3,}$'.\n- Fail unless race.src is gone, the wrapper contains MOE_TEST_RACE_LOADED, and `reload_git diff --quiet -- moe-agent.sh` exits 1.\n- reload_fail 'the restart loaded bytes written after the committed check' if the seat output contains MOE_TEST_RACE_LOADED.\n\nPhase B:\n- reload_commit 'race write', reload_wait 2 '^c+rc+rc{3,}$'.\n- Require an output line matching 'MOE_TEST_RACE_LOADED from .*/moe-wrapper-pin\\.[^/]+/moe-agent\\.sh,' (committed bytes load, from a private copy).\n\nPhase C:\n- node renames every MOE_WRAPPER_SOURCE to MOE_WRAPPER_ORIGIN in the wrapper (fail if none).\n- reload_commit 'drop hand-over', reload_wait 3 '^c+rc+rc+rc{3,}$'.\n- Require grep -F \"MOE_TEST_RACE_LOADED from $RELOAD_WRAPPER,\" (bytes without the hand-over reload from the checkout path).\n- Require that no moe-wrapper-pin.* entry is left in RACE_TMP.\n\nKill the seat and restore LIVE_PIDS as the sibling arms do, then print '[hot reload race] ok: ...'.\nRED: S=$(mktemp -d /mnt/d/moe-scratch/red-69c02444.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\", copy in ONLY these two test files, then run the gate's postflight.sh invocation there. Expect exit 1 at this arm with that message, every earlier arm ok. Keep the log for the completion summary.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js",
         "scripts/tests/postflight.sh"
-      ]
+      ],
+      "startedAt": "2026-11-02T19:28:09.062Z"
     },
     {
       "stepId": "step-2",
@@ -108,7 +109,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T19:16:23.434Z",
+  "updatedAt": "2026-11-02T19:28:09.062Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",
@@ -201,5 +202,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T14:05:08.368Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T19:28:09.062Z"
 }
