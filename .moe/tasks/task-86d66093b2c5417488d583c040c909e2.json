@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -83,7 +83,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:23:55.817Z",
-  "updatedAt": "2026-11-02T17:51:26.242Z",
+  "updatedAt": "2026-11-02T17:55:59.803Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:24:36.395Z",
@@ -93,11 +93,14 @@
     "firstClaimAt": "2026-11-02T17:25:53.179Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T17:55:59.803Z",
+    "wallClockMs": 1806624
   },
   "contextFetchedBy": [
     "architect-d54b05fd",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -191,7 +194,50 @@
   },
   "filesModified": [
     "packages/moe-proxy/src/daemonIdentity.test.ts",
+    "packages/moe-proxy/src/daemonIdentity.ts",
+    ".moe/tasks/task-0cadb4f66d3545debd72b8991368d526.json",
+    ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json",
+    ".moe/tasks/task-75bd491034914137b043b9648dd574ec.json",
+    ".moe/tasks/task-86d66093b2c5417488d583c040c909e2.json",
+    ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json"
+  ],
+  "completionSummary": "moe-proxy's identity probe now resolves a DNS-name MOE_DAEMON_HOST once (dns.promises.lookup, injectable as probeDaemonIdentity options.lookup) and dials the IP literal, so the daemon's isAllowedHealthHost admits the Host it sends. A daemon serving another project reads 'foreign' (proxy exits 1 naming both projects) instead of the old silent 'unknown'. IP literals (after WHATWG canonicalization: 127.1, percent-encoded, ::1, [::1]) and localhost/LOCALHOST keep today's request byte for byte and never call the resolver; localhost stays a name because Node dials both address families and a ::1-first lookup would miss a daemon on 127.0.0.1. A rejected, sync-throwing, hung or late lookup resolves 'unknown' inside the single entry timeoutMs and opens no socket (request() starts with `if (done) return`; no second timer). probeDaemonIdentity still never rejects. Files: packages/moe-proxy/src/daemonIdentity.ts and daemonIdentity.test.ts only; no daemon, index.ts, utils.ts or README change.\n\nRED (tests overlaid on unchanged HEAD source in a git-archive snapshot; `npx tsc -p tsconfig.build.json && npx vitest run src/daemonIdentity.test.ts`): exit 1, 3 failed | 93 passed (96). The 3 failures are exactly the name rows, each `expected { kind: 'unknown' } to deeply equal ...` (foreign for another project, same for this one, and the bracketed-IPv6 row). All 81 existing rows pass before and after.\n\nGREEN (DoD checkRef verbatim, fresh git-archive snapshot of HEAD with only the two files overlaid): exit 0; pretest `tsc -p tsconfig.build.json && tsc --noEmit` clean; vitest 8 files passed, 331 tests passed (316 baseline + 15 new rows in describe 'probeDaemonIdentity with a host name', none skipped). The new rows use a fake /health server applying the daemon's real isAllowedHealthHost (computed-specifier import) with an injected resolver: name -> foreign/same with exactly one Host `127.0.0.1:<port>`; ::1 answer -> Host `[::1]:<port>` admitted; localhost, LOCALHOST, 127.0.0.1, 127.1, %31%3",
+  "commits": [
+    {
+      "sha": "cedcc376b862a1d13853d04aae3cfa94d753bd0c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T17:45:09Z",
+      "paths": [
+        ".moe/tasks/task-0cadb4f66d3545debd72b8991368d526.json",
+        ".moe/tasks/task-550847ba5ff545dd9fa3156732ee0733.json",
+        ".moe/tasks/task-75bd491034914137b043b9648dd574ec.json",
+        ".moe/tasks/task-86d66093b2c5417488d583c040c909e2.json",
+        ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+        "packages/moe-proxy/src/daemonIdentity.test.ts",
+        "packages/moe-proxy/src/daemonIdentity.ts"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T17:52:18.428Z",
+      "treeId": "ca520c8bedbbddb09dc23eba9d15770e3363f7d0",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-proxy/src/daemonIdentity.test.ts",
     "packages/moe-proxy/src/daemonIdentity.ts"
   ],
-  "completionSummary": "moe-proxy's identity probe now resolves a DNS-name MOE_DAEMON_HOST once (dns.promises.lookup, injectable as probeDaemonIdentity options.lookup) and dials the IP literal, so the daemon's isAllowedHealthHost admits the Host it sends. A daemon serving another project reads 'foreign' (proxy exits 1 naming both projects) instead of the old silent 'unknown'. IP literals (after WHATWG canonicalization: 127.1, percent-encoded, ::1, [::1]) and localhost/LOCALHOST keep today's request byte for byte and never call the resolver; localhost stays a name because Node dials both address families and a ::1-first lookup would miss a daemon on 127.0.0.1. A rejected, sync-throwing, hung or late lookup resolves 'unknown' inside the single entry timeoutMs and opens no socket (request() starts with `if (done) return`; no second timer). probeDaemonIdentity still never rejects. Files: packages/moe-proxy/src/daemonIdentity.ts and daemonIdentity.test.ts only; no daemon, index.ts, utils.ts or README change.\n\nRED (tests overlaid on unchanged HEAD source in a git-archive snapshot; `npx tsc -p tsconfig.build.json && npx vitest run src/daemonIdentity.test.ts`): exit 1, 3 failed | 93 passed (96). The 3 failures are exactly the name rows, each `expected { kind: 'unknown' } to deeply equal ...` (foreign for another project, same for this one, and the bracketed-IPv6 row). All 81 existing rows pass before and after.\n\nGREEN (DoD checkRef verbatim, fresh git-archive snapshot of HEAD with only the two files overlaid): exit 0; pretest `tsc -p tsconfig.build.json && tsc --noEmit` clean; vitest 8 files passed, 331 tests passed (316 baseline + 15 new rows in describe 'probeDaemonIdentity with a host name', none skipped). The new rows use a fake /health server applying the daemon's real isAllowedHealthHost (computed-specifier import) with an injected resolver: name -> foreign/same with exactly one Host `127.0.0.1:<port>`; ::1 answer -> Host `[::1]:<port>` admitted; localhost, LOCALHOST, 127.0.0.1, 127.1, %31%3"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T17:45:09Z",
+    "at": "2026-11-02T17:52:18.428Z"
+  },
+  "completedAt": "2026-11-02T17:55:59.803Z",
+  "reviewCompletedAt": "2026-11-02T17:55:59.803Z",
+  "reviewSummary": "Approved. Reviewed completion cedcc376 (on moe/work-2026-10-24, pushed; HEAD; both source files identical to HEAD). Non-board diff: daemonIdentity.ts +32/-7, daemonIdentity.test.ts +109/-1 (net ~133 LOC, under the cap); rest is board JSON. No forbidden-pattern strings in added lines.\n\nRe-ran the DoD checkRef in a fresh git-archive snapshot (/tmp/tmp.bX6gORzxYt), overlaid files cmp-identical to HEAD: npm ci in moe-daemon and moe-proxy, then npm test (pretest tsc build + tsc --noEmit clean). Exit 0, 8 files, 331 tests passed (316 baseline + 15 new, none skipped). Nothing built or tested in the shared checkout.\n\nRED re-derived: with cedcc376^ source and the new tests, exactly 3 rows fail (foreign, same, bracketed IPv6), each `expected { kind: 'unknown' } to deeply equal ...`; 93 pass, including all existing rows. Mutation: removing the `if (done) return` guards fails only the late-lookup row ('opens no socket when the lookup answers after the timeout').\n\nDoD: names (not IP literal, not localhost) are resolved via dns.promises.lookup().address and the literal is dialed. IP literals and localhost (127.1, percent-encoded, ::1, [::1], LOCALHOST) call request() synchronously and never reach the resolver (asserted). Failed, sync-throwing, hung and late lookups give 'unknown' within one timer and open no socket (0 connections asserted); probe never rejects. Guarded fake uses the daemon's real isAllowedHealthHost (computed-specifier import); exactly one Host `127.0.0.1:<port>` / `[::1]:<port>`. No daemon, index.ts, utils.ts or README change.\n\nAccepted residuals: multi-address name probed at the first address; zone-id link-local IPv6 reads 403 so 'unknown'; hung getaddrinfo holds a libuv thread (same as the daemon's healthProbeAddress). Launcher named-host pre-flight probes remain a lane-held follow-up (until WT-19). ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

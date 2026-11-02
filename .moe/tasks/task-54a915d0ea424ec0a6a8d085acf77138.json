@@ -1,0 +1,36 @@
+{
+  "id": "task-54a915d0ea424ec0a6a8d085acf77138",
+  "epicId": "epic-be924fb8",
+  "title": "bug: launcher pre-flight /health probes skip the foreign-project check for a named MOE_DAEMON_HOST: moe-agent.sh sends the name and gets 403, moe-agent.ps1 only ever probes 127.0.0.1",
+  "description": "post-switch: lane paths. Held in BACKLOG on the governor's ruling (msg-05a7ca6e, 2026-11-02 17:45Z): promote it after the worktree switch, when lane rows run in parallel worktrees.\n\nFiles: scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/daemon-json-cap.test.mjs. All three are lane paths. At filing, 25 open rows declared one or both launchers (scan of affectedFiles + modifiedFiles, 17:50Z). The nearest overlap is WORKING task-3def0804. It declares all three files and edits the same two probes: comparable() inside probe_daemon_health, and Get-MoeComparableProjectPath. So this row dependsOn it. It also dependsOn task-86d66093, the proxy half of this bug, so it mirrors the rule that lands there.\n\nOrigin: this is the launcher half of task-86d66093 (moe-proxy probeDaemonIdentity) and of task-f0abb6d6, which fixed the daemon CLI's own probe with healthProbeAddress in packages/moe-daemon/src/index.ts. The daemon's /health Host guard is isAllowedHealthHost in packages/moe-daemon/src/server/healthHost.ts (task-80930ce6). It admits only localhost, 127.x, ::1 and the address the connection arrived on, so any other DNS name in Host gets 403, by design.\n\nRepro, 2026-11-02 ~17:53Z. I extracted the probe_daemon_health function verbatim from scripts/moe-agent.sh and ran it against a fake /health on 127.0.1.1 that applies the daemon's real isAllowedHealthHost. The machine name resolves to 127.0.1.1 in /etc/hosts.\n- By IP (127.0.1.1): another project gives rc 3 (foreign, refused), and this project gives rc 0.\n- By the machine name: both projects give rc 1. urllib gets HTTPError 403, and the probe exits 1 for any code but 503. curl by name also gets 403.\n\nEffects in scripts/moe-agent.sh:\n1. Live-PID branch (PROBE_HOST is MOE_DAEMON_HOST, else 127.0.0.1): rc 1 is not 3, so RUNNING=true. The seat adopts another project's daemon with no MOE_DAEMON_FOREIGN_PROJECT, which turns off the stale-daemon.json guard from task-e7f4026a for every named host.\n2. Windows-daemon branch (candidates in order: MOE_DAEMON_HOST, 127.0.0.1, the WSL gateway): the named candidate always fails, so a foreign daemon at that name is never refused. The loop falls through. It then either exports the first later candidate that answers as MOE_DAEMON_HOST, replacing the operator's name, or exits 1 as not reachable from here, though the daemon answers at that name.\n\nscripts/moe-agent.ps1 (code read, not run): Get-MoeDaemonIdentity always dials 127.0.0.1 and sends Host 127.0.0.1:PORT, and its only caller passes no host. So it never sees the 403, but it never checks MOE_DAEMON_HOST either. A daemon that does not listen on 127.0.0.1 reads as unknown and is adopted. Its refusal line also hard-codes 127.0.0.1.\n\nFix direction, mirroring healthProbeAddress and task-86d66093:\n- Resolve a host that is neither an IP literal nor localhost (any case) once, take the first address in OS order, and request /health from that IP literal. The Host is then an IP literal the guard admits, bracketed for IPv6.\n- IP literals and localhost keep today's request byte for byte.\n- ps1 probes MOE_DAEMON_HOST when set, else 127.0.0.1, under the same rule, and its refusal names the probed host. The three refusal sentences stay byte-identical to sh.\n- The sh candidate loop still exports the candidate as given, never the resolved IP.\n\nError handling: a failed or hung lookup counts as unreachable (sh rc 1, ps1 unknown) inside the existing 3 s bound. Neither launcher may hang or throw while resolving.\n\nTest hint: the launchers have no resolver hook. A real name path needs a name that resolves locally. os.hostname() works if the fake listens on exactly the address it resolves to, with no test-only switch in the launchers. Skip the row, with a reason, when the name does not resolve to a local address.\n\nOut of scope: the Host guard itself (healthHost.ts stays byte-identical) and the proxy (task-86d66093). The JetBrains and VS Code probes were not checked.",
+  "definitionOfDone": [
+    "scripts/moe-agent.sh probe_daemon_health resolves a host that is neither an IP literal nor localhost (any case) once, takes the first address in OS order, and requests /health from that IP literal. The Host it sends is then an IP literal, bracketed for IPv6, that isAllowedHealthHost admits. IP-literal and localhost hosts send today's request unchanged. Both call sites, the live-PID identity check and the Windows-daemon candidate loop, get the fix through the function, and the loop still exports the candidate as given.",
+    "scripts/moe-agent.ps1's pre-flight identity probe dials MOE_DAEMON_HOST when it is set, else 127.0.0.1, under the same resolve rule. The MOE_DAEMON_FOREIGN_PROJECT refusal names the probed host and port. The three refusal sentences stay byte-identical to moe-agent.sh, and the test 'identity: both launchers carry the same MOE_DAEMON_FOREIGN_PROJECT refusal' passes.",
+    "Error handling: on both launchers, a failed lookup and a lookup that outlasts the probe's 3 s bound each read as unreachable (sh exit 1, ps1 unknown) within that bound, with no hang and no uncaught error. With MOE_DAEMON_HOST unset, or set to an IP literal or localhost, both launchers behave exactly as today.",
+    "scripts/tests/daemon-json-cap.test.mjs adds identity rows, on every engine the suite runs, where MOE_DAEMON_HOST is a DNS name that resolves to a fake /health applying the daemon's real isAllowedHealthHost. A daemon serving another project is refused with MOE_DAEMON_FOREIGN_PROJECT, and this project's daemon is adopted. RED first: the name rows fail against the unchanged launchers, and the completion evidence quotes the failing output. All existing rows pass unchanged.",
+    "Verification runs in the task's own worktree or a git-archive snapshot, never with a build in the shared checkout. Command: `node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh`, which exits 0. The evidence shows the PowerShell rows ran (not skipped) on at least one PowerShell engine."
+  ],
+  "taskRails": [
+    "Do not loosen or bypass the daemon's /health Host guard (packages/moe-daemon/src/server/healthHost.ts). The launchers dial an IP literal instead, and healthHost.ts stays byte-identical."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3def080415d3495a8557b514d6a0ab2a",
+    "task-86d66093b2c5417488d583c040c909e2"
+  ],
+  "priority": "MEDIUM",
+  "order": 335.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T17:56:19.568Z",
+  "updatedAt": "2026-11-02T17:56:19.568Z"
+}

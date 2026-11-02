@@ -111,7 +111,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T14:54:47.204Z",
-  "updatedAt": "2026-11-02T16:03:47.110Z",
+  "updatedAt": "2026-11-02T17:55:59.373Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T14:54:58.635Z",
@@ -231,7 +231,11 @@
     ".moe/tasks/task-64809b196c4042f18c7665e1e8a14b18.json",
     ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json",
     ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
-    ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json"
+    ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+    ".moe/epics/epic-dce3a64f31a44d948f771137a2c0dbed.json",
+    ".moe/tasks/task-0cadb4f66d3545debd72b8991368d526.json",
+    ".moe/tasks/task-864103f3a772481f8e6bed3051a820ea.json",
+    ".moe/tasks/task-c76a8bf8241c497ebde5437dda19f953.json"
   ],
   "completionSummary": "The moe-account-switch mod now ends its own CLI when /exit does not end the session. This is a mod-only change; there is no wrapper or daemon change.\n\nregister.ts:\n- A new export, FORCE_EXIT_DELAY_MS = 60_000.\n- A main-turn `running` flag.\n- A per-attempt `Attempt` replaces the session-long `exiting` latch.\n- exit() names its own CLI just before /exit.\n  - POSIX: a $.process.run child prints $PPID. The mod accepts only a safe integer > 1 and builds sh -c 'kill -TERM \"$1\"'.\n  - Windows (a drive-letter or UNC cwd): powershell.exe runs the plan's quote-free STOP_CLI_PS, byte-identical to the plan at 676 chars.\n- exit() then arms a 60 s fallback and runs /exit. A resolved /exit keeps the fallback armed. A refused /exit shows the manual toast, as today.\n- The fallback re-arms while a main turn runs and kills at most once. 60 s after a delivered kill it gives up with the manual toast.\n- An attempt that fails clears itself, so the next main turn.complete, aborted or not, tries again. That fixes the 15:36Z stale-pending silence.\n- Every $ call fails open to the manual toast.\n\nDocs: scripts/CLAUDE.md (the rotation bullet and the END_SESSION sentence) and docs/TROUBLESHOOTING.md (the Fix paragraph, which mentions CLI exit=143).\n\nTests: 39 new, 92 total.\n- RED in a scratch copy with HEAD's register.ts: 60 pass, 32 fail, all on assertions.\n- GREEN: 92 pass, 0 fail.\n- A mutant sweep (7 mutants) was each caught by 1 to 5 tests.\n\nOther checks:\n- `claude plugin validate`: passed, with only the pre-existing author and icon warnings. Its call list includes process.run, session.cwd and command.run.\n- tsc with moe-vscode's TS 6.0.2 (the claude-plugin TS is now 7.x native and fails on Linux): only the baseline TS5097 and TS2769 in the test file.\n\nscripts/moe-agent.sh and .ps1 are not changed by this task (they were already dirty from other sessions at pre-flight), so parity-check.sh is not owed. Only temporary CLAUDE_CONFIG_DIRs were used.\n\nDiff: +382/-26 (net 356).",
   "commits": [
@@ -301,6 +305,24 @@
       "treeId": "99f75d1e03d2b1c36a1a055e8c7291ae5c090249",
       "status": "DONE",
       "pushed": true
+    },
+    {
+      "sha": "2ae7cb709b9439d9ef269dd3f0e25b0ef672e597",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-93e0e956@2026-11-02T14:55:02Z",
+      "paths": [
+        ".moe/epics/epic-dce3a64f31a44d948f771137a2c0dbed.json",
+        ".moe/tasks/task-0cadb4f66d3545debd72b8991368d526.json",
+        ".moe/tasks/task-864103f3a772481f8e6bed3051a820ea.json",
+        ".moe/tasks/task-c76a8bf8241c497ebde5437dda19f953.json"
+      ],
+      "recordedBy": "architect-93e0e956",
+      "recordedAt": "2026-11-02T17:55:59.372Z",
+      "treeId": "2a3ed83179bff3604c19e4aec65f35f244641993",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -313,8 +335,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-1106e678@2026-11-02T15:58:13Z",
-    "at": "2026-11-02T16:03:47.109Z"
+    "sessionId": "architect-93e0e956@2026-11-02T14:55:02Z",
+    "at": "2026-11-02T17:55:59.372Z"
   },
   "completedAt": "2026-11-02T16:02:06.431Z",
   "reviewCompletedAt": "2026-11-02T16:02:06.431Z",
