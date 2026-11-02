@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -111,7 +111,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:54.745Z",
-  "updatedAt": "2026-11-02T11:19:30.623Z",
+  "updatedAt": "2026-11-02T11:30:11.137Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:20:12.809Z",
     "plannedStepCount": 5,
@@ -122,7 +122,8 @@
   },
   "contextFetchedBy": [
     "qa-564d8bce",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-1106e678"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -199,10 +200,10 @@
   "planApprovedAt": "2026-11-02T10:28:12.919Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-02T10:30:07.616Z",
-  "blockedReason": null,
+  "blockedReason": "QA round 2 (qa-1106e678). Substance is re-verified green. The row is parked from REVIEW only because size waiver prop-30f48e3461c0443a8020de80ce7db2eb (EPIC ADD_RAIL, filed 11:01Z) was still PENDING at 11:30Z and no rail waives the 400-line cap for this row yet. Size: 680 net by git diff --numstat 7df999be^ 7df999be (client-accounts.json +397, AccountsCorpusTest.kt +278, AccountPresentation.kt +7/-2), and the proposal text matches. A second size reject would only spend the reopen cap.\n\nEvidence, 11:24-11:27Z, under jetbrains-gradle (now released):\n- checkRef verbatim at HEAD d2a55eb5: BUILD SUCCESSFUL in 53s; 35 suites, 564 tests, 0 failures/errors/skips; AccountsCorpusTest 4/4, AccountPresentationTest 19/19.\n- The 3 files are cmp-identical to 7df999be and HEAD; the corpus sha256 e08b58c8...95fc equals the oracle.\n- Completion 00c1ac96 is board json only, on moe/work-2026-10-24 and origin.\n- Snapshot mutants: move-up at index 0 (DoD 4) fails exactly C04, C06, C11, C13; pre-fix isValidLabel fails exactly L08; add ignoring the connection fails C09; removeVmToken on false fails C04, C05, C07, C09, C14, C15.\n- All 6 DoD items map to evidence.\n\nNext:\n- APPROVED: set_task_status REVIEW. QA then checks the rail text, confirms no byte change since 7df999be, re-runs the checkRef and approves.\n- REJECTED: route (b) of reject #1, a review-scope split (corpus json 397 / test plus fix 283, with VSC-13 and VSC-15 depending on both); set_task_status PLANNING.\nDetail: mem:task-task-93729f32ef6f408cbd411813c5c93838-qa-handoff.",
   "blockedResourceId": null,
-  "blockedFromStatus": null,
-  "blockedAt": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-11-02T11:30:11.136Z",
   "commits": [
     {
       "sha": "7df999be7c754a07ef9cd11a88d65a9d6e5d2d57",
@@ -255,10 +256,29 @@
       "treeId": "5a32d94044861408e005362feda6128410a21755",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "00c1ac969d70ee0654bed75bfd8e8e818702fd08",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T10:58:49Z",
+      "paths": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-7e7bd0ec91ca488da2858f70cff32f65.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T11:19:56.389Z",
+      "treeId": "32dc819ba5d0ae3d171b975d2233d87b923cc91a",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
+    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+    ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+    ".moe/tasks/task-7e7bd0ec91ca488da2858f70cff32f65.json"
   ],
   "touchedFiles": [
     "moe-jetbrains/src/test/resources/client-accounts.json",
@@ -268,9 +288,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-564d8bce@2026-11-02T10:52:11Z",
-    "at": "2026-11-02T10:56:05.998Z"
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T10:58:49Z",
+    "at": "2026-11-02T11:19:56.389Z"
   },
   "blockedOnTaskIds": null,
   "reviewStartedAt": "2026-11-02T11:19:30.621Z",
