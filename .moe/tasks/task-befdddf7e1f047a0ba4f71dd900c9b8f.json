@@ -83,26 +83,29 @@
     {
       "stepId": "step-5",
       "description": "Size check, then the verification, run once, fresh. Its output tail is the complete_task evidence (DoD 5, and DoD 1-4 through both harnesses).\n\n1. Size. Run `git diff --numstat` over the five files and compute net non-board LOC. If it is over 400, file ONE EPIC ADD_RAIL size exception with moe.propose_rail, in prop-d975cf4e's format:\n   - name WT-14 (task-befdddf7e1f047a0ba4f71dd900c9b8f), the five files, the measured +/- and the cap you request;\n   - state that it waives size only: every DoD item, the epic rails, substantive QA and fresh verification still apply.\n   Do it NOW, before the long harness runs, so the governor (standing delegation, msg-aac7c9c0) can approve it while they run.\n\n2. Verification. From the repo root in WSL, exactly:\nS=$(mktemp -d /mnt/d/moe-scratch/v-befdddf7.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') bash scripts/tests/worktree-landing.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell\n\nNotes on the command:\n- The snapshot keeps peers' unlanded bytes out of the run.\n- MOE_* and CLAUDE* are scrubbed so this seat's identity never reaches the wrappers under test.\n- The ps1 harness runs through Windows node from a /mnt/d path (Serena gotcha-qa-ps1-postflight-from-wsl). On a native Windows seat, run the same chain from Git Bash with `node` for node.exe.\n- Each harness run takes tens of minutes. Run it in the foreground, or poll a background run to the end.\n\nWhen a run fails:\n- Fix it only inside steps 1-4's files, and never weaken an assertion.\n- A failure that also reproduces on a clean HEAD snapshot is pre-existing: report it with that evidence.\n- Name every SKIP (WT14D as root) in the summary.\n- If any byte changes after this run, re-run the whole command and submit the last output.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-02T21:43:47.378Z"
+      "note": "Step 5 was read-only: no repo bytes changed. All five files are cmp-identical to the verified snapshot. Any MODIFIED-FILES-OMITTED fallback lists only this task's own five files.\n\n1. Size. git diff --numstat d08b62d1^ over the five files is +1539/-43 (1496 net):\n   - scripts/moe-agent.sh +440/-26\n   - scripts/moe-agent.ps1 +445/-17\n   - scripts/tests/postflight.sh +312/-0\n   - scripts/tests/postflight.ps1 +328/-0\n   - scripts/tests/postflight-fake-proxy.js +14/-0\n   That is over the 400 cap, so before the long runs I filed one EPIC ADD_RAIL size exception in prop-d975cf4e's format: prop-6812056da5e142f48194d673f33fb038 (PENDING). It asks for a cap of 1550 net and waives size only.\n\n2. Verification. I ran the plan's command verbatim from the worktree root, detached, with a log and an exit marker, and polled it to the end. 21:45:13Z → 23:04:42Z, VERIFY_EXIT=0.\n   - Snapshot /mnt/d/moe-scratch/v-befdddf7.8Xg30v.\n   - The token-set diff printed nothing.\n   - PASS parity-check.sh.\n   - bash: {\"exit\":0, \"failureClass\":\"NONE\"}, about 31 min.\n   - worktree-landing: 18 passed, 0 failed, 0 errors.\n   - powershell: {\"exit\":0, \"failureClass\":\"NONE\"}, about 39 min.\n   - postflight-safe.mjs turns any line starting with SKIP into SKIP_DETECTED, which would fail the run. Both engines report NONE, so no scenario skipped, WT14D included (this seat is not root).",
+      "startedAt": "2026-11-02T21:43:47.378Z",
+      "completedAt": "2026-11-02T23:05:31.862Z"
     },
     {
       "stepId": "step-6",
       "description": "Final adversarial self-review, once, over this task's diff. Load adversarial-self-review and attack it:\n1. Can ANY path delete outside W? Check:\n   - a manifest line with '..', an absolute path or a drive letter;\n   - a parent junction;\n   - W or .worktrees itself being a link;\n   - a link not in the manifest (WT-06 reserves every link before making it; confirm that still holds);\n   - git's own recursion on Windows after the unlinks.\n2. Can an unlanded commit or non-DENY dirty byte be deleted without a rescue ref that resolves to it? Check:\n   - rescue_ref's 'nothing to rescue' return being read as success;\n   - a ref-name collision in the same second (`<ts>` then `<ts>-$$`);\n   - an unknown task whose record_commit fails.\n3. Concurrency. Check:\n   - two seats breaking the same stale lock;\n   - the QA removal racing the sweep (both take the lock);\n   - a human reopening a DONE task mid-sweep (the attempt re-check);\n   - a worker provisioning the same TID: `branch -D` refuses a checked-out branch.\n4. Rail 4: with control off moe/control, does either entry point run a git command or print anything? Do existing postflight and worktree-landing scenarios still pass byte-for-byte (the fake knob only touches view:'status')?\n5. Error handling and fail-closed behaviour:\n   - an RPC failure, an unparsable attempt record, a failed porcelain read and a failed stamp write each abort, never delete;\n   - TASK_NOT_FOUND is the ONLY unknown signal;\n   - set -e safety of each new sh line;\n   - PS 5.1 parsing, -LiteralPath and the finally releases.\n6. Twins: identical codes, banners and env name; the token diff is empty; parity-check passes.\n7. Do any test helpers leak junctions, chmod/icacls denies or locks into scratch cleanup?\nIf any byte changes, re-run step 5's command and submit that last fresh output.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "startedAt": "2026-11-02T23:08:44.729Z"
     }
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": "worker-33f67e5b",
+  "assignedWorkerId": "worker-fdb2af60",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -143,7 +146,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-11-02T21:43:47.378Z",
+  "updatedAt": "2026-11-02T23:08:44.729Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",
@@ -153,11 +156,12 @@
     "firstClaimAt": "2026-10-30T13:50:04.185Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-899a90d6",
-    "worker-33f67e5b"
+    "worker-33f67e5b",
+    "worker-fdb2af60"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -167,7 +171,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:05:31.742Z",
@@ -232,18 +237,37 @@
       "treeId": "5991cffd1e0a4926d7361553d621d2e2ec401ac8",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "3cd1e08abf16a0da01a8d81b8ffff3b366aafc35",
+      "ref": "refs/heads/moe/task/task-befdddf7e1f047a0ba4f71dd900c9b8f",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-02T20:45:03Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-02T23:06:40.667Z",
+      "treeId": "22b56d4ee76566eb4c670ef911e8a7e22dd54e21",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/moe-agent.sh",
     "scripts/tests/postflight-fake-proxy.js",
-    "scripts/tests/postflight.sh"
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.ps1"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-33f67e5b@2026-11-02T19:16:18Z",
-    "at": "2026-11-02T20:44:18.154Z"
+    "sessionId": "worker-33f67e5b@2026-11-02T20:45:03Z",
+    "at": "2026-11-02T23:06:40.667Z"
   }
 }

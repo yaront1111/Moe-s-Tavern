@@ -1,0 +1,31 @@
+{
+  "id": "task-7faede1885454b3dae8e7921d4bbc7d8",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: JetBrains protected reads open .moe/project.json and .moe/daemon.json with no regular-file guard; also vm-control resolution and a restart check-then-act",
+  "description": "Found by CQ-RF07 (task-f3f364a6), the epic-final adversarial review (findings 7, 8 and 9). None is a protected-profile bypass: each one fails closed or is defence in depth. Evidence at 28df02f7, under moe-jetbrains/src/main/kotlin/com/moe:\n\n1. **No regular-file guard on two reads (DoS, fails closed).**\n   - `RuntimeSelectionPolicy.declaresVerifiedLocal` (util, 187-202) checks only `notExists(NOFOLLOW_LINKS)`, then `Files.newInputStream(file)`. That follows links and accepts any file type.\n   - `MoeDaemonSupervisor.parseDaemonInfo` (68-81) calls `file.inputStream()` with no type check.\n   - A committed symlink `.moe/project.json -> /dev/stdin`, or a link to a FIFO, blocks the reading thread. That thread is the profile() caller (133, 163), or daemon discovery (85, 98, 131, 278).\n   - VS Code already guards both reads (readDaemonJsonText and its project.json read).\n   - Fix: refuse anything that is not a regular file reached without a link (`Files.isRegularFile(p, NOFOLLOW_LINKS)`, then open with NOFOLLOW_LINKS). For project.json, refuse as UntrustedSetting, which reads protected. For daemon.json, return null.\n2. **vm-control is not resolved as an installed artifact (defence in depth).** `toolwindow/ManagedVmPanel.kt:114` resolves scripts/local-runner/vm-control.mjs through `TerminalAgentLauncher.resolveBundledPath` (the installed plugin dir). It does not go through `RuntimeSelectionPolicy.installedArtifact` (417), so the protected base, link and project checks that the daemon/proxy selection applies are not run.\n3. **Check-then-act in ensureDaemonRunning (robustness).** `MoeDaemonSupervisor.ensureDaemonRunning` (106-107) reads `windowsRestartInFlight` and `unresolvedWindowsTree` before it claims `replacementInFlight`. A restart that starts between the check and the spawn can overlap a start. Today the later survivor/unresolved-tree refusals catch it.\n\nFiles: util/RuntimeSelectionPolicy.kt, services/MoeDaemonSupervisor.kt, toolwindow/ManagedVmPanel.kt, plus their tests under moe-jetbrains/src/test.",
+  "definitionOfDone": [
+    "declaresVerifiedLocal and parseDaemonInfo refuse a symlink, FIFO, directory or device without reading it. project.json then reads as untrusted (protected) and daemon.json as absent. A JUnit row pins each case on POSIX: a symlink to a FIFO returns at once, without blocking.",
+    "ManagedVmPanel resolves vm-control.mjs through RuntimeSelectionPolicy.installedArtifact (or the row documents why the installed plugin path is already sufficient).",
+    "ensureDaemonRunning cannot start a daemon while a Windows restart is in flight. The restart flag and the start claim are taken atomically, or a test shows the existing refusal covers the overlap.",
+    "LEGACY behaviour is unchanged; `gradlew.bat test --rerun` exits 0 under the jetbrains-gradle lease."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 322.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T23:06:02.725Z",
+  "updatedAt": "2026-11-02T23:06:02.725Z"
+}

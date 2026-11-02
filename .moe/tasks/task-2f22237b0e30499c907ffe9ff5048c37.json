@@ -21,10 +21,17 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 316.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-eb0524a43d0f46c491fba9c1fcc99108",
+      "author": "worker-c9368191",
+      "content": "Planner input from CQ-RF07 (task-f3f364a6), epic-final review, finding 6 (LOW, Windows ps1, same class as this row).\n\n`Find-MoeProtectedFile` (scripts/moe-agent.ps1 ~499-523) skips in-project PATH entries by comparing `Get-MoeRealPath` strings (`$real.Equals($project)` or the `\"$real$sep\".StartsWith(\"$project$sep\")` check at ~518). It compares spellings, not file identity, so the same folder reached through an 8.3 short name, a `subst` drive or a `\\\\?\\`/UNC spelling slips past the containment check, and a node.exe there would be pinned. The JetBrains side matches by file identity (task-9a1da6f6).\n\nThis needs the user's own PATH to carry such an alias of the project, which is why it is LOW. Fold an identity compare (volume serial plus file index, as the plugin does), or an explicit refusal of 8.3/subst/UNC entries, into this row's Windows fix, with a postflight.ps1 row.",
+      "timestamp": "2026-11-02T23:06:15.965Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:23.628Z",
-  "updatedAt": "2026-11-02T22:26:12.756Z",
+  "updatedAt": "2026-11-02T23:06:15.965Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:12.756Z",

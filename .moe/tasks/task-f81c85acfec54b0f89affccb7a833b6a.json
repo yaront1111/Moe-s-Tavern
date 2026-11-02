@@ -1,0 +1,29 @@
+{
+  "id": "task-f81c85acfec54b0f89affccb7a833b6a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a wrapper hot reload releases the seat's held task, so an idle peer claims it in the ~2 s before the re-exec'd seat re-registers and a mid-step row changes hands",
+  "description": "Observed 2026-11-02 by governor-e6b40560.\n\nWhat happened:\n- 23:07:16Z: worker-33f67e5b's wrapper hot-reloaded (deregister reason wrapper_restart) and released WT-14 (task-befdddf7). Steps 1-4 were COMPLETED, and step 5's long verification had been IN_PROGRESS since 21:43:47Z.\n- 23:07:18Z: worker-fdb2af60, an idle Codex seat, claimed it. The re-exec'd worker-33f67e5b came back IDLE.\n- The new seat restarts step 5 from scratch (about an hour) without the first seat's context.\n- 21:48:29Z, same day: worker-2dc72348's reload released 4fdc7590 (steps 1-3 done), and the seat claimed the higher-priority 475e8844 instead. 4fdc7590 sat unowned until the governor raised its priority.\n- Of 9+ reloads that day, 2 stranded the row and 1 handed it to a peer. Worktree mode raised the cadence: every landing that changes moe-agent.{sh,ps1} reloads every seat at its next loop top (follow_control_checkout, then the hash check).\n\nCode:\n- scripts/moe-agent.sh ~8824-8842 (the hot-reload block) deregisters with reason wrapper_restart, then `exec`s. Its comment says it on purpose: \"any held task is released for it (or a peer) to re-claim\".\n- The ps1 in-process supervisor reload is the twin.\n- On the daemon side, deregister releases the seat's tasks (the 🔌 \"released 1 task\" line), and the claim path treats the row as claimable at once.\n- A wrapper-only \"re-claim by taskId after exec\" does not close the gap: the peer won the race inside the 2 s window, before the re-exec'd seat's first claim.\n\nWanted:\n- A reload keeps the seat's task. Between the reload's deregister and the re-exec'd wrapper's first claim, no other seat may claim it, and that first claim gets the same task back (alreadyAssigned / resume).\n- If the re-exec'd seat never comes back within a bounded window, the task becomes claimable exactly as today, so a reload that dies strands nothing. Name the window and its setting.\n- Both launchers keep parity: sh `exec` and the ps1 in-process supervisor.\n- This changes what the fleet may claim, so the governor surfaces the plan to the human before it is approved.\n\nLikely files: the daemon deregister/claim path (state/workerLifecycle.ts or tools/deregisterWorker.ts, plus claimNextTask.ts) and its tests; scripts/moe-agent.sh and scripts/moe-agent.ps1 (the reload block passes the hold or reason); a postflight arm; scripts/CLAUDE.md's Hot reload bullet; docs/MCP_SERVER.md (deregister_worker).",
+  "definitionOfDone": [
+    "A daemon test: a seat holding a WORKING task deregisters with reason wrapper_restart; a peer's claim_next_task in the grace window does not get that task; the same workerId's next claim gets it back (alreadyAssigned or a resume of the same task).",
+    "A daemon test: when the same workerId does not re-register within the bounded grace window, the task becomes claimable by any seat exactly as today. The window and its setting are documented.",
+    "A sh and a ps1 postflight arm show a hot-reloading seat resuming its own held task, with no peer claim and no release line naming a peer.",
+    "scripts/CLAUDE.md's Hot reload bullet and docs/MCP_SERVER.md's deregister_worker section describe the hold. The existing hot-reload arms and the restart purge/reattach behavior are unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 345.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T23:08:50.369Z",
+  "updatedAt": "2026-11-02T23:08:50.369Z"
+}

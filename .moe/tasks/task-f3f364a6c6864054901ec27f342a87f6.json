@@ -47,24 +47,32 @@
     {
       "stepId": "step-3",
       "description": "VERIFY: the full regression, once and fresh, with counts. This is the epic's gate.\n\nRun each command below. Record its exit code, its counts (passed, failed, skipped) and the last lines of its output. Every one must exit 0.\n\n1. Daemon vitest. packages/moe-daemon/node_modules holds only the win32 rolldown binding, so run it in a Linux scratch copy, as the CQ-R epic's archive regression did. Never npm install or npm ci inside the shared checkout. The recipe:\n   S=<scratchpad>/rf07; rm -rf \"$S\"; mkdir -p \"$S\"; git archive HEAD | tar -x -C \"$S\"; cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\" sh -c 'npm ci && npm run build && npm test'\n   If this task changed daemon bytes, copy those files over the archive first.\n2. JetBrains. Hold the jetbrains-gradle lease (moe.acquire_resource; if it is busy, moe.report_blocked with that resourceId), run cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\", then release the lease. Take the counts from build/test-results/test/*.xml, not from the console, and label the run as Windows evidence.\n3. VS Code: cd moe-vscode && npm test && npm run compile, under the same env -i Node 24 PATH. If a Windows-only module blocks it, run the same command through cmd.exe and label it.\n4. bash scripts/tests/postflight.sh from the repo root. It takes 12 minutes or more; raise MOE_POSTFLIGHT_TIMEOUT_SEC on a busy box. If peers' in-flight script edits break it, re-run from the step-1 archive and say so.\n5. npm run lint at the repo root.\n\nAny failure: check whether it is this epic's. A failure in a file the epic never touched is reported with its output, and that file is never edited here. Fix this epic's failures in code, never by weakening an assertion.\n\nThen run `git diff --check` over the three docs. A read-only `git status --short` must show only this task's files. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nThe commands, exit codes, counts and tails together are complete_task's verification evidence.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-02T22:37:25.792Z"
+      "note": "VERIFY, all run fresh this session, all exit 0. No bytes changed in this step.\n\n1. Daemon vitest: EXIT=0. Test Files 228 passed (228); Tests 6881 passed, 20 skipped (6901); 22:48:50Z-22:49:40Z.\n   - Snapshot /tmp/rf07-gate-25oD/dm3 = git archive of my base 28df02f7, plus codexDescriptor.ts from d1e127a1 (task-8c40a8fe's landed fix of the 0863b6c6 contract drift; the diff is identical), plus my 3 docs.\n   - Run: env -i Node 24, npm ci && npm run build && npm test.\n   - Plain HEAD fails 1 test (providerDescriptor.contract, the drift that d1e127a1 fixes).\n   - Target tip d1e127a1 plus my docs also fails 1 test: heartbeatStop.test.ts \"wrapper_pin_drop: command not found\". That comes from peer commit 373dc3d4 (task-69c02444, in REVIEW, a different epic). It is already filed as task-f6d9c532, and the governor routed it to 69c02444's QA. It is not caused by this epic.\n2. JetBrains: gradlew.bat test --rerun under the jetbrains-gradle lease, Windows evidence, run on moe/control 091c7dd0.\n   - EXIT=0, BUILD SUCCESSFUL.\n   - XML: 39 files, 585 tests, 0 failures, 0 errors, 0 skipped.\n3. VS Code: npm test && npm run compile.\n   - Linux snapshot: 587 tests, 583 pass, 0 fail, 4 Windows-only skips; tsc OK.\n   - Windows via cmd.exe on a full archive: 587 tests, 582 pass, 0 fail, 5 skips; tsc OK.\n4. Postflight: PASS postflight.sh, EXIT=0, 22:38:07Z-23:03:52Z, 141 ok lines. Snapshot /tmp/rf07-gate-25oD/pf = HEAD plus docs.\n5. npm run lint: EXIT=0 (architect 39, worker 30, qa 36 lines). git diff --check over docs/ is clean.",
+      "startedAt": "2026-11-02T22:37:25.792Z",
+      "completedAt": "2026-11-02T23:04:03.762Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL REVIEW of the WHOLE CQ-RF epic diff, as the final step: RF01..RF06 commits plus this task's docs. Load adversarial-self-review. Two questions drive it: can the protected profile reach a repository-supplied runtime, and can it downgrade silently?\n\nRuntime selection, JetBrains and VS Code:\n- Can any daemon, wrapper, proxy or node selection, any stop command (RF03) or any restart path (RF04) run a project or PATH copy?\n- Can any of them inherit NODE_OPTIONS or NODE_PATH, or use the project as its working directory?\n\nDowngrade:\n- Is there any path where a legacy, observe or absent read gives LEGACY while a 'protected' record exists, or while the record is unreadable or foreign, without an explicit confirmation? Check RF02 and RF06.\n- Can a confirmation apply mid-session?\n\nStore (RF01):\n- Are owner-only checks enforced on read AND write, for both POSIX and the Windows ACL?\n- Are links and in-project roots refused?\n- Is every name a sha-256, so no path from input is ever joined?\n- Is a foreign-project record refused?\n\nProcess signalling:\n- Under PROTECTED, is no pid from daemon.json signalled except through the installed CLI's stop after an explicit confirmation, or through a captured, verified handle?\n- Can the RF03 wait run unbounded?\n- Is the old-supervisor respawn race closed (RF03/RF04)?\n\nThreading: no prompt or wait on the EDT, and no invokeAndWait while holding a lock.\n\nEvidence: no caller-minted evidence. No daemon self-report skips a human check.\n\nDocs: do they claim nothing the code does not do? Is the single-user-host assumption from RF05 stated?\n\nFor each finding:\n- a small, local defect in an epic file gets fixed here, with a test that fails without the fix; declare the file with moe.declare_files;\n- anything larger gets a moe.create_task row in this epic, with the evidence, a DoD and its files.\nList the findings and the rows in complete_task's summary. If no bypass was found, say so explicitly.\n\nIf any byte changed, re-run step 3's affected suites, and the full set for any code change, fresh, before complete_task.\n\nWould I be embarrassed if this epic shipped?",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/ARCHITECTURE.md",
         "docs/TROUBLESHOOTING.md",
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "ADVERSARIAL REVIEW of the whole CQ-RF diff (RF01..RF06 plus these docs). A review agent made a static pass at 28df02f7, and I re-verified each finding against the code myself. Verdict: NO protected-profile bypass. No repository-supplied runtime is selected, and no silent downgrade exists.\n\nMy own checks:\n- profile(): LEGACY only from an ABSENT or LEGACY pin; untrusted or unreadable reads are PROTECTED; a downgrade asks once and persists only after an IDE restart, while the in-memory pin holds for the session.\n- ProtectedStateStore: owner-only on read and write (POSIX mode or all-owner ACL); NOFOLLOW on every attribute read and open; names must match the sha-256 regex; atomic rename; usableFor refuses an in-project root.\n- RF03 waits are bounded at 20 s and 15 s. The replacement prompt is never shown on the EDT and holds no lock.\n\nFindings:\n1. CONFIRMED: the CLI stop probes /health on daemon.json's bindHost, so one click on \"Stop and Replace\" can SIGTERM any same-user pid. Filed task-d6ebe4ab (MEDIUM).\n2. CONFIRMED: a workspace .vscode/settings.json can set moe.daemon.host and port, and the fromConfig path skips daemon.json. Consolidated as comment-395844f9 on task-648a5916 (its DoD 1 covers it).\n3. The pin is per IDE system dir. Documented in ARCHITECTURE's Profile pin bullet as inherent, like a fresh machine.\n4. The wrappers do not scrub NODE_OPTIONS or NODE_PATH. Comment on task-0b2ea570.\n5. Daemon cwd is the project. gitExecutable() already neutralises git; the rest belongs to task-2f22237b's class.\n6. ps1 Find-MoeProtectedFile compares spellings. Comment on task-2f22237b.\n7, 8, 9. No regular-file guard on two reads (DoS, fails closed), vm-control is not resolved via installedArtifact, and a check-then-act in ensureDaemonRunning. Filed task-7faede18 (LOW).\n10. The Accounts CLI uses a daemon-reported path, which is the known self-report gap. No row.\n\nDoc fix: ARCHITECTURE.md now has the per-IDE-dir clause, and the VS Code parity bullet names the moe.daemon.host/port case.\n\nRe-run after the doc edit:\n- daemon suite in snapshot dm3 (28df02f7 + d1e127a1 codexDescriptor + 3 docs): 228/228 files, 6881 passed, 20 skipped, EXIT=0, 23:06:43Z-23:07:31Z\n- account-trust-docs 5/5\n- lint EXIT=0\n- git diff --check clean\n\nNo code bytes changed, so the JetBrains, VS Code and postflight runs from step-3 still stand.",
+      "startedAt": "2026-11-02T23:04:05.308Z",
+      "completedAt": "2026-11-02T23:07:58.046Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c9368191",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -131,7 +139,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-11-02T22:37:25.792Z",
+  "updatedAt": "2026-11-02T23:09:29.681Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0",
@@ -157,7 +165,7 @@
     "firstClaimAt": "2026-10-30T07:17:11.675Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -170,7 +178,9 @@
   "lowEffortEligible": true,
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T07:19:14.155Z",
@@ -211,16 +221,43 @@
       "treeId": "d1dc5f71f5ee5cc04d974f7519b376412079e49e",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "b7f0afd91b6811e0327d354d05bd203c046df50c",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-02T22:29:49Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-02T23:09:29.362Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "docs/ARCHITECTURE.md"
+    "docs/ARCHITECTURE.md",
+    "docs/TROUBLESHOOTING.md",
+    "docs/CONFIGURATION.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-c9368191@2026-11-02T22:05:53Z",
-    "at": "2026-11-02T22:29:10.572Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-c9368191@2026-11-02T22:29:49Z",
+    "at": "2026-11-02T23:09:29.681Z"
+  },
+  "reviewStartedAt": "2026-11-02T23:08:32.099Z",
+  "verification": {
+    "command": "(cd packages/moe-daemon && npm test) && cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" && (cd moe-vscode && npm test && npm run compile) && bash scripts/tests/postflight.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "Each gate below exited 0, run fresh.\n\n1. Daemon (per the GLOBAL rail, in snapshot /tmp/rf07-gate-25oD/dm3 = archive of 28df02f7 + d1e127a1 codexDescriptor.ts + the 3 docs; env -i Node 24 npm ci && npm run build && npm test):\n Test Files  228 passed (228)\n      Tests  6881 passed | 20 skipped (6901)\nEND=2026-11-02T23:07:31Z EXIT=0\n\n2. JetBrains (gradlew.bat test --rerun, jetbrains-gradle lease, Windows evidence, moe/control 091c7dd0, 22:38:43Z-22:39:20Z):\nBUILD SUCCESSFUL in 37s. build/test-results XML: 39 files, 585 tests, 0 failures, 0 errors, 0 skipped. EXIT=0\n\n3. VS Code (npm test && npm run compile):\n- Linux, env -i Node 24: tests 587, pass 583, fail 0, skipped 4 (Windows-only); tsc OK; EXIT=0\n- Windows, cmd.exe on a full archive: tests 587, pass 582, fail 0, skipped 5; tsc OK; EXIT=0\n\n4. bash scripts/tests/postflight.sh (snapshot of HEAD + docs, MOE_POSTFLIGHT_TIMEOUT_SEC=240):\n[protected runtime] ok\n[prompt overflow] ok\nPASS postflight.sh\nEND=2026-11-02T23:03:52Z EXIT=0 (141 ok lines)\n\n5. npm run lint:\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nEXIT=0\n\nAlso: scripts/tests/account-trust-docs.test.mjs 5/5, and git diff --check over docs/ is clean.",
+    "reportedAt": "2026-11-02T23:08:32.099Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-RF07 epic-final integration. Docs only, no code changed.\n\nDocs:\n- ARCHITECTURE Security Notes: JetBrains protected state (daemon provenance, profile pin, which is per IDE system dir), unverified-daemon replacement, Windows Restart Daemon, VS Code parity gaps, accepted Windows costs, and a link to the threat model with its single-user host assumption.\n- TROUBLESHOOTING: 5 protected-profile entries and 3 MOE_PROTECTED_* code rows.\n- CONFIGURATION: the location and rules of the JetBrains protected state store.\n\nGates, each exit 0:\n- Daemon: snapshot of 28df02f7, plus the landed d1e127a1 codex fix, plus the docs: 228/228 files, 6881 passed, 20 skipped.\n- JetBrains: 585 tests, 0 failures (Windows, on moe/control 091c7dd0).\n- VS Code: 587 tests, 0 fail, tsc OK (Linux and Windows).\n- Postflight: PASS.\n- Lint: OK.\n- Not from this epic: target tip d1e127a1 fails heartbeatStop.test.ts. The cause is peer commit 373dc3d4 (task-69c02444, in REVIEW), and it is filed as task-f6d9c532.\n\nAdversarial review of the whole RF01-RF06 diff: NO protected-profile bypass. No repository runtime is selected and no silent downgrade exists. Findings:\n1. The CLI stop trusts daemon.json bindHost for /health and then sends SIGTERM. Filed task-d6ebe4ab (MEDIUM).\n2. VS Code workspace moe.daemon.host/port can redirect the connection. Commented on task-648a5916.\n3. The pin is per IDE dir. Documented.\n4. The wrappers keep NODE_OPTIONS/NODE_PATH. Commented on task-0b2ea570.\n5. Daemon cwd is the project. Covered by task-2f22237b's class.\n6. ps1 path containment compares spellings. Commented on task-2f22237b.\n7-9. JetBrains reads have no regular-file guard, vm-control is resolved directly, and ensureDaemonRunning has a check-then-act. Filed task-7faede18 (LOW).\n10. The Accounts CLI is the known daemon self-report gap.\n\nRows filed earlier by this task: task-648a5916, task-98c81a27, task-2f22237b, task-0b2ea570, task-6d5d3db2, task-fb0ab382. Related known costs: task-dd545bf1, task-9a1da6f6. Related prere"
 }

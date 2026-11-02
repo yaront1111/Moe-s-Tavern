@@ -1,0 +1,30 @@
+{
+  "id": "task-d6ebe4ab5098434a998252dced6d90bc",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: the installed CLI `stop` probes /health on whatever host .moe/daemon.json `bindHost` names, so a non-loopback answer can make the protected \"Stop and Replace\" SIGTERM an arbitrary same-user pid",
+  "description": "Found by CQ-RF07 (task-f3f364a6), the epic-final adversarial review (finding 1). It is not a runtime bypass: no repository code runs. It is a repository value that is trusted for process signalling.\n\nEvidence at 28df02f7, in packages/moe-daemon/src/index.ts:\n- `isDaemonInfoShape` (147) never validates `bindHost`.\n- `probeDaemonHealth` (321-371) probes `probeHostFor(info.bindHost)`. That is any string other than 0.0.0.0, :: or wsl, and `healthProbeAddress` (304) resolves it through DNS.\n- The probe is satisfied by any host answering /health with {status: healthy, projectPath: <own project>, pid: <daemon.json pid>}.\n- `stopDaemon` (1065-1099) then runs `process.kill(info.pid, 'SIGTERM')`.\n\nScenario:\n1. A repository plants .moe/daemon.json with the pid of an unrelated user process and a `bindHost` the attacker controls.\n2. Under the protected profile, JetBrains shows **Moe: Unverified Daemon** (MoeDaemonSupervisor.confirmDaemonReplacement, 969-984). The dialog shows only the pid.\n3. One click on **Stop and Replace** runs `installedStop()` (493), and the CLI signals that pid.\n\nThe same applies to RF04's protected Restart Daemon when it reaches the installed `stop`, and to any terminal `moe-daemon stop`. The effect is one SIGTERM to a process the user owns: a DoS, and it fails closed for Moe.\n\nFix direction:\n- In stop/status, probe a non-loopback `bindHost` only when it resolves to an address of a local interface. Otherwise treat daemon.json as stale and signal nothing.\n- Optionally, the JetBrains replacement dialog also shows the process start time and command line it is about to stop.\n\nFiles: packages/moe-daemon/src/index.ts, packages/moe-daemon/src/index.test.ts (and MoeDaemonSupervisor.kt plus its test, if the dialog part is taken).",
+  "definitionOfDone": [
+    "`moe-daemon stop` (and `status`) never sends a signal on the strength of a /health answer from an address that is not loopback or a local interface. A test with a daemon.json `bindHost` that resolves off-host asserts no signal and no deletion of a live daemon's file.",
+    "Loopback, `--host wsl` and the local-interface named-host daemons still stop as before. The existing index and healthHost tests pass, and so does the full daemon suite in a snapshot.",
+    "docs/ARCHITECTURE.md or docs/TROUBLESHOOTING.md states the rule wherever the stop path is described."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 321.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T23:05:43.620Z",
+  "updatedAt": "2026-11-02T23:05:43.620Z"
+}
