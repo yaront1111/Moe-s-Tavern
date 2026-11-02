@@ -49,11 +49,12 @@
     {
       "stepId": "step-3",
       "description": "ps1 twin of step 1 (scripts/moe-agent.ps1, scripts/tests/postflight.ps1). Same contract, guard order, codes and detail text, the same `[worktree] ...` lines, and the same MOE_WORKTREE_SWEEP_INTERVAL_SEC name, so parity-check and the code diff stay equal.\n\nFunctions, placed beside the landed WT-04/WT-07 twins:\n- Lock-MoeWorktreeSweep and Unlock-MoeWorktreeSweep:\n  - [IO.Directory]::CreateDirectory for D;\n  - New-Item -ItemType Directory for the lock, in try/catch, so an existing lock is 'held';\n  - the same 7200s stale break: Remove-Item without -Recurse, then one retry.\n- Remove-MoeTaskWorktree -Top -TaskId, the engine.\n- Invoke-MoeQaWorktreeRemoval -TaskId.\n\nPS rules:\n- Every git call goes through Invoke-MoeGit, with -MergeStderr where the detail needs git's message.\n- Compare paths with the landed comparable-path normalization, then [string]::Equals(a, b, [StringComparison]::Ordinal). Use -ceq for refs and codes, and -LiteralPath everywhere.\n- PS 5.1 compatible: no `&&`, no ternary.\n- Link test: `(Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue)`, then `.Attributes -band [IO.FileAttributes]::ReparsePoint`.\n- Unlink:\n  - On Windows, `cmd /c rmdir` on the quoted path. It removes a junction or directory link and never its target. Check $LASTEXITCODE.\n  - On a non-Windows pwsh host, Remove-Item -LiteralPath -Force WITHOUT -Recurse.\n  - Then verify the path is gone.\n- The W/.moe test is WT-04's exact `$null -ne (Get-Item -LiteralPath (Join-Path $w '.moe') -Force -ErrorAction SilentlyContinue)`.\n- The lock is always released in finally.\n- Call site: after the ps1 post-flight's finalize, for qa when the final status is DONE. Wrap it in try/catch, so it can never change the landing outcome, the finalize or the loop.\n\nTests in postflight.ps1: WT14A, WT14B, WT14C, WT14D and WT14S, mirroring step 1 with one fixture builder.\n- Links are made with New-Item -ItemType Junction, or WT-06's harness helper if one landed.\n- WT14D forces the unlink failure with icacls for the current user: deny DE on the junction and DC on its parent. Remove both denies in finally, so scratch cleanup works.\n- Teardown removes the junctions with `cmd /c rmdir` before deleting scratch.\n- Bump the ps1 scenario counters.\nError handling: as in step 1. A thrown .NET exception inside the engine becomes REFUSED, never a partial delete.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-02T20:46:50.436Z"
     },
     {
       "stepId": "step-4",
@@ -126,7 +127,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-11-02T20:45:07.094Z",
+  "updatedAt": "2026-11-02T20:46:50.436Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",

@@ -27,34 +27,52 @@
     {
       "stepId": "step-2",
       "description": "ps1 twin plus its test row (scripts/moe-agent.ps1, scripts/tests/importee-guard.ps1).\n\nThe fix goes in Get-MoeToolWrittenPaths (moe-agent.ps1 ~5426). In the per-path loop, after `$tp` is computed:\n- treat `$tp -match '[\\x00-\\x1f]'` exactly like an empty $tp: print the existing `  [attribution] tool path outside the repo dropped: $p` line and `continue`, so nothing reaches $script:MoeToolWritten or the daemon's touchedPaths;\n- add the same one-line comment as the sh twin.\nKeep moe-agent.ps1's UTF-8 BOM and LF endings. Stay PS 5.1 compatible. Check that `[System.Management.Automation.Language.Parser]::ParseFile` reports no errors before saving.\n\nTest: in importee-guard.ps1, after the existing stream-parser rows and before the summary line:\n- reset $script:MoeToolWritten, MoeToolPending and MoeToolSettled as the earlier rows do;\n- set `$serenaProject = $fixtureRoot`, because the Serena branch joins against it.\nSend through Send-ReviewToolUse / Send-ReviewToolResult with $false:\n- (a) Edit with file_path \"ok.txt`nforged.txt\";\n- (b) Write with file_path (Join-Path $fixtureRoot \"a.txt`rforged.txt\");\n- (c) mcp__serena__create_text_file with relative_path \"b.py`nforged.py\".\nCapture the Write-Host output with `6>&1` and assert it contains the dropped line for each. Then `Assert-ReviewWitnessCount 'control-character-path-refused' 0`. Then send (d) a Write of (Join-Path $fixtureRoot 'plain.txt') and assert the count is 1, so the row is not vacuous.\nError handling: the check runs on a string and cannot throw; the stream loop's existing try/catch is untouched.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/importee-guard.ps1"
       ],
-      "startedAt": "2026-11-02T20:44:01.354Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/importee-guard.ps1"
+      ],
+      "note": "Get-MoeToolWrittenPaths drops a $tp with [\\x00-\\x1f] via the existing dropped line. New importee-guard.ps1 rows: 3 dropped-line, count 0, plain count 1. Test var renamed $ctrl because $case collides with the script's -Case param. BOM kept, no CR.",
+      "startedAt": "2026-11-02T20:44:01.354Z",
+      "completedAt": "2026-11-02T20:47:43.625Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification, run once and fresh from the repo root in WSL. Its output tail is the complete_task evidence:\nS=$(mktemp -d /mnt/d/moe-scratch/v-414eae5a.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/importee-guard-bash.test.mjs scripts/tests/importee-guard.ps1; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/prompt-cache-witness.test.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$PWD/scripts/tests/importee-guard.ps1\")\"\n\nWhy this command:\n- The HEAD snapshot plus the four cmp'd files keeps peers' unlanded bytes in the shared checkout out of the run.\n- prompt-cache-witness.test.mjs is included to show the codex helper (N15) is unchanged.\n- On a native Windows seat, run the same chain from Git Bash with `powershell` in place of powershell.exe and the plain path.\n\nIf pwsh is available, also run importee-guard.ps1 under it (CI runs both engines) and paste that tail. If it isn't, say so.\n\nWhen something fails:\n- Fix it inside steps 1-2's files, never by weakening an assertion.\n- A failure that also reproduces on a clean HEAD snapshot is pre-existing: report it with that evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh snapshot chain: parity PASS, node 73/73, powershell.exe 5.1 53 passed/0 failed, pwsh 7 53/0, CHAIN_EXIT=0.",
+      "startedAt": "2026-11-02T20:47:44.490Z",
+      "completedAt": "2026-11-02T20:47:48.808Z"
     },
     {
       "stepId": "step-4",
       "description": "Final adversarial self-review, once, over this task's diff. Load adversarial-self-review and check:\n1. Can a control character still reach a witness line? Try:\n   - '\\t' and '\\x1f' inside the path;\n   - a path that is only control characters after strip;\n   - an absolute path whose control character sits right after the top prefix;\n   - a Serena summary path from replace_in_files (serena_changed output flows through the same to_top_rel).\n2. Is any LEGIT path now refused? Non-ASCII Unicode, spaces and '#' must still be witnessed. Only U+0000-U+001F is refused, exactly the codex helper's set, not DEL or C1.\n3. The twins refuse on the same remainder (the post-top TOP-relative path) and keep their existing message texts. parity-check passes.\n4. Hot-reload safety: moe-agent.sh was saved by an atomic mv after bash -n, and the ps1 keeps its BOM and LF.\n5. Scope: no other behaviour changed. In particular, the absolute-path '..'/blank tightening the codex helper also has is NOT ported. That is out of this DoD; note it in the summary rather than fixing it.\nIf any byte changes, re-run step 3's command and submit that last output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/importee-guard-bash.test.mjs",
         "scripts/tests/importee-guard.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/importee-guard-bash.test.mjs",
+        "scripts/tests/importee-guard.ps1"
+      ],
+      "note": "Self-review: \\t and \\x1f refused, plain Unicode/space/# kept, DEL and C1 kept (same set as the codex helper), both absolute and relative branches checked, Serena summary paths flow through to_top_rel. Messages unchanged, no bytes changed since the verified run. Not ported: the codex helper's absolute '..'/blank tightening (out of this DoD).",
+      "startedAt": "2026-11-02T20:47:49.707Z",
+      "completedAt": "2026-11-02T20:47:56.506Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d6c1cb7a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -85,7 +103,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:47:12.742Z",
-  "updatedAt": "2026-11-02T20:44:01.355Z",
+  "updatedAt": "2026-11-02T20:48:11.905Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:48.545Z",
@@ -99,7 +117,7 @@
     "firstClaimAt": "2026-10-30T14:05:58.701Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-899a90d6",
@@ -111,7 +129,10 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:09:10.934Z",
@@ -168,5 +189,20 @@
     "at": "2026-11-02T19:40:10.816Z"
   },
   "priorBlockedReason": "Editing-safety rail conflict before source changes: approved step-1 requires writing the whole moe-agent.sh to same-filesystem scratch, bash -n, then one atomic mv-f (never in-place). Global custom rail prohibits shell writes/cp/mv into the tree, allowing only main Edit/Write or Serena editor. Available Codex tools offer apply_patch (in-place), shell and Serena, but no atomic Edit/Write. Verified installed Serena replace_in_files -> EditedFileContext -> code_editor.py:92 open(abs_path,'w'); create_text_file uses Path.write_text, so neither satisfies required atomic save. No source files changed and no verification run. Handoff and gotcha-serena-wrapper-atomic-save recorded.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "reviewStartedAt": "2026-11-02T20:48:11.903Z",
+  "verification": {
+    "command": "S=$(mktemp -d /mnt/d/moe-scratch/v-414eae5a.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/importee-guard-bash.test.mjs scripts/tests/importee-guard.ps1; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/prompt-cache-witness.test.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$PWD/scripts/tests/importee-guard.ps1\")\"",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nℹ tests 73 / pass 73 / fail 0\nimportee-guard.ps1: 53 passed, 0 failed (powershell.exe 5.1)\nCHAIN_EXIT=0; pwsh.exe 7: importee-guard.ps1: 53 passed, 0 failed",
+    "reportedAt": "2026-11-02T20:48:11.903Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/importee-guard-bash.test.mjs",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/importee-guard.ps1"
+  ],
+  "completionSummary": "The sh STREAM_JSON_PARSER and the ps1 Get-MoeToolWrittenPaths now refuse a harvested tool path whose TOP-relative remainder has a control character (U+0000-U+001F), the same set as the codex helper's toTopRel. sh: to_top_rel returns None, so harvest prints the existing 'not harvested' WARN and appends nothing. ps1: the existing 'dropped' line, no witness. Edits were made in place with Edit (governor ruling comment-4908ce55). Tests: a new importee-guard-bash.test.mjs row covers Edit, absolute Write and Serena create_text_file; the tools file holds only plain.txt, with a WARN per refused raw path. New importee-guard.ps1 rows cover the same three: a dropped line each, 0 witnesses, and a plain path still records 1. Verified on a fresh snapshot: bash -n OK, parity-check PASS, node 73/73 (importee-guard-bash plus prompt-cache-witness), importee-guard.ps1 53/0 under powershell.exe 5.1 and pwsh 7. The ps1 keeps its BOM and LF. Not ported (out of DoD): the codex helper's absolute-path '..'/blank tightening."
 }

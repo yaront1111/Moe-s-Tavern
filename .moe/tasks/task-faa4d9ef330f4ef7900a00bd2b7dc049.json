@@ -13,10 +13,11 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST: the regression arm for DoD 1-3. Load test-driven-development.\n\nThis row sits at the tail of the wrapper lane (dependsOn 69c02444), so the rows ahead of it will have reworked scripts/moe-agent.sh. Locate every site in this plan by its text, never by line number.\n\nNew arm in scripts/tests/postflight.sh, '[idle wait killed]', ending with '[idle wait killed] ok'. Do not edit any pre-existing arm (DoD 3).\n- Fixture, modelled on the '[hot reload]' arm: its own project under $TMP_DIR, with .moe/project.json (autoCommit false), .moe/messages/chan-general.jsonl and a .moe/daemon.json. moe-call.sh refuses to deregister without daemon.json; the fake proxy never reads it.\n- Launch an idle looping seat: PATH=\"$TMP_DIR:$PATH\" HOME=\"$HOME_DIR\" MOE_PROXY_PATH=\"$FAKE_PROXY\" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \"$WRAPPER\" --project <P> --worker-id worker-idle-wait --role worker --no-start-daemon --command /bin/true --loop --poll-interval 47, in the background. Record its PID and add it to LIVE_PIDS, restoring that afterwards as '[hot reload]' does. 47 is deliberately distinctive: seats sleep 20, 30 and 60.\n- Find the poll sleep only as the child of that recorded PID: the row of `ps -A -o pid=,ppid=,comm=` whose ppid is the wrapper PID and whose comm is sleep. GLOBAL rule: never pkill, killall, `kill $(pgrep …)` or select by name or pattern alone.\n- (a) `kill -TERM` that one PID. Within 15 s (well under the 47 s poll) a second claim_next_task appears in .moe/evidence-rpcs.jsonl. The wrapper PID is still alive, its output has MOE_IDLE_WAIT_INTERRUPTED naming exit 143, and .moe/deregister.log has no line for worker-idle-wait.\n- (b) The same with `kill -KILL` on the next poll sleep: a third claim, and exit 137.\n- (c) The wrapper itself: `kill -TERM` the wrapper PID, then `kill -TERM` its current sleep child (found by PPID), so the TERM trap, which bash defers until the foreground sleep returns (as today), runs now. The wrapper exits 0 within a few seconds, its output has 'Agent stopped.', and its deregister.log line carries reason terminal_closed.\n- (d) An unexpected exit: a fresh single-shot seat, in its own project, that exits 1 after registering deregisters with reason unexpected_exit:1. Use the codex argv-probe refusal (MOE_CLI_ARGV_REJECTED, the fake codex with FAKE_CODEX_REJECT_ARGV=1, as scenario Z drives it, without editing scenario Z), or another deterministic exit-1 path after registration.\n- Bound every wait by POSTFLIGHT_TIMEOUT_SEC. On failure, print the wrapper output and deregister.log, and kill only the recorded PID.\n\nRun the arm and record in the step note: at RED, (a) fails because the wrapper exits 143 and deregisters terminal_closed, and (d) reports terminal_closed.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight.sh"
-      ]
+      ],
+      "startedAt": "2026-11-02T20:48:41.907Z"
     },
     {
       "stepId": "step-2",
@@ -50,7 +51,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-26483323",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -75,7 +76,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T04:54:29.471Z",
-  "updatedAt": "2026-11-02T19:15:39.657Z",
+  "updatedAt": "2026-11-02T20:48:41.907Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:42:11.681Z",
@@ -87,7 +88,8 @@
     "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-66fd8127"
+    "architect-66fd8127",
+    "worker-26483323"
   ],
   "dependsOn": [],
   "tier": "standard",
@@ -138,5 +140,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-31T06:34:04.169Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T20:48:41.907Z"
 }
