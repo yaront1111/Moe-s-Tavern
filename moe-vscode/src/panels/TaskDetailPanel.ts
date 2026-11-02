@@ -240,6 +240,22 @@ export function deliveryRows(delivery: unknown): DeliveryRow[] {
     return rows;
 }
 
+// =============================================================================
+// Release Agent
+// =============================================================================
+
+/**
+ * The text of JetBrains' Release Agent action (moe.button.releaseAgent,
+ * moe.message.releasedInUI and moe.message.releaseAgent in MoeBundle.properties,
+ * used by TaskDetailDialog and MoeToolWindowPanel.handleReleaseAgent), copied
+ * exactly: tests/task-release.test.cjs reads that bundle and compares. The
+ * confirm text keeps its {0} (worker id) and {1} (task title) placeholders. It
+ * is shown as plain text in a modal, so it is never HTML-escaped.
+ */
+const RELEASE_AGENT_LABEL = 'Release Agent';
+const RELEASED_FROM_BOARD = 'Released from board';
+const RELEASE_AGENT_CONFIRM = 'Release agent "{0}" from "{1}"? The task stays claimable where it is (Working stays Working, unassigned; Review if all steps are done) and the agent goes idle — the next agent may pick it up immediately. To pull the task away from the fleet instead, drag it to Backlog.';
+
 /**
  * Task Detail Panel - a full-featured editor panel for viewing and editing tasks.
  *
@@ -247,7 +263,7 @@ export function deliveryRows(delivery: unknown): DeliveryRow[] {
  * - Editable fields: title, description, DoD, priority
  * - Implementation plan display with status icons and color coding
  * - Comments section with add-comment input
- * - Action buttons: Save, Approve, Reject, Reopen, Prev, Next, Delete
+ * - Action buttons: Save, Approve, Reject, Reopen, Release Agent, Prev, Next, Delete
  * - PR link display
  * - Live updates via state change subscription
  */
@@ -451,6 +467,28 @@ export class TaskDetailPanel implements vscode.Disposable {
                                 vscode.window.showWarningMessage('Not connected to Moe daemon — task was not reopened.');
                             }
                         }
+                    }
+                    break;
+                }
+
+                case 'releaseAgent': {
+                    // The actions bar is static, so the button can outlive the
+                    // assignment: judge the task as it is now, not as rendered.
+                    const current = this.findTask();
+                    const workerId = nonBlankString(current?.assignedWorkerId);
+                    if (!current || workerId === null) {
+                        vscode.window.showInformationMessage('No agent is assigned to this task.');
+                        break;
+                    }
+                    // One pass, so a worker id or title that looks like a
+                    // placeholder is never substituted again.
+                    const choice = await vscode.window.showWarningMessage(
+                        RELEASE_AGENT_CONFIRM.replace(/\{([01])\}/g, (_match, index: string) => (index === '0' ? workerId : current.title)),
+                        { modal: true },
+                        RELEASE_AGENT_LABEL
+                    );
+                    if (choice === RELEASE_AGENT_LABEL && !this.client.releaseTask(this.taskId, RELEASED_FROM_BOARD)) {
+                        vscode.window.showWarningMessage('Not connected to Moe daemon — agent was not released.');
                     }
                     break;
                 }
@@ -979,6 +1017,7 @@ export class TaskDetailPanel implements vscode.Disposable {
         ${task.status === 'AWAITING_APPROVAL' ? '<button class="btn btn-approve" id="approveBtn">Approve</button>' : ''}
         ${task.status === 'AWAITING_APPROVAL' ? '<button class="btn btn-reject" id="rejectBtn">Reject</button>' : ''}
         ${task.status === 'REVIEW' || task.status === 'DONE' ? '<button class="btn btn-secondary" id="reopenBtn">Reopen</button>' : ''}
+        ${nonBlankString(task.assignedWorkerId) !== null ? `<button class="btn btn-secondary" id="releaseAgentBtn">${RELEASE_AGENT_LABEL}</button>` : ''}
         <button class="btn btn-secondary" id="prevBtn" ${task.status === 'BACKLOG' ? 'disabled' : ''} title="Move back in workflow">Prev</button>
         <button class="btn btn-secondary" id="nextBtn" ${task.status === 'DONE' ? 'disabled' : ''} title="Move forward in workflow">Next</button>
         <span class="spacer"></span>

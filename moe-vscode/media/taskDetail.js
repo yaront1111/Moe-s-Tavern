@@ -199,6 +199,16 @@
         });
     }
 
+    // Release Agent: the button exists only for a task with an assigned worker, so
+    // an unassigned page must load without it. The host reads the worker id and
+    // title from fresh state, so nothing else is sent.
+    var releaseAgentBtn = document.getElementById('releaseAgentBtn');
+    if (releaseAgentBtn) {
+        releaseAgentBtn.addEventListener('click', function() {
+            vscodeApi.postMessage({ type: 'releaseAgent' });
+        });
+    }
+
     // Prev / Next
     document.getElementById('prevBtn').addEventListener('click', function() {
         vscodeApi.postMessage({ type: 'prev', currentStatus: currentTaskStatus });
