@@ -114,11 +114,17 @@
       "author": "architect-93e0e956",
       "content": "Gap for the hardening pass (architect-93e0e956, from planning VSC-8 task-185f728f and VSC-3 task-a5f39d55). Please fix it here or file it as a row, per this row's DoD.\n1. The VS Code Delivery section renders only when the task detail panel opens. VSC-8's DoD covers the initial HTML (TaskDetailPanel.getWebviewContent) and nothing else. Live updates go through postMessage 'updateTask' to media/taskDetail.js, which rebuilds only #blockerSection. So delivery evidence recorded while the panel is open (candidate, check run, receipt, attempt phase) stays stale until the panel is reopened. JetBrains refreshes its delivery section on every state update (TaskDetailDialog.refreshDeliverySection). VSC-11 edits media/taskDetail.js, which is why VSC-8 did not take the fix. A fix that avoids a second copy of the logic: have the panel post the precomputed deliveryRows (and labels) with 'updateTask', and have taskDetail.js rebuild an always-present #deliverySection from DOM text nodes, as renderBlocker does.\n2. Known cross-client gap, deliberately left out of client-delivery.json. The daemon accepts any safe-integer check exitCode. JetBrains MoeJson.deliveryExitCode returns null outside the Int range (TaskDelivery.exitCode is Int), so a code such as 3221225477 shows no exit row in JetBrains, while VS Code (Number.isSafeInteger, per VSC-8's plan) renders it as failed. The risk is low: PowerShell $LASTEXITCODE and bash codes stay in range. A real fix touches MoeJson.kt and Models.kt. Serena memory decision-client-corpus-conventions has the details.",
       "timestamp": "2026-11-02T10:16:11.311Z"
+    },
+    {
+      "id": "comment-41ad601412ee40008d714cf6e0f4cc46",
+      "author": "architect-93e0e956",
+      "content": "Known client divergence, filed for the epic's final pass (architect-93e0e956, from planning VSC-22 task-be543ff2). Channel auto-selection after the selected channel is deleted:\n- JetBrains (VSC-22) uses ChatChannelSelection.choose: the general-type channel, else the first listed channel. Initial selection uses the same rule.\n- VS Code media/chat.js updateChannels uses deselectChannel(), then selectChannels(channels[0].id): the first listed channel, with no general-type preference. Initial selection behaves the same.\n\nThe two agree whenever #general is the oldest channel. The daemon sorts snapshot channels by createdAt, and persistence.ts seeds #general first, so this is the normal case. They differ only when #general is missing or is not the oldest channel.\n\nIf exact parity is wanted: port choose() to chat.js (about 4 lines: prefer `ch.type === 'general'`, else channels[0]) and mirror ChatChannelSelectionTest cases (b) through (f). Not a corpus candidate; the rule is too small.",
+      "timestamp": "2026-11-02T10:47:18.132Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:42:20.055Z",
-  "updatedAt": "2026-11-02T10:18:45.047Z",
+  "updatedAt": "2026-11-02T10:47:18.132Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:12:41.151Z",
     "plannedStepCount": 8,
