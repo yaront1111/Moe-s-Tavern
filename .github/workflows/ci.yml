@@ -322,3 +322,49 @@ jobs:
           npm run compile
           npm test
         working-directory: moe-vscode
+
+      - name: Package the VS Code extension and smoke-test its bundle
+        # One OS is enough for a packaging smoke. vsce's prepublish re-bundles the daemon and proxy built above, so a
+        # .vscodeignore or bundle-manifest.json regression fails the pull request instead of the release.
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          vsix="$RUNNER_TEMP/moe-vscode.vsix"
+          (cd moe-vscode && npm run package -- --out "$vsix")
+          unzip -Z1 "$vsix" > "$RUNNER_TEMP/moe-vscode.files"
+          # Every bundle-manifest.json target must ship: a file target itself, a directory target every file that
+          # bundle-assets.mjs staged under it. Reading the staged copy keeps the exclude rules in the bundler alone.
+          node --input-type=module - scripts/bundle-manifest.json "$RUNNER_TEMP/moe-vscode.files" moe-vscode/bundled <<'CHECK'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const [manifestFile, listingFile, stagedRoot] = process.argv.slice(2);
+          const shipped = new Set(fs.readFileSync(listingFile, 'utf8').split('\n').filter(Boolean));
+          // As bundle-assets.mjs reads a copy: with `files`, each <into>/<name> is a target; without, the whole <into> directory.
+          const { copies } = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+          const targets = (Array.isArray(copies) ? copies : []).flatMap(copy => Array.isArray(copy?.files) && copy.files.length > 0
+            ? copy.files.map(name => path.posix.join(String(copy.into), String(name))) : [copy?.into]);
+          if (shipped.size === 0 || targets.length === 0) {
+            console.error(`Nothing to compare: ${shipped.size} vsix entries, ${targets.length} targets in ${manifestFile}`);
+            process.exit(1);
+          }
+          const missing = [];
+          for (const to of targets) {
+            if (typeof to !== 'string' || !to || path.isAbsolute(to) || to.split('/').includes('..')) { missing.push(`${to} (not bundle-relative)`); continue; }
+            const staged = path.join(stagedRoot, to);
+            if (!fs.statSync(staged, { throwIfNoEntry: false })?.isDirectory()) {
+              if (!shipped.has(`extension/bundled/${to}`)) missing.push(to);
+              continue;
+            }
+            const files = fs.readdirSync(staged, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile())
+              .map(entry => path.relative(stagedRoot, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'));
+            if (files.length === 0) missing.push(`${to}/ (nothing staged)`);
+            for (const file of files) if (!shipped.has(`extension/bundled/${file}`)) missing.push(file);
+          }
+          for (const item of new Set(missing)) console.error(`Missing from the vsix: extension/bundled/${item}`);
+          if (missing.length > 0) process.exit(1);
+          console.log(`All ${targets.length} bundle-manifest.json targets are in the vsix`);
+          CHECK
+          smoke="$RUNNER_TEMP/moe-vscode-smoke"
+          unzip -oq "$vsix" -d "$smoke"
+          node scripts/tests/onboarding.mjs "$smoke/extension/bundled"
