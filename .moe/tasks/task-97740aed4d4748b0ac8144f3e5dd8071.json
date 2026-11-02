@@ -1,0 +1,35 @@
+{
+  "id": "task-97740aed4d4748b0ac8144f3e5dd8071",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: in worktree mode every WORKING claim's file-collision heads-up still @mentions each live peer seat to \"coordinate before either of you lands\", and each paged seat spends a turn replying",
+  "description": "Measured over .moe/messages since the 19:14Z 2026-11-02 switch to worktreeMode 'on' (about 1h40m):\n- #workers (chan-421a621d) got 33 \"⚠️ file collision on <task>\" notices. Together they carried 226 seat @mentions and drew 70 threaded replies.\n- The replies by seat: worker-26483323 18, worker-fdb2af60 14, worker-d6c1cb7a 13, worker-33f67e5b 12, plus QA seats (qa-7328a40d 2, qa-af7be174 2, qa-93f9625e 1).\n- worker-33f67e5b posted 10 of its 12 in 20 s (20:46:07-20:46:27Z).\n- Almost every reply says the same thing: \"my edits stay in my worktree, landing rebases/merges and a conflict goes to a rescue ref, no coordination needed\".\n\nThe notice ends \"Coordinate before either of you lands\", which a worktree claim cannot act on:\n- each WORKING claim edits its own .worktrees/<taskId> copy;\n- completions land one at a time under the git-land lease (merge-tree + CAS);\n- a true conflict parks the bytes on refs/moe/rescue and routes the row back (LANDING-CONFLICT resume).\nSo the page wakes a seat's chat_wait and costs it a turn for nothing.\n\nCode: packages/moe-daemon/src/tools/claimNextTask.ts.\n- The post block (~line 832, `state.postToRoleChannel('workers', collisionNotice(...))`) and collisionNotice() (~line 319) are unconditional.\n- collisionNotice @mentions every live assignee plus the claimer whenever markLivePeers finds a live peer.\n- The claim's own attempt records workspaceMode, which resolveAttemptWorkspace (state/validators.ts ~303) turns into the response's workspace.mode 'worktree' | 'shared'. A live peer's open attempt records the same field.\n\nWanted:\n- Page no seat when the claimer's attempt AND every live colliding peer's open attempt run in a worktree. Either post without @mentions (no \"coordinate\" sentence; say that overlapping hunks meet at landing) or skip the post; the planner picks one and says why.\n- Keep today's paging whenever either side runs shared (worktreeMode off, or a pre-switch shared attempt).\n- Leave the claim response's fileCollision array (with liveAssignee) as it is in both modes; it stays the claimer's advisory.\n\nExpected files:\n- packages/moe-daemon/src/tools/claimNextTask.ts;\n- one test file (extend governanceFeatures.test.ts's collision rows or add a focused test);\n- docs/MCP_SERVER.md (the claim_next_task fileCollision paragraph, ~line 1525).\n\nLane-free of scripts/moe-agent.{sh,ps1}. WT-17 (task-cda65eb0) also edits docs/MCP_SERVER.md later; keep this row's docs hunk to that one paragraph.",
+  "definitionOfDone": [
+    "With worktreeMode 'on', when the claimer's attempt and every live colliding peer's open attempt have workspaceMode 'worktree', the #workers heads-up pages no seat (no @mention routing targets) and does not ask seats to coordinate before landing. A new test asserts both.",
+    "When the claimer or any live colliding peer runs shared (worktreeMode off, or a peer attempt with workspaceMode other than 'worktree'), the heads-up @mentions live assignees and the claimer exactly as today. The existing collision tests in governanceFeatures.test.ts and chatSystemFeed.test.ts pass unchanged or with only the intended wording delta.",
+    "The claim_next_task response's fileCollision array (including liveAssignee) is unchanged in both modes, and a collision-scan or post failure still never fails the claim.",
+    "docs/MCP_SERVER.md's claim_next_task fileCollision paragraph states the worktree-mode paging rule.",
+    "The daemon test suite passes on a git-archive snapshot of the landed tree (never npm build/test in the shared checkout), with the exact command and its pass/fail counts in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor-filed Moe defect (worktree-mode collision paging); daemon-only, lane-free of the wrapper files; promote for planning.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 43,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T20:58:23.710Z",
+  "updatedAt": "2026-11-02T20:58:35.395Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T20:58:35.395Z",
+    "seq": 1
+  }
+}

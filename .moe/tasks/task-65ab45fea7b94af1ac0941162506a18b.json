@@ -1,0 +1,41 @@
+{
+  "id": "task-65ab45fea7b94af1ac0941162506a18b",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-proxy exits before a one-shot reply over 64 KiB is fully written on Linux/macOS/WSL, so wrapper RPCs read a truncated JSON line",
+  "description": "Files: packages/moe-proxy/src/index.ts, plus a test under packages/moe-proxy/src/ (index.test.ts or a new file). No open row declares any moe-proxy file. I checked the plan files of every non-DONE row at 2026-11-02 20:51Z, so this row is off the wrapper lanes.\n\nDefect, read at HEAD 3e092cff:\n- Every reply goes out through safeStdoutWrite (index.ts:186-199), a bare process.stdout.write with no completion callback. The ws 'message' handler writes the daemon's reply at :570.\n- A one-shot call (`echo \"$rpc\" | node dist/index.js`) hits stdin EOF at once. gracefulShutdown exits immediately when nothing is pending (:368-370). Otherwise drainTick runs every 50 ms and calls process.exit(0) as soon as the reply's id leaves pendingRequestIds (:415-419).\n- On POSIX, Node writes to a pipe asynchronously. The kernel takes about 64 KiB, libuv queues the rest, and process.exit() does not wait for that queue, so the tail is dropped. Windows stdout pipes are synchronous, so the ps1 path should be unaffected; that is not tested.\n- Measured in this WSL checkout with Node v24.21.0, using a standalone script that copies the proxy's write-then-exit timing: a 300 KB line arrived as 131,072 bytes in 2 of 5 runs. Through bash `$(...)` at the proxy's 50 ms tick, the line was cut in 3/30 runs at 100 KB, 6/30 at 1 MB and 9/30 at 3 MB.\n\nReach:\n- Every bash-wrapper one-shot RPC whose reply passes about 64 KiB: scripts/moe-agent.sh moe_rpc and scripts/moe-call.sh. That covers the pre-flight get_context preload, claims of large tasks, post-flight and adoption reads, and list/log reads.\n- The daemon has already executed the call, but the wrapper sees a JSON parse failure: moe_rpc returns 1, and moe-call.sh exits 1.\n- Most of the fleet runs bash seats under WSL. A failed pre-flight get_context read is the trigger of in-flight task-31187ec1, so this bug makes that path fire more often.\n\nOrigin: hunt requested by governor-e6b40560 (msg-5fe3b1537cb04b50964bd0edf07db4c8). task-35584de2 [CQ-C00] fixed the same write-then-exit pattern in moe-call.sh's own Node parser, and that row put proxy changes explicitly out of scope.\n\nFix direction (decided at planning): route the two success exits (:370 and :419) through one helper that exits only after stdout has drained, e.g. `process.stdout.write('', () => process.exit(code))`, with an unref'd guard timer for a reader that never drains. The EPIPE exit(1) path stays as it is.",
+  "definitionOfDone": [
+    "A one-shot run with stdin at EOF and stdout piped delivers a reply of at least 2 MB complete: the line parses as JSON and its byte length equals what the fake daemon sent. This holds on both success-exit paths: gracefulShutdown's immediate exit when nothing is pending, and drainTick's exit after the last reply.",
+    "A new test under packages/moe-proxy/src drives the real proxy entry against a fake daemon. Its reader waits at least 200 ms before draining stdout, so the unchanged proxy truncates every time on POSIX. RED first: the test fails against the unchanged index.ts, and the completion evidence quotes the failure.",
+    "A reader that never drains cannot keep the proxy alive more than 5 s after the reply. The EPIPE exit(1) path, the MOE_PROXY_ONESHOT_DEADLINE_MS bound, and the existing EOF grace and drain cases in index.test.ts and input-framing.test.ts behave exactly as before.",
+    "`cd packages/moe-proxy && npx vitest run` exits 0. Run it in the task's worktree or in a git-archive snapshot, never through `npm run build` in the shared control checkout. Its output is the complete_task evidence.",
+    "Only files under packages/moe-proxy/ change: src/index.ts, its tests, and README.md's one-shot section if the exit wording changes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\"; architect hunt row, confirmed at 3e092cff: proxy one-shot stdout truncation >64 KiB on POSIX. HIGH.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 339.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T21:12:01.587Z",
+  "updatedAt": "2026-11-02T21:14:53.554Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T21:14:19.438Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T21:14:41.584Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}

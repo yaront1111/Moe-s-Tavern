@@ -1,0 +1,34 @@
+{
+  "id": "task-6fe1e5ae27b343fab01901002c70289d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains chat shows no Approve/Reject decision cards after an IDE start or a reconnect, because ChatPanel requests decisions only once, before the daemon connection opens",
+  "description": "Files: moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt, plus one of these routes:\n- util/MoeJson.kt and model/Models.kt (if the fix reads decisions from the state snapshot), tested in moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt;\n- or a small headless-testable helper.\nNo open row declares any moe-jetbrains file. I checked the plan files of every non-DONE row at 2026-11-02 20:51Z.\n\nDefect, read at HEAD 3e092cff:\n- MoeToolWindowPanel builds ChatPanel (:303). Only afterwards does it start service.connect() on a pooled thread (:361-363).\n- ChatPanel's constructor sends requestChannels() and requestDecisions() (:298-300). Before the socket opens, MoeCommandSender.ensureConnected (:26-33) drops both with a warning. requestDecisions is at :283-286.\n- When the connection opens, ChatPanel.onStatus(true) (:214-219) re-requests channels only. ActivityLogPanel.onStatus (:80-84) re-requests its own data. ChatPanel does not re-request decisions.\n- Nothing else repairs the map:\n  - MoeJson.parseState (:310) ignores the snapshot's `decisions` array, which the daemon sends (packages/moe-daemon/src/state/StateManager.ts:1200).\n  - The 3 s GET_STATE refresh also goes through parseState.\n- So decisionsMap stays empty, and every existing `[Decision Proposed]` message renders as a plain bubble with no Approve/Reject buttons (the lookup at ChatPanel.kt:688).\n- Only decisions proposed after the connection opens get cards, through DECISION_PROPOSED.\n- Every daemon restart or reconnect repeats this for decisions proposed or resolved while the client was disconnected.\n\nReach: every IDE start with the Moe tool window open (the daemon is spawned after the panel is built) and every reconnect. These cards are JetBrains' only UI for approving or rejecting a decision.\n\nOrigin: hunt requested by governor-e6b40560 (msg-5fe3b1537cb04b50964bd0edf07db4c8). Rows 9cfb063f (decisions in chat) and VSC-6/VSC-22 never covered connect timing.\n\nFix direction: re-request decisions when the connection opens, as ActivityLogPanel does, and/or carry the snapshot's decisions through parseState into ChatPanel.onState, so the periodic refresh repairs the map. Choose at planning, and keep it headless-testable.",
+  "definitionOfDone": [
+    "Every time the daemon connection opens, first connect and each reconnect, ChatPanel refills its decision map from the daemon. Either onStatus(connected=true) sends GET_DECISIONS, or onState reseeds the map from the snapshot's decisions parsed by MoeJson.parseState. Decisions that existed before the connection render as cards with Approve/Reject, with no channel switch and no new decision needed.",
+    "A headless JUnit 4 test covers the chosen mechanism. Examples: parseState returns the snapshot's decisions in order; or the connect handler issues GET_DECISIONS. Malformed decision entries are skipped and never throw. RED first against the unchanged code, with the failing output quoted in the completion evidence.",
+    "`cd moe-jetbrains && ./gradlew test` exits 0, run under the jetbrains-gradle lease (moe.acquire_resource, then release). From WSL, run `cmd.exe /c gradlew.bat test --rerun` in the task's checkout and label the evidence Windows. Its output is the complete_task evidence.",
+    "No daemon or VS Code file changes. Approve and Reject, DECISION_PROPOSED and DECISION_RESOLVED handling, and the channel and pin behaviour of ChatPanel are unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\"; architect hunt row: JetBrains chat never re-fetches decision cards on connect/reconnect.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 342.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T21:12:38.134Z",
+  "updatedAt": "2026-11-02T21:14:23.689Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T21:14:23.689Z",
+    "seq": 1
+  }
+}

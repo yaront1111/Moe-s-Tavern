@@ -1,0 +1,34 @@
+{
+  "id": "task-475e8844df584b33bc40e8838a395e1f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains Done-column Clear (✕) archives every DONE task in scope while a board search is active, but its confirmation counts only the matching cards",
+  "description": "Files: moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt (the Done column's onClearColumn block), plus a new pure helper and a JUnit 4 test under moe-jetbrains/src/{main,test}/kotlin/com/moe/toolwindow/ (BoardApproval.kt and BoardApprovalTest.kt are the precedent). No open row declares any moe-jetbrains file. I checked the plan files of every non-DONE row at 2026-11-02 20:51Z.\n\nDefect, read at HEAD 3e092cff:\n- MoeToolWindowPanel builds `tasks` from the epic filter plus the search query (:488-500). Each column's `columnTasks` comes from `tasks` (:717).\n- The Done column's onClearColumn (:654-666) asks \"Archive {0} completed task(s)?\" (MoeBundle moe.message.archiveDone) using `columnTasks.size`, which is the search-filtered count. It then calls service.archiveDoneTasks(selectedEpicId).\n- That sends ARCHIVE_DONE_TASKS with only the epic id (MoeCommandSender.kt:196-203). The daemon handler (packages/moe-daemon/src/server/WebSocketServer.ts:907-926) archives every DONE task in that epic, or on the whole board when All epics is selected.\n- Example: 25 DONE tasks, and a search that shows 2. The dialog says 2, and the click archives 25.\n- The damage can't be undone to DONE. JetBrains has no un-archive UI, and set_task_status allows ARCHIVED to go only to BACKLOG or WORKING (setTaskStatus.ts:53), so the rows can never return to DONE.\n\nReach: any JetBrains user who searches the board and then clicks the Done column's ✕ (TaskColumn.kt:131).\n\nOrigin: hunt requested by governor-e6b40560 (msg-5fe3b1537cb04b50964bd0edf07db4c8). Feature rows 7e77f244 (clear DONE column) and 12d97434 (board search) never covered their interaction.\n\nFix direction: JetBrains only, no daemon protocol change. Either don't offer ✕ while a search is active, or make the confirmation's count the number of DONE tasks the daemon will actually archive, ignoring the search. Choose at planning.",
+  "definitionOfDone": [
+    "With a non-blank search query, the Done column never asks to confirm a count that differs from what ARCHIVE_DONE_TASKS will archive. Either ✕ is not offered while a search is active, or the dialog's count is the number of DONE tasks in the selected epic (every epic when none is selected), ignoring the search. With no search, ✕ and its count behave exactly as before.",
+    "The rule lives in a small pure function (no Swing, no Project) that MoeToolWindowPanel calls. A new JUnit 4 test covers four cases: no search; a search matching a subset with an epic selected; a search matching a subset with All epics; and an empty Done column, which offers no ✕. RED first: the subset cases fail before the fix, and the completion evidence quotes the failing output.",
+    "`cd moe-jetbrains && ./gradlew test` exits 0, run under the jetbrains-gradle lease (moe.acquire_resource, then release). From WSL, run `cmd.exe /c gradlew.bat test --rerun` in the task's checkout and label the evidence Windows. Its output is the complete_task evidence.",
+    "No daemon or VS Code file changes. MoeBundle.properties changes only if the dialog wording changes, and then only its archiveDone keys."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\"; architect hunt row: JetBrains Done-column clear archives all DONE tasks while a search filters the count (irreversible).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 340.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T21:12:12.436Z",
+  "updatedAt": "2026-11-02T21:14:21.040Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T21:14:21.040Z",
+    "seq": 1
+  }
+}

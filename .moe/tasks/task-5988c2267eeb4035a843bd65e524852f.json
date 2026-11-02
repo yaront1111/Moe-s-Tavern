@@ -1,0 +1,35 @@
+{
+  "id": "task-5988c2267eeb4035a843bd65e524852f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: archive_epic archives BLOCKED rows without clearing their blocked* fields, and report_blocked reads stored blockedOnTaskIds on non-BLOCKED rows, so a real block on an un-archived row answers dependenciesSatisfied and is never recorded",
+  "description": "Files: packages/moe-daemon/src/tools/archiveEpic.ts, packages/moe-daemon/src/tools/reportBlocked.ts, and their tests archiveEpic.test.ts and reportBlocked.test.ts. The clearing code may be shared with archiveTask.ts. No open row declares any of these files. I checked the plan files of every non-DONE row at 2026-11-02 20:51Z.\n\nDefect, read at HEAD 3e092cff:\n- archive_epic's IN_FLIGHT list (archiveEpic.ts:11) leaves out BLOCKED, so BLOCKED rows are archived, and its loop writes a bare { status: 'ARCHIVED' } (:61-64).\n- archive_task (archiveTask.ts:64-74) and set_task_status (setTaskStatus.ts:179-188) both copy the reason to priorBlockedReason and null blockedReason, blockedResourceId, blockedOnTaskIds, blockedFromStatus and blockedAt when a row leaves BLOCKED. updateTask itself clears none of them.\n- Un-archiving (set_task_status ARCHIVED→BACKLOG/WORKING, setTaskStatus.ts:53) clears block fields only when the row is BLOCKED, so the stale ids ride along into WORKING. get_context and list_tasks show the fields only for BLOCKED rows, so nobody sees them.\n- report_blocked reads the stored ids whatever the row's status (reportBlocked.ts:172) and computes dependenciesSatisfied from them (:256).\n- Suppose a worker on the un-archived row reports a real non-task blocker with blockedOnTaskIds:[], and a stale id is DONE:\n  - The answer is dependenciesSatisfied:true (\"NOT blocked … Continue the task\").\n  - Nothing is written and nobody is paged, and every retry gives the same answer.\n- If the stale id is not DONE, the row blocks on it instead of on the real blocker, and auto-unblocks when it lands.\n- Second source, same effect: release_task's refusal cascade parks a BLOCKED, assigned row to BACKLOG with no clearing (releaseTask.ts:326-327). Clearing there is out of scope here; the report_blocked guard below removes its effect on report_blocked.\n- The stale ids also feed dependencyEdges (cycle checks) and get_context's declared prerequisites.\n\nReach: archive_epic on an epic that holds a BLOCKED row with ids, followed by any un-archive; or the refusal cascade on such a row. The trigger is rare, but the outcome is a worker that cannot park its task.\n\nOrigin: hunt requested by governor-e6b40560 (msg-5fe3b1537cb04b50964bd0edf07db4c8). No existing row mentions archive_epic together with blocked fields. docs/MCP_SERVER.md already says blocked* fields belong to BLOCKED tasks only, so no doc edit is needed.",
+  "definitionOfDone": [
+    "archive_epic clears a BLOCKED row's block fields exactly as archive_task does: priorBlockedReason keeps the reason, and blockedReason, blockedResourceId, blockedOnTaskIds, blockedFromStatus and blockedAt become null. Non-BLOCKED rows are archived as before, and the in-flight refusal and finalizing-attempt gate are unchanged.",
+    "report_blocked merges stored blockedOnTaskIds only when the row is already BLOCKED (the union-on-update arm). On a PLANNING, WORKING or REVIEW row that carries stale ids, the block is computed from the supplied or reason-parsed ids alone. With blockedOnTaskIds:[], the row is parked BLOCKED with no ids and paged as a dep-less block.",
+    "New cases: archiveEpic.test.ts archives a BLOCKED row and asserts every cleared field. reportBlocked.test.ts blocks a WORKING row carrying a stale DONE blockedOnTaskIds entry with blockedOnTaskIds:[] and asserts blocked:true, status BLOCKED and no stored ids. RED first against the unchanged code, with the failing output quoted. Existing cases in both files pass unchanged.",
+    "`cd packages/moe-daemon && npx vitest run src/tools/archiveEpic.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/setTaskStatus.test.ts` exits 0. Run it in the task's worktree or in a git-archive snapshot, never as an in-place build or test in the shared control checkout. Its output is the complete_task evidence.",
+    "No docs/ edit. Only archiveEpic.ts, reportBlocked.ts and their two test files change, plus archiveTask.ts if the clearing code is extracted into a shared helper (its behaviour unchanged)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\"; architect hunt row: archive_epic keeps BLOCKED rows' blocked* fields.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 343.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T21:12:52.279Z",
+  "updatedAt": "2026-11-02T21:14:25.066Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T21:14:25.066Z",
+    "seq": 1
+  }
+}

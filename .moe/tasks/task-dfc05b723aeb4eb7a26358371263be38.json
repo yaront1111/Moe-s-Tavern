@@ -1,0 +1,35 @@
+{
+  "id": "task-dfc05b723aeb4eb7a26358371263be38",
+  "epicId": "epic-be924fb8",
+  "title": "bug: in a project that commits .moe/tasks (the commitBoardState default), `git clean -fdx` deletes the runtime dirs without tripping the mass-deletion heal, so the reload empties workers, teams, proposals, leases and attempts",
+  "description": "Files: packages/moe-daemon/src/state/massDeletionHeal.ts and packages/moe-daemon/src/state/massDeletionHeal.test.ts. No open row declares either file. I checked the plan files of every non-DONE row at 2026-11-02 20:51Z. WT-16 owns commands/doctor.ts, which this row does not touch.\n\nDefect, read at HEAD 3e092cff:\n- healMassDeletion (massDeletionHeal.ts:25, :33-43) counts missing entities across tasks, epics, teams, workers and proposals together. It heals only when at least 3 are missing AND at least 20% of that combined total is missing.\n- The heal was written for a fully gitignored .moe: px4swarm, 2026-09-25 and 09-26.\n- Under settings.commitBoardState (default on), the wrappers commit .moe/tasks, .moe/epics and project.json. So in a board-tracking project, `git clean -fdx` (or `git stash --all`) deletes only the ignored or untracked runtime dirs:\n  - workers/ and proposals/, ignored by .moe/.gitignore;\n  - teams/, resources/, attempts/, candidates/, checks/, reviews/ and receipts/, ignored by this repo's root .gitignore:68-80.\n- Example with this repo's live counts: 80 entities missing (13 workers + 6 teams + 61 proposals) out of 935 known. 80 is under 187 (20%), so the heal returns 0.\n- The FileWatcher callback (packages/moe-daemon/src/index.ts:805-813) then calls state.load(). load() replaces every map from disk (StateManager.ts:1078-1119), so workers, teams, proposals, resources, attempts, candidates, reviews, checkRuns and receipts all come back empty.\n- Even when the heal does fire, it rewrites only those 5 kinds. The next reload then empties the runtime maps it never rewrote.\n\nConsequences:\n- Every assigned task's owner is missing from the worker map, so isTaskClaimable lets any idle seat claim a live seat's WORKING row.\n- Held capacity-1 leases vanish, so the next acquire_resource is granted at once.\n- Open attempts vanish, so the attempt generation restarts.\n- Pending rail proposals are lost.\n\nReach: any project on the wrappers' default board commits, when a person or an agent runs `git clean -fdx` or `git stash --all` at the repo root while the daemon runs. That is exactly the trigger the heal exists for. A young board with few tasks still trips the combined 20% rule. A mature board never does.\n\nOrigin: hunt requested by governor-e6b40560 (msg-5fe3b1537cb04b50964bd0edf07db4c8). massDeletionHeal.ts has had one commit (ad4ff578). No row mentions its threshold or kinds.\n\nFix direction (exact rule decided at planning):\n- Also detect a wipe per kind: a kind that loses at least MIN and at least FRACTION of its own entries, or whose whole directory is gone while memory still holds entries of it.\n- Keep the combined rule.\n- On a wipe, rewrite every entity map that load() replaces (add resources, attempts, candidates, reviews, checkRuns stored under checks/, receipts, channels and decisions).\n- A deliberate deletion of one or two files must still reload.",
+  "definitionOfDone": [
+    "New fixture: a store holding at least 50 tasks, 1 epic, 4 workers, 1 team, 3 proposals, one resource with a lease and one open attempt. The test deletes the workers/, teams/, proposals/, resources/ and attempts/ directories, then runs healMassDeletion followed by state.load(), the FileWatcher's order. Afterwards those maps hold exactly the entities they held before the deletion, and their files are back on disk.",
+    "Deleting a single worker file (and, separately, two proposal files) still makes healMassDeletion return 0, and the following load() drops exactly those entities, as today. The three existing cases in massDeletionHeal.test.ts pass unchanged.",
+    "RED first: the new wipe case fails against the unchanged massDeletionHeal.ts, and the completion evidence quotes the failure.",
+    "`cd packages/moe-daemon && npx vitest run src/state/massDeletionHeal.test.ts src/state/StateManager.test.ts` exits 0. Run it in the task's worktree or in a git-archive snapshot, never as an in-place build or test in the shared control checkout. Its output is the complete_task evidence.",
+    "Only massDeletionHeal.ts and massDeletionHeal.test.ts change."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\"; architect hunt row: mass-deletion heal never fires when the board is committed.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 341.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T21:12:26.244Z",
+  "updatedAt": "2026-11-02T21:14:22.389Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T21:14:22.389Z",
+    "seq": 1
+  }
+}

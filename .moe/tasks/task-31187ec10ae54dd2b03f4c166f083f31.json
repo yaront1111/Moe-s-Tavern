@@ -41,21 +41,28 @@
     {
       "stepId": "step-3",
       "description": "ps1 twin, scripts/moe-agent.ps1.\n    - Keep the file UTF-8 with a BOM.\n    - Use the same code and the SAME detail strings as step 2, with $TaskId/$target interpolated. The codes diff and parity-check read both files, comments included, so never name a code in one twin only.\n\n(a) Test-MoeControlWorktreeMode, WT-07's twin spec: true iff `git -C <control> symbolic-ref -q HEAD` is exactly refs/heads/moe/control; any failure is false.\n    - If it is already present, call it.\n    - Else add it after Test-MoeTaskBranchLanded, with no params:\n      - $git = Get-MoeGitTop; return $false when it is absent.\n      - Run Invoke-MoeGit -Top $git.Top -GitArgs @('symbolic-ref','-q','HEAD').\n      - Return true only on Rc 0 and the first output line, trimmed, -ceq 'refs/heads/moe/control'.\n      - Wrap the body in try/catch that returns $false.\n\n(b) Get-MoeWorkspaceClaim, mirroring step 2(b):\n    - $task = Get-MoeProp $Context 'task'; $id = Get-MoeProp $task 'id'.\n    - $read = ($task -is [System.Management.Automation.PSCustomObject]) -and ($id -is [string]) -and ($id -ceq $TaskId). Require a string: -ceq against an array filters instead of comparing.\n    - If -not $read, set $Context = $null BEFORE the workspace and commits reads.\n    - Mode 'worktree' as today. Else 'shared' when the claim's workspace is a PSCustomObject or $read. Else 'unknown'.\n    - Return @{ Mode; Read = $read; Target; Foreign }, and update its comment.\n\n(c) Initialize-MoeWorktree:\n    - In the existing `if ($ws.Mode -cne 'worktree')` branch, after `if (-not $git) { return }` and before the moe/task rev-parse: `if ($ws.Mode -ceq 'unknown' -and (Test-MoeControlWorktreeMode)) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CONTEXT_FAILED' \"<step 2(c) detail>\" }`.\n    - In the try, after the target check and before `foreach ($f in $ws.Foreign)`: `if (-not $ws.Read) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CONTEXT_FAILED' \"<step 2(d) detail>\" }`. exit is flow control, so the catch never swallows it.\n    - Update the function comment to match step 2(e).\n\nThen run the ps1 leg of step 4 against a fresh scratch snapshot under Windows PowerShell 5.1, and record 'N ok, 0 failed'.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 twin, in checkpoint 21921418, UTF-8 BOM kept (ef bb bf). WT-07's Test-MoeControlWorktreeMode already existed and is reused (defined at :6027, before the pre-flight call at :8927).\n\n(b) Get-MoeWorkspaceClaim: Read is true only for a PSCustomObject task whose id is a [string] -ceq the claimed id. It deliberately deviates from the plan's Get-MoeProp read: task and id are read through PSObject.Properties, because Get-MoeProp's return unrolls a one-element array. With it, {\"task\":{\"id\":[\"task-x\"]}} and {\"task\":[{\"id\":\"task-x\"}]} read as answered, while the sh python reads both as unknown (mem gotcha-ps1-getmoeprop-unrolls-lists). When not Read, $Context and $task are $null before the workspace and commits reads. Mode is worktree, else shared (claim workspace PSCustomObject, or Read), else unknown. It returns @{Mode; Read; Target; Foreign}.\n(c) Initialize-MoeWorktree:\n- In the shared branch after Get-MoeGitTop: unknown plus Test-MoeControlWorktreeMode leads to Stop-MoeWorktreeSeat MOE_WORKTREE_CONTEXT_FAILED, before the moe/task rev-parse.\n- In the worktree try, after the target check and before the Foreign loop: if not Read, the same code.\n- Detail strings are identical to sh. Comments are updated.\n\nEvidence, run 2 (/mnt/d/moe-scratch/run-31187ec1.KEEfZI/verify2.log, snapshot v-31187ec1.Mmk7dY, ps1 bytes == HEAD 21921418): EXIT=0, 20:43:08Z-21:11:37Z.\n- PS 5.1 leg (node.exe ... powershell): ctx-unread ok, resume-unread ok, resume-dirty ok, resume-shared-unread ok, path-long ok, codes ok, '[worktree] 60 ok, 0 failed'.\n- The sh leg in the same run: 60 ok, 0 failed.",
+      "startedAt": "2026-11-02T20:58:04.722Z",
+      "completedAt": "2026-11-02T21:11:59.256Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification. Run this ONE fresh command from the repo root in WSL; its output is the complete_task evidence. It takes about 5-6 minutes, so raise the Bash tool timeout to 600000 ms or run it in the background.\n\nmkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-31187ec1.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-worktree.cjs scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && g='MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' && diff <(grep -oE \"$g\" scripts/moe-agent.sh | sort -u) <(grep -oE \"$g\" scripts/moe-agent.ps1 | sort -u) && grep -q MOE_WORKTREE_CONTEXT_FAILED scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && T=\"$S/scripts/tests\" && node \"$T/postflight-worktree.cjs\" sh \"$S/scripts/moe-agent.sh\" \"$T/postflight-fake-proxy.js\" \"$S\" \"$(command -v bash)\" && node.exe \"$(wslpath -w \"$T/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$S/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$T/postflight-fake-proxy.js\")\" \"$(wslpath -w \"$S\")\" powershell\n\nThe architect dry-ran this exact command at HEAD 920f9cca, with the CONTEXT_FAILED grep stubbed and MOE_WORKTREE_ONLY=shared-landed: rc 0 in 11 s, with sh and PS 5.1 each printing '1 ok, 0 failed'.\n\nExpected output:\n- the codes diff is empty and parity-check prints PASS;\n- the sh suite prints '[worktree] path-long n/a off win32' and 'N ok, 0 failed';\n- the ps1 suite (Windows PowerShell 5.1 via node.exe) prints 'N ok, 0 failed';\n- the four new cases print 'ok' in both.\n\nN is 16 for sh and 17 for ps1 at today's case list. It is higher if a peer row (WT-05) added cases before this row.\n\nPut both summary lines and the new-case lines in the step note.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "startedAt": "2026-11-02T21:12:01.935Z"
     },
     {
       "stepId": "step-5",
@@ -119,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:51:26.149Z",
-  "updatedAt": "2026-11-02T20:54:48.538Z",
+  "updatedAt": "2026-11-02T21:12:01.935Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T19:53:26.719Z",
@@ -129,7 +136,7 @@
     "firstClaimAt": "2026-10-30T19:53:43.609Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -170,6 +177,24 @@
       "treeId": "280e6d54d90355d9f8d90bfdea312f6e45ec7061",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "219214187900631f17985f65f81988d0e5bedfb4",
+      "ref": "refs/heads/moe/task/task-31187ec10ae54dd2b03f4c166f083f31",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-02T19:22:02Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-02T20:55:47.058Z",
+      "treeId": "b30716bbcca3cfcf177f060cd3077196589499fc",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -178,14 +203,18 @@
     ".moe/tasks/task-9eaa4c4e4ef74d43ab2538e0010b098e.json",
     ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json",
     ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
-    ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json"
+    ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight-worktree.cjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "architect-4ff0711c@2026-10-30T20:24:31Z",
-    "at": "2026-10-30T21:09:54.321Z"
+    "sessionId": "worker-c9368191@2026-11-02T19:22:02Z",
+    "at": "2026-11-02T20:55:47.058Z"
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -193,7 +222,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T20:52:50.174Z",

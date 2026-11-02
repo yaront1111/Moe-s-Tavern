@@ -1,0 +1,35 @@
+{
+  "id": "task-1cb3f280afe14a6d886214ee4feea952",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the dependency auto-unblock returns a still-assigned hold to its parked worker but leaves that worker BLOCKED with the resolved block's lastError (the resource grant path repairs it, 07af3ca5)",
+  "description": "Files: packages/moe-daemon/src/state/dependencyUnblock.ts and packages/moe-daemon/src/state/dependencyUnblock.test.ts. resourceStore.ts changes only if the worker repair is extracted into a shared helper. No open row declares any of these files. I checked the plan files of every non-DONE row at 2026-11-02 20:51Z.\n\nDefect, read at HEAD 3e092cff:\n- A third-party report_blocked on an assigned task keeps the seat and marks the worker BLOCKED with lastError set to the reason (reportBlocked.ts:386-387).\n- When every blockedOnTaskIds target lands, runDependencyUnblock restores the task to blockedFromStatus. While the worker still points at the task, it also restores the task onto that worker (dependencyUnblock.ts:241-253). It writes no worker update, and because assignedWorkerId is passed explicitly, updateTask's prior-owner handling is skipped.\n- The resource grant path repairs the same seat. grantNextLeases flips a BLOCKED owner whose currentTaskId is the task back to READING_CONTEXT, clears lastError and keeps lastActivityAt (resourceStore.ts:552-566). Commit 07af3ca5 added that after task-9f6c9938 showed a WORKING task whose worker still reported BLOCKED.\n- Result:\n  - list_workers and the board show a BLOCKED worker on a WORKING task until that worker's next claim, start_step or complete_step.\n  - Meanwhile runBlockedTimeoutSweep (sweeps.ts:411-460) acts on any worker whose status is BLOCKED. Once that worker's lastActivityAt is older than blockedTimeoutMs, the sweep parks the restored WORKING task to BACKLOG.\n  - A governor's routine unblock_worker on the \"BLOCKED\" seat releases the resumed row.\n- The parity test at dependencyUnblock.test.ts:152 ('a still-assigned hold returns to its parked worker (grantNextLeases parity)') sets the worker BLOCKED but asserts only the task's status and assignee.\n\nReach: a third-party or legacy still-assigned dependency block whose prerequisites land while the seat still points at the task. The display error is certain whenever that happens; the BACKLOG park needs the sweep to run before the seat's next moe call.\n\nOrigin: hunt requested by governor-e6b40560 (msg-5fe3b1537cb04b50964bd0edf07db4c8). 07af3ca5 fixed only the resource path. No row mentions the dependency path's worker state.",
+  "definitionOfDone": [
+    "When runDependencyUnblock restores a task onto its still-assigned worker, and that worker's status is BLOCKED with currentTaskId equal to the task, the worker becomes READING_CONTEXT. Its lastError becomes null, its lastActivityAt stays unchanged, and a WORKER_UNBLOCKED event is written; this is the same rule grantNextLeases applies.",
+    "A worker that is not BLOCKED, that points at another task, or that is DEAD is left untouched. A failed worker write is logged and never undoes the task restore.",
+    "Tests: the parity test at dependencyUnblock.test.ts:152 also asserts the worker's status, lastError and lastActivityAt. A new case shows that after the restore, runBlockedTimeoutSweep run past blockedTimeoutMs leaves the restored task WORKING and assigned. RED first against the unchanged code, with the failing output quoted.",
+    "`cd packages/moe-daemon && npx vitest run src/state/dependencyUnblock.test.ts src/state/resourceStore.lifecycle.test.ts src/tools/reportBlocked.test.ts` exits 0. Run it in the task's worktree or in a git-archive snapshot, never as an in-place build or test in the shared control checkout. Its output is the complete_task evidence.",
+    "Only dependencyUnblock.ts and its test change, plus resourceStore.ts if the repair moves into a shared helper (grant behaviour unchanged, its lifecycle tests pass)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\"; architect hunt row: dependency auto-unblock leaves the restored seat BLOCKED with a stale lastError.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 344.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T21:13:04.415Z",
+  "updatedAt": "2026-11-02T21:14:26.126Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T21:14:26.126Z",
+    "seq": 1
+  }
+}
