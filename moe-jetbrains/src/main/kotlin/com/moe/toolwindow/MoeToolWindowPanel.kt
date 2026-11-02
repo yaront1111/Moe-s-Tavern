@@ -653,15 +653,21 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     } else null,
                     onClearColumn = if (isDone) {
                         {
-                            val doneCount = columnTasks.size
-                            val result = Messages.showYesNoDialog(
-                                project,
-                                MoeBundle.message("moe.message.archiveDone", doneCount),
-                                MoeBundle.message("moe.message.archiveDoneTitle"),
-                                Messages.getQuestionIcon()
-                            )
-                            if (result == Messages.YES) {
-                                service.archiveDoneTasks(selectedEpicId)
+                            // ARCHIVE_DONE_TASKS ignores the board search, so quote what it
+                            // will archive. Count at click time from the newest state: this
+                            // column is not rebuilt when a task the search hides reaches DONE.
+                            val epicId = selectedEpicId
+                            val doneCount = DoneColumnClear.archiveCount(lastState?.tasks ?: allTasks, epicId, columnTasks)
+                            if (doneCount != null) {
+                                val result = Messages.showYesNoDialog(
+                                    project,
+                                    MoeBundle.message("moe.message.archiveDone", doneCount),
+                                    MoeBundle.message("moe.message.archiveDoneTitle"),
+                                    Messages.getQuestionIcon()
+                                )
+                                if (result == Messages.YES) {
+                                    service.archiveDoneTasks(epicId)
+                                }
                             }
                         }
                     } else null,
