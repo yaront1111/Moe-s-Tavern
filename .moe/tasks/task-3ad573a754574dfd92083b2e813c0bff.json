@@ -99,11 +99,17 @@
       "author": "worker-fdb2af60",
       "content": "Steps 1-4 implemented in assigned worktree; step 5 is NOT passing. Changed paths: scripts/moe-agent.ps1, scripts/moe-team.ps1, scripts/tests/literal-project-path.test.mjs, .github/workflows/ci.yml. Static RED found 71 agent/7 team invocations; pristine Windows RED failed all five runtime launches at Project path not found. After fixes: Linux 3 pass/5 Windows skips; parity-check and npm run lint pass. Latest Windows snapshot run: 6 pass/2 fail/0 skip; codex/gemini/grok launch and completion assertions pass. Both claude engines fail Daemon failed to start within 10s. Independent native argv probe confirms pre-existing Start-Process ArgumentList splits the project at spaces: --project receives only ...\\control followed by separate é, [x], and $; tokens. Filed blocking bug task-8c875cc811d847f7861125a41b31019d, no dependency back-edge. Scope permits path-binding/WorkingDirectory only, not daemon argv quoting, so I will not fix it inline. Also filed nonblocking task-ff1f71cd2e1548d284770fd47f65bac0 for PS5.1 ANSI decoding of BOM-less UTF-8 .moe-agent.json. Fixture now uses a BOM to isolate wildcard handling and Set-Location -LiteralPath in its driver because PS5.1 itself initializes in PSHOME for bracketed inherited cwd. Final files: Linux 3 pass/5 skips, diff --check clean; BOM/LF and ASCII preserved. Full PS postflight did NOT run because the required preceding Windows test failed; step 6 mutation proofs not yet performed. Step-5 recipe ran with only cleanup omitted (shell policy rejected rm -rf); snapshot retained at /mnt/d/moe-scratch/literal-UQeT; latest Windows log /tmp/literal-windows-green-attempt.log.",
       "timestamp": "2026-11-02T19:53:08.546Z"
+    },
+    {
+      "id": "comment-b85be1785a1f4ba9b6d2669774662152",
+      "author": "architect-24611a0a",
+      "content": "Heads-up from planning blocker task-8c875cc8. Its plan rev1 was approved 2026-11-02 and is now WORKING.\n\n1) Merge. task-8c875cc8 changes the same daemon-autostart statement in scripts/moe-agent.ps1:\n- -ArgumentList becomes (ConvertTo-MoeArgumentLine @(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\")).\n- The two \"Start-Process re-quotes each element\" comment lines are replaced.\n- A new helper, ConvertTo-MoeArgumentLine, goes just above `function Read-MoeDaemonJsonText(`.\nWhen you merge on top, keep both changes: that -ArgumentList, plus your -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape(...)) and your comment line. Its CI step goes AFTER 'Test launcher daemon.json cap and seat re-registration'; yours goes above it, so the two should not conflict.\n\n2) An anchor your checkpoint breaks. e94bd62c changes `    if (Test-Path $daemonInfoPath) {` (moe-agent.ps1:802) to -LiteralPath. That exact text is the start boundary of daemon-json-cap.test.mjs's ps1 `check` segment: `between(ps, '\\n    if (Test-Path $daemonInfoPath) {', '\\n    if (-not $running) {')`, used by every ps1 row at line 111. Those rows will fail with \"missing boundaries\" until the anchor follows your change. Your step-5 recipe runs only literal-project-path.test.mjs, so CI's 'Test launcher daemon.json cap and seat re-registration' step (Linux pwsh plus Windows) would be the first to see it.",
+      "timestamp": "2026-11-02T20:19:47.181Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:21:50.469Z",
-  "updatedAt": "2026-11-02T19:56:00.604Z",
+  "updatedAt": "2026-11-02T20:19:47.181Z",
   "dependsOn": [
     "task-92307adc30884fc4861348ed3c8ead4a",
     "task-86431c315e524b3b89af3bb3d2e7c98d"

@@ -27,41 +27,65 @@
     {
       "stepId": "step-2",
       "description": "TEST FIRST, ps1 twin (RED). The twin arm goes in scripts/tests/postflight.ps1 after its deferred/unverifiable loop. Same three phases and assertions, built on Invoke-ReloadCommit / Get-ReloadSequence / Wait-ReloadSequence / Set-ReloadWrapperText.\n- Write race.src with the same UTF-8 BOM encoding Set-ReloadWrapperText uses. Replace 'Agent idle, checking for tasks in' with 'MOE_TEST_RACE_LOADED from $PSCommandPath, checking for tasks in' (single-quoted literal; exactly one occurrence).\n- Launch via Start-Process exactly like the [hot reload] arm, with $env:TMP and $env:TEMP pointed at a private dir and $env:FAKE_RELOAD_RACE_SRC/_DST set. Restore or remove every one of them in the existing finally pattern, so later arms see the original environment.\n- Phase B requires a log match for 'MOE_TEST_RACE_LOADED from .*moe-wrapper-pin\\.[^\\\\/]+[\\\\/]moe-agent\\.ps1,'.\n- Phase C renames every MoeWrapperSourcePath to MoeWrapperOrigin. It then requires 'MOE_TEST_RACE_LOADED from <reload wrapper path>,', compared case-insensitively ($PSCommandPath may differ in case), and no moe-wrapper-pin.* left in the private temp dir.\nError handling: taskkill/Stop-Process cleanup in finally, as the sibling arms do. Throw 'HOT RELOAD RACE FAILED: ...' with the RPC sequence and the seat log on any failed check, using the same 'loaded bytes written after the committed check' text for phase A.\nRED: run postflight.ps1 via powershell.exe -NoProfile -ExecutionPolicy Bypass -File $(wslpath -w ...) in the step-1 RED snapshot, with this file copied in. It must fail at this arm. Keep the log.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.ps1"
       ],
-      "startedAt": "2026-11-02T20:07:56.629Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Added the PowerShell twin of the [hot reload race] arm (about +84 lines, placed after [hot reload follow]). It keeps the UTF-8 BOM, has no CR, and parses with 0 errors. The fake proxy's deregister_worker(wrapper_restart) knob rewrites the wrapper in place once, after the committed check.\n\nThe arm has three phases:\n- A. An uncommitted write landing after the check is never loaded. The arm checks that race.src was consumed, the write is on disk, and `git diff` returns 1, and that the output has no MOE_TEST_RACE_LOADED.\n- B. Once that write is committed, the next restart loads it from a moe-wrapper-pin.* copy (log match). The arm also asserts the copy deleted itself once loaded, an assertion added in adversarial review.\n- C. Committed bytes that lack the MoeWrapperSourcePath hand-over reload from the checkout path, with no pin left behind.\n\nRED, full run against HEAD's wrapper: /mnt/d/moe-scratch/red-69c02444.HXkfgr.ps1.log exited 1 with `HOT RELOAD RACE FAILED: the restart loaded bytes written after the committed check; RPC sequence 'crccc'`. Every earlier arm was ok: [worktree] 56 ok and 0 failed, [accounts] ok, and the five earlier reload arms ok.\n\nScratch runs of the reload arms only:\n- RED with HEAD's wrapper: /mnt/d/moe-scratch/redps1x-69c02444.IfmTb4 exited 1 with the same message.\n- GREEN with the new wrapper: greenps1-69c02444.oTRhPs.run2 exited 0, printing `[hot reload race] ok ... (sequence crcccrcccrccc)`.\n- Mutant with the self-delete removed: mutps1-69c02444.GGVVuq.run2 exited 1 with `the running copy did not delete itself once loaded`.",
+      "startedAt": "2026-11-02T20:07:56.629Z",
+      "completedAt": "2026-11-02T20:16:27.439Z"
     },
     {
       "stepId": "step-3",
       "description": "sh runtime, scripts/moe-agent.sh: pinned reload.\n\n(1) Top, replacing the SCRIPT_DIR line:\n- MOE_WRAPPER_FILE=${BASH_SOURCE[0]:-$0}.\n- ONLY when that path lies in a */moe-wrapper-pin.*/ folder, use ${MOE_WRAPPER_SOURCE:-...} (the checkout path a hot reload hands over).\n- ALWAYS `unset MOE_WRAPPER_SOURCE`, so no child ever inherits it.\n- SCRIPT_DIR from dirname of MOE_WRAPPER_FILE.\n\n(2) At the reload block:\n- MOE_WRAPPER_PATH=\"$SCRIPT_DIR/${MOE_WRAPPER_FILE##*/}\" (absolute).\n- MOE_WRAPPER_LAUNCH_HASH = sha256 of the file this process actually loaded (${BASH_SOURCE[0]:-$0}, the copy when pinned). A write after the hand-over can never become the launch hash, and launch == live for a clean checkout, so there is no thrash.\n- Then, only when that loaded file differs from MOE_WRAPPER_PATH: best-effort `rm -f` of it and `rmdir` of its folder. Bash holds the script open, and the {...exit} group reads on from that descriptor (prototyped).\n\n(3) wrapper_reload_deferred keeps the 5998f871 ls-files/diff gate and its messages unchanged. When diff is clean it pins:\n- mktemp -d \"${TMPDIR:-/tmp}/moe-wrapper-pin.XXXXXX\" (0700); cp the wrapper into it under the same leaf.\n- Require `git -C \"$SCRIPT_DIR\" hash-object --path=<leaf> -- <copy>` to equal `git -C \"$SCRIPT_DIR\" rev-parse --verify -q HEAD:./<leaf>`. These are the same clean filters diff uses; verified on git 2.43 with a CRLF copy.\n- On success, return 1 with MOE_WRAPPER_PIN=<copy>. MOE_WRAPPER_PIN is reset at the top of every call.\n- A blob mismatch (a write between diff and cp) defers with the rc-1 'uncommitted edits' message.\n- A failed mktemp/cp defers with 'cannot confirm the wrapper bytes are committed (private copy failed)'.\n- A rev-parse/hash-object failure defers with '(git rev-parse|hash-object exited N)'.\n- A copy that lacks the string MOE_WRAPPER_SOURCE (bytes that predate or revert this hand-over, and would resolve helpers beside the copy) is dropped. The call returns 1 with MOE_WRAPPER_PIN empty, which means a legacy reload of the checkout path.\n\n(4) Reload branch:\n- `bash -n \"${MOE_WRAPPER_PIN:-$MOE_WRAPPER_PATH}\"`.\n- One helper drops the pin. It removes only a moe-wrapper-pin.* folder and clears the variable. Call it on parse refusal (the refused hash is the parsed bytes' hash) and on the MOE_HEARTBEAT_STOP_TIMEOUT continue.\n- After deregister and the SECURE_TEMP_DIR removal, when pinned: `MOE_WRAPPER_SOURCE=\"$MOE_WRAPPER_PATH\" exec \"$BASH\" \"$MOE_WRAPPER_PIN\" \"${MOE_WRAPPER_ARGV[@]}\"`. Otherwise `exec \"$BASH\" \"$MOE_WRAPPER_PATH\" ...`. Keep the failure echo.\n- cleanup_temp drops a staged pin (type -t guard, like its siblings).\n\nError handling: every new command uses the `|| rc=$?` pattern, so set -e can never end the seat inside the check. Every failure defers and keeps serving the current bytes. Announcement, deregister reason and stop/deregister order stay byte-identical.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "The pinned reload is in place in scripts/moe-agent.sh (+74/-15; `bash -n` OK).\n\nWhat it does:\n- Top of file: `MOE_WRAPPER_FILE` is read; MOE_WRAPPER_SOURCE is honoured only when the running file is inside `*/moe-wrapper-pin.*/*`; MOE_WRAPPER_SOURCE is then always unset; SCRIPT_DIR is derived from MOE_WRAPPER_FILE. The WT-13 refusal message also names MOE_WRAPPER_FILE.\n- `MOE_WRAPPER_PATH` is now absolute: `$SCRIPT_DIR/<leaf>`.\n- The launch hash is taken from BASH_SOURCE, i.e. the bytes actually loaded.\n- `wrapper_reload_deferred` keeps the ls-files/diff gate and its messages unchanged, then pins:\n  - mktemp -d, then cp the wrapper into that folder;\n  - `git hash-object --path=<leaf>` of the copy must equal `rev-parse --verify -q HEAD:./<leaf>`;\n  - on a mismatch it defers with \"uncommitted edits\"; on a copy or git failure it defers with `(private copy failed)` / `(git rev-parse|hash-object exited N)`;\n  - if the copy lacks MOE_WRAPPER_SOURCE, the pin is dropped and the reload is the legacy one from the checkout path.\n- `bash -n` checks the copy.\n- The pin is dropped on parse refusal, on the HEARTBEAT_STOP_TIMEOUT continue, and in cleanup_temp (type -t guard).\n- Hand-over: `MOE_WRAPPER_SOURCE=$MOE_WRAPPER_PATH exec \"$BASH\" <copy>`; without a pin, `exec \"$BASH\" <checkout>`.\n\nDeviations from the plan:\n1. The self-delete runs only when `BASH_SOURCE != MOE_WRAPPER_FILE`, i.e. a handed-over copy, and `wrapper_pin_drop` also checks the folder name. Comparing with MOE_WRAPPER_PATH instead would misfire on a relative-path launch.\n2. `wrapper_pin_stage` was split out of `wrapper_reload_deferred` to keep each function short.\n3. On refusal, the `bash -n` error names the copy, so the copy path is replaced with the checkout path. Adversarial review in this session found that bash 5.2's patsub_replacement turned an `&` in the checkout path into the matched text. The replacement is now quoted, and the fix was checked on the exact production line with the path `R&D $x`.\n\nAll new commands use `|| rc=$?`, so set -e cannot end the seat inside the check.\n\nEvidence:\n- Full RED: /mnt/d/moe-scratch/red-69c02444.HXkfgr.sh.log exited 1 at the race arm.\n- Reload-only scratch GREEN: /tmp/green-69c02444.hhMvuI.run2 exited 0. All six reload arms passed, plus [stale offset]; the race sequence was crcccrcccrccc.\n- Mutant with the self-delete removed: /tmp/mut-69c02444.BYRoLM.run2 exited 1 with \"the running copy did not delete itself once loaded\".",
+      "startedAt": "2026-11-02T20:16:32.060Z",
+      "completedAt": "2026-11-02T20:18:39.375Z"
     },
     {
       "stepId": "step-4",
       "description": "ps1 runtime, scripts/moe-agent.ps1: pinned reload (prototyped on PS 5.1).\n\n(1) Supervisor at the top:\n- $global:MoeWrapperSourcePath = $PSCommandPath for the loop's life.\n- Reset $global:MoeWrapperReload and $global:MoeWrapperReloadPin before each pass.\n- Run $global:MoeWrapperReloadPin when the previous pass set it, else $PSCommandPath.\n- Once a pass that ran a copy returns, remove the copy's folder. Only a moe-wrapper-pin.* leaf; -Recurse -Force -ErrorAction SilentlyContinue; capture $LASTEXITCODE first.\n- The finally clears $global:MoeWrapperSourcePath and removes a staged copy no pass ran.\n- The catch/throw and the 'wrapper relaunch failed' text stay.\n\n(2) Directly after the supervisor block:\n- $script:MoeWrapperPath = $global:MoeWrapperSourcePath if set, else $PSCommandPath.\n- $script:MoeScriptRoot = Split-Path -Parent of it, else $PSScriptRoot.\n- Replace every other $PSScriptRoot with $script:MoeScriptRoot: proxy root, daemon root, $pluginRoot, prompt-cache.mjs, moe-account-lease.mjs, both mods dirs, plus any a peer added meanwhile.\n- Delete the later `$script:MoeWrapperPath = $PSCommandPath` line.\n\n(3) Launch hash from [IO.File]::ReadAllBytes($PSCommandPath): the bytes this pass loaded.\n\n(4) Test-MoeWrapperReloadDeferred keeps its ls-files/diff gate and messages. When diff is clean:\n- If $global:MoeWrapperSourcePath is unset (a pre-fix supervisor reruns the checkout path), return $false with no copy.\n- Else read the wrapper bytes once and [IO.File]::WriteAllBytes them to <[IO.Path]::GetTempPath()>/moe-wrapper-pin.<guid N>/<leaf>.\n- Require Invoke-MoeGit `rev-parse --verify -q HEAD:./<leaf>` and `hash-object --path=<leaf> -- <copy>` to both return Rc 0 and the same id. Then set $script:MoeWrapperPin and return $false.\n- Mismatch, failure and marker rules are the same as the sh twin: no 'MoeWrapperSourcePath' in the copy means a legacy reload with no copy. Reason texts are identical, including 'private copy failed'.\n\n(5) Reload branch:\n- ParseFile the copy when set.\n- Remove it on refusal and on the MOE_HEARTBEAT_STOP_TIMEOUT continue.\n- At the hand-over, set $global:MoeWrapperReloadPin = $script:MoeWrapperPin before `break`, so the supervisor can remove it even if the bottom hand-over is skipped. The bottom `$global:MoeWrapperReload = $true` stays.\n\nError handling: the copy block runs inside the existing try/catch. Any exception defers with '(private copy failed: <message>)' and never ends or deregisters the seat. Preserve the UTF-8 BOM and LF endings.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "The pinned reload is in place in scripts/moe-agent.ps1 (+99/-27). The file keeps its UTF-8 BOM and LF line endings and parses with 0 errors on PowerShell 5.1 and 7.6.\n\nWhat changed:\n- Supervisor:\n  - It sets $global:MoeWrapperSourcePath = $PSCommandPath for the life of the loop.\n  - Before each pass it resets Reload/ReloadPin/LASTEXITCODE.\n  - It runs $global:MoeWrapperReloadPin when the previous pass staged one, otherwise $PSCommandPath.\n  - After each pass, and again in the finally for any staged copy no pass ran, it drops the copy with $moeDropPin. That drop never touches the launched file and only acts on a moe-wrapper-pin.* folder.\n  - The catch/throw is unchanged.\n- $script:MoeWrapperPath and $script:MoeScriptRoot are resolved right after the supervisor. All 7 $PSScriptRoot uses (proxy root, daemon root, pluginRoot, prompt-cache.mjs, moe-account-lease.mjs, both mods dirs) now use MoeScriptRoot; a grep finds $PSScriptRoot only in the fallback on line 116. The later `$script:MoeWrapperPath = $PSCommandPath` line is gone. The WT-13 guard reads $script:MoeWrapperPath.\n- The launch hash is taken from ReadAllBytes($PSCommandPath), i.e. the bytes this pass actually loaded.\n- New-MoeWrapperPin:\n  - reads the bytes once and writes them to %TEMP%/moe-wrapper-pin.<guid N>/<leaf>;\n  - requires Invoke-MoeGit `rev-parse --verify -q HEAD:./<leaf>` and `hash-object --path=<leaf> -- <copy>` to return Rc 0 with the same id;\n  - on a mismatch, defers with 'uncommitted edits';\n  - on a failure, defers with `(private copy failed[: msg])` or `(git rev-parse|hash-object exited N)`;\n  - if the copy lacks 'MoeWrapperSourcePath', does a legacy reload with no copy.\n- A pre-fix supervisor (no SourcePath) gets no copy.\n- The reload branch runs ParseFile on the copy. The copy is dropped on refusal and on the HEARTBEAT_STOP_TIMEOUT continue, and stays staged through the break for the supervisor.\n\nDeviations from the plan:\n1. The pin lives only in $global:MoeWrapperReloadPin; there is no $script:MoeWrapperPin. The supervisor reads the global anyway, which makes the plan's copy-before-break a no-op.\n2. Deletes are non-recursive ([IO.File]::Delete then [IO.Directory]::Delete) instead of -Recurse. This avoids PS 5.1 following junctions when it recurses, and matches the sh twin's rm -f + rmdir.\n3. Added in review: a pinned pass deletes its own copy just after the launch hash (PowerShell has already parsed the whole file), so a hard-killed seat leaves no copy behind. The supervisor's drop is the fallback.\n\nRegression scan:\n- hooked-commit.ps1 and importee-guard.ps1 AST-load top-level functions. None of the 7 replaced sites is inside a function, and the two new functions have no side effects when defined.\n- The ps1 tail slice in seat-registration.test.mjs starts at line 10461, after every change.\n\nEvidence:\n- Full RED exited 1 at the race arm (red-69c02444.HXkfgr.ps1.log).\n- Scratch GREEN greenps1-69c02444.oTRhPs.run2 exited 0 with all six reload arms ok.\n- The mutant with the self-delete removed, mutps1-69c02444.GGVVuq.run2, exited 1 as expected.",
+      "startedAt": "2026-11-02T20:18:46.773Z",
+      "completedAt": "2026-11-02T20:19:24.022Z"
     },
     {
       "stepId": "step-5",
       "description": "Docs: scripts/CLAUDE.md, the Hot reload bullet only.\n- After the ls-files/diff sentence, say that a reload never loads the shared path. It copies the bytes into a private moe-wrapper-pin.* temp folder, requires the copy's blob (`git hash-object --path=<leaf>`) to equal `HEAD:<leaf>`, parses the copy, and runs it. sh: `exec \"$BASH\" <copy>` with MOE_WRAPPER_SOURCE naming the checkout. ps1: the supervisor runs $global:MoeWrapperReloadPin, and helpers resolve beside $global:MoeWrapperSourcePath. So a write after the check stays unloaded until committed (task-69c02444).\n- Copy failure defers with '(private copy failed)'.\n- Committed bytes that do not name the hand-over reload from the checkout path (revert-safe).\n- A ps1 seat launched before this change keeps its old supervisor until relaunched.\n- The sh copy deletes itself once loaded; the ps1 supervisor deletes it after the pass.\n- Update the tests sentence to the five [hot reload*] arms, naming [hot reload race].\nKeep the bullet terse; no other doc edits.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/CLAUDE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md"
+      ],
+      "note": "I edited only the Hot reload bullet in scripts/CLAUDE.md; no other docs changed.\n\nAfter the ls-files/diff sentence, the bullet now explains that a reload never loads the shared path:\n- The bytes are copied into a private `moe-wrapper-pin.*` temp folder.\n- The copy's blob (`git hash-object --path=<leaf>`) must equal `HEAD:<leaf>`.\n- The copy is parsed and then run. For sh that is `exec \"$BASH\" <copy>`, with `MOE_WRAPPER_SOURCE` naming the checkout. For ps1 the supervisor runs `$global:MoeWrapperReloadPin`, and helpers resolve beside `$global:MoeWrapperSourcePath`.\n- So a write that lands after the check stays unloaded until it is committed (task-69c02444).\n\nIt also states the edge cases:\n- A failed copy defers with `(private copy failed)`.\n- Committed bytes that do not name the hand-over reload from the checkout path, so a revert is safe.\n- A ps1 seat launched before this change keeps its old supervisor until it is relaunched.\n- The copy deletes itself once loaded. For ps1, the supervisor's drop after the pass is a fallback; this changed during review, when the ps1 self-delete was added.\n\nDeviation: the plan said \"five\" `[hot reload*]` arms, but the tests sentence now says \"six … (`[hot reload race]` included)\". The full ps1 log lists six distinct arms: [hot reload], refused, deferred, unverifiable, follow and race. The old text said \"four\", which was already stale before this task, because the follow arm was not counted. The sh-only `[stale offset]` mention is unchanged.",
+      "startedAt": "2026-11-02T20:19:26.678Z",
+      "completedAt": "2026-11-02T20:19:41.042Z"
     },
     {
       "stepId": "step-6",
       "description": "Verification: run ONCE, fresh, in a snapshot. Never npm build/test in the shared checkout. The command (also checkRefs):\ncd /mnt/d/projexts/moes && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-69c02444.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js scripts/CLAUDE.md; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\"\nIf it outlives the tool timeout, run it in the background with `tee` to a log and report exit code + tail.\n- Expected: exit 0. `[hot reload race] ok` in BOTH twins, and every pre-existing [hot reload*] / [stale offset] arm still ok with unchanged assertions.\n- complete_task evidence: this command, its exit code and tail, plus the two RED logs from steps 1-2.\n- Budget: net non-board diff ≤300 LOC (QA cap 400, tests included). Report per-file +/- in the completion summary.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-02T20:20:26.225Z"
     },
     {
       "stepId": "step-7",
@@ -116,7 +140,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T20:07:56.629Z",
+  "updatedAt": "2026-11-02T20:20:26.225Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",
@@ -126,7 +150,7 @@
     "firstClaimAt": "2026-10-30T13:39:36.046Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 1
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -140,7 +164,11 @@
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:05:08.343Z",

@@ -1,0 +1,36 @@
+{
+  "id": "task-a837dd48fcb049b5a54681aae1edfc79",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: the control-checkout follow gives up on a transient .git/index.lock, so a QA claim right after a landing can park the row with MOE_CONTROL_CHECKOUT_BEHIND",
+  "description": "Observed live on 2026-11-02 at 20:15:16Z, the first hour of worktree mode. qa-7328a40d's follow failed `git merge -q --ff-only` with \"Unable to create '/mnt/d/projexts/moes/.git/index.lock': File exists\". moe/control stayed at 7beed0bc, behind moe/work-2026-10-24 at 58c760f4. At 20:15:32Z the lock was gone, and a later follow had moved HEAD to 58c760f4. No row was parked this time.\n\nWho uses the control checkout's index at the same time:\n- the IDE: PyCharm's Windows git refreshes. Two Windows git processes were live at 20:15:32Z.\n- peer wrappers: their follows, `git push refs/moe/board`, landings.\n\nThe defect:\n- follow_control_checkout (scripts/moe-agent.sh, about line 6735) and its twin Invoke-MoeControlFollow (scripts/moe-agent.ps1, about line 6123) retry nothing on a lock error.\n- They tolerate only one case: a peer's follow that held the lock and itself moved HEAD to the tip.\n- The commit path already retries this: moe-agent.sh about :5081 (\"5 x 2 s retry on index.lock\"), and the ps1 twin about :5200-5209.\n\nWhy it matters: qa_control_preflight runs the follow, then qa_landed_gate checks that the claimed row's completion is in the control HEAD. If the follow lost a transient lock race for a row landed seconds earlier, the gate worktree_stops the seat with MOE_CONTROL_CHECKOUT_BEHIND and one report_blocked. That row has no blockedOnTaskIds, so it stays BLOCKED until a governor or human resets it. With about 8 coders landing and 3 QA seats claiming right after landings, that race is likely.\n\nFix, in both twins only: when the ff-only merge's stderr contains `index.lock`, re-check HEAD (keep the existing peer-moved-HEAD shortcut), sleep 2 s and retry. Use the same cap as the commit path, at most 5 tries. Every other failure path, and the final MOE_CONTROL_CHECKOUT_BEHIND alert after the last try, stays exactly as it is today. Never delete an index.lock.\n\nFiles: scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/postflight-worktree.cjs. The existing 'lock' case (about :1238) must keep passing: a lock held throughout still ends in BEHIND, with the lock not deleted.",
+  "definitionOfDone": [
+    "follow_control_checkout (sh) and Invoke-MoeControlFollow (ps1) retry the ff-only merge up to 5 times, 2 s apart, only when its error output contains index.lock. After each failed try they re-check whether HEAD already reached the tip.",
+    "A new postflight-worktree.cjs case passes under both postflight.sh and postflight.ps1: an index.lock that is released about 3 s into the follow ends with MOE_CONTROL_ADVANCED and HEAD at the tip.",
+    "The existing 'lock' case still passes: a lock held for the whole retry window ends in MOE_CONTROL_CHECKOUT_BEHIND, and the lock file is never deleted.",
+    "Every other follow failure path (DIVERGED, the .moe-paths BEHIND, NOT_FOLLOWING) behaves as before and does not retry.",
+    "bash scripts/tests/parity-check.sh passes. The verification command (bash scripts/tests/postflight.sh, plus the ps1 harness for the twin) exits 0 from the task worktree."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 41,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T20:16:59.695Z",
+  "updatedAt": "2026-11-02T20:19:54.348Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T20:19:50.362Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}

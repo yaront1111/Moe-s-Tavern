@@ -38,19 +38,26 @@
     {
       "stepId": "step-2",
       "description": "Implement the sh migration mode, run_migration_landing, in scripts/moe-agent.sh (DoD 1-5).\n\nOption and validation:\n- Add `--land-branch <branch>` and a --help line for it.\n- An empty value gives MOE_MIGRATION_BAD_ARGS, exit 2.\n- Once the project resolves, the branch must pass `git check-ref-format --branch`, must resolve via `rev-parse --verify --quiet refs/heads/<branch>^{commit}`, and must not equal the fixed target `main`. Otherwise MOE_MIGRATION_BAD_ARGS, exit 2, before any fetch.\n\nDispatch and isolation:\n- Dispatch once every helper the mode calls is defined, and before the main loop.\n- The mode never enters the loop: no join_team, claim_next_task, get_context, heartbeat sidecar, account lease, CLI launch, landing post-flight or deregister_worker. Guard cleanup_temp's deregistration with the mode flag, so a --worker-id naming a live seat is never torn down.\n- It sends no RPC at all, and never reads worktreeMode or consolidationBranch.\n\nSequence:\n1. Gate check. Read the raw configured settings.qualityGate with the completion arm's reader, ignoring qualityGateScope. If it is blank, or MOE_DISABLE_QUALITY_GATE=1: MOE_MIGRATION_NO_GATE, exit 1, before any fetch.\n2. Derive MOE_TOP, MOE_REL and MOE_GITDIR as pre-flight does, and apply the target-checked-out guard.\n3. At most 2 rounds:\n   - L4: sync_land_target main gives B. Its fetch and diverged codes stop the mode with exit 1.\n   - L5: the landed merge-tree call on B and the tip.\n     - Exit 1: MOE_COMMIT_FAILED_CONFLICT with the paths.\n     - Any other failure or malformed output: MOE_COMMIT_FAILED.\n     - M equal to B's tree (the branch is already contained): MOE_COMMIT_NOTHING_TO_COMMIT, exit 0, nothing published.\n   - L6: freeze B/M and run the .moe-free gate. Add a new explicit no-evidence argument to freeze_candidate and run_frozen_gate that skips record_candidate_rpc and record_check_run_rpc and nothing else; existing callers pass nothing and behave identically. Failure: MOE_COMMIT_FAILED_GATE, keeping MOE_WORKTREE_GATE_INTEGRITY when the integrity check fired.\n   - L7: C = `commit-tree M -p B -p <tip> -m \"chore(migration): land <branch> on main\"`. commit-tree runs no hooks.\n   - L9, through the landed publication helpers:\n     - Confirmed: L10 mirror in remote mode, print `MOE_MIGRATION_LANDED branch=<b> target=main base=<B> commit=<C>`, exit 0.\n     - `[rejected]`, a lost CAS, or a reconcile proving C can never apply: the round ends, and the next round fetches a fresh B and re-gates.\n     - `[remote rejected]`: MOE_PUSH_FAILED, exit 1.\n     - Unknown: MOE_PUSH_OUTCOME_UNKNOWN naming C, exit 1, no ref moved.\n4. Rounds exhausted: MOE_COMMIT_FAILED_REF_CONTENTION, exit 1.\n\nSkipped steps: L0-L3, L5b, L8 and L11-L14. That means no lease, receipt journal, rescue ref, record_commit, finalize_attempt, announce or control follow. Where a landed helper performs one of those task-bound side effects inline, give it the same opt-out or move the side effect into the completion arm. The completion arm's behaviour must not change; the held-out worktree-landing suite and the existing postflight cases prove it.\n\nSave scripts/moe-agent.sh atomically: a temp file in the same directory, checked with `bash -n`, then a rename. Running seats read the wrapper by offset.\n\nError handling in this step:\n- Check every git exit status explicitly and map it to the codes above. No failure path publishes.\n- A signal before L9 publishes nothing.\n- A signal during or after L9 leaves a state the re-run settles. Never print MOE_MIGRATION_LANDED unless publication is confirmed.\n- cleanup_gate_workspace still runs on every exit.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
-      "startedAt": "2026-11-02T20:00:03.503Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-migration.cjs"
+      ],
+      "note": "Added sh `--land-branch BRANCH` (plus a help line) and run_migration_landing. An empty value exits 2 with MOE_MIGRATION_BAD_ARGS at parse time. The mode sets NO_START_DAEMON=true and skips the team join (guarded). cleanup_temp's deregister is guarded by MIGRATION, so no RPC reaches the tripwire on any exit.\n\nThe dispatch `if [ \"$MIGRATION\" = true ]; then run_migration_landing; exit 1; fi` sits right after wt_land_rounds, the last helper it calls, well before the main loop. It never reads worktreeMode or consolidationBranch.\n\nSequence:\n- BAD_ARGS (exit 2): the branch is main, fails `check-ref-format --branch`, or does not resolve under refs/heads.\n- NO_GATE (exit 1): CS_QUALITY_GATE is blank, or MOE_DISABLE_QUALITY_GATE=1. Both refusals come before any fetch.\n- git_top, then the checked-out guard.\n- At most 2 rounds:\n  - sync_land_target main.\n  - The landed `merge-tree --write-tree -z --name-only` call: CONFLICT with the paths, generic FAILED, or NOTHING_TO_COMMIT exit 0 when M == B^{tree}.\n  - `freeze_candidate B M noevidence && run_frozen_gate worktree noevidence`, which is the .moe-free sparse gate. It always runs the configured gate, whatever the scope. Failure gives MOE_COMMIT_FAILED_GATE, and the MOE_WORKTREE_GATE_INTEGRITY/PROJECT_NOT_TOP warnings still print.\n  - `commit-tree M -p B -p tip -m \"chore(migration): land <b> on main\"`.\n  - The checked-out re-check.\n  - Publication. Remote mode uses the new wt_push_target (0 / 1 rejected / 2 remote rejected / 3 never applies / 4 unknown). Local mode uses the update-ref CAS with a lost-CAS ancestry check.\n  - Outcomes: L10 mirror plus LANDED, exit 0; PUSH_FAILED; PUSH_OUTCOME_UNKNOWN (no local ref moved); REF_CONTENTION after 2 rounds.\n- Signals use `trap 'exit 130' INT TERM`, not the loop's exit 0. The EXIT trap still runs cleanup_gate_workspace.\n\nNo-evidence opt-out: freeze_candidate's 3rd argument `noevidence` skips only record_candidate_rpc. run_frozen_gate's 2nd argument `noevidence` skips only record_check_run_rpc, and pre-sets GATE_RECORDED so finish_gate_observation never records an interrupted run. Existing callers pass nothing.\n\nRefactor: wt_publish's push, porcelain classification and reconcile moved verbatim into wt_push_target. wt_publish keeps every journal, rescue and finalize side effect and the same return codes.\n\nTests:\n- The suite grew to 11 cases. New: remote-rejected (a pre-receive hook gives MOE_PUSH_FAILED after 1 round) and checked-out (main is checked out during the gate, and the re-check refuses). `local` now loses round 1's CAS to a peer commit and lands in round 2.\n- `node scripts/tests/postflight-migration.cjs sh …` passes 11/11 in 16 s.\n- Mutation checks on a /tmp copy all fail the suite: deregister guard, team guard, check-run opt-out, candidate opt-out, parent order, up-front checked-out guard, re-check, `[rejected]`-as-final, nothing-to-commit, mirror, and the local CAS old value.\n- Held-out `bash scripts/tests/worktree-landing.sh` (sh, MOE_* scrubbed): 18 passed, 0 failed, including push-remote-rejected, push-outcome-unknown, push-unanswered-*, push-rejected-retry and diverged, so the wt_publish refactor is behaviour-preserving.\n- parity-check.sh passes. The MOE_MIGRATION_* diff is still open until step 3.\n\nSave: I edited with the Edit tool (the rail requires a TOOL witness for tracked files) on this worktree's copy, and `bash -n` passes. No running seat reads this copy (all seats run /mnt/d/projexts/moes/scripts/moe-agent.sh). The shared file changes only through git at landing, so no in-place offset hazard applies.",
+      "startedAt": "2026-11-02T20:00:03.503Z",
+      "completedAt": "2026-11-02T20:15:41.844Z"
     },
     {
       "stepId": "step-3",
       "description": "Mirror step 2 in scripts/moe-agent.ps1 as Invoke-MoeMigrationLanding, with a `-LandBranch <string>` parameter and a help entry. Keep the same validation order, codes, strings and exit codes: 2 for bad args, 1 for refused or failed, 0 for landed or nothing to commit.\n\nCall the landed twins:\n- Sync-MoeLandTarget and Update-MoeLandTargetMirror.\n- The merge-tree helper.\n- The L9 publication and Resolve-MoePushOutcome.\n- New-MoeFrozenCandidate. Never call Send-MoeCandidate in this mode.\n- `Invoke-MoeFrozenGate ... -WorktreeMode` with a new `-NoEvidence` switch that skips Send-MoeCheckRun only.\n\nThe script's exit/finally path skips deregistration in this mode, and the mode sends no RPC.\n\nPowerShell 5.1 rules:\n- Run git through Invoke-MoeGit and PATH, and check every native exit code explicitly.\n- Compare refs and codes ordinally (-ceq or [string]::Equals with Ordinal; mem:gotcha-powershell-path-comparison-culture).\n- Restore any env var you set in try/finally.\n- Keep the file's UTF-8 BOM and LF line endings.\n\nError handling in this step:\n- A PowerShell exception inside the mode is caught and printed with the matching code, or generic MOE_COMMIT_FAILED when none applies. The mode then exits 1 after the finally block has removed the gate workspace.\n- No catch path publishes.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-02T20:15:44.776Z"
     },
     {
       "stepId": "step-4",
@@ -127,7 +134,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:35:19.557Z",
-  "updatedAt": "2026-11-02T20:00:03.503Z",
+  "updatedAt": "2026-11-02T20:15:44.776Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:41:12.579Z",
@@ -137,7 +144,7 @@
     "firstClaimAt": "2026-10-30T13:46:37.034Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-6fc3dd5c",
@@ -148,7 +155,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:11:57.139Z",
