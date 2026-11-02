@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,7 +92,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T10:10:02.811Z",
-  "updatedAt": "2026-11-02T11:24:33.525Z",
+  "updatedAt": "2026-11-02T11:34:28.814Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T10:26:37.639Z",
@@ -102,11 +102,14 @@
     "firstClaimAt": "2026-11-02T10:43:08.563Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T11:34:28.813Z",
+    "wallClockMs": 3080250
   },
   "contextFetchedBy": [
     "architect-93e0e956",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "high",
@@ -231,5 +234,9 @@
     "kind": "completion",
     "sessionId": "worker-4c1da905@2026-11-02T11:20:32Z",
     "at": "2026-11-02T11:24:33.525Z"
-  }
+  },
+  "completedAt": "2026-11-02T11:34:28.813Z",
+  "reviewCompletedAt": "2026-11-02T11:34:28.813Z",
+  "reviewSummary": "Approved. Reviewed completion d2a55eb5 (git show; on moe/work-2026-10-24). ~+83/-12 code LOC: ChatChannelSelection.kt +27, ChatPanel.kt +8/-12, new ChatChannelSelectionTest.kt +48. Scope matches plan: fingerprint return, updatingChannels try/finally, name-sorted combo fill, combo listener, dispatcher and VS Code files untouched; no existing test file changed.\nDoD1: 6 JUnit 4 tests (assertSame/assertNull): kept id, gone->general-type, gone->first in list order, null->general else first, empty->null, two general-type. DoD2: ChatPanel uses choose; selectedItem set only when non-null (overrides the combo auto-select); currentChannelId = toSelect?.id, so empty list nulls it and sendCurrentMessage no-ops; refresh + requestMessages/requestPins only on a changed id, requests only for non-null; refreshMessages/refreshPinnedPanel handle a null id.\nDoD3: re-ran checkRef myself under the jetbrains-gradle lease (released): fresh git archive HEAD + 3 task files in /mnt/d/moe-scratch/vsc22-qa, cmd.exe gradlew.bat test --rerun -> BUILD SUCCESSFUL; ChatChannelSelectionTest 6 tests, 0 failures, 0 errors; Windows total 564 tests, 0 failures, 0 errors. Mutants in the snapshot copy only (compileKotlin executed, originals restored, snapshot deleted): old null-on-deleted fails 3 tests; ignoring previousId fails stillListedPreviousIdIsKept; name-order fallback fails 2 tests.\nUnverified: ChatPanel Swing wiring has no headless test (reviewed by reading only). Non-blocking: VS Code chat.js falls back to channels[0], JetBrains to the general-type channel (divergence filed on VSC-18). build.gradle.kts is a peer's dirty path, not in this commit.",
+  "requiredCheckAtDone": null
 }
