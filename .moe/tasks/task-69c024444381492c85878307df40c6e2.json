@@ -11,20 +11,27 @@
     {
       "stepId": "step-1",
       "description": "TEST FIRST, sh twin + shared knob (RED before any wrapper edit).\n(a) scripts/tests/postflight-fake-proxy.js, `case 'deregister_worker'`: add knob FAKE_RELOAD_RACE_SRC / FAKE_RELOAD_RACE_DST, documented at the handler like the other FAKE_* knobs. When `args.reason === 'wrapper_restart'` and SRC exists, BEFORE ok(): `fs.writeFileSync(DST, fs.readFileSync(SRC))` (rewrites the existing wrapper in place, no rename), then `fs.unlinkSync(SRC)` (one-shot). The deregister is synchronous in both wrappers, so this write lands after the committed check and the parse but before the hand-over loads bytes. That is the check-to-exec window, independent of which git commands the fix runs.\nError handling: let an fs error throw. The arm asserts SRC was consumed, so a swallowed deregister failure cannot pass vacuously.\n(b) scripts/tests/postflight.sh: new arm `[hot reload race] a write after the committed check is never loaded`.\n- Placement: after the deferred/unverifiable loop, before [stale offset].\n- Reuse RELOAD_DIR/RELOAD_PROJECT/RELOAD_WRAPPER and reload_repo/reload_commit/reload_wait/reload_seq/reload_fail.\n- Setup is the same as the deferred arm, plus a private RACE_TMP=$RELOAD_DIR/tmp.\n- Before launch, a node one-liner prepares two contents. Edit A = original + '# race A\\n'. $RELOAD_DIR/race.src = edit A with the single 'Agent idle, checking for tasks in' replaced by 'MOE_TEST_RACE_LOADED from ${BASH_SOURCE[0]}, checking for tasks in'. Exit non-zero unless exactly one occurrence.\n- Launch like [hot reload], adding TMPDIR=$RACE_TMP FAKE_RELOAD_RACE_SRC=$RELOAD_DIR/race.src FAKE_RELOAD_RACE_DST=$RELOAD_WRAPPER (FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 --loop --poll-interval 1).\n\nPhase A:\n- Write edit A, reload_commit 'race A', reload_wait 1 '^c+rc{3,}$'.\n- Fail unless race.src is gone, the wrapper contains MOE_TEST_RACE_LOADED, and `reload_git diff --quiet -- moe-agent.sh` exits 1.\n- reload_fail 'the restart loaded bytes written after the committed check' if the seat output contains MOE_TEST_RACE_LOADED.\n\nPhase B:\n- reload_commit 'race write', reload_wait 2 '^c+rc+rc{3,}$'.\n- Require an output line matching 'MOE_TEST_RACE_LOADED from .*/moe-wrapper-pin\\.[^/]+/moe-agent\\.sh,' (committed bytes load, from a private copy).\n\nPhase C:\n- node renames every MOE_WRAPPER_SOURCE to MOE_WRAPPER_ORIGIN in the wrapper (fail if none).\n- reload_commit 'drop hand-over', reload_wait 3 '^c+rc+rc+rc{3,}$'.\n- Require grep -F \"MOE_TEST_RACE_LOADED from $RELOAD_WRAPPER,\" (bytes without the hand-over reload from the checkout path).\n- Require that no moe-wrapper-pin.* entry is left in RACE_TMP.\n\nKill the seat and restore LIVE_PIDS as the sibling arms do, then print '[hot reload race] ok: ...'.\nRED: S=$(mktemp -d /mnt/d/moe-scratch/red-69c02444.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\", copy in ONLY these two test files, then run the gate's postflight.sh invocation there. Expect exit 1 at this arm with that message, every earlier arm ok. Keep the log for the completion summary.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js",
         "scripts/tests/postflight.sh"
       ],
-      "startedAt": "2026-11-02T19:28:09.062Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "RED confirmed. Full sh RED in snapshot /mnt/d/moe-scratch/red-69c02444.HXkfgr: HEAD's moe-agent.sh/ps1 plus this task's postflight.sh, postflight.ps1 and fake proxy, run as `env -u MOE_*/CLAUDE* MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh`. It exited 1. Log: /mnt/d/moe-scratch/red-69c02444.HXkfgr.sh.log. Every earlier arm is ok, [hot reload], refused, deferred, unverifiable and follow included. It then fails with \"HOT RELOAD FAILED: the restart loaded bytes written after the committed check (RPC sequence 'crccc')\". A reload-only scratch run (postflight.sh prelude plus the reload..[stale offset] arms) with the fixed wrapper passes: race sequence crcccrcccrccc, and [stale offset] ok. Fake proxy knob: FAKE_RELOAD_RACE_SRC/_DST inside deregister_worker (reason wrapper_restart only). It writes in place and is one-shot, and an fs error throws. Arm placement: after [hot reload follow], the newest reload arm, and before [stale offset]. Phases A/B/C are as planned; phase C renames MOE_WRAPPER_SOURCE to MOE_WRAPPER_ORIGIN and checks that no moe-wrapper-pin.* is left in RACE_TMP. The sh/ps1 runtime was drafted while the long RED ran; the RED ran on HEAD's wrappers, so it was unaffected.",
+      "startedAt": "2026-11-02T19:28:09.062Z",
+      "completedAt": "2026-11-02T20:07:54.122Z"
     },
     {
       "stepId": "step-2",
       "description": "TEST FIRST, ps1 twin (RED). The twin arm goes in scripts/tests/postflight.ps1 after its deferred/unverifiable loop. Same three phases and assertions, built on Invoke-ReloadCommit / Get-ReloadSequence / Wait-ReloadSequence / Set-ReloadWrapperText.\n- Write race.src with the same UTF-8 BOM encoding Set-ReloadWrapperText uses. Replace 'Agent idle, checking for tasks in' with 'MOE_TEST_RACE_LOADED from $PSCommandPath, checking for tasks in' (single-quoted literal; exactly one occurrence).\n- Launch via Start-Process exactly like the [hot reload] arm, with $env:TMP and $env:TEMP pointed at a private dir and $env:FAKE_RELOAD_RACE_SRC/_DST set. Restore or remove every one of them in the existing finally pattern, so later arms see the original environment.\n- Phase B requires a log match for 'MOE_TEST_RACE_LOADED from .*moe-wrapper-pin\\.[^\\\\/]+[\\\\/]moe-agent\\.ps1,'.\n- Phase C renames every MoeWrapperSourcePath to MoeWrapperOrigin. It then requires 'MOE_TEST_RACE_LOADED from <reload wrapper path>,', compared case-insensitively ($PSCommandPath may differ in case), and no moe-wrapper-pin.* left in the private temp dir.\nError handling: taskkill/Stop-Process cleanup in finally, as the sibling arms do. Throw 'HOT RELOAD RACE FAILED: ...' with the RPC sequence and the seat log on any failed check, using the same 'loaded bytes written after the committed check' text for phase A.\nRED: run postflight.ps1 via powershell.exe -NoProfile -ExecutionPolicy Bypass -File $(wslpath -w ...) in the step-1 RED snapshot, with this file copied in. It must fail at this arm. Keep the log.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-02T20:07:56.629Z"
     },
     {
       "stepId": "step-3",
@@ -109,7 +116,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T19:28:09.062Z",
+  "updatedAt": "2026-11-02T20:07:56.629Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",
@@ -118,7 +125,8 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:39:36.046Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 6
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -131,7 +139,9 @@
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:05:08.343Z",
   "executionContract": {

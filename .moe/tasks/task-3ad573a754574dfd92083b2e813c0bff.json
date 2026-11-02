@@ -29,33 +29,51 @@
     {
       "stepId": "step-2",
       "description": "TESTS FIRST (Windows real-wrapper launches). Add these cases to scripts/tests/literal-project-path.test.mjs, each with `{ skip: process.platform !== 'win32' && 'needs Windows PowerShell' }`. Model fixture()/launch() on scripts/tests/agent-git-guard.test.mjs, which task-c4cd6dce lands upstream of this task.\n\nMatrix: powershell.exe x [claude, codex, gemini, grok], plus pwsh.exe x [claude] when `where.exe pwsh` succeeds (else skip with that reason).\n\nFixture per case:\n- root = mkdtemp(os.tmpdir(), 'moe-literal-'); rmSync it in t.after with maxRetries 5.\n- project = join(root, \"control é [x] $;'\"), the reporter's exact name.\n- In project: git init -b moe/literal; set user.name, user.email and core.autocrlf=false; commit owned.txt.\n- .moe/project.json {id:'proj-literal', name:'literal', settings:{commitBoardState:false, attribution:{undeclared:'never'}, models:{worker:'claude-literal-sentinel'}}}\n- .moe/tasks/task-postflight.json {id:'task-postflight', title:'Literal', status:'WORKING', filesModified:['owned.txt'], implementationPlan:[]}\n- .moe/roles/worker.md containing ROLE-DOC-SENTINEL; .moe/KNOWN_ISSUES.md containing KNOWN-ISSUES-SENTINEL\n- .moe/agents/literal-agent.md; .serena/memories/literal-memory.md; .moe-agent.json {serenaProject: project}\n\nEnv:\n- Start from process.env minus keys matching /^(MOE_|FAKE_|GIT_|CLAUDE|CODEX|GEMINI|GROK|XAI)/i.\n- Add HOME=USERPROFILE=<root>/home, MOE_PROXY_PATH=<scripts>/tests/postflight-fake-proxy.js, MOE_NODE_COMMAND=process.execPath, MOE_ACCOUNT_ROTATION=off, MOE_DISABLE_HEARTBEAT=1, MOE_DISABLE_ARGV_PROBE=1, MOE_SERENA_PATH=<an existing dummy file under root>, FAKE_TASK_STATUS=REVIEW, FAKE_SCOPE_PEERS_ACTIVE=1, LITERAL_FIXTURE=JSON of {project, result, root}.\n- Prepend dirname(process.execPath) to the EXISTING path key. Windows spells it Path; never add a second key.\n\nFake CLI <root>/<cli>.ps1 (UTF-8 BOM): `& '<process.execPath>' '<this test file>' cli @args`, then `exit $LASTEXITCODE`.\n`cli` mode: on --help/--version exit 0. Otherwise:\n- write the result JSON {cwd: process.cwd(), projectEnv: MOE_PROJECT_PATH, argv, systemPrompt: text of the file after --append-system-prompt-file if present, context: argv joined + the text of any private session-context file a prompt names (`session context file at <path>.`)};\n- write 'literal edit' to <project>/owned.txt.\n\nFake daemon:\n- Claude cases omit -NoStartDaemon and set MOE_DAEMON_PATH=<this test file>.\n- `start` mode (argv: start --project <p>): write <root>/daemon-argv.json {project:p} and <p>/.moe/daemon.json {pid:process.pid, port:1, projectPath:p}; stay alive 8 s; exit 0.\n- t.after kills that pid (try/catch).\n- codex/gemini/grok cases pass -NoStartDaemon.\n\nLaunch: the win32 driver form from agent-git-guard, i.e. a BOM'd .ps1 containing `$global:MoeWrapperSupervised=$true; & '<scripts>/moe-agent.ps1' -Project '<psquoted project>' -WorkerId worker-literal -Role worker -Team Literal -NoLoop -Command '<cli.ps1>' ...`. Run it with spawnSync(engine, ['-NoProfile','-ExecutionPolicy','Bypass','-File',driver], {cwd: project, env, encoding:'utf8', timeout:180000}). Add -CodexExec / -GeminiExec for codex/gemini; a worker grok seat is headless by default.\n\nAsserts, all cases:\n- status 0;\n- stdout+stderr contains none of `wildcard path`, `Project path not found`, `not initialized for Moe`, `Daemon failed to start`;\n- the result file exists;\n- realpath(projectEnv) and realpath(cwd) equal realpath(project): use fs.realpathSync.native and lower-case, because GitHub's Windows TEMP is an 8.3 short path;\n- <project>/.claude/agents/literal-agent.md exists;\n- output contains `(source: .moe-agent.json)`;\n- `git log -1 --format=%s` matches /^(feat|fix)\\(task-postflight\\)/ and `git show HEAD:owned.txt` is 'literal edit'.\nPer CLI:\n- claude: argv has '--model' then 'claude-literal-sentinel'; systemPrompt has both sentinels; context has 'literal-memory'; output has `Daemon started`; daemon-argv project equals projectEnv.\n- codex: <project>/.codex/config.toml contains `MOE_PROJECT_PATH = \"<projectEnv with />\"`; some argv element starts with `mcp_servers.moe={` (the full override, not the dotted fallback); .codex/agent-instructions.md exists.\n- gemini: .gemini/settings.json mcpServers.moe.env.MOE_PROJECT_PATH === projectEnv; .gemini/GEMINI.md contains ROLE-DOC-SENTINEL.\n- grok: .grok/config.toml contains the forward-slashed projectEnv; argv has '--cwd' then projectEnv.\n\nRED: run the step-5 recipe WITHOUT your two ps1 copies. On the unmodified wrapper, the PS 5.1 cases must fail with 'Project path not found'. Note that in the step note.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/literal-project-path.test.mjs"
       ],
-      "startedAt": "2026-11-02T19:46:40.523Z"
+      "modifiedFiles": [
+        "scripts/tests/literal-project-path.test.mjs"
+      ],
+      "note": "Added PS5.1 x all four CLIs and installed pwsh7 x claude real-wrapper fixtures, fake cli/start modes, sentinel/config/landing assertions, isolated env and cleanup. RED on pristine HEAD scripts snapshot /mnt/d/moe-scratch/literal-red-BHmh: Windows native node --test exits 1; all five runtime cases fail with Project path not found before CLI, scanner self-test passes, no skips. Test env also strips PSModulePath (known PS5 child module incompatibility) and enables the established worktree-wrapper test seam.",
+      "startedAt": "2026-11-02T19:46:40.523Z",
+      "completedAt": "2026-11-02T19:47:52.251Z"
     },
     {
       "stepId": "step-3",
       "description": "FIX scripts/moe-agent.ps1. Keep the UTF-8 BOM and LF endings; the file must parse cleanly on PS 5.1 and 7.\n\n(a) Project discovery becomes `$projectPath = Resolve-Path -LiteralPath $Project -ErrorAction SilentlyContinue`. Add a one-line comment: a project dir may contain [ ], which -Path reads as a wildcard.\n\n(b) Convert every remaining G1 site to -LiteralPath and keep every other parameter. The sites below are as of 2026-10-30. Line numbers WILL have moved: 26 upstream ps1-lane tasks land first. So apply the rule to whatever the step-1 guard lists, including their new code.\n- Load-Registry and Get-MoeInstallPath: Test-Path and Get-Content.\n- Get-CodexMoeServerOverride: Test-Path $ConfigPath. Resolve-CommandParts: Test-Path $Cmd. Also Test-Path $moeDir.\n- The three `Resolve-Path (Join-Path $PSScriptRoot \"..\")` calls; Test-Path $proxyScript x2; Test-Path $daemonScript x2.\n- Serena: Test-Path $serenaCandidate; .moe-agent.json Test-Path and Get-Content; Resolve-Path -Path $serenaProjectCandidate; Test-Path $serenaPath x4.\n- Set-Content -Path $mcpConfigFile; Test-Path $daemonInfoPath x2.\n- Get-RoleDoc: Test-Path x2 and Get-Content. project.json and KNOWN_ISSUES.md: Test-Path and Get-Content.\n- Agents mirror: Test-Path x3, Get-ChildItem, Copy-Item.\n- Codex config: Test-Path on the dir and the file, Get-Content, Set-Content x4, Test-Path $codexDir.\n- Gemini: Test-Path on the dir and the file, Get-Content, Test-Path $geminiInstructionsDir, Set-Content GEMINI.md.\n- Grok: Test-Path on the dir and the file, Get-Content, Test-Path $grokAuthFile.\n- Memories: Test-Path and Get-ChildItem.\n- Push-Location $projectPath x4 (gemini and grok launches) and the test seam Push-Location $Git.Top.\n- Teardown: Test-Path and Remove-Item -Path on $mcpConfigFile, $systemPromptFile and $script:GrokPromptFile.\n\nForms:\n- `Get-Content -Raw -Path $x` -> `Get-Content -LiteralPath $x -Raw`.\n- `Set-Content -Path $f -Encoding UTF8 [-NoNewline]` -> `Set-Content -LiteralPath $f -Encoding UTF8 [-NoNewline]`. On both engines, -Path with -Encoding fails for a new bracketed file with \"A parameter cannot be found that matches parameter name 'Encoding'\" (probed).\n- `Get-ChildItem -LiteralPath $d -File -Filter '*.md'`.\n- `Copy-Item -LiteralPath $src -Destination $dest -Force`. A bracketed -Destination works (probed).\n\n(c) The daemon-start Start-Process gains `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))`. It is the same directory as before, only escaped. Add a one-line comment: PS 5.1 resolves the inherited current location as a wildcard. Probed facts:\n- From a [x] cwd, 5.1 fails with \"Cannot perform operation because the wildcard path ... did not resolve to a file\"; 7.6 is fine.\n- A raw bracketed -WorkingDirectory fails on both engines; an escaped one works on both.\n\nError handling: keep every existing -ErrorAction (SilentlyContinue / Stop), try/catch and fallback exactly as it is. A genuinely missing path must still take the same branch as today: 'Project path not found', 'not initialized for Moe', the plugin docs/roles fallback, the Serena 'override not found' warning, the dotted codex fallback, and 'Daemon failed to start'. -LiteralPath changes only how the path string is interpreted, never what happens when it is absent.\n\nLeave alone: Env: drive operations, New-Item -Path, Join-Path/Split-Path (string ops), [IO.File] calls, native git -C/argv, and moe-agent.sh. Make no other behavior change. Done when the step-1 guard reports no moe-agent.ps1 violations.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Converted all 70 flagged filesystem cmdlet invocations to -LiteralPath, including upstream worktree Push-Location sites. Added escaped current FileSystem working directory to daemon Start-Process and the two requested comments; preserved all other flags and Env/New-Item/native arguments. Focused node test (agent guard + scanner self-test) passes 2/2, exit 0.",
+      "startedAt": "2026-11-02T19:47:53.344Z",
+      "completedAt": "2026-11-02T19:48:42.550Z"
     },
     {
       "stepId": "step-4",
       "description": "FIX scripts/moe-team.ps1. It stays ASCII with no BOM.\n- `Test-Path -LiteralPath $agentScript`.\n- Load-Registry: `Test-Path -LiteralPath $path` and `Get-Content -LiteralPath $path -Raw`.\n- `$teamPath = Resolve-Path -LiteralPath $Project -ErrorAction SilentlyContinue`. Without it, a [x] project silently falls back to the team name \"Moe Team\" instead of its leaf.\n- Each of the three `Start-Process powershell ...` calls gains the same `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))`. Otherwise PS 5.1 refuses to open a window from a [x] current directory.\n\nError handling is unchanged: the missing-agent-script exit, the registry try/catch returning @(), and the \"Moe Team\" fallback for an unresolvable project keep their current behavior.\n\nLeave the child `cd \"$scriptDir\"` command strings and Quote-ForCommand unchanged. Done when the step-1 guard reports no violations in either file.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-team.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-team.ps1"
+      ],
+      "note": "Converted team launcher four path sites and three Start-Process working directories exactly as planned. Linux node --test: 3 pass, 5 Windows-only skips, 0 fail. Agent BOM retained with no CR, team stays ASCII. Child command strings and all fallback logic unchanged.",
+      "startedAt": "2026-11-02T19:48:43.411Z",
+      "completedAt": "2026-11-02T19:48:44.389Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY. Run this ONE command once, from the repo root, IN THE BACKGROUND: it takes about 15 min and the Bash tool's foreground cap is 10 min.\n\nR=$(pwd) && mkdir -p /mnt/d/moe-scratch && W=$(mktemp -d /mnt/d/moe-scratch/literal-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && cp scripts/moe-agent.ps1 scripts/moe-team.ps1 \"$W/scripts/\" && cp scripts/tests/literal-project-path.test.mjs \"$W/scripts/tests/\" && cd \"$W\" && node --test scripts/tests/literal-project-path.test.mjs && bash scripts/tests/parity-check.sh && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w \"$W/scripts/tests/literal-project-path.test.mjs\")\" && WSLENV=\"$WSLENV:MOE_POSTFLIGHT_TIMEOUT_SEC\" MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$W/scripts/tests/postflight-safe.mjs\")\" powershell; rc=$?; cd \"$R\"; rm -rf \"$W\"; echo \"VERIFY_EXIT=$rc\"; [ \"$rc\" -eq 0 ]\n\nExpect:\n- Linux: the static tests pass and the Windows cases are skipped.\n- parity-check passes, which also checks the BOM.\n- Windows-native: every case passes, NONE skipped. pwsh is on PATH on this box, so a skipped pwsh case is not evidence.\n- postflight-safe prints {\"exit\":0,...,\"failureClass\":\"NONE\"}. That is the PS 5.1 regression harness over the whole edited wrapper.\n\nWhy this shape: the snapshot is HEAD's scripts plus your three files, so peers' dirty bytes stay out. The drive-letter cwd matters: from a /tmp (UNC) cwd, unrelated postflight scenarios fail.\n\nIf postflight-safe fails, rerun only its part on a pristine `git archive HEAD scripts` snapshot to classify the failure as pre-existing before touching code, and report both results. Submit this command, its exit code and its output tail as the complete_task verification.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-02T19:48:45.297Z"
     },
     {
       "stepId": "step-6",
@@ -65,8 +83,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -75,10 +93,17 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 310.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-1556ff79fa2a47b085ca330d4537acd7",
+      "author": "worker-fdb2af60",
+      "content": "Steps 1-4 implemented in assigned worktree; step 5 is NOT passing. Changed paths: scripts/moe-agent.ps1, scripts/moe-team.ps1, scripts/tests/literal-project-path.test.mjs, .github/workflows/ci.yml. Static RED found 71 agent/7 team invocations; pristine Windows RED failed all five runtime launches at Project path not found. After fixes: Linux 3 pass/5 Windows skips; parity-check and npm run lint pass. Latest Windows snapshot run: 6 pass/2 fail/0 skip; codex/gemini/grok launch and completion assertions pass. Both claude engines fail Daemon failed to start within 10s. Independent native argv probe confirms pre-existing Start-Process ArgumentList splits the project at spaces: --project receives only ...\\control followed by separate é, [x], and $; tokens. Filed blocking bug task-8c875cc811d847f7861125a41b31019d, no dependency back-edge. Scope permits path-binding/WorkingDirectory only, not daemon argv quoting, so I will not fix it inline. Also filed nonblocking task-ff1f71cd2e1548d284770fd47f65bac0 for PS5.1 ANSI decoding of BOM-less UTF-8 .moe-agent.json. Fixture now uses a BOM to isolate wildcard handling and Set-Location -LiteralPath in its driver because PS5.1 itself initializes in PSHOME for bracketed inherited cwd. Final files: Linux 3 pass/5 skips, diff --check clean; BOM/LF and ASCII preserved. Full PS postflight did NOT run because the required preceding Windows test failed; step 6 mutation proofs not yet performed. Step-5 recipe ran with only cleanup omitted (shell policy rejected rm -rf); snapshot retained at /mnt/d/moe-scratch/literal-UQeT; latest Windows log /tmp/literal-windows-green-attempt.log.",
+      "timestamp": "2026-11-02T19:53:08.546Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:21:50.469Z",
-  "updatedAt": "2026-11-02T19:46:40.523Z",
+  "updatedAt": "2026-11-02T19:56:00.604Z",
   "dependsOn": [
     "task-92307adc30884fc4861348ed3c8ead4a",
     "task-86431c315e524b3b89af3bb3d2e7c98d"
@@ -92,7 +117,7 @@
     "firstClaimAt": "2026-10-30T16:38:29.657Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-bc59d28a",
@@ -103,7 +128,10 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T17:13:20.376Z",
@@ -187,17 +215,46 @@
       "treeId": "e9af598074b94cf015bb2c1cf3591663cf101498",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "e94bd62c54c0e3c4e002c15dd4e5be8f880e95b2",
+      "ref": "refs/heads/moe/task/task-3ad573a754574dfd92083b2e813c0bff",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-02T19:40:27Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-team.ps1",
+        "scripts/tests/literal-project-path.test.mjs"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-02T19:56:00.604Z",
+      "treeId": "b43cb25d4bc9b903e5bfb9e38ccca0677a84cd93",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json"
+    ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json",
+    ".github/workflows/ci.yml",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-team.ps1",
+    "scripts/tests/literal-project-path.test.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "architect-bc59d28a@2026-10-30T16:38:30Z",
-    "at": "2026-10-30T17:14:19.631Z"
+    "sessionId": "worker-fdb2af60@2026-11-02T19:40:27Z",
+    "at": "2026-11-02T19:56:00.604Z"
   },
-  "workStartedAt": "2026-11-02T19:45:29.085Z"
+  "workStartedAt": "2026-11-02T19:45:29.085Z",
+  "blockedReason": "Approved literal-path implementation and tests are saved (steps 1-4 complete), but required Windows verification is red: 6 pass/2 fail/0 skip. Both claude daemon-autostart cases time out because existing Start-Process -ArgumentList joins the spaced project path without quoting; native probes on PS5.1 and pwsh7 show --project receives only the path through control, with é/[x]/remaining characters split into later args. Fixing native argv is outside approved path-binding/WorkingDirectory scope. Filed blocker task-8c875cc811d847f7861125a41b31019d without a dependency back-edge. Linux static guard, parity, lint, and codex/gemini/grok launch+landing cases pass; full PS postflight and final mutation review remain unrun, not passing. Handoff and gotcha memories saved via Serena; detailed evidence in comment-1556ff79fa2a47b085ca330d4537acd7.",
+  "blockedOnTaskIds": [
+    "task-8c875cc811d847f7861125a41b31019d"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-11-02T19:55:06.998Z"
 }

@@ -1,0 +1,39 @@
+{
+  "id": "task-8c875cc811d847f7861125a41b31019d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: PowerShell daemon autostart splits project paths containing spaces in Start-Process ArgumentList",
+  "description": "Native PS5.1 and pwsh7 probe reproduces Start-Process -ArgumentList @($daemonScript,\"start\",\"--project\",$projectPath) splitting control é [x] $;' into four argv elements; --project receives only ...\\control. The new literal-project-path real-wrapper claude cases time out with Daemon failed to start within 10s after the wildcard fix. Existing comment incorrectly says Start-Process re-quotes each array element; approved task-3ad573a7 scope forbids changing native argv.",
+  "definitionOfDone": [
+    "Preserve complete daemon-script and project paths as individual native arguments on PS5.1 and pwsh7, including spaces and the literal fixture name.",
+    "Regression test fails with current ArgumentList construction and passes with the fix.",
+    "Keep daemon start error handling and escaped current FileSystem working directory unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote: a fleet-filed blocker with a native repro on PS5.1 and pwsh7. task-3ad573a7 (MEDIUM) is BLOCKED on it with an auto-unblock, because its Windows real-wrapper daemon-autostart cases time out. Planner: the fix is the daemon-autostart Start-Process -ArgumentList in scripts/moe-agent.ps1. task-3ad573a7's unlanded checkpoint (on moe/task/task-3ad573a7…) changes the same call's WorkingDirectory escaping. Keep this fix to ArgumentList quoting only, leave WorkingDirectory as it is on the target, and expect 3ad573a7 to merge on top.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 337.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T19:51:59.705Z",
+  "updatedAt": "2026-11-02T19:56:55.090Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T19:55:37.599Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T19:56:27.367Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
+}

@@ -13,10 +13,84 @@
   "taskRails": [
     "Do not loosen or bypass the daemon's /health Host guard (packages/moe-daemon/src/server/healthHost.ts). The launchers dial an IP literal instead, and healthHost.ts stays byte-identical."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the tests first, in scripts/tests/daemon-json-cap.test.mjs only. Read mem:gotcha-launcher-daemon-identity-probe and mem:gotcha-daemon-health-host-tests before you start. Every harness change below is backward compatible: every existing row and every existing assertion stays exactly as it is.\n(a) spawnAsync(exe, args, env = ENV), and runCheck(..., { daemonHost }) spawns with { ...ENV, MOE_DAEMON_HOST: daemonHost } when one is given. ENV still deletes the operator's own MOE_DAEMON_HOST.\n(b) listen(server, address = '127.0.0.1') and withHealth(statusCode, body, fn, { address = '127.0.0.1', guard = false } = {}). A guarded fake applies the daemon's REAL isAllowedHealthHost(req.headers.host, req.socket.localAddress). Import it lazily from packages/moe-daemon/dist/server/healthHost.js; that module imports only 'net'. If the dist is missing, fail the row with distKeys' 'build packages/moe-daemon first' wording. Never fall back to an unguarded fake. A refused Host gets 403 text/plain 'Forbidden', as the daemon does. Guarded requests are recorded as `${req.method} ${req.url} ${req.headers.host} ${code}`; unguarded recording stays 'GET /health'.\n(c) refusal() and assertRefused() take host = '127.0.0.1' as their last parameter.\n(d) powershellKeys' end anchor becomes the host-neutral '\\n# Which project the daemon '. It matches the ps1 comment both today and after step 3 rewords it.\n(e) Resolve NAMES once, at load: 'localhost.' and os.hostname(). 'localhost.' is RFC 6761's localhost name in absolute form: every resolver answers loopback, yet it is not 'localhost', so a launcher must resolve it, and the guard 403s it as a Host. For each name, take the first entry of dns.promises.lookup(name, { all: true }). Node's default verbatim order is the OS getaddrinfo order that Python and .NET also use. Measured on this host: ::1 first for 'localhost.' on node, node.exe, python3, python.exe, PS 5.1 and PS 7. Skip the name's rows, with the reason, when:\n- the lookup fails;\n- the name is an IP literal or localhost;\n- the first address is IPv6 link-local (fe80::/10), because no Host can name a scoped address (on this Windows host os.hostname() resolves first to fe80::...%3);\n- a bind probe on the first address fails (no IPv6 loopback).\nThe expected Host literal is [addr] for IPv6.\nRows for each usable name, on every engine. The fake is guarded and listens on that first address. One admitted request means requests deep-equals [`GET /health ${literal}:${port} 200`].\n- sh, live-pid branch (pidInfo). Foreign: assertRefused(..., name) plus one admitted request. Same: the running line plus one admitted request.\n- sh, Windows-owned candidate loop (px4Info; foreignSkip under Git Bash). Foreign: refused naming the name, r.after === r.before, '@@ exit host=[<name>]', one admitted request. Same: adopted, '@@ exit host=[<name>]' (the candidate is exported as given, never as the IP), one admitted request.\n- ps1, live-pid branch (psInfo). Foreign: refused naming `${name}:${port}`, untouched, no '@@ running=', one admitted request. Same: `@@ running=True port=${port} err=` plus one admitted request.\nAdd one non-resolving-name guard row per engine on the live-pid branch: MOE_DAEMON_HOST='moe-daemon.invalid' (RFC 6761 .invalid never resolves) with closedPort(). It must be adopted exactly as today: sh 'running=true'; ps1 '@@ running=True port=<p> err=' with nothing after err=, which proves no exception reached $Error. These guard rows pass before and after the fix.\nRED: with both launchers untouched, run the step-4 checkRef. To iterate faster, keep its /mnt/d snapshot and re-run `node --test ...` and `node.exe --test ...` there after copying files in; the Linux leg fails first and stops the && chain, so get the PowerShell RED from node.exe directly. Every resolving-name row must fail. For sh, the guard 403s Host '<name>:<port>', the probe exits 1, and the row is adopted or unreachable. For ps1, it dials 127.0.0.1 and the fake sees zero requests. All existing rows and the guard rows must pass. Save the failing row names and diffs for the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "note": "Added backward-compatible harness options and guarded real-DNS identity rows; all existing rows/assertions unchanged. RED checkRef in /mnt/d/moe-scratch/t54a9.reHple: Linux 100 tests, 24 pass / 8 fail / 68 skip; all 8 usable named-host rows fail with actual `GET /health localhost.:<p> 403` (or Yaron-PC 403), expected literal [::1] (or 127.0.1.1) 200. Separate node.exe RED: 100 tests, 81 pass / 6 fail / 13 skip. Both PS5.1+7 localhost. foreign/same rows fail `actual []`, expected `GET /health [::1]:<p> 200`, and output `@@ running=True ... err=`. All 81 baseline rows and nonresolving guards pass; legitimate unavailable engines/link-local/candidate branches skip. Launchers untouched. Snapshot kept for iteration. Edits in wrapper-provided task worktree with apply_patch tool witnesses; no shared runtime builds.",
+      "startedAt": "2026-11-02T19:59:28.180Z",
+      "completedAt": "2026-11-02T20:04:19.252Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix scripts/moe-agent.sh, in probe_daemon_health only. It mirrors moe-proxy probeDaemonIdentity from task-86d66093.\nAdd ipaddress and socket to the python import line. Resolve inside the OUTER try:, right before the urlopen. Never put this code between comparable() and 'try:': the test's pythonKeys cuts from 'WINDOWS = re.compile(' to '\\ntry:' and runs that cut with no argv. The python runs inside bash single quotes, so use double quotes only. The prototype below was verified on 2026-11-02 against the real guard. Old: Host 'localhost.:p' got 403 and exit 1. New: Host '[::1]:p' got 200 and exit 3 or 0. 127.0.0.1, [::1], LOCALHOST and bare ::1 still send exactly the Host they send today:\n    host = sys.argv[1]\n    try:\n        ipaddress.ip_address(host[1:-1] if host[:1] == \"[\" and host[-1:] == \"]\" else host)\n    except ValueError:\n        if host.lower() != \"localhost\":\n            address = socket.getaddrinfo(host, None, 0, socket.SOCK_STREAM)[0][4][0]\n            host = \"[%s]\" % address if \":\" in address else address\nThen build the URL from host instead of sys.argv[1].\nError handling: a failed lookup raises inside the outer try, so the existing except Exception exits 1 (unreachable). A hung lookup is ended by the existing 3 s watchdog (os._exit(1)), which starts before it. Add no timer, no retry and no second address. IP literals and localhost (any case) keep the URL built from argv, byte for byte.\nLeave comparable() untouched; it is task-3def0804's code. Also leave both call sites, refuse_foreign_daemon and the candidate loop untouched. The live-pid PROBE_HOST and the loop already pass the host as given, the loop still exports $CANDIDATE, and the refusal names '$1:$2', which is the name. Update the function's header comment in one or two lines: a name is resolved once and its first address dialed, because the daemon's /health guard 403s a name. `bash -n scripts/moe-agent.sh` must pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Updated probe_daemon_health imports/header and outer-try host resolution exactly as planned. A non-IP/non-localhost name resolves once via getaddrinfo's first stream address; IPv6 is bracketed. Existing watchdog/except bound failures. Comparable/path logic, call sites, candidate export and refusal remain untouched. `bash -n scripts/moe-agent.sh` exited 0 fresh. Full GREEN gate intentionally batched in step 4.",
+      "startedAt": "2026-11-02T20:04:19.283Z",
+      "completedAt": "2026-11-02T20:04:31.764Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Fix scripts/moe-agent.ps1. Keep its UTF-8 BOM, and never touch Get-MoeComparableProjectPath.\nThe new signature is Get-MoeDaemonIdentity($Port, [string]$ProjectPath, [string]$ProbeHost = '127.0.0.1'). Never name the parameter $Host: it is PowerShell's read-only automatic variable.\nBefore connecting, inside the existing try and the existing $deadline:\n- localhost in any ASCII case ($ProbeHost.ToLowerInvariant() -ceq 'localhost'; -eq is culture-aware, see mem:gotcha-powershell-path-comparison-culture) uses [Net.IPAddress]::Loopback. That is ps1's request today: Host 127.0.0.1:<port>.\n- An IP literal (strip one pair of enclosing brackets, then [Net.IPAddress]::TryParse) uses that address, with no lookup.\n- Anything else gets one [Net.Dns]::GetHostAddressesAsync($ProbeHost), waited with [Threading.Tasks.Task]::WaitAny on the time left to $deadline. Return 'unknown' unless the task finished RanToCompletion with at least one address; otherwise use Result[0].\nThen connect: New-Object Net.Sockets.TcpClient($address.AddressFamily). The PS 5.1 default TcpClient is IPv4-only and cannot reach ::1. Call ConnectAsync($address, [int]$Port) and wait on the time left, returning 'unknown' when none is left. The request line is \"Host: ${hostText}:$([int]$Port)\", where hostText is '[addr]' for InterNetworkV6 and the address otherwise. Keep the braces: \"$hostText:\" is a parse error. For 127.0.0.1 the request is byte-identical to today's. The rest of the function is unchanged: the read loop, the status check, the JSON, the comparison and 'foreign <served>'.\nError handling: never read .Result before checking Status. A faulted task's exception lands in $Error, and the harness's err= rows would show it. Every failure stays 'unknown' through the existing catch. Add no new throw.\nThe call site is inside `if ($proc) {`, which the test cuts out together with the check block, so do not hoist it: $probeHost = if ($env:MOE_DAEMON_HOST) { $env:MOE_DAEMON_HOST } else { '127.0.0.1' }. Pass $probeHost as the third argument. The refusal's first line reads 'the daemon at ${probeHost}:$($info.port)'. The three sentences are otherwise byte-identical (REFUSAL_FIXED), matching sh's '$1:$2'. Reword the comment above the function so it names the probed host and the resolve rule; keep its first words '# Which project the daemon ' for the test anchor.\nPrototype, verified on 2026-11-02 on PS 5.1 and PS 7 against the real guard:\n- 'localhost.' sent Host [::1]:<p> and classified foreign and same correctly.\n- 127.0.0.1, LOCALHOST and [::1] sent today's Host.\n- 'moe-daemon.invalid' gave 'unknown' in under 0.1 s, with $Error empty.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Added ProbeHost default, literal/localhost handling, async DNS once with Status-before-Result and deadline-bound WaitAny, address-family TcpClient, literal Host (IPv6 brackets), and env-aware call/refusal. BOM EF BB BF preserved; Get-MoeComparableProjectPath and remaining HTTP/parser logic untouched. Minor same-scope plan correction: use ToLowerInvariant().Equals('localhost') (ordinal) instead of -ceq. Fresh PS5.1 probe proved ('local'+[char]173+'host') -ceq 'localhost' is True but ordinal Equals is False; -ceq remains culture-aware and would bypass resolution for non-localhost names (as preloaded culture memory warns). Gate batched to step 4.",
+      "startedAt": "2026-11-02T20:04:34.268Z",
+      "completedAt": "2026-11-02T20:04:50.437Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify once, after steps 1-3. There is no gate per step.\nRun the executionContract checkRef from the worktree root (or from the control checkout). It:\n- archives HEAD to /mnt/d/moe-scratch/t54a9.* and overlays the three task files;\n- runs npm ci and npm run build for packages/moe-daemon and packages/moe-proxy IN THAT SNAPSHOT, never in the shared checkout (global rail);\n- runs the DoD command `node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh`. That is the Linux leg: bash rows run, and PowerShell rows skip because WSL has no pwsh;\n- runs the same suite under Windows node.exe. Git Bash, PS 5.1 and PS 7 rows run there; only Git Bash's Windows-owned daemon.json rows skip. See mem:gotcha-launcher-ps1-rows-from-wsl and mem:gotcha-wsl-scratch-repo-on-drvfs-filemode-and-speed.\nThe architect dry-ran it on 2026-11-02 against HEAD 7beed0bc. It exited 0 in about 5 min. Linux: 81 tests, 23 pass, 58 skip. parity: PASS. Windows: 81 tests, 78 pass, 3 skip. Expect the new rows to add to both counts, with 0 fail. Every 'localhost.' row must be ok, not skipped, on PowerShell 5.1 and PowerShell 7 in the Windows leg.\nFor complete_task, set verification.command to the checkRef verbatim and exitCode to 0. The outputTail is the Windows leg's summary plus the PowerShell 'localhost.' ok lines. The summary also quotes the step-1 RED failures.\nAlso run `npm run lint` once from the repo root; it is a bash script, not a build. The task is epic-final, so the wrapper's qualityGate `bash scripts/tests/parity-check.sh && npm run lint` runs at landing, and a failure there would send the completion to a rescue ref.\nError handling for a red run:\n- An existing row that fails is a regression to fix. Never skip or loosen that row.\n- A 'localhost.' row that skips on a PowerShell engine leaves DoD 5 unproven. Find out why (IPv6 loopback, resolver order) before completing.\nIf the gate nears the tool cap, run it detached (setsid nohup ... > log; echo EXIT=$?) and poll with `timeout 560 ...`. Afterwards, delete the snapshot by its literal path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "note": "Fresh executionContract checkRef verbatim exited 0 in isolated /mnt/d/moe-scratch/t54a9.wgvU0n; npm ci + build daemon/proxy there only. Linux node suite: 100 tests, 32 pass, 0 fail, 68 legitimate unavailable-PS skips. parity PASS. Native Windows node.exe suite: 100 tests, 87 pass, 0 fail, 13 legitimate skips (Git Bash WSL-only branches and scoped link-local machine-name rows). Every localhost. foreign/same row passed, including PS5.1 and PS7 (not skipped). Separate root `bash scripts/tests/parity-check.sh && npm run lint` exited 0. No gate failures or source changes in this step. Snapshot retained only for step-5 scratch mutants, then will delete literal path.",
+      "startedAt": "2026-11-02T20:05:06.582Z",
+      "completedAt": "2026-11-02T20:07:40.906Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review of this task's own diff.\nRun scratch-only mutants in a copy of the snapshot, never in the tree:\n(1) Hung lookup, DoD 3. Replace the sh getaddrinfo call with time.sleep(10): the probe must exit 1 within about 3 s (the watchdog). Replace the ps1 lookup with [Threading.Tasks.Task]::Delay(10000): it must give 'unknown' within about 3 s with err= empty. Quote both timings in the summary.\n(2) Each of these must fail at least one new row: drop the IPv6 brackets; keep the name in the URL; keep ps1 on 127.0.0.1; keep the refusal's hard-coded 127.0.0.1.\nCheck:\n- `git diff --exit-code <base> -- packages/moe-daemon/src/server/healthHost.ts` passes. Task rail: the file stays byte-identical, and there is no daemon change.\n- comparable() and Get-MoeComparableProjectPath are unchanged.\n- The refusal sentences are identical in both launchers.\n- moe-agent.ps1 still starts with EF BB BF.\n- No added line contains a project.json globalRails.forbiddenPatterns string.\n- Net non-board LOC is well under 400.\nThink through these cases:\n- A name with many addresses: only the first is tried, like the proxy.\n- A scoped link-local first address: 403, so 'unknown'. This is an accepted residual, shared with the proxy.\n- A bare IPv6 MOE_DAEMON_HOST on sh: the DoD keeps today's unbracketed request, so it is still unknown. Out of scope.\n- A MOE_DAEMON_HOST with whitespace or a CR: the lookup fails, so unreachable, as before.\n- Concurrent seats: the probe is stateless.\nThen update the Serena memories mem:decision-daemon-health-host-rule and mem:gotcha-daemon-health-host-tests: the launchers now resolve a named MOE_DAEMON_HOST (drop 'still send the name'), and add the 'localhost.' test-name trick. Fix any finding and re-run the step-4 gate before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "note": "Adversarial review of all three own diffs complete: stateless probes; failures stay bounded; no late DNS continuation can connect; client closed in finally. Scratch mutants killed: sh brackets=4 failing rows, ps brackets=4, sh name URL=4, ps loopback=4, ps refusal loopback=2. Hung lookup: sh exit1 in3.083s; PS5.1 unknown3032ms / PS7 unknown3044ms, both errors=0. Guard and both path helpers byte-identical to base7beed0bc, BOM EFBBBF, refusal parity, no forbidden added lines, diff-check/bash-n clean; +135/-27 net108. sh IP/localhost URL bytes match RED baseline with no explicit lookup. Accepted first-address-only, scoped link-local unknown, and sh bare-IPv6 residuals unchanged. No post-gate source fix necessary. Step4 exact checkRef remains fresh for these bytes: Linux32 pass/68skip; Windows87pass/13skip out of100 each, 0fail, both PS engines' localhost. rows ran. Root parity+lint pass. Existing broad function/file structure preserved per approved narrow scope. Memories updated and task handoff written. All owned scratch snapshots deleted; evidence logs retained in /tmp.",
+      "startedAt": "2026-11-02T20:07:48.685Z",
+      "completedAt": "2026-11-02T20:12:10.892Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -32,16 +106,142 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:56:19.568Z",
-  "updatedAt": "2026-11-02T19:17:46.545Z",
+  "updatedAt": "2026-11-02T20:14:55.733Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T19:16:34.259Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-02T19:17:17.594Z"
+    "firstClaimAt": "2026-11-02T19:17:17.594Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-fdb2af60"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T19:47:29.974Z",
+  "executionContract": {
+    "intendedBehavior": "When MOE_DAEMON_HOST is a DNS name (neither an IP literal nor localhost in any case), both launchers' pre-flight /health identity probes resolve it once. They dial its first address in OS order and send that IP literal as the Host, bracketed for IPv6; the daemon's /health guard admits it. A daemon at that name serving another project is refused with MOE_DAEMON_FOREIGN_PROJECT, naming the configured host and port. This project's daemon is adopted, and the sh candidate loop still exports the candidate as given. moe-agent.ps1 now probes MOE_DAEMON_HOST when it is set, else 127.0.0.1. IP literals, localhost and an unset MOE_DAEMON_HOST keep today's requests. A failed or hung lookup reads as unreachable (sh exit 1, ps1 'unknown') inside the existing 3 s bound.",
+    "acceptanceCriteria": [
+      "sh probe_daemon_health given a name sends one GET /health whose Host is '<ip literal>:<port>', bracketed for IPv6. A foreign project gives exit 3 and a refusal naming '<name>:<port>'; this project gives exit 0. The candidate loop exports the name, never the resolved IP.",
+      "ps1 probes $env:MOE_DAEMON_HOST, else 127.0.0.1. A name is handled as in sh. The refusal's first line names '<probe host>:<port>', and the other two lines are unchanged.",
+      "With an IP literal, localhost or an unset MOE_DAEMON_HOST, the request bytes are unchanged: sh builds the URL from argv, and ps1 sends Host 127.0.0.1:<port> for unset and for localhost.",
+      "A failed lookup gives sh exit 1 and ps1 'unknown' with $Error untouched. A hung lookup gives the same result within 3 s, through the sh watchdog and the ps1 WaitAny on the deadline.",
+      "'localhost.' rows (plus os.hostname() where usable) run on every engine against a fake guarded by the real isAllowedHealthHost: a foreign project is refused and this project adopted. RED is shown on the unchanged launchers, and every existing row passes unchanged."
+    ],
+    "invariants": [
+      "packages/moe-daemon/src/server/healthHost.ts stays byte-identical, and there is no daemon change.",
+      "comparable() in moe-agent.sh and Get-MoeComparableProjectPath stay unchanged (task-3def0804's code).",
+      "The three MOE_DAEMON_FOREIGN_PROJECT sentences stay byte-identical across the launchers (REFUSAL_FIXED).",
+      "Probe time stays at most 3 s in total: one watchdog in sh, one deadline in ps1, and no extra timers.",
+      "The probe never throws: sh exits only 0, 1 or 3; ps1 returns only 'same', 'foreign <path>' or 'unknown'.",
+      "moe-agent.ps1 keeps its UTF-8 BOM. No added line contains a project.json globalRails.forbiddenPatterns string."
+    ],
+    "compatibility": [
+      "With MOE_DAEMON_HOST unset, both launchers send today's exact request, and every existing daemon-json-cap row passes unchanged.",
+      "The sh candidate loop still exports the candidate string as given, so the codex/grok TOML upsert sees the operator's value.",
+      "A bare IPv6 MOE_DAEMON_HOST on sh keeps today's unbracketed request, because the DoD keeps IP-literal requests unchanged. That is a pre-existing residual."
+    ],
+    "approvedScope": [
+      "moe-agent.sh probe_daemon_health: the import line, host resolution inside the outer try, and the header comment.",
+      "moe-agent.ps1 Get-MoeDaemonIdentity: the [string]$ProbeHost parameter (default '127.0.0.1'), resolution, a TcpClient per address family, the Host text and the comment. Its one call site: $probeHost and the refusal host.",
+      "daemon-json-cap.test.mjs: the spawnAsync/runCheck env option, the listen/withHealth address and guard options, the refusal/assertRefused host parameter, the powershellKeys end anchor, the new named-host rows and the non-resolving-name guard rows."
+    ],
+    "reuse": [
+      "sh reuses the existing 3 s watchdog and the outer except. ps1 reuses the existing WaitAny-on-deadline pattern and its catch that returns 'unknown'.",
+      "Tests reuse the existing runCheck, withHealth, closedPort, assertRefused, pidInfo, px4Info and psInfo fixtures, plus the daemon's real built isAllowedHealthHost. There is no second harness.",
+      "The rule mirrors moe-proxy probeDaemonIdentity (task-86d66093): resolve a name once, dial the first address, and keep IP literals and localhost unchanged."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh probe_daemon_health is one `python -c` whose threading.Timer(3, os._exit, (1,)) watchdog starts before any work. Its urlopen URL is built from sys.argv[1]. An HTTPError other than 503 exits 1, and the outer `except Exception` exits 1.",
+      "moe-agent.sh live-pid branch: PROBE_HOST=\"${MOE_DAEMON_HOST:-127.0.0.1}\", and rc 3 leads to refuse_foreign_daemon \"$PROBE_HOST\". Candidate loop: MOE_DAEMON_HOST, then 127.0.0.1, then the WSL gateway; rc 0 leads to export MOE_DAEMON_HOST=\"$CANDIDATE\".",
+      "moe-agent.ps1 Get-MoeDaemonIdentity($Port, $ProjectPath) dials ConnectAsync('127.0.0.1') under one 3 s $deadline and sends raw HTTP/1.0 with 'Host: 127.0.0.1:<port>'; its catch returns 'unknown'. Its single caller sits under `if ($proc) {`, and the refusal hard-codes 127.0.0.1.",
+      "packages/moe-daemon/src/server/healthHost.ts isAllowedHealthHost admits no Host, localhost, 127/8, [::1] and the arrival address; any other name gets 403. Built output: dist/server/healthHost.js, which imports only 'net'.",
+      "scripts/tests/daemon-json-cap.test.mjs:\n- SEGMENTS cut the real blocks.\n- runCheck spawns asynchronously, ENV deletes MOE_DAEMON_HOST, and runCheck returns before/after.\n- withHealth listens on 127.0.0.1, unguarded.\n- refusal() and assertRefused() hard-code 127.0.0.1.\n- pythonKeys cuts from 'WINDOWS = re.compile(' to '\\ntry:'.\n- powershellKeys cuts up to '\\n# Which project the daemon on 127.0.0.1'.",
+      "Measured on this host, 2026-11-02:\n- 'localhost.' resolves to ::1 first, then 127.0.0.1, on node, node.exe, python3, python.exe, PS 5.1 and PS 7.\n- os.hostname() gives 127.0.1.1 in WSL, but on Windows its first address is fe80::...%3.\n- 'moe-daemon.invalid' fails in under 0.1 s."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/t54a9.XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in moe-agent.sh moe-agent.ps1 tests/daemon-json-cap.test.mjs; do cp \"$R/scripts/$f\" \"$S/scripts/$f\"; done && (cd \"$S/packages/moe-daemon\" && npm ci && npm run build) && (cd \"$S/packages/moe-proxy\" && npm ci && npm run build) && cd \"$S\" && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh && node.exe --test scripts/tests/daemon-json-cap.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected approaches:\n- Admitting names, or the configured host, in healthHost.ts. The task rail forbids it, and anyone who controls that name's DNS could then rebind it.\n- Dialing the name but sending a forged 'Host: 127.0.0.1'. The guard admits any 127/8 Host, so it would work, but it sidesteps the rebinding rule, and the rail says to dial an IP literal.\n- Trying every resolved address. The DoD and the proxy both take the first one: one bounded attempt.\n- ps1 dialing 'localhost' by name. PS 7's dual-mode TcpClient tries ::1 first, and on Windows a refused loopback connect costs about 2.4 s of the 3 s budget. So localhost keeps ps1's 127.0.0.1 request, which is also today's request (DoD 3).\n- os.hostname() as the only test name. On this Windows host it resolves first to a scoped link-local fe80::...%3, so every PowerShell row would skip and DoD 5 could not be shown.\nChosen instead: 'localhost.' (RFC 6761). It resolves to ::1 first on every engine, the guard still refuses it as a name, and it exercises the IPv6-bracket path. os.hostname() stays as the IPv4 case wherever it is usable (127.0.1.1 in WSL).",
+    "codebaseInsights": "Prototypes of both fixes, in scratch only, were run against a fake applying the real dist isAllowedHealthHost.\nsh: old code sent Host 'localhost.:p' and got 403, exit 1. New code sends Host '[::1]:p' and gets exit 3 for foreign, 0 for same. 127.0.0.1, [::1], LOCALHOST and bare ::1 send the same Host as before.\nps1 (PS 5.1 and 7): 'localhost.' gives foreign or same via [::1]. 127.0.0.1 and LOCALHOST send Host 127.0.0.1. A failed lookup gives unknown with $Error empty.\nHarness facts:\n- pythonKeys runs the WINDOWS..try: cut without argv, so the new python goes inside try:.\n- SEGMENTS.ps1.check cuts from the Test-Path block to `if (-not $running)`, so $probeHost must live inside it.\n- The harness prints err=$Error[0].\n- runCheck already returns before/after (task-3def0804, landed 7beed0bc).\nThe gate dry run exited 0 in about 5 min.",
+    "risks": "- Engines must pick Node's first address, or the fake is on the wrong one. Verified on this host for 'localhost.'. CI Linux engines share glibc. A host without IPv6 loopback skips those rows through the bind probe.\n- PowerShell traps: $Host is read-only; \"$var:\" is a parse error; reading .Result of a faulted task pollutes $Error; the PS 5.1 default TcpClient is IPv4-only.\n- The ps1 RED needs the Windows leg (node.exe). The unchanged ps1 connects to a closed 127.0.0.1 port, which takes about 2.4 s on Windows: slow, not hung.\n- Residuals, out of scope: a bare IPv6 MOE_DAEMON_HOST on sh, a scoped link-local first address, and trying only the first address. docs/ARCHITECTURE.md:512 now asks more of clients than ours need, but it is not one of this task's lane files.\n- isEpicFinal is only the order fallback of a long-running bucket epic. The gate is the DoD's full launcher-identity suite on every engine, not a whole-epic sweep. The qualityGate (parity plus npm run lint) still runs at landing.\n- The WORKING claim waits for task-3def0804, which is in REVIEW.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/daemon-json-cap.test.mjs",
+      "packages/moe-daemon/src/server/healthHost.ts",
+      "packages/moe-proxy/src/daemonIdentity.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "7beed0bc407cd6012b0aeaef68e7dc54f4f496ab",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T19:47:30.012Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fdb2af60@2026-11-02T19:56:40Z",
+    "at": "2026-11-02T20:14:55.733Z"
+  },
+  "workStartedAt": "2026-11-02T19:59:28.180Z",
+  "reviewStartedAt": "2026-11-02T20:12:38.951Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/t54a9.XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in moe-agent.sh moe-agent.ps1 tests/daemon-json-cap.test.mjs; do cp \"$R/scripts/$f\" \"$S/scripts/$f\"; done && (cd \"$S/packages/moe-daemon\" && npm ci && npm run build) && (cd \"$S/packages/moe-proxy\" && npm ci && npm run build) && cd \"$S\" && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh && node.exe --test scripts/tests/daemon-json-cap.test.mjs",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 100\nℹ pass 32\nℹ fail 0\nℹ skipped 68\nPASS parity-check.sh\n✔ PowerShell 5.1: identity: named host localhost., live pid, foreign refused (503.6041ms)\n✔ PowerShell 5.1: identity: named host localhost., live pid, same adopted (487.1564ms)\n✔ PowerShell 7: identity: named host localhost., live pid, foreign refused (595.7257ms)\n✔ PowerShell 7: identity: named host localhost., live pid, same adopted (549.3419ms)\nℹ tests 100\nℹ pass 87\nℹ fail 0\nℹ skipped 13\n",
+    "reportedAt": "2026-11-02T20:12:38.951Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/daemon-json-cap.test.mjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "Both launcher pre-flight identity probes now resolve a DNS-name MOE_DAEMON_HOST once and dial its first IP literal, bracketed for IPv6. ps1 honors the configured host and names it in foreign-project refusals; sh preserves candidate exports. Existing watchdog/deadline bounds failed/hung lookups. Guard, path helpers, refusal sentences and BOM preserved. Three files, +135/-27 (net108); no daemon changes.\nRED on unchanged launchers: Linux100 tests,24pass/8fail/68skip; actual `GET /health localhost.:<p> 403` vs expected `[::1]:<p> 200` (also hostname/IPv4). Native Windows81pass/6fail/13skip; PS5.1/7 localhost. foreign/same rows: `actual []` vs expected admitted GET, `running=True ... err=`. All original rows and failed-lookup guards passed.\nGREEN exact isolated checkRef: installs/builds only in scratch; Linux100 tests,32pass/0fail/68 unavailable-PS skips; Windows100,87pass/0fail/13 documented WSL-only/link-local skips. Both PS5.1/PS7 localhost. foreign/same rows ran and passed. Root parity+lint, bash-n, diff-check passed.\nFive scratch mutants killed (brackets sh4/ps4 failures; name URL4; ps loopback4; refusal host2). Hung lookup: sh exit1 in3.083s; PS5.1 unknown3032ms/PS7 unknown3044ms, errors=0. sh literal/localhost URL bytes match baseline without explicit lookup. Ordinal localhost Equals avoids -ceq soft-hyphen folding. Review found no post-gate fix needed; accepted first-address/scoped-IP/bare-sh-IPv6 residuals unchanged. Handoff/knowledge memories saved; snapshots removed. Wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "58c760f46d490f0f1985852b033844440e31e4ac",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-02T19:56:40Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-02T20:14:55.733Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
