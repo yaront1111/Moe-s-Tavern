@@ -1,0 +1,34 @@
+{
+  "id": "task-3c4850819cad458d9edb59809d00e400",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-25] VS Code Accounts view: one copy of shell quoting and account text, and rows while disconnected so CLI sign-in (corpus C09) is reachable",
+  "description": "Filed by VSC-18 (task-43363b5d) from its adversarial pass over the epic diff.\n1. Duplicated helpers. src/providers/AccountsTreeProvider.ts carries copies of psQuote, shQuote and assertSafeArg from src/util/AgentLauncher.ts. Its comment says this is because the provider loads under closed require maps in the tests. task-2f4b224f had to fix both VS Code copies plus the Kotlin one. It also has a second account-text table, ACCOUNT_ACTION_TEXT, with its own resolver `say`, beside AccountPresentation.ACCOUNT_TEXT and resolveAccountText. The two key sets are disjoint and both are pinned to the bundle. The comments at the accountsCommandLine JSDoc and in runCli still say 'throws on CR, LF or NUL', but the code refuses every C0 control and DEL. Open question for the planner: move the quoting into one pure module, such as util/shellQuote.ts with no imports, and add it to the strict require maps of the affected tests; or keep the copies and add a test that holds them byte-identical. Pick one.\n2. A C09 parity gap (VSC-14/15 QA). While disconnected, the view shows a single state item and no rows. JetBrains keeps Sign in available through the CLI when there is a cli but no connection (client-accounts.json C09), so in VS Code that action is unreachable.",
+  "definitionOfDone": [
+    "Either one copy of psQuote/shQuote/assertSafeArg serves AgentLauncher.ts and AccountsTreeProvider.ts, or a test holds the copies identical; the stale 'CR, LF or NUL' comments are corrected; tests/powershell-quoting.test.cjs and tests/agent-launcher-controls.test.cjs stay green unchanged.",
+    "Account action text uses one resolver (AccountPresentation.resolveAccountText) or a test explains why two remain; every action string stays equal to MoeBundle.properties.",
+    "With a cached rotation that has a cli but no connection, the view lists rows and Sign in runs the CLI as in corpus row C09, with a test; the disconnected state item stays for the no-rotation case.",
+    "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under \"keep the board moving\" (10:52Z) and \"go on the vscode epic\". VSC-18 filed this from its adversarial pass. VSC-27 (task-e1024bb3) also edits AccountsTreeProvider.ts and AgentLauncher.ts, and it now depends on this row, so this row lands first and VSC-27 builds on the single helper copy.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 27,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T15:12:00.824Z",
+  "updatedAt": "2026-11-02T15:16:29.251Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T15:16:29.251Z",
+    "seq": 1
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "task-e1024bb3e6194b828fcbf905babfebae",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-27] VS Code on Windows: agent and account terminals assume a PowerShell default shell",
+  "description": "Filed by VSC-18 (task-43363b5d) from its adversarial pass (Windows quoting in new terminal commands).\nOn win32, AgentLauncher and AccountsTreeProvider.runCli call vscode.window.createTerminal with no shellPath, so the line is typed into the user's default profile:\n- The agent line starts with `$env:MOE_DAEMON_PATH='...'; powershell ... -EncodedCommand ...`. The bundled extension always sets MOE_DAEMON_PATH, so the line works only when that profile is PowerShell; it fails under Command Prompt, Git Bash and WSL.\n- The accounts line `powershell -NoProfile ... -EncodedCommand ...` also fails under a WSL default profile, where only powershell.exe resolves.\nVSC-15's QA noted the same. JetBrains chooses its shell explicitly (TerminalAgentLauncher, plus its 'Run Agents in WSL' toggle). Remote-WSL is not affected, because process.platform is linux there. Open question for the planner: pass shellPath 'powershell.exe' on win32, or detect the profile and build the matching line.",
+  "definitionOfDone": [
+    "On win32 an agent launch and an account CLI run work whatever the default terminal profile is (for example, an explicit PowerShell shellPath), pinned by a node:test on the createTerminal options under a win32 platform override.",
+    "The -EncodedCommand framing, assertSafeArg and the powershell-quoting and agent-launcher-controls tests stay unchanged and green.",
+    "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under \"keep the board moving\" (10:52Z). VSC-18 filed this. It now depends on VSC-25 (task-3c485081), which dedupes the shared quoting helpers in AccountsTreeProvider.ts and AgentLauncher.ts first. Plan the shellPath change against the post-VSC-25 single copy.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 29,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T15:12:11.880Z",
+  "updatedAt": "2026-11-02T15:16:35.326Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T15:16:33.504Z",
+    "seq": 1
+  },
+  "dependsOn": [
+    "task-3c4850819cad458d9edb59809d00e400"
+  ]
+}

@@ -97,7 +97,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:18.459Z",
-  "updatedAt": "2026-11-02T15:03:39.626Z",
+  "updatedAt": "2026-11-02T15:04:18.890Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:41:02.986Z",
     "plannedStepCount": 4,
@@ -207,7 +207,8 @@
   "filesModified": [
     "moe-vscode/.vscodeignore",
     ".github/workflows/ci.yml",
-    ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json"
+    ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json",
+    ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json"
   ],
   "completionSummary": "VSC-17: PRs now package the VS Code extension and smoke-test its bundle.\\n- moe-vscode/.vscodeignore +4 lines: comment, `dist/**`, `!dist/extension.js`, `eslint.config.mjs`. Existing lines untouched, including `!bundled/**` and `!bundled/**/*`.\\n- .github/workflows/ci.yml +46: new last step \\\"Package the VS Code extension and smoke-test its bundle\\\" in build-all-platforms, right after \\\"Test VS Code daemon startup\\\", `if: matrix.os == 'ubuntu-latest'`, `shell: bash`. It runs `npm run package -- --out \\\"$RUNNER_TEMP/moe-vscode.vsix\\\"`, then an inline ESM check (quoted CHECK heredoc), then unzip and `node scripts/tests/onboarding.mjs \\\"$RUNNER_TEMP/moe-vscode-smoke/extension/bundled\\\"`.\\n- The check reads scripts/bundle-manifest.json: a files target is <into>/<name>, a directory target is every file staged under it in moe-vscode/bundled (the Ant excludes stay in the bundlers). It prints `Missing from the vsix: extension/bundled/<path>` once per path and exits 1. It exits 1 with `Nothing to compare:` on an empty listing or no targets, and fails closed on a non-relative target.\\nEvidence (snapshot $HOME/moe-scratch/vsc17-ff56d4ff-1793631499, ext4, UUID-free, fresh):\\n- DoD 2: `unzip -Z1 | grep -E '^extension/(dist/|eslint)'` lists exactly `extension/dist/extension.js`. vsix 4094 files, 61.36 MB.\\n- DoD 3: the step ran verbatim, exit 0: `All 16 bundle-manifest.json targets are in the vsix` and `PASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence`.\\n- Negative control (checkRef 4): without the !bundled lines plus an exclude of bundled/docs/roles/qa.md the step exits 1 with 3 lines: scripts/mods/moe-account-switch/hooks/register.ts, scripts/mods/moe-compaction-keeper/hooks/register.ts, docs/roles/qa.md.\\n- checkRef 5: `vsce ls` differs from the base only by 21 removed dist/*.js tsc files and eslint.config.mjs.\\n- DoD 4: yaml.safe_load exit 0; step placement and `if` verified (step 20).\\n- DoD 5: git diff --stat c",
   "commits": [
@@ -245,6 +246,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "7925df59224700dce0387f90ec8dab17b3691966",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-564d8bce@2026-11-02T15:01:20Z",
+      "paths": [
+        ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+        ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json"
+      ],
+      "recordedBy": "qa-564d8bce",
+      "recordedAt": "2026-11-02T15:04:18.890Z",
+      "treeId": "c0ff1f22a861bb631715a040b8beeb7a46bd42c5",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -254,9 +271,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b49a5155@2026-11-02T14:56:51Z",
-    "at": "2026-11-02T15:00:44.109Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-564d8bce@2026-11-02T15:01:20Z",
+    "at": "2026-11-02T15:04:18.890Z"
   },
   "completedAt": "2026-11-02T15:03:39.626Z",
   "reviewCompletedAt": "2026-11-02T15:03:39.626Z",

@@ -1,0 +1,34 @@
+{
+  "id": "task-921ca494fac241aa96b85cb9ae3e63ab",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-23] VS Code task detail: refresh the Delivery section and Release Agent button live, and pin blocker labels to MoeBundle",
+  "description": "Filed by VSC-18 (task-43363b5d) from its adversarial pass over the epic diff.\n1. The Delivery section (VSC-8) and the Release Agent button (VSC-11) are rendered only in the initial HTML (TaskDetailPanel.getWebviewContent). The live path, debouncedUpdate posting 'updateTask' to media/taskDetail.js (around line 336), rebuilds only the status badge, #blockerSection, the plan and the comments. So a candidate, check run or receipt recorded while the panel is open stays stale until it is reopened. A task assigned after the panel opened gets no Release Agent button, and a released one keeps a stale button (that click answers with the info message). JetBrains refreshes its delivery section on every state update (TaskDetailDialog.refreshDeliverySection). Fix idea from architect comment-97b50ba7 on VSC-18: the panel posts the precomputed deliveryRows and labels with 'updateTask', and taskDetail.js rebuilds an always-present #deliverySection from DOM text nodes, as renderBlocker does. Do the same for the button's visibility.\n2. BLOCK_CAUSE_LABEL and BLOCK_CAUSE_CLEARS exist in 3 VS Code copies: TaskDetailPanel.ts, media/board.js and media/taskDetail.js. They equal moe.blocker.* in MoeBundle.properties today, but no test pins that: tests/blocker-corpus.test.cjs compares the chip with the panel's own constant. Add a bundle-equality assertion, as delivery-corpus does for moe.delivery.*.",
+  "definitionOfDone": [
+    "With the panel open, an 'updateTask' carrying new delivery evidence re-renders #deliverySection, and one without delivery removes it. A node:test drives the real panel and the raw media/taskDetail.js in vm, every daemon string goes through text nodes or escapeHtml, and the test proves it.",
+    "The Release Agent button appears or disappears on a live 'updateTask' when assignedWorkerId changes, with a test.",
+    "A test asserts that the blocker cause and clearance labels in all 3 VS Code copies equal moe.blocker.* in MoeBundle.properties.",
+    "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0 and no existing test is weakened."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under \"keep the board moving\" (10:52Z) and \"go on the vscode epic\". VSC-18 filed this from its adversarial pass. It is lane-free: no open row plans TaskDetailPanel.ts or media/taskDetail.js.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 25,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T15:11:46.174Z",
+  "updatedAt": "2026-11-02T15:16:25.568Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T15:16:25.568Z",
+    "seq": 1
+  }
+}

@@ -109,7 +109,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -129,11 +129,17 @@
       "author": "governor-e6b40560",
       "content": "GOVERNOR: review overlap, approved by the human (\"yes overlap the review, go faster\").\n\nAs soon as WT-11 (task-dd1ee586b90d4fc785434454b1423e76) enters REVIEW with its completion landed, the governor removes this row's dependsOn on WT-11 so a coder can start while WT-11 is still in QA.\n- **Build on WT-11's landed bytes.** Edit from HEAD, which contains WT-11's completion commit.\n- **If QA rejects WT-11 while you're working:** keep going on this row and don't touch WT-11's fix. The governor makes WT-11's rework wait until this row lands. If the reject reason changes a WT-11 contract you consume, say so in your step note.\n- Nothing in the plan changes.",
       "timestamp": "2026-11-02T09:33:19.752Z"
+    },
+    {
+      "id": "comment-19acb00b0b954803bb31a339669cf7bb",
+      "author": "governor-e6b40560",
+      "content": "Governor, 14:48Z, for the QA who claims this row. Overlap step 2 has fired: WT-13 (task-fbe8e388) no longer depends on this row and is claimable. WT-13 edits moe-agent.sh/ps1 and the postflight tests live in the shared checkout.\n\n1. **Verify only in a git-archive snapshot of this row's completion 1f9950ee** (382 net without board json, under the cap), never the shared tree.\n2. **Expect MOE_CONTESTED_HELD/EDITING on WT-13's paths** at your QA-exit checkpoint. That is benign: WT-13's live hunks stay out.\n3. **If you reject with a byte change,** say so in the reject. The governor then adds this row's dependsOn on WT-13, so the rework waits for WT-13 to land.",
+      "timestamp": "2026-11-02T14:47:46.254Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:55:13.075Z",
-  "updatedAt": "2026-11-02T14:47:01.463Z",
+  "updatedAt": "2026-11-02T15:24:21.933Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:14.897Z",
@@ -143,11 +149,14 @@
     "firstClaimAt": "2026-10-30T13:46:49.924Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T15:24:21.933Z",
+    "wallClockMs": 265052009
   },
   "contextFetchedBy": [
     "architect-76a2c8bb",
-    "worker-b49a5155"
+    "worker-b49a5155",
+    "qa-1106e678"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -193,7 +202,44 @@
   "filesModified": [
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
-    "scripts/tests/postflight-worktree.cjs"
+    "scripts/tests/postflight-worktree.cjs",
+    ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json"
   ],
-  "completionSummary": "WT-12: board history snapshots on refs/moe/board. Twin helpers: sh board_snapshot (board_snapshot_node) and ps1 Invoke-MoeBoardSnapshot. Both embed one identical Node program, and the tests assert the two copies are equal.\n- Reads: .moe/project.json, .moe/tasks/*.json and .moe/epics/*.json in the control root. Each file is one Buffer read with lstat before and after, a fatal UTF-8 decode and JSON.parse. Exactly those bytes are hashed; hash-object runs with --no-filters on a private index in a temp dir.\n- Invalid, torn or link files keep the parent blob and are named in MOE_BOARD_FILE_KEPT. Deletion needs a successful readdir plus an ENOENT recheck; a linked or unreadable dir skips the snapshot.\n- Writes: commit-tree -p tip ('board: <task> <status>'), then an update-ref CAS with 3 attempts; exhaustion or any error prints MOE_BOARD_SNAPSHOT_SKIPPED. An unchanged tree writes no commit. A plain push follows (no force, no hooks); a rejection or failure prints MOE_BOARD_UNPUSHED.\n- Wiring: after a worktree completion landing whose outcome is committed or nothing, and after a QA control-seat post-flight. Gated by autoCommit and commitBoardState. Shared mode is unchanged. The snapshot never alters the landing outcome.\n- Tests in postflight-worktree.cjs, run by both postflight harnesses:\n  - new cases: board-snapshot, board-race, board-push, wt-board;\n  - updated: wt-control-seats, wt-checkpoint, wt-fails.\n  - Every run asserts .moe content and mtimes and the real index are unchanged.\n  - RED was shown before the change; 10 mutants were killed.\n- Net 366 LOC. ps1 BOM kept, 0 CR.\n- Verification, same bytes:\n  - bash safe gate: NONE, last scenario Z.\n  - worktree-landing: 18/18.\n  - parity-check: PASS.\n  - Native Windows `node scripts/tests/postflight-safe.mjs powershell` (PS 5.1): failureClass NONE, exit 0.\n  - The MOE_(WORKTREE|LAND|CONTROL|BOARD)_ code sets are identical in both wrappers (28 codes).\n  - Held-out worktree-landing.sh and .ps1 are unchanged from WT-08T.\n- Theo"
+  "completionSummary": "WT-12: board history snapshots on refs/moe/board. Twin helpers: sh board_snapshot (board_snapshot_node) and ps1 Invoke-MoeBoardSnapshot. Both embed one identical Node program, and the tests assert the two copies are equal.\n- Reads: .moe/project.json, .moe/tasks/*.json and .moe/epics/*.json in the control root. Each file is one Buffer read with lstat before and after, a fatal UTF-8 decode and JSON.parse. Exactly those bytes are hashed; hash-object runs with --no-filters on a private index in a temp dir.\n- Invalid, torn or link files keep the parent blob and are named in MOE_BOARD_FILE_KEPT. Deletion needs a successful readdir plus an ENOENT recheck; a linked or unreadable dir skips the snapshot.\n- Writes: commit-tree -p tip ('board: <task> <status>'), then an update-ref CAS with 3 attempts; exhaustion or any error prints MOE_BOARD_SNAPSHOT_SKIPPED. An unchanged tree writes no commit. A plain push follows (no force, no hooks); a rejection or failure prints MOE_BOARD_UNPUSHED.\n- Wiring: after a worktree completion landing whose outcome is committed or nothing, and after a QA control-seat post-flight. Gated by autoCommit and commitBoardState. Shared mode is unchanged. The snapshot never alters the landing outcome.\n- Tests in postflight-worktree.cjs, run by both postflight harnesses:\n  - new cases: board-snapshot, board-race, board-push, wt-board;\n  - updated: wt-control-seats, wt-checkpoint, wt-fails.\n  - Every run asserts .moe content and mtimes and the real index are unchanged.\n  - RED was shown before the change; 10 mutants were killed.\n- Net 366 LOC. ps1 BOM kept, 0 CR.\n- Verification, same bytes:\n  - bash safe gate: NONE, last scenario Z.\n  - worktree-landing: 18/18.\n  - parity-check: PASS.\n  - Native Windows `node scripts/tests/postflight-safe.mjs powershell` (PS 5.1): failureClass NONE, exit 0.\n  - The MOE_(WORKTREE|LAND|CONTROL|BOARD)_ code sets are identical in both wrappers (28 codes).\n  - Held-out worktree-landing.sh and .ps1 are unchanged from WT-08T.\n- Theo",
+  "commits": [
+    {
+      "sha": "1f9950ee0540bc53654ca27723e078bcf6ac1849",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T13:49:28Z",
+      "paths": [
+        ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T14:47:24.474Z",
+      "treeId": "0e96bfd1bf2115019fc1711893e69ed29a7d7318",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-b49a5155@2026-11-02T13:49:28Z",
+    "at": "2026-11-02T14:47:24.474Z"
+  },
+  "completedAt": "2026-11-02T15:24:21.933Z",
+  "reviewCompletedAt": "2026-11-02T15:24:21.933Z",
+  "reviewSummary": "Reviewed completion 1f9950ee (on moe/work-2026-10-24 + origin, pushed; the only commit for the row). Diff 3 non-board files +374/-8 = 366 net (<400). Verified in git-archive snapshots of 1f9950ee, never the shared tree: blobs sh f3691313, ps1 7e47cecb, cjs 545cc402.\nRe-ran: `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh` EXIT=0 (14:52-15:12Z): safe NONE/Z, worktree-landing 18/18, parity PASS. Native Windows node.exe `postflight-safe.mjs powershell` (PS 5.1) NONE/Z exit 0 (14:52-15:23Z).\nDoD: 1 wt-board (board tree = control tasks/epics/project.json blobs; C diff has no .moe path). 2 board-snapshot (torn old/new keep parent blob, named in MOE_BOARD_FILE_KEPT; unchanged board no commit). 3 board-race race3 SKIPPED with competitors kept; landing still counts shown end-to-end via the blob-ref SKIPPED case (same catch path, board_snapshot always returns 0); board-push UNPUSHED on reject/unreachable, no force. 4 wt-board-off, plus sig() around every helper run (.moe bytes/modes/mtimes, index, heads, HEAD). 5 postflight.sh/.ps1 unchanged; held-out worktree-landing.sh/.ps1 byte-identical to 8ad04de7; 28 MOE_(WORKTREE|LAND|CONTROL|BOARD)_ codes identical; JS program byte-identical in both wrappers, ASCII-only, ps1 BOM kept, 0 CR.\nMutants (own sweep, unmutated control 7/7 ok): 13/14 sh killed by AssertionError at the target case (1 attempt, commit-unchanged, drop torn, force push, no delete, follow link, no CAS, no JSON.parse, any filename, any outcome, no setting gate, no completion call, architect snapshots); ps1 3/3 killed (no QA call, no setting gate, any outcome). Expected survivor: dropping the non-board parent-entry filter (no test seeds a foreign entry in refs/moe/board), a minor defensive gap, not a DoD item.\nRails: no main/branch write, no .moe write, shared mode untouched, parity held. Complexity: lean already.",
+  "requiredCheckAtDone": null
 }

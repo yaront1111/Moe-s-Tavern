@@ -1,0 +1,33 @@
+{
+  "id": "task-d2a3532ec05c49d384214ae15b01ba7e",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-24] VS Code chat: prefer the general channel when auto-selecting, and dedupe CHANNEL_CREATED by id, matching JetBrains",
+  "description": "Filed by VSC-18 (task-43363b5d) from its adversarial pass over the epic diff.\n1. Channel auto-selection differs between the clients (architect comment-41ad6014 on VSC-18). JetBrains (VSC-22, ChatChannelSelection.choose) picks the still-listed id, else the general-type channel, else the first listed channel. VS Code media/chat.js updateChannels picks channels[0] after deselectChannel(), and on first load. The two agree only while #general is the oldest channel. Port choose() to chat.js (prefer ch.type === 'general', else channels[0]) and mirror ChatChannelSelectionTest cases (b) through (f).\n2. VS Code MoeDaemonClient case 'CHANNEL_CREATED' pushes the payload into state.channels without checking its id, and chat.js 'channelCreated' does channels.push. A repeated frame lists the channel twice. JetBrains MoeMessageDispatcher replaces by id (filter { it.id != channel.id } + channel).",
+  "definitionOfDone": [
+    "chat.js selects the general-type channel when the selection is gone or on first load, else the first listed channel; a node:test runs raw chat.js in vm over cases (b) to (f) of ChatChannelSelectionTest.",
+    "A repeated CHANNEL_CREATED with a known id leaves one entry in the client cache and in the chat.js list, with a test (tests/wire-parity.test.cjs style).",
+    "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under \"keep the board moving\" (10:52Z) and \"go on the vscode epic\". VSC-18 filed this from its adversarial pass. It is lane-free: no open row plans media/chat.js.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 26,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T15:11:52.276Z",
+  "updatedAt": "2026-11-02T15:16:27.251Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T15:16:27.251Z",
+    "seq": 1
+  }
+}
