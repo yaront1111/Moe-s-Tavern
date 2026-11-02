@@ -1590,12 +1590,14 @@ if [ "$CLI_TYPE" = "grok" ]; then write_grok_config "$PROJECT" "$SERENA_PROJECT"
 # with ntpath/posixpath, never os.path, so Windows python agrees. WSL shares
 # strip host/distro, preserving POSIX tail case before /mnt mapping. Bounded:
 # 3 s total (the watchdog also covers a trickled reply) and 64 KiB of body.
+# Resolve a name once and dial its first address: the /health guard refuses
+# a DNS-name Host. IP literals and localhost keep their original request.
 probe_daemon_health() {
     local host="$1"
     local port="$2"
     local project="${3:-}"
     $PYTHON_CMD -c '
-import json, ntpath, os, posixpath, re, sys, threading, urllib.error, urllib.request
+import ipaddress, json, ntpath, os, posixpath, re, socket, sys, threading, urllib.error, urllib.request
 watchdog = threading.Timer(3, os._exit, (1,))
 watchdog.daemon = True
 watchdog.start()
@@ -1614,9 +1616,16 @@ def comparable(p):
     m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
     return (m.group(1) + ":" + ("/" + m.group(2) if m.group(2) else "")).lower() if m else p
 try:
+    host = sys.argv[1]
+    try:
+        ipaddress.ip_address(host[1:-1] if host[:1] == "[" and host[-1:] == "]" else host)
+    except ValueError:
+        if host.lower() != "localhost":
+            address = socket.getaddrinfo(host, None, 0, socket.SOCK_STREAM)[0][4][0]
+            host = "[%s]" % address if ":" in address else address
     try:
         r = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
-            "http://%s:%s/health" % (sys.argv[1], sys.argv[2]), timeout=3)
+            "http://%s:%s/health" % (host, sys.argv[2]), timeout=3)
     except urllib.error.HTTPError as e:
         if e.code != 503:
             sys.exit(1)

@@ -739,7 +739,8 @@ function Get-MoeComparableProjectPath([string]$Path) {
     return "/$joined"
 }
 
-# Which project the daemon on 127.0.0.1:$Port serves, by its /health
+# Which project the daemon at $ProbeHost:$Port serves, by its /health
+# reply. Resolve a name once and dial its first IP (the guard refuses names).
 # projectPath: 'same', 'foreign <served>' or 'unknown'. Once this project's
 # daemon dies, another project's daemon can take its port (task-e7f4026a).
 # Only a 200 or 503 reply naming another ABSOLUTE project is foreign; every
@@ -747,19 +748,36 @@ function Get-MoeComparableProjectPath([string]$Path) {
 # the JetBrains probe: one 3 s deadline covers connect, headers and body (a
 # per-read timeout restarts on every trickled byte), no proxy, no redirect, and
 # at most 64 KiB of body. Twin: probe_daemon_health in moe-agent.sh.
-function Get-MoeDaemonIdentity($Port, [string]$ProjectPath) {
+function Get-MoeDaemonIdentity($Port, [string]$ProjectPath, [string]$ProbeHost = '127.0.0.1') {
     $client = $null
     try {
         $deadline = [DateTime]::UtcNow.AddMilliseconds(3000)
-        $client = New-Object Net.Sockets.TcpClient
+        [Net.IPAddress]$address = $null
+        $literal = $ProbeHost
+        if ($literal.StartsWith('[') -and $literal.EndsWith(']')) { $literal = $literal.Substring(1, $literal.Length - 2) }
+        if ($ProbeHost.ToLowerInvariant().Equals('localhost')) {
+            $address = [Net.IPAddress]::Loopback
+        } elseif (-not [Net.IPAddress]::TryParse($literal, [ref]$address)) {
+            $lookup = [Net.Dns]::GetHostAddressesAsync($ProbeHost)
+            $left = [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds
+            if ($left -le 0) { return 'unknown' }
+            $resolved = [Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($lookup), $left) -ge 0
+            if (-not $resolved -or $lookup.Status -ne 'RanToCompletion') { return 'unknown' }
+            if ($lookup.Result.Length -lt 1) { return 'unknown' }
+            $address = $lookup.Result[0]
+        }
+        $client = New-Object Net.Sockets.TcpClient($address.AddressFamily)
         $client.SendTimeout = 3000
-        $connect = $client.ConnectAsync('127.0.0.1', [int]$Port)
+        $connect = $client.ConnectAsync($address, [int]$Port)
         # WaitAny, not Wait: a refused connect (the usual stale port) is an
         # answer, not an exception to log.
-        $connected = [Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($connect), 3000) -ge 0
+        $left = [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds
+        if ($left -le 0) { return 'unknown' }
+        $connected = [Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($connect), $left) -ge 0
         if (-not $connected -or $connect.Status -ne 'RanToCompletion') { return 'unknown' }
         $stream = $client.GetStream()
-        $request = [Text.Encoding]::ASCII.GetBytes("GET /health HTTP/1.0`r`nHost: 127.0.0.1:$([int]$Port)`r`nConnection: close`r`n`r`n")
+        $hostText = if ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) { "[$address]" } else { $address.ToString() }
+        $request = [Text.Encoding]::ASCII.GetBytes("GET /health HTTP/1.0`r`nHost: ${hostText}:$([int]$Port)`r`nConnection: close`r`n`r`n")
         $stream.Write($request, 0, $request.Length)
         # 64 KiB of body plus 8 KiB of status line and headers; one byte more is oversize.
         $buffer = New-Object byte[] 73729
@@ -805,9 +823,10 @@ if (-not $NoStartDaemon) {
             if ($proc) {
                 # A live PID proves a process, not which project it serves.
                 # exit, not throw: the catch below would start a daemon instead.
-                $identity = Get-MoeDaemonIdentity $info.port $projectPath
+                $probeHost = if ($env:MOE_DAEMON_HOST) { $env:MOE_DAEMON_HOST } else { '127.0.0.1' }
+                $identity = Get-MoeDaemonIdentity $info.port $projectPath $probeHost
                 if ($identity.StartsWith('foreign ')) {
-                    Write-Host "[ERROR] MOE_DAEMON_FOREIGN_PROJECT: the daemon at 127.0.0.1:$($info.port) serves $($identity.Substring(8)), not this project ($projectPath)." -ForegroundColor Red
+                    Write-Host "[ERROR] MOE_DAEMON_FOREIGN_PROJECT: the daemon at ${probeHost}:$($info.port) serves $($identity.Substring(8)), not this project ($projectPath)." -ForegroundColor Red
                     Write-Host "$daemonInfoPath is stale: this project's daemon is not running. Start it (the IDE's Restart Daemon, or moe-daemon start --project $projectPath); it takes the next free port."
                     Write-Host "Refusing to register, claim or bridge to another project's daemon."
                     exit 1
