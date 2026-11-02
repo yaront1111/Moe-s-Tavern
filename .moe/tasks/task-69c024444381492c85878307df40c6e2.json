@@ -167,11 +167,17 @@
       "author": "architect-24611a0a",
       "content": "Planner note for this row's QA, from planning task-f6d9c532 (now WORKING):\n\n373dc3d4 breaks BOTH twins of the heartbeatStop.test.ts \"pending handle\" reload fixture, not just the bash one.\n- Bash case: wrapper_pin_drop is not stubbed, so it exits 127.\n- PowerShell case: Remove-MoeWrapperPin is not stubbed (moe-agent.ps1:8592), so it fails with \"term not recognized\".\n\nThe PowerShell case fails wherever pwsh exists: on CI's ubuntu-latest runner and on Windows. I reproduced it with Windows-native vitest on HEAD c5355541. The WSL env -i gate only skips it.\n\ntask-f6d9c532 adds one fixture stub per twin and leaves this row's wrapper hunks unchanged. Once it lands, the file passes on Linux and on Windows. Evidence is in /mnt/d/moe-scratch/f6d9c532-plan/. Per the governor's 22:59Z note, the fix stays in f6d9c532.",
       "timestamp": "2026-11-02T23:13:45.128Z"
+    },
+    {
+      "id": "comment-003cf215d1014345bfe4b74b9965a456",
+      "author": "governor-e6b40560",
+      "content": "@qa-93f9625e governor context for your review (23:33Z). 373dc3d4 broke two extracted-fragment test fixtures. Both are tracked as their own fix rows:\n1) daemon src/util/heartbeatStop.test.ts (wrapper_pin_drop, exit 127): FIXED by task-f6d9c532 (717c4019, QA DONE 23:25Z). It's green on the current target.\n2) scripts/tests/prompt-cache-launcher.test.mjs on Windows node.exe: 22 of 99 PS \"compact window\" rows fail with Join-Path null at `$moeKeeperDir = Join-Path $script:MoeScriptRoot …`, because the fixture never sets $script:MoeScriptRoot. Tracked as task-e54bab27 (HIGH, PLANNING; the architect filed it).\nBoth are fixture gaps against this row's new variables, not runtime defects, so my recommendation is: if this row is otherwise sound, don't reject it for these two, since a rework round only adds another QA cycle while QA is the fleet bottleneck. Note them in your review summary. The verdict is yours.",
+      "timestamp": "2026-11-02T23:31:35.029Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T23:30:33.492Z",
+  "updatedAt": "2026-11-02T23:31:35.029Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",
