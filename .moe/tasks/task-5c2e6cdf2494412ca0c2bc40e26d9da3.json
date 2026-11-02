@@ -72,13 +72,14 @@
     {
       "stepId": "step-4",
       "description": "4. Insert L6 on each fresh merged candidate and enforce round budgets (DoD 1,4). Consume WT-09's existing round after L5/L5b and before L7/L8/L9. Keep T fixed, derive fresh B/M each round, and call `freeze_candidate \"$B\" \"$M\"` then `run_frozen_gate worktree`; PS uses `New-MoeFrozenCandidate $Git $M $B`, existing Send-MoeCandidate, then `Invoke-MoeFrozenGate $Git $Frozen $command -WorktreeMode`. Candidate/check and journal must name this exact M and parent B, never pre-merge task T or control HEAD. Preserve evidence-refusal error handling: freeze/evidence/gate/sparse/integrity failure is MOE_COMMIT_FAILED_GATE, retains the existing failed+rescue path, releases, and never publishes. WT-11 later adds outcome unlanded/reason gate/contention; do not implement it here. If the effective gate runs, allow at most TWO L4-L9 rounds under one lease and rerun the gate for the new merged pair on every retry, with no stale result reuse. If scope skips the gate, preserve THREE ungated rounds but still lease when a gate is configured; if none is configured preserve the existing no-lease three-round behavior. Keep remote unknown-outcome/journal and non-forced push rules unchanged. Do not let MOE_DISABLE_QUALITY_GATE bypass an applicable worktree-mode configured gate: refuse safely before publication; shared-mode opt-out is unchanged. Twin tests use non-overlapping peer/task hunks to prove frozen HEAD^{tree}=M and HEAD^=B, published C^{tree}=M and C^=B; a gate reads both hunks and no .moe. A failing gate and a gate creating .moe/x leave main unchanged and release; the latter includes MOE_WORKTREE_GATE_INTEGRITY. Force one target race: second gate sees new B/M, then succeeds; force two losses: contention failure with exactly two gate runs and no task publication. Existing shared gate and WT-08T tests remain unchanged.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-02T00:21:56.295Z"
     },
     {
       "stepId": "step-5",
@@ -107,7 +108,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": "worker-152f84fc",
+  "assignedWorkerId": "worker-81a7999f",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -165,7 +166,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:53:57.865Z",
-  "updatedAt": "2026-11-02T00:17:59.128Z",
+  "updatedAt": "2026-11-02T07:24:59.487Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:03.609Z",
@@ -180,7 +181,8 @@
   "contextFetchedBy": [
     "architect-76a2c8bb",
     "architect-4ae016fb",
-    "worker-152f84fc"
+    "worker-152f84fc",
+    "worker-81a7999f"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -213,5 +215,52 @@
   },
   "planApprovedAt": "2026-10-30T13:41:42.129Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-01T22:47:24.320Z"
+  "workStartedAt": "2026-11-01T22:47:24.320Z",
+  "commits": [
+    {
+      "sha": "d3441bf3afdaa92b6d9bd91c80c83e78fed04111",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-152f84fc@2026-11-01T22:40:06Z",
+      "paths": [
+        ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+        ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+        ".moe/tasks/task-b712ce096fc743328b8baac69acb4d07.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-152f84fc",
+      "recordedAt": "2026-11-02T00:19:43.907Z",
+      "treeId": "00fea8471c55017b809b6c9c21b7366089a6ed0a",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-1a8f1d0e199046a289e94a5453d758b8.json",
+    ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+    ".moe/tasks/task-b712ce096fc743328b8baac69acb4d07.json",
+    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-152f84fc@2026-11-01T22:40:06Z",
+    "at": "2026-11-02T00:19:43.907Z"
+  }
 }
