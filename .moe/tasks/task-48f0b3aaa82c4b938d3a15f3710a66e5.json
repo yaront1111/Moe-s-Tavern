@@ -51,31 +51,43 @@
     {
       "stepId": "step-3",
       "description": "3. Write the operator runbook (DoD4, corrected by latest comments). Add TOC entry and `Worktree mode: flip on / roll back` section to TROUBLESHOOTING.md from FINAL landed WT-S §7.3/7.4 and actual WT10M CLI. Explain info/off vs hard/on probes, required fast-per-landing qualityGate, git>=2.38/root/moe/control/free target, and soft stale warning (no automatic doctor cleanup). Flip: stop/drain all seats/open attempts and let REVIEW land/finalize; inspect git for-each-ref refs/moe/rescue and recover/archive live tasks first; through supported operator settings declare resources.git-land-main {capacity:1,maxLeaseMs:7200000,releaseOnDeregister:true} and configure gate; human runs Bash `scripts/moe-agent.sh --land-branch moe/work-2026-10-24` or PS `scripts/moe-agent.ps1 -LandBranch moe/work-2026-10-24`. Explain target must be ancestor of branch before flip so switch preserves dirty daemon files; conflict recovery merges main INTO the shared branch, never directly into main. Migration always gates in .moe-free candidate workspace, no task lease (drain), two-parent C, CAS/nonforced publish, no task ledger; on any failure/unknown stop flip, unknown settled by rerun, no force/manual push/reset. After confirmed branch inclusion use exact `git switch -c moe/control main`, set worktreeMode on and consolidationBranch main, run `node packages/moe-daemon/dist/index.js doctor`, restart only after pass. Rollback: drain, land remaining task branches or human preserve/merge them into non-main shared branch; set mode off, UNSET consolidationBranch (main is shared-mode opt-in), switch explicitly `git switch -c moe/work-<date> main` using fresh branch name; preserve worktrees/rescue refs until recovery, normal sweep handles terminal tasks. Pinned mismatch blocks for human. Rollback never moves main. No generic 'let peel run' alternative, no manual merge/push to main, no setting-default flip or wrappers edited by this task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/TROUBLESHOOTING.md"
       ],
-      "startedAt": "2026-11-02T22:37:55.761Z"
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "Step 3 is done: docs/TROUBLESHOOTING.md is +78/-1, adding TOC item 8 \"Worktree Mode\" (Diagnostic Commands becomes 9) and \"## Worktree Mode / ### Worktree mode: flip on / roll back\".\n\nSources:\n- the landed WT-S §7.3 and §7.4;\n- comment 5957b3a6, which wins: the gate is required when on, the migration takes no lease, and rollback unsets consolidationBranch then switches to a fresh branch;\n- architect-6fc3dd5c's withdrawal acd998ce;\n- WT-10M's landed CLI, read from the code (run_migration_landing / Invoke-MoeMigrationLanding, --project/-Project, exit codes 0/1/2);\n- lease-id sanitizing (git-land-<target>, [^A-Za-z0-9._-] → -).\n\nThe section contains:\n- A readiness table with the 7 doctor labels, hard checks when on and INFO when off; the stale check is WARN only.\n- Flip steps 1-6: drain, then rescue refs, then gate plus git-land-main.\n- The human-only migration landing, with its ancestor precondition and both the sh and ps1 forms. The failure cases are a code table: BAD_ARGS(2), NO_GATE, TARGET_CHECKED_OUT, FETCH_FAILED, TARGET_DIVERGED, CONFLICT, GATE, PUSH_FAILED, PUSH_OUTCOME_UNKNOWN, REF_CONTENTION, COMMIT_FAILED.\n- `git switch -c moe/control main`, then worktreeMode on + consolidationBranch main, doctor and relaunch. Setting extensions.worktreeConfig is optional and comes from the gate row's addendum.\n- The governor's optional branch-target line (skip step 4), matching this project's 11-02 switch.\n- Rollback: drain/land; mode off; UNSET consolidationBranch; `git switch -c moe/work-<date> main`, or `git switch <branch>` for a branch target; doctor; relaunch; MOE_WORKTREE_MODE_MISMATCH.\n- Per the governor's 07:53Z note, the leftover-worktree text does not assume WT-14's sweep has run.\n\nThere is no manual merge or push to main, and no force or reset advice. Task-wide size is +520 net across the 4 rail files (≤560 waiver).",
+      "startedAt": "2026-11-02T22:37:55.761Z",
+      "completedAt": "2026-11-02T22:41:33.029Z"
     },
     {
       "stepId": "step-4",
       "description": "4. Single verification gate (DoD5 and epic rail2). From repo root run exactly `(cd packages/moe-daemon && npm run build && npx vitest run src/commands/doctor.test.ts) && (S=$(mktemp -d) && trap 'rm -rf \"$S\"' EXIT && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh))`. Require exit0, doctor tests actually executed, parity PASS; archive uses committed wrapper bytes because this slice changes none. Run the same doctor test on native Windows if the development gate was POSIX, pinning path/listing behavior; no WSL result mislabeled Windows. Load regression-check/verification-before-completion, retain fresh exact command/exitCode/outputTail. Check runbook commands/settings/ordering against the landed producer contracts without executing migration/rollback on this project. No full unrelated IDE/wrapper postflight gate; WT19 owns whole-epic integration.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/commands/doctor.ts",
         "packages/moe-daemon/src/commands/doctor.test.ts",
         "docs/TROUBLESHOOTING.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "note": "Step 4 gate.\n\nLinux run:\n- Ran the exact plan command from the worktree root at HEAD 373dc3d4 under env -i, node v24.21.0. Before it, `npm ci --prefer-offline` in the worktree's packages/moe-daemon, per the wrapper.\n- EXIT 0: build OK, doctor.test.ts 64/64, PASS parity-check.sh.\n- prebuild regenerated no tracked file (git status shows only my 2 paths).\n- `npm run lint` also exit 0.\n\nNative Windows run (D:\\moe-scratch\\wt16-win-004311, HEAD archive of packages/moe-daemon, Windows node v24.16.0, git 2.54.0.windows.1):\n- The first run FAILED the real-repo fixture with `fatal: unable to access '\\\\.\\nul'`. My step-2 test set GIT_CONFIG_GLOBAL to os.devNull, which Git for Windows rejects.\n- Fixed doctor.test.ts:422 to the repo convention `process.platform === 'win32' ? 'NUL' : '/dev/null'`, as checkArchitecture/planReuse tests do. This changes test code only.\n- Rerun: 62 passed, 2 skipped by design (D2's POSIX-case row and the symlink-escape row). The win32 cross-spelling row and the real-repo fixture (path with spaces, Windows TEMP) now run and pass natively.\n\nThen re-ran the exact Linux gate fresh: EXIT 0, 64/64, PASS parity.\n\nChecked the runbook against the landed contracts by reading the code, without executing any migration or rollback:\n- run_migration_landing / Invoke-MoeMigrationLanding codes and exits;\n- the land_lease id sanitizing;\n- enable_worktree_config;\n- control_worktree_mode;\n- the worktree add --lock;\n- the UPDATE_SETTINGS accepted keys (worktreeMode, resources).",
+      "startedAt": "2026-11-02T22:41:34.289Z",
+      "completedAt": "2026-11-02T22:45:13.174Z"
     },
     {
       "stepId": "step-5",
       "description": "5. Final adversarial self-review once. Load adversarial-self-review; attack unreadable/malformed project/task JSON, invalid gate/mode, fake Git version, detached HEAD, invalid/injection-like branch names, unrelated GIT_* environment, NUL parsing, output/time bounds, Windows case vs POSIX identity and terminal timestamp boundaries. Confirm new off-mode failures do not suppress existing health errors; on-mode unknown is never ready; doctor never writes .moe/Git or starts daemon. Audit runbook rollback's unset+switch order and migration's no-lease exception versus normal landing lease, no main bypass, no destructive recovery suggestions. Keep <=400 net LOC/three files. If fixes arise rerun same gate; complete via Moe with actual paths/fresh evidence, wrapper owns Git writes. WT17/18 keep other docs.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/commands/doctor.ts",
         "packages/moe-daemon/src/commands/doctor.test.ts",
         "docs/TROUBLESHOOTING.md"
-      ]
+      ],
+      "startedAt": "2026-11-02T22:45:14.356Z"
     }
   ],
   "planRevision": 1,
@@ -164,7 +176,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-11-02T22:37:55.761Z",
+  "updatedAt": "2026-11-02T22:45:14.356Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",
@@ -174,7 +186,7 @@
     "firstClaimAt": "2026-10-30T14:02:59.763Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-76a2c8bb",
@@ -187,7 +199,9 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:06:08.916Z",

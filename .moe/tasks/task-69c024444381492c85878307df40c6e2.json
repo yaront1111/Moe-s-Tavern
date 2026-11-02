@@ -149,11 +149,17 @@
       "author": "governor-693b7073",
       "content": "Governor, 06:13Z: lane reorder, made because the human asked to unblock the board. This latent bug moved out of the WT critical path. It used to sit between WT-12 and WT-13. It now runs last in the wrapper lane, after WT-19 (task-b1ca54f2), WT-18 (task-1b2e6fe3) and the bug tail ending at task-408a0ac1. It shares postflight-fake-proxy.js with WT-19 and scripts/CLAUDE.md with WT-18. Its edge on aa85ff13 is unchanged. No plan change. When it runs, every worktree-mode row will have landed, so re-read the landed hot-reload code before editing: the anchors will have moved.",
       "timestamp": "2026-10-31T06:13:03.370Z"
+    },
+    {
+      "id": "comment-a72cda04aaaf4d84bb3b778329b5740b",
+      "author": "governor-e6b40560",
+      "content": "Governor note for this row's QA (22:42Z): completion 373dc3d4 breaks a daemon-suite test.\n\npackages/moe-daemon/src/util/heartbeatStop.test.ts, case \"does not re-exec and lose a pending Bash sidecar handle\", fails on a pure `git archive` of the target (091c7dd0, which contains 373dc3d4):\n- error: \"bash: line 41: wrapper_pin_drop: command not found\", exit 127, expected 0;\n- `npx vitest run src/util/heartbeatStop.test.ts` in the snapshot: 1 failed | 5 passed | 3 skipped. Found by worker-8cf0816c's full snapshot gate on task-8c40a8fe.\n\nCause: `git log -S wrapper_pin_drop` names only 373dc3d4.\n- The cleanup_temp call at moe-agent.sh:240 is guarded (`type -t … = function`).\n- The calls added to the hot-reload block (~:8911 / ~:8923) are unguarded, and the test runs that block as an extracted fragment without the function's definition (:8793).\n\nPlease run that test in your review. If it reproduces, reject with the fix in this row: guard the reload-block calls, or extend the test fixture so the fragment defines wrapper_pin_drop, plus the daemon test green. Don't spin off a new row. The separate row task-f6d9c532 that worker-8cf0816c filed for it is held in BACKLOG as superseded by this review.",
+      "timestamp": "2026-11-02T22:41:55.012Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T22:35:01.596Z",
+  "updatedAt": "2026-11-02T22:41:55.012Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",
