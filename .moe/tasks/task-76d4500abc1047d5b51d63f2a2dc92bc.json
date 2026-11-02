@@ -1,0 +1,155 @@
+{
+  "id": "task-76d4500abc1047d5b51d63f2a2dc92bc",
+  "epicId": "epic-aabc654d",
+  "title": "bug: JetBrains PowerShell -Command route drops ASCII double quotes on Windows PowerShell 5.1, and its WSL wrap lets ! expand bash history",
+  "description": "Found while planning task-2f4b224f9afe47b4a5e382d5da7bb16c on 2026-11-02. Both problems already existed, and neither lets a value break out of its own argument.\n\n1. Windows PowerShell 5.1 does not escape ASCII double quotes when it passes JetBrains' typed `-Command \"...\"` string to powershell.exe, so the child's command-line parser drops them. A probe on this host (5.1.26100) used harmless payloads and task-2f4b224f's planned escaping. The value x`\"; Write-Output PWNED2; #' arrived as x`; Write-Output PWNED2; #'. It stayed in its own argument, but lost the \". VS Code's -EncodedCommand route and JetBrains' WSL interop route both kept the \". Carriers that can legitimately hold a \":\n- the agent command (LEGACY settings.agentCommand, or a custom command such as claude --append-system-prompt \"be terse\");\n- a team name from .idea/.name.\nWindows paths cannot hold \".\n\n2. bashWrapPowerShell, used for the WSL toggle when only moe-agent.ps1 exists, types the script inside bash double quotes. An interactive bash applies history expansion to ! inside double quotes (bash manual, HISTORY EXPANSION). A project path such as D:\\work!x then fails with 'event not found', or splices an earlier command into the line.\n\nFix direction: move JetBrains' PowerShell agent and accounts lines to -EncodedCommand (UTF-16LE base64), as VS Code's AgentLauncher and AccountsTreeProvider already do. bashWrapPowerShell then only appends .exe. This re-pins the byte-for-byte expectations in TerminalAgentLauncherTest: PINNED_LEGACY's 8 PowerShell rows, the accounts pin and the bashWrapPowerShell tests. It also re-pins AccountPresentationTest's psPrefix. Every contains-assertion on a PowerShell line must decode the line first, or it passes vacuously. JetBrains launch lines become opaque in the terminal, the same trade-off VS Code already made. Depends on task-2f4b224f, which edits the same files.",
+  "definitionOfDone": [
+    "JetBrains' PowerShell agent and accounts lines, and the WSL bashWrapPowerShell route, carry their inner script as -EncodedCommand. A value holding an ASCII \", a ! or any character task-2f4b224f covers reaches the wrapper byte-identical, shown by decoding the built line in a test that fails on HEAD.",
+    "Every existing TerminalAgentLauncherTest and AccountPresentationTest assertion on a PowerShell line decodes the line before asserting, so none can pass vacuously on an encoded line. PINNED_LEGACY is re-pinned to the new bytes.",
+    "JetBrains gradlew.bat test passes under the jetbrains-gradle lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1, test first. JetBrains only (epic rail). This row is claimable only once task-2f4b224f is DONE. That row adds the line-parsing helpers this step re-points, so find them by content at your HEAD: grep -n \"typedScript\\|typedPsScript\\|typedBashPsScript\\|assertPsCarriersKeep\\|psWords\\|PsAgent\" moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt.\n\nAs planned, and as seen in 2f4b224f's working tree, its tests read typed lines only through typedPsScript(line) (native) and typedBashPsScript(line) (WSL). Both call typedScript(line, exe, escape, escaped, strict), which un-escapes a -Command \"...\" body. The tests are:\n- J1 'every PowerShell single-quote character is doubled so each value stays one word';\n- J2 'a backtick, dollar or double-quote character stays inside its own word on every PowerShell route';\n- J3 'a project path holding a right single quotation mark reaches the wrapper intact on both PowerShell routes'.\nIf QA renamed the helpers, apply this step to whatever J1-J3 use to read a typed PowerShell line.\n\n(a) Make typedScript a decoder, typedScript(line, exe):\n- assert the line starts with exactly \"$exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand \";\n- assert the rest matches [A-Za-z0-9+/]+={0,2}. Only base64 is typed, so no shell sees a character of any value;\n- decode it with java.util.Base64.getDecoder(), assert an even byte count, and return String(bytes, Charsets.UTF_16LE).\nPut the line in every failure message. typedPsScript(line) = typedScript(line, \"powershell\") and typedBashPsScript(line) = typedScript(line, \"powershell.exe\"). Keep both names, so that assertPsCarriersKeep, psWords, PsAgent and the J1/J2 bodies stay byte-identical. Delete the escape-parsing body, and the fail import if nothing else uses it. Update the three KDocs.\n\n(b) J3's raw check native.contains(\"-Project 'D:\\\\Bob’’s work'\") becomes typedPsScript(native).contains(...).\n\n(c) Add J4 'an ASCII double quote or an exclamation mark reaches the wrapper byte-identical on every PowerShell route'. Run each value through assertPsCarriersKeep, which covers 5 agent carriers on the native and WSL routes plus 4 accounts words:\n- a\"b\n- x\"; Write-Output PWNED6; #\n- D:\\work!x\n- !!\n- a!$b\n- x'‘’‚‛“”„`$\"!y, one value holding every character 2f4b224f covers plus \" and ! (write the curly ones as \\u escapes).\nAdd one comment line saying why: Windows PowerShell 5.1's native argument passing dropped a plain \" from the old -Command line, and an interactive bash expanded ! inside the WSL wrap's double quotes ('event not found').\n\nOn HEAD every PowerShell route fails the framing check, so J4 is the DoD 1 test that fails on HEAD.\n\nError handling: this step changes tests only. The decoder fails with the offending line in its message. It checks the base64 alphabet before it decodes, so a decode exception cannot hide the line.\n\nNotes:\n- In Kotlin, write \\$ for a literal dollar.\n- Test names cannot contain a backtick, dot, colon or slash.\n- Edit can land a \\u escape as the literal character (mem:gotcha-edit-tool-unescapes-unicode-literals). The meaning is the same; check with grep -n.\n- Write tracked files only as the global rail allows; no shell writes.\n- Gradle needs the jetbrains-gradle lease, so the RED run is batched into step 4.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 2. Every existing assertion on a PowerShell line decodes the line first, and the pins are re-pinned. Change what each assertion reads, never what it means. An assertFalse on a raw encoded line would pass vacuously.\n\n(a) Wrap the builder result in typedPsScript(...) in these tests:\n- the 13 agent-line tests named 'PowerShell ...', from 'PowerShell worker Claude command stays in print mode' to 'PowerShell architect command no longer sets MOE_NO_PRINT_MODE env var' (not the accounts one, see c);\n- the ps value in 'protected runtime marker renders as exactly 1 in WSL bash and PowerShell';\n- the ps value in 'legacy env overrides never render the protected runtime marker'.\n\n(b) 'bashWrapPowerShell produces a bash-safe interop line'. Assert:\n- wrapped == \"powershell.exe\" + psLine.removePrefix(\"powershell\");\n- typedBashPsScript(wrapped) == typedPsScript(psLine);\n- that script starts with $env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; with single backslashes, because bash no longer escapes anything.\n\n(c) Rename 'PowerShell accounts command quotes every word for the inner and outer shell' to '... quotes every word inside its encoded script'. Assert that typedPsScript(command) equals:\n& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\Users\\O''Brien\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js' '--accounts-file' 'D:\\moe$\\claude-accounts.json' 'login' 'acct-1'\nThe $ is no longer backtick-escaped.\n\n(d) PINNED_LEGACY:\n- Each of the 8 PowerShell rows holds the script its line runs:\n$env:MOE_DAEMON_PATH='C:\\moe\\daemon\\index.js'; $env:MOE_PROXY_PATH='C:\\moe\\proxy\\index.js'; & '@S@' -Role <role> -Project 'D:\\projexts\\app' -WorkerId '<role>-0000abcd' -Command 'claude'\nArchitect and governor add ' -Interactive'. A WSL row holds the same script as its native row.\n- scriptAsTyped returns PINNED_SCRIPT, except toWslPath(PINNED_SCRIPT) for the WSL BASH rows.\n- In the pinned test, take exe = powershell.exe for a WSL row, else powershell. For a POWERSHELL row, assert typedScript(actual, exe) == expected. Also assert, byte for byte, actual == \"$exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand \" + Base64 of expected's UTF-16LE bytes. The script path depends on the OS, so the new bytes are computed from the pinned script, not stored as base64.\n- The BASH rows and the 16-row check are unchanged. Reword the 'Captured from today's buildCommand' comment.\n\n(e) 'a VM seat with the WSL toggle on types the native PowerShell wrapper into the WSL prompt':\n- keep the bashWrapPowerShell(native) == underWsl check;\n- the startsWith check names -EncodedCommand;\n- both contains checks read typedBashPsScript(underWsl) and typedPsScript(native), with plain PINNED_SCRIPT.\n\n(f) 'space, tilde and non-ASCII still build on every agent route and accounts shell': decode each POWERSHELL agent line (typedBashPsScript when wsl) and the POWERSHELL accounts line before contains.\n\n(g) AccountPresentationTest 'VM token command lines quote like sign-in in every shell':\n- add import java.util.Base64;\n- add a decoder local to that test, since tests share no helper module. It checks the exact prefix powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand, requires a base64-only tail, and decodes UTF-16LE;\n- psPrefix becomes the decoded script prefix & 'C:\\Program Files\\nodejs\\node.exe' 'C:\\Users\\O''Brien\\...\\cli.js' '--accounts-file' 'D:\\moe$\\claude-accounts.json';\n- the WSL and bash halves are unchanged.\n\nLeave every bash-route test, the control-character refusal tests and the protected-command tests unchanged.\n\nError handling: this step changes tests only. Every decoder failure names its line.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 1, production: the minimum change.\n\n(a) powerShellLine(psCommand) returns POWERSHELL_LINE_PREFIX + Base64.getEncoder().encodeToString(psCommand.toByteArray(Charsets.UTF_16LE)), with:\nprivate const val POWERSHELL_LINE_PREFIX = \"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand \"\nUse UTF_16LE, never UTF_16, which writes a big-endian BOM. The KDoc says:\n- the typed line holds only base64 after a fixed prefix;\n- so no character of a value reaches the shell it is typed into (PowerShell, cmd, or bash under WSL), or Windows PowerShell 5.1's native argument passing, which drops a plain \";\n- this is the form VS Code's AgentLauncher and AccountsTreeProvider type;\n- psQuote still guards the decoded script.\n\n(b) bashWrapPowerShell(psLine): when psLine starts with POWERSHELL_LINE_PREFIX, return \"powershell.exe\" + psLine.removePrefix(\"powershell\"). Otherwise return psLine unchanged (today's fallback). Rewrite its KDoc: interop needs only the .exe suffix, because base64 holds no $, backtick, quote or ! for bash to expand.\n\n(c) Delete PS_DOUBLE_QUOTED_SPECIAL and PS_BACKTICK_ESCAPE. They are 2f4b224f's outer escaping and are dead after this change. Keep psQuote and PS_SINGLE_QUOTE exactly as 2f4b224f left them.\n\n(d) Reword buildCommand's comment on the WSL POWERSHELL arm: no bash escaping is needed.\n\n(e) Add import java.util.Base64.\n\nUnchanged:\n- the script text buildPowerShellCommand builds;\n- the accounts POWERSHELL arm, which calls powerShellLine and so becomes encoded with no edit;\n- the WSL_BASH and BASH arms;\n- AccountsPanel. Its clipboard fallback and dialog now show the encoded line, which is VS Code's trade-off too.\n\nError handling: requireSafeArg and requireSafeLaunchArgs stay the first statements of every builder, with unchanged messages, so a control character is still refused before any encoding. Encoding is total: there is no new failure path, and neither call can throw.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "DoD 3. The gate runs once. Hold ONE jetbrains-gradle lease for every Gradle run (mem:convention-jetbrains-gradle-lease), and release it right after, even on failure. Run Gradle only in snapshots under /mnt/d/moe-scratch (mem:gotcha-jetbrains-gradle-from-wsl). Never kill java or gradle processes by name (global rail).\n\n(1) RED. Take a git-archive HEAD snapshot and overlay ONLY the two test files. Run:\n.\\gradlew.bat test --tests com.moe.util.TerminalAgentLauncherTest --tests com.moe.toolwindow.AccountPresentationTest --rerun\nJ4 must fail with 'not a powershell -EncodedCommand line'. So must J1-J3, every test step 2 converted, and the AccountPresentationTest VM token test. The bash-route, refusal and protected-command tests must pass.\n\n(2) Mutants. Write them into snapshot copies only (mem:pattern-mutant-sweep-in-gate-snapshot).\n- M1, vacuity: powerShellLine encodes \"$psCommand -Interactive -CodexExec -GeminiExec -GrokExec MOE_NO_PRINT_MODE MOE_RUNTIME_PROTECTED\" instead of psCommand. It must fail each of these 12 tests, each of which asserts false on a PowerShell line:\n  - PowerShell worker Claude command stays in print mode\n  - PowerShell qa Claude command stays in print mode\n  - PowerShell worker non-Claude command stays provider native\n  - PowerShell exec modes do not force Claude interactive\n  - PowerShell codex exec passes -CodexExec\n  - PowerShell gemini exec passes -GeminiExec and never -CodexExec\n  - PowerShell architect Gemini command stays provider native\n  - PowerShell worker Grok command stays provider native\n  - PowerShell architect Grok command does not pass -Interactive\n  - PowerShell grok exec passes -GrokExec and never -CodexExec\n  - PowerShell architect command no longer sets MOE_NO_PRINT_MODE env var\n  - legacy env overrides never render the protected runtime marker\n  A survivor among them still reads the encoded line. Fix it and rerun.\n- M2: Charsets.UTF_8 instead of UTF_16LE. It must fail J1-J4 and the PINNED_LEGACY test.\n- M3: bashWrapPowerShell returns psLine unchanged. It must fail J4, the PINNED_LEGACY test (its WSL PowerShell rows) and 'bashWrapPowerShell produces a bash-safe interop line'.\n\n(3) Run the checkRef verbatim; it must exit 0:\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && F=\"moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt\" && J=/mnt/d/moe-scratch/enc76d4-jb-gate && rm -rf \"$J\" && mkdir -p \"$J\" && git archive HEAD | tar -x -C \"$J\" && cp --parents $F \"$J/\" && cd /mnt/d/moe-scratch && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\enc76d4-jb-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'\n- Confirm '> Task :test' ran and was not UP-TO-DATE.\n- Read the TerminalAgentLauncherTest count, the AccountPresentationTest count and the JUnit total from the XML (mem:gotcha-gradle-uptodate-inside-chained-gate).\n\nRecord in complete_task: the RED failures, the mutant kills and the JUnit counts.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review: one pass, at the end, scoped to this row's diff (a mid-epic bug row). Check:\n- git diff --stat names only the 3 planned files, and the diff stays under the 400-line cap.\n- grep -rn 'Bypass -Command\\|PS_DOUBLE_QUOTED_SPECIAL\\|PS_BACKTICK_ESCAPE' moe-jetbrains/src finds nothing.\n- Read every call of buildPowerShellCommandForTest, agentLine(POWERSHELL, ...), accountsLine(AccountsShell.POWERSHELL, ...), pinnedCommand(..., POWERSHELL, ...) and buildAccountsCommand(..., AccountsShell.POWERSHELL) in both test files. Each result must reach typedScript, typedPsScript, typedBashPsScript, the AccountPresentationTest decoder or a full-line equality before any assertion.\n- requireSafeArg still runs first. psQuote and PS_SINGLE_QUOTE are unchanged. There is no new non-private API.\n- What if the builder runs twice, or a value is empty or huge? The functions are pure, and an empty value encodes as ''. The typed line is about 2.7 times the script, around 1.1K characters for a launch, far below Windows' 32,767-character command line.\n\nIn complete_task, state these as accepted residuals:\n- JetBrains' launch and accounts lines are opaque in the terminal and in the no-terminal dialog, as VS Code's are.\n- A lone UTF-16 surrogate becomes U+FFFD when encoded. HEAD's UTF-8 TTY write already turned it into '?'.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's \"keep the board moving\" (10:52Z). The row is fleet-filed (an architect, while planning task-2f4b224f) and off the critical path; nothing depends on it. Its dependsOn on 2f4b224f serializes the shared TerminalAgentLauncher.kt edit. architect-0fcb7226 is idle. It stays LOW, so it is claimed after higher-priority rows.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-2f4b224f9afe47b4a5e382d5da7bb16c"
+  ],
+  "priority": "LOW",
+  "order": 24,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T14:05:57.356Z",
+  "updatedAt": "2026-11-02T14:26:31.167Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T14:07:21.361Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T14:07:25.658Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T14:26:31.138Z",
+  "executionContract": {
+    "intendedBehavior": "JetBrains types every PowerShell line (the agent launch, the accounts CLI line and the WSL interop route) as powershell[.exe] -NoProfile -ExecutionPolicy Bypass -EncodedCommand <UTF-16LE base64>, so only base64 follows a fixed prefix. Every value reaches moe-agent.ps1 or the accounts CLI byte-identical, including ASCII \", !, backtick, $ and every curly quote. bashWrapPowerShell only swaps powershell for powershell.exe.",
+    "acceptanceCriteria": [
+      "J4 fails on HEAD and passes after. Each of a\"b, x\"; Write-Output PWNED6; #, D:\\work!x, !!, a!$b and an all-characters value comes back as exactly one word equal to the input, from every agent carrier on both PowerShell routes and from every accounts word. Every typed line is only base64 after its prefix.",
+      "J1-J3 (task-2f4b224f) pass through the decoding helpers. Their bodies are unchanged except J3's one raw contains.",
+      "Every existing TerminalAgentLauncherTest and AccountPresentationTest assertion on a PowerShell line reads the decoded script. Mutant M1 fails all 12 tests that assert false on a PowerShell line.",
+      "PINNED_LEGACY's 8 PowerShell rows pin the decoded script and the full new bytes. Its 8 bash rows are unchanged.",
+      "The checkRef exits 0, with :test executed."
+    ],
+    "invariants": [
+      "requireSafeArg and requireSafeLaunchArgs run first in every builder, with unchanged messages.",
+      "psQuote doubles the five PowerShell single-quote characters, exactly as task-2f4b224f left it.",
+      "Bash-route lines (native bash, WSL bash, accounts WSL_BASH and BASH) are byte-identical to HEAD.",
+      "No moe-vscode file changes."
+    ],
+    "compatibility": [
+      "The wrapper receives the same parameters as before (-Role, -Project, -WorkerId, -Command, -Team, -CodexExec/-GeminiExec/-GrokExec, -Interactive) and the same env (MOE_DAEMON_PATH, MOE_PROXY_PATH, MOE_RUNTIME_PROTECTED).",
+      "The JetBrains accounts PowerShell line takes the form of VS Code's accountsCommandLine.",
+      "The typed line now runs from any Windows shell, and from a WSL prompt with .exe. It is opaque in the terminal and in the no-terminal dialog, as VS Code's is."
+    ],
+    "approvedScope": [
+      "TerminalAgentLauncher.powerShellLine (private), bashWrapPowerShell (internal) and a new private const POWERSHELL_LINE_PREFIX. Removal of PS_DOUBLE_QUOTED_SPECIAL and PS_BACKTICK_ESCAPE. KDoc and buildCommand's WSL comment.",
+      "TerminalAgentLauncherTest: typedScript, typedPsScript and typedBashPsScript become decoders. J3's raw contains, a new J4, and step 2's conversions and re-pins.",
+      "AccountPresentationTest: the PowerShell half of the VM token test."
+    ],
+    "reuse": [
+      "VS Code's -EncodedCommand framing: moe-vscode/src/util/AgentLauncher.ts buildPowerShellCommand and AccountsTreeProvider.accountsCommandLine.",
+      "task-2f4b224f's assertPsCarriersKeep, psWords and PsAgent drive J4.",
+      "JDK java.util.Base64 and kotlin.text.Charsets.UTF_16LE; no new dependency."
+    ],
+    "sourceAssumptions": [
+      "TerminalAgentLauncher.kt, HEAD plus 2f4b224f's working tree at planning: bashWrapPowerShell ~L600, powerShellLine ~L658, the WSL POWERSHELL arm of buildCommand ~L543. buildAccountsCommand's POWERSHELL arm ~L494 calls powerShellLine.",
+      "PowerShell -EncodedCommand takes base64 of UTF-16LE with no BOM. VS Code's Buffer.from(s, 'utf16le') types the same.",
+      "Planning probe on Windows PowerShell 5.1.26100.9711: an -EncodedCommand line carrying \", !, backtick, $ and curly quotes reached a stub wrapper byte-identical, both from an interactive bash and from a PowerShell prompt.",
+      "An interactive bash applies history expansion to ! inside double quotes. Probe: the HEAD-shaped line printed 'bash: !x: event not found'."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && F=\"moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt\" && J=/mnt/d/moe-scratch/enc76d4-jb-gate && rm -rf \"$J\" && mkdir -p \"$J\" && git archive HEAD | tar -x -C \"$J\" && cp --parents $F \"$J/\" && cd /mnt/d/moe-scratch && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\enc76d4-jb-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(A) Chosen: -EncodedCommand (UTF-16LE base64) for every JetBrains PowerShell line. This is the row's fix direction and VS Code's form.\n\n(B) Rejected: keep -Command \"...\" and add escaping for \" and !.\n- Windows PowerShell 5.1's native argument passing drops an embedded \" whatever the PowerShell-level escaping. Only the child's \\\" form would survive, and that differs between 5.1 and 7.3+.\n- Bash keeps the backslash of a \\! inside double quotes (bash manual, HISTORY EXPANSION), so the WSL wrap would need re-quoting.\n- B is more code and more bytes to pin, and it would still depend on the shell.\n\n(C) Rejected: type the $env: sets in the outer shell, as VS Code does. Values would stay in the typed line, which then depends on the outer shell. Keeping them inside the encoded script makes the whole JetBrains line base64-only.",
+    "codebaseInsights": "- 2f4b224f's J1-J3 read typed lines only through typedPsScript/typedBashPsScript -> typedScript (seen in its working tree at planning). Re-pointing typedScript switches them to the decoded script with no change to their bodies. J3 has one raw contains.\n- buildCommandForTest and buildPowerShellCommandForTest type File(scriptPath).absolutePath, which depends on the OS. Pinned PowerShell bytes are therefore computed from PINNED_SCRIPT, never stored as base64.\n- The accounts POWERSHELL arm calls powerShellLine, so it is encoded with no edit. Its line then has the same form as VS Code's accountsCommandLine.\n- AccountsPanel.runCli copies accountsCommandLine to the clipboard and shows it in moe.accounts.terminal.unavailable. No string change is needed.\n- Overlap scan at planning: among open rows only 2f4b224f (this row's dependency) declares TerminalAgentLauncher.kt and TerminalAgentLauncherTest.kt. AccountPresentationTest.kt is undeclared.\n- Planning probe on Windows PowerShell 5.1.26100.9711. Files are in /mnt/d/moe-scratch/enc76d4-probe; the stub sits in a folder named 'dir ’x!'.\n  - A JetBrains-shaped -EncodedCommand line (env set; & '<stub>' -Role ... -Team ...; five-character psQuote) delivered these values byte-identical to the stub: D:\\work!x; claude --append-system-prompt \"be terse\"; x\"; Write-Output PWNED6; #'‘’‚‛“”„`$!! a`nb; and C:\\a!b$c\"d.\n  - That held both when the line was typed into an interactive bash (WSL interop) and when it was run as a Windows PowerShell 5.1 prompt's command.\n  - The HEAD-shaped WSL line, with ! inside bash double quotes, printed 'bash: !x: event not found'.",
+    "risks": "1. Vacuous negatives: an assertFalse on a raw encoded line always passes. M1 proves that none remain.\n2. UTF_16 instead of UTF_16LE writes a big-endian BOM. M2 covers the encoding.\n3. If 2f4b224f's QA renames or reshapes its helpers before landing, re-point whatever J1-J3 use. Do not edit their bodies beyond J3's raw contains.\n4. Kotlin escaping in pins: write \\$ for a dollar. The new PowerShell pins have single backslashes (\\\\ in source) and an unescaped $.\n5. A Gradle :test that is UP-TO-DATE gives a false green. Use --rerun and read the XML.\n6. CI runs these tests on Linux. Keep every expected path computed through File(...).absolutePath or PINNED_SCRIPT, as today.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt",
+      "moe-vscode/src/util/AgentLauncher.ts",
+      "moe-vscode/src/providers/AccountsTreeProvider.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "12ef9ffb992ad36fb427504161a24a97ab317e0f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T14:26:31.167Z",
+  "approvedPlanRevision": 1
+}
