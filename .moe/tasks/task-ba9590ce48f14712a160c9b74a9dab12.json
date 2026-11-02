@@ -53,7 +53,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -66,7 +66,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T10:43:48.052Z",
-  "updatedAt": "2026-11-02T11:01:37.128Z",
+  "updatedAt": "2026-11-02T11:08:00.575Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T10:44:34.253Z",
@@ -76,11 +76,14 @@
     "firstClaimAt": "2026-11-02T10:47:28.176Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-02T11:08:00.575Z",
+    "wallClockMs": 1232399
   },
   "contextFetchedBy": [
     "architect-93e0e956",
-    "worker-81a7999f"
+    "worker-81a7999f",
+    "qa-564d8bce"
   ],
   "tier": "light",
   "effort": "high",
@@ -158,7 +161,44 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt",
+    ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
+    ".moe/tasks/task-ba9590ce48f14712a160c9b74a9dab12.json",
+    ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json"
+  ],
+  "completionSummary": "Test-only fix in MoeProjectConnectionTest.kt: every WebSocket client close now goes through a bounded closeWithin (close(), poll isClosed, forced closeConnection, poll, stderr note), which never waits on Java-WebSocket's untimed closeBlocking latch. Teardown is non-throwing, the four in-test closes assert closure, a class-level 30 s Timeout rule is the backstop, and a new regression test covers a never-connected client. No production changes. Mutant with closeBlocking restored fails via TestTimedOutException and the run ends (1m1s). The checkRef passed 3 times in a row on Windows under the jetbrains-gradle lease (lease released): 34 suites, 558 tests, 0 failures, 0 errors each.",
+  "commits": [
+    {
+      "sha": "946b4713b0aae19ac66a68080994f45dbea82728",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T10:55:40Z",
+      "paths": [
+        ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
+        ".moe/tasks/task-ba9590ce48f14712a160c9b74a9dab12.json",
+        ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T11:02:19.328Z",
+      "treeId": "6c68ec2207723d188cea749877e8a43e7c738542",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt"
   ],
-  "completionSummary": "Test-only fix in MoeProjectConnectionTest.kt: every WebSocket client close now goes through a bounded closeWithin (close(), poll isClosed, forced closeConnection, poll, stderr note), which never waits on Java-WebSocket's untimed closeBlocking latch. Teardown is non-throwing, the four in-test closes assert closure, a class-level 30 s Timeout rule is the backstop, and a new regression test covers a never-connected client. No production changes. Mutant with closeBlocking restored fails via TestTimedOutException and the run ends (1m1s). The checkRef passed 3 times in a row on Windows under the jetbrains-gradle lease (lease released): 34 suites, 558 tests, 0 failures, 0 errors each."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-81a7999f@2026-11-02T10:55:40Z",
+    "at": "2026-11-02T11:02:19.328Z"
+  },
+  "completedAt": "2026-11-02T11:08:00.575Z",
+  "reviewCompletedAt": "2026-11-02T11:08:00.575Z",
+  "reviewSummary": "Approved. Reviewed completion 946b4713 (on moe/work-2026-10-24, pushed). Only code change: MoeProjectConnectionTest.kt +71/-5 (3 other paths are board json); no production/build.gradle.kts change.\n\nDoD1 (teardown can't block): all 5 closeBlocking() calls gone (grep matches only the new test name + KDoc). The 4 in-test closes and ConnectionFixture.close() use closeWithin: close(), poll isClosed 3s, forced closeConnection(ABNORMAL_CLOSE), poll 1s, stderr note naming URI/state/time; non-throwing in teardown; in-test closes are assertTrue(closeWithin). Class Timeout.seconds(30) rule backstops. Tests: 13 @Test before, 14 now; all 13 keep assertions, only removed lines are the 5 closeBlocking calls (contract text said \"17\"; slip, not a defect).\n\nDoD2 (3 consecutive passes): re-ran task.verification verbatim in a fresh git-archive snapshot, native Windows, under the jetbrains-gradle lease: run1 34 suites/558 tests/0 fail/0 err (56s), run2 same (32s), run3 same (32s), loop exit 0. MoeProjectConnectionTest XML: tests=14, failures=0, errors=0, includes the new never-connected test. Matches the worker's totals.\n\nIndependent mutant (snapshot only): inserted client.closeBlocking() at top of closeWithin -> class FAILED via TestTimedOutException \"timed out after 30 seconds\" on the never-connected test; run ended on its own (14 tests, 1 failed, BUILD FAILED in 38s).\n\nCleanup: lease released (granted on to task-0f2cc6eb), scratch dirs removed, no pattern-kill.\n\nNon-blocking notes: no dedicated timing test for the ~4s-per-client teardown bound (the regression test's timing assert covers closeWithin; the constants are visible). Ponytail pass: nothing to cut; pollUntil resembles existing awaitUntil but differs (boolean vs assert), taste only.",
+  "requiredCheckAtDone": null
 }

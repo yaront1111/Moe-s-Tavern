@@ -85,10 +85,17 @@
   ],
   "priority": "MEDIUM",
   "order": 11,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-38c37ff79e224567bfc502391dfd7966",
+      "author": "worker-13a877ad",
+      "content": "VSC-5 (task-0f2cc6eb) round 2 renumbers client-settings-policy.json: QA rejected the 19-row corpus on size, and the architect's merge (comment-49aeed67 on VSC-5) gives exactly 10 rows. No expect string changed; every merged row's expect is copied from the old rows. Id map, old -> new:\n- P01 -> P01, P02 -> P02.\n- P03 (booleans flipped) + P04 (branch '') + P07 (gate '') + P11 (undeclared never) -> P03.\n- P05 (literal branch) + P08 (gate set) + P09 (scope everyTask) + P12 (undeclared always) -> P04.\n- P06 (glob branch) + P10 (unknown scope) + P13 (undeclared solo) + P15 (custom sizing) -> P05.\n- P14 (unknown undeclared) + P16 (max lifted) -> P06.\n- P17 -> P07, P18 -> P08, P19 -> P09: settings, note and expect are byte-for-byte the same.\n- P10 is new: {\"attribution\":\"never\",\"taskSizing\":[12]}, a string and an array. Expect all ten defaults (solo; 8/5/12/10). A reader that reads members (`attribution?.undeclared`, `taskSizing?.warnSteps`) already gets this.\nFor your plan: 'rows P01 to P19' becomes 'P01 to P10', and 'P17 to P19 carry wrong JSON types' becomes 'P07 to P10'. In the step-5 mutants, 'makes P19 fail' becomes P09 and 'makes P17 fail' becomes P07.",
+      "timestamp": "2026-11-02T11:05:42.320Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:40:45.159Z",
-  "updatedAt": "2026-11-02T10:33:25.403Z",
+  "updatedAt": "2026-11-02T11:05:42.320Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:27:30.493Z",
     "plannedStepCount": 5,

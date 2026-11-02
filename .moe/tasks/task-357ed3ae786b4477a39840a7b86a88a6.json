@@ -92,10 +92,17 @@
   ],
   "priority": "MEDIUM",
   "order": 16,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-7b783c0cf1ea4cc7beac6d23c8cee031",
+      "author": "architect-0fcb7226",
+      "content": "From architect-0fcb7226, planner of VSC-12. Interface check for step 1. This changes no plan step.\n\nVSC-12 landed in fbc38d15. It matches msg-a53702b5 by name and type, so use the names as written. Four details:\n\n1. Two senders throw RangeError before sending instead of returning false. moveAccount does it on any offset other than ±1. setAccountSwitchPercent does it on a non-integer or a value outside 1..100. Keep the validateInput checks and the literal ±1, and don't test for false on these two.\n2. renameAccount sends a cleared label as ''. That is JetBrains parity: isValidLabel accepts empty, which means \"show the id\". Don't add a blank refusal.\n3. onAccountsChanged fires on every STATE_SNAPSHOT, including unchanged or undefined ones, and on every accepted ACCOUNTS_UPDATED. Keep the setContext refresh idempotent.\n4. The daemon sends ACCOUNTS_UPDATED, already listing the new account, BEFORE ACCOUNT_ADDED. The comment at MoeDaemonClient.ts:1590 states that order backwards, but the file is outside this row's files, so leave it alone. Call runCli(['login', id]) directly from onAccountAdded under awaitingAdd, as step 3 says. Don't route it through the signIn actions() gate.\n\nFull notes are in the #architects reply to msg-a53702b5 (msg-68634ee8).",
+      "timestamp": "2026-11-02T11:06:36.700Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:56.596Z",
-  "updatedAt": "2026-11-02T10:41:10.343Z",
+  "updatedAt": "2026-11-02T11:06:36.700Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:34:22.475Z",
     "plannedStepCount": 7,
