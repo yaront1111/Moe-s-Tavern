@@ -15,51 +15,88 @@
     {
       "stepId": "step-1",
       "description": "Write the held-out corpus moe-jetbrains/src/test/resources/client-settings-policy.json with the Write tool.\n\nFormat: {\"version\": 1, \"rows\": [...]}. Each row is {id, note, settings, expect}:\n- id: P01 to P19;\n- note: a one-line reason;\n- settings: the project.settings WIRE JSON, either null or an object that uses only the policy keys: autoCommit, checkpointCommits, checkpointPush, commitBoardState, commitHooks, consolidationBranch, qualityGate, qualityGateScope, attribution {undeclared}, taskSizing {warnSteps, maxSteps, warnDistinctFiles, maxDistinctFiles};\n- expect: the full 10-entry list of {label, value, detail} in display order: Auto-commit, Checkpoint commits, Push checkpoints, Commit board state, Commit hooks, Landing branch, Quality gate, Quality gate scope, Undeclared-file attribution, Plan size limits. Copy the strings exactly from effectivePolicyRows, landingBranchRow and attributionRow in MoeSettingsDialog.kt.\n\nRows:\n- P01: settings null (no snapshot yet), all defaults.\n- P02: {}, all defaults; same expect as P01.\n- P03: every landing boolean flipped: autoCommit, checkpointCommits, checkpointPush and commitBoardState false; commitHooks true.\n- P04: consolidationBranch ''.\n- P05: consolidationBranch '  release/train  ' (trimmed literal, the peel target).\n- P06: consolidationBranch 'moe/work-*' (glob).\n- P07: qualityGate ''.\n- P08: qualityGate '  npm test  ' (trimmed, set).\n- P09: qualityGateScope 'everyTask'.\n- P10: qualityGateScope 'whenever' (unknown, so epic-final).\n- P11 to P14: attribution.undeclared 'never', 'always', 'solo' and 'sometimes' (unknown, so solo).\n- P15: taskSizing {warnSteps 3, maxSteps 6, warnDistinctFiles 2, maxDistinctFiles 4}.\n- P16: taskSizing {warnSteps 9, maxSteps 2}. The max is lifted to the warn value: 9/9 steps, file defaults.\n- P17: wire types the daemon reads strictly: autoCommit \"false\" (a string), checkpointCommits 0, commitHooks \"true\" (a string). Expect On, On and Skipped, because the getCommitScope.ts policy block reads `!== false` and `=== true`.\n- P18: taskSizing {warnSteps \"9\", maxSteps 7.5, warnDistinctFiles 0, maxDistinctFiles -1}. Expect all defaults ('Warn past 8 steps / 5 files, reject past 12 / 10'), because positiveInt in packages/moe-daemon/src/util/planSize.ts accepts only integer numbers above 0.\n- P19: qualityGate 42 and consolidationBranch true. Expect the disabled quality gate and the default shared landing-branch row, because the wrapper (scripts/moe-agent.sh isinstance(v, str)) and complete_task (typeof === 'string') ignore non-strings.\n\nP18 and P19 encode the daemon and wrapper semantics, NOT today's JetBrains output. They are the expected RED rows of step 2, and step 3 fixes JetBrains to match them. Never edit their expect to match JetBrains.\n\nError handling: keep the file valid JSON. Check it with plain `node -e` (JSON.parse); no npm.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/test/resources/client-settings-policy.json"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-settings-policy.json"
+      ],
+      "note": "Round 2 (QA size reject, comment-49aeed67): corpus merged from 19 rows to exactly 10 (Write tool; 328 -> 175 lines). P01 null; P02 {}; P03 = old P03+P04+P07+P11; P04 = old P05+P08+P09+P12; P05 = old P06+P10+P13+P15; P06 = old P14+P16; P07-P09 = old P17-P19 verbatim (settings, note, expect); P10 new {attribution:\"never\", taskSizing:[12]} expecting every default (solo, 8/5/12/10): MoeJson takeIf isJsonObject, moe-agent.sh:2892 isinstance dict, getCommitScope.ts attribution.undeclared ?? 'solo', planSize.ts resolveTaskSizing member reads all agree. Each effectivePolicyRows line reads exactly one field (MoeSettingsDialog.kt 177-271), so merged cases cannot interact. Mechanical proof (node script in /tmp, old corpus from git show HEAD): every new expect entry equals the one merged old row that differs from the default at that line (never two), no new expect string, each settings object is the key-disjoint union of its old rows, P07-P09 byte-equal to old P17-P19. JSON parses (node). Foreign dirty paths left alone: .moe/roles/*, .moe/skills/*, other .moe/tasks/*, MoeProjectConnectionTest.kt, scripts/moe-agent.{sh,ps1}, scripts/tests/postflight-worktree.cjs, .moe/decisions/.",
+      "startedAt": "2026-11-02T11:02:12.610Z",
+      "completedAt": "2026-11-02T11:03:56.575Z"
     },
     {
       "stepId": "step-2",
       "description": "Create moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt with the Write tool. Model it on DeliveryCorpusTest.kt in the same package (VSC-3, landed at 287d86c5).\n- Header KDoc: name the consumer (the moe-vscode settings row VSC-10, task-743e577a) and the CQ-I06b rule (a disagreement is fixed or filed, never given a client-specific expectation).\n- Load /client-settings-policy.json from the test classpath. Throw an AssertionError naming the resource when it is missing or unreadable.\n\nTest 1, well formed:\n- version is 1, and there are at least 10 rows;\n- ids are unique and match P[0-9]{2};\n- note is a non-empty string;\n- settings is present and is null or an object whose members are only the policy keys of step 1 (attribution: undeclared only; taskSizing: the four thresholds only), so a typo cannot pass as a default;\n- expect is an array of objects with exactly the members label, value and detail, all strings.\nCollect every problem and assert once.\n\nTest 2, every row renders:\n- settings null: call MoeSettingsDialog.effectivePolicyRows(null) (the no-snapshot case; null stays null).\n- Otherwise wrap a deep copy as {project:{id, name, settings}, epics:[], tasks:[]} and take MoeJson.parseState(it).project.settings. That is the path STATE_SNAPSHOT uses; JetBrains has no separate SETTINGS_UPDATED parser.\n- Compare against the expect list as MoeSettingsDialog.PolicyRow(label, value, detail), order included.\n- Catch exceptions per row, and assert one list of 'Pnn: expected ..., got ...' so every failing id is reported at once.\n\nRED run, with the test in place and the fix not yet made:\n1. Take the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease).\n2. Snapshot HEAD plus only the two new files into /mnt/d/moe-scratch/vsc5-red (mem:gotcha-jetbrains-snapshot-gradle-test).\n3. Run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\\\moe-scratch\\\\vsc5-red\\\\moe-jetbrains && .\\\\gradlew.bat test --tests com.moe.toolwindow.SettingsPolicyCorpusTest --rerun\"`.\n4. Release the lease.\nExpected: test 1 passes, and test 2 fails naming exactly P18 and P19. Any other failing id is a corpus typo: re-derive that row from MoeSettingsDialog.kt and MoeJson.kt (JetBrains already matches the daemon there) and rerun.\n\nError handling: release the lease even when gradle fails, and delete the snapshot afterwards.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt"
+      ],
+      "note": "Round 2 QA fixes in SettingsPolicyCorpusTest.kt (Edit tool, +6/-4 vs HEAD; 148 lines): (1) unknownMembers merges `nested == null` and `!value.isJsonObject` into one emptyList branch, so a non-object attribution/taskSizing (new P10) is accepted while unknown top-level keys and unknown nested names inside an object are still reported (typo guard kept); KDoc says why. (2) Header KDoc 'Rows P17 to P19' -> 'Rows P07 to P10' (QA wording). RED run under the jetbrains-gradle lease (granted 11:07:38Z): snapshot /mnt/d/moe-scratch/vsc5-red = git archive HEAD (fbc38d15) + the 2 test files + MoeJson.kt from 3cfc3c78^ (pre-fix; differs from HEAD by exactly +9/-43); `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc5-red\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.SettingsPolicyCorpusTest --rerun\"` -> exit 1, BUILD FAILED in 28s, 2 tests 1 failed: 'the corpus is well formed' PASSED; 'every row renders' failed naming exactly P08 (row 9: got 'Warn past 9 steps / 5 files, reject past 9 / 10') and P09 (row 5: Landing branch 'true'; row 6: Quality gate '42'). No other id failed, so no corpus typo.",
+      "startedAt": "2026-11-02T11:03:57.412Z",
+      "completedAt": "2026-11-02T11:09:05.497Z"
     },
     {
       "stepId": "step-3",
       "description": "Fix the two JetBrains divergences in moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt. They are display-only: MoeCommandSender.updateSettings sends only approvalMode, speedModeDelayMs, agentCommand and enableAgentTeams, and only MoeSettingsDialog reads these fields.\n\n(a) Add a private JsonObject.getStrictStringOrDefault(key, default) that honours only a JSON string primitive. Use it for consolidationBranch and qualityGate in parseProjectSettings, keeping .trim().\n(b) Add a private JsonObject.getPositiveIntOrNull(key) that honours only a JSON number primitive whose value is an exact Int above 0. Use asBigDecimal.intValueExact() inside try/catch, so 7.5, \"9\", 0, -1 and out-of-range values all give null. Use it for the four thresholds in parseTaskSizing, keeping the defaults and the maxOf lift.\n\nLeave getIntOrNull and getStringOrDefault unchanged, because other callers use them. KDoc each new helper with the semantics it mirrors: scripts/moe-agent.sh isinstance(v, str) and completeTask.ts typeof === 'string' for (a); planSize.ts positiveInt for (b).\n\nError handling: neither helper may throw. project.json is hand-editable, and a malformed settings block must degrade to defaults, never blank the board (the existing contract above parseProjectSettings). MoeJsonTest.kt stays unchanged: its malformed-settings rows (0, -4, 9/2) keep passing.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json"
+      ],
+      "note": "No byte change this round, as QA required ('Do not touch MoeJson.kt'). The round-1 fix is already on the branch in completion 3cfc3c78: private getStrictStringOrDefault (consolidationBranch, qualityGate: JSON string primitives only) and private getPositiveIntOrNull (the four taskSizing thresholds: a JSON number that is an exact Int above 0, read through BigDecimal; NumberFormatException/ArithmeticException give null, so it never throws). getIntOrNull and getStringOrDefault are unchanged. Evidence: `cmp` of the working-tree MoeJson.kt against `git show 3cfc3c78:…/MoeJson.kt` is byte-identical, and `git log 3cfc3c78..HEAD` lists no later commit to MoeJson.kt, MoeSettingsDialog.kt or Models.kt. Step 2's RED run swapped in only the pre-fix MoeJson (3cfc3c78^) and failed only P08 and P09, so this fix is what makes them pass; the step-5 gate shows GREEN. Reporting only this task's board record, so that step attribution does not assert the unchanged source path.",
+      "startedAt": "2026-11-02T11:09:06.430Z",
+      "completedAt": "2026-11-02T11:09:16.091Z"
     },
     {
       "stepId": "step-4",
       "description": "Mutation proof (DoD 3), in a scratch snapshot and never in the checkout.\n1. Snapshot HEAD plus the three task files into /mnt/d/moe-scratch/vsc5-mut.\n2. In the SNAPSHOT copy of MoeSettingsDialog.kt, swap the Commit board state value: `if (s.commitBoardState) ON else OFF` becomes `if (s.commitBoardState) OFF else ON`. Assert exactly one replacement.\n3. Take the lease, run the same `--tests com.moe.toolwindow.SettingsPolicyCorpusTest` command there, then release the lease.\nExpected: test 2 fails and names every row, because each row renders the Commit board state line. It must be an assertion failure, not a compile or harness error. Delete the snapshot; the mutant is discarded.\n\nError handling: if the replacement count is not 1, stop and fix the pattern instead of running a no-op mutant.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json"
+      ],
+      "note": "Mutation proof (DoD 3) with the 10-row corpus, run under the same jetbrains-gradle lease right after the RED run. The snapshot /mnt/d/moe-scratch/vsc5-mut was git archive HEAD (fbc38d15) plus the 2 test files; its MoeJson.kt equals the task's (byte-identical to 3cfc3c78). In the SNAPSHOT copy of MoeSettingsDialog.kt, `if (s.commitBoardState) ON else OFF` became `OFF else ON`: the pattern count was 1 before, 0 after, and a diff against HEAD shows only line 200. `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc5-mut\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.SettingsPolicyCorpusTest --rerun\"` exited 1 with BUILD FAILED in 27s: 2 tests, 1 failed, 0 errors. 'every row renders' failed with a java.lang.AssertionError naming all ten ids, P01 to P10, each at row 3 (Commit board state). It was an assertion, not a compile or harness error. Both snapshots were deleted, so the mutant is discarded. The checkout's MoeSettingsDialog.kt was never touched: it still has the original pattern once and no git status entry. No source bytes changed in this step.",
+      "startedAt": "2026-11-02T11:09:16.925Z",
+      "completedAt": "2026-11-02T11:09:40.114Z"
     },
     {
       "stepId": "step-5",
       "description": "Full JetBrains suite (DoD 4), run once.\n1. Take the jetbrains-gradle lease.\n2. Run exactly executionContract.checkRefs[0]: it snapshots HEAD plus the three task files into /mnt/d/moe-scratch/vsc5-gate, runs `gradlew.bat test --rerun` through cmd.exe, and prints the JUnit total.\n3. Release the lease, even on failure.\nExpect BUILD SUCCESSFUL plus the JUnit total. For reference, VSC-19's QA saw 546 at 25e70ba1, and VSC-3 then added DeliveryCorpusTest. This command, its exit code and its output tail are the complete_task verification.\n\nError handling for a red run:\n- A SettingsPolicyCorpusTest failure names its rows. Change a corpus row only if it contradicts MoeSettingsDialog.kt for a row that is not a bug row.\n- A failure in another test class after the MoeJson change is a real regression: fix it in MoeJson.kt, never by editing that test.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json"
+      ],
+      "note": "Full JetBrains suite (DoD 4). I ran executionContract.checkRefs[0] verbatim at HEAD deccbb37 (VSC-5 bytes unchanged since 3cfc3c78, plus the 3 task files) under the jetbrains-gradle lease, held 11:07:38Z to about 11:11:15Z and then released; it went to VSC-7. Only the command's output was redirected to /tmp/vsc5-gate.log. Result: exit 0, 'BUILD SUCCESSFUL in 56s', 'JUnit tests total: 558'. Across 34 suites: 0 failures, 0 errors, 0 skipped. SettingsPolicyCorpusTest 2/2, MoeJsonTest 33/33, MoeSettingsDialogTest 11/11, MoeProjectConnectionTest 14/14 (the hang fix ba9590ce is now on HEAD; no hang). cmp shows the snapshot's 3 task files byte-identical to the checkout. The total rose from 557 (round 1 at 3ec84dbf) to 558 because peer rows landed tests in between; this task still adds exactly the 2 SettingsPolicyCorpusTest tests.",
+      "startedAt": "2026-11-02T11:09:41.160Z",
+      "completedAt": "2026-11-02T11:11:26.921Z"
     },
     {
       "stepId": "step-6",
       "description": "Self-review of this task's diff.\n(1) Only the two new files and MoeJson.kt changed (check git status; other sessions' paths are not yours), per DoD 5. The summary names the JetBrains bugs fixed (numeric-string and fractional taskSizing values; non-string qualityGate and consolidationBranch) and the rows that pin them (P18, P19).\n(2) The P18 and P19 expectations follow the daemon and the wrapper, not the old JetBrains output.\n(3) The corpus is client-neutral: no key or expectation names a client, so VSC-10's moe-vscode test can replay it unchanged.\n(4) The new helpers never throw, and every other reader is unchanged.\n(5) The summary records the RED run (P18 and P19 only), the mutant run and the gate, each with its command.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-settings-policy.json",
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json"
+      ],
+      "note": "Adversarial self-review of git diff over the task paths.\n(1) Scope (DoD 5): only client-settings-policy.json and SettingsPolicyCorpusTest.kt differ from HEAD. MoeJson.kt is byte-identical to 3cfc3c78. MoeSettingsDialog.kt, MoeJsonTest.kt and MoeSettingsDialogTest.kt are untouched, and no task path changed on the branch since 3cfc3c78. Net against 3cfc3c78^ is +366/-9 = 357 (corpus 175, test 148, MoeJson net 34), under the 400 cap.\n(2) Bug rows are now P08 (taskSizing \"9\"/7.5/0/-1) and P09 (qualityGate 42 / consolidationBranch true). Their expect and settings are byte-equal to old P18/P19 and follow the daemon and wrapper, not old JetBrains.\n(3) The corpus is client-neutral: no client name appears in the JSON.\n(4) Merging loses no detection. Each effectivePolicyRows line reads one field, and every merged row keeps every old input key. A cross-key mutant, such as the gate reading the branch key, still fails P04 because the two values differ.\n(5) The relaxed unknownMembers still flags unknown top-level keys and unknown names inside an object. A null or other non-object value cannot NPE: Gson's get returns JsonNull for a present key.\nFound and fixed in this step: P10's note cited 'moe-agent.sh isinstance dict' for both fields, but the wrappers never read taskSizing (grep: 0 hits in moe-agent.sh/.ps1). I reworded the note only (Edit tool); the merge proof re-ran OK. Because the bytes changed, I re-acquired the lease (11:16:39Z) and re-ran checkRefs[0] verbatim at HEAD 0006fafa: exit 0, BUILD SUCCESSFUL in 55s, JUnit tests total 558, 34 suites, 0 failures/errors. The lease was released and granted onward. RED and mutant ran before this note-only edit; a note is checked only for being non-empty, so their results stand.\nTheoretical only: the executionContract text still says P01-P19 and 'only P18 and P19 fail'. QA's reject and comment-49aeed67 supersede it: rows are now P01-P10, with RED on P08 and P09.",
+      "startedAt": "2026-11-02T11:11:27.805Z",
+      "completedAt": "2026-11-02T11:18:27.149Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-13a877ad",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -84,12 +121,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:29.201Z",
-  "updatedAt": "2026-11-02T10:52:29.286Z",
+  "updatedAt": "2026-11-02T11:19:34.371Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:19:00.472Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6,
+    "executedStepCount": 12,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -101,7 +138,14 @@
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T10:24:35.095Z",
   "executionContract": {
@@ -158,25 +202,20 @@
   "planApprovedAt": "2026-11-02T10:24:35.118Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-02T10:25:53.506Z",
-  "reviewStartedAt": "2026-11-02T10:45:37.043Z",
+  "reviewStartedAt": "2026-11-02T11:19:34.369Z",
   "verification": {
     "command": "S=/mnt/d/moe-scratch/vsc5-gate && rm -rf \"$S\" && mkdir -p \"$S\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-jetbrains/src/test/resources/client-settings-policy.json moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt \"$S\"/) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\\\moe-scratch\\\\vsc5-gate\\\\moe-jetbrains && .\\\\gradlew.bat test --rerun\" && grep -ho 'tests=\"[0-9]*\"' \"$S\"/moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{s+=$2} END {print \"JUnit tests total: \" s}'",
     "exitCode": 0,
-    "outputTail": "> Task :test\n\n[Incubating] Problems report is available at: file:///D:/moe-scratch/vsc5-gate/moe-jetbrains/build/reports/problems/problems-report.html\n\nBUILD SUCCESSFUL in 43s\n11 actionable tasks: 11 executed\nJUnit tests total: 557\n(gradle exit=0; 34 suites, 0 failures, 0 errors; SettingsPolicyCorpusTest 2/2, MoeJsonTest 33/33, MoeSettingsDialogTest 11/11. Run in HEAD 3ec84dbf + the 3 task files under the jetbrains-gradle lease; gradle output was redirected to a log file for the tail. An earlier run at the previous HEAD gave BUILD SUCCESSFUL with 553 tests.)",
-    "reportedAt": "2026-11-02T10:45:37.043Z",
+    "outputTail": "> Task :test\n\n[Incubating] Problems report is available at: file:///D:/moe-scratch/vsc5-gate/moe-jetbrains/build/reports/problems/problems-report.html\n\nBUILD SUCCESSFUL in 55s\n11 actionable tasks: 11 executed\nConsider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html\nJUnit tests total: 558\n(exit 0. Run 11:16:45-11:17:57Z at HEAD 0006fafa plus the 3 task files, cmp-identical to the checkout, under the jetbrains-gradle lease. 34 suites, 0 failures, 0 errors, 0 skipped. SettingsPolicyCorpusTest 2/2, MoeJsonTest 33/33, MoeSettingsDialogTest 11/11. Gradle output was redirected to a log to take the tail.)",
+    "reportedAt": "2026-11-02T11:19:34.369Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "moe-jetbrains/src/test/resources/client-settings-policy.json",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
-    ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
-    ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
-    ".moe/tasks/task-ba9590ce48f14712a160c9b74a9dab12.json",
-    ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json",
-    ".moe/tasks/task-be543ff20bbc4f30ac7ac895ae0b4d13.json"
+    ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json"
   ],
-  "completionSummary": "VSC-5 delivered 3 paths. NEW moe-jetbrains/src/test/resources/client-settings-policy.json: version 1, rows P01-P19 (null/{} defaults; each boolean flipped; branch '' / trimmed literal / glob; gate '' / trimmed set; scope everyTask / unknown; undeclared never/always/solo/unknown; custom sizing and max-lift; plus wire-type rows P17 strict booleans, P18 taskSizing, P19 qualityGate/consolidationBranch), each row {id, note, settings, expect x10 {label,value,detail}}, no client named, so VSC-10 can replay it unchanged. NEW SettingsPolicyCorpusTest.kt: well-formedness test (unique P[0-9]{2} ids, policy-key whitelist, exact expect members) + replay through MoeJson.parseState (null stays null -> effectivePolicyRows(null)), all failing ids reported at once. FIXED in MoeJson.kt (JetBrains bugs, display-only): taskSizing read \"9\" as 9 and truncated 7.5 to 7 (now exact Int > 0 only, as planSize.ts positiveInt); qualityGate 42 / consolidationBranch true showed as \"42\" / literal branch \"true\" (now strings only, as moe-agent.sh and complete_task). getIntOrNull and getStringOrDefault unchanged; neither new helper throws. Evidence: RED run (tests only) failed exactly P18 and P19; mutant (Commit board state ON/OFF swapped in a scratch copy) failed all 19 rows with an assertion on row 3; full gate BUILD SUCCESSFUL, 553 tests at the earlier HEAD, 557 at 3ec84dbf (VSC-7's accounts corpus landed between runs), 0 failures. One verbatim gate rerun hung 10+ min in an unrelated test (MoeProjectConnectionTest teardown, WebSocketClient.closeBlocking has no timeout); I cancelled my own run, ended only my own Gradle client PID, filed bug task-ba9590ce48f14712a160c9b74a9dab12, and reran green. MoeSettingsDialog.kt, MoeJsonTest.kt, MoeSettingsDialogTest.kt unchanged.",
+  "completionSummary": "VSC-5 round 2 fixes QA's size reject with the architect's 10-row merge (comment-49aeed67). Net vs 3cfc3c78^ is +366/-9 = 357 LOC (was 508): client-settings-policy.json 175 (new), SettingsPolicyCorpusTest.kt 148 (new), MoeJson.kt +43/-9 (identical to 3cfc3c78, untouched).\nRows: P01 null; P02 {}; P03 = old P03+P04+P07+P11; P04 = old P05+P08+P09+P12; P05 = old P06+P10+P13+P15; P06 = old P14+P16; P07-P09 = old P17-P19 verbatim; P10 new {attribution:\"never\", taskSizing:[12]}, expecting all defaults. A node check against HEAD's 19-row corpus: every expect entry is copied from the one merged old row that differs at that line (no new strings), and the settings are key-disjoint unions.\nTest: unknownMembers accepts a non-object attribution/taskSizing; the typo guard for unknown names stays. KDoc now says 'Rows P07 to P10'.\nJetBrains bugs (fixed in round 1, display-only) are pinned by bug rows P08 (taskSizing \"9\"/7.5 read as 9/7) and P09 (qualityGate 42 / consolidationBranch true shown as \"42\" / branch \"true\").\nEvidence (Windows gradle snapshots, jetbrains-gradle lease held only around runs):\n- RED (HEAD + new tests + MoeJson from 3cfc3c78^, --tests SettingsPolicyCorpusTest): well-formed PASSED; render FAILED naming exactly P08 (row 9) and P09 (rows 5, 6).\n- Mutant (Commit board state ON/OFF swapped in a snapshot copy, 1 replacement): AssertionError on all 10 rows at row 3; discarded.\n- Gate: checkRefs[0] verbatim at HEAD 0006fafa on the final bytes: BUILD SUCCESSFUL, JUnit total 558 (34 suites, 0 failures; 557 in round 1, before peer tests landed).\nRED and the mutant ran before a P10 note-only reword (the wrappers never read taskSizing). Notes are only checked for being non-empty.\nThe executionContract's 'P01 to P19 / only P18 and P19 fail' is superseded by the reject: the rows are now P01-P10, and RED fails P08 and P09.\nMoeSettingsDialog.kt, MoeJsonTest.kt and MoeSettingsDialogTest.kt are unchanged. The old->new id map is posted on VSC-10 (comment-38c37ff7).",
   "commits": [
     {
       "sha": "3cfc3c78c714ea48378502184ce4062d41e7518e",
@@ -213,6 +252,23 @@
       "treeId": "591898d81954bb244cadb7bf001c683954aaf951",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "96a7b6eb787737760fcde5bbb279ff7ebaaaec16",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T10:52:15Z",
+      "paths": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+        ".moe/tasks/task-a5f39d5535404f6e9e59f762c046f5e0.json"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T10:57:34.752Z",
+      "treeId": "bcd793d0841079bcc136680ccb17728d4e83f837",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -224,8 +280,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-1106e678@2026-11-02T10:46:14Z",
-    "at": "2026-11-02T10:48:18.711Z"
+    "sessionId": "worker-13a877ad@2026-11-02T10:52:15Z",
+    "at": "2026-11-02T10:57:34.752Z"
   },
   "reviewCompletedAt": "2026-11-02T10:47:31.430Z",
   "rejectionDetails": {
