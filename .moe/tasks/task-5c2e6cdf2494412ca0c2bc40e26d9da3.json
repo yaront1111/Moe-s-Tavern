@@ -15,36 +15,59 @@
     {
       "stepId": "step-1",
       "description": "1. Bind the landed producer interfaces and add deterministic lease fixtures. Re-read WT-S comments, WT-09 landing rounds, WT-10G and WT-10P source/hand-offs after their structural dependencies are satisfied; do not write a second landing engine or emulate missing prerequisites. G's declared contract is `run_frozen_gate worktree` / `Invoke-MoeFrozenGate ... -WorktreeMode`; P's new wrapper-only contract is absolute Unix-ms MOE_PROXY_ONESHOT_DEADLINE_MS bounding the entire one-shot proxy call, including connect/EOF. Confirm the selected built proxy contains that fix before testing a queued wait. Preserve shared-mode default call signatures. In the existing fake proxy, add narrowly opt-in worktree lease scenarios and log acquire_resource/wait_for_resource/release_resource in order together with existing candidate/check/ledger events. Model granted with lease identity, queued then granted, repeated timedOut, daemon refusal/malformed response, withheld reply until proxy deadline, and release failure once then success. Validate caller taskId/workerId and exact resource id; default fixture modes must not change. No test may pretend granted:false is success. Use persisted fixture counters per temp project, not process-local counters (every RPC gets a fresh process).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "Fake proxy now models acquire_resource/wait_for_resource/release_resource (daemon reply shapes from tools/acquireResource.ts, waitForResource.ts, releaseResource.ts). Every call is logged to evidence-rpcs.jsonl in order, with the MOE_PROXY_ONESHOT_DEADLINE_MS it carried. Checks: caller task and worker must match the claimed attempt, resource must equal FAKE_LEASE_RESOURCE (default git-land-main), timeoutMs must be 1000..600000, no force, and ifAcquiredAt must name the held grant. Grants persist in .moe/resources/<id>.json. FAKE_LEASE_MODE values: unset (grant), queued, timeout, late, withheld (honours the proxy deadline, then exits 1), refuse, malformed (granted:\"true\"), release-fail-once (counted from the RPC log). The default mode only adds handlers: no wrapper called these tools before. Smoke-tested each mode directly against a temp project. Pre-existing dirty .moe/roles, .moe/skills and .moe/tasks paths belong to other sessions and were left alone.",
+      "startedAt": "2026-11-01T22:47:24.320Z",
+      "completedAt": "2026-11-01T23:00:53.236Z"
     },
     {
       "stepId": "step-2",
       "description": "2. Implement L3 acquire/wait in both worktree completion arms, with tests first (DoD 2–3). Separate raw configured qualityGate from the scope-filtered command. A configured gate means take the lease even on a mid-epic/scope-skipped completion; absent/blank gate means no lease RPC. Checkpoints/shared mode make no new lease calls. Introduce acquire_land_lease / Acquire-MoeLandLease (new helpers) and per-landing resource/attempted/granted/lease-generation state. Resource identity is the complete `git-land-` + target string with every character outside ASCII [A-Za-z0-9._-] replaced by '-', then truncated to 64 total characters; test slash, Unicode and long targets. Parse MOE_LAND_LEASE_WAIT_SEC as a positive bounded numeric duration, default 1800 when unset; invalid/zero/negative/overflow input fails closed with MOE_COMMIT_FAILED_LAND_LEASE before a resource RPC. Establish one overall deadline before acquire. Supply the actual landing task and worker, never create a synthetic task or use report_blocked during finalization. Call acquire_resource; only literal granted:true admits L4. For granted:false, call wait_for_resource repeatedly with timeoutMs=min(600000, remaining budget), never request below its 1000ms minimum (expire instead). Continue only a genuine timedOut response while budget remains; cancelled/error/malformed/RPC failure fails closed. Set P's one-shot deadline env to the same overall deadline for each call and restore it afterward (PS try/finally, Bash per-call env), so a hung/not-connected proxy cannot exceed the configured bound. A grant returned after the deadline is not admission: release it and fail. Example invariant:\n```text\nif !configuredGate: return admitted_without_lease\nattempted = true\nreply = acquire(resource, realTask, realWorker, absoluteDeadline)\nwhile reply.granted !== true and reply is queued/timedOut and remaining >= 1000ms:\n    reply = wait(resource, realTask, realWorker, min(600000, remaining), absoluteDeadline)\nif reply.granted !== true or deadline_expired: LAND_CODE=MOE_COMMIT_FAILED_LAND_LEASE; fail\n```\nBoth postflight harnesses must show acquire before any gate/publication, queued grant after a delay greater than the old two-second proxy cutoff, scope-skipped gate still acquires, no configured gate makes no lease call, timeout/non-answer/refusal prints the code with main unchanged and no candidate/gate/push, and no successful completion row is recorded. Use short test budgets and fake replies, not a real 30-minute wait.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "L3 in both wrappers. sh: land_lease_id/land_lease_budget/land_lease_rpc/land_lease_read/acquire_land_lease. ps1: Get-MoeLandLeaseId/Get-MoeLandLeaseBudget/Invoke-MoeLandLeaseRpc/Request-MoeLandLease. Only a configured qualityGate takes the lease: sh CS_QUALITY_GATE no longer blanked by MOE_DISABLE_QUALITY_GATE, ps1 Settings.configuredGate added; the shared gate keeps its opt-out. One deadline; each RPC gets MOE_PROXY_ONESHOT_DEADLINE_MS as a per-call prefix (sh) or set/restore (ps1), never exported. Wait timeoutMs=min(600000,left), loop only while left>=1000 and the reply is a literal queued; only literal granted:true with lease.taskId==task admits; a late grant fails and is released. Bad MOE_LAND_LEASE_WAIT_SEC refused before any RPC. Tests first (RED seen: 'no function land_lease_id', and old MOE_COMMIT_FAILED instead of MOE_COMMIT_FAILED_LAND_LEASE): lease-units (slash/Unicode/astral/long ids, budget parser), wt-lease-fails (timeout/withheld/late/refuse/malformed/budget/disabled), no-lease asserts added to wt-completion and wt-fails; the fake's queued grant now comes after 2.5s. The release call sites (step-3) and L6 (step-4) went in during this step too, because the step-2 tests assert the queue-entry release; they are tested and reported under their own steps. GREEN, sh: lease-units, wt-lease-fails, wt-completion, wt-fails, wt-gate, wt-lease-signal, codes ok; bash -n ok; parity-check PASS. ps1 natively on Windows (cmd.exe -> Windows node, PS 5.1 and pwsh 7.6.9): wt-completion, wt-fails, wt-lease-fails, wt-gate, lease-units ok; ParseFile ok under both engines; BOM kept. Mutation check (scratch copy outside the checkout) caught each broken line, including the dropped per-call deadline, an accepted late grant and a lease taken without a gate. 17 dirty paths from other sessions/debris left untouched.",
+      "startedAt": "2026-11-01T23:02:19.162Z",
+      "completedAt": "2026-11-01T23:52:10.124Z"
     },
     {
       "stepId": "step-3",
       "description": "3. Implement L14 cleanup and failure-safe resource ownership (DoD 2–3). Introduce idempotent release_land_lease / Release-MoeLandLease and invoke it after every worktree completion return path plus cleanup_temp/PowerShell outer finally, before deregistration and before clearing the landing identity. Mark acquisition attempted before sending the RPC so an ambiguous reply still cancels this task's queue/lease. Release only this resource + original task + worker, never force and never another task; when the granted lease's acquiredAt is known, use the existing release preconditions to avoid releasing a later lease generation. Queue-only cleanup uses the existing task-scoped release behavior. Give cleanup its own short bounded proxy deadline (5 seconds), restoring the environment afterward. Clear ownership state only after an acknowledged release; a failed release warns MOE_LAND_LEASE_RELEASE_FAILED and remains eligible for one exit-trap retry. Cleanup failure must not overwrite a known published/failed landing outcome or rerun a publication; daemon lease expiry/releaseOnDeregister remains a backstop, not a successful-release claim. Preserve existing signal deferral across publication/recording from WT-08/09; a handled exit before publication releases and preserves T. Mirrored tests assert release after passing and failing gate, after lease timeout/ambiguous acquire, after merge/publication failure, and on a handled exit while queued/gating; never publish on a missing grant. Test release failure then cleanup retry without a duplicate committed ledger row. SIGKILL cannot run a trap: do not claim otherwise.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "L14 in both wrappers. release_land_lease / Release-MoeLandLease: the ps1 helpers are renamed to the plan's Acquire-/Release-MoeLandLease (they were Request-/Clear-MoeLandLease in the step-2 note). The in-band release is one call that every return path reaches: sh after the outcome block, ps1 in the finally. It runs after the completion row/finalize and before the summary and the loop's identity reset. cleanup_temp and the ps1 outer finally retry it once before deregister. The lease state is set before the acquire RPC, so an ambiguous or late reply still releases. Each release names the stored resource+task+worker (never the current task) and never forces. It is pinned with ifAcquiredAt when the grant's acquiredAt is a string, else task-scoped. It has its own 5s per-call deadline: sh uses a per-call prefix, ps1 sets and restores it in try/finally. State clears only on an answered release. A failure warns MOE_LAND_LEASE_RELEASE_FAILED, keeps the state and never rewrites the outcome. NEW: before a new acquire replaces the state, an earlier landing's failed release gets its one retry. Without it, a looping wrapper's next landing would drop that retry. Tests (postflight-worktree.cjs, run by postflight.sh and .ps1): wt-gate covers release after a pass, a failing gate and a .moe-writing gate. In wt-gate's release-fail-once run, the in-band release fails, the exit retry succeeds, there is exactly one committed row and holders are []. wt-lease-fails covers timeout/withheld/late/refuse/malformed plus a NEW merge-tree failure row; each releases with main unchanged and no gate. wt-lease-signal (sh only) covers queued plus a NEW gating variant: a SIGTERM while the gate runs means one gate run, main unchanged, T keeps its bytes, and acquire then release. NEW lease-retry case (both engines): the old task's pinned release comes before the new acquire, and a failed retry warns while the new lease proceeds. RED, on scratch copies outside the checkout: lease-retry fails without the retry line (bash and PS 5.1). The merge row and the gating variant fail with both release sites removed. GREEN on bash: lease-units, lease-retry, wt-lease-fails, wt-lease-signal, wt-gate, wt-completion, wt-fails, codes all ok; bash -n ok; parity PASS. Native Windows (cmd.exe -> Windows node, launched from WSL), PS 5.1: lease-units, lease-retry, wt-lease-fails, wt-gate, wt-completion, wt-fails, codes ok; wt-lease-signal n/a (no signal on Windows). pwsh 7: lease-units, lease-retry, wt-lease-fails, wt-gate ok. BOM kept, LF kept. Not claimed: SIGKILL runs no trap, and the sh hot-reload exec skips it, so a pending failed release is lost there; lease expiry or the task leaving active status is the backstop. Net task diff is now 390 LOC. The 17 other-session dirty paths are untouched.",
+      "startedAt": "2026-11-01T23:54:05.157Z",
+      "completedAt": "2026-11-02T00:17:59.128Z"
     },
     {
       "stepId": "step-4",
@@ -84,7 +107,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-152f84fc",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -142,7 +165,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:53:57.865Z",
-  "updatedAt": "2026-11-01T14:48:58.555Z",
+  "updatedAt": "2026-11-02T00:17:59.128Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:03.609Z",
@@ -151,17 +174,23 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:27:46.029Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-76a2c8bb",
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-152f84fc"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:41:42.089Z",
   "planningNotes": {
@@ -183,5 +212,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T13:41:42.129Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-01T22:47:24.320Z"
 }

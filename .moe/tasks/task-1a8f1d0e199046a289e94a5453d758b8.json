@@ -104,11 +104,17 @@
       "author": "qa-1b5727b1",
       "content": "QA follow-up from CQ-M07g (task-9076afab, approved, completion 493ea8a4). This is a test gap, not a defect. No row pins the production default of the seat runner probe in scripts/local-runner/vm-control.mjs. Every VC-C3/VC-R2 row injects runnerAlive, so three mutants pass all tests:\n- cleanupReport `runnerAlive = runnerProbe` changed to `() => false`;\n- the same change in reconcileReport;\n- runVmControl `deps.runnerAlive ?? (() => false)`.\nAny of them would purge a seat VM whose runner is still alive on this host.\n\nSuggested row for whichever slice next edits local-runner-vm-control.test.mjs (or the M07 integration):\n- one seat record with runner `${process.pid}@x`, host localRunnerHost() and platform process.platform;\n- the fake daemon says gone, and the lease is free;\n- call cleanupReport and reconcileReport (or runVmControl with deps.call only), passing NO runnerAlive;\n- expect preserved/held reason 'runner-alive' and zero provider delete calls.\n\nThe QA harness for the check: /tmp/qa-m07g-mut/run.mjs (mutants M28-M30).",
       "timestamp": "2026-11-01T20:07:43.555Z"
+    },
+    {
+      "id": "comment-c16cb64bec724f188aeee224e331aaf8",
+      "author": "governor-978922c1",
+      "content": "Governor, relaying two advisory doc points from CQ-M06's QA approval (task-ced85748, 22:41Z), for when this row rewrites the verified-local text in docs/MCP_SERVER.md:\n1. In get_context's Execution policy context paragraph, \"an open attempt whose own snapshot is verified-local shows ... under a non-strict effectiveProfile\" holds only when the TASK snapshot is not verified-local. A stored verified-local task snapshot floors effectiveProfile.\n2. In the Strict completion (CQ-F08) bullet, \"completes as legacy after the rollback\" also covers a rollback to observe.\nNeither blocked M06.",
+      "timestamp": "2026-11-01T22:42:23.021Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:17:20.276Z",
-  "updatedAt": "2026-11-01T20:07:43.555Z",
+  "updatedAt": "2026-11-01T22:42:23.021Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:17:38.753Z"
   },

@@ -2670,7 +2670,7 @@ function Read-MoeCommitSettings {
         autoCommit = $true; checkpointCommits = $true; checkpointPush = $true
         commitBoardState = $true; commitHooks = $false
         undeclared = 'solo'; contested = 'skip-untouched'; exclude = @()
-        qualityGate = ''; qualityGateScope = 'epicFinal'; consolidationBranch = ''
+        qualityGate = ''; qualityGateScope = 'epicFinal'; consolidationBranch = ''; configuredGate = ''
     }
     $projJsonPath = Join-Path $moeDir "project.json"
     if (Test-Path -LiteralPath $projJsonPath) {
@@ -2708,6 +2708,9 @@ function Read-MoeCommitSettings {
         }
     }
     if ($env:MOE_ATTRIBUTION -eq 'declared') { $s.undeclared = 'never' }
+    # configuredGate ignores MOE_DISABLE_QUALITY_GATE: a worktree landing gates on it or
+    # refuses (WT-10); the shared gate keeps the opt-out (twin: read_commit_settings).
+    $s.configuredGate = $s.qualityGate
     if ($env:MOE_DISABLE_QUALITY_GATE -eq '1') { $s.qualityGate = '' }
     if ($env:MOE_DISABLE_CHECKPOINT -eq '1') { $s.checkpointCommits = $false }
     return $s
@@ -6316,8 +6319,9 @@ function Set-MoeCtrlCDeferred([bool]$On) {
     if ($hit) { Write-Host ''; Write-Host 'Agent stopped.'; exit 0 }
 }
 
-# L4-L9 onto $Ref from the task tip $L.T, at most three rounds (§2.3): B read
-# fresh each round, merge-tree, the .moe guard, C, the strict journal, the S1
+# L4-L9 onto $Ref from the task tip $L.T, at most three rounds, two with a
+# qualityGate (§2.3): B read fresh each round, merge-tree, the .moe guard, the
+# gate on exactly M with parent B (L6), C, the strict journal, the S1
 # test hook, ONE CAS. $true with $Res.Outcome committed (this C, or a journaled
 # C the target holds while T adds nothing, §2.9; Ctrl+C stays deferred) or
 # nothing; $false with $Res.Code and $L.Msg set and no ref moved by this
@@ -6337,7 +6341,8 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
         }
         if (-not $jc) { Remove-Item -LiteralPath $journal -Force }   # its C never reached the target: this fresh round supersedes it
     }
-    for ($round = 1; $round -le 3; $round++) {
+    $rounds = if ($Settings.configuredGate) { 2 } else { 3 }
+    for ($round = 1; $round -le $rounds; $round++) {
         $Res.Outcome = 'failed'; $Res.Code = 'MOE_COMMIT_FAILED'; $L.Msg = ''; $L.Why = ''
         $b = Sync-MoeLandTarget $top $Res.Branch $Res $L
         $bt = if ($b) { Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '-q', '--verify', "$b^{tree}") } else { $null }
@@ -6362,6 +6367,13 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
         } elseif ($jc) {
             $Res.Outcome = 'refused'; $Res.Code = 'MOE_COMMIT_REFUSED_UNRECONCILED_INTENT'
             $L.Msg = "receipt journal $journal still owes the completion row of $jc"; return $false
+        }
+        if ($Settings.configuredGate) {
+            $frozen = $null
+            try { $frozen = New-MoeFrozenCandidate $Git $m $b } catch {}
+            if (-not $frozen -or -not (Send-MoeCandidate $preflightTaskId $frozen $Res.Branch) -or -not (Invoke-MoeFrozenGate $Git $frozen $Settings.configuredGate -WorktreeMode)) {
+                $Res.Code = 'MOE_COMMIT_FAILED_GATE'; $L.Msg = "the merged tree $m on $b was not frozen, recorded and passed by the qualityGate"; return $false
+            }
         }
         $dt = Invoke-MoeGit -Top $top -GitArgs @('diff-tree', '-r', '-z', '--name-only', '--no-renames', $bt, $m)
         if ($dt.Rc -ne 0) { $L.Msg = 'git diff-tree failed'; return $false }
@@ -6398,9 +6410,9 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
         Set-MoeCtrlCDeferred $false
         if ($rc -ne 1) { if (-not $L.Msg) { $L.Msg = "$Ref could not be read after a lost CAS; receipt journal $journal kept" }; return $false }
         Remove-Item -LiteralPath $journal -Force -ErrorAction SilentlyContinue
-        Write-Host "[branch] $Ref moved while landing task $preflightTaskId (round $round/3); rebuilding on the new tip." -ForegroundColor Yellow
+        Write-Host "[branch] $Ref moved while landing task $preflightTaskId (round $round/$rounds); rebuilding on the new tip." -ForegroundColor Yellow
     }
-    $Res.Code = 'MOE_COMMIT_FAILED_REF_CONTENTION'; $L.Msg = "$Ref moved under all 3 rounds"
+    $Res.Code = 'MOE_COMMIT_FAILED_REF_CONTENTION'; $L.Msg = "$Ref moved under all $rounds rounds"
     return $false
 }
 
@@ -6423,11 +6435,93 @@ function Complete-MoeWorktreeLanding([hashtable]$Res, [string]$Journal) {
     Set-MoeCtrlCDeferred $false
 }
 
+# The land lease (WT-10, design §2.2 L3 and L14): with a qualityGate set, a worktree
+# completion holds git-land-<target> from before its first gate until after its
+# landing, so two gated landings never gate the same B. ONE deadline
+# (MOE_LAND_LEASE_WAIT_SEC, default 1800) bounds the acquire and every wait, each
+# RPC carrying it as the proxy's MOE_PROXY_ONESHOT_DEADLINE_MS for that call only;
+# only a literal granted:true on this task's lease admits.
+# Twins: land_lease_id, land_lease_budget, acquire_land_lease, release_land_lease.
+$script:MoeLandLease = $null
+# git-land-TARGET, every character outside [A-Za-z0-9._-] (a surrogate pair as one) made '-', cut to 64.
+function Get-MoeLandLeaseId([string]$Target) {
+    $id = ('git-land-' + $Target) -creplace '[\uD800-\uDBFF][\uDC00-\uDFFF]|[^A-Za-z0-9._-]', '-'
+    return $id.Substring(0, [Math]::Min(64, $id.Length))
+}
+# MOE_LAND_LEASE_WAIT_SEC in ms: digits with at most 3 decimals, more than 0, at most 86400 s; else $null.
+function Get-MoeLandLeaseBudget([string]$Seconds) {
+    if ($Seconds -cmatch '^([0-9]{1,5})(\.([0-9]{1,3}))?$') { $ms = [int64]$Matches[1] * 1000 + [int64](($Matches[3] + '000').Substring(0, 3)) }
+    else { return $null }
+    if ($ms -le 0 -or $ms -gt 86400000) { return $null }
+    return $ms
+}
+# One lease call as this task and seat, the deadline set for that call only.
+function Invoke-MoeLandLeaseRpc([string]$Tool, [string]$Deadline, [hashtable]$Extra = @{}) {
+    $l = $script:MoeLandLease; $prev = $env:MOE_PROXY_ONESHOT_DEADLINE_MS
+    $env:MOE_PROXY_ONESHOT_DEADLINE_MS = $Deadline
+    try { return Invoke-MoeRpc -Tool $Tool -Args (@{ resourceId = $l.Id; taskId = $l.TaskId; workerId = $WorkerId } + $Extra) }
+    catch { return $null }
+    finally { $env:MOE_PROXY_ONESHOT_DEADLINE_MS = $prev }
+}
+# L3: $true with no qualityGate (no lease call) or once this task holds the lease;
+# $false with MOE_COMMIT_FAILED_LAND_LEASE, any queue entry or late grant left for
+# Release-MoeLandLease. A wait value it refuses makes no RPC; an earlier landing's
+# unreleased lease gets its one retry first. Twin: acquire_land_lease.
+function Acquire-MoeLandLease([string]$Target, [hashtable]$Settings, [hashtable]$Res, [hashtable]$L) {
+    if (-not $Settings.configuredGate) { return $true }
+    $w = if ($env:MOE_LAND_LEASE_WAIT_SEC) { $env:MOE_LAND_LEASE_WAIT_SEC } else { '1800' }
+    $budget = Get-MoeLandLeaseBudget $w
+    if ($null -eq $budget) { $Res.Code = 'MOE_COMMIT_FAILED_LAND_LEASE'; $L.Msg = "MOE_LAND_LEASE_WAIT_SEC=$w is not a wait of more than 0 and at most 86400 seconds"; return $false }
+    Release-MoeLandLease | Out-Null
+    $lease = @{ Id = (Get-MoeLandLeaseId $Target); TaskId = $preflightTaskId; At = '' }
+    $script:MoeLandLease = $lease
+    $dl = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + $budget
+    $tool = 'acquire_resource'; $r = Invoke-MoeLandLeaseRpc $tool ([string]$dl)
+    while ($true) {
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); $kind = 'bad'
+        if ($r -and $r.granted -is [bool] -and $r.granted -and $r.lease -and $r.lease.taskId -ceq $preflightTaskId) { $kind = 'granted' }
+        elseif ($r -and $r.granted -is [bool] -and -not $r.granted) {
+            # queued: an acquire's success:true or a wait's timedOut:true.
+            $q = if ($tool -ceq 'acquire_resource') { $r.success } else { $r.timedOut }
+            if ($q -is [bool] -and $q) { $kind = 'queued' }
+        }
+        if ($kind -cne 'queued' -or $dl - $now -lt 1000) { break }
+        $tool = 'wait_for_resource'; $r = Invoke-MoeLandLeaseRpc $tool ([string]$dl) @{ timeoutMs = [Math]::Min(600000, $dl - $now) }
+    }
+    if ($kind -ceq 'granted') {
+        # pwsh 7 reads an ISO acquiredAt as a DateTime: only a string pins the release.
+        $at = $r.lease.acquiredAt
+        if ($at -is [string] -and $at -cmatch '^[0-9A-Za-z:.+-]{1,64}$') { $lease.At = $at }
+        if ($now -le $dl) { Write-Host "[OK] task $preflightTaskId holds the land lease $($lease.Id)." -ForegroundColor Green; return $true }
+    }
+    $Res.Code = 'MOE_COMMIT_FAILED_LAND_LEASE'
+    $L.Msg = switch ($kind) {
+        'queued' { "no lease on $($lease.Id) within ${w}s" }
+        'granted' { "the lease on $($lease.Id) came after the ${w}s deadline, so it is released, not used" }
+        default { "$tool for $($lease.Id) was refused, cancelled, unanswered or malformed" }
+    }
+    return $false
+}
+# L14, idempotent: drops this task's lease or queue entry (never forced; pinned to the
+# grant when its acquiredAt is known) under a 5s deadline. A failure warns and keeps it
+# for one retry (the next Acquire-MoeLandLease, else the outer finally), the lease's
+# expiry the backstop; it never changes a landing's outcome. Twin: release_land_lease.
+function Release-MoeLandLease {
+    $l = $script:MoeLandLease
+    if (-not $l) { return $true }
+    $extra = if ($l.At) { @{ ifAcquiredAt = $l.At } } else { @{} }
+    if (Invoke-MoeLandLeaseRpc 'release_resource' ([string]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 5000)) $extra) { $script:MoeLandLease = $null; return $true }
+    Write-Host "[WARN] MOE_LAND_LEASE_RELEASE_FAILED: task $($l.TaskId) -- release_resource for $($l.Id) failed or got no answer; a failed release is retried once (before the next lease, else at exit), and the lease's expiry is the backstop." -ForegroundColor Yellow
+    return $false
+}
+
 # A worktree completion exit (design §2.2): L0-L2 commit W's dirt to its
 # branch (owner guard, no ledger row of its own), then the net change lands
 # on the target (literal consolidationBranch, else main) as ONE squash commit:
 # a local CAS without a remote, else (any remote, or a failed probe) the
-# non-forced push of WT-09. Any qualityGate fails closed here (WT-10 owns it).
+# non-forced push of WT-09. With a qualityGate set (whatever qualityGateScope
+# says), the landing holds the git-land-<target> lease (L3, L14) and gates each
+# merged tree (L6); MOE_DISABLE_QUALITY_GATE=1 refuses it instead.
 # Never Ensure-MoeSafeBranch, the peel or the shared push. Twin: land_worktree_completion.
 function Invoke-MoeWorktreeCompletion([hashtable]$Settings, [hashtable]$M) {
     $tid = $preflightTaskId; $branch = $script:MoeWtBranch
@@ -6454,12 +6548,14 @@ function Invoke-MoeWorktreeCompletion([hashtable]$Settings, [hashtable]$M) {
         elseif ((Invoke-MoeGit -Top $git.Top -GitArgs @('check-ref-format', $ref)).Rc -ne 0 -or
             (-not $L.Remote -and (Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '-q', '--verify', "$ref^{commit}")).Rc -ne 0)) {
             $L.Msg = "the target $ref is not an existing branch"
-        } elseif ($Settings.qualityGate) { $L.Msg = 'settings.qualityGate is set and gated worktree landing is not available yet' }
-        else {
+        } elseif ($Settings.configuredGate -and $env:MOE_DISABLE_QUALITY_GATE -eq '1') {
+            $res.Code = 'MOE_COMMIT_FAILED_GATE'; $L.Msg = "MOE_DISABLE_QUALITY_GATE=1 never skips a worktree landing's qualityGate"
+        } else {
             $L.T = ($t.Out -join '').Trim()
             $co = Test-MoeTargetCheckedOut $git.Top $target
             if ($co -eq 0) { $res.Code = 'MOE_LAND_TARGET_CHECKED_OUT'; $L.Msg = "$ref is checked out in a worktree" }
             elseif ($co -ne 1) { $L.Msg = 'git worktree list failed' }
+            elseif (-not (Acquire-MoeLandLease $target $Settings $res $L)) { }
             elseif (-not (Invoke-MoeWorktreeRounds $git $ref $res $L $Settings $M)) { $rescue = $true }
         }
         $row = @{ taskId = $tid; kind = 'completion'; ref = $ref; status = $M.Status; role = $Role; workerId = $WorkerId; sessionId = $M.Sid; cliExitCode = $M.CliExit }
@@ -6482,6 +6578,7 @@ function Invoke-MoeWorktreeCompletion([hashtable]$Settings, [hashtable]$M) {
         $res.StopLoop = $true
         Set-MoeCtrlCDeferred $false
     } finally {
+        try { Release-MoeLandLease | Out-Null } catch {}
         $ErrorActionPreference = $prev
     }
     return $res
@@ -9700,6 +9797,9 @@ $mentionsJson
     try { Invoke-MoeTeardownRescue } catch {}
     try { Complete-MoePostflight | Out-Null } catch {}
     try { Remove-MoeGateWorkspace | Out-Null } catch {}
+    # The land lease's one retry (WT-10 L14), ahead of the deregister: a release that
+    # failed, or a Ctrl+C that ended the landing while it was held or queued.
+    try { Release-MoeLandLease | Out-Null } catch {}
     # Drop this session's live-session marker. Measured on Windows PowerShell
     # 5.1 (see the CancelKeyPress note at the top), THIS finally is what
     # actually runs on Ctrl+C, on a terminating error and on an `exit 1` after

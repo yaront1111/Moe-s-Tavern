@@ -167,6 +167,9 @@ cleanup_temp() {
         finalize_postflight || true
     fi
     if [ "$(type -t cleanup_gate_workspace)" = function ]; then cleanup_gate_workspace || true; fi
+    # The land lease's one retry (WT-10 L14), ahead of the deregister: a release that
+    # failed, or a signal that ended the landing while it was held or queued.
+    if [ "$(type -t release_land_lease)" = function ]; then release_land_lease || true; fi
     # Drop this session's live-session marker. This is the union of BOTH
     # abnormal exit paths -- the INT/TERM trap ends in `exit 0`, which fires
     # this EXIT trap -- so a Ctrl+C, a window close through SIGTERM or a
@@ -2903,8 +2906,9 @@ sys.stdout.write('\x1f'.join(fields) + '\x1f')
           IFS= read -r -d $'\x1f' CS_QUALITY_GATE
         } <<< "$parsed" 2>/dev/null || true
     fi
-    # Same opt-out as the completion gate (twin: Read-MoeCommitSettings).
-    [ "${MOE_DISABLE_QUALITY_GATE:-0}" != 1 ] || CS_QUALITY_GATE=""
+    # CS_QUALITY_GATE stays the configured gate whatever MOE_DISABLE_QUALITY_GATE says:
+    # a worktree landing gates on it or refuses (WT-10); the shared gate keeps its own
+    # opt-out (twin: Read-MoeCommitSettings' configuredGate).
     CS_AUTO_COMMIT="${CS_AUTO_COMMIT:-true}"
     CS_CHECKPOINT_COMMITS="${CS_CHECKPOINT_COMMITS:-true}"
     CS_CHECKPOINT_PUSH="${CS_CHECKPOINT_PUSH:-true}"
@@ -6838,13 +6842,15 @@ wt_release_signals() {
 }
 
 # wt_land_rounds JOURNAL WORK -- L4-L9 onto refs/heads/$LAND_BRANCH from the task
-# tip LAND_WT_T, at most three rounds (§2.3): B read fresh each round,
-# merge-tree, the .moe guard, C, the strict journal, the S1 test hook, ONE CAS.
+# tip LAND_WT_T, at most three rounds, two with a qualityGate (§2.3): B read fresh
+# each round, merge-tree, the .moe guard, the gate on exactly M with parent B (L6),
+# C, the strict journal, the S1 test hook, ONE CAS.
 # 0 with LAND_OUTCOME committed (this C, or a journaled C the target holds while
 # T adds nothing, §2.9; signals stay deferred) or nothing; 1 with LAND_CODE and
 # LAND_MESSAGE set and no ref moved by this session.
 wt_land_rounds() {
-    local journal="$1" work="$2" ref="refs/heads/$LAND_BRANCH" round b bt m c rc tip hook names p jf jt ja jb jw jc=""
+    local journal="$1" work="$2" ref="refs/heads/$LAND_BRANCH" round rounds=3 b bt m c rc tip hook names p jf jt ja jb jw jc=""
+    [ -z "${QUALITY_GATE:-}" ] || rounds=2
     if [ -e "$journal" ]; then
         jf=$(receipt_journal_fields "$journal") || { LAND_MESSAGE="receipt journal $journal is malformed; kept"; return 1; }
         IFS=$'\x1f' read -r p jt ja p p p jb p p p jw <<< "$jf" || true
@@ -6855,7 +6861,7 @@ wt_land_rounds() {
             LAND_MESSAGE="receipt journal $journal holds an unsettled push of $ja"; return 1; }
         [ -n "$jc" ] || rm -f "$journal"   # its C never reached the target: this fresh round supersedes it
     fi
-    for round in 1 2 3; do
+    for ((round = 1; round <= rounds; round++)); do
         LAND_OUTCOME=failed; LAND_CODE=MOE_COMMIT_FAILED; LAND_MESSAGE=""; LAND_WT_REASON=""; names=""; m=""
         sync_land_target "$LAND_BRANCH" || return 1
         b="$LAND_B"; bt=$(git -C "$MOE_TOP" rev-parse -q --verify "$b^{tree}" 2>/dev/null) || { LAND_MESSAGE="$ref does not resolve"; return 1; }
@@ -6876,6 +6882,9 @@ wt_land_rounds() {
         elif [ -n "$jc" ]; then
             LAND_OUTCOME=refused; LAND_CODE=MOE_COMMIT_REFUSED_UNRECONCILED_INTENT
             LAND_MESSAGE="receipt journal $journal still owes the completion row of $jc"; return 1
+        fi
+        if [ -n "${QUALITY_GATE:-}" ] && ! { freeze_candidate "$b" "$m" && run_frozen_gate worktree; }; then
+            LAND_CODE=MOE_COMMIT_FAILED_GATE; LAND_MESSAGE="the merged tree $m on $b was not frozen, recorded and passed by the qualityGate"; return 1
         fi
         LAND_N_PATHS=0
         git -C "$MOE_TOP" diff-tree -r -z --name-only --no-renames "$bt" "$m" > "$work/diff.z" 2>/dev/null || { LAND_MESSAGE="git diff-tree failed"; return 1; }
@@ -6910,9 +6919,9 @@ wt_land_rounds() {
         wt_release_signals
         [ "$rc" -eq 1 ] || { LAND_MESSAGE="${LAND_MESSAGE:-$ref could not be read after a lost CAS; receipt journal $journal kept}"; return 1; }
         rm -f "$journal"
-        echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (round $round/3); rebuilding on the new tip."
+        echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (round $round/$rounds); rebuilding on the new tip."
     done
-    LAND_CODE=MOE_COMMIT_FAILED_REF_CONTENTION; LAND_MESSAGE="$ref moved under all 3 rounds"
+    LAND_CODE=MOE_COMMIT_FAILED_REF_CONTENTION; LAND_MESSAGE="$ref moved under all $rounds rounds"
     return 1
 }
 
@@ -6934,16 +6943,112 @@ wt_land_published() {
     wt_release_signals
 }
 
+# The land lease (WT-10, design §2.2 L3 and L14): with a qualityGate set, a worktree
+# completion holds git-land-<target> from before its first gate until after its
+# landing, so two gated landings never gate the same B. ONE deadline
+# (MOE_LAND_LEASE_WAIT_SEC, default 1800) bounds the acquire and every wait, each
+# RPC carrying it as the proxy's MOE_PROXY_ONESHOT_DEADLINE_MS for that call only;
+# only a literal granted:true on this task's lease admits.
+# Twins: Get-MoeLandLeaseId, Get-MoeLandLeaseBudget, Acquire-MoeLandLease, Release-MoeLandLease.
+LAND_LEASE_RID=""; LAND_LEASE_TASK=""; LAND_LEASE_AT=""
+land_now_ms() { $PYTHON_CMD -c 'import time; print(int(time.time() * 1000))'; }
+# git-land-TARGET, every character outside [A-Za-z0-9._-] made '-', cut to 64.
+land_lease_id() {
+    $PYTHON_CMD -c 'import re,sys; sys.stdout.write(re.sub(r"[^A-Za-z0-9._-]", "-", "git-land-" + sys.argv[1])[:64])' "$1"
+}
+# MOE_LAND_LEASE_WAIT_SEC in ms: digits with at most 3 decimals, more than 0, at most 86400 s.
+land_lease_budget() {
+    local f
+    [[ $1 =~ ^([0-9]{1,5})(\.([0-9]{1,3}))?$ ]] || return 1
+    f="${BASH_REMATCH[3]}000"; f=$((10#${BASH_REMATCH[1]} * 1000 + 10#${f:0:3}))
+    [ "$f" -gt 0 ] && [ "$f" -le 86400000 ] && echo "$f"
+}
+# land_lease_rpc TOOL DEADLINE_MS [ARG] -- one lease call as this task and seat;
+# ARG is a wait's timeoutMs or a release's ifAcquiredAt.
+land_lease_rpc() {
+    local args
+    args=$($PYTHON_CMD -c 'import json,sys
+t,r,k,w,x=sys.argv[1:]
+a=dict(resourceId=r,taskId=k,workerId=w)
+if x and t=="wait_for_resource": a["timeoutMs"]=int(x)
+elif x: a["ifAcquiredAt"]=x
+print(json.dumps(a))' "$1" "$LAND_LEASE_RID" "$LAND_LEASE_TASK" "$WORKER_ID" "${3:-}" 2>/dev/null) || return 1
+    MOE_PROXY_ONESHOT_DEADLINE_MS="$2" moe_rpc "$1" "$args" 2>/dev/null
+}
+# land_lease_read TOOL < REPLY -- "granted|queued|bad NOW_MS ACQUIRED_AT('-': none)".
+# queued: an acquire's success:true or a wait's timedOut:true, with granted:false.
+land_lease_read() {
+    $PYTHON_CMD -c 'import json,re,sys,time
+t,task=sys.argv[1:]; k="bad"; at="-"
+try: d=json.loads(sys.stdin.read())
+except Exception: d=None
+if isinstance(d,dict):
+    l=d.get("lease")
+    if d.get("granted") is True and isinstance(l,dict) and l.get("taskId")==task:
+        k="granted"; v=l.get("acquiredAt"); at=v if isinstance(v,str) and re.fullmatch(r"[0-9A-Za-z:.+-]{1,64}",v) else "-"
+    elif d.get("granted") is False and d.get("success" if t=="acquire_resource" else "timedOut") is True: k="queued"
+print(k,int(time.time()*1000),at)' "$1" "$LAND_LEASE_TASK" 2>/dev/null || echo bad
+}
+# acquire_land_lease TARGET -- L3. 0: no qualityGate (no lease call), or this task
+# holds the lease; 1: MOE_COMMIT_FAILED_LAND_LEASE, with any queue entry or late
+# grant left for release_land_lease. A wait value it refuses makes no RPC; an
+# earlier landing's unreleased lease gets its one retry first.
+acquire_land_lease() {
+    local w="${MOE_LAND_LEASE_WAIT_SEC:-1800}" budget dl now at kind left tool=acquire_resource reply
+    [ -n "${QUALITY_GATE:-}" ] || return 0
+    if ! budget=$(land_lease_budget "$w"); then
+        LAND_CODE=MOE_COMMIT_FAILED_LAND_LEASE; LAND_MESSAGE="MOE_LAND_LEASE_WAIT_SEC=$w is not a wait of more than 0 and at most 86400 seconds"; return 1
+    fi
+    release_land_lease || true
+    if ! LAND_LEASE_RID=$(land_lease_id "$1") || [ -z "$LAND_LEASE_RID" ] || ! now=$(land_now_ms); then
+        LAND_LEASE_RID=""; LAND_CODE=MOE_COMMIT_FAILED_LAND_LEASE; LAND_MESSAGE="the lease id or the clock could not be read"; return 1
+    fi
+    LAND_LEASE_TASK="$LAND_TASK_ID"; LAND_LEASE_AT=""; dl=$((now + budget))
+    reply=$(land_lease_rpc "$tool" "$dl") || reply=""
+    while read -r kind now at <<< "$(printf '%s' "$reply" | land_lease_read "$tool")" \
+        && [ "$kind" = queued ] && left=$((dl - now)) && [ "$left" -ge 1000 ]; do
+        [ "$left" -le 600000 ] || left=600000
+        tool=wait_for_resource; reply=$(land_lease_rpc "$tool" "$dl" "$left") || reply=""
+    done
+    [ "$kind" != granted ] || [ "$at" = - ] || LAND_LEASE_AT="$at"
+    if [ "$kind" = granted ] && [ "$now" -le "$dl" ]; then
+        echo -e "${GREEN}[OK]${NC} task $LAND_TASK_ID holds the land lease $LAND_LEASE_RID."; return 0
+    fi
+    LAND_CODE=MOE_COMMIT_FAILED_LAND_LEASE
+    case "$kind" in
+        queued) LAND_MESSAGE="no lease on $LAND_LEASE_RID within ${w}s" ;;
+        granted) LAND_MESSAGE="the lease on $LAND_LEASE_RID came after the ${w}s deadline, so it is released, not used" ;;
+        *) LAND_MESSAGE="$tool for $LAND_LEASE_RID was refused, cancelled, unanswered or malformed" ;;
+    esac
+    return 1
+}
+# release_land_lease -- L14, idempotent: drops this task's lease or queue entry (never
+# forced; pinned to the grant when its acquiredAt is known) under a 5s deadline. A
+# failure warns and keeps it for one retry (the next acquire_land_lease, else the exit
+# trap), the lease's expiry the backstop; it never changes a landing's outcome.
+release_land_lease() {
+    local now
+    [ -n "${LAND_LEASE_RID:-}" ] || return 0
+    now=$(land_now_ms) || now=""
+    if land_lease_rpc release_resource "${now:+$((now + 5000))}" "$LAND_LEASE_AT" >/dev/null; then
+        LAND_LEASE_RID=""; LAND_LEASE_AT=""; return 0
+    fi
+    echo -e "${YELLOW}[WARN]${NC} MOE_LAND_LEASE_RELEASE_FAILED: task $LAND_LEASE_TASK -- release_resource for $LAND_LEASE_RID failed or got no answer; a failed release is retried once (before the next lease, else at exit), and the lease's expiry is the backstop."
+    return 1
+}
+
 # land_worktree_completion W BRANCH -- a worktree completion exit (design §2.2):
 # L0-L2 commit W's dirt to BRANCH (owner guard, no ledger row of its own), then
 # the net change lands on the target (literal consolidationBranch, else main) as
 # ONE squash commit: a local CAS without a remote, else (any remote, or a failed
-# probe) the non-forced push of WT-09. Any qualityGate fails closed here (WT-10
-# owns it). Never peel_target_branch, ensure_safe_branch or the shared push.
+# probe) the non-forced push of WT-09. With a qualityGate set (whatever
+# qualityGateScope says), the landing holds the git-land-<target> lease (L3, L14)
+# and gates each merged tree (L6); MOE_DISABLE_QUALITY_GATE=1 refuses it instead.
+# Never peel_target_branch, ensure_safe_branch or the shared push.
 # Twin: Invoke-MoeWorktreeCompletion.
 land_worktree_completion() {
     local w="$1" branch="$2" work journal target="${CS_CONSOLIDATION_BRANCH:-main}" l2 rc=0 rescue=false reason=commit-failed
-    local LAND_WT_PUB=remote LAND_WT_REASON=""
+    local LAND_WT_PUB=remote LAND_WT_REASON="" QUALITY_GATE="${CS_QUALITY_GATE:-}"
     no_git_remote && LAND_WT_PUB=local
     LAND_WT_INTERNAL=true; land_worktree_checkpoint "$w" "$branch" || true; LAND_WT_INTERNAL=""
     [ "$LAND_OUTCOME" != refused ] || return 0
@@ -6963,12 +7068,13 @@ land_worktree_completion() {
     elif ! git check-ref-format "refs/heads/$target" \
         || { [ "$LAND_WT_PUB" = local ] && ! git -C "$MOE_TOP" rev-parse -q --verify "refs/heads/$target^{commit}" >/dev/null 2>&1; }; then
         LAND_MESSAGE="the target refs/heads/$target is not an existing branch"
-    elif [ -n "${CS_QUALITY_GATE:-}" ]; then
-        LAND_MESSAGE="settings.qualityGate is set and gated worktree landing is not available yet"
+    elif [ -n "$QUALITY_GATE" ] && [ "${MOE_DISABLE_QUALITY_GATE:-0}" = 1 ]; then
+        LAND_CODE=MOE_COMMIT_FAILED_GATE; LAND_MESSAGE="MOE_DISABLE_QUALITY_GATE=1 never skips a worktree landing's qualityGate"
     else
         wt_target_checked_out "$target" || rc=$?
         if [ "$rc" -eq 0 ]; then LAND_CODE=MOE_LAND_TARGET_CHECKED_OUT; LAND_MESSAGE="refs/heads/$target is checked out in a worktree"
         elif [ "$rc" -ne 1 ]; then LAND_MESSAGE="git worktree list failed"
+        elif ! acquire_land_lease "$target"; then :
         elif ! wt_land_rounds "$journal" "$work"; then rescue=true
         fi
     fi
@@ -6985,6 +7091,7 @@ land_worktree_completion() {
         [ "$rescue" != true ] || [ "$LAND_OUTCOME" = refused ] || rescue_ref_from_commit "$LAND_WT_T" "$reason" || true
         record_commit_rpc "$LAND_OUTCOME" completion "" "refs/heads/$target" "$LAND_CODE" "$LAND_MESSAGE" "" "" "" || true
     fi
+    release_land_lease || true
     LAND_SUMMARY_SHA="${LAND_SHA:-${LAND_RESCUE_SHA:-none}}"; LAND_SUMMARY_KIND=completion; LAND_SUMMARY_PATHS="$LAND_N_PATHS"
     LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""; LAND_SUMMARY_OUTCOME="$LAND_OUTCOME"; LAND_SUMMARY_CODE="${LAND_CODE:-}"
 }
