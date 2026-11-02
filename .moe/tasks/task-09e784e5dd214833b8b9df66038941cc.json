@@ -75,7 +75,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -88,16 +88,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:38:52.755Z",
-  "updatedAt": "2026-11-02T09:54:58.355Z",
+  "updatedAt": "2026-11-02T09:56:35.410Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T09:39:18.043Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T09:56:35.410Z",
+    "wallClockMs": 1037367
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-b49a5155"
+    "worker-b49a5155",
+    "qa-564d8bce"
   ],
   "tier": "standard",
   "effort": "high",
@@ -187,7 +190,46 @@
   },
   "filesModified": [
     "moe-vscode/tests/worktree-exclusion.test.cjs",
+    "moe-vscode/package.json",
+    ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
+    ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+    ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json"
+  ],
+  "completionSummary": "Added contributes.configurationDefaults to moe-vscode/package.json (files.watcherExclude {**/.worktrees/**: true}, search.exclude {**/.worktrees: true}). VS Code merges object defaults (configurationRegistry.ts at 1.140.0), so no core keys are copied. files.exclude is not contributed. New tests/worktree-exclusion.test.cjs pins both objects exactly and the files.exclude absence; the key-by-key mutation check is all ok. The snapshot gate passed: lint, compile and 391 tests (387 pass, 4 skip, 0 fail).",
+  "commits": [
+    {
+      "sha": "c46c4a8c0fc0a0b4ebb91b0ccde25683c46ad67c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T09:53:42Z",
+      "paths": [
+        ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
+        ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+        ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+        "moe-vscode/package.json",
+        "moe-vscode/tests/worktree-exclusion.test.cjs"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T09:55:21.585Z",
+      "treeId": "f48755c382a5a6d987068f227bd1a6c563ec58fc",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/worktree-exclusion.test.cjs",
     "moe-vscode/package.json"
   ],
-  "completionSummary": "Added contributes.configurationDefaults to moe-vscode/package.json (files.watcherExclude {**/.worktrees/**: true}, search.exclude {**/.worktrees: true}). VS Code merges object defaults (configurationRegistry.ts at 1.140.0), so no core keys are copied. files.exclude is not contributed. New tests/worktree-exclusion.test.cjs pins both objects exactly and the files.exclude absence; the key-by-key mutation check is all ok. The snapshot gate passed: lint, compile and 391 tests (387 pass, 4 skip, 0 fail)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-b49a5155@2026-11-02T09:53:42Z",
+    "at": "2026-11-02T09:55:21.585Z"
+  },
+  "completedAt": "2026-11-02T09:56:35.410Z",
+  "reviewCompletedAt": "2026-11-02T09:56:35.410Z",
+  "reviewSummary": "Reviewed completion commit c46c4a8c (on moe/work-2026-10-24, kind completion, pushed). moe-vscode diff = package.json +8 lines (contributes.configurationDefaults = exactly {files.watcherExclude:{**/.worktrees/**:true}, search.exclude:{**/.worktrees:true}}, no files.exclude, existing contributions untouched, valid JSON, LF) and new tests/worktree-exclusion.test.cjs (31 lines, 3 node:test tests with strict deepEqual + files.exclude absence, named assertion for missing block). Other 3 paths in the commit are wrapper-staged .moe/tasks board records. Net ~39 LOC, well under 400. Re-ran task.verification myself: git archive HEAD snapshot + overlay, env -i nvm node v24.21.0, `npm ci && npm run lint && npm run compile && npm test` -> exit 0, tests 391, pass 387, skipped 4, fail 0 (baseline 388/384/4 + 3 new). Re-ran checkRefs[0] mutation check: keep 0 ok; dropWatchKey, dropSearchKey, dropWatch, dropSearch, dropAll, addFilesExclude all exit 1 ok (every key deletion goes red). Merge-vs-replace: verdict MERGED, sourced to configurationRegistry.ts at 1.140.0 (decision-vscode-configurationdefaults-merge) so no core keys copied, correct (description's core list was stale). DoD 1-5 all met. Ponytail pass: nothing to cut. No rails violated (no npm in the shared checkout, no forbidden files touched; moe-vscode working tree clean vs the commit).",
+  "requiredCheckAtDone": null
 }
