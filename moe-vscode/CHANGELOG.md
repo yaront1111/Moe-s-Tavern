@@ -25,6 +25,7 @@ VS Code parity with JetBrains and shared client behaviour (epic-aabc654d; see `d
 
 ### Fixed
 - A deleted chat channel (CHANNEL_DELETED) leaves the channel list and the current selection.
+- Chat channel auto-selection matches JetBrains: on first load, or when the selected channel is gone, the view selects the general channel, else the first listed one. A repeated CHANNEL_CREATED frame no longer lists a channel twice.
 - Terminal commands refuse every C0 control character and DEL. PowerShell quoting doubles the curly single quotes PowerShell also treats as quotes, so a project path such as `Bob’s work` stays one argument.
 
 ## [0.8.0] - 2026-09-07

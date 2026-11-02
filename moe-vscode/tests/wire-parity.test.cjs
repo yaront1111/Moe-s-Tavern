@@ -435,3 +435,151 @@ test('C4: an updateChannels message with no list degrades to the no-channel stat
     assert.equal(page.byId('chatInput').disabled, true);
     assert.deepStrictEqual(page.listedIds(), []);
 });
+
+// =============================================================================
+// D: chat.js channel auto-selection, JetBrains ChatChannelSelectionTest cases (b) to (f)
+// =============================================================================
+
+// ChatChannelSelectionTest's fixtures. A 'role' channel renders in the custom tab group.
+const SEL_GENERAL = { ...CHAN_G, id: 'chan-general', name: 'general' };
+const SEL_GENERAL_2 = { ...CHAN_G, id: 'chan-general-2', name: 'general2' };
+const SEL_ZETA = { ...CHAN_X, id: 'chan-zeta', name: 'zeta' };
+const SEL_ALPHA = { ...CHAN_X, id: 'chan-alpha', name: 'alpha', type: 'role' };
+// Custom and listed last, so it is always the last tab on screen.
+const SEL_GONE = { ...CHAN_X, id: 'chan-deleted', name: 'deleted' };
+
+/** A page whose selection is a channel that the next update will no longer list. */
+function pageSelectingGone(list) {
+    const page = loadPage();
+    page.updateChannels([...list, SEL_GONE]);
+    page.clickTab(list.length);
+    assert.equal(page.selectedInState(), 'chan-deleted', 'setup: the doomed channel is selected');
+    return page;
+}
+
+test('D1 (b): a gone selection falls back to the general-type channel even when another is listed first', () => {
+    const page = pageSelectingGone([SEL_ZETA, SEL_GENERAL]);
+    page.updateChannels([SEL_ZETA, SEL_GENERAL]);
+    assert.equal(page.selectedInState(), 'chan-general');
+    assert.equal(page.selectPosts().at(-1).channel, 'chan-general');
+    assert.equal(page.activeTabs(), 1);
+});
+
+test('D2 (c): a gone selection with no general-type channel falls back to the first in list order', () => {
+    const page = pageSelectingGone([SEL_ZETA, SEL_ALPHA]);
+    page.updateChannels([SEL_ZETA, SEL_ALPHA]);
+    assert.equal(page.selectedInState(), 'chan-zeta');
+    assert.equal(page.selectPosts().at(-1).channel, 'chan-zeta');
+});
+
+test('D3 (d): with no selection, the first update picks the general-type channel, else the first listed', () => {
+    let page = loadPage();
+    page.updateChannels([SEL_ZETA, SEL_GENERAL]);
+    assert.equal(page.selectedInState(), 'chan-general');
+    assert.deepStrictEqual(page.selectPosts().map(p => p.channel), ['chan-general']);
+    page = loadPage();
+    page.updateChannels([SEL_ZETA, SEL_ALPHA]);
+    assert.deepStrictEqual(page.selectPosts().map(p => p.channel), ['chan-zeta']);
+});
+
+test('D4 (e): an empty list selects nothing, on first load and after a selection', () => {
+    let page = loadPage();
+    page.updateChannels([]);
+    assert.deepStrictEqual(page.selectPosts(), []);
+    assert.equal(page.activeTabs(), 0);
+    page = loadPage();
+    page.updateChannels([SEL_GENERAL]);
+    page.updateChannels([]);
+    assert.equal(page.selectedInState(), null);
+    assert.equal(page.selectPosts().length, 1, 'only the first update selected anything');
+});
+
+test('D5 (f): of two general-type channels the first listed wins', () => {
+    let page = loadPage();
+    page.updateChannels([SEL_ZETA, SEL_GENERAL, SEL_GENERAL_2]);
+    assert.equal(page.selectedInState(), 'chan-general');
+    page = pageSelectingGone([SEL_ZETA, SEL_GENERAL_2, SEL_GENERAL]);
+    page.updateChannels([SEL_ZETA, SEL_GENERAL_2, SEL_GENERAL]);
+    assert.equal(page.selectedInState(), 'chan-general-2');
+});
+
+// =============================================================================
+// E: CHANNEL_CREATED (inbound) replaces by id, as JetBrains MoeMessageDispatcher does
+// =============================================================================
+
+test('E1: a repeated CHANNEL_CREATED leaves one cache entry, and a known id takes the latest payload and moves last', () => {
+    withProvider({ withSnapshot: true }, h => {
+        h.deliver({ type: 'CHANNEL_CREATED', payload: CHAN_Y });
+        h.deliver({ type: 'CHANNEL_CREATED', payload: CHAN_Y });
+        assert.deepStrictEqual(h.channelIds(), ['chan-g', 'chan-x', 'chan-y']);
+        const renamed = { ...CHAN_X, name: 'x2' };
+        h.deliver({ type: 'CHANNEL_CREATED', payload: renamed });
+        assert.deepStrictEqual(h.channelIds(), ['chan-g', 'chan-y', 'chan-x']);
+        assert.deepStrictEqual(jsonCopy(h.client.currentState.channels).at(-1), renamed);
+        assert.deepStrictEqual(h.posts, [
+            { type: 'channelCreated', channel: CHAN_Y },
+            { type: 'channelCreated', channel: CHAN_Y },
+            { type: 'channelCreated', channel: renamed }
+        ], 'one channelCreated post per frame, and no updateChannels');
+    });
+});
+
+test('E1b: the cache already holds the new channel, once, when listeners are told', () => {
+    withClient(h => {
+        h.connectSocket();
+        h.deliver({ type: 'STATE_SNAPSHOT', payload: snapshot([CHAN_G, CHAN_X]) });
+        const seenAtFire = [];
+        h.client.onChannelCreated(() => seenAtFire.push(jsonCopy(h.client.currentState.channels.map(c => c.id))));
+        h.deliver({ type: 'CHANNEL_CREATED', payload: CHAN_Y });
+        h.deliver({ type: 'CHANNEL_CREATED', payload: CHAN_Y });
+        assert.deepStrictEqual(seenAtFire, [['chan-g', 'chan-x', 'chan-y'], ['chan-g', 'chan-x', 'chan-y']]);
+    });
+});
+
+test('E2: a repeated channelCreated lists the channel once in chat.js, and a known id moves last', () => {
+    const page = loadPage();
+    page.updateChannels([CHAN_G, CHAN_X]);
+    page.send({ type: 'channelCreated', channel: CHAN_Y });
+    page.send({ type: 'channelCreated', channel: CHAN_Y });
+    page.send({ type: 'channelCreated', channel: CHAN_X });
+    assert.equal(page.selectedInState(), 'chan-g', 'a listed selection is kept');
+    assert.deepStrictEqual(page.listedIds(), ['chan-g', 'chan-y', 'chan-x']);
+});
+
+test('E3: a channel created while nothing is selected is selected, and a later one leaves that selection alone', () => {
+    const page = loadPage();
+    page.updateChannels([]);
+    page.send({ type: 'channelCreated', channel: CHAN_X });
+    assert.deepStrictEqual(page.selectPosts().map(p => p.channel), ['chan-x'], 'the created channel is selected');
+    assert.equal(page.selectedInState(), 'chan-x');
+    assert.equal(page.byId('chatInput').disabled, false);
+    page.send({ type: 'channelCreated', channel: CHAN_G });
+    assert.deepStrictEqual(page.selectPosts().map(p => p.channel), ['chan-x']);
+    assert.deepStrictEqual(page.listedIds(), ['chan-g', 'chan-x']);
+});
+
+test('E4: malformed CHANNEL_CREATED payloads are silent no-ops in the client and the page', () => {
+    withProvider({ withSnapshot: true }, h => {
+        const before = JSON.stringify(h.client.currentState.channels);
+        for (const payload of [null, {}, { id: 42 }, 'chan-x', []]) {
+            assert.doesNotThrow(() => h.deliver({ type: 'CHANNEL_CREATED', payload }));
+        }
+        assert.doesNotThrow(() => h.deliver({ type: 'CHANNEL_CREATED' }));
+        assert.equal(JSON.stringify(h.client.currentState.channels), before);
+        assert.deepStrictEqual(h.posts, []);
+    });
+    withProvider({ withSnapshot: false }, h => {
+        assert.doesNotThrow(() => h.deliver({ type: 'CHANNEL_CREATED', payload: CHAN_Y }));
+        assert.equal(h.client.currentState, undefined);
+        // A snapshot that carries no channel list at all: the first created channel starts one.
+        h.deliver({ type: 'STATE_SNAPSHOT', payload: { tasks: [], epics: [], workers: [], teams: [], proposals: [], decisions: [] } });
+        h.deliver({ type: 'CHANNEL_CREATED', payload: CHAN_Y });
+        assert.equal(JSON.stringify(h.client.currentState.channels), JSON.stringify([CHAN_Y]));
+    });
+    const page = loadPage();
+    page.updateChannels([CHAN_G]);
+    for (const channel of [undefined, null, {}, { id: 42 }]) {
+        assert.doesNotThrow(() => page.send({ type: 'channelCreated', channel }));
+    }
+    assert.deepStrictEqual(page.listedIds(), ['chan-g']);
+});

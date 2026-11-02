@@ -101,6 +101,14 @@
         saveState();
     }
 
+    // With nothing selected, select what JetBrains ChatChannelSelection.choose picks: the first
+    // general-type channel in list order, else the first listed channel. An empty list selects nothing.
+    function autoSelectChannel() {
+        if (currentChannel || channels.length === 0) return;
+        var general = channels.find(function(ch) { return ch.type === 'general'; });
+        selectChannel((general || channels[0]).id);
+    }
+
     // =====================================================================
     // Message rendering
     // =====================================================================
@@ -519,10 +527,7 @@
                     deselectChannel();
                 }
                 renderChannels();
-                // Auto-select first channel if none selected
-                if (!currentChannel && channels.length > 0) {
-                    selectChannel(channels[0].id);
-                }
+                autoSelectChannel();
                 break;
 
             case 'loadMessages':
@@ -551,12 +556,17 @@
                 break;
             }
 
-            case 'channelCreated':
-                if (data.channel) {
-                    channels.push(data.channel);
-                    renderChannels();
-                }
+            case 'channelCreated': {
+                // JetBrains MoeMessageDispatcher parity: replace by id, so a repeated frame lists
+                // the channel once (the latest payload, moved last). No string id: a no-op.
+                const created = data.channel;
+                if (!created || typeof created.id !== 'string') break;
+                channels = channels.filter(function(ch) { return ch.id !== created.id; });
+                channels.push(created);
+                renderChannels();
+                autoSelectChannel();
                 break;
+            }
 
             case 'loadPins':
                 pinCache[data.channel] = data.pins || [];

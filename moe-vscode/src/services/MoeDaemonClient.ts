@@ -1679,13 +1679,19 @@ export class MoeDaemonClient implements vscode.Disposable {
                     this._onMessageCreated.fire(payload);
                     break;
 
-                case 'CHANNEL_CREATED':
-                    this._onChannelCreated.fire(payload);
-                    if (this.state) {
-                        if (!this.state.channels) { this.state.channels = []; }
-                        this.state.channels.push(payload);
+                case 'CHANNEL_CREATED': {
+                    // JetBrains MoeMessageDispatcher parity: replace by id (the latest payload,
+                    // moved last), cache first, then tell listeners. No string id: a no-op.
+                    const id = payload?.id;
+                    if (typeof id !== 'string') { break; }
+                    const state = this.state;
+                    if (state) {
+                        state.channels = (state.channels ?? []).filter(c => c.id !== id);
+                        state.channels.push(payload);
                     }
+                    this._onChannelCreated.fire(payload);
                     break;
+                }
 
                 case 'CHANNELS':
                     this._onChannelsReceived.fire(payload.channels);

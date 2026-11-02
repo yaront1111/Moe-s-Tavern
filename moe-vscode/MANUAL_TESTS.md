@@ -80,7 +80,7 @@
 
 ## Deleted chat channel
 1. Select a non-general channel in the Chat view, then delete that channel on the daemon side.
-2. Expected: the channel leaves the list, the selection falls back to the first listed channel, and nothing can be sent to the deleted one. With no channel left, the view shows "Select a channel to start chatting" and the input stays disabled.
+2. Expected: the channel leaves the list, the selection falls back to the general channel (the first general-type channel in list order), else the first listed channel, as in JetBrains, and nothing can be sent to the deleted one. With no channel left, the view shows "Select a channel to start chatting" and the input stays disabled.
 
 ## Remote-WSL (VS Code's answer to JetBrains' "Run Agents in WSL")
 1. Install Node.js and the agent CLI inside the WSL distro. From Windows VS Code, open the project with **WSL: Open Folder in WSL** (Remote-WSL).

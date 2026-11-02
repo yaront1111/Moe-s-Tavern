@@ -98,7 +98,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -111,7 +111,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:11:46.174Z",
-  "updatedAt": "2026-11-02T16:07:47.389Z",
+  "updatedAt": "2026-11-02T16:10:52.127Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:16:25.568Z",
@@ -121,11 +121,14 @@
     "firstClaimAt": "2026-11-02T15:36:46.514Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-02T16:10:52.127Z",
+    "wallClockMs": 2045613
   },
   "contextFetchedBy": [
     "architect-d54b05fd",
-    "worker-81a7999f"
+    "worker-81a7999f",
+    "qa-564d8bce"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -225,7 +228,48 @@
     "moe-vscode/tests/task-detail-live.test.cjs",
     "moe-vscode/src/panels/TaskDetailPanel.ts",
     "moe-vscode/media/taskDetail.js",
+    "moe-vscode/tests/blocker-corpus.test.cjs",
+    ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json",
+    ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json"
+  ],
+  "completionSummary": "VSC-23 delivered. With a task detail panel open, every state update now refreshes the Delivery section and the Release Agent button. TaskDetailPanel.ts: new exported deliveryDisplay(delivery) (one label lookup behind both renderers), module-private releaseAgentLabel(task), debouncedUpdate posts {type:'updateTask', task, delivery, releaseAgentLabel}, renderDelivery is built on deliveryDisplay with byte-identical markup, no new import (+30/-10). media/taskDetail.js: removeNode (parentNode-guarded), renderDelivery(delivery), renderReleaseAgent(label), postReleaseAgent as top-level declarations, called last in the updateTask branch; text goes in only through textContent/title (+65/-7). New tests/task-detail-live.test.cjs (256 lines): L0 harness self-check, L1 replays every client-delivery.json row (live equals initial), L2 placement right after #blockerSection/rebuild/removal for delivery:null and absent, L3 hostile text lands as text, L4 button follows assignedWorkerId and stays one node with one listener. The DOM fake throws on any write outside className/id/title/textContent/value/scrollTop. blocker-corpus.test.cjs: C3 appended (+37/-0) pins all 15 moe.blocker.* keys to MoeBundle.properties on TaskDetailPanel.ts, board.js and taskDetail.js. Evidence at HEAD fb0b5ab9 in a git-archive snapshot: npm ci, lint 0, compile 0, npm test 564 tests / 560 pass / 4 skip / 0 fail, gate exit 0. checkref 2 and checkref 3: mutants killed: 1, exit 0. RED proof against HEAD sources: L0 ok, L1-L4 not ok. Size: net 371 (panel +20, js +58, C3 +37, new test 256). delivery-corpus, task-blocker-visibility, task-release and approval-paths tests untouched and passing. README Known issues and MANUAL_TESTS step 6 still describe the old limit; VSC-18 owns them, so a docs follow-up should drop them.",
+  "commits": [
+    {
+      "sha": "17ebbe810669e845018b9b7861912a16984a625c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T16:02:00Z",
+      "paths": [
+        ".moe/tasks/task-7ad17dac9cf940e1907135d61f318c08.json",
+        ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/tests/blocker-corpus.test.cjs",
+        "moe-vscode/tests/task-detail-live.test.cjs"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T16:08:18.713Z",
+      "treeId": "242ff1e994c11715e3827363271a188cc0703616",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/task-detail-live.test.cjs",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/media/taskDetail.js",
     "moe-vscode/tests/blocker-corpus.test.cjs"
   ],
-  "completionSummary": "VSC-23 delivered. With a task detail panel open, every state update now refreshes the Delivery section and the Release Agent button. TaskDetailPanel.ts: new exported deliveryDisplay(delivery) (one label lookup behind both renderers), module-private releaseAgentLabel(task), debouncedUpdate posts {type:'updateTask', task, delivery, releaseAgentLabel}, renderDelivery is built on deliveryDisplay with byte-identical markup, no new import (+30/-10). media/taskDetail.js: removeNode (parentNode-guarded), renderDelivery(delivery), renderReleaseAgent(label), postReleaseAgent as top-level declarations, called last in the updateTask branch; text goes in only through textContent/title (+65/-7). New tests/task-detail-live.test.cjs (256 lines): L0 harness self-check, L1 replays every client-delivery.json row (live equals initial), L2 placement right after #blockerSection/rebuild/removal for delivery:null and absent, L3 hostile text lands as text, L4 button follows assignedWorkerId and stays one node with one listener. The DOM fake throws on any write outside className/id/title/textContent/value/scrollTop. blocker-corpus.test.cjs: C3 appended (+37/-0) pins all 15 moe.blocker.* keys to MoeBundle.properties on TaskDetailPanel.ts, board.js and taskDetail.js. Evidence at HEAD fb0b5ab9 in a git-archive snapshot: npm ci, lint 0, compile 0, npm test 564 tests / 560 pass / 4 skip / 0 fail, gate exit 0. checkref 2 and checkref 3: mutants killed: 1, exit 0. RED proof against HEAD sources: L0 ok, L1-L4 not ok. Size: net 371 (panel +20, js +58, C3 +37, new test 256). delivery-corpus, task-blocker-visibility, task-release and approval-paths tests untouched and passing. README Known issues and MANUAL_TESTS step 6 still describe the old limit; VSC-18 owns them, so a docs follow-up should drop them."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-81a7999f@2026-11-02T16:02:00Z",
+    "at": "2026-11-02T16:08:18.713Z"
+  },
+  "completedAt": "2026-11-02T16:10:52.127Z",
+  "reviewCompletedAt": "2026-11-02T16:10:52.127Z",
+  "reviewSummary": "Approved. Reviewed completion commit 17ebbe81 (moe/work-2026-10-24, pushed) via git show; owned paths clean in tree.\nRe-ran task.verification (checkref 1) verbatim in a git-archive snapshot: npm ci, lint 0, compile 0, npm test 564 tests / 560 pass / 4 skip / 0 fail, gate exit 0. Checkref 2 and checkref 3: both \"mutants killed: 1\", exit 0.\nDoD 1: renderDelivery inserts #deliverySection after #blockerSection, rebuilds in place, removes it for no rows, delivery:null and absent member. L1 replays every client-delivery.json row (live equals initial); L2 placement/rebuild/removal, unsaved inputs untouched; L3 hostile text lands as textContent/title, no child nodes; the DOM fake refuses markup writes (L0 proves it).\nDoD 2: L4 walks 10 assignedWorkerId values from 2 start states: one button before #prevBtn, same node kept, markup equals initial render, one listener, one {type:'releaseAgent'} per click.\nDoD 3: C3 pins all 15 moe.blocker.* keys on the 3 copies, fails on a new unpinned key (+37/-0).\nDoD 4: gate green; no existing test edited or weakened.\nInvariants: no new panel import; no forbidden-pattern token; initial HTML byte-identical (delivery-corpus, task-release, task-blocker-visibility, approval-paths unchanged and passing); removeNode guard protects old-shape messages; renderers run last so renderedPlanRevision is unchanged; host releaseAgent fresh-state check untouched.\nSize: net 371 (js +65/-7, panel +30/-10, C3 +37, new test +256), under 400.\nComplexity: nothing to cut. Non-blocking: a hand-made updateTask with rows but no title shows \"undefined\"; only the panel posts these. Follow-up for VSC-18: README Known issues and MANUAL_TESTS step 6 still describe the old limit.",
+  "requiredCheckAtDone": null
 }
