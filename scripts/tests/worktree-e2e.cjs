@@ -45,28 +45,18 @@ function seatMode(){
   const id=req&&req.id!==undefined?req.id:1;
   const log=o=>fs.appendFileSync(path.join(dir,'rpcs.jsonl'),JSON.stringify({session:Number(e.E2E_SESSION),tool:name,args,...o,start,end:Date.now()})+'\n');
   const reply=payload=>{log({reply:payload});process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result:{content:[{type:'text',text:JSON.stringify(payload)}]}})+'\n');};
-  // The fake knows WT-03's 'unlanded' once WT-11 lands; until then this file stores and serves landingRetry.
-  const fakeRetry=/'unlanded'/.test(read(e.E2E_FAKE)),store=path.join(dir,'e2e-landing-retry.json');
   try{
     if(!req||!name)throw new Error('malformed request: '+raw.slice(0,200));
     if(path.resolve(e.E2E_FAKE)===__filename)throw new Error('E2E_FAKE names the interposer itself');
     if(/(?<![\w-])(task|attempt)-postflight(?![\w-])/.test(raw))throw new Error('the request already names a fake id; ids cannot be translated back');
     if(args.taskId!==undefined&&args.taskId!==T)throw new Error(`a foreign task id ${args.taskId} on seat ${T}`);
     if(LEASE.includes(name)){reply(leaseRpc(e,name,args));}
-    else if(name==='finalize_attempt'&&args.outcome==='unlanded'&&!fakeRetry){
-      reply(JSON.parse(back(JSON.stringify(unlandedReply(moe,store,JSON.parse(fwd(JSON.stringify(args))))))));
-    } else {
+    else {
       if(name==='record_check_run')checkBeforeCas(moe,e.E2E_CONTROL,args);
       const r=cp.spawnSync(process.execPath,[e.E2E_FAKE],{input:fwd(raw),encoding:'utf8',maxBuffer:1<<26,
         env:{...e,MOE_PROJECT_PATH:dir,GIT_CEILING_DIRECTORIES:e.E2E_ROOT}});
       if(r.status!==0)throw new Error(`the fake proxy exited ${r.status}: ${String(r.stderr).trim().split('\n').pop()}`);
       const msg=JSON.parse(String(r.stdout).trim().split('\n').pop());
-      if(msg.result&&!fakeRetry){
-        const p=JSON.parse(msg.result.content[0].text);
-        if(name==='get_context'&&p&&p.task&&p.task.landingRetry===undefined&&present(store))p.task.landingRetry=JSON.parse(read(store));
-        if(name==='finalize_attempt'&&p&&p.success===true&&['landed','nothing-to-commit'].includes(args.outcome))fs.rmSync(store,{force:true});
-        msg.result.content[0].text=JSON.stringify(p);
-      }
       // The wrapper reads attempts from <control>/.moe/attempts (moe_attempt_read): mirror this seat's.
       const src=path.join(moe,'attempts','attempt-postflight.json'),dst=path.join(e.E2E_CONTROL,'.moe','attempts',A+'.json');
       if(present(src)){const tmp=path.join(path.dirname(dst),`.${A}.${process.pid}.tmp`);write(tmp,back(read(src)));fs.renameSync(tmp,dst);}
@@ -86,7 +76,15 @@ function leaseRpc(e,name,args){
   const rid=String(args.resourceId),lock=path.join(e.E2E_ROOT,'lease-'+rid+'.lock'),llog=path.join(e.E2E_ROOT,'lease.jsonl');
   assert.match(rid,/^[A-Za-z0-9._-]{1,64}$/,'resourceId');
   assert.deepEqual([args.taskId,args.workerId],['task-'+e.E2E_SEAT,'worker-e2e-'+e.E2E_SEAT],'the lease caller');
-  const holder=()=>{for(let i=0;i<40;i++){const t=readOr(lock);if(t===null)return null;if(t)return JSON.parse(t);sleep(25);}throw new Error('unreadable lease lock');};
+  // A peer's release can unlink the lock mid-read (no holder) and a grant can be mid-write (retry).
+  const holder=()=>{
+    for(let i=0;i<40;i++){
+      let t;try{t=read(lock);}catch(err){if(err.code==='ENOENT')return null;throw err;}
+      try{if(t)return JSON.parse(t);}catch{}
+      sleep(25);
+    }
+    throw new Error('unreadable lease lock');
+  };
   const take=()=>{
     for(let i=0;i<3;i++){
       let fd;
@@ -99,7 +97,7 @@ function leaseRpc(e,name,args){
       fs.appendFileSync(llog,JSON.stringify({task:args.taskId,event:'grant',at:now})+'\n');
       return l;
     }
-    throw new Error('the lease lock kept vanishing');
+    return null; // the lock changed hands under every try: another task holds it now
   };
   if(name==='release_resource'){
     assert.equal(args.force,undefined,'a forced release');
@@ -125,30 +123,6 @@ function checkBeforeCas(moe,control,args){
   const c=JSON.parse(read(path.join(moe,'candidates',args.candidateId+'.json')));
   const tip=cp.spawnSync('git',['-C',control,'rev-parse','--verify',c.deliveryTarget],{encoding:'utf8'});
   if(tip.status===0)assert.equal(tip.stdout.trim(),c.baseRevision,'CheckRun must persist before CAS');
-}
-// finalize_attempt 'unlanded' as WT-03 validates it (docs/MCP_SERVER.md), on the fake's attempt record, in the
-// fake's ids: close it and store Task.landingRetry (count + 1); a closed replay answers again, storing nothing.
-function unlandedReply(moe,store,a){
-  const f=path.join(moe,'attempts',a.attemptId+'.json'),at=JSON.parse(read(f));
-  assert.deepEqual([a.taskId,a.workerId,a.generation],[at.taskId,at.workerId,at.generation],'the attempt identity');
-  assert.ok(['finalizing','closed'].includes(at.phase),'attempt phase '+at.phase);
-  assert.equal(at.workspaceMode,'worktree','"unlanded" is only valid for a worktree attempt');
-  assert.ok(a.landedRevision===undefined||a.landedRevision===null,'landedRevision '+a.landedRevision);
-  assert.ok(['conflict','contention','gate','diverged','remote'].includes(a.unlandedReason),'unlandedReason '+a.unlandedReason);
-  const pre=`refs/moe/rescue/${a.taskId}/`,paths=a.conflictPaths===undefined?[]:a.conflictPaths;
-  assert.ok(typeof a.rescueRef==='string'&&a.rescueRef.length<=255&&a.rescueRef.startsWith(pre)
-    &&/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(a.rescueRef.slice(pre.length)),'rescueRef '+a.rescueRef);
-  assert.ok(a.targetTip===undefined||a.targetTip===null||sha(a.targetTip),'targetTip '+a.targetTip);
-  assert.ok(Array.isArray(paths)&&paths.length<=500&&new Set(paths).size===paths.length&&paths.every(p=>typeof p==='string'
-    &&!/[\\\x00-\x1f\x7f]/.test(p)&&p.split('/').every(s=>s&&s!=='.'&&s!=='..')),'conflictPaths '+JSON.stringify(paths));
-  if(at.phase==='finalizing'){
-    const prior=readOr(store);
-    write(store,JSON.stringify({reason:a.unlandedReason,paths,rescueRef:a.rescueRef,targetTip:a.targetTip||null,
-      count:(prior?JSON.parse(prior).count:0)+1,at:new Date().toISOString()}));
-    at.phase='closed';fs.writeFileSync(f,JSON.stringify(at));
-  }
-  return {success:true,taskId:at.taskId,attemptId:at.id,generation:at.generation,phase:'closed',outcome:'unlanded',landedRevision:null,
-    message:'unlanded (worktree-e2e interposer: the fake predates WT-03 unlanded)'};
 }
 
 if(process.argv[2]==='cli')cliMode();
