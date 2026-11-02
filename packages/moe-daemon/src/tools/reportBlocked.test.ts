@@ -646,6 +646,44 @@ describe('moe.report_blocked', () => {
     expect(state.getTask('task-1')!.assignedWorkerId).toBeNull();
   });
 
+  it('a WORKING row carrying a stale DONE blockedOnTaskIds entry blocks on [] alone: parked dep-less, stale ids cleared', async () => {
+    // Only an already-BLOCKED row unions stored ids from an earlier block.
+    const stale = await state.createTask({ epicId: 'epic-1', title: 'Old prerequisite', status: 'DONE' });
+    state.tasks.set('task-1', { ...state.getTask('task-1')!, blockedOnTaskIds: [stale.id] });
+
+    const result = await report({ reason: 'staging DB is down', blockedOnTaskIds: [] });
+
+    expect(result.blocked).not.toBe(false);
+    expect(result.dependenciesSatisfied).toBeUndefined();
+    expect(result.taskStatus).toBe('BLOCKED');
+    expect(result.blockedOnTaskIds).toBeUndefined();
+    expect(result.satisfiedBlockedOnTaskIds).toBeUndefined();
+    expect(result.seatFreed).toBe(true);
+    expect(result.blockResolution).toContain('No unmet blockedOnTaskIds were recorded');
+    expect(result.notified).toEqual({ target: '@governors', via: 'governors-fallback' });
+    expect(mentionedGeneralPosts().some((p) => p.includes('blocked on task-1') && p.includes('staging DB is down'))).toBe(true);
+    const task = state.getTask('task-1')!;
+    expect(task.status).toBe('BLOCKED');
+    expect(task.blockedOnTaskIds ?? null).toBeNull();
+    expect(await runDependencyUnblock(state)).toEqual([]);
+    expect(state.getTask('task-1')!.status).toBe('BLOCKED');
+  });
+
+  it('a stale OPEN id on a WORKING row is not unioned into an explicit list: the row waits on the real blocker only', async () => {
+    const stale = await state.createTask({ epicId: 'epic-1', title: 'Old prerequisite', status: 'WORKING' });
+    const real = await state.createTask({ epicId: 'epic-1', title: 'Real blocker', status: 'WORKING' });
+    state.tasks.set('task-1', { ...state.getTask('task-1')!, blockedOnTaskIds: [stale.id] });
+
+    const result = await report({ reason: `waiting on ${real.id}`, blockedOnTaskIds: [real.id] });
+
+    expect(result.blockedOnTaskIds).toEqual([real.id]);
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([real.id]);
+    state.tasks.set(stale.id, { ...state.getTask(stale.id)!, status: 'DONE' });
+    expect(await runDependencyUnblock(state)).toEqual([]);
+    state.tasks.set(real.id, { ...state.getTask(real.id)!, status: 'DONE' });
+    expect(await runDependencyUnblock(state)).toEqual(['task-1']);
+  });
+
   it.each([false, true])('drops dependency cycles and alerts #governors (explicit=%s)', async (explicit) => {
     // x is BLOCKED waiting on task-1; y (WORKING) declares dependsOn [task-1];
     // z is an honest prerequisite. Blocking task-1 on x or y closes a loop.

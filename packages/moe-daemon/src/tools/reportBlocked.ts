@@ -159,7 +159,9 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         task = state.getTask(task.id) ?? task;
       }
 
-      // Structured dependency ids: stored ∪ (supplied OR legacy reason-parsed).
+      // Structured dependency ids: supplied OR legacy reason-parsed, unioned
+      // with stored ids only on an already-BLOCKED update. Other statuses may
+      // carry stale ids from an earlier block, not prerequisites of this one.
       // Only ids that EXIST on the board are kept (a missing id counts as
       // satisfied anyway, so storing it would be dead weight); the task's own
       // id is never a dependency of itself; capped at MAX_TASK_DEPENDENCY_IDS.
@@ -169,7 +171,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // would close a dependency cycle nothing could ever auto-unblock (the
       // members never all reach DONE), and the knot would starve silently.
       const flipped = BLOCKABLE_STATUSES.has(task.status);
-      const storedBlockedOnIds = Array.isArray(task.blockedOnTaskIds) ? task.blockedOnTaskIds : [];
+      const storedBlockedOnIds = task.status === 'BLOCKED' && Array.isArray(task.blockedOnTaskIds) ? task.blockedOnTaskIds : [];
       const parsedFromReason = params.blockedOnTaskIds !== undefined
         ? []
         : [...new Set((params.reason.match(TASK_ID_IN_REASON_RE) ?? []).map((id) => id.toLowerCase()))];
@@ -343,7 +345,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
           // the assignment and resets the prior owner's task pointer.
           ...(freeSeat ? {} : { assignedWorkerId: task.assignedWorkerId }),
           blockedReason: params.reason,
-          ...(recordedBlockedOnIds.length > 0 ? { blockedOnTaskIds: recordedBlockedOnIds } : {}),
+          blockedOnTaskIds: recordedBlockedOnIds.length > 0 ? recordedBlockedOnIds : null,
           blockedResourceId: params.resourceId ?? null,
           blockedFromStatus: task.status,
           blockedAt: new Date().toISOString(),

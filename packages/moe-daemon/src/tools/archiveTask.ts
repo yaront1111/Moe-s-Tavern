@@ -17,6 +17,21 @@ import { missingRequired, notFound, notAllowed } from '../util/errors.js';
 export const ARCHIVABLE_FROM: TaskStatus[] = ['BACKLOG', 'REVIEW', 'DONE', 'PLANNING', 'BLOCKED'];
 const HOLDER_ONLY_FROM: TaskStatus[] = ['PLANNING', 'BLOCKED'];
 
+export function archiveUpdates(task: Pick<Task, 'status' | 'blockedReason'>): Partial<Task> {
+  const updates: Partial<Task> = { status: 'ARCHIVED' };
+  if (task.status === 'BLOCKED') {
+    // Same clear-on-exit as set_task_status: only the operational block
+    // fields can be acted on by a later grant/sweep; the prose is kept.
+    if (task.blockedReason) updates.priorBlockedReason = task.blockedReason;
+    updates.blockedReason = null;
+    updates.blockedResourceId = null;
+    updates.blockedOnTaskIds = null;
+    updates.blockedFromStatus = null;
+    updates.blockedAt = null;
+  }
+  return updates;
+}
+
 export function archiveTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.archive_task',
@@ -61,18 +76,7 @@ export function archiveTaskTool(_state: StateManager): ToolDefinition {
         );
       }
 
-      const updates: Partial<Task> = { status: 'ARCHIVED' };
-      if (task.status === 'BLOCKED') {
-        // Same clear-on-exit as set_task_status: only the operational block
-        // fields can be acted on by a later grant/sweep; the prose is kept.
-        if (task.blockedReason) updates.priorBlockedReason = task.blockedReason;
-        updates.blockedReason = null;
-        updates.blockedResourceId = null;
-        updates.blockedOnTaskIds = null;
-        updates.blockedFromStatus = null;
-        updates.blockedAt = null;
-      }
-      const updated = await state.updateTask(task.id, updates, 'TASK_ARCHIVED');
+      const updated = await state.updateTask(task.id, archiveUpdates(task), 'TASK_ARCHIVED');
       return { success: true, taskId: updated.id, status: updated.status };
     }
   };

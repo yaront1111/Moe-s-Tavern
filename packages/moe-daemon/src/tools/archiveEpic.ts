@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { TaskStatus } from '../types/schema.js';
 import { missingRequired, notFound, notAllowed } from '../util/errors.js';
 import { assertNoFinalizingAttempt } from '../state/taskStore.js';
+import { archiveUpdates } from './archiveTask.js';
 
 /**
  * In-flight task statuses that block an epic archive — a worker may own them.
@@ -60,7 +61,7 @@ export function archiveEpicTool(_state: StateManager): ToolDefinition {
       let archivedTaskCount = 0;
       for (const task of tasksInEpic) {
         if (task.status === 'ARCHIVED') continue;
-        await state.updateTask(task.id, { status: 'ARCHIVED' }, 'TASK_ARCHIVED');
+        await state.updateTask(task.id, archiveUpdates(task), 'TASK_ARCHIVED');
         archivedTaskCount++;
       }
 
