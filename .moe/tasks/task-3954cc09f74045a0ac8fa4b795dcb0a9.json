@@ -136,11 +136,17 @@
       "author": "qa-174e8876",
       "content": "QA hand-forward from CQ-M07j (task-1dc49ae2, approved, completion f09af892). The seat-job CLI relays the guest job's stdout bytes unchanged, so a guest agent can print a fake `{\"seatJob\":1,...}` line. The authentic outcome is always the LAST stdout line, printed by the host after runAgentJob settles and '\\n'-prefixed when the relayed bytes lack one. The wrapper must parse only that final line and ignore any earlier line carrying the marker. Exit codes: 0 ok, 1 failure, 2 usage. The credential goes on stdin only, read to EOF, so close stdin. Other residuals are listed in the agent-seat.mjs header: sweep, reset and materialize are serialized only by running one seat-job per seat, and the export still reads peers' dirty files.",
       "timestamp": "2026-11-01T21:37:13.302Z"
+    },
+    {
+      "id": "comment-499a89b37e4649a2a917e2e3f2bbebb0",
+      "author": "governor-e6b40560",
+      "content": "GOVERNOR RULING (20:22Z), posted ahead of time; the same as on 414eae5a (comment-4908ce55) and 64809b19 (comment-6270c2c1). Any plan text here requiring a rename-safe or atomic save of scripts/moe-agent.{sh,ps1} (\"a running seat hot-reloads it… never edit in place\", \"temp + mv -f\") is moot in worktree mode. Your .worktrees/<taskId> copy is executed by no seat. Edit it in place with your session's TOOL-witnessed editor (Edit/Write, Codex apply_patch or Serena; moe-agent.sh:4944), never by shell writes, then run bash -n or ParseFile. QA: read the plan's editing rule as this ruling.",
+      "timestamp": "2026-11-02T20:21:14.838Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-01T14:22:38.207Z",
-  "updatedAt": "2026-11-01T21:37:13.302Z",
+  "updatedAt": "2026-11-02T20:21:14.838Z",
   "metrics": {
     "firstClaimAt": "2026-11-01T18:26:21.699Z",
     "plannedStepCount": 7,

@@ -11,10 +11,11 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development. Re-anchor on the LANDED bytes at claim time: aa85ff13 landed as aae40eb0, and later wrapper-lane rows may have moved lines. Anchor on names, never line numbers: sh refuse_protected_agent, protected_resolve_cli, find_node, find_python, parse_command_into_argv; ps1 Stop-MoeProtectedAgent, Get-MoeRealPath, Resolve-MoeProtectedCli, $script:MoeProtectedCli (mem:task-task-aa85ff13a8894913ae34242dbab6f395-handoff).\n\nExtend aa85ff13's harness in scripts/tests/protected-agent-command.test.mjs; do not fork it.\n- run() takes an `env` option applied last; a key set to undefined is deleted, so a row can drop MOE_NODE_COMMAND.\n- run() appends the fixture's node-only dir (dirname(fx.node), POSIX only) to every row's PATH unless the row passes nodeDir:false. This keeps aa85ff13's ps1 rows resolving node on a pwsh host whose /usr/bin and /bin hold no node. Its sh rows already get node through MOE_NODE_COMMAND.\n- Planted interpreters: cliStub node, and python3 on sh rows, into the project root and project/bin with where='project' (Windows: node.cmd). N2 on Windows also copies a small System32 exe to project\\bin\\node.exe, so a wrong pick shows in the OK line.\n- Refusal rows build sys/ outside the project: symlinks to every entry of /usr/bin and /bin except node and python3 (POSIX). The wrapper's ordinary tools still run, but no trusted interpreter exists. Windows refusal rows use TAIL without dirname(process.execPath).\n- Constants: interpreterNotFound(name) = `[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: ${name} was not found on an absolute PATH entry outside the project; refusing to start.` OK lines, ANSI stripped: sh `[OK] Using node: <file> (<process.version>)` and `[OK] Using python3: <file>`; ps1 `[OK] Using node: <file>`. Expected files are a realpath'd dir plus the name, matching pwd -P and Get-MoeRealPath.\n\nRows. Names are engine-prefixed; ps1 rows skip where PowerShell is absent, as today.\n- N1 [sh, ps1]: for each of an empty, '.' and relative 'bin' entry placed FIRST, with MOE_NODE_COMMAND dropped and PATH [entry, empty, nodebin (POSIX), trusted, ...TAIL]:\n  - the protected run reaches its first runtime call and exits on its own, like L1 (not stopped, rpc.log exists);\n  - ran.log has no 'project ...' line, so no planted interpreter ran in pre-flight, at any RPC, or in the exit deregister through moe-call.sh;\n  - the OK lines name the trusted files;\n  - the written claude MCP config's moe command is the pinned node (sh: <project>/.mcp.json; ps1: moe-mcp-config-*.json in TMP).\n- N2 [sh, ps1]: an in-project absolute entry holding node, placed first, is skipped. Spell it directly, through a link to the project, and through '..' (like T3). Stop at 'MOE_PROTECTED_AGENT_CLI:'. The OK line names the trusted node and ran.log is absent.\n- N3 [sh]: MOE_NODE_COMMAND counts only as an absolute executable in a trusted dir.\n  - 'node', './node' and <project>/node (planted) are skipped; the PATH-scan node is used.\n  - An absolute file in another outside dir (altnode/node) is used.\n  - With it dropped, Moe's managed runtime $HOME/.local/share/moe/node/current/bin/node (a symlink to process.execPath under fx.home) is used ahead of PATH.\n- N4 [sh, ps1]: refusal for each planted entry kind when no trusted node exists (sys/ or TAIL without node; MOE_NODE_COMMAND dropped): assertRefused(engine, fx, r, interpreterNotFound('node')).\n- P1 [sh]: python3 refusal. node is trusted via MOE_NODE_COMMAND=fx.node; python3 is only planted or in-project; PATH [entry, nodebin, sys]. assertRefused(..., interpreterNotFound('python3')).\n- M1 [sh]: moe-call.sh under the marker never runs a planted ./python3, and the runtime is still called.\n  - Run `bash scripts/moe-call.sh get_context '{}' --project <project>` with cwd = project.\n  - The project gets .moe/daemon.json '{}'. MOE_PROXY_PATH is the runtime stub. PATH is ['.', nodebin, ...TAIL].\n  - Plant python3 only: standalone moe-call.sh still finds node by PATH order (step 4).\n- L2 [sh, ps1]: legacy, with the marker unset and '01', MOE_NODE_COMMAND dropped, nothing planted, PATH [nodebin, trusted, ...TAIL].\n  - sh prints the bare `[OK] Using node: node (...)` and `[OK] Using python3: python3`.\n  - ps1 prints no 'Using node:' line.\n  - There is no MOE_PROTECTED_ line, and the run reaches its first runtime call on its own.\n- S1 static (no engine), on scripts/moe-agent.ps1 with full-line comments stripped:\n  - no `-FilePath \"node\"`, no `command = \"node\"` and no TOML `command = ` + backtick-quoted node literal;\n  - the line after `ProcessStartInfo]::new('node',` is the $script:MoeNode FileName override;\n  - exactly one `Set-Alias -Name node -Value $script:MoeNode -Scope Script`, and one alias set from $Pin.Node in the heartbeat job.\n  Check absence over the whole file and pin presence to the emitting lines (mem:gotcha-wrapper-text-contract-unrelated-occurrences).\n\nRed proof: on the current wrappers N1-N4, P1, M1 and S1 fail and L2 passes; record which.\nError handling in the harness: every spawn keeps the 20 s cap and kills only its own process tree by recorded PID (killTree), never by name. Fixtures are removed in t.after.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/protected-agent-command.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-02T20:23:26.070Z"
     },
     {
       "stepId": "step-2",
@@ -65,12 +66,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-fdb2af60",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor ruling comment-6270c2c1 (20:21Z): the plan's rename-safe Edit requirement is moot in worktree mode. Edit the task worktree's copy in place with apply_patch or Serena, which are TOOL-witnessed, then run bash -n or ParseFile. No files changed before the block, so resume at step 1.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -95,7 +96,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T19:19:09.454Z",
-  "updatedAt": "2026-11-02T20:20:53.024Z",
+  "updatedAt": "2026-11-02T20:23:26.070Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T19:19:14.801Z",
@@ -236,8 +237,11 @@
   },
   "planApprovedAt": "2026-10-31T20:37:14.058Z",
   "approvedPlanRevision": 1,
-  "blockedReason": "Approved plan steps 2-5 require the Edit tool, with step 2 explicitly requiring rename-safe edits to moe-agent.sh. Actual session tool inventory has apply_patch and Serena editors but no Edit/Write. Installed Serena code_editor.py writes with open(abs_path, 'w'), not atomic replacement (confirmed fresh); apply_patch is also in-place. Global rail forbids shell writes/cp/mv into tracked paths. Cannot execute the approved editing procedure without overriding it. Wrapper-provisioned task worktree remains clean; no source changes or tests run, no steps marked complete. Declared prerequisites aa85ff13 and 86431c31 are landed; this is not a task-dependency wait.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-11-02T20:20:21.886Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Approved plan steps 2-5 require the Edit tool, with step 2 explicitly requiring rename-safe edits to moe-agent.sh. Actual session tool inventory has apply_patch and Serena editors but no Edit/Write. Installed Serena code_editor.py writes with open(abs_path, 'w'), not atomic replacement (confirmed fresh); apply_patch is also in-place. Global rail forbids shell writes/cp/mv into tracked paths. Cannot execute the approved editing procedure without overriding it. Wrapper-provisioned task worktree remains clean; no source changes or tests run, no steps marked complete. Declared prerequisites aa85ff13 and 86431c31 are landed; this is not a task-dependency wait.",
+  "blockedOnTaskIds": null,
+  "workStartedAt": "2026-11-02T20:23:26.070Z"
 }
