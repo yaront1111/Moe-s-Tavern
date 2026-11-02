@@ -7,10 +7,42 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED, then the fixture fix. This is a test-only change: the whole diff is two inserted lines in packages/moe-daemon/src/util/heartbeatStop.test.ts. Nothing else changes: not the wrapper, not the assertions, not the slice anchors and not the other cases.\n\nRED first (test-driven-development): before editing, run the step-2 command once. Its Linux leg must fail on 'does not re-exec and lose a pending Bash sidecar handle' with 'bash: line 41: wrapper_pin_drop: command not found', exit 127. Quote that in complete_step. The PowerShell twin's RED comes from step 3's stub-removal mutant on Windows. Planning evidence for both is in /mnt/d/moe-scratch/f6d9c532-plan/ (README.md, f6d9-win-head.log).\n\nThe edit. Use an editor tool (Edit on a Claude seat, apply_patch on a Codex seat), not a shell write. The file is LF (eol=lf) and must stay LF.\n1. In the bash case's fixture, directly after the line `wrapper_reload_deferred() { return 1; }`, add: `wrapper_pin_drop() { MOE_WRAPPER_PIN=''; }`\n2. In the PowerShell case's fixture, directly after `function Test-MoeWrapperReloadDeferred { param($Hash) $false }`, add: `function Remove-MoeWrapperPin { $global:MoeWrapperReloadPin = $null }`\nBoth lines sit inside JS template literals. Neither contains `${`, so nothing is interpolated.\n\nWhy the fixture and not a wrapper guard (the governor's 22:59Z comment asks the planner to say why):\n- Precedent: 46340ec2 (task-cf7f4708) fixed the same class of break, when the reload body gained Test-MoeWrapperReloadDeferred, by stubbing it in this fixture. The fixture already stubs every helper the extracted body calls: sha256sum, wrapper_reload_deferred, stop_heartbeat_sidecar and exec; Get-MoeSha256Hex, Test-MoeWrapperReloadDeferred, Stop-HeartbeatSidecar and Invoke-MoeDeregister.\n- In the real wrapper, both helpers are always defined before the loop runs: wrapper_pin_drop at moe-agent.sh:8793, before the loop at ~:8857; Remove-MoeWrapperPin at moe-agent.ps1:8418, before its loop at ~:8547. The `type -t` guard at moe-agent.sh:240 exists only because cleanup_temp's EXIT trap can fire before :8793 is parsed. A guard inside the loop would be dead code.\n- A wrapper edit hot-reloads every seat and needs sh/ps1 parity plus the launcher harnesses. This test-only edit needs neither, and leaves task-69c02444's hunks untouched.\n- The ps1 twin has the same gap. moe-agent.ps1:8592 calls Remove-MoeWrapperPin on the same MOE_HEARTBEAT_STOP_TIMEOUT path, so the PowerShell case fails wherever pwsh exists: on CI's ubuntu-latest runner and on Windows. The WSL gate only skips it, because the env -i PATH has no pwsh. Stubbing only the bash side would leave CI red.\n\nNo runtime error handling is needed. The stubs mirror the real helpers' state reset (MOE_WRAPPER_PIN and $global:MoeWrapperReloadPin cleared) without their filesystem side effects.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+      ],
+      "note": "RED on pure HEAD snapshot: 'does not re-exec and lose a pending Bash sidecar handle' fails, 'bash: line 41: wrapper_pin_drop: command not found', code 127 (1 failed | 5 passed | 3 skipped). Added two stub lines (bash wrapper_pin_drop, ps1 Remove-MoeWrapperPin) in the fixtures via Edit.",
+      "startedAt": "2026-11-02T23:14:18.109Z",
+      "completedAt": "2026-11-02T23:14:54.311Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, run once. This covers the governor's ask (the full daemon suite on a snapshot, exit 0) plus the PowerShell case wherever pwsh exists. After step 1, run this ONE command fresh from the task worktree root. Its output tail is the complete_task evidence.\n\nIt was dry-run at planning with the fixed file as the overlay: VERIFY_EXIT=0. Linux showed 229 files and 6921 passed / 20 skipped at c5355541; Windows showed 3 passed / 6 skipped. Counts move with HEAD; exit 0 is the gate.\n\nR=$(git rev-parse --show-toplevel) && F=packages/moe-daemon/src/util/heartbeatStop.test.ts && S=$(mktemp -d /tmp/moe-f6d9-lin.XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$R/$F\" \"$S/$F\" && cmp \"$R/$F\" \"$S/$F\" && (cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npm test 2>&1 | tail -5; exit ${PIPESTATUS[0]}') && W=$(mktemp -d /mnt/c/Users/Yaron/AppData/Local/Temp/moe-f6d9-win.XXXXXX) && tar -C \"$S\" -cf - --exclude=packages/moe-daemon/node_modules packages/moe-daemon scripts | tar -C \"$W\" -xf - && (cd /mnt/c/Windows/System32 && ./cmd.exe /c robocopy 'D:\\projexts\\moes\\packages\\moe-daemon\\node_modules' \"$(wslpath -w \"$W\")\\\\packages\\\\moe-daemon\\\\node_modules\" /E /XD .vite /NFL /NDL /NJH /NJS /NP /R:0 /W:0 >/dev/null; [ $? -lt 8 ]) && (cd \"$W/packages/moe-daemon\" && \"/mnt/c/Program Files/nodejs/node.exe\" node_modules/vitest/vitest.mjs run src/util/heartbeatStop.test.ts --reporter=verbose 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -14; exit ${PIPESTATUS[0]}); rc=$?; case \"${W:-}\" in /mnt/c/Users/Yaron/AppData/Local/Temp/moe-f6d9-win.?*) rm -rf \"$W\";; esac; case \"${S:-}\" in /tmp/moe-f6d9-lin.?*) rm -rf \"$S\";; esac; echo \"VERIFY_EXIT=$rc\"; (exit $rc)\n\nThe same text, as tested, is in /mnt/d/moe-scratch/f6d9c532-plan/verify-dryrun.sh; there the overlay source is $OVR instead of \"$R/$F\".\n- Linux leg: a whole-repo archive of HEAD, an explicit cp+cmp overlay of the one file, a Linux-native npm ci, then the full `npm test` in packages/moe-daemon. Never run npm in the shared checkout.\n- Windows leg:\n  - copy the snapshot's packages/moe-daemon and scripts to a C: temp dir;\n  - robocopy the control checkout's Windows node_modules, read-only (exit codes 0-7 are success);\n  - Windows node runs vitest on the one file. The output must show a pass for 'does not reload and lose a pending PowerShell job handle'.\n  Run node.exe straight from WSL as written. Routing it through `cmd.exe /c` with a quoted \"C:\\Program Files\\...\" path fails, because WSL interop escapes the quotes as \\\" (seen at planning).\n- The command removes both temp dirs by prefix at the end. VERIFY_EXIT is the combined result.\n- If the Linux leg fails only in a test outside this file, rerun that file alone, then the suite once, since load flakes happen (mem:gotcha-daemon-linux-snapshot-gate). Report it, and do not edit other files.\n- Declare packages/moe-daemon/src/util/heartbeatStop.test.ts as modifiedFiles.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+      ],
+      "startedAt": "2026-11-02T23:14:54.763Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n\nRun the mutants in scratch copies made the way step 2 makes them, never in the worktree or the shared checkout. After each one, restore the copy and re-run it green.\n(a) Diff scope: `git diff --stat` shows only heartbeatStop.test.ts, with 2 insertions and 0 deletions, LF kept.\n(b) Each stub is needed:\n  - remove the bash stub: the Linux file run (`npx vitest run src/util/heartbeatStop.test.ts`) fails again with 'wrapper_pin_drop: command not found';\n  - remove the PowerShell stub: the Windows file run fails with \"The term 'Remove-MoeWrapperPin' is not recognized\". This is the PowerShell RED.\n(c) Intent kept: the test still proves a pending handle is never lost on reload.\n  - In the snapshot's scripts/moe-agent.sh, delete the `continue` right after `wrapper_pin_drop` on the MOE_HEARTBEAT_STOP_TIMEOUT path. The bash case must fail with BAD_REEXEC (checked at planning).\n  - In the Windows copy's scripts/moe-agent.ps1, delete the `continue` after `Remove-MoeWrapperPin` on the same path. The PowerShell case must fail (BAD_RELOAD from the Invoke-MoeDeregister stub).\n(d) The stubs model production: cite the line numbers showing both helpers are defined before each wrapper loop runs, as in step 1.\n(e) Repeat runs: the fixture writes only its own mkdtemp wrapper, which afterEach removes. vitest's PWSH_CASE retries re-run the PowerShell case cleanly.\n(f) Process safety: kill nothing by name or pattern. Kill any process you start only by its recorded PID.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-ed0f6a9e",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -41,16 +73,83 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:40:06.987Z",
-  "updatedAt": "2026-11-02T23:02:01.535Z",
+  "updatedAt": "2026-11-02T23:14:54.763Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:58:33.125Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-02T23:01:58.418Z"
+    "firstClaimAt": "2026-11-02T23:01:58.418Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-ed0f6a9e"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T23:13:11.679Z",
+  "executionContract": {
+    "intendedBehavior": "packages/moe-daemon/src/util/heartbeatStop.test.ts passes again on the target in both twins of the 'pending handle' reload fixture: the bash case on Linux, and the PowerShell case wherever pwsh exists. The test still proves that a deferred reload keeps the pending heartbeat handle and never re-execs. Only fixture stubs change: wrapper_pin_drop in the bash fixture and Remove-MoeWrapperPin in the PowerShell fixture, the helpers that 373dc3d4 added to the extracted reload bodies.",
+    "acceptanceCriteria": [
+      "The full daemon suite exits 0 in a whole-repo HEAD snapshot with the one-file overlay (Linux, env -i, Node 24.21.0).",
+      "Windows-native vitest of src/util/heartbeatStop.test.ts passes, including 'does not reload and lose a pending PowerShell job handle'.",
+      "The diff is exactly two inserted lines in heartbeatStop.test.ts; scripts/moe-agent.sh and scripts/moe-agent.ps1 are unchanged.",
+      "Removing either stub breaks its case again, and deleting the deferral `continue` in either wrapper twin fails its case (BAD_REEXEC or BAD_RELOAD)."
+    ],
+    "invariants": [
+      "scripts/moe-agent.sh and scripts/moe-agent.ps1 do not change: no seat hot-reload and no twin parity work.",
+      "Every existing assertion, slice anchor and test case stays byte-identical."
+    ],
+    "compatibility": [
+      "The test keeps extracting the reload bodies by the same anchors, and task-69c02444's wrapper hunks are untouched."
+    ],
+    "approvedScope": [
+      "The fixtures of 'does not re-exec and lose a pending Bash sidecar handle' and 'does not reload and lose a pending PowerShell job handle' in heartbeatStop.test.ts: one stub line each."
+    ],
+    "reuse": [
+      "The fixture-stub pattern this test already uses (46340ec2 added the Test-MoeWrapperReloadDeferred stub)."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh at c5355541: wrapper_pin_drop is defined at :8793. The reload body (:8893-8944) calls it at :8911 (parse refusal) and at :8923 (the MOE_HEARTBEAT_STOP_TIMEOUT deferral, before `continue`). cleanup_temp has a guarded call at :240.",
+      "scripts/moe-agent.ps1: Remove-MoeWrapperPin is defined at :8418. The reload body (:8547-8601) calls it at :8572, and at :8592 on the deferral path, before the Write-Host and `continue`."
+    ],
+    "checkRefs": [
+      "The step-2 two-leg command. Linux: a whole-repo HEAD archive plus a cp/cmp overlay of packages/moe-daemon/src/util/heartbeatStop.test.ts, then env -i (Node 24.21.0) npm ci && npm test in packages/moe-daemon. Windows: node.exe node_modules/vitest/vitest.mjs run src/util/heartbeatStop.test.ts --reporter=verbose in a C: temp copy with robocopied node_modules. VERIFY_EXIT=0."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Guard the reload-block calls in the wrapper with `type -t … = function`. Rejected: both helpers are defined before each loop in production, so the guard is dead code. Every seat would hot-reload the wrapper, it needs sh/ps1 parity and launcher-harness runs, and it touches task-69c02444's hunks. 2) Extract the real helper definitions into the fixture, the way shFunctions and psFunctions do. Rejected: more anchors to keep in sync, and the real helpers do filesystem work the fixture does not need; this fixture's convention is stubs. 3) One stub per twin, CHOSEN. It matches precedent 46340ec2 and is two lines in total.",
+    "codebaseInsights": "The test slices the reload body out of each wrapper by text anchors and runs it with every helper stubbed. So any new helper call added to that body breaks the fixture until it is stubbed. This has happened twice: 46340ec2 (Test-MoeWrapperReloadDeferred) and now 373dc3d4 (wrapper_pin_drop / Remove-MoeWrapperPin). The WSL gate skips the pwsh cases because env -i leaves no pwsh on PATH, so a PowerShell-only regression is invisible there but red on CI's ubuntu-latest, which has pwsh. At planning, the Windows-native file run on HEAD failed the PowerShell case with Remove-MoeWrapperPin not recognized.",
+    "risks": "(1) Fixing only the bash stub leaves CI red on the PowerShell case. (2) The full suite has load flakes (for example baselineRun E2): rerun the file alone, then the suite once. (3) The Windows leg needs Windows node at C:\\Program Files\\nodejs and the control checkout's node_modules. If robocopy or node.exe fails, report it rather than skipping the leg. (4) HEAD moves fast (b7f0afd9, docs-only, landed during planning), so counts may change; exit 0 is the gate.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/heartbeatStop.test.ts",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "b7f0afd91b6811e0327d354d05bd203c046df50c",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T23:13:11.705Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T23:14:18.109Z"
 }

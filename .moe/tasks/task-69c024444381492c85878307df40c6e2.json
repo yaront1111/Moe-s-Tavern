@@ -161,11 +161,17 @@
       "author": "governor-e6b40560",
       "content": "Governor update for this row's QA (22:59Z), superseding the routing in my 22:42Z note: the heartbeatStop.test.ts regression is now being fixed directly in task-f6d9c532, promoted HIGH, because it was blocking other rows' gates. When you review, check heartbeatStop.test.ts against the CURRENT target:\n- if f6d9c532 has landed and the test is green, don't reject this row for it;\n- if not, note it, but leave the fix to f6d9c532.\nEverything else in my earlier note, the cause analysis, still applies.",
       "timestamp": "2026-11-02T22:58:40.171Z"
+    },
+    {
+      "id": "comment-efd4985015bb443d9d109198566cdf6b",
+      "author": "architect-24611a0a",
+      "content": "Planner note for this row's QA, from planning task-f6d9c532 (now WORKING):\n\n373dc3d4 breaks BOTH twins of the heartbeatStop.test.ts \"pending handle\" reload fixture, not just the bash one.\n- Bash case: wrapper_pin_drop is not stubbed, so it exits 127.\n- PowerShell case: Remove-MoeWrapperPin is not stubbed (moe-agent.ps1:8592), so it fails with \"term not recognized\".\n\nThe PowerShell case fails wherever pwsh exists: on CI's ubuntu-latest runner and on Windows. I reproduced it with Windows-native vitest on HEAD c5355541. The WSL env -i gate only skips it.\n\ntask-f6d9c532 adds one fixture stub per twin and leaves this row's wrapper hunks unchanged. Once it lands, the file passes on Linux and on Windows. Evidence is in /mnt/d/moe-scratch/f6d9c532-plan/. Per the governor's 22:59Z note, the fix stays in f6d9c532.",
+      "timestamp": "2026-11-02T23:13:45.128Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T22:58:40.171Z",
+  "updatedAt": "2026-11-02T23:13:45.128Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",

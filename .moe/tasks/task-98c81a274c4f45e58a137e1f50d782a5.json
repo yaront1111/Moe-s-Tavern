@@ -60,26 +60,41 @@
     {
       "stepId": "step-4",
       "description": "Verification, run once (DoD 3). Run ONE command fresh from the task worktree that runs both legs; its output tail is the complete_task evidence.\n\n- Linux leg: R=$(git rev-parse --show-toplevel); S=$(mktemp -d); git -C \"$R\" archive HEAD | tar -x -C \"$S\". Overlay exactly moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/extension.ts and moe-vscode/tests/protected-profile-pin.test.cjs, `cp` then `cmp` each. Then `cd \"$S/moe-vscode\" || exit 1` and run `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile'`.\n- Windows leg: the same archive plus overlay into a fresh dir under /mnt/d/moe-scratch/. Then `cmd.exe /d /c \"cd /d D:\\\\moe-scratch\\\\<dir>\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\"`. On Windows the POSIX-mode cases skip, and the link, size and parse cases still run.\n\nBoth legs must exit 0. Report each leg's tests / pass / fail / skipped. The base is 583 tests (579 pass, 4 skipped) at the latest VS Code landing, plus the new cases. Never run npm in the shared control checkout.\n\nAlso run `npm run lint` in the Linux snapshot. The diff must touch only these three files; declare them as modifiedFiles. Size: the size-only waiver for this row is filed (approved or pending).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/src/extension.ts"
       ],
-      "startedAt": "2026-11-02T23:10:57.874Z"
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "note": "Before verifying, trimmed to the pending TASK size waiver prop-b13568c2 (<=450 net): comments folded to one line, KEEP/ALLOW constants inlined, test helpers condensed (recordIn), P10's no-pin half dropped (protected-runtime.test.cjs P2 already proves an untrusted declaration never pins). Diff now exactly the 3 files: extension.ts +3/-1, MoeDaemonClient.ts +165/-17, new protected-profile-pin.test.cjs 293 lines => +461/-18, net 443. Fresh run of ONE command: `bash /mnt/d/moe-scratch/98c81a27-verify.sh` (exit 0). It git-archives HEAD b99e31c2 into /tmp/moe-98c8-linux-1793661073-pqTp and /mnt/d/moe-scratch/98c81a27-win-1793661073, overlays exactly the 3 files (cp + cmp ok), then runs both legs in parallel. Linux leg (env -i, node v24.21.0): `npm ci --no-audit --no-fund && npm test && npm run compile && npm run lint` exit 0 -> tests 622, pass 618, fail 0, skipped 4; new suite 30/30. Windows leg (cmd.exe, node v24.16.0, D:\\moe-scratch\\98c81a27-win-1793661073\\moe-vscode): `npm ci --no-audit --no-fund && npm test && npm run compile` exit 0 -> tests 618, pass 613, fail 0, skipped 5 (all 5 pre-existing symlink/NTFS skips); new suite 26/26 (the 4 POSIX-only P6 cases are not registered on Windows: 0644 record, 0755 root, symlinked record, symlinked root). Base without this row = 592 tests on Linux (622 - 30).",
+      "startedAt": "2026-11-02T23:10:57.874Z",
+      "completedAt": "2026-11-02T23:11:58.438Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n(a) Fail closed: no record state other than ABSENT or LEGACY can let a non-verified-local declaration answer 'legacy'. A failing confirmer never downgrades.\n(b) Restart semantics: an allowed downgrade never changes the current session's answer.\n(c) Store safety:\n  - names never come from input;\n  - a link, wrong mode, foreign uid or oversize file is refused;\n  - the temp-plus-rename write is atomic and leaves no temp file on failure;\n  - a root inside the project writes nothing.\n(d) Concurrency: two VS Code windows on one project. Each writes the whole record by atomic rename, so the last writer wins with a valid record, and neither can produce a torn file.\n(e) The strict-map suites pass: no new top-level import (grep the import block).\n(f) Mutation check in a scratch copy of the Linux snapshot:\n  - let UNTRUSTED read as LEGACY: P6 must fail;\n  - persist on 'Keep Protected': P3 must fail;\n  - drop the inside-project guard: P7 must fail;\n  - skip the session pin after allow: P5 must fail.\n  Then confirm the restored copy passes.\n(g) Name in the handoff what task-648a5916 reuses: useProtectedStateRoot, projectStateKey, protectedStateName(kind, key), readProtectedState and writeProtectedState.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/protected-profile-pin.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "note": "Adversarial self-review of `git diff -- moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/extension.ts` + the new test (no code change resulted).\n(a) Fail closed: a non-verified-local declaration answers 'legacy' only from stored 'absent'/'legacy'; every read throw or parse failure is 'untrusted' -> protected + ask. A thrown or rejected prompt, a dismissal, Keep and any other label never write (P3/P4 x5: same inode after settle). An unreadable declaration still returns protected through the existing catch before any store access.\n(b) Restart: the key is pinned before askDowngrade and is never removed, so an allow only writes 'legacy' for the next load (P5).\n(c) Store: names must match /^[0-9a-f]{16}\\.json$/ (both read and write), produced only by protectedStateName. lstat refuses links, kinds, POSIX mode != 0700/0600 and foreign uid. The read opens with O_NOFOLLOW where available and re-checks fstat, capped at 64 KiB. The write uses a 'wx' 0600 temp in the root plus renameSync, and the temp is removed on any failure (S1: a rename onto a directory leaves only the two expected entries). A root inside the project writes nothing (P7).\n(d) Two windows: separate temp names (pid + serial) and atomic rename, so the last writer wins with a whole record. A torn or empty file after a crash reads untrusted, which means protected.\n(e) The import block is unchanged (vscode, fs, path, net, type http, child_process, ws). accounts-wire, plan-approval-client and task-notifier pass in both legs. storedProfile and persistProfile return before protectedStateName when no root is set, so contexts without Buffer never hash.\n(f) Mutations in scratch /tmp/moe-98c8-mut-Injo (the Linux snapshot's src+tests, node_modules linked), each run with `node --test tests/protected-profile-pin.test.cjs`:\n- M1, untrusted read as legacy: 15 fail, all P6;\n- M2, Keep treated as allow: 1 fail, P3/P4 (Keep Protected);\n- M3, inside-project guard dropped: 1 fail, P7;\n- M4, pin deleted on allow: 1 fail, P5.\nThe restored copy (cmp equal to the worktree) passes 30/30.\nTheoretical only, accepted with parity to JetBrains:\n- On Windows, a link swapped in between lstat and open is not refused (no O_NOFOLLOW), and a swap of the root's parent is unchecked on any OS. Both need write access to the user's own globalStorage, and with that access the record could simply be deleted (absent).\n- A root left at the wrong mode or owner (for example a no-metadata mount, or created under sudo) makes every legacy project read untrusted and prompt. JetBrains checks the root first in the same way. The log names the rule.\n- No fsync: a power loss reads untrusted, which fails closed.\n(g) task-648a5916 reuses: useProtectedStateRoot(dir), projectStateKey(base), protectedStateName(kind, key) (16 hex + .json), readProtectedState(name) (undefined, or throws for untrusted) and writeProtectedState(name, text, base) (boolean, never throws). Use kind 'spawn'.",
+      "startedAt": "2026-11-02T23:12:00.757Z",
+      "completedAt": "2026-11-02T23:13:36.862Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-8cf0816c",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -91,7 +106,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:10.352Z",
-  "updatedAt": "2026-11-02T23:10:57.874Z",
+  "updatedAt": "2026-11-02T23:15:56.977Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:15.663Z",
@@ -101,7 +116,7 @@
     "firstClaimAt": "2026-11-02T22:51:29.480Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -114,7 +129,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T22:56:40.370Z",
@@ -167,5 +184,44 @@
   },
   "planApprovedAt": "2026-11-02T22:56:40.409Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T23:00:12.583Z"
+  "workStartedAt": "2026-11-02T23:00:12.583Z",
+  "reviewStartedAt": "2026-11-02T23:14:11.821Z",
+  "verification": {
+    "command": "bash /mnt/d/moe-scratch/98c81a27-verify.sh",
+    "exitCode": 0,
+    "outputTail": "HEAD b99e31c2b8d9d0d8157df183b901cadae47b938d; linux /tmp/moe-98c8-linux-1793661073-pqTp; windows /mnt/d/moe-scratch/98c81a27-win-1793661073; overlay cmp ok\n== linux leg exit 0 (/tmp/moe-98c8-linux-1793661073-pqTp/leg.log)   [npm ci --no-audit --no-fund && npm test && npm run compile && npm run lint]\nℹ tests 622\nℹ pass 618\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\n== windows leg exit 0 (/mnt/d/moe-scratch/98c81a27-win-1793661073/leg.log)   [cmd.exe: npm ci --no-audit --no-fund && npm test && npm run compile]\nℹ tests 618\nℹ pass 613\nℹ fail 0\nℹ cancelled 0\nℹ skipped 5\n> tsc -p ./\nexit=0",
+    "reportedAt": "2026-11-02T23:14:11.821Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/protected-profile-pin.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/src/extension.ts"
+  ],
+  "completionSummary": "VS Code RF02 parity: a confirmed verified-local project stays protected across restarts.\n\nStore (MoeDaemonClient.ts, module level, no new top-level import). This API is reused by task-648a5916 with kind 'spawn':\n- useProtectedStateRoot\n- projectStateKey\n- protectedStateName: FNV-1a 64 of kind:key, 16 hex + .json\n- readProtectedState: undefined when absent. It throws for a link, the wrong kind, POSIX mode != 0700/0600, a foreign uid, more than 64 KiB, or a bad name.\n- writeProtectedState: writes only in a root provably outside the project, as a 'wx' 0600 temp plus rename, and never throws.\nextension.ts calls useProtectedStateRoot(globalStorageUri/protected-state) first in activate().\n\nruntimeProfile:\n- verified-local persists {version:1,project,profile:'protected'};\n- a weaker declaration with a PROTECTED or UNTRUSTED record pins the session and asks once (modal 'Keep Protected' / 'Allow Downgrade', not awaited, safe default);\n- only exactly 'Allow Downgrade' records legacy, effective after a restart;\n- ABSENT or LEGACY records answer legacy with no prompt;\n- with no root, behavior is unchanged.\n\nTests: tests/protected-profile-pin.test.cjs has 30 cases (P1-P10 + S1), RED first (all failed: useProtectedStateRoot missing).\n\nVerification: `bash /mnt/d/moe-scratch/98c81a27-verify.sh` runs a fresh git-archive snapshot of HEAD per leg with the 3 files overlaid and cmp-checked.\n- Linux: npm ci, test, compile and lint all exit 0. 622 tests, 618 pass, 0 fail, 4 skipped.\n- Windows (cmd.exe): npm ci, test and compile all exit 0. 618 tests, 613 pass, 0 fail, 5 pre-existing skips. The 4 POSIX-only P6 cases are not registered there.\n\nMutation check: untrusted-as-legacy, persist-on-Keep, no inside-project guard and unpin-on-allow each fail P6, P3, P7 and P5. The restored copy passes 30/30.\n\nSize: net 443 (+461/-18) across exactly the 3 files, under the 450 cap in the pending TASK waiver prop-b13568c2. Accepted theoretical edges are in the step-5 note.",
+  "commits": [
+    {
+      "sha": "9eca3971f5508cb0b32eabeb97cee847f1e1ff3d",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-02T22:56:40Z",
+      "paths": [
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-02T23:15:56.977Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-8cf0816c@2026-11-02T22:56:40Z",
+    "at": "2026-11-02T23:15:56.977Z"
+  }
 }
