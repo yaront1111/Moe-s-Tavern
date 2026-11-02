@@ -53,8 +53,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -73,7 +73,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:56:23.239Z",
-  "updatedAt": "2026-11-02T23:12:45.393Z",
+  "updatedAt": "2026-11-02T23:21:16.114Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:11.206Z",
@@ -83,7 +83,9 @@
     "firstClaimAt": "2026-11-02T22:31:27.066Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-02T23:20:46.314Z",
+    "wallClockMs": 2959248
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -185,10 +187,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-8cf0816c@2026-11-02T22:42:16Z",
-    "at": "2026-11-02T22:46:18.064Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-02T23:12:32Z",
+    "at": "2026-11-02T23:21:16.114Z"
   },
   "priorBlockedReason": "Descriptor fix is done (codexDescriptor.ts; contract test 24/24 on a snapshot). The full daemon suite on HEAD still fails 1 test unrelated to this task: heartbeatStop.test.ts 'does not re-exec and lose a pending Bash sidecar handle' (wrapper_pin_drop: command not found, exit 127). It fails identically on a pure git archive of 091c7dd0 with no overlay. Filed as task-f6d9c532ace64c8faafad51894a7f233 (BACKLOG, needs promotion). The acceptance criterion 'full suite 0 failures' and the exit-0 verification gate cannot be met until it lands. Snapshot counts with my fix: 227/228 files, 6880 passed, 1 failed, 20 skipped. Steps 2 (re-run once the bug lands) and 3 (self-review and mutation check) remain.",
   "reviewStartedAt": "2026-11-02T22:45:25.282Z",
@@ -199,5 +202,9 @@
     "reportedAt": "2026-11-02T22:45:25.282Z",
     "source": "agent-reported"
   },
-  "completionSummary": "codexDescriptor.ts config.proxyCommand now describes the ps1 codex writer's `command = \"$nodeForToml\"` form (MOE_RUNTIME_PROTECTED node pin, else bare node; args always emitted). Only the powershell, onlyInPowershell[0] and divergenceReason strings changed; wrappers and the contract test are untouched. Contract test 24/24 on a whole-repo snapshot (red 1 failed|23 passed without the fix). Full daemon suite: the planned command exits non-zero ONLY on src/util/heartbeatStop.test.ts (wrapper_pin_drop: command not found), which belongs to 373dc3d4 / task-69c02444 (REVIEW) and fails identically on a pure archive without the fix. Per governor comment-04e7619c, the verification below is the same snapshot with that one file removed: 227 files passed, 6875 passed | 17 skipped, exit 0. Unexcluded run: 227/228 files, 6880 passed | 1 failed | 20 skipped. Mutation checks (original literal, and 'command = ') both fail the contract test as expected."
+  "completionSummary": "codexDescriptor.ts config.proxyCommand now describes the ps1 codex writer's `command = \"$nodeForToml\"` form (MOE_RUNTIME_PROTECTED node pin, else bare node; args always emitted). Only the powershell, onlyInPowershell[0] and divergenceReason strings changed; wrappers and the contract test are untouched. Contract test 24/24 on a whole-repo snapshot (red 1 failed|23 passed without the fix). Full daemon suite: the planned command exits non-zero ONLY on src/util/heartbeatStop.test.ts (wrapper_pin_drop: command not found), which belongs to 373dc3d4 / task-69c02444 (REVIEW) and fails identically on a pure archive without the fix. Per governor comment-04e7619c, the verification below is the same snapshot with that one file removed: 227 files passed, 6875 passed | 17 skipped, exit 0. Unexcluded run: 227/228 files, 6880 passed | 1 failed | 20 skipped. Mutation checks (original literal, and 'command = ') both fail the contract test as expected.",
+  "completedAt": "2026-11-02T23:20:46.314Z",
+  "reviewCompletedAt": "2026-11-02T23:20:46.314Z",
+  "reviewSummary": "Reviewed completion d1e127a1 (+3/-3, one file: codexDescriptor.ts). Only config.proxyCommand's powershell, onlyInPowershell[0], divergenceReason changed; wrappers and contract test untouched (scripts diff empty). Re-anchored: moe-agent.ps1:1228 emits command = \"$nodeForToml\"; moe-agent.sh has 0 nodeForToml hits. Prose covers both $nodeForToml branches; divergenceReason still explains the bash/ps1 split. Verified on a pure `git archive d1e127a1` snapshot outside the checkout (env -i, npm ci there): (1) providerDescriptor.contract.test.ts 24/24. (2) RED proof: parent descriptor in same snapshot = 1 failed|23 passed with the exact `\"command = \\\"node\\\"\" missing ... moe-agent.ps1` line; fix restored = 24/24. (3) heartbeatStop.test.ts fails identically on the pure archive (wrapper_pin_drop exit 127), owned by 373dc3d4/task-69c02444, disclosed exclusion per governor comment-04e7619c. (4) Full suite minus that file: run 1 226/227 files, 6876 passed|2 failed|17 skipped; run 2 225/227, 6874 passed|4 failed. All failures were timeouts under host load avg ~20-24 (index.version.test.ts 5000ms x3, bindHosts.test.ts D-fail 'Timed out'); those two files pass alone (26/26) and don't touch the descriptor. Worker's excluded run: 227 files, 6875 passed|17 skipped, exit 0. parity-check.sh PASS. Residual: heartbeatStop.test.ts stays red until task-69c02444 lands; outside this row's DoD.",
+  "requiredCheckAtDone": null
 }
