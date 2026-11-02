@@ -6297,7 +6297,10 @@ function Assert-MoeQaLandedCommit($Context, [string]$TaskId) {
     return "`n`nReview commit ${sha}: the landed completion of task $TaskId, contained in this checkout's HEAD $head. Its diff is 'git diff $sha^ $sha'; HEAD may be later, so never read 'git diff HEAD~1' or the working tree as this task's change."
 }
 
-# Test-MoeDenyPath plus .claude/skills/** (the wrapper's skill mirror), with no
+# Test-MoeDenyPath plus .claude/skills/** (the wrapper's skill mirror) and the exact
+# .serena/project.yml (WT-06 rewrites W's copy to project_name <name>@<taskId> at every
+# launch: tooling's, never task bytes, even when the project tracks it and git shows
+# ' M'; Test-MoeDenyPath holds .serena/** only while untracked), with no
 # BOARD exception: a task worktree never lands .moe (design §2.2). Twin: denied_wt.
 function Test-MoeDenyPathWorktree([string]$TopPath, [string]$XY, [string]$Rel, [hashtable]$Settings) {
     if (Test-MoeDenyPath $TopPath $XY $Rel $Settings) { return $true }
@@ -6306,7 +6309,7 @@ function Test-MoeDenyPathWorktree([string]$TopPath, [string]$XY, [string]$Rel, [
     $roots = @($r)
     if ($r) { $roots += '' }
     foreach ($dr in $roots) {
-        if ($k -ceq "$dr.claude/skills" -or $k.StartsWith("$dr.claude/skills/")) { return $true }
+        if ($k -ceq "$dr.claude/skills" -or $k.StartsWith("$dr.claude/skills/") -or $k -ceq "$dr.serena/project.yml") { return $true }
     }
     return $false
 }
