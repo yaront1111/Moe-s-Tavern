@@ -11,10 +11,56 @@
     "Only files under packages/moe-proxy/ change: src/index.ts, its tests, and README.md's one-shot section if the exit wording changes."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Create packages/moe-proxy/src/stdout-drain.test.ts with the Write tool (global rule [2]). Do not edit index.test.ts or input-framing.test.ts: DoD 3 needs their EOF grace and drain cases unchanged. First read mem:gotcha-proxy-test-harness (cleanup shape), mem:gotcha-proxy-tests-compile-into-dist-es2022 (npm run build type-checks this file under strict ES2022: no findLast/toSorted) and /mnt/d/moe-scratch/65ab45fe-plan/README.md. That README is the architect's prototype: prototype-harness.mjs drove the HEAD build and the patched build through these same 4 cases, 5 runs each.\n\nWrap everything in describe.skipIf(process.platform === 'win32'), with a comment: Node makes a Windows stdout pipe blocking, so the write itself waits for the reader and no queued tail can be lost. (A reader that never drains then blocks the proxy inside the write, which is out of scope.)\n\nHarness, shaped like index.test.ts:\n- A temp project dir whose .moe/daemon.json {port, pid, startedAt, projectPath} points at new WebSocketServer({ port: 0 }) (await 'listening').\n- Fake daemon: count connections. On each message, after delayMs, send ONE reply JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'x'.repeat(2 * 1024 * 1024) }] } }) and record sentAt and sentBytes = Buffer.byteLength(reply). Record closedAt on that ws's 'close'.\n- Spawn process.execPath on path.join(__dirname, '../dist/index.js') with env { ...process.env, MOE_PROJECT_PATH: testDir }. vitest.config.ts already blanks the seat's MOE_* vars; an inherited MOE_DAEMON_HOST=172.x would send the proxy to the Windows host. Collect stderr as text.\n\nThe reader is the crux. Register the collector AT SPAWN and pause it at once: proxy.stdout.on('data', (c) => chunks.push(c)); proxy.stdout.pause(); const ended = once(proxy.stdout, 'end'). Never attach it later: when a child exits, Node's child_process resumes an unconsumed stdout and discards it (flushStdio), so a late reader makes the RED run hang instead of fail.\n- Reader gate: wait (bounded 10 s) until the fake daemon has seen the proxy close its socket (closedAt set; closeWebSocket() runs just before either exit) AND Date.now() - sentAt >= 300 (DoD 2 asks for at least 200 ms). Then resume() and await 'end', bounded.\n- Every wait is bounded and clears its timer on both paths.\n- afterEach SIGKILLs a still-running child, terminates the server's clients, closes the server, and runs rmSync(testDir, { recursive: true, force: true, maxRetries: 5 }).\n\nCases. Assert numbers before parsing, and never diff the 2 MB string, so the RED output quotes cleanly:\n(1) drainTick exit: wait for a connection, write one tools/call line (moe.list_tasks, id 1) and end stdin at once. The daemon replies after 100 ms, so the id is still pending at EOF. After the gate: exactly one '\\n'-terminated line; expect(Buffer.byteLength(line)).toBe(sentBytes); JSON.parse(line) has id 1 and result.content[0].text.length 2 * 1024 * 1024; exit code 0.\n(2) gracefulShutdown immediate exit: write the request but keep stdin open; the daemon replies at once. Wait until proxy.stdout.readableLength > 0: the reply is written and its id forgotten, so nothing is pending. Then end stdin. Same gate and assertions as (1).\n(3) Never-drain guard: as (1), but never resume. Await exit (bounded 10 s): code 1, exitAt - sentAt >= 1800 and < 5000 (DoD 3's 5 s bound), and stderr matches /stdout did not drain within 2000ms/.\n(4) EPIPE: as (1) up to the gate, then proxy.stdout.destroy() instead of reading. Expect exit code 1 within 1000 ms of the destroy, well inside the 2 s guard, which proves it is the EPIPE path, and stderr matching /stdout write failed: .*EPIPE/.\n\nRED run (DoD 2), with index.ts still unchanged. Run it in a snapshot only (mem:gotcha-proxy-npm-test-shared-checkout-deletes-dist), from WSL bash:\nR=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$R/packages/moe-proxy/src/stdout-drain.test.ts\" \"$S/packages/moe-proxy/src/\" && cd \"$S/packages/moe-proxy\" && npm ci && npm run build && npx vitest run src/stdout-drain.test.ts\nExpected: all 4 cases fail on Linux. (1) and (2) fail on byte counts: the prototype saw 146,176 or 182,720 bytes against 2,097,225. (3) and (4) fail with exit code 0 where 1 is expected. If a case passes, the test is wrong: fix the test, never the thresholds. Keep the failure lines for the complete_task summary. Error handling: if vitest stops with 'Cannot find native binding', see mem:gotcha-gate-snapshot-psparse-and-proxy-rolldown.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-proxy/src/stdout-drain.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX. Edit packages/moe-proxy/src/index.ts only, with the Edit tool. Validated reference: /mnt/d/moe-scratch/65ab45fe-plan/index.ts.diff (+31/-2). It passed all 4 new cases 5/5, and HEAD's 8 files / 331 tests.\n\nNext to safeStdoutWrite, add const STDOUT_DRAIN_GUARD_MS = 2000 and function exitAfterStdoutDrain(): void. The function:\n- first arms setTimeout(() => { writeLog(`stdout did not drain within ${STDOUT_DRAIN_GUARD_MS}ms, exiting`); process.exit(1); }, STDOUT_DRAIN_GUARD_MS).unref();\n- then calls process.stdout.write('', (err) => { if (err) writeLog(`stdout write failed: ${err.message}`); process.exit(err ? 1 : 0); }) inside a try/catch. The catch logs and exits 1, the same error handling as safeStdoutWrite.\n\nGive it a doc comment that says why:\n- A piped stdout is asynchronous on POSIX: libuv queues what the ~64 KiB pipe cannot take, and process.exit() drops that queue.\n- An empty write's callback runs only after every earlier write has flushed.\n- On EPIPE, that callback receives the error before the 'error' event fires, so it must exit 1 itself: never () => process.exit(0).\n- The guard exits 1 because the reply may be incomplete, and moe_rpc treats a non-zero exit as failure.\n- Windows pipes are synchronous.\n\nReplace exactly the two success exits:\n- gracefulShutdown's nothing-pending branch: closeWebSocket(); process.exit(0); return;\n- drainTick's tail: closeWebSocket(); process.exit(0);\nKeep closeWebSocket() first in both, so the daemon still gets its close frame at once (index.test.ts 'sends clean close frame to daemon on graceful shutdown').\n\nLeave these as they are:\n- safeStdoutWrite's EPIPE exit(1);\n- main()'s stdout 'error' handler;\n- expireDeadline: MOE_PROXY_ONESHOT_DEADLINE_MS still exits 1 at its deadline, even mid-flush;\n- every other exit(1);\n- connect() and the stdin reader (mem:gotcha-proxy-stdin-before-async-connect).\n\nThe helper runs at most once: gracefulShutdown returns early on shuttingDown, and drainTick clears its interval before calling it. So add no extra flag. Update gracefulShutdown's doc comment ('then exit 0') to say it exits 0 once stdout has drained. Re-run step 1's snapshot command with index.ts also copied in: all 4 cases must pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DOCS. Edit packages/moe-proxy/README.md only, in its '## One-shot calls' section. DoD 5 allows this edit because the exit wording changes.\n\nAfter the paragraph that ends 'cap any drain at 2 seconds.', add one paragraph of 2-3 sentences:\n- The proxy exits 0 only after its stdout has drained, so a reader that starts late still gets all of a reply bigger than the OS pipe buffer (about 64 KiB on Linux).\n- A reader that stops reading gets 2 seconds; then the proxy exits 1, because the reply may be incomplete.\n- A reader that closes the pipe (EPIPE) gets exit 1, as before.\n\nTouch nothing else. The deadline paragraph stays true as written.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/README.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY: the DoD gate, run once, in a fresh git-archive snapshot of HEAD with only this task's 3 files copied in. Never run npm ci, build or test in the shared checkout (GLOBAL rule [0]: every seat launches packages/moe-proxy/dist). Run it from the worktree root in WSL bash, never in Git Bash on Windows, because the new cases skip on win32:\nR=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in src/index.ts src/stdout-drain.test.ts README.md; do cp \"$R/packages/moe-proxy/$f\" \"$S/packages/moe-proxy/$f\"; done && cd \"$S/packages/moe-daemon\" && npm ci && cd ../moe-proxy && npm ci && npm run build && npx vitest run\n\nExpected: exit 0, with 9 files and 335 tests: the prototype's 8 files / 331 tests at HEAD, plus the 4 new cases. None of the 4 new cases may be skipped on Linux.\n- Archive the whole HEAD: workerType.integration.test.ts needs the daemon's npm ci, and buildScriptOrder.test.ts reads packages/moe-claude-plugin/package.json.\n- DoD 5: git -C \"$R\" status --porcelain lists only those 3 files outside .moe/.\n\nSubmit complete_task verification as { command: that exact line, exitCode: 0, outputTail: the vitest summary }, together with the step-1 RED failure quote.\n\nError handling for a red run:\n- A failure in a file this task did not touch: follow mem:gotcha-snapshot-gate-peer-wip-checkpoint (rm only that peer file from the snapshot, submit that exact command, and disclose both runs).\n- A failure in stdout-drain.test.ts, index.test.ts or input-framing.test.ts is this task's to fix.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/stdout-drain.test.ts",
+        "packages/moe-proxy/README.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff of the 3 files as an attacker. Check:\n- Twice or concurrently: the two exits are mutually exclusive and each runs at most once. If the guard and the callback both fire, the first exit wins.\n- An EPIPE during the wait exits 1, never 0.\n- A SIGTERM/SIGINT during the wait: gracefulShutdown returns early (shuttingDown), and the 2 s guard bounds it.\n- MOE_PROXY_ONESHOT_DEADLINE_MS during the wait: expireDeadline is unchanged, and it still exits 1.\n- Small replies gain no delay: the callback runs on the next tick, so 'exits immediately when no pending requests' (<500 ms) stays green.\n- Nothing new writes to stdout during the wait. stdin is at EOF, the timeout checker and drain timer are stopped, and the daemon sends no unsolicited /mcp notifications (server/WebSocketServer.ts, McpAdapter.ts).\n- Windows: pipes are synchronous, so behavior there is unchanged.\n- Tests: every wait is bounded, nothing leaks a child or server on failure, failure output never prints the 2 MB string, and only win32 skips.\n- The forbidden-pattern rails, and ES2022 APIs only.\n- Scope is exactly 3 files, about +230 net LOC, under the 400 cap.\n\nFix what you find, re-run step 4's exact command if any code changed, then call complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/stdout-drain.test.ts",
+        "packages/moe-proxy/README.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -26,16 +72,92 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:01.587Z",
-  "updatedAt": "2026-11-02T21:14:53.554Z",
+  "updatedAt": "2026-11-02T21:35:15.476Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:19.438Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-02T21:14:41.584Z"
+    "firstClaimAt": "2026-11-02T21:14:41.584Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T21:35:15.439Z",
+  "executionContract": {
+    "intendedBehavior": "On stdin EOF, moe-proxy's two success exits wait until stdout has drained to the OS before exiting 0: gracefulShutdown when nothing is pending, and drainTick after the last reply. A one-shot reply bigger than the ~64 KiB pipe buffer then arrives complete on POSIX even when the reader starts late. An EPIPE during the wait exits 1. A reader that never drains is cut off 2 s later with exit 1. JSON-RPC output bytes are unchanged; only exit timing changes.",
+    "acceptanceCriteria": [
+      "The new stdout-drain.test.ts cases (1) drainTick exit and (2) gracefulShutdown immediate exit each deliver one line whose byte length equals the fake daemon's 2 MB reply, which parses as JSON, with exit 0.",
+      "Case (3): a never-read stdout makes the proxy exit 1, at least 1.8 s and less than 5 s after the reply, logging 'stdout did not drain within 2000ms'.",
+      "Case (4): destroying the reader mid-wait gives exit 1 within 1 s, logging 'stdout write failed: ... EPIPE'.",
+      "Against unchanged index.ts, all 4 new cases fail on Linux, and the completion summary quotes that failure.",
+      "index.test.ts and input-framing.test.ts pass unedited."
+    ],
+    "invariants": [
+      "safeStdoutWrite, main()'s stdout 'error' handler, expireDeadline and every process.exit(1) path are unchanged.",
+      "closeWebSocket() still runs before the exit wait.",
+      "index.test.ts, input-framing.test.ts and vitest.config.ts are not edited.",
+      "No npm ci/build/test runs in the shared checkout; tracked files are written only with Edit/Write."
+    ],
+    "compatibility": [
+      "No MCP/JSON-RPC wire change: every byte forwarded to stdout is unchanged.",
+      "Windows stdout pipes are synchronous (Node sets them blocking), so the ps1 path behaves exactly as before.",
+      "The interactive CLI sessions take the same exit path; a CLI that stopped reading costs at most 2 s."
+    ],
+    "approvedScope": [
+      "packages/moe-proxy/src/index.ts: new const STDOUT_DRAIN_GUARD_MS and function exitAfterStdoutDrain(); gracefulShutdown's nothing-pending branch and drainTick's tail call it instead of process.exit(0).",
+      "packages/moe-proxy/src/stdout-drain.test.ts (new, POSIX-only describe).",
+      "packages/moe-proxy/README.md '## One-shot calls': one added paragraph."
+    ],
+    "reuse": [
+      "Node's own Writable callback ordering (an empty write's callback runs after earlier writes flush); no new dependency or internal API.",
+      "CQ-C00 (35cf53c8) fixed moe-call.sh's parser with process.exitCode and a natural exit. That does not work here: ws's 30 s close timer and the deadline timer keep the loop alive."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-proxy/src/index.ts gracefulShutdown: closeWebSocket(); process.exit(0) when pendingRequestIds and pendingMessages are empty (HEAD 96c4ee19 lines 368-371).",
+      "packages/moe-proxy/src/index.ts drainTick: clearInterval(drainTimer); closeWebSocket(); process.exit(0) (lines 415-419).",
+      "packages/moe-proxy/src/index.ts safeStdoutWrite (186-199) is a bare process.stdout.write with no callback; the ws 'message' handler writes replies through it (570).",
+      "scripts/moe-agent.sh moe_rpc: raw=$(echo \"$rpc\" | node proxy) || return 1, so a non-zero proxy exit already fails the RPC.",
+      "The daemon sends no unsolicited notifications on /mcp (packages/moe-daemon/src/server/WebSocketServer.ts, McpAdapter.ts)."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in src/index.ts src/stdout-drain.test.ts README.md; do cp \"$R/packages/moe-proxy/$f\" \"$S/packages/moe-proxy/$f\"; done && cd \"$S/packages/moe-daemon\" && npm ci && cd ../moe-proxy && npm ci && npm run build && npx vitest run"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) process.exitCode and a natural exit, as CQ-C00 did in moe-call.sh: rejected. ws's 30 s close-handshake timer and an armed MOE_PROXY_ONESHOT_DEADLINE_MS timer hold the loop open. (b) Waiting on 'drain' and polling writableLength: more code, same effect. (c) Making stdout blocking via _handle.setBlocking: rejected. It is an internal API, blocks the event loop, and hangs forever on a reader that never drains. (d) Guard exit 0: rejected. The reply may be incomplete, and exit 1 makes moe_rpc fail honestly instead of on a JSON parse error. Chosen: an empty process.stdout.write callback plus an unref'd 2 s guard, the decided direction.",
+    "codebaseInsights": "Measured by the architect on Linux WSL2, node v24.21.0, artifacts in /mnt/d/moe-scratch/65ab45fe-plan:\n- A plain exit after a 2 MB write delivers 65,536 bytes to a reader that sleeps 300 ms. Through the real proxy with a paused child_process reader it delivers 146,176 or 182,720 bytes, deterministically, both exit paths, 5/5 runs.\n- The patched build delivers 2,097,225 of 2,097,225 bytes, 5/5. Never-drain exits 1 at 2,053-2,055 ms. EPIPE exits 1 7-11 ms after the reader closes.\n- Test pitfall: Node's child_process flushStdio resumes and discards an unconsumed child stdout when the child exits, so a reader that attaches late sees no 'end'. Register the collector at spawn and pause() it.\n- Prototype gotcha: an inherited MOE_DAEMON_HOST=172.x sends a spawned proxy to the Windows host. vitest.config.ts already blanks it.\n- The full proxy suite needs packages/moe-daemon npm ci (workerType.integration.test.ts) and packages/moe-claude-plugin/package.json (buildScriptOrder.test.ts), hence a whole-HEAD archive.\n- No proxy or daemon-server change between claim HEAD 3e092cff and 96c4ee19.",
+    "risks": "- A deadline that expires during the <=2 s flush wait still exits 1 at once, leaving expireDeadline unchanged and truncating the tail. That is the documented whole-process bound.\n- A signal during the wait is bounded by the guard.\n- macOS pipes start at 16 KiB but are async, like Linux.\n- Windows is skipped on purpose; CI runs the proxy suite on ubuntu only.\n- Timing margins are wide (gate at 300 ms vs a 2 s guard; never-drain exits at about 2.05 s vs a 5 s bound), but vitest runs files in parallel on a busy shared host: keep the thresholds, and fix flaky waits rather than loosening the asserts.\n- Fleet impact needs the governor to stage and swap a rebuilt packages/moe-proxy/dist. A landed src fix alone changes nothing live.",
+    "keyFiles": [
+      "packages/moe-proxy/src/index.ts",
+      "packages/moe-proxy/src/index.test.ts",
+      "packages/moe-proxy/src/input-framing.test.ts",
+      "packages/moe-proxy/vitest.config.ts",
+      "packages/moe-proxy/README.md",
+      "scripts/moe-agent.sh",
+      "/mnt/d/moe-scratch/65ab45fe-plan/README.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "96c4ee1962fb64f5939668b1e60e69eec202ee50",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T21:35:15.476Z",
+  "approvedPlanRevision": 1
 }

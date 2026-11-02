@@ -10,9 +10,55 @@
     "No daemon or VS Code file changes. MoeBundle.properties changes only if the dialog wording changes, and then only its archiveDone keys."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Create two new files with the Write tool (global rule [2]). Match BoardApproval.kt's LF line endings.\n\n(a) moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt: `object DoneColumnClear { fun archiveCount(allTasks: List<Task>, selectedEpicId: String?, visibleDone: List<Task>): Int? }` (import com.moe.model.Task; no Swing, no Project). For now its body is TODAY's shipped rule, so the RED run measures shipped behavior: `visibleDone.size.takeIf { it > 0 }`. That is the panel's `columnTasks.size`, plus TaskColumn's empty-column hiding. Step 2 replaces the body.\n\n(b) moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DoneColumnClearTest.kt: JUnit 4, shaped like BoardApprovalTest. A task(id, epicId, status) helper fills Task's required fields (id, epicId, title, description, status, order, definitionOfDone, implementationPlan, prLink, reopenReason, assignedWorkerId).\nFixture:\n- epic-1: d1, d2, d3 DONE, plus one each of WORKING, AWAITING_APPROVAL and BLOCKED;\n- epic-2: d4, d5 DONE, plus one REVIEW and one ARCHIVED.\nOnly status DONE counts, exactly as the daemon's ARCHIVE_DONE_TASKS does.\nTests:\n1. `no search quotes the visible Done column`: visible = every DONE task in scope gives 3 for epic-1 and 5 for null (All epics).\n2. `a search subset with an epic selected quotes every DONE task in that epic`: epic-1 with visible [d2] gives 3.\n3. `a search subset with All epics quotes every DONE task on the board`: null with visible [d1, d4] gives 5.\n4. `an empty Done column offers no clear`: visible [] gives null, for epic-1 and for null, although the search hides DONE tasks.\n5. A source guard (mem:gotcha-jetbrains-dialog-order-untestable). Read src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt, trying File(relative) and then File(\"moe-jetbrains/$relative\"); throw IllegalStateException when neither is a file. Slice it with substringAfter(\"onClearColumn = if (isDone)\").substringBefore(\"onNext =\") and check the slice is not blank. Assert the slice contains \"DoneColumnClear.archiveCount(\" and does not contain \"columnTasks.size\". Also assert the positive half, so deleting the dialog cannot pass: it still contains \"moe.message.archiveDone\" and \"service.archiveDoneTasks(\".\n\nRED run (DoD 2), under the lease (mem:convention-jetbrains-gradle-lease):\n- Call moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId, note: \"DoneColumnClearTest RED\" }. If it is queued, report_blocked with that resourceId; the grant unblocks the row.\n- From the worktree in WSL bash (mem:gotcha-jetbrains-gradle-from-wsl):\nW=$(wslpath -w \"$(git rev-parse --show-toplevel)\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.DoneColumnClearTest --rerun\"\n- Release the lease right after, whatever the result.\nExpected: exit 1. Tests 2, 3 and 5 fail (expected:<3> but was:<1>, expected:<5> but was:<2>, and the guard); 1 and 4 pass. Any other split means a test is wrong. Save the failure lines for the complete_task summary.\nerror handling: 'Could not receive a message from the daemon' is the gradlew client OOM (mem:gotcha-jetbrains-gradle-client-oom), not a test result. Re-run it.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DoneColumnClearTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX. Edit two files with the Edit tool.\n\n(a) DoneColumnClear.kt. Replace the body with: `if (visibleDone.isEmpty()) return null; return allTasks.count { it.status == \"DONE\" && (selectedEpicId.isNullOrEmpty() || it.epicId == selectedEpicId) }`. The doc comment says why:\n- ARCHIVE_DONE_TASKS (packages/moe-daemon/src/server/WebSocketServer.ts: `t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter)`) archives every DONE task in the epic, or on the whole board, and never sees the board search.\n- So the confirmation counts from the full task list, not from the search-filtered column.\n- An empty visible column offers no ✕ (TaskColumn.kt hides it too).\n\n(b) MoeToolWindowPanel.kt: the Done column's onClearColumn block only (about :654-666).\n- Read selectedEpicId once into a local `epicId`, and use it for both the count and service.archiveDoneTasks(epicId).\n- Compute the count at CLICK time: `DoneColumnClear.archiveCount(lastState?.tasks ?: allTasks, epicId, columnTasks)`. updateColumn skips rebuilding the Done column while its own cards' fingerprint is unchanged, so a count captured at render time goes stale when a task the search hides reaches DONE.\n- Show no dialog when the count is null.\n- Keep the message keys (moe.message.archiveDone, archiveDoneTitle) and their arguments.\n\nDoD 4: no MoeBundle.properties, daemon or VS Code change. With no search the count equals the visible column, exactly as before. Re-run step 1's focused command under the lease, then release it. All 5 tests pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY: run the DoD 3 gate once, under the jetbrains-gradle lease: acquire, run, then release whatever the result. In worktree mode it runs in this task's worktree, never the control checkout. From WSL bash:\nW=$(wslpath -w \"$(git rev-parse --show-toplevel)\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n\nA PowerShell seat runs the same gate from <W>\\moe-jetbrains with $env:GRADLE_OPTS='-Xmx512m' and .\\gradlew.bat test --rerun (mem:gotcha-jetbrains-gradle-gate-from-powershell). Report the spelling you actually ran, labeled Windows (DoD 3).\n\nExpected: exit 0. Confirm that tests really ran:\ngrep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/TEST-*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print t, s, f, e}'\nExpect failures 0 and errors 0, and TEST-com.moe.toolwindow.DoneColumnClearTest.xml with 5 tests (mem:gotcha-gradle-jetbrains-shared-box). DoD 4: git status --porcelain lists only the 3 files outside .moe/.\n\nSubmit complete_task verification as { command: the exact line you ran, exitCode: 0, outputTail: the BUILD SUCCESSFUL tail plus the XML sums }, together with the step-1 RED quote.\n\nerror handling:\n- A red exit with no failing test XML is usually the Gradle IPC flake. Check the daemon log (mem:gotcha-gradle-jetbrains-shared-box), then re-run.\n- A failure in a test class this task did not touch: tie it to a peer with `git log -- <file>`, disclose it, and never edit the peer's file.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DoneColumnClearTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your diff of the 3 files as an attacker. Check:\n- The count equals what the daemon archives in every scope: an epic, All epics (null), and a blank epicId (the daemon's `!epicFilter`).\n- Only DONE counts. AWAITING_APPROVAL, BLOCKED, REVIEW and ARCHIVED never do.\n- With no search, the count and ✕ visibility are exactly as before.\n- The count is computed at click time, and the archive sends the same local epicId the count used.\n- A null count shows no dialog.\n- The guard test throws when the source file is missing and asserts the positive half.\n- Message keys and arguments are unchanged. No MoeBundle, daemon or VS Code file changed.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 3's command under the lease if any code changed, then call complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DoneColumnClearTest.kt"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,10 +71,84 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:12.436Z",
-  "updatedAt": "2026-11-02T21:14:21.040Z",
+  "updatedAt": "2026-11-02T21:41:11.158Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:21.040Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T21:35:54.368Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T21:41:11.119Z",
+  "executionContract": {
+    "intendedBehavior": "The JetBrains Done column's Clear (✕) confirmation quotes exactly the number of tasks ARCHIVE_DONE_TASKS will archive: every DONE task in the selected epic, or on the whole board for All epics, ignoring the board search, which only hides cards. Without a search, nothing changes. An empty visible Done column still offers no ✕.",
+    "acceptanceCriteria": [
+      "DoneColumnClearTest has 5 JUnit 4 tests: no search; a search subset with an epic selected; a search subset with All epics; an empty Done column (null); and a source guard that MoeToolWindowPanel's Done onClearColumn calls DoneColumnClear.archiveCount and no longer uses columnTasks.size.",
+      "RED: against the shipped rule (visibleDone.size), tests 2, 3 and 5 fail and the completion summary quotes them.",
+      "The full `gradlew.bat test --rerun` in the task worktree exits 0 with 0 failures and 0 errors in TEST-*.xml, labeled Windows."
+    ],
+    "invariants": [
+      "The ARCHIVE_DONE_TASKS payload (epicId only), MoeCommandSender, TaskColumn, the daemon and VS Code are unchanged.",
+      "The MoeBundle archiveDone keys and their arguments are unchanged.",
+      "Gradle runs only under the jetbrains-gradle lease, released after each run."
+    ],
+    "compatibility": [
+      "No wire or state change. The confirmation's count changes only while a search hides some DONE cards."
+    ],
+    "approvedScope": [
+      "New object com.moe.toolwindow.DoneColumnClear with fun archiveCount(allTasks: List<Task>, selectedEpicId: String?, visibleDone: List<Task>): Int?",
+      "MoeToolWindowPanel.kt: only the Done column's onClearColumn lambda.",
+      "New test class com.moe.toolwindow.DoneColumnClearTest."
+    ],
+    "reuse": [
+      "BoardApproval.kt and BoardApprovalTest.kt are the pure-helper and headless-test precedent; the source-guard shape comes from mem:gotcha-jetbrains-dialog-order-untestable."
+    ],
+    "sourceAssumptions": [
+      "MoeToolWindowPanel.kt builds `tasks` from epic filter + searchQuery (about :488-500); updateColumn's columnTasks comes from it (about :717); the Done onClearColumn quotes columnTasks.size and calls service.archiveDoneTasks(selectedEpicId) (about :654-666); `lastState` (about :58) holds the newest MoeState.",
+      "TaskColumn.kt:131 shows ✕ only when onClearColumn != null && tasks.isNotEmpty().",
+      "packages/moe-daemon/src/server/WebSocketServer.ts ARCHIVE_DONE_TASKS (about :907-926) archives t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter).",
+      "MoeCommandSender.archiveDoneTasks (about :196-203) sends epicId only when non-null."
+    ],
+    "checkRefs": [
+      "W=$(wslpath -w \"$(git rev-parse --show-toplevel)\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Option A, hiding ✕ while a search is active, was rejected. It removes a working feature during search, and it makes the DoD's epic and All-epics subset cases indistinguishable. Option B, chosen: keep ✕ and quote the true archive count (DONE in scope, ignoring the search). It needs no wording change, so MoeBundle stays untouched (DoD 4). A new 'the search hides N' message was also rejected: it is extra bundle keys for a count the dialog already states honestly. Passing the search query into the helper was rejected too, because it would duplicate the panel's title/description match.",
+    "codebaseInsights": "- The Done column shows displayStatus == DONE, i.e. status DONE exactly (AWAITING_APPROVAL maps to Planning, BLOCKED to Working, and ARCHIVED is never shown), so without a search the visible count equals the daemon's count.\n- The column is rebuilt only when its own fingerprint changes, so the onClearColumn lambda can hold a stale render-time capture; compute the count at click time from lastState.\n- VS Code's moe.archiveDoneTasks asks for the epic via QuickPick and shows no count, so the bug is JetBrains-only.\n- Worker worktrees are D:\\projexts\\moes\\.worktrees\\<taskId>, sparse /* !/.moe/ (all of moe-jetbrains present), so cmd.exe gradle runs there.\n- Kotlin files now use LF (BoardApproval.kt, MoeToolWindowPanel.kt).",
+    "risks": "- The client state can lag the daemon, which the dialog cannot fix. Click time is the freshest point the panel has.\n- The first gradle run in a fresh worktree compiles from scratch (slower). Hold the lease only around each run.\n- `arrayOf(stringValue, intValue)` is a compile error here; write arrayOf<Any>(...) (mem:gotcha-jetbrains-gate-snapshot).\n- The source guard depends on the literal 'onClearColumn = if (isDone)' and 'onNext =' anchors. Keep them, or update the guard in the same diff.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardApproval.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardApprovalTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "96c4ee1962fb64f5939668b1e60e69eec202ee50",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T21:41:11.158Z",
+  "approvedPlanRevision": 1
 }
