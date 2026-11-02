@@ -6830,7 +6830,7 @@ control_alert() {
 # force or clean: a refusal is an alert, nothing moves, and the caller goes on.
 # Twin: Invoke-MoeControlFollow.
 follow_control_checkout() {
-    local target="${CS_CONSOLIDATION_BRANCH:-main}" head old tip mc sw hooks err new rc=0
+    local target="${CS_CONSOLIDATION_BRANCH:-main}" head old tip mc sw hooks err new attempt rc=0
     case "$target" in *'?'*|*'['*) target=main ;; esac
     [ -n "${MOE_TOP:-}" ] || git_top || return 0
     head=$(git -C "$MOE_TOP" symbolic-ref -q HEAD 2>/dev/null) || head=""
@@ -6864,13 +6864,18 @@ follow_control_checkout() {
         control_alert MOE_CONTROL_CHECKOUT_BEHIND "$old..$tip changes daemon-owned ${MOE_REL}.moe paths (or the diff failed); moe/control stays at $old"; return 0
     fi
     # The checked tip, not the ref: a target that moved since carries unchecked .moe paths.
-    err=$(git -C "$MOE_TOP" -c core.hooksPath="$hooks" merge -q --ff-only --no-autostash "$tip" 2>&1 >/dev/null) || rc=$?
-    new=$(git -C "$MOE_TOP" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || new=""
-    if [ "$rc" -ne 0 ]; then
+    # A held .git/index.lock (the IDE's git, a peer's landing or follow) is retried like
+    # index_refresh: at most 5 tries, 2 s apart. Any other failure is final. Never delete the lock.
+    for attempt in 1 2 3 4 5; do
+        rc=0
+        err=$(git -C "$MOE_TOP" -c core.hooksPath="$hooks" merge -q --ff-only --no-autostash "$tip" 2>&1 >/dev/null) || rc=$?
+        new=$(git -C "$MOE_TOP" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || new=""
+        [ "$rc" -ne 0 ] || break
         # A peer's follow that held the index lock may already have moved HEAD to the tip.
         [ -n "$new" ] && git -C "$MOE_TOP" merge-base --is-ancestor "$tip" "$new" 2>/dev/null && return 0
+        if [ "$attempt" -lt 5 ] && [[ "$err" == *index.lock* ]]; then sleep 2; continue; fi
         control_alert MOE_CONTROL_CHECKOUT_BEHIND "moe/control stays at $old, behind $target at $tip: ${err:0:1500}"; return 0
-    fi
+    done
     [ "$new" = "$old" ] || echo -e "${GREEN}[OK]${NC} MOE_CONTROL_ADVANCED $old..$new"
 }
 

@@ -6235,12 +6235,17 @@ function Invoke-MoeControlFollow([switch]$Switch) {
             Send-MoeControlAlert 'MOE_CONTROL_CHECKOUT_BEHIND' "$old..$tip changes daemon-owned $($git.Rel).moe paths (or the diff failed); moe/control stays at $old" $git; return
         }
         # The checked tip, not the ref: a target that moved since carries unchecked .moe paths.
-        $m = Invoke-MoeGit -Top $top -GitArgs @('-c', "core.hooksPath=$hooks", 'merge', '-q', '--ff-only', '--no-autostash', $tip) -MergeStderr
-        $new = & $one (Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD^{commit}'))
-        if ($m.Rc -ne 0) {
+        # A held .git/index.lock (the IDE's git, a peer's landing or follow) is retried like
+        # Update-MoeSharedIndex: at most 5 tries, 2 s apart. Any other failure is final. Never delete the lock.
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            $m = Invoke-MoeGit -Top $top -GitArgs @('-c', "core.hooksPath=$hooks", 'merge', '-q', '--ff-only', '--no-autostash', $tip) -MergeStderr
+            $new = & $one (Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD^{commit}'))
+            if ($m.Rc -eq 0) { break }
             # A peer's follow that held the index lock may already have moved HEAD to the tip.
             if ($new -and (Invoke-MoeGit -Top $top -GitArgs @('merge-base', '--is-ancestor', $tip, $new)).Rc -eq 0) { return }
-            $err = $m.Out -join "`n"; if ($err.Length -gt 1500) { $err = $err.Substring(0, 1500) }
+            $err = $m.Out -join "`n"
+            if ($attempt -lt 5 -and $err -like '*index.lock*') { Start-Sleep -Seconds 2; continue }
+            if ($err.Length -gt 1500) { $err = $err.Substring(0, 1500) }
             Send-MoeControlAlert 'MOE_CONTROL_CHECKOUT_BEHIND' "moe/control stays at $old, behind $target at ${tip}: $err" $git; return
         }
         if ($new -cne $old) { Write-Host "[OK] MOE_CONTROL_ADVANCED $old..$new" -ForegroundColor Green }

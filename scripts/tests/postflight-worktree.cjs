@@ -1424,6 +1424,46 @@ async function wtFollowRace(){
   assert.deepEqual([revOf(p.top,'HEAD'),present(path.join(p.top,'.moe','landed.json')),mainOf(p)],[tip,false,later],
     'the control HEAD went past the checked tip'+tail(r.log));
 }
+// Real git (no PATH stub): count follow merges and release the lock relative to its first try.
+async function wtFollowLock(){
+  const merges=f=>(readOr(f)||'').split('\n').filter(l=>/trace: built-in: git merge .*--no-autostash/.test(l)).length;
+  const behinds=r=>(r.log.match(/^\[WARN\] MOE_CONTROL_CHECKOUT_BEHIND: /gm)||[]).length;
+  const lockOf=p=>path.join(git(p.top,'rev-parse','--absolute-git-dir').trim(),'index.lock');
+  for(const name of ['released','held','other']){
+    const p=repo('wt-follow-lock-'+name),old=mainOf(p),edit=path.join(p.top,'src','a.txt');
+    if(name==='other')write(edit,'human edit\n');
+    const tip=commitOn(p,'refs/heads/main',name==='other'?{'src/a.txt':'landed\n'}:{'src/b.txt':'b\n'});
+    const lock=lockOf(p),trace=path.join(root,'wt-follow-lock-'+name+'.trace');
+    if(name!=='other')write(lock,'');
+    let started=0,removed=false,gone=false;
+    const signal=()=>{
+      if(!started&&merges(trace)>=1)started=Date.now();
+      if(name==='released'&&started&&!removed&&Date.now()-started>=3000){
+        gone=!present(lock);fs.rmSync(lock,{force:true});removed=true;
+      }
+      return false;
+    };
+    try{
+      const r=await launch(p,'wt-follow-lock-'+name,{GIT_TRACE:trace},{signal});
+      const why=s=>name+': '+s+tail(r.log);
+      if(name==='released'){
+        assert.deepEqual([...new Set(r.log.match(/MOE_CONTROL_[A-Z_]+/g)||[])],['MOE_CONTROL_ADVANCED'],why('the MOE_CONTROL_ codes'));
+        assert.deepEqual(r.log.match(/^\[OK\] MOE_CONTROL_ADVANCED .*$/gm),[`[OK] MOE_CONTROL_ADVANCED ${old}..${tip}`],why('no single ADVANCED old..tip line'));
+        assert.ok(removed&&!gone,why('the lock was not released, or the wrapper deleted index.lock'));
+        assert.ok(merges(trace)>=2,why('no merge retry'));
+        assert.deepEqual([probe(p.top,'symbolic-ref','-q','HEAD').trim(),revOf(p.top,'HEAD'),mainOf(p)],['0:'+MC,tip,tip],why('HEAD, its commit, or main'));
+      }else{
+        assert.ok(behinds(r)>=1,why('no BEHIND warning'));
+        assert.equal(merges(trace),(name==='held'?5:1)*behinds(r),why('wrong merge tries per follow'));
+        assert.ok(!r.log.includes('MOE_CONTROL_ADVANCED'),why('unexpected ADVANCED line'));
+        assert.equal(revOf(p.top,'HEAD'),old,why('HEAD moved'));
+        if(name==='held')assert.ok(present(lock),why('the wrapper deleted index.lock'));
+        else assert.equal(read(edit),'human edit\n',why('the local edit was lost'));
+      }
+      assert.ok(r.code===0&&r.cliRan,why(`exit ${r.code}; the CLI ran: ${r.cliRan}`));
+    }finally{if(name!=='other')fs.rmSync(lock,{force:true});}
+  }
+}
 // WT-13 §6.4: a QA claim in the control checkout launches only once the task's recorded completion C
 // (get_context task.landing.lastCompletion, never its checkpoint) is in the control HEAD after the follow;
 // otherwise MOE_CONTROL_CHECKOUT_BEHIND, one report_blocked and no CLI. The prompt names C's own diff, since
@@ -1486,6 +1526,7 @@ Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link
   'wt-contention':wtContention,'lease-units':leaseUnits,'lease-retry':leaseRetry,'wt-gate':wtGate,'wt-lease-fails':wtLeaseFails,'wt-lease-signal':wtLeaseSignal,
   'wt-unlanded':wtUnlanded,'wt-resume':wtResume,'marker-scan':markerScan,'wt-teardown':wtTeardown,'wt-crash':wtCrash,
   'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,codes});
+cases['wt-follow-lock']=wtFollowLock;
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{
   let ok=0,failed=0;
