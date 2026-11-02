@@ -39,7 +39,7 @@ const SEGMENTS = {
   },
   ps1: {
     helper: () => optional(ps, '\nfunction Read-MoeDaemonJsonText(', '\nif (-not $NoStartDaemon) {'),
-    check: () => between(ps, '\n    if (Test-Path $daemonInfoPath) {', '\n    if (-not $running) {'),
+    check: () => between(ps, '\n    if (Test-Path -LiteralPath $daemonInfoPath) {', '\n    if (-not $running) {'),
   },
 };
 const windows = process.platform === 'win32';
