@@ -1,0 +1,40 @@
+{
+  "id": "task-6519ed9127ad4c359fd64b71f1a08be5",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-flip gate] Human-run switch of this project to worktree mode — governor-closed, never plan or claim",
+  "description": "This is a tracking row, not work. No architect plans it and no seat claims it. It exists to hold the shared wrapper lane while this project switches to worktree mode. WT-10M depends on it, so once 31187ec1 lands, no new lane row starts in shared mode, and the checkout drains for the §7.3 stop-the-world switch. The governor checks the DoD with git and the daemon, then ARCHIVES the row. That releases WT-10M and the rest of the lane to run in worktree mode.\n\nDecisions:\n- The human said go on the early switch (\"lets dop it\"; #general msg-717a48e0).\n- On 11-02 the human decided \"keep main PR-only, land on a branch\". The target is therefore consolidationBranch 'moe/work-2026-10-24', with no migration landing. The human keeps merging that branch into main by pull request.\n\nPrerequisites (dependsOn):\n- 31187ec1, the resume fail-closed fix;\n- WT-18a and WT-18c, the mode-aware worker role docs;\n- WT-19b, the dry run on a slash-named target.\nIf 31187ec1 lands wrapper bytes after WT-19b ran, the governor re-runs WT-19b's command on the switch commit first.\n\nThe switch, adapted from docs/plans/2026-10-30-per-task-worktrees.md §7.3 and run by the human with the governor:\n1. Drain: no task is WORKING or REVIEW with an open attempt.\n2. Check `git for-each-ref refs/moe/rescue`: no live task is waiting on a shared-mode rescue.\n3. Settings:\n   - qualityGate `bash scripts/tests/parity-check.sh && npm run lint`;\n   - resources `git-land-moe-work-2026-10-24` with capacity 1, maxLeaseMs 7200000 and releaseOnDeregister true (the wrapper's sanitized lease id).\n4. Skip the migration landing.\n5. In the control checkout: `git switch -c moe/control` at the moe/work-2026-10-24 tip.\n6. Settings: worktreeMode 'on' and consolidationBranch 'moe/work-2026-10-24'.\n7. Rebuild the live daemon from HEAD and restart it (needs the human's yes), then run `node packages/moe-daemon/dist/index.js doctor --project <path>`; it must exit 0.\n8. Relaunch the seats.\n\nRollback is §7.4: set worktreeMode 'off', unset consolidationBranch, then `git switch moe/work-2026-10-24`.",
+  "definitionOfDone": [
+    "The control checkout's HEAD is refs/heads/moe/control, at a commit contained in moe/work-2026-10-24.",
+    ".moe/project.json settings have worktreeMode 'on', consolidationBranch 'moe/work-2026-10-24' and a non-blank qualityGate.",
+    "doctor on the rebuilt live daemon exits 0 with the worktree probes as hard checks.",
+    "A WORKING claim's get_context shows workspace.mode 'worktree' with target moe/work-2026-10-24, and that task's first landing reaches origin/moe/work-2026-10-24 fast-forward-only while main does not move."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor gate, not work. It holds WT-10M until this project's worktree switch, and the governor archives it once the switch is done. Architects: do not plan or claim this row.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-31187ec10ae54dd2b03f4c166f083f31",
+    "task-692a12df337c43edacb59fd0599ecff2",
+    "task-cfa129252343438d903de1e67ae6073c",
+    "task-48aafb880ede4b22a3e26115c07f8470"
+  ],
+  "priority": "LOW",
+  "order": 27.8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T08:48:44.700Z",
+  "updatedAt": "2026-11-02T08:53:15.963Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T08:49:58.314Z",
+    "seq": 1
+  }
+}
