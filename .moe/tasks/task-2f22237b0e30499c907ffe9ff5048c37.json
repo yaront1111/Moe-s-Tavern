@@ -57,23 +57,32 @@
     {
       "stepId": "step-4",
       "description": "Verification, run once (DoD 3). This row dependsOn task-e54bab27: until its one-line fixture fix lands, prompt-cache-launcher has 22 failing PowerShell compact-window rows on Windows at HEAD (a 373dc3d4 regression). The claim gate already waits for it.\n\nRun this ONE command fresh from the task worktree root, from your normal shell. Only the Linux leg runs under env -i, because the Windows node.exe leg needs the Windows PATH, with git, carried through WSL interop. Its output tail is the complete_task evidence:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/moe-call.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ] && bash scripts/tests/parity-check.sh && npm run lint\n\nPlanning dry run, with task-e54bab27's line simulated:\n- Linux: 157 tests, 130 pass, 0 fail, 27 skipped (pwsh rows, no pwsh in WSL).\n- Windows: 217 tests, 177 pass, 0 fail, 40 skipped (bash rows), about 2 minutes.\n- parity-check PASS, lint OK.\nCounts move with HEAD; exit 0 is the gate.\n\nThese launcher harnesses run in place; the rails allow that, and each suite sets MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER. Declare the four files as modifiedFiles. Size: about +55 net lines, most of them the two test rows.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "I ran the plan's single verification command fresh from the worktree root, from my normal shell. It exited 0.\n\n- Linux leg (env -i), 5 suites: 157 tests, 130 pass, 0 fail, 27 skipped (pwsh rows; there is no pwsh in WSL).\n- Windows node.exe leg, 3 suites: 217 tests, 177 pass, 0 fail, 40 skipped (bash rows), in 118.5 s.\n- parity-check.sh: PASS.\n- npm run lint: OK. Role-doc line counts are architect 39, worker 30, qa 36.\n\nThe counts match the planning dry run exactly. The base includes 1b754809, task-e54bab27's fixture fix.\n\nLog: /mnt/d/moe-scratch/2f22237b-work/verify.log.",
+      "startedAt": "2026-11-02T23:55:20.467Z",
+      "completedAt": "2026-11-02T23:57:47.548Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n\nRun the mutants in a scratch copy: `git archive HEAD scripts docs package.json` into a fresh mktemp dir under /mnt/c/Users/Yaron/AppData/Local/Temp/ for the Windows rows, or under /tmp for C1. Overlay your files with cp, mutate there, and delete the dir afterwards by its prefix. Never mutate the worktree.\n(a) Drop the ps1 line: C2 fails on both PowerShell engines.\n(b) Drop the sh line (replace it with `:`, so the file still parses): C1 fails on 'env [1]'.\n(c) Set the variable unconditionally in each twin: C1's legacy runs fail ('env [unset]'), and C2's legacy half fails (it no longer runs the project node.exe). This proves legacy stays unchanged.\n(d) Vacuity: run C2 with its legacy half removed and the ps1 fix absent. It must still fail, from the marker half alone.\n(e) Claims check: the variable closes only cmd.exe's cwd-first lookup.\n  - Relative and in-project PATH entries remain task-0b2ea570's scope; that row now dependsOn this one.\n  - Node or libuv bare-name spawns remain task-525551023b9d4931a1cf983ce02a6cfb's.\n  - 8.3, subst and UNC PATH aliases remain task-895791375f1341f5914c93e81348c083's.\n  Make no wider claim in comments or docs.\n(f) BOM/LF: `head -c3 scripts/moe-agent.ps1` is still ef bb bf. `git diff --stat` equals `git diff --ignore-cr-at-eol --stat`.\n(g) Process safety: kill nothing by name or pattern; the suite's killTree touches only its own children.",
       "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/protected-agent-command.test.mjs",
         "scripts/moe-agent.ps1",
         "scripts/moe-agent.sh"
       ],
-      "startedAt": "2026-11-02T23:55:20.467Z"
-    },
-    {
-      "stepId": "step-5",
-      "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n\nRun the mutants in a scratch copy: `git archive HEAD scripts docs package.json` into a fresh mktemp dir under /mnt/c/Users/Yaron/AppData/Local/Temp/ for the Windows rows, or under /tmp for C1. Overlay your files with cp, mutate there, and delete the dir afterwards by its prefix. Never mutate the worktree.\n(a) Drop the ps1 line: C2 fails on both PowerShell engines.\n(b) Drop the sh line (replace it with `:`, so the file still parses): C1 fails on 'env [1]'.\n(c) Set the variable unconditionally in each twin: C1's legacy runs fail ('env [unset]'), and C2's legacy half fails (it no longer runs the project node.exe). This proves legacy stays unchanged.\n(d) Vacuity: run C2 with its legacy half removed and the ps1 fix absent. It must still fail, from the marker half alone.\n(e) Claims check: the variable closes only cmd.exe's cwd-first lookup.\n  - Relative and in-project PATH entries remain task-0b2ea570's scope; that row now dependsOn this one.\n  - Node or libuv bare-name spawns remain task-525551023b9d4931a1cf983ce02a6cfb's.\n  - 8.3, subst and UNC PATH aliases remain task-895791375f1341f5914c93e81348c083's.\n  Make no wider claim in comments or docs.\n(f) BOM/LF: `head -c3 scripts/moe-agent.ps1` is still ef bb bf. `git diff --stat` equals `git diff --ignore-cr-at-eol --stat`.\n(g) Process safety: kill nothing by name or pattern; the suite's killTree touches only its own children.",
-      "status": "PENDING",
-      "affectedFiles": [
-        "scripts/tests/protected-agent-command.test.mjs",
-        "scripts/moe-agent.ps1",
-        "scripts/moe-agent.sh"
-      ]
+      "startedAt": "2026-11-02T23:58:04.085Z"
     }
   ],
   "planRevision": 1,
@@ -109,7 +118,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:23.628Z",
-  "updatedAt": "2026-11-02T23:55:20.467Z",
+  "updatedAt": "2026-11-02T23:58:04.085Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:12.756Z",
@@ -119,7 +128,7 @@
     "firstClaimAt": "2026-11-02T23:13:45.650Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -133,7 +142,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T23:39:28.595Z",

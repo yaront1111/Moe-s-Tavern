@@ -1,0 +1,32 @@
+{
+  "id": "task-48bbd091c2204d8eb06de272442d48e8",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "docs: VS Code protected-profile docs still describe the session-only pin and the missing daemon provenance after task-98c81a27 and task-648a5916",
+  "description": "Follow-up docs row from qa-7328a40d's drift note on task-98c81a27 (CQ-RF07 QA). Neither 98c81a27's DoD nor 648a5916's DoD names docs, and 98c81a27 already sits at net 443 under its 450 size exception, so the docs fix gets its own row.\n\nOnce both rows are DONE, these places are stale:\n- docs/ARCHITECTURE.md, Security Notes, **VS Code parity** (about :546-553). Both \"Two gaps are open\" bullets: no running-daemon provenance (task-648a5916), and the pin \"held in memory only\" (task-98c81a27).\n- docs/TROUBLESHOOTING.md, \"Protected profile in VS Code\", Cause: \"its `verified-local` pin lasts one window session and has no downgrade dialog (task-98c81a27).\"\n- docs/CONFIGURATION.md (about :494): \"VS Code keeps no such store: its protected pin lives in memory for one window session.\"\n\nRewrite them to describe what landed:\n- 98c81a27 (9eca3971): the owner-only globalStorage protected-state store and its Windows boundary, the RF02 pin, and the Keep Protected / Allow Downgrade prompt.\n- 648a5916: spawn provenance (the /health HMAC challenge from task-137bab15), the fixed refusal, and the RF03 replace flow.\nTake every name and message from the landed code, never from this description.\n\nPromotion trigger for the governor: promote to PLANNING when 98c81a27 is DONE and 648a5916 has landed (REVIEW or DONE). If 648a5916 is re-planned or archived, re-slice this row to cover 98c81a27 only.",
+  "definitionOfDone": [
+    "docs/ARCHITECTURE.md VS Code parity, docs/TROUBLESHOOTING.md 'Protected profile in VS Code' and docs/CONFIGURATION.md describe the landed owner-only store, the RF02 pin and downgrade prompt, the spawn-provenance check and the RF03 replace flow, using only names, codes and prompt text present in moe-vscode/src at the time of the edit; no remaining text calls the pin session-only or says VS Code has no daemon provenance.",
+    "Only those three docs files change; no code or test file changes.",
+    "npm run lint (repo root) exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-98c81a274c4f45e58a137e1f50d782a5",
+    "task-648a591623e1405ba788f44b5fe6690d"
+  ],
+  "priority": "LOW",
+  "order": 325.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T23:58:07.768Z",
+  "updatedAt": "2026-11-02T23:58:07.768Z"
+}
