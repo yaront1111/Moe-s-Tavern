@@ -28,8 +28,7 @@ const MNT_DRIVE = /^\/mnt\/([A-Za-z])(?:\/(.*))?$/;
  *   share, and case folds with toLowerCase (locale-independent, full Unicode:
  *   it over-folds U+212A and U+212B, which NTFS keeps apart, a fail-open same).
  * - `\\wsl$\<distro>\x` and `\\wsl.localhost\<distro>\x` name that distro's
- *   POSIX `/x`; the distro is not compared. The launchers still read a WSL
- *   share as plain UNC until task-3def0804.
+ *   POSIX `/x`; the distro is not compared.
  * - Any other path starting with `/` is POSIX: only `/` separates, '..' stops
  *   at the root, case is kept, and `/mnt/<d>[/x]` maps to `<d>:[/x]`.
  * The drive letter and the mount letter are ASCII-only. Only a relative input

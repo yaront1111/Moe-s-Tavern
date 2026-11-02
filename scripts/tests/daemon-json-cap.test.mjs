@@ -92,7 +92,7 @@ is_wsl() { return 1; }
 trap 'echo "@@ exit host=[\${MOE_DAEMON_HOST:-}]"' EXIT
 ${SEGMENTS.sh.probe()}
 ${SEGMENTS.sh.helper()}
-${withPid ? `content=$(cat "$DAEMON_INFO"); printf '%s' "\${content//${SHELL_PID}/$$}" > "$DAEMON_INFO"` : ''}
+${withPid ? `content=$(cat "$DAEMON_INFO"); printf '%s' "\${content//${SHELL_PID}/$$}" > "$DAEMON_INFO"; echo "@@ fixture-pid=$$"` : ''}
 ${SEGMENTS.sh.check()}
 echo "@@ port=[$DAEMON_PORT] project=[$DAEMON_PROJECT] running=$RUNNING"
 `;
@@ -145,8 +145,10 @@ async function runCheck(engine, content, { qualified = false, project = PROJECT[
       : ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script];
     const r = await spawnAsync(engine.exe, args);
     const out = r.out.replaceAll('\r\n', '\n').replace(ANSI, '');
+    // The sh fixture fills in $$ before probing; compare those exact bytes too.
+    const before = content.replace(SHELL_PID, /@@ fixture-pid=(\d+)/.exec(out)?.[1] ?? 'missing-fixture-pid');
     const after = existsSync(file) ? readFileSync(file, 'utf8') : null;
-    return { status: r.status, out, lines: out.split('\n'), size: existsSync(file) ? statSync(file).size : -1, after, infoPath };
+    return { status: r.status, out, lines: out.split('\n'), size: existsSync(file) ? statSync(file).size : -1, before, after, infoPath };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -228,6 +230,30 @@ test('identity: both launchers carry the same MOE_DAEMON_FOREIGN_PROJECT refusal
 
 for (const engine of ENGINES) {
   const t = (name, fn, skip = engine.skip) => test(`${engine.name}: ${name}`, { skip }, fn);
+  for (const [name, project, served, same] of [
+    ['WSL share and POSIX', '\\\\wsl$\\Ubuntu\\home\\u\\Proj', '/home/u/Proj', true],
+    ['WSL host aliases and ignored distro', '//WsL.LocalHost/Debian/home/u/Proj', '//wsl$/Ubuntu/home/u/Proj', true],
+    ['WSL Unicode tail and POSIX', '\\\\wsl.localhost\\Ubuntu\\home\\u\\caf\u00e9\\\u00ad', '/home/u/caf\u00e9/\u00ad', true],
+    ['WSL POSIX case', '//wsl$/Ubuntu/home/u/Proj', '/home/u/proj', false],
+    ['WSL alias POSIX case', '//wsl$/Ubuntu/home/u/Proj', '//wsl.localhost/Ubuntu/home/u/proj', false],
+    ['WSL ignorable segment', '//wsl$/Ubuntu/home/u/Proj/\u00ad', '/home/u/Proj', false],
+  ]) {
+    t(`identity: ${name} is ${same ? 'adopted' : 'refused, untouched'}`, () =>
+      withHealth(200, healthy(served), async (port, requests) => {
+        const info = { pid: engine.ext === 'sh' ? SHELL_PID : process.pid, port, startedAt: 'x', projectPath: project };
+        const content = JSON.stringify(info).replace(`"${SHELL_PID}"`, SHELL_PID);
+        const r = await runCheck(engine, content, { project });
+        if (same) {
+          assert.equal(r.status, 0, r.out);
+          assert.ok(r.out.includes(engine.ext === 'sh' ? 'running=true' : `@@ running=True port=${port} err=`), r.out);
+          assert.ok(!r.out.includes('MOE_DAEMON_FOREIGN_PROJECT'), r.out);
+        } else {
+          assertRefused(r, port, served, project);
+        }
+        assert.equal(r.after, r.before);
+        assert.deepEqual(requests, ['GET /health']);
+      }));
+  }
   if (engine.ext === 'sh') {
     const info = INFO.sh();
     t('a 65536-byte daemon.json is read', async () => {
@@ -422,6 +448,24 @@ const CONTRACT = [
 const WSL_SHARES = [
   ['\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', '/home/u/proj'], ['//wsl$/Ubuntu/home/u/proj', '/home/u/proj'],
   ['//WSL$/Ubuntu/mnt/d/proj', 'd:/proj'], ['//wsl$/Ubuntu', '/'],
+  ['//WsL.LocalHost/Debian', '/'], ['\\\\WSL$\\Ubuntu\\', '/'], ['//wsl.localhost/Ubuntu/', '/'],
+  ['\\\\WsL.LocalHost/Ubuntu\\home//u\\Proj/', '/home/u/Proj'],
+  ['//wsl$/Ubuntu/home/u/caf\u00e9/\u00ad/.\u00ad/..\u00ad', '/home/u/caf\u00e9/\u00ad/.\u00ad/..\u00ad'],
+  ['//wsl.localhost/Ubuntu/home/u/cafe\u0301', '/home/u/cafe\u0301'],
+  ['//wsl$/Ubuntu//home///u/./x/../Proj/', '/home/u/Proj'],
+  ['//wsl.localhost/Ubuntu/../../Proj', '/Proj'],
+  ['//wsl$/Ubuntu/..', '/'], ['//wsl$/Ubuntu///', '/'],
+  ['//wsl.localhost/Ubuntu/mnt/D/Proj/../X', 'd:/x'], ['//wsl$/Ubuntu/mnt/d', 'd:'],
+  ['//wsl$/Ubuntu/MNT/d/Proj', '/MNT/d/Proj'],
+];
+// These must remain generic UNC, not WSL shares (including Unicode host lookalikes).
+const NOT_WSL_SHARES = [
+  ['//wsl$/', '//wsl$'], ['//wsl.localhost', '//wsl.localhost'],
+  ['//wsl$//', '//wsl$'], ['//wsl.localhost//', '//wsl.localhost'],
+  ['//wsl.localhost.evil/Ubuntu/Proj', '//wsl.localhost.evil/ubuntu/proj'],
+  ['//wsl$evil/Ubuntu/Proj', '//wsl$evil/ubuntu/proj'],
+  ['//w\u017fl$/Ubuntu/Proj', '//w\u017fl$/ubuntu/proj'],
+  ['//w\u017fl.localhost/Ubuntu/Proj', '//w\u017fl.localhost/ubuntu/proj'],
 ];
 // Maps the rows' inputs to keys in ONE child process, which reads them as JSON on stdin. A
 // failed spawn, a non-zero exit, unparseable output or a wrong row count fails the test.
@@ -444,7 +488,7 @@ writeSync(1, JSON.stringify(JSON.parse(readFileSync(0, 'utf8')).map((p) => compa
 process.exit(0);`;
   return childKeys(process.execPath, ['--input-type=module', '-e', code], rows);
 }
-const ALL_ROWS = [...CONTRACT, ...WSL_SHARES];
+const ALL_ROWS = [...CONTRACT, ...WSL_SHARES, ...NOT_WSL_SHARES];
 test('path contract: moe-proxy and moe-daemon give every row its contract key', () => {
   assert.deepEqual(distKeys('packages/moe-proxy/dist/utils.js', ALL_ROWS), ALL_ROWS);
   assert.deepEqual(distKeys('packages/moe-daemon/dist/index.js', ALL_ROWS), ALL_ROWS);
@@ -462,12 +506,13 @@ test('path contract: moe-proxy matches every absolute row of the JetBrains table
 // The launchers' own rules, cut from the real scripts.
 const pythonKeys = (rows) => childKeys(PYTHON, ['-c', `import json, ntpath, posixpath, re, sys
 ${between(SEGMENTS.sh.probe(), 'WINDOWS = re.compile(', '\ntry:')}
-print(json.dumps([comparable(p) for p in json.load(sys.stdin)]))`], rows);
+print(json.dumps([comparable(p) for p in json.load(sys.stdin.buffer)]))`], rows);
 function powershellKeys(engine, rows) {
   const dir = mkdtempSync(path.join(tmpdir(), 'moe-path-'));
   try {
     const script = path.join(dir, 'keys.ps1');
     writeFileSync(script, `\ufeff$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 ${between(ps, '\nfunction Get-MoeComparableProjectPath(', '\n# Which project the daemon on 127.0.0.1')}
 foreach ($p in @(${rows.map(([p]) => psq(p)).join(', ')})) { Get-MoeComparableProjectPath $p }
 `);
@@ -483,10 +528,10 @@ const LAUNCHER_RULES = [
 ];
 for (const rule of LAUNCHER_RULES) {
   test(`path contract: ${rule.name} gives every non-WSL-share row its key`, { skip: rule.skip }, () => {
-    assert.deepEqual(rule.keys(CONTRACT), CONTRACT);
+    assert.deepEqual(rule.keys([...CONTRACT, ...NOT_WSL_SHARES]), [...CONTRACT, ...NOT_WSL_SHARES]);
   });
   test(`path contract: ${rule.name} maps a WSL share to its POSIX path`,
-    { skip: rule.skip, todo: 'launchers still read a WSL share as plain UNC: task-3def080415d3495a8557b514d6a0ab2a' }, () => {
+    { skip: rule.skip }, () => {
       assert.deepEqual(rule.keys(WSL_SHARES), WSL_SHARES);
     });
 }

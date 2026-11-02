@@ -710,12 +710,19 @@ function Read-MoeDaemonJsonText([string]$Path) {
 
 # moe-proxy's comparableProjectPath rule: D:\x == D:/x == /mnt/d/x, drive and
 # UNC paths case-insensitive, '.', '..' and trailing separators normalized.
+# WSL shares strip host/distro, preserving POSIX tail case before /mnt mapping.
 # String operations only, so Windows PowerShell 5.1 and pwsh on Linux agree.
 # Twin: comparable() in moe-agent.sh's probe_daemon_health.
 function Get-MoeComparableProjectPath([string]$Path) {
     $p = $Path.Trim()
     $windows = $p -match '^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])'
-    if ($windows) { $p = $p.Replace('\', '/') }
+    if ($windows) {
+        $p = $p.Replace('\', '/')
+        if ($p -cmatch '^//(?:[wW][sS][lL]\$|[wW][sS][lL]\.[lL][oO][cC][aA][lL][hH][oO][sS][tT])/[^/]+(/.*)?$') {
+            $p = if ($Matches[1]) { $Matches[1] } else { '/' }
+            $windows = $false
+        }
+    }
     # '..' never climbs past a drive or a UNC server/share.
     $root = if (-not $windows) { 0 } elseif ($p.StartsWith('//')) { 2 } else { 1 }
     $kept = New-Object System.Collections.Generic.List[string]

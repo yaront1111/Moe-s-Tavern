@@ -1587,8 +1587,9 @@ if [ "$CLI_TYPE" = "grok" ]; then write_grok_config "$PROJECT" "$SERENA_PROJECT"
 # 503 reply naming another ABSOLUTE project exits 3 and prints that path (one
 # line, at most 300 chars). A relative or missing projectPath cannot be judged.
 # Paths compare by moe-proxy's comparableProjectPath (D:\x == D:/x == /mnt/d/x),
-# with ntpath/posixpath, never os.path, so Windows python agrees. Bounded: 3 s in
-# total (the watchdog also covers a trickled reply) and 64 KiB of body.
+# with ntpath/posixpath, never os.path, so Windows python agrees. WSL shares
+# strip host/distro, preserving POSIX tail case before /mnt mapping. Bounded:
+# 3 s total (the watchdog also covers a trickled reply) and 64 KiB of body.
 probe_daemon_health() {
     local host="$1"
     local port="$2"
@@ -1604,7 +1605,11 @@ def absolute(p):
 def comparable(p):
     p = p.strip()
     if WINDOWS.match(p):
-        return ntpath.normpath(p).replace("\\", "/").rstrip("/").lower()
+        share = re.match(r"//(?:wsl\$|wsl\.localhost)/[^/]+(/.*)?$",
+                         p.replace("\\", "/"), re.IGNORECASE | re.ASCII)
+        if not share:
+            return ntpath.normpath(p).replace("\\", "/").rstrip("/").lower()
+        p = "/" + (share.group(1) or "").lstrip("/")
     p = posixpath.normpath(p)
     m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
     return (m.group(1) + ":" + ("/" + m.group(2) if m.group(2) else "")).lower() if m else p
