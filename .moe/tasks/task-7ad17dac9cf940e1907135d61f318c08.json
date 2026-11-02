@@ -1,0 +1,39 @@
+{
+  "id": "task-7ad17dac9cf940e1907135d61f318c08",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-28] VS Code docs sweep for the follow-up wave (VSC-23, VSC-25, VSC-27)",
+  "description": "Filed by architect-d54b05fd while planning VSC-23 (task-921ca494). None of the code plans for VSC-23, VSC-25 or VSC-27 edits docs. VSC-24's plan carries its own CHANGELOG and MANUAL_TESTS entries, and VSC-26 is JetBrains-only.\n\nObjective: once the follow-up rows land, moe-vscode's docs must stop describing the limits those rows fixed. VSC-18 (DONE, 78642f85) wrote these lines on purpose, as the open follow-ups:\n- moe-vscode/README.md \"Known issues\", three lines:\n  - \"The task detail panel's Delivery section and Release Agent button show the task as it was when the panel opened; reopen the panel to refresh them\" (VSC-23);\n  - \"While disconnected, the Claude accounts view lists no accounts, so a CLI-only sign-in is not offered (the JetBrains Accounts tab still offers it)\" (VSC-25);\n  - \"On Windows, agent and account terminals expect PowerShell as the default terminal profile\" (VSC-27).\n- moe-vscode/MANUAL_TESTS.md \"Task detail: Delivery and Release Agent\" step 6: \"Known limit (row VSC-23): ...\".\n- moe-vscode/CHANGELOG.md [Unreleased] has no entries for VSC-23, VSC-25 or VSC-27.\n- docs/plans/2026-11-02-vscode-reuse.md \"Follow-ups filed during the epic\" lists VSC-23 to VSC-27 with their status when written (PLANNING).\n\nDeliverable:\n- Each README line is removed, or rewritten to the narrower limit the row actually shipped. Read each row's completion diff first; never assume.\n- MANUAL_TESTS.md step 6 becomes a live-refresh check (with the panel open, a change to the task's delivery evidence or assigned agent shows without reopening). Add a manual step for VSC-25's disconnected accounts rows and CLI sign-in, and one for VSC-27's non-PowerShell default terminal profile.\n- One CHANGELOG [Unreleased] bullet each for VSC-23, VSC-25 and VSC-27. Keep VSC-24's entry as it landed.\n- The reuse doc's follow-up table shows each of VSC-23 to VSC-27 with its final status and its landing commit.\n\nNOT in scope: any code or test file, JetBrains docs, the epic rails' avoid list (CLAUDE.md, docs/roles/**, docs/MCP_SERVER.md, docs/SCHEMA.md and the rest), and re-designating the epic's final task.\n\nPromote this row to PLANNING only after its dependsOn rows are DONE: its plan has to read what each of them shipped.\n\nVerification command (run from the repo root):\n! grep -nE \"show the task as it was when the panel opened|lists no accounts, so a CLI-only sign-in is not offered|expect PowerShell as the default terminal profile\" moe-vscode/README.md && ! grep -n \"Known limit (row VSC-23)\" moe-vscode/MANUAL_TESTS.md\nIf a row only narrowed its limit, replace the first grep's pattern for that line with one for the rewritten text, and quote both in the completion summary.",
+  "definitionOfDone": [
+    "moe-vscode/README.md Known issues no longer carries the VSC-23, VSC-25 or VSC-27 sentence quoted in the description. Each one is removed, or rewritten to the narrower limit that row's completion diff shows, and the completion summary names which and why.",
+    "moe-vscode/MANUAL_TESTS.md no longer contains \"Known limit (row VSC-23)\". The Delivery and Release Agent section gains a numbered live-refresh step, and there is one numbered manual step each for VSC-25 (disconnected accounts rows, CLI sign-in) and VSC-27 (a non-PowerShell default terminal profile on Windows).",
+    "moe-vscode/CHANGELOG.md [Unreleased] has one bullet each describing the user-visible fix of VSC-23, VSC-25 and VSC-27, and VSC-24's own entry is unchanged.",
+    "The \"Follow-ups filed during the epic\" table in docs/plans/2026-11-02-vscode-reuse.md shows VSC-23 to VSC-27 with their final status and a landing commit sha. `git log --grep 'Moe-Task: <id>'` finds each sha.",
+    "The completion commit changes only moe-vscode/README.md, moe-vscode/MANUAL_TESTS.md, moe-vscode/CHANGELOG.md and docs/plans/2026-11-02-vscode-reuse.md (check with git show --stat), and the description's verification command exits 0."
+  ],
+  "taskRails": [
+    "Docs only. Edit nothing outside moe-vscode/README.md, moe-vscode/MANUAL_TESTS.md, moe-vscode/CHANGELOG.md and docs/plans/2026-11-02-vscode-reuse.md, and use the Edit tool only."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-921ca494fac241aa96b85cb9ae3e63ab",
+    "task-d2a3532ec05c49d384214ae15b01ba7e",
+    "task-3c4850819cad458d9edb59809d00e400",
+    "task-83515358babb403480bbef769d9726f2",
+    "task-e1024bb3e6194b828fcbf905babfebae"
+  ],
+  "priority": "LOW",
+  "order": 30,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T16:04:09.916Z",
+  "updatedAt": "2026-11-02T16:04:09.916Z"
+}

@@ -155,3 +155,40 @@ test('C2: every row has the expected needs-human-review flag and card chips', ()
     }
     assert.deepEqual(failures, []);
 });
+
+// Every moe.blocker.* string of JetBrains' bundle, pinned on each VS Code copy
+// that carries it: the cause and clearance labels on all three, the attention
+// pair on all three, the detail captions on the panel and taskDetail.js.
+const BUNDLE_PATH = path.join(__dirname, '../../moe-jetbrains/src/main/resources/messages/MoeBundle.properties');
+const CAUSE_KEYS = { RESOURCE_WAIT: 'resourceWait', DEPENDENCY_WAIT: 'dependencyWait', EXTERNAL_BLOCK: 'externalBlock' };
+const CONSTANT_KEYS = {
+    'attention.badge': 'ATTENTION_LABEL', 'attention.clears': 'ATTENTION_CLEARS', 'section.title': 'BLOCKER_SECTION_TITLE',
+    reason: 'BLOCKER_REASON_LABEL', 'reason.missing': 'BLOCKER_REASON_MISSING', prerequisites: 'BLOCKER_PREREQUISITES_LABEL',
+    resourceId: 'BLOCKER_RESOURCE_LABEL', fromStatus: 'BLOCKER_FROM_STATUS_LABEL', blockedAt: 'BLOCKER_BLOCKED_AT_LABEL'
+};
+
+test('C3: every surface\'s blocker labels equal moe.blocker.* in MoeBundle.properties', () => {
+    const bundle = {};
+    for (const [, key, value] of fs.readFileSync(BUNDLE_PATH, 'utf8').matchAll(/^moe\.blocker\.([A-Za-z.]+)=(.*?)\r?$/gm)) {
+        bundle[key] = value;
+    }
+    assert.deepEqual(Object.keys(bundle).filter(key => bundle[key].includes('\\')), [], 'a properties escape this parser does not decode');
+    const pinned = [...Object.values(CAUSE_KEYS).flatMap(k => [`cause.${k}`, `clears.${k}`]), ...Object.keys(CONSTANT_KEYS)];
+    assert.deepEqual(Object.keys(bundle).sort(), pinned.sort(), 'pin a new moe.blocker.* key here, on every copy that shows it');
+    // board.js declares its copies with const, so they are read inside its context.
+    const inScript = context => name => JSON.parse(vm.runInContext(`JSON.stringify(typeof ${name} === 'undefined' ? null : ${name})`, context));
+    const failures = [];
+    for (const [surface, get] of [['TaskDetailPanel.ts', name => panelModule[name]], ['board.js', inScript(board)], ['taskDetail.js', inScript(detail)]]) {
+        const expect = (key, got) => {
+            if (got !== bundle[key]) { failures.push(`${surface} moe.blocker.${key}: expected ${JSON.stringify(bundle[key])}, got ${JSON.stringify(got)}`); }
+        };
+        const labels = get('BLOCK_CAUSE_LABEL') || {};
+        const clears = get('BLOCK_CAUSE_CLEARS') || {};
+        for (const map of [labels, clears]) { assert.deepEqual(Object.keys(map).sort(), Object.keys(CAUSE_KEYS).sort(), `${surface} names exactly the three causes`); }
+        for (const [cause, k] of Object.entries(CAUSE_KEYS)) { expect(`cause.${k}`, labels[cause]); expect(`clears.${k}`, clears[cause]); }
+        for (const [key, name] of Object.entries(CONSTANT_KEYS)) {
+            if (surface !== 'board.js' || key.startsWith('attention.')) { expect(key, get(name)); }
+        }
+    }
+    assert.deepEqual(failures, []);
+});

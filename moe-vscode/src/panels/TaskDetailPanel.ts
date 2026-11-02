@@ -240,6 +240,17 @@ export function deliveryRows(delivery: unknown): DeliveryRow[] {
     return rows;
 }
 
+/**
+ * deliveryRows with each English label looked up: the one lookup behind the
+ * initial markup (which escapes it) and the live update (DOM text in media/taskDetail.js).
+ */
+export function deliveryDisplay(delivery: unknown) {
+    return {
+        title: DELIVERY_LABELS[DELIVERY_TITLE_KEY],
+        rows: deliveryRows(delivery).map(row => ({ ...row, label: DELIVERY_LABELS[row.labelKey] ?? row.labelKey })),
+    };
+}
+
 // =============================================================================
 // Release Agent
 // =============================================================================
@@ -255,6 +266,11 @@ export function deliveryRows(delivery: unknown): DeliveryRow[] {
 const RELEASE_AGENT_LABEL = 'Release Agent';
 const RELEASED_FROM_BOARD = 'Released from board';
 const RELEASE_AGENT_CONFIRM = 'Release agent "{0}" from "{1}"? The task stays claimable where it is (Working stays Working, unassigned; Review if all steps are done) and the agent goes idle — the next agent may pick it up immediately. To pull the task away from the fleet instead, drag it to Backlog.';
+
+/** The Release Agent button's label when the task has an agent to release, else null: one rule for the initial page and every live update. */
+function releaseAgentLabel(task: Task): string | null {
+    return nonBlankString(task.assignedWorkerId) !== null ? RELEASE_AGENT_LABEL : null;
+}
 
 /**
  * Task Detail Panel - a full-featured editor panel for viewing and editing tasks.
@@ -406,9 +422,13 @@ export class TaskDetailPanel implements vscode.Disposable {
                 this.approvalPending = false;
             }
             if (task) {
+                // The page rebuilds the Delivery section and the Release Agent
+                // button from these, with the initial render's rows and rule.
                 this.panel.webview.postMessage({
                     type: 'updateTask',
                     task,
+                    delivery: deliveryDisplay(task.delivery),
+                    releaseAgentLabel: releaseAgentLabel(task),
                 });
             }
         }, 200);
@@ -472,8 +492,8 @@ export class TaskDetailPanel implements vscode.Disposable {
                 }
 
                 case 'releaseAgent': {
-                    // The actions bar is static, so the button can outlive the
-                    // assignment: judge the task as it is now, not as rendered.
+                    // Live updates add and remove the button, but a click can
+                    // still race one: judge the task as it is now, not as rendered.
                     const current = this.findTask();
                     const workerId = nonBlankString(current?.assignedWorkerId);
                     if (!current || workerId === null) {
@@ -954,8 +974,8 @@ export class TaskDetailPanel implements vscode.Disposable {
              update handler has one node of its own to fill and to clear. -->
         <div id="blockerSection">${this.renderBlocker(task)}</div>
 
-        <!-- Delivery: read-only runner-reported evidence, rendered once with the
-             initial page (no live refresh yet); nothing when there is none. -->
+        <!-- Delivery: read-only runner-reported evidence; nothing when there is
+             none. Live-refreshed (added, rebuilt, removed) in media/taskDetail.js. -->
         ${this.renderDelivery(task)}
 
         <!-- Editable fields -->
@@ -1017,7 +1037,7 @@ export class TaskDetailPanel implements vscode.Disposable {
         ${task.status === 'AWAITING_APPROVAL' ? '<button class="btn btn-approve" id="approveBtn">Approve</button>' : ''}
         ${task.status === 'AWAITING_APPROVAL' ? '<button class="btn btn-reject" id="rejectBtn">Reject</button>' : ''}
         ${task.status === 'REVIEW' || task.status === 'DONE' ? '<button class="btn btn-secondary" id="reopenBtn">Reopen</button>' : ''}
-        ${nonBlankString(task.assignedWorkerId) !== null ? `<button class="btn btn-secondary" id="releaseAgentBtn">${RELEASE_AGENT_LABEL}</button>` : ''}
+        ${releaseAgentLabel(task) !== null ? `<button class="btn btn-secondary" id="releaseAgentBtn">${RELEASE_AGENT_LABEL}</button>` : ''}
         <button class="btn btn-secondary" id="prevBtn" ${task.status === 'BACKLOG' ? 'disabled' : ''} title="Move back in workflow">Prev</button>
         <button class="btn btn-secondary" id="nextBtn" ${task.status === 'DONE' ? 'disabled' : ''} title="Move forward in workflow">Next</button>
         <span class="spacer"></span>
@@ -1086,20 +1106,20 @@ export class TaskDetailPanel implements vscode.Disposable {
      * Every value is runner-reported text, so it goes through `escapeHtml`, in
      * the element and in the `title` attribute that carries the full value.
      * tests/delivery-corpus.test.cjs matches this exact one-line-per-row markup.
+     * Live updates post the same `deliveryDisplay` rows, which media/taskDetail.js
+     * writes as DOM text and which tests/task-detail-live.test.cjs holds equal to this.
      */
     private renderDelivery(task: Task): string {
-        const rows = deliveryRows(task.delivery);
+        const { title, rows } = deliveryDisplay(task.delivery);
         if (rows.length === 0) {
             return '';
         }
-        const title = escapeHtml(DELIVERY_LABELS[DELIVERY_TITLE_KEY]);
         const body = rows.map(row => {
             const outcome = row.outcome ? ` delivery-${row.outcome.toLowerCase()}` : '';
-            const label = escapeHtml(DELIVERY_LABELS[row.labelKey] ?? row.labelKey);
-            return `<div class="delivery-row${outcome}"><div class="field-label">${label}</div>`
+            return `<div class="delivery-row${outcome}"><div class="field-label">${escapeHtml(row.label)}</div>`
                 + `<div class="delivery-value" title="${escapeHtml(row.fullValue)}">${escapeHtml(row.value)}</div></div>`;
         });
-        return `<div class="delivery-section" id="deliverySection"><div class="section-title">${title}</div>${body.join('')}</div>`;
+        return `<div class="delivery-section" id="deliverySection"><div class="section-title">${escapeHtml(title)}</div>${body.join('')}</div>`;
     }
 
     private renderSteps(steps: Array<{ stepId: string; description: string; status: string; affectedFiles?: string[] }>): string {
