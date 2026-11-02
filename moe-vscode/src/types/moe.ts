@@ -238,6 +238,20 @@ export interface MetricsAggregate {
   perEpic: EpicMetricsAggregate[];
 }
 
+/**
+ * Runner-reported delivery evidence the daemon serves on /ws as `task.delivery`
+ * (packages/moe-daemon/src/state/deliveryProjection.ts). Display only, never
+ * stored on a task. Every member is optional: the daemon omits what it cannot
+ * read, and a legacy-policy task usually carries little or nothing.
+ */
+export interface TaskDelivery {
+  currentCandidate?: { id?: string; treeSha?: string; shortSha?: string; baseRevision?: string };
+  latestCheckRun?: { command?: string; exitCode?: number; source?: string; outcome?: string };
+  requiredCheckSatisfied?: boolean;
+  deliveryReceipt?: { target?: string; landedRevision?: string };
+  attemptPhase?: string;
+}
+
 export interface Task {
   id: string;
   epicId: string;
@@ -288,6 +302,10 @@ export interface Task {
   blockedResourceId?: string | null;
   blockedFromStatus?: TaskStatus | null;
   blockedAt?: string | null;
+
+  // Served on /ws only, optional and nullable like the blocker fields above;
+  // the raw client passes it through untouched.
+  delivery?: TaskDelivery | null;
 }
 
 export interface Worker {

@@ -134,6 +134,112 @@ export function blockerFacts(task: Task): string[] {
     return facts;
 }
 
+// =============================================================================
+// Delivery presentation
+// =============================================================================
+
+/**
+ * The runner-reported delivery evidence of a task, as display rows. A port of
+ * the contract JetBrains ships and owns (DeliveryPresentation.rows in
+ * moe-jetbrains/src/main/kotlin/com/moe/toolwindow/, plus the type guards of
+ * MoeJson.parseDelivery, because this client receives the raw wire JSON).
+ * tests/delivery-corpus.test.cjs replays the shared corpus
+ * moe-jetbrains/src/test/resources/client-delivery.json through it, so drift
+ * fails a test instead of shipping. Kept inside this file with no new import:
+ * peer tests load the panel under node:vm with a strict require map.
+ *
+ * What a run REPORTED is never proof the daemon executed a check, and the
+ * policy verdict (requiredCheckSatisfied) is never inferred from the run.
+ */
+export type DeliveryOutcome = 'PASS' | 'FAIL';
+
+export interface DeliveryRow {
+    labelKey: string;
+    value: string;
+    fullValue: string;
+    outcome: DeliveryOutcome | null;
+}
+
+export const DELIVERY_TITLE_KEY = 'moe.delivery.title';
+
+/** English labels, equal to the moe.delivery.* entries of JetBrains' MoeBundle.properties (the test compares them). */
+export const DELIVERY_LABELS: Record<string, string> = {
+    'moe.delivery.title': 'Delivery',
+    'moe.delivery.candidateSha': 'Candidate SHA',
+    'moe.delivery.candidateBase': 'Candidate base',
+    'moe.delivery.checkCommand': 'Reported check command',
+    'moe.delivery.checkPassed': 'Reported check passed - exit code',
+    'moe.delivery.checkFailed': 'Reported check failed - exit code',
+    'moe.delivery.checkNotPassed': 'Reported check did not pass - exit code',
+    'moe.delivery.checkOutcome': 'Reported check outcome',
+    'moe.delivery.checkSource': 'Reported check source',
+    'moe.delivery.requiredCheckCounted': 'Required check counted by policy',
+    'moe.delivery.requiredCheckNotCounted': 'Required check not counted by policy',
+    'moe.delivery.receiptTarget': 'Reported delivery target',
+    'moe.delivery.landedRevision': 'Reported landed revision',
+    'moe.delivery.attemptPhase': 'Owning attempt phase',
+};
+
+/** A non-null, non-array object, or null for anything else. */
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null;
+}
+
+/** A non-empty string member, or null: missing, empty and wrong-typed all mean "no row", never coerced. */
+function reportedText(record: Record<string, unknown> | null, key: string): string | null {
+    const value = record?.[key];
+    return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
+ * Display rows in JetBrains' order. Total function: a malformed member means
+ * no row for it, and nothing here throws. A candidate SHA is the tree SHA when
+ * that is non-empty, else the short SHA (an empty tree SHA must fall back, so a
+ * bare `??` on the raw member would be wrong). SHA rows show 8 characters and
+ * keep the whole value as `fullValue`; every other row has fullValue === value.
+ */
+export function deliveryRows(delivery: unknown): DeliveryRow[] {
+    const root = asRecord(delivery);
+    if (!root) { return []; }
+    const rows: DeliveryRow[] = [];
+    const addValue = (labelKey: string, value: string | null, sha = false): void => {
+        if (value) { rows.push({ labelKey, value: sha ? value.slice(0, 8) : value, fullValue: value, outcome: null }); }
+    };
+    const addVerdict = (labelKey: string, value: string, outcome: DeliveryOutcome): void => {
+        rows.push({ labelKey, value, fullValue: value, outcome });
+    };
+    const candidate = asRecord(root.currentCandidate);
+    addValue('moe.delivery.candidateSha', reportedText(candidate, 'treeSha') ?? reportedText(candidate, 'shortSha'), true);
+    addValue('moe.delivery.candidateBase', reportedText(candidate, 'baseRevision'), true);
+    const run = asRecord(root.latestCheckRun);
+    const outcome = reportedText(run, 'outcome');
+    addValue('moe.delivery.checkCommand', reportedText(run, 'command'));
+    // The daemon stores any safe integer; a string is never coerced to a code.
+    const code = run?.exitCode;
+    if (typeof code === 'number' && Number.isSafeInteger(code)) {
+        // Mirrors the daemon gate rule: only exit 0 with no outcome or exactly "passed" reads as passed.
+        const passed = code === 0 && (outcome === null || outcome === 'passed');
+        const labelKey = passed ? 'moe.delivery.checkPassed'
+            : code !== 0 ? 'moe.delivery.checkFailed' : 'moe.delivery.checkNotPassed';
+        addVerdict(labelKey, String(code), passed ? 'PASS' : 'FAIL');
+    }
+    addValue('moe.delivery.checkOutcome', outcome);
+    const source = reportedText(run, 'source');
+    addValue('moe.delivery.checkSource', source === 'runner-observed' || source === 'agent-reported' ? source : null);
+    if (root.requiredCheckSatisfied === true) {
+        addVerdict('moe.delivery.requiredCheckCounted', 'yes', 'PASS');
+    } else if (root.requiredCheckSatisfied === false) {
+        addVerdict('moe.delivery.requiredCheckNotCounted', 'no', 'FAIL');
+    }
+    const receipt = asRecord(root.deliveryReceipt);
+    addValue('moe.delivery.receiptTarget', reportedText(receipt, 'target'));
+    addValue('moe.delivery.landedRevision', reportedText(receipt, 'landedRevision'), true);
+    addValue('moe.delivery.attemptPhase', reportedText(root, 'attemptPhase'));
+    return rows;
+}
+
 /**
  * Task Detail Panel - a full-featured editor panel for viewing and editing tasks.
  *
@@ -783,6 +889,15 @@ export class TaskDetailPanel implements vscode.Disposable {
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+        .delivery-section { margin-bottom: 12px; }
+        .delivery-value {
+            font-size: 12px;
+            font-family: var(--vscode-editor-font-family);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .delivery-pass .delivery-value { color: var(--vscode-testing-iconPassed); }
+        .delivery-fail .delivery-value { color: var(--vscode-testing-iconFailed); }
     </style>
 </head>
 <body>
@@ -800,6 +915,10 @@ export class TaskDetailPanel implements vscode.Disposable {
              media/taskDetail.js; the wrapper stays even when empty so the
              update handler has one node of its own to fill and to clear. -->
         <div id="blockerSection">${this.renderBlocker(task)}</div>
+
+        <!-- Delivery: read-only runner-reported evidence, rendered once with the
+             initial page (no live refresh yet); nothing when there is none. -->
+        ${this.renderDelivery(task)}
 
         <!-- Editable fields -->
         <div class="field-row">
@@ -920,6 +1039,28 @@ export class TaskDetailPanel implements vscode.Disposable {
             }
         }
         return parts.join('');
+    }
+
+    /**
+     * The read-only Delivery section, or '' when the task has no delivery
+     * evidence to show. Display only: no action, no copy button, no client call.
+     * Every value is runner-reported text, so it goes through `escapeHtml`, in
+     * the element and in the `title` attribute that carries the full value.
+     * tests/delivery-corpus.test.cjs matches this exact one-line-per-row markup.
+     */
+    private renderDelivery(task: Task): string {
+        const rows = deliveryRows(task.delivery);
+        if (rows.length === 0) {
+            return '';
+        }
+        const title = escapeHtml(DELIVERY_LABELS[DELIVERY_TITLE_KEY]);
+        const body = rows.map(row => {
+            const outcome = row.outcome ? ` delivery-${row.outcome.toLowerCase()}` : '';
+            const label = escapeHtml(DELIVERY_LABELS[row.labelKey] ?? row.labelKey);
+            return `<div class="delivery-row${outcome}"><div class="field-label">${label}</div>`
+                + `<div class="delivery-value" title="${escapeHtml(row.fullValue)}">${escapeHtml(row.value)}</div></div>`;
+        });
+        return `<div class="delivery-section" id="deliverySection"><div class="section-title">${title}</div>${body.join('')}</div>`;
     }
 
     private renderSteps(steps: Array<{ stepId: string; description: string; status: string; affectedFiles?: string[] }>): string {
