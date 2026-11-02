@@ -412,7 +412,8 @@ class MoeMessageDispatcher(
                     log.warn("Failed to parse CHANNEL_DELETED payload", e)
                 }
             }
-            "PINS" -> {
+            // PINS is the GET_PINS reply to this socket; PINS_UPDATED is the daemon's broadcast of a channel's full pin list after every pin write (pin/unpin/toggle, incl. moe.chat_pin/chat_unpin), same {channel, pins} shape.
+            "PINS", "PINS_UPDATED" -> {
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val channel = payload.get("channel").safeAsString() ?: return
                 val pinsArray = payload.get("pins")?.takeIf { it.isJsonArray }?.asJsonArray ?: return
@@ -420,7 +421,7 @@ class MoeMessageDispatcher(
                     val pins = pinsArray.map { MoeJson.parsePinEntry(it.asJsonObject) }
                     publishPins(channel, pins)
                 } catch (e: Exception) {
-                    log.warn("Failed to parse PINS payload", e)
+                    log.warn("Failed to parse $type payload", e)
                 }
             }
             "PIN_CREATED" -> {

@@ -11,9 +11,75 @@
     "Only the two files named in the description change. No daemon, VS Code, ChatPanel.kt or MoeBundle.properties edit."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED test first (TDD; DoD 3). (1) Take the lease before the red file exists in the shared tree, and hold it through step 3: moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId, note:\"b9e0bb5a PINS_UPDATED red/green + gate\"} (mem:convention-jetbrains-gradle-lease, mem:gotcha-jetbrains-shared-tree-gate-peer-red). If you are queued, call moe.report_blocked with resourceId \"jetbrains-gradle\"; the grant unblocks you. (2) Create moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt with the Write tool. A shell write is barred by the GLOBAL customRule. Use JUnit 4 (org.junit.Test, org.junit.Assert.assertEquals), as in MoeMessageDispatcherAccountsTest.kt. Construct the dispatcher with project = fakeProject(), invokeLater = { it() }, isDisposed = { false }, currentState = { null }, updateState = {}, onProjectMismatch = {}, onDaemonShuttingDown = {}. Copy that file's private fakeProject() java.lang.reflect.Proxy helper into the new class. Do NOT extract a shared helper, because that edits a third file (DoD 5). Register one recording MoeStateListener. Its onPins appends (channel to pins) to `pinCalls: MutableList<Pair<String, List<PinEntry>>>`. Its onState and onStatus (both abstract) and onError, onDaemonError, onPinCreated, onPinRemoved and onPinToggled each append their own name to `others: MutableList<String>`. Write three @Test methods with backtick names.\n(a) Two pins. Handle {\"type\":\"PINS_UPDATED\",\"payload\":{\"channel\":\"chan-1\",\"pins\":[{\"messageId\":\"msg-1\",\"pinnedBy\":\"governor-x\",\"pinnedAt\":\"2026-11-02T17:00:00.000Z\",\"done\":false,\"doneAt\":null},{\"messageId\":\"msg-2\",\"pinnedBy\":\"human\",\"pinnedAt\":\"2026-11-02T17:05:00.000Z\",\"done\":true,\"doneAt\":\"2026-11-02T17:06:00.000Z\"}]}}. Assert assertEquals(listOf(\"chan-1\" to listOf(PinEntry(messageId=\"msg-1\", pinnedBy=\"governor-x\", pinnedAt=\"2026-11-02T17:00:00.000Z\", done=false, doneAt=null), PinEntry(messageId=\"msg-2\", pinnedBy=\"human\", pinnedAt=\"2026-11-02T17:05:00.000Z\", done=true, doneAt=\"2026-11-02T17:06:00.000Z\"))), pinCalls) and assertEquals(emptyList<String>(), others). Then handle the identical payload with type \"PINS\" and assert assertEquals(2, pinCalls.size) and assertEquals(pinCalls[0], pinCalls[1]). That second check is the parity with PINS that DoD 1 asks for.\n(b) Empty list. Handle PINS_UPDATED with channel \"chan-1\" and pins []. Assert assertEquals(listOf(\"chan-1\" to emptyList<PinEntry>()), pinCalls) and that `others` is empty. This proves that unpinning the last pin clears the panel.\n(c) Malformed frames, each passed to handle with NO try/catch in the test, so a throw fails the test (DoD 2). No payload key. payload null, [] and \"chan-1\". No channel key, and channel null. No pins key, and pins null, {} and \"msg-1\". pins [validPin, 42], [validPin, null], [validPin, \"msg-2\"] and [[]], where validPin is msg-1 from (a). The valid first entry proves that nothing is published when any entry is bad. After all frames, assert that pinCalls and `others` are both empty. Keep exactly this list. An empty-string, numeric or object channel is NOT in the DoD's malformed list, and the shared branch must keep treating it exactly as PINS does (planningNotes.risks a). Do not test those values.\n(3) Run RED against the unchanged dispatcher. From WSL bash, single-quote the whole cmd string and leave the --tests filter unquoted (mem:gotcha-jetbrains-gradle-from-wsl): cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeMessageDispatcherPinsTest --rerun' 2>&1 | tee /mnt/d/moe-scratch/b9e0bb5a/red.txt (mkdir -p the dir first; it is scratch, outside the checkout). Expect a nonzero exit, (a) and (b) failing with java.lang.AssertionError expected:<[(chan-1, …)]> but was:<[]>, and (c) passing. That RED output is evidence for DoD 3, not a defect. If it does not compile, or (c) fails, fix the test, never the dispatcher.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt"
+      ],
+      "note": "RED confirmed: 3 tests, (a),(b) fail, (c) passes. Output in /mnt/d/moe-scratch/b9e0bb5a/red.txt. Lease jetbrains-gradle held. 26 pre-existing dirty paths from other sessions untouched.",
+      "startedAt": "2026-11-02T18:07:17.684Z",
+      "completedAt": "2026-11-02T18:08:19.321Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Minimum fix, with the existing error handling (DoD 1, 2). Use the Edit tool in moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt, in handle(). (1) Change the branch label `\"PINS\" -> {` (line 415) to `\"PINS\", \"PINS_UPDATED\" -> {`. (2) In that branch's catch, change log.warn(\"Failed to parse PINS payload\", e) to log.warn(\"Failed to parse $type payload\", e). The text stays identical for PINS, and a bad PINS_UPDATED is now named in the log. (3) Add one comment line above the label: PINS is the GET_PINS reply to this socket, and PINS_UPDATED is the daemon's broadcast of a channel's full pin list after every pin write (chatStore.ts pinMessage/unpinMessage/togglePinDone, including moe.chat_pin/chat_unpin), in the same {channel, pins} shape. Error handling stays the PINS path as it is. The payload, channel and pins guards return before publishing. A non-object entry makes `it.asJsonObject` throw inside the existing try, the catch logs a warning, and publishPins never runs, so nothing is published and nothing leaves handle(). Do not touch PIN_CREATED, PIN_REMOVED, PIN_TOGGLED, safeAsString, publishPins, MoeStateListener, ChatPanel.kt, MoeBundle.properties, the daemon or VS Code. Then rerun the step-1 focused command (without the tee) and expect exit 0 with 3 tests and 0 failures in build/test-results/test/TEST-com.moe.services.MoeMessageDispatcherPinsTest.xml.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
+      ],
+      "note": "Branch label + warn text + comment. Focused run: 3 tests, 0 failures.",
+      "startedAt": "2026-11-02T18:08:24.054Z",
+      "completedAt": "2026-11-02T18:08:40.772Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate (DoD 4). Run it once, still under the jetbrains-gradle lease from step 1. The command is the DoD's `cd moe-jetbrains && ./gradlew test`, spelled for this Windows-JDK box (WSL has no JDK), with --rerun so :test cannot be UP-TO-DATE (mem:gotcha-gradle-jetbrains-shared-box): cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun'. A PowerShell seat runs the same gate as $env:GRADLE_OPTS='-Xmx512m'; cmd.exe --% /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" (mem:gotcha-jetbrains-gradle-gate-from-powershell). Report the spelling you actually ran. Confirm that the tests really ran: sum the TEST-*.xml attributes with grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/TEST-*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print t, s, f, e}', and check that the XML timestamps are after your run start. Expect failures 0 and errors 0. Snapshot fallback for peer WIP: if `git status --porcelain -- moe-jetbrains/` shows any path besides your two, or compile fails in a file you did not touch, run the same gate in a snapshot (mem:gotcha-jetbrains-snapshot-gradle-test, mem:in-place-verify-peer-red-tests): S=/mnt/d/moe-scratch/b9e0bb5a-gate; mkdir -p \"$S\" && git -C /mnt/d/projexts/moes archive HEAD moe-jetbrains | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt \"$S\"), cmp both files against the shared tree, then cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\b9e0bb5a-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'. Say which tree you used in the evidence. If compileKotlin fails in an untouched file, try mem:gotcha-jetbrains-stale-kotlin-ic first. A red exit with no failing test is the IPC flake in mem:gotcha-gradle-jetbrains-shared-box: rerun once. Never clean shared build output. Then call moe.release_resource {resourceId:\"jetbrains-gradle\", taskId, workerId}, on failure too. In complete_task, verification is this gate's command, exitCode 0 and outputTail. The summary quotes the two RED failure lines from /mnt/d/moe-scratch/b9e0bb5a/red.txt (test names plus expected/but was), as DoD 3 requires.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt"
+      ],
+      "note": "Full gate in place (only my two files dirty under moe-jetbrains/): exit 0, 574 tests, 0 skipped/failed/errors. Lease released.",
+      "startedAt": "2026-11-02T18:08:41.631Z",
+      "completedAt": "2026-11-02T18:09:19.253Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the two-file diff (load the adversarial-self-review skill; DoD 5). (1) Scope: `git status --porcelain` and `git diff --stat` show exactly MoeMessageDispatcher.kt (modified) and MoeMessageDispatcherPinsTest.kt (new) as yours. Do not touch other seats' dirty paths. Report both files in complete_step.modifiedFiles. (2) Mutation check by reading. Each of these makes a test fail: dropping the label, mapNotNull or filter-skipping bad entries (c catches it), returning early on an empty list (b), reordering or re-parsing entries (a, full PinEntry equality), routing entries to onPinCreated (a: `others` not empty). (3) Requesting-socket double delivery: StateManager.emit is synchronous (:983), so an IDE that pins, unpins or toggles gets PINS_UPDATED and then its own PIN_CREATED/PIN_REMOVED/PIN_TOGGLED reply. ChatPanel's onPinCreated dedupes by messageId (:246), onPinRemoved's removeAll is a no-op and onPinToggled replaces the same entry, so no pin is duplicated. (4) Keys: chatStore broadcasts the channel id, and ChatPanel requests GET_PINS by channel id (:141, :322), which the reply echoes. Both land in the same pinsByChannel key. (5) Null, empty and huge inputs: the guards return before publishing. The list is parsed once, in O(n), on the receiving thread, and onPins hops to the EDT. (6) A throw out of handle() reaches MoeProjectService.onMessage's catch, which calls publishStatus(false, …), so the panel looks disconnected. Confirm that no DoD-2 frame can throw. Leave the risk-a channel values as PINS has them.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt"
+      ],
+      "note": "Self-review: diff is exactly the two files (+3/-2 main, new test). Malformed guards return before publish; non-object entry throws inside the existing try and is caught. Double delivery on the requesting socket is deduped by ChatPanel. Risk-a channel values left as PINS has them.",
+      "startedAt": "2026-11-02T18:09:19.924Z",
+      "completedAt": "2026-11-02T18:09:29.544Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,10 +92,108 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:46:08.162Z",
-  "updatedAt": "2026-11-02T17:46:49.242Z",
+  "updatedAt": "2026-11-02T18:09:33.253Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:46:49.242Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T17:54:58.747Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-4c1da905"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T18:05:33.931Z",
+  "executionContract": {
+    "intendedBehavior": "Pins that any client or agent adds, removes or toggles (moe.chat_pin, moe.chat_unpin, toggle, or another IDE window) reach the JetBrains chat panel immediately. The daemon's PINS_UPDATED broadcast takes the same MoeMessageDispatcher branch as the PINS reply and calls onPins(channel, fullList) once. ChatPanel's existing onPins then replaces that channel's cached pins and redraws when it is the selected channel. A malformed frame publishes nothing and never throws out of handle().",
+    "acceptanceCriteria": [
+      "PINS_UPDATED with two pins gives exactly one onPins(\"chan-1\", [msg-1, msg-2]) in payload order with every PinEntry field parsed, and no other listener callback.",
+      "PINS_UPDATED with pins [] gives onPins(\"chan-1\", []).",
+      "PINS and PINS_UPDATED with the same payload give equal onPins calls.",
+      "These frames publish nothing and do not throw: no payload or a non-object payload; a channel that is missing or null; pins that is missing, null, an object or a string; any non-object pins entry, even after a valid one.",
+      "RED: before the fix, cases (a) and (b) of MoeMessageDispatcherPinsTest fail. The completion summary quotes those failure lines.",
+      "The gradle test gate exits 0 under the jetbrains-gradle lease."
+    ],
+    "invariants": [
+      "The PINS, PIN_CREATED, PIN_REMOVED and PIN_TOGGLED branches behave exactly as before, including PINS's channel coercion via safeAsString.",
+      "All-or-nothing: one non-object entry publishes nothing for the frame.",
+      "No file other than the two named changes, so there is no daemon, VS Code, ChatPanel.kt or MoeBundle.properties edit."
+    ],
+    "compatibility": [
+      "Wire shape is unchanged: PINS_UPDATED {channel: channelId, pins: PinEntry[]} from chatStore.ts, the same shape as the PINS reply. Older daemons that never send PINS_UPDATED are unaffected."
+    ],
+    "approvedScope": [
+      "MoeMessageDispatcher.handle: the \"PINS\" when-label becomes \"PINS\", \"PINS_UPDATED\"; that branch's warn text becomes \"Failed to parse $type payload\"; plus one comment line.",
+      "New JUnit 4 class com.moe.services.MoeMessageDispatcherPinsTest with a private fakeProject() copy and a recording MoeStateListener."
+    ],
+    "reuse": [
+      "Reuses the PINS branch, MoeJson.parsePinEntry, publishPins and ChatPanel.onPins. There is no new parser, listener method or UI code."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt:415-425 holds the PINS branch: payload object guard, channel via safeAsString, pins array guard, then try { map parsePinEntry(it.asJsonObject); publishPins } catch log.warn.",
+      "packages/moe-daemon/src/state/chatStore.ts:513/530/547 emits PINS_UPDATED {channel: channelId, pins}.",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt:234-240 has onPins replace pinsByChannel[channel] and refresh the panel when the channel is selected.",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherAccountsTest.kt is the headless harness: an injected-lambda constructor plus a Proxy IdeaProject."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Add PINS_UPDATED to the existing PINS branch label. Chosen: it is the fix the description names, it reuses the parser and publishPins, and the change is two lines. (2) A separate PINS_UPDATED branch with a copied parser. Rejected: duplicated code and drift. (3) Diff the broadcast list against the cache into onPinCreated/onPinRemoved/onPinToggled calls. Rejected: the frame carries the full list, so replacing it is exact and also covers toggles, and ChatPanel.onPins already replaces and redraws (:234-240). (4) Tighten channel parsing to stringOrNull. Rejected: it changes PINS's numeric and object channel behaviour, which DoD 1 forbids. (5) Have ChatPanel re-request GET_PINS on MESSAGE_CREATED or a timer. Out of scope, because DoD 5 allows no ChatPanel edit.",
+    "codebaseInsights": "- Daemon chatStore.ts pinMessage, unpinMessage and togglePinDone each emit PINS_UPDATED {channel: channelId, pins} (:513, :530, :547). StateManager.emit is synchronous (:983), and WebSocketServer.broadcast (:379) sends the event to every plugin client before the requester's own reply (PIN_CREATED :1128, PIN_REMOVED :1142, PIN_TOGGLED :1156).\n- The GET_PINS reply is PINS {channel: <requested>, pins} (:1114). ChatPanel requests by channel id, so both frames share a pinsByChannel key.\n- MoeJson.parsePinEntry (:833) defaults missing or wrong-typed fields. Only a non-object entry throws, via asJsonObject, inside the existing try.\n- MoeProjectService.onMessage (:370-379) catches whatever handle() throws and calls publishStatus(false, ex.message), so a throw looks like a disconnect.\n- No JetBrains test covers PINS or PIN_* frames today.\n- In headless JUnit the IntelliJ Logger is DefaultLogger: warn prints to stderr, but error would throw AssertionError. This branch uses warn.",
+    "risks": "(a) A channel that is a JSON object (or an array with zero or several elements) throws from safeAsString before the try, in PINS today and so in the shared branch too. A numeric channel is coerced to a string. Neither is in the DoD's malformed list: there, 'no channel' means the key is absent or JSON null, which is what PINS treats as no channel today. DoD 1 pins PINS's behaviour, so keep both cases as they are and do not test them. The daemon only ever sends a string channel id (GET_PINS also checks typeof === 'string').\n(b) A peer row (864103f3, JetBrains devDependencies bundling) may edit moe-jetbrains/build.gradle.kts while you run. Only the gradle lease is shared, so use step 3's snapshot fallback if the in-place gate breaks on someone else's bytes.\n(c) Stale Kotlin incremental compilation: see mem:gotcha-jetbrains-stale-kotlin-ic. No signature changes here, so it is unlikely.\n(d) Pre-existing ordering edge, out of scope: when two windows toggle the same pin within milliseconds, a reply sent after the other window's later broadcast can briefly restore the older entry on the requesting socket. The next PINS_UPDATED or a channel switch corrects it, and before this fix that window never learned of the other toggle at all.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherAccountsTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeStateListener.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "a3269a28b2705ec8e2b71ee0f232cd3c5827bc36",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T18:05:33.962Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T18:07:17.684Z",
+  "reviewStartedAt": "2026-11-02T18:09:33.251Z",
+  "verification": {
+    "command": "cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun'",
+    "exitCode": 0,
+    "outputTail": "> Task :test\n\nBUILD SUCCESSFUL in 28s\n11 actionable tasks: 2 executed, 9 up-to-date\nTEST-*.xml totals: tests=574 skipped=0 failures=0 errors=0",
+    "reportedAt": "2026-11-02T18:09:33.251Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherPinsTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
+  ],
+  "completionSummary": "MoeMessageDispatcher now routes PINS_UPDATED through the PINS branch (\"PINS\", \"PINS_UPDATED\"), so the daemon's broadcast after every pin write reaches ChatPanel.onPins; the warn text names the frame type. New MoeMessageDispatcherPinsTest has 3 cases: two pins in order plus parity with PINS, an empty list that clears the panel, and 14 malformed frames that publish nothing and never throw. RED against the unchanged dispatcher: \"PINS_UPDATED with two pins ... FAILED: expected:<[(chan-1, [PinEntry(messageId=msg-1, ...), PinEntry(messageId=msg-2, ...)])]> but was:<[]>\" and \"PINS_UPDATED with an empty list clears the channel FAILED: expected:<[(chan-1, [])]> but was:<[]>\" (/mnt/d/moe-scratch/b9e0bb5a/red.txt). Gate was run in place under the jetbrains-gradle lease (since released), and only my two files were dirty under moe-jetbrains/. 574 tests, 0 skipped, 0 failures, 0 errors."
 }
