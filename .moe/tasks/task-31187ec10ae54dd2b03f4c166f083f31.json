@@ -27,11 +27,16 @@
     {
       "stepId": "step-2",
       "description": "sh fix, scripts/moe-agent.sh. Anchor on function names, not line numbers: WT-04's reopen-1 rework (empty-index reuse, the Windows ls-tree probe) moves lines in provision_worktree before this row starts. Build on its final code.\n\n(a) control_worktree_mode. WT-07 (task-b319b263) specifies it:\n    - rc 0 iff `git -C \"$MOE_TOP\" symbolic-ref -q HEAD` prints exactly refs/heads/moe/control; any git failure is rc 1; callers run git_top first.\n    - If it is already in the file, call it.\n    - Else add it right after task_branch_landed with a 2-3 line comment: the design's §7 worktree-mode signal for control seats; runbook step 5 sets it, rollback removes it; Twin: Test-MoeControlWorktreeMode. WT-07 then reuses it.\n\n(b) provision_worktree's python parse. It sits inside single quotes, so use double quotes only.\n    - After `claim, ctx = load(claim), load(ctx)`, compute task first (ctx's task if it is a dict, else {}).\n    - read = task.get(\"id\") == tid: get_context answered for THIS task. A '{}' reply, an error or transport failure (empty input) and another task's context are all unread. plan_progress_mark already uses the same predicate.\n    - If not read: ctx = {} and task = {}, so neither its workspace nor its commits are used.\n    - ws = the claim's workspace if it is a dict, else ctx's.\n    - mode = \"worktree\" when ws is a dict with mode == \"worktree\". Else \"shared\" when the claim's workspace is a dict or read is true: an absent workspace on a readable context stays shared, the design's older-daemon rule. Else \"unknown\".\n    - Write `mode \\x1f (\"1\" if read else \"0\") \\x1f target \\x1f foreign`.\n    - Read it with `IFS=$'\\x1f' read -r mode ctxread target foreign`, and add ctxread to the function's `local` list.\n    - Then `case \"$mode\" in worktree|shared) ;; *) mode=unknown ;; esac`, so an empty parse (python failed) is unknown.\n\n(c) In the existing `if [ \"$mode\" != worktree ]` branch, right after `git_top || return 0` and BEFORE the unlanded-branch check, add:\n    `if [ \"$mode\" = unknown ] && control_worktree_mode; then worktree_stop MOE_WORKTREE_CONTEXT_FAILED \"get_context gave no context for $tid and the claim names no workspace, while the control checkout is on moe/control; unblock the task once get_context answers\"; fi`.\n    An unknown mode anywhere else falls through to today's shared path byte for byte, with no new output (epic rail 4).\n\n(d) Worktree path, right after the target check (\"the claim's target ... is not a local branch\") and before `read -ra rows <<< \"$foreign\"`, add:\n    `[ \"$ctxread\" = 1 ] || worktree_stop MOE_WORKTREE_CONTEXT_FAILED \"get_context gave no context for $tid, so its commits cannot be checked against $target; unblock the task once get_context answers\"`.\n    The §7.2 mode-mismatch guard reads task.commits from that context. On the same failed read it would otherwise pass silently.\n\n(e) Rewrite provision_worktree's header comment. The mode comes from the claim's workspace, else from a get_context that answered for this task. With neither, the mode is shared, unless the control checkout is on moe/control: then it refuses MOE_WORKTREE_CONTEXT_FAILED. Worktree mode also refuses when that context is missing.\n\nError handling:\n    - Call worktree_stop only from the main shell, never inside $(...) or a pipeline.\n    - A failed parse, a missing python, or a failed context read is 'unknown'. On moe/control it refuses; it never silently becomes shared or worktree.\n    - A git failure inside control_worktree_mode reads as not moe/control, per the design's control-seat rule.\n\nThen run the step-1 command over ALL cases (drop MOE_WORKTREE_ONLY) with the edited wrapper copied into a fresh scratch snapshot, and record 'N ok, 0 failed'.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
-      "startedAt": "2026-11-02T19:30:59.563Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh fix in provision_worktree. WT-07's control_worktree_mode already existed (after the WT landing helpers), so it is reused, not re-added.\n(b) The python parse computes task first. read = task.get(\"id\") == tid; when it is false, ctx and task become {}. ws is the claim's workspace dict, else ctx's. mode is worktree, else shared (claim workspace dict or read), else unknown. It emits mode\\x1fread\\x1ftarget\\x1fforeign; ctxread joins the local list, and the case statement maps any empty or odd mode to unknown.\n(c) In the shared branch after git_top: unknown plus control_worktree_mode leads to worktree_stop MOE_WORKTREE_CONTEXT_FAILED, before the unlanded-branch check.\n(d) In the worktree path after the target check: [ \"$ctxread\" = 1 ] || worktree_stop MOE_WORKTREE_CONTEXT_FAILED.\n(e) The header comment is rewritten.\nThe parse was probed directly with 14 inputs (empty, {}, non-JSON, another task, id [\"task-x\"], id 5, task as string, a JSON array, a matching id with and without workspace, claim shared/worktree/bogus). It matches the contract. Every worktree_stop runs in the main shell.\n\nFull sh suite, snapshot v-31187ec1.Mmk7dY (fixtures under /tmp): [worktree] 60 ok, 0 failed. New cases: ctx-unread ok, resume-unread ok, resume-dirty ok, resume-shared-unread ok; codes ok; path-long n/a off win32.\n\nNote: the plan's verbatim command puts the sh fixture parent on /mnt/d. There the pre-existing marker-scan case fails with 'mkfifo: Operation not supported' (59 ok, 1 failed). HEAD 0d8422ce fails it the same way, and it passes on ext4. Filed bug task-93bcb459. Verification therefore uses a /tmp parent for the sh leg only (setup-only change).",
+      "startedAt": "2026-11-02T19:30:59.563Z",
+      "completedAt": "2026-11-02T20:54:48.538Z"
     },
     {
       "stepId": "step-3",
@@ -114,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:51:26.149Z",
-  "updatedAt": "2026-11-02T19:30:59.563Z",
+  "updatedAt": "2026-11-02T20:54:48.538Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T19:53:26.719Z",
@@ -124,7 +129,7 @@
     "firstClaimAt": "2026-10-30T19:53:43.609Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -187,7 +192,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T20:52:50.174Z",

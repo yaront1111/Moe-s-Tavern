@@ -65,7 +65,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -91,7 +91,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T19:51:59.705Z",
-  "updatedAt": "2026-11-02T20:46:17.594Z",
+  "updatedAt": "2026-11-02T20:55:02.654Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T19:55:37.599Z",
@@ -101,12 +101,15 @@
     "firstClaimAt": "2026-11-02T19:56:27.367Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T20:54:18.932Z",
+    "wallClockMs": 3471565
   },
   "contextFetchedBy": [
     "architect-24611a0a",
     "worker-d6c1cb7a",
-    "worker-26483323"
+    "worker-26483323",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -186,10 +189,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-02T20:30:19.493Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-26483323@2026-11-02T20:42:32Z",
-    "at": "2026-11-02T20:46:16.885Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-02T20:49:39Z",
+    "at": "2026-11-02T20:55:02.654Z"
   },
   "commits": [
     {
@@ -253,5 +257,9 @@
     "source": "agent-reported"
   },
   "completionSummary": "Resolved the single landing conflict in scripts/moe-agent.ps1, preserving ConvertTo-MoeArgumentLine/corrected comments together with the merged target's protected $script:MoeNode FilePath selection (legacy fallback 'node'). Only that file was edited this retry via Serena; no Git commands, step reopening, or replanning. Snapshot diff/byte checks confirmed all bytes outside the conflict unchanged, no markers, UTF-8 BOM intact, LF-only. Existing regression test and Windows CI step preserved. Fresh approved verification: 4/4 native Windows tests pass on PS5.1 and pwsh7, 0 failures/skips; parity and lint pass. Self-review completed and task handoff plus protected-interpreter integration gotcha saved in Serena. Wrapper still owns completion landing.",
-  "landingRetry": null
+  "landingRetry": null,
+  "completedAt": "2026-11-02T20:54:18.932Z",
+  "reviewCompletedAt": "2026-11-02T20:54:18.932Z",
+  "reviewSummary": "Completion 3e092cff (pushed, on moe/work-2026-10-24): +186/-3, net 183 LOC, in approved scope.\n\nDoD1: the ConvertTo-MoeArgumentLine CRT escaping makes -ArgumentList one pre-quoted line. `node.exe --test scripts/tests/daemon-autostart-argv.test.mjs` on a 3e092cff snapshot: 4 pass, 0 fail, 0 skipped, 9 s. My probe of the landed helper through Start-Process round-tripped 13 edge cases with 0 mismatches on PS5.1 and pwsh7: empty, tab, embedded and lone quotes, trailing and lone backslashes, UNC, C:\\ and the literal name.\n\nDoD2: the same test against the pre-fix bbf2f857 ps1 failed 4/4 (split argv; 'Daemon failed to start within 10s').\n\nDoD3: the ps1 diff is only the helper, its comments and the -ArgumentList expression. Error handling and the wait loop are untouched; no -WorkingDirectory. -FilePath keeps the target's $script:MoeNode-or-'node' (from 64809b19) byte-identical, the correct conflict merge despite the stale plan invariant. The test covers the fallback only.\n\nInvariants: BOM ef bb bf, 0 CR, parses on both engines (row A), .sh untouched. The CI step sits after the daemon.json-cap step, Windows-only.\n\nGate `bash scripts/tests/parity-check.sh && npm run lint`: exit 0. No npm build, install or test. 0 leftover temp dirs.\n\nTiming: argv 9 s, RED 68 s, gate 4 s; 13 live seats. No gradle or git-land leases or queue at start or end. Windows process proxy (not CPU): node 13→15, powershell 10→11, java 2→2 (20:51:34Z→20:53:57Z).\n\nComplexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

@@ -13,34 +13,53 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST: the regression arm for DoD 1-3. Load test-driven-development.\n\nThis row sits at the tail of the wrapper lane (dependsOn 69c02444), so the rows ahead of it will have reworked scripts/moe-agent.sh. Locate every site in this plan by its text, never by line number.\n\nNew arm in scripts/tests/postflight.sh, '[idle wait killed]', ending with '[idle wait killed] ok'. Do not edit any pre-existing arm (DoD 3).\n- Fixture, modelled on the '[hot reload]' arm: its own project under $TMP_DIR, with .moe/project.json (autoCommit false), .moe/messages/chan-general.jsonl and a .moe/daemon.json. moe-call.sh refuses to deregister without daemon.json; the fake proxy never reads it.\n- Launch an idle looping seat: PATH=\"$TMP_DIR:$PATH\" HOME=\"$HOME_DIR\" MOE_PROXY_PATH=\"$FAKE_PROXY\" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \"$WRAPPER\" --project <P> --worker-id worker-idle-wait --role worker --no-start-daemon --command /bin/true --loop --poll-interval 47, in the background. Record its PID and add it to LIVE_PIDS, restoring that afterwards as '[hot reload]' does. 47 is deliberately distinctive: seats sleep 20, 30 and 60.\n- Find the poll sleep only as the child of that recorded PID: the row of `ps -A -o pid=,ppid=,comm=` whose ppid is the wrapper PID and whose comm is sleep. GLOBAL rule: never pkill, killall, `kill $(pgrep …)` or select by name or pattern alone.\n- (a) `kill -TERM` that one PID. Within 15 s (well under the 47 s poll) a second claim_next_task appears in .moe/evidence-rpcs.jsonl. The wrapper PID is still alive, its output has MOE_IDLE_WAIT_INTERRUPTED naming exit 143, and .moe/deregister.log has no line for worker-idle-wait.\n- (b) The same with `kill -KILL` on the next poll sleep: a third claim, and exit 137.\n- (c) The wrapper itself: `kill -TERM` the wrapper PID, then `kill -TERM` its current sleep child (found by PPID), so the TERM trap, which bash defers until the foreground sleep returns (as today), runs now. The wrapper exits 0 within a few seconds, its output has 'Agent stopped.', and its deregister.log line carries reason terminal_closed.\n- (d) An unexpected exit: a fresh single-shot seat, in its own project, that exits 1 after registering deregisters with reason unexpected_exit:1. Use the codex argv-probe refusal (MOE_CLI_ARGV_REJECTED, the fake codex with FAKE_CODEX_REJECT_ARGV=1, as scenario Z drives it, without editing scenario Z), or another deterministic exit-1 path after registration.\n- Bound every wait by POSTFLIGHT_TIMEOUT_SEC. On failure, print the wrapper output and deregister.log, and kill only the recorded PID.\n\nRun the arm and record in the step note: at RED, (a) fails because the wrapper exits 143 and deregisters terminal_closed, and (d) reports terminal_closed.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh"
       ],
-      "startedAt": "2026-11-02T20:48:41.907Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Added a new isolated [idle wait killed] arm without editing any existing arm: PPID-selected child TERM/KILL, bounded re-poll assertions, wrapper TERM exit/reason, independent codex argv refusal. RED scratch snapshots at HEAD (scripts archive + extracted exact new arm): /tmp/idle-red-poll.log fails because killed sleep ends the wrapper and deregisters terminal_closed; /tmp/idle-red-reason.log fails because exit-1 argv refusal reports terminal_closed. Initial test-only local-variable declaration issue fixed before RED. bash -n scripts/tests/postflight.sh passes. Working only in daemon-bound workspace.mode=worktree as current repo worker rails require. Historical lane-tail dependency is absent in current moe.list_tasks; no prerequisite code is assumed.",
+      "startedAt": "2026-11-02T20:48:41.907Z",
+      "completedAt": "2026-11-02T20:50:32.298Z"
     },
     {
       "stepId": "step-2",
       "description": "The sh fix, in scripts/moe-agent.sh.\n\n1. An idle_wait SECONDS helper, defined before the grouped main loop next to the INT/TERM trap:\n   idle_wait() { local rc=0; sleep \"$1\" || rc=$?; [ \"$rc\" -eq 0 ] || echo \"[WARN] MOE_IDLE_WAIT_INTERRUPTED: the ${1}s wait ended early (sleep exited $rc); the seat keeps looping.\" >&2; return 0; }\n   Its comment says why. A sleep killed by another process used to end the seat under set -e (five seats on 2026-10-31 at 04:47Z). The wrapper's own Ctrl+C, SIGINT or SIGTERM still stops it: bash runs the INT/TERM trap's `exit 0` as soon as the sleep returns, before `||` is evaluated. Probed for this plan: SIGTERM to the shell, then to its sleep, gave 'stopped' and exit 0, with no `||` branch; a killed sleep alone gave 'interrupted rc=143' and the script continued.\n2. Use idle_wait for every idle or backoff wait:\n   - sleep \"$POLL_INTERVAL\" (the idle poll);\n   - sleep \"$LAUNCH_FAIL_BACKOFF_SEC\" (the launch-failure and outage backoff);\n   - sleep \"$MOE_TASKLESS_POLL_SEC\" (the single-shot taskless wait);\n   - the account lease loop's sleep \"$trust_sec\" (untrusted retry) and sleep \"$f1\" (MOE_ACCOUNT_WAIT).\n   Leave the sub-second retries and the heartbeat sidecar alone: its subshell already runs `set +e`.\n3. cleanup_temp, the EXIT trap:\n   - its very first statement is `local exit_status=$?`, ahead of `set +e`;\n   - the deregister sends reason terminal_closed when exit_status is 0, else unexpected_exit:<status>;\n   - for a non-zero status it also prints one best-effort line to stderr: `[WARN] seat exiting with status <N>; deregistering as unexpected_exit:<N>`.\n   These stay unchanged:\n   - the INT/TERM trap still ends in `exit 0`, so Ctrl+C and SIGTERM keep terminal_closed;\n   - the hot-reload hand-over keeps its explicit wrapper_restart;\n   - a hang-up stays untrapped: it runs the EXIT trap with the last command's status, normally 0 (probed). The JetBrains plugin also deregisters a closed tab as terminal_closed itself (MoeProjectService.kt).\n   The daemon stores any reason string up to 200 chars (deregisterWorker.ts), so no daemon change is needed (DoD 2).\nThen `bash -n scripts/moe-agent.sh`, and step 1's arm passes.\nError handling: the EXIT trap stays best-effort under set +e, so a failed echo or moe-call never aborts it. idle_wait always returns 0, so a set -e abort can only come from somewhere else.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Implemented idle_wait at the five approved idle/backoff sites; left heartbeat, subsecond retry and landing-network backoff behavior unchanged. cleanup_temp now captures $? first, stays best-effort, and reports nonzero unexpected_exit:N. Existing INT/TERM trap text and wrapper_restart unchanged. bash -n scripts/moe-agent.sh passed; exact extracted new arm passed on the changed wrapper (/tmp/idle-red-b4bknmmr/scripts/tests/idle-green.sh): TERM/KILL sleep interruption, two re-polls, wrapper TERM exit 0/terminal_closed, argv refusal exit 1/unexpected_exit:1.",
+      "startedAt": "2026-11-02T20:50:32.336Z",
+      "completedAt": "2026-11-02T20:51:15.919Z"
     },
     {
       "stepId": "step-3",
       "description": "The ps1 twin, in scripts/moe-agent.ps1 and scripts/tests/postflight.ps1.\n\nThe idle-wait half does not apply to ps1. Every ps1 wait is an in-process Start-Sleep (the poll, the backoff, the taskless wait, the account waits), so no process kill can end it short of killing the wrapper itself. Say so in the completion summary.\n\nThe reason half is aligned:\n- `$script:MoeExitStatus = $null` sits beside `$script:MoeDeregistered`.\n- Invoke-MoeDeregister's default reason becomes unexpected_exit:<MoeExitStatus> when that is set, else terminal_closed. The self-restart call keeps passing 'wrapper_restart'.\n- The main loop's `try { do { … } while (…) } finally { … }` gains `catch { if ($_.Exception -isnot [System.Management.Automation.PipelineStoppedException]) { $script:MoeExitStatus = 1 }; throw }`. A terminating error still ends the script exactly as today, and Ctrl+C (a pipeline stop) keeps terminal_closed.\n- Each `exit 1` inside that loop (five at plan time, between the `do {` and the outer `} finally {`) first sets `$script:MoeExitStatus = 1`. PowerShell exposes no exit status inside finally after `exit N`: probed on 5.1, $LASTEXITCODE is empty there.\n- Residual, for the summary: the post-loop one-shot teamless exit 1 (MOE_SEAT_UNREGISTERED) runs after the finally has already deregistered, so ps1 still reports terminal_closed for it. The sh twin reports unexpected_exit:1.\nKeep the spelling 'unexpected_exit:' identical in both wrappers, and keep moe-agent.ps1 saved as UTF-8 with a BOM.\n\nNew arm in scripts/tests/postflight.ps1, the twin of step 1's (c) and (d), with no pre-existing arm changed:\n- a clean single-shot run deregisters terminal_closed;\n- the argv-probe refusal (the ps1 scenario Z fake codex) deregisters unexpected_exit:1.\nError handling: the catch only records the status and rethrows. It never swallows an error or changes the exit code.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Added PowerShell default deregistration status, catch/rethrow excluding PipelineStoppedException, and status=1 at all five current in-loop exit-1 sites. BOM preserved. New independent clean/argv-refusal arm leaves all existing arms unchanged. Native Windows PowerShell 5.1 extracted-arm RED at HEAD: clean passed, argv refusal exited 1 but logged terminal_closed. Same arm GREEN with changed wrapper: both pass (/mnt/d/moe-scratch/idle-ps1-hus59lvp/scripts/tests/idle.ps1, exit 0). bash syntax and parity-check.sh pass. ps1 idle waits remain in-process Start-Sleep (no killable child). Approved residual retained: post-finally one-shot MOE_SEAT_UNREGISTERED exit 1 still reports terminal_closed.",
+      "startedAt": "2026-11-02T20:51:15.966Z",
+      "completedAt": "2026-11-02T20:52:38.919Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh, on the finished code. The launcher harnesses may run in place (GLOBAL rule).\n1. The completion evidence, which are CI's Linux wrapper legs:\n`bash -n scripts/moe-agent.sh && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh`\n   Run it in the Bash tool's foreground, never under nohup or setsid. A detached launch starts with SIGINT ignored, and scenario W then fails (Serena gotcha-qa-session-env-and-signals-leak-into-harness). If it must run detached, use that memory's sigreset shim.\n2. The ps1 legs, in a separate call from any Linux run, under Windows Node from D:\\projexts\\moes: `node scripts\\tests\\postflight-safe.mjs powershell`, then `node scripts\\tests\\postflight-safe.mjs pwsh` and `pwsh -NoProfile -File scripts\\tests\\parity-check.ps1`. Write them into a run.cmd in a fresh scratch dir under %TEMP%, invoke it as `cmd.exe /d /c '<windows path>\\run.cmd'`, and delete the dir afterwards. If pwsh is missing, run the Windows PowerShell 5.1 leg alone and say so.\n3. `git diff --check` over the four files.\nRecord each leg's pass and fail outcome in the step note.\nError handling:\n- compare any failing arm or scenario against a run at HEAD before calling it pre-existing, and name both runs;\n- never weaken a test;\n- never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path;\n- kill only PIDs this session recorded (GLOBAL rule).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-02T20:52:38.956Z"
     },
     {
       "stepId": "step-5",
@@ -76,7 +95,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T04:54:29.471Z",
-  "updatedAt": "2026-11-02T20:48:41.907Z",
+  "updatedAt": "2026-11-02T20:52:38.956Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:42:11.681Z",
@@ -85,7 +104,8 @@
   "metrics": {
     "firstClaimAt": "2026-10-31T06:15:58.877Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-66fd8127",
@@ -96,7 +116,11 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T06:34:04.147Z",
   "executionContract": {
