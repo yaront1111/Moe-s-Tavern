@@ -6,12 +6,17 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 
 ## Features
 
-- **Kanban board** — epics and tasks across Backlog, Planning, Approval, Working, Review and Done; blocked tasks stay in Working with a BLOCKED badge
+- **Kanban board** — epics and tasks across Backlog, Planning, Approval, Working, Review and Done; blocked tasks stay in Working with a BLOCKED badge and a cause chip (resource wait, dependency wait or external block)
 - **Plan approval** — review each implementation plan before code is written (CONTROL mode; SPEED and TURBO relax the gate)
-- **Agent launcher** — start architect, worker, QA and governor agents with your chosen CLI
-- **Chat and metrics** — agent chat channels with notifications, plus a metrics view
+- **Task notifications** — a notice when a task moves into Awaiting Approval, Blocked, Review or Done, with **View Task** (Done has no button); no notice for a reconnect snapshot
+- **Task detail** — the blocker section names the cause, what clears it and the prerequisites; a read-only **Delivery** section shows the candidate, check run, receipt and attempt phase the daemon reports; **Release Agent** unassigns the task's agent after a confirmation
+- **Agent launcher** — start architect, worker, QA and governor agents with your chosen CLI. Closing the terminal of an agent this window launched deregisters that worker and releases its tasks; if the daemon is unreachable, it retries at the next connect. Seats still running after a window reload are kept
+- **Claude accounts** — the accounts rotation in its own view: usage per account, the switch threshold, and add, sign in, remove, move, rename and switch-percent actions. Sign-in runs the daemon's accounts CLI in a "Claude accounts" terminal
+- **Chat and metrics** — agent chat channels with notifications, plus a metrics view; a deleted channel leaves the channel list and the selection
 - **Drag & drop** — change task status by dragging between columns
 - **Real-time updates** — live sync over WebSocket; the status bar shows the daemon connection
+- **Project settings** — **Moe: Open Settings** edits the approval mode, speed-mode delay, agent command and Agent Teams (Claude Code workers only), and shows the effective landing and gate policy from `.moe/project.json` read-only. The branch and commit pattern fields are gone, because no launcher read them
+- **Worktrees stay out of the way** — per-task worktrees under `.worktrees/` are excluded from file watching and search by default (`files.watcherExclude`, `search.exclude`); they still show in the Explorer
 - **Managed VMs** — lists only the local Linux VMs Moe launched and recorded for this project; other VMs are never listed or touched. Provider readiness, execution readiness and verification are separate lines. Refresh, reconcile and cleanup run one at a time. The strong profile (`verified-local`) always shows as unavailable, and the view never changes the execution profile or delivery policy
 
 ## Requirements
@@ -23,7 +28,7 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 
 1. Install the extension `yaront1111.moe-vscode` from the VS Code Marketplace or Open VSX.
 2. Open your project. If it contains `.moe/`, the extension connects automatically; otherwise run **Moe: Connect to Daemon** to create it.
-3. Open the **Moe** view in the activity bar: Task Board, Chat, Metrics and Managed VMs. In Managed VMs, Reconcile needs a ready VM provider (Multipass at its installer's default location); Clean up owned also needs a launched VM row and asks for confirmation.
+3. Open the **Moe** view in the activity bar: Task Board, Chat, Metrics, Managed VMs and Claude accounts. In Managed VMs, Reconcile needs a ready VM provider (Multipass at its installer's default location); Clean up owned also needs a launched VM row and asks for confirmation.
 4. Create an epic and a task, drag the task to **Planning**, then run **Moe: Start Agent** (or **Moe: Start All Agents**).
 
 ## Extension settings
@@ -41,7 +46,9 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 
 ## Commands
 
-`Moe: Connect to Daemon`, `Moe: Disconnect from Daemon`, `Moe: Reconnect to Daemon`, `Moe: Refresh Board`, `Moe: Create Task`, `Moe: Create Epic`, `Moe: Open Task Detail`, `Moe: Open Epic Detail`, `Moe: Review Plan`, `Moe: Archive Done Tasks`, `Moe: Start Agent`, `Moe: Start All Agents`, `Moe: Open Settings`, `Moe: Show Daemon Status`, `Moe: Show Activity Log`, `Moe: Refresh Managed VMs`, `Moe: Reconcile Managed VMs`, `Moe: Clean Up Owned VMs`. The last three are the Managed VMs view's title-bar buttons.
+`Moe: Connect to Daemon`, `Moe: Disconnect from Daemon`, `Moe: Reconnect to Daemon`, `Moe: Refresh Board`, `Moe: Create Task`, `Moe: Create Epic`, `Moe: Open Task Detail`, `Moe: Open Epic Detail`, `Moe: Review Plan`, `Moe: Archive Done Tasks`, `Moe: Start Agent`, `Moe: Start All Agents`, `Moe: Open Settings`, `Moe: Show Daemon Status`, `Moe: Show Activity Log`, `Moe: Refresh Managed VMs`, `Moe: Reconcile Managed VMs`, `Moe: Clean Up Owned VMs`, `Moe: Refresh Claude Accounts`. The three Managed VMs commands are that view's title-bar buttons.
+
+The Claude accounts view adds `Moe Accounts: Add...`, `Moe Accounts: Set Switch Percent...` and `Moe: Refresh Claude Accounts` as title-bar buttons, and `Moe Accounts: Sign in`, `Rename...`, `Move up`, `Move down` and `Remove...` on each account's context menu. The `Moe Accounts` commands are hidden from the Command Palette, and each one is offered only while the daemon allows it.
 
 The extension does not define default keyboard shortcuts.
 
@@ -61,8 +68,20 @@ The extension does not define default keyboard shortcuts.
 - Drag and drop may not work in remote workspaces
 - The daemon must be reachable at `moe.daemon.host` (localhost by default)
 - Clean up owned deletes nothing unless Node.js 22 or later runs the bundled `vm-control.mjs` (it needs the global WebSocket) and the project's daemon is bound to loopback only (127.0.0.1 or ::1, the default); otherwise, including a daemon started with `--host` such as JetBrains' WSL agent mode, it keeps every VM and reports that the daemon could not confirm the attempt is closed
+- The task detail panel's Delivery section and Release Agent button show the task as it was when the panel opened; reopen the panel to refresh them
+- On Windows, agent and account terminals expect PowerShell as the default terminal profile
+- While disconnected, the Claude accounts view lists no accounts, so a CLI-only sign-in is not offered (the JetBrains Accounts tab still offers it)
 
 ## Release notes
+
+### Unreleased
+
+- Task status notifications, a Delivery section and Release Agent in task detail, matching JetBrains
+- Claude accounts view with the rotation and its account actions
+- Agent seats are deregistered when their terminal closes
+- Settings: Agent Teams toggle and a read-only landing policy; the unused branch and commit pattern fields are removed
+- Per-task worktrees are excluded from file watching and search; a deleted chat channel leaves the chat view
+- The packaged extension ships only the bundled `dist/extension.js`
 
 ### 0.8.0
 

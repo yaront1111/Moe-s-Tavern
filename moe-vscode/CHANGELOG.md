@@ -5,6 +5,28 @@ All notable changes to the Moe VS Code extension will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+VS Code parity with JetBrains and shared client behaviour (epic-aabc654d; see `docs/plans/2026-11-02-vscode-reuse.md`).
+
+### Added
+- Task status notifications for Awaiting Approval, Blocked, Review and Done, with a **View Task** action (none for Done). STATE_SNAPSHOT frames and frames before the first snapshot never notify.
+- Task detail: a read-only **Delivery** section (candidate, reported check run, required-check verdict, delivery receipt, attempt phase) and a **Release Agent** button with a confirmation, which sends RELEASE_TASK.
+- **Claude accounts** view in the Moe sidebar. It shows the rotation (status, 5-hour and weekly usage per account) plus a chips line, and has add, sign in, remove, move up/down, rename and switch-percent actions. Sign-in and sign-out run the daemon's accounts CLI in a "Claude accounts" terminal.
+- Agent seats launched from this window are deregistered (DEREGISTER_WORKER, reason `terminal_closed`) when their terminal closes. The deregistration is re-sent at each connect until the daemon acknowledges it. A seat whose shell survives a window reload is kept.
+- Settings: an **Enable Agent Teams** checkbox and a read-only **Landing & Gate Policy** section.
+- Per-task worktrees (`.worktrees/`) are excluded from file watching and search by default.
+- Shared test corpora: the VS Code delivery, blocker, settings-policy, accounts and seat-tracker logic replays the same `moe-jetbrains/src/test/resources/client-*.json` rows as JetBrains, and its labels are checked against `MoeBundle.properties`.
+
+### Changed
+- Settings no longer edit `autoCreateBranch`, `branchPattern` or `commitPattern`, which no launcher reads. Values already saved in `.moe/project.json` are kept.
+- The bundled scripts and docs come from `scripts/bundle-manifest.json`, the same list the JetBrains build reads. The vsix now also ships the remaining `docs/roles` reference files.
+- The vsix ships only the esbuild bundle `dist/extension.js`, without the tsc output or `eslint.config.mjs`. CI packages the extension and smoke-tests its bundle on every pull request.
+
+### Fixed
+- A deleted chat channel (CHANNEL_DELETED) leaves the channel list and the current selection.
+- Terminal commands refuse every C0 control character and DEL. PowerShell quoting doubles the curly single quotes PowerShell also treats as quotes, so a project path such as `Bob’s work` stays one argument.
+
 ## [0.8.0] - 2026-09-07
 
 ### Added

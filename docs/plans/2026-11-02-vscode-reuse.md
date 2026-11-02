@@ -8,6 +8,8 @@
 
 Does `moe-vscode` build, test and speak the current daemon wire? Yes to all three, measured in a git-archive snapshot of HEAD. No npm command ran in the shared checkout.
 
+The counts at the epic's close are under **Final gates (VSC-18)** at the end of this doc.
+
 - Snapshot sha: `aacc03ad51cc488a26f15e0575fb0d39cfd73b0a` (`git archive HEAD` of the whole repo, extracted to `/mnt/d/moe-scratch/vsc0-aacc03ad`, deleted afterwards). Environment: `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin`, WSL Linux.
 
 | Step (all in the snapshot) | Command | Exit | Result |
@@ -93,35 +95,71 @@ Criterion: use a corpus when the logic branches or renders text in both clients;
 
 Built from `moe.list_tasks` for `epic-aabc654d` on 2026-11-02 (22 rows). "Area" names the gap or the main files the row owns; each row's own plan and `affectedFiles` are authoritative.
 
-| Label | Task id | Title | Kind | Wave | dependsOn | Area |
-|---|---|---|---|---|---|---|
-| VSC-0 | `task-a3e414a3dce848e6939081e5cbf941ce` | Breakdown: audit moe-vscode against JetBrains, decide plugin reuse, slice this epic | doc | 1 | none | this doc |
-| VSC-1 | `task-2ef8e36c29f4490884dff27c9f3ed9fb` | VS Code: notify on task status transitions, matching JetBrains | VS Code | 1 | none | G1, `moe-vscode/src` notifications |
-| VSC-2 | `task-09e784e5dd214833b8b9df66038941cc` | VS Code: keep per-task worktrees out of file watching and search, matching JetBrains | VS Code | 1 | none | G2, `moe-vscode/package.json` |
-| VSC-3 | `task-a5f39d5535404f6e9e59f762c046f5e0` | JetBrains: shared delivery corpus for DeliveryPresentation | JetBrains corpus | 1 | none | G3, `client-delivery.json` |
-| VSC-4 | `task-db97dacb7b3843b4a6f747c154123501` | JetBrains: shared blocker corpus for TaskBlockerPresentation | JetBrains corpus | 1 | none | G4, `client-blocker.json` |
-| VSC-5 | `task-0f2cc6eb40324b37bafa8be4cf65caa3` | JetBrains: shared landing-policy corpus for the settings dialog | JetBrains corpus | 1 | none | G5, `client-settings-policy.json` |
-| VSC-6 | `task-9f6a725ff14c4c08b4acb203884e7ae5` | VS Code client: wire parity with JetBrains (RELEASE_TASK, CHANNEL_DELETED) | VS Code | 1 | none | G6/G7, `MoeDaemonClient.ts`, `extension.ts` |
-| VSC-7 | `task-93729f32ef6f408cbd411813c5c93838` | JetBrains: shared accounts corpus for AccountPresentation | JetBrains corpus | 1 | none | G8, `client-accounts.json` |
-| VSC-8 | `task-185f728fd79c4658a86b8a0b40a66595` | VS Code: Delivery section in task detail from the shared delivery corpus | VS Code | 2 | VSC-3 | G3, `TaskDetailPanel.ts` |
-| VSC-9 | `task-06dda5c1df29433ab4eb5c4230b38581` | VS Code: task detail and board blocker logic pass the shared blocker corpus | VS Code | 2 | VSC-4 | G4, `TaskDetailPanel.ts`, `media/board.js` |
-| VSC-10 | `task-743e577af8204d6aa48d11fab01c979d` | VS Code: settings panel parity from the shared landing-policy corpus | VS Code | 2 | VSC-5 | G5, settings panel |
-| VSC-11 | `task-e8255fb1ab274ca9bf67d49c34a9635e` | VS Code: Release Agent action in task detail, matching JetBrains | VS Code | 2 | VSC-6 | G6, `TaskDetailPanel.ts` |
-| VSC-12 | `task-daf5abdd282a4c46b280eb0a48e74cd9` | VS Code client: Claude account rotation wire, matching JetBrains | VS Code | 2 | VSC-6 | G8, `MoeDaemonClient.ts` |
-| VSC-13 | `task-065e4812d96247cc8394b3cd0416475d` | VS Code: AccountPresentation port that passes the shared accounts corpus | VS Code | 3 | VSC-7, VSC-12 | G8, accounts presentation |
-| VSC-14 | `task-720f81a6917d4490ab3b5a58c2217ccb` | VS Code: read-only Accounts view in the Moe sidebar | VS Code | 4 | VSC-13 | G8, `package.json`, accounts view |
-| VSC-15 | `task-357ed3ae786b4477a39840a7b86a88a6` | VS Code: account actions in the Accounts view, matching JetBrains | VS Code | 5 | VSC-14 | G8, `package.json`, accounts view |
-| VSC-16 | `task-6fbd08111de142508fb0402d06f24e3f` | Packaging: one bundle manifest shared by the VS Code and JetBrains builds | packaging | 1 | none | G10, `scripts/bundle-manifest.json`, `bundle-assets.mjs`, `build.gradle.kts` |
-| VSC-17 | `task-6a0f0be32acb4dc8b3977f32405277a5` | CI: package the VS Code extension on every PR and smoke-test its bundle | CI | 2 | VSC-16 | G11, `.github/workflows/ci.yml` |
-| VSC-18 | `task-43363b5db90940cb8760fe6bfa0fe5ad` | Integration and hardening: VS Code parity and plugin-reuse epic | final | last | all 20 other slices | whole-epic gates, D1 manual check |
-| VSC-19 | `task-b3daad343a474830a6bd243991d5353d` | JetBrains: shared seat-tracker corpus for AgentSeatTracker | JetBrains corpus | 1 | none | G9, `client-seat-tracker.json` |
-| VSC-20 | `task-7fa27666bdb94325b62c205e3599b165` | VS Code: AgentSeatTracker port with seat wiring that passes the shared seat corpus | VS Code | 2 | VSC-19 | G9, seat tracker |
-| VSC-21 | `task-7e7bd0ec91ca488da2858f70cff32f65` | VS Code: deregister agent seats whose terminal closed, matching JetBrains | VS Code | 3 | VSC-20, VSC-6, VSC-1 | G9, `extension.ts` |
+VSC-18 added the last two columns and checked each Area cell against the files the row's landed commits touched (`git show --name-only`, `.moe/` excluded). "Landing commit" is the row's completion commit on `moe/work-2026-10-24`. Where that commit carries only board state, the commit that landed the code is given in brackets. Paths without a directory are under `moe-vscode/src/` (VS Code) or the plugin's `src/main` and `src/test` trees (JetBrains); the corpus files are in `moe-jetbrains/src/test/resources/`.
+
+| Label | Task id | Title | Kind | Wave | dependsOn | Area | Final status | Landing commit |
+|---|---|---|---|---|---|---|---|---|
+| VSC-0 | `task-a3e414a3dce848e6939081e5cbf941ce` | Breakdown: audit moe-vscode against JetBrains, decide plugin reuse, slice this epic | doc | 1 | none | this doc | DONE | `3da2f5aa` |
+| VSC-1 | `task-2ef8e36c29f4490884dff27c9f3ed9fb` | VS Code: notify on task status transitions, matching JetBrains | VS Code | 1 | none | G1, `extension.ts`, `util/TaskNotifier.ts` | DONE | `fd136d98` |
+| VSC-2 | `task-09e784e5dd214833b8b9df66038941cc` | VS Code: keep per-task worktrees out of file watching and search, matching JetBrains | VS Code | 1 | none | G2, `moe-vscode/package.json` | DONE | `c46c4a8c` |
+| VSC-3 | `task-a5f39d5535404f6e9e59f762c046f5e0` | JetBrains: shared delivery corpus for DeliveryPresentation | JetBrains corpus | 1 | none | G3, `client-delivery.json`, `DeliveryCorpusTest.kt` | DONE | `287d86c5` |
+| VSC-4 | `task-db97dacb7b3843b4a6f747c154123501` | JetBrains: shared blocker corpus for TaskBlockerPresentation | JetBrains corpus | 1 | none | G4, `client-blocker.json`, `BlockerCorpusTest.kt` | DONE | `4ad2f057` |
+| VSC-5 | `task-0f2cc6eb40324b37bafa8be4cf65caa3` | JetBrains: shared landing-policy corpus for the settings dialog | JetBrains corpus | 1 | none | G5, `client-settings-policy.json`, `SettingsPolicyCorpusTest.kt`, `MoeJson.kt` | DONE | `2e63e0fd` (first landed `3cfc3c78`) |
+| VSC-6 | `task-9f6a725ff14c4c08b4acb203884e7ae5` | VS Code client: wire parity with JetBrains (RELEASE_TASK, CHANNEL_DELETED) | VS Code | 1 | none | G6/G7, `MoeDaemonClient.ts`, `media/chat.js` | DONE | `6fa401dc` (code `b7a67b97`) |
+| VSC-7 | `task-93729f32ef6f408cbd411813c5c93838` | JetBrains: shared accounts corpus for AccountPresentation | JetBrains corpus | 1 | none | G8, `client-accounts.json`, `AccountPresentation.kt`, `AccountsCorpusTest.kt` | DONE | `00c1ac96` (code `7df999be`) |
+| VSC-8 | `task-185f728fd79c4658a86b8a0b40a66595` | VS Code: Delivery section in task detail from the shared delivery corpus | VS Code | 2 | VSC-3 | G3, `panels/TaskDetailPanel.ts`, `types/moe.ts` | DONE | `ff0e8290` |
+| VSC-9 | `task-06dda5c1df29433ab4eb5c4230b38581` | VS Code: task detail and board blocker logic pass the shared blocker corpus | VS Code | 2 | VSC-4 | G4, `tests/blocker-corpus.test.cjs` only: `TaskDetailPanel.ts` and `media/board.js` passed the corpus unchanged | DONE | `89062f86` |
+| VSC-10 | `task-743e577af8204d6aa48d11fab01c979d` | VS Code: settings panel parity from the shared landing-policy corpus | VS Code | 2 | VSC-5 | G5, `panels/SettingsPanel.ts`, `media/settings.js` | DONE | `080f6df1` |
+| VSC-11 | `task-e8255fb1ab274ca9bf67d49c34a9635e` | VS Code: Release Agent action in task detail, matching JetBrains | VS Code | 2 | VSC-6 | G6, `panels/TaskDetailPanel.ts`, `media/taskDetail.js` | DONE | `63e2961d` (code `e71520cd`) |
+| VSC-12 | `task-daf5abdd282a4c46b280eb0a48e74cd9` | VS Code client: Claude account rotation wire, matching JetBrains | VS Code | 2 | VSC-6 | G8, `MoeDaemonClient.ts`, `types/accounts.ts` | DONE | `fbc38d15` |
+| VSC-13 | `task-065e4812d96247cc8394b3cd0416475d` | VS Code: AccountPresentation port that passes the shared accounts corpus | VS Code | 3 | VSC-7, VSC-12 | G8, `util/AccountPresentation.ts` | DONE | `b863458a` |
+| VSC-14 | `task-720f81a6917d4490ab3b5a58c2217ccb` | VS Code: read-only Accounts view in the Moe sidebar | VS Code | 4 | VSC-13 | G8, `package.json`, `extension.ts`, `providers/AccountsTreeProvider.ts`, `util/AccountPresentation.ts` | DONE | `21464c5d` |
+| VSC-15 | `task-357ed3ae786b4477a39840a7b86a88a6` | VS Code: account actions in the Accounts view, matching JetBrains | VS Code | 5 | VSC-14 | G8, `package.json`, `extension.ts`, `providers/AccountsTreeProvider.ts` | DONE | `5e972820` |
+| VSC-16 | `task-6fbd08111de142508fb0402d06f24e3f` | Packaging: one bundle manifest shared by the VS Code and JetBrains builds | packaging | 1 | none | G10, `scripts/bundle-manifest.json`, `bundle-assets.mjs`, `build.gradle.kts`, `docs/DEVELOPMENT.md` | DONE | `84536308` |
+| VSC-17 | `task-6a0f0be32acb4dc8b3977f32405277a5` | CI: package the VS Code extension on every PR and smoke-test its bundle | CI | 2 | VSC-16 | G11, `.github/workflows/ci.yml`, `moe-vscode/.vscodeignore` | DONE | `f534cc06` |
+| VSC-18 | `task-43363b5db90940cb8760fe6bfa0fe5ad` | Integration and hardening: VS Code parity and plugin-reuse epic | final | last | all 20 other slices | whole-epic gates, D1 manual check, the `moe-vscode` README, CHANGELOG and MANUAL_TESTS, this table | WORKING | this row |
+| VSC-19 | `task-b3daad343a474830a6bd243991d5353d` | JetBrains: shared seat-tracker corpus for AgentSeatTracker | JetBrains corpus | 1 | none | G9, `client-seat-tracker.json`, `SeatTrackerCorpusTest.kt` | DONE | `25e70ba1` |
+| VSC-20 | `task-7fa27666bdb94325b62c205e3599b165` | VS Code: AgentSeatTracker port with seat wiring that passes the shared seat corpus | VS Code | 2 | VSC-19 | G9, `util/AgentSeatTracker.ts` | DONE | `161c058c` |
+| VSC-21 | `task-7e7bd0ec91ca488da2858f70cff32f65` | VS Code: deregister agent seats whose terminal closed, matching JetBrains | VS Code | 3 | VSC-20, VSC-6, VSC-1 | G9, `extension.ts`, `MoeDaemonClient.ts`, `util/AgentLauncher.ts` | DONE | `2ab627c2` |
+
+### Follow-ups filed during the epic
+
+Statuses as of this row's writing (2026-11-02).
+
+| Label | Task id | Title | Filed by | Status | Landing commit |
+|---|---|---|---|---|---|
+| VSC-21a | `task-486f6f3223d74ac2bde345bf126299a7` | VS Code: remember seat shell pids so a reload or extension restart never deregisters a live seat | VSC-21 | DONE | `fb3e0721` (first landed `644ce882`) |
+| VSC-22 | `task-be543ff20bbc4f30ac7ac895ae0b4d13` | JetBrains: chat panel stops selecting a deleted channel, matching VS Code (VSC-6) | VSC-6 | DONE | `d2a55eb5` |
+| bug | `task-ba9590ce48f14712a160c9b74a9dab12` | MoeProjectConnectionTest can hang forever in ConnectionFixture.close | VSC-5 (JetBrains gate rerun) | DONE | `946b4713` |
+| bug | `task-26a3dacde03c4195bfcd3e01e3c59efd` | VS Code AgentLauncher lets terminal control characters through to sendText (bash path unchecked) | VSC-15 (self-review) | DONE | `519720ca` |
+| bug | `task-2f4b224f9afe47b4a5e382d5da7bb16c` | PowerShell quoting in both plugins lets curly quotes (and, in JetBrains, a backtick) break out of agent arguments | planning of `task-26a3dacd` | DONE | `12ef9ffb` |
+| bug | `task-76d4500abc1047d5b51d63f2a2dc92bc` | JetBrains PowerShell -Command route drops ASCII double quotes on Windows PowerShell 5.1, and its WSL wrap lets ! expand bash history | planning of `task-2f4b224f` | DONE | `53685817` |
+| VSC-23 | `task-921ca494fac241aa96b85cb9ae3e63ab` | VS Code task detail: refresh the Delivery section and Release Agent button live, and pin blocker labels to MoeBundle | VSC-18 | PLANNING | not landed (open) |
+| VSC-24 | `task-d2a3532ec05c49d384214ae15b01ba7e` | VS Code chat: prefer the general channel when auto-selecting, and dedupe CHANNEL_CREATED by id | VSC-18 | PLANNING | not landed (open) |
+| VSC-25 | `task-3c4850819cad458d9edb59809d00e400` | VS Code Accounts view: one copy of shell quoting and account text, and rows while disconnected so CLI-only sign-in works | VSC-18 | PLANNING | not landed (open) |
+| VSC-26 | `task-83515358babb403480bbef769d9726f2` | JetBrains: show delivery check exit codes outside the Int range, matching the daemon and VS Code | VSC-18 | PLANNING | not landed (open) |
+| VSC-27 | `task-e1024bb3e6194b828fcbf905babfebae` | VS Code on Windows: agent and account terminals assume a PowerShell default shell | VSC-18 | PLANNING | not landed (open) |
 
 Notes on the table:
 
-- **Wave 1** is VSC-1, 2, 3, 4, 5, 6, 7, 16 and 19. They have no dependencies and pairwise-disjoint files, so several coders can claim them at once in shared-checkout mode. At writing, VSC-2 and VSC-19 are DONE and VSC-1 is in REVIEW.
+- **Wave 1** is VSC-1, 2, 3, 4, 5, 6, 7, 16 and 19. They have no dependencies and pairwise-disjoint files, so several coders can claim them at once in shared-checkout mode. At the epic's close every slice except VSC-18 is DONE and landed, and so are VSC-21a, VSC-22 and the four bug rows; VSC-23 to VSC-27 are open follow-ups.
 - **Serialization-only edges.** VSC-12 depends on VSC-6, and VSC-21 on VSC-6 and VSC-1, only to serialize edits to `MoeDaemonClient.ts` and `extension.ts` in shared-checkout mode. A governor may drop them after the worktree switch, when a shared file stops being a dependency.
 - **Shared files by order.** Rows that share `TaskDetailPanel.ts` (VSC-8, 9, 11) or `package.json` (VSC-2, 14, 15) are sequenced by their `order` values.
 - **VSC-18** is the single final integration-and-hardening row, the epic's `finalTaskId`. Its `dependsOn` is capped at 20 entries, so it lists the other 20 slices and VSC-0 (this doc) is not in it.
 - **Rails.** The epic rails carry the files-to-avoid list and the JetBrains-first gate (`gradlew.bat test` on native Windows under the jetbrains-gradle lease); no slice plans a file on the avoid list.
+
+## Final gates (VSC-18)
+
+Measured on 2026-11-02 in a `git archive` snapshot of `7925df59224700dce0387f90ec8dab17b3691966`, with VSC-18's four doc files laid over it, at `/mnt/d/moe-scratch/vsc18-gate` (deleted afterwards). The environment is the same as in Baseline. The exact commands are VSC-18's `executionContract.checkRefs`.
+
+| Step (all in the snapshot) | Command | Exit | Result | Baseline |
+|---|---|---|---|---|
+| Daemon and proxy builds | `npm ci --no-audit --no-fund && npm run build` in each package | 0 | `tsc` clean | the same |
+| Lint and compile, `moe-vscode` | `npm run lint`, `npm run compile` | 0 | no findings; `tsc -p ./` clean | the same |
+| Tests, `moe-vscode` | `npm test` | 0 | 556 tests, 552 pass, 0 fail, 0 cancelled, 4 skipped (Windows-only) | 388 tests, 384 pass, 4 skipped at `882a4c39` |
+| Package | `npm run package` | 0 | `moe-vscode-0.8.0.vsix`, 4094 files, 61.36 MB (64,342,960 bytes); no tsc output or `eslint.config.mjs` inside (VSC-17) | 4105 files, 61.37 MB |
+| Onboarding smoke, vsix | `node scripts/tests/onboarding.mjs vsix/extension/bundled` | 0 | `PASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence` | PASS |
+| JetBrains | `gradlew.bat test buildPlugin --rerun` through `cmd.exe` on native Windows, under the jetbrains-gradle lease | 0 | `BUILD SUCCESSFUL in 1m 8s`, 13 of 13 actionable tasks executed (`:test` and `:prepareSandbox` included, none UP-TO-DATE); 571 JUnit tests in 35 result files, 0 failures, 0 errors, 0 skipped; `moe-jetbrains-0.8.0.zip`, 64,559,036 bytes | 546 JUnit tests at `25e70ba1` |
+| Onboarding smoke, plugin zip | `node scripts/tests/onboarding.mjs jb/moe-jetbrains` | 0 | `PASS onboarding: …` (same line as above) | not measured |
+
+Gradle's `--rerun` applies only to the task named just before it. The snapshot was fresh, so it had no earlier outputs and Gradle executed every task (none from cache). The short form is fresh evidence here.
