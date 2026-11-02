@@ -53,7 +53,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -69,16 +69,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:40:33.911Z",
-  "updatedAt": "2026-11-02T10:35:47.257Z",
+  "updatedAt": "2026-11-02T10:38:13.962Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:27:11.974Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-02T10:38:13.962Z",
+    "wallClockMs": 661988
   },
   "contextFetchedBy": [
     "architect-d54b05fd",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-1106e678"
   ],
   "tier": "light",
   "effort": "high",
@@ -196,5 +199,9 @@
     "kind": "completion",
     "sessionId": "worker-4c1da905@2026-11-02T10:34:00Z",
     "at": "2026-11-02T10:35:47.257Z"
-  }
+  },
+  "completedAt": "2026-11-02T10:38:13.962Z",
+  "reviewCompletedAt": "2026-11-02T10:38:13.962Z",
+  "reviewSummary": "APPROVED. Completion commit 89062f86 (recorded, pushed, on moe/work-2026-10-24): diff is only moe-vscode/tests/blocker-corpus.test.cjs (+157, new) + the task's board json; no production change, no moe-jetbrains file touched (dirty jetbrains paths in shared tree belong to other sessions, not this commit).\n\nRe-ran myself:\n1) task.verification (git archive HEAD snapshot in /tmp, env -i nvm Node 24.21: npm ci, lint, compile, npm test): exit 0, 473 tests / 469 pass / 4 skip / 0 fail; snapshot deleted.\n2) checkRef 2 mutant (scratch board.js without the BLOCKED gate, line found exactly once): test exit 1, B04/B05/B06/B17 each reported as \"<id> board.js: expected cause\"; mutant dir removed. Test is not vacuous.\n3) checkRef 3 exit 0: client-blocker.json byte-identical to 4ad2f057 at HEAD and working tree; no commit with this task's Moe-Task trailer touches moe-jetbrains/.\n4) In the snapshot C0/C1/C2 pass and tests/task-blocker-visibility.test.cjs (31 tests) passes unchanged.\n\nDoD: (1) C1 replays every row through blockCause + blockedPrerequisiteIds on TaskDetailPanel.ts (node:vm, require map vscode + ./PlanReviewPanel), board.js and taskDetail.js (raw vm contexts), strict compare, all failures in one assertion \"<id> <surface>: ...\". (2) C2 checks row.task.needsHumanReview, needsHumanAttention, board.js chip-question, and the cause chip vs BLOCK_CAUSE_LABEL. (3) mutant killed. (4) corpus + jetbrains unchanged. (5) snapshot gate green.\n\nRails: no forbidden tokens; no npm in shared checkout; no row needed a production fix. Missing corpus fails with its path; a throwing row is recorded per surface and the loop continues. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

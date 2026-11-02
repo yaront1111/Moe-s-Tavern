@@ -11,9 +11,42 @@
     "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first. Create moe-vscode/tests/accounts-wire.test.cjs with the Write tool. Reuse the harness shape of tests/plan-approval-client.test.cjs:\n- transpile MoeDaemonClient.ts and run it in a vm context with the closed require map {vscode, ws, child_process, fs, path, net};\n- use a RecordingEventEmitter;\n- set workspace.getConfiguration() to return { get: () => false }, so no reconnect timer;\n- connectSocket() records each frame and only then delegates;\n- deliver(frame) calls client['handleMessage'](JSON.stringify(frame));\n- JSON-parse the frames in the test realm before deepStrictEqual (mem:gotcha-vscode-vm-test-harness).\nSize budget: the whole row should stay at or under about 300 net LOC (QA rejects more than 400; mem:gotcha-plan-net-loc-budget-tests-count), so table-drive every list below and keep this file near 180 lines.\n\nRows, mirroring moe-jetbrains MoeCommandSenderAccountsTest.kt and MoeMessageDispatcherAccountsTest.kt:\n- A1 (DoD 1): with the client connected, run the JetBrains calls in order: addAccount('  Work Max  '), addAccount('   '), addAccount(undefined), removeAccount('acct-1'), moveAccount('acct-2', -1), moveAccount('acct-2', 1), renameAccount('acct-3', ' Personal '), setAccountSwitchPercent(85). Each returns true, and the frames deep-equal the 8 JetBrains envelopes: ADD_ACCOUNT {label:'Work Max'}, ADD_ACCOUNT {}, ADD_ACCOUNT {}, REMOVE_ACCOUNT {accountId:'acct-1'}, MOVE_ACCOUNT {accountId:'acct-2', offset:-1}, the same with offset 1, RENAME_ACCOUNT {accountId:'acct-3', label:'Personal'}, SET_ACCOUNT_SWITCH_PERCENT {switchAtPercent:85}.\n- A2: with a recording socket but _connectionState 'disconnected', each of the five senders returns false and nothing is sent.\n- A3: moveAccount with offset 0, 2, -2 or 1.5, and setAccountSwitchPercent with 0, 101, -5 or 85.5, each throw a RangeError (the vm realm's RangeError, read via vm.runInContext). Nothing is sent, and they throw even while disconnected, because validation comes first, as JetBrains' require does.\n- B1 (DoD 2): after a STATE_SNAPSHOT without accountRotation, deliver ACCOUNTS_UPDATED with a rotation {registryFile, switchAtPercent: 75, error: null, cli, accounts: [one account]}. accountRotation JSON-equals the payload, onAccountsChanged fires exactly once with it, and currentState's tasks, epics and workers stay JSON-equal.\n- B2: ACCOUNTS_UPDATED before any STATE_SNAPSHOT is ignored: accountRotation stays undefined and no event fires.\n- B3: after a good rotation, these leave it in place and fire nothing: payloads {}, {accounts: []}, {registryFile: 42}, {registryFile: '  '}, [], null and 'x', and a frame with no payload at all.\n- B4: a STATE_SNAPSHOT whose accountRotation is a valid view sets accountRotation and fires once. A later snapshot without one makes it undefined and fires once, as JetBrains' parseState gives null.\n- C1: ACCOUNT_ADDED {accountId: 'acct-7'} fires onAccountAdded once with 'acct-7'. Neither onAccountsChanged nor onStateChanged fires.\n- C2: ACCOUNT_ADDED with payload {}, {accountId: ''}, {accountId: '  '}, {accountId: 7}, {accountId: null}, {accountId: {}} or [], or with no payload, fires nothing.\n\nRun `node --test moe-vscode/tests/accounts-wire.test.cjs` in place (plain node, read-only; never npm in the shared checkout). It is RED: the senders, getter and events do not exist yet.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/accounts-wire.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the wire. Write the new moe-vscode/src/types/accounts.ts with the Write tool. It is type-only, with no runtime code, and mirrors the daemon's packages/moe-daemon/src/types/schema.ts AccountView and AccountRotationView plus accountStore.ts vmToken:\n- AccountUsageWindow {percent: number | null; resetsAt: string | null};\n- AccountView {id, label, signIn: 'subscription' | 'signed_out' | 'other', signInCheckedAt, windows: Record<string, AccountUsageWindow>, peakPercent, blockedUntil, active, seats: string[], vmToken?: boolean};\n- AccountRotationView {registryFile, switchAtPercent, error: string | null, cli: {node; script}, accounts: AccountView[]}.\nA doc comment says the client stores the raw payload after a top-level check only, and that VSC-13's AccountPresentation.parseAccountRotation normalizes it for display.\n\nEdit moe-vscode/src/services/MoeDaemonClient.ts with the Edit tool. Add ONLY `import type { AccountRotationView } from '../types/accounts';`, which is elided at transpile time; no value import:\n- `private rotation: AccountRotationView | undefined`, plus a `get accountRotation()` getter.\n- Two emitters: _onAccountsChanged (EventEmitter<AccountRotationView | undefined>, public onAccountsChanged) and _onAccountAdded (EventEmitter<string>, public onAccountAdded). Dispose both in dispose().\n- A private isRotationView(v): a non-null, non-array object whose registryFile is a string with non-blank trimmed text (JetBrains parseAccountRotation's gate).\n- STATE_SNAPSHOT, after the project-path check passes: rotation = isRotationView(payload.accountRotation) ? that value : undefined. Fire onAccountsChanged once.\n- Replace the 'ACCOUNTS_UPDATED'/'ACCOUNT_ADDED' no-op case with two braced cases:\n  - ACCOUNTS_UPDATED: break when this.state is undefined (no snapshot yet) or the payload fails isRotationView. Otherwise store the rotation and fire onAccountsChanged once.\n  - ACCOUNT_ADDED: fire onAccountAdded(id) only when payload?.accountId is a string with non-blank trimmed text. It never touches this.state.\n- Senders, after reopenTask:\n  - addAccount(label?: string): payload {} or {label: trimmed}; a non-string or blank label is left out.\n  - removeAccount(accountId): {accountId}.\n  - moveAccount(accountId, offset: -1 | 1): throw RangeError unless offset is exactly -1 or 1, checked BEFORE sendMessage; then {accountId, offset}.\n  - renameAccount(accountId, label): {accountId, label: label.trim()}, where a non-string label becomes ''.\n  - setAccountSwitchPercent(percent): throw RangeError unless Number.isInteger(percent) and 1 <= percent <= 100 (the daemon's rule); then {switchAtPercent: percent}.\n  - Each returns this.sendMessage(type, payload).\n\nError handling:\n- Malformed frames are silent no-ops.\n- The two RangeErrors mirror JetBrains' require(), so a caller bug surfaces at once instead of becoming a daemon ERROR round trip.\n- A send failure goes through sendMessage's existing path (log, onError, reconnect, false).\n\nRe-run the test in place: every row passes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "newFiles": [
+        "moe-vscode/src/types/accounts.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Gate, run once (DoD 4 and 5; mem:gotcha-vscode-gate-from-wsl). Run exactly executionContract.checkRefs[0]: it builds the snapshot /tmp/vsc12-gate from `git archive HEAD` of the whole repo plus this task's three files, then runs npm ci, lint, compile and the full npm test under env -i with nvm Node 24.\n\nExpect exit 0 and 0 failures. Every existing suite that loads MoeDaemonClient.ts must pass with its file unchanged: approval-paths, daemon-identity, daemon-json-cap, daemon-start, managed-vm-runtime, plan-approval-client, protected-daemon-spawn, protected-runtime, settings-wire, verified-local-launch, wire-parity and the later ones.\n\nThis command, its exit code and its output tail are the complete_task verification. Delete the snapshot afterwards.\n\nError handling for a red run:\n- A whole file failing at load, or a lower test total, means a require-map break: remove any value import.\n- A MODULE_NOT_FOUND before any assertion is a snapshot mistake.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Self-review of this task's diff.\n(1) Mutation proof, in a snapshot copy and never in the checkout. Each mutant must fail by assertion:\n- send the label untrimmed: A1 fails;\n- drop the registryFile gate: B3 fails;\n- accept a blank accountId: C2 fails;\n- validate the offset after sendMessage: A3 fails while disconnected.\n(2) There is no value import. Both new emitters are disposed. ACCOUNT_ADDED never writes state.\n(3) The diff touches only types/accounts.ts, MoeDaemonClient.ts and the new test. src/types/moe.ts, every moe-jetbrains file and the daemon are unchanged.\n(4) The net changed LOC (git diff --numstat plus wc -l of the new files) is at most 400, with a target of about 300.\nRecord the results and the LOC count in the step note and the summary.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -29,5 +62,71 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:06.908Z",
-  "updatedAt": "2026-11-02T09:41:06.908Z"
+  "updatedAt": "2026-11-02T10:37:38.477Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:30:39.475Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:37:38.453Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code's MoeDaemonClient speaks JetBrains' Claude account wire:\n- five senders whose envelopes match MoeCommandSender exactly, each returning false when not connected and throwing a RangeError on a bad offset or percent;\n- an accountRotation getter holding the latest valid rotation, from STATE_SNAPSHOT or ACCOUNTS_UPDATED, with onAccountsChanged;\n- onAccountAdded for ACCOUNT_ADDED.\nThe rules for malformed or early frames follow MoeMessageDispatcher.",
+    "acceptanceCriteria": [
+      "The 8 JetBrains sender calls produce the 8 JetBrains envelopes; disconnected senders return false and send nothing; an invalid offset or percent throws before sending.",
+      "ACCOUNTS_UPDATED after a snapshot stores the rotation and fires once; before a snapshot, or with a malformed payload, it changes nothing.",
+      "ACCOUNT_ADDED with a non-blank string id fires onAccountAdded once and touches no state; any other payload fires nothing."
+    ],
+    "invariants": [
+      "MoeDaemonClient.ts gains only a type-only import.",
+      "src/types/moe.ts, every moe-jetbrains file and the daemon are unchanged.",
+      "Every existing suite that loads MoeDaemonClient.ts passes unchanged."
+    ],
+    "compatibility": [
+      "VSC-13's AccountPresentation.parseAccountRotation(unknown) consumes client.accountRotation as the raw wire payload."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains MoeCommandSender.kt addAccount, removeAccount, moveAccount, renameAccount and setAccountSwitchPercent, with the envelopes pinned in MoeCommandSenderAccountsTest.kt.",
+      "moe-jetbrains MoeMessageDispatcher.kt ACCOUNTS_UPDATED (gated by parseAccountRotation's registryFile check) and ACCOUNT_ADDED (non-blank string accountId), pinned in MoeMessageDispatcherAccountsTest.kt.",
+      "packages/moe-daemon/src/types/schema.ts AccountRotationView and AccountView; packages/moe-daemon/src/server/accountMessages.ts."
+    ],
+    "checkRefs": [
+      "S=/tmp/vsc12-gate && rm -rf \"$S\" && mkdir -p \"$S\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/src/types/accounts.ts moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/tests/accounts-wire.test.cjs \"$S\"/) && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "The client stores the RAW rotation payload behind JetBrains' top-level gate: a non-blank string registryFile. It does not port MoeJson.parseAccountRotation. VSC-13's plan (task-065e4812, steps 2-3) already puts the strict parse in the pure AccountPresentation.ts ('VSC-12's client keeps the payload; this module normalizes it for display'). Porting it into MoeDaemonClient.ts too would duplicate it.\n\nOn bad input the senders throw a RangeError, as JetBrains' require() does, rather than returning false. The JetBrains test pins 'throws before anything is sent', and the only callers are VSC-15's commands.\n\nonAccountsChanged also fires on STATE_SNAPSHOT, because JetBrains publishes state on every snapshot and the Accounts view needs the initial rotation.",
+    "codebaseInsights": "- The daemon's STATE_SNAPSHOT carries accountRotation (StateManager.ts accountRotationView), and JetBrains reads it in MoeJson.parseState.\n- ACCOUNT_ADDED is the daemon's direct reply to ADD_ACCOUNT: {accountId} (server/accountMessages.ts). An ACCOUNTS_UPDATED broadcast follows it.\n- The daemon validates offset as -1 or 1 and switchAtPercent as an integer in 1..100, and requires a non-empty accountId.\n- JetBrains' dispatcher ignores ACCOUNTS_UPDATED before the first snapshot and keeps the last good rotation on a malformed payload.\n- I added VSC-12 to VSC-21's dependsOn as a sequencing-only edge, since both edit MoeDaemonClient.ts.",
+    "risks": "- Add no value import to MoeDaemonClient.ts: three harnesses use closed require maps.\n- The RangeError used in the A3 assertion must be the vm realm's: read it with vm.runInContext('RangeError', ctx).\n- Keep the test table-driven to stay inside the LOC budget.\n- Do not touch src/types/moe.ts (VSC-8) or add an accounts UI (VSC-14/15).",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeCommandSenderAccountsTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherAccountsTest.kt",
+      "packages/moe-daemon/src/server/accountMessages.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "moe-vscode/tests/plan-approval-client.test.cjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "e800263041814e78efe322423479ee1bac78f40a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:37:38.477Z",
+  "approvedPlanRevision": 1
 }
