@@ -43,9 +43,13 @@ DAEMON_PATH_OVERRIDE="${MOE_DAEMON_PATH:-}"
 # CQ-R13c2: the JetBrains launcher sets MOE_RUNTIME_PROTECTED=1 beside both paths.
 # Only exactly '1' protects: run exactly those files or refuse, never a fallback.
 if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then RUNTIME_PROTECTED=1; else RUNTIME_PROTECTED=0; fi
+PROTECTED_INTERPRETERS_PINNED=0
 # moe-call.sh resolves its own proxy and falls back past a missing MOE_PROXY_PATH,
-# so a protected seat calls it only while that exact file exists.
-moe_call_allowed() { [ "$RUNTIME_PROTECTED" != 1 ] || [ -f "$PROXY_PATH_OVERRIDE" ]; }
+# so a protected seat calls it only while that exact file exists and node is
+# pinned. Early exits (--help, invalid options) must not deregister before pinning.
+moe_call_allowed() {
+    [ "$RUNTIME_PROTECTED" != 1 ] || { [ "$PROTECTED_INTERPRETERS_PINNED" = 1 ] && [ -f "$PROXY_PATH_OVERRIDE" ]; }
+}
 
 # GUI terminals may not source the profile installed by the dependency helper.
 # Add its agent CLIs without changing the caller's existing command priority.
@@ -110,18 +114,25 @@ find_node() {
     return 1
 }
 
-NODE_CMD=$(find_node)
-# Agent CLI shebangs and their children must use the same selected Node.
-NODE_EXECUTABLE=$(command -v "$NODE_CMD" 2>/dev/null || true)
-if [ -n "$NODE_EXECUTABLE" ] && [ -f "$NODE_EXECUTABLE" ]; then
-    export PATH="$(dirname "$NODE_EXECUTABLE"):$PATH"
+use_node() {
+    # Agent CLI shebangs and their children must use the same selected Node.
+    NODE_EXECUTABLE=$(command -v "$NODE_CMD" 2>/dev/null || true)
+    if [ -n "$NODE_EXECUTABLE" ] && [ -f "$NODE_EXECUTABLE" ]; then
+        export PATH="$(dirname "$NODE_EXECUTABLE"):$PATH"
+    fi
+    NODE_VERSION=$("$NODE_CMD" --version 2>/dev/null || echo "unknown")
+    if [ "$NODE_VERSION" = "unknown" ]; then
+        echo -e "${RED}[ERROR]${NC} Could not find node. Set MOE_NODE_COMMAND=/path/to/node"
+        WORKER_ID=""
+        exit 1
+    fi
+    echo -e "${GREEN}[OK]${NC} Using node: $NODE_CMD ($NODE_VERSION)"
+}
+# Protected resolution must wait until --project is known.
+if [ "$RUNTIME_PROTECTED" != 1 ]; then
+    NODE_CMD=$(find_node)
+    use_node
 fi
-NODE_VERSION=$("$NODE_CMD" --version 2>/dev/null || echo "unknown")
-if [ "$NODE_VERSION" = "unknown" ]; then
-    echo -e "${RED}[ERROR]${NC} Could not find node. Set MOE_NODE_COMMAND=/path/to/node"
-    exit 1
-fi
-echo -e "${GREEN}[OK]${NC} Using node: $NODE_CMD ($NODE_VERSION)"
 
 # Secure temp directory creation (for any operations needing temp storage)
 # Uses mktemp with restricted permissions to prevent access on shared systems
@@ -418,6 +429,12 @@ COMMAND_BIN=""
 COMMAND_ARGV=()
 parse_command_into_argv() {
     local line="$1"
+    # The protected gate admits only a bare known CLI; do not run shlex yet.
+    if [ "${RUNTIME_PROTECTED:-0}" = 1 ]; then
+        COMMAND_BIN="$line"
+        COMMAND_ARGV=()
+        return 0
+    fi
     # A string that names an existing path is one binary, spaces and all
     # ("/opt/my tools/claude"). Same rule as the ps1 twin's
     # Resolve-CommandParts, which splits -Command only when the whole string
@@ -476,6 +493,58 @@ refuse_protected_agent() { # $1 = the line
     printf '%s\n' "$1" >&2
     WORKER_ID=""
     exit 1
+}
+# Trust directories, not PATH lookup results: links/case cannot hide the project.
+protected_trusted_dir() { # $1 = directory, $2 = project's real path
+    local real up
+    case "$1" in /*) ;; *) return 1 ;; esac
+    real=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
+    up="$real"
+    while :; do
+        [ "$up" -ef "$2" ] && return 1
+        [ "$up" != / ] || break
+        up="${up%/*}"; [ -n "$up" ] || up=/
+    done
+    printf '%s\n' "$real"
+}
+protected_path_lookup() { # $1 = name, $2 = project directory
+    local entries entry real ext exts="" project_real
+    [ -n "$2" ] || return 1
+    project_real=$(cd -- "$2" 2>/dev/null && pwd -P) || return 1
+    case "$OSTYPE" in msys*|cygwin*) exts=".exe .cmd" ;; esac
+    IFS=: read -r -a entries <<< "$PATH"
+    for entry in "${entries[@]}"; do
+        real=$(protected_trusted_dir "$entry" "$project_real") || continue
+        for ext in "" $exts; do
+            if [ -f "$real/$1$ext" ] && [ -x "$real/$1$ext" ]; then
+                printf '%s\n' "$real/$1$ext"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+protected_pin_interpreters() {
+    local project project_real="" candidate real
+    project=$(normalize_path "$PROJECT")
+    if [ -n "$project" ]; then
+        project_real=$(cd -- "$project" 2>/dev/null && pwd -P) || project_real=""
+    fi
+    NODE_CMD=""
+    for candidate in "${MOE_NODE_COMMAND:-}" "$HOME/.local/share/moe/node/current/bin/node"; do
+        [ -n "$project_real" ] || break
+        case "$candidate" in /*) ;; *) continue ;; esac
+        [ -f "$candidate" ] && [ -x "$candidate" ] || continue
+        real=$(protected_trusted_dir "${candidate%/*}/" "$project_real") || continue
+        NODE_CMD="$real/${candidate##*/}"
+        break
+    done
+    if [ -z "$NODE_CMD" ]; then
+        NODE_CMD=$(protected_path_lookup node "$project") || refuse_protected_agent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start."
+    fi
+    use_node
+    PYTHON_CMD=$(protected_path_lookup python3 "$project") || refuse_protected_agent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: python3 was not found on an absolute PATH entry outside the project; refusing to start."
+    PROTECTED_INTERPRETERS_PINNED=1
 }
 if [ "$RUNTIME_PROTECTED" = 1 ]; then
     case "$COMMAND" in
@@ -605,7 +674,11 @@ find_python() {
     return 1
 }
 
-PYTHON_CMD=$(find_python)
+if [ "$RUNTIME_PROTECTED" = 1 ]; then
+    protected_pin_interpreters
+else
+    PYTHON_CMD=$(find_python)
+fi
 if [ -z "$PYTHON_CMD" ]; then
     echo -e "${RED}Error: python3 is required but not found${NC}"
     echo "Install Python 3: brew install python3"
@@ -795,30 +868,9 @@ require_protected_runtime_file() { # $1 = the variable name, $2 = its value
 # the project or under it (-ef compares inodes, so links and case cannot hide
 # it). A manual scan: bash's hash table, aliases and functions never answer.
 protected_resolve_cli() { # $1 = the CLI name; sets COMMAND_BIN to its absolute path
-    local entries entry real up ext exts="" project_real
-    project_real=$(cd -- "$PROJECT" 2>/dev/null && pwd -P) || project_real=""
-    case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) exts=".exe .cmd" ;; esac
-    IFS=: read -r -a entries <<< "$PATH"
-    for entry in "${entries[@]}"; do
-        [ -n "$project_real" ] || break
-        case "$entry" in /*) ;; *) continue ;; esac
-        real=$(cd -- "$entry" 2>/dev/null && pwd -P) || continue
-        up="$real"
-        while :; do
-            [ "$up" -ef "$project_real" ] && continue 2
-            [ "$up" != / ] || break
-            up="${up%/*}"; [ -n "$up" ] || up=/
-        done
-        for ext in "" $exts; do
-            if [ -f "$real/$1$ext" ] && [ -x "$real/$1$ext" ]; then
-                COMMAND_BIN="$real/$1$ext"
-                COMMAND_ARGV=()
-                printf '%s\n' "[INFO] MOE_PROTECTED_AGENT_CLI: $1 -> $COMMAND_BIN"
-                return 0
-            fi
-        done
-    done
-    refuse_protected_agent "[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: $1 was not found on an absolute PATH entry outside the project; refusing to start."
+    COMMAND_BIN=$(protected_path_lookup "$1" "$PROJECT") || refuse_protected_agent "[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: $1 was not found on an absolute PATH entry outside the project; refusing to start."
+    COMMAND_ARGV=()
+    printf '%s\n' "[INFO] MOE_PROTECTED_AGENT_CLI: $1 -> $COMMAND_BIN"
 }
 if [ "$RUNTIME_PROTECTED" = 1 ]; then
     require_protected_runtime_file MOE_PROXY_PATH "$PROXY_PATH_OVERRIDE"

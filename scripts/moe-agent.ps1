@@ -488,15 +488,13 @@ function Get-MoeRealPath([string]$Path) {
     }
     throw "symlink loop at $Path"
 }
-# A protected CLI name resolves only from an absolute PATH entry outside the
+# A protected file resolves only from an absolute PATH entry outside the
 # project's real path (empty, '.', relative and in-project entries skipped) by
-# this manual scan, never Get-Command. Windows tries .ps1 first, then PATHEXT,
-# PowerShell's own order. ponytail: 8.3 short-name aliases of the project and a
+# this manual scan, never Get-Command. ponytail: 8.3 short-name aliases of the project and a
 # file-level link inside a trusted dir are not followed; resolve them if needed.
-function Resolve-MoeProtectedCli([string]$Name) {
+function Find-MoeProtectedFile([string]$Name, [string[]]$Extensions) {
     $onWindows = $PSVersionTable.PSEdition -ne 'Core' -or $IsWindows
     $cmp = if ($onWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
-    $exts = if ($onWindows) { @('.ps1') + @("$env:PATHEXT".Split(';') | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }) } else { @('') }
     $sep = [IO.Path]::DirectorySeparatorChar
     try { $project = (Get-MoeRealPath $projectPath.ProviderPath).TrimEnd('\', '/') } catch { $project = $null }
     foreach ($entry in "$env:PATH".Split([IO.Path]::PathSeparator)) {
@@ -508,17 +506,31 @@ function Resolve-MoeProtectedCli([string]$Name) {
             $realFull = Get-MoeRealPath $entry
             $real = $realFull.TrimEnd('\', '/')
             if ($real.Equals($project, $cmp) -or "$real$sep".StartsWith("$project$sep", $cmp)) { continue }
-            foreach ($ext in $exts) {
+            foreach ($ext in $Extensions) {
                 # The untrimmed path: a root entry trimmed to 'C:' or '' would join drive- or cwd-relative.
                 $file = [IO.Path]::Combine($realFull, "$Name$ext")
-                if (Test-Path -LiteralPath $file -PathType Leaf) {
-                    Write-Host "[INFO] MOE_PROTECTED_AGENT_CLI: $Name -> $file"
-                    return $file
-                }
+                if (Test-Path -LiteralPath $file -PathType Leaf) { return $file }
             }
         } catch { continue }
     }
-    Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: $Name was not found on an absolute PATH entry outside the project; refusing to start."
+    return $null
+}
+function Resolve-MoeProtectedCli([string]$Name) {
+    # PowerShell's own order: .ps1 first, then PATHEXT on Windows.
+    $onWindows = $PSVersionTable.PSEdition -ne 'Core' -or $IsWindows
+    $exts = if ($onWindows) { @('.ps1') + @("$env:PATHEXT".Split(';') | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }) } else { @('') }
+    $file = Find-MoeProtectedFile $Name $exts
+    if (-not $file) { Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: $Name was not found on an absolute PATH entry outside the project; refusing to start." }
+    Write-Host "[INFO] MOE_PROTECTED_AGENT_CLI: $Name -> $file"
+    return $file
+}
+$script:MoeNode = $null
+if ($script:MoeRuntimeProtected) {
+    $nodeExtensions = if ($PSVersionTable.PSEdition -ne 'Core' -or $IsWindows) { @('.exe') } else { @('') }
+    $script:MoeNode = Find-MoeProtectedFile 'node' $nodeExtensions
+    if (-not $script:MoeNode) { Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start." }
+    Set-Alias -Name node -Value $script:MoeNode -Scope Script
+    Write-Host "[OK] Using node: $script:MoeNode"
 }
 $script:MoeProtectedCli = $null
 if ($script:MoeRuntimeProtected) {
@@ -604,7 +616,7 @@ if (-not (Test-Path $proxyScript)) {
 $mcpConfigObj = @{
     mcpServers = @{
         moe = @{
-            command = "node"
+            command = $(if ($script:MoeNode) { $script:MoeNode } else { 'node' })
             args = @($proxyScript)
             env = @{
                 MOE_PROJECT_PATH = $projectPath.ToString()
@@ -861,7 +873,7 @@ if (-not $NoStartDaemon) {
         Write-Host "Starting Moe daemon for $projectPath..."
         # Pass arguments as an array so paths containing spaces or quotes survive
         # Windows command-line escaping (Start-Process re-quotes each element).
-        Start-Process -FilePath "node" -ArgumentList @("$daemonScript", "start", "--project", "$projectPath") -WindowStyle Hidden
+        Start-Process -FilePath $(if ($script:MoeNode) { $script:MoeNode } else { 'node' }) -ArgumentList @("$daemonScript", "start", "--project", "$projectPath") -WindowStyle Hidden
 
         # Wait for daemon to be ready (poll for up to 10 seconds)
         $maxWait = 10
@@ -1147,6 +1159,7 @@ function Write-MoeCodexConfig {
 
         # Build top-level config (role instructions + model instructions)
         $proxyScriptForToml = $proxyScript.ToString().Replace('\', '/')
+        $nodeForToml = if ($script:MoeNode) { $script:MoeNode.Replace('\', '/') } else { 'node' }
         $projectPathForToml = $projectPath.ToString().Replace('\', '/')
         $codexReasoningEffort = if ($env:MOE_CODEX_REASONING_EFFORT) { $env:MOE_CODEX_REASONING_EFFORT } else { "xhigh" }
         $topLevelConfig = @"
@@ -1176,7 +1189,7 @@ developer_instructions = """`nYou are an agent in the Moe AI Workforce system. Y
         $moeTomlBlock = @"
 
 [mcp_servers.moe]
-command = "node"
+command = "$nodeForToml"
 args = ["$proxyScriptForToml"]
 startup_timeout_sec = $codexMcpStartupTimeout
 default_tools_approval_mode = "approve"
@@ -1329,7 +1342,7 @@ function Write-MoeGeminiConfig {
 
         # Build the moe MCP server entry
         $moeEntry = @{
-            command = "node"
+            command = $(if ($script:MoeNode) { $script:MoeNode } else { 'node' })
             args = @($proxyScript)
             env = @{
                 MOE_PROJECT_PATH = $projectPath.ToString()
@@ -1420,6 +1433,7 @@ function Write-MoeGrokConfig {
 
         # Forward slashes: TOML basic strings treat backslashes as escapes.
         $proxyScriptForToml = $proxyScript.ToString().Replace('\', '/')
+        $nodeForToml = if ($script:MoeNode) { $script:MoeNode.Replace('\', '/') } else { 'node' }
         $projectPathForToml = $projectPath.ToString().Replace('\', '/')
         # Same startup_timeout_sec key and the same reason as codex: the proxy
         # waits out a supervised daemon restart, which outlasts a 30s default.
@@ -1468,7 +1482,7 @@ function Write-MoeGrokConfig {
         $grokMoeTomlBlock = (@(
             "",
             "[mcp_servers.moe]",
-            "command = `"node`"",
+            "command = `"$nodeForToml`"",
             "args = [`"$proxyScriptForToml`"]",
             "startup_timeout_sec = $grokMcpStartupTimeout",
             "tool_timeout_sec = $grokMcpToolTimeout",
@@ -2504,10 +2518,11 @@ function Start-HeartbeatSidecar {
     # This runner's identity, for the reattach below: the job is a separate
     # process and sees none of this script's variables.
     $pin = @{ RunnerId = [string]$script:MoeRunnerId; ProcessStartedAt = [string]$script:MoeProcessStartedAt; Host = [string]$script:MoeHost
-        AccountId = [string]$script:AccountLeasedId; AccountSampleFile = [string]$script:AccountSampleFile }
+        AccountId = [string]$script:AccountLeasedId; AccountSampleFile = [string]$script:AccountSampleFile; Node = [string]$script:MoeNode }
     try {
         $script:CurrentHeartbeatJob = Start-Job -Name "moe-heartbeat-$WorkerId" -ScriptBlock {
             param($ProxyScript, $ProjectPath, $WorkerId, $IntervalSec, $MaxDurationSec, $WrapperPid, $Pin)
+            if ($Pin.Node) { Set-Alias -Name node -Value $Pin.Node }
             $env:MOE_PROJECT_PATH = $ProjectPath
             # One tools/call through a fresh proxy: @{ Value = <parsed reply> }, or
             # @{ Refused = <codeName> } for a daemon refusal, or $null.
@@ -9430,6 +9445,7 @@ $mentionsJson
                     # PS 5.1 holds a native-to-native pipe until the producer exits, so
                     # feed the helper line by line; its stdout stays the console.
                     $psi = [System.Diagnostics.ProcessStartInfo]::new('node', "`"$promptCacheHelper`" codex-stream")
+                    if ($script:MoeNode) { $psi.FileName = $script:MoeNode }
                     $psi.UseShellExecute = $false
                     $psi.RedirectStandardInput = $true
                     # The helper alone gets the TOOL-witness env (prompt-cache-witness.mjs):
