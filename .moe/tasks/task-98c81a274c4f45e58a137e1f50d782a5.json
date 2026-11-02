@@ -1,0 +1,30 @@
+{
+  "id": "task-98c81a274c4f45e58a137e1f50d782a5",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: VS Code's verified-local pin is session-only, so a project.json edit between sessions downgrades a protected project to legacy with no confirmation (no RF02 parity)",
+  "description": "Found by CQ-RF07 (task-f3f364a6), the epic-final adversarial review; RF06 (task-98ffe33f) listed it as a known gap.\n\nEvidence at 28df02f7: moe-vscode/src/services/MoeDaemonClient.ts runtimeProfile() pins a verified-local read only in the in-memory pinnedProjects set. Nothing persists. After a VS Code restart, a project.json that now says legacy (or omits executionProfile), for example after a git pull or checkout, gives 'legacy' with no prompt. JetBrains (RF02) persists the confirmed profile in its owner-only store and asks \"Moe: Execution Profile Downgrade\" (Keep Protected / Allow Downgrade) before any downgrade, effective only after a restart.\n\nScenario: a protected project is opened in VS Code, and the repository then flips the declaration between sessions. The next session launches agents through resolveAgentScript (repository/PATH copies) and the legacy daemon start, which are the runtimes the protected profile exists to exclude.",
+  "definitionOfDone": [
+    "VS Code persists a confirmed protected profile outside the repository, owner-only (a store under the extension's globalStorage or the OS user state, never the workspace), and a weaker or untrusted declaration of a project recorded as protected stays protected until an explicit, safe-default human confirmation; an allowed downgrade takes effect only after a restart.",
+    "An unreadable, foreign or untrusted record reads as protected; a store that cannot be proved outside the project persists nothing new.",
+    "LEGACY projects never prompt; the existing moe-vscode tests are unchanged and new tests cover persist, ask, decline, dismiss and untrusted-record cases; `cd moe-vscode && npm test && npm run compile` exits 0 on Linux and on Windows."
+  ],
+  "taskRails": [
+    "Protected-profile state lives outside the repository, owner-only; a missing, unreadable or mismatched record fails closed to protected."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 315.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T22:16:10.352Z",
+  "updatedAt": "2026-11-02T22:16:10.352Z"
+}

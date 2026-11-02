@@ -1,0 +1,31 @@
+{
+  "id": "task-648a591623e1405ba788f44b5fe6690d",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: VS Code under the protected profile connects to whatever daemon .moe/daemon.json names, with no spawn provenance (no JetBrains activationRefusal/RF03 parity)",
+  "description": "Found by CQ-RF07 (task-f3f364a6), the epic-final adversarial review; architect-bd1eb82d had flagged it in comment-bd7e8461.\n\nEvidence at 28df02f7: under runtimeProfile(...) === 'protected', MoeDaemonClient.connect() → ensureDaemonRunning() starts nothing when .moe/daemon.json exists. getVerifiedDaemonInfo() then checks only the /health project identity (probeDaemonIdentity), and ws:// connects. Nothing checks that VS Code, or the IDE, started that pid from the extension's installed runtime. JetBrains refuses this case in doConnect via MoeDaemonSupervisor.activationRefusal → RuntimeSelectionPolicy.verifyProvenance (RF01) and offers the RF03 replacement.\n\nScenario: a protected (verified-local) project whose daemon was started from the repository's own packages/moe-daemon/dist, for example by `node packages/moe-daemon/dist/index.js start` in a terminal or by a legacy seat's autostart. VS Code adopts that daemon: a repository-supplied runtime serves the protected session. That breaks RF05's rule that a project file may add a refusal but never an admission.\n\nNode has no portable process start-time API, so the JetBrains (pid, startInstant) record does not port directly. Options: an owner-only spawn record keyed by pid plus a per-spawn nonce the daemon echoes on /health (the daemon reports it but cannot mint it, since the record lives outside the repository); or refuse any daemon this extension-host session did not spawn, with an explicit replace prompt as in RF03.",
+  "definitionOfDone": [
+    "Under the protected profile VS Code activates (connects to) a daemon only when it can prove that this extension, from its installed runtime, started that daemon, during this session or after a restart through an owner-only record outside the repository; otherwise it shows a fixed refusal and opens no WebSocket.",
+    "An unverified daemon is replaced only after an explicit, safe-default confirmation, and stopped only through the installed CLI's stop with a bounded wait (RF03 parity); a decline, a dismissal or a failure keeps the refusal.",
+    "LEGACY behaviour and the existing moe-vscode tests are unchanged; new tests cover verified, unverified, stale-record and declined cases, and `cd moe-vscode && npm test && npm run compile` exits 0 on Linux and on Windows."
+  ],
+  "taskRails": [
+    "Protected-profile state lives outside the repository, owner-only; a missing, unreadable or mismatched record fails closed to the refusal.",
+    "No caller-minted evidence: nothing the daemon or the repository reports about itself admits a daemon on its own."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 314.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T22:16:02.315Z",
+  "updatedAt": "2026-11-02T22:16:02.315Z"
+}

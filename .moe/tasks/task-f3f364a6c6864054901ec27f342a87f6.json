@@ -17,11 +17,16 @@
     {
       "stepId": "step-1",
       "description": "Read the landed epic, then write docs/ARCHITECTURE.md. This task starts only after CQ-RF01..RF06 are DONE, through the dependsOn chain RF05 and RF06 → RF02, RF04 → RF03 → RF01.\n\n1. Collect the epic's facts, read-only:\n   - For each row (RF01 task-fd653cfb, RF02 task-f3485ac9, RF03 task-ec64165c, RF04 task-de91373a, RF05 task-b439d7fb, RF06 task-98ffe33f), read through moe.get_context: completionSummary, reviewSummary and commits.\n   - Read each completion commit with git show.\n   - Note the exact landed names: ProtectedStateStore and its root (<IDE system dir>/moe/protected-state, sha-256 file names), the RF01 spawn record and the RF02 profile record formats, the RF03 replacement flow and dialog, RF04's Windows restart behaviour, RF06's VS Code state location and rules, and the RF05 record (docs/design/protected-profile-threat-model.md).\n   - Document what LANDED. Where a row's plan and its landed bytes differ, the landed bytes win.\n2. docs/ARCHITECTURE.md: extend the '## Security Notes' section that RF05 added, with one short paragraph each on:\n   - the persistent provenance and downgrade-pin state: where it lives, that it is owner-only, and that it fails closed;\n   - the unverified-daemon replacement flow: always confirmed, only through the installed CLI's stop, with a bounded wait that includes the old supervisor, then a start with fresh provenance;\n   - the Windows Restart Daemon behaviour, as RF04 landed it;\n   - VS Code parity, as RF06 landed it.\n   Keep the existing link to the RF05 decision, and change no unrelated line.\n\nError handling: a fact you cannot confirm from landed bytes is left out, never guessed. If a row is not DONE, stop and moe.report_blocked naming it.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/ARCHITECTURE.md"
       ],
-      "startedAt": "2026-11-02T22:07:36.844Z"
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "I extended the ARCHITECTURE.md '## Security Notes' section and kept the RF05 threat-model link. New bullets:\n- JetBrains protected state (ProtectedStateStore: root, owner-only rules, 64 KiB, sha-256 names, runIde sandbox never written), with sub-bullets for daemon provenance (pid+start, direct parent supervisor, session or store record naming the installed daemon, pruning, the exact refusal) and the profile pin (verified-local pins, once-per-session dialog, effective after restart, untrusted reads as protected, 9a1da6f6 aliases; open item task-6d5d3db2).\n- Unverified-daemon replacement (Keep It/Stop and Replace, installed stop bounded at 20 s with a sanitized env, 15 s exit wait, captured identities across retries).\n- Restart Daemon on Windows (RF04: pid guards, NOT_STARTED_HERE, roots first then descendants, survivor/unresolved-tree refusal, in-flight refusal, non-Windows behaviour).\n- VS Code parity, with gaps task-648a5916 and task-98c81a27.\n- Accepted Windows costs (52fb6178/08bb7723/dd545bf1/9a1da6f6: share/\\\\wsl$/device/mapped bases refused with the fix text, share installs, share/device PATH entries skipped, a share state root is session-only, dangling/trailing-dot roots).\nOther edits:\n- Added the wrappers' CLI/node/python3 pin and its three MOE_PROTECTED_* codes to the Protected control plane bullet, and noted that VS Code selects from <extensionPath>/bundled.\n- Fixed the stale Windows image wording per worker-152f84fc (release:<pin sha256>, image_hash must equal the pin, IMAGE_PROVIDER_HASH_MISMATCH; verified at provision.mjs:3-4 and 59-66), which reflowed that paragraph.\nEvery claim was checked against the code at 28df02f7. git diff --check is clean.",
+      "startedAt": "2026-11-02T22:07:36.844Z",
+      "completedAt": "2026-11-02T22:21:29.622Z"
     },
     {
       "stepId": "step-2",
@@ -118,7 +123,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-11-02T22:07:36.844Z",
+  "updatedAt": "2026-11-02T22:21:29.622Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0",
@@ -143,7 +148,8 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T07:17:11.675Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -154,7 +160,9 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T07:19:14.155Z",
   "planningNotes": {

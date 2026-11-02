@@ -14,47 +14,72 @@
     {
       "stepId": "step-1",
       "description": "RED first: write the two headless JUnit 4 test files, then run them against the UNCHANGED main code under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease).\n\n(a) New moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherDecisionsTest.kt. Copy the harness from MoeMessageDispatcherPinsTest.kt: the injected-lambda MoeMessageDispatcher constructor, `invokeLater = { it() }`, and the Proxy IdeaProject `fakeProject()` (mem:pattern-jetbrains-headless-proxy-fakes). Use a `frame(type, payload)` helper. The listener records each onDecisions list into `decisionCalls`. It records the name of every other callback it overrides (onState, onStatus, onError, onDaemonError, onDecisionProposed, onDecisionResolved) into `others`. Fixtures:\n- d1 = {\"id\":\"dec-1\",\"proposedBy\":\"worker-a\",\"content\":\"Use X\",\"status\":\"proposed\",\"channel\":\"chan-1\",\"messageId\":\"msg-1\",\"createdAt\":\"2026-11-02T20:00:00.000Z\"}\n- d2 = {\"id\":\"dec-2\",\"proposedBy\":\"architect-b\",\"content\":\"Ship\",\"status\":\"approved\",\"approvedBy\":\"human\",\"channel\":\"chan-1\",\"messageId\":\"msg-2\",\"createdAt\":\"2026-11-02T20:01:00.000Z\",\"resolvedAt\":\"2026-11-02T20:05:00.000Z\"}\n\nFour tests. Each asserts with assertEquals on the full data-class list, built with named Decision(...) args (model/Models.kt:378), and asserts `others` stays empty.\n1. `DECISIONS publishes every decision once in payload order`: [d1,d2] gives exactly one call equal to listOf(D1, D2), every field included.\n2. `malformed DECISIONS entries are skipped and the valid ones still publish`. The array is [d1, 42, null, \"dec-x\", [], {}, {\"id\":\"\"}, {\"id\":\"   \"}, {\"id\":null}, {\"id\":7}, {\"id\":{}}, {\"id\":[\"dec-3\"]}, d2]. Expect exactly one call equal to listOf(D1, D2), and no throw out of handle (a throw flips the panel to disconnected: mem:gotcha-jetbrains-dispatcher-throw-looks-disconnected). This is the RED test: today `42.asJsonObject` throws inside the branch's try, so the whole list is dropped and decisionCalls is empty.\n3. `a malformed DECISIONS frame publishes nothing and does not throw`. Frames: {\"type\":\"DECISIONS\"}; payload null, [] and \"x\"; payload {}; and {\"decisions\": null | {} | \"dec-1\"}. Expect no call. This is a regression guard for the early returns, so it passes on today's code.\n4. `an empty DECISIONS list publishes one empty list`: expect [[]], so the panel's clear still happens.\n\n(b) New moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatPanelConnectTest.kt. This is a source guard: ChatPanel cannot be built headless (mem:gotcha-jetbrains-dialog-order-untestable). Copy the `source(relative)` helper from DoneColumnClearTest.kt. It tries `src/main/kotlin/com/moe/<rel>` and then `moe-jetbrains/<path>`, throws IllegalStateException when neither exists, and normalizes CRLF. Two tests:\n- `onStatus connected re-requests channels and decisions`:\n  - assert the source contains `override fun onStatus(connected: Boolean, message: String)`;\n  - take slice = substringAfter(that).substringBefore(\"override fun onChatMessage(\");\n  - assert the slice is non-blank and contains `if (connected)`;\n  - assert branch = slice.substringAfter(\"if (connected)\") contains both `service.requestChannels()` and `service.requestDecisions()`. RED today.\n- `constructor still requests channels and decisions after adding its listener`: src.substringAfter(\"service.addListener(stateListener!!)\") contains both calls. Assert the delimiter exists first, so a missing delimiter cannot pass vacuously. This covers a panel built while the socket is already open.\n\nRED run, from the task checkout root (`cd \"$(git rev-parse --show-toplevel)\"`):\n1. moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId}.\n2. `W=$(wslpath -w \"$(git rev-parse --show-toplevel)\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun --tests com.moe.services.MoeMessageDispatcherDecisionsTest --tests com.moe.toolwindow.ChatPanelConnectTest\"`. Leave the --tests filters unquoted (mem:gotcha-jetbrains-gradle-from-wsl).\n3. Expect exactly 2 failures: test 2 and the onStatus guard. Keep their assertion lines for the complete_task evidence.\n\nLease timing:\n- In a task worktree (.worktrees/<taskId>), release the lease after this run.\n- If this attempt runs in the shared checkout D:\\projexts\\moes, hold the lease from copying the red files in until the green run. Draft them under /mnt/d/moe-scratch/6fe1e5ae/ first (mem:gotcha-jetbrains-shared-tree-gate-peer-red).\n\nWrite tracked files only with the Edit/Write tools or a Serena editor, never with shell writes. Error handling: if gradle hangs, never pattern-kill (no taskkill /IM java.exe, pkill or `gradlew --stop`, which stops every seat's Gradle daemon). Stop only a PID your own session started, and release the lease even on failure.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherDecisionsTest.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatPanelConnectTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherDecisionsTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatPanelConnectTest.kt"
+      ],
+      "note": "Implemented all 6 approved headless JUnit cases. Windows RED under jetbrains-gradle: gradlew.bat test --rerun --tests com.moe.services.MoeMessageDispatcherDecisionsTest --tests com.moe.toolwindow.ChatPanelConnectTest exited 1; 6 tests completed, exactly 2 failed against byte-unchanged main code: malformed DECISIONS entries... AssertionError at line 86 (expected full decisions, got []), and onStatus connected re-requests channels and decisions AssertionError at line 29 (connected must request decisions). Other 4 pass. Both source-guard delimiters checked; constructor slice bounded to prevent vacuity. Lease released; isolated runtime-provisioned task worktree, no launcher changes.",
+      "startedAt": "2026-11-02T22:16:32.838Z",
+      "completedAt": "2026-11-02T22:17:51.435Z"
     },
     {
       "stepId": "step-2",
       "description": "DECISIONS reply: skip malformed entries one at a time instead of dropping the whole list. This is in moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt, in the \"DECISIONS\" branch (about :455-464).\n\nToday the branch does `decisionsArray.map { MoeJson.parseDecision(it.asJsonObject) }`. One non-object element throws, the catch logs it, and nothing publishes. After a reconnect, one bad row would then leave every card missing, which is this bug again.\n\nReplace it, inside the existing try, with:\n```kotlin\nval decisions = decisionsArray.mapNotNull { element ->\n    val obj = element?.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null\n    if (obj.get(\"id\").stringOrNull().isNullOrBlank()) return@mapNotNull null\n    MoeJson.parseDecision(obj)\n}\nval skipped = decisionsArray.size() - decisions.size\nif (skipped > 0) log.warn(\"Skipped $skipped malformed DECISIONS entries\")\npublishDecisions(decisions)\n```\n\nDesign rules:\n- Malformed means one of: not a JSON object, or no non-blank JSON-string `id`.\n- Use the strict `stringOrNull()` reader (:41). Never use `safeAsString()`: it throws UnsupportedOperationException on an object id and IllegalStateException on an array id.\n- Use log.warn, never log.error. In headless JUnit, error throws an AssertionError.\n- The warn names only the count. No payload content goes into logs.\n\nError handling: keep the existing try/catch and its \"Failed to parse DECISIONS payload\" warn as the backstop for anything unforeseen. Keep the payload and array early returns byte-identical.\n\nLeave these unchanged: the DECISION_PROPOSED and DECISION_RESOLVED branches and MoeJson.parseDecision (DoD 4). Step 1's dispatcher tests 1-4 then go green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
+      ],
+      "note": "Replaced DECISIONS all-or-nothing map with approved mapNotNull: non-objects and missing/blank/non-string ids skipped via strict stringOrNull; warn logs skipped count only. Early returns, catch, parseDecision and DECISION_PROPOSED/RESOLVED unchanged. Step 1 supplies regression tests and RED evidence. GREEN verification is consolidated into step 4's full Windows gate per plan; not claiming it run yet.",
+      "startedAt": "2026-11-02T22:18:03.161Z",
+      "completedAt": "2026-11-02T22:18:03.233Z"
     },
     {
       "stepId": "step-3",
       "description": "Refill the decision map on every connection open. This is in moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt, in the stateListener's `onStatus` (about :214-219). Inside `if (connected) { ... }`, add `service.requestDecisions()` right after `service.requestChannels()`. This mirrors ActivityLogPanel.onStatus (:80-84).\n\nWhy this is enough:\n- MoeProjectService publishes onStatus(true) once per socket open, at MoeProjectService.kt:352, after `connected = true`. That covers the first connect and every reconnect, and MoeCommandSender.ensureConnected passes at that point.\n- The daemon answers GET_DECISIONS with the whole decision set (packages/moe-daemon/src/server/WebSocketServer.ts:1159-1162, state.getDecisions()).\n- onDecisions (:271-277) already clears and refills decisionsMap and calls refreshMessages().\n- setMessages also renders through refreshMessages(), which does the card lookup at :688. So existing `[Decision Proposed]` messages become Approve/Reject cards whichever of MESSAGES or DECISIONS arrives first, with no channel switch.\n\nKeep the constructor's `service.requestChannels()` and `service.requestDecisions()` (:299-300). They serve a panel built while the socket is already open, which gets no later onStatus(true). Keep the `if (disposed) return` guard.\n\nChange nothing else: Approve and Reject, onDecisionProposed and onDecisionResolved, the channel combo, ChatChannelSelection, and pins stay as they are (DoD 4). The step 1 ChatPanelConnectTest then goes green.\n\nError handling: requestDecisions goes through ensureConnected. If the socket closes before the call, the call is dropped with a warning and the next open re-requests, so no retry loop is needed.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "note": "Added requestDecisions immediately after requestChannels on connected status; disposed guard and constructor requests unchanged. Confirmed open publishes connected=true once after socket connection, requestDecisions sends GET_DECISIONS, reply returns whole set, and existing onDecisions clear/refill/refresh renders pre-existing messages in either arrival order. Headless source guard recorded RED in step 1; GREEN consolidated in step 4.",
+      "startedAt": "2026-11-02T22:18:03.270Z",
+      "completedAt": "2026-11-02T22:18:03.341Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification: the full JetBrains test gate, run once. From the task checkout root, under the jetbrains-gradle lease, labelled Windows:\n1. moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId}.\n2. Run `W=$(wslpath -w \"$(git rev-parse --show-toplevel)\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\"`.\n3. Release the lease, even on failure.\n\nThis command's fresh output is the complete_task verification. Put these in the outputTail:\n- the BUILD SUCCESSFUL line;\n- the summed TEST-*.xml counts from moe-jetbrains/build/test-results/test (tests, skipped, failures, errors), confirming :test executed and was not UP-TO-DATE;\n- the per-class lines for MoeMessageDispatcherDecisionsTest (tests=4) and ChatPanelConnectTest (tests=2), each failures=0 errors=0;\n- `git status --porcelain` showing only the 4 owned paths: no packages/, moe-vscode/ or .moe/ edits (DoD 4).\n\nAlso quote the step 1 RED failures in the completion summary.\n\nError handling: on a red run caused by a peer's file in a shared tree, follow mem:gotcha-jetbrains-shared-tree-gate-peer-red (release, snapshot, rerun). Never revert a peer's files.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Windows full verification passed: W=$(wslpath -w \"$(git rev-parse --show-toplevel)\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" exited 0, :test executed (not UP-TO-DATE), BUILD SUCCESSFUL in 33s; 11 actionable tasks: 6 executed, 5 up-to-date. Fresh TEST-*.xml: 39 classes, tests=585 skipped=0 failures=0 errors=0. MoeMessageDispatcherDecisionsTest tests=4/0/0; ChatPanelConnectTest tests=2/0/0. Lease released. Worktree qualityGate bash scripts/tests/parity-check.sh && npm run lint exited 0 (PASS parity-check.sh; docs role caps OK). git status --porcelain shows exactly the 4 owned Kotlin files (2 main, 2 new tests); no packages/, moe-vscode/, or .moe/ edits. git diff --check passes.",
+      "startedAt": "2026-11-02T22:18:13.058Z",
+      "completedAt": "2026-11-02T22:19:09.810Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff only. Check each of the following.\n\nConnection behaviour:\n- Reconnect storm: each socket open sends exactly one GET_DECISIONS. The replies clear and refill idempotently. No listener is added per connect, because the listener is registered once in the constructor.\n- A reply that arrives after dispose is dropped by onDecisions' disposed guard.\n- Twice concurrently: a constructor request plus an onStatus request in the same connect window gives two identical refills, which is harmless.\n\nParsing:\n- Null, non-object, blank, numeric, object and array ids are skipped without a throw.\n- A duplicate id: last wins, as before.\n- The warn leaks no payload.\n\nTests:\n- The source-guard delimiters are asserted present, so a renamed method fails loudly rather than passing vacuously.\n- The dispatcher tests compare whole Decision lists, so they are mutation-resistant.\n\nScope:\n- `git diff` touches no DECISION_PROPOSED or DECISION_RESOLVED, Approve/Reject, channel or pin code.\n- It makes no daemon or VS Code change.\n- It includes the 2 new test files.\n\nFix anything found and re-run the step 4 gate before complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
-      ]
+      ],
+      "note": "Adversarial self-review completed on the scoped two main diffs and both new test diffs. One request per connected callback, listener still registered once; constructor/open duplicate replies idempotent; existing disposed guards intact. Null/non-object/blank/numeric/object/array ids skipped using strict reader, payload order preserved; duplicate ids remain last-wins in existing map. Count-only warn leaks no payload. Bounded source guards assert all delimiters; full named-field Decision lists detect field/order loss. No new resources/retry/partial-write paths. Protected event branches and parseDecision checked byte-unchanged, as are channels/pins/Approve-Reject; only four planned Kotlin paths dirty. No findings or edits, so step 4 fresh Windows gate remains current: 585 tests, 0 skipped/failures/errors, both new classes 4+2 pass; qualityGate parity+lint exit 0. Handoff memory written and dispatcher gotcha updated. No step-5 file modifications.",
+      "startedAt": "2026-11-02T22:19:28.839Z",
+      "completedAt": "2026-11-02T22:20:18.032Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -67,7 +92,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:38.134Z",
-  "updatedAt": "2026-11-02T22:03:17.461Z",
+  "updatedAt": "2026-11-02T22:21:28.233Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:23.689Z",
@@ -76,16 +101,24 @@
   "metrics": {
     "firstClaimAt": "2026-11-02T21:55:49.053Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-fdb2af60"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T22:03:17.428Z",
   "executionContract": {
@@ -143,5 +176,47 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T22:03:17.461Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T22:16:32.838Z",
+  "reviewStartedAt": "2026-11-02T22:20:37.425Z",
+  "verification": {
+    "command": "W=$(wslpath -w \"$(git rev-parse --show-toplevel)\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "Windows, task checkout, jetbrains-gradle lease held then released.\n> Task :test\nBUILD SUCCESSFUL in 33s\n11 actionable tasks: 6 executed, 5 up-to-date (:test executed; not UP-TO-DATE)\nFresh TEST-*.xml totals: 39 classes; tests=585 skipped=0 failures=0 errors=0\nMoeMessageDispatcherDecisionsTest: tests=4 skipped=0 failures=0 errors=0\nChatPanelConnectTest: tests=2 skipped=0 failures=0 errors=0\nAdditional qualityGate: bash scripts/tests/parity-check.sh && npm run lint — exit 0; PASS parity-check.sh; all role-doc caps OK.\ngit diff --check — exit 0.\ngit status --porcelain:\n M moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt\n M moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt\n?? moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherDecisionsTest.kt\n?? moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatPanelConnectTest.kt\nNo packages/, moe-vscode/ or .moe/ edits.",
+    "reportedAt": "2026-11-02T22:20:37.425Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherDecisionsTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatPanelConnectTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+  ],
+  "completionSummary": "Restored pre-existing decision cards on first connect/reconnect via requestDecisions in connected status. DECISIONS now skips malformed rows/ids individually, preserving valid entries and empty-list clearing. Constructor requests and protected event/Approve-Reject/channel/pin code unchanged. Added 4 dispatcher and 2 bounded source-guard JUnit tests; exactly 4 planned Kotlin paths changed.\nRED Windows against unchanged main (lease held), exit 1: \"6 tests completed, 2 failed\". \"MoeMessageDispatcherDecisionsTest > malformed DECISIONS entries are skipped and the valid ones still publish FAILED\"; \"java.lang.AssertionError at MoeMessageDispatcherDecisionsTest.kt:86\" (expected full decisions, actual []). \"ChatPanelConnectTest > onStatus connected re-requests channels and decisions FAILED\"; \"java.lang.AssertionError: connected must request decisions\" at line 29.\nGREEN Windows full suite under lease: 585 tests, 0 skipped/failures/errors; new classes 4+2 pass. Parity+lint qualityGate exit 0; diff check clean. Adversarial scope/input/concurrency review found no further issues; no edits after green. Lease released. Serena handoff and strict-id gotcha saved.",
+  "commits": [
+    {
+      "sha": "d958f21d6cf221ffef84d3129e91b119f0ab3242",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-02T22:15:03Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherDecisionsTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatPanelConnectTest.kt"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-02T22:21:28.233Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fdb2af60@2026-11-02T22:15:03Z",
+    "at": "2026-11-02T22:21:28.233Z"
+  }
 }

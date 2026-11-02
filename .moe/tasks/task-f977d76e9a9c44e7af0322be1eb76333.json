@@ -41,23 +41,29 @@
     {
       "stepId": "step-3",
       "description": "VERIFY, once. The primary command is the complete_task evidence. From the worktree root in WSL bash:\ncd \"$(git rev-parse --show-toplevel)\" && T=$(mktemp -d) && cp scripts/tests/postflight-fake-proxy.js \"$T/\" && env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$T/postflight-fake-proxy.js\" \"$T\" \"$(command -v bash)\" && bash scripts/tests/parity-check.sh && npm run lint\n\nExpected: exit 0, with every worktree case ok on the sh engine (`[worktree] N ok, 0 failed`, wt-serena-yml among them), parity-check passing (epic rail 2) and the role-doc lint passing (settings.qualityGate). If the suite runs past the 10-minute tool cap, run it with run_in_background to a log ending `echo rc=$?`, then poll that log in the foreground (mem:gotcha-qa-full-postflight-sh-runtime-and-summary-cap).\n\nBoth wrappers (DoD): also run the ps1 engine on Windows PS 5.1 for `wt-serena-yml,wt-deny,wt-checkpoint,wt-completion,tooling,project-yml`, using the native-Windows recipe in mem:gotcha-postflight-worktree-mutant-copy:\n- a CRLF run.cmd under C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-f977 with `set \"MOE_WORKTREE_ONLY=<list>\"`;\n- `cd /d <wslpath -w of the worktree>`;\n- `\"C:\\Program Files\\nodejs\\node.exe\" scripts\\tests\\postflight-worktree.cjs ps1 <W>\\scripts\\moe-agent.ps1 <dir>\\fake-proxy.js <dir> powershell`;\n- launch it via `cd /mnt/c && cmd.exe /d /c '<win path>\\run.cmd'`, unsetting the seat's MOE_* identity vars.\nExpected: `[worktree] 6 ok, 0 failed`. Quote it in the summary.\n\nSubmit complete_task verification as { command: the primary line, exitCode: 0, outputTail: the suite summary plus the parity and lint tails }, with the ps1 line and the step-1 RED quote in the summary. DoD: `git status --porcelain` lists only the 3 files outside .moe/.\n\nerror handling:\n- A failing case this task did not touch: re-run it alone with MOE_WORKTREE_ONLY. Tie it to a peer's checkpoint with `git log -- <file>` and disclose it; never edit a peer's file.\n- Wrapper timeouts on a busy box: set MOE_POSTFLIGHT_TIMEOUT_SEC=180.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Primary command exit 0: \"[worktree] 61 ok, 0 failed\" (wt-serena-yml ok), \"PASS parity-check.sh\", role-doc lint OK. ps1 engine on Windows PS 5.1 (wt-serena-yml, wt-deny, wt-checkpoint, wt-completion, tooling, project-yml): \"[worktree] 6 ok, 0 failed\". The first ps1 run failed in the fixture, not the wrapper: this Windows host's global gitignore covers .serena, so a plain `git add` refused; fixed with `git add -f` and re-ran both engines on the final bytes. git status lists only the 3 files.",
+      "startedAt": "2026-11-02T22:03:04.004Z",
+      "completedAt": "2026-11-02T22:14:50.322Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff of the 3 files as an attacker. Check:\n- Only the exact path .serena/project.yml is new DENY, never .serena/** tracked.\n- Shared-mode denied() and Test-MoeDenyPath are byte-identical.\n- Case folding: key() and Get-MoePathKey lowercase on case-insensitive hosts, and the literal is lowercase.\n- The nested-project roots loop covers both the rel and the bare root.\n- Both comments say why. The ps1 BOM is intact, and parity-check passes.\n- The new case: its premise asserts would catch a WT-06 that stopped copying; the checkpoint and completion asserts would catch the renamed name on the task branch or the target; and it would not pass on the old wrappers (the step-1 RED).\n- The hunks are small next to WT-14's edits to the same files.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 3's primary command if anything changed, then call complete_task.",
       "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs"
       ],
-      "startedAt": "2026-11-02T22:03:04.004Z"
-    },
-    {
-      "stepId": "step-4",
-      "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff of the 3 files as an attacker. Check:\n- Only the exact path .serena/project.yml is new DENY, never .serena/** tracked.\n- Shared-mode denied() and Test-MoeDenyPath are byte-identical.\n- Case folding: key() and Get-MoePathKey lowercase on case-insensitive hosts, and the literal is lowercase.\n- The nested-project roots loop covers both the rel and the bare root.\n- Both comments say why. The ps1 BOM is intact, and parity-check passes.\n- The new case: its premise asserts would catch a WT-06 that stopped copying; the checkpoint and completion asserts would catch the renamed name on the task branch or the target; and it would not pass on the old wrappers (the step-1 RED).\n- The hunks are small next to WT-14's edits to the same files.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 3's primary command if anything changed, then call complete_task.",
-      "status": "PENDING",
-      "affectedFiles": [
-        "scripts/moe-agent.sh",
-        "scripts/moe-agent.ps1",
-        "scripts/tests/postflight-worktree.cjs"
-      ]
+      "startedAt": "2026-11-02T22:16:55.927Z"
     }
   ],
   "planRevision": 1,
@@ -74,7 +80,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:13:15.876Z",
-  "updatedAt": "2026-11-02T22:03:04.004Z",
+  "updatedAt": "2026-11-02T22:16:55.927Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:02:44.261Z",
@@ -84,7 +90,7 @@
     "firstClaimAt": "2026-11-02T21:46:48.237Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -96,7 +102,8 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T21:51:59.093Z",
@@ -158,5 +165,36 @@
   },
   "planApprovedAt": "2026-11-02T21:51:59.125Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T22:01:21.743Z"
+  "workStartedAt": "2026-11-02T22:01:21.743Z",
+  "commits": [
+    {
+      "sha": "e0ad39bc07bfef43e3ea07977a14b6e2e7e00084",
+      "ref": "refs/heads/moe/task/task-f977d76e9a9c44e7af0322be1eb76333",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-02T22:00:11Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-02T22:15:27.138Z",
+      "treeId": "c8917483e42ff7b73bdce6c47bcde2dfab6b59c4",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-8cf0816c@2026-11-02T22:00:11Z",
+    "at": "2026-11-02T22:15:27.138Z"
+  }
 }

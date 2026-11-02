@@ -1,0 +1,28 @@
+{
+  "id": "task-2f22237b0e30499c907ffe9ff5048c37",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: under MOE_RUNTIME_PROTECTED=1 on Windows, npm .cmd shims (claude.cmd, codex.cmd) and cmd.exe search the project directory before PATH, so a project-root node.exe still runs",
+  "description": "Found by CQ-RF07 (task-f3f364a6), the epic-final adversarial review. It is residual 3 in architect-54e5eb09's comment-1deae51a on that row, and task-64809b19 does not fix it.\n\nEvidence at 28df02f7: moe-agent.ps1 pins node (Find-MoeProtectedFile, MOE_PROTECTED_INTERPRETER_NOT_FOUND) and resolves the agent CLI to an absolute path outside the project. But the seat runs with the project as its working directory, and the resolved CLI is typically an npm shim (`claude.cmd`) that runs `node` by bare name when no node.exe sits beside it. cmd.exe, and CreateProcess without NoDefaultCurrentDirectoryInExePath, look in the current directory before PATH. A repository that ships `node.exe` at its root therefore runs it inside the protected seat, whatever PATH order the wrapper sets.\n\nFix direction: under the marker, set NoDefaultCurrentDirectoryInExePath=1 in the environment the wrapper gives the CLI (cmd.exe and CreateProcess both honour it), or run a resolved .cmd CLI through the pinned node directly. Pin the behaviour with a ps1 row that plants <project>\\node.exe and asserts it never runs.",
+  "definitionOfDone": [
+    "Under MOE_RUNTIME_PROTECTED=1 on Windows, a node.exe (or other bare-named helper) planted at the project root never runs through the agent CLI's shim or any cmd.exe child of the seat; a postflight or node --test row on Windows node.exe proves it with a planted file.",
+    "Legacy seats are unchanged, and the sh/ps1 parity check passes.",
+    "The protected-agent-command and launcher suites exit 0 on Linux and through Windows node.exe."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 316.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T22:16:23.628Z",
+  "updatedAt": "2026-11-02T22:16:23.628Z"
+}

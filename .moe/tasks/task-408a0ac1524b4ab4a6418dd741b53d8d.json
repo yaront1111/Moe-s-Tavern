@@ -41,11 +41,12 @@
     {
       "stepId": "step-3",
       "description": "Verification gate. Run it once, fresh, after steps 1-2. Its output is the complete_task evidence.\n\nWhere not to run it:\n- Never in the shared tree: the guard suite executes scripts/moe-agent.sh, whose working tree holds a peer's uncommitted bytes.\n- Never run npm build, test or install there either (GLOBAL rail).\n\nLinux:\n- Make a fresh mktemp dir $L and run `git archive HEAD | tar -x -C $L`.\n- Overlay exactly the two owned files, and `cmp` each one against the worktree.\n- From $L, run exactly:\n`unset ${!MOE_@} ${!CLAUDE_@} ${!FAKE_@}; node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh`\n- Submit that run's command, exitCode and outputTail.\n- For the parent's Linux counts, run the same node --test on a `git archive` snapshot of the parent.\n\nNative Windows is also required. No PowerShell skip counts as a pass, and Linux pwsh never substitutes for PS 5.1.\n- Make the snapshot on a Windows drive outside the repo, e.g. mktemp -d under /mnt/c/Users/<user>/AppData/Local/Temp, with the same overlay and cmp. Never use a \\\\wsl$ cwd.\n- Check that `cmd.exe /d /c \"set MOE\"` prints 'not defined'.\n- From that dir (via `cmd.exe /d /c \"cd /d <dir> && ...\"` or a powershell.exe -File runner), run `\"C:\\Program Files\\nodejs\\node.exe\" --test scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs`. It must show 0 failed and 0 skipped. The planner's guard-file run took 134 s.\n- Then, alone and not in parallel with that run, run `\"C:\\Program Files\\nodejs\\node.exe\" scripts/tests/postflight-safe.mjs powershell`. It must show failureClass NONE and lastScenario Z (about 26 min, against a 30-min cap).\n- Delete both snapshots afterwards, checking each path prefix first.\n\nThe completion summary gives each count beside the parent's:\n- guard: the parent's count + 1, with 0 skipped on both platforms;\n- each launcher harness: the parent's count, 0 failed (Linux skips only the PS-only cases);\n- postflight-safe bash and powershell: exit 0, NONE/Z;\n- parity-check: PASS.\nAlso include the step 1 RED line, both Windows wall-clock times, and the step 4 twin check.\n\nIf any run is red, fix it and re-run the whole gate. Never cite a partial run.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/agent-git-guard.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-02T22:16:51.985Z"
     },
     {
       "stepId": "step-4",
@@ -88,7 +89,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:06:05.143Z",
-  "updatedAt": "2026-11-02T22:14:15.240Z",
+  "updatedAt": "2026-11-02T22:16:51.986Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T19:06:13.181Z",
     "plannedStepCount": 4,
@@ -147,19 +148,36 @@
       "treeId": "be5146ce0ec62949a6e3ed49c906a839d3fc6691",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "d94827b4678102d22240ce1d30a98fae1cdaf79c",
+      "ref": "refs/heads/moe/task/task-408a0ac1524b4ab4a6418dd741b53d8d",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-02T22:06:50Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/agent-git-guard.test.mjs"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-02T22:15:01.766Z",
+      "treeId": "b8436b3b3fb07df710b947545f840e82d7b9605d",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
     ".moe/tasks/task-408a0ac1524b4ab4a6418dd741b53d8d.json",
-    ".moe/tasks/task-f9789178469f499ca3268fc4b392bd0c.json"
+    ".moe/tasks/task-f9789178469f499ca3268fc4b392bd0c.json",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/agent-git-guard.test.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
+    "outcome": "committed",
     "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-26483323@2026-11-02T19:41:04Z",
-    "at": "2026-11-02T19:46:42.801Z"
+    "sessionId": "worker-2dc72348@2026-11-02T22:06:50Z",
+    "at": "2026-11-02T22:15:01.766Z"
   },
   "workStartedAt": "2026-11-02T19:45:58.626Z",
   "blockedReason": null,

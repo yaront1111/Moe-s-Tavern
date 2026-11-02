@@ -71,9 +71,16 @@
     {
       "stepId": "step-5",
       "description": "VERIFY. Run this ONE command once, from the repo root, IN THE BACKGROUND: it takes about 15 min and the Bash tool's foreground cap is 10 min.\n\nR=$(pwd) && mkdir -p /mnt/d/moe-scratch && W=$(mktemp -d /mnt/d/moe-scratch/literal-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && cp scripts/moe-agent.ps1 scripts/moe-team.ps1 \"$W/scripts/\" && cp scripts/tests/literal-project-path.test.mjs \"$W/scripts/tests/\" && cd \"$W\" && node --test scripts/tests/literal-project-path.test.mjs && bash scripts/tests/parity-check.sh && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w \"$W/scripts/tests/literal-project-path.test.mjs\")\" && WSLENV=\"$WSLENV:MOE_POSTFLIGHT_TIMEOUT_SEC\" MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$W/scripts/tests/postflight-safe.mjs\")\" powershell; rc=$?; cd \"$R\"; rm -rf \"$W\"; echo \"VERIFY_EXIT=$rc\"; [ \"$rc\" -eq 0 ]\n\nExpect:\n- Linux: the static tests pass and the Windows cases are skipped.\n- parity-check passes, which also checks the BOM.\n- Windows-native: every case passes, NONE skipped. pwsh is on PATH on this box, so a skipped pwsh case is not evidence.\n- postflight-safe prints {\"exit\":0,...,\"failureClass\":\"NONE\"}. That is the PS 5.1 regression harness over the whole edited wrapper.\n\nWhy this shape: the snapshot is HEAD's scripts plus your three files, so peers' dirty bytes stay out. The drive-letter cwd matters: from a /tmp (UNC) cwd, unrelated postflight scenarios fail.\n\nIf postflight-safe fails, rerun only its part on a pristine `git archive HEAD scripts` snapshot to classify the failure as pre-existing before touching code, and report both results. Submit this command, its exit code and its output tail as the complete_task verification.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-02T19:48:45.297Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/literal-project-path.test.mjs",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "note": "VERIFY passed: VERIFY_EXIT=0. postflight-safe powershell gave {\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}, about 45 min, 21:32-22:17Z.\n\nIntegration (scope note):\n- Blocker 8c875cc8 landed on the target (3e092cff), and the target moved 7 commits past this branch. merge-tree showed a content conflict at the daemon-autostart Start-Process.\n- In W, ran the wrapper's own resume form (`git -c core.hooksPath=<empty> merge --no-commit --no-ff origin/moe/work-2026-10-24`). No commit was made; MERGE_HEAD=96c4ee19 is pending for the WT-11 two-parent landing.\n- Resolved with the Edit tool, keeping both sides: the target's $script:MoeNode -FilePath and ConvertTo-MoeArgumentLine -ArgumentList, plus this task's escaped -WorkingDirectory and comment.\n\nScope grew by one line in scripts/tests/daemon-json-cap.test.mjs. Its ps1 `check` anchor now follows `Test-Path -LiteralPath $daemonInfoPath`, the break that architect comment b85be178 flagged. A repo-wide search of the removed launcher lines found no other pinned literal.\n\nTest fixture fixes in literal-project-path.test.mjs: Known Issues ride the per-iteration session context, not the system-prompt file (the prompt-cache split). The fake CLI also now matches the real moe-claude-context-<hex>.md filename.\n\nRecipe: the plan's command with `B=$(git rev-parse -q --verify MERGE_HEAD || echo HEAD)` archived in place of HEAD, so it tests the merged bytes (it is HEAD after landing), plus the cap test copy.\n- Linux: 3 pass / 5 Windows skips.\n- parity PASS.\n- Windows node: 8/8 pass, 0 skip (PS 5.1 x claude/codex/gemini/grok, pwsh 7 claude).\n- postflight-safe PS 5.1: exit 0.\n\nExtra:\n- daemon-json-cap on Linux: 32 pass / 0 fail.\n- Windows node, cap + daemon-autostart-argv: 90 pass, 1 env fail (Windows node cannot follow the WSL node_modules symlink, `pino`; the same row passes on Linux). Every PS 5.1/7 cap row and all 4 argv rows pass.\n- CI wrapper-reading suites (21 files, Linux): merged and pristine target give identical fail sets, 470/389/5 (missing docs/ and skills/ in the snapshot).\n- Gate `parity-check && npm run lint` passes; `git diff --check` is clean.",
+      "startedAt": "2026-11-02T19:48:45.297Z",
+      "completedAt": "2026-11-02T22:18:43.697Z"
     },
     {
       "stepId": "step-6",
@@ -109,7 +116,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:21:50.469Z",
-  "updatedAt": "2026-11-02T21:21:59.454Z",
+  "updatedAt": "2026-11-02T22:20:47.095Z",
   "dependsOn": [
     "task-92307adc30884fc4861348ed3c8ead4a",
     "task-86431c315e524b3b89af3bb3d2e7c98d"
@@ -123,7 +130,7 @@
     "firstClaimAt": "2026-10-30T16:38:29.657Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-bc59d28a",
@@ -138,7 +145,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T17:13:20.376Z",
@@ -240,6 +248,34 @@
       "treeId": "b43cb25d4bc9b903e5bfb9e38ccca0677a84cd93",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "4fb85a5c451ac51a5828f2e6bba30cff90aefd36",
+      "ref": "refs/heads/moe/task/task-3ad573a754574dfd92083b2e813c0bff",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-02T21:21:44Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/moe-call.sh",
+        "scripts/tests/agent-git-guard.test.mjs",
+        "scripts/tests/daemon-autostart-argv.test.mjs",
+        "scripts/tests/daemon-json-cap.test.mjs",
+        "scripts/tests/importee-guard-bash.test.mjs",
+        "scripts/tests/importee-guard.ps1",
+        "scripts/tests/literal-project-path.test.mjs",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-02T22:19:41.909Z",
+      "treeId": "80aa863925a79994732c7169f45eea87472f3134",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -247,14 +283,26 @@
     ".github/workflows/ci.yml",
     "scripts/moe-agent.ps1",
     "scripts/moe-team.ps1",
-    "scripts/tests/literal-project-path.test.mjs"
+    "scripts/tests/literal-project-path.test.mjs",
+    "docs/CONFIGURATION.md",
+    "docs/TROUBLESHOOTING.md",
+    "scripts/moe-agent.sh",
+    "scripts/moe-call.sh",
+    "scripts/tests/agent-git-guard.test.mjs",
+    "scripts/tests/daemon-autostart-argv.test.mjs",
+    "scripts/tests/daemon-json-cap.test.mjs",
+    "scripts/tests/importee-guard-bash.test.mjs",
+    "scripts/tests/importee-guard.ps1",
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/tests/protected-agent-command.test.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
+    "outcome": "nothing",
     "kind": "checkpoint",
-    "sessionId": "worker-fdb2af60@2026-11-02T19:40:27Z",
-    "at": "2026-11-02T19:56:00.604Z"
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "worker-d6c1cb7a@2026-11-02T22:20:19Z",
+    "at": "2026-11-02T22:20:47.095Z"
   },
   "workStartedAt": "2026-11-02T19:45:29.085Z",
   "blockedReason": null,

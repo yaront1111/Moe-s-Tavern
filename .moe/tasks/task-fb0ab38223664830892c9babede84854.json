@@ -1,0 +1,27 @@
+{
+  "id": "task-fb0ab38223664830892c9babede84854",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: no MoeDaemonSupervisorTest row pins that a surviving old supervisor root refuses a Windows Restart Daemon (OldTree.survivor() includes roots)",
+  "description": "Test gap found by RF04's QA (qa-952969be, comment-6125c6f7 on task-f3f364a6) and handed to CQ-RF07. The code is correct at 28df02f7, but a mutant that drops `roots` from MoeDaemonSupervisor.OldTree.survivor() passes every existing MoeDaemonSupervisorTest row. Without that term, a supervisor root that survives TerminateProcess could respawn `_run` after Restart Daemon reports success. QA's probes QA1-QA4 (a surviving root in both profiles; a PROTECTED STOP_FAILED signals nothing and gates starts; NOT_STARTED_HERE while a tree is retained; pid 0/-1 is never looked up or signalled) are in /mnt/d/moe-scratch/qa-rf04-qa-952969be/qa-probes.patch with mutant-roots-survivor.log. Adopt them as permanent rows. This is test-only; no production change is expected.",
+  "definitionOfDone": [
+    "MoeDaemonSupervisorTest gains rows equivalent to QA1-QA4; the QA1 row fails when `roots` is dropped from OldTree.survivor() and passes on the unchanged production code.",
+    "No production byte changes; `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exits 0 under the jetbrains-gradle lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 319.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T22:16:45.607Z",
+  "updatedAt": "2026-11-02T22:16:45.607Z"
+}

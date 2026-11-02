@@ -1,0 +1,28 @@
+{
+  "id": "task-0b2ea5709415489ea9b6fef528bef5df",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: under MOE_RUNTIME_PROTECTED=1 the sh wrapper keeps empty, '.', relative and in-project PATH entries, so its bare-name tools (git, dirname, uname, serena) and a standalone moe-call.sh can run project copies",
+  "description": "Found by CQ-RF07 (task-f3f364a6), the epic-final adversarial review. It covers residuals 1 and 2 in architect-54e5eb09's comment-1deae51a and the \"POSIX pwsh does not prepend the pinned dir\" residual from task-64809b19's review.\n\nEvidence at 28df02f7: moe-agent.sh under the marker pins node and python3 (protected_pin_interpreters) and the agent CLI (protected_path_lookup), but it leaves PATH as inherited. Every other bare-name command, such as git, dirname, uname, mktemp and the Serena binary, is still found by PATH lookup, so an empty, '.', relative or in-project entry reaches a project-planted copy. A standalone `scripts/moe-call.sh` under the marker runs `command -v node`, and only the wrapper's use_node prepend makes that safe. The pwsh (POSIX) path of moe-agent.ps1 aliases node but does not prepend its directory.\n\nFix direction: under the marker, rewrite PATH once, early, to the absolute entries outside the project (the same test protected_path_lookup applies), before any bare-name call. moe-call.sh does the same, or it refuses to run under the marker without a pinned node.",
+  "definitionOfDone": [
+    "Under MOE_RUNTIME_PROTECTED=1, moe-agent.sh and moe-call.sh drop empty, '.', relative and in-project PATH entries before their first bare-name command; a planted <project>/git (or dirname) on a '.' entry never runs, proved by a bash row like protected-agent-command.test.mjs N5.",
+    "The ps1 POSIX (pwsh) path gives child processes the pinned node directory first, or the row documents why it is not needed.",
+    "Legacy seats are unchanged; parity-check.sh and the launcher suites exit 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 317.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T22:16:31.431Z",
+  "updatedAt": "2026-11-02T22:16:31.431Z"
+}

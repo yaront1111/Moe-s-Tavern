@@ -1,0 +1,28 @@
+{
+  "id": "task-6d5d3db221dc422e90a7a3d5bc4d1e8f",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: JetBrains keeps a confirmed downgrade after the project re-declares verified-local in the same session, so a later legacy declaration runs legacy after restart with no new confirmation",
+  "description": "Found by CQ-RF07 (task-f3f364a6), the epic-final adversarial review. RF02's QA (task-f3485ac9 reviewSummary) noted it as a candidate for epic-final hardening.\n\nEvidence at 28df02f7, RuntimeSelectionPolicy.profile(): `if (key in pinned) return PROTECTED` runs before declaresVerifiedLocal. After a human clicks Allow Downgrade (askDowngrade persists LEGACY), a verified-local declaration later in the same JVM session never re-persists PROTECTED. If the repository then flips back to legacy before the restart, the next session reads LEGACY with no prompt. A related case: the dialog's answer is applied without re-reading the declaration, so an Allow clicked after the project already re-declares verified-local still persists LEGACY.\n\nImpact is narrow: a human allowed legacy once. But the repository's later verified-local declaration is lost, so a second downgrade happens without the confirmation the epic rail requires.\n\nFix direction: on a pinned key, still note a verified-local read and persist PROTECTED when the stored record is not PROTECTED; in the confirmation callback, persist LEGACY only if the declaration is still weaker.",
+  "definitionOfDone": [
+    "After a confirmed downgrade, a verified-local declaration in the same session re-records PROTECTED, so a later weaker declaration asks again after restart; an Allow applied when the project already re-declares verified-local persists nothing.",
+    "Existing RuntimeSelectionPolicyTest rows (D1-D12, PS1-PS8) pass unchanged; new rows fail on 28df02f7 and pass after the fix.",
+    "`cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exits 0 under the jetbrains-gradle lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 318.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T22:16:39.471Z",
+  "updatedAt": "2026-11-02T22:16:39.471Z"
+}
