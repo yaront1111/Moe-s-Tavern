@@ -123,12 +123,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Size waiver prop-8f3527c6 APPROVED by the human at 14:17:29Z. The VSC-15 size-exception rail is on epic-aabc654d once. QA: follow qa-564d8bce's checklist (msg-aa9f4203): check the live rail via get_context; confirm VSC-15's owned paths are unchanged since 5e972820, attributing any AccountsTreeProvider.ts diff to task-2f4b224f per comment-c91ca56e; re-run the checkRef; approve with the 589 net noted.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -166,16 +166,24 @@
       "author": "governor-e6b40560",
       "content": "Governor, 12:27Z, for the QA who claims this row. Size waiver prop-8f3527c6 (EPIC ADD_RAIL, 589 net: runtime 230 + test 359) is PENDING, and the ask is in #general (msg-eeba6d86). Do NOT size-reject, because that only spends the reopen cap.\n\n1. **Review substance now, in parallel with the human's click.** Use a snapshot of this row's completion commit, plus the V1/registerCommands checks in comment-07779221.\n2. **Substance fails:** reject on substance only, with failedDodItems.\n3. **Substance is green and the proposal is still PENDING when you finish:** park verdict-less with report_blocked (blockedOnTaskIds: []), naming the waiver, as VSC-7's round 2 did. The governor sets REVIEW the moment the proposal reads APPROVED.\n4. **The proposal is APPROVED by then:** check that the rail text matches `git diff --numstat` of the completion commit, then approve.",
       "timestamp": "2026-11-02T12:28:04.308Z"
+    },
+    {
+      "id": "comment-c91ca56e1e6a45c99732f6c5d67a2cb5",
+      "author": "governor-e6b40560",
+      "content": "Governor, 14:11Z, an addendum for the QA who approves this row after waiver prop-8f3527c6.\n\nBug row task-2f4b224f (the curly-quote fix) is now claimable, overlapped with this park. Its step 3 edits moe-vscode/src/providers/AccountsTreeProvider.ts, changing only psQuote's character set. So by the time you re-check, `git diff --stat 5e972820 HEAD -- <VSC-15 paths>` may show that file.\n\nThat diff is not a byte change by this row. Attribute it with `git log --format='%h %s' 5e972820..HEAD -- moe-vscode/src/providers/AccountsTreeProvider.ts`: every commit listed must be task-2f4b224f's, or board-only checkpoints of this row. Then verify this row in a snapshot of 5e972820, as qa-564d8bce already did, and approve under the rail.",
+      "timestamp": "2026-11-02T14:10:23.395Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:56.596Z",
-  "updatedAt": "2026-11-02T12:32:02.563Z",
+  "updatedAt": "2026-11-02T14:21:11.218Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:34:22.475Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-11-02T14:21:11.218Z",
+    "wallClockMs": 13608743
   },
   "contextFetchedBy": [
     "architect-93e0e956",
@@ -338,8 +346,14 @@
     "sessionId": "qa-564d8bce@2026-11-02T12:27:47Z",
     "at": "2026-11-02T12:32:02.563Z"
   },
-  "blockedReason": "Verdict-less park on a PENDING size waiver (governor-e6b40560 12:28Z, item 3). VSC-15 substance is GREEN; the only open item is the 400-line cap. Completion 5e972820 is pushed and on moe/work-2026-10-24. moe-vscode numstat is +594/-5 = 589 net: AccountsTreeProvider.ts 207/3, package.json 27/2, extension.ts 1/0, tests/accounts-actions.test.cjs 359/0. That matches the waiver text exactly. Waiver prop-8f3527c671aa4070801a0cc13383b818 (EPIC ADD_RAIL) was still PENDING, and no epic rail covers VSC-15, so I gave no approval and no size-reject.\nQA evidence:\n(1) Gate: git archive of 5e97282 into /tmp/vsc15-qa-5tvGRK, then in moe-vscode under env -i, node v24.21.0: npm ci OK, lint 0, compile 0. npm test: 550 tests / 546 pass / 4 skip / 0 fail.\n(2) My own 14 mutants were 14/14 killed: add without isValidLabel, rename unchanged, bash double quotes, remove on dismiss, foreign ACCOUNT_ADDED, 7.5%, canRemove, canSwitchAt from add, a swapped move offset, no not-connected warning, setContext and tokens before register, no control-character check, and remove without the post-dialog check.\n(3) DoD 1-5 are each mapped to tests A1-A8, K1-K3, Q1, P2 and S1. K2 covers all 15 corpus rows.\n(4) MoeDaemonClient.ts, AccountPresentation.ts, moe-jetbrains/**, the corpus and accounts-view.test.cjs are unchanged. No forbidden patterns. extension.ts calls registerCommands() at activation.\nOn resume: confirm the rail's numbers against the numstat above, then qa_approve. Details are in Serena memory task-task-357ed3ae786b4477a39840a7b86a88a6-qa-handoff.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-02T12:31:34.762Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Verdict-less park on a PENDING size waiver (governor-e6b40560 12:28Z, item 3). VSC-15 substance is GREEN; the only open item is the 400-line cap. Completion 5e972820 is pushed and on moe/work-2026-10-24. moe-vscode numstat is +594/-5 = 589 net: AccountsTreeProvider.ts 207/3, package.json 27/2, extension.ts 1/0, tests/accounts-actions.test.cjs 359/0. That matches the waiver text exactly. Waiver prop-8f3527c671aa4070801a0cc13383b818 (EPIC ADD_RAIL) was still PENDING, and no epic rail covers VSC-15, so I gave no approval and no size-reject.\nQA evidence:\n(1) Gate: git archive of 5e97282 into /tmp/vsc15-qa-5tvGRK, then in moe-vscode under env -i, node v24.21.0: npm ci OK, lint 0, compile 0. npm test: 550 tests / 546 pass / 4 skip / 0 fail.\n(2) My own 14 mutants were 14/14 killed: add without isValidLabel, rename unchanged, bash double quotes, remove on dismiss, foreign ACCOUNT_ADDED, 7.5%, canRemove, canSwitchAt from add, a swapped move offset, no not-connected warning, setContext and tokens before register, no control-character check, and remove without the post-dialog check.\n(3) DoD 1-5 are each mapped to tests A1-A8, K1-K3, Q1, P2 and S1. K2 covers all 15 corpus rows.\n(4) MoeDaemonClient.ts, AccountPresentation.ts, moe-jetbrains/**, the corpus and accounts-view.test.cjs are unchanged. No forbidden patterns. extension.ts calls registerCommands() at activation.\nOn resume: confirm the rail's numbers against the numstat above, then qa_approve. Details are in Serena memory task-task-357ed3ae786b4477a39840a7b86a88a6-qa-handoff.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-02T14:21:11.218Z",
+  "reviewCompletedAt": "2026-11-02T14:21:11.218Z",
+  "reviewSummary": "APPROVED under the epic rail \"VSC-15 size exception\" (prop-8f3527c6, APPROVED). SIZE: 589 net, over the 400 cap and waived.\n\nCompletion: 5e97282 on moe/work-2026-10-24, pushed (branch --contains). numstat 5e97282^..5e97282 for moe-vscode: AccountsTreeProvider.ts 207/3, package.json 27/2, extension.ts 1/0, accounts-actions.test.cjs 359/0, so +594/-5 = 589. That matches the rail's numbers and files exactly.\n\nOwned paths: no commit since 5e97282, and HEAD's blobs equal 5e97282's. The checkout's AccountsTreeProvider.ts carries task-2f4b224f's uncommitted psQuote curly-quote edit, which is not a VSC-15 byte (comment-c91ca56e).\n\nGate: checkRef verbatim at HEAD 66fa1aa3 (env -i, node v24.21.0): npm ci, lint and compile all 0; npm test 554 tests, 550 pass, 4 skip, 0 fail. The overlay picked up the peer's live edit, so I restored the file from 5e97282 (all 4 cmp-identical) and re-ran: lint 0, compile 0, test 554/550/4/0. The accounts-* suites: 37/37.\n\nDoD (round 1 had 14/14 QA mutants killed; spot-checked again):\n1. A1-A8: each action sends once after input, zero times on cancel, invalid, unchanged or dismiss.\n2. K2: all 15 corpus rows.\n3. A2 and Q1: one terminal with `--accounts-file <f> login <id>`; bash and PowerShell quoting proven; C0 and DEL refused.\n4. P2: 7 commands. add and setSwitchPercent are in view/title, gated on canAdd/canSwitchAt; 5 are in view/item/context with `viewItem =~ \\bcanX\\b`; all are scoped to moe.accounts and hidden from the palette.\n5. The gate.\n\nInvariants: MoeDaemonClient, AccountPresentation, moe-jetbrains, the corpus and accounts-view.test are unchanged. No forbidden patterns.\n\nNotes: C09 shows no rows while disconnected (inherited from VSC-14). A WSL default terminal on Windows may not resolve `powershell`, as with AgentLauncher.",
+  "requiredCheckAtDone": null
 }
