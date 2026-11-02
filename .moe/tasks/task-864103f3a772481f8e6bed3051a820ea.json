@@ -79,12 +79,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Governor promote: fleet-filed, off-lane work for idle workers (VSC-0 D8, JetBrains half). Overlap check at 17:54Z: no open row declares moe-jetbrains/build.gradle.kts. It serializes only on the jetbrains-gradle lease with b9e0bb5a, not on files. Keep .github/workflows/ci.yml out of scope as filed, since WORKING rows hold it.",
+  "reopenReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion 30d483e9 has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "LOW",
@@ -99,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:52:29.881Z",
-  "updatedAt": "2026-11-02T18:32:05.628Z",
+  "updatedAt": "2026-11-02T18:33:59.248Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:53:48.921Z",
@@ -199,7 +199,43 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "moe-jetbrains/build.gradle.kts",
+    ".moe/tasks/task-864103f3a772481f8e6bed3051a820ea.json",
+    ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+    ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json"
+  ],
+  "completionSummary": "JetBrains buildPlugin now bundles only each package-lock.json's production entries. Only moe-jetbrains/build.gradle.kts changed (+112/-10). Evidence is from snapshot /mnt/d/moe-scratch/864103f3/r: git archive of HEAD 19d3fc0c plus this file (cmp OK), with Windows npm ci and build of the daemon and proxy in the snapshot.\nGATE: `prepareSandbox --rerun buildPlugin --rerun test --rerun`, the --rerun long form of the DoD's `./gradlew buildPlugin test`, run under the jetbrains-gradle lease. rc 0, 574 JUnit tests, 0 failures, 0 errors.\nZIP: 64,546,287 bytes before, 4,742,186 after.\nDoD 1: compare.mjs on `unzip -Z1` against the lockfiles. Daemon shipped 31 = prod 31 (nested pino-pretty/node_modules/sonic-boom included), proxy 1 = prod 1 (ws). missing, extra and devShipped are all []. 0 typescript/vitest/tsx/@types lines, down from 1424.\nDoD 5: the 807 listing lines outside the two node_modules trees are identical before and after.\nNegative controls (each rc 1; inputs restored, sha256 OK):\n- N1 (DoD 2): one message names 'typescript' (zz-nc.js:1), 'tsx' (zz-nc.js:3) and 'vitest' (zz-nc.js:4) for moe-daemon, and 'vitest' (zz-nc.js:1) for moe-proxy. It does not mention node:module or zz-nc.test.js. RED: the build without the guard ran rc 0 and shipped zz-nc.js.\n- N2 'is missing or unreadable', N3 '{' 'is not valid JSON', N4 lockfileVersion 1 'has no packages map'. Each is a GradleException naming the lockfile, on the nested '> Lockfile' line under 'Could not create task :prepareSandbox'.\n- N5: the presence error names pino-pretty/node_modules/sonic-boom.\n- Extras: N6 key ../../x, N7 backslash key and N8 optional link entry are each refused, naming the lockfile.\nDoD 4: the zip holds the dist at daemon/index.js; the plan's daemon/dist/index.js does not exist. `node <unzip>/moe-jetbrains/daemon/index.js doctor --project <empty tmp>` gave rc 1 ([FAIL] .moe/ presence) with 0 ERR_MODULE_NOT_FOUND. pino, pino-pretty, chokidar and ws import from the unzipped tree.\nRule for VS Code twi",
+  "commits": [
+    {
+      "sha": "30d483e968668913c81ddd3cc21b87ff1c57c46a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T18:20:15Z",
+      "paths": [
+        ".moe/tasks/task-864103f3a772481f8e6bed3051a820ea.json",
+        ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+        ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T18:32:57.506Z",
+      "treeId": "dea025d79f367783113c5bfca4c1f5fa284dc34a",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "moe-jetbrains/build.gradle.kts"
   ],
-  "completionSummary": "JetBrains buildPlugin now bundles only each package-lock.json's production entries. Only moe-jetbrains/build.gradle.kts changed (+112/-10). Evidence is from snapshot /mnt/d/moe-scratch/864103f3/r: git archive of HEAD 19d3fc0c plus this file (cmp OK), with Windows npm ci and build of the daemon and proxy in the snapshot.\nGATE: `prepareSandbox --rerun buildPlugin --rerun test --rerun`, the --rerun long form of the DoD's `./gradlew buildPlugin test`, run under the jetbrains-gradle lease. rc 0, 574 JUnit tests, 0 failures, 0 errors.\nZIP: 64,546,287 bytes before, 4,742,186 after.\nDoD 1: compare.mjs on `unzip -Z1` against the lockfiles. Daemon shipped 31 = prod 31 (nested pino-pretty/node_modules/sonic-boom included), proxy 1 = prod 1 (ws). missing, extra and devShipped are all []. 0 typescript/vitest/tsx/@types lines, down from 1424.\nDoD 5: the 807 listing lines outside the two node_modules trees are identical before and after.\nNegative controls (each rc 1; inputs restored, sha256 OK):\n- N1 (DoD 2): one message names 'typescript' (zz-nc.js:1), 'tsx' (zz-nc.js:3) and 'vitest' (zz-nc.js:4) for moe-daemon, and 'vitest' (zz-nc.js:1) for moe-proxy. It does not mention node:module or zz-nc.test.js. RED: the build without the guard ran rc 0 and shipped zz-nc.js.\n- N2 'is missing or unreadable', N3 '{' 'is not valid JSON', N4 lockfileVersion 1 'has no packages map'. Each is a GradleException naming the lockfile, on the nested '> Lockfile' line under 'Could not create task :prepareSandbox'.\n- N5: the presence error names pino-pretty/node_modules/sonic-boom.\n- Extras: N6 key ../../x, N7 backslash key and N8 optional link entry are each refused, naming the lockfile.\nDoD 4: the zip holds the dist at daemon/index.js; the plan's daemon/dist/index.js does not exist. `node <unzip>/moe-jetbrains/daemon/index.js doctor --project <empty tmp>` gave rc 1 ([FAIL] .moe/ presence) with 0 ERR_MODULE_NOT_FOUND. pino, pino-pretty, chokidar and ws import from the unzipped tree.\nRule for VS Code twi"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-b49a5155@2026-11-02T18:20:15Z",
+    "at": "2026-11-02T18:32:57.506Z"
+  },
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-11-02T18:33:59.248Z",
+  "blockedReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion 30d483e9 has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode."
 }

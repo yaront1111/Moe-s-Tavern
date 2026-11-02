@@ -11,9 +11,45 @@
     "In a git-archive snapshot, with daemon and proxy installed and built there first, moe-vscode `npm ci && npm run lint && npm run compile && npm test && npm run package` exits 0. The evidence reports the vsix size before and after. Never run npm in the shared checkout (GLOBAL rule 0)."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Create moe-vscode/tests/bundle-assets.test.cjs with the Write tool (GLOBAL rule: no shell writes into the checkout). The file plugs into `npm test` (node --test tests/*.test.cjs) and adds no dependency.\n\nVerified reference: /mnt/d/moe-scratch/c76a8bf8-architect/bundle-assets.test.cjs (D:\\moe-scratch\\c76a8bf8-architect\\bundle-assets.test.cjs), 164 lines, sha256 fa53337862508f4677cd633f249bc5b8413970407c265a232415a7f12bd3239f. Writing it byte-identically is preferred. A deviation must keep every assertion below.\n\nSafety design: the test NEVER imports or runs the checkout's script. The unchanged script bundles on import, which would rm -rf moe-vscode/bundled.\n- fixtureRepo(t) builds a temp repo, mkdtemp under os.tmpdir() and removed in t.after, holding a COPY of scripts/bundle-assets.mjs under moe-vscode/scripts. It also holds:\n  - scripts/bundle-manifest.json, one file copy: docs/readme.md;\n  - packages/moe-daemon and packages/moe-proxy, each with package.json, a lockfile v3, dist and node_modules.\n- The daemon lockfile:\n  - prod: a, its nested a/node_modules/c, scoped @s/g, devOptional e, optional f;\n  - dev: b, nested b/node_modules/d, @types/x.\n- On daemon disk besides those: a stray a/node_modules/stray, .bin/b, .package-lock.json and .vite/vitest/results.json.\n- The daemon dist:\n  - index.js imports fs, a and '@s/g/register.js', and re-exports ./lib/x.js;\n  - lib/x.js holds node:path plus look-alike text in the real dist's shapes: \"run it from 'profile show'\" and t.value === 'from';\n  - index.test.js imports b.\n- The proxy: p is prod, q is dev, and dist/index.js imports p.\n- bundle(repo) = spawnSync(process.execPath, [copy]), exactly as `npm run bundle` runs it.\n\nRows:\n- B1: exit 0. bundled/daemon/node_modules files == [@s/g/package.json, a/index.js, a/node_modules/c/package.json, a/package.json, e/package.json, f/package.json]. proxy == [p/package.json]. The daemon's non-node_modules files == [index.js, lib/x.js, package.json]. docs/readme.md is copied.\n- B2: for dist/late.js holding import('b'), a static 'b/lib/d.js' on line 2, or require('@types/x'): exit 1, stderr includes `'<spec>' (late.js:<line>)`, and nothing at all is staged under bundled.\n- B3: exit 1 with stderr matching /moe-daemon[\\\\/]package-lock\\.json/ and nothing staged, for each lockfile case: missing, unparseable, no packages map, a key node_modules/../evil, a non-dev link entry, an entry that is not an object.\n- B4: exit 1 for a missing @s/g, a missing optional f, and an e without package.json. stderr includes `(run npm ci in packages/moe-daemon): <name>`, and nothing is staged.\n- B5: import the copy; after 200 ms there is no bundled dir. productionPackages(daemon lock) deep-equals ['@s/g','a','a/node_modules/c','e','f']. bareImports over a 17-line source gives ['a:6','@s/g/sub/index.js:7','side-effect:8','dyn:9','req/deep:10','multi:17']: builtins, node:, relative and absolute paths, and three look-alike lines are skipped, and the multi-line import reports its specifier's line.\n\nCross-platform: compare forward-slash relative paths and match the lockfile name with [\\\\/]. Use entry.parentPath ?? entry.path. Never compare absolute paths (macOS /var vs /private/var, Windows 8.3 names).\n\nRED (DoD 3). Before step 2, run verbatim from inside the checkout:\nR=$(git rev-parse --show-toplevel)/moe-vscode && M=$(mktemp -d) && cd \"$R\" && cp --parents scripts/bundle-assets.mjs tests/bundle-assets.test.cjs \"$M\" && cd \"$M\" && ~/.nvm/versions/node/v24.21.0/bin/node --test --test-reporter=tap tests/bundle-assets.test.cjs > o 2>&1; grep -E \"^(not )?ok [0-9]+ - B|^# (tests|pass|fail)\" o\nVerified at 30d483e9: not ok 1 to 5, then # tests 5, # pass 0, # fail 5. Keep that output; the completion evidence quotes it.\n\nError handling for this run: if it reports fewer than 5 rows, or a load error, the harness is broken, which is not RED. Fix the test first.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/bundle-assets.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "moe-vscode/scripts/bundle-assets.mjs, with the Edit tool only (DoD 1 and 2). Mirror task-864103f3's landed rule in moe-jetbrains/build.gradle.kts (commit 30d483e9: productionPackages, importSpecifiers, urlScheme, unshippedImports, bundleProblems, requireBundledPackages), so the vsix and the plugin zip ship one node_modules set. First re-read `git log -p --grep 'Moe-Task: task-864103f3' -- moe-jetbrains/build.gradle.kts`. If a later commit changed that rule (a QA reopen), mirror the landed version and say so in the summary.\n\nVerified reference: /mnt/d/moe-scratch/c76a8bf8-architect/fixed/moe-vscode/scripts/bundle-assets.mjs, 296 lines, sha256 5238dc53da687564df49d8496e8251c818f050604f6cd91a3e36eecbb4a59166, and fix-bundle-assets.diff beside it.\n\nChanges:\n1) Imports: add `realpathSync` from 'fs' and `isBuiltin` from 'module'. Builtins only, because no dependency may be added. Add a `lock` member (packages/moe-<name>/package-lock.json) to both assets entries.\n2) Replace copyDir (its excludeBin path dies) with isTestFile(filePath), defined as /\\.(test|spec)\\./ on the basename.\n3) `export async function productionPackages(lockFile)` returns the sorted paths under node_modules ('chokidar', 'pino-pretty/node_modules/sonic-boom'). For every key starting with node_modules/:\n   - the entry must be a plain object;\n   - the key must fully match LOCKFILE_KEY = /^node_modules\\/(?:@[^/\\\\]+\\/)?[^/\\\\]+(?:\\/node_modules\\/(?:@[^/\\\\]+\\/)?[^/\\\\]+)*$/ and have no . or .. segment (checked for dev keys too);\n   - then dev:true is skipped, and a non-dev link:true is refused.\n   Error handling: every failure throws `Lockfile <path> …`, for a missing or unreadable file, invalid JSON, no packages map, a non-object entry, a bad key, or a link. There is never a fallback.\n4) `export function bareImports(source)` returns [{specifier, line}] in source order.\n   - Use the four Gradle regexes verbatim, with the d flag: the static form ^\\s*(?:import|export)\\b[^'\"`;]*?\\bfrom\\s*(['\"])([^'\"\\n]+)\\1 with gm, the side-effect import with gm, import(), and require().\n   - Skip specifiers starting with . or /, URL schemes /^[A-Za-z][A-Za-z0-9+.-]*:/, and isBuiltin(packageOf(spec)), where packageOf takes the first segment, or two for @scope.\n   - The line is 1 + the number of \\n before match.indices[2][0], the specifier's own line.\n   - There is no package-name shape filter: anything else counts and fails closed.\n5) bundleProblems(asset, packages):\n   - Every rel without <deps>/<rel>/package.json is missing. Optional entries count too: a bundle is cross-platform.\n   - The scan covers the source dist's .js/.mjs/.cjs files minus test files, sorted. That is the same file set as the copied dist, which is what the description means by \"copied dist (after excludeTests)\".\n   - Problems:\n     - one string per kind, mirroring the Gradle wording: `Bundled moe-<name> production packages from <lock> are missing at <deps> (run npm ci in packages/moe-<name>): a, b`;\n     - and `Bundled moe-<name> dist imports packages its bundled node_modules does not ship (devDependencies are not bundled): '<spec>' (<dist-relative path>:<line>), …`. Deduplicate these items.\n   - A bare name counts as shipped only if it is a top-level entry (no /node_modules/ in rel).\n6) main():\n   - The existing dist/deps/stale checks stay.\n   - Read both lockfiles there.\n   - Then check BOTH assets and throw all problems joined by \\n, before anything is copied.\n   - Then per asset: copy dist without test files, then each rel from <deps>/<rel> to bundled/<name>/node_modules/<rel>, with cp filter p !== <deps>/<rel>/node_modules. So .bin, .package-lock.json, .vite and stray or dev nested packages never ship. Then package.json as today.\n   - The manifest copies are unchanged.\n7) Entry guard: run main().catch(... exit 1) only when invokedDirectly(). Reuse scripts/moe-account-lease.mjs:579-587: realpathSync(process.argv[1]) vs realpathSync(__filename), lowercased on win32, false on any error. Importing the module then has no side effects.\n\nNo added line may contain a project.json globalRails.forbiddenPatterns string. After this step, step 1's RED command shows 5 pass, 0 fail.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/scripts/bundle-assets.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, in this order (DoD 1, 4 and 5). Never run npm in the shared checkout (GLOBAL rule 0; mem:gotcha-vscode-gate-from-wsl). These commands work from the checkout or from a task worktree, and npm runs only in mktemp snapshots.\n\n1) Run the gate checkRef verbatim (DoD 5). It takes git archive HEAD, overlays the two files, and gets the 'before' script from 30d483e9. It then runs npm ci and build for the daemon and proxy, and packages a before vsix with moe-vscode npm ci. Finally it runs lint, compile, test and package (after.vsix), copies after.vsix to /tmp/c76a8bf8-after.vsix and runs ls -l on both. The architect's verbatim dry run exited 0: before 64354493 bytes, after 3548808 bytes, npm test 592 tests (588 pass, 4 skipped, Windows-only).\n\n2) Run the sets checkRef verbatim, with Z set to a JetBrains buildPlugin zip of a tree containing task-864103f3's change (DoD 1).\n   - First choice: Z=/mnt/d/moe-scratch/864103f3/after.zip (that row's worker built it from 30d483e9).\n   - Otherwise: a moe-jetbrains/build/distributions zip built after 30d483e9.\n   - Otherwise build one under the jetbrains-gradle lease (moe.acquire_resource, then `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && gradlew.bat buildPlugin\"`, then release). WSL has no JDK.\n   Expected: `daemon 31 true true`, `proxy 1 true true`, exit 0. On today's pre-864103f3 zips it fails, as designed.\n\n3) Run the smoke checkRef verbatim (DoD 4). It unzips /tmp/c76a8bf8-after.vsix. Running `<unpacked>/extension/bundled/daemon/index.js doctor --project <empty dir>` must print 'moe-daemon doctor' and a checklist line, with no ERR_MODULE_NOT_FOUND; it exits 1 because .moe is missing. Then it runs CI's own scripts/tests/onboarding.mjs against <unpacked>/extension/bundled, which must PASS. DoD 4 names `…/daemon/dist/index.js`, but the bundle has no dist level (see the planner comment on this row). That literal path does not exist and itself fails with MODULE_NOT_FOUND.\n\nError handling for a red run:\n- A failure inside a file this task did not touch (a peer's WIP checkpoint) follows mem:gotcha-snapshot-gate-peer-wip-checkpoint.\n- A lockfile change landed since 30d483e9 just changes the counts; compare against the current lockfiles.\n- Any red B-row, a packaging error, or a dev package in after.vsix is this task's to fix.\n\nPut these in the complete_task summary: the step-1 RED output, the before/after sizes, the sets output with the Z used, the doctor head and the onboarding PASS line.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "moe-vscode/tests/bundle-assets.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff only (load the adversarial-self-review skill).\n\nCheck the diff:\n- Only the two files changed.\n- The manifest/stale-dist code and the bundled layout (bundled/<asset>/index.js, package.json, node_modules/<rel>) are unchanged.\n- No added line contains a project.json globalRails.forbiddenPatterns string.\n- The rule, regexes, skips, message wording and fail-closed presence check match build.gradle.kts as landed. List any intentional difference: isBuiltin instead of Gradle's hardcoded builtin list gives the same top-level names on Node 24.\n\nThink through these cases:\n- `npm run bundle` started through a symlinked or relative path, or an 8.3 short Windows path: the realpath compare on both sides.\n- The script imported by a future tool: no side effect.\n- A lockfile with lockfileVersion 1, or a packages map holding \"\": the \"\" key is skipped because it is not node_modules/.\n- A huge lockfile: linear.\n- Two bundles running concurrently in one checkout: the pre-existing rm of bundled/, not new.\n- A dist import of a nested-only package fails, correctly, because it cannot resolve from dist.\n- Comments in dist that look like imports at a line start fail closed, by design, and name the file and line.\n- Optional native packages missing on another OS fail the bundle, by design (fail-closed, cross-platform).\n\nReport the findings in the complete_task summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "moe-vscode/tests/bundle-assets.test.cjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -22,17 +58,109 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-864103f3a772481f8e6bed3051a820ea"
+    "task-864103f3a772481f8e6bed3051a820ea",
+    "task-6519ed9127ad4c359fd64b71f1a08be5"
   ],
   "priority": "LOW",
   "order": 334.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ee5dba7809934d0dbde269ee3ca55244",
+      "author": "architect-93e0e956",
+      "content": "Planner note (architect-93e0e956, 2026-11-02 ~18:45Z). Three DoD readings are pinned at submit time, so QA does not have to guess them.\n\n1. **DoD 4 path.** The bundle has no dist/ level. bundle-assets.mjs copies the contents of packages/moe-daemon/dist straight into bundled/daemon, and MoeDaemonClient.ts:1261 launches bundled/daemon/index.js. So `<unpacked>/extension/bundled/daemon/dist/index.js` does not exist, and running it literally gives \"Cannot find module\" (ERR_MODULE_NOT_FOUND). The DoD-4 smoke is therefore `node <unpacked>/extension/bundled/daemon/index.js doctor --project <empty temp dir>`. The JetBrains twin task-864103f3 has the same path error; architect-0fcb7226 confirmed it in msg-cf20d564.\n\n2. **\"Same selection rule and guard as task-864103f3.\"** The plan mirrors that row's landed moe-jetbrains/build.gradle.kts (30d483e9):\n   - every non-dev entry ships, optional, devOptional and peer included;\n   - every node_modules key must be an object entry with a node_modules path shape;\n   - a non-dev \"link\" entry is refused;\n   - a production entry without <rel>/package.json fails the bundle, optional ones included (fail-closed, cross-platform);\n   - the scan uses the same four regexes, skips URL schemes and Node builtins, and reports '<spec>' (<dist-relative path>:<line>);\n   - both packages are checked before anything is copied.\n\n   The description says \"scan the copied dist .js files (after excludeTests)\". The plan scans packages/moe-*/dist minus *.test.* and *.spec.*, before copying, as the Gradle build does. That is the same file set.\n\n3. **DoD 1's \"same node_modules set as task-864103f3's zip\".** The sets checkRef compares the vsix listing, both lockfiles and a JetBrains buildPlugin zip that contains 30d483e9's change. The architect's dry run used that row's worker zip, /mnt/d/moe-scratch/864103f3/after.zip: daemon 31/31/31 and proxy 1/1/1.",
+      "timestamp": "2026-11-02T18:40:05.165Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:52:48.048Z",
-  "updatedAt": "2026-11-02T17:53:50.978Z",
+  "updatedAt": "2026-11-02T18:42:07.883Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:53:50.978Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T18:16:35.407Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T18:42:07.853Z",
+  "executionContract": {
+    "intendedBehavior": "`npm run bundle` (and so vsce's prepublish and `npm run package`) ships, under bundled/daemon/node_modules and bundled/proxy/node_modules, exactly the lockfile's production packages. That is every package-lock.json packages[\"node_modules/…\"] entry, nested ones included, that is not \"dev\": true. Each package is copied without its own nested node_modules, and nested production packages come from their own entries.\n\nBefore copying anything, the bundle checks both packages and stops with one non-zero failure naming every problem:\n- a lockfile that is missing, unparseable, has no packages map, or holds a non-object entry, a non-node_modules key or a non-dev link;\n- a production entry without package.json on disk;\n- a dist .js file (tests excluded) whose bare import names a package that does not ship as a top-level entry.\n\nThe rule, scan and messages mirror moe-jetbrains/build.gradle.kts as landed by task-864103f3, so both IDE bundles ship one node_modules set. The vsix drops from about 64 MB to about 3.5 MB. Importing scripts/bundle-assets.mjs exports its helpers and bundles nothing.",
+    "acceptanceCriteria": [
+      "The vsix's extension/bundled/{daemon,proxy}/node_modules package set equals each lockfile's non-dev entries: daemon 31 (30 top-level plus pino-pretty/node_modules/sonic-boom), proxy 1 (ws). It also equals the set in a task-864103f3 buildPlugin zip. No typescript, vitest, tsx, @types/*, .bin, .package-lock.json or .vite ships.",
+      "bundle-assets.mjs exits 1 naming '<spec>' (<dist-relative path>:<line>) when a non-test dist .js imports a package that is not shipped. It exits 1 naming the lockfile when the lockfile is missing, unparseable, without a packages map, or holds a bad key, a non-object entry or a non-dev link. It exits 1 naming the package when a production entry lacks package.json, optional ones included. In every failure nothing is staged, and there is never a whole-tree fallback.",
+      "moe-vscode/tests/bundle-assets.test.cjs rows B1 to B5 fail (5 of 5) on the unchanged script and pass after the change. The rows only ever import or run a temp copy of the script inside a fixture repo.",
+      "DoD 4 reading: the bundled daemon entry is <unpacked>/extension/bundled/daemon/index.js, because the bundle has no dist/ level. `node <that> doctor --project <empty dir>` prints its checklist with no ERR_MODULE_NOT_FOUND, and scripts/tests/onboarding.mjs passes against <unpacked>/extension/bundled.",
+      "In a git-archive snapshot with the daemon and proxy installed and built: moe-vscode npm ci, lint, compile, test and package exit 0, and the before and after vsix sizes are reported."
+    ],
+    "invariants": [
+      "No fallback ever copies a whole node_modules tree.",
+      "Both assets are checked before any asset is copied.",
+      "Importing bundle-assets.mjs has no side effect, and no npm dependency is added (Node builtins only).",
+      "The VS Code and JetBrains bundles ship the same node_modules set from the same lockfiles.",
+      "No added line contains a project.json globalRails.forbiddenPatterns string."
+    ],
+    "compatibility": [
+      "The `npm run bundle` entry (node ./scripts/bundle-assets.mjs) and the vscode:prepublish chain are unchanged.",
+      "The bundled layout is unchanged: bundled/<asset>/index.js and the rest of dist, package.json, node_modules/<rel>. MoeDaemonClient.ts:1261 and CI's onboarding.mjs read that layout.",
+      "The bundle-manifest.json copies, readManifest, the stale-dist check and .vscodeignore are unchanged. The CI packaging smoke still passes: manifest targets ship, and onboarding passes against the pruned bundle.",
+      "No change to the daemon's or proxy's package.json or lockfile, to ci.yml, or to moe-jetbrains."
+    ],
+    "approvedScope": [
+      "scripts/bundle-assets.mjs: the assets[].lock member; isTestFile; LOCKFILE_KEY; exported productionPackages(lockFile); IMPORT_FORMS; URL_SCHEME; packageOf; exported bareImports(source); bundleProblems(asset, packages); main() restructured into checks, then check both assets, then copy; invokedDirectly() entry guard. copyDir and its excludeBin branch are removed.",
+      "tests/bundle-assets.test.cjs: fixtureRepo, bundle, filesUnder, rows B1 to B5."
+    ],
+    "reuse": [
+      "The selection rule, the four import regexes, the URL-scheme skip, the top-level-only shipped set and the message wording all come from moe-jetbrains/build.gradle.kts as landed by task-864103f3 (30d483e9; architect-0fcb7226 msg-cf20d564).",
+      "The invokedDirectly idiom comes from scripts/moe-account-lease.mjs:579-587.",
+      "The existing manifest and stale-dist checks are kept. Node's isBuiltin replaces Gradle's hardcoded builtin list."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/package-lock.json and packages/moe-proxy/package-lock.json are lockfileVersion 3. The daemon has 31 non-dev entries, and no production entry is optional, devOptional, peer or link; the proxy has 1, ws. All are installed in the checkout.",
+      "The non-test daemon dist imports chokidar, pino and ws plus bare builtins (fs, path, crypto, http, net, os, url, zlib, dns, child_process, async_hooks). The proxy dist imports ws plus fs, path, http and net. generated/skillFiles.js and delivery/architectureRules.js contain look-alike text that the quote-blocking static form does not capture.",
+      "moe-vscode/scripts/bundle-assets.mjs at 30d483e9 copies each node_modules tree whole except .bin (:153) and runs main() on import (:187). The vsix ships extension/bundled/<asset>/index.js; there is no dist level.",
+      ".github/workflows/ci.yml packages the vsix on ubuntu, checks the manifest targets, and runs scripts/tests/onboarding.mjs on the unpacked bundle. `npm test` runs tests/*.test.cjs on ubuntu, windows and macos."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && G=$(mktemp -d -t c76a8bf8-XXXXXX) && echo \"snapshot $G\" && cd \"$R\" && git archive HEAD | tar -x -C \"$G\" && cp --parents moe-vscode/scripts/bundle-assets.mjs moe-vscode/tests/bundle-assets.test.cjs \"$G/\" && git show 30d483e968668913c81ddd3cc21b87ff1c57c46a:moe-vscode/scripts/bundle-assets.mjs > \"$G/before.mjs\" && cd \"$G\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'for p in daemon proxy; do (cd packages/moe-$p && npm ci --no-audit --no-fund && npm run build) || exit 1; done; cd moe-vscode && npm ci --no-audit --no-fund && mv scripts/bundle-assets.mjs ../after.mjs && cp ../before.mjs scripts/bundle-assets.mjs && npm run package -- --out ../before.vsix && cp ../after.mjs scripts/bundle-assets.mjs && npm run lint && npm run compile && npm test && npm run package -- --out ../after.vsix && cp ../after.vsix /tmp/c76a8bf8-after.vsix && ls -l ../before.vsix ../after.vsix'",
+      "R=$(git rev-parse --show-toplevel) && Z=${Z:-$(ls -t \"$R\"/moe-jetbrains/build/distributions/*.zip|head -1)} && test -f \"$Z\" && echo \"zip $Z\" && node -e 'const{execFileSync:x}=require(\"child_process\"),[v,r,z]=process.argv.slice(1);let b=0;const K=(f,q)=>{const s=new Set;for(const l of(x(\"unzip\",[\"-Z1\",f],{maxBuffer:1e9})+\"\").split(\"\\n\")){const m=l.match(\"^\"+q+\"/(node_modules/.*)\");if(!m)continue;const g=m[1].split(\"/\"),k=[];for(let i=0,n;g[i]==\"node_modules\"&&g[i+1]&&g[i+(n=g[i+1][0]==\"@\"?2:1)];i+=1+n)k.push(\"node_modules\",...g.slice(i+1,i+1+n));k[0]&&s.add(k.join(\"/\"))}return[...s].sort()+\"\"};for(const p of[\"daemon\",\"proxy\"]){const P=require(r+\"/packages/moe-\"+p+\"/package-lock.json\").packages,e=Object.keys(P).filter(k=>k.startsWith(\"node_modules/\")&&!P[k].dev).sort()+\"\",a=K(v,\"extension/bundled/\"+p),j=z?K(z,\"[^/]+/\"+p):e;console.log(p,e.split(\",\").length,a==e,j==e);if(a!=e||j!=e)b=1,console.log(e+\"\\n\"+a+\"\\n\"+j)}process.exit(b)' /tmp/c76a8bf8-after.vsix \"$R\" \"$Z\"",
+      "R=$(git rev-parse --show-toplevel) && U=$(mktemp -d) && T=$(mktemp -d) && unzip -q /tmp/c76a8bf8-after.vsix -d \"$U\" && N=$HOME/.nvm/versions/node/v24.21.0/bin/node && o=$(\"$N\" \"$U/extension/bundled/daemon/index.js\" doctor --project \"$T\" 2>&1); printf '%s\\n' \"$o\" | head -3 && printf '%s' \"$o\" | grep -q '^moe-daemon doctor' && printf '%s' \"$o\" | grep -qE '^\\[(OK|WARN|FAIL|INFO)\\]' && ! printf '%s' \"$o\" | grep -q ERR_MODULE_NOT_FOUND && \"$N\" \"$R/scripts/tests/onboarding.mjs\" \"$U/extension/bundled\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) A package-name shape filter on the scan: rejected at architect-0fcb7226's request (msg-cf20d564). The Gradle guard has none, so every capture after the skips fails closed. The quote-blocking static form already avoids the real dist's look-alike text.\n2) Skipping missing optional entries: rejected. A bundle is cross-platform, so its contents must not depend on the build OS (Gradle fails closed too).\n3) Typescript's preProcessFile as the scanner: rejected. It adds a dependency to the bundler, and the regexes give the same {chokidar, pino, ws}/{ws} on the real dist.\n4) Scanning the copied dist after the copy: replaced by scanning the source dist minus test files before anything is copied. It is the same file set, as Gradle does, and leaves nothing staged on failure.\n5) A separate helpers module: rejected. The DoD asks for exported helpers without a bundle on import, so the moe-account-lease invokedDirectly guard is used instead.\n6) A CHANGELOG bullet: left out, because the row's file list is fixed.",
+    "codebaseInsights": "- The bundle flattens dist into bundled/<asset>/, with no dist level. MoeDaemonClient.ts:1261 launches bundled/daemon/index.js.\n- The current vsix and plugin zip both ship node_modules/.package-lock.json and .vite/vitest caches besides about 84 MB of devDependencies per tree.\n- The daemon dist imports many builtins unprefixed, so a scan that skips only node: specifiers fails every build.\n- A naive `from '…'` regex captures string text in generated/skillFiles.js and delivery/architectureRules.js.\n- CI already runs onboarding.mjs against the unpacked vsix, which is the real runtime proof of no over-pruning.\n- The task depends on task-864103f3, which is BLOCKED only by the governor's worktree-switch drain. Its completion 30d483e9 has landed, and QA follows the switch.",
+    "risks": "- **RED safety:** the unchanged script bundles on import. The test only ever imports or spawns a temp copy inside a fixture repo, and B5 waits 200 ms so a background bundle on the old script completes before cleanup.\n- **macOS and Windows path forms:** both sides of the entry guard go through realpathSync, and the test never compares absolute paths.\n- **Parity drift:** if task-864103f3 is reopened and its rule changes, mirror the landed version (step 2) and re-run the sets checkRef against a zip from that commit.\n- **The vsix copy:** /tmp/c76a8bf8-after.vsix is shared between the gate and the later checkRefs. Run them in order, in one session.\n- **Nested-only packages:** a future dist import of a package that exists only nested fails the bundle. That is intended, because it cannot resolve from dist.\n- **Lockfile churn:** if a peer lands a dependency change, the counts change; compare against the current lockfiles.",
+    "keyFiles": [
+      "moe-vscode/scripts/bundle-assets.mjs",
+      "moe-vscode/tests/bundle-assets.test.cjs",
+      "moe-jetbrains/build.gradle.kts",
+      "scripts/moe-account-lease.mjs",
+      "scripts/tests/onboarding.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "30d483e968668913c81ddd3cc21b87ff1c57c46a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T18:42:07.883Z",
+  "approvedPlanRevision": 1
 }
