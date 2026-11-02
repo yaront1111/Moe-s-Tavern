@@ -17,7 +17,7 @@ import org.junit.Test
  *
  * Each row's `settings` is the daemon's /ws `project.settings` block (null or an object), parsed exactly as the client
  * parses a STATE_SNAPSHOT (null stays null: no snapshot yet), and `expect` is the effective-policy rows the settings
- * dialog shows, order included. Rows P17 to P19 carry wire types the daemon and wrappers read strictly.
+ * dialog shows, order included. Rows P07 to P10 carry wire types the daemon and wrappers read strictly.
  */
 class SettingsPolicyCorpusTest {
     private val corpus = loadCorpus()
@@ -91,15 +91,17 @@ class SettingsPolicyCorpusTest {
         return problems
     }
 
-    /** A key the policy never reads is a typo that would pass as a default; a nested shape of null marks a leaf key. */
+    /**
+     * A key the policy never reads is a typo that would pass as a default; a nested shape of null marks a leaf key.
+     * Only an object value has member names to check: a non-object attribution or taskSizing is a wire-type row.
+     */
     private fun unknownMembers(path: String, obj: JsonObject, shape: Map<String, Set<String>?>): List<String> =
         obj.keySet().flatMap { key ->
             val nested = shape[key]
             val value = obj.get(key)
             when {
                 key !in shape -> listOf("$path.$key is not a policy member")
-                nested == null -> emptyList()
-                !value.isJsonObject -> listOf("$path.$key must be an object")
+                nested == null || !value.isJsonObject -> emptyList()
                 else -> value.asJsonObject.keySet().filter { it !in nested }.map { "$path.$key.$it is not a policy member" }
             }
         }
