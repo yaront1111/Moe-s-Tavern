@@ -11,6 +11,120 @@ function escapeHtml(text: string): string {
         .replace(/'/g, '&#039;');
 }
 
+/**
+ * The English strings shared with JetBrains, keyed by their MoeBundle.properties key with the
+ * bundle's <html>/<small> markup stripped. tests/settings-policy-corpus.test.cjs pins them to the
+ * bundle. They live in this file because the test harnesses load the panel with a closed require map.
+ */
+export const SETTINGS_BUNDLE_TEXT = {
+    'moe.label.landingPolicy': 'Landing & Gate Policy (read-only)',
+    'moe.settings.landingPolicyHint': 'Read-only. These come from .moe/project.json settings; a key that is absent shows the daemon default.',
+    'moe.settings.enableAgentTeams': 'Enable Agent Teams (Claude Code workers only)',
+    'moe.settings.enableAgentTeamsHint': 'When enabled, Claude Code workers can spawn teammate instances for parallel sub-step work.',
+};
+
+export interface PolicyRow {
+    label: string;
+    value: string;
+    detail: string;
+}
+
+type JsonObject = Record<string, unknown>;
+
+const isJsonObject = (value: unknown): value is JsonObject =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** planSize.ts positiveInt: a JSON number, an integer, above 0; anything else is the default. */
+const positiveInt = (value: unknown, fallback: number): number =>
+    typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback;
+
+/** moe-agent.sh `isinstance(v, str)` and complete_task `typeof === 'string'`: only a string counts. */
+const trimmedString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+const SHARED_DATED_BRANCH = 'moe/work-<YYYY-MM-DD>';
+
+function toggleRow(label: string, on: boolean, onDetail: string, offDetail: string): PolicyRow {
+    return { label, value: on ? 'On' : 'Off', detail: on ? onDetail : offDetail };
+}
+
+function landingBranchRow(branch: string): PolicyRow {
+    const label = 'Landing branch';
+    if (branch === '') {
+        return { label, value: `${SHARED_DATED_BRANCH} (shared, default)`, detail: 'No consolidationBranch set; wrappers peel onto the shared dated branch.' };
+    }
+    if (branch.includes('*')) {
+        return { label, value: branch, detail: `Glob checked at complete_task only; wrappers still peel onto ${SHARED_DATED_BRANCH}.` };
+    }
+    return { label, value: branch, detail: 'Peel target and the branch complete_task requires.' };
+}
+
+function attributionRow(undeclared: unknown): PolicyRow {
+    const label = 'Undeclared-file attribution';
+    if (undeclared === 'never') {
+        return { label, value: 'Declared files only (never)', detail: 'A changed file nobody declared is never committed.' };
+    }
+    if (undeclared === 'always') {
+        return { label, value: 'Always commit (always)', detail: 'A changed file nobody declared is committed regardless of live peers.' };
+    }
+    return { label, value: 'Commit when no other worker is live (solo)', detail: 'With a live peer, undeclared changes are reported unresolved instead.' };
+}
+
+function sizingRow(taskSizing: unknown): PolicyRow {
+    const sizing = isJsonObject(taskSizing) ? taskSizing : {};
+    const warnSteps = positiveInt(sizing.warnSteps, 8);
+    const warnFiles = positiveInt(sizing.warnDistinctFiles, 5);
+    const maxSteps = Math.max(warnSteps, positiveInt(sizing.maxSteps, 12));
+    const maxFiles = Math.max(warnFiles, positiveInt(sizing.maxDistinctFiles, 10));
+    return {
+        label: 'Plan size limits',
+        value: `Warn past ${warnSteps} steps / ${warnFiles} files, reject past ${maxSteps} / ${maxFiles}`,
+        detail: 'Applied to every submitted plan.',
+    };
+}
+
+/**
+ * The effective landing and gate policy the daemon and wrappers apply, in display order. A port
+ * of JetBrains' MoeSettingsDialog.effectivePolicyRows, but over the RAW wire settings: VS Code
+ * keeps project.json untyped, so each value goes through the reader the daemon uses. It never
+ * throws; project.json is hand-editable and a wrong type means the daemon default.
+ */
+export function effectivePolicyRows(settings: unknown): PolicyRow[] {
+    const s = isJsonObject(settings) ? settings : {};
+    const attribution = isJsonObject(s.attribution) ? s.attribution : {};
+    const qualityGate = trimmedString(s.qualityGate);
+    const gateEveryTask = s.qualityGateScope === 'everyTask';
+    const commitHooks = s.commitHooks === true;
+    return [
+        toggleRow('Auto-commit', s.autoCommit !== false, "Every session exit lands this task's attributed paths.", 'No completion, checkpoint or rescue commits.'),
+        toggleRow('Checkpoint commits', s.checkpointCommits !== false, 'Non-final exits commit as wip(task-<id>): ...', 'No wip(task-<id>) commits; unlanded bytes wait for completion.'),
+        toggleRow('Push checkpoints', s.checkpointPush !== false, 'Checkpoint commits are pushed to the remote.', 'Checkpoints stay local.'),
+        toggleRow('Commit board state', s.commitBoardState !== false, "Landing also stages this task's .moe/tasks/<id>.json.", "This task's .moe/tasks/<id>.json is left uncommitted."),
+        {
+            label: 'Commit hooks',
+            value: commitHooks ? 'Run on completion commits' : 'Skipped (plumbing commits)',
+            detail: commitHooks ? 'Completion commits run git hooks; checkpoints stay plumbing.' : 'Landing writes the commit directly, so no git hook runs.',
+        },
+        landingBranchRow(trimmedString(s.consolidationBranch)),
+        {
+            label: 'Quality gate',
+            value: qualityGate === '' ? 'Disabled (no command configured)' : qualityGate,
+            detail: qualityGate === '' ? 'Nothing gates the completion commit.' : 'Must exit 0 before the completion commit lands.',
+        },
+        {
+            label: 'Quality gate scope',
+            value: gateEveryTask ? 'Every task' : 'Epic-final task only',
+            detail: gateEveryTask ? "The gate runs before every task's completion commit." : 'The gate runs only on the last open task of an epic.',
+        },
+        attributionRow(attribution.undeclared),
+        sizingRow(s.taskSizing),
+    ];
+}
+
+function policyRowHtml(row: PolicyRow): string {
+    const detail = row.detail === '' ? '' : `<div class="policy-detail">${escapeHtml(row.detail)}</div>`;
+    return `<div class="policy-row"><span class="policy-label">${escapeHtml(row.label)}</span>: <span class="policy-value">${escapeHtml(row.value)}</span>${detail}</div>`;
+}
+
 export class SettingsPanel {
     public static currentPanel: SettingsPanel | undefined;
     private readonly panel: vscode.WebviewPanel;
@@ -67,9 +181,7 @@ export class SettingsPanel {
                     approvalMode: message.approvalMode as ProjectSettings['approvalMode'],
                     speedModeDelayMs: Number(message.speedModeDelayMs),
                     agentCommand: String(message.agentCommand ?? '').trim(),
-                    autoCreateBranch: Boolean(message.autoCreateBranch),
-                    branchPattern: String(message.branchPattern ?? '').trim(),
-                    commitPattern: String(message.commitPattern ?? '').trim(),
+                    enableAgentTeams: message.enableAgentTeams === true,
                 };
 
                 try {
@@ -116,9 +228,9 @@ export class SettingsPanel {
         const approvalMode = escapeHtml(settings?.approvalMode ?? 'CONTROL');
         const speedModeDelayMs = settings?.speedModeDelayMs ?? 2000;
         const agentCommand = escapeHtml(settings?.agentCommand ?? 'claude');
-        const autoCreateBranch = settings?.autoCreateBranch ?? true;
-        const branchPattern = escapeHtml(settings?.branchPattern ?? 'moe/{epicId}/{taskId}');
-        const commitPattern = escapeHtml(settings?.commitPattern ?? 'feat({epicId}): {taskTitle}');
+        const enableAgentTeams = settings?.enableAgentTeams === true;
+        const text = SETTINGS_BUNDLE_TEXT;
+        const policyRows = effectivePolicyRows(settings).map(policyRowHtml).join('\n        ');
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -220,6 +332,16 @@ export class SettingsPanel {
         .btn-secondary:hover {
             background: var(--vscode-button-secondaryHoverBackground);
         }
+        .policy-row {
+            margin-bottom: 8px;
+        }
+        .policy-label {
+            font-weight: 600;
+        }
+        .policy-detail {
+            color: var(--vscode-descriptionForeground);
+            font-size: 11px;
+        }
     </style>
 </head>
 <body>
@@ -256,26 +378,20 @@ export class SettingsPanel {
         <div class="hint">CLI command used to launch AI agents</div>
     </div>
 
-    <h2>Git</h2>
-
     <div class="form-group">
         <label class="checkbox-label">
-            <input type="checkbox" id="autoCreateBranch"${autoCreateBranch ? ' checked' : ''} />
-            Auto Create Branch
+            <input type="checkbox" id="enableAgentTeams"${enableAgentTeams ? ' checked' : ''} />
+            ${escapeHtml(text['moe.settings.enableAgentTeams'])}
         </label>
+        <div class="hint">${escapeHtml(text['moe.settings.enableAgentTeamsHint'])}</div>
     </div>
 
-    <div class="form-group">
-        <label for="branchPattern">Branch Pattern</label>
-        <input type="text" id="branchPattern" value="${branchPattern}" />
-        <div class="hint">Available: {epicId}, {taskId}</div>
-    </div>
+    <h2>${escapeHtml(text['moe.label.landingPolicy'])}</h2>
 
-    <div class="form-group">
-        <label for="commitPattern">Commit Pattern</label>
-        <input type="text" id="commitPattern" value="${commitPattern}" />
-        <div class="hint">Available: {epicId}, {taskTitle}</div>
-    </div>
+    <section id="landingPolicy">
+        ${policyRows}
+    </section>
+    <div class="hint">${escapeHtml(text['moe.settings.landingPolicyHint'])}</div>
 
     <div class="button-row">
         <button class="btn-primary" id="saveBtn">Save</button>

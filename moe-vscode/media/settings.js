@@ -3,9 +3,7 @@
     var approvalModeEl = document.getElementById('approvalMode');
     var speedModeDelayMsEl = document.getElementById('speedModeDelayMs');
     var agentCommandEl = document.getElementById('agentCommand');
-    var autoCreateBranchEl = document.getElementById('autoCreateBranch');
-    var branchPatternEl = document.getElementById('branchPattern');
-    var commitPatternEl = document.getElementById('commitPattern');
+    var enableAgentTeamsEl = document.getElementById('enableAgentTeams');
     var saveBtn = document.getElementById('saveBtn');
     var cancelBtn = document.getElementById('cancelBtn');
 
@@ -15,9 +13,7 @@
             approvalMode: approvalModeEl.value,
             speedModeDelayMs: parseInt(speedModeDelayMsEl.value, 10) || 2000,
             agentCommand: agentCommandEl.value.trim(),
-            autoCreateBranch: autoCreateBranchEl.checked,
-            branchPattern: branchPatternEl.value.trim(),
-            commitPattern: commitPatternEl.value.trim()
+            enableAgentTeams: enableAgentTeamsEl.checked
         });
     });
 

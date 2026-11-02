@@ -23,7 +23,11 @@ const compile = file => ts.transpileModule(fs.readFileSync(file, 'utf8'), {
 const [CLIENT_JS, PANEL_JS] = [CLIENT_PATH, PANEL_PATH].map(compile);
 const PAGE_JS = fs.readFileSync(PAGE_PATH, 'utf8');
 
-const FORM_KEYS = ['agentCommand', 'approvalMode', 'autoCreateBranch', 'branchPattern', 'commitPattern', 'speedModeDelayMs'];
+// Exactly what JetBrains' MoeCommandSender.updateSettings sends. The daemon still stores
+// autoCreateBranch, branchPattern and commitPattern, but no launcher reads them, so VS Code
+// neither edits nor sends them.
+const FORM_KEYS = ['agentCommand', 'approvalMode', 'enableAgentTeams', 'speedModeDelayMs'];
+const LEGACY_KEYS = ['autoCreateBranch', 'branchPattern', 'commitPattern'];
 const STORED = {
     approvalMode: 'CONTROL', speedModeDelayMs: 4500, agentCommand: 'my-agent --msg "a & b" --in <dir>',
     autoCreateBranch: false, branchPattern: 'moe/{taskId}-x', commitPattern: "feat({epicId}): don't {taskTitle}",
@@ -87,7 +91,7 @@ function loadPage(html, postMessage) {
 
 /** Open the real panel on a real client fed one STATE_SNAPSHOT; `settings` undefined means no project. */
 function withSettingsPage(settings, body) {
-    const seen = { frames: [], info: [], warnings: [], errors: [], disposes: 0, handler: undefined };
+    const seen = { frames: [], posted: [], info: [], warnings: [], errors: [], disposes: 0, handler: undefined };
     let panel;
     function StubWebSocket() { throw new Error('these tests never open a real socket'); }
     StubWebSocket.OPEN = 1;
@@ -127,14 +131,16 @@ function withSettingsPage(settings, body) {
         const payload = { project: settings && { id: 'p', rootPath: '/p', settings }, tasks: [], epics: [] };
         client['handleMessage'](JSON.stringify({ type: 'STATE_SNAPSHOT', payload }));
         SettingsPanel.createOrShow('ext', client, client.currentState);
+        seen.html = panel.webview.html;
         body(loadPage(panel.webview.html, message => {
             if (typeof seen.handler !== 'function') { throw new Error('the panel registered no message handler'); }
+            seen.posted.push(JSON.parse(JSON.stringify(message)));
             seen.handler(message);
         }), seen, client);
     } finally { client.dispose(); }
 }
 
-/** The single UPDATE_SETTINGS payload on the wire, which must carry exactly the six form keys. */
+/** The single UPDATE_SETTINGS payload on the wire, which must carry exactly the four form keys. */
 function savedPayload(seen) {
     assert.equal(seen.frames.length, 1, 'exactly one frame reached the socket');
     assert.equal(seen.frames[0].type, 'UPDATE_SETTINGS');
@@ -164,12 +170,11 @@ for (const mode of ['CONTROL', 'SPEED', 'TURBO']) {
     });
 }
 
-test('S3: with no project the form defaults are CONTROL and the six-key payload', () => {
+test('S3: with no project the form defaults are CONTROL and the four-key payload', () => {
     withSettingsPage(undefined, (page, seen) => {
         page.click('saveBtn');
         assert.deepEqual(savedPayload(seen), {
-            approvalMode: 'CONTROL', speedModeDelayMs: 2000, agentCommand: 'claude', autoCreateBranch: true,
-            branchPattern: 'moe/{epicId}/{taskId}', commitPattern: 'feat({epicId}): {taskTitle}'
+            approvalMode: 'CONTROL', speedModeDelayMs: 2000, agentCommand: 'claude', enableAgentTeams: false
         });
     });
 });
@@ -179,13 +184,51 @@ test('S4: user edits reach the wire as typed, trimmed where the page trims', () 
         page.el('approvalMode').value = 'SPEED';
         page.el('speedModeDelayMs').value = '3000';
         page.el('agentCommand').value = '  grok  ';
-        page.el('autoCreateBranch').checked = true;
-        page.el('branchPattern').value = '  moe/x/{taskId}  ';
+        page.el('enableAgentTeams').checked = false;
         page.click('saveBtn');
         assert.deepEqual(savedPayload(seen), {
-            approvalMode: 'SPEED', speedModeDelayMs: 3000, agentCommand: 'grok', autoCreateBranch: true,
-            branchPattern: 'moe/x/{taskId}', commitPattern: STORED.commitPattern
+            approvalMode: 'SPEED', speedModeDelayMs: 3000, agentCommand: 'grok', enableAgentTeams: false
         });
+    });
+});
+
+for (const [stored, shown] of [[true, true], [false, false], [undefined, false], ['true', false]]) {
+    test(`S9: a stored enableAgentTeams of ${JSON.stringify(stored)} shows ${shown ? 'checked' : 'unchecked'}, saves as ${shown} and toggles to ${!shown}`, () => {
+        withSettingsPage({ ...STORED, enableAgentTeams: stored }, (page, seen) => {
+            assert.strictEqual(page.el('enableAgentTeams').checked, shown);
+            page.click('saveBtn');
+            assert.strictEqual(savedPayload(seen).enableAgentTeams, shown);
+        });
+        withSettingsPage({ ...STORED, enableAgentTeams: stored }, (page, seen) => {
+            page.el('enableAgentTeams').checked = !shown;
+            page.click('saveBtn');
+            assert.strictEqual(savedPayload(seen).enableAgentTeams, !shown);
+        });
+    });
+}
+
+test('S10: the removed Git controls are not emitted and no save carries their keys', () => {
+    withSettingsPage(STORED, (page, seen) => {
+        for (const id of LEGACY_KEYS) {
+            assert.ok(!seen.html.includes(`id="${id}"`), `${id} control is still emitted`);
+            assert.throws(() => page.el(id), /no element with id/);
+        }
+        assert.ok(!seen.html.includes('<h2>Git</h2>'), 'the Git section is gone');
+        page.click('saveBtn');
+        const payload = savedPayload(seen);
+        for (const key of LEGACY_KEYS) { assert.ok(!(key in payload), `${key} must never be sent`); }
+        // The page itself posts only the four form keys, so the panel is not the sole guard.
+        assert.deepEqual(seen.posted.map(message => Object.keys(message).sort()), [['type', ...FORM_KEYS].sort()]);
+    });
+});
+
+test('S11: the panel builds the payload itself: extra message keys never reach the wire and enableAgentTeams must be exactly true', () => {
+    withSettingsPage(STORED, (page, seen) => {
+        seen.handler({
+            type: 'save', approvalMode: 'TURBO', speedModeDelayMs: 1500, agentCommand: ' x ', enableAgentTeams: 'true',
+            autoCreateBranch: true, branchPattern: 'p', commitPattern: 'c', qualityGate: 'rm -rf /'
+        });
+        assert.deepEqual(savedPayload(seen), { approvalMode: 'TURBO', speedModeDelayMs: 1500, agentCommand: 'x', enableAgentTeams: false });
     });
 });
 
@@ -200,7 +243,11 @@ for (const typed of ['', 'abc', '0']) {
 }
 
 test('S6: profile and evidence settings are never sent and survive the SETTINGS_UPDATED roundtrip', () => {
-    const kept = { executionProfile: 'observe', deliveryPolicy: 'local-branch', checkEnvironments: [{ id: 'env-1', image: 'ubuntu-24.04' }], repairPolicy: { maxCodeRepairs: 2 } };
+    const kept = {
+        executionProfile: 'observe', deliveryPolicy: 'local-branch', checkEnvironments: [{ id: 'env-1', image: 'ubuntu-24.04' }], repairPolicy: { maxCodeRepairs: 2 },
+        // The daemon still stores these; VS Code no longer edits or sends them.
+        autoCreateBranch: true, branchPattern: 'moe/legacy/{taskId}', commitPattern: 'legacy: {taskTitle}'
+    };
     withSettingsPage({ ...STORED, ...kept }, (page, seen, client) => {
         page.click('saveBtn');
         const payload = savedPayload(seen);
