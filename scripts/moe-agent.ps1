@@ -8168,8 +8168,16 @@ try {
     process.stderr.write('MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI\n'); process.exit(1);
 }
 '@
-    $script:AgentGitGuardRoot = $program | & node - $projectPath ([IO.Path]::GetTempPath())
-    if ($LASTEXITCODE -ne 0) { throw 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI' }
+    $encoding = [Console]::OutputEncoding
+    try {
+        # Node writes UTF-8 even when gemini/grok seats keep the OEM code page.
+        [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+        $script:AgentGitGuardRoot = $program | & node - $projectPath ([IO.Path]::GetTempPath())
+        $rc = $LASTEXITCODE
+    } finally {
+        [Console]::OutputEncoding = $encoding
+    }
+    if ($rc -ne 0) { throw 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI' }
     $script:AgentGitGuard = if ($script:AgentGitGuardRoot) {
         [IO.File]::ReadAllText((Join-Path $script:AgentGitGuardRoot "env.json")) | ConvertFrom-Json
     } else { $null }
