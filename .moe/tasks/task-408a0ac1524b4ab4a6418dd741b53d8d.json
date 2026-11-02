@@ -13,10 +13,11 @@
     {
       "stepId": "step-1",
       "description": "Test first (RED). Use test-driven-development. Read these first: mem:task-task-408a0ac1524b4ab4a6418dd741b53d8d-handoff, mem:task-task-76ae5c472f6a4651a45478b1893e07dc-handoff, mem:gotcha-agent-git-guard-runtime-config, and this row's planner comment (comment-29bee9da).\n\nIn scripts/tests/agent-git-guard.test.mjs, add ONE case.\n- Seat: cli 'custom', headless (interactive false), commitHooks false, status REVIEW, mode 'spaced-temp'. This is the seat the planner measured RED.\n- Title: include 'spaced temp', so that `--test-name-pattern 'spaced temp'` selects exactly this case.\n\nReuse what task-76ae5c47 (dependsOn, lands first) added for its two 'non-ascii-temp' cases: the optional 5th matrix element (mode), the TMP/TEMP env plumbing, and its extra assertions. Re-read the file at start_step and mirror whatever shape it actually landed.\n- Only the directory name differs: path.join(root, 'My Temp'), ASCII with a space. Create it before launch, inside the fixture root that t.after removes.\n- If that plumbing is inline under mode === 'non-ascii-temp', key the directory name by mode, e.g. { 'non-ascii-temp': 'témp', 'spaced-temp': 'My Temp' }. The non-ascii-temp cases must keep the same directory, env and assertions.\n- Its CP 850 driver and stub pins stay on its own mode. This case uses the default stub and driver.\n\nEnv:\n- Windows: delete every f.env key matching /^(TMP|TEMP)$/i, then set TMP and TEMP to the directory. GetTempPath reads TMP first, and a spread process.env is no longer case-insensitive.\n- Linux: set TMPDIR to the directory.\n\nAssertions:\n- Every matrix assertion.\n- core.hooksPath (observed.hooks) resolves under the directory: compare path.resolve'd strings, case-insensitively on Windows.\n- After exit, a recursive walk of the directory finds no entry whose name starts with moe-git-guard-.\n\nRED message:\n- The shared check's `codes=` lists the MOE_ codes found in r.stdout only, but the wrapper's refusal goes to stderr (measured: codes=null).\n- So for this case only, before the shared check, assert fs.existsSync(f.result) with the message `CLI did not run: exit=${r.status}; codes=${(r.stdout + r.stderr).match(/MOE_[A-Z_]+/g)}`. The RED then names both 'CLI did not run' and MOE_AGENT_GIT_GUARD_FAILED, as the DoD requires.\n- Leave the shared check and every other case unchanged. If 76ae5c47 already widened the shared check, reuse it.\n\nRED proof on native Windows (recipe in step 3):\n- Take a snapshot of the parent (HEAD at start, unfixed ps1) with only this test file overlaid.\n- Run node.exe --test on the three gate files.\n- Expect exactly one failure: this case, failing with 'CLI did not run' and MOE_AGENT_GIT_GUARD_FAILED. Keep that line.\n- The per-file counts, minus this case, are the parent's Windows counts for the summary.\n- On Linux the case passes before and after the fix. The planner measured all 24 existing cases passing under a spaced TMPDIR on HEAD (51 s).\n- Never put scratch copies inside the checkout.\n\nError handling: everything the case creates stays inside the fixture root, and no env change leaks into other cases, because f.env is per fixture.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/agent-git-guard.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-02T19:45:58.626Z"
     },
     {
       "stepId": "step-2",
@@ -46,7 +47,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -55,7 +56,8 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-86431c315e524b3b89af3bb3d2e7c98d"
+    "task-86431c315e524b3b89af3bb3d2e7c98d",
+    "task-76ae5c472f6a4651a45478b1893e07dc"
   ],
   "priority": "MEDIUM",
   "order": 315.7,
@@ -75,14 +77,15 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:06:05.143Z",
-  "updatedAt": "2026-11-02T19:15:58.749Z",
+  "updatedAt": "2026-11-02T19:46:42.801Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T19:06:13.181Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d"
+    "architect-bd1eb82d",
+    "worker-26483323"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -136,9 +139,18 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
+    "outcome": "nothing",
     "kind": "checkpoint",
-    "sessionId": "architect-bd1eb82d@2026-10-30T19:06:13Z",
-    "at": "2026-10-30T19:21:00.578Z"
-  }
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "worker-26483323@2026-11-02T19:41:04Z",
+    "at": "2026-11-02T19:46:42.801Z"
+  },
+  "workStartedAt": "2026-11-02T19:45:58.626Z",
+  "blockedReason": "Approved plan rev1 requires task-76ae5c47's landed non-ascii-temp matrix/env/assertion plumbing (step 1) and encoding save/set/restore around the guard node capture (steps 2/4). Supplied epicSiblings marks that task WORKING, landed:false. At worktree HEAD 7beed0bc407cd6012b0aeaef68e7dc54f4f496ab, agent-git-guard.test.mjs has no non-ascii-temp mode and scripts/moe-agent.ps1:8090 still has the bare node capture with no encoding try/finally. Current dependsOn only names landed task-86431c31; that does not supply the approved plan's prerequisite. No files modified, no verification run or claimed passing. Required handoff and gotcha memories recorded; governors notified.",
+  "blockedOnTaskIds": [
+    "task-76ae5c472f6a4651a45478b1893e07dc"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-11-02T19:46:06.545Z"
 }

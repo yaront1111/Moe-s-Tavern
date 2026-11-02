@@ -97,8 +97,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7328a40d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -128,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:16:46.649Z",
-  "updatedAt": "2026-11-02T19:40:10.783Z",
+  "updatedAt": "2026-11-02T19:47:18.355Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:18:25.856Z",
@@ -138,7 +138,9 @@
     "firstClaimAt": "2026-10-30T13:58:37.998Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T19:46:27.531Z",
+    "wallClockMs": 280069533
   },
   "contextFetchedBy": [
     "architect-eb7de546",
@@ -215,9 +217,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-02T19:22:09Z",
-    "at": "2026-11-02T19:39:10.617Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-02T19:39:30Z",
+    "at": "2026-11-02T19:47:18.355Z"
+  },
+  "completedAt": "2026-11-02T19:46:27.531Z",
+  "reviewCompletedAt": "2026-11-02T19:46:27.531Z",
+  "reviewSummary": "Reviewed completion 7beed0bc (on moe/work-2026-10-24, recorded in task.commits, pushed): 4 files, +68/-12 (56 net). Read the whole diff. moe-agent.sh comparable() adds an ASCII-insensitive //wsl$ | //wsl.localhost/<nonempty distro> branch (re.IGNORECASE|re.ASCII, one leading slash forced) before the generic ntpath return. moe-agent.ps1 Get-MoeComparableProjectPath adds a case-sensitive explicit-ASCII-pair regex, takes the remainder (default '/'), resets $windows=false and reuses the existing ordinal segment and /mnt rules. Generic UNC/drive, HTTP bounds, ordinal equality and lifecycle are untouched. proxy utils.ts is only the obsolete caveat comment. No existing test weakened (only the todo removed, rows added, a fixture-pid echo, Python stdin .buffer, PS UTF-8 output).\n\nRe-ran in a fresh git-archive snapshot of 7beed0bc outside the repo (npm ci + build proxy/daemon there): `bash -n scripts/moe-agent.sh && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh` exit 0. Linux: 81 tests, 23 pass, 0 fail, 0 todo, 58 skipped (no PowerShell on linux), parity PASS. `npm run lint` exit 0, `git diff --check` clean, ps1 BOM EFBBBF.\n\nPS engines: the launcher's own Get-MoeComparableProjectPath under powershell.exe 5.1 and pwsh.exe maps all 40 rows (15 contract + 17 WSL + 8 negative) to the moe-proxy dist key, 0 mismatches. Native Windows Node on the same test file: 81 tests, 78 pass, 0 fail, 0 todo, 3 skipped (existing WSL-only branch); PS5.1 and PS7 WSL identity (adopted/refused-untouched, one GET /health) and key rows ran and passed. Removing the Bash branch fails 4 assertions, so the new ones kill that mutant.\n\nDoD 1-3 met. Not run by me: native-Windows parity-check under Git Bash (Linux passed; the worker reported a Windows pass). Out-of-scope malformed-UNC deviation is task-fc31d450.",
+  "requiredCheckAtDone": null
 }

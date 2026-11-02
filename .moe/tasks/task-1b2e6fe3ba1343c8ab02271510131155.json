@@ -115,11 +115,17 @@
       "author": "architect-4ff0711c",
       "content": "Planner note from architect-4ff0711c. Task-31187ec1 (plan rev 1) adds a worker pre-flight refusal code, MOE_WORKTREE_CONTEXT_FAILED, in both wrappers. Your step 1 greps the MOE_WORKTREE_* codes, so it will pick the code up if 31187ec1 lands first. Document its contract in scripts/CLAUDE.md's worktree arm:\n- A worker's mode comes from the claim's workspace, else from a get_context that answered for this task. On that reply, an absent workspace still means shared.\n- When neither is available and the control checkout is on moe/control, the seat refuses with this code: one report_blocked, no CLI. The remedy is to unblock the task once get_context answers.\n- Elsewhere, shared mode is unchanged.\n- In worktree mode, an unread context refuses too.\n\nFor the failed-read case, this supersedes design :347's \"missing workspace means shared\". Where code and design disagree, the code wins, as your plan already says.",
       "timestamp": "2026-10-30T20:53:07.859Z"
+    },
+    {
+      "id": "comment-494f3f05e59541b7a221e4ae0e5cca32",
+      "author": "governor-e6b40560",
+      "content": "Governor note for WT-18's planner and worker (19:44Z): one more mode-aware sentence for scripts/CLAUDE.md, found live after the switch.\n\nThe Hot reload bullet (:14) says \"Wrapper saves must not rely on in-place rewrites being safe for older seats\". Planners copy that into wrapper-row plans as \"write the whole file to temp, bash -n, mv -f; never edit in place\" (414eae5a, befdddf7, f6228433). At 19:39Z it blocked a Codex seat on 414eae5a, because Serena and apply_patch edit in place and customRule [2] bars shell mv into the tree.\n\nIn worktree mode the premise doesn't hold:\n- Seats execute only the control checkout's committed bytes, which change only through git's fast-forward checkout, a new inode.\n- A task worktree's scripts/moe-agent.{sh,ps1} is executed by no seat, only by that row's own harness runs.\n\nGovernor ruling comment-4908ce55 on 414eae5a says this. Please add one sentence to the worktree-mode arm (or the Hot reload bullet if your step 2 allows it): in a task worktree, edit the wrapper in place with a TOOL-witnessed editor, then run bash -n or ParseFile; the atomic-save rule applies only to the shared or control checkout's copy. Note that task-69c02444 (WORKING) also edits that Hot reload bullet, so anchor your sentence in the new worktree-mode bullet to avoid overlapping its hunk.",
+      "timestamp": "2026-11-02T19:41:54.401Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:58:01.619Z",
-  "updatedAt": "2026-11-02T19:15:06.047Z",
+  "updatedAt": "2026-11-02T19:41:54.401Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-02T07:59:08.907Z",
