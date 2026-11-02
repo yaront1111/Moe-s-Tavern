@@ -1145,13 +1145,15 @@ async function wtResume(){
 }
 // The marker scan, from this wrapper's own function: each marker shape (CRLF too), a path out of W and a linked parent
 // (out of W, or in W over a missing file) are hits, as are a file link and a FIFO (never opened) under sh and a name
-// Windows cannot parse under ps1; a resolved deletion (absent) and marker look-alikes are not.
+// Windows cannot parse under ps1; a resolved deletion (absent) and marker look-alikes are not. sh builds under the suite's
+// temp dir because a FIFO needs a filesystem that supports one, and drvfs (/mnt/<drive>) does not.
 function markerScan(){
-  const w=path.join(root,'marker-scan'),out=path.join(root,'marker-scan-out'),q=s=>"'"+s.replace(/'/g,"''")+"'";
+  const base=win?root:path.join(wrapperTmp,'marker scan'),w=path.join(base,'marker-scan'),out=path.join(base,'marker-scan-out'),q=s=>"'"+s.replace(/'/g,"''")+"'";
   const files={'lt.txt':'a\n<<<<<<< HEAD\n','gt.txt':'>>>>>>> theirs\r\n','eq.txt':'a\r\n=======\r\nb\r\n','ok.txt':'<<<<<<<x\n ======= \n=======x\n','sub/ok.txt':'b\n'};
   for(const [f,b] of Object.entries(files))write(path.join(w,f),b);
   write(path.join(out,'x.txt'),'clean\n');fs.symlinkSync(out,path.join(w,'out'),'junction');fs.symlinkSync(path.join(w,'sub'),path.join(w,'in'),'junction');
-  if(!win){fs.symlinkSync('ok.txt',path.join(w,'fl.txt'));cp.execFileSync('mkfifo',[path.join(w,'fifo.txt')]);}
+  if(!win){fs.symlinkSync('ok.txt',path.join(w,'fl.txt'));
+    try{cp.execFileSync('mkfifo',[path.join(w,'fifo.txt')],{stdio:'pipe'});}catch(e){throw new Error(`mkfifo under ${base} failed; point TMPDIR at a filesystem that supports FIFOs: ${String(e.stderr||e.message).trim()}`);}}
   const more=['../x','in/gone.txt','out/x.txt',...(win?(winHost?['a<b.txt']:[]):['fifo.txt','fl.txt'])],args=[...Object.keys(files),'gone.txt',...more],o={encoding:'utf8',timeout:60000};
   const r=win?cp.spawnSync(engine,['-NoProfile','-NonInteractive','-Command',`${wrapperFn('Find-MoeConflictMarkers')}\nFind-MoeConflictMarkers ${q(w)} @(${args.map(q).join(',')})`],o)
     :cp.spawnSync(engine,['-c',`${wrapperFn('wt_marker_scan')}\nwt_marker_scan "$@"`,'_',w,...args],{...o,env:{...inherited,PYTHON_CMD:py}});
