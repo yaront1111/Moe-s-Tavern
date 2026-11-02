@@ -74,8 +74,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-93f9625e",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -87,12 +87,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:16:59.695Z",
-  "updatedAt": "2026-11-02T22:40:40.082Z",
+  "updatedAt": "2026-11-02T23:29:42.391Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T20:19:50.362Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T23:29:01.190Z",
+    "wallClockMs": 11350828
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -211,9 +213,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-02T20:39:47Z",
-    "at": "2026-11-02T22:14:12.996Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-02T22:40:16Z",
+    "at": "2026-11-02T23:29:42.391Z"
+  },
+  "completedAt": "2026-11-02T23:29:01.190Z",
+  "reviewCompletedAt": "2026-11-02T23:29:01.190Z",
+  "reviewSummary": "Reviewed completion ecf00c18 (on moe/work-2026-10-24, in control HEAD 603b46bb): 3 files +60/-9 (51 net), exactly approved scope; follows 'lock' row and PATH stub untouched.\n\nRe-ran the exact verification command on an exact-commit git archive snapshot (blobs hash-checked), env -i, set -m (SigIgn 0x5):\n- sh (/tmp): parity-check.sh && postflight.sh -> exit 0, 26m: parity PASS, frozen 106, owner guard 16, migration 12, worktree 65 ok/0 failed (wt-follow, wt-follow-race, wt-follow-lock ok), commit-scope 45, PASS postflight.sh.\n- PS 5.1 (/mnt/d): node.exe postflight-safe.mjs powershell -> exit 0, lastScenario Z, failureClass NONE, 45m (postflight.ps1 throws on any worktree-suite failure before PASS).\nIndependent RED: wt-follow-lock vs ecf00c18^ moe-agent.sh fails 'released' ([BEHIND] vs [ADVANCED]); unmutated control passes (32 s).\nStatic: bash -n OK; ParseFile 0 errors on PS 5.1 and pwsh 7.6; BOM kept, no CR.\n\nDoD 1: both twins <=5 tries, sleep 2 only when attempt<5 and error has index.lock, HEAD re-check after each failed try, rc reset per try, same checked tip, ps1 returns inside try/finally. DoD 2: 'released' asserts one ADVANCED old..tip, merges>=2, HEAD/main at tip, lock not deleted. DoD 3: 'lock' row + 'held' (merges==5*BEHIND, lock kept) pass. DoD 4: DIVERGED/.moe-paths/NOT_FOLLOWING return before the loop; 'other' asserts 1 try per warning. DoD 5: parity + both harnesses exit 0. No new MOE_ code/log line, no lock deletion, throttle unchanged. Complexity pass: nothing to cut. Nit: ps1 -like is case-insensitive vs sh glob; harmless.",
+  "requiredCheckAtDone": null
 }
