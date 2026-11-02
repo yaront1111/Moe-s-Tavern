@@ -11,21 +11,28 @@
     {
       "stepId": "step-1",
       "description": "sh fix plus its test row (scripts/moe-agent.sh, scripts/tests/importee-guard-bash.test.mjs).\n\nThe fix goes in STREAM_JSON_PARSER's to_top_rel (moe-agent.sh ~8318), copying the refusal in prompt-cache-witness.mjs toTopRel (line ~70). Refuse the FINAL remainder p when `re.search(r'[\\x00-\\x1f]', p)` matches:\n- in the absolute branch, right after the top prefix is sliced off (check `p[len(top) + 1:]`, then return it);\n- in the relative branch, beside the existing '..' check, before `rel + p`.\nReturn None in both cases. harvest() already turns None into its `  [WARN] tool write outside the repo not harvested: <raw>` line and writes nothing, so the forged second line can no longer reach MOE_TOOL_WRITES_FILE.\n- Keep raw.strip() as it is: a trailing newline that strip() removes stays accepted, exactly as the codex helper's trim does.\n- Add one comment line above the check: a control character (a line break) would append a second, forged witness line, and prompt-cache-witness.mjs refuses the same set.\n- Change nothing else in the parser. Peer row 7db14e2d edits only its header comment, a separate hunk.\n- Editing rule for moe-agent.sh (a running seat hot-reloads it): write the whole edited file to a temp file on the same filesystem, run `bash -n` on it, then one `mv -f` over the original. Never edit in place.\n\nTest: one new `test(...)` in importee-guard-bash.test.mjs, mirroring prompt-cache-witness.test.mjs N15. Spawn the extracted `streamParser` exactly as the fixture helper does (python -c, events piped as JSON lines), with env MOE_GIT_TOP=root, MOE_GIT_REL='', MOE_SERENA_PROJECT_ROOT=root and MOE_TOOL_WRITES_FILE=<scratch>/tools. Feed successful results (is_error false) for:\n- (a) an Edit with file_path 'ok.txt\\nforged.txt';\n- (b) a Write with file_path `${root}/a.txt\\rforged.txt` (absolute);\n- (c) mcp__serena__create_text_file with relative_path 'b.py\\nforged.py';\n- (d) a control: an Edit with file_path 'plain.txt'.\nAssert exit 0, and that the tools file's lines deep-equal ['plain.txt'], which proves the row is not vacuous. Assert stdout includes `WARN + raw + '\\n'` for each of a-c, where raw is the joined Serena path for (c), exactly as harvest prints it.\nError handling: a malformed path must never raise inside the stream loop. to_top_rel only returns None, so harvest's existing per-path continue holds.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/importee-guard-bash.test.mjs"
       ],
-      "startedAt": "2026-11-02T19:38:36.291Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/importee-guard-bash.test.mjs"
+      ],
+      "note": "to_top_rel refuses [\\x00-\\x1f] in both branches (edited in place with Edit per governor ruling); bash -n OK; new test passes.",
+      "startedAt": "2026-11-02T19:38:36.291Z",
+      "completedAt": "2026-11-02T20:44:00.547Z"
     },
     {
       "stepId": "step-2",
       "description": "ps1 twin plus its test row (scripts/moe-agent.ps1, scripts/tests/importee-guard.ps1).\n\nThe fix goes in Get-MoeToolWrittenPaths (moe-agent.ps1 ~5426). In the per-path loop, after `$tp` is computed:\n- treat `$tp -match '[\\x00-\\x1f]'` exactly like an empty $tp: print the existing `  [attribution] tool path outside the repo dropped: $p` line and `continue`, so nothing reaches $script:MoeToolWritten or the daemon's touchedPaths;\n- add the same one-line comment as the sh twin.\nKeep moe-agent.ps1's UTF-8 BOM and LF endings. Stay PS 5.1 compatible. Check that `[System.Management.Automation.Language.Parser]::ParseFile` reports no errors before saving.\n\nTest: in importee-guard.ps1, after the existing stream-parser rows and before the summary line:\n- reset $script:MoeToolWritten, MoeToolPending and MoeToolSettled as the earlier rows do;\n- set `$serenaProject = $fixtureRoot`, because the Serena branch joins against it.\nSend through Send-ReviewToolUse / Send-ReviewToolResult with $false:\n- (a) Edit with file_path \"ok.txt`nforged.txt\";\n- (b) Write with file_path (Join-Path $fixtureRoot \"a.txt`rforged.txt\");\n- (c) mcp__serena__create_text_file with relative_path \"b.py`nforged.py\".\nCapture the Write-Host output with `6>&1` and assert it contains the dropped line for each. Then `Assert-ReviewWitnessCount 'control-character-path-refused' 0`. Then send (d) a Write of (Join-Path $fixtureRoot 'plain.txt') and assert the count is 1, so the row is not vacuous.\nError handling: the check runs on a string and cannot throw; the stream loop's existing try/catch is untouched.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/importee-guard.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-02T20:44:01.354Z"
     },
     {
       "stepId": "step-3",
@@ -47,7 +54,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-d6c1cb7a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -78,7 +85,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:47:12.742Z",
-  "updatedAt": "2026-11-02T19:40:59.115Z",
+  "updatedAt": "2026-11-02T20:44:01.355Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:48.545Z",
@@ -91,17 +98,21 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T14:05:58.701Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-899a90d6",
-    "worker-26483323"
+    "worker-26483323",
+    "worker-d6c1cb7a"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:09:10.934Z",
   "executionContract": {

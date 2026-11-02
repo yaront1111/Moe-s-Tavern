@@ -31,13 +31,20 @@
     {
       "stepId": "step-2",
       "description": "sh: the orphan sweep at the loop top, the fake-proxy status knob, and the postflight.sh cases (DoD 2, DoD 3, DoD 4 unregistered half).\n\nworktree_orphan_sweep. Run order:\n1. Gate, silent: return 0 unless the control predicate is true, git_top resolves with MOE_REL empty, and TOP/.worktrees exists.\n2. Interval: MOE_WORKTREE_SWEEP_INTERVAL_SEC.\n   - Unset or blank means 3600.\n   - `^[0-9]{1,9}$` is used as given; 0 means every loop top, which the tests need.\n   - Anything else prints one [WARN] and uses 3600.\n   - Stamp file D/sweep.last holds epoch seconds. Pre-check it without the lock and return when `now-last < interval` (a stamp in the future counts as stale).\n3. worktree_lock_take. A held lock prints `[worktree] sweep skipped: lock held` and returns 0.\n4. Under the lock:\n   - re-check the stamp;\n   - write now with a temp file plus mv (a failed write is a [WARN] and skips the pass);\n   - run worktree_sweep_pass;\n   - always drop the lock.\n\nworktree_sweep_pass:\n- Enumerate with `git -C TOP worktree list --porcelain -z`, through WT-04's parser and normalization. A failure aborts the pass with a [WARN].\n- Registered set: entries whose normalized path's parent is exactly TOP/.worktrees.\n- Candidates are the subset whose basename matches the TID pattern. Others, such as the main worktree and the temp hook and gate worktrees, are ignored.\n- Unregistered: each DIRECTORY directly under TOP/.worktrees whose normalized path is not in the registered set.\n  - Print `[WARN] MOE_WORKTREE_UNREGISTERED: <path>: not a registered worktree; left on disk`.\n  - chat_send one #general alert per path per 24h, through WT-13's throttle helper keyed by a hash of the normalized path. If the helper is hour-only, add optional key and window arguments without changing its existing calls.\n  - Never delete it.\n- Per candidate, in TID sort order, local checks first:\n  - Skip when W/.moe exists, with a `[worktree] sweep left <W>: W/.moe exists (MOE_WORKTREE_MOE_PRESENT)` line.\n  - Skip when the branch is not moe/task/TID (REFUSED detail).\n  - Skip when any control-project .moe/attempts/*.json record (read as utf-8-sig) has taskId TID and a phase other than 'closed'.\n    - An unparsable attempt record aborts the pass: it cannot be proved not to be TID's.\n  - Then `moe_rpc_unserved get_context {taskId, view:'status'}`. The status view writes nothing, unlike the default view's contextFetchedBy stamp.\n    - A reply whose task.id equals TID gives the status. Only DONE or ARCHIVED make a candidate.\n    - A failure whose stderr JSON carries data.codeName TASK_NOT_FOUND means unknown, which is a candidate. Reuse launch_outage_release's codeName parse.\n    - Anything else aborts the pass: a transport failure, any other refusal, or a missing or mismatched task. An RPC failure never counts as unknown.\n- Per candidate, removal phase, stopping after 5 candidates have reached it (removed or refused):\n  a. Non-DENY dirt (WT-07 attribution in W, under the same local shadow WT-07 uses, plus `local FROZEN_TREE=\"\" LAND_TASK_ID=TID LAND_TITLE='worktree orphan'`) goes through `rescue_ref worktree-orphan <cand>`.\n  b. When task_branch_landed refs/heads/<target> TID fails, run `rescue_ref_from_commit <tip> worktree-orphan`.\n  c. Proceed only when each needed rescue ref resolves to the commit just written. Dirt that rescue_ref reports as matching HEAD has nothing to lose. Anything else is REFUSED with 'rescue failed'.\n  d. Re-read the attempt records right before the engine. A record that appeared now means skip.\n  e. remove_task_worktree TOP TID.\n- Call site: the loop top, after WT-13's follow and the wrapper reload check, just above `# -------- Pre-flight: perform startup rituals`: `worktree_orphan_sweep || true`. It never sleeps, never blocks on the lock and never changes claim behavior.\n\nscripts/tests/postflight-fake-proxy.js, one knob, FAKE_TASK_STATUS_MAP: a comma list of `taskId=STATUS`.\n- It applies only to get_context with view 'status', which no wrapper sent before this task. Answer it BEFORE the context-count block, so the attempt-finalizing flip never sees sweep reads.\n- A mapped STATUS answers {contextScope:'status', task:{id, status}}.\n- NOT_FOUND answers a refusal with data.codeName 'TASK_NOT_FOUND'.\n- FAIL answers an error without a codeName.\n- An unmapped id answers WORKING, which is never a candidate.\n- Every other call is byte-identical.\n\nCases in postflight.sh, using step 1's builder, with MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 unless stated and FAKE_CLAIM_MODE idle:\n- WT14E (DoD 2): a DONE W whose branch has an unlanded commit T, plus a modified tracked file and an untracked non-DENY file. Expect:\n  - a refs/moe/rescue/TID/<ts> that resolves to T exactly;\n  - the chan-general log has `MOE_RESCUE_REF task=TID ... sha=<T> reason=worktree-orphan`;\n  - a second rescue ref whose tree has both dirty files' bytes (`git show`);\n  - then W, the branch and the manifest are gone, and the sentinels are intact.\n  An unknown task (NOT_FOUND) in the same run is removed the same way.\n- WT14F (DoD 3): the map holds d1..d6 DONE, w1 WORKING, a1 DONE with an open .moe/attempts record (phase running), and m1 DONE with W/.moe. One run removes exactly d1..d5. d6, w1, a1 and m1 keep their W and branch.\n  - A run with a fresh D/sweep.lock removes nothing and logs `sweep skipped`.\n  - A run with that lock's mtime set 3h old breaks it and removes d6.\n- WT14G (DoD 4): unregistered .worktrees/stray and .worktrees/task-ghost, each with a file. Both print MOE_WORKTREE_UNREGISTERED and stay with their bytes. Two runs give exactly one chan-general row per path.\n- WT14H (error handling):\n  - a FAIL mapping for a candidate aborts the pass: no ref, no removal;\n  - with the interval unset and a fresh sweep.last, nothing runs;\n  - an invalid interval (`abc`) warns and uses 3600.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight-fake-proxy.js"
       ],
-      "startedAt": "2026-11-02T20:13:45.527Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "sh orphan sweep (DoD 2-4). worktree_orphan_sweep runs at the loop top, before pre-flight. It runs only when the control checkout is on moe/control at the repo top and TOP/.worktrees is a real directory, so shared mode runs no new git command and prints nothing. Pacing: MOE_WORKTREE_SWEEP_INTERVAL_SEC (unset or blank 3600; 0 every loop top; anything else prints one [WARN] per value and uses 3600). <admin>/sweep.last is checked before the sweep lock and again under it, then written by temp+mv before the pass. A held lock prints '[worktree] sweep skipped: lock held'. wt_porcelain gained a 'sweep' mode. Candidates are only registered .worktrees/task-* worktrees on moe/task/<same id> (comment-3263c743). An unregistered .worktrees/task-* directory gets MOE_WORKTREE_UNREGISTERED, one #general alert per path per day (control_alert gained KEY and WINDOW; the key is sha1 of the comparable path, first 16 hex). Nothing else under .worktrees is touched. Per candidate, at most 5 removals a pass: a link W is REFUSED; a missing W is skipped; W/.moe prints 'sweep left ... MOE_WORKTREE_MOE_PRESENT'; an open attempt (.moe/attempts phase != closed) is skipped. Status comes from get_context view:'status', unserved. Only TASK_NOT_FOUND counts as UNKNOWN; any other RPC failure stops the pass. DONE, ARCHIVED and UNKNOWN go to worktree_sweep_remove. There, W's non-DENY dirt goes to rescue_ref worktree-orphan on W's HEAD, strictly: the staged count must equal the dirt count and the ref must resolve, else REFUSED. An unlanded tip goes to rescue_ref_from_commit, which must resolve to the tip. Attempts are re-read, then remove_task_worktree runs. Landing globals are shadowed; the sessionId is <worker>@unknown. #general is looked up lazily, because pre-flight sets it after the loop top. Fake proxy: view:'status' answers from FAKE_TASK_STATUS_MAP. NOT_FOUND gives -32001 with data.codeName TASK_NOT_FOUND, as the daemon does; FAIL gives -32603; unmapped gives WORKING. Every other read is unchanged. postflight.sh WT14E-I; wt14_fixture sets a repo identity, because rescue refs are commit-trees. Evidence: RED WT14E 'no single rescue ref at the unlanded commit' before the code. GREEN dev copy '[WT-14] ok: 11 scenarios' / 'PASS wt14-dev', rc=0. Mutation (sweep-only cases, 12 mutants): attempts, budget, status, notfound, tiprescue, uprefix, branch, dirt, lock, dotmoe, interval and window each FAILED with their case message; the noop baseline gave PASS rc=0. The dirt mutant first aborted silently through set -e on a grep -v pipeline; that is fixed with '|| true', so it now prints 'no single second rescue ref for W's dirt'. Full suites run in step 5.",
+      "startedAt": "2026-11-02T20:13:45.527Z",
+      "completedAt": "2026-11-02T20:43:13.702Z"
     },
     {
       "stepId": "step-3",
@@ -119,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-11-02T20:13:45.527Z",
+  "updatedAt": "2026-11-02T20:45:07.094Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",
@@ -129,7 +136,7 @@
     "firstClaimAt": "2026-10-30T13:50:04.185Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-899a90d6",
@@ -140,7 +147,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:05:31.742Z",
@@ -187,5 +195,36 @@
   },
   "planApprovedAt": "2026-10-30T14:05:31.765Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T19:23:23.442Z"
+  "workStartedAt": "2026-11-02T19:23:23.442Z",
+  "commits": [
+    {
+      "sha": "d08b62d12d93ea8ed3da591af4957c154145d9f7",
+      "ref": "refs/heads/moe/task/task-befdddf7e1f047a0ba4f71dd900c9b8f",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-02T19:16:18Z",
+      "paths": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-02T20:44:18.154Z",
+      "treeId": "5991cffd1e0a4926d7361553d621d2e2ec401ac8",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight.sh"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-33f67e5b@2026-11-02T19:16:18Z",
+    "at": "2026-11-02T20:44:18.154Z"
+  }
 }

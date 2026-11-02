@@ -1,0 +1,26 @@
+{
+  "id": "task-93bcb459ee1747c8a8a2fc650039e803",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: postflight-worktree.cjs marker-scan fails on the sh engine when the fixture parent is on drvfs (/mnt/d): mkfifo is unsupported there",
+  "description": "Repro (WSL, HEAD 0d8422ce): S=$(mktemp -d /mnt/d/moe-scratch/x.XXXXXX); git archive HEAD scripts | tar -x -C \"$S\"; MOE_WORKTREE_ONLY=marker-scan node \"$S/scripts/tests/postflight-worktree.cjs\" sh \"$S/scripts/moe-agent.sh\" \"$S/scripts/tests/postflight-fake-proxy.js\" \"$S\" \"$(command -v bash)\" → \"marker-scan FAILED: Error: Command failed: mkfifo …: Operation not supported\". The same case passes with an ext4 parent (/tmp). Any WSL gate that puts the sh leg's parent on /mnt/d, which it must do to share one snapshot with the node.exe ps1 leg, fails at HEAD (seen in task-31187ec1's planned verification). Fix idea: make the fifo element conditional on mkfifo succeeding (or create it under os.tmpdir()), without weakening the scan's assertions.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 42,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T20:42:59.971Z",
+  "updatedAt": "2026-11-02T20:42:59.971Z"
+}
