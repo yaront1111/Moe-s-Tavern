@@ -9,10 +9,61 @@
     "postflight.{sh,ps1} cover the self-sent case, and parity-check.sh passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED arms first (test-driven-development): the fixture knob plus one scope scenario in each harness. Use an editor tool (Edit on Claude, apply_patch on Codex), not a shell write. All three files are LF.\n\n1. scripts/tests/postflight-fake-proxy.js, chat_read (~:425). This is the ONE shared fixture: edit behaviour only here, which parity-check enforces. FAKE_MENTION grows two values. '1' keeps EXACTLY its current message (id 'msg-fake-1', sender 'human', mentions [args.workerId || 'all']), so CQ-M07m3/n3 rows that use it are unaffected.\n   - 'self': id 'msg-fake-self', sender args.workerId, mentions [args.workerId, 'all', 'workers']. The seat's own message tags itself, @all and its role group, so every target kind would match.\n   - 'group': id 'msg-fake-group', sender 'human', mentions ['all', 'workers'], with no direct tag.\n   Each is appended to .moe/messages/chan-general.jsonl like '1', so provenance passes. Add a comment naming this task.\n2. scripts/tests/postflight.sh: Scenario AB3, directly after AB2's `echo \"[scenario AB2] ok\"`, built on Scenario AA's shape (:4627):\n   (a) make_scope_project scope-ab3 '[]', then `FAKE_CLAIM_MODE=idle FAKE_MENTION=self MOE_TASKLESS_WAIT_SEC=5 run_scope_wrapper ... \"$FILE_CLI\" worker worker-scope-ab3`, then reset the env vars. scope_fail unless ALL of these hold:\n     - exit 0;\n     - no scope-ab3/session-new.txt (no notification-only session);\n     - the log has '[no-task] No claimable task for role worker; waiting up to 5s in the wrapper' (the pre-wait probe did not count the seat's own message, so the wrapper-side wait ran);\n     - the log has 'MOE_TASKLESS_NO_LAUNCH reason=idle role=worker worker=worker-scope-ab3';\n     - the dir's .moe/messages/chan-general.jsonl contains 'msg-fake-self' (non-vacuity: the fixture served it).\n   (b) make_scope_project scope-ab3b '[]', then the same run with FAKE_MENTION=group and worker id worker-scope-ab3b. Expect exit 0 and scope-ab3b/session-new.txt present: another sender's @all or role-group tag still launches a notification-only session (DoD 2). This kills a 'fix' that drops @all or role-group routing altogether. Scenario AB already covers another sender's direct tag.\n   Increment SCOPE_SCENARIOS_RUN once, echo '[scenario AB3] ok', and add 1 to both expected counts at your base: 45->46 and 44->45 at 0c44ccf0. Add AB3 to the list in that error message.\n3. scripts/tests/postflight.ps1: the same Scenario AB3, directly after AB2's `Write-Host '[scenario AB2] ok'`, in that block's style:\n   - New-ScopeProject; set and remove $env:FAKE_CLAIM_MODE, $env:FAKE_MENTION and $env:MOE_TASKLESS_WAIT_SEC in try/finally;\n   - Assert-ScopeRun 'AB3' (Invoke-GateWrapper <dir> <out> 'REVIEW' $createFileCmd 'worker' 'worker-scope-ab3');\n   - the same assertions with Test-Path, .Contains() and throw 'SCENARIO AB3 FAILED: ...', then the group run.\n   $scopeScenariosRun++ once. Add 1 to $scopeExpectedRuns: 44->45, and 45->46 with symlinks, at 0c44ccf0. Add AB3 to its throw text.\n   If another row lands a scope scenario first, add 1 to whatever counts your base has.\n\nRED: overlay ONLY these three files into a fresh snapshot made like step 4's, and run both harnesses there.\n- sh: `env -u ... MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh`.\n- ps1: `WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe ... -File <snapshot postflight.ps1>`. It takes about 15 minutes to reach AB3. Start it in the background with the PID recorded, then do steps 2-3 meanwhile: the snapshot is a copy.\nBoth must fail at AB3, with a session launched and no wait line. Quote both.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "startedAt": "2026-11-02T23:51:41.362Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The sh fix, both filters (DoD 1). scripts/moe-agent.sh is LF; use an editor tool. The exact sender comparison matches the daemon, whose unread counter already skips the sender: packages/moe-daemon/src/state/chatStore.ts:236, `targetId !== opts.sender`.\n- Pre-wait probe, in the PYEOF heredoc after `targets = {worker_id, \"all\"}` (~:9140 at 0c44ccf0): change the `hit = ...` line to\n  `hit = any(targets & set(m.get(\"mentions\") or []) for m in msgs if isinstance(m, dict) and m.get(\"sender\") != worker_id)`\n  and add a comment above it: a seat's own message is never its mention (task-ecf78687); the twin is moe-agent.ps1.\n- Routed-mention build (~:9648), inside `for msg in extract_msgs(...)`, directly after `if not isinstance(msg, dict): continue`:\n  `if msg.get(\"sender\") == worker_id: continue  # own message (task-ecf78687; same in moe-agent.ps1)`\n  It sits before the `seen` check and before verified_mention, so a self-sent message is never re-read from the store or counted.\n\nThis skips any message the seat sent, whichever tag matched, its own id included. A message with no sender (None) is NOT skipped.\n\nError handling: both blocks already treat a malformed message as a non-match (the probe's broad except, the build's isinstance guards). msg.get on a dict cannot raise, so no new failure path.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "The ps1 fix, both filters (DoD 1, sh parity). scripts/moe-agent.ps1 starts with a UTF-8 BOM and is LF; keep both. Use an editor tool.\n- Pre-wait probe (~:8766 at 0c44ccf0): in `foreach ($msg in @($unread.messages))`, directly after `if (-not $msg -or -not $msg.mentions) { continue }`, add\n  `if ([string]$msg.sender -ceq $WorkerId) { continue }  # own message (task-ecf78687; same in moe-agent.sh)`\n- Routed-mention build (~:9054): in the bucket loop, directly after `if (-not $msg -or -not $msg.mentions) { continue }`, add the same line.\n\nWhy `-ceq` on a `[string]` cast:\n- It is exact and ordinal, like the sh `==` and the daemon's `!==`.\n- `-eq` would be case-insensitive and would coerce a wire value that is an array or number (mem:gotcha-powershell-eq-coerces-wire-values).\n- A missing sender casts to '' and is not skipped.\n\nError handling: the routed build already sits inside the try that fails closed to MOE_MENTION_EXTRACTION_FAILED, and the probe's cast cannot throw.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once (DoD 3). This follows task-69c02444's proven recipe on this host. Run this ONE command fresh from the task worktree root. It takes about 35-40 minutes (postflight.ps1 alone is about 25), so run it in the background, with the PID recorded or the tool's run_in_background, and wait. Its output tail, ending 'PASS postflight.ps1' plus lint, is the complete_task evidence:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-ecf78687.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\" && cd \"$R\" && npm run lint\n\n- Both logs must show '[scenario AB3] ok' and the bumped 'commit-scope scenarios run: N' (45 on this host, which cannot make symlinks), with scenarios AA, AB and AB2 still ok.\n- Grep the ps1 log for 'PASS postflight.ps1', and count its 'ok' lines. A ps1 leg that never ran can still exit 0 (mem:gotcha-pwsh7-reachable-from-wsl).\n- CI runs postflight.ps1 under PowerShell 7 too; the local gate uses 5.1, as 69c02444's did.\n- Declare the five files as modifiedFiles.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n(a) Parity: all four sites skip the sender. sh `==` / `!=` and ps1 `-ceq` agree on a missing sender (not skipped) and on a case-only difference (not skipped).\n  - Prove the sh half with a two-line python check of the probe expression: a sender of None, 'worker-x' and 'WORKER-X' against worker_id 'worker-x'.\n  - Prove the ps1 half with a `powershell.exe -NoProfile -Command` probe of `[string]$null -ceq 'worker-x'` and `'WORKER-X' -ceq 'worker-x'`.\n(b) RED already proves both arms kill the unfixed wrappers. Name which assertion fired in each.\n(c) The FAKE_MENTION=1 message is byte-identical to before, and AA, AB and AB2 still pass.\n(d) The contrast run (group) proves another sender's @all or role-group tag still launches.\n(e) Out of scope, note only: a peer's message that only quotes @all is still a mention by design, and the daemon decides routing.\n(f) Process safety: background runs are killed only by their recorded PID, never by name or pattern.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-8cf0816c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,16 +75,81 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:23:35.850Z",
-  "updatedAt": "2026-11-02T23:43:42.750Z",
+  "updatedAt": "2026-11-02T23:51:41.362Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T23:37:11.284Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-02T23:43:38.052Z"
+    "firstClaimAt": "2026-11-02T23:43:38.052Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
-  ]
+    "architect-24611a0a",
+    "worker-8cf0816c"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T23:49:49.774Z",
+  "executionContract": {
+    "intendedBehavior": "In both wrappers, a chat message whose sender is the seat's own worker id is ignored by the pre-wait unread-mention probe and by the routed-mention build. A seat's own role-group, @all or self-tagged message therefore never skips the wrapper-side task wait, never appears in <routed_mentions>, and never launches a notification-only session. Messages from any other sender that tag the seat, @all or its role group route exactly as before.",
+    "acceptanceCriteria": [
+      "postflight.sh and postflight.ps1 Scenario AB3, idle claim with only the seat's own message (tagging itself, @all and its role group): no CLI session, the wrapper-side wait ran, and 'MOE_TASKLESS_NO_LAUNCH reason=idle' appears; both fail against the unfixed wrappers (RED first).",
+      "AB3 contrast run: another sender's @all/role-group-only message still launches a notification-only session. Scenarios AA, AB and AB2 still pass.",
+      "parity-check.sh, postflight.sh, postflight.ps1 (Windows PowerShell) and npm run lint all exit 0."
+    ],
+    "invariants": [
+      "FAKE_MENTION=1 behaves byte-identically.",
+      "The sender comparison is exact (sh ==, ps1 -ceq on [string]); a message without a sender is never skipped.",
+      "No daemon, MCP tool or chat contract change."
+    ],
+    "compatibility": [
+      "The CQ-M07m3/n3 rows' FAKE_MENTION=1 arms and every existing scope scenario keep their behaviour."
+    ],
+    "approvedScope": [
+      "The sender skip at the two mention filters in scripts/moe-agent.sh and the two in scripts/moe-agent.ps1.",
+      "The FAKE_MENTION 'self' and 'group' values in postflight-fake-proxy.js.",
+      "Scenario AB3 and the expected-scenario counts in postflight.sh and postflight.ps1."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh at 0c44ccf0: the probe heredoc is ~:9131-9145 and the routed build loop ~:9648-9661; the launch skip on a zero routed-mention count is ~:10087.",
+      "scripts/moe-agent.ps1: the probe is ~:8764-8771, the routed build ~:9053-9066 and the launch skip ~:9460. packages/moe-daemon/src/state/chatStore.ts:236 skips the sender's own unread count."
+    ],
+    "checkRefs": [
+      "The step-4 command: a /mnt/d/moe-scratch snapshot of HEAD with a cp/cmp overlay of the five files, then bash -n, parity-check.sh, postflight.sh (MOE_*/CLAUDE* unset, MOE_POSTFLIGHT_TIMEOUT_SEC=180), postflight.ps1 through powershell.exe with WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC, then npm run lint from the worktree root."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Skip sender == workerId in the four wrapper filters, CHOSEN. It matches the daemon's own unread rule (chatStore.ts:236) and needs no daemon or contract change. 2) Make the daemon stop routing a sender's own message. Rejected: chat_read and chat_wait return channel history, not routing, and the wrappers' filters are what treat it as a mention. A daemon change would not fix #general reads. 3) Test only the self case. Rejected: a fix that dropped @all or role-group routing altogether would pass it. The contrast run (FAKE_MENTION=group) pins DoD 2.",
+    "codebaseInsights": "Two different signals come from these filters, which is why both pairs of sites matter. The pre-wait probe (sh ~:9131, ps1 ~:8764) decides whether the single-shot wrapper-side task wait runs; its '[no-task] ... waiting up to Ns in the wrapper' line is the observable. The routed-mention build (sh ~:9648, ps1 ~:9054) feeds the routed-mention count, and a taskless launch is skipped only when that count is 0 (sh ~:10087, ps1 ~:9460), which the 'MOE_TASKLESS_NO_LAUNCH reason=idle' line shows. Both scope helpers run single-shot (--no-loop / -NoLoop, poll interval 0). Scenario AA (:4627 sh) is the no-mention baseline that AB3a must match.",
+    "risks": "(1) The scope-scenario counts are a rebase hotspot: add 1 to whatever the base has. task-69c02444 (REVIEW) and task-4fdc7590 (REVIEW) also touch scope scenarios. (2) The fake proxy is shared with the CQ-M07m3/n3 rows, which use FAKE_MENTION=1; keep that value byte-identical. (3) postflight.ps1 runs about 25 minutes, so run it in the background and confirm 'PASS postflight.ps1'. (4) Keep the ps1 BOM.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "packages/moe-daemon/src/state/chatStore.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "1b754809f56bbd64b9bb659705dbd09bc09d0722",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T23:49:49.803Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T23:51:41.362Z"
 }

@@ -78,8 +78,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -119,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:04:11.016Z",
-  "updatedAt": "2026-11-02T23:37:52.726Z",
+  "updatedAt": "2026-11-02T23:57:31.080Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:40.801Z",
@@ -129,7 +129,9 @@
     "firstClaimAt": "2026-10-30T09:55:16.013Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T23:56:58.284Z",
+    "wallClockMs": 309702271
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
@@ -281,8 +283,8 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-af7be174@2026-11-02T21:58:46Z",
-    "at": "2026-11-02T23:37:36.662Z"
+    "sessionId": "qa-af7be174@2026-11-02T23:37:50Z",
+    "at": "2026-11-02T23:57:31.080Z"
   },
   "workStartedAt": "2026-11-02T19:33:44.999Z",
   "reviewStartedAt": "2026-11-02T21:57:51.460Z",
@@ -293,5 +295,9 @@
     "reportedAt": "2026-11-02T21:57:51.460Z",
     "source": "agent-reported"
   },
-  "completionSummary": "ps1 Invoke-MoeLanding now records exactly one failed ledger row per landing, as sh does. Fix (scripts/moe-agent.ps1): the function-local $recorded is set after each of the 8 explicit failed Send-MoeRecordCommit sends (git status, no-candidate peel, candidates peel, temp-index, evidence unavailable, gate failed, commit creation failed, ref contention), and the finally's failed-row fallback now needs -not $recorded. The catch and the interrupted-gate path never set it, so a real exception after attribution (DoD 2) and Ctrl+C mid-gate still park and record their one row from the finally. Tests: new scripts/tests/landing-ledger.ps1 (AST-loaded drill, cases no-candidate peel, candidates peel, throw after attribution, mid-gate exception, git-status failure; exact row and rescue-reason equality), wired into both Windows landing-guard steps in ci.yml; postflight.sh/.ps1 scenario AJ now assert the exact [outcome,code,kind] row sequence (deepStrictEqual) instead of a tail slice (DoD 3). RED on HEAD's wrapper: drill A, B, E fail with 2 rows, AJ2 fails on ps1 and passes on sh (parity pin). Mutants on scratch copies: dropping -not $recorded fails A, B, E; setting $recorded in the catch fails C and D. Gate: GATE_EXIT=0 (landing-ledger 5/5 on PS 5.1 and pwsh 7, parity sh+ps1, postflight.sh scope 45, PS 5.1 and pwsh 7 postflight.ps1 scope 44, AJ1 and AJ2 ok in all three). pwsh 7 postflight.ps1 passed in this setup. The verification command is the plan's command verbatim except that the first cd points at this task's worktree (the changed files live there). Behaviour change: the git-status and temp-index failure paths no longer get a second rescue attempt from the finally; sh's run_landing parks nothing there either (baseline kept, next pre-flight recovers). Known pre-existing edge, not fixed (out of scope): a throw between an explicit rescue that parked a ref and its send still records no row, because the finally keeps -not $res.Ref. No record_commit payload, MCP contract or daemon"
+  "completionSummary": "ps1 Invoke-MoeLanding now records exactly one failed ledger row per landing, as sh does. Fix (scripts/moe-agent.ps1): the function-local $recorded is set after each of the 8 explicit failed Send-MoeRecordCommit sends (git status, no-candidate peel, candidates peel, temp-index, evidence unavailable, gate failed, commit creation failed, ref contention), and the finally's failed-row fallback now needs -not $recorded. The catch and the interrupted-gate path never set it, so a real exception after attribution (DoD 2) and Ctrl+C mid-gate still park and record their one row from the finally. Tests: new scripts/tests/landing-ledger.ps1 (AST-loaded drill, cases no-candidate peel, candidates peel, throw after attribution, mid-gate exception, git-status failure; exact row and rescue-reason equality), wired into both Windows landing-guard steps in ci.yml; postflight.sh/.ps1 scenario AJ now assert the exact [outcome,code,kind] row sequence (deepStrictEqual) instead of a tail slice (DoD 3). RED on HEAD's wrapper: drill A, B, E fail with 2 rows, AJ2 fails on ps1 and passes on sh (parity pin). Mutants on scratch copies: dropping -not $recorded fails A, B, E; setting $recorded in the catch fails C and D. Gate: GATE_EXIT=0 (landing-ledger 5/5 on PS 5.1 and pwsh 7, parity sh+ps1, postflight.sh scope 45, PS 5.1 and pwsh 7 postflight.ps1 scope 44, AJ1 and AJ2 ok in all three). pwsh 7 postflight.ps1 passed in this setup. The verification command is the plan's command verbatim except that the first cd points at this task's worktree (the changed files live there). Behaviour change: the git-status and temp-index failure paths no longer get a second rescue attempt from the finally; sh's run_landing parks nothing there either (baseline kept, next pre-flight recovers). Known pre-existing edge, not fixed (out of scope): a throw between an explicit rescue that parked a ref and its send still records no row, because the finally keeps -not $res.Ref. No record_commit payload, MCP contract or daemon",
+  "completedAt": "2026-11-02T23:56:58.284Z",
+  "reviewCompletedAt": "2026-11-02T23:56:58.284Z",
+  "reviewSummary": "Approve completion 5cb99ba7 (on moe/control HEAD and moe/work-2026-10-24; net +151 LOC, under the 400 cap; moe-agent.sh and daemon untouched). Read the diff: Invoke-MoeLanding sets $recorded=$true after each of the 8 explicit failed sends; the finally fallback now needs -not $recorded. The catch and the interrupted-gate branch never set it. Audited every outcome='failed' site: each explicit one is followed by $recorded=$true.\n\nRe-ran task.verification on a clean clone at 5cb99ba7 (same command; only the first cd and dir pointer file differ; MOE_/CLAUDE/FAKE_ env unset; SIGINT unmasked). Log /mnt/d/moe-scratch/t4fdc-wR03.log: GATE_EXIT=0. ParseFile ok on powershell.exe and pwsh.exe. landing-ledger.ps1 5/5 on both engines. parity-check.sh and .ps1 PASS. postflight.sh PASS. postflight.ps1 PASS on PS 5.1 and pwsh 7. AJ1 and AJ2 ok in all three runs.\n\nMutants re-run on scratch copies: dropping -not $recorded fails no-candidate-peel, candidates-peel and status-failure (2 rows); setting $recorded in the catch fails throw-after-attribution and mid-gate-exception (0 rows).\n\nDoD: (1) peel failure with nothing to rescue gives one failed PEEL row (drill A, B). (2) A real exception after attribution still records one MOE_COMMIT_FAILED row from the finally with held fields (drill C); mid-gate exception gives one GATE row (drill D). (3) postflight AJ asserts the exact row sequence via deepStrictEqual; parity passes; the drill runs in both Windows CI steps. BOM kept; landing-ledger.ps1 is ASCII; 0 CRs.\n\nOut-of-scope edge the worker disclosed: a throw between a parking rescue and its send still records no row, since the finally keeps -not $res.Ref.",
+  "requiredCheckAtDone": null
 }

@@ -78,8 +78,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-26483323",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -130,11 +130,17 @@
       "author": "worker-26483323",
       "content": "Landing recovery: resolved the sole scripts/moe-agent.ps1 conflict by retaining target's `$script:MoeDeregistered = $moeMigration` (migration sends no registration/deregistration RPC) plus this task's `$script:MoeExitStatus = $null`. No step reopened, no new plan or Git commands; only apply_patch on the declared PS file. BOM intact and all four task paths are conflict-marker-free. Fresh exact Linux completion gate and both native Windows full harness engines are running in the bound worktree; quality gate also rerun. Existing regression arms cover clean/error reasons; reviewing merged context for preservation.",
       "timestamp": "2026-11-02T22:27:15.005Z"
+    },
+    {
+      "id": "comment-70f72e28aa7a410ca6e4ee711e0d5b91",
+      "author": "worker-26483323",
+      "content": "Recovery verification complete: exact plan Linux command exit0 (bash lastScenario=Z/failureClass=NONE + parity PASS); native Windows Node powershell and pwsh full harnesses both exit0/lastScenario=Z/failureClass=NONE, then Windows parity PASS. Quality gate parity+lint exit0, repeated after all harnesses; Bash harness syntax and BOM/no-marker/migration+status initialization checks pass. No code edits during gates. Adversarial merged-context review found no new issues. LANDING rule followed: no Git commands, new plan, or reopened steps; only declared scripts/moe-agent.ps1 edited. Serena handoff and diagnostic/merge gotcha updated. Returning to REVIEW for wrapper-owned landing.",
+      "timestamp": "2026-11-02T23:56:57.258Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T04:54:29.471Z",
-  "updatedAt": "2026-11-02T22:27:15.005Z",
+  "updatedAt": "2026-11-02T23:57:06.747Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:42:11.681Z",
@@ -207,12 +213,12 @@
   "planApprovedAt": "2026-10-31T06:34:04.169Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-02T20:48:41.907Z",
-  "reviewStartedAt": "2026-11-02T22:24:04.014Z",
+  "reviewStartedAt": "2026-11-02T23:57:06.745Z",
   "verification": {
     "command": "bash -n scripts/moe-agent.sh && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh",
     "exitCode": 0,
     "outputTail": "{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS parity-check.sh",
-    "reportedAt": "2026-11-02T22:24:04.014Z",
+    "reportedAt": "2026-11-02T23:57:06.745Z",
     "source": "agent-reported"
   },
   "filesModified": [
@@ -221,7 +227,7 @@
     "scripts/moe-agent.ps1",
     "scripts/tests/postflight.ps1"
   ],
-  "completionSummary": "Implemented resilient Bash idle/backoff waits across all five sites, logging interrupted status without ending the seat (including closed-stderr robustness). Unexpected Bash exits now deregister unexpected_exit:N; PS terminating errors/in-loop exit1 report unexpected_exit:1. Own INT/TERM exit0/terminal_closed and wrapper_restart preserved. Added new regression arms; existing arms byte-identical. RED reproduced HEAD sleep exit143/terminal_closed and argv refusal's wrong reason; GREEN checks child TERM/KILL re-polls, wrapper signals and distinct exit reasons. All 3 full harness engines passed (Bash, Windows PS5.1, pwsh; lastScenario Z/failureClass NONE); both parity checks, qualityGate parity+lint and diff-check passed. PS waits are in-process Start-Sleep, so no child-kill fix applies. Approved residual: PS post-finally one-shot MOE_SEAT_UNREGISTERED exit1 still reports terminal_closed. Four files, net170 LOC. Handoff and diagnostic gotcha saved in Serena.",
+  "completionSummary": "Resolved the sole landing conflict in scripts/moe-agent.ps1, preserving target migration's no-deregister guard ($script:MoeDeregistered = $moeMigration) alongside this task's nullable exit-status initialization. No completed steps reopened, no new plan or manual Git commands. Original delivery retained: Bash survives killed idle/backoff waits (including closed stderr); unexpected exits report unexpected_exit:N; PowerShell terminating/in-loop exit1 reports unexpected_exit:1; operator signals and wrapper_restart unchanged. Fresh full verification on merged/resolved bytes: all 3 harness engines (Bash, Windows PS5.1, pwsh) exit0/lastScenario Z/failureClass NONE; both parity checks PASS; quality gate parity+lint PASS. BOMs, conflict-marker absence and merged initialization checks PASS. Adversarial merged-context review found no new issue. PowerShell uses in-process Start-Sleep; approved post-finally MOE_SEAT_UNREGISTERED exit1 residual still reports terminal_closed. Only PS wrapper edited in recovery; all four original task paths remain declared. Handoff and gotcha updated in Serena. Wrapper owns final landing.",
   "commits": [
     {
       "sha": "6407171fb44d3e7adc0cf5431a542adacb7039fe",
