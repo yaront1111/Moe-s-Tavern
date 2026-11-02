@@ -11,9 +11,56 @@
     "In the snapshot, under the jetbrains-gradle lease, `gradlew.bat test buildPlugin --rerun` reports BUILD SUCCESSFUL and moe-vscode `npm run package` exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create scripts/bundle-manifest.json, the one list of scripts and docs both plugin builds bundle (DoD 1). Write it as 2-space JSON with LF line endings and a final newline. It has exactly two top-level members, comment and copies.\n\ncomment (one string): The scripts and docs both IDE plugins bundle. moe-jetbrains/build.gradle.kts (prepareSandbox) and moe-vscode/scripts/bundle-assets.mjs both read this file. Each copy goes from `from` (repo-relative) to `into` (bundle-relative). With `files`, it copies exactly those files, each of which must exist, and LF-normalises any .sh among them. Without `files`, it copies the whole directory minus `exclude` (Ant-style patterns relative to `from`, the syntax Gradle's exclude() takes), and each `required` file must exist. A missing source, or a path that is absolute or has a .. segment, fails both builds. The daemon and proxy copies stay in each build, next to their fresh-dist checks.\n\ncopies, in this order, one object each:\n1. from scripts, into scripts, files: moe-agent.ps1, moe-agent.sh, moe-call.sh, prompt-cache.mjs, prompt-cache-policy.mjs, prompt-cache-usage.mjs, prompt-cache-witness.mjs, usage-receipt.mjs, usage-session.mjs, usage-report.mjs, analyze-usage.mjs, moe-account-lease.mjs.\n2. from scripts/local-runner, into scripts/local-runner, required: certified-provider.json, multipass.mjs, doctor.mjs, cli.mjs, vm-control.mjs; exclude: **/*.test.*, **/*.spec.*, **/tests/**, **/__tests__/**, **/fixtures/**, **/__fixtures__/**.\n3. from scripts/mods, into scripts/mods, exclude: **/*.test.ts, */.claude-plugin/types/**.\n4. from docs/roles, into docs/roles.\n5. from docs, into docs, files: agent-context.md.\n6. from docs/skills, into docs/skills.\n\nWhy this shape:\n- The 12 script names are today's VS Code list. Gradle ships the same 12 files through its prompt-cache*.mjs glob plus explicit names.\n- The excludes are today's Gradle patterns, rebased from scripts/ to each entry's own directory. JetBrains is the reference, because its zip listing must not change (DoD 2).\n- docs/roles is the whole directory: that is the intended G10 fix. VS Code gains the 5 role docs JetBrains already ships: architect.reference.md, governor.md, governor.reference.md, qa.reference.md and worker.reference.md (DoD 3).\n- The member names copies, from, into, files, required and exclude are a contract: VSC-17 (task-6a0f0be3) will check the vsix against them.\n\nError handling and test: none at this step. Both consumers validate the shape (steps 2 and 3), and step 3's test pins this content.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/bundle-manifest.json"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "JetBrains first (task description, epic rail). Make moe-jetbrains/build.gradle.kts read the manifest (DoD 1), then prove the zip listing is unchanged (DoD 2) BEFORE touching bundle-assets.mjs.\n\nCode:\n1. Delete the vals bundledAgentScript, bundledAgentScriptSh, bundledCallScriptSh, bundledRoleDocs, bundledAgentContext, bundledSkillsDir and bundledLocalRunnerDir.\n2. Parse the manifest once:\n   - Add a small data class BundleCopy(from, into, files, required, exclude) and a top-level `val bundleCopies: List<BundleCopy> by lazy { ... }`.\n   - Parse with groovy.json.JsonSlurper().parseText(<repoRoot>/scripts/bundle-manifest.json read as text). groovy-json-4.0.33.jar ships in Gradle 9.8.2's lib, so no buildscript dependency is needed.\n   - Error handling: throw GradleException with the message `Bundle manifest <path> is malformed: <what>`, naming the key (for example copies[2].exclude), when:\n     - the file is missing or does not parse;\n     - copies is not a non-empty array;\n     - an entry is not an object;\n     - from or into is not a non-empty string;\n     - files, required or exclude is present but not an array of non-empty strings;\n     - any from, into, files or required value is absolute, starts with / or \\, or has a .. segment.\n   - An absent files, required or exclude means empty. There are no other defaults.\n3. requireBundledAssets():\n   - Replace the moe-agent.ps1/.sh/moe-call.sh checks and the local-runner listOf(...).forEach loop with ONE loop over bundleCopies.\n   - The from dir must be a directory, and every files + required name must be a file (isFile, so a directory masquerading as a module still fails).\n   - Messages: `Bundled <from>/<name> not found at <dir>.`, or `Bundled <from> not found at <dir>.` for the directory.\n   - The daemon/proxy checks and requireFreshDist stay untouched.\n4. prepareSandbox:\n   - Replace the from(bundledAgentScript), from(repoRoot.resolve(scripts)) {...}, from(listOf(bundledAgentScriptSh, bundledCallScriptSh)), from(bundledRoleDocs), from(bundledAgentContext) and from(bundledSkillsDir) blocks with ONE loop over bundleCopies:\n     - an entry with files: from(those files, resolved against from) into $pluginContentRoot/<into>, with the existing FixCrLfFilter eol=lf filter applied through filesMatching(**/*.sh). Keep the CRLF comment.\n     - any other entry: from(the from dir) into $pluginContentRoot/<into>, exclude(its exclude list).\n   - The daemon/proxy dist, node_modules and package.json blocks stay byte-identical: the bundle test regex-checks the dist blocks.\n5. Add one comment above the parse: moe-vscode/scripts/bundle-assets.mjs reads the same manifest, and its comment member states the rules. Nowhere in this file may you write a manifest file name or a multi-segment from path (scripts/local-runner, scripts/mods, docs/roles, docs/skills). Step 3's test enforces that no duplicated list is left.\n\nJetBrains-first proof (mem:gotcha-jetbrains-gradle-from-wsl, mem:convention-jetbrains-gradle-lease, mem:gotcha-vsce-package-uuid-path). Snapshot paths must have no UUID segment. Use umask 022, and run every node/npm command under env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin.\na. Base snapshot, built once and reused in step 5:\n   - BASE=$(git rev-parse HEAD); record it in the step note.\n   - S=/mnt/d/moe-scratch/vsc16-base; rm -rf $S; mkdir -p $S; git archive $BASE | tar -x -C $S.\n   - npm ci --no-audit --no-fund && npm run build in $S/packages/moe-daemon and in $S/packages/moe-proxy.\n   - npm ci --no-audit --no-fund && npm run package in $S/moe-vscode. That gives the base .vsix for DoD 3.\nb. JB snapshot /mnt/d/moe-scratch/vsc16-jb: the same archive of $BASE, plus a cp of ONLY scripts/bundle-manifest.json and moe-jetbrains/build.gradle.kts from the checkout. Build daemon and proxy as in (a).\nc. For vsc16-base, then vsc16-jb:\n   - take the jetbrains-gradle lease (moe.acquire_resource, then moe.wait_for_resource if it is queued);\n   - run from bash: cd /mnt/d/moe-scratch && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\<dir>\\moe-jetbrains && .\\gradlew.bat buildPlugin --rerun'. Expect BUILD SUCCESSFUL;\n   - moe.release_resource, even on failure.\nd. diff <(unzip -Z1 vsc16-base/moe-jetbrains/build/distributions/*.zip | LC_ALL=C sort) <(unzip -Z1 vsc16-jb/moe-jetbrains/build/distributions/*.zip | LC_ALL=C sort) prints nothing. Note the entry count.\ne. Negative test, in vsc16-jb only:\n   - rename scripts/local-runner/vm-control.mjs to vm-control.mjs.saved;\n   - rerun (c) there: it must FAIL with Bundled scripts/local-runner/vm-control.mjs not found;\n   - rename the file back.\n\nError handling for a red run:\n- A listing diff is fixed in build.gradle.kts or the manifest, never by accepting the new listing.\n- If the Kotlin DSL cannot resolve groovy.json.JsonSlurper, stop and post a task comment with the compiler error. Do not hand-parse JSON.\n- If Windows Gradle cannot read the WSL-built node_modules, rebuild BOTH snapshots' packages with Windows npm through cmd.exe, so base and JB stay like-for-like, and note it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/build.gradle.kts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Now VS Code. Make moe-vscode/scripts/bundle-assets.mjs read the same manifest (DoD 1 and 3), and move the list checks in scripts/tests/local-runner-bundle.test.mjs onto it. That test has 13 tests passing today, and CI runs it on ubuntu, windows and macos (ci.yml:244).\n\nbundle-assets.mjs:\n1. Delete lines 101-166: the agentScripts list, the local-runner required list and copy, the mods copy, the three role docs, agent-context and skills.\n2. In their place:\n   a. readManifest(). It applies the same validation and error handling as step 2, and throws an Error whose message starts `Bundle manifest <path> is malformed:` (or `is unreadable:`) and names the key.\n   b. A check pass over EVERY entry before anything is copied:\n      - from must be a directory: `Bundled <from> not found at <dir>.`;\n      - each files + required name must be a file: `Required <from>/<name> asset not found at <dir>.`. That keeps the /local-runner.*doctor\\.mjs/ stderr that the existing refusal rows match.\n   c. A copy pass:\n      - files entries: mkdir <bundled>/<into> and copy each file. A .sh goes through the current readFile / CRLF-to-LF / writeFile / chmod(source mode) code. Keep its two comments but reword them to name no script, because test (d) below greps for names.\n      - directory entries: cp(from, into, { recursive: true, filter }), where filter drops a path whose forward-slash path relative to from matches any exclude. fs.cp creates missing parent dirs, and it calls filter with the root itself (relative '').\n3. The exclude matcher is a tiny antPattern(glob) that returns a RegExp with Gradle's Ant semantics:\n   - **/ matches zero or more directories;\n   - a trailing /** also matches the directory itself;\n   - * and ? stay inside one segment;\n   - dot names are ordinary.\n   This one-liner passed 16 probe rows:\n   - escape with /[.+^${}()|[\\]\\\\]/g to '\\\\$&';\n   - then map /\\*\\*\\/|\\/\\*\\*$|\\*\\*|\\*|\\?/g to '(?:[^/]+/)*', '(?:/.*)?', '.*', '[^/]*' and '[^/]' respectively;\n   - anchor with ^ and $.\n   Add a one-line comment on why path.matchesGlob is not used: on Node 24.21 it returns false for ('a/.claude-plugin/x.test.ts', '**/*.test.ts') and for ('tests', '**/tests/**'), and Gradle excludes both.\n4. The daemon/proxy loop, newestSourceMtime and copyDir stay untouched. Add no import beyond node built-ins.\n\nTests in scripts/tests/local-runner-bundle.test.mjs:\na. fixture() also puts:\n   - scripts/bundle-manifest.json, as the checkout's bytes;\n   - docs/agent-context.md and docs/skills/example/SKILL.md;\n   - docs/roles/governor.md and docs/roles/worker.reference.md, beside the three it already puts;\n   - under scripts/mods/example: .claude-plugin/plugin.json, .claude-plugin/types/index.d.ts and .claude-plugin/hook.test.ts.\nb. In the test 'excludes root and nested tests/spec fixtures', also assert that hook.test.ts and types/index.d.ts are absent from bundled/scripts/mods/example and that plugin.json is present. These are the dot-directory rows that path.matchesGlob gets wrong.\nc. In the codex witness test, replace the Gradle regex (lines 105-108) with an assertion that the manifest's scripts entry lists every scripts/prompt-cache*.mjs in the checkout (readdirSync). Gradle's old glob shipped new helpers automatically, and this keeps that guarantee.\nd. Replace 'Gradle production script copy explicitly includes provider assets and excludes nested tests' with one test that checks:\n   - the scripts/local-runner entry has every excludedPatterns value, and exactly the required array;\n   - moe-jetbrains/build.gradle.kts and moe-vscode/scripts/bundle-assets.mjs both contain scripts/bundle-manifest.json;\n   - neither of them contains, as a substring, any manifest files/required name or any multi-segment from path (DoD 1: no duplicated list).\ne. In 'Gradle requires vm-control and drops compiled tests...', drop the listOf regex half, which (d) now covers. Keep the dist-block half and rename the test to match.\nf. New test 'actual bundler ships every docs/roles file, as the JetBrains build does': every fixture role doc is in bundled/docs/roles.\ng. New refusal table. Each row gets a fresh fixture, must exit 1, and its stderr must name the subject:\n   - scripts/moe-call.sh removed: /scripts\\/moe-call\\.sh/;\n   - docs/skills removed: /docs\\/skills/;\n   - a manifest whose copies is []: /bundle-manifest\\.json/;\n   - the real manifest with copies[0].into set to ../escape: /bundle-manifest\\.json/, and nothing exists at moe-vscode/escape.\nRun node --test scripts/tests/local-runner-bundle.test.mjs from the repo root (env -i, node 24). Expect 15 tests, all passing. Budget about +60/-25 lines for this test file; table-driving (g) keeps it there.\n\nError handling: every refusal names the manifest or the missing source. The old copy-only-when-present skip is gone from both builds.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "docs/DEVELOPMENT.md, sections Plugin Bundling and Packaging guards (lines 246-280): make them describe what steps 2-3 built, now that the bundling contract has moved.\n- Line 246: the two layouts now differ only by lib/. Drop 'and docs/roles/'.\n- Line 261: the roles/ comment becomes 'the whole docs/roles/ dir'.\n- Line 266: add one sentence. Both builds read the scripts/ and docs/ lists from scripts/bundle-manifest.json (its comment member states the copy rules); the daemon and proxy copies stay in each build.\n- Guard 1 (line 278): replace 'Only JetBrains also requires moe-agent.ps1, moe-agent.sh and moe-call.sh; the VS Code bundler copies the other scripts only when they are present.' with: both builds also fail on any file or directory the manifest names that is missing (its required local-runner files included), and on a malformed manifest.\n- Guard 3 (line 280): replace 'It also statically checks build.gradle.kts and ci.yml' with: it also checks the manifest's lists, that neither build file re-lists them, and ci.yml.\n\nThen update Serena mem:gotcha-packaged-bundle-test-artifacts (gitignored, not part of the diff). A helper an IDE loads by path is now named in THREE places: the manifest's local-runner required list, the onboarding packaged-file list, and the required array in scripts/tests/local-runner-bundle.test.mjs.\n\nError handling: the text may claim only behaviour that steps 2-3 implement and step 3's test checks. git diff --check -- docs/DEVELOPMENT.md must be clean. Touch no other doc: docs/plans/2026-11-02-vscode-reuse.md belongs to VSC-18, and the epic rail forbids CLAUDE.md, docs/ARCHITECTURE.md and the other listed docs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/DEVELOPMENT.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE, fresh (DoD 2, 3, 4 and 5). Use the same env -i node 24 and umask 022 as step 2.\n1. Check BASE is still good: run git diff --quiet $BASE HEAD -- scripts/bundle-manifest.json moe-jetbrains/build.gradle.kts moe-vscode/scripts/bundle-assets.mjs scripts/tests/local-runner-bundle.test.mjs docs/DEVELOPMENT.md. If it fails, someone else committed to a task file: re-take BASE=HEAD and rebuild vsc16-base exactly as in step 2a, including its buildPlugin under the lease.\n2. New snapshot:\n   - rm -rf /mnt/d/moe-scratch/vsc16-jb /mnt/d/moe-scratch/vsc16-new;\n   - archive $BASE into /mnt/d/moe-scratch/vsc16-new, cp in the 5 task files from the checkout, and cmp each against it;\n   - npm ci --no-audit --no-fund && npm run build in packages/moe-daemon and packages/moe-proxy;\n   - npm ci --no-audit --no-fund && npm run package in moe-vscode. It must exit 0 (DoD 5).\n3. Under the jetbrains-gradle lease:\n   - run cd /mnt/d/moe-scratch && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc16-new\\moe-jetbrains && .\\gradlew.bat test buildPlugin --rerun';\n   - expect BUILD SUCCESSFUL, with > Task :test not UP-TO-DATE;\n   - take the JUnit total from build/test-results/test/TEST-*.xml (mem:gotcha-gradle-uptodate-inside-chained-gate);\n   - release the lease, even on failure.\n   No Kotlin changes in this task. If a test fails, rerun that class in vsc16-base before blaming this diff. If it is red at $BASE too, post a task comment. Do not edit Kotlin.\n4. The gate script is /mnt/d/moe-scratch/vsc16-gate.sh: 24 lines, sha256 fcf96250363840ee82f6a0afbfc95ec39fa468e1171376e8ad2e6fdcf8e8df4a. The architect wrote it and dry-ran it on pass and fail fixtures. Its exact text is also in mem:task-task-6fbd08111de142508fb0402d06f24e3f-handoff; restore it from there if it is missing or its sha256 differs. It checks:\n   - DoD 2: the two zip listings are identical;\n   - DoD 3: the vsix lost nothing and gained only extension/bundled/docs/roles/* entries, and the vsix and the zip ship the same role docs;\n   - DoD 4: onboarding.mjs passes on both unzipped bundles;\n   - finally, node --test runs the bundle test in vsc16-new.\n5. Completion evidence command, which must exit 0: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash /mnt/d/moe-scratch/vsc16-gate.sh /mnt/d/moe-scratch/vsc16-base /mnt/d/moe-scratch/vsc16-new\n   Expect:\n   - DoD2 with the entry count;\n   - DoD3 listing exactly architect.reference.md, governor.md, governor.reference.md, qa.reference.md and worker.reference.md;\n   - DoD4;\n   - 15 bundle tests passing.\n   Its command, exit code and output tail are complete_task's verification. Put the npm package exit, the Gradle BUILD SUCCESSFUL line and the JUnit total in the step note. Keep vsc16-base and vsc16-new for QA.\n\nError handling for a red run:\n- Fix the cause in the task files, re-copy them into vsc16-new, and rerun from the failing stage.\n- Never weaken the gate script.\n- Never run npm ci/install/build in the shared checkout.\n- Kill only PIDs you started, by recorded PID, never by name or pattern. onboarding.mjs stops its own proxy and daemon in a finally block.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's diff (adversarial-self-review skill). Answer each point in the step note:\n- Parity:\n  - does every manifest exclude select the same paths in Gradle and in antPattern (the dot-directory rows, and dir/** matching dir)?\n  - is a .sh in a files entry LF in both builds?\n  - do a missing source, an absolute path or a .. path fail both builds BEFORE any copy?\n- Cross-platform:\n  - Windows backslashes in the cp filter are normalised before matching;\n  - forward-slash manifest paths resolve under Windows Gradle (the zip proved it);\n  - a CRLF checkout of a .sh still ships LF.\n- Odd manifests: an empty exclude list; a files entry that also has exclude (unused); two entries sharing an into. Say what each build does, and add no code for them.\n- No duplicated list: test (d) passes, and reading both build files finds no stray script name in a comment.\n- Size: report git diff --numstat for the 4 tracked files, plus wc -l scripts/bundle-manifest.json. Tests and JSON count (mem:gotcha-plan-net-loc-budget-tests-count). The budget is net (adds minus deletes) at most +150, and at most 400 changed lines in total. Past either limit, post a task comment before complete_task.\n- git status --short shows that, of the paths you touched, only the 5 task files changed. Never revert, stash, git add -A or commit a peer's dirty path.\n\nError handling: a finding is fixed with a test row in step 3's file and a gate re-run, never waved through.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,8 +70,114 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 17,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-99f9ddde5d60430b8403d46076a8b5ad",
+      "author": "architect-d54b05fd",
+      "content": "@architect-0fcb7226 I'm planning VSC-17 (task-6a0f0be3), which consumes this row's scripts/bundle-manifest.json. Its CI step must \"fail when any file the bundle manifest lists is missing from the vsix\", and I'd like that check not to re-implement the copy rules a third time, after bundle-assets.mjs and build.gradle.kts. One request for the schema: give every entry an explicit bundle-relative target path, plus whether it is a file or a directory, with any excludes. For example:\n`{ \"from\": \"scripts/moe-agent.sh\", \"to\": \"scripts/moe-agent.sh\", \"kind\": \"file\" }`\n`{ \"from\": \"scripts/local-runner\", \"to\": \"scripts/local-runner\", \"kind\": \"dir\", \"exclude\": [...] }`\nThen VSC-17 checks that each file entry's `to` is in the vsix under extension/bundled/, and that each directory entry's `to` is non-empty there, with every file bundle-assets.mjs copied under it present. If you settle on different field names, VSC-17's plan maps its check to whatever field names the bundle target, so one clearly named target field per entry is all it needs. Also note: bundle-assets.mjs today silently skips a missing agent script (`if (await exists(src))`). A listed-but-missing source would be worth failing on in the bundler, as the required local-runner assets already do.",
+      "timestamp": "2026-11-02T10:44:17.320Z"
+    },
+    {
+      "id": "comment-683b87fa63724bfc8c8bbb2beb274dd0",
+      "author": "architect-d54b05fd",
+      "content": "@architect-0fcb7226 Two follow-ups for VSC-16 from VSC-17 planning (vsix dry run at 3cfc3c78):\n1. docs/agent-context.md no longer exists (purged in f5b00437). bundle-assets.mjs still copies it behind `if (await exists(...))`, and build.gradle.kts:33 still names it (`bundledAgentContext`). Please leave it out of scripts/bundle-manifest.json. VSC-17's CI check fails on any manifest target that never reaches the vsix, so a dead entry would turn every PR red.\n2. A simpler version of my earlier ask: VSC-17 needs only an explicit bundle-relative target per entry, named `to` (e.g. `\"to\": \"scripts/moe-agent.sh\"`, `\"to\": \"docs/roles\"`). `kind` is optional, because VSC-17 reads file vs directory from the staged copy in moe-vscode/bundled. VSC-17 collects every object with a string `to` anywhere in the manifest, so any top-level grouping works. If you name the target field something else, VSC-17's worker renames that one property.",
+      "timestamp": "2026-11-02T10:59:01.918Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:40:05.382Z",
-  "updatedAt": "2026-11-02T09:40:05.382Z"
+  "updatedAt": "2026-11-02T10:59:23.356Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:37:49.892Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:59:23.318Z",
+  "executionContract": {
+    "intendedBehavior": "Both IDE plugin builds bundle their scripts, local-runner assets, mods and docs from one list, scripts/bundle-manifest.json, so a newly bundled file is added once. The JetBrains zip's entry listing does not change. The .vsix gains only the docs/roles files the zip already ships (architect.reference.md, governor.md, governor.reference.md, qa.reference.md and worker.reference.md). Either build refuses to bundle, naming the problem, when a source the manifest lists is missing or when the manifest is malformed (empty copies, a non-string member, or an absolute or .. path).",
+    "acceptanceCriteria": [
+      "Adding a script name to the manifest's scripts entry ships it in both bundles, with no edit to either build file.",
+      "The JetBrains zip built from this diff has the same sorted unzip -Z1 listing as the base zip.",
+      "The .vsix built from this diff loses no entry, gains only extension/bundled/docs/roles files, and ships the same role docs as the zip.",
+      "A missing manifest source or a malformed manifest fails both builds with a message naming the manifest or the missing path, before anything is copied.",
+      "scripts/tests/onboarding.mjs passes on both unzipped bundles. gradlew.bat test buildPlugin --rerun is BUILD SUCCESSFUL, and npm run package exits 0."
+    ],
+    "invariants": [
+      "The daemon and proxy dist, node_modules and package.json copies, the fresh-dist check and the marker checks are unchanged in both builds.",
+      ".sh files in a files entry ship LF, and the VS Code copy keeps the source file mode.",
+      "Both builds check every manifest source before copying anything, and refuse absolute or .. paths.",
+      "Exclude patterns have Ant semantics in both builds: ** crosses dot directories, and dir/** matches dir.",
+      "No epic-avoid file is edited, and no npm ci/install/build/test runs in the shared checkout."
+    ],
+    "compatibility": [
+      "The JetBrains zip entry listing is identical to the base.",
+      "scripts/tests/onboarding.mjs is unchanged. CI's 'Verify packaged JetBrains onboarding' step and release.yml's onboarding step need no change.",
+      "ci.yml still runs scripts/tests/local-runner-bundle.test.mjs by the same path.",
+      "VSC-17 (task-6a0f0be3) reads the copies/from/into/files/required member names."
+    ],
+    "approvedScope": [
+      "scripts/bundle-manifest.json: top-level comment and copies[{from, into, files?, required?, exclude?}]",
+      "moe-jetbrains/build.gradle.kts: BundleCopy, a lazy bundleCopies parsed with JsonSlurper and validated, a manifest loop in requireBundledAssets(), a manifest loop in prepareSandbox",
+      "moe-vscode/scripts/bundle-assets.mjs: readManifest, antPattern, a check pass then a copy pass over copies",
+      "scripts/tests/local-runner-bundle.test.mjs: fixture additions and rows (b) to (g) from step 3",
+      "docs/DEVELOPMENT.md: the Plugin Bundling and Packaging guards text"
+    ],
+    "reuse": [
+      "groovy.json.JsonSlurper from the Gradle runtime: no new buildscript dependency.",
+      "The existing FixCrLfFilter, applied through filesMatching.",
+      "fs.promises.cp with a filter, which the local-runner and mods copies already use.",
+      "The existing .sh CRLF-to-LF plus chmod code in bundle-assets.mjs.",
+      "A 4-line Ant matcher instead of path.matchesGlob, which disagrees with Gradle on dot directories and dir/**."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/scripts/bundle-assets.mjs:101-166 holds the 12 agentScripts (copied only when present), local-runner with its 5 required files and test/fixture excludes, mods (*.test.ts and /.claude-plugin/types excluded), docs/roles/{architect,qa,worker}.md, docs/agent-context.md and docs/skills.",
+      "moe-jetbrains/build.gradle.kts: vals at 29-35, requireBundledAssets script and local-runner checks at 74-87, prepareSandbox scripts/docs blocks at 183-217. The dist blocks at 157-182 stay.",
+      "scripts/tests/local-runner-bundle.test.mjs regex-checks build.gradle.kts at 105-108, 150-156 and 232-241. All 13 tests pass at 3cfc3c78 plus the working tree.",
+      "Gradle 9.8.2 lib has groovy-json-4.0.33.jar, and moe-jetbrains/gradle.properties enables no configuration cache.",
+      "On Node 24.21, path.matchesGlob returns false for ('a/.claude-plugin/x.test.ts', '**/*.test.ts') and for ('tests', '**/tests/**'). Ant matches both.",
+      "docs/roles has 8 files at HEAD."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash /mnt/d/moe-scratch/vsc16-gate.sh /mnt/d/moe-scratch/vsc16-base /mnt/d/moe-scratch/vsc16-new",
+      "cd /mnt/d/moe-scratch && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc16-new\\moe-jetbrains && .\\gradlew.bat test buildPlugin --rerun'",
+      "cd /mnt/d/moe-scratch/vsc16-new/moe-vscode && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" npm run package",
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Generate the two build files' lists from the manifest at build time (codegen). Rejected: an extra build step, when both builds can just read JSON.\n2. Use path.matchesGlob on the Node side. Rejected: on Node 24.21 its ** does not enter dot directories, and `**/tests/**` does not match `tests` itself. Gradle (Ant) matches both. A 4-line Ant matcher, probed on 16 rows, keeps one pattern syntax for both builds.\n3. Put the daemon/proxy dist and node_modules copies in the manifest too. Rejected: each build keeps its own fresh-dist and marker checks, and DoD 1 names only the script, local-runner, mods and docs lists.\n4. Keep VS Code's copy-only-when-present behaviour for scripts and docs. Rejected: one strict rule in both builds is simpler, it stops a silent omission, and every listed source is tracked in git.\n5. Allow globs in files (prompt-cache*.mjs). Rejected: an explicit list plus test (c), which requires every scripts/prompt-cache*.mjs to be listed, keeps Gradle's auto-pickup guarantee with no glob expansion in files.",
+    "codebaseInsights": "- Today the two builds ship the same scripts/ set. JetBrains gets it from moe-agent.ps1, the prompt-cache*.mjs glob (4 files), 5 explicit .mjs files, and moe-agent.sh/moe-call.sh through FixCrLfFilter. VS Code gets it from an explicit list of 12.\n- local-runner and mods excludes are equivalent in both builds. The only listing difference is docs/roles: VS Code ships 3 of the 8 files.\n- buildPlugin zips the prepareSandbox output directory, so the zip listing equals the set of files and dirs that land in the sandbox.\n- scripts/tests/local-runner-bundle.test.mjs runs the real VS Code bundler on a fixture, and regex-checks build.gradle.kts in 3 places (lines 105-108, 150-156, 232-241). Those checks must move to the manifest. CI runs the test on 3 OSes (ci.yml:244).\n- Gradle 9.8.2 lib ships groovy-json-4.0.33.jar. No configuration cache is enabled.\n- fs.promises.cp creates missing dest parents, and calls filter with the root itself.\n- The gate script /mnt/d/moe-scratch/vsc16-gate.sh was dry-run on synthetic zips: it passes the good case and exits 1 when the vsix gains a non-role entry.",
+    "risks": "- The Kotlin DSL may not resolve groovy.json.JsonSlurper on its compile classpath. The plan says to stop and comment, not to hand-parse.\n- Windows Gradle copies node_modules that npm ci built under WSL. If that fails, rebuild both snapshots with Windows npm, so the comparison stays like-for-like.\n- HEAD moves during the task: both snapshots come from one BASE, and step 5 re-checks BASE against the 5 task files.\n- vsce packages nothing on a UUID-shaped path (mem:gotcha-vsce-package-uuid-path). /mnt/d/moe-scratch/vsc16-* avoids that.\n- `gradlew test` can be UP-TO-DATE inside a chain. A fresh snapshot plus a check of the XML count avoids that.\n- The comment in bundle-assets.mjs that names moe-agent.sh/moe-call.sh must be reworded, or test (d) fails.\n- Size: about 350 changed lines, net about +50. Watch the test-file growth.\n- VSC-17 (task-6a0f0be3) consumes the member names copies/from/into/files/required/exclude.",
+    "keyFiles": [
+      "scripts/bundle-manifest.json",
+      "moe-jetbrains/build.gradle.kts",
+      "moe-vscode/scripts/bundle-assets.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs",
+      "docs/DEVELOPMENT.md",
+      "scripts/tests/onboarding.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4b32dd78aa3c9469eb19dade5e44d05dac3bca13",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:59:23.356Z",
+  "approvedPlanRevision": 1
 }

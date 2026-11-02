@@ -96,7 +96,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T10:23:08.353Z",
-  "updatedAt": "2026-11-02T10:58:02.823Z",
+  "updatedAt": "2026-11-02T10:59:12.911Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:24:56.835Z",
     "plannedStepCount": 4,
@@ -180,7 +180,9 @@
     "moe-vscode/src/util/SeatSurvival.ts",
     ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
     ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
-    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
+    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+    ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json",
+    ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json"
   ],
   "completionSummary": "Round 2 (QA size-only reject 424>400): trimmed in place; no behaviour change, no test row or assertion dropped. Footprint 386 net (git diff --numstat 644ce882^: SeatSurvival.ts +101, seat-survival.test.cjs +285), 14 under the cap.\n- SeatSurvival.ts: comments only (module JSDoc 18->9, isProcessAlive 6->1, class 5->1, record 5->1, surviving 5->4); kept the why, the VSC-21 wiring notes and a JSDoc per method; fixed one inaccuracy (an injected isAlive's errors propagate too). Proof: transpile with removeComments gives byte-identical JS for 644ce882 and final (sha256 bd7676342dd2585a).\n- Test: S2a's edge-pid loop became an inner pid loop over every outcome row (superset, 26->66 assert calls); seatOf runs in S4a/S4d/S5a became [pid, seat] loops (same calls, same order); comments shortened. Proof: a harness counting executed asserts per test shows identical counts for all 19 tests except S2a; old/new test x old/new source all 19/19.\n- DoD 5: QA's 8 round-1 mutants re-run in the gate snapshot against the new AND the 644ce882 test file: all killed by ERR_ASSERTION with identical kill sets (surviving ignores isAlive: S2c S6a-d; EPERM dead: S2a; pid 0 probed: S2b S3b S4b; dup probed twice: S6a S6b; keep(non-array) keeps all: S5b; record saves always: S4a S4b; pid not moved: S3c S4c; keep saves always: S5a S5b). Source restored, snapshot deleted.\n- DoD 6: checkRefs[0] verbatim on the final bytes at HEAD 96e0d7c2: exit 0, 473 tests/469 pass/4 skip/0 fail (+3 since round 1 = VSC-9 89062f86 blocker-corpus test). AgentSeatTracker.ts, client-seat-tracker.json, extension.ts, AgentLauncher.ts, MoeDaemonClient.ts untouched. Scripts: /tmp/vsc21a-count/{count,strip}.cjs, /tmp/vsc21a-mut/mutate.cjs.",
   "commits": [
@@ -238,6 +240,23 @@
       "treeId": "b4fada8b1fc25d285de5bc65b896188b38483825",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "4b32dd78aa3c9469eb19dade5e44d05dac3bca13",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T10:52:04Z",
+      "paths": [
+        ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+        ".moe/tasks/task-daf5abdd282a4c46b280eb0a48e74cd9.json",
+        ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T10:59:12.910Z",
+      "treeId": "d5d1856c85e646654f8a212becb28892b3b2a1ec",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -247,9 +266,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-4c1da905@2026-11-02T10:36:19Z",
-    "at": "2026-11-02T10:51:46.922Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T10:52:04Z",
+    "at": "2026-11-02T10:59:12.910Z"
   },
   "reviewCompletedAt": "2026-11-02T10:58:02.823Z",
   "rejectionDetails": {
