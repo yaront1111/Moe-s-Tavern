@@ -1,0 +1,33 @@
+{
+  "id": "task-185f728fd79c4658a86b8a0b40a66595",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-8] VS Code: Delivery section in task detail from the shared delivery corpus",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-3 (task-a5f39d5535404f6e9e59f762c046f5e0), which lands moe-jetbrains/src/test/resources/client-delivery.json. This row must pass that corpus UNCHANGED: it is a held-out test, and QA rejects a diff that edits it. A row VS Code cannot meet because JetBrains is wrong is filed against JetBrains, never edited.\n\nObjective: JetBrains' task detail shows a Delivery section (DeliveryPresentation.kt, MoeBundle keys moe.delivery.*): candidate SHA and base, the runner-reported check (command, exit-code verdict, outcome, source), whether the required check counted by policy, the reported delivery target and landed revision, and the owning attempt phase. The daemon serves it as task.delivery on /ws (packages/moe-daemon/src/server/WebSocketServer.ts, deliveryProjection from packages/moe-daemon/src/state/deliveryProjection.ts). VS Code drops it: src/types/moe.ts has no delivery type and TaskDetailPanel.ts renders nothing.\n\nDeliverable:\n- moe-vscode/src/types/moe.ts: the TaskDelivery shape (type-only; transpileModule elides it).\n- moe-vscode/src/panels/TaskDetailPanel.ts: an exported `deliveryRows(delivery)` returning `{ labelKey, value, fullValue, outcome }[]` with JetBrains' semantics; a `DELIVERY_LABELS` map from labelKey to English; and a Delivery section (title from moe.delivery.title) rendered with escapeHtml, PASS and FAIL styled, the full value in a title attribute, nothing rendered when the list is empty. Keep this code inside TaskDetailPanel.ts: three peer test files load the panel under node:vm with a strict require map, so a new value import breaks them (mem:gotcha-vscode-panel-strict-require-map).\n- new moe-vscode/tests/delivery-corpus.test.cjs: loads the corpus via `path.join(__dirname, '../../moe-jetbrains/src/test/resources/client-delivery.json')`, checks deliveryRows against every row (all failing ids reported together), checks DELIVERY_LABELS against the moe.delivery.* values parsed from moe-jetbrains/src/main/resources/messages/MoeBundle.properties (VSC-0's shared-strings rule), and renders one populated and one null delivery through the real panel HTML (fake webview, pattern in tests/task-blocker-visibility.test.cjs).\n\nTaskDetailPanel.ts is shared with VSC-9 and VSC-11: in shared-checkout mode do not run concurrently with them; after this project's worktree switch they merge independently.\n\nNot in scope: the board card, commit and landing lists, verification evidence, any moe-jetbrains file, the corpus.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo (the test reads moe-jetbrains files) into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/delivery-corpus.test.cjs runs every row of moe-jetbrains/src/test/resources/client-delivery.json through TaskDetailPanel's exported deliveryRows and passes, reporting all failing ids at once.",
+    "The same test asserts DELIVERY_LABELS equals the moe.delivery.* entries parsed from moe-jetbrains/src/main/resources/messages/MoeBundle.properties.",
+    "The rendered task-detail HTML for a populated delivery holds the Delivery title and one escaped row per expected entry in corpus order; for a null delivery it holds no Delivery section.",
+    "client-delivery.json and every moe-jetbrains file are unchanged by this task's diff (`git diff --exit-code <base> -- moe-jetbrains` exits 0).",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures, with task-blocker-visibility, task-time-budget and approval-paths passing unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-a5f39d5535404f6e9e59f762c046f5e0"
+  ],
+  "priority": "HIGH",
+  "order": 9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:40:23.707Z",
+  "updatedAt": "2026-11-02T09:40:23.707Z"
+}

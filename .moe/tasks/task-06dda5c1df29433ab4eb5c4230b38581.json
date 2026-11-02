@@ -1,0 +1,33 @@
+{
+  "id": "task-06dda5c1df29433ab4eb5c4230b38581",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-9] VS Code: task detail and board blocker logic pass the shared blocker corpus",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-4 (task-db97dacb7b3843b4a6f747c154123501), which lands moe-jetbrains/src/test/resources/client-blocker.json. This row must pass it UNCHANGED (held-out test). A row VS Code cannot meet because JetBrains is wrong is filed against JetBrains, never edited.\n\nObjective: VS Code computes block causes twice: moe-vscode/src/panels/TaskDetailPanel.ts (exported blockCause, blockedPrerequisiteIds, blockerFacts) and moe-vscode/media/board.js (its own blockCause and blockedPrerequisiteIds in browser JS). Both must agree with each other and with JetBrains' TaskBlockerPresentation on every corpus row: the cause (RESOURCE_WAIT, DEPENDENCY_WAIT, EXTERNAL_BLOCK or null), the prerequisite ids in order, and the independent needs-human-review flag.\n\nDeliverable: new moe-vscode/tests/blocker-corpus.test.cjs that runs every row through BOTH implementations: TaskDetailPanel.ts transpiled under node:vm (reuse the loadModule shape of tests/task-blocker-visibility.test.cjs, whose require map holds only `vscode` and `./PlanReviewPanel`), and the raw media/board.js in its own vm context, calling its top-level functions (mem:convention-vscode-renderer-tests: function declarations become context properties). Fix any disagreement in TaskDetailPanel.ts and/or media/board.js, and name each fixed row id in the summary.\n\nTaskDetailPanel.ts is shared with VSC-8 and VSC-11: in shared-checkout mode do not run concurrently with them; after the worktree switch they merge independently.\n\nNot in scope: blocker wording (fact text differs by client on purpose), any moe-jetbrains file, the corpus.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/blocker-corpus.test.cjs runs every row of moe-jetbrains/src/test/resources/client-blocker.json through TaskDetailPanel.ts's blockCause and blockedPrerequisiteIds and through media/board.js's blockCause and blockedPrerequisiteIds, and every row passes on both, with all failing ids reported together.",
+    "The test also checks each row's expected needs-human-review flag against the field both renderers read.",
+    "A scratch-copy mutant of media/board.js's blockCause that ignores the BLOCKED-status check makes the test fail (mutant discarded afterwards).",
+    "client-blocker.json and every moe-jetbrains file are unchanged by this task's diff.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-db97dacb7b3843b4a6f747c154123501"
+  ],
+  "priority": "MEDIUM",
+  "order": 10,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:40:33.911Z",
+  "updatedAt": "2026-11-02T09:40:33.911Z"
+}

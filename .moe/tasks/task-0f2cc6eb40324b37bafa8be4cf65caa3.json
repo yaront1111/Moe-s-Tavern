@@ -1,0 +1,30 @@
+{
+  "id": "task-0f2cc6eb40324b37bafa8be4cf65caa3",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-5] JetBrains: shared landing-policy corpus for the settings dialog",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). First wave: no dependencies, files disjoint from the other first-wave rows. JetBrains first: this row writes the held-out corpus that VS Code's settings row (VSC-10) must pass unchanged.\n\nReuse decision (VSC-0): one client-neutral JSON corpus per shared presentation, executed by both test suites (CQ-I06b pattern, moe-jetbrains/src/test/resources/client-verdicts.json; rule in the header of ClientVerdictCorpusTest.kt). Each new corpus gets its own file.\n\nObjective: JetBrains' settings dialog shows the effective landing policy read-only. MoeSettingsDialog.effectivePolicyRows(settings: ProjectSettings?) (moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt, companion object) returns ordered PolicyRow(label, value, detail) rows in plain English: Auto-commit, Checkpoint commits, Push checkpoints, Commit board state, Commit hooks, Landing branch, Quality gate, Quality gate scope, Undeclared-file attribution, Plan size limits. VS Code has no such section. Pin the rows, including the defaults applied to missing fields, as a corpus.\n\nDeliverable:\n- new moe-jetbrains/src/test/resources/client-settings-policy.json: `{ \"version\": 1, \"rows\": [ { \"id\": \"P01\", \"settings\": <project.settings wire JSON (partial) or null>, \"expect\": [ { \"label\", \"value\", \"detail\" } ] } ] }`. At least 10 rows: null settings (all defaults); `{}`; each boolean flipped; consolidationBranch empty, literal and glob; qualityGate empty and set; qualityGateScope everyTask and any other value; attribution.undeclared never, always, solo and an unknown value; custom taskSizing.\n- new moe-jetbrains/src/test/kotlin/com/moe/toolwindow/SettingsPolicyCorpusTest.kt: parses `settings` through the same MoeJson path the client uses for STATE_SNAPSHOT project.settings (null stays null), asserts effectivePolicyRows equals `expect` exactly and in order, asserts unique `P[0-9]{2}` ids, and reports every failing id at once.\nIf a row exposes a JetBrains bug (for example a default that differs from the daemon's in packages/moe-daemon/src/state/persistence.ts), fix it here and name it in the summary.\n\nNot in scope: VS Code files (VSC-10), MoeSettingsDialogTest.kt (unchanged), the daemon.\n\nVerification (WSL has no JDK): take the `jetbrains-gradle` lease (mem:convention-jetbrains-gradle-lease); `git archive HEAD | tar -x -C /mnt/d/moe-scratch/<dir>`; overlay this task's files; run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\<dir>\\moe-jetbrains && .\\gradlew.bat test --rerun'` (mem:gotcha-jetbrains-snapshot-gradle-test); release the lease even on failure.",
+  "definitionOfDone": [
+    "moe-jetbrains/src/test/resources/client-settings-policy.json exists with version 1 and at least 10 rows with unique P[0-9]{2} ids, covering every case listed in the description.",
+    "SettingsPolicyCorpusTest.kt parses each row's settings through MoeJson and asserts effectivePolicyRows equals the row's expect list exactly (label, value, detail and order), reporting all failing ids at once.",
+    "A scratch-copy mutant that swaps the Commit board state On/Off value makes SettingsPolicyCorpusTest fail (mutant discarded afterwards).",
+    "The full JetBrains suite passes in a git-archive snapshot under the jetbrains-gradle lease: `gradlew.bat test --rerun` reports BUILD SUCCESSFUL, with the JUnit total in the summary.",
+    "The diff touches only the two new files, plus MoeSettingsDialog.kt or MoeJson.kt if a row exposed a JetBrains bug (named in the summary)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:39:29.201Z",
+  "updatedAt": "2026-11-02T09:39:29.201Z"
+}

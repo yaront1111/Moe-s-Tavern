@@ -1,0 +1,28 @@
+{
+  "id": "task-b6a3d41e365445629f73ff17bd379f13",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: moe-agent.sh subagent mirror races when two seats start in one project (cp EEXIST under set -e kills pre-flight)",
+  "description": "Repro (WT-19b trial, scripts/tests/worktree-e2e.cjs, two worker seats launched at once into a fresh control checkout): seat b exits 1 in pre-flight with `cp: cannot create regular file '<project>/.claude/agents/moe-code-reviewer.md': File exists`. Cause: scripts/moe-agent.sh:2130-2134 checks `[ -e \"$dest\" ]` and then runs a plain `cp \"$src\" \"$dest\"` under `set -e`; GNU cp opens a missing destination with O_EXCL, so the seat that loses the race dies (ps1 uses `Copy-Item -Force` and keeps going). Fix: tolerate EEXIST (`cp \"$src\" \"$dest\" 2>/dev/null || [ -e \"$dest\" ] || <fail>`) and count it as kept. Until then, WT-19b's fixture pre-seeds <control>/.claude/agents, which is the live checkout's state.",
+  "definitionOfDone": [
+    "Two moe-agent.sh seats starting at the same moment in one project both pass the subagent mirror (a postflight.sh arm, or a loop of concurrent mirrors, reproduces it before the fix and passes after)",
+    "A destination that another seat created between the -e check and the copy counts as kept, not as a failure",
+    "sh/ps1 parity-check stays green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 37,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:34:04.961Z",
+  "updatedAt": "2026-11-02T09:34:04.961Z"
+}

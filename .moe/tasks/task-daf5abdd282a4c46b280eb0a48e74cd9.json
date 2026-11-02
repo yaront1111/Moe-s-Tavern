@@ -1,0 +1,33 @@
+{
+  "id": "task-daf5abdd282a4c46b280eb0a48e74cd9",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-12] VS Code client: Claude account rotation wire, matching JetBrains",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). dependsOn VSC-6 (task-9f6a725ff14c4c08b4acb203884e7ae5) ONLY to serialize edits to MoeDaemonClient.ts while this project runs in shared-checkout mode. Nothing here uses VSC-6's code, so after the worktree switch a governor may drop the dependency (moe.set_task_dependencies).\n\nObjective: VS Code ignores the accounts wire (MoeDaemonClient.ts: `case 'ACCOUNTS_UPDATED': case 'ACCOUNT_ADDED':` with the comment \"VS Code has no account UI\"). Give the client what JetBrains' MoeCommandSender and MoeMessageDispatcher have (tests: moe-jetbrains MoeCommandSenderAccountsTest.kt and MoeMessageDispatcherAccountsTest.kt; daemon: packages/moe-daemon/src/server/accountMessages.ts):\n- state: the latest rotation from ACCOUNTS_UPDATED (and whatever ACCOUNT_ADDED carries, handled as MoeMessageDispatcher handles it), exposed as an `accountRotation` getter and an `onAccountsChanged` event;\n- senders with exactly the payloads JetBrains sends: ADD_ACCOUNT, REMOVE_ACCOUNT, MOVE_ACCOUNT, RENAME_ACCOUNT and SET_ACCOUNT_SWITCH_PERCENT, each returning false when not connected.\nThe types go in a NEW moe-vscode/src/types/accounts.ts (type-only), so src/types/moe.ts stays free for VSC-8.\n\nHarness trap: seven test files transpile MoeDaemonClient.ts under node:vm, three with closed require maps (mem:gotcha-vscode-vm-test-harness): add no value import; `import type` is safe. Drive the real client as in tests/plan-approval-client.test.cjs.\n\nNot in scope: any view, command or package.json change (VSC-14, VSC-15), the presentation port (VSC-13), any moe-jetbrains file, the daemon.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "New moe-vscode/tests/accounts-wire.test.cjs drives the real transpiled MoeDaemonClient and asserts each of the five senders emits exactly the payload JetBrains' MoeCommandSender emits for the same arguments (expected frames taken from MoeCommandSenderAccountsTest.kt), and returns false and sends nothing when disconnected.",
+    "Feeding ACCOUNTS_UPDATED stores the rotation in accountRotation and fires onAccountsChanged once; ACCOUNT_ADDED and a malformed payload are handled the way MoeMessageDispatcherAccountsTest.kt pins for JetBrains.",
+    "The account types live in moe-vscode/src/types/accounts.ts, and MoeDaemonClient.ts imports them type-only (no new value import).",
+    "Every existing suite that loads MoeDaemonClient.ts passes unchanged.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-9f6a725ff14c4c08b4acb203884e7ae5"
+  ],
+  "priority": "MEDIUM",
+  "order": 13,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:41:06.908Z",
+  "updatedAt": "2026-11-02T09:41:06.908Z"
+}

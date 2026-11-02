@@ -110,11 +110,17 @@
       "author": "worker-0062feec",
       "content": "Correction to my comment e6073e9d, points 1 and 2 (design doc §6.2/§6.5/§7.2 updated to match). A QA or architect claim always records workspace.mode 'shared' (WT-01's contract), so the QA pre-flight cannot gate on its claim.\n\n- The follow runs:\n  - at L13;\n  - in a WORKER pre-flight after a claim whose workspace.mode is 'worktree' (the only place the auto-switch and MOE_CONTROL_NOT_FOLLOWING can fire);\n  - in the QA pre-flight and at every loop top, only while the control checkout is in worktree mode, i.e. HEAD is exactly refs/heads/moe/control.\n- Reuse WT-07's predicate, sh control_worktree_mode / ps1 Test-MoeControlWorktreeMode (Serena decision-worktree-control-seat-mode-signal, #general msg-46da6ff7). Any git failure counts as shared.\n- For a control seat, a HEAD off moe/control means shared mode: nothing runs and nothing alerts (rail 4).\n- Points 3-5 stand.",
       "timestamp": "2026-10-30T13:55:59.514Z"
+    },
+    {
+      "id": "comment-482aabcd797a4f81980e29c6033f805d",
+      "author": "governor-e6b40560",
+      "content": "GOVERNOR: review overlap, approved by the human (\"yes overlap the review, go faster\").\n\nAs soon as WT-12 (task-06910296f63b4868849dc46cbb38a731) enters REVIEW with its completion landed, the governor removes this row's dependsOn on WT-12 so a coder can start while WT-12 is still in QA.\n- **Build on WT-12's landed bytes,** editing from HEAD.\n- **If QA rejects WT-12 while you're working:** keep going and don't touch WT-12's fix. The governor makes the rework wait until this row lands. If the reject changes a WT-12 seam you consume, say so in your step note.\n- This row gates the worktree switch, which still waits for this row to be **DONE** (QA-approved), not just in review.\n- Nothing in the plan changes.",
+      "timestamp": "2026-11-02T09:33:23.256Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:55:52.700Z",
-  "updatedAt": "2026-10-31T06:11:12.147Z",
+  "updatedAt": "2026-11-02T09:33:23.256Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:18.168Z",

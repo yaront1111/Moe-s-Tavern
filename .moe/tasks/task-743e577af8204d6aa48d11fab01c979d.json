@@ -1,0 +1,33 @@
+{
+  "id": "task-743e577af8204d6aa48d11fab01c979d",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-10] VS Code: settings panel parity from the shared landing-policy corpus",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-5 (task-0f2cc6eb40324b37bafa8be4cf65caa3), which lands moe-jetbrains/src/test/resources/client-settings-policy.json. This row must pass it UNCHANGED (held-out test).\n\nObjective: bring the VS Code settings panel (moe-vscode/src/panels/SettingsPanel.ts + moe-vscode/media/settings.js) to JetBrains' MoeSettingsDialog:\n1. Edit and send exactly what JetBrains does: MoeCommandSender.updateSettings sends UPDATE_SETTINGS with exactly approvalMode, speedModeDelayMs, agentCommand and enableAgentTeams. VS Code lacks the enableAgentTeams checkbox.\n2. Remove the autoCreateBranch, branchPattern and commitPattern controls. The daemon still stores them (packages/moe-daemon/src/state/persistence.ts), but no launcher reads them (0 hits in scripts/moe-agent.sh and scripts/moe-agent.ps1) and JetBrains dropped them. VS Code must stop sending them.\n3. Show the effective landing policy read-only, with the same rows as MoeSettingsDialog.effectivePolicyRows: an exported `effectivePolicyRows(settings)` in SettingsPanel.ts returning `{ label, value, detail }[]`, rendered with escapeHtml. Keep it in that file: SettingsPanel is loaded under node:vm with a strict require map (mem:gotcha-vscode-panel-strict-require-map).\n\nDeliverable: the changed SettingsPanel.ts and media/settings.js; moe-vscode/tests/settings-wire.test.cjs updated where it pins the removed fields (FORM_KEYS and the stored and saved payloads) and extended with enableAgentTeams; new moe-vscode/tests/settings-policy-corpus.test.cjs running every corpus row through effectivePolicyRows and checking the rendered HTML.\n\nNot in scope: settings JetBrains does not show (chat, columnLimits, models, executionProfile), the daemon, any moe-jetbrains file, the corpus.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/settings-policy-corpus.test.cjs runs every row of moe-jetbrains/src/test/resources/client-settings-policy.json through SettingsPanel's exported effectivePolicyRows and gets the exact label, value, detail and order, reporting all failing ids at once.",
+    "The rendered settings HTML lists the policy rows read-only (no input element for them) with escaped text.",
+    "tests/settings-wire.test.cjs asserts a Save sends an UPDATE_SETTINGS payload with exactly the keys approvalMode, speedModeDelayMs, agentCommand and enableAgentTeams (never autoCreateBranch, branchPattern or commitPattern), and that the enableAgentTeams checkbox round-trips both true and false.",
+    "client-settings-policy.json and every moe-jetbrains file are unchanged by this task's diff.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-0f2cc6eb40324b37bafa8be4cf65caa3"
+  ],
+  "priority": "MEDIUM",
+  "order": 11,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:40:45.159Z",
+  "updatedAt": "2026-11-02T09:40:45.159Z"
+}

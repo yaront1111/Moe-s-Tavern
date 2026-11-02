@@ -1,0 +1,30 @@
+{
+  "id": "task-9f6a725ff14c4c08b4acb203884e7ae5",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-6] VS Code client: wire parity with JetBrains (RELEASE_TASK, CHANNEL_DELETED)",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). First wave: no dependencies, files disjoint from the other first-wave rows. VSC-11 (Release Agent action) and VSC-12 (accounts wire) build on this row's MoeDaemonClient.ts.\n\nObjective: the /ws diff in VSC-0's audit (882a4c39) found two messages JetBrains handles and VS Code does not:\n1. RELEASE_TASK (outbound). JetBrains MoeCommandSender.releaseTask(taskId, reason?) sends `{ taskId, reason? }`, omitting reason when blank; the daemon handles it in packages/moe-daemon/src/server/WebSocketServer.ts `case 'RELEASE_TASK'`. Add `releaseTask(taskId: string, reason?: string): boolean` to moe-vscode/src/services/MoeDaemonClient.ts on the existing sendMessage (false when not connected, like approveTask).\n2. CHANNEL_DELETED (inbound; packages/moe-daemon/src/state/chatStore.ts emits it with the deleted ChatChannel as payload). JetBrains' MoeMessageDispatcher removes the channel; VS Code ignores the frame, so the chat view keeps a dead channel. Remove it from currentState.channels and tell the chat view (moe-vscode/src/providers/ChatViewProvider.ts already posts 'updateChannels' for CHANNELS; reuse that path or add an event). In moe-vscode/media/chat.js, an 'updateChannels' list that no longer holds the selected channel must stop selecting it (fall back to the first remaining channel, or none), instead of keeping currentChannel on a dead id.\n\nHarness trap: seven test files transpile MoeDaemonClient.ts under node:vm, three with closed require maps (mem:gotcha-vscode-vm-test-harness): add no value import. To drive the real client: `client['ws'] = { readyState: 1, send }`, `client['_connectionState'] = 'connected'`, feed `client['handleMessage'](JSON.stringify(frame))`, and JSON-parse sent frames in the test realm (vm-realm objects fail deepStrictEqual). chat.js runs raw in its own vm context (mem:pattern-vscode-webview-script-vm-test).\n\nNot in scope: any Release button or confirm dialog (VSC-11), accounts messages (VSC-12), PINS_UPDATED and RESOURCE_UPDATED (neither client handles them; a JetBrains-first follow-up noted in VSC-0's doc), TaskDetailPanel.ts, package.json, extension.ts.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl). Baseline at 882a4c39: 388 tests, 384 pass, 4 skip, 0 fail.",
+  "definitionOfDone": [
+    "New moe-vscode/tests/wire-parity.test.cjs drives the real transpiled MoeDaemonClient and asserts releaseTask('t1', 'Released from board') sends exactly one RELEASE_TASK frame whose payload is {taskId:'t1', reason:'Released from board'}, a blank reason omits the reason key, and when disconnected the call returns false and sends nothing.",
+    "The same test feeds a CHANNEL_DELETED frame and asserts the channel is gone from currentState.channels and the chat view is told once, while an unknown channel id changes nothing.",
+    "Running the raw media/chat.js in a node:vm context, an updateChannels list without the selected channel leaves the deleted channel neither listed nor selected.",
+    "Every existing suite that loads MoeDaemonClient.ts passes unchanged (daemon-identity, daemon-start, daemon-json-cap, plan-approval-client, protected-daemon-spawn, settings-wire, approval-paths, verified-local-launch).",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:39:41.943Z",
+  "updatedAt": "2026-11-02T09:39:41.943Z"
+}

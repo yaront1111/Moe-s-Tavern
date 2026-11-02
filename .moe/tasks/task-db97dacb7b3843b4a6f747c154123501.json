@@ -1,0 +1,30 @@
+{
+  "id": "task-db97dacb7b3843b4a6f747c154123501",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-4] JetBrains: shared blocker corpus for TaskBlockerPresentation",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). First wave: no dependencies, files disjoint from the other first-wave rows. JetBrains first: this row writes the held-out corpus that VS Code's blocker row (VSC-9) must pass unchanged.\n\nReuse decision (VSC-0): one client-neutral JSON corpus per shared presentation, executed by both test suites (CQ-I06b pattern, moe-jetbrains/src/test/resources/client-verdicts.json; rule in the header of ClientVerdictCorpusTest.kt: a disagreement is fixed or filed, never given a client-specific expectation). Each new corpus gets its own file.\n\nObjective: block-cause logic exists three times today: JetBrains moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt (cause, badges, detail, prerequisiteIds), VS Code moe-vscode/src/panels/TaskDetailPanel.ts (exported blockCause, blockedPrerequisiteIds, blockerFacts) and VS Code moe-vscode/media/board.js (its own blockCause and blockedPrerequisiteIds in browser JS). Pin the client-neutral part as a corpus, with JetBrains as the reference.\n\nDeliverable:\n- new moe-jetbrains/src/test/resources/client-blocker.json: `{ \"version\": 1, \"rows\": [ { \"id\": \"B01\", \"task\": <task wire JSON>, \"cause\": \"RESOURCE_WAIT\" | \"DEPENDENCY_WAIT\" | \"EXTERNAL_BLOCK\" | null, \"prerequisiteIds\": [...], \"needsHumanReview\": true | false } ] }` (the cause names are the enum both clients already use). At least 14 rows: each cause; a non-BLOCKED status carrying stale block fields (cause null); BLOCKED with blockedOnTaskIds; a reason naming task ids, with and without blockedOnTaskIds (whatever JetBrains derives); duplicate and blank ids; resourceId together with task ids (the precedence JetBrains applies); needsHumanReview true on REVIEW and on BLOCKED, independent of cause; missing optional fields.\n- new moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BlockerCorpusTest.kt: parses each task with MoeJson.parseTask, asserts TaskBlockerPresentation.cause(task)?.name, prerequisiteIds(task) (order included) and the badges' needs-human-review flag against the row, asserts unique `B[0-9]{2}` ids, and reports every failing id at once.\nIf a row exposes a JetBrains bug, fix TaskBlockerPresentation.kt here and name it in the summary; never bend a row to a bug.\n\nNot in scope: VS Code files (VSC-9), TaskBlockerPresentationTest.kt (unchanged), wording and bundle text (the clients word blocker facts differently on purpose; only the fields above are shared).\n\nVerification (WSL has no JDK): take the `jetbrains-gradle` lease (mem:convention-jetbrains-gradle-lease); `git archive HEAD | tar -x -C /mnt/d/moe-scratch/<dir>`; overlay this task's files; run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\<dir>\\moe-jetbrains && .\\gradlew.bat test --rerun'` (mem:gotcha-jetbrains-snapshot-gradle-test); release the lease even on failure.",
+  "definitionOfDone": [
+    "moe-jetbrains/src/test/resources/client-blocker.json exists with version 1 and at least 14 rows with unique B[0-9]{2} ids, covering every case listed in the description.",
+    "BlockerCorpusTest.kt parses each row's task with MoeJson.parseTask and asserts the cause name, prerequisiteIds (order included) and the needs-human-review flag against the row, reporting all failing ids at once.",
+    "A scratch-copy mutant that makes TaskBlockerPresentation.cause return a cause for a non-BLOCKED task makes BlockerCorpusTest fail (mutant discarded afterwards).",
+    "The full JetBrains suite passes in a git-archive snapshot under the jetbrains-gradle lease: `gradlew.bat test --rerun` reports BUILD SUCCESSFUL, with the JUnit total in the summary.",
+    "The diff touches only the two new files, plus TaskBlockerPresentation.kt if a row exposed a JetBrains bug (named in the summary)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:39:17.846Z",
+  "updatedAt": "2026-11-02T09:39:17.846Z"
+}

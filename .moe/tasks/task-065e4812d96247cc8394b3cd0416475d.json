@@ -1,0 +1,34 @@
+{
+  "id": "task-065e4812d96247cc8394b3cd0416475d",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-13] VS Code: AccountPresentation port that passes the shared accounts corpus",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-7 (task-93729f32ef6f408cbd411813c5c93838: moe-jetbrains/src/test/resources/client-accounts.json, a held-out corpus this row must pass UNCHANGED) and VSC-12 (task-daf5abdd282a4c46b280eb0a48e74cd9: moe-vscode/src/types/accounts.ts and the client's accountRotation).\n\nObjective: a pure TypeScript port of JetBrains' AccountPresentation.kt (rows, chips, actions, isValidLabel) whose text is `{ key, args }` exactly as the corpus writes it, plus an English resolver for those keys that matches moe-jetbrains/src/main/resources/messages/MoeBundle.properties (VSC-0's shared-strings rule).\n\nDeliverable: new moe-vscode/src/util/AccountPresentation.ts (pure: no vscode import and no runtime import at all; the time and zone are parameters, as in the corpus) and new moe-vscode/tests/accounts-corpus.test.cjs that loads the module under node:vm with a require map that throws on every name (tests/managed-vm.test.cjs loads the pure ManagedVm.ts this way), runs every corpus row and label case, and checks the resolver's text for every key in the corpus against MoeBundle.properties with {0}-style args substituted.\n\nNot in scope: the tree view, commands and package.json (VSC-14, VSC-15), any moe-jetbrains file, the corpus.\n\nVerification (GLOBAL rail: never npm in the shared checkout): `git archive HEAD` of the whole repo into a fresh directory outside the checkout, overlay this task's files, then in <snapshot>/moe-vscode run `npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (mem:gotcha-vscode-gate-from-wsl).",
+  "definitionOfDone": [
+    "moe-vscode/tests/accounts-corpus.test.cjs runs every rotation row of client-accounts.json through AccountPresentation.ts's rows, chips and actions with the corpus' fixed now and zone, and every label case through isValidLabel; all pass, with failing ids reported together.",
+    "The test checks that the English the resolver gives for every key used in the corpus equals the value in moe-jetbrains/src/main/resources/messages/MoeBundle.properties, args substituted.",
+    "AccountPresentation.ts loads under a require map that throws on every module name and contains no vscode reference.",
+    "client-accounts.json and every moe-jetbrains file are unchanged by this task's diff.",
+    "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-93729f32ef6f408cbd411813c5c93838",
+    "task-daf5abdd282a4c46b280eb0a48e74cd9"
+  ],
+  "priority": "MEDIUM",
+  "order": 14,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:41:33.390Z",
+  "updatedAt": "2026-11-02T09:41:33.390Z"
+}

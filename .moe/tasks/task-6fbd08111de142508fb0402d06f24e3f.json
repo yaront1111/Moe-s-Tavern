@@ -1,0 +1,30 @@
+{
+  "id": "task-6fbd08111de142508fb0402d06f24e3f",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-16] Packaging: one bundle manifest shared by the VS Code and JetBrains builds",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). No dependencies; files disjoint from every other row in the epic.\n\nObjective: both plugins bundle the same runtime (daemon dist + node_modules, proxy dist + node_modules, agent scripts, local-runner assets, mods, role docs, agent-context, skills) from two hand-kept lists: moe-vscode/scripts/bundle-assets.mjs and moe-jetbrains/build.gradle.kts (tasks.named<PrepareSandboxTask>(\"prepareSandbox\")). They have drifted: VS Code ships only docs/roles/{architect,qa,worker}.md while JetBrains ships every file under docs/roles (governor and the *.reference.md companions too). Move the shared part into one JSON manifest that both builds read.\n\nDeliverable: new scripts/bundle-manifest.json listing the bundled script files and directories with their excludes, and the docs to copy; bundle-assets.mjs and build.gradle.kts both read it (Gradle can parse it with groovy.json.JsonSlurper, which the Gradle runtime ships), keeping their existing fresh-dist and required-asset checks and the CRLF to LF normalisation of .sh files. JetBrains first: change and verify the Gradle build before bundle-assets.mjs. The shipped JetBrains file set must not change; the VS Code set may only gain the role docs JetBrains already ships.\n\nNot in scope: pruning devDependencies from the bundled node_modules (both plugins ship vitest and typescript today; the vsix was 61 MB at 882a4c39), CI (VSC-17), the content of any wrapper script.\n\nVerification (GLOBAL rail: no in-place builds or installs): build in a git-archive snapshot outside the checkout whose absolute path has NO UUID-shaped segment, e.g. /mnt/d/moe-scratch/vsc16-<sha>. npm 12 redacts UUID-shaped path segments in `npm list` output, so vsce then collects zero files and `npm run package` fails with \"Extension entrypoint(s) missing\" (seen 2026-11-02 in a Claude scratchpad path). In the snapshot: `npm ci && npm run build` in packages/moe-daemon and packages/moe-proxy, `npm ci && npm run package` in moe-vscode, then under the jetbrains-gradle lease `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc16-<sha>\\moe-jetbrains && .\\gradlew.bat test buildPlugin --rerun'`. Build the base commit the same way, compare sorted `unzip -Z1` listings of both zips and both vsix files, and run `node scripts/tests/onboarding.mjs <unzipped bundled dir>` on the new zip and vsix.",
+  "definitionOfDone": [
+    "scripts/bundle-manifest.json exists, and moe-vscode/scripts/bundle-assets.mjs and moe-jetbrains/build.gradle.kts both read their script, local-runner, mods and docs lists from it, with no duplicated list left in either file.",
+    "The JetBrains plugin zip built from this diff has exactly the same sorted `unzip -Z1` listing as the zip built from the base commit.",
+    "The .vsix built from this diff differs from the base .vsix only by added docs/roles files that the JetBrains zip already ships (listing diff in the summary).",
+    "`node scripts/tests/onboarding.mjs` passes against the unzipped JetBrains moe-jetbrains dir and the unzipped vsix's extension/bundled dir.",
+    "In the snapshot, under the jetbrains-gradle lease, `gradlew.bat test buildPlugin --rerun` reports BUILD SUCCESSFUL and moe-vscode `npm run package` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 17,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:40:05.382Z",
+  "updatedAt": "2026-11-02T09:40:05.382Z"
+}

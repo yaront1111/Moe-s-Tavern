@@ -1,0 +1,31 @@
+{
+  "id": "task-a5f39d5535404f6e9e59f762c046f5e0",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-3] JetBrains: shared delivery corpus for DeliveryPresentation",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). First wave: no dependencies, files disjoint from the other first-wave rows. JetBrains first: this row writes the held-out corpus that VS Code's delivery row (VSC-8) must pass unchanged.\n\nReuse decision (VSC-0): presentation logic both plugins implement is pinned by ONE client-neutral JSON corpus that both test suites execute, extending CQ-I06b's moe-jetbrains/src/test/resources/client-verdicts.json. Rule (header of moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt): a row the clients disagree on is fixed or filed, never given a client-specific expectation. Each new corpus gets its own file next to client-verdicts.json.\n\nObjective: pin JetBrains' task-detail Delivery rows (moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt, rendered by TaskDetailDialog.kt) as a corpus. Input is the task's `delivery` object exactly as the daemon serves it on /ws (packages/moe-daemon/src/server/WebSocketServer.ts serves deliveryProjection(state, task) from packages/moe-daemon/src/state/deliveryProjection.ts).\n\nDeliverable:\n- new moe-jetbrains/src/test/resources/client-delivery.json: `{ \"version\": 1, \"rows\": [ { \"id\": \"D01\", \"delivery\": <wire JSON or null>, \"expect\": [ { \"labelKey\", \"value\", \"fullValue\", \"outcome\": \"PASS\" | \"FAIL\" | null } ] } ] }`. At least 12 rows: null delivery; treeSha preferred over shortSha; empty strings skipped; SHA values cut to 8 chars with the full value kept; exit 0 with no outcome and with \"passed\" (checkPassed, PASS); exit 0 with another outcome (checkNotPassed, FAIL); a non-zero exit (checkFailed, FAIL); requiredCheckSatisfied true, false and absent; receipt target and landed revision; attempt phase; one fully populated row in display order.\n- new moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt: parses each row's `delivery` through the same MoeJson path the client uses for task.delivery, asserts DeliveryPresentation.rows equals `expect` (order included), asserts unique ids matching `D[0-9]{2}`, asserts every labelKey exists in messages/MoeBundle.properties, and reports every failing id at once (like ClientVerdictCorpusTest.assertRows).\nIf a row exposes a JetBrains bug, fix DeliveryPresentation.kt here (JetBrains first) and name it in the summary; never bend a row to match a bug.\n\nNot in scope: VS Code (VSC-8), client-verdicts.json, DeliveryPresentationTest.kt (left unchanged), the daemon.\n\nVerification (WSL has no JDK): take the `jetbrains-gradle` lease (mem:convention-jetbrains-gradle-lease); `git archive HEAD | tar -x -C /mnt/d/moe-scratch/<dir>`; overlay this task's files; run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\<dir>\\moe-jetbrains && .\\gradlew.bat test --rerun'` (mem:gotcha-jetbrains-snapshot-gradle-test, mem:gotcha-jetbrains-gradle-from-wsl); release the lease even on failure.",
+  "definitionOfDone": [
+    "moe-jetbrains/src/test/resources/client-delivery.json exists with version 1 and at least 12 rows with unique D[0-9]{2} ids, covering every case listed in the description.",
+    "DeliveryCorpusTest.kt parses each row's delivery through MoeJson and asserts DeliveryPresentation.rows equals the row's expect list in order, reporting all failing ids at once.",
+    "DeliveryCorpusTest.kt asserts every labelKey used in the corpus exists in moe-jetbrains/src/main/resources/messages/MoeBundle.properties.",
+    "A scratch-copy mutant of DeliveryPresentation.kt that treats exit 0 as passed whatever the outcome makes DeliveryCorpusTest fail (mutant discarded afterwards).",
+    "The full JetBrains suite passes in a git-archive snapshot under the jetbrains-gradle lease: `gradlew.bat test --rerun` reports BUILD SUCCESSFUL, with the JUnit total in the summary.",
+    "The diff touches only the two new files, plus DeliveryPresentation.kt if a row exposed a JetBrains bug (named in the summary)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:39:05.695Z",
+  "updatedAt": "2026-11-02T09:39:05.695Z"
+}

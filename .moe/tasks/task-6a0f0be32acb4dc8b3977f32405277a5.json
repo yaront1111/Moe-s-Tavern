@@ -1,0 +1,33 @@
+{
+  "id": "task-6a0f0be32acb4dc8b3977f32405277a5",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-17] CI: package the VS Code extension on every PR and smoke-test its bundle",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). Depends on VSC-16 (task-6fbd08111de142508fb0402d06f24e3f): the smoke checks the packaged .vsix against the scripts/bundle-manifest.json that VSC-16 creates.\n\nObjective: pull requests never package the VS Code extension. In .github/workflows/ci.yml, job build-all-platforms, the step \"Test VS Code daemon startup\" runs only npm ci, lint, compile and test; `npm run package` runs only in release.yml, so a packaging break surfaces at release time. The JetBrains job already packages and runs `node scripts/tests/onboarding.mjs` on the unzipped plugin.\n\nDeliverable:\n- .github/workflows/ci.yml: in build-all-platforms on ubuntu-latest only (the job builds daemon and proxy earlier), after the VS Code tests: `npm run package` in moe-vscode, unzip the .vsix to \"$RUNNER_TEMP/moe-vscode-smoke\", run `node scripts/tests/onboarding.mjs \"$RUNNER_TEMP/moe-vscode-smoke/extension/bundled\"`, and fail when any file the bundle manifest lists is missing from the vsix.\n- moe-vscode/.vscodeignore: stop shipping the tsc output that `npm run compile` leaves in dist/ beside esbuild's dist/extension.js (exclude dist/** except dist/extension.js), and eslint.config.mjs. At 882a4c39, packaging after a compile shipped dist/panels, dist/providers, dist/services and the rest.\n\nShared file: .github/workflows/ci.yml is also planned by open rows outside this epic (task-3ad573a7, task-4fdc7590, task-f6228433 when this row was cut). In shared-checkout mode do not run concurrently with them; after the worktree switch non-overlapping hunks merge on their own.\n\nNot in scope: release.yml, the Windows and macOS legs (Linux is enough for a packaging smoke), any other CI step.\n\nVerification: in a git-archive snapshot outside the checkout whose absolute path has NO UUID-shaped segment (npm 12 redacts UUIDs in `npm list` output and vsce then packages nothing; see VSC-16), e.g. /mnt/d/moe-scratch/vsc17-<sha>: build daemon and proxy, run `cd moe-vscode && npm ci && npm run compile`, then the new CI step's commands verbatim from the snapshot root; show `unzip -Z1 <vsix> | grep '^extension/dist/'` lists only extension.js; and `python3 -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))'` exits 0 (PyYAML 6.0.1 is installed).",
+  "definitionOfDone": [
+    ".github/workflows/ci.yml's build-all-platforms job runs, on ubuntu-latest only, `npm run package` in moe-vscode after the existing VS Code tests, then the onboarding smoke on the unzipped vsix's extension/bundled dir and a check that every file scripts/bundle-manifest.json lists is in the vsix.",
+    "moe-vscode/.vscodeignore excludes dist/** except dist/extension.js, and eslint.config.mjs; in a snapshot, `npm run compile && npm run package` yields a vsix whose only extension/dist/ entry is extension.js (listing in the summary).",
+    "The new CI commands, run verbatim in a UUID-free git-archive snapshot after the daemon and proxy builds, exit 0 (output tail in the summary).",
+    "`python3 -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))'` exits 0.",
+    "The diff touches only .github/workflows/ci.yml and moe-vscode/.vscodeignore."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-6fbd08111de142508fb0402d06f24e3f"
+  ],
+  "priority": "MEDIUM",
+  "order": 18,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:41:18.459Z",
+  "updatedAt": "2026-11-02T09:41:18.459Z"
+}

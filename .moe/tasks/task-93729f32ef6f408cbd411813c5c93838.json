@@ -1,0 +1,31 @@
+{
+  "id": "task-93729f32ef6f408cbd411813c5c93838",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-7] JetBrains: shared accounts corpus for AccountPresentation",
+  "description": "Epic epic-aabc654d (VS Code works + plugin reuse), sliced by task-a3e414a3 (VSC-0). First wave: no dependencies, files disjoint from the other first-wave rows. JetBrains first: this row writes the held-out corpus that the VS Code accounts rows (VSC-13 presentation port, VSC-14 view, VSC-15 actions) must pass unchanged.\n\nContext: Claude account rotation (docs/plans/2026-10-20-claude-account-rotation.md; daemon side packages/moe-daemon/src/server/accountMessages.ts) has a JetBrains Accounts tab (AccountsPanel.kt over AccountPresentation.kt) and no VS Code UI at all (MoeDaemonClient.ts drops ACCOUNTS_UPDATED with the comment \"VS Code has no account UI\").\n\nReuse decision (VSC-0): one client-neutral JSON corpus per shared presentation, executed by both test suites (CQ-I06b, moe-jetbrains/src/test/resources/client-verdicts.json; rule in the header of ClientVerdictCorpusTest.kt). Each new corpus gets its own file. Text is shared as MoeBundle keys plus args; each client resolves keys to its own strings, and the VS Code consumer test checks its English equals messages/MoeBundle.properties.\n\nObjective: pin AccountPresentation's pure functions (moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountPresentation.kt): rows(rotation, now, zone), chips(rotation, now, zone), actions(rotation, selectedId, connected) and isValidLabel(input).\n\nDeliverable:\n- new moe-jetbrains/src/test/resources/client-accounts.json: `{ \"version\": 1, \"now\": \"<fixed ISO instant>\", \"zone\": \"UTC\", \"rows\": [ { \"id\": \"C01\", \"rotation\": <ACCOUNTS_UPDATED payload as the daemon sends it, or null>, \"selectedId\": ..., \"connected\": true | false, \"expectRows\": [...], \"expectChips\": [...], \"expectActions\": {...} } ], \"labels\": [ { \"input\": \"...\", \"valid\": true | false } ] }`, every text written as `{ \"key\", \"args\" }`. At least 12 rotation rows (null rotation; empty; one and several accounts; each sign-in state; usage windows with and without a reset time; the account in use; switch percent; vmToken states; disconnected; selection at the top, middle and bottom for move up/down) and at least 8 label rows.\n- new moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountsCorpusTest.kt: parses `rotation` through the same MoeJson path MoeMessageDispatcher uses for ACCOUNTS_UPDATED, runs each function with the corpus' fixed now and zone, compares with the expectations, asserts unique `C[0-9]{2}` ids and that every key exists in MoeBundle.properties, and reports every failing id at once.\nIf a row exposes a JetBrains bug, fix AccountPresentation.kt here and name it in the summary.\n\nNot in scope: VS Code files, AccountPresentationTest.kt (unchanged), AccountsPanel.kt, the daemon.\n\nVerification (WSL has no JDK): take the `jetbrains-gradle` lease (mem:convention-jetbrains-gradle-lease); `git archive HEAD | tar -x -C /mnt/d/moe-scratch/<dir>`; overlay this task's files; run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\<dir>\\moe-jetbrains && .\\gradlew.bat test --rerun'` (mem:gotcha-jetbrains-snapshot-gradle-test); release the lease even on failure.",
+  "definitionOfDone": [
+    "moe-jetbrains/src/test/resources/client-accounts.json exists with version 1, a fixed now and zone, at least 12 rotation rows with unique C[0-9]{2} ids and at least 8 label rows, covering every case listed in the description.",
+    "AccountsCorpusTest.kt parses each rotation through MoeJson and asserts rows, chips, actions and isValidLabel against the corpus with the fixed now and zone, reporting all failing ids at once.",
+    "AccountsCorpusTest.kt asserts every text key in the corpus exists in moe-jetbrains/src/main/resources/messages/MoeBundle.properties.",
+    "A scratch-copy mutant that enables move-up for the first account makes AccountsCorpusTest fail (mutant discarded afterwards).",
+    "The full JetBrains suite passes in a git-archive snapshot under the jetbrains-gradle lease: `gradlew.bat test --rerun` reports BUILD SUCCESSFUL, with the JUnit total in the summary.",
+    "The diff touches only the two new files, plus AccountPresentation.kt if a row exposed a JetBrains bug (named in the summary)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T09:39:54.745Z",
+  "updatedAt": "2026-11-02T09:39:54.745Z"
+}
