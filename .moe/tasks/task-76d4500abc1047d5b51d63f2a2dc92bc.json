@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -95,7 +95,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T14:05:57.356Z",
-  "updatedAt": "2026-11-02T14:43:50.729Z",
+  "updatedAt": "2026-11-02T14:47:43.975Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T14:07:21.361Z",
@@ -105,11 +105,14 @@
     "firstClaimAt": "2026-11-02T14:07:25.658Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T14:47:43.975Z",
+    "wallClockMs": 2418317
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-564d8bce"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -205,19 +208,40 @@
       "treeId": "ac7f0d82f3784560b8f81d52d56479ff513a6e1e",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "5368581701a8c80689570c07197475763e15561d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T14:33:34Z",
+      "paths": [
+        ".moe/tasks/task-2f4b224f9afe47b4a5e382d5da7bb16c.json",
+        ".moe/tasks/task-76d4500abc1047d5b51d63f2a2dc92bc.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T14:44:11.134Z",
+      "treeId": "ab24cf44a363bdc12a87cdc5eeec36d870caaa26",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    ".moe/tasks/task-2f4b224f9afe47b4a5e382d5da7bb16c.json",
+    ".moe/tasks/task-76d4500abc1047d5b51d63f2a2dc92bc.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-0fcb7226@2026-11-02T14:07:24Z",
-    "at": "2026-11-02T14:27:40.030Z"
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T14:33:34Z",
+    "at": "2026-11-02T14:44:11.134Z"
   },
   "workStartedAt": "2026-11-02T14:34:27.229Z",
   "reviewStartedAt": "2026-11-02T14:43:50.727Z",
@@ -228,5 +252,14 @@
     "reportedAt": "2026-11-02T14:43:50.727Z",
     "source": "agent-reported"
   },
-  "completionSummary": "JetBrains now types every PowerShell line (agent launch, accounts CLI, WSL interop) as `powershell[.exe] -NoProfile -ExecutionPolicy Bypass -EncodedCommand <UTF-16LE base64>`, so only base64 follows a fixed prefix.\n\nProduction, TerminalAgentLauncher.kt:\n- powerShellLine encodes with Base64 over UTF_16LE.\n- bashWrapPowerShell only swaps powershell for powershell.exe.\n- PS_DOUBLE_QUOTED_SPECIAL and PS_BACKTICK_ESCAPE are deleted; psQuote, PS_SINGLE_QUOTE and requireSafeArg are untouched.\n\nTests:\n- typedScript is now a decoder (exact prefix, base64-only tail, even UTF-16LE byte count).\n- J4 runs a\"b, x\"; Write-Output PWNED6; #, D:\\work!x, !!, a!$b and an all-characters value through assertPsCarriersKeep (5 agent carriers x native/WSL + 4 accounts words).\n- Every PowerShell-line assertion reads the decoded script. A helper decodedPowerShellCommand wraps the builder for the 13 'PowerShell ...' tests and 2 protected-marker tests; the bashWrap, accounts, VM-seat, space/tilde, J1-J3 and AccountPresentationTest VM token tests decode too.\n- PINNED_LEGACY's 8 PowerShell rows pin the decoded script, and the test also rebuilds the full typed bytes from it. The 8 bash rows are unchanged.\n\nEvidence:\n- RED (HEAD production + only the 2 test files): 63 focused tests, 25 fail, all 'not a powershell -EncodedCommand line' (J4, J1-J3, converted tests, pinned, VM token).\n- Mutants on a snapshot copy:\n  - M1 vacuity killed all 12 named assertFalse tests (18 in total).\n  - M2 UTF_8 killed 25, including J1-J4 and the pinned test.\n  - M3 no-.exe killed 8, including J4, the pinned test, bashWrap and the VM-seat test.\n  - Extra M4 (UTF_16 BOM) killed 22; extra M5 (URL-safe base64) was killed by 1 test only (space/tilde), since the alphabet difference is value-dependent.\n- checkRef verbatim under the jetbrains-gradle lease (released): attempt 1 exit 1, one unrelated flake (MoeProjectConnectionTest 'a malformed readiness reply...' TimeoutException at :217; file untouched). Attempt 2 exit 0: :tes"
+  "completionSummary": "JetBrains now types every PowerShell line (agent launch, accounts CLI, WSL interop) as `powershell[.exe] -NoProfile -ExecutionPolicy Bypass -EncodedCommand <UTF-16LE base64>`, so only base64 follows a fixed prefix.\n\nProduction, TerminalAgentLauncher.kt:\n- powerShellLine encodes with Base64 over UTF_16LE.\n- bashWrapPowerShell only swaps powershell for powershell.exe.\n- PS_DOUBLE_QUOTED_SPECIAL and PS_BACKTICK_ESCAPE are deleted; psQuote, PS_SINGLE_QUOTE and requireSafeArg are untouched.\n\nTests:\n- typedScript is now a decoder (exact prefix, base64-only tail, even UTF-16LE byte count).\n- J4 runs a\"b, x\"; Write-Output PWNED6; #, D:\\work!x, !!, a!$b and an all-characters value through assertPsCarriersKeep (5 agent carriers x native/WSL + 4 accounts words).\n- Every PowerShell-line assertion reads the decoded script. A helper decodedPowerShellCommand wraps the builder for the 13 'PowerShell ...' tests and 2 protected-marker tests; the bashWrap, accounts, VM-seat, space/tilde, J1-J3 and AccountPresentationTest VM token tests decode too.\n- PINNED_LEGACY's 8 PowerShell rows pin the decoded script, and the test also rebuilds the full typed bytes from it. The 8 bash rows are unchanged.\n\nEvidence:\n- RED (HEAD production + only the 2 test files): 63 focused tests, 25 fail, all 'not a powershell -EncodedCommand line' (J4, J1-J3, converted tests, pinned, VM token).\n- Mutants on a snapshot copy:\n  - M1 vacuity killed all 12 named assertFalse tests (18 in total).\n  - M2 UTF_8 killed 25, including J1-J4 and the pinned test.\n  - M3 no-.exe killed 8, including J4, the pinned test, bashWrap and the VM-seat test.\n  - Extra M4 (UTF_16 BOM) killed 22; extra M5 (URL-safe base64) was killed by 1 test only (space/tilde), since the alphabet difference is value-dependent.\n- checkRef verbatim under the jetbrains-gradle lease (released): attempt 1 exit 1, one unrelated flake (MoeProjectConnectionTest 'a malformed readiness reply...' TimeoutException at :217; file untouched). Attempt 2 exit 0: :tes",
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/AccountPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+  ],
+  "completedAt": "2026-11-02T14:47:43.975Z",
+  "reviewCompletedAt": "2026-11-02T14:47:43.975Z",
+  "reviewSummary": "Approved. Reviewed completion commit 53685817 (branch HEAD, pushed), not the dirty tree. JetBrains-only, 3 source files, 245 net lines (<400), no moe-vscode file.\n\nCode: powerShellLine = prefix + Base64(UTF_16LE); bashWrapPowerShell only swaps powershell->powershell.exe on prefix match; PS_DOUBLE_QUOTED_SPECIAL/PS_BACKTICK_ESCAPE deleted; psQuote, PS_SINGLE_QUOTE, requireSafeArg untouched (requireSafeArg still first); new const private; no old-form leftovers in src/docs/scripts; bash arms byte-identical.\n\nRe-ran checkRef verbatim under the jetbrains-gradle lease (released): exit 0, :test executed. JUnit XML: 571 tests, 0 failures/errors/skipped; TerminalAgentLauncherTest 44/0, AccountPresentationTest 19/0. The MoeProjectConnectionTest flake did not recur.\n\nMy own M1 vacuity mutant (scratch copy; script plus '-Interactive -CodexExec -GeminiExec -GrokExec MOE_NO_PRINT_MODE MOE_RUNTIME_PROTECTED' encoded) failed all 12 named assertFalse tests plus J1, J2, J4, pinned, accounts and VM token tests, so no PowerShell assertion reads the encoded line vacuously. Worker's RED run and M2-M5 not re-run; M5 (URL-safe base64) is killed by only 1 test (value-dependent), accepted.\n\nDoD1: J4 runs a\"b, x\"; Write-Output PWNED6; #, D:\\work!x, !!, a!$b and an all-chars value through assertPsCarriersKeep on both agent routes and the accounts words; decoder checks exact prefix, base64-only tail, even UTF-16LE byte count.\nDoD2: every PowerShell assertion decodes first (13 'PowerShell ...' tests and 2 protected-marker tests via decodedPowerShellCommand; bashWrap, accounts, VM-seat, space/tilde, J1-J3 and the AccountPresentationTest VM token test via decoders). PINNED_LEGACY's 8 PS rows pin the decoded script and rebuild the full typed bytes; the 8 bash rows are unchanged.\nDoD3: gradlew.bat test passes.\n\nAccepted residuals: lines are opaque in terminal/dialog (as VS Code's); lone surrogate becomes U+FFFD; line is about 2.7x the script, far under 32,767 chars.",
+  "requiredCheckAtDone": null
 }
