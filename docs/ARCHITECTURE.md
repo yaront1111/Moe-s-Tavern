@@ -510,7 +510,7 @@ and `verified-local` stays refused until certification and the client gates pass
   the WSL gateway, or an explicit bind address). Any other Host, every DNS name included, gets 403 with no
   body fields, so a page that points a name at the daemon cannot read it (`server/healthHost.ts`). WebSocket
   upgrades rely on the Origin rule instead. Clients that reach `/health` (`MOE_DAEMON_HOST`, curl) must use an
-  IP literal or `localhost`.
+  IP literal or `localhost`. With `MOE_SPAWN_PROOF_KEY` set by the IDE for a protected spawn, `GET /health?challenge=<64 lowercase hex>` also returns `spawnProof`, the HMAC-SHA256 of the ASCII challenge under that key (never the key itself); any other query returns the plain body.
 
 ---
 

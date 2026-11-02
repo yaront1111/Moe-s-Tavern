@@ -14,6 +14,7 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_DEFAULT_PORT` | WebSocket/HTTP server port (auto-scans upward if taken) | `9876` | `9900` |
 | `MOE_PORT_RANGE` | How many ports to scan past the default | `50` | `100` |
 | `MOE_BIND_HOST` | Bind address or `wsl`: loopback plus the non-internal IPv4 addresses of each `vEthernet (WSL...)` adapter, on one port. Recorded as `bindHost` in daemon.json for values other than `127.0.0.1`, including the literal `wsl`. | `127.0.0.1` | `wsl` |
+| `MOE_SPAWN_PROOF_KEY` | Set by the IDE (VS Code) for a protected-profile spawn, never by hand; exactly 64 hex characters. `_run` keeps the key in memory and removes it from its own environment; `/health?challenge=<64 lowercase hex>` answers with `spawnProof`, its HMAC-SHA256 over the ASCII challenge, never the key. | unset | — |
 | `MOE_SHUTDOWN_TIMEOUT_MS` | Grace period for clean shutdown | `10000` | `5000` |
 | `LOG_LEVEL` | Logging verbosity | `info` | `debug`, `warn`, `error` |
 | `LOG_MAX_SIZE_MB` | Max activity.log size before rotation | `10` | `5` |
