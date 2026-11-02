@@ -895,8 +895,10 @@ model makes after the switch (a claim, another `chat_wait`) is refused, and its 
 
 **Fix:** none needed. To keep a TUI on one account until you exit it, set `MOE_DISABLE_ACCOUNT_SWITCH_MOD=1` for that
 seat; it then moves at its next launch, as before. A `--no-loop`/`-NoLoop` or one-shot (`--print`) seat never loads
-the mod. If a seat leaves the toast `Type /exit and Moe relaunches it.` and keeps running, the claude build could not
-run `/exit` from the mod. Exit it by hand.
+the mod. If `/exit` has not ended the session 60 s later (claude opens a `Background work is running` dialog over
+running background work), the mod ends its own CLI; the session-ended line then shows `CLI exit=143` on Linux and
+macOS. A seat left with the toast `Type /exit and Moe relaunches it.` means claude refused the mod's `/exit` (a person
+pressed Esc) or the termination failed. Exit it by hand.
 
 ### An interactive seat will not launch: `MOE_ACCOUNT_UNTRUSTED`
 

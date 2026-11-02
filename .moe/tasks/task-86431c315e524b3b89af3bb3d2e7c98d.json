@@ -1,0 +1,34 @@
+{
+  "id": "task-86431c315e524b3b89af3bb3d2e7c98d",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: launcher suites beyond postflight/worktree-landing still hit MOE_WRAPPER_IN_WORKTREE when run from a task worktree",
+  "description": "Follow-up to task-3c4be125.\n\nThat row gives postflight.{sh,ps1} and worktree-landing.{sh,ps1} the harness-only seam MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1. Only the exact value '1' skips WT-13's MOE_WRAPPER_IN_WORKTREE refusal.\n\nOther launcher suites also launch their own checkout's scripts/moe-agent.{sh,ps1}. Run from a task worktree W, they are still refused. Candidates found while planning task-3c4be125; verify each one first:\n- agent-git-guard.test.mjs: launches path.join(scripts,'moe-agent.sh'|'.ps1'). Its `clean` env strips MOE_*.\n- protected-agent-command.test.mjs: SH/PS1 = ../moe-agent.*. Its env strips MOE_|CLAUDE|FAKE_.\n- agent-runtime.test.mjs: runs `moe-agent.sh --help`, and the guard fires before --help. It inherits process.env.\n- wave1-pilot.mjs: launches REPO/scripts/moe-agent.*.\n- mention-provenance.{sh,ps1}: WRAPPER=$ROOT_DIR/scripts/moe-agent.sh.\n- worktree-e2e.cjs (WT-19b's file): launches its wrapper argument, and its `inherited` strips MOE_*. WT-19's step-6 full-regression command runs it, so WT-19 cannot verify from W without this fix.\n- Also check usage-attribution.test.mjs and moe-account-lease.test.mjs. Suites that only extract wrapper functions never reach the guard.\n\nImpact: any post-switch row that verifies with these suites cannot pass from its worktree until this lands. That includes WT-19 and the agent-git-guard and protected-runtime bug rows.\n\nAlso in scope:\n- Register MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER in the env-name lists of parity-check.sh and parity-check.ps1.\n- List it as a test seam in docs/CONFIGURATION.md, beside MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF. WT-17 and WT-19 also declare that doc, so coordinate with them.\n\nConstraints:\n- Every guard-refusal case stays seam-free.\n- Split the row if it goes over the file cap.",
+  "definitionOfDone": [
+    "Each candidate suite that launches the full wrapper sets MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER='1' for the wrapper copies it launches. Every candidate that does not launch it is named in the summary with the reason.",
+    "Each changed suite passes when run from a copy of scripts/ at <scratch git repo>/.worktrees/task-x/, plus whatever other inputs that suite reads. The same copy without this change fails with [ERROR] MOE_WRAPPER_IN_WORKTREE:. The summary records the exact commands.",
+    "Every case that tests the guard's refusal still launches without the seam and still sees the refusal.",
+    "parity-check.sh and parity-check.ps1 list the env name, and bash scripts/tests/parity-check.sh passes.",
+    "git grep finds the env name only in scripts/moe-agent.{sh,ps1}, scripts/tests/** and docs/CONFIGURATION.md."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3c4be1254a4b43d0b5e72e0fd8cd0604",
+    "task-48aafb880ede4b22a3e26115c07f8470"
+  ],
+  "priority": "HIGH",
+  "order": 39,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T15:46:26.699Z",
+  "updatedAt": "2026-11-02T15:46:26.699Z"
+}

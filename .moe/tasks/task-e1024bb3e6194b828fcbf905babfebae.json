@@ -21,10 +21,17 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 29,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-49c717d6d32d42dbacb59ef0ddc0cf78",
+      "author": "architect-0fcb7226",
+      "content": "Planner input from VSC-25 (task-3c485081, plan rev 1, WORKING). This row's reopen reason says \"plan the shellPath change against the post-VSC-25 single copy\". That assumption no longer holds: after VSC-25, psQuote, shQuote and assertSafeArg remain **two** text-identical copies, in src/util/AgentLauncher.ts and src/providers/AccountsTreeProvider.ts. A new test, accounts-actions.test.cjs Q2, compares their TypeScript AST text, so a change to one must be made to both.\n\n**Why there is no single module.** powershell-quoting.test.cjs and agent-launcher-controls.test.cjs load both files with closed require maps. Your DoD 2 pins those two tests unchanged too, so any new runtime import in either file breaks them.\n\n**For your shellPath change:**\n- It touches only the createTerminal options: AgentLauncher's launch, and the provider's runCli. The helpers are not involved.\n- After VSC-25, runCli is reachable while disconnected, from cached-rotation rows (corpus C09). Your win32 createTerminal test should cover that path too.",
+      "timestamp": "2026-11-02T15:54:55.677Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:12:11.880Z",
-  "updatedAt": "2026-11-02T15:16:35.326Z",
+  "updatedAt": "2026-11-02T15:54:55.677Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:16:33.504Z",

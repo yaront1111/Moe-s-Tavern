@@ -18,19 +18,44 @@ const TURN = { answer: 'ok', durationMs: 1, isAborted: false, reason: 'answer' }
 // Stands for core and the moe daemon: answers each moe tool with its reply as
 // JSON text (as the MCP adapter sends it), a string reply as a tool error, and
 // records what reached the daemon and what the mod asked of the engine. A call
-// on $ (turn.abort, ui.toast, session.usage) is answered with { value }.
+// on $ (turn.abort, ui.toast, session.usage, session.cwd, process.run) is
+// answered with { value }.
 const usage = (...percents: number[]): SessionUsage => ({
   startedAt: 0, context: { window: 200_000 },
   rateLimits: percents.map((percentUsed, i) => ({ kind: i === 0 ? 'five_hour' : 'spend_limit', percentUsed })),
 })
 
+/** The mod's child that names its own CLI: it prints its parent's PID, 4242 here. */
+const PID = ['sh', '-c', 'echo "$PPID"']
+const KILL = ['sh', '-c', 'kill -TERM "$1"', 'sh', '4242']
+
+type World = {
+  surfaces?: () => readonly RenderSurface[]
+  exitFails?: boolean
+  /**
+   * /exit stays open until release(): claude's 'Background work is running'
+   * exit dialog, which waits for a person, with the usage-limit auto-continue
+   * armed behind it (11-02).
+   */
+  exitHangs?: boolean
+  cwd?: string
+  pidExit?: number
+  pidStdout?: string
+  killExit?: number
+  /** That child cannot start: process.run throws. */
+  runThrows?: 'pid' | 'kill'
+}
+
 function engine(
   on: On, replies: Record<string, unknown> = {}, readUsage: () => SessionUsage | Promise<SessionUsage> = usage,
-  world: { surfaces?: () => readonly RenderSurface[]; exitFails?: boolean } = {},
+  world: World = {},
 ) {
+  const held: (() => void)[] = []
   const seen = {
     calls: [] as Record<string, unknown>[], commands: [] as string[], toasts: [] as string[], aborted: [] as string[],
-    completions: 0, usageReads: 0, stopFailures: 0, timers: 0,
+    processes: [] as string[][], completions: 0, usageReads: 0, stopFailures: 0, timers: 0,
+    /** Answers every /exit still held open. */
+    release: () => { for (const answer of held.splice(0)) answer() },
   }
   on('tool.call', ($, e) => {
     seen.calls.push({ ...e })
@@ -46,8 +71,19 @@ function engine(
   on('command.run', ($, e) => {
     seen.commands.push(e.command)
     if (world.exitFails) throw new Error('no /exit here')
+    if (world.exitHangs) return new Promise(resolve => { held.push(() => resolve({})) })
     return {}
   })
+  on('process.run', ($, e) => {
+    seen.processes.push([...e.argv])
+    const pid = e.argv.join('\n') === PID.join('\n')
+    if (world.runThrows === (pid ? 'pid' : 'kill')) throw new Error(`cannot start ${e.argv[0]}`)
+    return { value: {
+      exitCode: (pid ? world.pidExit : world.killExit) ?? 0, stdout: pid ? world.pidStdout ?? '4242\n' : '',
+      stderr: '', isStdoutTruncated: false, isStderrTruncated: false,
+    } }
+  })
+  on('session.cwd', () => ({ value: world.cwd ?? '/proj' }))
   on('session.surfaces', () => ({ value: (world.surfaces ?? (() => ['terminal']))() }))
   on('ui.toast', ($, e) => { seen.toasts.push(e.text); return { value: undefined } })
   on('classic.StopFailure', () => { seen.stopFailures++; return {} })
@@ -594,3 +630,213 @@ test('an interrupted turn keeps a taskless session; the next finished turn ends 
   await clock.advance(EXIT_DELAY_MS)
   expect(seen.commands).toEqual(['exit'])
 })
+
+// claude's /exit opens 'Background work is running' (no timeout) over running
+// background work, so an /exit can leave the CLI up. 60 s on, with no main turn
+// running, the mod ends its own CLI. The delay is FORCE_EXIT_DELAY_MS, spelled
+// out so this file still links against a register.ts without it.
+const FORCE_MS = 60_000
+const LIMIT = 'ACCOUNT-SWITCH: this Claude account reached its usage limit. End your turn now: Moe restarts this seat on the next account.'
+const KINDS = ['switch', 'ended', 'idle'] as const
+type Kind = (typeof KINDS)[number]
+const ENDING_TOAST: Record<Kind, string> = {
+  switch: 'Moe: this Claude account reached its usage limit. This session ends in 10 s and restarts on the next account.',
+  ended: ENDED_TOAST,
+  idle: IDLE_TOAST,
+}
+const MANUAL: Record<Kind, string> = {
+  switch: 'Moe: this seat must restart on the next Claude account. Type /exit and Moe relaunches it.',
+  ended: 'Moe: this task session is over. Type /exit and Moe relaunches it.',
+  idle: 'Moe: this seat holds no task. Type /exit and Moe claims the next one.',
+}
+/** What ran besides the PID read: the terminations. */
+const kills = (seen: { processes: string[][] }) => seen.processes.filter(argv => argv.join('\n') !== PID.join('\n'))
+
+/** A seat whose main turn t1 has just ended with the session's ending decided: a hard limit, END_SESSION or idle. */
+async function ending($: Engine, on: On, kind: Kind, world: World = {}) {
+  mock.env(on, kind === 'switch' ? SEAT : kind === 'ended' ? WORKER : LOOP_SEAT)
+  if (kind === 'idle') record(on, 'architect-1', null)
+  const seen = engine(on, { report_blocked: handoff() }, () => usage(kind === 'switch' ? 100 : 0), world)
+  const clock = mock.clock(on)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  if (kind === 'ended') await call($, 'report_blocked', { taskId: 'task-1' })
+  await $.turn.complete({ ...TURN, turnId: 't1' })
+  expect(seen.toasts).toEqual([ENDING_TOAST[kind]])
+  return { seen, clock }
+}
+
+test('a hard limit whose /exit never returns has its own CLI terminated once, 60 s after /exit', {
+  plugins: [{ name: 'swallow-stop-failure', tier: 'prepend', register(on) {
+    on('classic.StopFailure', () => ({}))
+  } }],
+}, async ($, on) => {
+  mock.env(on, SEAT)
+  const seen = engine(on, {}, () => usage(100), { exitHangs: true })
+  const clock = mock.clock(on)
+  await $.turn.start({ text: 'plan', turnId: 't1' })
+  await $.classic.StopFailure({ error: 'rate_limit' })
+  await $.turn.complete({ ...TURN, turnId: 't1', reason: 'error' })
+  await clock.advance(EXIT_DELAY_MS)
+  expect(seen.commands).toEqual(['exit'])
+  expect(seen.processes).toEqual([PID])
+  await clock.advance(FORCE_MS - 1)
+  expect(seen.processes).toEqual([PID])
+  await clock.advance(1)
+  expect(seen.processes).toEqual([PID, KILL])
+  expect(seen.toasts).toEqual([ENDING_TOAST.switch])
+  await clock.advance(2 * FORCE_MS)
+  expect(seen.processes).toEqual([PID, KILL])
+  expect(seen.commands).toEqual(['exit'])
+  // This CLI outlived its SIGTERM: the person is asked for /exit, once.
+  expect(seen.toasts).toEqual([ENDING_TOAST.switch, MANUAL.switch])
+  seen.release()
+  await clock.settle()
+})
+
+for (const kind of KINDS) {
+  test(`${kind}: an /exit that never returns is followed by one termination 60 s later`, async ($, on) => {
+    const { seen, clock } = await ending($, on, kind, { exitHangs: true })
+    await clock.advance(EXIT_DELAY_MS + FORCE_MS - 1)
+    expect(seen.commands).toEqual(['exit'])
+    expect(seen.processes).toEqual([PID])
+    await clock.advance(1)
+    expect(seen.processes).toEqual([PID, KILL])
+    expect(seen.toasts).toEqual([ENDING_TOAST[kind]])
+    seen.release()
+    await clock.settle()
+  })
+
+  test(`${kind}: a refused /exit asks for one by hand and terminates nothing`, async ($, on) => {
+    const { seen, clock } = await ending($, on, kind, { exitFails: true })
+    await clock.advance(EXIT_DELAY_MS + 2 * FORCE_MS)
+    expect(seen.commands).toEqual(['exit'])
+    expect(kills(seen)).toEqual([])
+    expect(seen.toasts).toEqual([ENDING_TOAST[kind], MANUAL[kind]])
+  })
+}
+
+for (const cwd of ['C:\\proj', '\\\\wsl.localhost\\d\\proj']) {
+  test(`a Windows session in ${cwd} ends its CLI with a quote-free PowerShell script`, async ($, on) => {
+    const { seen, clock } = await ending($, on, 'switch', { exitHangs: true, cwd })
+    await clock.advance(EXIT_DELAY_MS)
+    expect(seen.commands).toEqual(['exit'])
+    expect(seen.processes).toEqual([]) // the script names the CLI itself, at the fallback
+    await clock.advance(FORCE_MS)
+    expect(seen.processes).toHaveLength(1)
+    const argv = seen.processes[0] ?? []
+    expect(argv.slice(0, 4)).toEqual(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command'])
+    expect(argv).toHaveLength(5)
+    const script = argv[4] ?? ''
+    expect(script).not.toContain('"')
+    for (const part of ['$PID', 'ParentProcessId', 'CreationDate', "'conhost.exe'", 'Stop-Process -Id $cli.ProcessId -Force']) {
+      expect(script).toContain(part)
+    }
+    await clock.advance(FORCE_MS - 1)
+    expect(seen.processes).toHaveLength(1)
+    seen.release()
+    await clock.settle()
+  })
+}
+
+test('a main turn running at the check delays the termination to the first check after it ends', async ($, on) => {
+  const { seen, clock } = await ending($, on, 'switch', { exitHangs: true })
+  await clock.advance(EXIT_DELAY_MS)
+  await $.turn.start({ text: 'a background task finished', turnId: 't2' })
+  await clock.advance(2 * FORCE_MS) // checks at 60 s and 120 s find t2 running
+  expect(kills(seen)).toEqual([])
+  await $.turn.complete({ ...TURN, turnId: 't2' })
+  expect(seen.toasts).toEqual([ENDING_TOAST.switch]) // the attempt in flight goes on
+  await clock.advance(FORCE_MS - 1)
+  expect(kills(seen)).toEqual([])
+  await clock.advance(1)
+  expect(kills(seen)).toEqual([KILL])
+  expect(seen.commands).toEqual(['exit'])
+  seen.release()
+  await clock.settle()
+})
+
+const FAILURES: Record<string, World> = {
+  'a PID read that exits 1': { pidExit: 1 },
+  'a PID read that names pid 1': { pidStdout: '1\n' },
+  'a PID read that names no number': { pidStdout: 'x\n' },
+  'a PID read that cannot start': { runThrows: 'pid' },
+  'a termination that exits 1': { killExit: 1 },
+  'a termination that cannot start': { runThrows: 'kill' },
+  'a CLI that outlives its termination': {},
+}
+for (const [name, world] of Object.entries(FAILURES)) {
+  const named = world.pidExit === undefined && world.pidStdout === undefined && world.runThrows !== 'pid'
+  const delivered = named && world.killExit === undefined && world.runThrows === undefined
+  for (const kind of KINDS) {
+    test(`${kind}: ${name} leaves the manual /exit, once`, async ($, on) => {
+      const { seen, clock } = await ending($, on, kind, { ...world, exitHangs: true })
+      await clock.advance(EXIT_DELAY_MS + FORCE_MS - 1)
+      expect(seen.toasts).toEqual([ENDING_TOAST[kind]]) // /exit may still end it
+      await clock.advance(1)
+      // A delivered termination gets a full delay to end the CLI; a failed one asks at once.
+      expect(seen.toasts).toEqual(delivered ? [ENDING_TOAST[kind]] : [ENDING_TOAST[kind], MANUAL[kind]])
+      await clock.advance(3 * FORCE_MS)
+      expect(seen.commands).toEqual(['exit'])
+      expect(kills(seen)).toEqual(named ? [KILL] : [])
+      expect(seen.toasts).toEqual([ENDING_TOAST[kind], MANUAL[kind]])
+      seen.release()
+      await clock.settle()
+    })
+  }
+}
+
+for (const [name, world] of [
+  ['a refused /exit', { exitFails: true }],
+  ['a failed termination', { killExit: 1, exitHangs: true }],
+] as const) {
+  test(`after ${name} the next main turn's end, aborted or not, tries again`, async ($, on) => {
+    const { seen, clock } = await ending($, on, 'switch', world)
+    await clock.advance(EXIT_DELAY_MS + FORCE_MS)
+    expect(seen.toasts).toEqual([ENDING_TOAST.switch, MANUAL.switch])
+    await $.turn.start({ text: 'usage limit reset, continue', turnId: 't2' })
+    expect((await call($, 'claim_next_task')).deny).toBe(LIMIT)
+    expect(seen.aborted).toEqual(['t2'])
+    await $.turn.complete({ ...TURN, turnId: 't2', isAborted: true, reason: 'aborted' })
+    expect(seen.toasts).toEqual([ENDING_TOAST.switch, MANUAL.switch, ENDING_TOAST.switch])
+    await clock.advance(EXIT_DELAY_MS - 1)
+    expect(seen.commands).toEqual(['exit'])
+    await clock.advance(1)
+    expect(seen.commands).toEqual(['exit', 'exit'])
+    seen.release()
+    await clock.settle()
+  })
+}
+
+for (const [name, answerAt] of [['detaches at once (a background session)', 0], ['is answered Stay after 30 s', 30_000]] as const) {
+  test(`an /exit that ${name} while the CLI runs on is still ended at the fallback`, async ($, on) => {
+    const { seen, clock } = await ending($, on, 'switch', { exitHangs: answerAt > 0 })
+    await clock.advance(EXIT_DELAY_MS + answerAt)
+    expect(seen.commands).toEqual(['exit'])
+    seen.release()
+    await clock.advance(FORCE_MS - answerAt - 1)
+    expect(kills(seen)).toEqual([])
+    await clock.advance(1)
+    expect(kills(seen)).toEqual([KILL])
+  })
+}
+
+const NO_ENDING: Record<string, [env: Record<string, string>, percents: number[], agentId?: string]> = {
+  'a subagent turn at 100%': [SEAT, [100], 'agent-1'],
+  'a session without MOE_WORKER_ID at 100%': [{ MOE_ACCOUNT_ID: 'acct-1' }, [100]],
+  'a session without MOE_ACCOUNT_ID at 100%': [{ MOE_WORKER_ID: 'governor-1' }, [100]],
+  'a turn with every window below 100%': [SEAT, [99.9, 40]],
+}
+for (const [name, [env, percents, agentId]] of Object.entries(NO_ENDING)) {
+  test(`${name} gets no exit, PID read or termination`, async ($, on) => {
+    mock.env(on, env)
+    const seen = engine(on, {}, () => usage(...percents))
+    const clock = mock.clock(on)
+    await $.turn.start({ text: 'work', turnId: 't1' })
+    await $.turn.complete({ ...TURN, turnId: agentId ? 'sub-1' : 't1', ...(agentId ? { agentId } : {}) })
+    await clock.advance(2 * (EXIT_DELAY_MS + FORCE_MS))
+    expect(seen.commands).toEqual([])
+    expect(seen.processes).toEqual([])
+    expect(seen.toasts).toEqual([])
+    expect(seen.timers).toBe(0)
+  })
+}
