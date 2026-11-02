@@ -11,6 +11,7 @@ import com.moe.util.TerminalAgentLauncher.AgentCommandChoice.Run
 import com.moe.util.TerminalAgentLauncher.ScriptKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -613,6 +614,83 @@ class TerminalAgentLauncherTest {
         assertEquals(Run("gemini"), TerminalAgentLauncher.agentCommandFor(LEGACY, "gemini", null))
     }
 
+    @Test
+    fun `every agent route refuses a C0 control or DEL in each typed value`() {
+        for (code in CONTROL_CODES) {
+            // Mid-value: toWslPath's `$` would drop a trailing line terminator before the WSL check.
+            val bad = "p${code.toChar()}q"
+            for ((kind, wsl) in AGENT_ROUTES) {
+                val carriers = mapOf<String, () -> String>(
+                    "project path" to { agentLine(kind, wsl, basePath = "D:/$bad") },
+                    "script path" to { agentLine(kind, wsl, scriptPath = "D:/$bad/moe-agent") },
+                    "command" to { agentLine(kind, wsl, agentCommand = "claude$bad") },
+                    "team name" to { agentLine(kind, wsl, teamName = "a$bad") },
+                    "worker id" to { agentLine(kind, wsl, workerId = "worker-$bad") },
+                    "env MOE_DAEMON_PATH" to { agentLine(kind, wsl, env = mapOf("MOE_DAEMON_PATH" to "C:/$bad")) }
+                )
+                for ((label, build) in carriers) {
+                    val ex = assertThrows("0x%02x $kind wsl=$wsl $label".format(code), IllegalArgumentException::class.java) { build() }
+                    assertEquals("Invalid $label: contains control characters", ex.message)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `every accounts shell refuses a C0 control or DEL in each typed word`() {
+        for (code in CONTROL_CODES) {
+            val bad = "p${code.toChar()}q"
+            for (shell in AccountsShell.values()) {
+                val carriers = listOf<() -> String>(
+                    { accountsLine(shell, node = "C:/$bad/node") },
+                    { accountsLine(shell, script = "C:/$bad/cli.js") },
+                    { accountsLine(shell, registryFile = "C:/$bad/claude-accounts.json") },
+                    { accountsLine(shell, args = listOf("login", "acct-$bad")) }
+                )
+                carriers.forEachIndexed { index, build ->
+                    val ex = assertThrows("0x%02x $shell carrier $index".format(code), IllegalArgumentException::class.java) { build() }
+                    assertEquals("Invalid accounts command word: contains control characters", ex.message)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `space, tilde and non-ASCII still build on every agent route and accounts shell`() {
+        val ok = "a ~\u00e9"
+        for ((kind, wsl) in AGENT_ROUTES) {
+            val line = agentLine(
+                kind, wsl, basePath = "D:/$ok", scriptPath = "D:/$ok/moe-agent", agentCommand = "claude $ok",
+                teamName = ok, workerId = "worker-$ok", env = mapOf("MOE_DAEMON_PATH" to "C:/$ok")
+            )
+            val team = if (kind == ScriptKind.POWERSHELL) "-Team '$ok'" else "--team '$ok'"
+            assertTrue("$kind wsl=$wsl: $line", line.contains(team))
+        }
+        for (shell in AccountsShell.values()) {
+            val line = accountsLine(shell, node = "C:/$ok/node", script = "C:/$ok/cli.js", registryFile = "C:/$ok/a.json", args = listOf("login", ok))
+            assertTrue("$shell: $line", line.contains("'login' '$ok'"))
+        }
+    }
+
+    private fun agentLine(
+        kind: ScriptKind,
+        wsl: Boolean,
+        basePath: String = "D:/projexts/app",
+        scriptPath: String = "D:/moe/moe-agent",
+        agentCommand: String = "claude",
+        teamName: String? = "team",
+        workerId: String = "worker-0000abcd",
+        env: Map<String, String> = mapOf("MOE_DAEMON_PATH" to "C:/moe/daemon/index.js")
+    ): String = TerminalAgentLauncher.buildCommandForTest(basePath, "worker", scriptPath, kind, env, agentCommand, teamName, wsl, workerId)
+
+    private fun accountsLine(
+        shell: AccountsShell,
+        node: String = "C:/node/node.exe",
+        script: String = "C:/moe/cli.js",
+        registryFile: String = "C:/moe/claude-accounts.json",
+        args: List<String> = listOf("check")
+    ): String = TerminalAgentLauncher.buildAccountsCommand(AccountCli(node, script), registryFile, args, shell)
+
     private fun pinnedCommand(role: String, kind: ScriptKind, wsl: Boolean): String =
         TerminalAgentLauncher.buildCommandForTest(
             "D:\\projexts\\app", role, PINNED_SCRIPT, kind, PINNED_ENV, "claude", null, wsl, "$role-0000abcd"
@@ -633,6 +711,8 @@ class TerminalAgentLauncherTest {
         val PINNED_ENV = linkedMapOf("MOE_DAEMON_PATH" to "C:\\moe\\daemon\\index.js", "MOE_PROXY_PATH" to "C:\\moe\\proxy\\index.js")
         val POWERSHELL = ScriptKind.POWERSHELL
         val BASH = ScriptKind.BASH
+        val CONTROL_CODES = listOf(0x00, 0x01, 0x09, 0x0A, 0x0D, 0x15, 0x17, 0x1B, 0x1F, 0x7F)
+        val AGENT_ROUTES = listOf(POWERSHELL to false, BASH to false, BASH to true, POWERSHELL to true)
 
         // Captured from today's buildCommand before this change (agentCommand claude, no team, workerId <role>-0000abcd).
         val PINNED_LEGACY = listOf(

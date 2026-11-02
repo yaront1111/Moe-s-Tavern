@@ -311,9 +311,15 @@ class AccountsPanel(private val project: Project) : JBPanel<AccountsPanel>(Borde
         val current = rotation ?: return
         val cli = current.cli ?: return
         val tab = MoeBundle.message(AccountKeys.TERMINAL_TAB)
-        if (TerminalAgentLauncher.runAccountsCommand(project, cli, current.registryFile, args, tab)) return
-        // No terminal tab: give the person the exact line to run where their agents run.
-        val line = TerminalAgentLauncher.accountsCommandLine(project, cli, current.registryFile, args)
+        val line = try {
+            if (TerminalAgentLauncher.runAccountsCommand(project, cli, current.registryFile, args, tab)) return
+            // No terminal tab: give the person the exact line to run where their agents run.
+            TerminalAgentLauncher.accountsCommandLine(project, cli, current.registryFile, args)
+        } catch (ex: IllegalArgumentException) {
+            // A word with a control character: nothing is typed or copied.
+            Messages.showErrorDialog(project, "Account action failed: ${ex.message}", "Moe")
+            return
+        }
         CopyPasteManager.getInstance().setContents(StringSelection(line))
         Messages.showWarningDialog(
             project,

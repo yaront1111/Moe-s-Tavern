@@ -207,16 +207,39 @@ function psQuote(value: string): string {
     return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-// Reject characters that would corrupt the command regardless of quoting:
-// CR/LF break the terminal line and the -EncodedCommand framing, and a NUL
-// byte is never legitimate in a path or team name. Names flow in from
-// .moe/project.json and the workspace path, so they are not fully trusted.
+// Reject every C0 control and DEL, whatever the quoting: sendText types each
+// character into the shell's line editor, where CR/LF end the line and Ctrl-U
+// or Ctrl-W erase the quoting typed before them, so the rest would run. The
+// -EncodedCommand base64 is typed too, so the decoded words are checked before
+// encoding. Names flow in from .moe/project.json and the workspace path, so
+// they are not fully trusted. (Not isControl above: it also masks C1 for display.)
 function assertSafeArg(label: string, value: string): void {
     for (let i = 0; i < value.length; i++) {
         const code = value.charCodeAt(i);
-        if (code === 13 || code === 10 || code === 0) {
+        if (code < 0x20 || code === 0x7f) {
             throw new Error(`Invalid ${label}: contains control characters`);
         }
+    }
+}
+
+// Every free-form value either builder types. (Role is restricted by the AgentRole type.)
+function assertSafeLaunchArgs(
+    scriptPath: string,
+    workspacePath: string,
+    workerId: string,
+    command: string,
+    envOverrides?: Record<string, string>,
+    teamName?: string
+): void {
+    assertSafeArg('script path', scriptPath);
+    assertSafeArg('workspace path', workspacePath);
+    assertSafeArg('worker id', workerId);
+    assertSafeArg('command', command);
+    if (teamName) {
+        assertSafeArg('team name', teamName);
+    }
+    for (const [key, value] of Object.entries(envOverrides ?? {})) {
+        assertSafeArg(`env ${key}`, value);
     }
 }
 
@@ -234,19 +257,11 @@ function buildPowerShellCommand(
     envOverrides?: Record<string, string>,
     teamName?: string
 ): string {
-    // Validate the untrusted, free-form values before they are baked into a
-    // command line. (Role is restricted by the AgentRole type.)
-    assertSafeArg('workspace path', workspacePath);
-    assertSafeArg('worker id', workerId);
-    assertSafeArg('command', command);
-    if (teamName) {
-        assertSafeArg('team name', teamName);
-    }
+    assertSafeLaunchArgs(scriptPath, workspacePath, workerId, command, envOverrides, teamName);
 
     let prefix = '';
     if (envOverrides) {
         for (const [key, value] of Object.entries(envOverrides)) {
-            assertSafeArg(`env ${key}`, value);
             prefix += `$env:${key}=${psQuote(value)}; `;
         }
     }
@@ -274,6 +289,8 @@ function buildBashCommand(
     envOverrides?: Record<string, string>,
     teamName?: string
 ): string {
+    assertSafeLaunchArgs(scriptPath, workspacePath, workerId, command, envOverrides, teamName);
+
     let prefix = '';
     if (envOverrides) {
         for (const [key, value] of Object.entries(envOverrides)) {

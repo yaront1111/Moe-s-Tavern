@@ -335,14 +335,18 @@ object TerminalAgentLauncher {
     private fun launchRole(project: Project, ctx: AgentContext, role: String, codexExec: Boolean = false, decision: VerifiedLocalLaunch.Decision = VerifiedLocalLaunch.Decision.Launch) {
         val tabName = roleTabNames[role] ?: "Moe $role"
         try {
-            val widget = openSeat(decision, ctx.manager, ctx.basePath, tabName) { Messages.showErrorDialog(project, it, "Moe") }
-            // A refusal has shown its one dialog: no command is built and no terminal exists.
-            if (decision is VerifiedLocalLaunch.Decision.Refused) return
-            if (widget != null) {
+            // Built before any tab opens, so a value the builder refuses lands in the catch below with no terminal.
+            val launch = if (decision is VerifiedLocalLaunch.Decision.Refused) null else {
                 val defaultTeamName = project.name.takeIf { it.isNotBlank() } ?: "Moe Team"
                 val teamName = if (isTeamModeEnabled(project)) defaultTeamName else null
                 val workerId = newWorkerId(role)
-                val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName, codexExec, ctx.wslAgents, workerId)
+                workerId to buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName, codexExec, ctx.wslAgents, workerId)
+            }
+            val widget = openSeat(decision, ctx.manager, ctx.basePath, tabName) { Messages.showErrorDialog(project, it, "Moe") }
+            // A refusal has shown its one dialog: no command is built and no terminal exists.
+            if (launch == null) return
+            if (widget != null) {
+                val (workerId, command) = launch
                 if (sendCommand(widget, command)) trackSeat(project, widget, workerId)
             } else {
                 LOG.warn("Failed to create terminal widget for tab \"$tabName\"")
@@ -484,8 +488,9 @@ object TerminalAgentLauncher {
      * WSL the daemon's Windows paths become /mnt paths for WSL's own node, so
      * claude signs in where WSL agents run it.
      */
-    internal fun buildAccountsCommand(cli: AccountCli, registryFile: String, args: List<String>, shell: AccountsShell): String =
-        when (shell) {
+    internal fun buildAccountsCommand(cli: AccountCli, registryFile: String, args: List<String>, shell: AccountsShell): String {
+        (listOf(cli.node, cli.script, registryFile) + args).forEach { requireSafeArg("accounts command word", it) }
+        return when (shell) {
             AccountsShell.POWERSHELL -> powerShellLine(
                 "& " + (listOf(cli.node, cli.script, "--accounts-file", registryFile) + args).joinToString(" ") { psQuote(it) }
             )
@@ -494,6 +499,7 @@ object TerminalAgentLauncher {
             AccountsShell.BASH ->
                 (listOf(cli.node, cli.script, "--accounts-file", registryFile) + args).joinToString(" ") { shQuote(it) }
         }
+    }
 
     /** The accounts CLI line for this project's agent shell, for a person to run when no terminal tab can. */
     fun accountsCommandLine(project: Project, cli: AccountCli, registryFile: String, args: List<String>): String =
@@ -502,13 +508,15 @@ object TerminalAgentLauncher {
     /**
      * Runs the daemon's `accounts` CLI in a new terminal tab (sign in, check, sign
      * out): claude's own sign-in prompts need a person, and the daemon never runs
-     * claude. False when no terminal tab could run it.
+     * claude. False when no terminal tab could run it. Throws IllegalArgumentException,
+     * before any tab opens, for a word holding a control character.
      */
     fun runAccountsCommand(project: Project, cli: AccountCli, registryFile: String, args: List<String>, tabName: String): Boolean {
+        val line = accountsCommandLine(project, cli, registryFile, args)
         val manager = resolveTerminalManager(project) ?: return false
         val workingDir = project.basePath ?: System.getProperty("user.home")
         val widget = runCatching { createTerminalWidget(manager, workingDir, tabName) }.getOrNull() ?: return false
-        return sendCommand(widget, accountsCommandLine(project, cli, registryFile, args))
+        return sendCommand(widget, line)
     }
 
     private fun buildCommand(
@@ -611,6 +619,7 @@ object TerminalAgentLauncher {
         codexExec: Boolean = false,
         workerId: String = newWorkerId(role)
     ): String {
+        requireSafeLaunchArgs(script.absolutePath, basePath, workerId, agentCommand, teamName, envOverrides)
         val projectArg = psQuote(basePath)
         val scriptArg = psQuote(script.absolutePath)
         val commandArg = psQuote(agentCommand)
@@ -706,6 +715,7 @@ object TerminalAgentLauncher {
         codexExec: Boolean = false,
         workerId: String = newWorkerId(role)
     ): String {
+        requireSafeLaunchArgs(scriptPath, basePath, workerId, agentCommand, teamName, envOverrides)
         val projectArg = shQuote(basePath)
         val scriptArg = shQuote(scriptPath)
         val commandArg = shQuote(agentCommand)
@@ -732,6 +742,21 @@ object TerminalAgentLauncher {
         } else ""
         val interactiveArg = if (shouldLaunchClaudeInteractive(role, agentCommand, codexExec)) " --interactive" else ""
         return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg$teamArg$execArg$interactiveArg"
+    }
+
+    // Every word is typed into the shell's line editor: CR/LF end the line, and Ctrl-U or Ctrl-W erase the quoting before them.
+    private fun requireSafeArg(label: String, value: String) =
+        require(value.none { it < ' ' || it == '\u007f' }) { "Invalid $label: contains control characters" }
+
+    private fun requireSafeLaunchArgs(
+        scriptPath: String, basePath: String, workerId: String, agentCommand: String, teamName: String?, envOverrides: Map<String, String>
+    ) {
+        requireSafeArg("script path", scriptPath)
+        requireSafeArg("project path", basePath)
+        requireSafeArg("worker id", workerId)
+        requireSafeArg("command", agentCommand)
+        if (teamName != null) requireSafeArg("team name", teamName)
+        envOverrides.forEach { (key, value) -> requireSafeArg("env $key", value) }
     }
 
     private fun psQuote(value: String): String {
