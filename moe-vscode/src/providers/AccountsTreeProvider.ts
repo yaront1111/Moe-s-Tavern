@@ -17,21 +17,7 @@ const text = (key: string, ...args: (string | number)[]): string => resolveAccou
 const column = (name: (typeof COLUMNS)[number]): string => text(`moe.accounts.column.${name}`);
 const localClock = (): Clock => ({ now: () => Date.now(), zone: () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' });
 
-/** MoeBundle.properties English for the account actions; tests/accounts-actions.test.cjs holds it equal to the bundle. */
-export const ACCOUNT_ACTION_TEXT: Readonly<Record<string, string>> = Object.freeze({
-    'moe.accounts.add.title': 'Add Claude Account',
-    'moe.accounts.add.prompt': 'Name for the new account (optional, up to 64 characters). A terminal tab opens next so you can sign it in with your Claude subscription.',
-    'moe.accounts.rename.title': 'Rename Claude Account',
-    'moe.accounts.rename.prompt': 'New name (up to 64 characters; leave it empty to use the account id):',
-    'moe.accounts.remove.confirm': 'Remove {0} from the list? Remove only keeps its Claude sign-in on this machine and deletes its VM token. Sign out and remove signs it out first, in a terminal tab.',
-    'moe.accounts.remove.signOut': 'Sign out and remove',
-    'moe.accounts.remove.only': 'Remove only',
-    'moe.accounts.terminal.tab': 'Claude accounts',
-    'moe.accounts.terminal.unavailable': 'Moe could not open a terminal tab. The command is on your clipboard; run it in the terminal where your agents run:\n{0}',
-    'moe.accounts.switchAt': 'Switch to the next account at',
-    'moe.accounts.switchAt.unit': '% of any usage window'
-});
-const say = (key: string, ...args: string[]): string => (ACCOUNT_ACTION_TEXT[key] ?? key).replace(/\{(\d+)\}/g, (placeholder, n: string) => args[Number(n)] ?? placeholder);
+// Every dialog text is AccountPresentation.ACCOUNT_TEXT English (MoeBundle.properties), through text() above.
 const NOT_CONNECTED = 'Not connected to Moe daemon — the account change was not sent.';
 const LABEL_HINT = 'Use at most 64 characters and no control characters.';
 const PERCENT_HINT = 'Enter a whole number from 1 to 100.';
@@ -47,22 +33,40 @@ const ROW_TOKENS: readonly [string, (a: AccountActions) => boolean][] = [
     ['canRemove', a => a.removeOnly || a.signOutAndRemove]
 ];
 
-// psQuote, shQuote and assertSafeArg are copied from util/AgentLauncher.ts: the provider loads under closed require maps.
-// assertSafeArg is widened from CR, LF and NUL to every C0 control and DEL, because sendText types each character into the
-// shell's line editor, where Ctrl-U or Ctrl-W would erase the quoting typed before it.
-// psQuote doubles each of ', U+2018, U+2019, U+201A and U+201B (PowerShell's single quotes; EscapeSingleQuotedStringContent).
-const psQuote = (value: string): string => `'${String(value).replace(/['‘’‚‛]/g, '$&$&')}'`;
-const shQuote = (value: string): string => `'${String(value).replace(/'/g, `'\\''`)}'`;
+// psQuote, shQuote and assertSafeArg below are text-identical copies of util/AgentLauncher.ts's helpers, and
+// tests/accounts-actions.test.cjs (Q2) fails on any drift: change a copy, change both. They cannot live in one shared module,
+// because powershell-quoting.test.cjs and agent-launcher-controls.test.cjs load AgentLauncher.ts and this file under closed
+// require maps (vscode and AccountPresentation only), so any new runtime import would throw there.
+
+// Escape for a PowerShell single-quoted string: double each of ', U+2018, U+2019, U+201A and U+201B, which
+// PowerShell all reads as single quotes (CodeGeneration.EscapeSingleQuotedStringContent's rule).
+function psQuote(value: string): string {
+    return `'${String(value).replace(/['‘’‚‛]/g, '$&$&')}'`;
+}
+
+// Reject every C0 control and DEL, whatever the quoting: sendText types each
+// character into the shell's line editor, where CR/LF end the line and Ctrl-U
+// or Ctrl-W erase the quoting typed before them, so the rest would run. The
+// -EncodedCommand base64 is typed too, so the decoded words are checked before
+// encoding. Names flow in from .moe/project.json and the workspace path, so
+// they are not fully trusted. (Not a display mask: C1 controls pass.)
 function assertSafeArg(label: string, value: string): void {
     for (let i = 0; i < value.length; i++) {
         const code = value.charCodeAt(i);
-        if (code < 0x20 || code === 0x7f) { throw new Error(`Invalid ${label}: contains control characters`); }
+        if (code < 0x20 || code === 0x7f) {
+            throw new Error(`Invalid ${label}: contains control characters`);
+        }
     }
+}
+
+// Escape for a Bash single-quoted string: close, insert escaped quote, reopen.
+function shQuote(value: string): string {
+    return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
 /**
  * JetBrains TerminalAgentLauncher.buildAccountsCommand: `<node> <cli.js> --accounts-file <file> <args>`, every word quoted.
- * Windows gets it through PowerShell -EncodedCommand, AgentLauncher's injection-safe form. Throws on CR, LF or NUL in any word.
+ * Windows gets it through PowerShell -EncodedCommand, AgentLauncher's injection-safe form. Throws on a C0 control or DEL in any word.
  */
 export function accountsCommandLine(cli: { node: string; script: string }, registryFile: string, args: string[], windows: boolean): string {
     const words = [cli.node, cli.script, '--accounts-file', registryFile, ...args];
@@ -72,9 +76,10 @@ export function accountsCommandLine(cli: { node: string; script: string }, regis
 }
 
 /**
- * The read-only Claude accounts view (parity with the JetBrains Accounts tab, AccountsPanel.render): one item per
- * AccountPresentation row, the chips line as the view description, the account-file error or missing-CLI note as the
- * view message, and one state item when there is nothing to list. All English comes from AccountPresentation.
+ * The Claude accounts view (parity with the JetBrains Accounts tab, AccountsPanel.render): one item per AccountPresentation
+ * row from the latest rotation, even while disconnected (the CLI actions stay on, the list edits go off), the chips line as
+ * the view description, the account-file error or missing-CLI note as the view message, and one state item when there is
+ * no rotation to list. All English comes from AccountPresentation.
  */
 export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode>, vscode.Disposable {
     private readonly changed = new vscode.EventEmitter<void>();
@@ -93,9 +98,9 @@ export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode
 
     /** What the view shows right now. Total: every input is a state, none throws. */
     parts(): AccountParts {
-        if (this.client.connectionState !== 'connected') { return { items: [{ label: text('moe.accounts.notConnected') }] }; }
+        // The latest rotation lists whatever the connection (the client keeps it across a drop); only the actions differ (C09).
         const rotation = parseAccountRotation(this.client.accountRotation);
-        if (rotation === null) { return { items: [{ label: text(this.client.isStateReady ? 'moe.accounts.unsupported' : 'moe.accounts.notConnected') }] }; }
+        if (rotation === null) { return { items: [{ label: text(this.connected() && this.client.isStateReady ? 'moe.accounts.unsupported' : 'moe.accounts.notConnected') }] }; }
         const now = this.clock.now();
         const zone = this.clock.zone();
         const line = chips(rotation, now, zone).map(resolveAccountText).join(SEPARATOR);
@@ -201,7 +206,7 @@ export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode
     private async add(): Promise<void> {
         await this.guard(async () => {
             if (!this.allowed(null).add) { return; }
-            const label = await vscode.window.showInputBox({ title: say('moe.accounts.add.title'), prompt: say('moe.accounts.add.prompt'), value: '', validateInput: validLabel });
+            const label = await vscode.window.showInputBox({ title: text('moe.accounts.add.title'), prompt: text('moe.accounts.add.prompt'), value: '', validateInput: validLabel });
             if (label === undefined || !isValidLabel(label) || !this.allowed(null).add) { return; }
             this.awaitingAdd = this.sent(this.client.addAccount(label)); // ACCOUNT_ADDED arrives later, from the socket
         });
@@ -216,11 +221,11 @@ export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode
         await this.guard(async () => {
             const account = this.account(node);
             if (account === undefined) { return; }
-            const [signOut, only] = [say('moe.accounts.remove.signOut'), say('moe.accounts.remove.only')];
+            const [signOut, only] = [text('moe.accounts.remove.signOut'), text('moe.accounts.remove.only')];
             const allowed = this.allowed(account.id);
             const choices = [...(allowed.signOutAndRemove ? [signOut] : []), ...(allowed.removeOnly ? [only] : [])];
             if (choices.length === 0) { return; }
-            const choice = await vscode.window.showWarningMessage(say('moe.accounts.remove.confirm', account.label), { modal: true }, ...choices);
+            const choice = await vscode.window.showWarningMessage(text('moe.accounts.remove.confirm', account.label), { modal: true }, ...choices);
             const now = this.allowed(account.id);
             if (choice === only && now.removeOnly) { this.sent(this.client.removeAccount(account.id)); }
             // The CLI signs the account out first and keeps it listed if that fails.
@@ -240,7 +245,7 @@ export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode
         await this.guard(async () => {
             const account = this.account(node);
             if (account === undefined || !this.allowed(account.id).rename) { return; }
-            const label = await vscode.window.showInputBox({ title: say('moe.accounts.rename.title'), prompt: say('moe.accounts.rename.prompt'), value: account.label, validateInput: validLabel });
+            const label = await vscode.window.showInputBox({ title: text('moe.accounts.rename.title'), prompt: text('moe.accounts.rename.prompt'), value: account.label, validateInput: validLabel });
             if (label === undefined || !isValidLabel(label) || label.trim() === account.label || !this.allowed(account.id).rename) { return; }
             this.sent(this.client.renameAccount(account.id, label));
         });
@@ -251,7 +256,7 @@ export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode
             const rotation = parseAccountRotation(this.client.accountRotation);
             if (rotation === null || !this.allowed(null).switchAt) { return; }
             const input = await vscode.window.showInputBox({
-                title: say('moe.accounts.switchAt'), prompt: `1-100${say('moe.accounts.switchAt.unit')}`, value: String(rotation.switchAtPercent),
+                title: text('moe.accounts.switchAt'), prompt: `1-100${text('moe.accounts.switchAt.unit')}`, value: String(rotation.switchAtPercent),
                 validateInput: value => (percentOf(value) === null ? PERCENT_HINT : undefined)
             });
             const percent = input === undefined ? null : percentOf(input);
@@ -272,13 +277,13 @@ export class AccountsTreeProvider implements vscode.TreeDataProvider<AccountNode
     private runCli(args: string[]): void {
         const rotation = parseAccountRotation(this.client.accountRotation);
         if (rotation === null || rotation.cli === null) { return; }
-        const line = accountsCommandLine(rotation.cli, rotation.registryFile, args, process.platform === 'win32'); // throws on CR, LF or NUL
+        const line = accountsCommandLine(rotation.cli, rotation.registryFile, args, process.platform === 'win32'); // throws on a C0 control or DEL
         let terminal: vscode.Terminal;
         try {
-            terminal = vscode.window.createTerminal({ name: say('moe.accounts.terminal.tab') });
+            terminal = vscode.window.createTerminal({ name: text('moe.accounts.terminal.tab') });
         } catch {
             void vscode.env.clipboard.writeText(line);
-            void vscode.window.showWarningMessage(say('moe.accounts.terminal.unavailable', line));
+            void vscode.window.showWarningMessage(text('moe.accounts.terminal.unavailable', line));
             return;
         }
         terminal.sendText(line);

@@ -45,7 +45,8 @@ function loadPort() {
 
 function bundleValues() {
     const values = new Map();
-    for (const m of readText(bundlePath, 'MoeBundle.properties').matchAll(/^(moe\.accounts\.[A-Za-z.]+)=(.*?)\r?$/gm)) values.set(m[1], m[2]);
+    // A properties value decodes `\n` to a newline (moe.accounts.terminal.unavailable has one).
+    for (const m of readText(bundlePath, 'MoeBundle.properties').matchAll(/^(moe\.accounts\.[A-Za-z.]+)=(.*?)\r?$/gm)) values.set(m[1], m[2].replace(/\\n/g, '\n'));
     return values;
 }
 

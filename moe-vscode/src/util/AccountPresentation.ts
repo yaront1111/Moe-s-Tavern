@@ -211,7 +211,10 @@ export function isValidLabel(input: string): boolean {
     return label.length <= MAX_LABEL_LENGTH && ![...label].some(isControl);
 }
 
-/** The English of MoeBundle.properties (moe.accounts.signIn, usage, status, vmTokenState and chip keys), {n} unsubstituted. */
+/**
+ * The English of MoeBundle.properties (moe.accounts.signIn, usage, status, vmTokenState and chip keys, plus the Accounts
+ * view's dialog text: add, rename, remove, terminal, switchAt), {n} unsubstituted.
+ */
 export const ACCOUNT_TEXT: Readonly<Record<string, string>> = Object.freeze({
     'moe.accounts.signIn.subscription': 'Subscription',
     'moe.accounts.signIn.signedOut': 'Signed out',
@@ -246,7 +249,18 @@ export const ACCOUNT_TEXT: Readonly<Record<string, string>> = Object.freeze({
     'moe.accounts.column.fiveHour': '5-hour',
     'moe.accounts.column.weekly': 'Weekly',
     'moe.accounts.column.status': 'Status',
-    'moe.accounts.column.vmToken': 'VM token'
+    'moe.accounts.column.vmToken': 'VM token',
+    'moe.accounts.add.title': 'Add Claude Account',
+    'moe.accounts.add.prompt': 'Name for the new account (optional, up to 64 characters). A terminal tab opens next so you can sign it in with your Claude subscription.',
+    'moe.accounts.rename.title': 'Rename Claude Account',
+    'moe.accounts.rename.prompt': 'New name (up to 64 characters; leave it empty to use the account id):',
+    'moe.accounts.remove.confirm': 'Remove {0} from the list? Remove only keeps its Claude sign-in on this machine and deletes its VM token. Sign out and remove signs it out first, in a terminal tab.',
+    'moe.accounts.remove.signOut': 'Sign out and remove',
+    'moe.accounts.remove.only': 'Remove only',
+    'moe.accounts.terminal.tab': 'Claude accounts',
+    'moe.accounts.terminal.unavailable': 'Moe could not open a terminal tab. The command is on your clipboard; run it in the terminal where your agents run:\n{0}',
+    'moe.accounts.switchAt': 'Switch to the next account at',
+    'moe.accounts.switchAt.unit': '% of any usage window'
 });
 
 /** The English for a text: its template (the key itself when unknown) with each {n} replaced once by its argument. */

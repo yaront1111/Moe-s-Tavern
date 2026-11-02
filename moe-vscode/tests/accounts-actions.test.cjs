@@ -17,6 +17,7 @@ const files = {
     bundle: path.join(root, '../moe-jetbrains/src/main/resources/messages/MoeBundle.properties'),
     presentation: path.join(root, 'src/util/AccountPresentation.ts'),
     provider: path.join(root, 'src/providers/AccountsTreeProvider.ts'),
+    launcher: path.join(root, 'src/util/AgentLauncher.ts'),
     extension: path.join(root, 'src/extension.ts'),
     manifest: path.join(root, 'package.json')
 };
@@ -181,7 +182,7 @@ test('K2: for every corpus row the context keys and row tokens equal AccountPres
         const got = [s.rec.context.get('moe.accounts.canAdd'), s.rec.context.get('moe.accounts.canSwitchAt'), tokens(s.provider.contextFor(row.selectedId))];
         if (JSON.stringify(got) !== JSON.stringify([e.add, e.switchAt, row.selectedId === null ? [] : expected(e)])) failures.push(`${row.id} selected ${JSON.stringify(got)}`);
         const rotation = presentation.parseAccountRotation(row.rotation);
-        for (const element of s.provider.getChildren().filter(n => n.id !== undefined)) { // none while disconnected (VSC-14 lists no rows then)
+        for (const element of s.provider.getChildren().filter(n => n.id !== undefined)) { // while disconnected too (C09 lists its rows, VSC-25)
             const item = s.provider.getTreeItem(element);
             if (JSON.stringify(tokens(item.contextValue)) !== JSON.stringify(expected(presentation.actions(rotation, element.id, row.connected)))) failures.push(`${row.id} ${element.id} ${item.contextValue}`);
         }
@@ -346,14 +347,68 @@ test('Q1: the CLI line quotes every word for bash and PowerShell, and a control 
     assert.match(s.rec.errors[0], /^Account action failed: .*control characters/);
 });
 
-test('S1: dialog texts equal MoeBundle.properties, and a missing terminal copies the line and shows the bundle warning', async () => {
+test('S1: dialog texts resolve through AccountPresentation.ACCOUNT_TEXT, equal MoeBundle.properties, and a missing terminal copies the line and shows the bundle warning', async () => {
     const { mod } = setup();
     const keys = ['add.title', 'add.prompt', 'rename.title', 'rename.prompt', 'remove.confirm', 'remove.signOut', 'remove.only', 'terminal.tab', 'terminal.unavailable', 'switchAt', 'switchAt.unit'].map(k => `moe.accounts.${k}`);
-    assert.deepEqual(Object.keys(mod.ACCOUNT_ACTION_TEXT).sort(), [...keys].sort());
-    keys.forEach(key => assert.equal(mod.ACCOUNT_ACTION_TEXT[key], bundle.get(key), key));
+    assert.equal(mod.ACCOUNT_ACTION_TEXT, undefined, 'the provider keeps no second text table');
+    const source = read(files.provider);
+    assert.doesNotMatch(source, /ACCOUNT_ACTION_TEXT/);
+    assert.doesNotMatch(source, /\bsay\(/, 'the provider keeps no second resolver');
+    for (const key of keys) {
+        assert.ok(bundle.has(key), `${key} is missing from the bundle`);
+        assert.ok(Object.hasOwn(presentation.ACCOUNT_TEXT, key), `${key} is missing from AccountPresentation.ACCOUNT_TEXT`);
+        assert.equal(presentation.ACCOUNT_TEXT[key], bundle.get(key), key);
+    }
     const s = setup();
     s.rec.noTerminal = true;
     await s.run('signIn', s.node('acct-4'));
     const line = s.line(['login', 'acct-4']);
     assert.deepEqual([s.rec.clipboard, s.rec.warnings, s.rec.errors], [[line], [[t('moe.accounts.terminal.unavailable', line)]], []]);
+});
+
+/** The top-level `function` declarations of the three quoting helpers in a source file, by name, as their AST text (leading comments excluded). */
+const QUOTE_HELPERS = ['psQuote', 'shQuote', 'assertSafeArg'];
+function helperTexts(file) {
+    const source = ts.createSourceFile(file, read(file), ts.ScriptTarget.ES2020, true);
+    const found = new Map();
+    for (const statement of source.statements) {
+        if (!ts.isFunctionDeclaration(statement) || statement.name === undefined || !QUOTE_HELPERS.includes(statement.name.text)) continue;
+        assert.ok(!found.has(statement.name.text), `${file} declares ${statement.name.text} twice`);
+        found.set(statement.name.text, statement.getText(source));
+    }
+    return found;
+}
+
+test('Q2: the provider keeps text-identical copies of AgentLauncher.ts psQuote, shQuote and assertSafeArg', () => {
+    // A shared module is not possible: powershell-quoting and agent-launcher-controls load both files under closed require maps.
+    const launcher = helperTexts(files.launcher);
+    const provider = helperTexts(files.provider);
+    assert.deepEqual([...launcher.keys()].sort(), [...QUOTE_HELPERS].sort(), 'AgentLauncher.ts must declare each helper once as a function');
+    assert.deepEqual([...provider.keys()].sort(), [...QUOTE_HELPERS].sort(), 'AccountsTreeProvider.ts must declare each helper once as a function');
+    for (const name of QUOTE_HELPERS) assert.equal(provider.get(name), launcher.get(name), `${name} drifted between AccountsTreeProvider.ts and AgentLauncher.ts: change both copies together`);
+});
+
+test('C09: disconnected with a cached rotation lists its rows, keeps the CLI actions and drops the list edits', async () => {
+    const row = rowOf('C09');
+    const e = row.expectActions;
+    const en = ({ key, args }) => t(key, ...args);
+    const s = setup(row.rotation, { connected: false });
+    const nodes = s.provider.getChildren();
+    assert.deepEqual(nodes.map(n => n.id), row.expectRows.map(r => r.id), 'rows equal expectRows');
+    assert.deepEqual(nodes.map(n => n.label), row.expectRows.map(r => `${r.position}. ${r.label}`));
+    assert.deepEqual(nodes.map(n => n.description), row.expectRows.map(r => `${en(r.status)} · ${t('moe.accounts.column.fiveHour')}: ${en(r.fiveHour)} · ${t('moe.accounts.column.weekly')}: ${en(r.weekly)}`));
+    assert.deepEqual(tokens(s.provider.contextFor(row.selectedId)), expected(e));
+    assert.deepEqual([s.rec.context.get('moe.accounts.canAdd'), s.rec.context.get('moe.accounts.canSwitchAt')], [e.add, e.switchAt]);
+    const selected = s.node(row.selectedId);
+    assert.ok(selected, `${row.selectedId} must be listed while disconnected`);
+    await s.run('signIn', selected);
+    assertTerminal(s, ['login', row.selectedId]);
+    for (const name of ['moveUp', 'moveDown', 'rename', 'add', 'setSwitchPercent']) await s.run(name, selected);
+    assert.deepEqual([s.rec.sends, s.rec.inputs.length, s.rec.warnings.length, s.rec.errors], [[], 0, 0, []], 'list edits do nothing while disconnected');
+    s.rec.answers.push(undefined);
+    await s.run('remove', selected); // only the CLI half of remove is offered
+    assert.deepEqual([s.rec.warnings.length, s.rec.warnings[0].slice(2), s.rec.sends], [1, [t('moe.accounts.remove.signOut')], []]);
+    s.client.accountRotation = undefined; // no snapshot yet: nothing to list
+    s.events.connection.fire();
+    assert.deepEqual(s.provider.getChildren().map(n => n.label), [t('moe.accounts.notConnected')]);
 });

@@ -155,11 +155,19 @@ test('V2: each client event fires onDidChangeTreeData once and re-renders the vi
     }
 });
 
-test('V3: not connected, no rotation and an empty account list each give one state item', () => {
+test('V3: not connected shows the cached rotation like connected (JetBrains AccountsPanel.render); no rotation and an empty account list each give one state item', () => {
     const c05 = rowOf('C05').rotation;
+    const online = setup(c05);
+    online.provider.attach(online.view);
+    assert.ok(online.provider.getChildren().length > 1 && online.view.description !== undefined);
     for (const connectionState of ['disconnected', 'connecting']) {
-        const { provider } = setup(c05, { connectionState }); // a stale rotation never shows while not connected
-        assert.deepEqual(labels(provider), [t('moe.accounts.notConnected')]);
+        const off = setup(c05, { connectionState }); // the cached rotation survives a dropped socket
+        off.provider.attach(off.view);
+        assert.deepEqual(off.provider.getChildren(), online.provider.getChildren(), `${connectionState}: same rows as connected`);
+        assert.deepEqual([off.view.description, off.view.message], [online.view.description, online.view.message], `${connectionState}: same chips and note`);
+        for (const isStateReady of [true, false]) { // with no rotation yet, not connected is not-connected whatever isStateReady says
+            assert.deepEqual(labels(setup(undefined, { connectionState, isStateReady }).provider), [t('moe.accounts.notConnected')], `${connectionState} isStateReady=${isStateReady}`);
+        }
     }
     assert.deepEqual(labels(setup(undefined, { isStateReady: true }).provider), [t('moe.accounts.unsupported')]);
     assert.deepEqual(labels(setup(undefined, { isStateReady: false }).provider), [t('moe.accounts.notConnected')]);
@@ -194,6 +202,12 @@ test('V5: the provider never throws, with the local clock, an unknown zone or a 
     const { provider, view } = setup(hostile);
     provider.attach(view);
     assert.equal(provider.getChildren().length, 1);
+    for (const connectionState of ['disconnected', 'connecting']) { // parts() now parses the rotation on the not-connected path too
+        const off = setup(hostile, { connectionState });
+        off.provider.attach(off.view);
+        assert.equal(off.provider.getChildren().length, 1, connectionState);
+        for (const bad of [null, 7, 'x', [], {}, { registryFile: ' ' }]) assert.deepEqual(labels(setup(bad, { connectionState }).provider), [t('moe.accounts.notConnected')], `${connectionState} ${JSON.stringify(bad)}`);
+    }
 });
 
 test('V6: dispose removes every listener, silences the provider and tolerates a second call', () => {

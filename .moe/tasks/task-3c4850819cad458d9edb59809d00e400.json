@@ -10,9 +10,88 @@
     "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Tests first (RED). Edit with the Edit tool only, and work in a scratch snapshot for runs.\n\nDecision on the description's open question, item 1: KEEP the copies and add a test that holds them identical. A shared util/shellQuote.ts cannot work, for two reasons:\n- DoD 1 pins tests/powershell-quoting.test.cjs and tests/agent-launcher-controls.test.cjs unchanged.\n- Both of those load AgentLauncher.ts with `require: name => name === 'vscode' ? vscode : deps[name] || require(name)` (deps holds only '../services/MoeDaemonClient'). powershell-quoting also loads AccountsTreeProvider.ts with a closed map ('vscode', '../util/AccountPresentation'). Any new runtime import in either file throws in those loaders.\n- `import type` is erased, so it is fine.\n\ntests/accounts-actions.test.cjs:\n(a) New test 'Q2'. Parse src/util/AgentLauncher.ts and src/providers/AccountsTreeProvider.ts with `ts.createSourceFile(file, text, ts.ScriptTarget.ES2020, true)`. Collect the top-level FunctionDeclaration statements named psQuote, shQuote and assertSafeArg; a name declared twice is an assertion failure. Then:\n  - assert the launcher has exactly those three;\n  - assert `deepEqual(providerTexts, launcherTexts)` using `node.getText(sourceFile)`, which excludes leading comments, so the comments may differ.\n  - RED today: the provider's psQuote and shQuote are arrow consts.\n(b) New test 'C09'. Run `setup(rowOf('C09').rotation, { connected: false })`, then check:\n  - getChildren() ids equal the row's expectRows ids;\n  - the selected row's contextValue tokens equal `expected(row.expectActions)`;\n  - canAdd and canSwitchAt equal expectActions.add and .switchAt (both false);\n  - signIn on the selected node runs exactly `login <id>` (assertTerminal);\n  - moveUp, moveDown and rename send nothing and open no dialog, and add opens no input box;\n  - after `client.accountRotation = undefined` plus a connection event, the only item is t('moe.accounts.notConnected').\n  - RED today: disconnected shows one state item.\n(c) Rewrite 'S1':\n  - `assert.equal(mod.ACCOUNT_ACTION_TEXT, undefined)`, and the provider source matches neither `ACCOUNT_ACTION_TEXT` nor `\\bsay\\(`;\n  - each of the 11 dialog keys (add.title, add.prompt, rename.title, rename.prompt, remove.confirm, remove.signOut, remove.only, terminal.tab, terminal.unavailable, switchAt, switchAt.unit) equals `presentation.ACCOUNT_TEXT[key]` and the bundle value from `bundle.get(key)` (already `\\n`-decoded);\n  - keep the missing-terminal clipboard part as is.\n(d) K2: update its comment `(VSC-14 lists no rows then)`. C09's rows are now listed and their tokens checked; the loop itself needs no change.\n\ntests/accounts-view.test.cjs, V3:\n- For 'disconnected' and 'connecting', `setup(c05, { connectionState }).provider.getChildren()` must deep-equal the connected `setup(c05)` children. Both use the corpus clock. This mirrors JetBrains AccountsPanel.render, which lists rows from the cached rotation whatever the connection.\n- For each of those states, with `setup(undefined, { connectionState, isStateReady })` for both isStateReady values, the only item is notConnected.\n- Keep the rest of V3.\n- Extend V5 so every hostile rotation it feeds also renders while disconnected without throwing (parts() now parses the rotation on that path too).\n\ntests/accounts-corpus.test.cjs, bundleValues():\n- Decode `\\n` exactly as accounts-actions does: `m[2].replace(/\\\\n/g, '\\n')`. moe.accounts.terminal.unavailable joins ACCOUNT_TEXT in step 2 and holds a properties `\\n`. No existing ACCOUNT_TEXT or corpus key contains one.\n\nFocused RED run, in a whole-repo snapshot (the tests read ../moe-jetbrains):\n`S=$(mktemp -d /mnt/d/moe-scratch/vsc25-red.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\"`\nThen copy the three test files in, and from $S/moe-vscode run `npm ci --no-audit --no-fund && node --test tests/accounts-actions.test.cjs tests/accounts-view.test.cjs tests/accounts-corpus.test.cjs`.\nExpected RED: Q2, C09, S1 and V3 fail on assertions, and the corpus test stays green.\n\nerror handling: every new assertion names its row, key or file, so a failure says which copy or text drifted.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/accounts-actions.test.cjs",
+        "moe-vscode/tests/accounts-view.test.cjs",
+        "moe-vscode/tests/accounts-corpus.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/accounts-actions.test.cjs",
+        "moe-vscode/tests/accounts-view.test.cjs",
+        "moe-vscode/tests/accounts-corpus.test.cjs"
+      ],
+      "note": "RED in snapshot /mnt/d/moe-scratch/vsc25-red.uuZBBu (git archive HEAD + the 3 test files): 30 tests, 26 pass, 4 fail = Q2, C09, S1, V3 on assertions (S1: ACCOUNT_ACTION_TEXT still exported; V3: disconnected shows one state item; C09: no rows; Q2: provider has only assertSafeArg as a function declaration). Corpus test stays green; V5's new disconnected guards pass vacuously until the view lists rows. Kept the copies (no shared module) per the plan. Shared checkout had unrelated dirty paths (board json, roles, scripts); not touched.",
+      "startedAt": "2026-11-02T15:55:22.557Z",
+      "completedAt": "2026-11-02T15:59:04.300Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Implementation (Edit tool only). AgentLauncher.ts is NOT edited.\n\nsrc/util/AccountPresentation.ts:\n- Move the 11 dialog entries of the provider's ACCOUNT_ACTION_TEXT into ACCOUNT_TEXT, byte-for-byte. remove.confirm keeps its {0}; terminal.unavailable keeps its real newline before {0}.\n- Update the doc comment above ACCOUNT_TEXT to say it also holds the Accounts view's dialog text.\n- None of the values contains a single quote, which accounts-corpus forbids because of MessageFormat.\n\nsrc/providers/AccountsTreeProvider.ts:\n(a) Replace the arrow-const psQuote and shQuote and the compact assertSafeArg with text-identical copies of AgentLauncher.ts's three `function` declarations: same signatures, bodies and line breaks.\n  - Put one comment above them: they are byte-identical copies of AgentLauncher.ts's helpers, and accounts-actions Q2 holds them equal.\n  - The comment must say why a shared module is not possible: powershell-quoting.test.cjs and agent-launcher-controls.test.cjs load both files under closed require maps and must stay unchanged.\n  - Keep the existing why-comments: C0 and DEL because sendText types into a line editor; the PowerShell single quotes.\n(b) Delete ACCOUNT_ACTION_TEXT and `say`. Every dialog text goes through the existing `text(key, ...args)`, i.e. resolveAccountText.\n  - Leave NOT_CONNECTED, LABEL_HINT, PERCENT_HINT and the 'Account action failed:' prefix as they are: they are not bundle keys.\n(c) parts() (C09, JetBrains AccountsPanel.render parity):\n  - Drop the early not-connected return.\n  - Parse the rotation first.\n  - When it is null, return the single item `text(this.connected() && this.client.isStateReady ? 'moe.accounts.unsupported' : 'moe.accounts.notConnected')`.\n  - Otherwise build rows, chips and the message exactly as today, connected or not.\n  - Row tokens already come from actions(rotation, id, this.connected()). While disconnected that leaves only CLI actions: Sign in, and Remove with only 'Sign out and remove'. canAdd and canSwitchAt are off.\n(d) Correct the stale comments, the accountsCommandLine JSDoc and runCli's `// throws on CR, LF or NUL`, to say a C0 control or DEL. Update the class doc: rows from the latest rotation even while disconnected, one state item when there is no rotation.\n\nKeep exactly two imports: 'vscode' and '../util/AccountPresentation' (the type import is fine). accountsCommandLine stays exported, because powershell-quoting V2 calls it.\n\nerror handling:\n- parts() stays total: parseAccountRotation, rows and chips never throw, and V5 now pins that while disconnected too.\n- Action failures still go through guard().\n- runCli still returns early for a null rotation or cli.\n\nGREEN: rerun step 1's focused command, then all three files plus powershell-quoting.test.cjs and agent-launcher-controls.test.cjs in the snapshot. All tests pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/util/AccountPresentation.ts",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AccountPresentation.ts",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts"
+      ],
+      "note": "GREEN in snapshot vsc25-red.uuZBBu: accounts-actions, accounts-view, accounts-corpus plus the pinned powershell-quoting and agent-launcher-controls = 36 tests, 36 pass, 0 fail; tsc --noEmit clean. Moved the 11 dialog texts into ACCOUNT_TEXT (byte-for-byte), removed ACCOUNT_ACTION_TEXT/say (7 call sites now use text()), replaced the arrow-const quoting with function copies of AgentLauncher's (comments kept) and a Q2 pointer comment, parts() now lists rows when disconnected (unsupported only when connected && isStateReady), fixed the stale CR/LF/NUL comments and the class doc. AgentLauncher.ts untouched.",
+      "startedAt": "2026-11-02T15:59:04.964Z",
+      "completedAt": "2026-11-02T15:59:59.810Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Verification, run once and fresh, from the repo root. This is the complete_task evidence, verbatim:\nS=$(mktemp -d /mnt/d/moe-scratch/vsc25.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/src/providers/AccountsTreeProvider.ts moe-vscode/src/util/AccountPresentation.ts moe-vscode/tests/accounts-actions.test.cjs moe-vscode/tests/accounts-view.test.cjs moe-vscode/tests/accounts-corpus.test.cjs \"$S\") && cd \"$S/moe-vscode\" && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test && git -C /mnt/d/projexts/moes diff --quiet HEAD -- moe-vscode/tests/powershell-quoting.test.cjs moe-vscode/tests/agent-launcher-controls.test.cjs moe-vscode/src/util/AgentLauncher.ts\n\nBefore running:\n- Run `git status --short moe-vscode/`. It must list only this task's five files, else peers' bytes enter the overlay (mem:gotcha-snapshot-gate-peer-wip-checkpoint).\n\nExpect:\n- exit 0, lint 0 and compile 0;\n- npm test passes with more tests than the epic's 882a4c39 baseline (388: 384 pass, 4 skip, 0 fail) because of the new Q2 and C09 tests; record the counts;\n- the last check proves the two pinned tests and AgentLauncher.ts are unchanged.\n\nIf it fails:\n- Fix only within the five files and re-run the whole command fresh.\n- A peer's red file can turn the gate red (mem:gotcha-snapshot-gate-peer-wip-checkpoint). Attribute it, re-run with only that file removed, and say so in the summary.\n\nThis step adds no error handling of its own.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/util/AccountPresentation.ts",
+        "moe-vscode/tests/accounts-actions.test.cjs",
+        "moe-vscode/tests/accounts-view.test.cjs",
+        "moe-vscode/tests/accounts-corpus.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/util/AccountPresentation.ts",
+        "moe-vscode/tests/accounts-actions.test.cjs",
+        "moe-vscode/tests/accounts-view.test.cjs",
+        "moe-vscode/tests/accounts-corpus.test.cjs"
+      ],
+      "note": "Verbatim step-3 command, fresh, snapshot /mnt/d/moe-scratch/vsc25.DIRoxc: git status --short moe-vscode/ listed only the five task files first; npm ci, lint 0, compile 0, npm test = 558 tests, 554 pass, 4 skipped, 0 fail; the final git diff --quiet on the two pinned tests and AgentLauncher.ts exited 0 (chain EXIT=0). Test count is above the epic's 388 baseline because other landed rows added tests since; this row adds Q2 and C09. No peer red file appeared.",
+      "startedAt": "2026-11-02T16:00:00.585Z",
+      "completedAt": "2026-11-02T16:02:36.121Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Adversarial self-review (load adversarial-self-review), then complete_task.\n\nMutants, one at a time in the step-3 snapshot (edit the SNAPSHOT copy; restore each), each run with `node --test` on the named files:\n- M1: drop U+201B from the provider's psQuote character class → Q2 fails (and powershell-quoting V2).\n- M2: in the provider's assertSafeArg, change `code === 0x7f` to `code === 0x7e` → Q2 fails.\n- M3: put back `if (this.client.connectionState !== 'connected') { return { items: [{ label: text('moe.accounts.notConnected') }] }; }` at the top of parts() → C09 and V3 fail.\n- M4: drop `this.connected() &&` from the no-rotation branch → V3 fails (disconnected + isStateReady true would show 'unsupported').\n- M5: change one character of 'moe.accounts.remove.only' in ACCOUNT_TEXT → S1 and the corpus bundle check fail.\nEach kill must be an assertion on the named test, never a load or harness error.\n\nThen check:\n- Parity: re-read JetBrains AccountsPanel.render and confirm the same three states (rows from any rotation; UNSUPPORTED only when connected with state; else NOT_CONNECTED). Confirm the message logic (error, then noCli) is unchanged.\n- Stale menus still re-check before acting.\n- The provider imports only vscode and AccountPresentation, and AgentLauncher.ts has no diff.\n- No value in ACCOUNT_TEXT has a single quote.\n- Run `git diff --numstat` on the five files: under about 150 net lines.\n\nFinish:\n- If bytes change, re-run step 3.\n- Call complete_task with step 3's command, exitCode and outputTail.\n- Report modifiedFiles as exactly the five files.\n- The summary carries the test counts, the RED list from step 1 and the mutant kills.\n- Note for VSC-27 (task-e1024bb3), which builds on this row: the quoting copies stay two, held identical by Q2. A change to one copy must be made to both.\n\nThis step adds no error handling of its own; any failure loops back to step 3.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/util/AccountPresentation.ts",
+        "moe-vscode/tests/accounts-actions.test.cjs",
+        "moe-vscode/tests/accounts-view.test.cjs",
+        "moe-vscode/tests/accounts-corpus.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/util/AccountPresentation.ts",
+        "moe-vscode/tests/accounts-actions.test.cjs",
+        "moe-vscode/tests/accounts-view.test.cjs",
+        "moe-vscode/tests/accounts-corpus.test.cjs"
+      ],
+      "note": "Self-review done. Mutants (snapshot copies, restored and cmp-verified): M1 drop U+201B -> Q2 + powershell-quoting V2 fail; M2 0x7f->0x7e -> Q2 + Q1 fail; M3 early not-connected return -> C09 + V3 fail; M4 drop connected() -> C09 + V3 + V5 fail; M5 remove.only char -> S1, A3, A7 and the corpus 'resolver speaks MoeBundle English' fail. Every kill is an AssertionError on a named test, no load errors. Parity re-read of JetBrains AccountsPanel.render: rows from any rotation, EMPTY for a non-null rotation, UNSUPPORTED only when hasState && connected, else NOT_CONNECTED, error then noCli note unchanged. Stale-menu re-checks untouched (allowed() still re-evaluates before every action). Provider imports are still vscode + ../util/AccountPresentation (+ type-only MoeDaemonClient); AgentLauncher.ts byte-equal to HEAD. Numstat 135 added / 46 removed across the five files (net ~89). Checkout files cmp-identical to the verified step-3 snapshot, so no re-run needed. Theoretical only: Sign in while disconnected runs the cached cli on this machine (intended by C09).",
+      "startedAt": "2026-11-02T16:02:37.094Z",
+      "completedAt": "2026-11-02T16:03:31.248Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,10 +104,115 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:12:00.824Z",
-  "updatedAt": "2026-11-02T15:16:29.251Z",
+  "updatedAt": "2026-11-02T16:03:47.415Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:16:29.251Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T15:47:16.038Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-4c1da905"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T15:54:43.770Z",
+  "executionContract": {
+    "intendedBehavior": "Quoting: AccountsTreeProvider.ts keeps text-identical copies of AgentLauncher.ts's psQuote, shQuote and assertSafeArg, and a test fails on any drift between them.\n\nText: every Accounts dialog string resolves through AccountPresentation.resolveAccountText from the one ACCOUNT_TEXT table, which stays pinned to MoeBundle.properties.\n\nDisconnected view: while not connected, the view lists the cached rotation's rows. List edits stay off, and the CLI actions stay on, so Sign in runs `login <id>` as in corpus row C09. With no rotation, the single not-connected state item stays.",
+    "acceptanceCriteria": [
+      "Q2: the provider's three top-level function declarations have the same AST text as AgentLauncher.ts's, which has exactly those three.",
+      "C09 (disconnected): rows equal expectRows, the selected row's tokens and both context keys equal expectActions, Sign in runs exactly `login acct-b`, list edits send nothing, and no rotation leaves only notConnected.",
+      "V3: disconnected and connecting render the same children as connected for C05. No rotation while not connected gives notConnected whatever isStateReady says.",
+      "S1: the provider exports no ACCOUNT_ACTION_TEXT and has no `say(`. All 11 dialog keys are in ACCOUNT_TEXT and equal the bundle.",
+      "powershell-quoting.test.cjs, agent-launcher-controls.test.cjs and AgentLauncher.ts are unchanged, and the full moe-vscode gate exits 0."
+    ],
+    "invariants": [
+      "The provider's runtime imports stay vscode and ../util/AccountPresentation, and accountsCommandLine stays exported.",
+      "Action enablement stays AccountPresentation.actions(rotation, id, connected); no client-specific rule is added.",
+      "No JetBrains file and no corpus or bundle file changes."
+    ],
+    "compatibility": [
+      "Every dialog and state string the user sees is unchanged.",
+      "The connected view renders exactly as before."
+    ],
+    "approvedScope": [
+      "AccountsTreeProvider.ts: the quoting copies (function form), removal of ACCOUNT_ACTION_TEXT and say, parts(), and comments.",
+      "AccountPresentation.ts: 11 entries added to ACCOUNT_TEXT, plus its doc comment.",
+      "accounts-actions.test.cjs: Q2 and C09 added, S1 rewritten, K2 comment. accounts-view.test.cjs: V3 and V5. accounts-corpus.test.cjs: the \\n decode in bundleValues()."
+    ],
+    "reuse": [
+      "resolveAccountText and the provider's existing text() helper replace say.",
+      "The existing corpus rows (C05, C09) and the setup/assertTerminal helpers in accounts-actions."
+    ],
+    "sourceAssumptions": [
+      "AccountsTreeProvider.ts:21-34 holds ACCOUNT_ACTION_TEXT and say; :50-61 holds the arrow-const psQuote/shQuote and a compact assertSafeArg; parts() :95-114 returns notConnected early when not connected.",
+      "AgentLauncher.ts:207-225 and :248-250 hold the function-declaration psQuote, assertSafeArg and shQuote.",
+      "AccountPresentation.ts:215 holds ACCOUNT_TEXT; :253 holds resolveAccountText, a {n} substitution that leaves an unknown placeholder as is, the same as say.",
+      "accounts-corpus.test.cjs:46-50 bundleValues() does not decode \\n; accounts-actions.test.cjs:47 already does."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /mnt/d/moe-scratch/vsc25.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/src/providers/AccountsTreeProvider.ts moe-vscode/src/util/AccountPresentation.ts moe-vscode/tests/accounts-actions.test.cjs moe-vscode/tests/accounts-view.test.cjs moe-vscode/tests/accounts-corpus.test.cjs \"$S\") && cd \"$S/moe-vscode\" && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test && git -C /mnt/d/projexts/moes diff --quiet HEAD -- moe-vscode/tests/powershell-quoting.test.cjs moe-vscode/tests/agent-launcher-controls.test.cjs moe-vscode/src/util/AgentLauncher.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Item 1, the quoting copies:\n- Considered util/shellQuote.ts, a pure module imported by both files. Rejected: DoD 1 requires powershell-quoting.test.cjs and agent-launcher-controls.test.cjs to stay unchanged, and both load AgentLauncher.ts (and powershell-quoting also loads the provider) with closed require maps. Any new runtime import throws there.\n- Also rejected: exporting the helpers from AgentLauncher or MoeDaemonClient into the provider. The provider's closed map allows only vscode and AccountPresentation.\n- So the copies stay, as identical `function` declarations, compared by AST text in accounts-actions Q2.\n\nItem 2, the text tables: merge ACCOUNT_ACTION_TEXT into AccountPresentation.ACCOUNT_TEXT, so there is one resolver, resolveAccountText. The corpus test already pins every ACCOUNT_TEXT entry to the bundle (\"keys that later rows add stay pinned\"). Its bundleValues() must decode \\n for moe.accounts.terminal.unavailable.\n\nItem 3, C09: mirror JetBrains AccountsPanel.render.\n- rows come from any cached rotation;\n- the empty text is UNSUPPORTED only when hasState && connected, else NOT_CONNECTED;\n- the error/noCli note is unchanged;\n- no extra 'not connected' message is shown (parity; the corpus has no such field).",
+    "codebaseInsights": "- MoeDaemonClient keeps `rotation` across a disconnect. Only STATE_SNAPSHOT and ACCOUNTS_UPDATED set it, at MoeDaemonClient.ts:1518 and :1612, and setConnectionState never clears it. So a cached rotation exists after a drop, and undefined means no snapshot yet.\n- AccountPresentation.actions with connected=false enables only the CLI actions: signIn, signOut, signOutAndRemove, check and the vmToken pair. The provider's tokens and handlers already route through it.\n- The accounts-view setup defaults to the corpus clock, so a connected-vs-disconnected getChildren() deepEqual is deterministic.\n- C09 is the corpus's only disconnected row.",
+    "risks": "- VSC-27 (task-e1024bb3) depends on this row and assumed a 'single helper copy'. Tell it that the copies stay two, held identical by Q2.\n- Overlay with peers' dirty bytes: none of the five files is declared by any other open row (scanned 2026-11-02), and moe-vscode was clean.\n- eslint no-control-regex: AgentLauncher's assertSafeArg uses charCodeAt, so copying it is lint-safe (mem:gotcha-vscode-eslint-no-control-regex).\n- K2 now also checks C09's rows; that is intended and stronger.",
+    "keyFiles": [
+      "moe-vscode/src/providers/AccountsTreeProvider.ts",
+      "moe-vscode/src/util/AccountPresentation.ts",
+      "moe-vscode/src/util/AgentLauncher.ts",
+      "moe-vscode/tests/accounts-actions.test.cjs",
+      "moe-vscode/tests/accounts-view.test.cjs",
+      "moe-vscode/tests/accounts-corpus.test.cjs",
+      "moe-vscode/tests/powershell-quoting.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/AccountsPanel.kt",
+      "moe-jetbrains/src/test/resources/client-accounts.json"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "78642f851af4f5adba54fedff9143328c24d9892",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T15:54:43.802Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T15:55:22.557Z",
+  "reviewStartedAt": "2026-11-02T16:03:47.413Z",
+  "verification": {
+    "command": "S=$(mktemp -d /mnt/d/moe-scratch/vsc25.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/src/providers/AccountsTreeProvider.ts moe-vscode/src/util/AccountPresentation.ts moe-vscode/tests/accounts-actions.test.cjs moe-vscode/tests/accounts-view.test.cjs moe-vscode/tests/accounts-corpus.test.cjs \"$S\") && cd \"$S/moe-vscode\" && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test && git -C /mnt/d/projexts/moes diff --quiet HEAD -- moe-vscode/tests/powershell-quoting.test.cjs moe-vscode/tests/agent-launcher-controls.test.cjs moe-vscode/src/util/AgentLauncher.ts",
+    "exitCode": 0,
+    "outputTail": "✔ files.exclude is not contributed, so the Explorer still lists .worktrees (12.06489ms)\nℹ tests 558\nℹ suites 0\nℹ pass 554\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 33586.019585\nEXIT=0 (npm ci, npm run lint and npm run compile exited 0; the trailing git diff --quiet on the two pinned tests and AgentLauncher.ts exited 0)",
+    "reportedAt": "2026-11-02T16:03:47.413Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/accounts-actions.test.cjs",
+    "moe-vscode/tests/accounts-view.test.cjs",
+    "moe-vscode/tests/accounts-corpus.test.cjs",
+    "moe-vscode/src/util/AccountPresentation.ts",
+    "moe-vscode/src/providers/AccountsTreeProvider.ts"
+  ],
+  "completionSummary": "VSC-25 delivered in 5 files under moe-vscode/ (net ~89 lines).\n1) Quoting: kept two copies. The provider now has function-declaration copies of AgentLauncher's psQuote, shQuote, assertSafeArg, and new accounts-actions test Q2 (ts AST getText per name) fails on any drift. A shared module cannot work because powershell-quoting and agent-launcher-controls load both files under closed require maps and must stay unchanged. Stale 'CR, LF or NUL' comments now say C0 control or DEL.\n2) Text: ACCOUNT_ACTION_TEXT and say are gone. The 11 dialog keys moved byte-for-byte into AccountPresentation.ACCOUNT_TEXT and resolve through resolveAccountText; S1 pins each to the bundle. accounts-corpus bundleValues() now decodes \\n.\n3) C09: parts() no longer returns early when not connected. It lists the cached rotation's rows, so Sign in runs `login <id>` via the CLI while list edits stay off. With no rotation: unsupported only if connected && isStateReady, else notConnected (JetBrains AccountsPanel.render parity). New tests C09, V3 (connected vs disconnected/connecting children and view description equal) and V5 (hostile rotations while disconnected).\nRED before impl: Q2, C09, S1, V3 failed on assertions. Mutants M1-M5 all killed by assertions on the named tests.\nGate (verbatim step-3 command, fresh snapshot, exit 0): lint 0, compile 0, npm test 558 tests, 554 pass, 4 skip, 0 fail; pinned tests and AgentLauncher.ts unchanged. No peer red file.\nNote for VSC-27: the quoting copies stay two, held identical by Q2; change both together."
 }

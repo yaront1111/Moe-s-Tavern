@@ -9,9 +9,63 @@
     "In a git-archive snapshot, moe-vscode `npm ci && npm run lint && npm run compile && npm test` exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first, append-only, in moe-vscode/tests/wire-parity.test.cjs. Write it with the Edit tool only (GLOBAL rule: no shell writes into the checkout). Epic rail, VSC-6 size exception: every line VSC-6 landed in this file (the load/loadClient/setup/withProvider/withClient/loadPage helpers and tests A1 to C4) stays byte-identical, so add new lines after C4 only. Reuse the file's harness (mem:gotcha-vscode-wire-parity-test-harness, mem:pattern-vscode-webview-script-vm-test): no new file, helper module or dependency. A verified reference of all 10 new tests is in /mnt/d/moe-scratch/vsc24-architect-prototype/vsc24-prototype.diff (README.txt there).\n\nSection D drives the RAW media/chat.js through loadPage() over JetBrains ChatChannelSelectionTest cases (b) to (f) (moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt; case (a) is VSC-6's C3). Fixtures spread from CHAN_G/CHAN_X: SEL_GENERAL (chan-general, type general), SEL_GENERAL_2 (chan-general-2, general), SEL_ZETA (chan-zeta, custom), SEL_ALPHA (chan-alpha, name alpha, type role), SEL_GONE (chan-deleted, custom). Helper pageSelectingGone(list): loadPage(); updateChannels([...list, SEL_GONE]); clickTab(list.length). Tab order is general, epic, task, custom, then list order, so a custom channel listed last is the last tab. Then assert selectedInState() === 'chan-deleted' as a setup guard.\n- D1 (b): pageSelectingGone([ZETA, GENERAL]), then updateChannels([ZETA, GENERAL]) selects chan-general: selectedInState, the last selectChannel post, and activeTabs() === 1.\n- D2 (c): the same with [ZETA, ALPHA] selects chan-zeta (list order, not name order).\n- D3 (d): a fresh page's updateChannels([ZETA, GENERAL]) posts exactly one selectChannel, chan-general. A fresh page's updateChannels([ZETA, ALPHA]) posts exactly chan-zeta.\n- D4 (e): a fresh page's updateChannels([]) posts no selectChannel and shows 0 active tabs. A fresh page's updateChannels([GENERAL]) then updateChannels([]) leaves selectedInState null and exactly 1 selectChannel post.\n- D5 (f): a fresh page's updateChannels([ZETA, GENERAL, GENERAL_2]) selects chan-general. pageSelectingGone([ZETA, GENERAL_2, GENERAL]) then updateChannels([ZETA, GENERAL_2, GENERAL]) selects chan-general-2.\n\nSection E, CHANNEL_CREATED:\n- E1 (withProvider, withSnapshot true): CHAN_Y delivered twice gives channelIds() ['chan-g','chan-x','chan-y']. Then {...CHAN_X, name:'x2'} gives ['chan-g','chan-y','chan-x'], and the last cache entry deep-equals that payload: the latest payload wins and moves last, like JetBrains `filter { it.id != channel.id } + channel`. h.posts deep-equals exactly the three {type:'channelCreated', channel} posts, so there is no updateChannels double-post.\n- E1b (withClient plus snapshot [CHAN_G, CHAN_X]): a client.onChannelCreated listener records the JSON-copied cache ids at fire time. Two CHAN_Y frames record [['chan-g','chan-x','chan-y'], ['chan-g','chan-x','chan-y']]: the cache is written first, then the event fires, as in B1b.\n- E2 (raw page): updateChannels([CHAN_G, CHAN_X]), then channelCreated CHAN_Y twice, then channelCreated CHAN_X. selectedInState stays chan-g, and listedIds() gives ['chan-g','chan-y','chan-x']. Call listedIds LAST, because it clicks every tab.\n- E3 (raw page): updateChannels([]), then channelCreated CHAN_X. The selectChannel posts are exactly ['chan-x']; assert that BEFORE selectedInState, which throws while no state was saved. selectedInState is chan-x and chatInput is enabled. Then channelCreated CHAN_G leaves the posts at ['chan-x'], because a listed selection is kept, like JetBrains choose. listedIds gives ['chan-g','chan-x'].\n- E4 (error handling): with a snapshot, the payloads null, {}, {id: 42}, 'chan-x' and [], plus a frame with no payload, each pass assert.doesNotThrow, leave the cache JSON unchanged and leave h.posts []. Without a snapshot, a valid frame does not throw and currentState stays undefined. Then a STATE_SNAPSHOT with no channels key followed by a CHAN_Y frame gives JSON.stringify(currentState.channels) === JSON.stringify([CHAN_Y]). Compare JSON text here, because channelIds() throws a TypeError, not an assertion failure, when the list stays undefined. On a raw page after updateChannels([CHAN_G]), channelCreated with channel undefined, null, {} and {id: 42} does not throw, and listedIds stays ['chan-g'].\nRules:\n- JSON-copy every vm-realm array before deepStrictEqual.\n- Never spell any project.json globalRails.forbiddenPatterns string in the test (the markup-injection DOM property is one of them). Read tabs only through clickTab, listedIds and activeTabs.\n\nRED proof, recorded in the step note:\n- Build a snapshot as the checkRef does, but cp --parents ONLY moe-vscode/tests/wire-parity.test.cjs.\n- In its moe-vscode, under the checkRef's env -i PATH, run `npm ci --no-audit --no-fund && node --test tests/wire-parity.test.cjs`.\n- Expected (architect prototype at 78642f85): exit 1, 22 tests, 14 pass and 8 fail. The failures are D1, D3, D5, E1, E1b, E2, E3 and E4, each with ERR_ASSERTION. A1 to C4, D2 and D4 pass.\n- Keep this snapshot for step 5.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/tests/wire-parity.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "moe-vscode/media/chat.js, Edit tool only. The tests run this raw page script in node:vm, so the helper stays inside this file. Error handling: malformed input is a silent no-op, never an exception.\n1) Next to deselectChannel, add one helper (for example autoSelectChannel()). When nothing is selected and the list is non-empty, it calls selectChannel with the first channel whose type === 'general' in `channels` array order, else channels[0]. Array order is the daemon's list order, never tab or name order. With a selection or an empty list, it does nothing. Comment it as JetBrains ChatChannelSelection.choose parity.\n2) case 'updateChannels': keep VSC-6's lines byte-identical: `channels = data.channels || []`, the drop-unlisted branch that calls deselectChannel(), and renderChannels(). Replace only the old 'Auto-select first channel if none selected' block with the helper call. A still-listed selection stays and posts nothing (C3).\n3) case 'channelCreated' (braced, for a block-scoped const):\n- Ignore the message unless data.channel is truthy and data.channel.id is a string.\n- Replace by id: channels = channels.filter(ch => ch.id !== id), then push the payload. The latest payload wins and moves last, as in JetBrains MoeMessageDispatcher `filter { it.id != channel.id } + channel`.\n- Call renderChannels(), then the helper, since JetBrains runs choose() on every channel-list change.\n- Never deselect here. channelCreated is not a full list, and a restored selection may arrive before the first updateChannels.\nNo added line may contain a globalRails.forbiddenPatterns string; build no markup. Prototype size: +19/-9.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/media/chat.js"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "moe-vscode/src/services/MoeDaemonClient.ts, case 'CHANNEL_CREATED' in handleMessage (line ~1682), Edit tool only. Mirror VSC-6's CHANNEL_DELETED block below it, and leave that block byte-identical. Wrap the case in braces.\n- Error handling: const id = payload?.id; if typeof id !== 'string', break with no cache write and no event. JetBrains ignores an unparseable payload. Today a null or {} payload is pushed into state.channels, where it later breaks CHANNEL_DELETED's filter (c.id on null).\n- Cache first: when this.state exists, state.channels = (state.channels ?? []).filter(c => c.id !== id), then push payload. A snapshot without a channel list starts one, as today. With no snapshot, nothing is cached.\n- Then fire this._onChannelCreated once per valid frame, also with no snapshot. This is unchanged: ChatViewProvider posts channelCreated, and the page dedupes.\n- Never fire _onStateChanged or _onChannelsReceived here. ChatViewProvider posts updateChannels for both, so the page would be told twice (mem:gotcha-vscode-wire-parity-test-harness point 9; E1 pins the exact posts).\nNo change to ChatViewProvider.ts or types/moe.ts. Prototype size: +11/-5, and it passes tsc -p and eslint.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs, Edit tool only.\n- moe-vscode/MANUAL_TESTS.md, section 'Deleted chat channel', step 2: change 'the selection falls back to the first listed channel' to 'the selection falls back to the general channel (the first general-type channel in list order), else the first listed channel, as in JetBrains'.\n- moe-vscode/CHANGELOG.md, [Unreleased] ### Fixed: add one bullet: 'Chat channel auto-selection matches JetBrains: on first load, or when the selected channel is gone, the view selects the general channel, else the first listed one. A repeated CHANNEL_CREATED frame no longer lists a channel twice.'\nBoth files are also declared by VSC-18 (task-43363b5d, REVIEW, landed in 78642f85). Sibling VSC-23 (task-921ca494) may add its own CHANGELOG bullet. Change only your lines, and never revert or reformat another task's hunk (shared checkout).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/MANUAL_TESTS.md",
+        "moe-vscode/CHANGELOG.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE, fresh (DoD 1 to 3). Gate in snapshots only: never run npm or node tests in the shared checkout (GLOBAL rail; mem:gotcha-vscode-gate-from-wsl). Use the checkRef's env -i PATH for every node and npm call.\n1) Mutant sweep (mem:pattern-mutant-sweep-in-gate-snapshot; mem:gotcha-vscode-wire-parity-test-harness point 6). cp --parents chat.js and MoeDaemonClient.ts over step 1's snapshot (now 22/22 pass). Use a scratch node driver OUTSIDE the checkout: the prototype's /mnt/d/moe-scratch/vsc24-architect-prototype/mutants.cjs, re-anchored on your code. Keep it for QA. The driver:\n- applies one exact-string replacement per mutant to the SNAPSHOT copy only, and asserts the anchor hits exactly once (a miss is an anchor fix, never a code change);\n- runs `node --test tests/wire-parity.test.cjs`;\n- counts a kill only on a non-zero exit WITH ERR_ASSERTION in the output;\n- restores the file in finally.\nThe mutants:\n- M1 no general preference (channels[0]);\n- M2 the last general-type channel wins;\n- M3 channelCreated without the id filter;\n- M4 channelCreated replaces in place instead of filter plus push;\n- M5 channelCreated without the auto-select;\n- M6 the page id guard reduced to truthiness;\n- M7 the auto-select ignores an existing selection;\n- M8 the client cache without the id filter;\n- M9 the client fires before the cache write;\n- M10 the client id guard removed;\n- M11 the client `?? []` removed;\n- M12 the client also fires _onStateChanged.\nExpected: 12/12 killed (prototype-verified). A survivor is a test gap: strengthen the test, then re-run. Report killed/total.\n2) Run the checkRef verbatim from the repo root (a new snapshot). Confirm exit 0, lint 0, compile 0 and node:test fail 0, and report the test count. Baseline at 78642f85: 556 tests (552 pass, 4 skip). Expect 566.\nError handling for a red run:\n- A failure in a test file this task did not touch, traced to a peer's wip checkpoint, follows mem:gotcha-snapshot-gate-peer-wip-checkpoint.\n- A failure in A1 to C4 means the change broke VSC-6 behaviour: fix the code, never the VSC-6 test.\n- If a run hangs, kill only the PID you started: no pkill, killall or pattern kill (GLOBAL rule).\nDelete both snapshots afterwards, by their printed literal paths.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/media/chat.js",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/wire-parity.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's diff only (load the adversarial-self-review skill). Check:\n- `git diff HEAD -- moe-vscode/tests/wire-parity.test.cjs` has no removed line (VSC-6 bytes intact).\n- The chat.js and MoeDaemonClient.ts diffs touch only the old auto-select block, the new helper, the channelCreated case and the CHANNEL_CREATED case. deselectChannel and CHANNEL_DELETED are unchanged.\n- No added line in the 5 files contains any string from project.json globalRails.forbiddenPatterns (grep the added lines for each entry).\n- Twice or concurrently: a replayed frame; a frame before the first snapshot; a renamed channel that is the current selection (kept, with no extra selectChannel); a restored selection whose channel first arrives by channelCreated (never deselected).\n- Null, empty or huge input: an empty list; only role channels; two general channels; malformed payloads in both layers. The O(n) filter per frame is fine at chat-channel counts.\n- Assumptions: 'first' is the daemon's list order (StateManager sorts by createdAt and seeds #general first), not the tab grouping. The provider still posts exactly once per frame.\n- `git diff --stat HEAD -- moe-jetbrains` is empty: JetBrains is the reference and is unchanged.\nFix what you find. If code changed, re-run step 5's checkRef. Record the review in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/media/chat.js",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/wire-parity.test.cjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,10 +78,85 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:11:52.276Z",
-  "updatedAt": "2026-11-02T15:16:27.251Z",
+  "updatedAt": "2026-11-02T16:02:41.721Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:16:27.251Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T15:44:32.210Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T16:02:41.695Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code chat matches JetBrains in two places. (1) media/chat.js: when nothing is selected (on first load, after the selected channel leaves an updateChannels list, or when a channelCreated arrives with no selection), the page selects the first general-type channel in the daemon's list order, else the first listed channel, else nothing. A still-listed selection is kept and posts no selectChannel. (2) CHANNEL_CREATED replaces by id in the MoeDaemonClient cache and in the chat.js list: a repeated frame leaves one entry, and the latest payload wins and moves last. The cache is written before onChannelCreated fires. A payload without a string id is a silent no-op in both layers.",
+    "acceptanceCriteria": [
+      "DoD 1: wire-parity D1 to D5 run the raw media/chat.js in node:vm over ChatChannelSelectionTest cases (b) to (f), and pass.",
+      "DoD 2: E1 (client cache through the real provider), E1b (cache before event), E2 (chat.js list), E3 (auto-select on create) and E4 (malformed payloads) pass.",
+      "DoD 3: the checkRef exits 0 (lint 0, compile 0, node:test fail 0, about 566 tests).",
+      "Mutant sweep M1 to M12: 12/12 killed with ERR_ASSERTION."
+    ],
+    "invariants": [
+      "VSC-6 landed bytes stay byte-identical: wire-parity.test.cjs lines 1 to 437, chat.js deselectChannel and the drop-unlisted branch, and MoeDaemonClient CHANNEL_DELETED.",
+      "ChatViewProvider posts exactly one webview message per CHANNEL_CREATED frame (channelCreated), never updateChannels.",
+      "No added line contains a project.json globalRails.forbiddenPatterns string.",
+      "moe-jetbrains is unchanged."
+    ],
+    "compatibility": [
+      "The wire is unchanged: the CHANNEL_CREATED payload is a ChatChannel, and the webview messages channelCreated and updateChannels keep their shapes.",
+      "The saved webview state shape is unchanged: {currentChannel, unreadCounts, messageCache, pinCache, decisionMap}.",
+      "A snapshot without a channels key still gets a list started by the first CHANNEL_CREATED. With no snapshot, the event still fires."
+    ],
+    "reuse": [
+      "The tests/wire-parity.test.cjs harness: loadPage, withProvider, withClient, snapshot, and CHAN_G/CHAN_X/CHAN_Y.",
+      "VSC-6's CHANNEL_DELETED block (guard, cache first, then the event) is the client pattern. No new module."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt choose(): the still-listed id, else the first type == general, else the first, else null. ChatPanel.updateChannels runs it on every channel-list change.",
+      "moe-jetbrains MoeMessageDispatcher.kt CHANNEL_CREATED (~line 377): a non-object payload is ignored, a parse failure is logged and ignored, and the list becomes channels.filter { it.id != channel.id } + channel.",
+      "moe-vscode/media/chat.js: updateChannels (~line 515) auto-selects channels[0], and channelCreated (~line 554) pushes without an id check.",
+      "moe-vscode/src/services/MoeDaemonClient.ts handleMessage CHANNEL_CREATED (~line 1682) fires before pushing, with no id check. payload is untyped (JSON.parse).",
+      "ChatViewProvider: onChannelCreated posts channelCreated; onChannelsReceived and onStateChanged both post updateChannels."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc24-gate-XXXXXX) && echo \"snapshot $S\" && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/media/chat.js moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/tests/wire-parity.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Porting choose(list, previousId) whole was rejected: VSC-6's drop-unlisted branch already handles previousId, so only the general-else-first part is new. A separate test file was rejected because it would duplicate about 200 lines of vm harness; appending keeps one harness, since the VSC-6 rail forbids rewriting landed lines, not adding new ones. Suppressing the client event on a duplicate frame was rejected: JetBrains republishes state on every frame (the latest payload wins), and the page dedupes. A persisted-state first-load test was rejected because loadPage hard-codes getState, and changing it rewrites VSC-6 bytes; the gone-selection path runs the same updateChannels branch.",
+    "codebaseInsights": "Tab order in chat.js renderChannels is grouped (general, epic, task, custom; a role channel falls into custom), but 'first listed' means the channels array order. The daemon's ChatChannel.type is 'general' | 'role' | 'custom'. ChatViewProvider has two updateChannels paths (onChannelsReceived and onStateChanged). The checkRef dry-run at 78642f85 exited 0 with 556 tests (552 pass, 4 skip). The architect prototype (/mnt/d/moe-scratch/vsc24-architect-prototype) gave RED 8/22 failing, GREEN 22/22, and 12/12 mutants killed, and passed tsc and eslint.",
+    "risks": "E3: selectedInState() throws while no state was saved, so assert the selectChannel posts first. E4: channelIds() throws a TypeError when the cache list is undefined, so compare JSON text instead. SEL_GONE must be custom and listed last to be the last tab. Never deselect in channelCreated, because the page's list may be partial. CHANGELOG.md and MANUAL_TESTS.md are also declared by VSC-18 (REVIEW), and VSC-23 may edit CHANGELOG: Edit tool only, own lines only. Uncommitted accounts-file edits from a peer are in moe-vscode; the snapshot gate excludes them, so leave them alone.",
+    "keyFiles": [
+      "moe-vscode/media/chat.js",
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/wire-parity.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatChannelSelection.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ChatChannelSelectionTest.kt",
+      "moe-vscode/src/providers/ChatViewProvider.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ed60ab316c94c38750f80f1dc62ba2e9f1fae818",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T16:02:41.721Z",
+  "approvedPlanRevision": 1
 }
