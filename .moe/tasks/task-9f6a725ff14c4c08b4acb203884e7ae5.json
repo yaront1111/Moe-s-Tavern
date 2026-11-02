@@ -83,12 +83,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "SIZE-ONLY REJECT. Substance is green, every DoD item is verified, nothing in the bytes needs fixing. The diff exceeds the 400 net changed LOC cap and no project, epic or task rail waives size (epicRails: files-to-avoid and JetBrains-first only; taskRails []).\n\nMeasured on b7a67b97 (worktree files byte-identical): MoeDaemonClient.ts +29, chat.js +19, tests/wire-parity.test.cjs +437 = +485 net, excluding the board json. An approved plan does not waive the cap and test lines count (mem:gotcha-cq-plan-size-vs-qa-cap).\n\nVerified good:\n- Re-ran task.verification exactly (git archive HEAD, 3-file overlay, env -i nvm Node 24, npm ci, lint, compile, test): EXIT=0, 442 tests, 438 pass, 4 skip, 0 fail. Existing MoeDaemonClient harness suites pass unchanged.\n- DoD 1 (A1-A4), DoD 2 (B1-B3 via the real ChatViewProvider), DoD 3 (C1-C4 raw chat.js under vm) all hold.\n- 4 scratch mutants all killed by assertion: blank guard dropped, fire before write, deselectChannel() dropped, unknown-id guard dropped. Restored 12/12.\n- Forbidden-token grep of added lines clean; no new import; ChatViewProvider.ts and existing tests unchanged.\n\nTo clear (failedDodItems empty on purpose):\n(a) Preferred, bytes already landed: per mem:decision-size-only-reject-of-landed-bytes, the worker files an EPIC ADD_RAIL (under 1000 chars) naming b7a67b97, the 3 files with numstat 29/19/437, waiving size only for this slice, and pings #governors with the proposal id. Then a no-byte complete_task. I will check the rail text against `git diff --numstat b7a67b97^ b7a67b97` and approve once the proposal is APPROVED.\n(b) Or request_replan and split at the existing seam: wire-parity.test.cjs lines 1-295 (sections A, B and client harness) with MoeDaemonClient.ts is about 325 net; lines 296-437 (section C raw-page harness) with chat.js is about 170 net.",
+  "reopenReason": "Governor unpark: the human approved waiver prop-60dd597c (resolvedBy HUMAN), and epic-aabc654d now carries the VSC-6 size-exception rail exactly once. QA reviews on substance under the rail (net 485 for b7a67b97, retry completion 6fa401dc).",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -109,18 +109,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:41.943Z",
-  "updatedAt": "2026-11-02T10:28:35.544Z",
+  "updatedAt": "2026-11-02T10:42:13.598Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T09:54:40.142Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-02T10:42:13.597Z",
+    "wallClockMs": 2853455
   },
   "contextFetchedBy": [
     "worker-13a877ad",
-    "qa-1106e678"
+    "qa-1106e678",
+    "qa-564d8bce"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -218,7 +221,10 @@
   "filesModified": [
     ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
     ".serena/memories/task-task-9f6a725ff14c4c08b4acb203884e7ae5-handoff.md",
-    ".serena/memories/decision-size-only-reject-of-landed-bytes.md"
+    ".serena/memories/decision-size-only-reject-of-landed-bytes.md",
+    ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+    ".moe/tasks/task-db97dacb7b3843b4a6f747c154123501.json"
   ],
   "completionSummary": "Round 2, no-byte retry after QA's size-only reject (route a). EPIC ADD_RAIL prop-60dd597c2782400ba98a9d8a012f7b4c was filed at 10:23Z and is still PENDING at complete_task (status re-read just before this call; only a human resolves it). It waives size only for completion b7a67b97. Its numstat from `git diff --numstat b7a67b97^ b7a67b97` is: MoeDaemonClient.ts +29, media/chat.js +19, tests/wire-parity.test.cjs +437, net 485 without the board json. #governors was pinged and a task comment posted.\n\nNo source bytes changed. At HEAD ac66db4c the 3 files are cmp-identical to b7a67b97, no later commit touches them, and `git status -- moe-vscode/` is clean.\n\nFresh evidence:\n(1) RED/GREEN in a scratch archive: 12/12 at HEAD. With both product files at b7a67b97^, 9 fail; B2, B3 and C3 hold, as planned.\n(2) Per-half A/B: reverting only the client fails A1-A4, B1 and B1b. Reverting only chat.js fails C1, C2 and C4.\n(3) 14 of 14 mutants killed by ERR_ASSERTION: blank guard, trim, connected check, OPEN check, length guard, fire-before-write, deselect call, saveState, both disabled flags, renderPins, textContent clear, an inverted still-listed check and an inverted filter.\n(4) The recorded gate was re-run verbatim at HEAD ac66db4c, because VSC-4 landed after the first run at ff0e8290. Both runs: EXIT=0; lint, compile and test all ran; 451 tests, 447 pass, 4 Windows skips, 0 fail. That is 451 rather than 442 because VSC-8 landed tests.\n(5) Self-review: imports unchanged, ChatViewProvider.ts and the existing tests unchanged, 0 forbidden tokens, no vacuous recorders.\n\nQA: once the proposal is APPROVED, check the rail text against the numstat; while it is PENDING, park the row.",
   "commits": [
@@ -239,6 +245,24 @@
       "treeId": "25682fba9ebd5407fd6fba3ed901aaaa10c1838f",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "6fa401dc28d00dbdfd3d5b145341bd5c05c099fe",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T10:20:53Z",
+      "paths": [
+        ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+        ".moe/tasks/task-9f6a725ff14c4c08b4acb203884e7ae5.json",
+        ".moe/tasks/task-db97dacb7b3843b4a6f747c154123501.json"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T10:29:06.117Z",
+      "treeId": "ad7fef1172159083d5a3146b3b1648b7b85685a0",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -250,10 +274,10 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-81a7999f@2026-11-02T10:12:36Z",
-    "at": "2026-11-02T10:18:36.657Z"
+    "sessionId": "worker-13a877ad@2026-11-02T10:20:53Z",
+    "at": "2026-11-02T10:29:06.117Z"
   },
-  "reviewCompletedAt": "2026-11-02T10:20:52.742Z",
+  "reviewCompletedAt": "2026-11-02T10:42:13.597Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -276,5 +300,14 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedReason": null,
+  "priorBlockedReason": "Governor park: size waiver prop-60dd597c (EPIC ADD_RAIL, net 485 for landed b7a67b97; retry completion 6fa401dc carries no source bytes) is PENDING the human's IDE click. Auto mode bars governor approval. QA round 1 found the substance green (442 tests, 0 fail, 4/4 mutants). Without a rail QA must size-reject, so the row waits here. Resume: once the proposal reads APPROVED, the governor sets this row back to REVIEW and QA reviews on substance under the rail.",
+  "blockedResourceId": null,
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-02T10:42:13.597Z",
+  "reviewSummary": "APPROVE under epic rail \"VSC-6 size exception\" (prop-60dd597c APPROVED by HUMAN 10:30Z). Size: net 485 per numstat of b7a67b97 (client 29, chat.js 19, test 437), matching the rail. No growth: the 3 blobs at HEAD 644ce882 = b7a67b97 = worktree; 6fa401dc is board json only; both completions are on the branch and origin.\n\nGate: task.verification re-run verbatim at 644ce882 gave EXIT=0. Lint, compile and test ran: 470 tests, 466 pass, 4 skip, 0 fail (451 earlier; VSC-21a added tests). All 12 wire-parity rows pass.\n\nDoD 1: A1-A3. DoD 2: B1/B2 through the real ChatViewProvider handshake (one updateChannels post; a repeat or unknown id is a no-op), plus B3 for malformed frames. DoD 3: C1/C2 run raw chat.js in vm. DoD 4: the 8 suites are unchanged and green. DoD 5: the gate.\n\nOwn mutants: 7/7 killed by ERR_ASSERTION (force:false, sendMessage bypass, extra onStateChanged post, unpruned list fired first, some->every, empty-state div dropped, null instead of deselectChannel). Restored, hashes checked.\n\nRails: 0 forbidden tokens, imports unchanged, no avoided files, no JetBrains change. Contract matches the daemon's RELEASE_TASK, chatStore CHANNEL_DELETED and the JetBrains sender/dispatcher.\n\nponytail (non-blocking): test L100-101 delete: unused frames helper. Client L988-992 shrink: one conditional sendMessage line. net: -6 lines possible.",
+  "requiredCheckAtDone": null
 }

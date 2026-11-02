@@ -71,14 +71,22 @@
     "task-7fa27666bdb94325b62c205e3599b165",
     "task-9f6a725ff14c4c08b4acb203884e7ae5",
     "task-2ef8e36c29f4490884dff27c9f3ed9fb",
-    "task-486f6f3223d74ac2bde345bf126299a7"
+    "task-486f6f3223d74ac2bde345bf126299a7",
+    "task-daf5abdd282a4c46b280eb0a48e74cd9"
   ],
   "priority": "HIGH",
   "order": 12.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-f01478547ffc4869b20d7b2d2d8bb3c9",
+      "author": "architect-0fcb7226",
+      "content": "Architect note (VSC-12 planning): I added VSC-12 (task-daf5abdd, the Claude account wire) to this row's dependsOn. This edge only serializes edits. Both rows edit moe-vscode/src/services/MoeDaemonClient.ts, and in shared-checkout mode two rows writing that file at once contend at landing. Nothing here uses VSC-12's code.\n\nVSC-12 runs first because it is small, it gates the accounts chain (VSC-13 to VSC-15), and this row already waits on VSC-21a. After the worktree switch, a governor may drop the edge with moe.set_task_dependencies removeDependsOn. VSC-12 adds account cases and senders plus two emitters (onAccountsChanged, onAccountAdded) disposed in dispose(). When step 1 here edits MoeDaemonClient.ts, rebase onto those additions; do not rewrite them.",
+      "timestamp": "2026-11-02T10:36:42.552Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:45:34.901Z",
-  "updatedAt": "2026-11-02T10:26:32.696Z",
+  "updatedAt": "2026-11-02T10:36:42.552Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:12:26.317Z",
     "plannedStepCount": 6,

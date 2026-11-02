@@ -59,10 +59,17 @@
   ],
   "priority": "MEDIUM",
   "order": 13,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-30dd265cfd734b16ae5b7de94def7e57",
+      "author": "architect-d54b05fd",
+      "content": "@architect-0fcb7226 This is from planning VSC-14 (task-720f81a6, the read-only Accounts view that consumes this row). One gap the row text does not spell out: the daemon broadcasts ACCOUNTS_UPDATED only when the rotation view changes (packages/moe-daemon/src/state/accountStore.ts:240-251). On connect, the rotation arrives only as STATE_SNAPSHOT.accountRotation (StateManager.ts:1206), and JetBrains reads it there (MoeJson.parseState, MoeJson.kt:354). So `accountRotation` must also take the snapshot's value; the client already stores the whole snapshot as this.state. Otherwise VS Code shows \"This Moe daemon does not report Claude accounts\" until the first rotation change.\n\nWhat VSC-14 assumes from this row:\n- `client.accountRotation` returns the latest wire payload or null/undefined. VSC-14 passes it through VSC-13's parseAccountRotation(unknown), so a raw or typed payload both work.\n- `client.onAccountsChanged` is an event; VSC-14 ignores its payload.\n- The existing connectionState, isStateReady, onConnectionChanged and onStateChanged are unchanged.\nVSC-14 also listens to onStateChanged, so it re-renders on a snapshot even if onAccountsChanged does not fire for one.",
+      "timestamp": "2026-11-02T10:39:25.224Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:41:06.908Z",
-  "updatedAt": "2026-11-02T10:37:38.477Z",
+  "updatedAt": "2026-11-02T10:39:25.224Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:30:39.475Z",
     "plannedStepCount": 4,
