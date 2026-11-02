@@ -81,18 +81,25 @@
     {
       "stepId": "step-5",
       "description": "5. Final adversarial self-review once. Load adversarial-self-review; attack unreadable/malformed project/task JSON, invalid gate/mode, fake Git version, detached HEAD, invalid/injection-like branch names, unrelated GIT_* environment, NUL parsing, output/time bounds, Windows case vs POSIX identity and terminal timestamp boundaries. Confirm new off-mode failures do not suppress existing health errors; on-mode unknown is never ready; doctor never writes .moe/Git or starts daemon. Audit runbook rollback's unset+switch order and migration's no-lease exception versus normal landing lease, no main bypass, no destructive recovery suggestions. Keep <=400 net LOC/three files. If fixes arise rerun same gate; complete via Moe with actual paths/fresh evidence, wrapper owns Git writes. WT17/18 keep other docs.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/commands/doctor.ts",
         "packages/moe-daemon/src/commands/doctor.test.ts",
         "docs/TROUBLESHOOTING.md"
       ],
-      "startedAt": "2026-11-02T22:45:14.356Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctorWorktree.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "Step 5 adversarial self-review, over the whole task diff. Fixed:\n(1) The control-branch [FAIL] hint always printed `git switch -c moe/control main`. On a branch-target project, such as this one with target moe/work-2026-10-24, it would cut moe/control from the wrong branch. The target is now resolved once in probeWorktreeReadiness and passed to probeControlBranch and probeTarget, and the hint names it. A new test was RED first, then GREEN. resolveWorktreeTarget is pure and never throws.\n(2) The runbook's ancestor precondition now says to use `main` instead of `origin/main` when there is no remote.\n(3) Fixed in step 4: the real-repo fixture's GIT_CONFIG_GLOBAL is NUL on win32.\n\nChecked with no change needed:\n- Malformed or unreadable project.json, a non-object settings value or an invalid mode gives [FAIL], never a silent off.\n- Version parsing handles suffixes; unknown output fails when on.\n- Detached HEAD gives a named fail.\n- Branch names go to git as argv, rejected by cachedPlanRef and quoted by shown().\n- runGit masks GIT_*; there are 4 calls, each ≤2s and ≤128KiB.\n- The NUL listing parser requires the trailing NUL; truncated or malformed output is a named failure.\n- Task ids are regex-bound, so there is no traversal; the stale check never fails.\n- An off-mode failure does not hide existing health failures (test).\n- Doctor only reads: the real-repo snapshot test covers bytes, mtimes, index, HEAD, refs and the worktree list.\n- Runbook: rollback order is off, then unset, then a fresh switch. The migration takes no lease, and normal landings take the git-land-<target> lease. No manual merge/push to main, and no force/reset advice.\n\nFresh evidence after the last edit:\n- Exact gate exit 0: doctor.test.ts 65/65, PASS parity.\n- tsc on the test file (--ignoreConfig, strict, bundler) is clean.\n- Native Windows: 63 passed, 2 skipped by design.\n- Doc guards qaCommitPolicy + daemonGitDocs: 14/14. account-trust-docs: 5/5.\n- npm run lint: exit 0.\n\nSize is about 526 net task-wide across the 4 rail files, under the 560 waiver.",
+      "startedAt": "2026-11-02T22:45:14.356Z",
+      "completedAt": "2026-11-02T22:48:59.349Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -176,7 +183,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-11-02T22:45:14.356Z",
+  "updatedAt": "2026-11-02T22:51:41.446Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",
@@ -186,7 +193,7 @@
     "firstClaimAt": "2026-10-30T14:02:59.763Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-76a2c8bb",
@@ -201,7 +208,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:06:08.916Z",
@@ -253,16 +261,29 @@
       "treeId": "9b52fecac4cab7340206af2a218701c3a6c4fbea",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "b99e31c2b8d9d0d8157df183b901cadae47b938d",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-02T22:35:54Z",
+      "paths": [
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/commands/doctorWorktree.ts"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-02T22:51:41.446Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
-    ".moe/tasks/task-5d5175717f704c708bc5e7f76b45129f.json",
-    ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json",
-    ".moe/tasks/task-d88bb99057b54b3bb02241557886aa85.json",
-    "packages/moe-daemon/src/commands/doctor.test.ts",
     "packages/moe-daemon/src/commands/doctor.ts",
-    "packages/moe-daemon/src/commands/doctorWorktree.ts"
+    "packages/moe-daemon/src/commands/doctor.test.ts",
+    "packages/moe-daemon/src/commands/doctorWorktree.ts",
+    "docs/TROUBLESHOOTING.md"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/commands/doctor.test.ts",
@@ -271,8 +292,17 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-c0a1ac70@2026-10-31T06:08:51Z",
-    "at": "2026-10-31T06:25:31.452Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-02T22:35:54Z",
+    "at": "2026-11-02T22:51:41.446Z"
+  },
+  "reviewStartedAt": "2026-11-02T22:50:45.191Z",
+  "verification": {
+    "command": "(cd packages/moe-daemon && npm run build && npx vitest run src/commands/doctor.test.ts) && (S=$(mktemp -d) && trap 'rm -rf \"$S\"' EXIT && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh))",
+    "exitCode": 0,
+    "outputTail": "Run from the task worktree root (.worktrees/task-48f0b3aa…) under env -i, node v24.21.0, after `npm ci --prefer-offline` in packages/moe-daemon.\nprebuild: Generated initFiles.ts (8 role docs + 3 subagents), skillFiles.ts (65 skill files across 17 skills); tsc Version 7.0.2; build OK\n RUN  v5.0.5 …/packages/moe-daemon\n ✓ src/commands/doctor.test.ts (65 tests) 770ms\n Test Files  1 passed (1)\n      Tests  65 passed (65)\nPASS parity-check.sh\nEXIT=0 (git status after: only my 3 paths modified; no generated file changed)",
+    "reportedAt": "2026-11-02T22:50:45.191Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "WT-16 is delivered. Task-wide it adds about 526 net lines across exactly the 4 waiver files (TASK rail ≤560).\n\nSteps 1-2 (prior session, checkpoint 8f059bec):\n- New doctorWorktree.ts with seven probes: worktree mode, git version, project root, control branch, target, quality gate and stale task worktrees.\n- They are hard checks when resolveWorktreeMode(settings) is 'on' and [INFO] when it is 'off'.\n- The stale probe is WARN only.\n- doctor.ts gains the 'info' symbol and runs these as probe 9.\n\nStep 3: docs/TROUBLESHOOTING.md gets TOC item 8 \"Worktree Mode\" and \"### Worktree mode: flip on / roll back\" (+78/-1).\n- A readiness table maps each doctor line to its meaning.\n- Flip on: drain, then the rescue-ref check, then the settings (qualityGate, plus resources git-land-main {1, 7200000, releaseOnDeregister true} and the git-land-<target> id rule).\n- Then the human-only migration landing: `scripts/moe-agent.sh --land-branch` / `-LandBranch`, the ancestor precondition, and a code table from WT-10M's landed code.\n- Then `git switch -c moe/control main`, worktreeMode on with consolidationBranch main, doctor, and relaunch.\n- Branch-target variant (this project's 11-02 switch).\n- Rollback: mode off, UNSET consolidationBranch, `git switch -c moe/work-<date> main`, and keep worktrees and rescue refs. It does not assume WT-14's sweep has landed.\n- The runbook has no manual merge or push to main and no force/reset advice.\n\nStep 4: the exact gate passes. A native-Windows run caught a defect in my own test: GIT_CONFIG_GLOBAL=os.devNull is `\\\\.\\nul`, which Git for Windows rejects. Fixed to the repo's 'NUL' convention.\n\nStep 5 self-review fixes:\n- The control-branch FAIL hint now names the resolved target instead of always main. It is RED-first tested.\n- The runbook says to use main instead of origin/main when there is no remote.\n\nEvidence, fresh after the last edit:\n- Exact gate exit 0: 65/65, PASS parity.\n- Native Windows (node 24.16, git 2.54.windows): 63 passed, 2 skipped by desi"
 }

@@ -1,0 +1,146 @@
+{
+  "id": "task-137bab15f35949fa8a4902cedd74b372",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: the daemon answers a /health challenge with an HMAC of a spawn key the IDE passed it, so VS Code can prove it started the daemon (prerequisite of task-648a5916)",
+  "description": "Prerequisite of task-648a5916, the CQ-RF07 residual about spawn provenance for VS Code under the protected profile. Split out by architect-24611a0a while planning that row, 2026-11-02.\n\nWhy: JetBrains proves it started a protected daemon from OS facts, (pid, startInstant) and the parent pid, via RuntimeSelectionPolicy.verifyProvenance. Node has no portable process start time, so VS Code needs a proof the daemon can give but cannot mint:\n- VS Code mints a fresh 32-byte key for each protected spawn.\n- It keeps the key in its owner-only store outside the repository (SecretStorage).\n- It passes the key in the environment of the installed daemon it spawns.\n- To verify, VS Code sends a fresh random challenge, and the daemon answers HMAC-SHA256(key, challenge).\nA daemon started any other way holds no key and cannot answer. Examples: a terminal `node packages/moe-daemon/dist/index.js start`, or a legacy seat's autostart. This is the spawn-nonce mechanism that docs/design/protected-profile-threat-model.md (CQ-RF05) lists as deferred. Same-user host processes stay outside that model, so the key's secrecy is not claimed against them.\n\nContract (packages/moe-daemon only; no MCP tool changes):\n- Env `MOE_SPAWN_PROOF_KEY` holds exactly 64 hex characters (32 bytes).\n  - The `_run` process reads it once at startup, keeps the bytes in memory, and deletes the variable from its own process.env, so nothing it spawns inherits it.\n  - Any other value is ignored, with a log line that names the problem, never the value.\n  - The `start` supervisor already passes process.env to every `_run` it spawns, crash restarts included (spawnChild, packages/moe-daemon/src/index.ts ~:969). Keep that.\n- `GET /health?challenge=<64 lowercase hex>` answers the normal body plus `spawnProof`, but only while a key is held. spawnProof is the lowercase hex HMAC-SHA256 keyed by the key bytes over the challenge's ASCII text.\n  - No key, a missing, malformed or repeated challenge, or any other query parameter: the normal body without spawnProof.\n  - The Host guard (isAllowedHealthHost) still runs first. Plain `GET /health` answers exactly as today, and every other path still answers 426.\n- Known-answer vector, pinned identically by task-648a5916's client tests:\n  - key 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\n  - challenge 'ab' repeated 32 times\n  - spawnProof 583630234f7e60ecfa2a6ae2e98ee37876e3ff6344457723cb4b42fcf77f7fc0\n- The key never reaches daemon.json, logs, the activity log, chat or any response.\n\nFiles: packages/moe-daemon/src/index.ts, a new packages/moe-daemon/src/server/spawnProof.ts with its test, docs/ARCHITECTURE.md (the /health bullet) and docs/CONFIGURATION.md (the environment table). Both docs files are also declared by CQ-RF07 (task-f3f364a6) and WT-17/18/19. Worktree mode merges disjoint hunks, so keep these edits to one sentence in the /health bullet and one table row.",
+  "definitionOfDone": [
+    "The `_run` process reads MOE_SPAWN_PROOF_KEY once at startup. It accepts exactly 64 hex characters; anything else is ignored with a log line that never prints the value. It keeps the key bytes in memory only and deletes the variable from its own process.env. The key never reaches daemon.json, a log, the activity log, chat or any response.",
+    "`GET /health?challenge=<64 lowercase hex>` answers the normal body plus `spawnProof`, the lowercase hex HMAC-SHA256 keyed by the key bytes over the challenge text, only while a key is held. With no key, a missing, malformed or repeated challenge, or any other query parameter, it answers the normal body without spawnProof. The Host guard still refuses first, plain `GET /health` is unchanged, and every other path still answers 426.",
+    "A new packages/moe-daemon/src/server/spawnProof.test.ts covers: key parsing (valid, short, non-hex, absent); the known-answer vector from the description; challenge parsing (valid, uppercase, short, repeated, extra parameter, no query); and the /health URL routing helper. Tests are RED first against the missing module, with the failing output quoted.",
+    "docs/ARCHITECTURE.md (the /health bullet) and docs/CONFIGURATION.md (the environment table: set by the IDE for a protected spawn, never by hand) describe the key and the challenge answer.",
+    "The full daemon suite `cd packages/moe-daemon && npx vitest run` exits 0 in a whole-repo git-archive snapshot of the task worktree, never in place in the shared control checkout. Its output is the complete_task evidence."
+  ],
+  "taskRails": [
+    "The spawn key never leaves process memory: it is never written to daemon.json, a log, the activity log, chat or any response, and it is never echoed. Only its HMAC over a caller's challenge is returned."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first (test-driven-development). Create packages/moe-daemon/src/server/spawnProof.test.ts with the Write tool. It imports from './spawnProof.js', which does not exist yet, so the RED run fails at import; quote that failure.\n\nCases:\n(a) takeSpawnProofKey(env):\n  - valid lowercase and valid uppercase 64-hex values give a 32-byte key;\n  - each of these gives a null key plus a `problem` string, and the problem text never contains the value: 63 characters, 65 characters, a non-hex character, the empty string;\n  - absent gives a null key and no problem;\n  - in every case where the variable was present, it is gone from the env object afterwards.\n(b) Known-answer vector: spawnProofFor(Buffer.from('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f','hex'), 'ab'.repeat(32)) === '583630234f7e60ecfa2a6ae2e98ee37876e3ff6344457723cb4b42fcf77f7fc0'. The client tests of task-648a5916 pin the same vector.\n(c) parseHealthRequest(url):\n  - '/health' is health with no challenge;\n  - '/health?challenge=' plus 64 lowercase hex is health with that challenge;\n  - these are health with no challenge: an uppercase challenge, 63 characters, a repeated challenge parameter, an extra parameter (challenge plus x=1), a lone x=1, and '/health?';\n  - these are NOT health: '/healthz', '/health/', '/', undefined, and the absolute form 'http://127.0.0.1/health'. The handler today matches req.url === '/health' exactly, so only the exact path routes.\n(d) healthProofFields(route, key): { spawnProof } only when both a challenge and a key are present; {} otherwise.\n\nRun RED in the step-5 snapshot (whole-repo git archive plus an explicit overlay of the test file only): `npx vitest run src/server/spawnProof.test.ts` must fail. Never run npm or vitest in the shared control checkout.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/spawnProof.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement packages/moe-daemon/src/server/spawnProof.ts: pure functions, no IO, node:crypto only.\n- `export const SPAWN_PROOF_ENV = 'MOE_SPAWN_PROOF_KEY'`.\n- `takeSpawnProofKey(env: NodeJS.ProcessEnv): { key: Buffer | null; problem?: string }`. It reads env[SPAWN_PROOF_ENV], ALWAYS deletes the variable when present (valid or not), and accepts /^[0-9a-f]{64}$/i as Buffer.from(value, 'hex'). Otherwise it returns a problem such as 'MOE_SPAWN_PROOF_KEY is not 64 hex characters', which must never interpolate the value.\n- `parseHealthRequest(url: string | undefined): { health: false } | { health: true; challenge?: string }`. Split at the first '?'. The path part must be exactly '/health'. Parse the query with URLSearchParams and keep a challenge only when the query holds exactly one parameter, named challenge, whose value matches /^[0-9a-f]{64}$/.\n- `spawnProofFor(key: Buffer, challenge: string): string` returns createHmac('sha256', key).update(challenge, 'ascii').digest('hex').\n- `healthProofFields(route, key)` returns { spawnProof } or {}.\nA header comment states the purpose (the VS Code protected-provenance proof, task-648a5916), the contract, and that the key is never returned or logged.\n\nError handling: none of these throws on hostile input. URLSearchParams decoding is safe, and anything malformed simply yields no challenge.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/spawnProof.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire packages/moe-daemon/src/index.ts.\n\n(1) Only the `_run` path reads the key, before anything else runs: `case '_run':` (~:1240) or the top of startDaemon (~:641), which only `_run` reaches. It calls takeSpawnProofKey(process.env) once and keeps `key` in a module-level or closure variable. When there is a problem, it logs one logger.warn({ problem }) line; the value is never logged.\n- The `start` and `init` supervisor (superviseDaemon) must NOT read or delete the variable. spawnChild (~:969) already passes `env: process.env` to every `_run`, crash restarts included. Leave that untouched and say so in a one-line comment.\n- Deleting from process.env in `_run` keeps the key away from the processes the daemon spawns (git and the like).\n\n(2) The HTTP handler (~:710): replace `req.method === 'GET' && req.url === '/health'` with a route from parseHealthRequest(req.url) for GET requests. Keep the isAllowedHealthHost 403 guard first, exactly as now. Build the body as today and spread healthProofFields(route, key) after bindHost. Plain `/health` stays byte-identical, and non-health paths still get 426.\n\n(3) The key never reaches writeDaemonInfo / daemon.json, any logger call, the activity log or chat. Grep the diff for SPAWN_PROOF and key usages.\n\nError handling: a bad env value only logs a warning and runs without a key; the proof computation cannot throw on a validated challenge.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs (DoD 4). Both files are also declared by CQ-RF07 (task-f3f364a6, WORKING) and WT-17/18/19. Worktree mode merges disjoint hunks, so keep each edit minimal and re-read the file in your worktree first.\n- docs/ARCHITECTURE.md, the plain-HTTP `GET /health` bullet (~:508-513): append one sentence. With a spawn key (`MOE_SPAWN_PROOF_KEY`, which the IDE sets on a protected spawn), `GET /health?challenge=<64 lowercase hex>` also returns `spawnProof`, the HMAC-SHA256 of the challenge under that key. The key itself is never returned, and any other query answers the plain body.\n- docs/CONFIGURATION.md, the Daemon Configuration table: one row after MOE_BIND_HOST, `| MOE_SPAWN_PROOF_KEY | ... | unset | — |`. The description: set by the IDE (VS Code) for a protected-profile spawn, never by hand; 64 hex characters; `_run` keeps it in memory and removes it from its own environment; it answers `/health?challenge=` with `spawnProof`.\nThe dated decision record docs/design/protected-profile-threat-model.md is not edited here.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/CONFIGURATION.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, run once (DoD 5 plus a live wiring smoke).\n\n(a) Build a whole-repo snapshot outside the checkout: R=$(git rev-parse --show-toplevel); S=$(mktemp -d); git -C \"$R\" archive HEAD | tar -x -C \"$S\". Overlay exactly these five files, `cp` then `cmp` each: packages/moe-daemon/src/server/spawnProof.ts, packages/moe-daemon/src/server/spawnProof.test.ts, packages/moe-daemon/src/index.ts, docs/ARCHITECTURE.md and docs/CONFIGURATION.md. Then `cd \"$S/packages/moe-daemon\" || exit 1` and, under `env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\"`, run `npm ci --no-audit --no-fund`. Never run it in the shared control checkout (customRule).\n\n(b) The evidence command, exactly: `cd packages/moe-daemon && npx vitest run`. It must exit 0. Report the file and test counts. The base at ecf00c18 was 228 files, 6881 passed | 20 skipped, plus the new file; report base + N.\n- Load flake: if baselineRun.test.ts E2 times out under host load, rerun that file, then the suite once (mem:gotcha-daemon-linux-snapshot-gate).\n- This is a protocol change, so the full suite is mandatory (epic rail).\n\n(c) In the same snapshot: `npx tsc --noEmit -p .` exits 0, then `npm run build`.\n\n(d) Live smoke from the snapshot's dist:\n  - Start `node dist/index.js init --project <fresh scratch dir> --port <a free port, e.g. 19985>` in the background with env -i plus MOE_SPAWN_PROOF_KEY set to the known-answer key, and record its PID.\n  - Wait for daemon.json, then GET http://127.0.0.1:<port>/health?challenge=<'ab' repeated 32 times>. Its spawnProof must equal the known-answer value. This proves the supervisor passes the key to `_run`.\n  - Plain /health has no spawnProof. An uppercase challenge has no spawnProof. A path such as /x still answers 426.\n  - `grep -r <key hex> <scratch>/.moe` finds nothing.\n  - Stop with `node dist/index.js stop --project <scratch>` and wait for the recorded PID to exit, with a bound.\n  - Kill only that recorded PID if it is still alive after the bound; never pattern-kill (customRule).\n  Report the smoke's outputs beside the evidence.\n\nDeclare the five files as modifiedFiles.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n(a) The key path: env, then memory, then HMAC only. It never appears in daemon.json, logs, responses or child environments. The supervisor still passes it to every `_run`.\n(b) Routing: the exact '/health' path only. A hostile query (huge, repeated, encoded, absolute-form URL) yields no proof and no throw. The Host guard still refuses first.\n(c) No key means no spawnProof field at all: not null, not an empty string.\n(d) Plain GET /health is byte-identical. Diff the response body built with and without a route.\n(e) Concurrency: the handler is stateless per request; the key is read once at startup.\n(f) Mutation check in a scratch copy of the snapshot:\n  - drop the delete from takeSpawnProofKey: case (a)'s env assertion must fail;\n  - accept an uppercase challenge: case (c) must fail;\n  - change 'ascii' to 'hex' in spawnProofFor: case (b) must fail.\n  Then confirm the restored copy passes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/spawnProof.ts",
+        "packages/moe-daemon/src/index.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-fdb2af60",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 320.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T22:46:45.444Z",
+  "updatedAt": "2026-11-02T22:51:36.204Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T22:49:35.189Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-fdb2af60"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T22:51:16.609Z",
+  "executionContract": {
+    "intendedBehavior": "A `_run` daemon started with a valid MOE_SPAWN_PROOF_KEY answers GET /health?challenge=<64 lowercase hex> with the normal body plus spawnProof, the HMAC-SHA256 of the challenge under the key bytes. It holds the key only in memory and removes it from its environment. Without a key, or for any other query, the plain body is returned; plain /health and every non-health path are unchanged.",
+    "acceptanceCriteria": [
+      "spawnProof.test.ts covers key parsing, the known-answer vector, challenge parsing, routing and proof fields, and is RED first.",
+      "The full daemon vitest suite exits 0 in a whole-repo snapshot.",
+      "A live smoke shows the supervisor-to-_run pass-through: the known-answer spawnProof on a challenge, none on plain /health, and the key absent from .moe."
+    ],
+    "invariants": [
+      "The key is never written to daemon.json, logs, the activity log, chat or any response.",
+      "The Host guard runs before any /health work.",
+      "Plain GET /health is byte-identical, and non-health paths answer 426."
+    ],
+    "compatibility": [
+      "No MCP tool contract changes. /health gains an optional field only when a challenge is sent and a key is held.",
+      "The contract and the known-answer vector are shared with task-648a5916 (the VS Code client)."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npx vitest run"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Echo the key itself on /health. Rejected: it discloses the secret to anyone who can read /health. 2) Return a static hash of the key. Rejected: replayable. 3) A challenge-response HMAC over a caller-chosen 64-hex challenge, CHOSEN. It discloses nothing reusable and binds the answer to the dialled port. 4) Put the proof on the /ws handshake. Rejected: /health is already probed by both IDEs and the Host guard covers it.",
+    "codebaseInsights": "The /health handler is a closure in startDaemon (index.ts ~:709) that matches req.url === '/health' exactly. isAllowedHealthHost (server/healthHost.ts) runs first. The `_run` case calls startDaemon(projectPath, port, host); `start` and `init` call superviseDaemon, whose spawnChild passes env: process.env unchanged. The client side lives in task-648a5916, which depends on this row.",
+    "risks": "(1) `/health?anything` now answers the health body instead of 426. The DoD specifies this, and no current client sends a query. (2) /proc/<pid>/environ still shows the initial environment block of `_run`. Same-user processes are outside the threat model; do not claim more. (3) docs/ARCHITECTURE.md and docs/CONFIGURATION.md overlap with CQ-RF07 and WT-17/18/19, so keep the hunks to one sentence and one table row. (4) The live smoke must stop only its own recorded PID.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/server/healthHost.ts",
+      "docs/ARCHITECTURE.md",
+      "docs/CONFIGURATION.md",
+      "docs/design/protected-profile-threat-model.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d1e127a159d9ed97f30808043e706fed0d9f5023",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T22:51:16.646Z",
+  "approvedPlanRevision": 1
+}

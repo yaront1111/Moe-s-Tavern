@@ -12,10 +12,63 @@
     "Protected-profile state lives outside the repository, owner-only; a missing, unreadable or mismatched record fails closed to the refusal.",
     "No caller-minted evidence: nothing the daemon or the repository reports about itself admits a daemon on its own."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first (test-driven-development). Create moe-vscode/tests/protected-daemon-provenance.test.cjs with the Write tool. Build its harness on the fixture() in tests/protected-daemon-spawn.test.cjs: transpile src/services/MoeDaemonClient.ts and run it in vm.runInNewContext with a permissive require map. Add these stubs:\n- 'ws' is a StubWebSocket class that records every construction.\n- vscode.window has showErrorMessage (collect) and showWarningMessage (records its arguments and returns f.choice, default undefined).\n- child_process.spawn records [cmd, args, opts]. A daemon spawn emits 'spawn'. A spawn whose args include 'stop' emits 'exit' with f.stopCode (default 0), or never exits when f.stopHang is set, and exposes kill().\n- A Map-backed secrets object { get, store } that rejects when f.secretsThrow is set.\n- Construct the client as new MoeDaemonClient(extension, secrets).\n- Override the instance seams the plan adds:\n  - client.probeSpawnProof = async (_info, _project, challenge) => HMAC of f.daemonKey, or undefined;\n  - client.isPidAlive = pid => f.alive.has(pid);\n  - client.waitForDaemonInfo = async () => {};\n  - short bounds: replaceStopTimeoutMs, replaceExitTimeoutMs, replacePollMs.\n\nCover these cases (group them as you like, but name them):\n(1) Verified in session. A protected startDaemon('start', project) passes env MOE_SPAWN_PROOF_KEY as 64 lowercase hex chars, and stores the record under the project's secret name with the installed daemon's real path. A daemon answering that key's HMAC is admitted.\n(2) Verified after a restart. A freshly loaded module with an empty session map but the same secrets record admits it.\n(3) Unverified, no record. The answer is exactly 'Protected execution profile: the running Moe daemon (pid 4242) was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect.' Through connect(), that text is shown, no StubWebSocket is built and no 'stop' spawns.\n(4) Stale record. Each of these refuses: a stored key whose HMAC does not match; a record naming another installed daemon path (refused without probing); malformed JSON, a wrong version, a wrong project or a non-hex key; secrets.get rejecting.\n(5) The known-answer vector shared with task-137bab15: the client's HMAC helper gives 583630234f7e60ecfa2a6ae2e98ee37876e3ff6344457723cb4b42fcf77f7fc0 for key 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f and challenge 'ab' repeated 32 times.\n(6) Declined. The modal returns undefined: no 'stop' spawn, the refusal stays, no socket.\n(7) Replace succeeds. The choice is 'Stop and Replace'.\n  - The stop spawn is [installed node real path, [installed daemon real path, 'stop', '--project', project]] with the installed cwd, an env without MOE_SPAWN_PROOF_KEY, stdio 'ignore' and windowsHide.\n  - Once the captured pid is dead and daemon.json is gone, a fresh protected spawn carries a NEW key.\n  - Admission then passes with that key.\n(8) Replace fails. Each of these keeps the refusal and starts no new daemon: stop exits 1; stop hangs (its child.kill() is called); the captured pid stays alive past the bound; daemon.json now names another live pid.\n(9) LEGACY is unchanged: no MOE_SPAWN_PROOF_KEY in the spawn env, secrets never read or written, the probe never called.\n(10) A configured endpoint (moe.daemon.port) under protected with no record is refused with no replace offer.\n\nRED: run `node --test tests/protected-daemon-provenance.test.cjs` in the step-5 Linux snapshot with only this test file overlaid. Every case must fail against the unchanged client. Quote the failures in complete_step.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The spawn side and the owner-only record (DoD 1; the epic and task rails on owner-only state). In moe-vscode/src/services/MoeDaemonClient.ts:\n\n- `export const SPAWN_PROOF_ENV = 'MOE_SPAWN_PROOF_KEY'` and `export interface SpawnSecrets { get(key: string): Thenable<string | undefined>; store(key: string, value: string): Thenable<void> }`.\n- constructor(extensionPath: string, secrets?: SpawnSecrets). In moe-vscode/src/extension.ts, change `new MoeDaemonClient(context.extensionPath)` to pass `context.secrets`. VS Code SecretStorage is the OS credential store: per user, outside the repository, and owner-only by design. Without a store, records live only in the session and a restart refuses (fail closed).\n- A module-level session map from project key to record. The project key is computed exactly as runtimeProfile computes its own: comparablePath(realPathOrNull(base) ?? path.resolve(base), defaultFoldCase).\n- Record shape: { version: 1, project: <project key>, key: <64 lowercase hex>, daemon: <installed daemon key> }. The installed daemon key is comparablePath(realPathOrNull(daemon) ?? daemon, defaultFoldCase) of the selected installed daemon/index.js. The secret name is 'moe.protectedSpawn.v1.' + sha256(project key) as hex.\n- A strict parser: a JSON object with exactly those four fields, version 1, project equal to the key, a key matching /^[0-9a-f]{64}$/ and a string daemon. Anything else is no record, logged with the reason, never with the key.\n- startProtectedDaemon, after the selection and protectedDaemonEnvironment:\n  - mint the key with crypto randomBytes(32) as hex and set env[SPAWN_PROOF_ENV] to it, overriding anything inherited;\n  - put the record in the session map;\n  - `await this.secrets?.store(...)` inside try/catch: a failure logs 'stays in memory only' plus the error text;\n  - all of this happens BEFORE the spawn.\n  The legacy startDaemon path is untouched.\n\nLazy builtins: tests/accounts-wire, plan-approval-client and task-notifier load this file with a closed require map (vscode, ws, child_process, fs, path, net). So crypto, and any other new builtin, must be obtained with `await import('crypto')` inside the function, as probeDaemonIdentity does for http and url. A top-level import breaks those three suites.\n\nError handling: no new path throws to callers. Key material is never logged, shown or written outside SecretStorage and the spawned daemon's environment.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "The admission gate (DoD 1; task rail: no caller-minted evidence). In MoeDaemonClient.ts:\n\n(a) probeDaemonIdentity gets an optional `challenge` in its options. With it, the request path becomes `/health?challenge=<challenge>`, and the result carries `spawnProof` only when the body has a string spawnProof. Without a challenge, every existing caller and result stays byte-identical, so daemon-identity.test.cjs passes untouched.\n(b) An instance seam `probeSpawnProof(info, project, challenge)` returns that spawnProof when the identity is 'same', else undefined.\n(c) `protectedProvenanceRefusal(pid?)` builds the fixed text: 'Protected execution profile: the running Moe daemon (pid N) was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect.' With no pid, it omits the ' (pid N)' part.\n(d) An async `protectedAdmissionRefusal(info, project)` returns null when admitted, else the refusal text. It never throws; any exception becomes the refusal.\n  - The installed daemon key comes from protectedDaemonCommand on installedRoot(this.extensionPath). If the selection is refused, return that refusal.\n  - Candidate records: the session record and the stored record, deduped by key, keeping only those whose daemon equals the installed key. With none, refuse without probing.\n  - Make a fresh challenge from randomBytes(32) as hex, then probe. If connectCancelled() is set after the await, act on nothing. A proof that is absent or not 64 hex chars refuses.\n  - Each candidate's expected HMAC-SHA256 (keyed by the key bytes, over the challenge's ASCII text) is compared with crypto.timingSafeEqual on equal-length buffers. A match admits, and a stored record is cached into the session map.\n  - Export the HMAC helper for case (5).\n(e) connect(): only when runtimeProfile(project) === 'protected', after getVerifiedDaemonInfo() and before setConnectionState('connecting'), run the gate and then the step-4 flow. On a final refusal, show it with showErrorMessage and throw, so no WebSocket opens. Re-check connectCancelled() after every await. The gate applies to a configured endpoint (moe.daemon.port) too: neither daemon.json nor /health can admit a daemon on its own; only a record outside the repository can (CQ-RF05, docs/design/protected-profile-threat-model.md). LEGACY connect is unchanged.\n\nError handling: probe timeouts and errors, unreadable secrets and malformed records all end in the refusal, never in a connection. Never log the key, the challenge's expected value or the proof.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "RF03 parity: replace an unverified daemon (DoD 2). This mirrors JetBrains MoeDaemonSupervisor.replacedUnverified, waitForReplacementExit and replacementMetadataCleared, with STOP_TIMEOUT_MS 20000, EXIT_TIMEOUT_MS 15000 and POLL_MS 250 as instance fields replaceStopTimeoutMs, replaceExitTimeoutMs and replacePollMs.\n\n- Offer replacement only when all of these hold: the refused endpoint came from daemon.json (not fromConfig); it has a positive integer pid, captured now; and protectedDaemonCommand selects the installed runtime. Otherwise show only the refusal.\n- Ask with `vscode.window.showWarningMessage(refusal, { modal: true, detail: <one sentence: Stop and Replace stops that daemon with the installed Moe CLI and starts the installed runtime> }, 'Stop and Replace')`. Anything but exactly 'Stop and Replace' keeps the refusal and stops nothing. Dismiss and Escape return undefined, and the modal's built-in Cancel is the safe default.\n- Stop through the installed CLI only: spawn(selection node, [installed daemon, 'stop', '--project', project], { cwd, env: protectedDaemonEnvironment(...) with SPAWN_PROOF_ENV deleted, stdio: 'ignore', windowsHide: true }). Await 'exit' within replaceStopTimeoutMs. On timeout, call kill() on that child handle (our own process, never by name or pid scan) and fail. An 'error' or a non-zero code also fails.\n- Wait, polling every replacePollMs within one replaceExitTimeoutMs budget, until both hold:\n  - !this.isPidAlive(captured pid);\n  - daemon.json is absent, or names a pid that is not alive; unreadable or oversize counts as NOT cleared.\n  isPidAlive(pid) is process.kill(pid, 0); only ESRCH means dead, and EPERM means alive.\n- On success, call startProtectedDaemon(project), which mints a fresh key. Then read getDaemonInfo(false) and run the gate again on the new endpoint. Admitted: return it so connect dials it. Otherwise refuse.\n- Every failure, decline or exception keeps the refusal: showErrorMessage, return undefined, no WebSocket.\n- Re-check connectCancelled() after each await. Runs only inside connect() (connectInProgress), and startInProgress prevents a double spawn.\n\nError handling: a stop that cannot run (ENOENT), a stop timeout and an unreadable daemon.json all refuse. Nothing else is signalled: no pattern kill and no direct pid signal. The installed CLI's stop is the only stopper.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, run once (DoD 3). This row is gated on task-137bab15 (dependsOn), whose daemon answers the challenge; this step tests the client against the stubbed proof. Run ONE command fresh from the task worktree. It runs both legs and its output tail is the complete_task evidence:\n\n- Linux leg: R=$(git rev-parse --show-toplevel); S=$(mktemp -d); git -C \"$R\" archive HEAD | tar -x -C \"$S\". Then overlay exactly these three files, each `cp` then `cmp`: moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/extension.ts and moe-vscode/tests/protected-daemon-provenance.test.cjs. Then `cd \"$S/moe-vscode\" || exit 1` and run `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile'`.\n- Windows leg: the same archive plus overlay into a fresh dir under /mnt/d/moe-scratch/ (Windows-native node_modules, never shared with the Linux leg). Then `cmd.exe /d /c \"cd /d D:\\\\moe-scratch\\\\<dir>\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\"`.\n\nBoth legs must exit 0. Report each leg's `tests / pass / fail / skipped` lines. The base is 583 tests (579 pass, 4 skipped) at the latest VS Code landing, plus the new cases. Never run npm in the shared control checkout.\n\nAlso run `npm run lint` in the Linux snapshot and report it. `git -C <worktree> diff --stat HEAD` plus the new file must list only those three files. Declare them as modifiedFiles. Stay within the size waiver proposed for this row (prop-bd7d6ccfae674e019941ac59491ce1b7, at most 520 net non-board lines).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n(a) Admission: no path admits without an HMAC match against a record from the session or SecretStorage that names the installed daemon. daemon.json, /health identity, pid and port can only refuse.\n(b) Fail closed: a secrets error, a malformed record, a probe timeout, a cancelled connect or an install change all refuse, and none opens a socket.\n(c) Secrets: the key appears only in the session map, SecretStorage and the spawned daemon's env. The stop and legacy spawns never carry it. Grep the diff for any log or message that could print it.\n(d) Concurrency: connect re-entry, a cancel during the modal or the stop, and two windows sharing one stored record. Window B's newer record must still admit B's daemon in window A through the stored-record fallback.\n(e) The replace flow stops only through the installed CLI, kills only its own stop child on timeout, and its bounded wait cannot spin past the budget.\n(f) Strict-map suites (accounts-wire, plan-approval-client, task-notifier) still pass: no new top-level import.\n(g) Mutation check in a scratch copy of the Linux snapshot:\n  - make the gate admit on a mismatched proof: cases (4) must fail;\n  - drop the env key at spawn: cases (1) and (7) must fail;\n  - skip the confirmation: case (6) must fail.\n  Then confirm the restored copy passes.\n(h) The residual matches JetBrains: no port↔pid binding beyond what the HMAC over the dialled port already proves.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-provenance.test.cjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,19 +77,95 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 314.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-745a4eac252d4815a53d8b95e89da926",
+      "author": "architect-24611a0a",
+      "content": "Planner note (architect-24611a0a, plan rev 1). The daemon half moved to prerequisite task-137bab15 (dependsOn): an env MOE_SPAWN_PROOF_KEY, `/health?challenge=<64 hex>` answering `spawnProof` = HMAC-SHA256(key, challenge), and a shared known-answer vector. WORKING claims on this row stay gated until it is DONE. The size-only waiver for this row is filed as prop-bd7d6ccfae674e019941ac59491ce1b7 (approved or pending): at most 520 net non-board lines across MoeDaemonClient.ts, extension.ts and the new tests/protected-daemon-provenance.test.cjs. The design follows docs/design/protected-profile-threat-model.md: the record lives in SecretStorage (outside the repository, owner-only), and neither daemon.json nor /health can admit a daemon on its own. Trap: tests/accounts-wire, plan-approval-client and task-notifier load MoeDaemonClient.ts through a closed require map, so crypto must be a lazy `await import('crypto')`.",
+      "timestamp": "2026-11-02T22:49:20.120Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:02.315Z",
-  "updatedAt": "2026-11-02T22:37:46.706Z",
+  "updatedAt": "2026-11-02T22:49:20.120Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:14.255Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-02T22:37:43.536Z"
+    "firstClaimAt": "2026-11-02T22:37:43.536Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a"
-  ]
+  ],
+  "dependsOn": [
+    "task-137bab15f35949fa8a4902cedd74b372"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T22:49:11.011Z",
+  "executionContract": {
+    "intendedBehavior": "Under the protected profile VS Code opens a WebSocket only to a daemon that answers a fresh /health challenge with the HMAC of a spawn key this extension minted, passed to the installed daemon it spawned, and kept in the session or in SecretStorage, naming the daemon installed now. Anything else gets a fixed refusal and no socket. An unverified daemon read from daemon.json can be replaced only through a modal confirmation whose default keeps the refusal. The replacement stops it with the installed CLI, waits with a bound for the pid and daemon.json to clear, starts the installed runtime with a fresh key, then verifies again. LEGACY is unchanged.",
+    "acceptanceCriteria": [
+      "Cases verified (in session and after a restart), unverified, stale record, declined, replace success, replace failure, legacy unchanged, configured endpoint and the known-answer vector pass in tests/protected-daemon-provenance.test.cjs, RED first against the unchanged client.",
+      "`cd moe-vscode && npm test && npm run compile` exits 0 on Linux and on Windows, each in its own snapshot."
+    ],
+    "invariants": [
+      "Neither daemon.json nor /health identity can admit a daemon on its own; admission needs an HMAC match against an out-of-repository record.",
+      "The spawn key never appears in logs, messages, daemon.json or the stop or legacy spawn environments.",
+      "Only the installed CLI's stop stops an unverified daemon; nothing is pattern-killed or signalled by pid.",
+      "LEGACY spawn, connect and every existing moe-vscode test are unchanged."
+    ],
+    "compatibility": [
+      "The constructor's secrets argument is optional, so existing harnesses construct new MoeDaemonClient(extension) unchanged.",
+      "probeDaemonIdentity without a challenge answers exactly as before.",
+      "The daemon contract (env MOE_SPAWN_PROOF_KEY, /health?challenge=, spawnProof, and the known-answer vector) is shared with task-137bab15."
+    ],
+    "approvedScope": [
+      "MoeDaemonClient: SPAWN_PROOF_ENV, SpawnSecrets, an optional constructor secrets argument, the session spawn map and strict record parse, key minting in startProtectedDaemon, the probeDaemonIdentity challenge option, the probeSpawnProof seam, protectedProvenanceRefusal, protectedAdmissionRefusal, the HMAC helper, isPidAlive, the replace flow fields and logic, and the connect() hook.",
+      "extension.ts passes context.secrets to the client."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/services/MoeDaemonClient.ts: connect() ~:698, getVerifiedDaemonInfo ~:1185, ensureDaemonRunning ~:1282, startProtectedDaemon ~:1421, protectedDaemonCommand ~:525, probeDaemonIdentity ~:185, constructor ~:662.",
+      "moe-vscode/src/extension.ts:35 constructs the client.",
+      "JetBrains reference: MoeDaemonSupervisor.replacedUnverified/waitForReplacementExit/replacementMetadataCleared and its STOP_TIMEOUT_MS 20000, EXIT_TIMEOUT_MS 15000 and POLL_MS 250; RuntimeSelectionPolicy.verifyProvenance."
+    ],
+    "checkRefs": [
+      "cd moe-vscode && npm test && npm run compile (Linux snapshot and Windows snapshot, per step 5)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Mirror JetBrains (pid, startInstant, parent pid) with per-platform probes: /proc on Linux, ps on macOS, PowerShell CIM on Windows. Rejected: Node has no portable API. The Windows probe means spawning PowerShell on every connect (slow, locale-dependent CreationDate). Supervisor crash restarts change the pid and would need the parent lookup too. The CQ-RF05 record already calls per-platform OS lookups brittle. 2) Session-only proof (refuse any daemon this extension host did not spawn). Rejected: DoD 1 and DoD 3 require an after-restart record and a stale-record case. 3) A custom owner-only JSON file under globalStorageUri. Rejected for SecretStorage, which is owner-only by OS design; a file store would need Windows ACL checks that Node cannot set without icacls. 4) The spawn-key HMAC challenge, CHOSEN. It is the threat-model record's deferred nonce mechanism. It works the same on every OS, survives supervisor crash restarts (the env passes through), refuses stale records (a key mismatch), and the challenge goes over the dialled port. The daemon side is split into task-137bab15 (dependsOn).",
+    "codebaseInsights": "VS Code has no Restart/Stop Daemon command (only connect, disconnect, reconnect, showDaemonStatus), so the replace flow is the only stopper. runtimeProfile pins verified-local per session (pinnedProjects) and has no persistent pin. protectedDaemonCommand returns { node, args: [daemon, 'start', '--project', base], cwd }; swap 'start' for 'stop' to get the installed CLI's stop. The daemon's `stop` writes the stop sentinel and sends SIGTERM to daemon.json's pid after its /health project check (index.ts stopDaemon). Three suites load MoeDaemonClient.ts through a closed require map, hence the lazy crypto import. Tests override instance methods (waitForDaemonInfo, resolveDaemonRuntime) as seams.",
+    "risks": "(1) A top-level crypto import breaks accounts-wire, plan-approval-client and task-notifier. (2) probeDaemonIdentity's result shape must not change without a challenge (daemon-identity.test.cjs deepEquals). (3) On Linux without a keyring, SecretStorage may throw: records stay session-only and a restart refuses (fail closed, by design). (4) The Windows leg needs its own npm ci in a D: scratch copy; never reuse Linux node_modules. (5) Unlike JetBrains, there is no parent-supervisor capture. The stop CLI's sentinel stops respawns, and a respawned child shows up as daemon.json naming a live pid, which refuses. (6) The size waiver prop-bd7d6ccf may be pending at QA; cite it.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/extension.ts",
+      "moe-vscode/tests/protected-daemon-spawn.test.cjs",
+      "moe-vscode/tests/daemon-identity.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "docs/design/protected-profile-threat-model.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d1e127a159d9ed97f30808043e706fed0d9f5023",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T22:49:11.049Z",
+  "approvedPlanRevision": 1
 }
