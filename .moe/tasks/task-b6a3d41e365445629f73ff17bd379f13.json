@@ -9,9 +9,48 @@
     "sh/ps1 parity-check stays green"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED) — DoD 1 and 2. Create scripts/tests/subagent-mirror.test.mjs (node:test, ESM; Write tool) and wire it into CI. It runs the wrappers' REAL subagent-mirror block, sliced out by anchor text, so no product refactor is needed. Copy the conventions of scripts/tests/seat-registration.test.mjs:\n- read ../moe-agent.sh and ../moe-agent.ps1 via new URL(…, import.meta.url), drop a leading U+FEFF, CRLF->LF;\n- between(source, start, end) and fwd/shq/psq;\n- the ENGINES table + probe(): bash (or 'C:/Program Files/Git/bin/bash.exe' on Windows), PowerShell 5.1 Windows-only, PowerShell 7 probed, each with a skip reason;\n- delete MOE_WORKER_ID, MOE_PROJECT_PATH and MOE_SESSION_ID from the child env.\n\nSLICES. Start anchor (unique in both wrappers today): '# Mirror .moe/agents/<name>.md to .claude/agents/<name>.md so Claude Code's'. End anchors: sh '\\nLOOP_ENABLED=false', ps1 '# Normalize Command + CommandArgs'. Assert each slice contains its copy call (sh 'cp \"$src\"', ps1 'Copy-Item'), so a moved anchor fails loudly. Child script = preamble + optional injection + slice + a sentinel line printing '@@ after mirror'.\n- sh, run as bash --noprofile --norc <file>: set -e; GREEN=''; NC=''; RED=''; YELLOW=''; ENABLE_AGENT_TEAMS=true; PROJECT=<fwd path>; MOE_DIR=\"$PROJECT/.moe\".\n- ps1, run as -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <file>: write it with a leading \\ufeff BOM (mem:gotcha-ps51-bomless-non-ascii-needles; the slice holds a non-ASCII arrow). Preamble: $ErrorActionPreference = 'Stop'; $enableAgentTeams = $true; $projectPath = <path>; $moeDir = Join-Path $projectPath '.moe'.\n- Fixture per row: mkdtemp under os.tmpdir(); <project>/.moe/agents/one.md and two.md (distinct, >=1 KB); no .claude dir; rmSync(dir, {recursive: true, force: true, maxRetries: 5}) in finally.\n\nROWS, per engine unless noted:\nA 'a copy that loses the race to another seat counts as kept'. Inject on one.md only.\n- sh: a cp() shell function (it shadows the binary, and $(…) subshells inherit it). For 2 operands whose destination ends in /one.md, it runs `command cp \"$1\" \"$2\"` (the other seat's create lands), appends a line to $MIRROR_RACE_LOG, prints \"cp: cannot create regular file '$2': File exists\" to stderr and returns 1: GNU cp's lost O_EXCL create. Every other call is `command cp \"$@\"`.\n- ps1: function Copy-Item (functions shadow cmdlets) with params [string]$Path, [string]$LiteralPath, [string]$Destination, [switch]$Force. For one.md it calls Microsoft.PowerShell.Management\\Copy-Item -LiteralPath <whichever of LiteralPath/Path is set> -Destination $Destination -Force, appends to $env:MIRROR_RACE_LOG and throws [System.IO.IOException]::new(\"The process cannot access the file '$Destination' because it is being used by another process.\"). Otherwise it copies through the same module-qualified cmdlet. Use cmdlets, never [IO.File], on wrapper-built paths: pwsh on Linux resolves the wrapper's '.claude\\agents' only through the provider.\n- Assert: exit 0; output contains 'Subagents: mirrored 1, kept 1 existing (.moe/agents/ -> .claude/agents/)' and '@@ after mirror'; the race log has exactly 1 line; both .claude/agents files byte-equal their sources.\nB 'any other copy failure still stops the pre-flight'. Inject on one.md WITHOUT creating it.\n- sh prints \"cp: cannot create regular file '$2': Permission denied\" and returns 1.\n- ps1 throws [System.UnauthorizedAccessException]::new(\"Access to the path '$Destination' is denied.\").\n- Assert: non-zero exit; stdout+stderr contain 'Permission denied' (sh) / 'is denied' (ps1); no '@@ after mirror'; .claude/agents/one.md absent.\nC (bash engine only) 'two seats mirroring at the same moment both pass': the DoD's loop of concurrent mirrors, with the REAL cp.\n- One bash driver (spawnSync, timeout 120 s) runs 30 rounds. Each round makes a fresh project with six agent files a.md..f.md (>=4 KB each).\n- Each round starts two seat children running the slice behind a ready/go barrier: each child touches ready-<n> and spins until go exists; the driver creates go once both ready files exist. Every spin is bounded to 10 s.\n- The driver waits on both by recorded PID. Never pkill/killall or name-matched kills (project rail).\n- Assert: all 60 seat runs exit 0 and print the banner and the sentinel; every .claude/agents file byte-equals its source.\nD 'the wrapper parses': sh `bash -n` on moe-agent.sh; ps1 [System.Management.Automation.Language.Parser]::ParseFile on moe-agent.ps1 with zero errors.\n\nCI: append scripts/tests/subagent-mirror.test.mjs to the run line of the 'Test launcher daemon.json cap and seat re-registration' step in .github/workflows/ci.yml (build-all-platforms: Linux runs bash + pwsh 7, Windows Git Bash + PS 5.1 + pwsh 7). Keep its `if: runner.os != 'macOS'` byte-identical: daemon-json-cap.test.mjs's CI-guard test asserts that exact line.\n\nRED evidence for the complete_step note (wrappers still unfixed): this is the DoD's 'reproduces it before the fix'.\n- `node --test scripts/tests/subagent-mirror.test.mjs` fails bash rows A and C with 'File exists' and passes B and D; the PowerShell rows skip under WSL node.\n- `\"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w scripts/tests/subagent-mirror.test.mjs)\"` (mem:gotcha-launcher-ps1-rows-from-wsl) also fails row A on both PowerShell engines with the IOException.\n- The architect measured the unfixed loop on WSL ext4 losing 100 of 300 two-seat rounds, so 30 rounds miss the race with p≈5e-6.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "newFiles": [
+        "scripts/tests/subagent-mirror.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX scripts/moe-agent.sh — DoD 1 and 2. Edit only the pre-flight mirror block under '# Mirror .moe/agents/<name>.md …' (~line 2118). Do NOT edit prepare_worktree_launch's `cp -f` into the task's own W, which no other seat shares.\n\nReplace the bare `cp \"$src\" \"$dest\"` with:\n        if ! AGENT_CP_ERR=$(cp \"$src\" \"$dest\" 2>&1); then\n            if [ -e \"$dest\" ]; then\n                AGENT_SKIPPED=$((AGENT_SKIPPED + 1))\n                continue\n            fi\n            printf '%s\\n' \"$AGENT_CP_ERR\" >&2\n            exit 1\n        fi\nKeep `AGENT_MIRRORED=$((AGENT_MIRRORED + 1))` after it.\n\nComment the new lines:\n- Two seats starting at the same moment both pass the -e check. GNU cp creates a missing destination with O_EXCL, so the seat whose create loses gets EEXIST for a file the other seat is writing from the same source. That file counts as kept (task-b6a3d41e).\n- Error handling for a real failure is unchanged: with no destination, cp's own message is printed and the pre-flight exits 1, exactly as set -e did.\nAmend the header's 'Idempotent: …' sentence: a destination another seat creates meanwhile is kept too.\n\nKeep the first comment line (the test's start anchor), the banner and `LOOP_ENABLED=false` unchanged. Add no operator-visible string, so the parity vocabulary does not change.\nWhy capture stderr rather than the description's `2>/dev/null || [ -e ] || <fail>`: a real failure keeps cp's diagnostic. Why not `cp -n`/`--update=none`: they are GNU-only, and their exit status changed across coreutils releases.\n\nThen run `node --test scripts/tests/subagent-mirror.test.mjs`: bash rows A to D pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "FIX the scripts/moe-agent.ps1 twin — epic parity rail, DoD 2. Edit the block under the same first comment (~line 949, before '# Normalize Command + CommandArgs').\n\nWhy: Copy-Item -Force overwrites rather than O_EXCL-creating, but an overlapping overwrite can still throw: a Windows CopyFile sharing violation, or .NET's exclusive file lock under pwsh on Unix. The script-wide $ErrorActionPreference = 'Stop' then ends the seat.\n\nReplace\n            Copy-Item -Path $src -Destination $dest -Force\n            $mirrored++\nwith\n            try {\n                Copy-Item -LiteralPath $src -Destination $dest -Force\n            } catch {\n                if (-not (Test-Path -LiteralPath $dest)) { throw }\n                $skipped++\n                return\n            }\n            $mirrored++\nAdd an ASCII comment naming moe-agent.sh as the twin and stating the rule: a failed copy whose destination now exists lost to another seat; any other failure rethrows, so error handling for a real failure is unchanged. `return` inside the ForEach-Object block moves to the next file.\n\nUse -LiteralPath only on the lines this step writes. task-3ad573a7 converts the block's other -Path sites; leave them to it. Keep the UTF-8 BOM (parity-check fails without it), LF endings, the first comment line, the banner and the end anchor.\n\nThen run the Windows-node command from step 1: rows A, B and D pass on PowerShell 5.1 and PowerShell 7.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY + ADVERSARIAL SELF-REVIEW, once, at the end (DoD 1-3). From the checkout root the CLI runs in (the task worktree in worktree mode), run this ONE command. Its fresh output is complete_task's verification evidence:\nnode --test scripts/tests/subagent-mirror.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w scripts/tests/subagent-mirror.test.mjs)\" && bash scripts/tests/parity-check.sh\nExpect:\n- WSL node: bash rows A-D pass, and the PowerShell rows skip (5.1 is Windows-only; WSL has no pwsh).\n- Windows node: the Git Bash, PowerShell 5.1 and PowerShell 7 rows all pass, none skipped. If pwsh.exe is unavailable, say so in the note.\n- Then 'PASS parity-check.sh'.\n\nSelf-review of this task's diff:\n(1) N seats: the rule holds for any count, because every loser's destination exists. A seat whose check sees a half-written file counts it kept; the writer finishes it long before any CLI launches.\n(2) A real failure still stops the pre-flight: no `|| true`, and no ps1 catch swallows it. A dangling-symlink destination fails as before (-e is false).\n(3) prepare_worktree_launch is untouched; no new operator strings; moe-agent.ps1 keeps its BOM and LF; row D passes on every engine.\n(4) Mutation proof in a scratch copy, never in the tree: `S=$(mktemp -d /mnt/d/moe-scratch/b6a3-mut-XXXX) && cp -r scripts \"$S/\"`. Apply one mutant at a time to \"$S/scripts\" and re-run the test there (the Windows run via wslpath -w \"$S/…\"):\n- (a) restore the bare `cp \"$src\" \"$dest\"`: bash A and C fail;\n- (b) count every sh copy failure as kept, with no -e check: bash B fails;\n- (c) drop the ps1 `if (-not (Test-Path -LiteralPath $dest)) { throw }`: PowerShell B fails.\nRecord the failing rows, then rm -rf \"$S\".\n(5) The test kills nothing by pattern and removes every temp dir in finally.\n(6) Leave scripts/tests/worktree-e2e.cjs alone: WT-19b owns it, and its .claude/agents pre-seed models the live checkout.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/subagent-mirror.test.mjs",
+        ".github/workflows/ci.yml"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,7 +63,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:34:04.961Z",
-  "updatedAt": "2026-11-02T09:42:10.110Z",
+  "updatedAt": "2026-11-02T11:19:51.868Z",
   "dependsOn": [
     "task-6519ed9127ad4c359fd64b71f1a08be5"
   ],
@@ -32,5 +71,81 @@
     "from": "BACKLOG",
     "at": "2026-11-02T09:42:10.110Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:56:44.081Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T11:19:51.831Z",
+  "executionContract": {
+    "intendedBehavior": "Seats that start in one project at the same moment all get through the pre-flight subagent mirror (.moe/agents/*.md -> <project>/.claude/agents/). In moe-agent.sh, a cp that fails while its destination exists afterwards lost GNU cp's O_EXCL create to another seat writing the same source bytes, and counts as kept. In moe-agent.ps1, a Copy-Item failure under the same condition (for example a sharing violation) counts as kept too. A copy failure that leaves no destination still stops the pre-flight as before: sh prints cp's own message and exits 1, and ps1 rethrows the same terminating error.",
+    "acceptanceCriteria": [
+      "Row C of scripts/tests/subagent-mirror.test.mjs: 30 rounds of two concurrent real-cp mirrors into one fresh project; all 60 seat runs exit 0 and print the banner, and the bytes equal the sources. Before the fix it fails with 'File exists' (DoD 1).",
+      "Row A on every engine: a destination another seat created between the existence check and the copy yields 'Subagents: mirrored 1, kept 1 existing (.moe/agents/ -> .claude/agents/)' and exit 0 (DoD 2).",
+      "Row B on every engine: a copy failure that leaves no destination exits non-zero before the sentinel.",
+      "bash scripts/tests/parity-check.sh prints PASS (DoD 3)."
+    ],
+    "invariants": [
+      "A failed copy counts as kept only when its destination exists after the failure.",
+      "The control-checkout mirror never overwrites an existing destination; user customizations win.",
+      "The banner text and the parity-check vocabulary are unchanged; moe-agent.ps1 keeps its UTF-8 BOM and LF endings.",
+      "prepare_worktree_launch's per-task W mirror is unchanged."
+    ],
+    "compatibility": [
+      "A genuine mirror failure still ends the pre-flight with exit 1 (sh) or the same terminating error (ps1). No new codes or chat lines."
+    ],
+    "approvedScope": [
+      "The moe-agent.sh pre-flight subagent mirror block only",
+      "The moe-agent.ps1 subagent mirror block only",
+      "The new scripts/tests/subagent-mirror.test.mjs",
+      "The run line of one ci.yml step"
+    ],
+    "reuse": [
+      "Segment slicing as in seat-registration.test.mjs, instead of refactoring the blocks into functions or adding a ~20-minute postflight.sh arm."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh:2118-2141 is the mirror block, from '# Mirror .moe/agents/<name>.md to .claude/agents/<name>.md so Claude Code's' to just before 'LOOP_ENABLED=false'. It uses ENABLE_AGENT_TEAMS, MOE_DIR, PROJECT, AGENT_MIRRORED and AGENT_SKIPPED, under the script-wide set -e (line 5), before the claim loop.",
+      "scripts/moe-agent.ps1:949-979 is the twin, from the same first comment line to just before '# Normalize Command + CommandArgs'. It uses $enableAgentTeams, $moeDir, $projectPath, $mirrored and $skipped, with ForEach-Object and the script-wide $ErrorActionPreference='Stop' (line 103).",
+      "scripts/tests/seat-registration.test.mjs supplies the slice-runner conventions to copy: between(), the ENGINES/probe() table and BOM-prefixed temp ps1 scripts.",
+      ".github/workflows/ci.yml: the step 'Test launcher daemon.json cap and seat re-registration' (build-all-platforms, if: runner.os != 'macOS') runs node --test on daemon-json-cap.test.mjs and seat-registration.test.mjs."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/subagent-mirror.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w scripts/tests/subagent-mirror.test.mjs)\" && bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) A postflight.sh arm running two full wrappers through a PATH cp shim: rejected. The full harness takes ~20 min on WSL (mem:gotcha-qa-full-postflight-sh-runtime-and-summary-cap), and no PATH shim reaches a PowerShell cmdlet, so the ps1 twin would stay untested. Neither harness fixture even has .moe/agents, so no existing test runs this block. (2) Refactoring both blocks into functions for testability: unnecessary. seat-registration.test.mjs already slices top-level pre-flight segments by anchor text and runs them on bash, PS 5.1 and pwsh 7; this plan reuses that pattern. (3) The description's `cp … 2>/dev/null || [ -e \"$dest\" ] || <fail>`: adopted in spirit, with stderr captured so a real failure keeps cp's own diagnostic. (4) cp -n / --update=none: rejected; they are GNU-only and their exit status changed across coreutils releases. (5) A flock or mkdir lock around the mirror: rejected; stock macOS has no flock, and stale-lock handling is more code than the bug. (6) Leaving ps1 unchanged (mem:gotcha-wrapper-concurrent-seat-start-agents-mirror calls it unaffected): rejected. It has no EEXIST, but an overlapping Copy-Item -Force can still throw (a Windows CopyFile sharing violation, or .NET's exclusive lock on Unix), and EAP 'Stop' ends the seat. Seven lines give it the same 'destination exists => kept' rule, for the epic's parity rail and DoD 2.",
+    "codebaseInsights": "- The sh block runs in EVERY seat's pre-flight against the control checkout's .claude/agents, before the loop and its claim, so it still races after the worktree flip. Its first comment line is unique in both wrappers, and no other test slice covers it: the seat-registration slices start at sh 2192 and ps1 1509.\n- Architect measurement (WSL ext4, coreutils 9.4, two lockstep bash processes, six ~4 KB files): the unfixed loop lost 100 of 300 rounds, failing with exactly `cp: cannot create regular file … File exists`. The fixed loop had 0 failures in 600 seat runs, with bytes intact. GNU cp often OVERWRITES instead, because its own stat already saw the peer's file. So exact mirrored/kept counts can only be asserted under the injected race (row A); row C asserts exit codes, banner, sentinel and bytes.\n- Windows has node.exe at /mnt/c/Program Files/nodejs/node.exe, Git Bash at C:/Program Files/Git/bin/bash.exe and a Store pwsh.exe, so one Windows-node run from WSL covers Git Bash, PS 5.1 and pwsh 7. The task worktree under /mnt/d is reachable from Windows via wslpath -w.\n- daemon-json-cap.test.mjs's CI-guard test requires that CI step's if: line to be exactly `if: runner.os != 'macOS'`; appending a file to the step's run line is safe.",
+    "risks": "- pwsh on Linux runs in CI only (WSL has no pwsh). The ps1 block joins '.claude\\agents' with a backslash, which pwsh normalizes only through the provider. So the test's Copy-Item override and its checks use cmdlets (the module-qualified Microsoft.PowerShell.Management\\Copy-Item, Test-Path -LiteralPath), never [IO.File], on wrapper-built paths.\n- PS 5.1 reads a BOM-less temp .ps1 as ANSI, and the ps1 slice holds a non-ASCII arrow. Write temp ps1 files with a \ufeff BOM, as seat-registration does.\n- task-3ad573a7 (WORKING, a ps1 -LiteralPath sweep) edits the same ps1 block. In worktree mode the later landing rebases; a hunk conflict parks on a rescue ref and is re-applied on the new tip, never auto-resolved. Using -LiteralPath on the lines this task writes keeps the overlap small.\n- About 25 open rows edit moe-agent.sh/ps1 elsewhere (WT-1x, CQ-M07*, bug rows); this hunk is small and local.\n- Row C is real concurrency. Bound every spin and wait, and kill only recorded PIDs (project rail).\n- Keep the start anchor and both end anchors byte-identical; the test asserts each slice contains its copy call.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/seat-registration.test.mjs",
+      "scripts/tests/daemon-json-cap.test.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "00c1ac969d70ee0654bed75bfd8e8e818702fd08",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T11:19:51.868Z",
+  "approvedPlanRevision": 1
 }
