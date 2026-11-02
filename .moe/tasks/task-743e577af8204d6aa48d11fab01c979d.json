@@ -11,9 +11,48 @@
     "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first. Create moe-vscode/tests/settings-policy-corpus.test.cjs with the Write tool. Reuse the load/transpile shape of tests/settings-wire.test.cjs: SettingsPanel.ts runs under vm with a require map holding only {vscode}, and a fresh vm context for every render, because SettingsPanel.currentPanel is static (mem:gotcha-vscode-vm-test-harness, mem:gotcha-vscode-panel-strict-require-map).\n\nRead the corpus moe-jetbrains/src/test/resources/client-settings-policy.json, landed by VSC-5 (task-0f2cc6eb). Read it UNCHANGED, and read only each row's id, settings and expect; ignore extra members such as note. Expected format: rows P01 to P19, each {id, note, settings: wire JSON or null, expect: [{label, value, detail}] x10}. P17 to P19 carry wrong JSON types and pin the daemon's strict readers.\n\nRows:\n- C1, the corpus (DoD 1): run every row's settings through the exported effectivePolicyRows. JSON-copy the vm result and compare with expect by deepStrictEqual (label, value, detail, order). Collect 'Pnn: expected ..., got ...' and assert the whole list once, so every failing id is reported at once. A thrown error counts as that row's failure.\n- C2, the rendered section (DoD 2): open the panel for P01's settings, and separately for a LOCAL hostile fixture (qualityGate '<img src=x onerror=alert(1)>', consolidationBranch 'a&b'). Slice the HTML from `<section id=\"landingPolicy\">` to the next `</section>`, and assert:\n  - it contains no <input, <select, <textarea or <button;\n  - its policy-label / policy-value / policy-detail spans, decoded, equal effectivePolicyRows(settings) in order;\n  - the raw '<img', '<YYYY-MM-DD>' and 'a&b' never appear unescaped, while '&lt;img' and 'a&amp;b' do.\n- C3, shared strings (epic rule 2): the exported SETTINGS_BUNDLE_TEXT equals moe-jetbrains/src/main/resources/messages/MoeBundle.properties for exactly moe.label.landingPolicy, moe.settings.landingPolicyHint, moe.settings.enableAgentTeams and moe.settings.enableAgentTeamsHint, with the bundle's <html>/<small> tags stripped. Parse the bundle as tests/delivery-corpus.test.cjs does, and refuse a value containing a backslash escape.\n\nRun `node --test moe-vscode/tests/settings-policy-corpus.test.cjs` in place (plain node, read-only; never npm in the shared checkout). It is RED, because the export does not exist yet.\n\nError handling: a missing or unparsable corpus fails with an assertion that names the path; it never crashes the file silently.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/settings-policy-corpus.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Make SettingsPanel.ts match JetBrains. Edit moe-vscode/src/panels/SettingsPanel.ts and add no import.\n\n(a) Export `effectivePolicyRows(settings: unknown): { label: string; value: string; detail: string }[]`, a pure port of MoeSettingsDialog.effectivePolicyRows. It takes the RAW wire settings, because VS Code does not normalize them the way MoeJson does, and it applies the daemon's readers:\n- s is the object when settings is a non-null, non-array object, else {};\n- autoCommit, checkpointCommits, checkpointPush and commitBoardState are on unless they are exactly false; commitHooks is on only when exactly true (getCommitScope.ts);\n- consolidationBranch and qualityGate count only when they are strings, trimmed, else '' (wrapper isinstance(v, str), complete_task typeof);\n- the landing branch is a glob when it contains '*';\n- qualityGateScope 'everyTask' means every task; anything else means epic-final only;\n- attribution.undeclared is read only from a plain-object attribution: 'never', 'always', or anything else as solo;\n- each taskSizing threshold must be an integer number above 0 (planSize.ts positiveInt), else defaults 8/12/5/10, and each max is lifted to its warn value.\nCopy every label, value and detail string verbatim from MoeSettingsDialog.kt; the corpus pins them.\n\n(b) Export SETTINGS_BUNDLE_TEXT, holding the four bundle texts in plain form (the 'Landing & Gate Policy (read-only)' title, the read-only hint, the 'Enable Agent Teams (Claude Code workers only)' label and its hint).\n\n(c) In the HTML:\n- drop the Git section (autoCreateBranch, branchPattern, commitPattern);\n- add an enableAgentTeams checkbox under Agent, checked only when settings.enableAgentTeams === true, with the bundle label and hint;\n- add `<h2>` with the title, then `<section id=\"landingPolicy\">` holding one `<div class=\"policy-row\">` per row: `<span class=\"policy-label\">`, `<span class=\"policy-value\">`, and `<div class=\"policy-detail\">` only when the detail is non-empty, each value through escapeHtml; then the hint. No form control goes inside the section.\n\n(d) The save handler builds exactly {approvalMode, speedModeDelayMs, agentCommand, enableAgentTeams: message.enableAgentTeams === true} and nothing else, matching JetBrains MoeCommandSender.updateSettings.\n\nError handling: effectivePolicyRows never throws on any JSON shape. Wrong types fall back to the daemon defaults, because project.json is hand-editable. The save path keeps its existing not-connected warning and its catch.\n\nRe-run the corpus test in place: C1 to C3 pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/panels/SettingsPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Page script and wire test.\n\nmoe-vscode/media/settings.js: drop the autoCreateBranch, branchPattern and commitPattern lookups and payload fields. Post enableAgentTeams from the checkbox's .checked, so the save message carries exactly approvalMode, speedModeDelayMs, agentCommand and enableAgentTeams.\n\nmoe-vscode/tests/settings-wire.test.cjs (DoD 3), with the Edit tool:\n- FORM_KEYS becomes the sorted ['agentCommand', 'approvalMode', 'enableAgentTeams', 'speedModeDelayMs'], and savedPayload's message says four keys.\n- S3's no-project payload becomes {approvalMode: 'CONTROL', speedModeDelayMs: 2000, agentCommand: 'claude', enableAgentTeams: false}.\n- S4 stops editing the removed controls and also flips enableAgentTeams.\n- Add rows proving that enableAgentTeams round-trips: stored true saves true; stored false saves false; toggling either way sends the toggled value.\n- Add a row asserting that the emitted HTML has no element with id autoCreateBranch, branchPattern or commitPattern, and that no payload ever carries those keys. STORED keeps them as stored values.\n- Extend S6's kept settings with the three legacy keys, to show they survive in client state when VS Code no longer sends them.\n- Keep S1, S2, S5, S7 and S8 as they are.\n\nRun both test files in place with plain `node --test`.\n\nError handling: S7 (disconnected) and S8 (throwing socket) must still pass unchanged; they pin the save failure paths.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/media/settings.js",
+        "moe-vscode/tests/settings-wire.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Gate, run once (DoD 5; mem:gotcha-vscode-gate-from-wsl).\n\nRun exactly executionContract.checkRefs[0]. It builds the snapshot /tmp/vsc10-gate from `git archive HEAD` of the whole repo (two corpora and MoeBundle.properties live under moe-jetbrains), overlays this task's four files, then runs npm ci, lint, compile and the full npm test under env -i with nvm Node 24. Expect exit 0 and 0 failures. The baseline at 9ea87aa6 was 416 tests, 412 pass, 4 skip, before later landings and the new rows.\n\nThis command, its exit code and its output tail are the complete_task verification. Delete the snapshot afterwards.\n\nError handling for a red run:\n- A C1 failure names the corpus rows. Fix effectivePolicyRows, never the corpus (DoD 4).\n- A failure in another suite that loads SettingsPanel.ts means a require-map break: no import may be added.\n- A MODULE_NOT_FOUND or ENOENT before any assertion is a snapshot mistake.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Self-review of this task's diff.\n(1) DoD 4: client-settings-policy.json and every moe-jetbrains file are unchanged (git status; other sessions' paths are not yours).\n(2) Mutation proof, in a snapshot copy and never in the checkout. Each mutant must fail by assertion:\n- drop the typeof-string guard on qualityGate, which makes P19 fail;\n- read autoCommit as truthy instead of `!== false`, which makes P17 fail;\n- drop escapeHtml on the policy value, which makes C2 fail.\n(3) The save payload has exactly four keys on every path.\n(4) effectivePolicyRows handles null, arrays, strings and nested wrong types without throwing.\n(5) The policy section holds no form control.\nRecord the results in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -29,5 +68,71 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:40:45.159Z",
-  "updatedAt": "2026-11-02T09:40:45.159Z"
+  "updatedAt": "2026-11-02T10:30:26.110Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T10:27:30.493Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:30:26.086Z",
+  "executionContract": {
+    "intendedBehavior": "The VS Code settings panel edits and sends exactly what JetBrains does (approvalMode, speedModeDelayMs, agentCommand, enableAgentTeams), no longer shows or sends the dead branch and commit fields, and shows JetBrains' read-only effective landing policy rows. Those rows come from a port that replays the shared landing-policy corpus unchanged.",
+    "acceptanceCriteria": [
+      "Every client-settings-policy.json row passes through the exported effectivePolicyRows with exact label, value, detail and order, and all failing ids are reported at once.",
+      "The rendered policy section has no form control, and every value is escaped.",
+      "A Save sends exactly the four keys, and enableAgentTeams round-trips true and false.",
+      "The four new strings equal MoeBundle.properties."
+    ],
+    "invariants": [
+      "client-settings-policy.json and every moe-jetbrains file are unchanged.",
+      "SettingsPanel.ts gets no new import.",
+      "effectivePolicyRows never throws on any JSON input."
+    ],
+    "compatibility": [
+      "The daemon keeps storing autoCreateBranch, branchPattern and commitPattern. VS Code stops editing them, and they survive the SETTINGS_UPDATED round trip."
+    ],
+    "sourceAssumptions": [
+      "VSC-5 (task-0f2cc6eb) lands moe-jetbrains/src/test/resources/client-settings-policy.json with rows {id, note, settings, expect[{label, value, detail}]} P01 to P19, where P17 to P19 pin strict wire types.",
+      "MoeSettingsDialog.kt effectivePolicyRows holds the exact strings; MoeBundle.properties has moe.label.landingPolicy, moe.settings.landingPolicyHint, moe.settings.enableAgentTeams and moe.settings.enableAgentTeamsHint.",
+      "tests/settings-wire.test.cjs FORM_KEYS pins the save payload keys."
+    ],
+    "checkRefs": [
+      "S=/tmp/vsc10-gate && rm -rf \"$S\" && mkdir -p \"$S\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/src/panels/SettingsPanel.ts moe-vscode/media/settings.js moe-vscode/tests/settings-wire.test.cjs moe-vscode/tests/settings-policy-corpus.test.cjs \"$S\"/) && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "The policy rows come from a pure exported effectivePolicyRows over the RAW wire settings. VS Code keeps project.settings as untyped JSON, so the port must apply the daemon's readers itself. These are exactly what VSC-5's corpus rows P17 to P19 pin, after VSC-5 also fixes JetBrains' MoeJson; see mem:gotcha-jetbrains-settings-coercion-vs-daemon.\n\nShared strings follow VSC-8's pattern: an exported text map compared with MoeBundle.properties. A build-time catalog was rejected by VSC-0.\n\nThe legacy autoCreateBranch, branchPattern and commitPattern stay in types/moe.ts. That file is outside this row and the daemon still stores them; they are just no longer edited or sent.",
+    "codebaseInsights": "- JetBrains MoeSettingsDialog: the title is moe.label.landingPolicy ('Landing & Gate Policy (read-only)'); then one bold-label line plus a small detail per row; then moe.settings.landingPolicyHint. The enableAgentTeams checkbox uses moe.settings.enableAgentTeams plus its hint.\n- MoeCommandSender.updateSettings sends only approvalMode, speedModeDelayMs, agentCommand and enableAgentTeams.\n- tests/settings-wire.test.cjs loadPage builds elements only from <input|select|button> tags, so a read-only section made of div/span leaves it untouched.\n- tests/delivery-corpus.test.cjs (VSC-8) has the bundle parser to reuse.\n- Corpus strings contain '<YYYY-MM-DD>', 'wip(task-<id>)' and '.moe/tasks/<id>.json', so escaping is exercised by real rows.",
+    "risks": "- VSC-5 is not landed at planning time. The corpus format is the one VSC-5's plan pins (P01 to P19, {id, note, settings, expect}); read only id, settings and expect.\n- If VSC-5 changes a row while being implemented, the consumer must follow the landed corpus, never edit it.\n- Do not trim qualityGateScope or undeclared: the wrapper compares them exactly.\n- No import may be added to SettingsPanel.ts.\n- SettingsPanel.currentPanel is static, so use a fresh vm context per render.",
+    "keyFiles": [
+      "moe-vscode/src/panels/SettingsPanel.ts",
+      "moe-vscode/media/settings.js",
+      "moe-vscode/tests/settings-wire.test.cjs",
+      "moe-vscode/tests/delivery-corpus.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6fa401dc28d00dbdfd3d5b145341bd5c05c099fe",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:30:26.110Z",
+  "approvedPlanRevision": 1
 }
