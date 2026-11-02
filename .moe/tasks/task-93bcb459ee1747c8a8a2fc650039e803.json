@@ -11,28 +11,43 @@
     {
       "stepId": "step-1",
       "description": "Work from the task checkout root: `cd \"$(git rev-parse --show-toplevel)\"`.\n\nRED first, on the unchanged harness: `mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/93bcb459.XXXXXX) && MOE_WORKTREE_ONLY=marker-scan node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$PWD/scripts/tests/postflight-fake-proxy.js\" \"$S\" \"$(command -v bash)\"`. Expect `[worktree] marker-scan FAILED: Error: Command failed: mkfifo …: Operation not supported`. Quote it in the completion summary.\n\nThen fix markerScan() in scripts/tests/postflight-worktree.cjs (about :1084-1094). Use the Edit tool only; shell writes leave no TOOL witness.\n\n1. Move the sh engine's fixture to the suite's own os.tmpdir() dir:\n   - Add `const base=win?root:path.join(wrapperTmp,'marker scan');`.\n   - Build `w` and `out` under `base` instead of `root`.\n   Why:\n   - drvfs cannot hold a FIFO, and a WSL gate puts the sh parent on /mnt/<drive> when it shares one snapshot with the node.exe ps1 leg.\n   - wrapperTmp (:54) is already an os.tmpdir() mkdtemp this suite deletes in its final cleanup (:1467), and keeps under MOE_KEEP_WORKTREE_FIXTURE together with root. So no new cleanup code is needed.\n   - The space in 'marker scan' keeps the quoting coverage that root's 'worktree ' name gives today.\n   - The ps1 branch stays on root byte for byte: it never makes a FIFO.\n2. Error handling: wrap only the mkfifo call: `try{cp.execFileSync('mkfifo',[path.join(w,'fifo.txt')],{stdio:'pipe'});}catch(e){throw new Error(`mkfifo under ${base} failed; point TMPDIR at a filesystem that supports FIFOs: ${String(e.stderr||e.message).trim()}`);}`. A host whose temp dir also lacks FIFO support then fails loudly, with an actionable message, instead of skipping.\n3. Do NOT make the FIFO element conditional or drop it. On sh, the expected set stays `['eq.txt','gt.txt','lt.txt',...more]` with 'fifo.txt' and 'fl.txt' always in `more`, so no assertion is weakened.\n4. Update the case's header comment (:1081-1083) with one clause: sh builds under the suite's temp dir because a FIFO needs a filesystem that supports one, and drvfs does not.\n\nTouch nothing outside markerScan and its comment: not the cases map and not :52-54. Three open rows declare this file (f977d76e adds a case after wtCompletion and registers it in the cases map, plus a837dd48 and 31187ec1). Keeping hunks apart lets the worktree landing merge them.\n\nThe new markerScan is the only test change: the existing marker-scan case is the test.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "RED first: marker-scan FAILED with mkfifo 'Operation not supported' on a /mnt/d parent. Fixed markerScan: sh fixture now under wrapperTmp/'marker scan'; mkfifo wrapped with an actionable error; ps1 stays on root.",
+      "startedAt": "2026-11-02T22:30:42.987Z",
+      "completedAt": "2026-11-02T22:30:59.197Z"
     },
     {
       "stepId": "step-2",
       "description": "Verification, run once from the task checkout root. This command's fresh output is the complete_task evidence:\n\n`cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && mkdir -p /mnt/d/moe-scratch && for P in /mnt/d/moe-scratch /tmp; do S=$(mktemp -d \"$P/93bcb459.XXXXXX\") || exit 1; MOE_WORKTREE_ONLY=marker-scan node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$PWD/scripts/tests/postflight-fake-proxy.js\" \"$S\" \"$(command -v bash)\" || exit 1; rmdir \"$S\" 2>/dev/null; done`\n\nExpect:\n- the parity check passes (an epic rail);\n- `[worktree] marker-scan ok` and `[worktree] 1 ok, 0 failed` appear twice: once with the drvfs parent, the repro's case, and once with the ext4 parent, the canonical postflight.sh case.\n\nAfter the run, `ls /tmp | grep moe-worktree-wrapper-` shows no directory left by these runs, because the suite deleted its wrapperTmp. `rmdir` removes only the now-empty mktemp parents.\n\nError handling: if a run hangs past the harness's own timeouts, never pattern-kill (no pkill, killall, or kill by name). Stop only a PID your session started.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification passed: parity-check PASS; marker-scan ok on /mnt/d parent and /tmp parent. Leftover /tmp/moe-worktree-wrapper-* dirs predate/are peers' (not mine to remove).",
+      "startedAt": "2026-11-02T22:30:59.804Z",
+      "completedAt": "2026-11-02T22:31:12.259Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of this diff only:\n- ps1 legs (node.exe, or pwsh in WSL with win=true and winHost=false) still build under root and never call mkfifo.\n- Every sh run still asserts fifo.txt and fl.txt.\n- A temp dir that cannot hold a FIFO fails with the new message that names `base`. It does not pass silently.\n- Two concurrent harness runs get distinct wrapperTmp mkdtemps, so they never collide.\n- On macOS, os.tmpdir() and postflight.sh's `mktemp -d` parent sit in the same /var/folders tree, so the realpath behaviour is unchanged.\n- The final cleanup still removes the fixture; MOE_KEEP_WORKTREE_FIXTURE keeps both dirs.\n- `git diff --stat` shows only scripts/tests/postflight-worktree.cjs, and its hunks stay inside markerScan and its comment.\n\nFix anything found and re-run step 2 before complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Self-review: ps1 legs keep base=root and never call mkfifo; sh still asserts fifo.txt and fl.txt; a FIFO-less temp dir throws a message naming base; distinct mkdtemp per run; cleanup unchanged; diff is 1 file, +5/-3, inside markerScan and its comment.",
+      "startedAt": "2026-11-02T22:31:12.983Z",
+      "completedAt": "2026-11-02T22:31:16.455Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -45,7 +60,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:42:59.971Z",
-  "updatedAt": "2026-11-02T22:06:21.432Z",
+  "updatedAt": "2026-11-02T22:32:18.565Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:02:44.338Z",
@@ -54,17 +69,23 @@
   "metrics": {
     "firstClaimAt": "2026-11-02T22:03:31.065Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
-    "architect-24611a0a"
+    "architect-24611a0a",
+    "worker-8cf0816c"
   ],
   "tier": "light",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T22:06:21.404Z",
   "planningNotes": {
@@ -88,5 +109,41 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T22:06:21.432Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T22:30:42.987Z",
+  "reviewStartedAt": "2026-11-02T22:31:20.001Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && mkdir -p /mnt/d/moe-scratch && for P in /mnt/d/moe-scratch /tmp; do S=$(mktemp -d \"$P/93bcb459.XXXXXX\") || exit 1; MOE_WORKTREE_ONLY=marker-scan node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$PWD/scripts/tests/postflight-fake-proxy.js\" \"$S\" \"$(command -v bash)\" || exit 1; rmdir \"$S\" 2>/dev/null; done",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\n[worktree] marker-scan ok\n[worktree] 1 ok, 0 failed\n[worktree] marker-scan ok\n[worktree] 1 ok, 0 failed",
+    "reportedAt": "2026-11-02T22:31:20.001Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "completionSummary": "markerScan() in scripts/tests/postflight-worktree.cjs now builds the sh fixture under the suite's os.tmpdir() dir (wrapperTmp/'marker scan') instead of the drvfs-prone parent. The ps1 branch stays on root. The mkfifo call is wrapped to throw an actionable message naming the base dir. No assertion is weakened: sh still checks fifo.txt and fl.txt. RED before the fix: '[worktree] marker-scan FAILED: Error: Command failed: mkfifo … Operation not supported' on a /mnt/d parent. After: marker-scan ok on both the /mnt/d and /tmp parents; parity-check passes. Diff: 1 file, +5/-3.",
+  "commits": [
+    {
+      "sha": "33abb3e7d0a2744bbad5f33beb6fc75fe3448e6e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-02T22:29:42Z",
+      "paths": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-02T22:32:18.565Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-8cf0816c@2026-11-02T22:29:42Z",
+    "at": "2026-11-02T22:32:18.565Z"
+  }
 }

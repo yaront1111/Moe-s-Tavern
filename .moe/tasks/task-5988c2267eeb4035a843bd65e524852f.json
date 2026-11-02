@@ -11,10 +11,55 @@
     "No docs/ edit. Only archiveEpic.ts, reportBlocked.ts and their two test files change, plus archiveTask.ts if the clearing code is extracted into a shared helper (its behaviour unchanged)."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-24611a0a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first (test-driven-development). Write both test files with the Edit tool only (customRule: shell writes leave no TOOL witness). A reference copy of these exact cases, the simulated runtime diff and the architect's RED/GREEN output are in /mnt/d/moe-scratch/5988c226-plan/ (README.md, ae-case.ts, rb-cases.ts, simulated-fix.diff). They are suggestions; the DoD is the contract.\n\n(a) archiveEpic.test.ts: add `import { setTaskStatusTool } from './setTaskStatus.js';`. New case 'clears a BLOCKED row's block fields exactly as archive_task does; un-archiving carries none of them':\n- h.createEpic({ id: 'epic-2' }); h.createTask({ id: 'task-dep', epicId: 'epic-2', status: 'WORKING' }); h.createTask({ id: 'task-done', status: 'DONE' }); h.createTask({ id: 'task-bk', status: 'BLOCKED', blockedReason: 'needs PostgreSQL', blockedResourceId: 'pg-box', blockedOnTaskIds: ['task-dep'], blockedFromStatus: 'WORKING', blockedAt: '2026-09-05T22:22:00.000Z' }); await h.state.load().\n- Archive epic-1 and expect archivedTaskCount 2.\n- task-bk toMatchObject { status: 'ARCHIVED', priorBlockedReason: 'needs PostgreSQL', blockedReason: null, blockedResourceId: null, blockedOnTaskIds: null, blockedFromStatus: null, blockedAt: null }.\n- task-done is ARCHIVED and (priorBlockedReason ?? null) is null: non-BLOCKED rows archive as before.\n- set_task_status task-bk ARCHIVED→WORKING, then expect { status: 'WORKING', blockedOnTaskIds: null, blockedFromStatus: null }.\nEvery block field starts non-null, so each assertion can fail. The prerequisite sits in ANOTHER epic on purpose: updateTask runs runDependencyUnblock on every DONE/ARCHIVED transition, so a prerequisite archived by the same call could restore task-bk mid-loop, depending on readdir order (flaky across platforms). blockedResourceId also keeps that scan off the row.\n\n(b) reportBlocked.test.ts, first describe, just before the it.each 'drops dependency cycles and alerts #governors (explicit=%s)':\n- Case A 'a WORKING row carrying a stale DONE blockedOnTaskIds entry blocks on [] alone: parked dep-less, stale ids cleared'. Setup: const stale = await state.createTask({ epicId: 'epic-1', title: 'Old prerequisite', status: 'DONE' }); then state.tasks.set('task-1', { ...state.getTask('task-1')!, blockedOnTaskIds: [stale.id] }), a fixture write like the one in 'auto-unblocks on the real dependency…'. Call: result = await report({ reason: 'staging DB is down', blockedOnTaskIds: [] }). Expect:\n  - result.blocked not.toBe(false); result.dependenciesSatisfied undefined; result.taskStatus 'BLOCKED';\n  - result.blockedOnTaskIds and result.satisfiedBlockedOnTaskIds undefined; result.seatFreed true;\n  - result.blockResolution toContain 'No unmet blockedOnTaskIds were recorded';\n  - result.notified toEqual { target: '@governors', via: 'governors-fallback' } (the fixture has no architect), and one mentionedGeneralPosts() entry contains 'blocked on task-1' and the reason;\n  - stored task-1 has status 'BLOCKED' and (blockedOnTaskIds ?? null) null;\n  - await runDependencyUnblock(state) returns [] and task-1 stays BLOCKED.\n- Case B 'a stale OPEN id on a WORKING row is not unioned into an explicit list: the row waits on the real blocker only'. Setup: stale and real are both WORKING; fixture task-1 blockedOnTaskIds [stale.id]. Call: report({ reason: `waiting on ${real.id}`, blockedOnTaskIds: [real.id] }). Expect result.blockedOnTaskIds and the stored ids toEqual [real.id]. Fixture stale → DONE: runDependencyUnblock returns []. Fixture real → DONE: it returns ['task-1'].\n\nDoD 3's 'asserts blocked:true' is read as pinned by TASK rail proposal prop-583816507c344cfeaa139033c7c6193c (approved or pending). The Blocked answer has no `blocked` key, so case A asserts blocked is not false, dependenciesSatisfied undefined and taskStatus 'BLOCKED'. Do not add a `blocked` response field.\n\nRED: build a snapshot OUTSIDE the shared checkout from the task worktree W (never npm or vitest in place). Guard every cd.\n  SNAP=$(mktemp -d); git -C \"$W\" archive HEAD packages/moe-daemon | tar -x -C \"$SNAP\"\n  for f in $(git -C \"$W\" diff --name-only HEAD -- packages/moe-daemon); do cp \"$W/$f\" \"$SNAP/$f\"; done\n  cd \"$SNAP/packages/moe-daemon\" || exit 1; npm ci; npx vitest run src/tools/archiveEpic.test.ts src/tools/reportBlocked.test.ts\nA bare `git archive HEAD` without the overlay runs the unchanged files and proves nothing. Expected: exactly the 3 new cases fail and every existing case passes (architect run: 3 failed | 65 passed). Quote each failure in complete_step. The expected shapes are:\n- archiveEpic: expected { id: 'task-bk', …(25) } to match object { status: 'ARCHIVED', …(6) };\n- case A: expected false not to be false;\n- case B: expected [ …(2) ] to deeply equal [ Array(1) ].\nKeep the log under /mnt/d/moe-scratch/5988c226-<workerId>/.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "archive_epic clears block fields through one helper shared with archive_task (DoD 1, DoD 5).\n\narchiveTask.ts: move the existing clear-on-exit block (archiveTask.ts:64-74) verbatim into an exported pure function above archiveTaskTool:\n  export function archiveUpdates(task: Pick<Task, 'status' | 'blockedReason'>): Partial<Task>\nIt returns { status: 'ARCHIVED' }. When task.status === 'BLOCKED' it also sets priorBlockedReason = task.blockedReason (only when truthy) and sets blockedReason, blockedResourceId, blockedOnTaskIds, blockedFromStatus and blockedAt to null. Keep the 'same clear-on-exit as set_task_status' comment on the helper. archive_task's handler then calls state.updateTask(task.id, archiveUpdates(task), 'TASK_ARCHIVED'). ARCHIVABLE_FROM, HOLDER_ONLY_FROM, the holder check and the idempotent return are untouched, so archiveTask.test.ts passes unchanged.\n\narchiveEpic.ts: import { archiveUpdates } from './archiveTask.js' and replace the loop's bare { status: 'ARCHIVED' } (archiveEpic.ts:63) with archiveUpdates(task). These stay byte-identical: IN_FLIGHT, the refusal message, the assertNoFinalizingAttempt pre-pass, the epic update, the tool description and the return shape. Only the IN_FLIGHT doc comment may add that a BLOCKED row is shelveable with its block fields cleared.\n\nKeep the loop on the pre-loop snapshot `task`. If an earlier sibling's ARCHIVED transition auto-unblocks a BLOCKED row mid-loop, the snapshot still reads BLOCKED, so the row still ends ARCHIVED with null block fields. That mid-loop restore is pre-existing and out of scope.\n\nError handling: the helper is pure (no IO, cannot throw). updateTask failures propagate exactly as today, and the all-or-nothing gates still run before the first write.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/archiveTask.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "report_blocked merges stored ids only on an already-BLOCKED row (DoD 2). Three edits in reportBlocked.ts:\n\n(1) Line 172 becomes:\n  const storedBlockedOnIds = task.status === 'BLOCKED' && Array.isArray(task.blockedOnTaskIds) ? task.blockedOnTaskIds : [];\nLike `flipped`, it reads the `task` that line 159 re-reads after the resource arm's await. On a PLANNING/WORKING/REVIEW row, stored ids are leftovers of an old block that get_context and list_tasks hide. They come from archive_epic before this fix, or from release_task's refusal cascade (releaseTask.ts:311-327, out of scope). The block is computed from the supplied or reason-parsed ids alone.\n\n(2) The flip write (line 346) always sets the key:\n  blockedOnTaskIds: recordedBlockedOnIds.length > 0 ? recordedBlockedOnIds : null,\nupdateTask clears none of the block fields. Omitting the key would leave the stale list on the now-BLOCKED row, and the next dependency scan would restore the row on the stale DONE id (claim-thrash). set_task_status, archive_task and runDependencyUnblock already write null. The architect's full daemon suite run with this write showed no failure in src/state or src/tools.\n\n(3) Rewrite the comment above line 171 ('Structured dependency ids: stored ∪ (supplied OR legacy reason-parsed)…'): stored ids join only on the already-BLOCKED union-on-update arm, and say why.\n\nLeave everything else byte-identical:\n- the human-gated refusal, the resource arm and cycle detection;\n- satisfied-id filtering and the dependenciesSatisfied rule;\n- the repeat arm (blockedOnIdsChanged, identicalRepeat, the union including satisfied ids);\n- seat handling, paging and the response shape;\n- the tool description and the inputSchema text, which already say ids union on repeats of an already-BLOCKED task.\n\nError handling: no new throw or IO. Input validation and the refusal still run before any write or page. No docs/ edit (DoD 5): docs/MCP_SERVER.md already scopes blocked* fields to BLOCKED tasks.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once. Build a FRESH snapshot from the task worktree with the step-1 overlay recipe; it now carries all five changed files. Never run it in place in the shared control checkout (customRule: the daemon runs from packages/moe-daemon/dist). Run exactly:\n  cd packages/moe-daemon && npx vitest run src/tools/archiveEpic.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/setTaskStatus.test.ts\nIt must exit 0 with 4 files passed: 91 tests at HEAD ecf00c18 plus the new cases. The architect's run with the three cases above passed 94; if a later landing changed one of these files, report base + N. That command, its exit code and its output tail are the complete_task verification evidence (DoD 4).\n\nIn the same snapshot also run `npx tsc --noEmit -p .` (vitest does not typecheck the helper's Pick signature) and report its exit 0 beside the evidence.\n\nThen `git -C <worktree> diff --stat HEAD` must list only archiveEpic.ts, archiveTask.ts, reportBlocked.ts, archiveEpic.test.ts and reportBlocked.test.ts under packages/moe-daemon/src/tools (DoD 5). Declare those five as modifiedFiles.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff, once (load adversarial-self-review). Record it in the final complete_step.\n(a) Parity: archive_epic and archive_task now write the same clearing through one helper. set_task_status's BLOCKED exit (setTaskStatus.ts:179-188) clears the same five fields and sets priorBlockedReason.\n(b) The already-BLOCKED repeat arm still unions stored ids, satisfied ones included: 'a repeat carrying NEW blockedOnTaskIds…' and 'the reason-update arm on an already-BLOCKED row KEEPS satisfied ids…' pass unchanged.\n(c) A fresh flip never leaves an earlier list: it writes the recorded ids, otherwise null, on resource and non-resource flips alike.\n(d) Concurrency: both tools run under the global state mutex, and the new guard reads the post-await task.\n(e) blockedOnTaskIds that is null, undefined, [] or not an array gives stored [] on every status.\n(f) Mutation check in a scratch copy of the snapshot, never in the worktree. Revert each runtime hunk on its own and confirm a new case fails:\n  - the status guard → cases A and B;\n  - the null write → case A's stored-ids assertion;\n  - archiveUpdates in archive_epic → the archiveEpic case.\n  Then confirm the restored copy passes.\n(g) Put residuals in the handoff, not in code. release_task's refusal cascade and set_task_status's un-archive still leave block fields on a non-BLOCKED row. Those stale ids still feed dependencyEdges/findDependencyPath (a false DEPENDENCY_CYCLE drop) and get_context's declared prerequisites.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -23,19 +68,96 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 343.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-fbe79b3a8d6244db9a819d807b2483f7",
+      "author": "architect-24611a0a",
+      "content": "Planner note (architect-24611a0a, plan rev 1): DoD 3 says \"asserts blocked:true\", but report_blocked's Blocked answer has no `blocked` key (docs/MCP_SERVER.md Returns). Only the not-blocked arm answers blocked:false. The reading is pinned by TASK rail proposal prop-583816507c344cfeaa139033c7c6193c (approved or pending): the test asserts blocked is not false, dependenciesSatisfied is undefined and taskStatus is 'BLOCKED', plus the stored row is BLOCKED with no ids. Do not add a response field; DoD 5 forbids the docs edit. Evidence from the architect's scratch run (snapshot of ecf00c18): /mnt/d/moe-scratch/5988c226-plan/. With the new tests on unchanged code, 3 failed | 65 passed. With the fix, the 4-file DoD gate passed 4 files / 94 tests and tsc --noEmit exited 0. The full daemon suite had no failures in src/state or src/tools; the only failures were repo-root docs/scripts reads that a package-only snapshot cannot see. Snapshot trap: `git archive HEAD` alone tests the unchanged files. Overlay the worktree's `git diff --name-only HEAD` files, as step 1 says.",
+      "timestamp": "2026-11-02T22:31:12.822Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T21:12:52.279Z",
-  "updatedAt": "2026-11-02T22:17:33.872Z",
+  "updatedAt": "2026-11-02T22:31:12.822Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:14:25.066Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-11-02T22:17:19.136Z"
+    "firstClaimAt": "2026-11-02T22:17:19.136Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T22:31:04.067Z",
+  "executionContract": {
+    "intendedBehavior": "archive_epic archives a BLOCKED row with its block fields cleared exactly as archive_task does: priorBlockedReason keeps the reason, and blockedReason, blockedResourceId, blockedOnTaskIds, blockedFromStatus and blockedAt become null. report_blocked unions stored blockedOnTaskIds only on an already-BLOCKED row. A fresh flip of a PLANNING/WORKING/REVIEW row computes the block from supplied or reason-parsed ids alone, and writes blockedOnTaskIds as the recorded list or null, never a leftover list.",
+    "acceptanceCriteria": [
+      "archiveEpic.test.ts: a BLOCKED row archived by archive_epic has every block field cleared and priorBlockedReason kept. A non-BLOCKED sibling archives as before. The row un-archived to WORKING carries no blockedOnTaskIds.",
+      "reportBlocked.test.ts: a WORKING row with a stale DONE id, blocked with blockedOnTaskIds:[], gets the Blocked answer (taskStatus BLOCKED, no blocked:false, no dependenciesSatisfied). It is stored BLOCKED with no ids, paged as a dep-less block, and no dependency scan restores it.",
+      "reportBlocked.test.ts: a WORKING row with a stale OPEN id, blocked with [real], records [real] only. It auto-unblocks when real lands, not when the stale id lands.",
+      "RED first against the unchanged runtime: exactly the new cases fail; existing cases pass."
+    ],
+    "invariants": [
+      "archive_epic's in-flight refusal (PLANNING/AWAITING_APPROVAL/WORKING) and the finalizing-attempt pre-pass are unchanged.",
+      "archive_task's behaviour is unchanged; archiveTask.test.ts passes untouched.",
+      "report_blocked's already-BLOCKED repeat arm still unions stored ids, satisfied ones included.",
+      "report_blocked's response shape, tool description and inputSchema are unchanged; no new response field.",
+      "No docs/ edit; only the five named files under packages/moe-daemon/src/tools change."
+    ],
+    "compatibility": [
+      "Existing .moe task files whose non-BLOCKED rows carry stale blockedOnTaskIds load unchanged. report_blocked ignores those ids and clears them on the row's next flip.",
+      "The MCP tool contracts of archive_epic, archive_task and report_blocked are unchanged (epic rail)."
+    ],
+    "reuse": [
+      "archive_task's clear-on-exit block moves verbatim into the exported archiveUpdates(task) in archiveTask.ts, and archive_epic calls it.",
+      "set_task_status keeps its own identical clearing (setTaskStatus.ts:179-188), because DoD 5 does not list that file."
+    ],
+    "sourceAssumptions": [
+      "archiveEpic.ts:11 IN_FLIGHT omits BLOCKED; archiveEpic.ts:63 writes a bare { status: 'ARCHIVED' }.",
+      "archiveTask.ts:64-74 is the BLOCKED clear-on-exit block.",
+      "reportBlocked.ts:171-172 computes flipped and storedBlockedOnIds; :256-257 is the dependenciesSatisfied rule; :346 omits blockedOnTaskIds when none are recorded.",
+      "taskStore.ts:670-681 runs runDependencyUnblock on every DONE/ARCHIVED transition; dependencyUnblock.ts:210-283 scans only BLOCKED rows without blockedResourceId."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npx vitest run src/tools/archiveEpic.test.ts src/tools/reportBlocked.test.ts src/tools/archiveTask.test.ts src/tools/setTaskStatus.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Add `blocked: true` to report_blocked's Blocked response so DoD 3 can assert it literally. Rejected: it changes the documented response contract (docs/MCP_SERVER.md Returns) and DoD 5 forbids the docs edit. The reading is pinned by TASK rail prop-583816507c344cfeaa139033c7c6193c instead. 2) Copy the 7-line clearing into archiveEpic.ts. Rejected in favour of one helper in archiveTask.ts, so 'exactly as archive_task does' holds by construction (DoD 5 allows it). 3) Add BLOCKED to archive_epic's IN_FLIGHT list. Rejected: DoD 1 keeps the refusal unchanged, and archive_task already shelves BLOCKED rows. 4) Clear fields on un-archive (setTaskStatus.ts:53) or in release_task's refusal cascade. Both files are outside DoD 5's list; the report_blocked guard removes their effect on report_blocked. 5) Write null only when stale ids exist. Rejected for the unconditional write, which mirrors blockedResourceId; the architect's scratch run found no regression. 6) Re-read the live row inside archive_epic's loop: not needed, because the snapshot still reads BLOCKED and the clearing is still right.",
+    "codebaseInsights": "updateTask clears no blocked* field; only set_task_status, archive_task and runDependencyUnblock do. updateTask runs runDependencyUnblock on every DONE/ARCHIVED transition (taskStore.ts:670-681), and that scan skips rows with blockedResourceId. get_context and list_tasks show blocked* only on BLOCKED rows, so stale ids stay invisible. report_blocked refuses human-gated rows before line 171, so there `!flipped` means BLOCKED. Test idiom for absent-or-null: `(x ?? null)` toBeNull. ToolTestHarness.createEpic/createTask write JSON fixtures; call h.state.load() after them. The reportBlocked fixture has worker-1 (role worker) and no architect, so pages fall back to @governors.",
+    "risks": "(1) A snapshot from `git archive HEAD` without the worktree overlay tests the unchanged code and gives a false green; the step-1 recipe overlays `git diff --name-only HEAD`. (2) A same-epic prerequisite in the archiveEpic fixture is order-dependent through the event-driven unblock, so use the cross-epic dependency. (3) The flip now writes `\"blockedOnTaskIds\": null` into fresh BLOCKED rows without ids. Plugins already read null there (runDependencyUnblock writes it). (4) Peer row task-1cb3f280 (PLANNING) edits dependencyUnblock.ts and runs reportBlocked.test.ts without editing it. There is no file overlap, and worktree mode isolates RED tests. (5) Rail proposal prop-58381650 may still be pending at QA; cite it in complete_task.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/archiveEpic.ts",
+      "packages/moe-daemon/src/tools/archiveTask.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/tools/setTaskStatus.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "863629c8bc01b71b79de44e3f6ba4685349b3d36",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T22:31:04.105Z",
+  "approvedPlanRevision": 1
 }

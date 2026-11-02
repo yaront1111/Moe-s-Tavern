@@ -11,31 +11,44 @@
     {
       "stepId": "step-1",
       "description": "RED, then fix. Work from the task checkout root: `cd \"$(git rev-parse --show-toplevel)\"`. Write tracked files only with the Edit tool; shell writes leave no TOOL witness.\n\n(1) Regression rows in scripts/tests/daemon-json-cap.test.mjs (tables at about :521-549; mem:gotcha-path-contract-cross-impl-test).\n\nAppend to CONTRACT these generic UNC rows with an empty separator after the server or share:\n- `['//srv//share/proj', '//srv/share/proj']`\n- `['\\\\\\\\srv\\\\\\\\share\\\\proj', '//srv/share/proj']`, which is the JS literal for \\\\srv\\\\share\\proj\n- `['//SRV//SHARE', '//srv/share']`\n- `['//srv//share/../../b', '//srv/share/b']`: '..' never climbs past the share, even after an empty separator\n- `['//srv//..//share/x', '//srv/share/x']`\n- `['//srv///share//proj//', '//srv/share/proj']`\n\nAppend to NOT_WSL_SHARES these rows. An empty distro segment is generic UNC, never a share:\n- `['//wsl$//home/u/Proj', '//wsl$/home/u/proj']`, the task's repro\n- `['\\\\\\\\wsl$\\\\\\\\home\\\\u\\\\Proj', '//wsl$/home/u/proj']`\n- `['//wsl.localhost//Ubuntu/home', '//wsl.localhost/ubuntu/home']`\n\nI pre-checked every row on 2026-11-03: moe-proxy dist, moe-daemon dist and moe-agent.ps1 Get-MoeComparableProjectPath (PS5.1) already give exactly these keys, so only the Bash rule goes red. Do not edit WSL_SHARES, the helpers or the cut anchors (`WINDOWS = re.compile(` … `\\ntry:`).\n\nRED run, in place (this harness builds nothing): `node --test --test-name-pattern='moe-agent\\.sh' scripts/tests/daemon-json-cap.test.mjs`. Expect `path contract: moe-agent.sh (python3) gives every non-WSL-share row its key` to fail, with `//wsl$//home/u/proj` and `//srv//share/proj`-style actuals. Quote it in the completion summary.\n\n(2) Fix the Bash identity key in scripts/moe-agent.sh probe_daemon_health's Python (about :1665-1680). Port the contract's collapse() from packages/moe-proxy/src/utils.ts:55-62. Define it AFTER the `WINDOWS = re.compile(...)` line and BEFORE `def comparable`, so the test's cut window, which ends at `\\ntry:`, includes it:\n```python\ndef collapse(p, keep):\n    kept = []\n    for s in p.split(\"/\"):\n        if s in (\"\", \".\"):\n            continue\n        if s != \"..\":\n            kept.append(s)\n        elif len(kept) > keep:\n            kept.pop()\n    return \"/\".join(kept)\n```\n\nIn comparable(), in the Windows-form branch, set `s = p.replace(\"\\\\\", \"/\")` and keep the WSL-share `re.match(...)` on `s` exactly as it is. Replace `return ntpath.normpath(p).replace(\"\\\\\", \"/\").rstrip(\"/\").lower()` with:\n```python\nunc = s.startswith(\"//\")\nreturn ((\"//\" if unc else \"\") + collapse(s, 2 if unc else 1)).lower()\n```\nThis mirrors utils.ts:44-45, keep 2 for UNC server and share, 1 for the drive.\n\nKeep byte-identical:\n- the WSL-share branch, so WSL-share recognition is unaltered, per the DoD;\n- the posixpath and /mnt branch;\n- absolute().\n\nThen:\n- Drop `ntpath` from that snippet's import line (:1665) once a grep of the probe_daemon_health body shows no other use.\n- Update the header comment (:1655-1656) from \"with ntpath/posixpath, never os.path\" to say the drive and UNC forms use a port of comparableProjectPath's collapse rule (empty and '.' segments dropped, '..' never climbs past the drive or the UNC server and share), and POSIX uses posixpath, never os.path.\n\nConstraints:\n- The Python sits inside a bash single-quoted `-c '…'` string, so it must contain NO single quote.\n- Make the edit in one Edit call: in shared mode the live seats hot-reload this file.\n- Error handling: collapse and comparable stay total for any str (split and join only, no new exception paths). The caller's try/except, its exit codes 0/1/3 and the foreign-project output are unchanged.\n- Out of scope: the separate worktree-registration comparable() at about :3256-3264, which is not the identity key, and moe-agent.ps1, which already follows the contract. Many open rows declare moe-agent.sh, so keep the hunk inside this snippet.\n\nRe-run the RED command: all its tests now pass.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/daemon-json-cap.test.mjs",
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Added all nine malformed-UNC regression rows. RED: narrow node --test command exited 1; non-WSL key test expected //wsl$/home/u/proj but got //wsl$//home/u/proj, and //srv/share/b got //srv//b. Ported contract collapse inside probe's cut window; removed its only ntpath use and updated header in one production edit. WSL regex, recognition/tail handling, absolute(), POSIX mapping and caller exception/exit handling unchanged (only reuse of identical normalized string in regex input). GREEN: same command exited 0, 2 tests passed. Working in wrapper-provisioned task checkout per workspace; no Git writes.",
+      "startedAt": "2026-11-02T22:30:03.426Z",
+      "completedAt": "2026-11-02T22:30:32.288Z"
     },
     {
       "stepId": "step-2",
       "description": "Verification, run once. This command's fresh output is the complete_task evidence.\n\nThe path-contract tests import BOTH built dists, and a missing dist fails. Build them only in a scratch snapshot, never in the shared checkout (rail; mem:gotcha-path-contract-cross-impl-test):\n\n`R=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/tests/daemon-json-cap.test.mjs; do cp \"$R/$f\" \"$S/$f\" && cmp \"$R/$f\" \"$S/$f\" || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'set -e; cd \"$1/packages/moe-proxy\"; npm ci --no-audit --no-fund --prefer-offline >/dev/null; npm run build >/dev/null; cd ../moe-daemon; npm ci --no-audit --no-fund --prefer-offline >/dev/null; npm run build >/dev/null; cd \"$1\"; bash -n scripts/moe-agent.sh; node --test scripts/tests/daemon-json-cap.test.mjs; bash scripts/tests/parity-check.sh' _ \"$S\"`\n\nExpect:\n- `# fail 0`;\n- the dist test `path contract: moe-proxy and moe-daemon give every row its contract key` passes with the new rows;\n- both `moe-agent.sh (python3)` path-contract tests pass;\n- the identity rows pass;\n- the parity check passes.\n\nPS engines are skipped on Linux node. State that in the evidence. Windows CI runs them, and the step 1 pre-check found PS5.1 already agrees on every new row.\n\nAfterwards, delete only that exact `$S` mktemp dir.\n\nError handling: a failed npm ci or build in the snapshot is an environment failure. Report it, and never retry in the shared checkout.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran plan's exact scratch-archive verification command fresh. npm ci --prefer-offline and builds succeeded for proxy and daemon only in /tmp/tmp.fO6vHLrW4v; overlay cmp verified both changed files. bash -n passed; node suite: 100 total, 32 passed, 0 failed, 68 skipped (PowerShell 5.1 Windows-only and pwsh unavailable on Linux). Both dist and Bash path-contract tests, JetBrains table comparison and Bash identity rows passed. PASS parity-check.sh. Build emitted expected nonfatal archive-without-git-history generator warnings; no build/install failures. Additional worktree completion quality gate parity + root lint run in identical snapshot.",
+      "startedAt": "2026-11-02T22:30:42.658Z",
+      "completedAt": "2026-11-02T22:31:09.079Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of this diff only:\n- The Python has no single quote, and `bash -n` passes.\n- collapse sits inside the test's `WINDOWS = re.compile(` … `\\ntry:` window. Otherwise pythonKeys raises NameError and the whole rule fails, not just the new rows.\n- WSL_SHARES rows all still pass, so recognition is unaltered.\n- CONTRACT drive rows are unchanged:\n  - `D:\\\\` gives `d:`;\n  - `D:/../proj` gives `d:/proj`;\n  - `\\\\\\\\?\\\\D:\\\\x\\\\..` gives `//?/d:`, which matches moe-proxy.\n- Huge or odd input: split and join only, no recursion and no regex backtracking added.\n- `git diff --stat` shows only the 2 files, and the moe-agent.sh hunk stays inside probe_daemon_health's comment and Python.\n\nFix anything found and re-run step 2 before complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/daemon-json-cap.test.mjs"
-      ]
+      ],
+      "note": "Loaded adversarial-self-review and read full task diff. No findings requiring changes. Verified no single quotes inside embedded Python; helper inside cut window; absolute(), POSIX/mnt branch and WSL tail byte-identical; WSL regex and semantics unchanged using identical normalized string. Drive D:\\ -> d:, D:/../proj -> d:/proj, device \\\\?\\D:\\x\\.. -> //?/d: and huge repeated traversal input checked. Pure local list operations add no shared state, IO, recursion or regex backtracking; caller validates absolute string and retains bounded body/watchdog/try-except. Diff only two intended files (+23/-4), shell hunks solely probe header/Python; git diff --check and bash -n pass. Fresh step-2 suite 32 pass/0 fail/68 PS skips; additional worktree quality gate parity+lint passed. No source edits in this review step; exact scratch snapshot removed. Serena task handoff and UNC gotcha recorded.",
+      "startedAt": "2026-11-02T22:31:09.115Z",
+      "completedAt": "2026-11-02T22:31:48.300Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fdb2af60",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -47,7 +60,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T19:27:49.581Z",
-  "updatedAt": "2026-11-02T22:28:47.530Z",
+  "updatedAt": "2026-11-02T22:32:08.356Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T21:02:44.374Z",
@@ -56,7 +69,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-02T22:06:31.457Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -66,7 +80,11 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T22:11:14.899Z",
   "planningNotes": {
@@ -91,5 +109,19 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T22:11:14.936Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T22:30:03.426Z",
+  "reviewStartedAt": "2026-11-02T22:32:08.354Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/tests/daemon-json-cap.test.mjs; do cp \"$R/$f\" \"$S/$f\" && cmp \"$R/$f\" \"$S/$f\" || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'set -e; cd \"$1/packages/moe-proxy\"; npm ci --no-audit --no-fund --prefer-offline >/dev/null; npm run build >/dev/null; cd ../moe-daemon; npm ci --no-audit --no-fund --prefer-offline >/dev/null; npm run build >/dev/null; cd \"$1\"; bash -n scripts/moe-agent.sh; node --test scripts/tests/daemon-json-cap.test.mjs; bash scripts/tests/parity-check.sh' _ \"$S\"",
+    "exitCode": 0,
+    "outputTail": "✔ path contract: moe-proxy and moe-daemon give every row its contract key\n✔ path contract: moe-proxy matches every absolute row of the JetBrains table\n✔ path contract: moe-agent.sh (python3) gives every non-WSL-share row its key\n✔ path contract: moe-agent.sh (python3) maps a WSL share to its POSIX path\nPowerShell 5.1 and PowerShell 7 cases skipped: unavailable on Linux.\n✔ CI runs this suite on Linux and Windows\nℹ tests 100\nℹ pass 32\nℹ fail 0\nℹ skipped 68\nPASS parity-check.sh\nVERIFICATION_EXIT=0\nAdditional fresh quality gate: bash scripts/tests/parity-check.sh && npm run lint -> exit 0; role-doc caps all OK.",
+    "reportedAt": "2026-11-02T22:32:08.354Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/daemon-json-cap.test.mjs",
+    "scripts/moe-agent.sh"
+  ],
+  "completionSummary": "Ported shared collapse rule into Bash health identity key; generic UNC empty segments now normalize consistently and '..' cannot climb past actual server/share. Added nine malformed-UNC rows. RED narrow test: 'path contract: moe-agent.sh (python3) gives every non-WSL-share row its key' failed with '//wsl$//home/u/proj' instead of '//wsl$/home/u/proj' and '//srv//b' instead of '//srv/share/b'; after fix 2/2 pass. Full isolated snapshot verification: 100 tests, 32 passed, 0 failed, 68 PowerShell-only skips on Linux; proxy/daemon builds, bash syntax, parity passed. Additional worktree quality gate parity+lint passed. Adversarial review verified quote safety, helper test window, unchanged WSL recognition, absolute/POSIX branches, drive/device keys and huge input. Two files only (+23/-4); no Git writes; wrapper lands assigned worktree. Snapshot removed; Serena handoff and UNC gotcha recorded."
 }
