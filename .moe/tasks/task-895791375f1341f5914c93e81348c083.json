@@ -1,0 +1,27 @@
+{
+  "id": "task-895791375f1341f5914c93e81348c083",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: under MOE_RUNTIME_PROTECTED=1, ps1 Find-MoeProtectedFile treats a PATH entry that reaches the project through an 8.3 short name, a subst or mapped drive, or a UNC spelling as outside it",
+  "description": "Planner input from CQ-RF07 (task-f3f364a6), finding 6, posted on task-2f22237b by worker-c9368191. The architect filed it separately because task-2f22237b's DoD covers only cmd.exe's cwd-first lookup.\n\nFind-MoeProtectedFile (scripts/moe-agent.ps1, about :523-544 at 717c4019) skips in-project PATH entries by comparing Get-MoeRealPath strings: `$real.Equals($project)`, or `\"$real$sep\".StartsWith(\"$project$sep\")`. That compares spellings, not file identity. So the same folder reached through an 8.3 short name, a subst drive or a `\\\\?\\`/UNC spelling passes the containment check, and a node.exe (or agent CLI) there would be pinned. The function's own ponytail comment already admits the 8.3 case.\n\nThe JetBrains side matches by file identity (task-9a1da6f6, the volume serial plus the file index). This needs the user's own PATH to carry such an alias of the project, which is why it is LOW.\n\nFix direction: an identity compare (volume serial plus file index) of each PATH entry's real path against the project and its ancestors, or an explicit refusal of 8.3, subst and UNC entries under the marker, with a Windows ps1 row (node --test through Windows node.exe, or postflight.ps1). The sh twin compares inodes with `-ef` and is not affected.",
+  "definitionOfDone": [
+    "Under MOE_RUNTIME_PROTECTED=1 on Windows, a PATH entry that names the project, or a folder under it, through an 8.3 short name, a subst drive or a UNC/\\\\?\\ spelling is skipped by Find-MoeProtectedFile, so a node.exe or agent CLI planted there is never pinned. A row run through Windows node.exe proves it for at least the 8.3 and subst forms.",
+    "Legacy seats are unchanged; the protected-agent-command suite and parity-check.sh exit 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 323.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T23:35:38.591Z",
+  "updatedAt": "2026-11-02T23:35:38.591Z"
+}

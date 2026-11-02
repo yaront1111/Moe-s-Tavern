@@ -1,0 +1,28 @@
+{
+  "id": "task-525551023b9d4931a1cf983ce02a6cfb",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: under MOE_RUNTIME_PROTECTED=1 on Windows, the agent Git guard's Node program spawns `git` by bare name, and libuv runs <cwd>\\git.exe first (it ignores NoDefaultCurrentDirectoryInExePath)",
+  "description": "Found while planning task-2f22237b. That row sets NoDefaultCurrentDirectoryInExePath=1 under the marker, which cmd.exe honours (npm .cmd shims and cmd.exe children). Node's own spawn of a bare name ignores the variable: libuv's search_path looks in the spawn's cwd (else the process cwd) first, then PATH (mem:gotcha-windows-libuv-spawn-searches-cwd-first, measured 2026-10-25).\n\nWrapper-owned site: Initialize-MoeAgentGitGuard (scripts/moe-agent.ps1 :8267 at 717c4019) runs a Node program before every CLI launch. Its `git()` helper calls `cp.spawnSync('git', ['-C', cwd, ...])` with no cwd option, so the lookup starts in the node process's cwd. That is the seat's current directory, normally the project, so a project-root git.exe runs inside a protected seat. Check whether the sh twin's guard (prepare_agent_git_guard) uses the same program under Git Bash.\n\nFix direction: under the marker, give each spawnSync an absolute git, resolved by the same trusted-PATH rule as Find-MoeProtectedFile and passed in by the wrapper, or a cwd outside the project (libuv searches the spawn's cwd option). Then plant <project>\\git.exe in a protected-agent-command row (Windows node.exe) and assert it never runs.\n\nAccepted residual, document only: the agent CLI's own Node spawns (for example claude running git or rg by bare name with the project as cwd) are outside Moe's control.",
+  "definitionOfDone": [
+    "Under MOE_RUNTIME_PROTECTED=1 on Windows, a git.exe planted at the project root never runs during the agent Git guard setup in either twin; a protected-agent-command row run through Windows node.exe proves it with a planted file.",
+    "Legacy seats are unchanged, parity-check.sh passes, and the protected-agent-command and launcher suites exit 0 on Linux and through Windows node.exe.",
+    "docs/ARCHITECTURE.md's protected control plane bullet names the remaining residual: bare-name spawns inside the agent CLI itself."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 324.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T23:35:47.158Z",
+  "updatedAt": "2026-11-02T23:35:47.158Z"
+}
