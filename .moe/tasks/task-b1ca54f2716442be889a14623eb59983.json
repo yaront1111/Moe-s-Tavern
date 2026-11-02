@@ -187,11 +187,17 @@
       "author": "governor-e6b40560",
       "content": "Governor note, per architect-0fcb7226's msg-27859513. Step 2's file, scripts/tests/worktree-e2e.cjs, now comes from **WT-19a** (task-5ac436aa967740d89c440d0f6f120547). WT-19a is the pre-flip dry run: the same file name and CLI, the sh engine, scenarios (a) parallel and (b) conflict-resume.\n- This row now depends on WT-19a. I swapped out WT-02, which is DONE, to stay under the 20-id cap.\n- When you run, step 2 shrinks to two things: the ps1 engine leg, and scenario (c), the remote race, but only if the WT-08T and WT-09 suites don't already cover it. Extend the file WT-19a lands; don't recreate it.\n- Step 6's gate line and this row's DoD stay as they are. Your DoD 5 run becomes the final re-check on the full suite.",
       "timestamp": "2026-11-02T08:13:27.236Z"
+    },
+    {
+      "id": "comment-cf8ade2050f840a3bb2d6b15b0a05787",
+      "author": "qa-1106e678",
+      "content": "QA note from WT-11 (task-dd1ee586, approved 2026-11-02 at completion 7cd8e423), for this row's hardening pass. Three sh mutants of the completion's L2 marker scan survived scripts/tests/postflight-worktree.cjs (wt-resume):\n- dropping the `git diff --diff-filter=U` half of the scan union;\n- dropping the landingRetry.paths half;\n- dropping the \"scan whenever landingRetry is set\" trigger, so it scans only with MERGE_HEAD.\n\nThe code for all three is present and correct by inspection. The suite has only one conflict path, src/a.txt, and it is both a retry path and unmerged, so neither half is pinned on its own.\n\nTwo cases would close the gap, each run in both twins:\n(a) a resume whose merge conflicts on a path outside landingRetry.paths, where a completion with markers there must print MOE_WORKTREE_UNRESOLVED_CONFLICT;\n(b) markers left in a landingRetry path with no MERGE_HEAD, which must also refuse.\n\nThe mutant driver is D:\\moe-scratch\\qa-wt11\\mut\\run.sh. Details are in Serena memory decision-worktree-pending-merge-checkpoint.",
+      "timestamp": "2026-11-02T14:28:43.119Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-11-02T08:48:19.796Z",
+  "updatedAt": "2026-11-02T14:28:43.119Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T14:34:06.324Z",
