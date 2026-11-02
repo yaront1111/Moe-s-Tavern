@@ -139,7 +139,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:55:13.075Z",
-  "updatedAt": "2026-11-02T15:24:21.933Z",
+  "updatedAt": "2026-11-02T15:25:17.352Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:14.897Z",
@@ -203,7 +203,15 @@
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
     "scripts/tests/postflight-worktree.cjs",
-    ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json"
+    ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json",
+    ".moe/tasks/task-3c4850819cad458d9edb59809d00e400.json",
+    ".moe/tasks/task-6519ed9127ad4c359fd64b71f1a08be5.json",
+    ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json",
+    ".moe/tasks/task-76d4500abc1047d5b51d63f2a2dc92bc.json",
+    ".moe/tasks/task-83515358babb403480bbef769d9726f2.json",
+    ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+    ".moe/tasks/task-d2a3532ec05c49d384214ae15b01ba7e.json",
+    ".moe/tasks/task-e1024bb3e6194b828fcbf905babfebae.json"
   ],
   "completionSummary": "WT-12: board history snapshots on refs/moe/board. Twin helpers: sh board_snapshot (board_snapshot_node) and ps1 Invoke-MoeBoardSnapshot. Both embed one identical Node program, and the tests assert the two copies are equal.\n- Reads: .moe/project.json, .moe/tasks/*.json and .moe/epics/*.json in the control root. Each file is one Buffer read with lstat before and after, a fatal UTF-8 decode and JSON.parse. Exactly those bytes are hashed; hash-object runs with --no-filters on a private index in a temp dir.\n- Invalid, torn or link files keep the parent blob and are named in MOE_BOARD_FILE_KEPT. Deletion needs a successful readdir plus an ENOENT recheck; a linked or unreadable dir skips the snapshot.\n- Writes: commit-tree -p tip ('board: <task> <status>'), then an update-ref CAS with 3 attempts; exhaustion or any error prints MOE_BOARD_SNAPSHOT_SKIPPED. An unchanged tree writes no commit. A plain push follows (no force, no hooks); a rejection or failure prints MOE_BOARD_UNPUSHED.\n- Wiring: after a worktree completion landing whose outcome is committed or nothing, and after a QA control-seat post-flight. Gated by autoCommit and commitBoardState. Shared mode is unchanged. The snapshot never alters the landing outcome.\n- Tests in postflight-worktree.cjs, run by both postflight harnesses:\n  - new cases: board-snapshot, board-race, board-push, wt-board;\n  - updated: wt-control-seats, wt-checkpoint, wt-fails.\n  - Every run asserts .moe content and mtimes and the real index are unchanged.\n  - RED was shown before the change; 10 mutants were killed.\n- Net 366 LOC. ps1 BOM kept, 0 CR.\n- Verification, same bytes:\n  - bash safe gate: NONE, last scenario Z.\n  - worktree-landing: 18/18.\n  - parity-check: PASS.\n  - Native Windows `node scripts/tests/postflight-safe.mjs powershell` (PS 5.1): failureClass NONE, exit 0.\n  - The MOE_(WORKTREE|LAND|CONTROL|BOARD)_ code sets are identical in both wrappers (28 codes).\n  - Held-out worktree-landing.sh and .ps1 are unchanged from WT-08T.\n- Theo",
   "commits": [
@@ -224,6 +232,183 @@
       "treeId": "0e96bfd1bf2115019fc1711893e69ed29a7d7318",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "ec65308e1d7132db564e9926c342eacff8e4fe08",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1106e678@2026-11-02T14:47:45Z",
+      "paths": [
+        ".moe/tasks/task-06910296f63b4868849dc46cbb38a731.json",
+        ".moe/tasks/task-3c4850819cad458d9edb59809d00e400.json",
+        ".moe/tasks/task-6519ed9127ad4c359fd64b71f1a08be5.json",
+        ".moe/tasks/task-6a0f0be32acb4dc8b3977f32405277a5.json",
+        ".moe/tasks/task-76d4500abc1047d5b51d63f2a2dc92bc.json",
+        ".moe/tasks/task-83515358babb403480bbef769d9726f2.json",
+        ".moe/tasks/task-921ca494fac241aa96b85cb9ae3e63ab.json",
+        ".moe/tasks/task-d2a3532ec05c49d384214ae15b01ba7e.json",
+        ".moe/tasks/task-e1024bb3e6194b828fcbf905babfebae.json"
+      ],
+      "recordedBy": "qa-1106e678",
+      "recordedAt": "2026-11-02T15:25:17.352Z",
+      "treeId": "61484e2e8e441d0e7c5fbd6336bd5676e35d33a9",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-23c803d2ec834496a730b00524f44e0b"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-253884005a59471fb7c59ef38e1f3cc1"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-31187ec10ae54dd2b03f4c166f083f31"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-3ad573a754574dfd92083b2e813c0bff"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-3def080415d3495a8557b514d6a0ab2a"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-408a0ac1524b4ab4a6418dd741b53d8d"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-414eae5aa1f349f49852bf01f4e617db"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-4fdc7590cd054a45a379c477ffe45ac7"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-62ec51f179494706a39045154d07e544"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-64809b196c4042f18c7665e1e8a14b18"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-65b3e023923e4ab6b71cb94e7bea2f9b"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-69c024444381492c85878307df40c6e2"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-76ae5c472f6a4651a45478b1893e07dc"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-b6a3d41e365445629f73ff17bd379f13"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-befdddf7e1f047a0ba4f71dd900c9b8f"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-c7ca56e6511b4d9bb8dcb9fe482e2fa8"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-d861f3de0d62437a964a83011e8c7def"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-f622843305224cf49ca24478b26c3351"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-faa4d9ef330f4ef7900a00bd2b7dc049"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-253884005a59471fb7c59ef38e1f3cc1"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-31187ec10ae54dd2b03f4c166f083f31"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-3954cc09f74045a0ac8fa4b795dcb0a9"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-3def080415d3495a8557b514d6a0ab2a"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-414eae5aa1f349f49852bf01f4e617db"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-5adf0673fdad4c5f8a0956e7afcebe07"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-64809b196c4042f18c7665e1e8a14b18"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-69c024444381492c85878307df40c6e2"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-828e7d21602e4cf2a0f242e024db7dea"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-91ee455a601b411f97d5d951cc5f241c"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-b6a3d41e365445629f73ff17bd379f13"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-befdddf7e1f047a0ba4f71dd900c9b8f"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-c7ca56e6511b4d9bb8dcb9fe482e2fa8"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-faa4d9ef330f4ef7900a00bd2b7dc049"
+        },
+        {
+          "path": "scripts/tests/postflight-worktree.cjs",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/tests/postflight-worktree.cjs",
+          "taskId": "task-31187ec10ae54dd2b03f4c166f083f31"
+        },
+        {
+          "path": "scripts/tests/postflight-worktree.cjs",
+          "taskId": "task-c7ca56e6511b4d9bb8dcb9fe482e2fa8"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -234,9 +419,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b49a5155@2026-11-02T13:49:28Z",
-    "at": "2026-11-02T14:47:24.474Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-1106e678@2026-11-02T14:47:45Z",
+    "at": "2026-11-02T15:25:17.352Z"
   },
   "completedAt": "2026-11-02T15:24:21.933Z",
   "reviewCompletedAt": "2026-11-02T15:24:21.933Z",
