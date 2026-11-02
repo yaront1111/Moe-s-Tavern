@@ -91,12 +91,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "Rejected for size only; substance is sound. Landed bytes net +682/-2 over 3 files, above the 400-line QA cap, and no rail waives size for this row (epic's only exception is VSC-6).\n\nnumstat 7df999be^..7df999be, moe-jetbrains/, board json excluded: client-accounts.json +397; AccountsCorpusTest.kt +278; AccountPresentation.kt +7/-2.\n\nVerified green: checkRef re-run in a fresh git-archive snapshot at HEAD e71520cd under jetbrains-gradle (released): BUILD SUCCESSFUL 53s, 34 suites, 557 tests, 0 failures/errors/skips, AccountsCorpusTest 4/4, AccountPresentationTest 19/19. The 3 files are cmp-identical; corpus sha256 e08b58c8...95fc equals the oracle. Test logic (per-id failure collection, both MoeJson paths, Int-vs-String args, bundle key set) and the isValidLabel fix (daemon CONTROL_CHARS_RE) are correct; scope matches the plan.\n\nTo approve, change no byte of the substance. Pick one:\n(a) Preferred (VSC-6 precedent): file an EPIC ADD_RAIL waiver, under 1000 chars, naming 7df999be (checkpoint with the 3 files) and completion d13c97f5, the 3 files with the numstat above, the cap, and \"waives size only; grow only by QA-required fixes\". Ping #governors with the proposal id. Then a no-byte round: report only the board json per step, fresh evidence plus the plan's mutants on snapshot copies, and re-read the proposal file just before complete_task. I approve once it is APPROVED, after one more fresh gate.\n(b) If the human rejects the waiver, split review scope, not bytes: slice 1 = client-accounts.json alone (397 net); slice 2 = AccountsCorpusTest.kt plus the AccountPresentation.kt hunk (283 net). Make VSC-13 (task-065e4812) and VSC-15 (task-357ed3ae) depend on both. Do not re-land or revert.\n\nTrimming the corpus in place to 400 total would break the plan's coverage (15 rows and 14 labels vs the DoD floor of 12 and 8); not recommended.",
+  "reopenReason": "Size waiver prop-30f48e34 APPROVED by the human at 12:23:08Z. The VSC-7 size-exception rail is on epic-aabc654d once. QA: check the rail text against git diff --numstat 7df999be^ 7df999be, confirm no byte change since 7df999be, re-run the checkRef, and approve on substance.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -111,14 +111,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:54.745Z",
-  "updatedAt": "2026-11-02T11:30:41.466Z",
+  "updatedAt": "2026-11-02T12:29:45.399Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:20:12.809Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-02T12:29:45.399Z",
+    "wallClockMs": 7772590
   },
   "contextFetchedBy": [
     "qa-564d8bce",
@@ -200,10 +202,10 @@
   "planApprovedAt": "2026-11-02T10:28:12.919Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-02T10:30:07.616Z",
-  "blockedReason": "QA round 2 (qa-1106e678). Substance is re-verified green. The row is parked from REVIEW only because size waiver prop-30f48e3461c0443a8020de80ce7db2eb (EPIC ADD_RAIL, filed 11:01Z) was still PENDING at 11:30Z and no rail waives the 400-line cap for this row yet. Size: 680 net by git diff --numstat 7df999be^ 7df999be (client-accounts.json +397, AccountsCorpusTest.kt +278, AccountPresentation.kt +7/-2), and the proposal text matches. A second size reject would only spend the reopen cap.\n\nEvidence, 11:24-11:27Z, under jetbrains-gradle (now released):\n- checkRef verbatim at HEAD d2a55eb5: BUILD SUCCESSFUL in 53s; 35 suites, 564 tests, 0 failures/errors/skips; AccountsCorpusTest 4/4, AccountPresentationTest 19/19.\n- The 3 files are cmp-identical to 7df999be and HEAD; the corpus sha256 e08b58c8...95fc equals the oracle.\n- Completion 00c1ac96 is board json only, on moe/work-2026-10-24 and origin.\n- Snapshot mutants: move-up at index 0 (DoD 4) fails exactly C04, C06, C11, C13; pre-fix isValidLabel fails exactly L08; add ignoring the connection fails C09; removeVmToken on false fails C04, C05, C07, C09, C14, C15.\n- All 6 DoD items map to evidence.\n\nNext:\n- APPROVED: set_task_status REVIEW. QA then checks the rail text, confirms no byte change since 7df999be, re-runs the checkRef and approves.\n- REJECTED: route (b) of reject #1, a review-scope split (corpus json 397 / test plus fix 283, with VSC-13 and VSC-15 depending on both); set_task_status PLANNING.\nDetail: mem:task-task-93729f32ef6f408cbd411813c5c93838-qa-handoff.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-02T11:30:11.136Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "7df999be7c754a07ef9cd11a88d65a9d6e5d2d57",
@@ -319,7 +321,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "VSC-7 round 2: a no-byte retry after QA reject #1, which was for size only. Size waiver EPIC ADD_RAIL prop-30f48e3461c0443a8020de80ce7db2eb was filed at 11:01Z and #governors pinged; re-read just now, it is still PENDING. The bytes are unchanged since checkpoint 7df999be / completion d13c97f5: `git diff 7df999be HEAD` on the 3 files is empty and the worktree is clean on them. Numstat +682/-2: client-accounts.json +397, AccountsCorpusTest.kt +278, AccountPresentation.kt +7/-2. JetBrains bug fixed (round 1, unchanged): isValidLabel refused C1 control characters the daemon accepts (corpus L08).\nFresh evidence, from Windows gradlew.bat in /mnt/d/moe-scratch snapshots under the jetbrains-gradle lease (released):\n- The corpus sha256 e08b58c8...95fc equals the oracle, and gen.py+fmt.py regenerate it byte-identically.\n- RED with 7df999be^'s AccountPresentation.kt: exactly L08 fails (3/4 pass). GREEN: 4/4.\n- The plan's mutant (index > 0 -> >= 0) fails exactly C04, C06, C11, C13.\n- 27 more mutants, all killed. The plan's 11 each die on exactly the predicted rows: weekly busiest C05; floor C05/C12; subscription-only chips C05/C12/C15; +N C05/C12; spent over active (status and chip) C13; zone C05/C12/C13/C14; HH:mm vs MM-dd C12/C13 and C05/C14; check needs cli C11; absent vmToken C08. The 16 extras include Int-vs-String args (C14; C05/C12/C14) and labels (L04/L05, L05/L06, L14).\n- The checkRef verbatim at HEAD 0006fafa: BUILD SUCCESSFUL in 55s; 34 suites, 558 tests, 0 failures, 0 errors, 0 skipped; AccountsCorpusTest 4/4, AccountPresentationTest 19/19. The rise from round 1's 557 is peer 946b4713 (MoeProjectConnectionTest +1).\nScope: only the two new files plus AccountPresentation.kt. Known, unpinned by design: the zone is UTC only; edge trim differs (Kotlin strips U+001C..U+001F, JS strips U+FEFF); the 32-account limit is pinned by AccountPresentationTest.",
-  "reviewCompletedAt": "2026-11-02T10:55:05.355Z",
+  "reviewCompletedAt": "2026-11-02T12:29:45.399Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -342,5 +344,9 @@
         }
       ]
     }
-  ]
+  ],
+  "priorBlockedReason": "QA round 2 (qa-1106e678). Substance is re-verified green. The row is parked from REVIEW only because size waiver prop-30f48e3461c0443a8020de80ce7db2eb (EPIC ADD_RAIL, filed 11:01Z) was still PENDING at 11:30Z and no rail waives the 400-line cap for this row yet. Size: 680 net by git diff --numstat 7df999be^ 7df999be (client-accounts.json +397, AccountsCorpusTest.kt +278, AccountPresentation.kt +7/-2), and the proposal text matches. A second size reject would only spend the reopen cap.\n\nEvidence, 11:24-11:27Z, under jetbrains-gradle (now released):\n- checkRef verbatim at HEAD d2a55eb5: BUILD SUCCESSFUL in 53s; 35 suites, 564 tests, 0 failures/errors/skips; AccountsCorpusTest 4/4, AccountPresentationTest 19/19.\n- The 3 files are cmp-identical to 7df999be and HEAD; the corpus sha256 e08b58c8...95fc equals the oracle.\n- Completion 00c1ac96 is board json only, on moe/work-2026-10-24 and origin.\n- Snapshot mutants: move-up at index 0 (DoD 4) fails exactly C04, C06, C11, C13; pre-fix isValidLabel fails exactly L08; add ignoring the connection fails C09; removeVmToken on false fails C04, C05, C07, C09, C14, C15.\n- All 6 DoD items map to evidence.\n\nNext:\n- APPROVED: set_task_status REVIEW. QA then checks the rail text, confirms no byte change since 7df999be, re-runs the checkRef and approves.\n- REJECTED: route (b) of reject #1, a review-scope split (corpus json 397 / test plus fix 283, with VSC-13 and VSC-15 depending on both); set_task_status PLANNING.\nDetail: mem:task-task-93729f32ef6f408cbd411813c5c93838-qa-handoff.",
+  "completedAt": "2026-11-02T12:29:45.399Z",
+  "reviewSummary": "VSC-7 round 3: approved on substance under the APPROVED VSC-7 size-exception epic rail (prop-30f48e34, HUMAN 12:23:08Z; rail text = proposal verbatim). Size 680 net, matching the rail: git diff --numstat 7df999be^ 7df999be gives client-accounts.json +397, AccountsCorpusTest.kt +278, AccountPresentation.kt +7/-2 (board json excluded). No byte change: git diff/log 7df999be..HEAD on the 3 files empty; tree clean; corpus sha256 e08b58c8...95fc = architect oracle (cmp). Delivery: checkpoint 7df999be, completions d13c97f5 + 00c1ac96, all on moe/work-2026-10-24 and origin.\nFresh gate under jetbrains-gradle (12:25:50Z, released): checkRef verbatim at HEAD 95ab5ba8: exit 0, BUILD SUCCESSFUL in 52s, 11 tasks executed; JUnit 35 suites, 564 tests, 0 failures/errors/skips; AccountsCorpusTest 4/4, AccountPresentationTest 19/19; the 3 snapshot files cmp-identical to 7df999be.\nFocused snapshot mutants (compileKotlin ran each time): DoD move-up at index 0 fails exactly C04,C06,C11,C13; pre-fix isValidLabel (7df999be^) fails exactly L08; a fresh one, signOutAndRemove gated by the connection instead of the cli, fails exactly C09,C11 as predicted; restored 4/4.\nDoD: (1) v1, now 2026-10-20T12:00:00.000Z, UTC, C01-C15 + L01-L14, every listed case mapped to a row; (2) both MoeJson paths must agree, all failing ids in one assert; (3) key set = the 23 bundle keys, args = placeholders; (4) mutant kills; (5) full suite green; (6) only the 3 files. JetBrains bug fixed: isValidLabel refused C1 controls the daemon accepts (L08); now = registry.ts CONTROL_CHARS_RE; sole caller AccountsPanel.kt:75.\nUnpinned, not DoD gaps: null-percent weekly ranking; UTC only; Kotlin/JS edge-trim divergence. Complexity pass: none.",
+  "requiredCheckAtDone": null
 }
