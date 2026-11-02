@@ -7707,7 +7707,8 @@ function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput, $Result = $null)
         } elseif ($kind -eq 'serena') {
             $tp = ConvertTo-MoeTopPathFromAbsolute (Join-Path $serenaProject $p) $moeGit.Top
         }
-        if (-not $tp) {
+        # A control character (a line break) would forge a second witness; the sh parser and prompt-cache-witness.mjs refuse the same set.
+        if (-not $tp -or $tp -match '[\x00-\x1f]') {
             Write-Host "  [attribution] tool path outside the repo dropped: $p" -ForegroundColor DarkYellow
             continue
         }

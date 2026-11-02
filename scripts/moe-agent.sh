@@ -10536,10 +10536,13 @@ def to_top_rel(raw):
         t = top.lower() if CI else top
         if not a.startswith(t + '/'):
             return None
-        return p[len(top) + 1:]
+        # A control character (a line break) would append a second, forged witness line;
+        # prompt-cache-witness.mjs refuses the same set.
+        rest = p[len(top) + 1:]
+        return None if re.search(r'[\x00-\x1f]', rest) else rest
     while p.startswith('./'):
         p = p[2:]
-    if not p or any(seg == '..' for seg in p.split('/')):
+    if not p or re.search(r'[\x00-\x1f]', p) or any(seg == '..' for seg in p.split('/')):
         return None
     return rel + p
 def result_text(block):
