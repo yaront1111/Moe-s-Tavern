@@ -76,17 +76,25 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff, the only review step.\n- Would a test fail if:\n  - the button rendered for a whitespace-only id;\n  - the handler released on dismiss;\n  - it used the stale render-time worker id;\n  - the modal text were HTML-escaped (the title has quotes, < and &);\n  - placeholders were replaced in two passes;\n  - the not-connected branch were dropped;\n  - the page posted on load, or the button had no guard?\n- Any value import added, or a client member touched outside the handler?\n- Confirm with `git status --porcelain` that the task touched only moe-vscode/src/panels/TaskDetailPanel.ts, moe-vscode/media/taskDetail.js and moe-vscode/tests/task-release.test.cjs. Peers own every other dirty path: never revert, stage or commit them.\n- Report the three files in complete_step.modifiedFiles.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/task-release.test.cjs",
         "moe-vscode/src/panels/TaskDetailPanel.ts",
         "moe-vscode/media/taskDetail.js"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/tests/task-release.test.cjs"
+      ],
+      "note": "Self-review of e71520cd (the checkpoint holds the whole diff; git status -- moe-vscode/ shows my 3 files clean). Product diff is 51 lines in TaskDetailPanel.ts (3 constants, one conditional button, one case) and 10 in taskDetail.js. Imports unchanged (vscode, MoeDaemonClient type use, PlanReviewPanel); client.releaseTask is touched only inside the 'releaseAgent' case. 0 forbidden tokens in all 3 files. Mutants from step 4 cover each attacker question: whitespace id button, release on dismiss, stale render-time id, HTML-escaped modal, two-pass placeholders, dropped not-connected branch, page posting on load, missing page guard (13/13 killed). Fresh checkRef rerun this session at HEAD e71520cd: EXIT=0; npm ci, lint, compile, test all ran; 485 tests, 481 pass, 4 skip (Windows-only), 0 fail, no failed rows. The only other moe-vscode path in git status is an untracked tests/accounts-wire.test.cjs that belongs to a peer; untouched.",
+      "startedAt": "2026-11-02T10:53:41.324Z",
+      "completedAt": "2026-11-02T10:54:18.166Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-81a7999f",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -101,12 +109,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:40:55.910Z",
-  "updatedAt": "2026-11-02T10:50:58.092Z",
+  "updatedAt": "2026-11-02T10:54:30.973Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:28:40.798Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-93e0e956",
@@ -120,7 +128,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T10:31:29.686Z",
@@ -187,5 +196,52 @@
   },
   "planApprovedAt": "2026-11-02T10:31:29.710Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T10:47:19.770Z"
+  "workStartedAt": "2026-11-02T10:47:19.770Z",
+  "commits": [
+    {
+      "sha": "e71520cd46287998495d02dfacef84b41a86d737",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T10:46:31Z",
+      "paths": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-e8255fb1ab274ca9bf67d49c34a9635e.json",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/tests/task-release.test.cjs"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T10:52:05.654Z",
+      "treeId": "37d7170609ddce7caa4c3181e1fbe7c3a86387e0",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-vscode/tests/task-release.test.cjs",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/media/taskDetail.js"
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/task-release.test.cjs",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/media/taskDetail.js"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-81a7999f@2026-11-02T10:46:31Z",
+    "at": "2026-11-02T10:52:05.654Z"
+  },
+  "reviewStartedAt": "2026-11-02T10:54:30.970Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && S=$(mktemp -d -t vsc11-gate-XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents moe-vscode/src/panels/TaskDetailPanel.ts moe-vscode/media/taskDetail.js moe-vscode/tests/task-release.test.cjs \"$S/\" && cd \"$S/moe-vscode\" && umask 022 && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'",
+    "exitCode": 0,
+    "outputTail": "✔ files.watcherExclude keeps per-task worktrees out of the file watcher\n✔ search.exclude keeps per-task worktrees out of search and quick open\n✔ files.exclude is not contributed, so the Explorer still lists .worktrees\nℹ tests 485\nℹ suites 0\nℹ pass 481\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\n(EXIT=0; npm ci, eslint src, tsc -p ./ and node --test all ran in a git-archive snapshot of HEAD e71520cd with the 3 task files overlaid)",
+    "reportedAt": "2026-11-02T10:54:30.970Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "VSC-11: VS Code task detail now has JetBrains' Release Agent action.\\n\\nTaskDetailPanel.ts: constants RELEASE_AGENT_LABEL ('Release Agent'), RELEASED_FROM_BOARD ('Released from board') and RELEASE_AGENT_CONFIRM, copied exactly from MoeBundle.properties (moe.button.releaseAgent, moe.message.releasedInUI, moe.message.releaseAgent). #releaseAgentBtn renders after the Reopen button only when nonBlankString(assignedWorkerId) is non-null, for any status. New case 'releaseAgent' reads the fresh task: a task with no agent now gets an info message 'No agent is assigned to this task.'. Otherwise it shows a modal warning with {0}=worker id and {1}=raw title, substituted in one pass and not HTML-escaped. Only on confirm does it call client.releaseTask(taskId, 'Released from board'); a false return shows 'Not connected to Moe daemon — agent was not released.'. No success toast, as in JetBrains. No value import added; client.releaseTask is touched only inside the handler.\\ntaskDetail.js: guarded click listener posting {type:'releaseAgent'}; an unassigned page loads without the button.\\ntests/task-release.test.cjs (new, 12 tests) reads the bundle at runtime and covers button present for 'w1' and absent for null/''/whitespace, confirm exactly once with ('task-release','Released from board'), dismiss zero calls, false return shows not-connected, stale button, current (not render-time) id/title, one-pass placeholders, an exception landing in the existing catch, and page wiring.\\n\\nEvidence: RED at HEAD with only the test overlaid (12 tests, 3 pass, 9 fail); GREEN 12/12 with the product files; 13/13 mutants killed. The plan's checkRef was re-run fresh this session: EXIT=0; npm ci, lint, compile and test all ran; 485 tests, 481 pass, 4 Windows-only skips, 0 fail. task-blocker-visibility, task-time-budget and approval-paths pass unchanged. Scope: only the 3 moe-vscode files; MoeDaemonClient.ts and every moe-jetbrains file unchanged. An untracked tests/accounts-wire.test.cjs in the check"
 }
