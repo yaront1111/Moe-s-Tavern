@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -96,14 +96,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T10:23:08.353Z",
-  "updatedAt": "2026-11-02T10:51:22.637Z",
+  "updatedAt": "2026-11-02T10:58:02.823Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:24:56.835Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
     "executedStepCount": 8,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-02T10:58:02.823Z",
+    "wallClockMs": 1985988
   },
   "contextFetchedBy": [
     "qa-1106e678",
@@ -175,7 +177,10 @@
   },
   "filesModified": [
     "moe-vscode/tests/seat-survival.test.cjs",
-    "moe-vscode/src/util/SeatSurvival.ts"
+    "moe-vscode/src/util/SeatSurvival.ts",
+    ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+    ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+    ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json"
   ],
   "completionSummary": "Round 2 (QA size-only reject 424>400): trimmed in place; no behaviour change, no test row or assertion dropped. Footprint 386 net (git diff --numstat 644ce882^: SeatSurvival.ts +101, seat-survival.test.cjs +285), 14 under the cap.\n- SeatSurvival.ts: comments only (module JSDoc 18->9, isProcessAlive 6->1, class 5->1, record 5->1, surviving 5->4); kept the why, the VSC-21 wiring notes and a JSDoc per method; fixed one inaccuracy (an injected isAlive's errors propagate too). Proof: transpile with removeComments gives byte-identical JS for 644ce882 and final (sha256 bd7676342dd2585a).\n- Test: S2a's edge-pid loop became an inner pid loop over every outcome row (superset, 26->66 assert calls); seatOf runs in S4a/S4d/S5a became [pid, seat] loops (same calls, same order); comments shortened. Proof: a harness counting executed asserts per test shows identical counts for all 19 tests except S2a; old/new test x old/new source all 19/19.\n- DoD 5: QA's 8 round-1 mutants re-run in the gate snapshot against the new AND the 644ce882 test file: all killed by ERR_ASSERTION with identical kill sets (surviving ignores isAlive: S2c S6a-d; EPERM dead: S2a; pid 0 probed: S2b S3b S4b; dup probed twice: S6a S6b; keep(non-array) keeps all: S5b; record saves always: S4a S4b; pid not moved: S3c S4c; keep saves always: S5a S5b). Source restored, snapshot deleted.\n- DoD 6: checkRefs[0] verbatim on the final bytes at HEAD 96e0d7c2: exit 0, 473 tests/469 pass/4 skip/0 fail (+3 since round 1 = VSC-9 89062f86 blocker-corpus test). AgentSeatTracker.ts, client-seat-tracker.json, extension.ts, AgentLauncher.ts, MoeDaemonClient.ts untouched. Scripts: /tmp/vsc21a-count/{count,strip}.cjs, /tmp/vsc21a-mut/mutate.cjs.",
   "commits": [
@@ -214,6 +219,25 @@
       "treeId": "3e73ac75f4839426029dd0cc7a787e9406dc86a5",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "fb3e0721d84dde5b69d72d8fe25df48a81d179a2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T10:36:19Z",
+      "paths": [
+        ".moe/tasks/task-0f2cc6eb40324b37bafa8be4cf65caa3.json",
+        ".moe/tasks/task-486f6f3223d74ac2bde345bf126299a7.json",
+        ".moe/tasks/task-93729f32ef6f408cbd411813c5c93838.json",
+        "moe-vscode/src/util/SeatSurvival.ts",
+        "moe-vscode/tests/seat-survival.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T10:51:46.922Z",
+      "treeId": "b4fada8b1fc25d285de5bc65b896188b38483825",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -223,11 +247,11 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-1106e678@2026-11-02T10:33:34Z",
-    "at": "2026-11-02T10:36:30.511Z"
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T10:36:19Z",
+    "at": "2026-11-02T10:51:46.922Z"
   },
-  "reviewCompletedAt": "2026-11-02T10:35:52.178Z",
+  "reviewCompletedAt": "2026-11-02T10:58:02.823Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -250,5 +274,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-11-02T10:58:02.823Z",
+  "reviewSummary": "Round 2 approved. Completion fb3e0721 (pushed; on moe/work-2026-10-24 and origin) trims 644ce882 in place per QA's size-only reject. Footprint, git diff --numstat 644ce882^ fb3e0721 on the 2 owned files: SeatSurvival.ts +101, seat-survival.test.cjs +285 = 386 net, under the 400 cap. Task commits touch no avoid-list path, no moe-jetbrains file, and none of AgentSeatTracker.ts, client-seat-tracker.json, extension.ts, AgentLauncher.ts, MoeDaemonClient.ts.\nGate: checkRefs[0] verbatim at HEAD e71520cd (overlay cmp-identical to fb3e0721): npm ci, lint, compile, test exit 0; 485 tests, 481 pass, 4 skip, 0 fail (+12 vs the worker's run = VSC-11 task-release.test.cjs); all 19 S-rows pass.\nNo behaviour change: every changed .ts line is a comment, and transpile with removeComments is byte-identical for 644ce882 and fb3e0721 (sha bd7676342dd2585a). Test hunks: S4a/S4d/S5a seatOf loops keep the same values and order, S2a is a superset (edge pids x every outcome), and no assertion was dropped.\nDoD 1-5: 16 of my own snapshot-copy mutants, run against the new AND the round-1 test file, all killed by ERR_ASSERTION with identical kill sets. They include: surviving ignores isAlive (S2c S6a-d), EPERM dead, pid 0 probed, dup probed twice, keep(non-array) keeps all, record/keep/load always save, pid not moved, pid 1 or MAX_SAFE unprobed (S2a), seatOf(undefined) answers (S4a), keep never deletes, one shared save object (S4a S4c S4d), array load, blank id. Source restored; snapshot deleted. Purity: no vscode, import or require( text; 0 forbidden patterns. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
