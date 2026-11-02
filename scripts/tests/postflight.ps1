@@ -1858,6 +1858,90 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD FOLLOW FAILED: ' + ($reloadProblems -join ' | ')) }
         Write-Host "[hot reload follow] ok: followed $reloadMain, restarted once, no deferral (sequence $reloadSeq)"
 
+        # --- Hot reload race (task-69c02444; twin in postflight.sh). A restart
+        # loads the bytes it verified as committed. The fake proxy rewrites the
+        # wrapper inside the restart's own deregister (FAKE_RELOAD_RACE_SRC/_DST):
+        # after the check and before the load. The seat restarts on the committed
+        # bytes (a private moe-wrapper-pin.* copy) and reloads the racing write
+        # only once it is committed, again from a copy. Committed bytes that no
+        # longer name the MoeWrapperSourcePath hand-over (a revert) reload from
+        # the checkout path, and no copy is left in the seat's temp dir. ---
+        Write-Host '[hot reload race] a write after the committed check is never loaded'
+        $reloadRoot = Join-Path $tempRoot 'reload-race'
+        $reloadWrapper = Join-Path $reloadRoot 'scripts\moe-agent.ps1'
+        $reloadProject = Join-Path $reloadRoot 'project'
+        $raceTmp = Join-Path $reloadRoot 'tmp'
+        $raceSrc = Join-Path $reloadRoot 'race.src'
+        New-Item -ItemType Directory -Force -Path @((Split-Path $reloadWrapper), (Join-Path $reloadProject '.moe\messages'), $raceTmp) | Out-Null
+        Copy-Item -LiteralPath $wrapper -Destination $reloadWrapper
+        Get-ChildItem -LiteralPath (Split-Path $wrapper) -Filter '*.mjs' | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Split-Path $reloadWrapper)
+        }
+        Initialize-ReloadRepo
+        Set-Content -Path (Join-Path $reloadProject '.moe\project.json') -Value '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}' -Encoding UTF8
+        Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+        $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
+        $reloadOut = Join-Path $tempRoot 'wrapper-reload-race.out'
+        # Edit A appends '# race A'; race.src is edit A with a marked idle line.
+        $raceIdle = 'Agent idle, checking for tasks in'
+        $raceText = [IO.File]::ReadAllText($reloadWrapper) + "# race A`n"
+        if (($raceText -csplit [regex]::Escape($raceIdle)).Count -ne 2) { throw 'HOT RELOAD RACE FAILED: the idle line is not in the wrapper exactly once' }
+        [IO.File]::WriteAllText($raceSrc, $raceText.Replace($raceIdle, 'MOE_TEST_RACE_LOADED from $PSCommandPath, checking for tasks in'), (New-Object System.Text.UTF8Encoding($true)))
+        # A console host can wrap a long line; the log is matched unwrapped.
+        function Get-ReloadRaceLog {
+            ([string](Get-Content -Raw -LiteralPath $reloadOut -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$reloadOut.err" -ErrorAction SilentlyContinue)) -replace '\r?\n', ''
+        }
+        function Assert-ReloadRace([bool]$Ok, [string]$Why) {
+            if ($Ok) { return }
+            Write-Host (Get-ReloadRaceLog)
+            throw "HOT RELOAD RACE FAILED: $Why; RPC sequence '$(Get-ReloadSequence)'"
+        }
+        $reloadProc = $null
+        $raceEnv = @{ TMP = $env:TMP; TEMP = $env:TEMP }
+        $env:FAKE_CLAIM_MODE = 'idle'
+        $env:MOE_DISABLE_HEARTBEAT = '1'
+        $env:FAKE_RELOAD_RACE_SRC = $raceSrc
+        $env:FAKE_RELOAD_RACE_DST = $reloadWrapper
+        $env:TMP = $raceTmp
+        $env:TEMP = $raceTmp
+        try {
+            $reloadArgs = @('-NoProfile', '-File', $reloadWrapper, '-Project', $reloadProject, '-WorkerId', 'worker-reload-race', '-Role', 'worker', '-NoStartDaemon', '-Command', $trueCmd, '-Loop', '-PollInterval', '1') |
+                ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+            $reloadProc = Start-Process -FilePath $psExe -ArgumentList $reloadArgs -RedirectStandardOutput $reloadOut -RedirectStandardError "$reloadOut.err" -PassThru -NoNewWindow
+            $null = $reloadProc.Handle
+            Wait-ReloadSequence '^c' 'first claim'
+            Add-ReloadWrapperText "# race A`n"
+            Invoke-ReloadCommit 'race A'
+            Wait-ReloadSequence '^c+rc{3,}$' 'three claims after the race A reload'
+            Assert-ReloadRace (-not (Test-Path -LiteralPath $raceSrc)) 'the restart deregister did not write the racing bytes'
+            Assert-ReloadRace ([IO.File]::ReadAllText($reloadWrapper).Contains('MOE_TEST_RACE_LOADED')) 'the racing bytes are not on disk'
+            & git -C (Split-Path $reloadWrapper) diff --quiet -- moe-agent.ps1 2>$null
+            Assert-ReloadRace ($LASTEXITCODE -eq 1) "the racing bytes must stay uncommitted (git diff exited $LASTEXITCODE)"
+            Assert-ReloadRace ((Get-ReloadRaceLog) -notmatch 'MOE_TEST_RACE_LOADED') 'the restart loaded bytes written after the committed check'
+            # Committed, the racing bytes reload once, from a private copy.
+            Invoke-ReloadCommit 'race write'
+            Wait-ReloadSequence '^c+rc+rc{3,}$' 'three claims after the racing write reload'
+            Assert-ReloadRace ((Get-ReloadRaceLog) -match 'MOE_TEST_RACE_LOADED from [^,]*moe-wrapper-pin\.[^\\/,]+[\\/]moe-agent\.ps1,') 'the committed racing bytes did not run from a moe-wrapper-pin copy'
+            Assert-ReloadRace (@(Get-ChildItem -LiteralPath $raceTmp -Filter 'moe-wrapper-pin.*' -Force -ErrorAction SilentlyContinue).Count -eq 0) 'the running copy did not delete itself once loaded'
+            # Bytes without the hand-over would resolve their helpers beside a copy.
+            $raceText = [IO.File]::ReadAllText($reloadWrapper)
+            Assert-ReloadRace ($raceText.Contains('MoeWrapperSourcePath')) 'the wrapper does not name MoeWrapperSourcePath'
+            Set-ReloadWrapperText $raceText.Replace('MoeWrapperSourcePath', 'MoeWrapperOrigin')
+            Invoke-ReloadCommit 'drop hand-over'
+            Wait-ReloadSequence '^c+rc+rc+rc{3,}$' 'three claims after the reload without the hand-over'
+        } finally {
+            Remove-Item Env:FAKE_CLAIM_MODE, Env:MOE_DISABLE_HEARTBEAT, Env:FAKE_RELOAD_RACE_SRC, Env:FAKE_RELOAD_RACE_DST -ErrorAction SilentlyContinue
+            $env:TMP = $raceEnv.TMP
+            $env:TEMP = $raceEnv.TEMP
+            if ($reloadProc -and -not $reloadProc.HasExited) { & taskkill /T /F /PID $reloadProc.Id 2>&1 | Out-Null; $reloadProc.WaitForExit(5000) | Out-Null }
+            foreach ($reloadPid in @(Get-ReloadWrapperPids)) { Stop-Process -Id $reloadPid -Force -ErrorAction SilentlyContinue }
+        }
+        $reloadSeq = Get-ReloadSequence
+        Assert-ReloadRace ((Get-ReloadRaceLog).IndexOf("MOE_TEST_RACE_LOADED from $reloadWrapper,", [StringComparison]::OrdinalIgnoreCase) -ge 0) 'bytes without the hand-over did not reload from the checkout path'
+        $raceLeft = @(Get-ChildItem -LiteralPath $raceTmp -Filter 'moe-wrapper-pin.*' -Force -ErrorAction SilentlyContinue)
+        Assert-ReloadRace ($raceLeft.Count -eq 0) "private copies left behind: $(@($raceLeft | ForEach-Object { $_.Name }) -join ', ')"
+        Write-Host "[hot reload race] ok: restarted on the committed bytes, loaded the racing write from a copy once committed (sequence $reloadSeq)"
+
         # --- Quality gate (settings.qualityGate): the post-flight runs the
         # configured command before a COMPLETION commit. Failing gate => no
         # branch commit (the edits go to a rescue ref), PUSH-BLOCKED chat

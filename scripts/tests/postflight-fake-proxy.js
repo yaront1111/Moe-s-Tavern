@@ -762,6 +762,14 @@ switch (tool) {
     // The EXIT-trap deregister; scenario W proves it still runs after the
     // teardown rescue.
     fs.appendFileSync(path.join(moe, 'deregister.log'), `${new Date().toISOString()} ${args.workerId} ${args.reason || ''}\n`);
+    // [hot reload race]: FAKE_RELOAD_RACE_SRC's bytes overwrite FAKE_RELOAD_RACE_DST
+    // in place, once, inside a hot reload's own deregister: after the wrapper
+    // checked its bytes are committed, before it loads them. An fs error throws.
+    const raceSrc = process.env.FAKE_RELOAD_RACE_SRC;
+    if (args.reason === 'wrapper_restart' && raceSrc && fs.existsSync(raceSrc)) {
+      fs.writeFileSync(process.env.FAKE_RELOAD_RACE_DST, fs.readFileSync(raceSrc));
+      fs.unlinkSync(raceSrc);
+    }
     ok({ success: true });
     break;
   }

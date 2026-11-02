@@ -14,7 +14,13 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A hot reload runs a private copy of the committed bytes from a moe-wrapper-pin.*
+# folder and names the checkout's wrapper in MOE_WRAPPER_SOURCE (task-69c02444).
+# Honour it only there, and never pass it on.
+MOE_WRAPPER_FILE="${BASH_SOURCE[0]:-$0}"
+case "$MOE_WRAPPER_FILE" in */moe-wrapper-pin.*/*) MOE_WRAPPER_FILE="${MOE_WRAPPER_SOURCE:-$MOE_WRAPPER_FILE}" ;; esac
+unset MOE_WRAPPER_SOURCE
+SCRIPT_DIR="$(cd "$(dirname "$MOE_WRAPPER_FILE")" && pwd)"
 # WT-13 (design §6.1): a seat runs only the control checkout's wrapper. A copy in a
 # task worktree, <repo>/.worktrees/task-*/ (a registered W, or a plain directory
 # there), refuses before any daemon, config or claim side effect. git answers with
@@ -34,7 +40,7 @@ moe_wrapper_in_worktree() {
 # can run them from its own task worktree. Exactly '1' skips this one refusal and
 # nothing else reads it; no launch path (IDE plugins, moe-team, operators, runbooks) sets it.
 if [ "${MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:-}" != 1 ] && moe_wrapper_in_worktree "$SCRIPT_DIR"; then
-    echo -e "${RED}[ERROR] MOE_WRAPPER_IN_WORKTREE: ${BASH_SOURCE[0]} is inside a task worktree; launch the control checkout's scripts/moe-agent.sh${NC}" >&2
+    echo -e "${RED}[ERROR] MOE_WRAPPER_IN_WORKTREE: $MOE_WRAPPER_FILE is inside a task worktree; launch the control checkout's scripts/moe-agent.sh${NC}" >&2
     exit 1
 fi
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -218,6 +224,8 @@ cleanup_temp() {
     if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
         rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
     fi
+    # A hot-reload copy staged but never run (task-69c02444).
+    if [ "$(type -t wrapper_pin_drop)" = function ]; then wrapper_pin_drop; fi
 }
 trap cleanup_temp EXIT
 
@@ -8517,38 +8525,78 @@ account_after_exit() {
 # captured a peer's live mutation drill into HEAD -- were produced by wrappers
 # launched BEFORE the pathspec fix landed, while every copy on disk had the fix.
 #
-# The hash is captured ONCE, here, so one on-disk change triggers exactly one
-# restart: the re-exec'd process captures the new hash and cannot thrash.
-# Only load committed bytes: on 2026-10-30 three seats re-exec'd onto
-# task-e7f4026a's uncommitted, unreviewed +79/-8 wrapper edit.
-MOE_WRAPPER_PATH="${BASH_SOURCE[0]:-$0}"
+# The hash is captured ONCE, here, from the bytes this process loaded, so one
+# on-disk change triggers exactly one restart: the re-exec'd process captures the
+# new hash and cannot thrash. Only load committed bytes: on 2026-10-30 three seats
+# re-exec'd onto task-e7f4026a's uncommitted, unreviewed +79/-8 wrapper edit. And
+# load them from a private copy: a write landing after the check is not loaded.
+MOE_WRAPPER_PATH="$SCRIPT_DIR/${MOE_WRAPPER_FILE##*/}"
 MOE_WRAPPER_LAUNCH_HASH=""
 MOE_WRAPPER_REFUSED_HASH=""
 MOE_WRAPPER_DEFERRED_HASH=""
-# Twin: Test-MoeWrapperReloadDeferred. Return 0 to defer, 1 to reload.
+MOE_WRAPPER_PIN=""
+# Drop the private copy MOE_WRAPPER_PIN names: rm -f + rmdir, only in a
+# moe-wrapper-pin.* folder.
+wrapper_pin_drop() {
+    local dir="${MOE_WRAPPER_PIN%/*}"
+    case "${dir##*/}" in moe-wrapper-pin.*) rm -f "$MOE_WRAPPER_PIN" 2>/dev/null || true; rmdir "$dir" 2>/dev/null || true ;; esac
+    MOE_WRAPPER_PIN=""
+}
+# Copy the wrapper into a new moe-wrapper-pin.* folder and check the copy's blob is
+# HEAD's. Return 0 (MOE_WRAPPER_PIN is the copy), 1 when the bytes moved after the
+# diff, or 2 on a failure that MOE_WRAPPER_PIN_ERR names.
+wrapper_pin_stage() {
+    local leaf="${MOE_WRAPPER_PATH##*/}" pin want got rc=0
+    MOE_WRAPPER_PIN_ERR="private copy failed"
+    pin="$(mktemp -d "${TMPDIR:-/tmp}/moe-wrapper-pin.XXXXXX" 2>/dev/null)" || return 2
+    MOE_WRAPPER_PIN="$pin/$leaf"
+    cp "$MOE_WRAPPER_PATH" "$MOE_WRAPPER_PIN" 2>/dev/null || return 2
+    want="$(git -C "$SCRIPT_DIR" rev-parse --verify -q "HEAD:./$leaf" 2>/dev/null)" || rc=$?
+    MOE_WRAPPER_PIN_ERR="git rev-parse exited $rc"
+    [ "$rc" -eq 0 ] || return 2
+    got="$(git -C "$SCRIPT_DIR" hash-object "--path=$leaf" -- "$MOE_WRAPPER_PIN" 2>/dev/null)" || rc=$?
+    MOE_WRAPPER_PIN_ERR="git hash-object exited $rc"
+    [ "$rc" -eq 0 ] || return 2
+    [ "$want" = "$got" ] || return 1
+}
+# Twin: Test-MoeWrapperReloadDeferred. Return 0 to defer, 1 to reload: from the
+# MOE_WRAPPER_PIN copy, or from the checkout path when that is empty.
 wrapper_reload_deferred() {
-    local rc=0 git_cmd=ls-files
+    local rc=0 git_cmd=ls-files reason
+    wrapper_pin_drop
     git -C "$SCRIPT_DIR" ls-files --error-unmatch -- "${MOE_WRAPPER_PATH##*/}" >/dev/null 2>&1 || rc=$?
     if [ "$rc" -eq 0 ]; then
         git_cmd=diff
         git -C "$SCRIPT_DIR" diff --quiet HEAD -- "${MOE_WRAPPER_PATH##*/}" >/dev/null 2>&1 || rc=$?
-        [ "$rc" -ne 0 ] || return 1
+    fi
+    reason="git $git_cmd exited $rc"
+    if [ "$rc" -eq 0 ]; then
+        wrapper_pin_stage || rc=$?
+        reason="$MOE_WRAPPER_PIN_ERR"
+        if [ "$rc" -eq 0 ]; then
+            # Bytes without the hand-over (a revert) would resolve helpers beside the copy.
+            grep -Fq MOE_WRAPPER_SOURCE "$MOE_WRAPPER_PIN" 2>/dev/null || wrapper_pin_drop
+            return 1
+        fi
+        wrapper_pin_drop
     fi
     if [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_DEFERRED_HASH" ]; then
         MOE_WRAPPER_DEFERRED_HASH="$MOE_WRAPPER_CURRENT_HASH"
         if [ "$rc" -eq 1 ]; then
             echo "[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits; staying on the current bytes until they are committed"
         else
-            echo "[WARN] MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed (git $git_cmd exited $rc); staying on the current bytes" >&2
+            echo "[WARN] MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed ($reason); staying on the current bytes" >&2
         fi
     fi
     return 0
 }
-if [ -f "$MOE_WRAPPER_PATH" ]; then
+if [ -f "${BASH_SOURCE[0]:-$0}" ]; then
     # FAIL-OPEN: a wrapper that dies because it could not hash itself is a fleet
     # outage; a stale wrapper is merely the status quo this guard improves on.
-    MOE_WRAPPER_LAUNCH_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
+    MOE_WRAPPER_LAUNCH_HASH="$(sha256sum "${BASH_SOURCE[0]:-$0}" 2>/dev/null | cut -d' ' -f1 || true)"
 fi
+# A pinned seat runs its copy from the open file: the copy itself can go now.
+if [ "${BASH_SOURCE[0]:-$0}" != "$MOE_WRAPPER_FILE" ]; then MOE_WRAPPER_PIN="${BASH_SOURCE[0]:-$0}"; wrapper_pin_drop; fi
 
 # Bash reads scripts incrementally from a saved file offset. An in-place save
 # (same inode: editor/apply_patch) could end the loop on NEW bytes at the OLD
@@ -8600,10 +8648,14 @@ while [ "$LOOP_RUNNING" = true ]; do
             # keeps serving the bytes it already parsed. The `||` keeps set -e
             # from ending the seat on the very failure this guards.
             MOE_WRAPPER_PARSE_RC=0
-            MOE_WRAPPER_PARSE_ERR="$(bash -n "$MOE_WRAPPER_PATH" 2>&1)" || MOE_WRAPPER_PARSE_RC=$?
+            MOE_WRAPPER_PARSE_ERR="$(bash -n "${MOE_WRAPPER_PIN:-$MOE_WRAPPER_PATH}" 2>&1)" || MOE_WRAPPER_PARSE_RC=$?
             if [ "$MOE_WRAPPER_PARSE_RC" -ne 0 ]; then
                 MOE_WRAPPER_REFUSED_HASH="$MOE_WRAPPER_CURRENT_HASH"
                 MOE_WRAPPER_PARSE_ERR=${MOE_WRAPPER_PARSE_ERR%%$'\n'*}
+                # bash names the file it parsed: name the checkout, not the copy
+                # (quoted, so bash 5.2 never reads an & in the path as the match).
+                [ -z "$MOE_WRAPPER_PIN" ] || MOE_WRAPPER_PARSE_ERR=${MOE_WRAPPER_PARSE_ERR//"$MOE_WRAPPER_PIN"/"$MOE_WRAPPER_PATH"}
+                wrapper_pin_drop
                 echo "[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: ${MOE_WRAPPER_PARSE_ERR:-bash -n exited $MOE_WRAPPER_PARSE_RC}" >&2
             else
                 echo "wrapper source changed on disk; restarting to load it"
@@ -8615,6 +8667,7 @@ while [ "$LOOP_RUNNING" = true ]; do
                 stop_heartbeat_sidecar
                 if [ -n "$HEARTBEAT_PID" ]; then
                     echo "[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle." >&2
+                    wrapper_pin_drop
                     continue
                 fi
                 if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
@@ -8625,7 +8678,13 @@ while [ "$LOOP_RUNNING" = true ]; do
                 if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
                     rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
                 fi
-                exec "$MOE_WRAPPER_PATH" "${MOE_WRAPPER_ARGV[@]}"
+                # Run the verified copy and hand it the checkout's path; bytes
+                # without the hand-over run from the checkout path.
+                if [ -n "$MOE_WRAPPER_PIN" ]; then
+                    MOE_WRAPPER_SOURCE="$MOE_WRAPPER_PATH" exec "$BASH" "$MOE_WRAPPER_PIN" "${MOE_WRAPPER_ARGV[@]}"
+                else
+                    exec "$BASH" "$MOE_WRAPPER_PATH" "${MOE_WRAPPER_ARGV[@]}"
+                fi
                 echo "wrapper relaunch failed; continuing on current bytes"
             fi
         fi
