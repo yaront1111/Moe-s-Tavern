@@ -71,7 +71,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -109,7 +109,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:47:12.742Z",
-  "updatedAt": "2026-11-02T21:20:53.663Z",
+  "updatedAt": "2026-11-02T21:24:09.231Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:48.545Z",
@@ -123,12 +123,15 @@
     "firstClaimAt": "2026-10-30T14:05:58.701Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T21:23:44.360Z",
+    "wallClockMs": 285465659
   },
   "contextFetchedBy": [
     "architect-899a90d6",
     "worker-26483323",
-    "worker-d6c1cb7a"
+    "worker-d6c1cb7a",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -188,10 +191,11 @@
   "blockedAt": null,
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-02T21:18:32Z",
-    "at": "2026-11-02T21:20:53.020Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-02T21:21:37Z",
+    "at": "2026-11-02T21:24:09.231Z"
   },
   "priorBlockedReason": "Editing-safety rail conflict before source changes: approved step-1 requires writing the whole moe-agent.sh to same-filesystem scratch, bash -n, then one atomic mv-f (never in-place). Global custom rail prohibits shell writes/cp/mv into the tree, allowing only main Edit/Write or Serena editor. Available Codex tools offer apply_patch (in-place), shell and Serena, but no atomic Edit/Write. Verified installed Serena replace_in_files -> EditedFileContext -> code_editor.py:92 open(abs_path,'w'); create_text_file uses Path.write_text, so neither satisfies required atomic save. No source files changed and no verification run. Handoff and gotcha-serena-wrapper-atomic-save recorded.",
   "blockedOnTaskIds": null,
@@ -242,5 +246,9 @@
       "pushed": true
     }
   ],
-  "landingRetry": null
+  "landingRetry": null,
+  "completedAt": "2026-11-02T21:23:44.360Z",
+  "reviewCompletedAt": "2026-11-02T21:23:44.360Z",
+  "reviewSummary": "Reviewed completion 96c4ee19 (on moe/control and moe/work-2026-10-24, recorded, pushed). Diff +59/-3 in 4 files (sh +7/-2, ps1 +2/-1, bash test +29, ps1 test +23), far under the 400 cap.\n\nRe-ran task.verification on a fresh scratch snapshot (git archive HEAD scripts, cmp of the 4 files vs checkout): bash -n OK; parity-check PASS; node --test importee-guard-bash + prompt-cache-witness 73/73 pass; powershell.exe 5.1 importee-guard.ps1 53 passed/0 failed; CHAIN_EXIT=0.\n\nDoD (sh and ps1 refuse a control-character path, WARN and no line, one launcher test row each):\n- sh to_top_rel returns None on [\\x00-\\x1f] in the post-top remainder (absolute branch) and in p (relative branch); harvest's existing 'not harvested' WARN fires, nothing is appended. The new bash test feeds Edit, Write (absolute, \\r) and Serena create_text_file plus a plain control; it asserts the tools file is exactly ['plain.txt'] and a WARN per refused raw path.\n- ps1 Get-MoeToolWrittenPaths drops a $tp matching [\\x00-\\x1f] via the existing 'dropped' line. New rows: dropped line for each of the 3 cases, count 0, then a plain Write counts 1.\n\nMutation check (scratch only): reverting the sh check fails the new bash test; reverting the ps1 check fails the ctrl-write, ctrl-serena and count-0 rows. So the rows are not vacuous. Mutants discarded, snapshot deleted.\n\nInvariants hold: refused set is exactly [\\x00-\\x1f] (DEL and C1 not refused), message texts unchanged, prompt-cache-witness.mjs untouched, ps1 BOM kept and no CR, no other parser behaviour changed.\n\nNon-blocking: (1) the ps1 relative-path Edit row is already dropped by the pre-existing `-not $tp` branch, so it does not exercise the new regex; the Write and Serena rows do. (2) The codex helper's absolute '..'/blank tightening is intentionally not ported (out of DoD). The #general collision mention concerns peers' separate hunks; this commit is already landed.",
+  "requiredCheckAtDone": null
 }
