@@ -25,24 +25,35 @@
     {
       "stepId": "step-2",
       "description": "Verification, run once. This covers the governor's ask (the full daemon suite on a snapshot, exit 0) plus the PowerShell case wherever pwsh exists. After step 1, run this ONE command fresh from the task worktree root. Its output tail is the complete_task evidence.\n\nIt was dry-run at planning with the fixed file as the overlay: VERIFY_EXIT=0. Linux showed 229 files and 6921 passed / 20 skipped at c5355541; Windows showed 3 passed / 6 skipped. Counts move with HEAD; exit 0 is the gate.\n\nR=$(git rev-parse --show-toplevel) && F=packages/moe-daemon/src/util/heartbeatStop.test.ts && S=$(mktemp -d /tmp/moe-f6d9-lin.XXXXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && cp \"$R/$F\" \"$S/$F\" && cmp \"$R/$F\" \"$S/$F\" && (cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npm test 2>&1 | tail -5; exit ${PIPESTATUS[0]}') && W=$(mktemp -d /mnt/c/Users/Yaron/AppData/Local/Temp/moe-f6d9-win.XXXXXX) && tar -C \"$S\" -cf - --exclude=packages/moe-daemon/node_modules packages/moe-daemon scripts | tar -C \"$W\" -xf - && (cd /mnt/c/Windows/System32 && ./cmd.exe /c robocopy 'D:\\projexts\\moes\\packages\\moe-daemon\\node_modules' \"$(wslpath -w \"$W\")\\\\packages\\\\moe-daemon\\\\node_modules\" /E /XD .vite /NFL /NDL /NJH /NJS /NP /R:0 /W:0 >/dev/null; [ $? -lt 8 ]) && (cd \"$W/packages/moe-daemon\" && \"/mnt/c/Program Files/nodejs/node.exe\" node_modules/vitest/vitest.mjs run src/util/heartbeatStop.test.ts --reporter=verbose 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -14; exit ${PIPESTATUS[0]}); rc=$?; case \"${W:-}\" in /mnt/c/Users/Yaron/AppData/Local/Temp/moe-f6d9-win.?*) rm -rf \"$W\";; esac; case \"${S:-}\" in /tmp/moe-f6d9-lin.?*) rm -rf \"$S\";; esac; echo \"VERIFY_EXIT=$rc\"; (exit $rc)\n\nThe same text, as tested, is in /mnt/d/moe-scratch/f6d9c532-plan/verify-dryrun.sh; there the overlay source is $OVR instead of \"$R/$F\".\n- Linux leg: a whole-repo archive of HEAD, an explicit cp+cmp overlay of the one file, a Linux-native npm ci, then the full `npm test` in packages/moe-daemon. Never run npm in the shared checkout.\n- Windows leg:\n  - copy the snapshot's packages/moe-daemon and scripts to a C: temp dir;\n  - robocopy the control checkout's Windows node_modules, read-only (exit codes 0-7 are success);\n  - Windows node runs vitest on the one file. The output must show a pass for 'does not reload and lose a pending PowerShell job handle'.\n  Run node.exe straight from WSL as written. Routing it through `cmd.exe /c` with a quoted \"C:\\Program Files\\...\" path fails, because WSL interop escapes the quotes as \\\" (seen at planning).\n- The command removes both temp dirs by prefix at the end. VERIFY_EXIT is the combined result.\n- If the Linux leg fails only in a test outside this file, rerun that file alone, then the suite once, since load flakes happen (mem:gotcha-daemon-linux-snapshot-gate). Report it, and do not edit other files.\n- Declare packages/moe-daemon/src/util/heartbeatStop.test.ts as modifiedFiles.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/heartbeatStop.test.ts"
       ],
-      "startedAt": "2026-11-02T23:14:54.763Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+      ],
+      "note": "VERIFY_EXIT=0. Linux full daemon suite: 229 files passed, 6921 passed / 20 skipped. Windows-native heartbeatStop file: 3 passed / 6 skipped, 'does not reload and lose a pending PowerShell job handle' passed.",
+      "startedAt": "2026-11-02T23:14:54.763Z",
+      "completedAt": "2026-11-02T23:16:29.107Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n\nRun the mutants in scratch copies made the way step 2 makes them, never in the worktree or the shared checkout. After each one, restore the copy and re-run it green.\n(a) Diff scope: `git diff --stat` shows only heartbeatStop.test.ts, with 2 insertions and 0 deletions, LF kept.\n(b) Each stub is needed:\n  - remove the bash stub: the Linux file run (`npx vitest run src/util/heartbeatStop.test.ts`) fails again with 'wrapper_pin_drop: command not found';\n  - remove the PowerShell stub: the Windows file run fails with \"The term 'Remove-MoeWrapperPin' is not recognized\". This is the PowerShell RED.\n(c) Intent kept: the test still proves a pending handle is never lost on reload.\n  - In the snapshot's scripts/moe-agent.sh, delete the `continue` right after `wrapper_pin_drop` on the MOE_HEARTBEAT_STOP_TIMEOUT path. The bash case must fail with BAD_REEXEC (checked at planning).\n  - In the Windows copy's scripts/moe-agent.ps1, delete the `continue` after `Remove-MoeWrapperPin` on the same path. The PowerShell case must fail (BAD_RELOAD from the Invoke-MoeDeregister stub).\n(d) The stubs model production: cite the line numbers showing both helpers are defined before each wrapper loop runs, as in step 1.\n(e) Repeat runs: the fixture writes only its own mkdtemp wrapper, which afterEach removes. vitest's PWSH_CASE retries re-run the PowerShell case cleanly.\n(f) Process safety: kill nothing by name or pattern. Kill any process you start only by its recorded PID.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/heartbeatStop.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+      ],
+      "note": "Self-review, mutants in scratch copies (all restored and re-run green). (a) git diff --stat: heartbeatStop.test.ts only, 2 insertions, 0 deletions, no CR. (b) Removing the bash stub -> 'wrapper_pin_drop: command not found', 1 failed. Removing the ps stub -> \"The term 'Remove-MoeWrapperPin' is not recognized\", 1 failed (Windows). (c) Deleting `continue` in moe-agent.sh -> BAD_REEXEC; deleting it in moe-agent.ps1 -> BAD_RELOAD; both fail their case, so the pending-handle intent is still proven. (d) Helpers are defined before each loop: wrapper_pin_drop at moe-agent.sh:8793 (loop :8859), Remove-MoeWrapperPin at moe-agent.ps1:8418 (loop ~:8547). (e)/(f) Fixture writes only its own mkdtemp wrapper; nothing killed; temp dirs removed.",
+      "startedAt": "2026-11-02T23:16:29.570Z",
+      "completedAt": "2026-11-02T23:18:56.987Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-ed0f6a9e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -73,7 +84,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:40:06.987Z",
-  "updatedAt": "2026-11-02T23:14:54.763Z",
+  "updatedAt": "2026-11-02T23:20:09.804Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:58:33.125Z",
@@ -83,7 +94,7 @@
     "firstClaimAt": "2026-11-02T23:01:58.418Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 1
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -95,7 +106,9 @@
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T23:13:11.679Z",
@@ -151,5 +164,40 @@
   },
   "planApprovedAt": "2026-11-02T23:13:11.705Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T23:14:18.109Z"
+  "workStartedAt": "2026-11-02T23:14:18.109Z",
+  "reviewStartedAt": "2026-11-02T23:19:01.343Z",
+  "verification": {
+    "command": "step-2 two-leg command (git archive HEAD + cp/cmp overlay of heartbeatStop.test.ts; env -i Node 24.21.0 npm ci && npm test in packages/moe-daemon; Windows node.exe vitest run src/util/heartbeatStop.test.ts --reporter=verbose in a C: temp copy)",
+    "exitCode": 0,
+    "outputTail": "Test Files  229 passed (229)\nTests  6921 passed | 20 skipped (6941)\n✓ heartbeatStop.test.ts > does not reload and lose a pending PowerShell job handle 388ms\nTest Files  1 passed (1)\nTests  3 passed | 6 skipped (9)\nVERIFY_EXIT=0",
+    "reportedAt": "2026-11-02T23:19:01.343Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+  ],
+  "completionSummary": "Test-only fix: two stub lines in packages/moe-daemon/src/util/heartbeatStop.test.ts (bash wrapper_pin_drop, PowerShell Remove-MoeWrapperPin), the helpers 373dc3d4 added to the extracted reload bodies. Wrappers unchanged. Full daemon suite on a HEAD snapshot with the one-file overlay: 229 files, 6921 passed / 20 skipped, exit 0. Windows-native heartbeatStop file: PowerShell pending-handle case passes. Mutants: removing either stub fails its case again; deleting the deferral `continue` in either wrapper fails with BAD_REEXEC / BAD_RELOAD.",
+  "commits": [
+    {
+      "sha": "717c4019a18c7f79ec64fe3a3b64d0b82dd98648",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-02T23:13:23Z",
+      "paths": [
+        "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-02T23:20:09.451Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-ed0f6a9e@2026-11-02T23:13:23Z",
+    "at": "2026-11-02T23:20:09.804Z"
+  }
 }
