@@ -223,10 +223,15 @@ object AccountPresentation {
     fun vmTokenArgs(accountId: String, remove: Boolean): List<String> =
         if (remove) listOf("vm-token", accountId, "--remove") else listOf("vm-token", accountId)
 
-    /** The daemon's label rule: trimmed, at most 64 characters, no control characters. Empty means the id. */
+    /**
+     * The daemon's label rule (accounts/registry.ts normalizeLabel): trimmed, at most 64 UTF-16 characters, and none of
+     * U+0000..U+001F or U+007F. The C1 controls (U+0080..U+009F) are accepted, as the daemon accepts them. Empty means
+     * the id. Kotlin's trim also strips U+001C..U+001F at the ends, where the daemon's JS trim does not; that
+     * divergence is known and not pinned by the shared corpus.
+     */
     fun isValidLabel(input: String): Boolean {
         val label = input.trim()
-        return label.length <= MAX_LABEL_LENGTH && label.none { it.isISOControl() }
+        return label.length <= MAX_LABEL_LENGTH && label.none { it < ' ' || it == '\u007F' }
     }
 
     /** Floored, so 89.6% never reads as a 90% switch point. */

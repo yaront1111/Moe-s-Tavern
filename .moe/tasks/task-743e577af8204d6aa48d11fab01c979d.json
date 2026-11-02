@@ -19,7 +19,17 @@
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/settings-policy-corpus.test.cjs"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Tests first. Create moe-vscode/tests/settings-policy-corpus.test.cjs with the Write tool. Reuse the load/transpile shape of tests/settings-wire.test.cjs: SettingsPanel.ts runs under vm with a require map holding only {vscode}, and every render gets a fresh vm context, because SettingsPanel.currentPanel is static (mem:gotcha-vscode-vm-test-harness, mem:gotcha-vscode-panel-strict-require-map).\n\nRead the corpus moe-jetbrains/src/test/resources/client-settings-policy.json, as landed by VSC-5 (task-0f2cc6eb). Read it UNCHANGED, and read only each row's id, settings and expect; ignore extra members such as note. Do not depend on row ids or the row count: VSC-5 lands at least 10 rows, each {id, note, settings: wire JSON or null, expect: [{label, value, detail}] x10}. Some rows carry wrong JSON types (string or number booleans; numeric-string, fractional or non-positive taskSizing; a non-string qualityGate or consolidationBranch; a non-object attribution or taskSizing), and their notes say so. Those rows pin the daemon's strict readers.\n\nC1, the corpus (DoD 1): run every row's settings through the exported effectivePolicyRows. JSON-copy the vm result and compare it with expect by deepStrictEqual (label, value, detail, order). Collect 'Pnn: expected ..., got ...' and assert the whole list once, so every failing id is reported at once. A thrown error counts as that row's failure.\n\nC2, the rendered section (DoD 2): open the panel for the null-settings row, and separately for a LOCAL hostile fixture (qualityGate '<img src=x onerror=alert(1)>', consolidationBranch 'a&b'). Slice the HTML from `<section id=\"landingPolicy\">` to the next `</section>`, then assert:\n- the slice contains no <input, <select, <textarea or <button;\n- its policy-label, policy-value and policy-detail spans, decoded, equal effectivePolicyRows(settings) in order;\n- the raw '<img', '<YYYY-MM-DD>' and 'a&b' never appear unescaped, while '&lt;img' and 'a&amp;b' do.\n\nC3, shared strings (epic rule 2): the exported SETTINGS_BUNDLE_TEXT equals moe-jetbrains/src/main/resources/messages/MoeBundle.properties for exactly these keys: moe.label.landingPolicy, moe.settings.landingPolicyHint, moe.settings.enableAgentTeams and moe.settings.enableAgentTeamsHint, with the bundle's <html>/<small> tags stripped. Parse the bundle the way tests/delivery-corpus.test.cjs does, and refuse a value that contains a backslash escape.\n\nSize budget: QA rejects more than 400 net changed LOC across this row's whole diff (moe-qa-loop 'Oversized diffs'). Keep this file near 150 lines by using table-driven loops.\n\nRun `node --test moe-vscode/tests/settings-policy-corpus.test.cjs` in place (plain node, read-only; never npm in the shared checkout). Expect RED, because the export does not exist yet.\n\nError handling: a missing or unparsable corpus fails with an assertion that names the path; it never crashes the file silently.",
+          "reason": "VSC-5's corpus is being compacted from 19 rows to 10 to stay under QA's 400-net-LOC cap (see the architect comment on task-0f2cc6eb), so this step must not depend on row ids or the row count. Also adds a net-LOC budget for this row.",
+          "amendedBy": "architect-0fcb7226",
+          "amendedAt": "2026-11-02T10:33:25.354Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
@@ -48,10 +58,20 @@
       "stepId": "step-5",
       "description": "Self-review of this task's diff.\n(1) DoD 4: client-settings-policy.json and every moe-jetbrains file are unchanged (git status; other sessions' paths are not yours).\n(2) Mutation proof, in a snapshot copy and never in the checkout. Each mutant must fail by assertion:\n- drop the typeof-string guard on qualityGate, which makes P19 fail;\n- read autoCommit as truthy instead of `!== false`, which makes P17 fail;\n- drop escapeHtml on the policy value, which makes C2 fail.\n(3) The save payload has exactly four keys on every path.\n(4) effectivePolicyRows handles null, arrays, strings and nested wrong types without throwing.\n(5) The policy section holds no form control.\nRecord the results in the step note.",
       "status": "PENDING",
-      "affectedFiles": []
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Self-review of this task's diff.\n(1) DoD 4: client-settings-policy.json and every moe-jetbrains file are unchanged (git status; other sessions' paths are not yours).\n(2) Mutation proof, in a snapshot copy and never in the checkout. Each mutant must fail by assertion:\n- drop the typeof-string guard on qualityGate: the corpus row with a non-string qualityGate fails;\n- read autoCommit as truthy instead of `!== false`: the strict-boolean row fails;\n- drop escapeHtml on the policy value: C2 fails.\n(3) The save payload has exactly four keys on every path.\n(4) effectivePolicyRows handles null, arrays, strings and nested wrong types without throwing.\n(5) The policy section holds no form control.\n(6) The net changed LOC (git diff --numstat for edited files plus wc -l for the new test) is at most 400, the cap QA enforces; a target of about 300.\nRecord the results and the LOC count in the step note and in the summary.",
+          "reason": "The VSC-5 corpus row ids change with its 10-row compaction, so the mutants are now named by the case they break, not by row id. Adds the net-LOC check.",
+          "amendedBy": "architect-0fcb7226",
+          "amendedAt": "2026-11-02T10:33:25.403Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     }
   ],
-  "planRevision": 1,
+  "planRevision": 3,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -68,7 +88,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:40:45.159Z",
-  "updatedAt": "2026-11-02T10:30:26.110Z",
+  "updatedAt": "2026-11-02T10:33:25.403Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T10:27:30.493Z",
     "plannedStepCount": 5,
