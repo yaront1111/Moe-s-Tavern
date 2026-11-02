@@ -49,35 +49,52 @@
     {
       "stepId": "step-3",
       "description": "3. Resume a landingRetry in W without overwriting existing resolution work. After WT-04's .moe guard and owner checks, before general dirty recovery or CLI launch, consume task.landingRetry from served context. Obtain the authoritative §1.2 base through the landed target-sync helper: local target in local mode; fetched refs/remotes/origin/<target> in remote mode, never local fallback. Preserve unrelated W dirt with the existing one-parent checkpoint only when no merge is already pending. With no MERGE_HEAD, run `git -C W -c core.hooksPath=<owned empty dir> merge --no-commit --no-ff <base>`. Exit 1 plus actual unmerged paths is an expected conflict; operational errors/failed fetch launch no CLI, leave bytes untouched and report a retryable failure, never reset/clean/abort. If MERGE_HEAD already exists, validate it as a commit and reuse the pending merge and current edits as-is instead of starting a second merge or repeating recovery. Prefix the worker's actual prompt/context with `LANDING-CONFLICT: <paths>` when conflicts are pending, otherwise `LANDING-RETRY: <reason>` (including remote and already-up-to-date cases). Safely render bounded relative paths without shell interpolation; tell the worker to edit files only, remove markers, run the existing plan verification and call complete_task directly, not run Git or re-open completed steps. Tests in both harnesses: same-line conflict yields markers+MERGE_HEAD+prefix; clean contention/gate/remote retry yields retry prefix; remote uses fetched tracking tip rather than stale local; a second resume preserves partial edits and the original merge metadata; fetch/merge operational failure preserves work and does not launch.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Resume of a landingRetry in W. sh worktree_resume (already in checkpoint e1881619) + new ps1 twin Invoke-MoeWorktreeResume, called from worktree_preflight / Invoke-MoeWorktreePreflight right after the recovery checkpoint (ps1 gains a [ref]$Context param at its one call site). Reads task.landingRetry (5 reasons, ≤500 paths kept for step 4's marker scan as MOE_WT_RETRY(_PATHS) / $script:MoeWtRetry(Paths)); reuses an existing MERGE_HEAD (verified to be a commit); else base = refs/heads/<target> without a remote, or refs/remotes/origin/<target> fetched now (3 tries, no local fallback); `git -C W -c core.hooksPath=<owned empty temp dir> merge --no-commit --no-ff <base>`; rc0 or rc1-with-unmerged is ok, anything else → MOE_WORKTREE_RESUME_FAILED (report_blocked, exit 1, no reset/clean/abort so W keeps its bytes). The prompt/context starts `LANDING-CONFLICT: <unmerged paths, ≤20, +N more>` or `LANDING-RETRY: <reason>` plus one instruction line (edit files only, re-run verification, complete_task); identical text in both wrappers. Test fix: the resume launches in wt-unlanded/wt-resume now pass {type:'claude'} (cliShim forwards no argv, so WT_CLI_RECORD saw no prompt). Evidence (scratch snapshots, MOE_WORKTREE_ONLY=wt-unlanded,wt-resume): sh and ps1 (Windows PowerShell 5.1) both pass every resume assertion for all 7 rows (conflict→'LANDING-CONFLICT: src/a.txt' + MERGE_HEAD=main tip + main unchanged; contention/gate/lease/diverged→'LANDING-RETRY: …' with no MERGE_HEAD; fetch→refused MOE_WORKTREE_RESUME_FAILED with W bytes kept; rejected→'LANDING-RETRY: remote' with MERGE_HEAD = origin's peer commit, not the stale local main); wt-resume run 2 prompt/MERGE_HEAD/markers/one-parent checkpoint pass. Remaining failures are exactly step-4 items: 'resolved to T' (two-parent L2 + merge --quit) and the 3 unmerged stages (checkpoint must not reset the real index under MERGE_HEAD). Tests live in the shared postflight-worktree.cjs (both harnesses). No peer dirty paths touched; held-out worktree-landing.{sh,ps1} and daemon files untouched.",
+      "startedAt": "2026-11-02T09:57:19.302Z",
+      "completedAt": "2026-11-02T10:15:40.549Z"
     },
     {
       "stepId": "step-4",
       "description": "4. Make L2 aware of pending merges and marker safety. When a completion has MERGE_HEAD, collect the deduplicated union of landingRetry.paths and `git -C W diff --name-only -z --diff-filter=U`; validate paths are W-relative and contained, do not follow outside symlinks. Read regular-file bytes linewise, treating CRLF as line endings, and reject lines beginning `<<<<<<< ` or `>>>>>>> `, or exactly `=======`. Missing paths can represent resolved deletion; other unreadable/unsafe paths are refusal, never a clean scan. Any hit emits MOE_WORKTREE_UNRESOLVED_CONFLICT, leaves W/real index/MERGE_HEAD untouched and takes step 2's conflict route. After a clean scan, use the private temp index to stage the resolution, then `commit-tree <resolved-tree> -p T -p <saved MERGE_HEAD>` and the existing task-branch CAS; this commit is required even if the resolved tree equals T. Refresh the real index without discarding W changes and run `git -C W merge --quit` ONLY after successful CAS. On failure preserve pending metadata and prevent publication until recoverable. A checkpoint during MERGE_HEAD uses only parent T and does not reset/read-tree the REAL index or call merge --quit: preserve its unmerged stages and MERGE_HEAD, while using the temp index for the checkpoint. This avoids reset -q clearing the merge and avoids losing new conflict names after a checkpoint. Tests: each marker shape and CRLF refuses with main unchanged; marker-free merge lands C and a task commit whose second parent is the saved MERGE_HEAD; resolved-to-T still records merge ancestry; deletion resolution; interrupted checkpoint has exactly one parent with MERGE_HEAD and unmerged paths surviving; later completion still scans all those paths. Do not silently choose ours/theirs.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Step 4 done in both wrappers. A completion's L2 first runs a marker scan (sh wt_merge_check + wt_marker_scan, ps1 Find-MoeConflictMarkers + Get-MoeUnmergedPaths) over landingRetry.paths plus W's unmerged paths whenever MERGE_HEAD is present or a landingRetry is set. A hit (a '<<<<<<< '/'>>>>>>> ' prefix or an exact '=======' line; a path that resolves outside W, a link, a directory or an unreadable file also counts as a hit, the same in both wrappers) gives MOE_WORKTREE_UNRESOLVED_CONFLICT, commits nothing, leaves W, its index and MERGE_HEAD alone, and takes step 2's conflict route with those paths as conflictPaths. The completion now carries L2's own message forward instead of 'the task-branch commit failed'. After a clean scan, commit-tree -p T -p MERGE_HEAD runs even when the tree equals T. The real index is refreshed, and `git merge --quit` runs only after the CAS succeeds. A checkpoint during a merge (LAND_KEEP_INDEX / $M.KeepIndex) has a single parent, skips the real-index refresh and keeps MERGE_HEAD and the unmerged stages. Addition beyond the plan text: the merge seed (wt_merge_seed / Get-MoeMergeSeed). With MERGE_HEAD as the second parent, landing's merge-base becomes MH and T'^{tree} lands verbatim. If the temp index were seeded from T, every DENY path B changed but the task never stages (.gemini/**, the sparse .moe/) would be reverted on main. The seed is git's merge of T and MH, taking T's side on conflicted paths. If staging drops any path of a pending merge, the result is MOE_COMMIT_FAILED (a merge lands whole or not at all). Test: the wt-resume B now also changes .gemini/g.md, and run 4 asserts main keeps 'main g'. In a mutation run (seed=T) it went RED with \"path '.gemini/g.md' does not exist in C\"; with the real code it is GREEN. Harness fix: resume launches use {type:'claude'}, because cliShim drops argv and only typeShim forwards the prompt to WT_CLI_RECORD. Evidence: MOE_WORKTREE_ONLY=marker-scan,wt-resume,wt-unlanded passes on bash (3 ok, 0 failed) and on Windows PowerShell 5.1 via node.exe (3 ok, 0 failed), both from snapshots outside the checkout. The ps1 parses clean with the PS Parser API and keeps its BOM and LF line endings.",
+      "startedAt": "2026-11-02T10:15:42.199Z",
+      "completedAt": "2026-11-02T10:37:34.238Z"
     },
     {
       "stepId": "step-5",
       "description": "5. Complete worktree teardown and finalizing-attempt recovery. Reuse WT-08/09's publication journal/state and WT-10's lease cleanup. Before L9, cancellation abandons publication and preserves task bytes/checkpoint/rescue without a main move. During L9-L12, defer handled cancellation until publication is classified and its ledger/finalize sequence finishes; release any lease in finally on all paths. Bash traps set a pending-stop flag during the narrow critical window and run the normal stop afterwards. PowerShell must use a native event handler/owned-process mechanism that is safe on 5.1 and 7, never a Console.CancelKeyPress PowerShell scriptblock (verified source warning); preserve existing handler/console settings and detach only this invocation's handler after the window. A forced process death is not claimed to be deferrable: recover from the durable journal. On next pre-flight, a REVIEW task with the pinned finalizing attempt first replays/reconciles its journal; confirmed publication owes only sync/ledger/finalize, proven absence reruns L4-L12 in W under the owner guard, unknown remote outcome stays finalizing with no finalize/no new CLI. Never apply a second landing to an already-contained C or let generic teardown turn unknown into failed/unlanded. Use the existing owned-console/signal test supervisor and deterministic Git/RPC barriers in both harnesses: interrupt before publish, after publish before sync, during ledger/finalize, hard death then replay, and unknown push then restart. Assert target/rescue/attempt truth, exactly one completion, no premature unlanded, lease released and no leaked child process; no sleep-only race tests.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-02T10:37:37.579Z"
     },
     {
       "stepId": "step-6",
@@ -106,7 +123,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": "worker-4c1da905",
+  "assignedWorkerId": "worker-b49a5155",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -162,7 +179,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:54:37.672Z",
-  "updatedAt": "2026-11-02T09:54:00.758Z",
+  "updatedAt": "2026-11-02T10:37:37.579Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:04.735Z",
@@ -172,11 +189,12 @@
     "firstClaimAt": "2026-10-30T13:29:07.408Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-eb7de546",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "worker-b49a5155"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -184,7 +202,9 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:34:06.921Z",
@@ -208,5 +228,66 @@
   },
   "planApprovedAt": "2026-10-30T13:34:06.946Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T09:12:37.079Z"
+  "workStartedAt": "2026-11-02T09:12:37.079Z",
+  "commits": [
+    {
+      "sha": "e188161982373b7dd36a1e56851d201faebc51f7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T09:02:10Z",
+      "paths": [
+        ".moe/epics/epic-aabc654d.json",
+        ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
+        ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json",
+        ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json",
+        ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+        ".moe/tasks/task-6519ed9127ad4c359fd64b71f1a08be5.json",
+        ".moe/tasks/task-720f81a6917d4490ab3b5a58c2217ccb.json",
+        ".moe/tasks/task-7e7bd0ec91ca488da2858f70cff32f65.json",
+        ".moe/tasks/task-7fa27666bdb94325b62c205e3599b165.json",
+        ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+        ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T09:55:24.967Z",
+      "treeId": "e1385429bdf4b12f82f5618df9b6e3d438b18434",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/epics/epic-aabc654d.json",
+    ".moe/tasks/task-09e784e5dd214833b8b9df66038941cc.json",
+    ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json",
+    ".moe/tasks/task-43363b5db90940cb8760fe6bfa0fe5ad.json",
+    ".moe/tasks/task-48aafb880ede4b22a3e26115c07f8470.json",
+    ".moe/tasks/task-6519ed9127ad4c359fd64b71f1a08be5.json",
+    ".moe/tasks/task-720f81a6917d4490ab3b5a58c2217ccb.json",
+    ".moe/tasks/task-7e7bd0ec91ca488da2858f70cff32f65.json",
+    ".moe/tasks/task-7fa27666bdb94325b62c205e3599b165.json",
+    ".moe/tasks/task-b6a3d41e365445629f73ff17bd379f13.json",
+    ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-4c1da905@2026-11-02T09:02:10Z",
+    "at": "2026-11-02T09:55:24.967Z"
+  }
 }

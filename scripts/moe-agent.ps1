@@ -6014,6 +6014,52 @@ function Push-MoeTaskBranch([string]$Worktree, [string]$Branch, [string]$TaskId)
     return $false
 }
 
+# W's unmerged paths (git diff --diff-filter=U), one string each.
+function Get-MoeUnmergedPaths([string]$W) {
+    return @(((Invoke-MoeGit -Top $W -GitArgs @('diff', '--name-only', '-z', '--diff-filter=U')).Out -join "`n").Split([char]0) | Where-Object { $_ })
+}
+
+# WT-11 (design §2.5): emit each W-relative path of $Paths holding a
+# conflict-marker line, one starting '<<<<<<< ' or '>>>>>>> ' or exactly
+# '=======' (CRLF is a line end). A missing path is a resolved deletion; one
+# resolving out of W, a link, a directory or an unreadable file is a hit, never
+# a clean scan. Twin: wt_marker_scan.
+function Find-MoeConflictMarkers([string]$W, [string[]]$Paths) {
+    $root = [IO.Path]::GetFullPath($W).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $latin1 = [Text.Encoding]::GetEncoding(28591)   # byte for byte, so only ASCII markers match
+    foreach ($p in @($Paths | Where-Object { $_ } | Select-Object -Unique)) {
+        $f = [IO.Path]::GetFullPath((Join-Path $W $p))
+        if (-not $f.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { $p; continue }
+        try { $a = [IO.File]::GetAttributes($f) } catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { continue } catch { $p; continue }
+        if ($a -band ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint)) { $p; continue }
+        try { $lines = $latin1.GetString([IO.File]::ReadAllBytes($f)).Split("`n") } catch { $p; continue }
+        foreach ($l in $lines) {
+            $l = $l.TrimEnd("`r")
+            if ($l.StartsWith('<<<<<<< ', [StringComparison]::Ordinal) -or $l.StartsWith('>>>>>>> ', [StringComparison]::Ordinal) -or $l -ceq '=======') { $p; break }
+        }
+    }
+}
+
+# The tree a pending merge's L2 stages W onto (WT-11): git's own merge of $T
+# and $Mh with $T's side on each conflicted path, so W's bytes resolve those
+# and a path the task never stages (DENY, the sparse .moe/) keeps $Mh's side
+# instead of reverting it. '' on any failure. Twin: wt_merge_seed.
+function Get-MoeMergeSeed([string]$Top, [string]$T, [string]$Mh) {
+    $mt = Invoke-MoeGit -Top $Top -GitArgs @('merge-tree', '--write-tree', '-z', '--name-only', $T, $Mh)
+    if ($mt.Rc -gt 1) { return '' }
+    $z = @(($mt.Out -join "`n").Split([char]0)); $names = @()
+    for ($i = 1; $i -lt $z.Count -and $z[$i]; $i++) { $names += ":(literal)$($z[$i])" }
+    if (-not $z[0] -or $names.Count -eq 0) { return [string]$z[0] }
+    $idx = Join-Path ([IO.Path]::GetTempPath()) ('moe-seed-' + [guid]::NewGuid().ToString('N'))
+    try {
+        if ((Invoke-MoeGit -Top $Top -IndexFile $idx -GitArgs @('read-tree', $z[0])).Rc -ne 0 -or
+            (Invoke-MoeGit -Top $Top -IndexFile $idx -GitArgs (@('reset', '-q', $T, '--') + $names)).Rc -ne 0) { return '' }
+        $w = Invoke-MoeGit -Top $Top -IndexFile $idx -GitArgs @('write-tree')
+        if ($w.Rc -eq 0) { return ($w.Out -join '').Trim() }
+        return ''
+    } finally { Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue }
+}
+
 # The commit half of Invoke-MoeWorktreeCheckpoint (design §2.2 L1-L2): a temp
 # index from the tip T, commit-tree -p T, ONE update-ref CAS, W's index
 # refresh. Never Ensure-MoeSafeBranch, never the 3-attempt loop: a moved tip is
@@ -6032,18 +6078,29 @@ function Invoke-MoeWorktreeCommit([hashtable]$Wt, [string]$Ref, [hashtable]$Attr
     $idx = Join-Path (Join-Path $Wt.GitDir 'moe') "idx-$($M.TaskId)-$myPid"
     $msgFile = ''
     try {
-        $built = Build-MoeTempIndexTree -Top $Wt.Top -IndexFile $idx -OldSha $old -Candidates $Attr.Candidates
+        # WT-11: a pending merge ($M.MergeHead) stages W onto Get-MoeMergeSeed, lands whole and
+        # commits with MERGE_HEAD as the second parent even when the tree equals T's.
+        $seed = if ($M.MergeHead) { Get-MoeMergeSeed $Wt.Top $old $M.MergeHead } else { $old }
+        $built = if ($seed) { Build-MoeTempIndexTree -Top $Wt.Top -IndexFile $idx -OldSha $seed -Candidates $Attr.Candidates } else { @{ Ok = $false } }
         if (-not $built.Ok) {
             $Res.Outcome = 'failed'; $Res.Code = 'MOE_COMMIT_FAILED'
             Write-Host "[WARN] MOE_COMMIT_FAILED: could not build the landing index for task $($M.TaskId)." -ForegroundColor Yellow
             return
         }
         foreach ($d in @($built.Dropped)) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow; $d }
-        if (-not $built.Changed) { $Res.Outcome = 'nothing'; return }
+        if ($M.MergeHead -and @($built.Dropped).Count -gt 0) {
+            $Res.Outcome = 'failed'; $Res.Code = 'MOE_COMMIT_FAILED'; $Res.Msg = 'staging dropped a path of the pending merge, which lands whole or not at all'
+            Write-Host "[WARN] MOE_COMMIT_FAILED: task $($M.TaskId) -- $($Res.Msg); nothing is committed and MERGE_HEAD stays." -ForegroundColor Yellow
+            return
+        }
+        if (-not $built.Changed -and -not $M.MergeHead) { $Res.Outcome = 'nothing'; return }
+        $tree = $built.Tree
+        if (-not $tree) { $wr = Invoke-MoeGit -Top $Wt.Top -IndexFile $idx -GitArgs @('write-tree'); if ($wr.Rc -eq 0) { $tree = ($wr.Out -join '').Trim() } }
         $landed = @($built.Landed | ForEach-Object { $_.Path })
         $msg = New-MoeCommitMessage -Kind 'checkpoint' -TaskId $M.TaskId -Title $M.Title -Status $M.Status -ReopenCount $M.ReopenCount -Role $Role -Sid $M.Sid -CliExit $M.CliExit -Recovered $M.Recovered -PathCount $landed.Count -InferredCount 0 -Contested @() -Reason ''
         $msgFile = Write-MoeMessageFile $Wt.GitDir $M.TaskId $msg
-        $ct = Invoke-MoeGit -Top $Wt.Top -GitArgs @('commit-tree', $built.Tree, '-p', $old, '-F', $msgFile) -MergeStderr
+        $parents = @('-p', $old) + $(if ($M.MergeHead) { @('-p', $M.MergeHead) } else { @() })
+        $ct = Invoke-MoeGit -Top $Wt.Top -GitArgs (@('commit-tree', $tree) + $parents + @('-F', $msgFile)) -MergeStderr
         if ($ct.Rc -ne 0 -or $ct.Out.Count -eq 0) {
             ($ct.Out | Select-Object -Last 3) | ForEach-Object { Write-Host "  $_" }
             Write-Host "[WARN] MOE_COMMIT_FAILED: commit creation failed (identity or signing) for task $($M.TaskId); parking the edits on a rescue ref." -ForegroundColor Yellow
@@ -6068,7 +6125,11 @@ function Invoke-MoeWorktreeCommit([hashtable]$Wt, [string]$Ref, [hashtable]$Attr
             return
         }
         $Res.Outcome = 'committed'; $Res.Sha = $new; $Res.Ref = $Ref; $Res.PathCount = $landed.Count; $Res.Landed = $landed
-        Update-MoeSharedIndex $Wt.Top $landed | Out-Null
+        if (-not $M.KeepIndex) { Update-MoeSharedIndex $Wt.Top $landed | Out-Null }
+        # Only now, the CAS done, is the merge concluded; a failure leaves MERGE_HEAD for the next resume.
+        if ($M.MergeHead -and (Invoke-MoeGit -Top $Wt.Top -GitArgs @('merge', '--quit')).Rc -ne 0) {
+            Write-Host "[WARN] git merge --quit failed in $($Wt.Top); MERGE_HEAD stays and the next session resumes it." -ForegroundColor Yellow
+        }
     } finally {
         Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue
         if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
@@ -6094,7 +6155,7 @@ function Invoke-MoeWorktreeCheckpoint {
         [int]$ReopenCount = 0, [int]$CliExit = 0, [string]$Sid = '', [bool]$Recovered = $false, [bool]$Internal = $false
     )
     $res = @{ Outcome = 'pending'; Kind = 'checkpoint'; Sha = ''; Ref = ''; Code = ''; Branch = $Branch; Landed = @()
-        PathCount = 0; InferredCount = 0; SkippedCount = 0; UnattributedCount = 0; Pushed = $false; StopLoop = $false; Held = '' }
+        PathCount = 0; InferredCount = 0; SkippedCount = 0; UnattributedCount = 0; Pushed = $false; StopLoop = $false; Held = ''; Paths = @(); Msg = '' }
     if (-not $Recovered) { $script:MoeLandingResult = $res }
     $ref = "refs/heads/$Branch"
     $rec = @{ taskId = $TaskId; kind = 'checkpoint'; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit }
@@ -6112,6 +6173,21 @@ function Invoke-MoeWorktreeCheckpoint {
             return $res
         }
         if (-not $Title -and $guard.Scope -and $guard.Scope.Title) { $Title = $guard.Scope.Title }
+        # WT-11 (design §2.5): with a pending merge or a landingRetry a completion's L2 first scans
+        # landingRetry.paths and W's unmerged paths; a hit commits nothing and leaves W, its index and
+        # MERGE_HEAD alone. A checkpoint during a merge commits one parent and keeps W's index.
+        $q = Invoke-MoeGit -Top $WorktreePath -GitArgs @('rev-parse', '-q', '--verify', 'MERGE_HEAD')
+        $mh = if ($q.Rc -eq 0) { ($q.Out -join '').Trim() } else { '' }
+        if ($Internal -and ($mh -or $script:MoeWtRetry)) {
+            $hits = @(Find-MoeConflictMarkers $WorktreePath (@($script:MoeWtRetryPaths) + @(Get-MoeUnmergedPaths $WorktreePath)))
+            if ($hits.Count -gt 0) {
+                $res.Outcome = 'failed'; $res.Code = 'MOE_WORKTREE_UNRESOLVED_CONFLICT'; $res.Paths = $hits
+                $res.Msg = "conflict markers remain in: $(@($hits | Select-Object -First 20) -join ' ')"
+                Write-Host "[WARN] MOE_WORKTREE_UNRESOLVED_CONFLICT: task $TaskId -- $($res.Msg); nothing is committed and $WorktreePath keeps its merge." -ForegroundColor Yellow
+                return $res
+            }
+        }
+        $merge = @{ MergeHead = $(if ($Internal) { $mh } else { '' }); KeepIndex = (-not $Internal -and [bool]$mh) }
         $gd = Invoke-MoeGit -Top $WorktreePath -GitArgs @('rev-parse', '--absolute-git-dir')
         $wt = @{ Top = $WorktreePath; GitDir = $(if ($gd.Rc -eq 0) { ($gd.Out -join '').Trim() } else { '' }); Rel = $Rel }
         $S = if ($wt.GitDir) { Get-MoeDirtySnapshot $WorktreePath } else { $null }
@@ -6123,8 +6199,9 @@ function Invoke-MoeWorktreeCheckpoint {
             if ($Recovered -and $attr.Candidates.Count -eq 0) { $res.Outcome = 'nothing'; return $res }
             if ($attr.Skipped.Count -gt 0) { Write-Host "[attribution] $($attr.Skipped.Count) excluded path(s) untouched (MOE_ATTR_EXCLUDED: .moe/, tool config, worktrees)" -ForegroundColor Cyan }
             $res.Outcome = 'nothing'
-            if ($attr.Candidates.Count -gt 0) {
-                $m = @{ TaskId = $TaskId; Title = $Title; Status = $Status; ReopenCount = $ReopenCount; CliExit = $CliExit; Sid = $Sid; Recovered = $Recovered }
+            # A pending merge commits even with no candidate: its resolution may equal T.
+            if ($attr.Candidates.Count -gt 0 -or $merge.MergeHead) {
+                $m = @{ TaskId = $TaskId; Title = $Title; Status = $Status; ReopenCount = $ReopenCount; CliExit = $CliExit; Sid = $Sid; Recovered = $Recovered } + $merge
                 $dropped = @(Invoke-MoeWorktreeCommit $wt $ref $attr $res $m)
             }
         }
@@ -6610,7 +6687,7 @@ function Invoke-MoeWorktreeCompletion([hashtable]$Settings, [hashtable]$M) {
         $t = if ($L.Journal) { Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '-q', '--verify', "refs/heads/$branch^{commit}") } else { $null }
         if ($l2.Outcome -eq 'failed') {
             if ($l2.Code) { $res.Code = $l2.Code }
-            $res.Ref = $l2.Ref; $res.Sha = $l2.Sha; $L.Msg = 'the task-branch commit failed'
+            $res.Ref = $l2.Ref; $res.Sha = $l2.Sha; $L.Msg = if ($l2.Msg) { $l2.Msg } else { 'the task-branch commit failed' }
         } elseif (-not $t -or $t.Rc -ne 0) { $L.Msg = "refs/heads/$branch does not resolve" }
         elseif ((Invoke-MoeGit -Top $git.Top -GitArgs @('check-ref-format', $ref)).Rc -ne 0 -or
             (-not $L.Remote -and (Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '-q', '--verify', "$ref^{commit}")).Rc -ne 0)) {
@@ -6662,6 +6739,50 @@ function Get-MoeWorktreeControlDirt([hashtable]$Git, [hashtable]$Settings) {
     return ,@((Get-MoeWorktreeAttribution $S $Git.Rel $Settings).Candidates | ForEach-Object { $_.Path })
 }
 
+# WT-11 (design §2.5): a task whose last completion was routed unlanded
+# (task.landingRetry; $script:MoeWtRetry and $script:MoeWtRetryPaths) first
+# merges the target into W, hooks off: the local target without a remote, else
+# origin's fetched now, never a local fallback. A MERGE_HEAD already there is
+# reused. Returns the line the prompt starts with, LANDING-CONFLICT: <unmerged
+# paths> or LANDING-RETRY: <reason>; '' without a retry. Any other git failure
+# stops the seat (MOE_WORKTREE_RESUME_FAILED); never a reset, clean or abort,
+# so W keeps its bytes. Twin: worktree_resume.
+function Invoke-MoeWorktreeResume([string]$Top) {
+    $r = Get-MoeProp (Get-MoeProp $preflightContext 'task') 'landingRetry'
+    $why = Get-MoeProp $r 'reason'
+    $script:MoeWtRetry = if ($why -is [string] -and $why -cin @('conflict', 'contention', 'gate', 'diverged', 'remote')) { $why } else { '' }
+    $script:MoeWtRetryPaths = @(@(Get-MoeProp $r 'paths') | Where-Object { $_ -is [string] -and $_ } | Select-Object -First 500)
+    if (-not $script:MoeWtRetry) { $script:MoeWtRetryPaths = @(); return '' }
+    $W = $script:MoeWtPath; $T = $script:MoeWtTarget
+    $mh = Invoke-MoeGit -Top $W -GitArgs @('rev-parse', '-q', '--verify', 'MERGE_HEAD')
+    if ($mh.Rc -eq 0) {
+        $m = ($mh.Out -join '').Trim()
+        if ((Invoke-MoeGit -Top $W -GitArgs @('cat-file', '-e', "$m^{commit}")).Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_RESUME_FAILED' "MERGE_HEAD $m in $W is not a commit" }
+    } else {
+        if (Test-MoeNoRemote $Top) { $base = "refs/heads/$T" }
+        elseif (Invoke-MoeLandFetch $Top $T) { $base = "refs/remotes/origin/$T" }
+        else { Stop-MoeWorktreeSeat 'MOE_WORKTREE_RESUME_FAILED' "git fetch origin $T failed 3 times: $($script:MoeLandFetchErr); the bytes stay in $W" }
+        $hooks = Join-Path ([IO.Path]::GetTempPath()) ('moe-wt-no-hooks-' + [guid]::NewGuid().ToString('N'))
+        try {
+            [void][IO.Directory]::CreateDirectory($hooks)
+            $m = Invoke-MoeGit -Top $W -GitArgs @('-c', "core.hooksPath=$hooks", 'merge', '--no-commit', '--no-ff', $base) -MergeStderr
+        } finally { Remove-Item -LiteralPath $hooks -Recurse -Force -ErrorAction SilentlyContinue }
+        # Exit 1 with unmerged paths is the expected conflict; anything else is a failed merge.
+        if ($m.Rc -ne 0 -and -not ($m.Rc -eq 1 -and (Get-MoeUnmergedPaths $W).Count -gt 0)) {
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_RESUME_FAILED' "git merge $base in $W exited $($m.Rc) ($(@($m.Out) | Select-Object -Last 1)); the bytes stay there"
+        }
+    }
+    $u = @(Get-MoeUnmergedPaths $W | Select-Object -Unique)
+    if ($u.Count -gt 0) {
+        $s = (@($u | Select-Object -First 20 | ForEach-Object { $_.Substring(0, [Math]::Min(200, $_.Length)) -replace '[\p{C}\p{Z}-[ \p{Cs}]]', '?' }) -join ', ') + $(if ($u.Count -gt 20) { " +$($u.Count - 20) more" } else { '' })
+        $line = "LANDING-CONFLICT: $s`nYour last completion did not land: $T is merged into this worktree and these paths conflict. Edit files only (no git commands, no new plan): remove every conflict marker (<<<<<<<, =======, >>>>>>>), re-run the plan's verification, then call moe.complete_task."
+    } else {
+        $line = "LANDING-RETRY: $($script:MoeWtRetry)`nYour last completion did not land ($($script:MoeWtRetry)); $T is merged into this worktree. Edit files only (no git commands, no new plan), re-run the plan's verification, then call moe.complete_task."
+    }
+    Write-Host "[WARN] $($line.Split("`n")[0])" -ForegroundColor Yellow
+    return $line
+}
+
 # A worktree worker's pre-flight after Initialize-MoeWorktree's W/.moe guard
 # (design §3.3, §3.7): dirt a crashed session left in W becomes a recovery
 # checkpoint on the task branch (MOE_CHECKPOINT_RECOVERED; a failure leaves it
@@ -6672,7 +6793,7 @@ function Get-MoeWorktreeControlDirt([hashtable]$Git, [hashtable]$Settings) {
 # refuses over W's dirt, which then stays. Only a C on the target that the
 # branch adds nothing to: a C^{tree} sync over newer work would drop it, and
 # that work lands from the older base instead. Twin: worktree_preflight.
-function Invoke-MoeWorktreePreflight([string]$TaskId, [string]$Title, [string]$Status, [string]$Sid) {
+function Invoke-MoeWorktreePreflight([string]$TaskId, [string]$Title, [string]$Status, [string]$Sid, [ref]$Context) {
     $settings = Read-MoeCommitSettings
     $git = Get-MoeGitTop
     $done = @(@(Get-MoeProp (Get-MoeProp $preflightContext 'task') 'commits') | Where-Object { $_ -and $_.kind -ceq 'completion' -and
@@ -6693,6 +6814,8 @@ function Invoke-MoeWorktreePreflight([string]$TaskId, [string]$Title, [string]$S
             Write-Host "[WARN] recovery checkpoint for $TaskId did not complete ($(if ($r.Code) { $r.Code } else { '?' })); its bytes stay in $($script:MoeWtPath)." -ForegroundColor Yellow
         }
     }
+    $line = Invoke-MoeWorktreeResume $(if ($git) { $git.Top } else { $script:MoeWtPath })
+    if ($line) { $Context.Value = "$line`n`n$($Context.Value)" }
     $list = ''
     try {
         $cd = if ($git) { Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '--path-format=absolute', '--git-common-dir') } else { $null }
@@ -8483,7 +8606,7 @@ If moe.wait_for_task returns hasChatMessage:true, call moe.chat_read on chatMess
         # Recovery checkpoint + control-dirt list (twin: worktree_preflight).
         $moeWtStatus = ''
         if ($preflightContext -and $preflightContext.task -and $preflightContext.task.PSObject.Properties['status']) { $moeWtStatus = [string]$preflightContext.task.status }
-        Invoke-MoeWorktreePreflight $preflightTaskId $preflightTaskTitle $moeWtStatus $moeSid
+        Invoke-MoeWorktreePreflight $preflightTaskId $preflightTaskTitle $moeWtStatus $moeSid ([ref]$dynamicContext)
         Initialize-MoeWorktreeLaunch ([ref]$dynamicContext)
     }
 

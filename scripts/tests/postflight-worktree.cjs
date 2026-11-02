@@ -115,7 +115,8 @@ function commitOn(p,ref,files){
 
 // PATH-first git stub: WT_GIT_VERSION answers a version probe at any argv position,
 // WT_GIT_FAIL fails any call with that argv element, the first fetch moves WT_GIT_SWAP over
-// WT_GIT_SWAP_TO; the rest runs the real git. sh
+// WT_GIT_SWAP_TO, and the first call with the argv element WT_GIT_HOLD writes WT_GIT_HOLD_FILE,
+// then waits (at most 120s) for <WT_GIT_HOLD_FILE>.sent before it runs; the rest runs the real git. sh
 // engines find `git`; PowerShell finds git.ps1 (a .cmd would mangle `%` in --format).
 function stub(){
   const dir=path.join(root,'git-stub');
@@ -125,6 +126,10 @@ for a in "$@"; do
   if [ -n "$WT_GIT_VERSION" ] && { [ "$a" = --version ] || [ "$a" = version ]; }; then echo "git version $WT_GIT_VERSION"; exit 0; fi
   if [ -n "$WT_GIT_FAIL" ] && [ "$a" = "$WT_GIT_FAIL" ]; then echo "fatal: wt stub fails $a" >&2; exit 1; fi
   if [ "$a" = fetch ] && [ -n "$WT_GIT_SWAP" ] && [ -f "$WT_GIT_SWAP" ]; then mv -f "$WT_GIT_SWAP" "$WT_GIT_SWAP_TO"; fi
+  if [ -n "$WT_GIT_HOLD" ] && [ "$a" = "$WT_GIT_HOLD" ] && [ ! -e "$WT_GIT_HOLD_FILE" ]; then
+    : > "$WT_GIT_HOLD_FILE"; i=0
+    while [ ! -e "$WT_GIT_HOLD_FILE.sent" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i + 1)); done
+  fi
 done
 exec "${realGit.replace(/\\/g,'/')}" "$@"
 `);
@@ -140,6 +145,10 @@ foreach ($a in $args) {
   if ($env:WT_GIT_VERSION -and ($a -ceq '--version' -or $a -ceq 'version')) { "git version $env:WT_GIT_VERSION"; exit 0 }
   if ($env:WT_GIT_FAIL -and $a -ceq $env:WT_GIT_FAIL) { [Console]::Error.WriteLine("fatal: wt stub fails $a"); exit 1 }
   if ($a -ceq 'fetch' -and $env:WT_GIT_SWAP -and (Test-Path -LiteralPath $env:WT_GIT_SWAP)) { Move-Item -LiteralPath $env:WT_GIT_SWAP -Destination $env:WT_GIT_SWAP_TO -Force }
+  if ($env:WT_GIT_HOLD -and $a -ceq $env:WT_GIT_HOLD -and -not (Test-Path -LiteralPath $env:WT_GIT_HOLD_FILE)) {
+    [IO.File]::WriteAllText($env:WT_GIT_HOLD_FILE, 'held')
+    for ($i = 0; $i -lt 1200 -and -not (Test-Path -LiteralPath "$($env:WT_GIT_HOLD_FILE).sent"); $i++) { Start-Sleep -Milliseconds 100 }
+  }
 }
 if ($MyInvocation.ExpectingInput) { $input | & ${real} @args } else { & ${real} @args }
 exit $LASTEXITCODE
@@ -891,7 +900,8 @@ async function wtUnlanded(){
     assert.deepEqual([mainOf(p),done(p).map(x=>[x.outcome,x.code,x.pushed]),f.map(x=>[x.outcome,x.unlandedReason,x.conflictPaths,x.targetTip,x.landedRevision])],
       [main,[['failed',code,false]],Array(knobs.FAKE_EVIDENCE_MODE?2:1).fill(['unlanded',reason,n==='conflict'?['src/a.txt']:[],tip,null])],`${n}: main moved, the row or the finalize`+tail(r.log));
     assert.deepEqual([revOf(p.top,ref),retryOf(p)&&[retryOf(p).rescueRef,retryOf(p).count]],[t,[ref,1]],`${n}: the rescue ref ${ref} or the stored landingRetry (a replayed finalize counts once)`);
-    const mh=mhOf(p);r=await launch(p,`wt-unlanded-${n}-resume`,{WT_CLI_RECORD:rec,...net,...(n==='conflict'?{MOE_DISABLE_CHECKPOINT:'1'}:{})});
+    // A typed CLI: only typeShim forwards the prompt argv to WT_CLI_RECORD.
+    const mh=mhOf(p);r=await launch(p,`wt-unlanded-${n}-resume`,{WT_CLI_RECORD:rec,...net,...(n==='conflict'?{MOE_DISABLE_CHECKPOINT:'1'}:{})},{type:'claude'});
     if(!next){refused(r,'MOE_WORKTREE_RESUME_FAILED');assert.equal(readOr(path.join(p.W,'src','a.txt')),'task a\n','W lost the bytes');continue;}
     assert.deepEqual([promptOf(rec),revOf(p.W,'MERGE_HEAD'),mainOf(p)],[next,mh,main],`${n}: the resume prompt, MERGE_HEAD or main`+tail(r.log));
   }
@@ -907,14 +917,15 @@ async function wtUnlanded(){
 }
 // The conflict chain: the resume leaves markers and MERGE_HEAD; its checkpoint is one commit on T keeping MERGE_HEAD and
 // the unmerged stages; a completion with markers lands nothing (MOE_WORKTREE_UNRESOLVED_CONFLICT, routed conflict again);
-// resolved, C lands B's other change and the partial edit, the task-branch commit is [T', B] and the merge is quit.
+// resolved, C lands B's other change and the partial edit, keeps B's change to a DENY path the task never stages, the
+// task-branch commit is [T', B] and the merge is quit.
 async function wtResume(){
   const p=repo('wt-resume',{settings:LANDS}),rec=path.join(root,'wt-resume-cli.jsonl'),mh=()=>revOf(p.W,'MERGE_HEAD');
   await landRun(p,'wt-resume-0',{'src/a.txt':'task a\n'});
-  const b=commitOn(p,'refs/heads/main',{'src/a.txt':'main a\n','src/m.txt':'main m\n'});
+  const b=commitOn(p,'refs/heads/main',{'src/a.txt':'main a\n','src/m.txt':'main m\n','.gemini/g.md':'main g\n'});
   await landRun(p,'wt-resume-1',{},REVIEW);
   const t=revOf(p.top,p.branch);
-  let r=await landRun(p,'wt-resume-2',{'src/p.txt':'partial\n'},{WT_CLI_RECORD:rec}),t2=revOf(p.top,p.branch);
+  let r=await landRun(p,'wt-resume-2',{'src/p.txt':'partial\n'},{WT_CLI_RECORD:rec},{type:'claude'}),t2=revOf(p.top,p.branch);
   assert.deepEqual([promptOf(rec),mh(),/^<<<<<<< /m.test(read(path.join(p.W,'src','a.txt'))),parents(p.top,t2),git(p.W,'ls-files','-u','--','src/a.txt').trim().split('\n').length],
     ['LANDING-CONFLICT: src/a.txt',b,true,[t],3],'the prompt, MERGE_HEAD, the markers, the one-parent checkpoint or the unmerged stages'+tail(r.log));
   r=await landRun(p,'wt-resume-3',{},REVIEW);
@@ -922,8 +933,8 @@ async function wtResume(){
     [b,b,true,[['unlanded','conflict',['src/a.txt']]]],'a completion with markers'+tail(r.log));
   r=await landRun(p,'wt-resume-4',{'src/a.txt':'resolved\n'},REVIEW);
   const c=mainOf(p),l2=parents(p.top,revOf(p.top,p.branch))[0];
-  assert.deepEqual([parents(p.top,c),['a','m','p'].map(f=>git(p.top,'show',`${c}:src/${f}.txt`)),parents(p.top,l2)[1],mh(),retryOf(p),finals(p)],
-    [[b],['resolved\n','main m\n','partial\n'],b,null,null,[['landed',c]]],'the resolved landing'+tail(r.log));
+  assert.deepEqual([parents(p.top,c),['src/a.txt','src/m.txt','src/p.txt','.gemini/g.md'].map(f=>git(p.top,'show',`${c}:${f}`)),parents(p.top,l2)[1],mh(),retryOf(p),finals(p)],
+    [[b],['resolved\n','main m\n','partial\n','main g\n'],b,null,null,[['landed',c]]],'the resolved landing'+tail(r.log));
 }
 // The marker scan, from this wrapper's own function: each marker shape (CRLF too) and a path out of W are hits; a
 // resolved deletion (absent) and marker look-alikes are not.

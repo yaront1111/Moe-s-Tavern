@@ -5414,7 +5414,7 @@ land_commit() {
 }
 
 land_plumbing() {
-    local msgfile="$1" ref="refs/heads/$LAND_BRANCH" attempt old="" tree="" new="" rc err attempts="1 2 3"
+    local msgfile="$1" ref="refs/heads/$LAND_BRANCH" attempt old="" seed="" tree="" new="" rc err attempts="1 2 3"
     err="$(create_secure_temp)/land-err-$$.txt"
     # A task branch gets ONE CAS (design §2.2 L2): a moved tip is contention, never a rebuild.
     [ "${LAND_ONE_CAS:-}" != true ] || attempts=1
@@ -5432,15 +5432,25 @@ land_plumbing() {
     fi
     for attempt in $attempts; do
         old=$(git -C "$MOE_TOP" rev-parse -q --verify "$ref" 2>/dev/null) || old=""
-        if ! moe_temp_index_build "$old" "$ATTR_DIR/candidates" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE"; then
+        # WT-11: a pending merge (LAND_MERGE_HEAD) stages W onto wt_merge_seed, lands whole and
+        # commits with MERGE_HEAD as the second parent even when the tree equals T's.
+        seed="$old"
+        [ -z "${LAND_MERGE_HEAD:-}" ] || seed=$(wt_merge_seed "$old" "$LAND_MERGE_HEAD") || seed=""
+        if { [ -z "$seed" ] && [ -n "$old" ]; } || ! moe_temp_index_build "$seed" "$ATTR_DIR/candidates" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE"; then
             moe_temp_index_drop
             LAND_OUTCOME="failed"
             LAND_CODE="MOE_COMMIT_FAILED"
             echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: could not build the landing index for task $LAND_TASK_ID."
             return 1
         fi
+        if [ -n "${LAND_MERGE_HEAD:-}" ] && [ -s "$LAND_DROPPED_FILE" ]; then
+            moe_temp_index_drop
+            LAND_OUTCOME="failed"; LAND_CODE="MOE_COMMIT_FAILED"; LAND_MESSAGE="staging dropped a path of the pending merge, which lands whole or not at all"
+            echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $LAND_MESSAGE; nothing is committed and MERGE_HEAD stays."
+            return 1
+        fi
         local changed=true
-        moe_temp_index_has_changes "$old" || changed=false
+        [ -n "${LAND_MERGE_HEAD:-}" ] || moe_temp_index_has_changes "$old" || changed=false
         write_commit_message "$LAND_KIND" "$msgfile" "$TI_N_STAGED" "$TI_N_INFERRED"
         tree=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" write-tree 2>"$err") || tree=""
         # Only a completion that will actually run a gate freezes and records a
@@ -5480,7 +5490,7 @@ land_plumbing() {
                     new=""
                 fi
             elif [ -n "$old" ]; then
-                new=$(git -C "$MOE_TOP" commit-tree "$tree" -p "$old" -F "$msgfile" 2>"$err") || new=""
+                new=$(git -C "$MOE_TOP" commit-tree "$tree" -p "$old" ${LAND_MERGE_HEAD:+-p "$LAND_MERGE_HEAD"} -F "$msgfile" 2>"$err") || new=""
             else
                 new=$(git -C "$MOE_TOP" commit-tree "$tree" -F "$msgfile" 2>"$err") || new=""
             fi
@@ -5553,7 +5563,7 @@ land_plumbing() {
             LAND_OUTCOME="committed"
             LAND_N_PATHS="$TI_N_STAGED"
             LAND_N_INFERRED="$TI_N_INFERRED"
-            index_refresh "$LAND_STAGED_FILE" || true
+            [ "${LAND_KEEP_INDEX:-}" = true ] || index_refresh "$LAND_STAGED_FILE" || true
             return 0
         fi
         # FROZEN_* stay: the next attempt compares its rebuilt tree and base to them.
@@ -6614,6 +6624,75 @@ push_task_branch() {
     return 1
 }
 
+# wt_marker_scan W PATH... -- WT-11 (design §2.5): print each W-relative PATH
+# holding a conflict-marker line, one starting '<<<<<<< ' or '>>>>>>> ' or
+# exactly '=======' (CRLF is a line end), and exit 1 on any. A missing path is
+# a resolved deletion; one resolving out of W, a link, a directory or an
+# unreadable file is a hit, never a clean scan. Twin: Find-MoeConflictMarkers.
+wt_marker_scan() {
+    $PYTHON_CMD - "$@" <<'PY'
+import os, sys
+w = os.path.realpath(sys.argv[1]); hits = []
+def inside(r):
+    try: return os.path.commonpath([w, r]) == w and r != w
+    except ValueError: return False
+for p in dict.fromkeys(a for a in sys.argv[2:] if a):
+    f = os.path.join(w, p); r = os.path.realpath(f)
+    if not inside(r): hits.append(p); continue
+    if not os.path.lexists(f): continue
+    if os.path.islink(f): hits.append(p); continue
+    try:
+        with open(r, "rb") as h:
+            if any(l.rstrip(b"\r\n").startswith((b"<<<<<<< ", b">>>>>>> ")) or l.rstrip(b"\r\n") == b"=======" for l in h): hits.append(p)
+    except OSError: hits.append(p)
+if hits: print("\n".join(hits))
+sys.exit(1 if hits else 0)
+PY
+}
+
+# wt_merge_check W -- a completion's L2 guard (WT-11, design §2.5): with a
+# pending merge in W (MERGE_HEAD) or a landingRetry, landingRetry.paths and W's
+# unmerged paths are scanned. A hit is MOE_WORKTREE_UNRESOLVED_CONFLICT (return
+# 1): nothing commits, W, its index and MERGE_HEAD stay, and the paths join the
+# unlanded route's conflictPaths. Else LAND_MERGE_HEAD is the saved MERGE_HEAD
+# (none: empty), L2's second parent.
+wt_merge_check() {
+    local mh hits="" p
+    local -a ps=()
+    mh=$(git -C "$1" rev-parse -q --verify MERGE_HEAD 2>/dev/null) || mh=""
+    [ -n "$mh" ] || [ -n "${MOE_WT_RETRY:-}" ] || return 0
+    while IFS= read -r -d '' p; do ps+=("$p"); done < <(cat "${MOE_WT_RETRY_PATHS:-/dev/null}" 2>/dev/null; git -C "$1" diff --name-only -z --diff-filter=U 2>/dev/null)
+    if [ "${#ps[@]}" -gt 0 ] && ! hits=$(wt_marker_scan "$1" "${ps[@]}"); then
+        [ -n "$hits" ] || hits=$(printf '%s\n' "${ps[@]}")   # a scan that could not run is no clean scan
+        LAND_OUTCOME=failed; LAND_CODE=MOE_WORKTREE_UNRESOLVED_CONFLICT
+        LAND_MESSAGE="conflict markers remain in: $(printf '%s\n' "$hits" | head -n 20 | tr '\n' ' ')"; LAND_MESSAGE="${LAND_MESSAGE% }"
+        [ -z "${MOE_UNLANDED_PATHS:-}" ] || printf '%s\n' "$hits" | tr '\n' '\0' >> "$MOE_UNLANDED_PATHS"
+        echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $LAND_MESSAGE; nothing is committed and $1 keeps its merge."
+        return 1
+    fi
+    LAND_MERGE_HEAD="$mh"
+}
+
+# wt_merge_seed T MH -- print the tree a pending merge's L2 stages W onto
+# (WT-11): git's own merge of T and MH with T's side on each conflicted path, so
+# W's bytes resolve those and a path the task never stages (DENY, the sparse
+# .moe/) keeps MH's side instead of reverting it. Twin: Get-MoeMergeSeed.
+wt_merge_seed() {
+    local out rc=0 f tree=""
+    local -a names=()
+    out="$(create_secure_temp)/wt-seed-$$"
+    git -C "$MOE_TOP" merge-tree --write-tree -z --name-only "$1" "$2" > "$out" 2>/dev/null || rc=$?
+    [ "$rc" -le 1 ] || return 1
+    while IFS= read -r -d '' f; do
+        if [ -z "$tree" ]; then tree="$f"; elif [ -n "$f" ]; then names+=(":(literal)$f"); else break; fi
+    done < "$out"
+    [ -n "$tree" ] || return 1
+    if [ "${#names[@]}" -eq 0 ]; then printf '%s' "$tree"; return 0; fi
+    GIT_INDEX_FILE="$out.idx" git -C "$MOE_TOP" read-tree "$tree" >/dev/null 2>&1 \
+        && GIT_INDEX_FILE="$out.idx" git -C "$MOE_TOP" reset -q "$1" -- "${names[@]}" >/dev/null 2>&1 \
+        && GIT_INDEX_FILE="$out.idx" git -C "$MOE_TOP" write-tree 2>/dev/null
+}
+
 # land_worktree_checkpoint W BRANCH -- commit every dirty path of the task
 # worktree W except DENY to refs/heads/BRANCH as a checkpoint (design §2.2
 # L0-L2): owner guard, W's snapshot through resolve_attribution's worktree
@@ -6629,8 +6708,10 @@ push_task_branch() {
 # owner refusal is the completion's. Twin: Invoke-MoeWorktreeCheckpoint.
 land_worktree_checkpoint() {
     local w="$1" branch="$2" work rc=0 kind=checkpoint
-    local MOE_TOP="$1" MOE_GITDIR LAND_ONE_CAS=true
+    local MOE_TOP="$1" MOE_GITDIR LAND_ONE_CAS=true LAND_MERGE_HEAD="" LAND_KEEP_INDEX=""
     if [ "${LAND_WT_INTERNAL:-}" = true ]; then local MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF=""; kind=completion; fi
+    # WT-11: a checkpoint during a pending merge commits one parent and leaves W's index (its unmerged stages) and MERGE_HEAD alone.
+    if [ "$kind" = checkpoint ] && git -C "$w" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then LAND_KEEP_INDEX=true; fi
     MOE_GITDIR=$(git -C "$w" rev-parse --absolute-git-dir 2>/dev/null) || MOE_GITDIR=""
     LAND_KIND=checkpoint; LAND_OUTCOME=failed; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""
     LAND_BRANCH="$branch"; LAND_PUSHED=""; LAND_RECORDED=""; LAND_N_PATHS=0; LAND_N_INFERRED=0
@@ -6645,7 +6726,9 @@ land_worktree_checkpoint() {
         landing_refuse_owner "$kind"
         return 0
     fi
-    if [ -z "$MOE_GITDIR" ] || ! git_dirty_snapshot "$work/S.tsv"; then
+    if [ "$kind" = completion ] && ! wt_merge_check "$w"; then
+        rc=1
+    elif [ -z "$MOE_GITDIR" ] || ! git_dirty_snapshot "$work/S.tsv"; then
         LAND_CODE=MOE_COMMIT_FAILED_ATTRIBUTION; rc=1
         echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: git status failed in $w; nothing committed for task $LAND_TASK_ID, its bytes stay in the worktree."
     elif ! resolve_attribution worktree "$LAND_TASK_ID" "$work/S.tsv" "" "" "" "$work/scope.json" "$ATTR_DIR" "" \
@@ -6659,13 +6742,19 @@ land_worktree_checkpoint() {
         attr_print_skips "$ATTR_DIR"
         [ "${ATTR_N_EXCLUDED:-0}" -eq 0 ] || echo -e "${BLUE}[attribution]${NC} $ATTR_N_EXCLUDED excluded path(s) untouched (MOE_ATTR_EXCLUDED: .moe/, tool config, worktrees)"
         LAND_OUTCOME=nothing
-        if [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ] && ! git -C "$w" rev-parse -q --verify "refs/heads/$branch" >/dev/null 2>&1; then
+        # A pending merge commits even with no candidate: its resolution may equal T.
+        if [ "${ATTR_N_CANDIDATES:-0}" -eq 0 ] && [ -z "$LAND_MERGE_HEAD" ]; then :
+        elif ! git -C "$w" rev-parse -q --verify "refs/heads/$branch" >/dev/null 2>&1; then
             # No tip T to build on: never an orphan commit from an empty tree.
             LAND_OUTCOME=failed; LAND_CODE=MOE_COMMIT_FAILED_REF_CONTENTION; rc=1
             echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: refs/heads/$branch does not resolve; nothing committed for task $LAND_TASK_ID, its bytes stay in $w."
-        elif [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ]; then
-            if land_plumbing "$work/msg.txt"; then rc=0; else rc=$?; fi
-        fi
+        elif land_plumbing "$work/msg.txt"; then
+            rc=0
+            # Only now, the CAS done, is the merge concluded; a failure leaves MERGE_HEAD for the next resume.
+            if [ -n "$LAND_MERGE_HEAD" ] && [ "$LAND_OUTCOME" = committed ] && ! git -C "$w" merge --quit >/dev/null 2>&1; then
+                echo -e "${YELLOW}[WARN]${NC} git merge --quit failed in $w; MERGE_HEAD stays and the next session resumes it."
+            fi
+        else rc=$?; fi
         [ "$rc" -ne 2 ] || rc=0
     fi
     [ "$LAND_OUTCOME" != nothing ] || LAND_CODE=MOE_COMMIT_NOTHING_TO_COMMIT
@@ -7123,14 +7212,14 @@ replay_unlanded() {
 # Never peel_target_branch, ensure_safe_branch or the shared push.
 # Twin: Invoke-MoeWorktreeCompletion.
 land_worktree_completion() {
-    local w="$1" branch="$2" work journal target="${CS_CONSOLIDATION_BRANCH:-main}" l2 rc=0 rescue=false why=""
+    local w="$1" branch="$2" work journal target="${CS_CONSOLIDATION_BRANCH:-main}" l2 l2msg rc=0 rescue=false why=""
     local LAND_WT_PUB=remote QUALITY_GATE="${CS_QUALITY_GATE:-}"
     MOE_UNLANDED_PATHS="$(create_secure_temp)/wt-unlanded-$$.z"; LAND_B=""
     : > "$MOE_UNLANDED_PATHS"
     no_git_remote && LAND_WT_PUB=local
     LAND_WT_INTERNAL=true; land_worktree_checkpoint "$w" "$branch" || true; LAND_WT_INTERNAL=""
     [ "$LAND_OUTCOME" != refused ] || return 0
-    l2="$LAND_OUTCOME"
+    l2="$LAND_OUTCOME"; l2msg="${LAND_MESSAGE:-}"
     case "$target" in *'?'*|*'['*) target=main ;; esac
     work="$(create_secure_temp)/wt-complete-$$"
     rm -rf "$work" 2>/dev/null || true
@@ -7140,7 +7229,7 @@ land_worktree_completion() {
     [ "$LAND_WT_PUB" = local ] || LAND_PUSHED=""   # remote: unknown until wt_publish confirms it
     journal=$(receipt_journal_path "$LAND_TASK_ID")
     if [ "$l2" = failed ]; then
-        LAND_CODE="${LAND_CODE:-MOE_COMMIT_FAILED}"; LAND_MESSAGE="the task-branch commit failed"
+        LAND_CODE="${LAND_CODE:-MOE_COMMIT_FAILED}"; LAND_MESSAGE="${l2msg:-the task-branch commit failed}"
     elif [ -z "$journal" ] || ! mkdir -p "$work" || ! LAND_WT_T=$(git -C "$MOE_TOP" rev-parse -q --verify "refs/heads/$branch^{commit}" 2>/dev/null); then
         LAND_MESSAGE="refs/heads/$branch does not resolve"
     elif ! git check-ref-format "refs/heads/$target" \
