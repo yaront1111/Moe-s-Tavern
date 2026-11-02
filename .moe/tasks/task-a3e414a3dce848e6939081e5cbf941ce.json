@@ -30,34 +30,52 @@
     {
       "stepId": "step-2",
       "description": "Write `## Gap list (JetBrains → VS Code)` and `## Reuse decision`. Gap list, as a table with columns: what JetBrains has (cite the file), VS Code at baseline, row(s). G1: task-status notifications (MoeMessageDispatcher's TASK_UPDATED/TASK_CREATED branch notifies via MoeNotificationService on AWAITING_APPROVAL, BLOCKED, REVIEW and DONE); VS Code has none; VSC-1. G2: <root>/.worktrees excluded from indexing (util/WorktreeExclusion.kt); VS Code's watcher and search crawl every worktree; VSC-2. G3: Delivery section in task detail (toolwindow/DeliveryPresentation.kt); VS Code has no type and renders nothing; VSC-3, VSC-8. G4: one blocker presentation (toolwindow/TaskBlockerPresentation.kt); VS Code keeps two copies (src/panels/TaskDetailPanel.ts and media/board.js) and no test pins their parity; VSC-4, VSC-9. G5: settings edits approvalMode, speedModeDelayMs, agentCommand and enableAgentTeams, and shows the effective landing policy read-only (MoeSettingsDialog.effectivePolicyRows); VS Code lacks enableAgentTeams and the policy, and still edits autoCreateBranch, branchPattern and commitPattern, which no launcher reads; VSC-5, VSC-10. G6: Release Agent (RELEASE_TASK) in task detail and on the card; VS Code has none; VSC-6, VSC-11. G7: CHANNEL_DELETED removes the channel; VS Code ignores it, so the dead channel stays; VSC-6. G8: Accounts tab (rotation list; add, sign in, remove, move, rename, switch percent; five senders); VS Code drops ACCOUNTS_UPDATED and has no UI; VSC-7, VSC-12 to VSC-15. G9: AgentSeatTracker deregisters a seat whose terminal closed (DEREGISTER_WORKER with terminal_closed, acknowledged by WORKER_DEREGISTERED); in VS Code a closed terminal's worker keeps its tasks; VSC-19, VSC-20, VSC-21. G10: build.gradle.kts bundles every docs/roles file, while bundle-assets.mjs bundles 3 role docs, and the two lists are kept by hand; VSC-16. G11: CI packages and smoke-tests the JetBrains zip on PRs, but the vsix is packaged only at release, and packaging after `npm run compile` ships stale dist/ tsc output plus eslint.config.mjs; VSC-17. Then a 'Not sliced' list with reasons. D1 \"Run Agents in WSL\" toggle: VS Code Remote-WSL runs the extension host inside the distro, so it becomes a manual check in VSC-18. D2 project selector / MoeProjectRegistry: VS Code binds a window to workspaceFolders[0]; deferred until asked. D3 stop the spawned daemon when the last project closes (registry refcount): needs a human decision, because agent seats share the supervised daemon. D4 live Activity Log tab: moe.showActivityLog opens a log document; accepted difference. D5 explicit Initialize Moe action: VS Code runs the daemon's `init` on connect when .moe is missing; accepted. D6 keyboard shortcuts: low value, deferred. D7 PINS_UPDATED and RESOURCE_UPDATED: neither client handles them; a JetBrains-first follow-up. D8 the bundled node_modules ship devDependencies (vitest, typescript, rolldown) in both plugins: a VSC-16 follow-up. Notes: JetBrains' notifyConnectionLost/notifyConnectionRestored are never called; role docs and skills need no VS Code sync, because the daemon rewrites .moe/roles and .moe/skills at every start (packages/moe-daemon/src/index.ts writeInitFiles/writeSkillFiles). Reuse decision, listing every option with its verdict and reason. O1 host VS Code's webviews in JetBrains via JCEF: maximum reuse, but it rewrites the primary IDE's UI, JCEF is missing in some JetBrains setups, and the epic forbids regressing JetBrains; rejected. O2 shared TypeScript client-core package: only VS Code can consume TypeScript; rejected. Type-importing packages/moe-daemon/src/types/schema.ts into VS Code was also considered: tsconfig rootDir is src, so it changes the emit layout and couples compiles to schema churn; deferred. O3 compute presentation in the daemon and serve it on /ws: a true single source, but it changes the wire and docs/SCHEMA.md and docs/MCP_SERVER.md, which are frozen for this epic; deferred. O4 client-neutral golden corpora, CHOSEN: extend CQ-I06b's moe-jetbrains/src/test/resources/client-verdicts.json (27 approval and 23 VM rows today). One JSON file per shared behaviour (client-delivery, client-blocker, client-settings-policy, client-accounts, client-seat-tracker), executed by a Kotlin test and a moe-vscode test. JetBrains writes it first. A disagreement is fixed or filed, never given a client-specific expectation, and consumer rows never edit it. O5 shared strings at test time, CHOSEN: VS Code labels for corpus keys must equal MoeBundle.properties; a generated build-time catalog is deferred. O6 shared bundle manifest, CHOSEN: scripts/bundle-manifest.json (VSC-16). O7 shared launcher, KEPT: both plugins already launch seats through the bundled scripts/moe-agent.{ps1,sh}. Criterion: use a corpus when the logic branches or renders text in both clients; a four-status rule like VSC-1's notifications is ported with mirrored tests.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "docs/plans/2026-11-02-vscode-reuse.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "note": "Gap list (G1-G11), Not sliced (D1-D8) and Reuse decision (O1-O7) written; cited files spot-checked with ls. Other dirty paths are peers'; untouched.",
+      "startedAt": "2026-11-02T10:01:13.101Z",
+      "completedAt": "2026-11-02T10:01:38.902Z"
     },
     {
       "stepId": "step-3",
       "description": "Write `## Slice table`. First run moe.list_tasks {epicId:'epic-aabc654d'} and build the table from the board, so ids, titles, order and dependsOn are exactly what exists, including any row added after this plan. Columns: label, task id, title, kind (JetBrains corpus / VS Code / packaging / CI / final), wave, dependsOn (labels), main files. Rows at plan time: VSC-0 task-a3e414a3dce848e6939081e5cbf941ce (this doc); VSC-1 task-2ef8e36c29f4490884dff27c9f3ed9fb; VSC-2 task-09e784e5dd214833b8b9df66038941cc; VSC-3 task-a5f39d5535404f6e9e59f762c046f5e0; VSC-4 task-db97dacb7b3843b4a6f747c154123501; VSC-5 task-0f2cc6eb40324b37bafa8be4cf65caa3; VSC-6 task-9f6a725ff14c4c08b4acb203884e7ae5; VSC-7 task-93729f32ef6f408cbd411813c5c93838; VSC-8 task-185f728fd79c4658a86b8a0b40a66595 (after VSC-3); VSC-9 task-06dda5c1df29433ab4eb5c4230b38581 (after VSC-4); VSC-10 task-743e577af8204d6aa48d11fab01c979d (after VSC-5); VSC-11 task-e8255fb1ab274ca9bf67d49c34a9635e (after VSC-6); VSC-12 task-daf5abdd282a4c46b280eb0a48e74cd9 (after VSC-6); VSC-13 task-065e4812d96247cc8394b3cd0416475d (after VSC-7 and VSC-12); VSC-14 task-720f81a6917d4490ab3b5a58c2217ccb (after VSC-13); VSC-15 task-357ed3ae786b4477a39840a7b86a88a6 (after VSC-14); VSC-16 task-6fbd08111de142508fb0402d06f24e3f; VSC-17 task-6a0f0be32acb4dc8b3977f32405277a5 (after VSC-16); VSC-18 task-43363b5db90940cb8760fe6bfa0fe5ad (final integration and hardening, after all 20 slices, epic finalTaskId); VSC-19 task-b3daad343a474830a6bd243991d5353d; VSC-20 task-7fa27666bdb94325b62c205e3599b165 (after VSC-19); VSC-21 task-7e7bd0ec91ca488da2858f70cff32f65 (after VSC-20, VSC-6, VSC-1). Below the table, state: wave 1 = VSC-1, 2, 3, 4, 5, 6, 7, 16, 19, with no dependencies and pairwise-disjoint files; VSC-12 -> VSC-6 and VSC-21 -> VSC-6/VSC-1 exist only to serialize MoeDaemonClient.ts and extension.ts edits in shared-checkout mode, and a governor may drop them after the worktree switch; rows that share TaskDetailPanel.ts (VSC-8, 9, 11) or package.json (VSC-2, 14, 15) are sequenced by order; VSC-18's dependsOn is capped at 20, so VSC-0 is not in it; the epic rails carry the files-to-avoid list and the JetBrains-first gate.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "docs/plans/2026-11-02-vscode-reuse.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "note": "Slice table built from moe.list_tasks (22 rows, all ids in full) with wave, dependsOn and notes.",
+      "startedAt": "2026-11-02T10:01:42.050Z",
+      "completedAt": "2026-11-02T10:02:07.167Z"
     },
     {
       "stepId": "step-4",
       "description": "Verify and self-review the doc; this is the only verification step. Run the plan's verification command (executionContract.checkRefs[0]) from the repo root; it must print 'vscode-reuse doc OK'. It requires the four section headings, each of the 22 epic task ids in full (32 hex digits after task-) and a 40-hex sha. Then check by hand: every baseline number comes from your fresh run, except the clearly labelled 882a4c39 comparison, and your own snapshot sha is present; every gap cites a file that exists (spot-check with ls or grep); the slice table matches moe.list_tasks for the epic; `git status --porcelain` shows this task touching only docs/plans/2026-11-02-vscode-reuse.md (other dirty paths belong to peers: never revert, stage or commit them); no scratch directory is left under /mnt/d/moe-scratch/vsc0-*. Fix anything wrong in the doc and re-run the command.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "docs/plans/2026-11-02-vscode-reuse.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "note": "Check command printed 'vscode-reuse doc OK: 4 sections, 22 task ids, sha' (exit 0). Slice table matches moe.list_tasks (22 rows). git status shows only the doc from this task; .moe/decisions/ and .moe/* edits are peers'. No vsc0-* scratch dir left.",
+      "startedAt": "2026-11-02T10:02:07.951Z",
+      "completedAt": "2026-11-02T10:02:16.286Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-13a877ad",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -69,12 +87,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:00:34.285Z",
-  "updatedAt": "2026-11-02T09:59:45.938Z",
+  "updatedAt": "2026-11-02T10:02:24.554Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T09:06:47.201Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-93e0e956",
@@ -86,7 +104,10 @@
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T09:50:37.891Z",
@@ -131,5 +152,45 @@
   },
   "planApprovedAt": "2026-11-02T09:50:37.913Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T09:51:01.949Z"
+  "workStartedAt": "2026-11-02T09:51:01.949Z",
+  "commits": [
+    {
+      "sha": "6487a1421fe4ec92c853071c99787116089bcec9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-13a877ad@2026-11-02T09:50:37Z",
+      "paths": [
+        ".moe/tasks/task-a3e414a3dce848e6939081e5cbf941ce.json",
+        "docs/plans/2026-11-02-vscode-reuse.md"
+      ],
+      "recordedBy": "worker-13a877ad",
+      "recordedAt": "2026-11-02T10:00:15.546Z",
+      "treeId": "6fea3bbb1aa9c0bb528ce975b1ef48838a2bcf4f",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/plans/2026-11-02-vscode-reuse.md"
+  ],
+  "touchedFiles": [
+    "docs/plans/2026-11-02-vscode-reuse.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-13a877ad@2026-11-02T09:50:37Z",
+    "at": "2026-11-02T10:00:15.546Z"
+  },
+  "reviewStartedAt": "2026-11-02T10:02:24.553Z",
+  "verification": {
+    "command": "node -e \"const t=require('fs').readFileSync('docs/plans/2026-11-02-vscode-reuse.md','utf8');const p='a3e414a3 2ef8e36c 09e784e5 a5f39d55 db97dacb 0f2cc6eb 9f6a725f 93729f32 185f728f 06dda5c1 743e577a e8255fb1 daf5abdd 065e4812 720f81a6 357ed3ae 6fbd0811 6a0f0be3 43363b5d b3daad34 7fa27666 7e7bd0ec'.split(' ');const miss=['## Baseline','## Gap list','## Reuse decision','## Slice table'].filter(s=>!t.includes(s));for(const x of p)if(!new RegExp('task-'+x+'[0-9a-f]{24}').test(t))miss.push('task-'+x);if(!/\\b[0-9a-f]{40}\\b/.test(t))miss.push('40-hex sha');if(miss.length){console.error('MISSING: '+miss.join(', '));process.exit(1)}console.log('vscode-reuse doc OK: 4 sections, '+p.length+' task ids, sha')\"",
+    "exitCode": 0,
+    "outputTail": "vscode-reuse doc OK: 4 sections, 22 task ids, sha",
+    "reportedAt": "2026-11-02T10:02:24.553Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Wrote docs/plans/2026-11-02-vscode-reuse.md: fresh git-archive baseline (snapshot aacc03ad51cc488a26f15e0575fb0d39cfd73b0a: npm ci/test/compile 0, 388 tests/384 pass/4 skip/0 fail, lint 0, daemon+proxy build 0, vsix 4105 files 61.37 MB, onboarding PASS) plus daemon wire verdict and UUID-path finding; gap list G1-G11 with Not-sliced D1-D8; reuse decision (golden corpora, shared strings, bundle manifest chosen; JCEF, TS core, daemon-side presentation rejected/deferred); slice table of all 22 epic rows. Only this doc changed."
 }

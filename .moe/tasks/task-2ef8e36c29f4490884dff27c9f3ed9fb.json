@@ -81,7 +81,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,16 +94,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:38:41.896Z",
-  "updatedAt": "2026-11-02T10:00:28.741Z",
+  "updatedAt": "2026-11-02T10:02:23.103Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T09:39:11.394Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T10:02:23.103Z",
+    "wallClockMs": 1391709
   },
   "contextFetchedBy": [
     "architect-d54b05fd",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-1106e678"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -200,7 +203,44 @@
   "filesModified": [
     "moe-vscode/tests/task-notifier.test.cjs",
     "moe-vscode/src/util/TaskNotifier.ts",
+    "moe-vscode/src/extension.ts",
+    ".moe/tasks/task-b3daad343a474830a6bd243991d5353d.json"
+  ],
+  "completionSummary": "VS Code now notifies on task status transitions with JetBrains' rule. New src/util/TaskNotifier.ts (type-only imports, zero require): pure taskNotification(previousStatus, task) and registerTaskNotifier(client, window, commands) -> Disposable. A TASK_UPDATED/TASK_CREATED frame whose status differs from the cached one (uncached counts as different) shows one `<title>: <message>` notice for AWAITING_APPROVAL (info, View Task), BLOCKED (warning, View Task), REVIEW (info, View Task), DONE (info, no button); texts match MoeNotificationService.kt. Nothing for other statuses, same-status frames, STATE_SNAPSHOT, TASK_DELETED, or frames before the first snapshot. View Task runs moe.openTaskDetail with the task id; a failed open surfaces as a warning (rejection handler on the Thenable chain). One intentional divergence: '](' in a title becomes '] (' so an agent-written title cannot plant a clickable command: link. extension.ts registers it once in activate() after the statusBar push and pushes the Disposable into context.subscriptions; MoeDaemonClient.ts, package.json, media/ untouched. tests/task-notifier.test.cjs: 25 rows (pure decision, fake client firing before caching, View Task/error paths, link neutralization, and 2 rows driving the REAL MoeDaemonClient to guard the fire-before-cache seam). Gate in git-archive snapshot: lint/compile/test exit 0, 416 tests, 412 pass, 0 fail, 4 skip (baseline 384 pass). 12 scratch mutants all killed.",
+  "commits": [
+    {
+      "sha": "fd136d98966c4f232c32d07cf8acac91e8b5e6e2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T09:56:36Z",
+      "paths": [
+        ".moe/tasks/task-b3daad343a474830a6bd243991d5353d.json",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/util/TaskNotifier.ts",
+        "moe-vscode/tests/task-notifier.test.cjs"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T10:01:01.394Z",
+      "treeId": "3654229dc380cbc414ddddb6fd9530807d46e994",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/task-notifier.test.cjs",
+    "moe-vscode/src/util/TaskNotifier.ts",
     "moe-vscode/src/extension.ts"
   ],
-  "completionSummary": "VS Code now notifies on task status transitions with JetBrains' rule. New src/util/TaskNotifier.ts (type-only imports, zero require): pure taskNotification(previousStatus, task) and registerTaskNotifier(client, window, commands) -> Disposable. A TASK_UPDATED/TASK_CREATED frame whose status differs from the cached one (uncached counts as different) shows one `<title>: <message>` notice for AWAITING_APPROVAL (info, View Task), BLOCKED (warning, View Task), REVIEW (info, View Task), DONE (info, no button); texts match MoeNotificationService.kt. Nothing for other statuses, same-status frames, STATE_SNAPSHOT, TASK_DELETED, or frames before the first snapshot. View Task runs moe.openTaskDetail with the task id; a failed open surfaces as a warning (rejection handler on the Thenable chain). One intentional divergence: '](' in a title becomes '] (' so an agent-written title cannot plant a clickable command: link. extension.ts registers it once in activate() after the statusBar push and pushes the Disposable into context.subscriptions; MoeDaemonClient.ts, package.json, media/ untouched. tests/task-notifier.test.cjs: 25 rows (pure decision, fake client firing before caching, View Task/error paths, link neutralization, and 2 rows driving the REAL MoeDaemonClient to guard the fire-before-cache seam). Gate in git-archive snapshot: lint/compile/test exit 0, 416 tests, 412 pass, 0 fail, 4 skip (baseline 384 pass). 12 scratch mutants all killed."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T09:56:36Z",
+    "at": "2026-11-02T10:01:01.394Z"
+  },
+  "completedAt": "2026-11-02T10:02:23.103Z",
+  "reviewCompletedAt": "2026-11-02T10:02:23.103Z",
+  "reviewSummary": "Approved. Completion commit fd136d98 (kind completion, pushed, on moe/work-2026-10-24). Reviewed git show: TaskNotifier.ts (78 lines, type-only imports), extension.ts (+4: import, one subscriptions.push after statusBar; line 8 untouched), tests/task-notifier.test.cjs (25 rows). Source diff ~82 net LOC.\nRe-ran task.verification myself (git archive HEAD + 3-file overlay, snapshot /tmp/vsc1-qa-wPH3nX, env -i, node 24.21.0): npm ci, lint, compile, test all exit 0; 416 tests, 412 pass, 0 fail, 4 skip (baseline 384 pass).\nDoD 1: A1-A6 assert exact kind/title/message/action (moe.openTaskDetail + id; no action key for DONE); texts match MoeNotificationService.kt and MoeMessageDispatcher.kt 110-142 char-for-char.\nDoD 2: B, B2, C4, C5, F/F2 cover same-status, PLANNING/WORKING, uncached BACKLOG, ARCHIVED, STATE_SNAPSHOT, pre-snapshot frames (F/F2 use the real MoeDaemonClient).\nDoD 3: C1 fake client fires before caching, as MoeDaemonClient.ts:1425-1427 does; WORKING->REVIEW = 1 notice, repeat = 0, disposed = 0.\nDoD 4: registered once in activate(), Disposable pushed; MoeDaemonClient.ts, package.json, media/ have no diff.\nDoD 5: exit 0, 0 fail, 412 > 384.\nMutation check in my snapshot (outside checkout): no same-status guard (4 fail), no '](' rewrite (2 fail), no-op Disposable (2 fail) all killed; restored 25/25. Thenable chain ends in .then(undefined, handler). '](' -> '] (' is the only intended divergence from JetBrains, commented. Out of scope by design: mute setting, connection notices, docs (VSC-18). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
