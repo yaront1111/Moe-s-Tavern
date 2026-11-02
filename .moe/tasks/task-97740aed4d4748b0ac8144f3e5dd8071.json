@@ -70,18 +70,25 @@
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, the final step. Load the adversarial-self-review skill and read your own diff of the 3 files as an attacker. Check:\n- A shared claimer (every REVIEW/QA claim and every shared WORKING claim) still pages exactly as today.\n- A live peer with no open attempt, a legacy one or a shared one still pages.\n- A claim with no workerId (claimedAttempt null) still pages.\n- Dormant-only collisions in worktree mode post nothing, and the claim response is unchanged.\n- The decision runs inside the try, so a throw never fails the claim.\n- No test reads the live setting where an attempt's pinned mode is what matters.\n- MESSAGE_CREATED capture: the new rows would catch a reworded or mention-less notice.\n- The docs hunk is that one paragraph only, its old sentences unchanged.\n- The forbidden-pattern rails.\n\nFix what you find. Re-run step 4's exact command if code changed, then call complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
         "docs/MCP_SERVER.md"
       ],
-      "startedAt": "2026-11-02T21:57:37.826Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial self-review of the 3-file diff, no code change needed (so step 4's run stands). Checked: shared/REVIEW/PLANNING claimers and worktreeMode off -> claimed.workspaceMode !== 'worktree' -> pages as today; live peer with no/legacy/shared attempt -> every() false -> pages (rows i, j); no workerId -> claimedAttempt null -> pages; dormant-only in worktree mode posts nothing and fileCollision is unchanged (h2); the decision sits inside the existing try/catch, so a throw (e.g. a malformed attempt record) is swallowed, the claim lands and only the post is skipped; tests read pinned attempt modes (premise guards on currentAttempt), never the setting; claimAndHearWorkers captures every #workers MESSAGE_CREATED so a reworded or mention-less notice fails (h)/(h2), and the RED run proved the capture sees the notice; docs hunk is one @@ and `new.replace(insertedSentences,'') === old` holds byte-for-byte; no forbidden-pattern tokens. Theoretical only: QA REVIEW claims still page (out of DoD, noted in the handoff).",
+      "startedAt": "2026-11-02T21:57:37.826Z",
+      "completedAt": "2026-11-02T21:58:19.856Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-8cf0816c",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -93,7 +100,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T20:58:23.710Z",
-  "updatedAt": "2026-11-02T21:57:37.826Z",
+  "updatedAt": "2026-11-02T21:58:31.387Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T20:58:35.395Z",
@@ -103,7 +110,7 @@
     "firstClaimAt": "2026-11-02T21:41:26.592Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-24611a0a",
@@ -117,7 +124,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T21:46:32.930Z",
@@ -182,5 +190,19 @@
   },
   "planApprovedAt": "2026-11-02T21:46:32.960Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-02T21:52:10.463Z"
+  "workStartedAt": "2026-11-02T21:52:10.463Z",
+  "reviewStartedAt": "2026-11-02T21:58:31.385Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && S=$(mktemp -d) && git -C \"$R\" archive HEAD | tar -x -C \"$S\" && rm -f \"$S/packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts\" && for f in packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/governanceFeatures.test.ts docs/MCP_SERVER.md; do cp \"$R/$f\" \"$S/$f\" && cmp \"$R/$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/governanceFeatures.test.ts src/tools/chatSystemFeed.test.ts src/tools/claimNextTask.test.ts && npm test'",
+    "exitCode": 0,
+    "outputTail": "snapshot /tmp/tmp.VD9BX0cZKE\n(tsc --noEmit clean)\nFocused: Test Files  3 passed (3) | Tests  125 passed (125)\nFull:    Test Files  227 passed (227) | Tests  6852 passed | 20 skipped (6872)\nrun 1 (without the rm): 228 files, 1 failed | 6875 passed | 20 skipped; the one failure, providerDescriptor.contract.test.ts, also fails on a pure git archive HEAD (task-8c40a8fe)",
+    "reportedAt": "2026-11-02T21:58:31.385Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "In worktree mode claim_next_task no longer posts the #workers file-collision heads-up when the claimer's attempt and every live colliding peer's open attempt have workspaceMode 'worktree', so no seat is paged. SKIPPED rather than posted without @mentions: a mention-less system line in a role channel routes to every busy seat (chatStore MentionRouter, chatSystemFeed.test.ts), so a quiet post would page more seats. claimNextTask.ts: new worktreeOnlyCollision(state, claimed, collisions) gates the existing post inside the existing try/catch (info log on skip); collisionNotice, markLivePeers, computeFileCollisions and the response's fileCollision are untouched. A claimer not in a worktree (REVIEW/PLANNING, worktreeMode off, no workerId) and any live peer with no/legacy/shared attempt keep today's paging. governanceFeatures.test.ts: rows (h) (h2) (i)x3 (j) (k); docs/MCP_SERVER.md: the fileCollision paragraph only (one hunk). RED (snapshot, test file only): 2 failed | 12 passed; (h) received \"@worker-live @worker-b ⚠️ file collision on task-B. Live: task-live ... Coordinate before either of you lands.\", (h2) received \"⚠️ file collision on task-B: task-dead ... | task-gone ... | task-unassigned ...\". GREEN: focused 3 files / 125 passed; full 227 files, 6852 passed | 20 skipped. DISCLOSURE: the plan's verbatim command (run 1) exited 1 with 1 failed | 6875 passed | 20 skipped (228 files); the one failure, providerDescriptor.contract.test.ts, also fails on a pure `git archive HEAD` 17ff3749 (landed 0863b6c6 vs codexDescriptor.ts), filed as task-8c40a8fe. The submitted command is run 2: identical but it rm's only that file after the tar step."
 }
