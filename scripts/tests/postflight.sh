@@ -5235,8 +5235,10 @@ try {
   echo "[scenario AI] ok"
 
   # Scenario AJ -- held paths survive BOTH peel-failure sends and the rescue
-  # ledger row. Twin: scenario AJ in postflight.ps1 (task-dfbda1a8). Every
-  # row is checked: ps1's no-candidate peel adds a second, finally-block row.
+  # ledger row. Twin: scenario AJ in postflight.ps1 (task-dfbda1a8). The ledger
+  # must hold EXACTLY the expected rows on both wrappers (AJ2: one failed PEEL
+  # row); ps1's finally used to add a second one (task-4fdc7590), so the whole
+  # sequence is compared, never a tail of it.
   # AJ2 owns nothing but a TOOL-witnessed held.txt, so ps1's completion refuses
   # NO_OWNED_PATHS and takes its no-candidate peel (sh has one such branch).
   echo "[scenario AJ] peel failures and rescue records retain held contested paths"
@@ -5256,8 +5258,7 @@ const [f,run]=process.argv.slice(1),assert=require("assert");
 const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse);
 const expected=run==="1"?[["committed","peel-failed","rescue"],["failed","MOE_COMMIT_FAILED_PEEL","completion"]]:[["failed","MOE_COMMIT_FAILED_PEEL","completion"]];
 try {
-  assert.ok(rows.length>=expected.length,"missing ledger rows");
-  rows.slice(-expected.length).forEach((r,i)=>assert.deepStrictEqual([r.outcome,r.code,r.kind],expected[i],expected[i].join("/")));
+  assert.deepStrictEqual(rows.map(r=>[r.outcome,r.code,r.kind]),expected,"ledger rows: exactly one failed row per landing");
   rows.forEach(r=>{
     const label=[r.outcome,r.code,r.kind].join("/");
     assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),label+": skipped and contested must be JSON arrays");
