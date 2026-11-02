@@ -24,6 +24,7 @@ import type {
     MetricsAggregate,
     PluginOutboundMessage,
 } from '../types/moe';
+import type { AccountRotationView } from '../types/accounts';
 
 /**
  * The APPROVE_TASK wire payload, read straight off the outbound message union so
@@ -69,6 +70,21 @@ function getOutputChannel(): vscode.OutputChannel {
 
 function log(message: string): void {
     getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
+}
+
+/** True for a non-empty string with some non-whitespace text. */
+function isNonBlankString(value: unknown): value is string {
+    return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * Top-level gate for a rotation payload (JetBrains parseAccountRotation's registryFile
+ * check): a plain object whose registryFile is non-blank text. Everything else is
+ * normalized at display time (VSC-13).
+ */
+function isRotationView(value: unknown): value is AccountRotationView {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+        && isNonBlankString((value as { registryFile?: unknown }).registryFile);
 }
 
 /**
@@ -623,11 +639,20 @@ export class MoeDaemonClient implements vscode.Disposable {
     private readonly _onMetrics = new vscode.EventEmitter<MetricsAggregate>();
     public readonly onMetrics = this._onMetrics.event;
 
+    /** Fires with the latest rotation (undefined when the snapshot carried none). */
+    private readonly _onAccountsChanged = new vscode.EventEmitter<AccountRotationView | undefined>();
+    public readonly onAccountsChanged = this._onAccountsChanged.event;
+
+    /** Fires with the id the daemon answered to ADD_ACCOUNT. */
+    private readonly _onAccountAdded = new vscode.EventEmitter<string>();
+    public readonly onAccountAdded = this._onAccountAdded.event;
+
     private daemonShuttingDown = false;
     private manualDisconnect = false;
     private disposed = false;
 
     private state: StateSnapshot | undefined;
+    private rotation: AccountRotationView | undefined;
     private readonly readinessWaiters = new Set<(reply: ReadinessReply) => void>();
 
     constructor(extensionPath: string) {
@@ -643,6 +668,14 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     get currentState(): StateSnapshot | undefined {
         return this.state;
+    }
+
+    /**
+     * The latest Claude account rotation, as the raw wire payload (STATE_SNAPSHOT or
+     * ACCOUNTS_UPDATED); undefined before a snapshot or when the daemon reports none.
+     */
+    get accountRotation(): AccountRotationView | undefined {
+        return this.rotation;
     }
 
     get isStateReady(): boolean {
@@ -990,6 +1023,40 @@ export class MoeDaemonClient implements vscode.Disposable {
             payload.reason = reason;
         }
         return this.sendMessage('RELEASE_TASK', payload);
+    }
+
+    // =========================================================================
+    // Outbound: Claude account operations (JetBrains MoeCommandSender parity)
+    // =========================================================================
+
+    /** A blank or missing label is left off the frame; the daemon picks a default. */
+    addAccount(label?: string): boolean {
+        const trimmed = typeof label === 'string' ? label.trim() : '';
+        return this.sendMessage('ADD_ACCOUNT', trimmed ? { label: trimmed } : {});
+    }
+
+    removeAccount(accountId: string): boolean {
+        return this.sendMessage('REMOVE_ACCOUNT', { accountId });
+    }
+
+    /** Move one place up (-1) or down (1) in the registry order. Throws before sending on any other offset. */
+    moveAccount(accountId: string, offset: -1 | 1): boolean {
+        if (offset !== -1 && offset !== 1) {
+            throw new RangeError(`offset must be -1 or 1, got ${String(offset)}`);
+        }
+        return this.sendMessage('MOVE_ACCOUNT', { accountId, offset });
+    }
+
+    renameAccount(accountId: string, label: string): boolean {
+        return this.sendMessage('RENAME_ACCOUNT', { accountId, label: typeof label === 'string' ? label.trim() : '' });
+    }
+
+    /** The usage percent at which the wrapper moves to the next account (1..100). Throws before sending otherwise. */
+    setAccountSwitchPercent(percent: number): boolean {
+        if (!Number.isInteger(percent) || percent < 1 || percent > 100) {
+            throw new RangeError(`switch percent must be an integer in 1..100, got ${String(percent)}`);
+        }
+        return this.sendMessage('SET_ACCOUNT_SWITCH_PERCENT', { switchAtPercent: percent });
     }
 
     addTaskComment(taskId: string, content: string): void {
@@ -1429,11 +1496,15 @@ export class MoeDaemonClient implements vscode.Disposable {
                         break;
                     }
                     this.state = payload;
+                    // ACCOUNTS_UPDATED only follows a rotation change, so a fresh connect
+                    // learns the rotation from here (JetBrains MoeJson.parseState does too).
+                    this.rotation = isRotationView(payload?.accountRotation) ? payload.accountRotation : undefined;
                     if (!this.stateReady) {
                         this.stateReady = true;
                         this.stateReadyResolve?.();
                     }
                     this._onStateChanged.fire(payload);
+                    this._onAccountsChanged.fire(this.rotation);
                     break;
                 }
 
@@ -1508,8 +1579,17 @@ export class MoeDaemonClient implements vscode.Disposable {
                     break;
 
                 case 'ACCOUNTS_UPDATED':
+                    // JetBrains MoeMessageDispatcher parity: nothing before the first
+                    // snapshot, and a malformed payload keeps the last good rotation.
+                    if (!this.state || !isRotationView(payload)) { break; }
+                    this.rotation = payload;
+                    this._onAccountsChanged.fire(payload);
+                    break;
+
                 case 'ACCOUNT_ADDED':
-                    // Claude accounts are managed in the JetBrains Accounts tab; VS Code has no account UI.
+                    // The daemon's direct reply to ADD_ACCOUNT; an ACCOUNTS_UPDATED follows it.
+                    // Never touches the cached state.
+                    if (isNonBlankString(payload?.accountId)) { this._onAccountAdded.fire(payload.accountId); }
                     break;
 
                 case 'TEAM_CREATED':
@@ -1812,5 +1892,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         this._onDecisionResolved.dispose();
         this._onError.dispose();
         this._onMetrics.dispose();
+        this._onAccountsChanged.dispose();
+        this._onAccountAdded.dispose();
     }
 }
