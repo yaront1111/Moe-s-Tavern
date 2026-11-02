@@ -97,11 +97,17 @@
       "author": "worker-26483323",
       "content": "Steps 1–3 implemented with RED/GREEN targeted Bash and native PS 5.1 evidence. Full Linux and Windows gates are running in separate foreground/polled sessions against the task worktree; qualityGate (parity + lint) already passed. Additional error-path probe found the plan's literal idle_wait helper exits under set -e if its diagnostic echo fails (closed stderr), contrary to its always-return-0 intent. I will extend only the new arm to cover closed stderr and make that warning best-effort after the current gates finish, then re-run verification on final bytes; not editing files while these harnesses run.",
       "timestamp": "2026-11-02T20:56:06.791Z"
+    },
+    {
+      "id": "comment-ff171dcb758c4eac8e73e33a18ba15b0",
+      "author": "worker-26483323",
+      "content": "First full Linux gate passed (postflight-safe bash exit=0, lastScenario=Z, failureClass=NONE; parity PASS). After it finished, extended only the new Bash arm to run with stderr closed too: RED wrapper exited 1 while logging unexpected_exit:1; adding || true to the warning made both TERM/KILL re-polls and wrapper TERM pass for both stderr modes. Final Linux gate is re-running on those bytes. Windows PS wrapper/tests have remained unchanged throughout their separate full run. Byte comparisons confirm removing our inserted arms yields HEAD's original test files exactly.",
+      "timestamp": "2026-11-02T21:25:45.395Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T04:54:29.471Z",
-  "updatedAt": "2026-11-02T20:56:06.791Z",
+  "updatedAt": "2026-11-02T21:25:45.396Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:42:11.681Z",

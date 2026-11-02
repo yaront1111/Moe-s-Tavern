@@ -55,6 +55,23 @@
     {
       "stepId": "step-4",
       "description": "Verification. Run this ONE fresh command from the repo root in WSL; its output is the complete_task evidence. It takes about 5-6 minutes, so raise the Bash tool timeout to 600000 ms or run it in the background.\n\nmkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-31187ec1.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-worktree.cjs scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && g='MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' && diff <(grep -oE \"$g\" scripts/moe-agent.sh | sort -u) <(grep -oE \"$g\" scripts/moe-agent.ps1 | sort -u) && grep -q MOE_WORKTREE_CONTEXT_FAILED scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && T=\"$S/scripts/tests\" && node \"$T/postflight-worktree.cjs\" sh \"$S/scripts/moe-agent.sh\" \"$T/postflight-fake-proxy.js\" \"$S\" \"$(command -v bash)\" && node.exe \"$(wslpath -w \"$T/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$S/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$T/postflight-fake-proxy.js\")\" \"$(wslpath -w \"$S\")\" powershell\n\nThe architect dry-ran this exact command at HEAD 920f9cca, with the CONTEXT_FAILED grep stubbed and MOE_WORKTREE_ONLY=shared-landed: rc 0 in 11 s, with sh and PS 5.1 each printing '1 ok, 0 failed'.\n\nExpected output:\n- the codes diff is empty and parity-check prints PASS;\n- the sh suite prints '[worktree] path-long n/a off win32' and 'N ok, 0 failed';\n- the ps1 suite (Windows PowerShell 5.1 via node.exe) prints 'N ok, 0 failed';\n- the four new cases print 'ok' in both.\n\nN is 16 for sh and 17 for ps1 at today's case list. It is higher if a peer row (WT-05) added cases before this row.\n\nPut both summary lines and the new-case lines in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Fresh verification on the final bytes, run 3: /mnt/d/moe-scratch/run-31187ec1.KEEfZI/run3.sh, log verify3.log, snapshot v-31187ec1.u0LT3S. The snapshot was cmp-equal to all 4 working files after the run. START=20:59:25Z, END=21:27:11Z, EXIT=0.\n\nSession 2 made one byte change before this run: it restored a stray whitespace change in the sh python parse (`own ={` back to `own = {`, no behaviour change). That is why scripts/moe-agent.sh is listed.\n\nThe command is the plan's, with ONE setup-only change: the sh leg's fixture parent is P=$(mktemp -d /tmp/wt-31187ec1.XXXXXX), not \"$S\". On /mnt/d drvfs the pre-existing marker-scan case fails with 'mkfifo: Operation not supported', HEAD 0d8422ce included (bug task-93bcb459). MOE_*/CLAUDE* are unset first.\n\nOutput:\n- snapshot line; the codes diff is empty; bash -n ok; the CONTEXT_FAILED grep is ok; PASS parity-check.sh.\n- sh: '[worktree] path-long n/a off win32'. ctx-unread ok, resume-unread ok, resume-dirty ok, resume-shared-unread ok, codes ok. '[worktree] 60 ok, 0 failed'.\n- ps1 (node.exe, Windows PowerShell 5.1): path-long ok. ctx-unread ok, resume-unread ok, resume-dirty ok, resume-shared-unread ok, codes ok. '[worktree] 60 ok, 0 failed'.\n- N is 60, not the plan's 16/17, because peer rows WT-05..WT-13 added cases since the plan.",
+      "startedAt": "2026-11-02T21:12:01.935Z",
+      "completedAt": "2026-11-02T21:27:35.961Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff (`git diff -- <the 4 files>`), read as an attacker, before complete_task. Check and record the following.\n\n(1) A real get_context for the claimed task always carries task.id equal to the claimed id: check the getContext.ts task projection. Otherwise every live resume would refuse. Also confirm that the claim's own workspace still wins over the context, and that an explicit workspace mode 'shared' is never refused.\n\n(2) The rail-4 surface:\n    - Off moe/control, an unknown mode prints nothing new and refuses nothing new.\n    - shared-landed, shared-unlanded and resume-shared-unread pass.\n    - postflight.{sh,ps1}'s FAKE_GET_CONTEXT_FAIL=empty/mismatch gate cases run on non-moe/control fixtures, so they are untouched.\n\n(3) A refusal creates, moves, deletes and commits nothing: W, its dirt, moe/task/<id> and the control checkout all stay as they were. It also fires before '# -------- Pre-flight landing' / '# -------- Pre-flight baseline', so nothing lands.\n\n(4) report_blocked failing as well, with the daemon down: the seat still stops (the existing [WARN]). A later relaunch either resumes with a working read or is a fresh claim that carries workspace.\n\n(5) Odd inputs, in both twins:\n    - an empty python parse, PYTHON_CMD missing;\n    - ps1 $Context as $null, a string, or an object without task;\n    - an id that is an array or a number.\n\n(6) No code token appears in one twin only, the detail strings are identical, and the ps1 BOM is intact.\n\n(7) Optional, not a gate: run the sh suite under native Git Bash if it is available.\n\n(8) Report numstat: about +80 net lines is expected.\n\nFix anything found, then re-run step 4 fresh before complete_task. The completion summary should name the contract choice: wrapper-only, keyed on moe/control, with no daemon or wire change.",
       "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
@@ -62,18 +79,7 @@
         "scripts/tests/postflight-worktree.cjs",
         "scripts/tests/postflight-fake-proxy.js"
       ],
-      "startedAt": "2026-11-02T21:12:01.935Z"
-    },
-    {
-      "stepId": "step-5",
-      "description": "Adversarial self-review of this task's diff (`git diff -- <the 4 files>`), read as an attacker, before complete_task. Check and record the following.\n\n(1) A real get_context for the claimed task always carries task.id equal to the claimed id: check the getContext.ts task projection. Otherwise every live resume would refuse. Also confirm that the claim's own workspace still wins over the context, and that an explicit workspace mode 'shared' is never refused.\n\n(2) The rail-4 surface:\n    - Off moe/control, an unknown mode prints nothing new and refuses nothing new.\n    - shared-landed, shared-unlanded and resume-shared-unread pass.\n    - postflight.{sh,ps1}'s FAKE_GET_CONTEXT_FAIL=empty/mismatch gate cases run on non-moe/control fixtures, so they are untouched.\n\n(3) A refusal creates, moves, deletes and commits nothing: W, its dirt, moe/task/<id> and the control checkout all stay as they were. It also fires before '# -------- Pre-flight landing' / '# -------- Pre-flight baseline', so nothing lands.\n\n(4) report_blocked failing as well, with the daemon down: the seat still stops (the existing [WARN]). A later relaunch either resumes with a working read or is a fresh claim that carries workspace.\n\n(5) Odd inputs, in both twins:\n    - an empty python parse, PYTHON_CMD missing;\n    - ps1 $Context as $null, a string, or an object without task;\n    - an id that is an array or a number.\n\n(6) No code token appears in one twin only, the detail strings are identical, and the ps1 BOM is intact.\n\n(7) Optional, not a gate: run the sh suite under native Git Bash if it is available.\n\n(8) Report numstat: about +80 net lines is expected.\n\nFix anything found, then re-run step 4 fresh before complete_task. The completion summary should name the contract choice: wrapper-only, keyed on moe/control, with no daemon or wire change.",
-      "status": "PENDING",
-      "affectedFiles": [
-        "scripts/moe-agent.sh",
-        "scripts/moe-agent.ps1",
-        "scripts/tests/postflight-worktree.cjs",
-        "scripts/tests/postflight-fake-proxy.js"
-      ]
+      "startedAt": "2026-11-02T21:27:39.180Z"
     }
   ],
   "planRevision": 1,
@@ -126,7 +132,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:51:26.149Z",
-  "updatedAt": "2026-11-02T21:12:01.935Z",
+  "updatedAt": "2026-11-02T21:27:39.180Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T19:53:26.719Z",
@@ -136,7 +142,7 @@
     "firstClaimAt": "2026-10-30T19:53:43.609Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -223,7 +229,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T20:52:50.174Z",

@@ -95,8 +95,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -125,7 +125,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T19:19:09.454Z",
-  "updatedAt": "2026-11-02T21:18:08.779Z",
+  "updatedAt": "2026-11-02T21:28:54.590Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T19:19:14.801Z",
@@ -137,7 +137,9 @@
     "plannedDistinctFileCount": 4,
     "executedStepCount": 14,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-02T21:27:49.376Z",
+    "wallClockMs": 180502268
   },
   "contextFetchedBy": [
     "qa-af7be174",
@@ -218,10 +220,11 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d6c1cb7a@2026-11-02T20:49:53Z",
-    "at": "2026-11-02T21:17:41.821Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-02T21:18:06Z",
+    "at": "2026-11-02T21:28:54.590Z"
   },
   "tier": "heavy",
   "effort": "max",
@@ -329,7 +332,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "QA round 1 rework (both qa-af7be174 defects). (1) scripts/moe-agent.sh protected_pin_interpreters accepts a MOE_NODE_COMMAND or managed-runtime candidate only if its basename is node (msys/cygwin: node or node.exe). Any other name (e.g. altnode/nodejs) is skipped like N3's untrusted overrides; resolution falls to the managed runtime, then the trusted PATH scan. Root cause: use_node prepends the pinned file's dir, but moe-call.sh (`command -v node`) and env-node shebangs look up the NAME node, so a differently named pin let a planted ./node win. For the same reason the msys node PATH scan now accepts .exe only (new optional 3rd arg on protected_path_lookup; python3 and CLI resolution keep .exe .cmd): Git Bash's name lookup never resolves node.cmd (probed, OSTYPE=cygwin). (2) scripts/tests/protected-agent-command.test.mjs: under FAKE_RPC_TOOLS=1 the runtime stub logs `tool <name>`; new assertDeregistered helper. N1 (sh) writes .moe/daemon.json '{}' and asserts the exit deregister reached the runtime. New bash N5 x4 (empty/dot/relative/absolute in-project planted entry; MOE_NODE_COMMAND=<root>/altnode/nodejs; daemon.json present) asserts no '^project ' ran.log line after the run exits on its own. RED on c4c5fa86 (scripts = 0863b6c6): N5 4/4 fail ('project node'). GREEN: bash rows 39/39. Mutants: M5 (drop basename check) turns N5 4/4 red. M6 (no-op use_node PATH prepend) turns the new N1 3/3 red, while the old N1 stayed green, so the old row was vacuous. M1-M4 still killed. Fresh plan verification exit 0: WSL 155 tests, 129 pass, 0 fail, 26 skip (no pwsh on linux); Windows 214 tests, 175 pass, 0 fail, 39 skip (sh rows); parity PASS. docker bash 3.2.57 parses moe-agent.sh and moe-call.sh; git diff --check clean. moe-agent.ps1 (BOM intact) and moe-call.sh unchanged. Diff vs 0863b6c6: 2 files, +40/-7. Residual, fail-closed: a host whose only node is named nodejs must expose it as `node`.",
-  "reviewCompletedAt": "2026-11-02T20:48:03.789Z",
+  "reviewCompletedAt": "2026-11-02T21:27:49.376Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Task completed as described"
@@ -370,5 +373,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-11-02T21:27:49.376Z",
+  "reviewSummary": "QA r2 APPROVE 617c5658, the round-1 rework (pushed, on moe/work-2026-10-24). +40/-7 in moe-agent.sh and the test file. ps1 and moe-call.sh unchanged. Task total +335/-75, net 260.\n(1) Fixed: protected_pin_interpreters pins an override or the managed runtime only if its basename is node (msys/cygwin: node or node.exe). Other names are skipped like N3. The msys node scan now takes .exe only, which fails closed; no automated Git Bash coverage, by harness design.\n(2) Fixed: N1 [sh] writes daemon.json and asserts tool moe.deregister_worker. The deregister runs only through moe-call.sh (moe-agent.sh:222, 8746), so the row is no longer vacuous. New N5 x4.\nRed proof (snapshots, env -i): with 617c5658^'s wrapper, N5 fails 4/4 with ran.log 'project node' and N1 passes 3/3. Mutant M6 (use_node's PATH prepend replaced by ':'): N1 3/3 and N5 4/4 fail.\nGate: the exact task.verification command on a git-archive snapshot, env -i, 21:23:13Z-21:25:24Z (2m11s), EXIT=0.\n- WSL: 155 tests, 129 pass, 0 fail, 26 skip (pwsh rows; no PS on linux).\n- Windows: 214 tests, 175 pass, 0 fail, 39 skip (bash rows).\n- PS 5.1 24/24, pwsh 7 24/24; slices 44/44/37.\n- parity PASS; npm run lint exit 0.\nContention (a proxy, not a CPU measure): 13 live seats; gradle, jetbrains-gradle and git-land free at start and end. node.exe 19 then 16, powershell 12, pwsh 2, java 1.\nAudit: after the pin, python runs only through $PYTHON_CMD, and bare node appears only in legacy find_node. No IDE passes MOE_NODE_COMMAND to the wrapper. Ponytail: nothing to cut.\nResiduals (on epic-final f3f364a6): POSIX pwsh does not prepend the pinned dir; standalone moe-call; a host whose only node is named nodejs refuses; Windows .cmd and cwd lookup; whitespace in PYTHON_CMD.",
+  "requiredCheckAtDone": null
 }
