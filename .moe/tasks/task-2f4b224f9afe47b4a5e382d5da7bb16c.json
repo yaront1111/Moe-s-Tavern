@@ -83,7 +83,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -106,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T12:41:22.705Z",
-  "updatedAt": "2026-11-02T14:25:21.017Z",
+  "updatedAt": "2026-11-02T14:33:19.051Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T13:49:39.060Z",
@@ -116,12 +116,15 @@
     "firstClaimAt": "2026-11-02T13:49:44.626Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T14:33:19.050Z",
+    "wallClockMs": 2614424
   },
   "contextFetchedBy": [
     "architect-93e0e956",
     "architect-0fcb7226",
-    "worker-81a7999f"
+    "worker-81a7999f",
+    "qa-564d8bce"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -218,6 +221,28 @@
       "treeId": "e1bbd6595dff63438dbff92ee6cbf19246a7f7d5",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "12ef9ffb992ad36fb427504161a24a97ab317e0f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-81a7999f@2026-11-02T14:10:33Z",
+      "paths": [
+        ".moe/epics/epic-dce3a64f31a44d948f771137a2c0dbed.json",
+        ".moe/tasks/task-2f4b224f9afe47b4a5e382d5da7bb16c.json",
+        ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+        "moe-vscode/src/providers/AccountsTreeProvider.ts",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/powershell-quoting.test.cjs"
+      ],
+      "recordedBy": "worker-81a7999f",
+      "recordedAt": "2026-11-02T14:25:45.582Z",
+      "treeId": "605c23aa9a5789a9b119e7c3d7e342bcb2da2dca",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -225,14 +250,17 @@
     "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
     "moe-vscode/src/util/AgentLauncher.ts",
     "moe-vscode/src/providers/AccountsTreeProvider.ts",
-    "moe-vscode/tests/powershell-quoting.test.cjs"
+    "moe-vscode/tests/powershell-quoting.test.cjs",
+    ".moe/epics/epic-dce3a64f31a44d948f771137a2c0dbed.json",
+    ".moe/tasks/task-2f4b224f9afe47b4a5e382d5da7bb16c.json",
+    ".moe/tasks/task-357ed3ae786b4477a39840a7b86a88a6.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-93e0e956@2026-11-02T13:49:42Z",
-    "at": "2026-11-02T14:09:40.636Z"
+    "kind": "completion",
+    "sessionId": "worker-81a7999f@2026-11-02T14:10:33Z",
+    "at": "2026-11-02T14:25:45.582Z"
   },
   "workStartedAt": "2026-11-02T14:12:42.176Z",
   "reviewStartedAt": "2026-11-02T14:25:21.015Z",
@@ -243,5 +271,16 @@
     "reportedAt": "2026-11-02T14:25:21.015Z",
     "source": "agent-reported"
   },
-  "completionSummary": "PowerShell quoting now keeps every value inside its own argument in both plugins.\n\nFix:\n- psQuote, in all 3 copies (AgentLauncher.ts, AccountsTreeProvider.ts, TerminalAgentLauncher.kt), doubles each of ', U+2018, U+2019, U+201A and U+201B. That is EscapeSingleQuotedStringContent's rule. The 3 sets are byte-identical (od).\n- JetBrains powerShellLine escapes in ONE pass. It puts a backtick before each backtick, $, \" and U+201C/U+201D/U+201E.\n- bashWrapPowerShell undoes that exactly: Regex(\"`(.)\") becomes group 1, then the bash re-escape runs unchanged.\n- Ordinary values are typed byte-for-byte as before. PINNED_LEGACY, the accounts pins and AccountPresentationTest are unedited and green.\n\nTests:\n- Kotlin J1/J2/J3 in TerminalAgentLauncherTest. A psWords tokenizer model plus typedPsScript/typedBashPsScript checks 5 agent carriers × the native and WSL PowerShell routes, and 4 accounts words.\n- J3 covers D:\\Bob’s work on both routes.\n- New moe-vscode/tests/powershell-quoting.test.cjs:\n  - V1: a win32 launch with project dir Bob’s work and an extension dir holding all 5 single quotes; the outer words and the decoded words are checked;\n  - V2: accountsCommandLine.\n\nRED at HEAD:\n- Kotlin: 43 tests, only J1, J2 and J3 fail.\n- VS Code: V1 and V2 fail.\n\nMutants, all killed as predicted:\n- M1 psQuote ASCII-only: J1 and J3.\n- M2 without U+201A: J1.\n- M3 without the backtick: J2.\n- M4 without U+201E: J2.\n- M5 chained replaces that escape \" first: J2.\n- M6 HEAD's un-escape: J2, wsl=true rows.\n- VM1 AgentLauncher ASCII-only: V1 alone.\n- VM2 AccountsTreeProvider ASCII-only: V2 alone.\n- VM3 without U+201B: V1 and V2.\n- Drivers: /tmp/psq2f4b-mut/{mut,vmut}.py.\n\nGate, exit 0:\n- VS Code: 556 tests, 552 pass, 0 fail, 4 skip.\n- Gradle: :test executed, 570 JUnit tests, 0 failures; TerminalAgentLauncherTest 43.\n\nSize: 340 changed lines across the 5 planned files. No new export. requireSafeArg and assertSafeArg still run first.\n\nThe curly characters are literal UTF-8 in the source; the toolin"
+  "completionSummary": "PowerShell quoting now keeps every value inside its own argument in both plugins.\n\nFix:\n- psQuote, in all 3 copies (AgentLauncher.ts, AccountsTreeProvider.ts, TerminalAgentLauncher.kt), doubles each of ', U+2018, U+2019, U+201A and U+201B. That is EscapeSingleQuotedStringContent's rule. The 3 sets are byte-identical (od).\n- JetBrains powerShellLine escapes in ONE pass. It puts a backtick before each backtick, $, \" and U+201C/U+201D/U+201E.\n- bashWrapPowerShell undoes that exactly: Regex(\"`(.)\") becomes group 1, then the bash re-escape runs unchanged.\n- Ordinary values are typed byte-for-byte as before. PINNED_LEGACY, the accounts pins and AccountPresentationTest are unedited and green.\n\nTests:\n- Kotlin J1/J2/J3 in TerminalAgentLauncherTest. A psWords tokenizer model plus typedPsScript/typedBashPsScript checks 5 agent carriers × the native and WSL PowerShell routes, and 4 accounts words.\n- J3 covers D:\\Bob’s work on both routes.\n- New moe-vscode/tests/powershell-quoting.test.cjs:\n  - V1: a win32 launch with project dir Bob’s work and an extension dir holding all 5 single quotes; the outer words and the decoded words are checked;\n  - V2: accountsCommandLine.\n\nRED at HEAD:\n- Kotlin: 43 tests, only J1, J2 and J3 fail.\n- VS Code: V1 and V2 fail.\n\nMutants, all killed as predicted:\n- M1 psQuote ASCII-only: J1 and J3.\n- M2 without U+201A: J1.\n- M3 without the backtick: J2.\n- M4 without U+201E: J2.\n- M5 chained replaces that escape \" first: J2.\n- M6 HEAD's un-escape: J2, wsl=true rows.\n- VM1 AgentLauncher ASCII-only: V1 alone.\n- VM2 AccountsTreeProvider ASCII-only: V2 alone.\n- VM3 without U+201B: V1 and V2.\n- Drivers: /tmp/psq2f4b-mut/{mut,vmut}.py.\n\nGate, exit 0:\n- VS Code: 556 tests, 552 pass, 0 fail, 4 skip.\n- Gradle: :test executed, 570 JUnit tests, 0 failures; TerminalAgentLauncherTest 43.\n\nSize: 340 changed lines across the 5 planned files. No new export. requireSafeArg and assertSafeArg still run first.\n\nThe curly characters are literal UTF-8 in the source; the toolin",
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "moe-vscode/tests/powershell-quoting.test.cjs",
+    "moe-vscode/src/util/AgentLauncher.ts",
+    "moe-vscode/src/providers/AccountsTreeProvider.ts"
+  ],
+  "completedAt": "2026-11-02T14:33:19.050Z",
+  "reviewCompletedAt": "2026-11-02T14:33:19.050Z",
+  "reviewSummary": "Reviewed completion 12ef9ffb (pushed, on moe/work-2026-10-24; HEAD c97bd18c only adds a board checkpoint). Diff is the 5 planned files: runtime +23/-9, tests +308/-0 (new cjs +167), about 340 lines without board json, under 400.\n- No existing test edited, no rail-forbidden file, no new export.\n- requireSafeArg and assertSafeArg are unchanged and still run first.\n- The EncodedCommand framing and shQuote are unchanged.\n\nGate: checkRef re-run verbatim under my jetbrains-gradle lease (released after), GATE_EXIT=0.\n- VS Code snapshot: npm ci, lint and compile ok; 556 tests, 552 pass, 0 fail, 4 skip.\n- Gradle: :test executed, BUILD SUCCESSFUL; JUnit XML 570 tests, 0 failures, 0 errors; TerminalAgentLauncherTest 43/0.\n\nRED, re-run myself:\n- The pre-fix TerminalAgentLauncher.kt fails exactly J1, J2 and J3 (43 tests, 3 failed).\n- AgentLauncher.ts reverted alone fails only V1; AccountsTreeProvider.ts reverted alone fails only V2.\n- So DoD1 has a failing-on-HEAD test per file, and DoD2 has J2.\n\nReal-parser check: lines built with the landed rules for 11 probes (the 5 single quotes, Bob’s work, the backtick, $ and curly-double-quote probes, PWNED1-5). Windows PowerShell 5.1 Parser.ParseInput returned each value as exactly the -Project argument, with 1 statement and 0 errors, on both the inner and the outer -Command routes.\n\nDoD3: J3 covers both JetBrains routes; V1 covers VS Code.\nDoD4: green.\nThe WSL accounts route uses shQuote, so DoD2's bashWrapPowerShell part applies to agent lines; J2 covers wsl=true.\n\nResiduals: the 5.1 native route drops ASCII \", and ! expands in bash. Both are pre-existing and filed as task-76d4500a.\n\nComplexity: nothing to cut.",
+  "requiredCheckAtDone": null
 }
