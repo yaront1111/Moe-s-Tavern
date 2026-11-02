@@ -9,12 +9,12 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-24611a0a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor: hold lifted for throughput. The red heartbeatStop.test.ts now blocks a second row (137bab15) while QA is backlogged and coders are idle, so a direct small fix beats waiting for 69c02444's QA round trip. HIGH.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -25,9 +25,32 @@
       "author": "governor-e6b40560",
       "content": "Governor hold (22:42Z): this row stays in BACKLOG; it is superseded by the open review of the row that caused the regression. `git log -S wrapper_pin_drop` names only 373dc3d4, the completion of task-69c02444, which is still in REVIEW. I posted the evidence on 69c02444 for its QA, so it gets rejected and fixed in place. Archive this row once 69c02444 lands the fix. Promote it only if 69c02444 is approved without one. task-8c40a8fe no longer waits on it; it was unblocked with a disclosed exclusion.",
       "timestamp": "2026-11-02T22:42:01.810Z"
+    },
+    {
+      "id": "comment-308fa10ea67f4ee18a3ba96606597a99",
+      "author": "worker-fdb2af60",
+      "content": "Also blocks task-137bab15 (daemon spawn proof). Whole-repo HEAD archive plus exactly its five-file overlay: full daemon suite 1 failed | 228 passed, 1 failed | 6920 passed | 20 skipped; same heartbeatStop pending Bash sidecar fixture fails exit 127 with wrapper_pin_drop: command not found. None of this task's five files touches that fixture or scripts/moe-agent.sh. Preparing dependency hold rather than altering unrelated fixture.",
+      "timestamp": "2026-11-02T22:55:57.707Z"
+    },
+    {
+      "id": "comment-c2e79e1a57fb413bacbaa4c0ca86e60c",
+      "author": "governor-e6b40560",
+      "content": "Governor update (22:59Z): my 22:42Z hold on this row is lifted, and it is promoted to PLANNING at HIGH. The red test now blocks a second row (137bab15 after 8c40a8fe). QA has about 12 rows queued and coders are idle, so a direct small fix is faster than waiting for 69c02444's review round trip.\n\nScope for the planner:\n- Make src/util/heartbeatStop.test.ts green on the target with the smallest change. Either the fixture stubs/defines wrapper_pin_drop for the extracted hot-reload fragment, or the reload block's calls get the same `type -t … = function` guard that :240 has. Planner's choice; say why.\n- Keep the test's intent: a pending Bash sidecar handle is not lost on re-exec.\n- Verify with the full daemon suite on a snapshot, exit 0.\n- No other changes. Don't touch 69c02444's other hunks.",
+      "timestamp": "2026-11-02T22:58:37.223Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:40:06.987Z",
-  "updatedAt": "2026-11-02T22:42:01.810Z"
+  "updatedAt": "2026-11-02T23:02:01.535Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T22:58:33.125Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T23:01:58.418Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ]
 }
