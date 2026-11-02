@@ -9,9 +9,52 @@
     "A mutant that drops the new prelude line fails the compact-window rows again on Windows."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED evidence, then the one-line fixture fix. The change is test-only, a single line in scripts/tests/prompt-cache-launcher.test.mjs.\n\nRED first (test-driven-development): before editing, run the Windows half of the step-2 command:\n`\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/prompt-cache-launcher.test.mjs`, from the worktree root, in your normal shell, not env -i.\nIt must show 99 tests, 77 pass, 22 fail. All 22 are '<engine>: <role> <kind> compact window over ...' rows for powershell.exe and pwsh.exe, each with \"Join-Path : Cannot bind argument to parameter 'Path' because it is null\". Quote it in complete_step. (Planning log: /mnt/d/moe-scratch/e54bab27-plan/e54b-win-head.log, a0269bcd.)\n\nThe edit. Use an editor tool (Edit on Claude, apply_patch on Codex), not a shell write. The file is LF. At :419 (a0269bcd), in the PowerShell branch's `script = `...`` template, insert `$script:MoeScriptRoot=$PSScriptRoot\\n` directly after `$ErrorActionPreference='Stop'\\n`, so the line begins:\n`script = `$ErrorActionPreference='Stop'\\n$script:MoeScriptRoot=$PSScriptRoot\\n$Role='${role}'\\n...`\nThe exact one-line diff is /mnt/d/moe-scratch/e54bab27-plan/e54b-fix.diff. `$script:` and `$PSScriptRoot` contain no `${`, so the template does not interpolate them.\n\nWhy this value:\n- In the wrapper, $script:MoeScriptRoot is the scripts folder, which holds mods\\ (moe-agent.ps1:120). 373dc3d4 moved the keeper and account-switch lines to it (:10085 and :10092 at 717c4019).\n- The fixture writes compact.ps1 into <dir>, beside <dir>/mods/..., and its assertions expect keeperDir and switchDir under <dir>. Mapping it to $PSScriptRoot reproduces the wrapper's layout.\n- Nothing else changes: not the wrapper, the sh branch, the assertions or the other rows.\n\nNo runtime error handling is involved; the fixture only defines a variable the real wrapper always sets. Re-run the Windows command: 99 of 99 pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "note": "RED on Windows node.exe before the edit: 99 tests, 77 pass, 22 fail (compact-window rows; Join-Path null Path). Added `$script:MoeScriptRoot=$PSScriptRoot` to the fixture prelude (1 insertion/1 deletion on the template line). After: 99 tests, 99 pass, 0 fail.",
+      "startedAt": "2026-11-02T23:44:05.217Z",
+      "completedAt": "2026-11-02T23:46:47.514Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, run once (DoD 1). Run this ONE command fresh from the task worktree root, in your normal shell. Only the Linux leg uses env -i, because Windows node.exe needs the Windows PATH that WSL interop carries. Its output tail is the complete_task evidence:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 node --test scripts/tests/prompt-cache-launcher.test.mjs 2>&1 | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ] && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/prompt-cache-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ] && bash scripts/tests/parity-check.sh && npm run lint\n\nPlanning dry run on a0269bcd, with the fix:\n- Linux: 31 tests, 29 pass, 0 fail, 2 skipped (no pwsh in WSL).\n- Windows: 99 tests, 99 pass, 0 fail.\nThe launcher harnesses may run in place (rails). parity-check.sh and lint are the project's qualityGate. Declare scripts/tests/prompt-cache-launcher.test.mjs as modifiedFiles.\n\nNote: get_context marks this row isEpicFinal only as a fallback. Its catch-all epic (epic-be924fb8, more than 120 rows) has no finalTaskId, so the newest row inherits the flag. The DoD is this one suite, so the gate stays scoped to it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "note": "Plan command exit 0: Linux 31/29 pass/0 fail/2 skipped; Windows 99/99; parity-check PASS; lint OK.",
+      "startedAt": "2026-11-02T23:46:48.260Z",
+      "completedAt": "2026-11-02T23:47:32.844Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n\nRun the mutants in a scratch copy: `git archive HEAD scripts docs package.json` into a fresh mktemp dir under /mnt/c/Users/Yaron/AppData/Local/Temp/, with your file overlaid by cp. Run Windows node.exe there, then delete the dir by its prefix. Never mutate the worktree.\n(a) Drop the new prelude line: the 22 compact-window rows fail again (DoD 3).\n(b) Set the wrong root, `$script:MoeScriptRoot=$env:TEMP`: the keeper-on rows must fail their keeperDir assertion. This proves the assertions bind the value, not just its presence.\n(c) Diff scope: `git diff --stat` shows only this file, 1 insertion and 1 deletion on that template line. Every assertion and every other row stays byte-identical (DoD 2).\n(d) The sh branch is untouched, and its rows still pass on Linux.\n(e) Process safety: kill nothing by name or pattern; the suite's spawnSync calls have their own 20 s timeout.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "note": "Self-review: (a) dropped line = the RED run, 22 fail. (b) wrong root ($env:TEMP) in a scratch copy: 99/77 pass/22 fail, so assertions bind the value; scratch dir removed. (c) git diff --stat: 1 file, 1 insertion/1 deletion; wrapper, sh branch, assertions untouched. (d) Linux run 29 pass 0 fail. (e) Nothing killed.",
+      "startedAt": "2026-11-02T23:47:33.502Z",
+      "completedAt": "2026-11-02T23:48:20.200Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +67,110 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T23:31:07.414Z",
-  "updatedAt": "2026-11-02T23:31:07.414Z"
+  "updatedAt": "2026-11-02T23:49:16.502Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T23:40:12.334Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-2dc72348"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T23:43:11.923Z",
+  "executionContract": {
+    "intendedBehavior": "prompt-cache-launcher.test.mjs passes again through Windows node.exe and under Linux node. The PowerShell compact-window fixture defines $script:MoeScriptRoot as the folder of its extracted script, as the wrapper defines it as its scripts folder. The keeper and account-switch mods paths therefore resolve under the fixture folder and match the unchanged assertions.",
+    "acceptanceCriteria": [
+      "Windows node.exe: 99 of 99 pass, including all 22 PowerShell compact-window rows (powershell.exe and pwsh.exe), which fail without the line (RED first).",
+      "Linux node: the suite exits 0.",
+      "The diff is one line in the PowerShell prelude of prompt-cache-launcher.test.mjs; a wrong-root mutant fails the keeper assertions."
+    ],
+    "invariants": [
+      "scripts/moe-agent.ps1 and the sh branch are unchanged.",
+      "Every assertion and every other row stays byte-identical."
+    ],
+    "compatibility": [
+      "The block anchors that the fixture extracts are unchanged."
+    ],
+    "approvedScope": [
+      "The PowerShell branch's script prelude in the compact-window test of scripts/tests/prompt-cache-launcher.test.mjs."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1:120 sets $script:MoeScriptRoot to the scripts folder. The keeper and account-switch lines (~:10085/:10092) use it since 373dc3d4.",
+      "scripts/tests/prompt-cache-launcher.test.mjs:419 (a0269bcd) builds the PowerShell compact.ps1 script; the assertions at :433-434 expect mods paths under the fixture folder."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 node --test scripts/tests/prompt-cache-launcher.test.mjs 2>&1 | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ] && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/prompt-cache-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ] && bash scripts/tests/parity-check.sh && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Set $script:MoeScriptRoot in the fixture prelude, CHOSEN. It is one line and mirrors the wrapper's layout. 2) Revert the wrapper's keeper lines to $PSScriptRoot. Rejected: 373dc3d4 moved them on purpose, because a pinned private copy runs outside the scripts folder, so $PSScriptRoot would name the temp copy's folder. That change is under review in task-69c02444. 3) Extract and evaluate moe-agent.ps1:120 in the fixture. Rejected: one more anchor to keep in sync, for no gain.",
+    "codebaseInsights": "373dc3d4 (the hot-reload pin) broke two slice-extract fixtures: heartbeatStop (fixed by f6d9c532, landed 717c4019) and this one. Slice fixtures run a wrapper block outside the wrapper, so every script-scope variable the block reads has to be stubbed. The WSL env -i gate skips every pwsh row, so these breaks show only on Windows node.exe, or on CI runners that have pwsh.",
+    "risks": "(1) Running the Windows leg under env -i loses PATH. Use the normal shell. (2) task-2f22237b dependsOn this row; it lands as soon as this one is DONE. (3) If task-69c02444's QA rejects that row and it changes the keeper lines again, re-check the anchors.",
+    "keyFiles": [
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/moe-agent.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "0c44ccf0aa5656d53dc61579373e16722e289c33",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T23:43:11.960Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T23:44:05.217Z",
+  "reviewStartedAt": "2026-11-02T23:48:23.691Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 node --test scripts/tests/prompt-cache-launcher.test.mjs 2>&1 | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ] && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/prompt-cache-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -8; [ \"${PIPESTATUS[0]}\" -eq 0 ] && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "Linux: tests 31, pass 29, fail 0, skipped 2. Windows node.exe: tests 99, pass 99, fail 0. PASS parity-check.sh. lint: OK architect 39 / worker 30 / qa 36 lines. EXIT=0",
+    "reportedAt": "2026-11-02T23:48:23.691Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/prompt-cache-launcher.test.mjs"
+  ],
+  "completionSummary": "Test-only: added `$script:MoeScriptRoot=$PSScriptRoot` to the PowerShell compact-window fixture prelude in prompt-cache-launcher.test.mjs. Windows node.exe went from 77/99 to 99/99; Linux 29 pass 0 fail 2 skipped. Wrong-root mutant fails 22 rows. Wrapper and assertions untouched.",
+  "commits": [
+    {
+      "sha": "1b754809f56bbd64b9bb659705dbd09bc09d0722",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-02T23:43:15Z",
+      "paths": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-02T23:49:16.350Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2dc72348@2026-11-02T23:43:15Z",
+    "at": "2026-11-02T23:49:16.502Z"
+  }
 }

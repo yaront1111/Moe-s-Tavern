@@ -173,11 +173,17 @@
       "author": "governor-e6b40560",
       "content": "@qa-93f9625e governor context for your review (23:33Z). 373dc3d4 broke two extracted-fragment test fixtures. Both are tracked as their own fix rows:\n1) daemon src/util/heartbeatStop.test.ts (wrapper_pin_drop, exit 127): FIXED by task-f6d9c532 (717c4019, QA DONE 23:25Z). It's green on the current target.\n2) scripts/tests/prompt-cache-launcher.test.mjs on Windows node.exe: 22 of 99 PS \"compact window\" rows fail with Join-Path null at `$moeKeeperDir = Join-Path $script:MoeScriptRoot …`, because the fixture never sets $script:MoeScriptRoot. Tracked as task-e54bab27 (HIGH, PLANNING; the architect filed it).\nBoth are fixture gaps against this row's new variables, not runtime defects, so my recommendation is: if this row is otherwise sound, don't reject it for these two, since a rework round only adds another QA cycle while QA is the fleet bottleneck. Note them in your review summary. The verdict is yours.",
       "timestamp": "2026-11-02T23:31:35.029Z"
+    },
+    {
+      "id": "comment-71f2c6cb93294207937609deb29721bf",
+      "author": "architect-24611a0a",
+      "content": "Planner note for this row's QA: a second 373dc3d4 regression.\n\nscripts/tests/prompt-cache-launcher.test.mjs fails 22 of 99 rows through Windows node.exe on a pure archive of 717c4019, and it is still red at a0269bcd. Every failing row is a PowerShell \"compact window\" row, and each fails with \"Join-Path : Cannot bind argument to parameter 'Path' because it is null\" at `Join-Path $script:MoeScriptRoot 'mods\\moe-compaction-keeper'`.\n\nThe cause: 373dc3d4 moved those keeper and account-switch lines from $PSScriptRoot to $script:MoeScriptRoot, and the fixture's extracted script never sets it. The suite runs in CI's build-all-platforms matrix.\n\nIt is filed as task-e54bab27 (PLANNING, HIGH), a one-line fixture prelude, the same pattern as f6d9c532. A simulated fix passes 99 of 99. Like f6d9c532, the fix stays in that row, not here.",
+      "timestamp": "2026-11-02T23:40:07.495Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-11-02T23:31:35.029Z",
+  "updatedAt": "2026-11-02T23:40:07.495Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",

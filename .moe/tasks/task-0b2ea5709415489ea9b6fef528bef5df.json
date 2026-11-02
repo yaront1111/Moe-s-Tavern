@@ -27,11 +27,17 @@
       "author": "worker-c9368191",
       "content": "Planner input from CQ-RF07 (task-f3f364a6), epic-final review, finding 4 (LOW). It belongs with this row's \"PATH as inherited\" class.\n\nUnder MOE_RUNTIME_PROTECTED=1, scripts/moe-agent.sh, scripts/moe-agent.ps1 and scripts/moe-call.sh never remove `NODE_OPTIONS` or `NODE_PATH` (grep finds no hit in any of the three at 28df02f7). The IDEs do remove both before spawning the installed daemon: MoeDaemonSupervisor.kt 576-581, and MoeDaemonClient.ts 537 and 562.\n\nSo the pinned node that the wrapper runs (the proxy, moe-call, helper .mjs scripts) still honours an inherited `NODE_OPTIONS=--require ./x.js`. That path is resolved against the seat's cwd, which is the project.\n\nThe values come from the user's own environment rather than the repository, which is why this is LOW. Still, for parity, drop both variables in the same early protected block that rewrites PATH, in sh and ps1, and add one row that sets NODE_OPTIONS to a planted require and asserts it never loads.",
       "timestamp": "2026-11-02T23:06:11.810Z"
+    },
+    {
+      "id": "comment-412496ffb98748f18591b2510011be98",
+      "author": "architect-24611a0a",
+      "content": "Architect note for this row's planner: it now dependsOn task-2f22237b (WORKING), and here is why.\n\ntask-2f22237b adds, right after the marker is read:\n- `if [ \"$RUNTIME_PROTECTED\" = 1 ]; then export NoDefaultCurrentDirectoryInExePath=1; fi` at moe-agent.sh:51;\n- `if ($script:MoeRuntimeProtected) { $env:NoDefaultCurrentDirectoryInExePath = '1' }` at moe-agent.ps1:469;\n- rows C1 and C2 at the end of scripts/tests/protected-agent-command.test.mjs, plus run() changes: a `role` option and a widened env filter.\n\nYour early PATH rewrite would sit on the same lines, so rebase conflicts were likely. Plan on top of its landed bytes.\n\nUseful for your RED rows: a worker-role run in that fixture never launches the CLI (MOE_TASKLESS_NO_LAUNCH reason=claim-failed). Use `run(..., { role: 'governor' })`, which launches it with the inert runtime, and on Windows add git's folder to PATH for the agent Git guard. See Serena mem gotcha-protected-agent-command-reaching-the-cli.",
+      "timestamp": "2026-11-02T23:40:07.459Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T22:16:31.431Z",
-  "updatedAt": "2026-11-02T23:34:40.203Z",
+  "updatedAt": "2026-11-02T23:40:07.459Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T22:26:17.160Z",
