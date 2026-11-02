@@ -56,7 +56,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -76,7 +76,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T16:48:45.302Z",
-  "updatedAt": "2026-11-02T17:27:25.518Z",
+  "updatedAt": "2026-11-02T17:32:03.740Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:06:08.302Z",
@@ -86,11 +86,14 @@
     "firstClaimAt": "2026-11-02T17:06:12.248Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-02T17:32:03.740Z",
+    "wallClockMs": 1551492
   },
   "contextFetchedBy": [
     "architect-0fcb7226",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-1106e678"
   ],
   "tier": "light",
   "effort": "high",
@@ -171,7 +174,40 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "scripts/tests/mention-provenance.ps1",
+    ".moe/tasks/task-e856c24678e94ff4b38ef79c99069e24.json"
+  ],
+  "completionSummary": "Child-host probe in scripts/tests/mention-provenance.ps1 now sent as -EncodedCommand (base64 UTF-16LE of the unchanged $probeScript); [probe] shows the exact command, new [probe-script] shows the decoded text. RED at HEAD: both powershell.exe-parent legs rc=1 with 'child host probe failed'. After: C2 all four legs PASSED, GATE rc=0 (snapshot /mnt/d/moe-scratch/e856c246-gate.MNSlfJ, removed after). C1 STATIC-OK (ASCII, no BOM/CR, Invoke-ProvenanceMode onward byte-identical to 51ba4f6a). C3 NEG-OK (pwsh absent from PATH -> 'probe could not be launched', FAIL line, rc=1). Diff +11/-4, one file.",
+  "commits": [
+    {
+      "sha": "771f7441c36b4c5f027e84f1edef7ba413b30caf",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4c1da905@2026-11-02T17:23:25Z",
+      "paths": [
+        ".moe/tasks/task-e856c24678e94ff4b38ef79c99069e24.json",
+        "scripts/tests/mention-provenance.ps1"
+      ],
+      "recordedBy": "worker-4c1da905",
+      "recordedAt": "2026-11-02T17:28:29.482Z",
+      "treeId": "a13d2223aacb8340d4aa85dba65ae61da3dad8a1",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "scripts/tests/mention-provenance.ps1"
   ],
-  "completionSummary": "Child-host probe in scripts/tests/mention-provenance.ps1 now sent as -EncodedCommand (base64 UTF-16LE of the unchanged $probeScript); [probe] shows the exact command, new [probe-script] shows the decoded text. RED at HEAD: both powershell.exe-parent legs rc=1 with 'child host probe failed'. After: C2 all four legs PASSED, GATE rc=0 (snapshot /mnt/d/moe-scratch/e856c246-gate.MNSlfJ, removed after). C1 STATIC-OK (ASCII, no BOM/CR, Invoke-ProvenanceMode onward byte-identical to 51ba4f6a). C3 NEG-OK (pwsh absent from PATH -> 'probe could not be launched', FAIL line, rc=1). Diff +11/-4, one file."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-4c1da905@2026-11-02T17:23:25Z",
+    "at": "2026-11-02T17:28:29.482Z"
+  },
+  "completedAt": "2026-11-02T17:32:03.740Z",
+  "reviewCompletedAt": "2026-11-02T17:32:03.740Z",
+  "reviewSummary": "Reviewed completion 771f7441 (kind=completion, on moe/work-2026-10-24, pushed). Code diff is scripts/tests/mention-provenance.ps1 only, +11/-4 (well under the 400 LOC cap); the other path is the task's own board JSON. Re-ran all three checkRefs myself. C1 STATIC-OK: file ASCII, no BOM, no CR; the `$probeScript =` line is unchanged vs pinned base 51ba4f6a; the probe call is `-EncodedCommand $probeEncoded` and no `-Command $probeScript` remains; Invoke-ProvenanceMode through EOF is byte-identical to 51ba4f6a (so task-86431c31's anchors hold). C2 (fresh snapshot /mnt/d/moe-scratch/e856c246-gate.u6GQ6p, removed after): all four parent/child legs print `mention-provenance.ps1 PASSED (8 stored cases + 2 synthetic ..., 3 modes)` and rc=0, GATE rc=0. powershell.exe parent: child powershell gives PROVENANCE_HOST 5.1.26100.9711 + `not-required host=WindowsPowerShell-5.1...`; child pwsh gives 7.6.9 + `reader=Newtonsoft.Json... jobject=Newtonsoft.Json...`. pwsh.exe parent: both children PASSED with the same lines (DoD 1, 2, 4). C3: with pwsh removed from PATH under a 5.1 parent the harness prints `probe could not be launched: The term 'pwsh' is not recognized...`, `FAIL: child host probe failed (exit 1)...`, NEG rc=1, NEG-OK (DoD 3: failure handling intact). `git grep -F '[probe'` finds readers only in this file, so the changed [probe] line and the new [probe-script] line break nothing. Scope matches approvedScope (probe block only). No test weakened or deleted; the harness is itself the regression test. Complexity pass: nothing to cut; the encoded-command transport is the minimal fix and the comments explain why.",
+  "requiredCheckAtDone": null
 }
