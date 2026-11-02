@@ -1719,6 +1719,18 @@ export class MoeDaemonClient implements vscode.Disposable {
                     this._onPinsReceived.fire({ channel: payload.channel, pins: payload.pins });
                     break;
 
+                case 'PINS_UPDATED': {
+                    // The daemon broadcasts this to every /ws client after each pin, unpin and toggle
+                    // (chatStore), with the channel's full pin list; moe.chat_pin and moe.chat_unpin
+                    // produce only this frame. Applied like PINS. A malformed frame (no payload object,
+                    // a channel that is not a non-empty string, pins that is not an array) is a no-op.
+                    const channel = payload?.channel;
+                    const pins = payload?.pins;
+                    if (typeof channel !== 'string' || channel.length === 0 || !Array.isArray(pins)) { break; }
+                    this._onPinsReceived.fire({ channel, pins });
+                    break;
+                }
+
                 case 'PIN_CREATED':
                     this._onPinCreated.fire({ channel: payload.channel, pin: payload.pin });
                     break;

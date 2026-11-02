@@ -123,11 +123,17 @@
       "author": "governor-e6b40560",
       "content": "Governor, about 15:16Z, for the planner. This row is now a prerequisite of the worktree-switch gate, task-6519ed91, and is HIGH. Please plan it promptly, because it is on the switch's critical path.\n\n**Constraints:**\n- The fix must let the wrapper test harnesses run from inside a task worktree: postflight.{sh,ps1}, worktree-landing.{sh,ps1} and parity-check. Real seats launched from a worktree copy must still be refused, as WT-13's §6.1 guard intends. So use a harness-scoped opt-out: an env var that the harnesses set and the real launch paths never set. Do not use a blanket bypass.\n- Both twins change together, and parity-check.sh must pass.\n- dependsOn WT-13 (task-fbe8e388) keeps this row after WT-13 in the shared lane.\n- WT-19b (task-48aafb88) also runs after WT-13. It owns only scripts/tests/worktree-e2e.cjs. If your plan touches that file, add dependsOn on WT-19b.\n- Show DoD evidence with a repro: copy scripts/ into <repo>/.worktrees/task-x/ and run its postflight.sh. It fails on HEAD and passes with the fix. Also show a real seat launch from W is still refused.",
       "timestamp": "2026-11-02T15:15:59.769Z"
+    },
+    {
+      "id": "comment-9ad5a82e2b6240c09851bce35e7d74d7",
+      "author": "governor-e6b40560",
+      "content": "Governor note for QA (18:13Z). This row's completion 7c60841f is on origin, and nothing else is editing these files right now, so the working tree equals HEAD for this row's paths. Size is +31/-4 non-board, well under the cap.\nThis is the last code prerequisite of the worktree switch (gate task-6519ed91). Because it changed wrapper bytes after WT-19b's dry run, I am re-running WT-19b's verification command on 7c60841f myself (snapshot clone, MOE_/CLAUDE env removed). Please review as usual. If you reject with a change to the bytes, say so plainly, and I will re-run the dry run on the fixed commit.",
+      "timestamp": "2026-11-02T18:12:23.053Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:03:45.669Z",
-  "updatedAt": "2026-11-02T18:10:47.319Z",
+  "updatedAt": "2026-11-02T18:12:23.053Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:15:39.522Z",
@@ -247,6 +253,50 @@
       "treeId": "f81852878d7f1f5f6f100bb608e23630e0b2087a",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "7c60841f4b2be6adeac6d399e36f3590fe43f3fa",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b49a5155@2026-11-02T17:20:57Z",
+      "paths": [
+        ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+        ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/worktree-landing.sh"
+      ],
+      "recordedBy": "worker-b49a5155",
+      "recordedAt": "2026-11-02T18:11:43.048Z",
+      "treeId": "cd607dbefb1f73f9fa3a8a3ce52ea0ef72f6ec21",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/tests/postflight-worktree.cjs",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-fbe8e3880ddf47dfa8546f220acea770"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -255,14 +305,16 @@
     "scripts/moe-agent.ps1",
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
-    "scripts/tests/worktree-landing.sh"
+    "scripts/tests/worktree-landing.sh",
+    ".moe/tasks/task-3c4be1254a4b43d0b5e72e0fd8cd0604.json",
+    ".moe/tasks/task-b9e0bb5a7c2242fea45b0c9fbcb85f50.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-0fcb7226@2026-11-02T15:15:47Z",
-    "at": "2026-11-02T17:01:36.422Z"
+    "kind": "completion",
+    "sessionId": "worker-b49a5155@2026-11-02T17:20:57Z",
+    "at": "2026-11-02T18:11:43.048Z"
   },
   "workStartedAt": "2026-11-02T17:22:30.642Z",
   "reviewStartedAt": "2026-11-02T18:10:47.317Z",
@@ -273,5 +325,13 @@
     "reportedAt": "2026-11-02T18:10:47.317Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Harness-only opt-out for WT-13's MOE_WRAPPER_IN_WORKTREE guard. The seam is MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER, honoured only when it is exactly '1'.\n\nChanges (six files, +31/-4):\n- Wrapper twins: only the refusal condition changes (sh `[ \"${X:-}\" != 1 ] &&`, ps1 `-and $env:X -cne '1'`). Detection, message and exit 1 are byte-identical.\n- postflight.sh and postflight.ps1 set the seam at the top.\n- postflight-worktree.cjs launch() gives it to the suite's own wrapper only (copies get null). New wt-guard cases: wt-guard-optout (seam '1', exit 0, CLI ran) and wt-guard-optout-strict ('true', ' 1', '0': exit 1, refusal, no RPC or CLI).\n- worktree-landing.sh adds one launch-env key. No case or list changes; worktree-landing.ps1 is untouched.\n\nEvidence:\n- RED: a HEAD scripts copy at <scratch git repo>/.worktrees/task-x made postflight.sh exit 1 in 0.2s with [ERROR] MOE_WRAPPER_IN_WORKTREE:.\n- Bash leg (verification above): exit 0. The task-head (072dd78c) repro is refused, the seat probe exits 1 with the refusal, postflight-safe bash gives NONE, worktree-landing 18/18, parity PASS.\n- PS 5.1 leg: exit 0 (/mnt/d/moe-scratch/3c4be125-ps-leg.sh, the plan's command verbatim). The ps1 seat probe exits 1 with the refusal, postflight-safe powershell gives {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}, and worktree-landing.ps1 gives 18 passed, 0 failed.\n- wt-guard GREEN on sh and on PS 5.1 (1 ok).\n- Mutant kills, each in a scratch copy:\n  - M1 sh revert: wt-guard-optout seam '1' exit 1;\n  - M2 -z: wt-guard-optout-strict seam 'true' exit 0;\n  - M3 ps1 revert (PS 5.1): wt-guard-optout;\n  - M4 postflight.sh export removed in a W copy: refusal at the first launch;\n  - M5 launch() key removed in a W copy: wt-board fails with the refusal (the control passed).\n- `git grep -- ':!.moe'` finds the seam only in the six files; .moe/tasks board records mention it only as plan text.\n- Overlay copies matched the working tree byte for byte (cmp"
+  "completionSummary": "Harness-only opt-out for WT-13's MOE_WRAPPER_IN_WORKTREE guard. The seam is MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER, honoured only when it is exactly '1'.\n\nChanges (six files, +31/-4):\n- Wrapper twins: only the refusal condition changes (sh `[ \"${X:-}\" != 1 ] &&`, ps1 `-and $env:X -cne '1'`). Detection, message and exit 1 are byte-identical.\n- postflight.sh and postflight.ps1 set the seam at the top.\n- postflight-worktree.cjs launch() gives it to the suite's own wrapper only (copies get null). New wt-guard cases: wt-guard-optout (seam '1', exit 0, CLI ran) and wt-guard-optout-strict ('true', ' 1', '0': exit 1, refusal, no RPC or CLI).\n- worktree-landing.sh adds one launch-env key. No case or list changes; worktree-landing.ps1 is untouched.\n\nEvidence:\n- RED: a HEAD scripts copy at <scratch git repo>/.worktrees/task-x made postflight.sh exit 1 in 0.2s with [ERROR] MOE_WRAPPER_IN_WORKTREE:.\n- Bash leg (verification above): exit 0. The task-head (072dd78c) repro is refused, the seat probe exits 1 with the refusal, postflight-safe bash gives NONE, worktree-landing 18/18, parity PASS.\n- PS 5.1 leg: exit 0 (/mnt/d/moe-scratch/3c4be125-ps-leg.sh, the plan's command verbatim). The ps1 seat probe exits 1 with the refusal, postflight-safe powershell gives {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}, and worktree-landing.ps1 gives 18 passed, 0 failed.\n- wt-guard GREEN on sh and on PS 5.1 (1 ok).\n- Mutant kills, each in a scratch copy:\n  - M1 sh revert: wt-guard-optout seam '1' exit 1;\n  - M2 -z: wt-guard-optout-strict seam 'true' exit 0;\n  - M3 ps1 revert (PS 5.1): wt-guard-optout;\n  - M4 postflight.sh export removed in a W copy: refusal at the first launch;\n  - M5 launch() key removed in a W copy: wt-board fails with the refusal (the control passed).\n- `git grep -- ':!.moe'` finds the seam only in the six files; .moe/tasks board records mention it only as plan text.\n- Overlay copies matched the working tree byte for byte (cmp",
+  "touchedFiles": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/worktree-landing.sh"
+  ]
 }

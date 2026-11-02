@@ -583,3 +583,131 @@ test('E4: malformed CHANNEL_CREATED payloads are silent no-ops in the client and
     }
     assert.deepStrictEqual(page.listedIds(), ['chan-g']);
 });
+
+// =============================================================================
+// F: PINS_UPDATED (inbound), socket frame -> real client -> real provider -> raw page
+// =============================================================================
+
+const TYPES_PATH = path.join(__dirname, '../src/types/moe.ts');
+// The daemon's PinEntry shape (chatStore). PIN_B is done; no list below is in id or time order.
+const PIN_A = { messageId: 'msg-a0000001', pinnedBy: 'governor-1', pinnedAt: '2026-11-02T17:00:00.000Z', done: false, doneAt: null };
+const PIN_B = { messageId: 'msg-b0000002', pinnedBy: 'human', pinnedAt: '2026-11-02T17:01:00.000Z', done: true, doneAt: '2026-11-02T17:02:00.000Z' };
+const PIN_C = { messageId: 'msg-c0000003', pinnedBy: 'worker-1', pinnedAt: '2026-11-02T17:03:00.000Z', done: false, doneAt: null };
+
+/**
+ * The B-section client and provider plus a fresh page showing chan-g (auto-selected).
+ * deliver() hands the client one frame, relays every post that frame caused to the page,
+ * and returns those posts. fired records each onPinsReceived event.
+ */
+function withPinsChain(body) {
+    withProvider({ withSnapshot: true }, h => {
+        const page = loadPage();
+        page.updateChannels([CHAN_G, CHAN_X]);
+        assert.equal(page.selectedInState(), 'chan-g', 'setup: the page shows chan-g');
+        const fired = [];
+        h.client.onPinsReceived(event => fired.push(jsonCopy(event)));
+        const deliver = frame => {
+            h.deliver(frame);
+            const caused = h.posts.splice(0);
+            for (const post of caused) { page.send(post); }
+            return caused;
+        };
+        body({ page, fired, deliver });
+    });
+}
+
+/** The page's pinned section: visibility, count badge, and each item's message id and done flag. */
+function pinnedView(page) {
+    const items = page.byId('pinnedList').children;
+    return {
+        display: page.byId('pinnedSection').style.display,
+        count: page.byId('pinCount').textContent,
+        ids: items.map(item => item.children[0].dataset.messageId),
+        done: items.map(item => item.className === 'pinned-item done')
+    };
+}
+
+test('F1: PINS_UPDATED for the selected channel fires once, posts one loadPins and shows the pin', () => {
+    withPinsChain(c => {
+        const posts = c.deliver({ type: 'PINS_UPDATED', payload: { channel: 'chan-g', pins: [PIN_A] } });
+        assert.deepStrictEqual(c.fired, [{ channel: 'chan-g', pins: [PIN_A] }], 'onPinsReceived fires once');
+        assert.deepStrictEqual(posts, [{ type: 'loadPins', channel: 'chan-g', pins: [PIN_A] }], 'exactly one loadPins');
+        assert.deepStrictEqual(pinnedView(c.page), { display: '', count: '1', ids: [PIN_A.messageId], done: [false] });
+    });
+});
+
+test('F2: an empty PINS_UPDATED list clears the pinned section that PINS filled', () => {
+    withPinsChain(c => {
+        c.deliver({ type: 'PINS', payload: { channel: 'chan-g', pins: [PIN_B, PIN_A] } });
+        assert.deepStrictEqual(pinnedView(c.page),
+            { display: '', count: '2', ids: [PIN_B.messageId, PIN_A.messageId], done: [true, false] }, 'setup: PINS shows two pins');
+        c.fired.length = 0;
+        const posts = c.deliver({ type: 'PINS_UPDATED', payload: { channel: 'chan-g', pins: [] } });
+        assert.deepStrictEqual(c.fired, [{ channel: 'chan-g', pins: [] }]);
+        assert.deepStrictEqual(posts, [{ type: 'loadPins', channel: 'chan-g', pins: [] }]);
+        assert.equal(c.page.byId('pinnedSection').style.display, 'none', 'unpinning the last pin hides the section');
+    });
+});
+
+test('F3: PINS_UPDATED for another channel replaces only that channel\'s cache, in payload order', () => {
+    withPinsChain(c => {
+        c.deliver({ type: 'PINS', payload: { channel: 'chan-g', pins: [PIN_A] } });
+        const shown = pinnedView(c.page);
+        c.fired.length = 0;
+        const posts = c.deliver({ type: 'PINS_UPDATED', payload: { channel: 'chan-x', pins: [PIN_C, PIN_B] } });
+        assert.deepStrictEqual(c.fired, [{ channel: 'chan-x', pins: [PIN_C, PIN_B] }]);
+        assert.deepStrictEqual(posts, [{ type: 'loadPins', channel: 'chan-x', pins: [PIN_C, PIN_B] }]);
+        assert.deepStrictEqual(pinnedView(c.page), shown, 'chan-g still shows only its own pin');
+        c.page.clickTab(1); // selecting chan-x saves the page state, pin caches included
+        assert.deepStrictEqual(c.page.stateWrites.at(-1).pinCache, { 'chan-g': [PIN_A], 'chan-x': [PIN_C, PIN_B] });
+    });
+});
+
+test('F4: a malformed PINS_UPDATED frame fires nothing, posts nothing and never throws', () => {
+    withPinsChain(c => {
+        c.deliver({ type: 'PINS', payload: { channel: 'chan-g', pins: [PIN_A] } });
+        const shown = pinnedView(c.page);
+        c.fired.length = 0;
+        const malformed = [
+            // no payload object
+            undefined, null, 'chan-g', 42, [],
+            // a channel that is not a non-empty string
+            { pins: [] }, { channel: '', pins: [] }, { channel: 7, pins: [] }, { channel: null, pins: [] }, { channel: ['chan-g'], pins: [] },
+            // pins that is not an array
+            { channel: 'chan-g' }, { channel: 'chan-g', pins: null }, { channel: 'chan-g', pins: {} },
+            { channel: 'chan-g', pins: PIN_A.messageId }, { channel: 'chan-g', pins: { 0: PIN_A, length: 1 } }
+        ];
+        for (const payload of malformed) {
+            const frame = payload === undefined ? { type: 'PINS_UPDATED' } : { type: 'PINS_UPDATED', payload };
+            let posts;
+            assert.doesNotThrow(() => { posts = c.deliver(frame); }, JSON.stringify(frame));
+            assert.deepStrictEqual({ fired: c.fired, posts }, { fired: [], posts: [] }, `${JSON.stringify(frame)} must be ignored`);
+        }
+        assert.deepStrictEqual(pinnedView(c.page), shown, 'the shown pins are untouched');
+    });
+});
+
+test('F5: PINS, PIN_CREATED, PIN_REMOVED and PIN_TOGGLED reach the chat view exactly as before', () => {
+    withPinsChain(c => {
+        const toggled = { ...PIN_A, done: true, doneAt: '2026-11-02T17:04:00.000Z' };
+        const cases = [
+            [{ type: 'PINS', payload: { channel: 'chan-g', pins: [PIN_B, PIN_A] } }, { type: 'loadPins', channel: 'chan-g', pins: [PIN_B, PIN_A] }],
+            // PINS is not validated, and stays so: a list-less PINS still posts (the page reads it as empty).
+            [{ type: 'PINS', payload: { channel: 'chan-g' } }, { type: 'loadPins', channel: 'chan-g' }],
+            [{ type: 'PIN_CREATED', payload: { channel: 'chan-g', pin: PIN_C } }, { type: 'pinCreated', channel: 'chan-g', pin: PIN_C }],
+            [{ type: 'PIN_REMOVED', payload: { channel: 'chan-g', messageId: PIN_C.messageId } }, { type: 'pinRemoved', channel: 'chan-g', messageId: PIN_C.messageId }],
+            [{ type: 'PIN_TOGGLED', payload: { channel: 'chan-g', pin: toggled } }, { type: 'pinToggled', channel: 'chan-g', pin: toggled }]
+        ];
+        for (const [frame, post] of cases) {
+            assert.deepStrictEqual(c.deliver(frame), [post], frame.type);
+        }
+        assert.deepStrictEqual(c.fired, [{ channel: 'chan-g', pins: [PIN_B, PIN_A] }, { channel: 'chan-g' }], 'only PINS reaches onPinsReceived');
+    });
+});
+
+test('F6: types/moe.ts lists PINS_UPDATED among the daemon message types', () => {
+    const { exports } = load(compile(TYPES_PATH), TYPES_PATH, {});
+    assert.equal(exports.isDaemonMessage({ type: 'PINS_UPDATED', payload: { channel: 'chan-g', pins: [] } }), true);
+    assert.equal(exports.isDaemonMessage({ type: 'PINS', payload: { channel: 'chan-g', pins: [] } }), true);
+    assert.equal(exports.isDaemonMessage({ type: 'PINS_UPDATE' }), false);
+});

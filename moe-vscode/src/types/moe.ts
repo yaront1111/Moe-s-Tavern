@@ -506,6 +506,7 @@ export type DaemonInboundMessage =
   | { type: 'MESSAGE_CREATED'; payload: ChatMessage }
   | { type: 'CHANNEL_CREATED'; payload: ChatChannel }
   | { type: 'PINS'; payload: { channel: string; pins: PinEntry[] } }
+  | { type: 'PINS_UPDATED'; payload: { channel: string; pins: PinEntry[] } }
   | { type: 'PIN_CREATED'; payload: { channel: string; pin: PinEntry } }
   | { type: 'PIN_REMOVED'; payload: { channel: string; messageId: string } }
   | { type: 'PIN_TOGGLED'; payload: { channel: string; pin: PinEntry } }
@@ -543,7 +544,7 @@ const DAEMON_MESSAGE_TYPES = new Set([
   'PROPOSAL_CREATED', 'PROPOSAL_UPDATED', 'SETTINGS_UPDATED',
   'TEAM_CREATED', 'TEAM_UPDATED', 'TEAM_DELETED',
   'CHANNELS', 'MESSAGES', 'MESSAGE_SENT', 'MESSAGE_CREATED', 'CHANNEL_CREATED',
-  'PINS', 'PIN_CREATED', 'PIN_REMOVED', 'PIN_TOGGLED',
+  'PINS', 'PINS_UPDATED', 'PIN_CREATED', 'PIN_REMOVED', 'PIN_TOGGLED',
   'DECISIONS', 'DECISION_PROPOSED', 'DECISION_RESOLVED',
   'ACTIVITY_LOG', 'ERROR', 'DAEMON_SHUTTING_DOWN'
 ]);
