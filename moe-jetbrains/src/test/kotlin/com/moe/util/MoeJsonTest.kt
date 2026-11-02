@@ -126,10 +126,13 @@ class MoeJsonTest {
 
     @Test
     fun `delivery exit codes require exact signed integers without coercion or overflow`() {
-        val cases = mapOf(
-            "0" to 0, "-1" to -1, "1.0" to 1, "1e2" to 100,
-            "2147483647" to Int.MAX_VALUE, "-2147483648" to Int.MIN_VALUE,
-            "2147483648" to null, "-2147483649" to null, "1.1" to null,
+        // The daemon's rule (deliveryProjection.ts, Number.isSafeInteger): any exact |n| <= 2^53-1.
+        val cases = mapOf<String, Long?>(
+            "0" to 0L, "-1" to -1L, "1.0" to 1L, "1e2" to 100L,
+            "2147483647" to 2147483647L, "-2147483648" to -2147483648L,
+            "2147483648" to 2147483648L, "-2147483649" to -2147483649L, "3221225477" to 3221225477L,
+            "9007199254740991" to 9007199254740991L, "-9007199254740991" to -9007199254740991L,
+            "9007199254740992" to null, "-9007199254740992" to null, "1.1" to null,
             "1e-400" to null, "1e400" to null, "\"0\"" to null,
             "true" to null, "null" to null, "[]" to null, "{}" to null
         )

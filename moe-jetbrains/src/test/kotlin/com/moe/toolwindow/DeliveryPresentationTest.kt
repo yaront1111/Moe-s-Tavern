@@ -27,7 +27,7 @@ class DeliveryPresentationTest {
         currentCandidate = DeliveryCandidate(
             treeSha = sha.takeIf { mask and 1 != 0 }, baseRevision = base.takeIf { mask and 2 != 0 }
         ),
-        latestCheckRun = DeliveryCheckRun(" npm.cmd test ".takeIf { mask and 4 != 0 }, 0.takeIf { mask and 8 != 0 }),
+        latestCheckRun = DeliveryCheckRun(" npm.cmd test ".takeIf { mask and 4 != 0 }, 0L.takeIf { mask and 8 != 0 }),
         deliveryReceipt = DeliveryReceipt("refs/heads/Pilot".takeIf { mask and 16 != 0 }, landed.takeIf { mask and 32 != 0 }),
         attemptPhase = "finalizing".takeIf { mask and 64 != 0 }
     )
@@ -55,9 +55,12 @@ class DeliveryPresentationTest {
 
     @Test
     fun `zero passes and every signed nonzero exit code fails`() {
-        for (code in listOf(0, -1, 1, Int.MIN_VALUE, Int.MAX_VALUE)) {
-            val outcome = if (code == 0) DeliveryOutcome.PASS else DeliveryOutcome.FAIL
-            val key = if (code == 0) "moe.delivery.checkPassed" else "moe.delivery.checkFailed"
+        val codes = listOf(
+            0L, -1L, 1L, Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong(), 3221225477L, -9007199254740991L, 9007199254740991L
+        )
+        for (code in codes) {
+            val outcome = if (code == 0L) DeliveryOutcome.PASS else DeliveryOutcome.FAIL
+            val key = if (code == 0L) "moe.delivery.checkPassed" else "moe.delivery.checkFailed"
             assertEquals(listOf(DeliveryRow(key, code.toString(), outcome = outcome)),
                 DeliveryPresentation.rows(TaskDelivery(latestCheckRun = DeliveryCheckRun(exitCode = code))))
         }
@@ -120,7 +123,7 @@ class DeliveryPresentationTest {
         )
     }
 
-    private fun gateRows(code: Int, outcome: String?) =
+    private fun gateRows(code: Long, outcome: String?) =
         DeliveryPresentation.rows(TaskDelivery(latestCheckRun = DeliveryCheckRun("node gate.cjs", code, "runner-observed", outcome)))
 
     private fun gateExpected(verdict: DeliveryRow, outcome: String) = listOf(
@@ -148,7 +151,7 @@ class DeliveryPresentationTest {
 
     @Test
     fun `a nonzero exit renders as failed whatever the recorded outcome`() {
-        for (code in listOf(1, -9)) for (outcome in listOf(null, "passed", "timeout", "code-failure")) {
+        for (code in listOf(1L, -9L)) for (outcome in listOf(null, "passed", "timeout", "code-failure")) {
             assertEquals(
                 "exit $code outcome $outcome",
                 listOfNotNull(

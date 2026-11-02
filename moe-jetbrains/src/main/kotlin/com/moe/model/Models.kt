@@ -163,7 +163,8 @@ data class DeliveryCandidate(
 
 data class DeliveryCheckRun(
     val command: String? = null,
-    val exitCode: Int? = null,
+    /** Any JS safe integer, the daemon's rule (deliveryProjection.ts, Number.isSafeInteger), e.g. Windows NTSTATUS 3221225477, which overflows Int. */
+    val exitCode: Long? = null,
     val source: String? = null,
     /**
      * The REPORTED daemon CheckOutcome (passed, code-failure, infra-failure, timeout, skipped or inconclusive;

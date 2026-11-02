@@ -25,10 +25,10 @@ object DeliveryPresentation {
             // This is what the runner REPORTED, never proof the daemon executed a check.
             // Mirrors the daemon gate rule: only exit 0 with no outcome or exactly "passed" reads as passed.
             run?.exitCode?.let { code ->
-                val passed = code == 0 && (reported.isNullOrEmpty() || reported == "passed")
+                val passed = code == 0L && (reported.isNullOrEmpty() || reported == "passed")
                 val key = when {
                     passed -> "moe.delivery.checkPassed"
-                    code != 0 -> "moe.delivery.checkFailed"
+                    code != 0L -> "moe.delivery.checkFailed"
                     else -> "moe.delivery.checkNotPassed"
                 }
                 add(DeliveryRow(key, code.toString(), outcome = if (passed) DeliveryOutcome.PASS else DeliveryOutcome.FAIL))

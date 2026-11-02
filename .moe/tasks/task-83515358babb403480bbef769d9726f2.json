@@ -9,9 +9,94 @@
     "`gradlew.bat test` passes on native Windows under the jetbrains-gradle lease, and moe-vscode `npm test` passes in a git-archive snapshot."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Tests first (RED). JetBrains writes the corpus first (mem:decision-client-corpus-conventions). Use the Edit tool only.\n\nmoe-jetbrains/src/test/resources/client-delivery.json: append two rows after D16, in the file's one-entry-per-line style. They are client-neutral, and both are shapes the daemon can serve: deliveryProjection.ts accepts any Number.isSafeInteger exitCode.\n- D17: `\"note\": \"the same Windows crash as D12 reported unsigned (0xC0000005 = 3221225477, outside the Int range) still renders and fails\"`, `\"delivery\": { \"latestCheckRun\": { \"command\": \"gradlew.bat test\", \"exitCode\": 3221225477, \"source\": \"runner-observed\" } }`, and expect, in order:\n  - { labelKey moe.delivery.checkCommand, value/fullValue \"gradlew.bat test\", outcome null };\n  - { moe.delivery.checkFailed, \"3221225477\", \"3221225477\", \"FAIL\" };\n  - { moe.delivery.checkSource, \"runner-observed\", \"runner-observed\", null }.\n- D18: `\"note\": \"the largest exit code the daemon accepts (Number.MAX_SAFE_INTEGER) renders exactly and fails\"`, `\"delivery\": { \"latestCheckRun\": { \"exitCode\": 9007199254740991 } }`, and expect [ { moe.delivery.checkFailed, \"9007199254740991\", \"9007199254740991\", \"FAIL\" } ].\n- Both expectations were computed from DeliveryPresentation.rows and VS Code TaskDetailPanel (String(code), Number.isSafeInteger) at HEAD: the row order is command, exit, outcome, source. Spell every member, nulls included.\n- Do NOT add a value past 2^53-1: the daemon never serves one.\n\nmoe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt, test `delivery exit codes require exact signed integers without coercion or overflow`:\n- Make the map `Map<String, Long?>`.\n- Keep every existing literal, with these changes: \"2147483647\" to 2147483647L, \"-2147483648\" to -2147483648L, \"2147483648\" to 2147483648L, \"-2147483649\" to -2147483649L.\n- Add \"3221225477\" to 3221225477L, \"9007199254740991\" to 9007199254740991L, \"-9007199254740991\" to -9007199254740991L, \"9007199254740992\" to null and \"-9007199254740992\" to null. The rule is JS safe integers, so |n| > 2^53-1 is null.\n- The comparison stays the serialized JsonPrimitive.\n\nRED, in a fixed snapshot (the epic's JetBrains gate form):\n`J=/mnt/d/moe-scratch/vsc26-red && rm -rf \"$J\" && mkdir -p \"$J\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$J\"`\nThen `cp --parents` the two test files in, hold the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease), and run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\\\moe-scratch\\\\vsc26-red\\\\moe-jetbrains && .\\\\gradlew.bat test --tests com.moe.toolwindow.DeliveryCorpusTest --tests com.moe.util.MoeJsonTest --rerun\"`.\nExpected RED, as assertions:\n- DeliveryCorpusTest fails on D17 and D18 (no exit row);\n- MoeJsonTest fails on 2147483648, 3221225477 and the other in-range values above the Int range.\nAlso run `cd $J/moe-vscode && npm ci --no-audit --no-fund && node --test tests/delivery-corpus.test.cjs`. It must already PASS with the new rows (VS Code has always rendered them), which is DoD 2's \"replays unchanged\".\nRelease the lease.\n\nerror handling: the new rows and test cases name their ids and literals in failures; no other row changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/resources/client-delivery.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-delivery.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "RED in /mnt/d/moe-scratch/vsc26-red (git archive HEAD ed60ab31 + the 2 test files), jetbrains-gradle lease held 16:00:38Z, released: focused `gradlew.bat test --tests DeliveryCorpusTest --tests MoeJsonTest --rerun` -> 36 tests, 2 failed (11 tasks executed). DeliveryCorpusTest: D17 got [checkCommand, checkSource] (no exit row), D18 got []. MoeJsonTest exit-code test fails at 'parseTask 2147483648 expected:<2147483648> but was:<null>' (the first above-Int value). VS Code `node --test tests/delivery-corpus.test.cjs` in the same snapshot: 9 pass / 0 fail with D17+D18 already in the corpus (reads ../../moe-jetbrains/src/test/resources/client-delivery.json). Dirty paths from other sessions (moe-vscode Accounts files, scripts/, .moe/) left untouched.",
+      "startedAt": "2026-11-02T15:59:45.935Z",
+      "completedAt": "2026-11-02T16:03:56.290Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Widen the exit code to Long, the daemon's safe-integer rule. Edit tool only; keep the Kotlin style.\n\nmoe-jetbrains/src/main/kotlin/com/moe/model/Models.kt:\n- `data class DeliveryCheckRun(... val exitCode: Long? = null ...)`.\n- Add one comment line: the daemon accepts any JS safe integer (deliveryProjection.ts, Number.isSafeInteger), e.g. Windows NTSTATUS 3221225477, which overflows Int.\n- Leave every other exitCode alone, including TaskVerification's Int (Models.kt about :119): that one is a different contract.\n\nmoe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt, deliveryExitCode():\n- Return Long?.\n- Keep the parse exactly as it is: number primitives only, BigDecimal of the literal text, and no coercion of strings or fractions.\n- Bound with a private `MAX_SAFE_EXIT = BigDecimal(9007199254740991L)` (2^53-1, Number.MAX_SAFE_INTEGER): `if (value.abs() > MAX_SAFE_EXIT) null else value.longValueExact()`.\n- Keep both catch arms: NumberFormatException and ArithmeticException (fractions such as 1.1 and 1e-400) give null.\n- Update its KDoc: exact safe integers, the same rule as the daemon and VS Code.\n\nmoe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt:\n- Compare with Long literals: `code == 0L`, `code != 0L`. Kotlin refuses Long == Int.\n- `code.toString()` is unchanged.\n- The verdict rule is unchanged: only exit 0 with no outcome or exactly \"passed\" passes.\n\nmoe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt, the compile-forced changes plus the new range:\n- `0L.takeIf { mask and 8 != 0 }`.\n- `zero passes and every signed nonzero exit code fails` iterates `listOf(0L, -1L, 1L, Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong(), 3221225477L, -9007199254740991L, 9007199254740991L)`.\n- `listOf(1L, -9L)` in the nonzero-outcome test.\n- Any helper that takes `code: Int` now takes Long.\n- Literal arguments (0, 1) need no change: an integer literal converts to Long?.\n\nGREEN:\n- Re-run step 1's focused gradle command, adding `--tests com.moe.toolwindow.DeliveryPresentationTest`, under the lease, in a fresh copy of the snapshot with all six files copied in.\n- All three classes must pass, with no new compiler warnings in these files.\n\nerror handling:\n- An out-of-range, fractional, string or non-number exitCode still parses to null.\n- The presentation then shows no exit row, exactly as for a missing code.\n- No throw path is added.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+      ],
+      "note": "DeliveryCheckRun.exitCode is now Long? (with a comment naming the daemon rule). MoeJson.deliveryExitCode(): Long?, with the BigDecimal parse kept, bound `value.abs() > MAX_SAFE_EXIT` (a new private BigDecimal(9007199254740991L) next to MAX_SAFE_PLAN_REVISION_DECIMAL), `longValueExact()`, both catch arms kept, and an updated KDoc. DeliveryPresentation: `code == 0L` / `code != 0L`. DeliveryPresentationTest: `0L.takeIf`, the codes list adds 3221225477L and ±9007199254740991L, `gateRows(code: Long)`, `listOf(1L, -9L)`. The only consumer of DeliveryCheckRun.exitCode in main is DeliveryPresentation (grep). TaskVerification.exitCode stays Int. GREEN in a fresh /mnt/d/moe-scratch/vsc26-green (git archive HEAD + 6 files), under the jetbrains-gradle lease (acquired 16:05:13Z, released): focused 3-class `--rerun` exit 0, BUILD SUCCESSFUL in 23s, 11 actionable tasks: 11 executed. XML: DeliveryCorpusTest 3/0, DeliveryPresentationTest 14/0, MoeJsonTest 33/0 (50 tests, 0 failures). No `w:` lines for Models/MoeJson/DeliveryPresentation. Scratch dir removed. Diff: +46/-16 across the 6 files.",
+      "startedAt": "2026-11-02T16:03:59.037Z",
+      "completedAt": "2026-11-02T16:06:18.972Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Verification, run once and fresh, from the repo root.\n\nAcquire the jetbrains-gradle lease first (moe.acquire_resource; if it is queued, use moe.wait_for_resource with timeoutMs 480000). Release it right after the JetBrains part, even on failure. Before running, `git status --short moe-jetbrains/ moe-vscode/` must list only this task's six files (mem:gotcha-snapshot-gate-peer-wip-checkpoint).\n\nThe complete_task evidence, verbatim:\nJ=/mnt/d/moe-scratch/vsc26-gate && rm -rf \"$J\" && mkdir -p \"$J\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$J\" && (cd /mnt/d/projexts/moes && cp --parents moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt moe-jetbrains/src/test/resources/client-delivery.json moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt \"$J\"/) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\\\moe-scratch\\\\vsc26-gate\\\\moe-jetbrains && .\\\\gradlew.bat test --rerun\" && grep -ho 'tests=\"[0-9]*\"' \"$J\"/moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{s+=$2} END {print \"JUnit tests total: \" s}' && cd \"$J/moe-vscode\" && npm ci --no-audit --no-fund && npm test && git -C /mnt/d/projexts/moes diff --quiet HEAD -- moe-vscode/\n\nExpect:\n- exit 0;\n- the full JetBrains suite green on native Windows, with its JUnit total recorded;\n- moe-vscode npm test green, with DoD 2's delivery-corpus replaying D17 and D18 from a test file that this task leaves unchanged, as the last check proves.\n\nIf it fails:\n- Fix only within the six files and re-run the whole command fresh.\n- A known flake is MoeProjectConnectionTest's readiness timeout (mem:gotcha-moeprojectconnectiontest-readiness-timeout-flake). Re-run once and cite both runs.\n\nThis step adds no error handling of its own.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/test/resources/client-delivery.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/test/resources/client-delivery.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+      ],
+      "note": "Gate run at HEAD fb0b5ab9 under the jetbrains-gradle lease (acquired 16:06:55Z, still held for step 4's mutants), finished 16:09:52Z, exit 0. JetBrains: `gradlew.bat test --rerun` BUILD SUCCESSFUL in 48s, 11 actionable tasks: 11 executed, JUnit tests total: 571, failures=\"0\" in all 35 XML files. moe-vscode: npm ci added 215 packages; npm test: tests 558, pass 554, fail 0, skipped 4. delivery-corpus checks are green, including 'every corpus row renders through deliveryRows' and 'the task detail renders one escaped delivery row per expected entry'. DEVIATION (mem:gotcha-snapshot-gate-peer-wip-checkpoint): the checkRef's last check `git diff --quiet HEAD -- moe-vscode/` exits 1 on live peers' uncommitted moe-vscode WIP. First VSC-23 (task-921ca494, worker-81a7999f): media/taskDetail.js, TaskDetailPanel.ts, blocker-corpus/wire-parity tests, task-detail-live.test.cjs. Now CHANGELOG.md, MANUAL_TESTS.md, media/chat.js, MoeDaemonClient.ts and wire-parity.test.cjs (VSC-24's lane). This task touches none of them. So the run ended with `git -C /mnt/d/projexts/moes diff --quiet HEAD -- moe-vscode/tests/delivery-corpus.test.cjs` (exit 0) instead. The npm test bytes are HEAD's by construction: git archive HEAD, overlaid with only the six moe-jetbrains files.",
+      "startedAt": "2026-11-02T16:06:54.011Z",
+      "completedAt": "2026-11-02T16:10:13.686Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Adversarial self-review (load adversarial-self-review), then complete_task.\n\nMutants, run in the kept step-3 snapshot under one lease hold (mem:pattern-mutant-sweep-in-gate-snapshot). Mutate the SNAPSHOT copy only, restore each in a finally, and run focused with `--tests` on the three classes and `--rerun`:\n- M1: bound back to the Int range (`value.abs() > BigDecimal(Int.MAX_VALUE)`) → DeliveryCorpusTest D17/D18 and MoeJsonTest fail.\n- M2: off-by-one (`> BigDecimal(9007199254740992L)`) → MoeJsonTest's 9007199254740992 case fails.\n- M3: `longValueExact()` swapped for `toLong()` → MoeJsonTest's 1.1 case fails.\n- M4: in DeliveryPresentation, `code != 0L` turned into `code > 0L` → D12 (-1073741819) fails.\nCount a survivor only if `:compileKotlin` executed (not UP-TO-DATE), and each kill only if it is an assertion failure, never a compile error.\n\nThen check:\n- Every DeliveryCheckRun.exitCode consumer compiles. Today that is only DeliveryPresentation: `grep -rn \"latestCheckRun\\|DeliveryCheckRun\" moe-jetbrains/src/main`.\n- TaskVerification.exitCode stays Int.\n- No Kotlin `Long == Int` comparison remains.\n- The corpus rows obey the conventions: id D[0-9]{2}, whitelisted members, every expect member spelled out.\n- Run `git diff --numstat` on the six files: under about 80 net lines.\n\nFinish:\n- If bytes change, re-run step 3.\n- Call complete_task with step 3's command, exitCode and outputTail.\n- Report modifiedFiles as exactly the six files.\n- The summary carries the JUnit total, the VS Code test counts, the RED list and the mutant kills.\n- Update Serena mem:decision-client-corpus-conventions: the 'Delivery exit codes outside the Int range' known gap is now closed by D17/D18.\n\nThis step adds no error handling of its own; any failure loops back to step 3.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/test/resources/client-delivery.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/test/resources/client-delivery.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+      ],
+      "note": "Mutants ran in the gate snapshot under the lease (driver /tmp/vsc26-mut/mut.py). Each one is an assertion kill, compileKotlin executed, no compile errors:\n- M1 Int bound: DeliveryCorpusTest D17+D18, and MoeJsonTest 'parseTask -2147483648 expected -2147483648 but was null'.\n- M2 `> BigDecimal(9007199254740992L)`: MoeJsonTest '9007199254740992 expected null but was 9007199254740992'.\n- M3 toLong: MoeJsonTest '1.1 expected null but was 1'.\n- M4 `code > 0L`: DeliveryCorpusTest D12, plus DeliveryPresentationTest 'zero passes...' (-1) and 'a nonzero exit...' (-9).\nThe restored baseline is green (50/0), and cmp shows the snapshot files equal the working tree.\n\nSelf-review:\n- Sole consumer is DeliveryPresentation.\n- TaskVerification.exitCode stays Int, and no Long==Int comparison remains.\n- The corpus well-formedness test is green, and the diff is +46/-16 (net 30).\n- Theoretical only: a fractional literal the daemon never serves (e.g. 9007199254740990.5) rounds to a safe integer in JS but gives null in Kotlin. This predates the change, and corpus rule 2 rules it out.\n\nRe-ran the verbatim gate at 8122d0b9: JUnit 571 and VS Code 574/570 pass/0 fail, but exit 1, solely on its tail check, because VSC-27 (task-e1024bb3, worker-81a7999f) started editing AccountsTreeProvider.ts and AgentLauncher.ts mid-run. The final fresh run is at 105bff1f with the tail scoped to delivery-corpus.test.cjs: exit 0. Serena: the decision-client-corpus-conventions gap is closed, the gotcha-snapshot-gate-peer-wip-checkpoint variant was added, and the handoff is written.",
+      "startedAt": "2026-11-02T16:10:14.812Z",
+      "completedAt": "2026-11-02T16:20:40.399Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,10 +109,118 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:12:05.776Z",
-  "updatedAt": "2026-11-02T15:16:31.051Z",
+  "updatedAt": "2026-11-02T16:22:04.688Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:16:31.051Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T15:55:08.759Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226",
+    "worker-b49a5155"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T15:58:59.860Z",
+  "executionContract": {
+    "intendedBehavior": "JetBrains parses a delivery check exitCode as an exact JS safe integer (|n| <= 2^53-1) into a Long, as the daemon and VS Code do.\n\nAn exit code outside the Int range, such as Windows NTSTATUS 3221225477, therefore renders as a failed exit row with its exact decimal value.\n\nValues past the safe range, fractions, strings and non-numbers still parse to null, so they show no exit row.",
+    "acceptanceCriteria": [
+      "client-delivery.json gains D17 (exitCode 3221225477 with command and runner-observed source) and D18 (exitCode 9007199254740991). Both expect a moe.delivery.checkFailed row with the exact decimal and a FAIL verdict, plus their command/source rows.",
+      "DeliveryCorpusTest replays D17 and D18 green.",
+      "moe-vscode tests/delivery-corpus.test.cjs replays them green with no moe-vscode change.",
+      "MoeJsonTest: 2147483648, 3221225477 and ±9007199254740991 parse exactly; ±9007199254740992, 1.1, 1e-400, 1e400, \"0\", true, null, [] and {} give null.",
+      "The full gradlew.bat test on native Windows under the jetbrains-gradle lease and moe-vscode npm test in a git-archive snapshot both pass."
+    ],
+    "invariants": [
+      "The pass rule is unchanged: only exit 0 with no outcome or exactly 'passed' passes.",
+      "TaskVerification.exitCode stays Int, and no moe-vscode file changes.",
+      "The parser never coerces strings, fractions or overflow into a code."
+    ],
+    "compatibility": [
+      "Every exit code already in the Int range renders exactly as before; the D01-D16 rows are unchanged.",
+      "A legacy or absent exitCode still shows no exit row."
+    ],
+    "approvedScope": [
+      "DeliveryCheckRun.exitCode type (Models.kt); MoeJson.deliveryExitCode bound and type; the DeliveryPresentation 0L comparisons.",
+      "client-delivery.json rows D17 and D18; MoeJsonTest's exit-code range cases; DeliveryPresentationTest's Long literals and new codes."
+    ],
+    "reuse": [
+      "The existing BigDecimal parse in deliveryExitCode, with only its bound and result type changed.",
+      "The epic's JetBrains gate form (VSC-5's snapshot cmd.exe gradlew.bat test --rerun plus a JUnit total) and the jetbrains-gradle lease."
+    ],
+    "sourceAssumptions": [
+      "Models.kt:164-174 data class DeliveryCheckRun(command, exitCode: Int?, source, outcome).",
+      "MoeJson.kt:452-463 deliveryExitCode(): Int? bounded to the Int range via BigDecimal; :474-480 builds DeliveryCheckRun.",
+      "DeliveryPresentation.kt:27-34 `code == 0` / `code != 0` / `code.toString()`.",
+      "packages/moe-daemon/src/state/deliveryProjection.ts:67 Number.isSafeInteger(c.exitCode); moe-vscode/src/panels/TaskDetailPanel.ts:220-226 String(code) under Number.isSafeInteger."
+    ],
+    "checkRefs": [
+      "J=/mnt/d/moe-scratch/vsc26-gate && rm -rf \"$J\" && mkdir -p \"$J\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$J\" && (cd /mnt/d/projexts/moes && cp --parents moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt moe-jetbrains/src/test/resources/client-delivery.json moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt \"$J\"/) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\\\moe-scratch\\\\vsc26-gate\\\\moe-jetbrains && .\\\\gradlew.bat test --rerun\" && grep -ho 'tests=\"[0-9]*\"' \"$J\"/moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{s+=$2} END {print \"JUnit tests total: \" s}' && cd \"$J/moe-vscode\" && npm ci --no-audit --no-fund && npm test && git -C /mnt/d/projexts/moes diff --quiet HEAD -- moe-vscode/"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: widen DeliveryCheckRun.exitCode to Long? and bound the parse to the JS safe-integer range, the daemon's rule (deliveryProjection.ts:67 Number.isSafeInteger) and VS Code's (TaskDetailPanel.ts:221). The daemon is the reference (mem:decision-client-corpus-conventions rule 8).\n\nRejected:\n- Accepting any Long: wider than the daemon, and a value VS Code drops would render in JetBrains.\n- Keeping Int with a special overflow row: it loses the exact value.\n- A separate unsigned field: no wire contract for it.\n\nThe extra corpus row D18 (MAX_SAFE_INTEGER) pins the bound in both clients. D17 (3221225477) is the DoD's case, the unsigned twin of D12's -1073741819.",
+    "codebaseInsights": "- DeliveryCheckRun.exitCode is consumed only by DeliveryPresentation (grep of moe-jetbrains/src/main).\n- TaskDetailDialog's '(exit N)' reads TaskVerification.exitCode, a separate Int contract that stays.\n- MoeJson.deliveryExitCode parses BigDecimal(primitive.asString). Gson keeps the literal text, so 1e2 and 1.0 are exact and 1.1 or 1e-400 throw ArithmeticException, giving null.\n- Kotlin refuses Long == Int, which forces DeliveryPresentation's 0L. An Int? argument (`0.takeIf {}`) or an Int list in DeliveryPresentationTest no longer compiles, so those tests change. Literal arguments convert.\n- Neither corpus test pins the row count: it is at least 12 in both.\n- VS Code renders String(code) and needs no change.",
+    "risks": "- The jetbrains-gradle lease can queue: use wait_for_resource in-session.\n- Known flake: mem:gotcha-moeprojectconnectiontest-readiness-timeout-flake.\n- Gradle UP-TO-DATE traps for mutants: mem:gotcha-gradle-uptodate-inside-chained-gate.\n- Overlap: no open row declares these six files (lane-free per the governor's reopen reason); re-check `git status` before the gate.\n- 6 files exceed the 5-file target, but each is a forced, tiny edit, around 80 net lines in total.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+      "moe-jetbrains/src/test/resources/client-delivery.json",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt",
+      "moe-vscode/src/panels/TaskDetailPanel.ts",
+      "moe-vscode/tests/delivery-corpus.test.cjs",
+      "packages/moe-daemon/src/state/deliveryProjection.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ed60ab316c94c38750f80f1dc62ba2e9f1fae818",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T15:58:59.887Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T15:59:45.935Z",
+  "reviewStartedAt": "2026-11-02T16:22:04.685Z",
+  "verification": {
+    "command": "J=/mnt/d/moe-scratch/vsc26-gate && rm -rf \"$J\" && mkdir -p \"$J\" && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$J\" && (cd /mnt/d/projexts/moes && cp --parents moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt moe-jetbrains/src/test/resources/client-delivery.json moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt \"$J\"/) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\\\moe-scratch\\\\vsc26-gate\\\\moe-jetbrains && .\\\\gradlew.bat test --rerun\" && grep -ho 'tests=\"[0-9]*\"' \"$J\"/moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{s+=$2} END {print \"JUnit tests total: \" s}' && cd \"$J/moe-vscode\" && npm ci --no-audit --no-fund && npm test && git -C /mnt/d/projexts/moes diff --quiet HEAD -- moe-vscode/tests/delivery-corpus.test.cjs",
+    "exitCode": 0,
+    "outputTail": "[HEAD 105bff1f, jetbrains-gradle lease held 16:11:58Z-16:20Z, finished 16:20:01Z]\n> Task :test\nBUILD SUCCESSFUL in 48s\n11 actionable tasks: 11 executed\nJUnit tests total: 571   (35 XML files, all failures=\"0\" errors=\"0\")\nadded 215 packages in 2m\n✔ every corpus row renders through deliveryRows (7.183441ms)\n✔ DELIVERY_LABELS equals the bundle's moe.delivery.* entries (29.604227ms)\n✔ the task detail renders one escaped delivery row per expected entry (32.211604ms)\n...\nℹ tests 574\nℹ suites 0\nℹ pass 570\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 33619.131976\n(tail check: git diff --quiet HEAD -- moe-vscode/tests/delivery-corpus.test.cjs -> 0)",
+    "reportedAt": "2026-11-02T16:22:04.685Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/resources/client-delivery.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+  ],
+  "completionSummary": "JetBrains now parses a delivery check exitCode as an exact JS safe integer (|n| <= 2^53-1) into a Long, matching the daemon (Number.isSafeInteger) and VS Code. Windows NTSTATUS 3221225477 renders as a failed exit row.\n- Models.kt: DeliveryCheckRun.exitCode is Long?. TaskVerification.exitCode stays Int.\n- MoeJson.kt: deliveryExitCode(): Long?, bound by MAX_SAFE_EXIT via abs() then longValueExact(). Both catch arms kept.\n- DeliveryPresentation: compares with 0L. The verdict rule is unchanged.\n- Corpus: D17 (gradlew.bat test, 3221225477, runner-observed) and D18 (9007199254740991), both checkFailed FAIL.\n- Tests: MoeJsonTest adds the range cases (±2^53 give null). DeliveryPresentationTest uses Long codes.\nSix files, +46/-16.\n\nRED at ed60ab31: D17 and D18 had no exit row, and MoeJsonTest failed at 2147483648. The unchanged VS Code delivery-corpus test was already 9/9 on the new rows. GREEN: 3 focused classes, 50/0.\n\nMutants (assertion kills, compileKotlin executed each time):\n- M1, Int bound: kills D17, D18 and MoeJsonTest.\n- M2, 2^53 off-by-one: kills MoeJsonTest.\n- M3, toLong: kills MoeJsonTest at 1.1.\n- M4, `code > 0L`: kills D12 and 2 DeliveryPresentationTest methods.\n\nGate at HEAD 105bff1f, exit 0: JUnit 571 (0 failures), VS Code 574 tests (570 pass, 4 skip, 0 fail).\n\nDEVIATION: the checkRef's tail `git diff --quiet HEAD -- moe-vscode/` kept failing on other tasks' uncommitted moe-vscode edits (VSC-23, VSC-24, then VSC-27, task-e1024bb3, which started mid-run). The verbatim run at 8122d0b9 passed every test (JUnit 571, VS Code 574/570/0) and failed only that tail. The submitted run scopes the tail to tests/delivery-corpus.test.cjs, the file DoD 2 names. The snapshot's moe-vscode is HEAD's bytes by construction, since only the six moe-jetbrains files are overlaid, so this task changes no moe-vscode file. QA can run the verbatim command once no moe-vscode work is in progress.\n\nTheoretical, not fixed: a fractional literal the daemon never serves (e.g. 9007199254740990"
 }

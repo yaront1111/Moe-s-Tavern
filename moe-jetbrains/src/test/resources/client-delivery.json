@@ -198,6 +198,24 @@
         { "labelKey": "moe.delivery.landedRevision", "value": "AbCdEf01", "fullValue": "AbCdEf0123456789AbCdEf0123456789AbCdEf01", "outcome": null },
         { "labelKey": "moe.delivery.attemptPhase", "value": "closed", "fullValue": "closed", "outcome": null }
       ]
+    },
+    {
+      "id": "D17",
+      "note": "the same Windows crash as D12 reported unsigned (0xC0000005 = 3221225477, outside the Int range) still renders and fails",
+      "delivery": { "latestCheckRun": { "command": "gradlew.bat test", "exitCode": 3221225477, "source": "runner-observed" } },
+      "expect": [
+        { "labelKey": "moe.delivery.checkCommand", "value": "gradlew.bat test", "fullValue": "gradlew.bat test", "outcome": null },
+        { "labelKey": "moe.delivery.checkFailed", "value": "3221225477", "fullValue": "3221225477", "outcome": "FAIL" },
+        { "labelKey": "moe.delivery.checkSource", "value": "runner-observed", "fullValue": "runner-observed", "outcome": null }
+      ]
+    },
+    {
+      "id": "D18",
+      "note": "the largest exit code the daemon accepts (Number.MAX_SAFE_INTEGER) renders exactly and fails",
+      "delivery": { "latestCheckRun": { "exitCode": 9007199254740991 } },
+      "expect": [
+        { "labelKey": "moe.delivery.checkFailed", "value": "9007199254740991", "fullValue": "9007199254740991", "outcome": "FAIL" }
+      ]
     }
   ]
 }

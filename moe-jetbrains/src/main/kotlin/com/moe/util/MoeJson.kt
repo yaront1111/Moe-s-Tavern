@@ -38,6 +38,8 @@ import java.math.BigDecimal
 
 object MoeJson {
     private val MAX_SAFE_PLAN_REVISION_DECIMAL: BigDecimal = BigDecimal.valueOf(MAX_SAFE_PLAN_REVISION)
+    /** 2^53-1, JS Number.MAX_SAFE_INTEGER: the largest delivery check exit code the daemon accepts. */
+    private val MAX_SAFE_EXIT: BigDecimal = BigDecimal(9007199254740991L)
 
     private fun JsonObject.getStringOrNull(key: String): String? {
         val element = get(key) ?: return null
@@ -448,13 +450,16 @@ object MoeJson {
     private fun JsonObject.deliveryObject(key: String): JsonObject? =
         get(key)?.takeIf { it.isJsonObject }?.asJsonObject
 
-    /** Do not coerce strings, truncate fractions or wrap overflow into a passing code. */
-    private fun JsonObject.deliveryExitCode(): Int? {
+    /**
+     * Exact safe integers only (|n| <= 2^53-1), the same rule as the daemon and VS Code (Number.isSafeInteger).
+     * Do not coerce strings, truncate fractions or wrap overflow into a passing code.
+     */
+    private fun JsonObject.deliveryExitCode(): Long? {
         val primitive = get("exitCode")?.takeIf { it.isJsonPrimitive }?.asJsonPrimitive ?: return null
         if (!primitive.isNumber) return null
         return try {
             val value = BigDecimal(primitive.asString)
-            if (value < BigDecimal(Int.MIN_VALUE) || value > BigDecimal(Int.MAX_VALUE)) null else value.intValueExact()
+            if (value.abs() > MAX_SAFE_EXIT) null else value.longValueExact()
         } catch (_: NumberFormatException) {
             null
         } catch (_: ArithmeticException) {
