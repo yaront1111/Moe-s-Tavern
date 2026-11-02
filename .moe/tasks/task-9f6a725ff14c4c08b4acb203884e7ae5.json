@@ -11,9 +11,47 @@
     "In a git-archive snapshot of HEAD plus this diff, `cd moe-vscode && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test` exits 0 with 0 failures."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first. Create moe-vscode/tests/wire-parity.test.cjs with the Write tool (rail: no shell writes to tracked files). Use only node:test, node:assert/strict, node:vm, fs, path, net and typescript, which sibling tests already use, so there is no new dependency and no package.json edit. Read mem:gotcha-vscode-vm-test-harness, mem:gotcha-vscode-panel-strict-require-map and mem:pattern-vscode-webview-script-vm-test first.\n\nHARNESS. Transpile src/services/MoeDaemonClient.ts and src/providers/ChatViewProvider.ts with ts.transpileModule (CommonJS, ES2020, esModuleInterop). Run each in its own vm.createContext with a closed require map that throws on any other name:\n- client: vscode, ws, child_process, fs, path, net (as in tests/plan-approval-client.test.cjs);\n- provider: vscode and path only. Its MoeDaemonClient import is type-only and transpiles away (architect-verified).\nThe vscode stub has:\n- a recording EventEmitter (event/fire/dispose);\n- window.createOutputChannel and showErrorMessage;\n- workspace.getConfiguration() returning { get: () => false }, so no reconnect timer is armed;\n- no workspaceFolders, so the STATE_SNAPSHOT path check is skipped;\n- Uri.joinPath returning {}.\nConnect the real client with client['ws'] = { readyState: 1, send, close }, where send records the frame first, and client['_connectionState'] = 'connected'. Feed frames with client['handleMessage'](JSON.stringify(frame)). JSON-parse every recorded frame and webview post in the test realm before deepStrictEqual, because vm-realm objects fail it. Dispose the provider and the client in finally.\n\nSECTION A, RELEASE_TASK (DoD 1).\n- A1: releaseTask('t1', 'Released from board') returns true and sends exactly one frame equal to {type:'RELEASE_TASK', payload:{taskId:'t1', reason:'Released from board'}}.\n- A2: undefined, '', '   ' and a tab-plus-newline string each send payload {taskId:'t1'} with no reason key. A padded non-blank reason '  keep  ' is sent verbatim: JetBrains sends it untrimmed and the daemon trims.\n- A3: the call returns false and sends nothing in three cases: _connectionState 'disconnected' with a recording socket installed; ws undefined; socket readyState 3 while the state says connected.\n\nSECTION B, CHANNEL_DELETED through the real ChatViewProvider (DoD 2). Setup:\n- deliver a STATE_SNAPSHOT {tasks:[], epics:[], workers:[], teams:[], proposals:[], decisions:[], channels:[general chan-g, custom chan-x]};\n- construct new ChatViewProvider({}, client) and call resolveWebviewView with a fake view: visible; onDidDispose and onDidChangeVisibility returning disposables; webview {cspSource:'', asWebviewUri returning 'chat.js', postMessage recording a JSON copy, onDidReceiveMessage capturing the handler};\n- send {type:'ready'} through the captured handler (the real handshake), then clear the post recorder.\nRows:\n- B1: a CHANNEL_DELETED whose payload is the deleted ChatChannel {id:'chan-x', name:'x', type:'custom', linkedEntityId:null, createdAt} leaves currentState.channels ids ['chan-g']. The webview gets exactly one post, deepStrictEqual {type:'updateChannels', channels:[chan-g]}. The same frame again posts nothing more.\n- B2: an unknown id leaves currentState.channels JSON-identical and posts nothing.\n- B3, error handling: payloads null, {} and {id:42} change nothing, post nothing and do not throw. A client that never got a STATE_SNAPSHOT keeps currentState undefined and posts nothing.\n\nSECTION C, the raw media/chat.js (DoD 3). Read it with fs and run it unmodified in a fresh vm.createContext per test. Stubs:\n- acquireVsCodeApi() returns getState returning undefined, plus setState and postMessage that each record a JSON copy;\n- document.getElementById memoizes one generic element per id: dataset, style, classList add/remove/toggle no-ops, addEventListener recording listeners by type, appendChild, querySelector returning null, querySelectorAll returning [], remove, scrollTo, focus;\n- document.createElement returns a fresh generic element;\n- window.addEventListener captures the 'message' handler (throw if none is registered).\nchannelTabs is a Proxy whose set trap empties the recorded tab list on ANY property write, because renderChannels clears the strip with one property write before it appends. The test never spells that property (project forbiddenPatterns). Helper listedIds() copies the current tabs, fires each tab's click listeners and returns the channel of each selectChannel post. Call it last, because a click changes the selection.\nRows:\n- C1: updateChannels [chan-g, chan-x] auto-selects chan-g; then click chan-x's tab. After updateChannels [chan-g]: the last setState has currentChannel 'chan-g', the last selectChannel post is 'chan-g', exactly one tab's className contains 'active', and listedIds() is ['chan-g'].\n- C2: with chan-x selected, updateChannels [] leaves currentChannel null in the last setState, zero tabs, chatInput.disabled and sendBtn.disabled true, and no selectChannel post after the update.\n- C3, the guard: with chan-x selected, updateChannels [chan-g, chan-x, chan-y] adds no selectChannel post, and the last setState still says 'chan-x'.\n\nRun it in place with `node --test moe-vscode/tests/wire-parity.test.cjs` (plain node, read-only; never npm in the shared checkout) and record the RED. Expected failures: A rows (releaseTask is not a function); B1 (chan-x stays, nothing posted); C1 and C2 (chan-x stays selected, input stays enabled). B2, B3 and C3 already pass.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/wire-parity.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Client half in moe-vscode/src/services/MoeDaemonClient.ts. Add no import: seven harnesses transpile this file and three use closed require maps (mem:gotcha-vscode-vm-test-harness).\n\n(a) After reopenTask, add releaseTask(taskId: string, reason?: string): boolean.\n- Build const payload: { taskId: string; reason?: string } = { taskId }.\n- Set payload.reason = reason only when typeof reason === 'string' && reason.trim().length > 0. Send it verbatim (untrimmed), as JetBrains MoeCommandSender.releaseTask does with isNullOrBlank.\n- Return this.sendMessage('RELEASE_TASK', payload).\n- Do not send force: JetBrains never does, and the Release button belongs to VSC-11.\n- JSDoc: the daemon (WebSocketServer.ts case 'RELEASE_TASK') routes it through moe.release_task and substitutes 'Released from board' for a missing reason.\n\n(b) Right after case 'CHANNELS' in handleMessage, add a braced case 'CHANNEL_DELETED':\n- const state = this.state; const id = payload?.id;\n- break unless state?.channels exists and id is a string;\n- const remaining = state.channels.filter(c => c.id !== id); break when remaining.length === state.channels.length;\n- then state.channels = remaining; this._onChannelsReceived.fire(remaining).\nWrite the state BEFORE firing; the opposite order is the TASK_UPDATED seam in mem:gotcha-vscode-notifier-seam-and-link-injection. Reuse the CHANNELS path: ChatViewProvider already posts {type:'updateChannels', channels} for onChannelsReceived. So ChatViewProvider.ts gets no edit, no EventEmitter is added and dispose() is unchanged. One comment line names the JetBrains MoeMessageDispatcher parity.\n\nError handling:\n- A malformed payload, an unknown id, no snapshot yet or a snapshot without channels is a silent no-op: no event and no state write.\n- handleMessage's outer try/catch stays the backstop.\n- releaseTask inherits sendMessage's false when not connected, and its throwing-socket path (log, onError, reconnect, false).\n\nRe-run `node --test moe-vscode/tests/wire-parity.test.cjs`: sections A and B pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Page half in moe-vscode/media/chat.js.\n\nAdd a local function deselectChannel() next to selectChannel. It must:\n- set currentChannel = null, chatInput.disabled = true and sendBtn.disabled = true;\n- restore the initial empty state with DOM calls only: messagesEl.textContent = '', then a createElement('div') with className 'empty-state' and textContent 'Select a channel to start chatting' (the text ChatViewProvider's HTML ships), appended with messagesEl.appendChild;\n- call renderPins(), which hides the pinned section because pinCache[null] is empty;\n- call saveState(), so a webview reload cannot restore the dead id.\n\nIn the 'updateChannels' case, after channels = data.channels || [] and before renderChannels(), call deselectChannel() when currentChannel is set and !channels.some(function(ch) { return ch.id === currentChannel; }). The existing auto-select branch (if (!currentChannel && channels.length > 0) selectChannel(channels[0].id)) then falls back to the first remaining channel. That is normally #general, because the daemon sorts channels by createdAt. The branch also posts selectChannel, so the extension loads that channel's messages and pins. A still-listed selection is left untouched.\n\nNo added line may contain a token from the project forbiddenPatterns rail: write markup only through textContent, createElement and appendChild.\n\nError handling: a missing channels array already degrades to [] and lands in the no-channel state instead of throwing.\n\nRe-run `node --test moe-vscode/tests/wire-parity.test.cjs`: every row passes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/media/chat.js"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate, run once. Under the GLOBAL rail there is no npm in the shared checkout (mem:gotcha-vscode-gate-from-wsl). Run exactly:\nS=$(mktemp -d /tmp/vsc6-gate-XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/media/chat.js moe-vscode/tests/wire-parity.test.cjs \"$S\"/) && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'\n\nThe command archives HEAD of the whole repo, because two suites read moe-jetbrains/src/test/resources/client-verdicts.json. It overlays this task's three files, then runs npm ci, lint, compile and the full node:test suite under a clean env with nvm Node 24.\n\nExpect exit 0 with 0 failures. The architect's baseline at 9ea87aa6 was lint 0, compile 0 and 416 tests (412 pass, 4 platform skips); expect that plus the new wire-parity rows. Every existing suite that loads MoeDaemonClient.ts must pass with its file unchanged: approval-paths, daemon-identity, daemon-json-cap, daemon-start, managed-vm-runtime, plan-approval-client, protected-daemon-spawn, protected-runtime, settings-wire and verified-local-launch. This task's diff touches only its three files; other sessions' dirty paths are not yours. Submit this command, its exit code and the output tail as complete_task verification.\n\nError handling for a red run:\n- Read the first failing assertion and fix the product file it names.\n- A MODULE_NOT_FOUND or ENOENT before any assertion is a snapshot mistake (wrong cwd, missing overlay or missing jetbrains corpus), not a product failure.\nRemove your snapshot directory afterwards.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff only: the two product files plus the new test.\n\n(1) Mutation check, in a snapshot copy and never in the checkout (recipe in mem:gotcha-vscode-notifier-seam-and-link-injection). Each of these mutants must fail a wire-parity row by assertion, not by a harness error:\n- drop the blank-reason guard;\n- trim the reason;\n- skip sendMessage's connected check;\n- drop the unknown-id length guard;\n- fire before the state write;\n- drop the deselectChannel() call;\n- drop saveState() or the disabled flags in deselectChannel.\n(2) A duplicate CHANNEL_DELETED is a no-op.\n(3) A still-listed selection never re-posts selectChannel.\n(4) A malformed frame never throws.\n(5) MoeDaemonClient.ts has no new import, and ChatViewProvider.ts and every existing test file are unchanged.\n(6) Grep the added lines for every project forbiddenPatterns token. Look for a vacuous assertion, such as a stub that replaces the recorder instead of recording first.\n\nRecord the findings in the step note, and fix any real defect before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,5 +64,91 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:41.943Z",
-  "updatedAt": "2026-11-02T09:39:41.943Z"
+  "updatedAt": "2026-11-02T10:12:00.744Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T09:54:40.142Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-0fcb7226"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:12:00.720Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code's MoeDaemonClient gains releaseTask(taskId, reason?). It sends RELEASE_TASK {taskId, reason?} exactly like JetBrains MoeCommandSender.releaseTask: the reason is left off when blank and sent verbatim otherwise. It returns false without sending when not connected. An inbound CHANNEL_DELETED removes that channel from currentState.channels and hands the chat view the pruned list once, through the existing CHANNELS path (ChatViewProvider posts updateChannels). The chat page drops a selection that is no longer listed. It falls back to the first remaining channel, or, when none remain, to its no-channel state (input disabled, empty-state text).",
+    "acceptanceCriteria": [
+      "releaseTask('t1','Released from board') puts exactly one frame {type:'RELEASE_TASK',payload:{taskId:'t1',reason:'Released from board'}} on the socket and returns true.",
+      "A blank or missing reason sends {taskId} with no reason key. A disconnected client returns false and sends nothing.",
+      "CHANNEL_DELETED for a cached channel removes it from currentState.channels, and the chat webview receives exactly one updateChannels post without it. A repeat, an unknown id, a malformed payload or a pre-snapshot frame changes nothing and posts nothing.",
+      "Raw media/chat.js, given an updateChannels list without the selected channel, neither lists nor selects that channel. It selects the first remaining channel, or none when the list is empty."
+    ],
+    "invariants": [
+      "MoeDaemonClient.ts gets no new value import. ChatViewProvider.ts and every existing moe-vscode test file stay unchanged.",
+      "The cached state is written before the chat view is notified.",
+      "updateChannels leaves a still-listed selection alone and posts no extra selectChannel.",
+      "No added line contains a token from the project forbiddenPatterns rail."
+    ],
+    "compatibility": [
+      "The RELEASE_TASK payload matches packages/moe-daemon/src/server/WebSocketServer.ts case 'RELEASE_TASK' (taskId, optional reason). force is not sent, because JetBrains never sends it.",
+      "The CHANNEL_DELETED payload is the deleted ChatChannel emitted by packages/moe-daemon/src/state/chatStore.ts; only payload.id is read.",
+      "onChannelsReceived keeps its meaning for its one subscriber (ChatViewProvider): the full current channel list."
+    ],
+    "approvedScope": [
+      "MoeDaemonClient.releaseTask(taskId: string, reason?: string): boolean",
+      "MoeDaemonClient.handleMessage case 'CHANNEL_DELETED'",
+      "media/chat.js updateChannels case and a new local deselectChannel()",
+      "moe-vscode/tests/wire-parity.test.cjs (new)"
+    ],
+    "reuse": [
+      "sendMessage for the send and its failure path (log, onError, reconnect, false).",
+      "_onChannelsReceived and ChatViewProvider's existing updateChannels post, instead of a new event or a provider edit.",
+      "chat.js's existing auto-select-first branch, for the fallback.",
+      "Harness shapes from tests/plan-approval-client.test.cjs (client), tests/settings-wire.test.cjs (client plus panel plus raw page) and tests/metrics-view.test.cjs (raw webview script)."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/services/MoeDaemonClient.ts: sendMessage(type, payload) returns false when ws is missing, is not OPEN, or the state is not 'connected'. handleMessage case 'CHANNELS' fires _onChannelsReceived(payload.channels). The currentState getter returns this.state.",
+      "moe-vscode/src/providers/ChatViewProvider.ts posts {type:'updateChannels', channels} for onChannelsReceived and drops posts until the page sends 'ready'. Its MoeDaemonClient import is type-only (transpiled requires: path, vscode).",
+      "moe-vscode/media/chat.js: the updateChannels case sets channels, calls renderChannels() and auto-selects channels[0] when currentChannel is null. selectChannel posts selectChannel, and saveState() persists currentChannel via vscode.setState.",
+      "moe-jetbrains MoeMessageDispatcher.kt CHANNEL_DELETED filters state.channels, and MoeCommandSender.releaseTask omits a blank reason."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/vsc6-gate-XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && (cd /mnt/d/projexts/moes && cp --parents moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/media/chat.js moe-vscode/tests/wire-parity.test.cjs \"$S\"/) && cd \"$S/moe-vscode\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "How the chat view learns about CHANNEL_DELETED:\n(1) Fire _onStateChanged, like JetBrains publishState. Rejected: ChatViewProvider would also post updateWorkers, and the board, status bar, managed-VM tree and open panels would re-render for a chat-only change.\n(2) A new onChannelDeleted event, plus a ChatViewProvider 'channelDeleted' post, plus a page handler. Rejected: it adds an emitter, a file and a second page path, while updateChannels has to handle a vanished selection anyway (a GET_CHANNELS refresh after a webview reload can drop a channel too).\n(3) Chosen: fire the existing _onChannelsReceived with the pruned list, which ChatViewProvider already posts as updateChannels.\nNot done: adding RELEASE_TASK/CHANNEL_DELETED to the types/moe.ts unions. handleMessage parses untyped JSON, isDaemonMessage has no caller, and types/moe.ts is VSC-8/VSC-12's file.\nUnknown id: JetBrains publishes state anyway (a no-op filter). VS Code stays silent, so the DoD's 'changes nothing' is testable.",
+    "codebaseInsights": "Architect probe, run in scratch under node:vm with the shared node_modules typescript:\n- ChatViewProvider.ts transpiles to require('path') and require('vscode') only.\n- The real provider plus the real client run under vm. After the 'ready' handshake the provider posts updateConnection and updateWorkers, and the client sends GET_CHANNELS and GET_DECISIONS.\n- Before the fix, CHANNEL_DELETED changes nothing (0 posts, chan-x kept), and raw chat.js keeps currentChannel 'chan-x' after updateChannels [chan-g].\n- With exactly the planned edits applied to scratch copies: 1 post and channels ['chan-g']. chat.js falls back to chan-g (one active tab), or to null with input and send disabled. releaseTask frames match exactly; blank reasons drop the key; disconnected returns false and sends nothing.\nOther facts:\n- JetBrains ChatPanel.updateChannels has the same dead-selection bug: currentChannelId stays on the deleted id while the combo shows another channel. Filed as VSC-22 task-be543ff20bbc4f30ac7ac895ae0b4d13 (BACKLOG, human-gated).\n- The daemon orders channels by createdAt, so channels[0] is normally #general, the same channel JetBrains prefers.\n- Baseline gate at 9ea87aa6: lint 0, compile 0, 416 tests / 412 pass / 4 skip / 0 fail.",
+    "risks": "- chat.js already uses the markup-string DOM property that the project forbiddenPatterns rail names. New lines must not, and neither may the test: use the Proxy set trap and textContent/createElement/appendChild.\n- Cross-realm: JSON-parse frames and posts in the test realm before deepStrictEqual. Test-realm data passed into the page works.\n- listedIds() clicks tabs, which changes the selection, so call it last.\n- A value import added to MoeDaemonClient.ts breaks three closed-map harnesses.\n- Never run npm in the shared checkout. `node --test` in place is read-only and fine.\n- Write tracked files only with Edit/Write (TOOL witness). VSC-11, VSC-12 and VSC-21 will also declare MoeDaemonClient.ts; they depend on this row.\n- Out of scope: CHANNEL_CREATED dedupe. VS Code pushes blindly while JetBrains dedupes by id; this is pre-existing and rare.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/media/chat.js",
+      "moe-vscode/src/providers/ChatViewProvider.ts",
+      "moe-vscode/tests/plan-approval-client.test.cjs",
+      "moe-vscode/tests/settings-wire.test.cjs",
+      "moe-vscode/tests/metrics-view.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/state/chatStore.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9ea87aa6ffc7f846a4f00e2b3e51dcd87ead823d",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:12:00.744Z",
+  "approvedPlanRevision": 1
 }

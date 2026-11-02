@@ -12,9 +12,68 @@
     "The diff touches only the two new files, plus DeliveryPresentation.kt if a row exposed a JetBrains bug (named in the summary)."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the held-out corpus moe-jetbrains/src/test/resources/client-delivery.json with the Write tool (global rail: tracked files only through Edit/Write, never shell writes). Shape: `{ \"version\": 1, \"rows\": [ { \"id\", \"note\", \"delivery\", \"expect\" } ] }`, 2-space pretty-printed like client-seat-tracker.json, one expect entry per line, LF, trailing newline. `id` is D01..D16 and `note` is one line naming the case. `delivery` is ALWAYS present: JSON null, or the daemon's /ws task.delivery wire JSON (TaskDelivery in packages/moe-daemon/src/state/deliveryProjection.ts). A focused row may omit members the daemon would also send, but it uses only the daemon's member names and JSON types: top level currentCandidate, latestCheckRun, requiredCheckSatisfied, deliveryReceipt, attemptPhase; currentCandidate id, treeSha, shortSha, baseRevision; latestCheckRun command, exitCode, source, outcome; deliveryReceipt target, landedRevision. Every expect entry spells all four members, `{ \"labelKey\": \"moe.delivery.<key>\", \"value\": \"<string>\", \"fullValue\": \"<string>\", \"outcome\": \"PASS\" | \"FAIL\" | null }`, where fullValue equals value unless a SHA was cut, so VS Code's deliveryRows (VSC-8, task-185f728f) can deep-equal `expect` with no defaulting. Every value below was computed from DeliveryPresentation.kt and MoeJson.parseDelivery at HEAD and cross-checked by a simulation: write them literally. Constants: T = 0123456789abcdef0123456789abcdef01234567 (cut 01234567), B = fedcba9876543210fedcba9876543210fedcba98 (cut fedcba98), L = AbCdEf0123456789AbCdEf0123456789AbCdEf01 (cut AbCdEf01, case kept). Expect notation: `key value[/fullValue] [PASS|FAIL]`, key without the moe.delivery. prefix, `;` between entries.\nD01 null -> [].\nD02 {\"attemptPhase\":\"running\"} -> attemptPhase running. (requiredCheckSatisfied absent: no policy row.)\nD03 {\"currentCandidate\":{\"id\":\"cand-d03\",\"treeSha\":T,\"shortSha\":\"ffffffff\",\"baseRevision\":B}} -> candidateSha 01234567/T; candidateBase fedcba98/B. (treeSha beats a disagreeing shortSha; id never renders.)\nD04 {\"currentCandidate\":{\"id\":\"cand-d04\",\"treeSha\":\"\",\"shortSha\":\"1a2b3c4\"}} -> candidateSha 1a2b3c4. (an empty treeSha falls back to shortSha.)\nD05 {\"currentCandidate\":{\"id\":\"cand-d05\",\"treeSha\":\"0123456789ab\",\"shortSha\":\"01234567\",\"baseRevision\":\"fedcba9\"}} -> candidateSha 01234567/0123456789ab; candidateBase fedcba9. (store-valid 12- and 7-char SHAs, mem:gotcha-jetbrains-delivery-serving; 8 chars or fewer keeps value == fullValue.)\nD06 {\"currentCandidate\":{\"id\":\"\",\"treeSha\":\"\",\"shortSha\":\"\",\"baseRevision\":\"\"},\"latestCheckRun\":{\"command\":\"\",\"source\":\"\",\"outcome\":\"\"},\"deliveryReceipt\":{\"target\":\"\",\"landedRevision\":\"\"},\"attemptPhase\":\"\"} -> []. (every empty string is skipped.)\nD07 {\"latestCheckRun\":{\"command\":\" <b>npm test</b> \",\"exitCode\":0,\"source\":\"runner-observed\"}} -> checkCommand \" <b>npm test</b> \" (verbatim, both spaces kept); checkPassed 0 PASS; checkSource runner-observed. (exit 0 with no outcome, as a pre-CQ-V12b daemon sends it, passes; reported text is never trimmed or stripped; requiredCheckSatisfied absent.)\nD08 {\"latestCheckRun\":{\"command\":\"npm test\",\"exitCode\":0,\"source\":\"agent-reported\",\"outcome\":\"passed\"}} -> checkCommand npm test; checkPassed 0 PASS; checkOutcome passed; checkSource agent-reported.\nD09 {\"latestCheckRun\":{\"command\":\"npm test\",\"exitCode\":0,\"source\":\"runner-observed\",\"outcome\":\"timeout\"}} -> checkCommand npm test; checkNotPassed 0 FAIL; checkOutcome timeout; checkSource runner-observed.\nD10 {\"latestCheckRun\":{\"exitCode\":0,\"outcome\":\"cancelled\"}} -> checkNotPassed 0 FAIL; checkOutcome cancelled. (an outcome the client does not know fails closed; only exactly \"passed\" passes.)\nD11 {\"latestCheckRun\":{\"command\":\"npm test\",\"exitCode\":1,\"outcome\":\"code-failure\"}} -> checkCommand npm test; checkFailed 1 FAIL; checkOutcome code-failure.\nD12 {\"latestCheckRun\":{\"command\":\"pwsh -File gate.ps1\",\"exitCode\":-1073741819,\"source\":\"agent-reported\"}} -> checkCommand pwsh -File gate.ps1; checkFailed -1073741819 FAIL; checkSource agent-reported. (a signed Windows crash code renders as-is.)\nD13 {\"latestCheckRun\":{\"command\":\"node lint.cjs\",\"exitCode\":1,\"source\":\"runner-observed\",\"outcome\":\"code-failure\"},\"requiredCheckSatisfied\":true} -> checkCommand node lint.cjs; checkFailed 1 FAIL; checkOutcome code-failure; checkSource runner-observed; requiredCheckCounted yes PASS. (the policy verdict is never inferred from the last run.)\nD14 {\"latestCheckRun\":{\"command\":\"node gate.cjs\",\"exitCode\":0,\"source\":\"agent-reported\",\"outcome\":\"passed\"},\"requiredCheckSatisfied\":false} -> checkCommand node gate.cjs; checkPassed 0 PASS; checkOutcome passed; checkSource agent-reported; requiredCheckNotCounted no FAIL.\nD15 {\"currentCandidate\":{\"id\":\"cand-d15\",\"treeSha\":T,\"shortSha\":\"01234567\",\"baseRevision\":B},\"deliveryReceipt\":{\"target\":\"refs/heads/moe/work-2026-10-24\",\"landedRevision\":L}} -> candidateSha 01234567/T; candidateBase fedcba98/B; receiptTarget refs/heads/moe/work-2026-10-24 (not a SHA, never cut); landedRevision AbCdEf01/L.\nD16 fully populated, JSON members deliberately in reverse display order: {\"attemptPhase\":\"closed\",\"deliveryReceipt\":{\"landedRevision\":L,\"target\":\"refs/heads/main\"},\"requiredCheckSatisfied\":true,\"latestCheckRun\":{\"outcome\":\"passed\",\"source\":\"runner-observed\",\"exitCode\":0,\"command\":\"npm.cmd test\"},\"currentCandidate\":{\"baseRevision\":B,\"shortSha\":\"01234567\",\"treeSha\":T,\"id\":\"cand-d16\"}} -> candidateSha 01234567/T; candidateBase fedcba98/B; checkCommand npm.cmd test; checkPassed 0 PASS; checkOutcome passed; checkSource runner-observed; requiredCheckCounted yes PASS; receiptTarget refs/heads/main; landedRevision AbCdEf01/L; attemptPhase closed.\nDoD coverage map: null D01; treeSha over shortSha D03 (fallback D04); empty strings D06 (and D04); SHA cut with the full value kept D03, D05, D15, D16; exit 0 with no outcome D07 and with \"passed\" D08; exit 0 with another outcome D09, D10; non-zero exit D11, D12; requiredCheckSatisfied true D13, false D14, absent D02 and D07; receipt target and landed revision D15; attempt phase D02 and D16; fully populated in display order D16. The 13 label keys used are exactly the bundle's moe.delivery.* row keys. Leave out shapes the daemon never serves: string or fractional exit codes, unknown sources, outcome passed with a non-zero exit, and code-failure with exit 0 (checkRunStore.ts readOutcome refuses both pairs). Leave out exit codes outside the Int range too (planningNotes explain why).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/test/resources/client-delivery.json"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-delivery.json"
+      ],
+      "note": "Wrote 16-row corpus D01..D16; values computed from DeliveryPresentation.kt. Peers' dirty paths left alone.",
+      "startedAt": "2026-11-02T10:09:00.793Z",
+      "completedAt": "2026-11-02T10:09:28.537Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Write moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt with the Write tool (package com.moe.toolwindow; JUnit 4 + Gson, both already test dependencies), modelled on ClientVerdictCorpusTest.kt (loadCorpus and the per-row failure collection of assertRows). Header KDoc: one client-neutral corpus, two consumers; moe-vscode's tests/delivery-corpus.test.cjs (VSC-8, task-185f728f) replays the same bytes through TaskDetailPanel's deliveryRows; the CQ-I06b rule (a row the clients disagree on is fixed or filed, never given a client-specific expectation); the input is the daemon's /ws task.delivery, parsed exactly as the client parses it. Its error handling: a missing or unparseable /client-delivery.json throws an AssertionError naming the resource (as loadCorpus there does); a malformed or throwing row fails THAT row with a message (catch per row, record \"threw $e\"), so one bad row never hides another. Three tests:\n1. `the corpus is well formed`: version 1; at least 12 rows; ids unique and matching D[0-9]{2}; each row has a non-empty string note, a `delivery` member that is present and either JSON null or an object, and an `expect` array; every delivery object uses only the daemon member names step 1 lists (top level and each nested object), which catches a typo such as treesha inside a row that expects []; every expect entry has exactly the members labelKey, value and fullValue (JSON strings) and outcome (\"PASS\", \"FAIL\" or JSON null). Collect `\"<id>: <problem>\"` and finish with one assertEquals(\"malformed rows\", emptyList<String>(), problems).\n2. `every row renders its expected delivery rows`: embed the row's delivery as the `delivery` member of a minimal task {\"id\":\"task-corpus\",\"epicId\":\"epic-corpus\",\"status\":\"WORKING\"} (parseTasks drops a task without epicId). Parse it through BOTH client paths: MoeJson.parseTask (TASK_CREATED and TASK_UPDATED in MoeMessageDispatcher) and MoeJson.parseState on {\"project\":{\"id\":\"proj-corpus\",\"name\":\"corpus\"},\"epics\":[],\"tasks\":[task]} (STATE_SNAPSHOT, which the 3 s GET_STATE refresh feeds into the detail dialog; mem:convention-jetbrains-exact-number-parsing notes the two paths build Task separately). A row whose two TaskDelivery values differ fails, naming both. Map expect to DeliveryRow(labelKey, value, fullValue, outcome?.let(DeliveryOutcome::valueOf)) and compare it with DeliveryPresentation.rows(delivery) by list equality, order included. Collect `\"<id>: expected <e>, got <a>\"` for every mismatch and finish with one assertEquals(\"delivery rows that diverge\", emptyList<String>(), failures).\n3. `corpus label keys are exactly the bundle's delivery row keys`: load messages/MoeBundle.properties through the test classloader as DeliveryPresentationTest does (requireNotNull(javaClass.classLoader.getResourceAsStream(...)).use(properties::load)). Assert every labelKey the corpus uses has a non-empty value, and that the set of corpus labelKeys equals the bundle's moe.delivery.* keys minus DeliveryPresentation.TITLE_KEY (13 keys today), so a new delivery row key cannot ship without a corpus row. Name the missing and unknown keys in the message.\nDo not edit DeliveryPresentationTest.kt, ClientVerdictCorpusTest.kt or client-verdicts.json.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt"
+      ],
+      "note": "DeliveryCorpusTest written before the gate (my step ordering slipped; start_step for step-2 was called after step-3). Verified green in step 3.",
+      "startedAt": "2026-11-02T10:11:57.277Z",
+      "completedAt": "2026-11-02T10:11:58.567Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Gate and mutation proof in a snapshot under the jetbrains-gradle lease, never in the shared tree (mem:convention-jetbrains-gradle-lease, mem:gotcha-jetbrains-snapshot-gradle-test, mem:gotcha-jetbrains-gradle-from-wsl: WSL has no JDK; from bash, single-quote the whole cmd string and pass --tests unquoted). Take the lease with moe.acquire_resource {resourceId:\"jetbrains-gradle\", taskId, workerId, note}; if it is busy, park with moe.report_blocked {resourceId:\"jetbrains-gradle\"} (seat kept; the grant unblocks the task). Hold it only around the gradle runs, and release it with moe.release_resource even on failure. Run every command from the repo root /mnt/d/projexts/moes.\n1) Focused run: build the snapshot exactly as the checkRef does (its part before `&& cmd.exe`), then run `cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc3-gate\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.DeliveryCorpusTest --rerun'`. It passes with 3 tests (check build/test-results/test/TEST-com.moe.toolwindow.DeliveryCorpusTest.xml in the snapshot).\n2) Mutant, in the SNAPSHOT copy only (a scratch path outside the checkout, so a shell edit is allowed there): `sed -i 's/val passed = code == 0 && (reported.isNullOrEmpty() || reported == \"passed\")/val passed = code == 0/' /mnt/d/moe-scratch/vsc3-gate/moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt`, then confirm `grep -c 'val passed = code == 0$'` on that file prints 1 (the architect dry-ran this on a copy: exactly one replacement in an LF file). Re-run the focused command: it must FAIL, and the divergence message must name D09 and D10 (exit 0 with a non-passed outcome now reads as passed) and no other planned row. Record the failing ids for the summary.\n3) Run the checkRef verbatim: it rebuilds a clean snapshot, which discards the mutant, and runs the full suite. Confirm BUILD SUCCESSFUL and that :test executed (not UP-TO-DATE). Then `cmp` the three copied files against the shared tree, and sum tests, failures, errors and skipped over the snapshot's build/test-results/test/TEST-*.xml for the summary's JUnit total.\nError handling for a red run: a red corpus row before the mutant is most likely a corpus typo, so re-derive the value from DeliveryPresentation.kt first. Change DeliveryPresentation.kt only for a genuine JetBrains bug: fix it there, list it in complete_step.modifiedFiles and name it in the summary (the checkRef already copies it). \"Could not receive a message from the daemon\" is a gradlew client OOM (mem:gotcha-jetbrains-gradle-client-oom): rerun it and never count it as a test result. A failure in a file this task never touched that ties to a peer's wip checkpoint follows mem:gotcha-snapshot-gate-peer-wip-checkpoint (disclose it; never report_blocked on it). Never stop Gradle daemons or kill processes by name.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/resources/client-delivery.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt"
+      ],
+      "note": "Focused run: 3 tests pass. Mutant (exit 0 => passed) fails exactly D09, D10. Clean full suite: BUILD SUCCESSFUL, 549 tests, 0 failures/errors/skipped; files cmp-identical to the shared tree.",
+      "startedAt": "2026-11-02T10:10:08.979Z",
+      "completedAt": "2026-11-02T10:11:55.477Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff, the only review step. Would the test still pass if shortSha were preferred over treeSha (D03 must fail), if the fallback kept an empty treeSha the way a TypeScript `??` would (D04), if the SHA cut were dropped or applied to the target (D03, D05, D15, D16), if the policy verdict were inferred from the last run (D13, D14), if rows followed JSON member order (D16), or if an unknown outcome were whitelisted as passed (D10)? Is every DoD case mapped to a named row (step 1's coverage map)? Is the corpus plain JSON (strings, numbers, booleans and null, no Kotlin names), so VSC-8 can deep-equal `expect` against its deliveryRows output unchanged? Do the well-formedness checks fail on a renamed member, a missing delivery member or a fifth expect member? Run `git status --porcelain -- moe-jetbrains` and confirm the task touched only the two new files (plus DeliveryPresentation.kt, only for a named bug). Peers own every other dirty path, for example VSC-19's untracked SeatTrackerCorpusTest.kt and client-seat-tracker.json: never revert, stage or commit them. Report both new files in complete_step.modifiedFiles. Deleting /mnt/d/moe-scratch/vsc3-gate afterwards is fine (it is this task's own scratch).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/resources/client-delivery.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-delivery.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt"
+      ],
+      "note": "Self-review: D03 (tree over short), D04 (empty fallback), D03/05/15/16 (cut), D13/D14 (policy), D16 (display order), D09/D10 (fail closed; mutant proven) pin the listed regressions. Well-formedness checks reject unknown delivery members, missing delivery, extra expect members. Diff is only the two new files; no DeliveryPresentation bug found.",
+      "startedAt": "2026-11-02T10:11:59.345Z",
+      "completedAt": "2026-11-02T10:12:09.205Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -27,5 +86,104 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:39:05.695Z",
-  "updatedAt": "2026-11-02T09:39:05.695Z"
+  "updatedAt": "2026-11-02T10:12:14.360Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-02T09:53:57.310Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-93e0e956",
+    "worker-4c1da905"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-3",
+    "step-2",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T10:08:31.770Z",
+  "executionContract": {
+    "intendedBehavior": "JetBrains' task-detail Delivery rows (DeliveryPresentation.rows over task.delivery as MoeJson parses it) are pinned by a client-neutral JSON corpus, moe-jetbrains/src/test/resources/client-delivery.json, which DeliveryCorpusTest replays through both MoeJson task paths. VS Code's VSC-8 (task-185f728f) replays the same bytes unchanged. JetBrains runtime behaviour does not change unless a row exposes a real bug.",
+    "acceptanceCriteria": [
+      "client-delivery.json has version 1 and the 16 planned rows D01..D16 (at least 12), covering every DoD case; every expect entry spells labelKey, value, fullValue and outcome.",
+      "DeliveryCorpusTest replays every row through MoeJson.parseTask and MoeJson.parseState, then DeliveryPresentation.rows, and reports all diverging ids in one assertion.",
+      "The corpus uses exactly the bundle's 13 moe.delivery.* row keys, each with a non-empty MoeBundle.properties value.",
+      "The exit-0-always-passes mutant fails D09 and D10; the clean snapshot passes.",
+      "The full JetBrains suite passes in the vsc3-gate snapshot under the jetbrains-gradle lease: BUILD SUCCESSFUL, with the JUnit total in the summary."
+    ],
+    "invariants": [
+      "DeliveryPresentation.kt changes only for a real JetBrains bug a row exposes, named in the summary; every planned expected value was computed from it at HEAD.",
+      "DeliveryPresentationTest.kt, ClientVerdictCorpusTest.kt, client-verdicts.json, MoeJson.kt, Models.kt, MoeBundle.properties, moe-vscode and the daemon are unchanged.",
+      "No Gradle run in the shared checkout: every run is in /mnt/d/moe-scratch/vsc3-gate under the jetbrains-gradle lease."
+    ],
+    "compatibility": [
+      "Corpus rows carry the daemon's /ws wire JSON, never Kotlin types, so moe-vscode reads the same bytes (VSC-8 resolves path.join(__dirname, '../../moe-jetbrains/src/test/resources/client-delivery.json'))."
+    ],
+    "approvedScope": [
+      "New resource client-delivery.json: { version: 1, rows: [ { id, note, delivery, expect: [ { labelKey, value, fullValue, outcome } ] } ] }.",
+      "New JUnit 4 class com.moe.toolwindow.DeliveryCorpusTest with three tests: well formed, every row renders, label keys.",
+      "DeliveryPresentation.rows is read only, unless a row exposes a named bug."
+    ],
+    "reuse": [
+      "ClientVerdictCorpusTest.kt: loadCorpus and the per-row failure collection of assertRows.",
+      "DeliveryPresentationTest.kt: loading messages/MoeBundle.properties through the test classloader.",
+      "MoeJsonTest.kt snapshotTasks: the minimal STATE_SNAPSHOT payload shape."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt DeliveryPresentation.rows(TaskDelivery?): order candidateSha, candidateBase, checkCommand, exit verdict, checkOutcome, checkSource, requiredCheck*, receiptTarget, landedRevision, attemptPhase; addValue skips null or empty values and cuts SHA fields with take(8), keeping fullValue.",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt: public parseTask(JsonObject) and parseState(JsonObject) both call private parseDelivery; parseTasks drops a task without id or epicId; deliveryExitCode keeps only exact Int-range numbers; source is kept only when runner-observed or agent-reported.",
+      "packages/moe-daemon/src/state/deliveryProjection.ts TaskDelivery is the wire shape; packages/moe-daemon/src/state/checkRunStore.ts readOutcome refuses passed with a nonzero exit and code-failure with exit 0.",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties lines 258-271: moe.delivery.title plus 13 row keys."
+    ],
+    "checkRefs": [
+      "S=/mnt/d/moe-scratch/vsc3-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents moe-jetbrains/src/test/resources/client-delivery.json moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt $S/ && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc3-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rows carry wire JSON rather than Kotlin TaskDelivery values, so VSC-8 consumes identical bytes. The test parses through both parseTask and parseState, because the 3 s snapshot refresh is what feeds the dialog. Rejected: malformed-wire rows (string or fractional exit codes, unknown sources). The daemon never serves them, MoeJsonTest already pins that strictness, and pinning it here would force VS Code to port parser internals. Rejected: exit codes outside the Int range (e.g. a Windows 3221225477). The daemon accepts any safe integer, but MoeJson.deliveryExitCode drops such a code because TaskDelivery.exitCode is Int, so JetBrains shows no exit row. Fixing that touches MoeJson.kt and Models.kt, outside this row's files, so do not pin it either way; mention it in the summary only if you hit it.",
+    "codebaseInsights": "DeliveryPresentation is pure (TaskDelivery? -> List<DeliveryRow>). DeliveryRow is a data class, so list equality checks the order and all four fields; a null outcome means no PASS/FAIL styling. TaskDetailDialog.buildDeliveryPanel shows value plus fullValue when they differ. Both MoeJson task paths call the same parseDelivery today, so the two-path check guards against future drift (mem:convention-jetbrains-exact-number-parsing). The bundle has exactly moe.delivery.title plus 13 row keys, and DeliveryPresentationTest asserts 14 distinct keys.",
+    "risks": "The likeliest red row is a corpus typo: re-derive it before touching DeliveryPresentation.kt. Apply the mutant only to the snapshot copy, never to the shared tree. VSC-19's untracked files in moe-jetbrains belong to a peer. git archive HEAD carries peers' wip checkpoints (mem:gotcha-snapshot-gate-peer-wip-checkpoint). A snapshot's JUnit XML count can differ by one suite from the shared tree's stale build/ output, so compare test totals, not file counts.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "packages/moe-daemon/src/state/deliveryProjection.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9ea87aa6ffc7f846a4f00e2b3e51dcd87ead823d",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T10:08:31.793Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T10:09:00.793Z",
+  "reviewStartedAt": "2026-11-02T10:12:14.358Z",
+  "verification": {
+    "command": "S=/mnt/d/moe-scratch/vsc3-gate; rm -rf $S && mkdir -p $S && git archive HEAD | tar -x -C $S && cp --parents moe-jetbrains/src/test/resources/client-delivery.json moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt $S/ && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\vsc3-gate\\moe-jetbrains && .\\gradlew.bat test --rerun'",
+    "exitCode": 0,
+    "outputTail": "> Task :testClasses\n> Task :test\nBUILD SUCCESSFUL in 46s\nJUnit total over build/test-results/test/TEST-*.xml: tests 549, skipped 0, failures 0, errors 0 (Windows native Gradle, jetbrains-gradle lease held and released)",
+    "reportedAt": "2026-11-02T10:12:14.358Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/resources/client-delivery.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryCorpusTest.kt"
+  ],
+  "completionSummary": "Added moe-jetbrains/src/test/resources/client-delivery.json (version 1, 16 rows D01..D16 covering every DoD case, wire JSON in, 4-member expect entries out) and DeliveryCorpusTest.kt (3 tests: well-formed; every row renders via both MoeJson.parseTask and parseState then DeliveryPresentation.rows, all failing ids reported at once; label keys equal the bundle's 13 moe.delivery.* row keys, each non-empty). Mutant in the snapshot copy (exit 0 => passed) fails exactly D09 and D10; clean snapshot passes. No DeliveryPresentation.kt bug found; diff is only the two new files. Out-of-scope note: MoeJson drops exit codes outside Int range (not pinned either way)."
 }

@@ -1,0 +1,28 @@
+{
+  "id": "task-be543ff20bbc4f30ac7ac895ae0b4d13",
+  "epicId": "epic-aabc654d",
+  "title": "[VSC-22] JetBrains: chat panel stops selecting a deleted channel, matching VS Code (VSC-6)",
+  "description": "Epic epic-aabc654d. Filed by the VSC-6 architect (task-9f6a725ff14c4c08b4acb203884e7ae5) under the epic rule that a client disagreement is fixed or filed, never left client-specific.\n\nDefect (verified at 9ea87aa6): moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt updateChannels(channels) rebuilds channelModel (a DefaultComboBoxModel) with the combo action listener suppressed (updatingChannels), then re-selects only `channels.find { it.id == previousId }`. When the selected channel was deleted (CHANNEL_DELETED, which MoeMessageDispatcher already removes from state), toSelect is null. currentChannelId stays on the dead id, while DefaultComboBoxModel.addElement auto-selects the first added channel in the combo. The panel then shows one channel in the combo, keeps the dead channel's messages, and sendCurrentMessage posts to the deleted channel. VSC-6 fixes the same case in VS Code: media/chat.js falls back to the first remaining channel, or none.\n\nObjective: when previousId is no longer listed, choose the channel by the same rule as the initial selection (the general-type channel, else the first). Set currentChannelId to it, refresh the messages and pinned panes, and request its messages and pins. When the list is empty, clear currentChannelId so sending is a no-op. Extract the rule as a pure function, for example ChatChannelSelection.choose(channels, previousId): ChatChannel?, so it is unit-testable headless, and have ChatPanel.updateChannels call it. It is a tiny rule, so it is ported with mirrored tests and needs no shared corpus (decision-vscode-plugin-reuse).\n\nNot in scope: VS Code (VSC-6 owns it), the daemon, MoeMessageDispatcher. Not in VSC-18's dependsOn, because that list is at its 20-id cap. Human-gated in BACKLOG.",
+  "definitionOfDone": [
+    "A JUnit 4 test drives the extracted selection rule: a still-listed previous id is kept; a previous id that is gone yields the general-type channel, else the first channel; no previous id yields the general-type channel, else the first; an empty list yields null.",
+    "ChatPanel.updateChannels uses that rule. When the selected channel disappears, currentChannelId moves to the chosen channel and its messages and pins are requested, or currentChannelId becomes null when no channel remains.",
+    "`gradlew.bat test` from cmd.exe passes on native Windows under the jetbrains-gradle lease, with no existing test file weakened."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 20,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T10:10:02.811Z",
+  "updatedAt": "2026-11-02T10:10:02.811Z"
+}
